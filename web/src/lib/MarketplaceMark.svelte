@@ -14,8 +14,7 @@
 </script>
 
 <!-- One element with the role and the name, so a screen reader announces the
-     platform once and in words; the image inside says nothing on its own, and
-     the region beside it is part of the picture rather than a second label.
+     platform once and in words; the image inside says nothing on its own.
      A `title` as well, because a mark is only a name to a reader who already
      knows it. -->
 <span
@@ -28,9 +27,7 @@
 	{#if shown.src === null}
 		<span class="word">{shown.name}</span>
 	{:else}
-		<img src={shown.src} alt="" width={size} height={size} />{#if shown.region !== null}<b
-				>{shown.region}</b
-			>{/if}
+		<img src={shown.src} alt="" width={size} height={size} />
 	{/if}
 </span>
 
@@ -49,13 +46,6 @@
 		object-fit: contain;
 		border-radius: 5px;
 		flex: none;
-	}
-
-	.mpmark b {
-		font-size: 11px;
-		font-weight: 700;
-		letter-spacing: 0.04em;
-		color: var(--muted);
 	}
 
 	.word {

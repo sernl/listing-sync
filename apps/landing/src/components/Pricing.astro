@@ -1,7 +1,7 @@
 ---
 import Tick from './Tick.astro';
-import { loginUrl } from '../site.js';
-import { founding, importLadder, subscription } from '../pricing.js';
+import { loginUrl, supportEmail } from '../site.js';
+import { founding, importLadder, importLadderNote, rungCap, rungPrice, subscription } from '../pricing.js';
 
 /* The two ways to start, and the founding offer beside them. One component
    draws both `/` and `/pricing`: `detail` is what the fuller page adds, which
@@ -10,6 +10,13 @@ import { founding, importLadder, subscription } from '../pricing.js';
 
 const { level = 2, detail = false } = Astro.props;
 const Heading = level === 1 ? 'h1' : 'h2';
+
+/* The open rung is an invitation rather than a band, so it is the one rung a
+   reader can act on. It reaches the founder where there is an address to
+   reach, and the founding section where there is not: `supportEmail` is null
+   until the founder monitors one, and a `mailto:` that reaches nobody is
+   worse than a link into the page. */
+const askHref = supportEmail ? `mailto:${supportEmail}` : '/pricing/#founding';
 ---
 
 <section class="section band-pricing" id="pricing">
@@ -23,25 +30,45 @@ const Heading = level === 1 ? 'h1' : 'h2';
 				<p>Bring your existing catalogue from your current marketplace into Teachouse.</p>
 				<div class="ladder">
 					{
-						importLadder.map((rung) => (
-							<div class="rung">
-								<span class="cap">{rung.cap}</span>
-								<span class="amount">{rung.price}</span>
-							</div>
-						))
+						importLadder.map((rung) =>
+							rung.price === undefined ? (
+								<a class="rung ask" href={askHref}>
+									<span class="cap">{rungCap(rung)}</span>
+									<span class="amount">{rungPrice(rung)}</span>
+								</a>
+							) : (
+								<div class="rung">
+									<span class="cap">{rungCap(rung)}</span>
+									<span class="amount">{rungPrice(rung)}</span>
+								</div>
+							)
+						)
 					}
 				</div>
+				<p class="counts">{importLadderNote}</p>
 			</div>
 
 			<div class="way">
 				<h3>2. {subscription.name} <span class="cadence">({subscription.cadence})</span></h3>
 				<p>Manage, update and distribute your catalogue across multiple marketplaces.</p>
+				{/* A tick beside a line that is not built yet would claim it is.
+				    The one coming-soon line takes a hollow mark instead. */}
 				<div class="chips">
 					{
 						subscription.features.map((feature) => (
 							<span class="chip">
-								<Tick />
-								{feature}
+								{
+									feature.soon ? (
+										<span class="tick soon" aria-hidden="true">
+											<svg width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
+												<circle cx="4" cy="4" r="3" fill="currentColor" />
+											</svg>
+										</span>
+									) : (
+										<Tick />
+									)
+								}
+								{feature.text}
 							</span>
 						))
 					}
@@ -75,7 +102,7 @@ const Heading = level === 1 ? 'h1' : 'h2';
 				</div>
 				<ul>
 					<li><strong>{founding.discountYearOne}% off Year 1</strong></li>
-					<li>{founding.discountOngoing}% off ongoing</li>
+					<li>{founding.discountOngoing}% off for {founding.ongoingYears} years after</li>
 					<li>First {founding.freeImports} resources imported free</li>
 					<li>Only {founding.places} places available.</li>
 				</ul>

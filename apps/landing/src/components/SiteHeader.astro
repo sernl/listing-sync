@@ -7,8 +7,14 @@ import { loginUrl } from '../site.js';
 
 <header class="site-head">
 	<div class="wrap">
+		{/* The lockup's lettering is drawn in Indigo, which is the dark
+		    ground's own colour, so the dark page takes a second file whose
+		    lettering is the near-white the dark palette writes text in. The
+		    house stays Teal in both. One is hidden by the theme, which is an
+		    attribute rather than a media query, so `<picture>` cannot do it. */}
 		<a class="wordmark" href="/">
-			<img src="/brand/wordmark.svg" alt="Teachouse" height="32" />
+			<img class="on-light" src="/brand/wordmark.svg" alt="Teachouse" height="32" />
+			<img class="on-dark" src="/brand/wordmark-dark.svg" alt="" height="32" />
 		</a>
 		<nav class="site-nav" aria-label="Primary">
 			<a href="/#how">How it works</a>

@@ -661,7 +661,7 @@ mod tests {
     #[test]
     fn a_complete_row_passes_and_carries_what_the_create_will_send() {
         let reported = read(
-            "TES GB",
+            "TES",
             &[&[
                 (Cell::Title, "Fractions of amounts"),
                 (Cell::Price, "3.50"),
@@ -700,7 +700,7 @@ mod tests {
     #[test]
     fn a_live_row_without_a_file_is_refused_naming_the_file_column() {
         let reported = read(
-            "TES GB",
+            "TES",
             &[&[
                 (Cell::Status, "live"),
                 (Cell::Title, "A worksheet"),
@@ -733,7 +733,7 @@ mod tests {
     #[test]
     fn a_marketplace_draft_row_without_a_file_is_refused_like_a_live_one() {
         let reported = read(
-            "TES GB",
+            "TES",
             &[&[
                 (Cell::Status, "draft"),
                 (Cell::Title, "A worksheet"),
@@ -775,7 +775,7 @@ mod tests {
     #[test]
     fn a_required_marketplace_field_left_blank_is_refused_off_the_registry() {
         let reported = read(
-            "TES GB",
+            "TES",
             &[&[(Cell::Title, "A worksheet"), (Cell::Price, "free")]],
         );
         let Some(row) = reported.rows.first() else {
@@ -793,7 +793,7 @@ mod tests {
     #[test]
     fn a_value_outside_a_captured_set_is_refused_and_the_set_is_listed() {
         let reported = read(
-            "TES GB",
+            "TES",
             &[&[
                 (Cell::Title, "A worksheet"),
                 (Cell::Price, "free"),
@@ -817,7 +817,7 @@ mod tests {
     #[test]
     fn a_captured_value_is_stored_in_the_registrys_own_spelling() {
         let reported = read(
-            "TES GB",
+            "TES",
             &[&[
                 (Cell::Title, "A worksheet"),
                 (Cell::Price, "free"),
@@ -890,8 +890,8 @@ mod tests {
 
     #[test]
     fn the_example_row_left_as_written_is_not_imported() {
-        let document = sheet("TES GB", &[]);
-        let Ok(read) = grids("TES GB.csv", document.as_bytes()) else {
+        let document = sheet("TES", &[]);
+        let Ok(read) = grids("TES.csv", document.as_bytes()) else {
             panic!("the fixture sheet parses");
         };
         assert_eq!(
@@ -907,9 +907,9 @@ mod tests {
         // four; overwriting the example's own position is what a seller does
         // when they start typing in it, so a row equal to the example except
         // in one cell has to be read as data.
-        let mut document = sheet("TES GB", &[]);
-        let Some(tab) = tab_of("TES GB") else {
-            panic!("TES GB is a tab");
+        let mut document = sheet("TES", &[]);
+        let Some(tab) = tab_of("TES") else {
+            panic!("TES is a tab");
         };
         let held = columns(tab);
         let Some(title_at) = held.iter().position(|column| column.cell == Cell::Title) else {
@@ -921,7 +921,7 @@ mod tests {
         }
         document.push_str("\r\n");
         document.push_str(&example.join(","));
-        let Ok(read) = grids("TES GB.csv", document.as_bytes()) else {
+        let Ok(read) = grids("TES.csv", document.as_bytes()) else {
             panic!("the fixture sheet parses");
         };
         let Ok(reported) = report(&read) else {
@@ -936,14 +936,14 @@ mod tests {
 
     #[test]
     fn a_column_the_template_does_not_write_refuses_the_upload() {
-        let document = format!("{}\r\n", sheet("TES GB", &[]));
+        let document = format!("{}\r\n", sheet("TES", &[]));
         let with_extra = document.replace("Status,", "Status,My notes,");
         assert_eq!(
-            grids("TES GB.csv", with_extra.as_bytes())
+            grids("TES.csv", with_extra.as_bytes())
                 .and_then(|read| report(&read))
                 .err(),
             Some(Malformed::ColumnUnknown {
-                sheet: "TES GB".to_owned(),
+                sheet: "TES".to_owned(),
                 column: "My notes".to_owned()
             }),
             "an unrecognised column is named rather than ignored, because a seller who filled \
@@ -953,11 +953,11 @@ mod tests {
 
     #[test]
     fn a_missing_column_refuses_the_upload_rather_than_every_row_of_it() {
-        let document = sheet("TES GB", &[]);
+        let document = sheet("TES", &[]);
         let without_title = document.replacen("Title,", "", 1);
         assert!(
             matches!(
-                grids("TES GB.csv", without_title.as_bytes()).and_then(|read| report(&read)),
+                grids("TES.csv", without_title.as_bytes()).and_then(|read| report(&read)),
                 Err(Malformed::ColumnMissing { .. })
             ),
             "a sheet whose shape is wrong writes no batch at all"

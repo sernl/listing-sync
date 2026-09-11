@@ -29,18 +29,25 @@
 /* --- the icon rail ------------------------------------------------------- */
 
 /* Indigo, as the kit draws the console's sidebar: the rail is the one band on
-   the page that is not a light neutral, which is what makes the sections read
-   as the frame rather than as content. The icons on it are white, and the
-   section the seller is in takes the kit's mint tile with Indigo on it -- the
-   same pairing the navigation card below uses, so one active state is learned
-   once. */
+   the page that is not a neutral, which is what makes the sections read as
+   the frame rather than as content. The icons on it are white, and the
+   section the seller is in takes the kit's mint tile with `--primary` on it
+   -- the same pairing the navigation card below uses, so one active state is
+   learned once.
+
+   Indigo through `--rail-fill` rather than through `--primary`, because on
+   dark the two part company: `--primary` moves to Lavender so that a solid
+   button is visible on an Indigo card, and the rail stays Indigo. There the
+   rail and the card are the same colour, so `--rail-edge` is what makes it a
+   band; on light it is `transparent` and the rule costs nothing. */
 .rail {
 	display: flex;
 	flex-direction: column;
 	align-items: center;
 	gap: 12px;
 	padding: 10px 0;
-	background: var(--primary);
+	background: var(--rail-fill);
+	border: 1px solid var(--rail-edge);
 	border-radius: var(--r-card);
 }
 
@@ -60,7 +67,7 @@
 	border-radius: 10px;
 	display: grid;
 	place-items: center;
-	color: color-mix(in srgb, var(--on-fill) 78%, var(--primary));
+	color: color-mix(in srgb, var(--rail-ink) 78%, var(--rail-fill));
 	flex: none;
 	border: 0;
 	background: none;
@@ -68,8 +75,8 @@
 }
 
 .rail-item:hover {
-	background: color-mix(in srgb, var(--on-fill) 14%, transparent);
-	color: var(--on-fill);
+	background: color-mix(in srgb, var(--rail-ink) 14%, transparent);
+	color: var(--rail-ink);
 }
 
 .rail-item[aria-current='page'] {
@@ -91,6 +98,23 @@
 	flex-direction: column;
 	gap: 2px;
 	min-width: 0;
+}
+
+/* The wordmark's lettering is the kit's Indigo inside the file, so on the
+   dark navigation card it is Indigo on Indigo and only the Teal house
+   survives. An `<img>` cannot inherit `currentColor`, so the marketing site
+   ships a second file with the lettering recoloured to `--text` and the
+   house left Teal, and the console reads the same one from
+   `web/static/brand/`.
+
+   `content` on a replaced element rather than a second `<img>`, because the
+   markup is `Console.svelte`'s and one line of stylesheet is the whole of
+   what this needs; the alternative there would be two images and an empty
+   `alt` to keep the lockup announced once. Global rather than scoped for the
+   same reason a theme rule always is: the element it names is the one the
+   shell draws. */
+[data-theme='dark'] .nav-wordmark {
+	content: url('/brand/wordmark-dark.svg');
 }
 
 /* A column rather than a row: the card's head is the wordmark, the section's
@@ -208,13 +232,6 @@
 	font-size: 11.5px;
 	color: var(--muted);
 	flex-wrap: wrap;
-}
-
-.conn > span {
-	display: inline-flex;
-	align-items: center;
-	gap: 5px;
-	white-space: nowrap;
 }
 
 .dot {

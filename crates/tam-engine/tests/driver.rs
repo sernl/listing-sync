@@ -101,7 +101,7 @@ impl ScriptedAdapter {
 
 impl MarketplaceAdapter for ScriptedAdapter {
     fn inventory(&self) -> InventoryId {
-        InventoryId::TesGb
+        InventoryId::Tes
     }
 
     fn project_fields(&self, listing: &ProjectedListing) -> Result<FieldSet, AdapterError> {
@@ -277,7 +277,7 @@ async fn seed(app: &PgPool, engine: &PgPool) -> MappingId {
                 id: mapping,
                 org: ORG,
                 product,
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 binding: tam_domain::Binding::Unbound,
                 policies: tam_domain::FieldPolicies {
                     title: tam_domain::FieldPolicy::Managed,
@@ -318,7 +318,7 @@ async fn seed(app: &PgPool, engine: &PgPool) -> MappingId {
             ORG,
             &NewJob {
                 job: JobId(Uuid([0x06; 16])),
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 stamp: Stamp {
                     at: T0,
                     actor: Actor::System(SystemComponent::Engine),
@@ -353,7 +353,7 @@ fn seed_machine(strategy: CreateStrategy) -> MachineSeed {
         budget: StepBudget {
             actions_remaining: 20,
         },
-        verify: verify_policy(InventoryId::TesGb),
+        verify: verify_policy(InventoryId::Tes),
     }
 }
 
@@ -1041,7 +1041,7 @@ async fn enqueue_sibling(
             ORG,
             &NewJob {
                 job: JobId(Uuid([0x0B; 16])),
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 stamp: Stamp {
                     at: T0,
                     actor: Actor::System(SystemComponent::Engine),

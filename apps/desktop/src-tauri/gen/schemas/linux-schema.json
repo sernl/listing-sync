@@ -381,6 +381,12 @@
           "markdownDescription": "Enables the session_status command without any pre-configured scope."
         },
         {
+          "description": "Enables the set_theme command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-theme",
+          "markdownDescription": "Enables the set_theme command without any pre-configured scope."
+        },
+        {
           "description": "Enables the start_import command without any pre-configured scope.",
           "type": "string",
           "const": "allow-start-import",
@@ -421,6 +427,12 @@
           "type": "string",
           "const": "deny-session-status",
           "markdownDescription": "Denies the session_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_theme command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-theme",
+          "markdownDescription": "Denies the set_theme command without any pre-configured scope."
         },
         {
           "description": "Denies the start_import command without any pre-configured scope.",

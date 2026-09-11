@@ -71,7 +71,9 @@ stdenv.mkDerivation {
       terms/index.html \
       app-redirect.js \
       brand/logo.svg \
-      images/og.png; do
+      images/og.png \
+      images/console-resources.webp \
+      images/console-resources-phone.webp; do
       test -f "dist/$emitted"
     done
     cp -r dist $out

@@ -3,7 +3,7 @@
 The public site a teacher-seller reaches before signing up.
 
 - date: 2026-09-03
-- status: built and green under `just landing-check`, which runs inside `just pre-push`; rewritten 2026-09-05 to carry the founder's approved prices at `/` and at a new `/pricing`, and re-based on `tam-server` serving the build rather than on a static host of its own; rebuilt 2026-09-11 to the founder's mockup, on the brand kit and the pricing recorded in `brand-kit-and-teacher-ui.md` and `decisions.md` under that date, which supersede the copy, tokens, pricing and the no-marketplace-names rule described below wherever the two disagree
+- status: built and green under `just landing-check`, which runs inside `just pre-push`; rewritten 2026-09-05 to carry the founder's approved prices at `/` and at a new `/pricing`, and re-based on `tam-server` serving the build rather than on a static host of its own; rebuilt 2026-09-11 to the founder's mockup, on the brand kit and the pricing recorded in `brand-kit-and-teacher-ui.md` and `decisions.md` under that date, which supersede the copy, tokens, pricing and the no-marketplace-names rule described below wherever the two disagree; amended 2026-09-12 with the Resource Atelier imagery, two more import rungs, the three-year cap on the Founding discount and the AI "coming soon" placements, recorded under "Amended 2026-09-12" below
 - placeholders: the legal text and the support address are what the founder must still replace, and the desktop download URL is still null
 - paths: `apps/landing/`, `nix/landing.nix`, and the `landing-check` and `landing-dev` recipes in the justfile
 
@@ -135,6 +135,39 @@ The block follows heyretro's structure, which is where the shape comes from and 
 The heading names the metering unit, the trial is stated once above the cards rather than repeated inside each, exactly one card is badged, and the top tier gets a full-width panel of its own below the row as well as its card.
 The trial line reads "14-day Studio trial." and no more: which paid plans it attaches to is not something the founder has said, and a Studio trial sold beside Publisher would be a downgrade rather than a trial.
 heyretro's monthly-and-yearly toggle is not built, because it needs JavaScript; each card carries its annual price as the caption under its monthly one instead.
+
+## Amended 2026-09-12: the imagery, the ladder, the Founding cap and AI
+
+Four changes, all from the design of record at `2026-09-12-one-marketplace-per-site-and-the-seller-workflows.md`, sections 11 and 12, and the decisions of that date.
+
+**The imagery is the Resource Atelier, and it is drawn rather than photographed.**
+The three `-placeholder.webp` files the founder owed are gone: the hero and the challenge are inline SVG compositions, and the solution is a real screenshot of the console's own Resources board.
+The hero draws a cream "Your catalogue" card carrying the house mark and three resource covers — fraction circles, ruled reading lines, checklist squares — with a peach card behind one and a lavender behind another, and four thin teal lines routing out to tiles carrying the four featured marks, then "+ more".
+There is no person, no laptop and no script face anywhere on the page; the handwritten line and the system cursive fallback it was set in are both gone.
+The challenge draws one finished cover with a teal tick, then the same title typed again on a listing sheet per marketplace, gathered under a peach bracket reading "Same resource. Repeated admin.".
+`ResourceCover.astro` draws a cover, `MarkTile.astro` draws a tile, and `src/art.js` holds the arithmetic both share, so a box and the mark inside it are computed once.
+
+Two things make the compositions safe to keep.
+Every colour in them is a token or `currentColor`, which is what lets them read on the dark ground the same sheet now carries, and `tokens.test.ts` fails the lane on a colour literal in any `.astro` file here.
+The four marks are `<image>` references to the owners' own published bytes under `public/marks/`, never a redrawing, which is the rule the strip under the hero already worked under; the compositions sit inside `data-marketplace-band` wrappers, so `just landing-copy-gate` strips them whole.
+
+The hero ships as two drawings rather than one that reflows.
+Under 720px the wide composition's three covers and four-high tile column have no room, so `.atelier-phone` — one cover, the card, a 2x2 grid of tiles — replaces it, and the compositions are inline so this site's own `@font-face` faces set their display text and no glyph is outlined by hand.
+
+**The screenshot is real, and it is reproducible.**
+`public/images/console-resources.webp` and its 390-wide crop are captures of `/resources` running against the ephemeral Postgres with three seeded resources named Fractions practice, Reading response and Classroom routines, which are the three the covers above draw.
+They are framed in an indigo-outlined panel under the house mark, captioned "Your resources, together.", rather than bled into the band, because a screenshot with no edge reads as part of the page rather than as the product.
+
+**The import ladder gains two rungs and says what it counts.**
+`importLadder` is now a list of `{ upTo, price }` rather than two display strings per rung, so a page phrases a rung its own way and no page can quote a band the file does not hold.
+`$397` up to 500 joins the four the founder set, because the measured dual-lister holds about 764 listings, and a last rung carries no figure at all: it reads "Talk to us", its action reads "Ask us", and it links the support address where `site.supportEmail` is set and `/pricing/#founding` where it is null, which is the same rule the footer's missing address already follows.
+Under the ladder, in both pages, "Counted as resources added to your catalogue after duplicates are merged."
+
+**Import is included, the Founding discount is capped, and AI is sold as coming soon.**
+`subscription.includesImport` is true and the card lists "Import included".
+`founding.ongoingYears` is 3 and the card reads "20% off for 3 years after" in place of "20% off ongoing".
+`subscription.ai` carries the packaging the founder adopted — `{ status: 'coming-soon', includedFills: 200, addOn: { fills: 100, price: 5 } }` — and the card's line reads "AI fill — coming soon (200 a month)" against a hollow grey mark rather than a tick, because a tick beside a line that is not built yet claims it is.
+Two questions join the FAQ: "Do I pay for import?", which says the subscription includes it and the one-off price is for a seller who does not subscribe, and "What does AI fill do?", which promises that it fills the form from the seller's own file for them to check, that it never writes to a marketplace on its own, and no date and no accuracy figure.
 
 ## Where the code holds each decision
 

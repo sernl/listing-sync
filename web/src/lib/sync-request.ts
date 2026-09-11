@@ -22,7 +22,6 @@ import type {
 import { connectionStands } from '$lib/connection-standing';
 import { TRANSPORT_OF, onSellerDevice } from '$lib/inventory';
 import { MARKETPLACE_OF } from '$lib/listings-view';
-import { PLATFORMS, SHORT_NAME } from '$lib/platforms';
 import type { InventoryId, Marketplace } from '$lib/generated/vocab';
 
 /** The tones the console's pills already carry. */
@@ -477,16 +476,16 @@ export function resourceRows(view: SyncRequestView): ResourceRow[] {
 // ------------------------------------------------------- starting a migrate
 
 /** Where a migrate can read from, and it is a fact rather than a preference:
- *  `tam_storage::uncaptured_source` admits the three Tes inventories as a
- *  sync's source and refuses TPT and Etsy, so a migrate offered from either
- *  would be refused at submit. Mirrored here because no view serves it.
+ *  `tam_storage::uncaptured_source` admits Tes as a sync's source and refuses
+ *  TPT and Etsy, so a migrate offered from either would be refused at submit.
+ *  Mirrored here because no view serves it.
  *
  *  A `readonly InventoryId[]` requires no exhaustiveness, so this array is not
  *  what stops the lane when an inventory is added in Rust. What stops it is
  *  `MARKETPLACE_OF`, the total `Record<InventoryId, Marketplace>` that
  *  `migrateSource` and `sourcesOn` both read through: a new inventory leaves
  *  that record incomplete and fails the type check there. */
-export const MIGRATE_SOURCES: readonly InventoryId[] = ['TesGb', 'TesUs', 'TesNz'];
+export const MIGRATE_SOURCES: readonly InventoryId[] = ['Tes'];
 
 /** Where a migrate writes to. One value, because TPT is the only marketplace
  *  this console can create a listing on. */
@@ -654,22 +653,4 @@ export function emptyListingsLine(stage: SyncStage): string {
 		case 'unrecognised':
 			return 'No listings are recorded against this import.';
 	}
-}
-
-// ------------------------------------------------------- naming the sites
-
-/** One site, named by the only part that tells it from its siblings.
- *
- * The three Tes sites differ by region alone, so a group labelled by full
- * platform title reads as the same words three times under a question that has
- * already said which platform it means. */
-export function siteLabel(inventory: InventoryId): string {
-	return PLATFORMS[inventory].region ?? SHORT_NAME[inventory];
-}
-
-/** The question above the site choice, naming the platform once. */
-export function siteChoiceQuestion(sites: readonly InventoryId[]): string {
-	const first = sites[0];
-	const platform = first === undefined ? 'this marketplace' : PLATFORMS[first].acronym;
-	return `Which ${platform} site do you sell on?`;
 }

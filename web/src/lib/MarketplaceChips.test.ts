@@ -24,10 +24,6 @@ describe('the chip strip', () => {
 		expect(source).not.toContain('SHORT_NAME');
 	});
 
-	it('carries the region only where a mark cannot tell three sites apart', () => {
-		expect(source).toContain('REGION_TAG[chip.inventory]');
-	});
-
 	it('gives every mark an empty alt, so the platform is announced once', () => {
 		const images = [...source.matchAll(/<img\b[\s\S]*?\/>/g)].map((match) => match[0]);
 		expect(images.length).toBeGreaterThan(0);

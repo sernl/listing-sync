@@ -122,22 +122,22 @@ mod tests {
     #[test]
     fn the_opaque_tes_tokens_reach_a_form_as_words() {
         assert_eq!(
-            native_label(InventoryId::TesGb, "mainType", "99001"),
+            native_label(InventoryId::Tes, "mainType", "99001"),
             Some("Assembly"),
             "the resource-type select is nine five-digit ids and nine names"
         );
         assert_eq!(
-            native_label(InventoryId::TesGb, "ageRanges", "3"),
+            native_label(InventoryId::Tes, "ageRanges", "3"),
             Some("7-11"),
             "the band a seller picks, not its row number"
         );
         assert_eq!(
-            native_label(InventoryId::TesUs, "yearGroups", "3"),
+            native_label(InventoryId::Tes, "yearGroups", "3"),
             Some("1"),
             "year group 3 is named 1, which is exactly why it is not age band 3"
         );
         assert_eq!(
-            native_label(InventoryId::TesGb, "licence", "TES-PAID"),
+            native_label(InventoryId::Tes, "licence", "TES-PAID"),
             Some("Teaching Resource Licence"),
             "the licence title the refdata store holds"
         );
@@ -174,7 +174,7 @@ mod tests {
             "no Etsy vocabulary has been polled, and this token is its own name"
         );
         assert_eq!(
-            native_label(InventoryId::TesGb, "mainType", "43788"),
+            native_label(InventoryId::Tes, "mainType", "43788"),
             None,
             "a legacy read-only type is not a member of the writable set"
         );
@@ -186,7 +186,7 @@ mod tests {
     fn the_age_range_table_still_agrees_with_the_capture() {
         for row in TES_MAIN_AGE_RANGES {
             assert_eq!(
-                native_label(InventoryId::TesGb, "ageRanges", row.native_id),
+                native_label(InventoryId::Tes, "ageRanges", row.native_id),
                 Some(row.label),
                 "the const table and docs/design/data/tes-vocabulary.json name band {} \
                  differently",
@@ -200,7 +200,7 @@ mod tests {
     #[test]
     fn every_mapped_field_is_a_native_field_that_holds_captured_values() {
         let mapped = [
-            (InventoryId::TesGb, TES_FIELDS.as_slice()),
+            (InventoryId::Tes, TES_FIELDS.as_slice()),
             (InventoryId::Tpt, TPT_FIELDS.as_slice()),
         ];
         for (inventory, fields) in mapped {

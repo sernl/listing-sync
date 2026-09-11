@@ -1,6 +1,5 @@
-//! The three Tes inventories: one account against one JSON API reached
-//! through the curriculum field (probe 04), so they share both axes and
-//! differ only in the key and in which age vocabulary the country selects.
+//! Tes: one inventory, one account against one JSON API (probe 04, and
+//! decisions.md "Tes is one marketplace with no regions, 2026-09-12").
 //!
 //! The `placement` on each field below is the uploader's five-step wizard,
 //! and two sources fix it. `docs/notes/probes/02-upload-request-shape.md`
@@ -10,8 +9,9 @@
 //! each holds: "title and description, file upload and resource type, tag and
 //! categorise, price or licence, preview and agree to the Author Code". The
 //! ordinal within a step is this file's own ordering and not a measurement;
-//! `ageRanges` and `yearGroups` share one because the country picks one of
-//! them and never both.
+//! `ageRanges` and `yearGroups` share one because the uploader picks one of
+//! them by country and never both, and `ageRanges` is the branch this system
+//! writes.
 
 use super::{
     AxisBinding, CanonicalFields, Cardinality, Delegation, FieldDirection, FieldGroup,
@@ -20,27 +20,18 @@ use super::{
 use crate::TermKind;
 use tam_types::InventoryId;
 
-/// The axes are a parameter rather than a shared const because the three
-/// registries genuinely differ on one: GB binds `Phase` to `ageRanges` and
-/// the other two bind it to `yearGroups`, which is the country branch the
-/// uploader takes.
-const fn tes(
-    inventory: InventoryId,
-    equivalence_axes: &'static [AxisBinding],
-) -> InventoryRegistry {
-    InventoryRegistry {
-        inventory,
-        // No Tes cap has been measured. The design applies caps at projection
-        // and never at authoring, so an absent cap is a projection that copies
-        // verbatim, which is the honest behaviour for an unmeasured platform.
-        canonical: CanonicalFields::UNRECORDED,
-        natives: TES_NATIVES,
-        equivalence_axes,
-        // Tes binds all five axes, so nothing is measured absent here. TPT is
-        // where the empty-handed case lives.
-        absent_axes: &[],
-    }
-}
+/// Tes binds all five axes, so nothing is measured absent here. TPT is where
+/// the empty-handed case lives. No Tes cap has been measured: the design
+/// applies caps at projection and never at authoring, so an absent cap is a
+/// projection that copies verbatim, which is the honest behaviour for an
+/// unmeasured platform.
+pub(super) const TES: InventoryRegistry = InventoryRegistry {
+    inventory: InventoryId::Tes,
+    canonical: CanonicalFields::UNRECORDED,
+    natives: TES_NATIVES,
+    equivalence_axes: &TES_AXES,
+    absent_axes: &[],
+};
 
 pub(super) const TES_NATIVES: &[NativeField] = &[
     // Restated rather than imported: the pure core must not depend on an
@@ -256,77 +247,68 @@ pub(super) const TES_NATIVES: &[NativeField] = &[
 /// Subject and Topic share one wire field: `categories` carries both, and the
 /// depth of the node is what tells them apart, so the axes differ in what
 /// they mean and not in where they land.
-const fn tes_axes(phase_native: &'static str) -> [AxisBinding; 5] {
-    [
-        AxisBinding {
-            axis: TermKind::Subject,
-            native: "categories",
-            cardinality: Cardinality::Many { cap: None },
-            delegation: Delegation::ByOptIn,
-        },
-        AxisBinding {
-            axis: TermKind::Topic,
-            native: "categories",
-            cardinality: Cardinality::Many { cap: None },
-            delegation: Delegation::ByOptIn,
-        },
-        AxisBinding {
-            axis: TermKind::ResourceType,
-            native: "mainType",
-            cardinality: Cardinality::One,
-            delegation: Delegation::ByOptIn,
-        },
-        AxisBinding {
-            axis: TermKind::Phase,
-            native: phase_native,
-            cardinality: Cardinality::Many { cap: None },
-            delegation: Delegation::ByOptIn,
-        },
-        AxisBinding {
-            axis: TermKind::Licence,
-            native: "licence",
-            cardinality: Cardinality::One,
-            delegation: Delegation::Never(NonDelegable::LegalContent),
-        },
-    ]
-}
-
-/// GB takes `ageRanges`; every other country takes `yearGroups`.
-const TES_GB_AXES: [AxisBinding; 5] = tes_axes("ageRanges");
-const TES_US_AXES: [AxisBinding; 5] = tes_axes("yearGroups");
-
-pub(super) const TES_GB: InventoryRegistry = tes(InventoryId::TesGb, &TES_GB_AXES);
-pub(super) const TES_US: InventoryRegistry = tes(InventoryId::TesUs, &TES_US_AXES);
-// NZ is on the non-GB branch of the country fork, so it shares US's axes.
-pub(super) const TES_NZ: InventoryRegistry = tes(InventoryId::TesNz, &TES_US_AXES);
+///
+/// `Phase` binds `ageRanges`: the uploader picks the age field by country and
+/// `ageRanges` is the GB branch, the only one this system has ever written.
+const TES_AXES: [AxisBinding; 5] = [
+    AxisBinding {
+        axis: TermKind::Subject,
+        native: "categories",
+        cardinality: Cardinality::Many { cap: None },
+        delegation: Delegation::ByOptIn,
+    },
+    AxisBinding {
+        axis: TermKind::Topic,
+        native: "categories",
+        cardinality: Cardinality::Many { cap: None },
+        delegation: Delegation::ByOptIn,
+    },
+    AxisBinding {
+        axis: TermKind::ResourceType,
+        native: "mainType",
+        cardinality: Cardinality::One,
+        delegation: Delegation::ByOptIn,
+    },
+    AxisBinding {
+        axis: TermKind::Phase,
+        native: "ageRanges",
+        cardinality: Cardinality::Many { cap: None },
+        delegation: Delegation::ByOptIn,
+    },
+    AxisBinding {
+        axis: TermKind::Licence,
+        native: "licence",
+        cardinality: Cardinality::One,
+        delegation: Delegation::Never(NonDelegable::LegalContent),
+    },
+];
 
 #[cfg(test)]
 mod tests {
-    use super::{TES_GB, TES_NATIVES, TES_NZ, TES_US};
+    use super::{TES, TES_NATIVES};
     use crate::registry::{
         registry, AxisBinding, Cardinality, Delegation, FieldDirection, NativeVocabulary,
         NonDelegable,
     };
     use crate::TermKind;
     use tam_types::{FieldKey, InventoryId};
+
     #[test]
-    fn no_tes_inventory_declares_a_cap_because_none_is_measured() {
-        for inventory in [InventoryId::TesGb, InventoryId::TesUs, InventoryId::TesNz] {
-            let canonical = registry(inventory).canonical;
-            for key in [
-                FieldKey::Title,
-                FieldKey::Description,
-                FieldKey::Price,
-                FieldKey::Taxonomy,
-                FieldKey::Grades,
-                FieldKey::Files,
-            ] {
-                assert_eq!(
-                    canonical.get(key).cap,
-                    None,
-                    "no Tes cap is measured, so none is declared for {key:?}"
-                );
-            }
+    fn tes_declares_no_cap_because_none_is_measured() {
+        let canonical = registry(InventoryId::Tes).canonical;
+        for key in [
+            FieldKey::Title,
+            FieldKey::Description,
+            FieldKey::Price,
+            FieldKey::Taxonomy,
+            FieldKey::Grades,
+            FieldKey::Files,
+        ] {
+            assert_eq!(
+                canonical.get(key).cap,
+                None,
+                "no Tes cap is measured, so none is declared for {key:?}"
+            );
         }
     }
 
@@ -354,7 +336,7 @@ mod tests {
              whose TesLicence writes four of the seven"
         );
         assert_eq!(
-            TES_GB.natives.len(),
+            TES.natives.len(),
             9,
             "the licence, the curriculum read, and the seven remaining age, category and \
              format fields the uploader posts"
@@ -437,36 +419,34 @@ mod tests {
     }
 
     #[test]
-    fn every_tes_inventory_binds_all_five_axes_and_records_none_absent() {
-        for inventory in [InventoryId::TesGb, InventoryId::TesUs, InventoryId::TesNz] {
-            let entry = registry(inventory);
-            let bound: Vec<TermKind> = entry
-                .equivalence_axes
-                .iter()
-                .map(|binding| binding.axis)
-                .collect();
-            assert_eq!(
-                bound,
-                vec![
-                    TermKind::Subject,
-                    TermKind::Topic,
-                    TermKind::ResourceType,
-                    TermKind::Phase,
-                    TermKind::Licence,
-                ],
-                "{inventory:?} carries every axis on its own wire"
-            );
-            assert!(
-                entry.absent_axes.is_empty(),
-                "{inventory:?} lacks no axis, so it records no absence"
-            );
-        }
+    fn tes_binds_all_five_axes_and_records_none_absent() {
+        let entry = registry(InventoryId::Tes);
+        let bound: Vec<TermKind> = entry
+            .equivalence_axes
+            .iter()
+            .map(|binding| binding.axis)
+            .collect();
+        assert_eq!(
+            bound,
+            vec![
+                TermKind::Subject,
+                TermKind::Topic,
+                TermKind::ResourceType,
+                TermKind::Phase,
+                TermKind::Licence,
+            ],
+            "Tes carries every axis on its own wire"
+        );
+        assert!(
+            entry.absent_axes.is_empty(),
+            "Tes lacks no axis, so it records no absence"
+        );
     }
 
     #[test]
     fn the_tes_licence_axis_refuses_delegation_whatever_the_seller_opts_into() {
         assert_eq!(
-            TES_GB.axis(TermKind::Licence),
+            TES.axis(TermKind::Licence),
             Some(AxisBinding {
                 axis: TermKind::Licence,
                 native: "licence",
@@ -478,22 +458,12 @@ mod tests {
     }
 
     #[test]
-    fn the_country_fork_is_the_one_axis_the_three_registries_disagree_on() {
-        let phase = |entry: &super::InventoryRegistry| {
-            entry.axis(TermKind::Phase).map(|binding| binding.native)
-        };
+    fn the_phase_axis_binds_the_age_ranges_the_uploader_writes() {
         assert_eq!(
-            (phase(&TES_GB), phase(&TES_US), phase(&TES_NZ)),
-            (Some("ageRanges"), Some("yearGroups"), Some("yearGroups")),
-            "the uploader takes ageRanges for GB and yearGroups everywhere else"
+            TES.axis(TermKind::Phase).map(|binding| binding.native),
+            Some("ageRanges"),
+            "the uploader's age field is ageRanges, the only branch ever written"
         );
-        for other in [TermKind::Subject, TermKind::Topic, TermKind::ResourceType] {
-            assert_eq!(
-                TES_GB.axis(other),
-                TES_US.axis(other),
-                "{other:?} is the same binding on both branches"
-            );
-        }
     }
 
     #[test]
@@ -508,19 +478,18 @@ mod tests {
             "five closed bands, the half-open 16+, and the not-applicable sentinel"
         );
         assert!(
-            TES_GB
-                .equivalence_axes
+            TES.equivalence_axes
                 .iter()
                 .filter(|binding| binding.axis == TermKind::Phase)
                 .count()
                 == 1,
-            "one Phase binding per inventory, because the country picks one field"
+            "one Phase binding, because the uploader posts one age field"
         );
     }
 
     #[test]
     fn the_primary_category_is_one_where_the_categories_beside_it_are_many() {
-        let Some(primary) = TES_GB.native("primaryCategory") else {
+        let Some(primary) = TES.native("primaryCategory") else {
             panic!("primaryCategory is a written field of the publish request");
         };
         assert_eq!(
@@ -529,7 +498,7 @@ mod tests {
             "publish_request posts it and no read returns it"
         );
         assert_eq!(
-            TES_GB.axis(TermKind::Subject).map(|b| b.cardinality),
+            TES.axis(TermKind::Subject).map(|b| b.cardinality),
             Some(Cardinality::Many { cap: None }),
             "a tilde in the vocabulary catalogue is a guess, so the cap stays unmeasured"
         );

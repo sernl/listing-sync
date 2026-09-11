@@ -70,8 +70,8 @@
 			<div>
 				<dt>Every marketplace</dt>
 				<dd>
-					TES GB, TES US, TES NZ, TPT and Etsy, each with that listing's status, the price you set
-					there, and a link to the live page.
+					TES, TPT and Etsy, each with that listing's status, the price you set there, and a
+					link to the live page.
 				</dd>
 			</div>
 		</dl>

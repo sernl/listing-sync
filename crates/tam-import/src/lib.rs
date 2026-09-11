@@ -889,7 +889,7 @@ fn listing_inventory(listing: &tam_marketplace::ImportedListing) -> InventoryId 
     listing
         .native
         .first()
-        .map_or(InventoryId::TesGb, |term| term.inventory)
+        .map_or(InventoryId::Tes, |term| term.inventory)
 }
 
 /// What the import's own projection could not carry, recorded against the
@@ -941,14 +941,14 @@ mod tests {
     #[test]
     fn a_fixed_inventory_denominates_a_price_from_its_own_rule() {
         assert_eq!(
-            resolve_price(InventoryId::TesGb, &paid(450, "GBP")).ok(),
+            resolve_price(InventoryId::Tes, &paid(450, "GBP")).ok(),
             Money::new(450, Currency::Gbp).ok().map(PriceIntent::Paid),
             "the write side already mints from currency_rule, and the read side agrees"
         );
         assert_eq!(
-            resolve_price(InventoryId::TesUs, &paid(450, "USD")).ok(),
+            resolve_price(InventoryId::Tpt, &paid(450, "USD")).ok(),
             Money::new(450, Currency::Usd).ok().map(PriceIntent::Paid),
-            "TesUs fixes USD; a rule that said Tes mints GBP would be wrong here"
+            "TPT fixes USD; a rule that said every inventory mints GBP would be wrong here"
         );
     }
 
@@ -999,7 +999,7 @@ mod tests {
     fn a_denomination_the_inventory_does_not_fix_is_refused() {
         assert!(
             matches!(
-                resolve_price(InventoryId::TesGb, &paid(450, "USD")),
+                resolve_price(InventoryId::Tes, &paid(450, "USD")),
                 Err(ImportError::Price(_))
             ),
             "reading a USD price into a GBP-fixed inventory would silently redenominate it"

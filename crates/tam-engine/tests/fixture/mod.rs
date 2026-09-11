@@ -93,7 +93,7 @@ pub(crate) async fn seed(app: &PgPool, engine: &PgPool) -> MappingId {
                 id: mapping,
                 org: ORG,
                 product,
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 binding: tam_domain::Binding::Unbound,
                 policies: tam_domain::FieldPolicies {
                     title: tam_domain::FieldPolicy::Managed,
@@ -134,7 +134,7 @@ pub(crate) async fn seed(app: &PgPool, engine: &PgPool) -> MappingId {
             ORG,
             &NewJob {
                 job: JobId(Uuid([0x06; 16])),
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 stamp: Stamp {
                     at: T0,
                     actor: Actor::System(SystemComponent::Engine),

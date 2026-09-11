@@ -5,11 +5,8 @@ import {
 	migrationRows,
 	migrations,
 	openFromSource,
-	pillTone,
-	seededSource,
-	sourceFromQuery
+	pillTone
 } from './migration';
-import { MIGRATE_SOURCES } from '$lib/sync-request';
 import { request } from './fixtures.test-support';
 
 const HOUR = 3_600_000;
@@ -25,9 +22,9 @@ describe('which requests this page owns', () => {
 });
 
 describe('a migration row', () => {
-	it('carries both shops, so the row draws each by its own mark and region', () => {
-		const [row] = migrationRows([request({ source: 'TesNz' })], 0);
-		expect(row.source).toBe('TesNz');
+	it('carries both shops, so the row draws each by its own mark', () => {
+		const [row] = migrationRows([request({ source: 'Tes' })], 0);
+		expect(row.source).toBe('Tes');
 		expect(row.target).toBe('Tpt');
 	});
 
@@ -67,10 +64,10 @@ describe('the activity log', () => {
 });
 
 describe('the per-source count', () => {
-	it('counts by marketplace rather than by site, because a seller has one Tes login', () => {
+	it('sums every migration from one marketplace under it', () => {
 		const counts = migrationCounts([
-			request({ request: 'a', source: 'TesGb' }),
-			request({ request: 'b', source: 'TesNz' })
+			request({ request: 'a', source: 'Tes' }),
+			request({ request: 'b', source: 'Tes' })
 		]);
 		expect(counts).toEqual({ Tes: 2 });
 	});
@@ -92,42 +89,42 @@ describe('the tone translation', () => {
 
 describe('a migration already under way from the same shop', () => {
 	it('is found while the device has not started it', () => {
-		const open = openFromSource([request({ state: 'pending', resources_total: 0 })], 'TesGb');
+		const open = openFromSource([request({ state: 'pending', resources_total: 0 })], 'Tes');
 		expect(open?.request).toBe('r-1');
 		expect(open?.href).toBe('/sync/requests/r-1');
 	});
 
 	it('is found while it is reading', () => {
-		expect(openFromSource([request({ state: 'draining' })], 'TesGb')).not.toBeNull();
+		expect(openFromSource([request({ state: 'draining' })], 'Tes')).not.toBeNull();
 	});
 
 	it('is not found once it has imported, so a second migration is allowed', () => {
-		expect(openFromSource([request({ state: 'enqueued' })], 'TesGb')).toBeNull();
+		expect(openFromSource([request({ state: 'enqueued' })], 'Tes')).toBeNull();
 	});
 
 	it('is not found once it has failed, so the seller can try again', () => {
-		expect(openFromSource([request({ state: 'failed' })], 'TesGb')).toBeNull();
+		expect(openFromSource([request({ state: 'failed' })], 'Tes')).toBeNull();
 	});
 
 	it('is not found when the shop was read and held nothing', () => {
 		const empty = request({ state: 'enqueued', resources_total: 0 });
-		expect(openFromSource([empty], 'TesGb')).toBeNull();
+		expect(openFromSource([empty], 'Tes')).toBeNull();
 	});
 
 	it('treats a state it does not recognise as still going, which is the cautious side', () => {
 		const strange = request({ state: 'something-new' as never });
-		expect(openFromSource([strange], 'TesGb')).not.toBeNull();
+		expect(openFromSource([strange], 'Tes')).not.toBeNull();
 	});
 
-	it('does not block a different Tes site, because three sites are three shops', () => {
-		const running = request({ source: 'TesGb', state: 'draining' });
-		expect(openFromSource([running], 'TesNz')).toBeNull();
-		expect(openFromSource([running], 'TesGb')).not.toBeNull();
+	it('does not block a different marketplace, which is a different shop', () => {
+		const running = request({ source: 'Tes', state: 'draining' });
+		expect(openFromSource([running], 'Tpt')).toBeNull();
+		expect(openFromSource([running], 'Tes')).not.toBeNull();
 	});
 
 	it('ignores a sync request, which is not a migration', () => {
 		const synced = request({ disposition: 'sync', state: 'draining' });
-		expect(openFromSource([synced], 'TesGb')).toBeNull();
+		expect(openFromSource([synced], 'Tes')).toBeNull();
 	});
 
 	it('answers nothing before a source has been chosen', () => {
@@ -139,61 +136,13 @@ describe('a migration already under way from the same shop', () => {
 			request({ request: 'older', state: 'draining', created_at: 1 }),
 			request({ request: 'newer', state: 'draining', created_at: 2 })
 		];
-		expect(openFromSource(rows, 'TesGb')?.request).toBe('newer');
-		expect(openFromSource([...rows].reverse(), 'TesGb')?.request).toBe('newer');
+		expect(openFromSource(rows, 'Tes')?.request).toBe('newer');
+		expect(openFromSource([...rows].reverse(), 'Tes')?.request).toBe('newer');
 	});
 
 	it('names the shop and says what it is doing, so the banner is not a bare refusal', () => {
-		const open = openFromSource([request({ state: 'draining' })], 'TesGb');
-		expect(open?.line).toContain('United Kingdom');
+		const open = openFromSource([request({ state: 'draining' })], 'Tes');
+		expect(open?.line).toContain('Tes.com');
 		expect(open?.line).toContain('Importing');
-	});
-});
-
-describe('the source a hand-over names', () => {
-	it('preselects a site this page offers', () => {
-		expect(sourceFromQuery('TesNz', MIGRATE_SOURCES)).toBe('TesNz');
-	});
-
-	it('preselects nothing for a value that is not one of them', () => {
-		expect(sourceFromQuery('Tpt', MIGRATE_SOURCES)).toBeNull();
-		expect(sourceFromQuery('nonsense', MIGRATE_SOURCES)).toBeNull();
-		expect(sourceFromQuery(null, MIGRATE_SOURCES)).toBeNull();
-	});
-
-	it('preselects nothing for a site the seller has no connection for', () => {
-		expect(sourceFromQuery('TesNz', ['TesGb'])).toBeNull();
-	});
-});
-
-
-describe('which shop the From field names', () => {
-	const OFFERED = MIGRATE_SOURCES;
-
-	it('takes the seller’s own pick over everything else', () => {
-		expect(seededSource('TesGb', 'TesNz', OFFERED)).toBe('TesGb');
-	});
-
-	it('takes a hand-over where the seller has picked nothing', () => {
-		expect(seededSource(null, 'TesNz', OFFERED)).toBe('TesNz');
-	});
-
-	it('falls back to the default this page had before seeding existed', () => {
-		expect(seededSource(null, null, OFFERED)).toBe('TesGb');
-		expect(seededSource(null, null, OFFERED)).toBe(seededSource(null, 'nonsense', OFFERED));
-	});
-
-	it('never selects nothing because a link was stale', () => {
-		for (const stale of ['nonsense', 'Tpt', 'Etsy', '', 'tesgb']) {
-			expect(seededSource(null, stale, OFFERED)).toBe('TesGb');
-		}
-	});
-
-	it('falls back rather than naming a site this seller cannot migrate from', () => {
-		expect(seededSource(null, 'TesNz', ['TesGb'])).toBe('TesGb');
-	});
-
-	it('answers nothing only when the seller is offered nothing', () => {
-		expect(seededSource(null, 'TesGb', [])).toBeNull();
 	});
 });

@@ -881,7 +881,7 @@ input:focus-visible {
 	color: var(--text);
 	background: var(--surface);
 	border: 1px solid var(--line);
-	box-shadow: 0 6px 20px color-mix(in srgb, var(--text) 18%, transparent);
+	box-shadow: var(--sh-3);
 }
 
 .toast-mark {
@@ -1331,7 +1331,7 @@ dialog {
 }
 
 dialog::backdrop {
-	background: color-mix(in srgb, var(--text) 42%, transparent);
+	background: var(--scrim);
 }
 
 .dialog-body {

@@ -43,7 +43,6 @@
 >
 	<div class="top">
 		<img class="mark" src={tile.markSrc} alt="" width="28" height="28" />
-		{#if tile.region !== null}<b class="tag">{tile.region}</b>{/if}
 	</div>
 
 	{#if tile.href === null}
@@ -146,14 +145,6 @@
 		object-fit: contain;
 		border-radius: 6px;
 		flex: none;
-	}
-
-	/* The region, and only where three sites of one marketplace share a mark. */
-	.tag {
-		font-size: 11.5px;
-		font-weight: 700;
-		letter-spacing: 0.04em;
-		color: var(--muted);
 	}
 
 	/* The whole tile is one target rather than four, so a thumb landing

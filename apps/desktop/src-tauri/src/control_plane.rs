@@ -1225,7 +1225,7 @@ mod tests {
     async fn the_source_inventory_is_read_from_the_request() {
         let fake = Arc::new(Fake::answering(
             200,
-            r#"{"request":"71717171-7171-7171-7171-717171717171","source":"TesNz","target":"Tpt","disposition":"migrate","intent":"draft","state":"pending","resources":[]}"#,
+            r#"{"request":"71717171-7171-7171-7171-717171717171","source":"Tes","target":"Tpt","disposition":"migrate","intent":"draft","state":"pending","resources":[]}"#,
         ));
         let source = plane(Arc::clone(&fake))
             .sync_request_source(tam_types::Uuid([0x71; 16]))
@@ -1233,7 +1233,7 @@ mod tests {
             .expect("the request reads");
         assert_eq!(
             source,
-            tam_types::InventoryId::TesNz,
+            tam_types::InventoryId::Tes,
             "the shop is the one the request names, not a default this device picked"
         );
         let path = fake.seen.lock().await[0].path.clone();

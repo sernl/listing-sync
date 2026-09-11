@@ -118,7 +118,7 @@ async fn provision(pool: &PgPool) {
                     id: mapping_id,
                     org: ORG_A,
                     product: ProductId(Uuid([product_id; 16])),
-                    inventory: InventoryId::TesNz,
+                    inventory: InventoryId::Tes,
                     binding: Binding::Unbound,
                     policies: FieldPolicies {
                         title: FieldPolicy::Managed,
@@ -202,7 +202,7 @@ async fn call(
 
 fn create_body() -> serde_json::Value {
     serde_json::json!({
-        "inventory": "TesNz",
+        "inventory": "Tes",
         "mappings": [
             uuid::Uuid::from_bytes(MAPPING_1.0 .0).to_string(),
             uuid::Uuid::from_bytes(MAPPING_2.0 .0).to_string(),
@@ -228,8 +228,8 @@ const KEY_2: &str = "22222222-2222-4222-8222-222222222222";
 async fn a_sync_request_is_accepted_written_and_polled_back(pool: PgPool) {
     provision(&pool).await;
     let body = serde_json::json!({
-        "source": "TesGb",
-        "target": "TesNz",
+        "source": "Tes",
+        "target": "Tpt",
         "disposition": "sync",
         "intent": "live",
         "resources": ["13549794", "13549795"],
@@ -303,8 +303,8 @@ async fn a_migrate_from_a_device_enumerated_source_names_no_resources(pool: PgPo
         &TOKEN_A,
         Some(KEY_1),
         Some(serde_json::json!({
-            "source": "TesGb",
-            "target": "TesNz",
+            "source": "Tes",
+            "target": "Tpt",
             "disposition": "migrate",
             "intent": "draft",
             "resources": ["13549794"],
@@ -326,8 +326,8 @@ async fn a_migrate_from_a_device_enumerated_source_names_no_resources(pool: PgPo
         &TOKEN_A,
         Some(KEY_2),
         Some(serde_json::json!({
-            "source": "TesGb",
-            "target": "TesNz",
+            "source": "Tes",
+            "target": "Tpt",
             "disposition": "migrate",
             "intent": "draft",
             "resources": [],
@@ -376,7 +376,7 @@ async fn a_source_with_no_captured_read_is_refused_at_submit(pool: PgPool) {
         Some(KEY_1),
         Some(serde_json::json!({
             "source": "Tpt",
-            "target": "TesNz",
+            "target": "Tes",
             "resources": ["13549794"],
         })),
     )
@@ -414,8 +414,8 @@ async fn a_sync_between_one_inventory_and_itself_is_refused(pool: PgPool) {
         &TOKEN_A,
         Some(KEY_1),
         Some(serde_json::json!({
-            "source": "TesNz",
-            "target": "TesNz",
+            "source": "Tes",
+            "target": "Tes",
             "resources": ["13549794"],
         })),
     )
@@ -599,7 +599,7 @@ async fn unknown_mappings_are_named_in_the_refusal(pool: PgPool) {
         "/v1/jobs",
         &TOKEN_A,
         Some(KEY_1),
-        Some(serde_json::json!({ "inventory": "TesNz", "mappings": [stranger.clone()] })),
+        Some(serde_json::json!({ "inventory": "Tes", "mappings": [stranger.clone()] })),
     )
     .await;
     assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);

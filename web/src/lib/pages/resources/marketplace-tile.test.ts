@@ -15,7 +15,7 @@ import {
 	type MarketplaceState,
 	type WorkItem
 } from '$lib/inventory';
-import { MARK_SRC, REGION_TAG, platformTitle } from '$lib/platforms';
+import { MARK_SRC, platformTitle } from '$lib/platforms';
 import type { ConnectionView, ItemView, MappingHead } from '$lib/api';
 import type { Readiness } from '$lib/publish-readiness';
 import type { InventoryId } from '$lib/generated/vocab';
@@ -52,7 +52,7 @@ function work(partial: Partial<ItemView>, job = 'j1'): WorkItem {
 		job,
 		item: {
 			item: 'i1',
-			mapping: 'm-TesGb',
+			mapping: 'm-Tes',
 			state: 'queued',
 			attempt_count: 1,
 			created_at: NOW,
@@ -85,24 +85,24 @@ function tile(partial: Partial<TileInput> & { chip: MarketplaceChip }) {
 /** One chip per state in the closed vocabulary, each reached the way the
  *  console reaches it rather than by writing the state in by hand. */
 const BY_STATE: Record<MarketplaceState, MarketplaceChip> = {
-	listed: chip({ inventory: 'TesGb' }),
+	listed: chip({ inventory: 'Tes' }),
 	draft: chip({
-		inventory: 'TesGb',
-		mapping: mapping({ inventory: 'TesGb', lifecycle_state: 'draft' })
+		inventory: 'Tes',
+		mapping: mapping({ inventory: 'Tes', lifecycle_state: 'draft' })
 	}),
 	not_listed: chip({
-		inventory: 'TesGb',
-		mapping: mapping({ inventory: 'TesGb', binding_state: 'unbound', lifecycle_state: 'absent' })
+		inventory: 'Tes',
+		mapping: mapping({ inventory: 'Tes', binding_state: 'unbound', lifecycle_state: 'absent' })
 	}),
-	in_flight: chip({ inventory: 'TesGb', work: work({ state: 'running' }) }),
+	in_flight: chip({ inventory: 'Tes', work: work({ state: 'running' }) }),
 	blocked: chip({
-		inventory: 'TesGb',
+		inventory: 'Tes',
 		work: work({ state: 'blocked', blocked_on: 'election' })
 	}),
-	needs_signin: chip({ inventory: 'TesGb', connection: undefined }),
-	stranded: chip({ inventory: 'TesGb', work: work({ state: 'parked_live' }) }),
+	needs_signin: chip({ inventory: 'Tes', connection: undefined }),
+	stranded: chip({ inventory: 'Tes', work: work({ state: 'parked_live' }) }),
 	failed: chip({
-		inventory: 'TesGb',
+		inventory: 'Tes',
 		work: work({
 			state: 'settled',
 			outcome: 'failed',
@@ -145,33 +145,29 @@ describe('one tile per state in the closed vocabulary', () => {
 	it('spells the marketplace and the status out in the accessible name', () => {
 		for (const [state, held] of Object.entries(BY_STATE)) {
 			const drawn = tile({ chip: held });
-			expect(drawn.name.startsWith(platformTitle('TesGb')), state).toBe(true);
+			expect(drawn.name.startsWith(platformTitle('Tes')), state).toBe(true);
 			expect(drawn.name, state).toContain(STATE_LABEL[state as MarketplaceState]);
 		}
 	});
 
-	it('draws the marketplace by its own mark, and the region only where one is needed', () => {
+	it('draws the marketplace by its own mark', () => {
 		expect(tile({ chip: BY_STATE.listed }).markSrc).toBe(MARK_SRC.Tes);
-		expect(tile({ chip: BY_STATE.listed }).region).toBe(REGION_TAG.TesGb);
 		const tpt = tile({
 			chip: chip({ inventory: 'Tpt' }),
 			mapping: mapping({ inventory: 'Tpt' })
 		});
 		expect(tpt.markSrc).toBe(MARK_SRC.Tpt);
-		expect(tpt.region).toBe(null);
 	});
 });
 
 describe('where tapping a tile goes', () => {
 	it('sends a marketplace needing a sign-in to its own card, not to the bare page', () => {
-		for (const inventory of ['TesGb', 'TesUs', 'TesNz'] as const) {
-			const drawn = tile({
-				chip: chip({ inventory, connection: undefined }),
-				mapping: mapping({ inventory })
-			});
-			expect(drawn.href, inventory).toBe('/marketplaces#mp-tes');
-			expect(drawn.external, inventory).toBe(false);
-		}
+		const drawn = tile({
+			chip: chip({ inventory: 'Tes', connection: undefined }),
+			mapping: mapping({ inventory: 'Tes' })
+		});
+		expect(drawn.href).toBe('/marketplaces#mp-tes');
+		expect(drawn.external).toBe(false);
 		const tpt = tile({
 			chip: chip({ inventory: 'Tpt', connection: undefined }),
 			mapping: mapping({ inventory: 'Tpt' })
@@ -180,9 +176,9 @@ describe('where tapping a tile goes', () => {
 	});
 
 	it('opens a live listing on the marketplace, in the seller’s own browser', () => {
-		const listed = mapping({ inventory: 'TesGb', listing_url: 'https://www.tes.com/x' });
+		const listed = mapping({ inventory: 'Tes', listing_url: 'https://www.tes.com/x' });
 		const drawn = tile({
-			chip: chip({ inventory: 'TesGb', mapping: listed }),
+			chip: chip({ inventory: 'Tes', mapping: listed }),
 			mapping: listed
 		});
 		expect(drawn.href).toBe('https://www.tes.com/x');
@@ -194,8 +190,8 @@ describe('where tapping a tile goes', () => {
 	// link back to the page the tile is already on: four tiles that look like
 	// destinations and go nowhere. It fails under exactly that implementation.
 	it('drops a link that points at the page the tile is drawn on', () => {
-		const noUrl = mapping({ inventory: 'TesGb', listing_url: null });
-		const listed = chip({ inventory: 'TesGb', mapping: noUrl });
+		const noUrl = mapping({ inventory: 'Tes', listing_url: null });
+		const listed = chip({ inventory: 'Tes', mapping: noUrl });
 		expect(listed.action?.href).toBe(`/resources/${PRODUCT}`);
 		const drawn = tile({ chip: listed, mapping: noUrl });
 		expect(drawn.href).toBe(null);
@@ -207,7 +203,7 @@ describe('where tapping a tile goes', () => {
 	});
 
 	it('keeps a link to another resource, which is not this page', () => {
-		const elsewhere = chip({ inventory: 'TesGb', product: 'p-other' });
+		const elsewhere = chip({ inventory: 'Tes', product: 'p-other' });
 		const drawn = tile({ chip: elsewhere, product: PRODUCT });
 		expect(drawn.href).toBe('/resources/p-other');
 	});
@@ -230,13 +226,13 @@ describe('where tapping a tile goes', () => {
 describe('the control under the status', () => {
 	it('offers to record a listing the console has never bound', () => {
 		const unbound = mapping({
-			inventory: 'TesGb',
+			inventory: 'Tes',
 			binding_state: 'unbound',
 			lifecycle_state: 'absent'
 		});
-		const drawn = tile({ chip: chip({ inventory: 'TesGb', mapping: unbound }), mapping: unbound });
+		const drawn = tile({ chip: chip({ inventory: 'Tes', mapping: unbound }), mapping: unbound });
 		expect(drawn.control).toBe('attach');
-		expect(drawn.mapping).toBe('m-TesGb');
+		expect(drawn.mapping).toBe('m-Tes');
 	});
 
 	it('offers to cross-list onto a marketplace this console can author for', () => {
@@ -265,8 +261,8 @@ describe('the control under the status', () => {
 
 describe('what the tile no longer draws but still says', () => {
 	const refused: Readiness = {
-		inventory: 'TesGb',
-		title: platformTitle('TesGb'),
+		inventory: 'Tes',
+		title: platformTitle('Tes'),
 		ready: false,
 		line: 'needs a licence',
 		tone: 'run'
@@ -287,8 +283,8 @@ describe('what the tile no longer draws but still says', () => {
 
 	it('carries a paused marketplace as an overlay rather than as a ninth state', () => {
 		const held = chip({
-			inventory: 'TesGb',
-			status: { inventory: 'TesGb', marketplace: 'Tes', halted: true, raised_at: 1, reason: 'a Tes outage' }
+			inventory: 'Tes',
+			status: { inventory: 'Tes', marketplace: 'Tes', halted: true, raised_at: 1, reason: 'a Tes outage' }
 		});
 		const drawn = tile({ chip: held });
 		expect(drawn.paused).toBe('a Tes outage');

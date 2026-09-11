@@ -8,7 +8,7 @@ use base64::Engine;
 use serde_json::{json, Value};
 use tam_marketplace::transport::{FilePart, HttpRequest, Method, RequestAuth, RequestBody};
 use tam_marketplace::RemoteListingId;
-use tam_types::{CopyFormat, InventoryId};
+use tam_types::CopyFormat;
 
 pub const ORIGIN: &str = "https://www.tes.com";
 
@@ -250,69 +250,29 @@ pub struct TesListing {
     pub pricing: TesPricing,
 }
 
-/// The age channel one Tes inventory takes, as exactly one of two fields.
+/// The age ids a Tes listing declares, posted as `ageRanges`.
 ///
-/// The uploader picks by country -- `ageResourceFieldName = country === "GB" ?
-/// "ageRanges" : "yearGroups"` -- and the two carry ids from different
-/// vocabularies, so a US year group posted in `ageRanges` is a wrong field
-/// rather than a wrong label: id 2 names the 5-7 age band in one and Reception
-/// in the other. Modelling the pair as one value is what stops the write path
-/// sending both or sending the wrong one.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TesAges {
-    Ranges(Vec<i64>),
-    YearGroups(Vec<i64>),
-}
+/// The uploader picks the field by country -- `ageResourceFieldName =
+/// country === "GB" ? "ageRanges" : "yearGroups"` -- and the two carry ids
+/// from different vocabularies: id 2 names the 5-7 age band in one and
+/// Reception in the other. Tes is one inventory on the `ageRanges` branch
+/// since 2026-09-12, and `yearGroups` travels empty because the captured
+/// draft body carries the key (probe 02 line 15).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TesAges(Vec<i64>);
 
 impl TesAges {
-    /// The wire field name this channel answers.
+    /// The wire field these ids answer.
+    pub const FIELD: &'static str = "ageRanges";
+
     #[must_use]
-    pub const fn field(&self) -> &'static str {
-        match self {
-            Self::Ranges(_) => "ageRanges",
-            Self::YearGroups(_) => "yearGroups",
-        }
+    pub const fn new(ids: Vec<i64>) -> Self {
+        Self(ids)
     }
 
     #[must_use]
     pub fn ids(&self) -> &[i64] {
-        match self {
-            Self::Ranges(ids) | Self::YearGroups(ids) => ids,
-        }
-    }
-
-    /// The channel the inventory binds, empty. The fork is stated once, here
-    /// and in the registry's `equivalence_axes`, and the adapter restates it
-    /// rather than importing it because the pure core depends on this crate.
-    #[must_use]
-    pub const fn empty(inventory: InventoryId) -> Self {
-        match inventory {
-            InventoryId::TesGb => Self::Ranges(Vec::new()),
-            InventoryId::TesUs | InventoryId::TesNz | InventoryId::Etsy | InventoryId::Tpt => {
-                Self::YearGroups(Vec::new())
-            }
-        }
-    }
-
-    /// The same fork, carrying ids.
-    #[must_use]
-    pub const fn of(inventory: InventoryId, ids: Vec<i64>) -> Self {
-        match inventory {
-            InventoryId::TesGb => Self::Ranges(ids),
-            InventoryId::TesUs | InventoryId::TesNz | InventoryId::Etsy | InventoryId::Tpt => {
-                Self::YearGroups(ids)
-            }
-        }
-    }
-
-    /// The age ranges alone. `mainAge` and the additional-range field are
-    /// concepts of the GB age table, so a year-group listing declares none.
-    #[must_use]
-    pub fn ranges(&self) -> &[i64] {
-        match self {
-            Self::Ranges(ids) => ids,
-            Self::YearGroups(_) => &[],
-        }
+        &self.0
     }
 
     /// The two derived age fields this declaration posts.
@@ -323,22 +283,10 @@ impl TesAges {
     /// `low..=high` fill agrees with the union only where the bands are
     /// adjacent; for the captured `[2, 6]` the union is `{5,6,7,16,17,18}`
     /// where a fill would post everything from 5 to 18.
-    ///
-    /// A year-group inventory derives neither. Both fields belong to the
-    /// `ageRanges` vocabulary -- `mainAge` is a band id, not an age -- and no
-    /// capture shows what a year-group listing posts in their place, so they
-    /// are omitted rather than filled from a table that does not address
-    /// them.
     pub fn derived_ages(&self) -> Result<DerivedAges, UnknownAgeBand> {
-        let Self::Ranges(ids) = self else {
-            return Ok(DerivedAges {
-                ages: Vec::new(),
-                main_age: None,
-            });
-        };
         let mut ages: Vec<i64> = Vec::new();
         let mut main_age = None;
-        for id in ids {
+        for id in &self.0 {
             let band = AGE_BANDS
                 .iter()
                 .find(|band| band.id == *id)
@@ -440,7 +388,7 @@ pub fn probe_listing() -> TesListing {
         description_raw: "Automated schema probe. **Delete me.**".to_owned(),
         description_format: CopyFormat::Markdown,
         category_ids: vec![1_000_448],
-        age_channel: TesAges::Ranges(vec![4]),
+        age_channel: TesAges::new(vec![4]),
         ages: vec![11, 12, 13, 14],
         main_type: Some(99_009),
         main_age: Some(4),
@@ -488,16 +436,15 @@ fn metadata_body(listing: &TesListing) -> Value {
         .iter()
         .map(|category| json!({ "id": category }))
         .collect();
-    // Exactly one of the two age fields carries ids and the other is empty,
-    // because the uploader offers exactly one by country. Sending a US year
-    // group in `ageRanges` would be a wrong field rather than a wrong label.
+    // `yearGroups` travels empty rather than absent: the captured draft body
+    // carries the key, and the ids this adapter writes are age bands.
     let mut body = json!({
         "title": listing.title,
         "descriptionRaw": listing.description_raw,
         "descriptionRawType": raw_type(listing.description_format),
         "categories": categories,
-        "ageRanges": listing.age_channel.ranges(),
-        "yearGroups": year_groups(&listing.age_channel),
+        "ageRanges": listing.age_channel.ids(),
+        "yearGroups": Vec::<i64>::new(),
         "licence": listing.pricing.licence().as_str(),
     });
     // The registry declares `mainType` optional, so an unprojected resource
@@ -525,13 +472,6 @@ fn metadata_body(listing: &TesListing) -> Value {
     body
 }
 
-fn year_groups(channel: &TesAges) -> &[i64] {
-    match channel {
-        TesAges::YearGroups(ids) => ids,
-        TesAges::Ranges(_) => &[],
-    }
-}
-
 #[must_use]
 pub fn set_metadata_request(id: DraftId, listing: &TesListing) -> HttpRequest {
     HttpRequest::post_json(
@@ -550,7 +490,7 @@ fn additional_age(listing: &TesListing) -> Option<i64> {
     let main = listing.main_age?;
     listing
         .age_channel
-        .ranges()
+        .ids()
         .iter()
         .copied()
         .find(|range| *range != main)
@@ -1205,7 +1145,7 @@ mod tests {
     /// would post everything from 5 to 18 here.
     #[test]
     fn a_disjoint_declaration_posts_the_union_of_its_bands_and_not_the_fill() {
-        let derived = TesAges::Ranges(vec![2, 6])
+        let derived = TesAges::new(vec![2, 6])
             .derived_ages()
             .expect("both are bands");
         assert_eq!(
@@ -1222,9 +1162,7 @@ mod tests {
     /// states real ages rather than omitting the pair.
     #[test]
     fn the_sixteen_plus_band_alone_posts_its_own_closed_age_set() {
-        let derived = TesAges::Ranges(vec![6])
-            .derived_ages()
-            .expect("6 is a band");
+        let derived = TesAges::new(vec![6]).derived_ages().expect("6 is a band");
         assert_eq!(
             derived,
             super::DerivedAges {
@@ -1239,7 +1177,7 @@ mod tests {
     /// is what the not-applicable row means.
     #[test]
     fn the_not_applicable_band_states_neither_key() {
-        for declaration in [TesAges::Ranges(vec![7]), TesAges::Ranges(vec![])] {
+        for declaration in [TesAges::new(vec![7]), TesAges::new(vec![])] {
             let derived = declaration.derived_ages().expect("7 is a band");
             assert_eq!(
                 derived,
@@ -1253,25 +1191,9 @@ mod tests {
     }
 
     #[test]
-    fn a_year_group_declaration_derives_neither_age_field() {
-        let derived = TesAges::YearGroups(vec![4, 5])
-            .derived_ages()
-            .expect("a year group is never read against the band table");
-        assert_eq!(
-            derived,
-            super::DerivedAges {
-                ages: vec![],
-                main_age: None,
-            },
-            "`mainAge` is an ageRanges band id, and no capture shows what a year-group \
-             listing posts in its place"
-        );
-    }
-
-    #[test]
     fn a_grade_id_outside_the_band_vocabulary_is_named_rather_than_dropped() {
         assert_eq!(
-            TesAges::Ranges(vec![4, 99]).derived_ages(),
+            TesAges::new(vec![4, 99]).derived_ages(),
             Err(super::UnknownAgeBand(99)),
             "the ids are seeded from this vocabulary, so one that is not in it is a fault"
         );
@@ -1282,7 +1204,7 @@ mod tests {
     #[test]
     fn the_draft_body_carries_the_additional_band_beside_the_main_one() {
         let listing = TesListing {
-            age_channel: TesAges::Ranges(vec![2, 6]),
+            age_channel: TesAges::new(vec![2, 6]),
             ages: vec![5, 6, 7, 16, 17, 18],
             main_age: Some(6),
             ..listing(TesPricing::Free(FreeLicence::CcBy))
@@ -1391,7 +1313,7 @@ mod tests {
             description_raw: "D".to_owned(),
             description_format: CopyFormat::Markdown,
             category_ids: vec![1_000_448, 1_000_977],
-            age_channel: TesAges::Ranges(vec![3, 4]),
+            age_channel: TesAges::new(vec![3, 4]),
             ages: vec![11, 12],
             main_type: Some(99_009),
             main_age: Some(4),
@@ -1533,7 +1455,7 @@ mod tests {
             DraftId(7),
             &TesListing {
                 category_ids: Vec::new(),
-                age_channel: TesAges::Ranges(vec![4]),
+                age_channel: TesAges::new(vec![4]),
                 ..listing(TesPricing::Free(FreeLicence::CcByNd))
             },
         );

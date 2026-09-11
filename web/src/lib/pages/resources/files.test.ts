@@ -157,8 +157,8 @@ describe('which files a seller may replace', () => {
 
 describe('what a file change says it does', () => {
 	it('states that a listed marketplace keeps its copy until the next send', () => {
-		expect(reachSentence(['Tpt', 'TesGb'])).toBe(
-			'The copy on TPT (Teachers Pay Teachers), TES (Tes.com) · United Kingdom stays exactly as it is until the next send.'
+		expect(reachSentence(['Tpt', 'Tes'])).toBe(
+			'The copy on TPT (Teachers Pay Teachers), TES (Tes.com) stays exactly as it is until the next send.'
 		);
 	});
 

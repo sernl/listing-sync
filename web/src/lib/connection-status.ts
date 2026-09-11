@@ -1,9 +1,11 @@
-// The connections page's rendering of the four-state status: a tone and a
-// sentence per value. Pure, so it tests without a component.
+// The connections page's rendering of the four-state status: a tone, a
+// sentence, and the word the top strip raises. Pure, so it tests without a
+// component.
 //
 // The four labels are the server's own words, rendered verbatim rather than
 // prettified: the vocabulary is generated from the Rust enum, and a client
-// that re-spells it puts a second vocabulary in front of the seller.
+// that re-spells it puts a second vocabulary in front of the seller. The
+// sentence beside them is not the server's, and is written for a teacher.
 
 import type { ConnectionStatus } from '$lib/generated/vocab';
 
@@ -13,25 +15,35 @@ export interface StatusPresentation {
 	tone: 'ok' | 'mut' | 'run' | 'bad';
 	/// What the value means for the seller, in one sentence.
 	explanation: string;
+	/// What the top strip says after the marketplace's name, and null where
+	/// there is nothing to raise: a working connection and an unverified one
+	/// are both "nothing for you to do", and a strip that said so would be a
+	/// permanent notice nobody reads.
+	alert: string | null;
 }
 
 const PRESENTATION: Record<ConnectionStatus, Omit<StatusPresentation, 'label'>> = {
 	connected: {
 		tone: 'ok',
-		explanation: 'Verified against the marketplace recently. Work is flowing.'
+		explanation: 'Working. Nothing for you to do.',
+		alert: null
 	},
 	checking: {
 		tone: 'mut',
-		explanation: 'Linked, but not verified right now. Nothing for you to do.'
+		explanation: 'Linked, and not checked just now. Nothing for you to do.',
+		alert: null
 	},
 	unstable: {
 		tone: 'run',
 		explanation:
-			'Verification is failing. We are still retrying, and re-linking is not known to be the fix.'
+			'We are having trouble reaching this marketplace. We keep trying, and signing in again may not be the fix.',
+		alert: 'needs a look'
 	},
 	disconnected: {
 		tone: 'bad',
-		explanation: 'Nothing usable is stored. Re-link to let queued work continue.'
+		explanation:
+			'You are signed out here. Sign in again on your computer to let waiting work continue.',
+		alert: 'signed out'
 	}
 };
 

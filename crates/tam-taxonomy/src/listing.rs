@@ -418,10 +418,10 @@ mod tests {
             subjects: vec![TERM],
             grades: tam_domain::GradeDeclaration {
                 source: tam_domain::DeclarationSource::Imported {
-                    vocabulary: VocabularyId(InventoryId::TesGb, TermKind::Phase),
+                    vocabulary: VocabularyId(InventoryId::Tes, TermKind::Phase),
                 },
                 raw: vec![VocabularyPath {
-                    vocabulary: VocabularyId(InventoryId::TesGb, TermKind::Phase),
+                    vocabulary: VocabularyId(InventoryId::Tes, TermKind::Phase),
                     segments: vec!["5-7".to_owned()],
                     native_id: Some("2".to_owned()),
                 }],
@@ -442,11 +442,11 @@ mod tests {
         }]
     }
 
-    fn nz_edge() -> ProjectionEdge {
+    fn tes_edge() -> ProjectionEdge {
         ProjectionEdge {
             from: TERM,
             to: VocabularyPath {
-                vocabulary: VocabularyId(InventoryId::TesNz, TermKind::Subject),
+                vocabulary: VocabularyId(InventoryId::Tes, TermKind::Subject),
                 segments: vec!["Maths".to_owned()],
                 native_id: Some("7000001".to_owned()),
             },
@@ -481,7 +481,7 @@ mod tests {
     /// carrying none, and the token is the relation's to supply.
     fn elected(token: &str) -> VocabularyPath {
         VocabularyPath {
-            vocabulary: VocabularyId(InventoryId::TesNz, TermKind::Licence),
+            vocabulary: VocabularyId(InventoryId::Tes, TermKind::Licence),
             segments: vec![token.to_owned()],
             native_id: None,
         }
@@ -494,7 +494,7 @@ mod tests {
             .into_iter()
             .map(|token| ProjectionEdge {
                 from: RIGHT,
-                to: licence(InventoryId::TesNz, token),
+                to: licence(InventoryId::Tes, token),
                 kind: EdgeKind::Exact,
                 decided_by: Decider::Imported {
                     source: "test".to_owned(),
@@ -519,7 +519,7 @@ mod tests {
         .into_iter()
         .map(|(pricing, token)| ElectionRule {
             org: ORG,
-            inventory: InventoryId::TesNz,
+            inventory: InventoryId::Tes,
             axis: TermKind::Licence,
             trigger_kind: ElectionTriggerKind::Supply,
             trigger_key: Some(pricing.as_str().to_owned()),
@@ -542,7 +542,7 @@ mod tests {
         ListingContext {
             org: ORG,
             mapping: MAPPING,
-            inventory: InventoryId::TesNz,
+            inventory: InventoryId::Tes,
             now: NOW,
             terms,
             edges,
@@ -556,7 +556,7 @@ mod tests {
     fn a_free_scanned_covered_mapped_product_projects() {
         let catalogue = terms();
         let policy = licence_policy();
-        let edges = [nz_edge()];
+        let edges = [tes_edge()];
         let projection = project_listing(
             &product(PriceIntent::Free, true, ScanOutcome::Clean { at: NOW }),
             &ctx(&catalogue, &edges, &policy),
@@ -571,7 +571,7 @@ mod tests {
         assert!(
             projection.grades.is_empty(),
             "the relation holds no phase edge, so the GB band id is carried out as \
-             unrecognised rather than re-labelled into the NZ vocabulary, where 2 means \
+             unrecognised rather than re-labelled into the Tes vocabulary, where 2 means \
              Reception and not the 5-7 age band"
         );
     }
@@ -583,7 +583,7 @@ mod tests {
     #[test]
     fn an_unstated_licence_into_a_target_that_requires_one_asks_rather_than_defaulting() {
         let catalogue = terms();
-        let edges = [nz_edge()];
+        let edges = [tes_edge()];
         let blocked = project_listing(
             &product(PriceIntent::Free, true, ScanOutcome::Clean { at: NOW }),
             &ctx(&catalogue, &edges, &[]),
@@ -637,7 +637,7 @@ mod tests {
     #[test]
     fn a_standing_rule_answers_the_licence_for_every_later_product() {
         let catalogue = terms();
-        let mut edges = vec![nz_edge()];
+        let mut edges = vec![tes_edge()];
         edges.extend(licence_edges());
         let policy = licence_policy();
         for price in [PriceIntent::Free, PriceIntent::Free] {
@@ -667,12 +667,12 @@ mod tests {
     #[test]
     fn an_answered_licence_carries_the_targets_token_on_the_next_projection() {
         let catalogue = terms();
-        let mut edges = vec![nz_edge()];
+        let mut edges = vec![tes_edge()];
         edges.extend(licence_edges());
         let subject = product(PriceIntent::Free, true, ScanOutcome::Clean { at: NOW });
         let settled = [SettledElection {
             product: subject.id,
-            inventory: InventoryId::TesNz,
+            inventory: InventoryId::Tes,
             axis: TermKind::Licence,
             trigger_kind: ElectionTriggerKind::Supply,
             trigger_key: Some(PricingBranch::Free.as_str().to_owned()),
@@ -703,22 +703,22 @@ mod tests {
             },
         ];
         let edges = [
-            nz_edge(),
-            phase_edge(InventoryId::TesUs, "Kindergarten", "17"),
-            phase_edge(InventoryId::TesNz, "Kindergarten", "17"),
+            tes_edge(),
+            phase_edge(InventoryId::Tpt, "Kindergarten", "kindergarten"),
+            phase_edge(InventoryId::Tes, "Kindergarten", "17"),
         ];
         let mut source = product(PriceIntent::Free, true, ScanOutcome::Clean { at: NOW });
         source.grades.raw = vec![VocabularyPath {
-            vocabulary: VocabularyId(InventoryId::TesUs, TermKind::Phase),
+            vocabulary: VocabularyId(InventoryId::Tpt, TermKind::Phase),
             segments: vec!["Kindergarten".to_owned()],
-            native_id: Some("17".to_owned()),
+            native_id: Some("kindergarten".to_owned()),
         }];
 
         let projection = project_listing(&source, &ctx(&catalogue, &edges, &policy))
             .expect("the grade is mapped");
         assert_eq!(
             projection.grades[0].vocabulary,
-            VocabularyId(InventoryId::TesNz, TermKind::Phase),
+            VocabularyId(InventoryId::Tes, TermKind::Phase),
             "the grade lands in the target vocabulary"
         );
         assert_eq!(
@@ -828,7 +828,7 @@ mod tests {
         };
         assert_eq!(
             (gaps.len(), gaps[0].term, gaps[0].target),
-            (1, TERM, VocabularyId(InventoryId::TesNz, TermKind::Subject)),
+            (1, TERM, VocabularyId(InventoryId::Tes, TermKind::Subject)),
             "one gap names the term and the vocabulary pair it is a question about"
         );
         assert!(
@@ -841,7 +841,7 @@ mod tests {
     fn a_priced_nz_listing_projects_now_that_the_currency_is_fixed_and_a_free_one_always_did() {
         let catalogue = terms();
         let policy = licence_policy();
-        let edges = [nz_edge()];
+        let edges = [tes_edge()];
         let paid = PriceIntent::Paid(Money::new(300, Currency::Gbp).expect("a price"));
         assert!(
             project_listing(
@@ -849,7 +849,7 @@ mod tests {
                 &ctx(&catalogue, &edges, &policy),
             )
             .is_ok(),
-            "the NZ currency is fixed to GBP, so a priced listing clears the currency gate"
+            "the Tes currency is fixed to GBP, so a priced listing clears the currency gate"
         );
         assert!(
             project_listing(
@@ -870,7 +870,7 @@ mod tests {
     fn a_price_in_another_currency_than_the_inventory_sells_in_blocks_by_name() {
         let catalogue = terms();
         let policy = licence_policy();
-        let edges = [nz_edge()];
+        let edges = [tes_edge()];
         let dollars = PriceIntent::Paid(Money::new(500, Currency::Usd).expect("a price"));
         let blocked = project_listing(
             &product(dollars, true, ScanOutcome::Clean { at: NOW }),
@@ -879,18 +879,18 @@ mod tests {
         assert_eq!(
             blocked,
             Err(ProjectionBlocked::CurrencyMismatch {
-                inventory: InventoryId::TesNz,
+                inventory: InventoryId::Tes,
                 priced: Currency::Usd,
                 sells: Currency::Gbp,
             }),
-            "the NZ inventory sells in GBP, so a USD price is named on both sides rather than \
+            "the Tes inventory sells in GBP, so a USD price is named on both sides rather than \
              posted as that many pounds"
         );
     }
 
     #[test]
     fn a_priced_listing_into_a_seller_scoped_inventory_still_blocks() {
-        // The gate's block path survives the NZ measurement: Etsy is
+        // The gate's block path survives the Tes measurement: Etsy is
         // SellerScoped and its currency is unverified until its connector,
         // so a priced listing into it must still refuse rather than guess.
         let catalogue = terms();
@@ -938,7 +938,7 @@ mod tests {
     fn a_tes_projection_is_verbatim_because_no_tes_cap_is_declared() {
         let catalogue = terms();
         let policy = licence_policy();
-        let edges = [nz_edge()];
+        let edges = [tes_edge()];
         let long = "A worksheet ".repeat(400);
         let mut source = product(PriceIntent::Free, true, ScanOutcome::Clean { at: NOW });
         source.title = Title(long.clone());
@@ -1008,7 +1008,7 @@ mod tests {
     fn a_missing_cover_blocks() {
         let catalogue = terms();
         let policy = licence_policy();
-        let edges = [nz_edge()];
+        let edges = [tes_edge()];
         assert!(
             matches!(
                 project_listing(
@@ -1025,7 +1025,7 @@ mod tests {
     fn an_unscanned_payload_blocks_naming_the_file() {
         let catalogue = terms();
         let policy = licence_policy();
-        let edges = [nz_edge()];
+        let edges = [tes_edge()];
         let blocked = project_listing(
             &product(PriceIntent::Free, true, ScanOutcome::Pending),
             &ctx(&catalogue, &edges, &policy),
@@ -1088,7 +1088,7 @@ mod tests {
         let mut source = product(PriceIntent::Free, true, ScanOutcome::Clean { at: NOW });
         source.grades.raw = vec![];
         source.rights = RightsDeclaration::Declared {
-            source: licence(InventoryId::TesGb, "CC-BY"),
+            source: licence(InventoryId::Tes, "CC-BY"),
         };
         let projection = project_listing(
             &source,
@@ -1109,7 +1109,7 @@ mod tests {
             projection.loss,
             vec![Loss::NoTargetField {
                 axis: TermKind::Licence,
-                value: licence(InventoryId::TesGb, "CC-BY"),
+                value: licence(InventoryId::Tes, "CC-BY"),
             }],
             "the seller's Creative Commons grant does not reach TPT, and the record of \
              that is what makes the drop disclosed rather than silent"
@@ -1132,7 +1132,7 @@ mod tests {
         let mut source = product(PriceIntent::Free, true, ScanOutcome::Clean { at: NOW });
         source.grades.raw = vec![];
         source.rights = RightsDeclaration::Declared {
-            source: licence(InventoryId::TesGb, "CC-BY"),
+            source: licence(InventoryId::Tes, "CC-BY"),
         };
         let projection = project_listing(
             &source,

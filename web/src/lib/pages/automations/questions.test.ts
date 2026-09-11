@@ -11,8 +11,8 @@ describe('a question row', () => {
 	});
 
 	it('names the marketplace in full and says when the question was raised', () => {
-		const [row] = questionRows([queued({ inventory: 'TesGb', raised_at: 0 })], DAY);
-		expect(row.meta).toContain('United Kingdom');
+		const [row] = questionRows([queued({ inventory: 'Tes', raised_at: 0 })], DAY);
+		expect(row.meta).toContain('TES (Tes.com)');
 		expect(row.meta).toContain('raised 1 day ago');
 	});
 

@@ -91,7 +91,7 @@ function chip(
 describe('the transport branch', () => {
 	it('puts TPT and Tes on the seller device and Etsy on the sanctioned API', () => {
 		expect(onSellerDevice('Tpt')).toBe(true);
-		expect(onSellerDevice('TesNz')).toBe(true);
+		expect(onSellerDevice('Tes')).toBe(true);
 		expect(onSellerDevice('Etsy')).toBe(false);
 	});
 
@@ -309,7 +309,7 @@ describe('a dropped connection', () => {
 // routed there is also a sign-in gate, and `closed-enum-sweep.test.ts` holds
 // the whole space to the same rule so it cannot arrive unanchored.
 describe('every verdict that sends a seller to a marketplace names it', () => {
-	const bound = mapping({ inventory: 'TesGb' });
+	const bound = mapping({ inventory: 'Tes' });
 
 	it('anchors all four on the card for that marketplace', () => {
 		const sites = [
@@ -317,18 +317,18 @@ describe('every verdict that sends a seller to a marketplace names it', () => {
 			// connection for an absent one and this is the arm for having none.
 			chipFor({
 				product: 'p1',
-				inventory: 'TesGb',
+				inventory: 'Tes',
 				mapping: bound,
 				work: undefined,
 				connection: undefined,
 				status: undefined
 			}),
-			chip('TesGb', { mapping: bound, connection: connection('Tes', 'disconnected') }),
-			chip('TesGb', {
+			chip('Tes', { mapping: bound, connection: connection('Tes', 'disconnected') }),
+			chip('Tes', {
 				mapping: bound,
 				work: work({ state: 'blocked', blocked_on: 'awaiting_seller_signin' })
 			}),
-			chip('TesGb', {
+			chip('Tes', {
 				mapping: bound,
 				work: work({ state: 'parked_live', blocked_on: 'ReauthRequired' })
 			})
@@ -392,7 +392,7 @@ describe('the newest item per mapping', () => {
 
 describe('the strip', () => {
 	it('shows every marketplace this console authors for, mapped or not', () => {
-		expect(stripFor([])).toEqual(['Tpt', 'TesGb', 'TesUs', 'TesNz']);
+		expect(stripFor([])).toEqual(['Tpt', 'Tes']);
 	});
 
 	it('keeps a mapping onto a marketplace the form does not offer', () => {
@@ -405,7 +405,7 @@ describe('a row', () => {
 		product: product('p1'),
 		mappings: [
 			mapping({ id: 'm-Tpt', inventory: 'Tpt' }),
-			mapping({ id: 'm-TesNz', inventory: 'TesNz', binding_state: 'unbound' })
+			mapping({ id: 'm-Tes', inventory: 'Tes', binding_state: 'unbound' })
 		],
 		work: newestWork([work({ mapping: 'm-Tpt', state: 'blocked', blocked_on: 'ReauthRequired' })]),
 		connections: CONNECTED,
@@ -413,12 +413,7 @@ describe('a row', () => {
 	});
 
 	it('carries one chip per marketplace in the strip', () => {
-		expect(row.chips.map((entry) => entry.inventory)).toEqual([
-			'Tpt',
-			'TesGb',
-			'TesUs',
-			'TesNz'
-		]);
+		expect(row.chips.map((entry) => entry.inventory)).toEqual(['Tpt', 'Tes']);
 	});
 
 	it('lists what needs acting on, worst first', () => {
@@ -427,8 +422,8 @@ describe('a row', () => {
 	});
 
 	it('indexes the mappings it could send by marketplace', () => {
-		expect(row.mapped.get('TesNz')?.id).toBe('m-TesNz');
-		expect(row.mapped.has('TesGb')).toBe(false);
+		expect(row.mapped.get('Tes')?.id).toBe('m-Tes');
+		expect(row.mapped.has('Etsy')).toBe(false);
 	});
 });
 
@@ -443,7 +438,7 @@ describe('the filter bar', () => {
 		}),
 		rowFor({
 			product: product('p2', 'Phonics mats'),
-			mappings: [mapping({ id: 'm2', product: 'p2', inventory: 'TesNz' })],
+			mappings: [mapping({ id: 'm2', product: 'p2', inventory: 'Tes' })],
 			work: newestWork([
 				work({ mapping: 'm2', state: 'settled', outcome: 'failed' })
 			]),
@@ -500,7 +495,7 @@ describe('the tally and the bulk target', () => {
 		}),
 		rowFor({
 			product: product('p2'),
-			mappings: [mapping({ id: 'm2', product: 'p2', inventory: 'TesNz' })],
+			mappings: [mapping({ id: 'm2', product: 'p2', inventory: 'Tes' })],
 			work: newestWork([work({ mapping: 'm2', state: 'settled', outcome: 'failed' })]),
 			connections: CONNECTED,
 			statuses: []
@@ -518,10 +513,10 @@ describe('the tally and the bulk target', () => {
 			mappings: ['m-Tpt'],
 			unmapped: ['p2']
 		});
-		expect(bulkTarget(rows, 'TesGb')).toEqual({
-			inventory: 'TesGb',
-			mappings: [],
-			unmapped: ['p1', 'p2']
+		expect(bulkTarget(rows, 'Tes')).toEqual({
+			inventory: 'Tes',
+			mappings: ['m2'],
+			unmapped: ['p1']
 		});
 	});
 });
@@ -529,7 +524,7 @@ describe('the tally and the bulk target', () => {
 describe('the runs that touched one listing', () => {
 	const mappings = [
 		mapping({ id: 'm-Tpt', inventory: 'Tpt' }),
-		mapping({ id: 'm-TesNz', inventory: 'TesNz' })
+		mapping({ id: 'm-Tes', inventory: 'Tes' })
 	];
 
 	it('is newest first and one row per run', () => {
@@ -537,11 +532,11 @@ describe('the runs that touched one listing', () => {
 			mappings,
 			newestWork([
 				work({ mapping: 'm-Tpt', created_at: 3, state: 'settled', outcome: 'succeeded' }, 'j1'),
-				work({ mapping: 'm-TesNz', created_at: 7, state: 'running' }, 'j2')
+				work({ mapping: 'm-Tes', created_at: 7, state: 'running' }, 'j2')
 			])
 		);
 		expect(rows.map((row) => row.job)).toEqual(['j2', 'j1']);
-		expect(rows[0].inventory).toBe('TesNz');
+		expect(rows[0].inventory).toBe('Tes');
 		expect(rows[1].outcome).toBe('succeeded');
 	});
 
@@ -550,11 +545,11 @@ describe('the runs that touched one listing', () => {
 			mappings,
 			new Map([
 				['m-Tpt', work({ mapping: 'm-Tpt', created_at: 1 }, 'j1')],
-				['m-TesNz', work({ mapping: 'm-TesNz', created_at: 4 }, 'j1')]
+				['m-Tes', work({ mapping: 'm-Tes', created_at: 4 }, 'j1')]
 			])
 		);
 		expect(rows).toHaveLength(1);
-		expect(rows[0].inventory).toBe('TesNz');
+		expect(rows[0].inventory).toBe('Tes');
 	});
 
 	it('is empty where no run in the window touched this listing', () => {

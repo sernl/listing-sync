@@ -54,12 +54,10 @@ pub const fn verify_policy(inventory: InventoryId) -> VerifyPolicy {
         // No adapter serves Etsy, so this policy is unexercised; it takes the
         // Tes numbers rather than one invented for a platform nothing has
         // measured.
-        InventoryId::TesGb | InventoryId::TesUs | InventoryId::TesNz | InventoryId::Etsy => {
-            VerifyPolicy {
-                tries: 8,
-                interval_ms: 2_000,
-            }
-        }
+        InventoryId::Tes | InventoryId::Etsy => VerifyPolicy {
+            tries: 8,
+            interval_ms: 2_000,
+        },
         InventoryId::Tpt => VerifyPolicy {
             tries: 11,
             interval_ms: 2_000,
@@ -71,9 +69,7 @@ pub const fn verify_policy(inventory: InventoryId) -> VerifyPolicy {
 /// idempotency module's durable inventory ordinal reused as a tag.
 pub const fn form_id(inventory: InventoryId) -> FormId {
     let tag = match inventory {
-        InventoryId::TesGb => 0x01,
-        InventoryId::TesUs => 0x02,
-        InventoryId::TesNz => 0x03,
+        InventoryId::Tes => 0x01,
         InventoryId::Etsy => 0x04,
         InventoryId::Tpt => 0x05,
     };
@@ -720,13 +716,7 @@ mod lease_budget_tests {
     #[test]
     fn the_measured_stretch_between_two_heartbeats_fits_inside_the_lease() {
         let lease_ms = lease_ms();
-        for inventory in [
-            InventoryId::TesGb,
-            InventoryId::TesUs,
-            InventoryId::TesNz,
-            InventoryId::Etsy,
-            InventoryId::Tpt,
-        ] {
+        for inventory in InventoryId::ALL {
             let between =
                 MEASURED_SUBMIT_WORST_CASE_MS + u64::from(verify_policy(inventory).interval_ms);
             assert!(
@@ -764,13 +754,7 @@ mod lease_budget_tests {
     #[test]
     fn the_verification_poll_fits_inside_the_lease() {
         let lease_ms = lease_ms();
-        for inventory in [
-            InventoryId::TesGb,
-            InventoryId::TesUs,
-            InventoryId::TesNz,
-            InventoryId::Etsy,
-            InventoryId::Tpt,
-        ] {
+        for inventory in InventoryId::ALL {
             let spent = MEASURED_SUBMIT_WORST_CASE_MS + verify_policy(inventory).window_ms();
             assert!(
                 spent < lease_ms,

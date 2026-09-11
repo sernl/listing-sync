@@ -176,16 +176,16 @@ impl TransportClass {
 }
 
 /// The inventory a listing is actually created in, which is the unit the model
-/// keys on. Tes runs disjoint GB and US inventories under one marketplace, so
-/// keying projections on `Marketplace` would make the entire first chargeable
-/// product unrepresentable. Whether one author login reaches both inventories
-/// is an assumption rather than a research finding, and it is settled by the
-/// M-1 probe on the founder's own account; `Connection` scope depends on it.
+/// keys on. Tes is one inventory: the founder decided on 2026-09-12 that a Tes
+/// region is a site and not a catalogue, because one author account reaches one
+/// upload flow, one JSON API and one resource list, with the market carried as a
+/// per-resource field (`docs/design/decisions.md`, "Tes is one marketplace with
+/// no regions, 2026-09-12"). The dimension re-opens only for a Tes seller whose
+/// account prices outside GBP, and it re-opens as a country field on the
+/// connection rather than as a second variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum InventoryId {
-    TesGb,
-    TesUs,
-    TesNz,
+    Tes,
     Etsy,
     Tpt,
 }
@@ -212,10 +212,10 @@ impl Currency {
 /// How an inventory decides the currency a price is denominated in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CurrencyRule {
-    /// Fixed by the inventory itself. Measured on Tes: fetching two US-inventory
-    /// resources from a New Zealand client with `geoCurrency=AUD` cookies still
-    /// returned USD offers, so currency follows the inventory rather than the
-    /// viewer. The GB-cookie case specifically has not been tested.
+    /// Fixed by the inventory itself. Measured on Tes: fetching two resources
+    /// from a New Zealand client with `geoCurrency=AUD` cookies still returned
+    /// the offers' own currency, so currency follows the inventory rather than
+    /// the viewer.
     Fixed(Currency),
     /// Set by the seller at shop level. Unverified for Etsy; must be
     /// established before that connector is built.
@@ -229,12 +229,12 @@ pub enum CurrencyRule {
 impl InventoryId {
     /// The closed set, in a stable order; the vocabulary generator and the
     /// closed-set tests read this single source.
-    pub const ALL: [Self; 5] = [Self::TesGb, Self::TesUs, Self::TesNz, Self::Etsy, Self::Tpt];
+    pub const ALL: [Self; 3] = [Self::Tes, Self::Etsy, Self::Tpt];
 
     #[must_use]
     pub const fn marketplace(self) -> Marketplace {
         match self {
-            Self::TesGb | Self::TesUs | Self::TesNz => Marketplace::Tes,
+            Self::Tes => Marketplace::Tes,
             Self::Etsy => Marketplace::Etsy,
             Self::Tpt => Marketplace::Tpt,
         }
@@ -243,27 +243,17 @@ impl InventoryId {
     #[must_use]
     pub const fn currency_rule(self) -> CurrencyRule {
         match self {
-            Self::TesGb => CurrencyRule::Fixed(Currency::Gbp),
-            Self::TesUs => CurrencyRule::Fixed(Currency::Usd),
-            // Observed by the founder on their own account: the NZ upload flow
-            // carries no currency control and prices denominate in GBP, so the
-            // inventory fixes the currency to the account's GBP rather than
-            // offering a per-listing choice. Recorded in decisions.md
-            // ("The NZ currency, fixed to GBP by observation, 2026-08-28").
-            // Re-open if a non-GBP seller's NZ inventory ever shows otherwise.
-            #[expect(
-                clippy::match_same_arms,
-                reason = "the GBP value coincides with TesGb today, but the NZ rule is a re-openable founder observation rather than the definitional GB fact, so the arms stay distinct to carry their own provenance"
-            )]
-            Self::TesNz => CurrencyRule::Fixed(Currency::Gbp),
+            // Every flow the founder's own account shows, the New Zealand one
+            // included, prices in GBP and offers no currency control
+            // (decisions.md, "Tes is one marketplace with no regions,
+            // 2026-09-12"). Re-open when a Tes seller appears whose account
+            // prices in another currency: that is a currency read on the
+            // connection, not a second inventory.
+            Self::Tes => CurrencyRule::Fixed(Currency::Gbp),
             // Confirmed by the founder in their own TPT seller account on
             // 2026-08-29: the marketplace sells in USD and offers no other
             // currency to select. The read's bare `$` is therefore a fact of
             // how TPT renders money and not evidence of which currency it is.
-            #[expect(
-                clippy::match_same_arms,
-                reason = "the USD value coincides with TesUs, but this is a founder observation of one marketplace's pricing rather than that inventory's definitional fact, so the arms stay distinct to carry their own provenance"
-            )]
             Self::Tpt => CurrencyRule::Fixed(Currency::Usd),
             Self::Etsy => CurrencyRule::SellerScoped,
         }
@@ -1206,8 +1196,8 @@ mod tests {
                 scope: "org_inventory".to_owned(),
             },
             super::JobEventPayload::ImportDrainMeasured {
-                source: super::InventoryId::TesGb,
-                target: super::InventoryId::TesNz,
+                source: super::InventoryId::Tes,
+                target: super::InventoryId::Tpt,
                 rows: 1,
                 terms_seen: 3,
                 terms_unmapped: 1,

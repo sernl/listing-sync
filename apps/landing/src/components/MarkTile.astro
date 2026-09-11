@@ -1,0 +1,32 @@
+---
+import { markSlot } from '../art.js';
+
+/* One marketplace tile at the end of a routing line: a card with the owner's
+ * own published bytes drawn in it, unaltered, as the strip under the hero
+ * draws them.
+ *
+ * An icon carries no lettering, so the tile prints the name beside it for the
+ * same reason the strip does: a 30-pixel symbol on its own names nothing. A
+ * wordmark and a square mark are already the name.
+ */
+
+const { mark, x, y, w, h } = Astro.props;
+const icon = mark.shape === 'icon';
+const slot = markSlot(mark, x, y, w, h);
+---
+
+<g>
+	<rect x={x} y={y} width={w} height={h} rx="14" fill="var(--mark-ground)" stroke="var(--art-line)" />
+	{
+		icon ? (
+			<>
+				<image href={`/marks/${mark.file}`} x={x + 16} y={y + h / 2 - 15} width="30" height="30" />
+				<text class="art-sans art-tile-name" x={x + 54} y={y + h / 2 + 6}>
+					{mark.name}
+				</text>
+			</>
+		) : (
+			<image href={`/marks/${mark.file}`} {...slot} preserveAspectRatio="xMidYMid meet" />
+		)
+	}
+</g>

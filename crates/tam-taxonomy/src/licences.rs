@@ -26,8 +26,7 @@ use crate::grades::{derived, OptionSet};
 /// The inventories that bind a licence axis. TPT binds none anywhere on its
 /// wire, which is the legal exemplar and is declared in the registry rather
 /// than restated here.
-const LICENCE_INVENTORIES: [InventoryId; 3] =
-    [InventoryId::TesGb, InventoryId::TesUs, InventoryId::TesNz];
+const LICENCE_INVENTORIES: [InventoryId; 1] = [InventoryId::Tes];
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,13 +68,10 @@ impl core::fmt::Display for LicenceError {
 impl core::error::Error for LicenceError {}
 
 /// Mints the seven Tes licence tokens as canonical terms with identity edges
-/// into each Tes inventory's licence vocabulary.
+/// into the Tes licence vocabulary.
 ///
-/// Identity rather than a crosswalk: the three inventories share one licence
-/// vocabulary, so every edge is `Exact` and the projection between them is
-/// lossless. That is the wedge's third row — a GB resource duplicated into New
-/// Zealand carries the seller's own grant unchanged — and it holds only
-/// because the terms exist.
+/// Identity rather than a crosswalk: the licence vocabulary is Tes's own, so
+/// every edge is `Exact` and ingesting a declared licence is lossless.
 pub fn derive_licence_crosswalk(
     tes_json: &str,
     decided_at: Timestamp,
@@ -156,7 +152,7 @@ mod tests {
     #[test]
     fn the_seeded_tokens_are_the_registry_vocabulary() {
         let crosswalk = derive_licence_crosswalk(TES, AT).expect("the committed capture derives");
-        let Some(NativeVocabulary::Closed(declared)) = registry(InventoryId::TesGb)
+        let Some(NativeVocabulary::Closed(declared)) = registry(InventoryId::Tes)
             .native("licence")
             .map(|field| field.vocabulary)
         else {
@@ -165,9 +161,7 @@ mod tests {
         let mut seeded: Vec<&str> = crosswalk
             .edges
             .iter()
-            .filter(|edge| {
-                edge.to.vocabulary == VocabularyId(InventoryId::TesGb, TermKind::Licence)
-            })
+            .filter(|edge| edge.to.vocabulary == VocabularyId(InventoryId::Tes, TermKind::Licence))
             .filter_map(|edge| edge.to.native_id.as_deref())
             .collect();
         seeded.sort_unstable();
@@ -180,18 +174,16 @@ mod tests {
     }
 
     #[test]
-    fn every_token_holds_one_identity_edge_into_each_tes_inventory() {
+    fn every_token_holds_one_identity_edge_into_the_tes_licence_vocabulary() {
         let crosswalk = derive_licence_crosswalk(TES, AT).expect("the committed capture derives");
         assert_eq!(crosswalk.terms.len(), 7);
-        assert_eq!(crosswalk.edges.len(), 21);
-        for inventory in [InventoryId::TesGb, InventoryId::TesUs, InventoryId::TesNz] {
-            let term = licence_term_id("CC-BY-ND");
-            assert!(
-                crosswalk.edges.iter().any(|edge| edge.from == term
-                    && edge.to.vocabulary == VocabularyId(inventory, TermKind::Licence)),
-                "a GB grant reaches {inventory:?} unchanged, which is the wedge's third row"
-            );
-        }
+        assert_eq!(crosswalk.edges.len(), 7);
+        let term = licence_term_id("CC-BY-ND");
+        assert!(
+            crosswalk.edges.iter().any(|edge| edge.from == term
+                && edge.to.vocabulary == VocabularyId(InventoryId::Tes, TermKind::Licence)),
+            "the seller's own grant is carried unchanged onto the Tes wire"
+        );
     }
 
     #[test]
@@ -207,9 +199,7 @@ mod tests {
         let mut paths: Vec<&[String]> = crosswalk
             .edges
             .iter()
-            .filter(|edge| {
-                edge.to.vocabulary == VocabularyId(InventoryId::TesGb, TermKind::Licence)
-            })
+            .filter(|edge| edge.to.vocabulary == VocabularyId(InventoryId::Tes, TermKind::Licence))
             .map(|edge| edge.to.segments.as_slice())
             .collect();
         paths.sort_unstable();

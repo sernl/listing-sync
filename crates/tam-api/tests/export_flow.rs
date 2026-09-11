@@ -275,9 +275,7 @@ async fn export(pool: PgPool, token: &SessionToken) -> Answer {
 }
 
 const HEADER: &str = "Resource ID,Title,Price,Currency,Labels,Created,Updated,\
-                      TES GB status,TES GB price,TES GB link,\
-                      TES US status,TES US price,TES US link,\
-                      TES NZ status,TES NZ price,TES NZ link,\
+                      TES status,TES price,TES link,\
                       TPT status,TPT price,TPT link,\
                       Etsy status,Etsy price,Etsy link";
 
@@ -325,7 +323,7 @@ async fn the_export_writes_one_row_per_resource_with_every_inventory_beside_it(p
                 MappingId(Uuid([0x32; 16])),
                 ORG_A,
                 PRODUCT_A,
-                InventoryId::TesGb,
+                InventoryId::Tes,
                 Listing {
                     binding: Binding::Unbound,
                     price_rule: PriceRule::Explicit(PriceIntent::Free),
@@ -371,12 +369,6 @@ async fn the_export_writes_one_row_per_resource_with_every_inventory_beside_it(p
         "2026-08-01T09:15:00Z".to_owned(),
         "unsent".to_owned(),
         "Free".to_owned(),
-        String::new(),
-        String::new(),
-        String::new(),
-        String::new(),
-        String::new(),
-        String::new(),
         String::new(),
         "live".to_owned(),
         "5.99 USD".to_owned(),

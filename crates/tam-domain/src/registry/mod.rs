@@ -415,9 +415,7 @@ impl InventoryRegistry {
 #[must_use]
 pub const fn registry(inventory: InventoryId) -> &'static InventoryRegistry {
     match inventory {
-        InventoryId::TesGb => &tes::TES_GB,
-        InventoryId::TesUs => &tes::TES_US,
-        InventoryId::TesNz => &tes::TES_NZ,
+        InventoryId::Tes => &tes::TES,
         InventoryId::Etsy => &etsy::ETSY,
         InventoryId::Tpt => &tpt::TPT,
     }
@@ -482,9 +480,7 @@ mod tests {
     fn every_registered_inventory_reads_its_marketplaces_transport_class() {
         for inventory in InventoryId::ALL {
             let expected = match inventory {
-                InventoryId::TesGb | InventoryId::TesUs | InventoryId::TesNz | InventoryId::Tpt => {
-                    TransportClass::SellerDevice
-                }
+                InventoryId::Tes | InventoryId::Tpt => TransportClass::SellerDevice,
                 InventoryId::Etsy => TransportClass::OfficialApi,
             };
             assert_eq!(
@@ -576,12 +572,10 @@ mod tests {
         assert_eq!(
             refused,
             vec![
-                (InventoryId::TesGb, "licence"),
-                (InventoryId::TesUs, "licence"),
-                (InventoryId::TesNz, "licence"),
+                (InventoryId::Tes, "licence"),
                 (InventoryId::Tpt, "ItemsProperty.copyright_declaration"),
             ],
-            "the Tes licence on each of three inventories, and TPT's copyright declaration"
+            "the Tes licence, and TPT's copyright declaration"
         );
     }
 

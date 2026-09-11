@@ -289,7 +289,7 @@ describe('what the popup says', () => {
 			query: 'poetry',
 			catalogue: CATALOGUE,
 			mappings: [
-				mapping({ product: 'b', inventory: 'TesGb' }),
+				mapping({ product: 'b', inventory: 'Tes' }),
 				mapping({ product: 'b', inventory: 'Tpt' }),
 				// Bound but not live: the marketplace is not showing it, so it is
 				// not named as though it were.
@@ -301,7 +301,7 @@ describe('what the popup says', () => {
 		if (view.kind !== 'results') {
 			return;
 		}
-		expect(view.rows[0].meta).toBe('Free · TPT, TES GB');
+		expect(view.rows[0].meta).toBe('Free · TPT, TES');
 	});
 
 	it('says nothing about marketplaces where the mappings were not read', () => {
@@ -402,10 +402,10 @@ describe('which marketplaces show a resource', () => {
 
 	it('names each marketplace once, in the chip strip order', () => {
 		const showing = showingByProduct([
-			mapping({ product: 'a', inventory: 'TesUs' }),
+			mapping({ product: 'a', inventory: 'Tes' }),
 			mapping({ product: 'a', inventory: 'Tpt' })
 		]);
-		expect(showing.get('a')).toEqual(['TPT', 'TES US']);
+		expect(showing.get('a')).toEqual(['TPT', 'TES']);
 	});
 });
 

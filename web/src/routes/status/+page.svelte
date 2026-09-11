@@ -7,7 +7,7 @@
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
 	import { queryKeys } from '$lib/query';
 	import StatusPill from '$lib/StatusPill.svelte';
-	import { statusLine } from '$lib/pages/account/status-line';
+	import { statusRows } from '$lib/pages/account/status-line';
 	import '$lib/pages/account/account.css';
 
 	const status = createQuery(() => ({
@@ -15,9 +15,22 @@
 		queryFn: () => api.status()
 	}));
 
-	const inventories = $derived(status.data?.inventories ?? []);
-	const halted = $derived(inventories.filter((entry) => entry.halted).length);
+	// This page needs no sign-in, so the devices read is allowed to fail: a
+	// seller reading it signed out gets the halt states and no device line,
+	// which is the honest answer rather than a sign-in wall on the one page
+	// that matters when signing in is what is broken. Not retried, because a
+	// 401 is an answer and repeating it only delays the rest of the page.
+	const devices = createQuery(() => ({
+		queryKey: queryKeys.devices,
+		queryFn: () => api.devices().then((view) => view.devices),
+		retry: false
+	}));
+
 	const now = Date.now();
+	const rows = $derived(
+		statusRows(status.data?.inventories ?? [], devices.data ?? [], now)
+	);
+	const paused = $derived(rows.filter((row) => row.tone === 'bad').length);
 </script>
 
 <div class="page">
@@ -34,8 +47,8 @@
 				<StatusPill tone="bad" label="not read" />
 			{:else if status.isSuccess}
 				<StatusPill
-					tone={halted === 0 ? 'ok' : 'warn'}
-					label={halted === 0 ? 'all working' : `${halted} paused`}
+					tone={paused === 0 ? 'ok' : 'warn'}
+					label={paused === 0 ? 'all working' : `${paused} paused`}
 				/>
 			{:else}
 				<StatusPill tone="soon" label="checking" />
@@ -48,26 +61,25 @@
 			<p class="quiet">Loading…</p>
 		{:else if status.isError}
 			<p class="quiet">We could not read the status.</p>
-		{:else if inventories.length === 0}
+		{:else if rows.length === 0}
 			<Placeholder
 				icon="activity"
 				headline="No marketplace to show yet"
 				body="Every marketplace we work with appears here, with whether it is working."
 			/>
 		{:else}
-			{#each inventories as entry (entry.inventory)}
-				{@const line = statusLine(entry, now)}
+			{#each rows as row (row.marketplace)}
 				<div class="acct-state-row">
 					<span class="who">
-						<span class="t"><MarketplaceMark inventory={entry.inventory} /></span>
-						{#if line !== ''}
-							<span class="why">{line}</span>
+						<span class="t"><MarketplaceMark marketplace={row.marketplace} /></span>
+						{#if row.why !== ''}
+							<span class="why">{row.why}</span>
+						{/if}
+						{#if row.checked !== ''}
+							<span class="why">{row.checked}</span>
 						{/if}
 					</span>
-					<StatusPill
-						tone={entry.halted ? 'bad' : 'ok'}
-						label={entry.halted ? 'paused' : 'working'}
-					/>
+					<StatusPill tone={row.tone} label={row.label} />
 				</div>
 			{/each}
 			<p class="foot-note">

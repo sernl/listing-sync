@@ -1,9 +1,7 @@
 //! The idempotency key: ours, because no marketplace in scope offers one, and
-//! keyed on the INVENTORY rather than the marketplace — both ends of a Tes
-//! GB-to-US duplication share tenant, marketplace, product, intent version
-//! and content hash, so a marketplace-keyed tuple would collide on
-//! `UNIQUE (org_id, idempotency_key)` and the second half of the first
-//! chargeable product would silently never run.
+//! keyed on the INVENTORY rather than the marketplace, because the inventory is
+//! what a listing is created in and the ordinal below is part of a canonical
+//! encoding that historical keys still derive from.
 //!
 //! UUIDv5 over a fixed-width canonical encoding, per
 //! `docs/design/sync-machine.md`: every field is fixed-width, so no separator
@@ -20,11 +18,13 @@ use crate::IdempotencyKey;
 /// each one.
 const fn inventory_ordinal(inventory: InventoryId) -> u8 {
     match inventory {
-        InventoryId::TesGb => 0,
-        InventoryId::TesUs => 1,
+        // Tes was `TesGb` until the one-Tes collapse of 2026-09-12; it keeps
+        // ordinal 0 so every key derived over an existing Tes mapping still
+        // reproduces. Ordinals 1 and 4 belonged to the deleted `TesUs` and
+        // `TesNz` and are retired, never reused.
+        InventoryId::Tes => 0,
         InventoryId::Etsy => 2,
         InventoryId::Tpt => 3,
-        InventoryId::TesNz => 4,
     }
 }
 
@@ -59,11 +59,9 @@ mod tests {
     #[test]
     fn the_ordinals_are_forever() {
         for (inventory, ordinal) in [
-            (InventoryId::TesGb, 0u8),
-            (InventoryId::TesUs, 1),
+            (InventoryId::Tes, 0u8),
             (InventoryId::Etsy, 2),
             (InventoryId::Tpt, 3),
-            (InventoryId::TesNz, 4),
         ] {
             assert_eq!(
                 inventory_ordinal(inventory),
@@ -75,8 +73,8 @@ mod tests {
 
     #[test]
     fn the_derivation_is_deterministic() {
-        let first = derive_idempotency_key(ORG, InventoryId::TesGb, PRODUCT, 1, HASH);
-        let again = derive_idempotency_key(ORG, InventoryId::TesGb, PRODUCT, 1, HASH);
+        let first = derive_idempotency_key(ORG, InventoryId::Tes, PRODUCT, 1, HASH);
+        let again = derive_idempotency_key(ORG, InventoryId::Tes, PRODUCT, 1, HASH);
         assert_eq!(
             first, again,
             "a requeued item must recompute the same key or lose its identity"
@@ -84,22 +82,11 @@ mod tests {
     }
 
     #[test]
-    fn the_two_tes_inventories_do_not_collide() {
-        let gb = derive_idempotency_key(ORG, InventoryId::TesGb, PRODUCT, 1, HASH);
-        let us = derive_idempotency_key(ORG, InventoryId::TesUs, PRODUCT, 1, HASH);
-        assert_ne!(
-            gb, us,
-            "a marketplace-keyed tuple would collide here and the second half \
-             of the first chargeable product would silently never run"
-        );
-    }
-
-    #[test]
     fn version_and_hash_both_move_the_key() {
-        let base = derive_idempotency_key(ORG, InventoryId::TesGb, PRODUCT, 1, HASH);
-        let bumped = derive_idempotency_key(ORG, InventoryId::TesGb, PRODUCT, 2, HASH);
+        let base = derive_idempotency_key(ORG, InventoryId::Tes, PRODUCT, 1, HASH);
+        let bumped = derive_idempotency_key(ORG, InventoryId::Tes, PRODUCT, 2, HASH);
         let rehashed =
-            derive_idempotency_key(ORG, InventoryId::TesGb, PRODUCT, 1, ContentHash([0x52; 32]));
+            derive_idempotency_key(ORG, InventoryId::Tes, PRODUCT, 1, ContentHash([0x52; 32]));
         assert_ne!(base, bumped, "a new intent version is a new write");
         assert_ne!(base, rehashed, "new content is a new write");
     }

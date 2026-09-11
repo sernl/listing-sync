@@ -189,7 +189,7 @@ async fn provision(pool: &PgPool) {
                      policy_description, policy_price, policy_taxonomy, policy_grades, \
                      policy_files, price_rule_kind, price_explicit_kind, publish_mode, \
                      lifecycle_state, created_at, updated_at) \
-                 VALUES ($1, '{}', '{}', 'tes_nz', 'tes', 'unbound', 'stale', 1, \
+                 VALUES ($1, '{}', '{}', 'tes', 'tes', 'unbound', 'stale', 1, \
                      'managed', 'managed', 'managed', 'managed', 'managed', 'managed', \
                      'explicit', 'free', 'dry_run', 'absent', now(), now())",
                 id(mapping),
@@ -212,7 +212,7 @@ async fn provision(pool: &PgPool) {
             org,
             &[format!(
                 "INSERT INTO job (org_id, id, inventory, marketplace, created_at, actor_kind) \
-                 VALUES ($1, '{}', 'tes_nz', 'tes', now(), 'system')",
+                 VALUES ($1, '{}', 'tes', 'tes', now(), 'system')",
                 id(job)
             )],
         )
@@ -905,8 +905,8 @@ async fn seed_drain(
 /// A measurement in the spelling `record_drain_report` writes.
 fn measurement(items_new: u32) -> serde_json::Value {
     serde_json::json!({
-        "source": "TesGb",
-        "target": "TesNz",
+        "source": "Tes",
+        "target": "Tes",
         "rows": 4,
         "terms_seen": 20,
         "terms_unmapped": 2,

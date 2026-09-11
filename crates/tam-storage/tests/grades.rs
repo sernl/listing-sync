@@ -18,7 +18,7 @@ use common::{minimal_product, seed_org_a, ORG_A, PRODUCT_1};
 
 fn phase_path(low: &str, native: &str) -> tam_domain::VocabularyPath {
     tam_domain::VocabularyPath {
-        vocabulary: VocabularyId(InventoryId::TesGb, TermKind::Phase),
+        vocabulary: VocabularyId(InventoryId::Tes, TermKind::Phase),
         segments: vec![low.to_owned()],
         native_id: Some(native.to_owned()),
     }
@@ -30,7 +30,7 @@ async fn an_imported_declaration_round_trips_verbatim_and_ordered(pool: PgPool) 
     let mut product = minimal_product();
     product.grades = GradeDeclaration {
         source: DeclarationSource::Imported {
-            vocabulary: VocabularyId(InventoryId::TesGb, TermKind::Phase),
+            vocabulary: VocabularyId(InventoryId::Tes, TermKind::Phase),
         },
         raw: vec![phase_path("5-7", "2"), phase_path("7-11", "3")],
         derived: Some(AgeInterval::new(5, 11).expect("a well-formed interval")),

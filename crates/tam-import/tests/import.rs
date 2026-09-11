@@ -93,18 +93,18 @@ fn adapter_licensed(
         }],
     };
     TesAdapter::new(
-        InventoryId::TesGb,
+        InventoryId::Tes,
         CassetteTransport::new(cassette),
         NoImportFiles,
     )
-    .expect("TesGb is a Tes inventory")
+    .expect("Tes is a Tes inventory")
 }
 
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
 )]
-async fn seed(pool: &PgPool, with_nz_edges: bool) {
+async fn seed(pool: &PgPool, with_target_edges: bool) {
     sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, 'org-a', now())")
         .bind(uuid::Uuid::from_bytes(ORG.0 .0))
         .execute(pool)
@@ -145,52 +145,52 @@ async fn seed(pool: &PgPool, with_nz_edges: bool) {
         },
     ];
     // The resource type's edges are seeded on both sides whatever
-    // `with_nz_edges` says, so the tests that count subject gaps count the
+    // `with_target_edges` says, so the tests that count subject gaps count the
     // same gaps they counted before the type crossed with the read.
     let mut edges = vec![
         edge(
             SUBJECT,
-            InventoryId::TesGb,
+            InventoryId::Tes,
             TermKind::Subject,
             &["Maths for early years"],
             "1000454",
         ),
         edge(
             TOPIC,
-            InventoryId::TesGb,
+            InventoryId::Tes,
             TermKind::Topic,
             &["Maths for early years", "Time"],
             "1000732",
         ),
         edge(
             RESOURCE_TYPE,
-            InventoryId::TesGb,
+            InventoryId::Tes,
             TermKind::ResourceType,
             &["Worksheet"],
             "1",
         ),
         edge(
             RESOURCE_TYPE,
-            InventoryId::TesNz,
+            InventoryId::Tpt,
             TermKind::ResourceType,
             &["Worksheet"],
             "1",
         ),
     ];
-    if with_nz_edges {
+    if with_target_edges {
         edges.push(edge(
             SUBJECT,
-            InventoryId::TesNz,
+            InventoryId::Tpt,
             TermKind::Subject,
             &["Maths for early years"],
-            "7000454",
+            "maths-for-early-years",
         ));
         edges.push(edge(
             TOPIC,
-            InventoryId::TesNz,
+            InventoryId::Tpt,
             TermKind::Topic,
             &["Maths for early years", "Time"],
-            "7000732",
+            "time",
         ));
     }
     taxonomy
@@ -256,8 +256,8 @@ fn run_for_org(pool: PgPool, org: OrgId) -> ImportRun {
     ImportRun {
         pool,
         org,
-        source: InventoryId::TesGb,
-        target: InventoryId::TesNz,
+        source: InventoryId::Tes,
+        target: InventoryId::Tpt,
         now: NOW,
     }
 }
@@ -301,7 +301,7 @@ async fn listing_of(
     adapter
         .fetch_for_import(
             &FetchReason::FirstPartyExport {
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
             },
             DraftId(resource),
         )
@@ -401,7 +401,7 @@ async fn applied_fixture(fixture: Fixture<'_>) -> AppliedResource {
     let listing = adapter
         .fetch_for_import(
             &FetchReason::FirstPartyExport {
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
             },
             DraftId(resource),
         )
@@ -470,7 +470,7 @@ async fn a_mapped_catalogue_row_imports_and_projects(pool: PgPool) {
     assert_eq!(
         (report.terms_seen, report.terms_mapped, report.projectable),
         (2, 2, true),
-        "both categories mapped inbound and the NZ projection is green"
+        "both categories mapped inbound and the target projection is green"
     );
     assert_eq!(
         (report.raised.new, report.raised.already_open),
@@ -508,7 +508,7 @@ async fn a_mapped_catalogue_row_imports_and_projects(pool: PgPool) {
         tam_domain::RightsDeclaration::Declared {
             source: tam_domain::VocabularyPath {
                 vocabulary: tam_domain::VocabularyId(
-                    InventoryId::TesGb,
+                    InventoryId::Tes,
                     tam_domain::TermKind::Licence
                 ),
                 segments: vec!["CC-BY".to_owned()],
@@ -569,7 +569,7 @@ async fn the_row_report_for_a_covered_listing_is_what_it_was_before_the_split(po
             report.terms_uncovered
         ),
         (2, 2, 0),
-        "both categories map inbound over the Tes relation and both reach an NZ counterpart"
+        "both categories map inbound over the Tes relation and both reach a target counterpart"
     );
     assert!(
         report.unmapped_native_ids.is_empty(),
@@ -685,7 +685,7 @@ async fn measure_reports_a_covered_catalogue_as_zero_uncovered_without_files(poo
             report.terms_uncovered
         ),
         (2, 2, 0),
-        "both categories map and both have an NZ counterpart, so the drain is zero"
+        "both categories map and both have a target counterpart, so the drain is zero"
     );
     let mut totals = MeasureTotals::default();
     totals.absorb(&report);
@@ -714,7 +714,7 @@ async fn measure_counts_the_uncovered_terms_a_full_import_would_raise(pool: PgPo
     assert_eq!(
         (report.terms_mapped, report.terms_uncovered),
         (2, 2),
-        "no NZ edges: both mapped terms are uncovered, matching the full import's raise count"
+        "no target edges: both mapped terms are uncovered, matching the full import's raise count"
     );
     let mut totals = MeasureTotals::default();
     totals.absorb(&report);
@@ -745,7 +745,7 @@ async fn a_gap_blocks_the_projection_and_raises_exactly_once(pool: PgPool) {
     assert_eq!(
         (report.projectable, report.blocked_by.as_deref()),
         (false, Some("taxonomy")),
-        "no NZ edges: the projection blocks on the taxonomy gate"
+        "no target edges: the projection blocks on the taxonomy gate"
     );
     assert_eq!(report.raised.new, 2, "each of the two gaps raised its item");
 
@@ -760,7 +760,7 @@ async fn a_gap_blocks_the_projection_and_raises_exactly_once(pool: PgPool) {
 /// seller and for nobody else.
 ///
 /// The fixture is the one `a_gap_blocks_the_projection_and_raises_exactly_once`
-/// uses: no NZ edges, so both terms are uncovered and two items raise. One
+/// uses: no target edges, so both terms are uncovered and two items raise. One
 /// override on the subject leaves exactly one gap for the org that set it and
 /// both for an org that did not, which is the tenancy of the layer and its
 /// effect in the same assertion. Before this wiring the importer projected
@@ -776,13 +776,13 @@ async fn a_sellers_override_answers_a_gap_for_that_seller_only(pool: PgPool) {
         .expect("the second org seeds");
     let decided = ProjectionOverride::new(NewProjectionOverride {
         org: ORG,
-        inventory: InventoryId::TesNz,
+        inventory: InventoryId::Tpt,
         axis: TermKind::Subject,
         from: SUBJECT,
         to: VocabularyPath {
-            vocabulary: VocabularyId(InventoryId::TesNz, TermKind::Subject),
+            vocabulary: VocabularyId(InventoryId::Tpt, TermKind::Subject),
             segments: vec!["Mathematics".to_owned()],
-            native_id: Some("nz-mathematics".to_owned()),
+            native_id: Some("mathematics".to_owned()),
         },
         kind: OverrideKind::Exact,
         decided_by: Decider::Human {
@@ -1000,7 +1000,7 @@ async fn a_sourced_payload_imports_and_stores_no_bytes_of_it(pool: PgPool) {
 /// divergences breaks this equality.
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn the_imports_coverage_number_is_the_measurements(pool: PgPool) {
-    // Seeded without the NZ edges, so there is genuinely something uncovered
+    // Seeded without the target edges, so there is genuinely something uncovered
     // and the equality is not satisfied by both sides being zero.
     seed(&pool, false).await;
     let run = run_for(pool.clone());
@@ -1057,7 +1057,7 @@ async fn the_coverage_number_counts_terms_and_not_the_projections_blocker(pool: 
     let run = ImportRun {
         pool: pool.clone(),
         org: ORG,
-        source: InventoryId::TesGb,
+        source: InventoryId::Tes,
         target: InventoryId::Etsy,
         now: NOW,
     };
@@ -1145,7 +1145,7 @@ async fn the_drain_report_lands_as_a_job_event_the_client_can_read(pool: PgPool)
         .expect("the job exists");
     assert_eq!(
         snapshot.inventory,
-        InventoryId::TesGb,
+        InventoryId::Tes,
         "the job carries the inventory the run reads"
     );
     assert_eq!(
@@ -1162,8 +1162,8 @@ async fn the_drain_report_lands_as_a_job_event_the_client_can_read(pool: PgPool)
     assert_eq!(
         drain.payload,
         serde_json::json!({
-            "source": "TesGb",
-            "target": "TesNz",
+            "source": "Tes",
+            "target": "Tpt",
             "rows": 1,
             "terms_seen": 2,
             "terms_unmapped": 0,
@@ -1171,7 +1171,7 @@ async fn the_drain_report_lands_as_a_job_event_the_client_can_read(pool: PgPool)
             "items_new": 2,
             "items_already_open": 0,
         }),
-        "an empty NZ crosswalk raises every canonical term: the gate's first-run share is 2 of 2"
+        "an empty target crosswalk raises every canonical term: the gate's first-run share is 2 of 2"
     );
 }
 
@@ -1313,11 +1313,11 @@ fn discover_adapter(
         ],
     };
     TesAdapter::new(
-        InventoryId::TesGb,
+        InventoryId::Tes,
         CassetteTransport::new(cassette),
         NoImportFiles,
     )
-    .expect("TesGb is a Tes inventory")
+    .expect("Tes is a Tes inventory")
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
@@ -1326,7 +1326,7 @@ async fn discover_lists_downloads_and_imports_with_no_file_on_disk(pool: PgPool)
     let adapter = discover_adapter(13_549_794, zip_of(&[("worksheet.pdf", pdf())]));
     let run = run_for(pool.clone());
     let reason = FetchReason::FirstPartyExport {
-        inventory: InventoryId::TesGb,
+        inventory: InventoryId::Tes,
     };
 
     let catalogue = adapter
@@ -1400,7 +1400,7 @@ async fn discover_lists_downloads_and_imports_with_no_file_on_disk(pool: PgPool)
         .expect("the drain job exists");
     assert_eq!(
         snapshot.inventory,
-        InventoryId::TesGb,
+        InventoryId::Tes,
         "the drain job carries the inventory the run read"
     );
 }
@@ -1413,7 +1413,7 @@ async fn a_bundle_wrapping_an_inner_zip_keeps_it_as_one_archive_payload(pool: Pg
     let adapter = discover_adapter(13_549_794, bundle);
     let run = run_for(pool.clone());
     let reason = FetchReason::FirstPartyExport {
-        inventory: InventoryId::TesGb,
+        inventory: InventoryId::Tes,
     };
 
     let catalogue = adapter

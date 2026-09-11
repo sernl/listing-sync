@@ -23,7 +23,7 @@ import type { InventoryId } from '$lib/generated/vocab';
  *  these tests read. Transcribed from `crates/tam-api/src/vocabulary.rs` and
  *  the Tes registry rather than invented. */
 const TES_GB: VocabularyView = {
-	inventory: 'TesGb',
+	inventory: 'Tes',
 	marketplace: 'Tes',
 	canonical: [
 		{ field: 'title', required: false },
@@ -165,7 +165,7 @@ const TPT: VocabularyView = {
 };
 
 const VOCABULARIES = new Map<InventoryId, VocabularyView>([
-	['TesGb', TES_GB],
+	['Tes', TES_GB],
 	['Tpt', TPT]
 ]);
 
@@ -265,13 +265,13 @@ describe('the licence, which is the one required field anywhere', () => {
 
 	it('writes one supply election per licence-gating platform, keyed on the price branch', () => {
 		const draft = draftWith({
-			inventories: ['TesGb', 'Tpt'],
+			inventories: ['Tes', 'Tpt'],
 			licence: 'TES-PAID',
 			branch: 'paid'
 		});
 		expect(licenceElections(draft, VOCABULARIES)).toEqual([
 			{
-				inventory: 'TesGb',
+				inventory: 'Tes',
 				axis: 'licence',
 				trigger: 'supply',
 				trigger_key: 'paid',
@@ -281,8 +281,8 @@ describe('the licence, which is the one required field anywhere', () => {
 	});
 
 	it('names the grant against a platform that actually holds a licence field', () => {
-		const draft = draftWith({ inventories: ['Tpt', 'TesGb'], licence: 'CC-BY' });
-		expect(rightsOf(draft, VOCABULARIES)?.inventory).toBe('TesGb');
+		const draft = draftWith({ inventories: ['Tpt', 'Tes'], licence: 'CC-BY' });
+		expect(rightsOf(draft, VOCABULARIES)?.inventory).toBe('Tes');
 	});
 
 	it('states why the licence refuses delegation', () => {
@@ -343,32 +343,32 @@ describe('the refusal that a marketplace wants a field this listing lacks', () =
 	// field this product does not carry".
 
 	it('names the marketplace and the field in words a seller reads', () => {
-		expect(requiredFieldSentence({ missing: [{ inventory: 'TesGb', field: 'licence' }] })).toBe(
-			`${platformTitle('TesGb')} needs a licence, and this listing does not carry one yet.`
+		expect(requiredFieldSentence({ missing: [{ inventory: 'Tes', field: 'licence' }] })).toBe(
+			`${platformTitle('Tes')} needs a licence, and this listing does not carry one yet.`
 		);
 	});
 
 	it('names every marketplace that asked, rather than only the first', () => {
 		const said = requiredFieldSentence({
 			missing: [
-				{ inventory: 'TesGb', field: 'licence' },
-				{ inventory: 'TesUs', field: 'licence' }
+				{ inventory: 'Tes', field: 'licence' },
+				{ inventory: 'Tpt', field: 'licence' }
 			]
 		});
-		expect(said).toContain(platformTitle('TesGb'));
-		expect(said).toContain(platformTitle('TesUs'));
+		expect(said).toContain(platformTitle('Tes'));
+		expect(said).toContain(platformTitle('Tpt'));
 	});
 
 	it('reads the server’s own label for the field where it sent one', () => {
 		expect(
 			requiredFieldSentence({
-				missing: [{ inventory: 'TesGb', field: 'licence', label: 'Licence' }]
+				missing: [{ inventory: 'Tes', field: 'licence', label: 'Licence' }]
 			})
 		).toContain('needs a licence');
 	});
 
 	it('stands a field the registry adds later in for itself rather than guessing', () => {
-		expect(requiredFieldSentence({ missing: [{ inventory: 'TesGb', field: 'age_range' }] })).toContain(
+		expect(requiredFieldSentence({ missing: [{ inventory: 'Tes', field: 'age_range' }] })).toContain(
 			'needs a age_range'
 		);
 	});
@@ -376,7 +376,7 @@ describe('the refusal that a marketplace wants a field this listing lacks', () =
 	it('falls back to the server’s own sentence for a detail it cannot read', () => {
 		expect(requiredFieldSentence({ missing: 'licence' })).toBeNull();
 		expect(requiredFieldSentence(null)).toBeNull();
-		expect(missingFields({ missing: [{ inventory: 'TesGb' }] })).toEqual([]);
+		expect(missingFields({ missing: [{ inventory: 'Tes' }] })).toEqual([]);
 	});
 });
 

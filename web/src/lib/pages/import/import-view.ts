@@ -61,8 +61,8 @@ const ACRONYM: Record<Marketplace, string> = {
  * A total map over the generated union, so a marketplace added in Rust is
  * given a sentence here or fails the web lane. Read only where the
  * marketplace offers no source at all — `sourcesOn` is what decides that, and
- * it mirrors `tam_storage::uncaptured_source`, which admits the three Tes
- * inventories and refuses the rest — so `Tes` carries null and the invariant
+ * it mirrors `tam_storage::uncaptured_source`, which admits Tes and refuses
+ * the rest — so `Tes` carries null and the invariant
  * that every other entry is a sentence is held by a test rather than by the
  * type. */
 const UNREADABLE: Record<Marketplace, string | null> = {
@@ -70,12 +70,6 @@ const UNREADABLE: Record<Marketplace, string | null> = {
 	Tpt: 'Nothing here reads a TPT shop yet. TPT is where a shop brought across arrives.',
 	Etsy: 'Etsy is not built yet, so nothing here can read a shop on it.'
 };
-
-/** The site a Tes card starts on.
- *
- * Named rather than taken as the first of the list, so reordering the sources
- * cannot quietly move the default onto another country's shop. */
-export const DEFAULT_SITE: InventoryId = 'TesGb';
 
 /** What this console knows about the seller's connection for a marketplace.
  *
@@ -95,11 +89,9 @@ export interface ImportCard {
 	marketplace: Marketplace;
 	/** The acronym, which is how the card is titled. */
 	name: string;
-	/** The sites a shop can be read from, in the console's platform order.
-	 *  Empty where nothing here reads this marketplace. */
+	/** The inventories a shop can be read from, in the console's platform
+	 *  order. Empty where nothing here reads this marketplace. */
 	sites: readonly InventoryId[];
-	/** The site the form starts on, and null where there is no choice. */
-	preselected: InventoryId | null;
 	/** Whether the seller holds a connection for this marketplace, and whether
 	 *  this console knows.
 	 *
@@ -131,7 +123,6 @@ export function importCards(connections: readonly ConnectionView[] | null): Impo
 			marketplace,
 			name: ACRONYM[marketplace],
 			sites,
-			preselected: startingSite(sites),
 			standing: standingOf(held, marketplace),
 			unreadable: sites.length === 0 ? UNREADABLE[marketplace] : null
 		};
@@ -164,13 +155,6 @@ function onDeviceBranch(): Marketplace[] {
 	return [...seen];
 }
 
-function startingSite(sites: readonly InventoryId[]): InventoryId | null {
-	if (sites.includes(DEFAULT_SITE)) {
-		return DEFAULT_SITE;
-	}
-	return sites[0] ?? null;
-}
-
 /** Why this card cannot hand off to Marketplace Migration, or null where it
  *  can.
  *
@@ -194,16 +178,6 @@ export function handoffBlocked(card: ImportCard): string | null {
 		return notConnected(card);
 	}
 	return null;
-}
-
-/** Where the seller goes to raise the request for one site.
- *
- * The query value is the inventory identifier `sourcesOn` yields — `TesGb`,
- * `TesUs`, `TesNz` — because Marketplace Migration validates the parameter
- * against that same list. Sending a prettier name would hand it a value it is
- * right to reject. */
-export function migrationHref(site: InventoryId): string {
-	return `${MIGRATION_HREF}?${new URLSearchParams({ source: site }).toString()}`;
 }
 
 /** The screen that owns raising the request (D8). */

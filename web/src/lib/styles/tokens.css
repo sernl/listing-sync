@@ -25,21 +25,22 @@
  * are derived here and not in the kit, which is why they are not in the shared
  * table the landing declares.
  *
- * There is no dark block here yet. It is its own change, and it is gated on
- * this one: a stray white literal on a dark ground is invisible, so every
- * colour the console draws had to reach a token first. `tokens.test.ts` holds
- * that line, and it strips comments before it searches -- but the hex is
- * spelled out in prose nowhere in this file anyway, so a plain grep for a
- * colour outside `:root` returns nothing here and agrees with the gate.
+ * The dark block is at the foot of this file, and it was gated on the light
+ * one: a stray white literal on a dark ground is invisible, so every colour
+ * the console draws had to reach a token first. `tokens.test.ts` holds that
+ * line, measures every contrast pair on both grounds, and strips both
+ * declaring blocks before it sweeps for a literal, so a hex anywhere else in
+ * this file is still a failure.
  */
 
 :root {
-	/* Light, and said out loud: the palette below is the only one this console
-	   has, so a browser told nothing paints its own form controls, scrollbars
-	   and canvas dark for a seller whose system is dark and leaves them
-	   surrounded by widgets the page never chose. A dark theme is a later
-	   founder decision, and this line is what it changes. */
-	color-scheme: light;
+	/* Both schemes, said out loud, so a browser paints its own form controls,
+	   scrollbars and canvas to match whichever block is in force. The two
+	   blocks below pin it exactly rather than leaving it to the reader's
+	   system, because `app.html` always writes one of them onto the element
+	   before first paint, and a resolved scheme disagreeing with the painted
+	   ground is the widget-soup this line exists to prevent. */
+	color-scheme: light dark;
 
 	/* grounds, lightest to the card the content sits on */
 	--ground: #f8faf8;
@@ -111,7 +112,21 @@
 	   is neither indigo nor teal and competes with neither. */
 	--tint: #efe9ff;
 	--tint-edge: #f5f2ff;
+	/* The ground a marketplace's own mark is drawn on. Owners chose their
+	   colours for a light page, so the dark palette keeps a light card behind
+	   every mark rather than tinting the mark. */
+	--mark-ground: var(--surface);
 	--on-fill: #ffffff;
+
+	/* The icon rail, which is the one band on the page that is a brand colour
+	   rather than a neutral. It needs its own three names because the dark
+	   block moves `--primary` to Lavender -- an indigo button vanishes on an
+	   indigo ground -- and the rail is the one place indigo has to stay: a
+	   lavender rail would read as the page's loudest surface. On light these
+	   are exactly what the rule said before, spelled as aliases. */
+	--rail-fill: var(--primary);
+	--rail-ink: var(--on-fill);
+	--rail-edge: transparent;
 
 	/* The seven colours a seller can give a label, and the one scale here that
 	   deliberately does not follow the theme: the colour is derived from the
@@ -148,9 +163,16 @@
 	--r-pill: 999px;
 
 	/* shadow, tinted with the palette's own ink so the ground and the shadow
-	   below it never sit in different colour families */
+	   below it never sit in different colour families. `--sh-3` is the
+	   detached tier -- a toast, a menu, a sheet -- and it is a token rather
+	   than three hand-written rules because the dark block has to move all
+	   three off the ink at once: on a dark ground the ink is nearly white and
+	   a shadow drawn with it is a halo. `--scrim` is the dim behind a modal,
+	   here for the same reason. */
 	--sh-1: 0 1px 2px color-mix(in srgb, var(--text) 8%, transparent);
 	--sh-2: 0 4px 14px color-mix(in srgb, var(--text) 8%, transparent);
+	--sh-3: 0 6px 20px color-mix(in srgb, var(--text) 18%, transparent);
+	--scrim: color-mix(in srgb, var(--text) 42%, transparent);
 
 	/* the two fixed measures the shell's grid is built from */
 	--rail-w: 56px;
@@ -164,4 +186,111 @@
 	   grows. */
 	--control-h: 38px;
 	--control-h-sm: 30px;
+}
+
+/* The same kit, re-grounded on the kit's own Indigo.
+ *
+ * Dark is not the light palette inverted: it is the brand's darkest colour
+ * promoted to the page, with the grounds stepping *up* towards the content
+ * rather than down, which is what keeps a card reading as a card. `--surface`
+ * is Indigo itself, the colour the rail and every solid button wear on light,
+ * so the console's own frame colour becomes the paper.
+ *
+ * Two roles have to move, and both are arithmetic rather than taste. Indigo
+ * cannot be the action colour on an Indigo ground -- a solid button would
+ * vanish into the card -- so Lavender, already the kit's, carries `--primary`
+ * and `--on-fill` becomes Indigo under it. And the four ink names split: the
+ * kit's one Slate is 2.1 against this ground, so secondary text takes a
+ * lighter Slate and the tertiary names take a lighter one still, which is the
+ * distinction the light block did not need because there Slate cleared the
+ * bar under all three names.
+ *
+ * Teal, Success, Warning, Danger, Lavender and Peach are the kit's own values
+ * unchanged; only the `-soft` grounds under them are re-mixed for this page,
+ * and the three derived `-ink` tokens fall out of the same `color-mix` the
+ * light block writes, now against a near-white `--text`.
+ *
+ * The seven label hues are the one scale that does not follow the theme, and
+ * they move here for the same reason they were darkened on light: hue and
+ * saturation are the seller's choice and untouched, and only lightness moves,
+ * each to where it measures about 5.6 on the card -- so the seven read at one
+ * weight rather than teal shouting and red whispering.
+ *
+ * `tokens.test.ts` measures every pair below on both grounds and grants this
+ * block no trade: unlike light, where the kit's Slate on the navigation card
+ * is a documented 4.29, every pair here clears 4.5 outright. */
+[data-theme=dark] {
+	color-scheme: dark;
+
+	/* grounds, darkest to the card the content sits on: the step runs upward
+	   here, which is the one structural inversion in this block */
+	--ground: #141c3a;
+	--nav: #1a2347;
+	--surface: #1e2a5a;
+	--hover: #26335f;
+
+	/* action tiers. Lavender is the kit's own accent surface taking the
+	   primary role, and Indigo is what a word on it is set in. */
+	--primary: #c8b4ff;
+	--on-fill: #1e2a5a;
+	--accent: #00b894;
+	--accent-ink: #00bb97;
+	--accent-soft: #103f3a;
+	--additive: #ab91fb;
+	--additive-soft: #2a2456;
+
+	/* ink: three weights where light had one, because the kit's single Slate
+	   is unreadable on this ground */
+	--text: #f8faf8;
+	--muted: #b4bcd0;
+	--faint: #9aa3b8;
+	--line: #33406b;
+
+	/* state: the kit's four colours unchanged, on grounds mixed for this page */
+	--ok: #10b981;
+	--ok-soft: #0f3d33;
+	--warn: #f59e0b;
+	--warn-soft: #3d2f0e;
+	--bad: #ef4444;
+	--bad-soft: #4a1a1a;
+	--soon: #9aa3b8;
+	--soon-soft: #26335f;
+
+	/* the outcome bar's own two, kept at the weights they carry on light:
+	   `--queued` measures 1.48 against the card there and 1.48 here */
+	--blocked: #f59e0b;
+	--queued: #36495e;
+
+	--tint: #1a2347;
+	--tint-edge: #232c52;
+	--mark-ground: #f8faf8;
+
+	/* Indigo stays the rail, which on this page is the card colour, so the
+	   band needs an edge to be a band at all. */
+	--rail-fill: #1e2a5a;
+	--rail-ink: #f8faf8;
+	--rail-edge: var(--line);
+
+	--label-red: #e38e99;
+	--label-amber: #e49512;
+	--label-green: #3dbb78;
+	--label-teal: #16b6c8;
+	--label-blue: #7baadc;
+	--label-violet: #ae9dd6;
+	--label-pink: #d790b7;
+
+	/* Off the ink and onto a near-black, and deeper than light's 8 per cent:
+	   a shadow separates two surfaces by darkening the lower one, and there
+	   is less room to darken below #141C3A than below Cream. */
+	--sh-1: 0 1px 2px color-mix(in srgb, #05070f 45%, transparent);
+	--sh-2: 0 4px 14px color-mix(in srgb, #05070f 55%, transparent);
+	--sh-3: 0 6px 20px color-mix(in srgb, #05070f 65%, transparent);
+	--scrim: color-mix(in srgb, #05070f 62%, transparent);
+}
+
+/* Named rather than left to `:root`'s `light dark`, because `app.html` writes
+   one of the two onto the element before first paint and the resolved scheme
+   has to follow the painted ground, not the reader's system. */
+[data-theme=light] {
+	color-scheme: light;
 }

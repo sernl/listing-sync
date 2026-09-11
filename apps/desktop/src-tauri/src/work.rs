@@ -227,12 +227,12 @@ impl MarketplaceFiles for SellerFiles {
                     // country segment, so it does not reach this wire. A
                     // per-country download would have to put the inventory in
                     // the locator rather than pick one here.
-                    let adapter = TesAdapter::new(InventoryId::TesGb, transport, NoUploads)
+                    let adapter = TesAdapter::new(InventoryId::Tes, transport, NoUploads)
                         .map_err(|why| why.to_string())?;
                     adapter
                         .download_resource_bundle(
                             &FetchReason::FirstPartyExport {
-                                inventory: InventoryId::TesGb,
+                                inventory: InventoryId::Tes,
                             },
                             tam_marketplace_tes::DraftId(id),
                         )
@@ -918,7 +918,7 @@ mod reconcile_tests {
     fn marker_locator() -> ListingLocator {
         ListingLocator::Marker {
             marker: CorrelationMarker(MARKER.to_owned()),
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
         }
     }
 
@@ -927,12 +927,8 @@ mod reconcile_tests {
     }
 
     fn tes(cassette: Cassette) -> TesAdapter<CassetteTransport, NoFiles> {
-        TesAdapter::new(
-            InventoryId::TesGb,
-            CassetteTransport::new(cassette),
-            NoFiles,
-        )
-        .expect("TesGb is a Tes inventory")
+        TesAdapter::new(InventoryId::Tes, CassetteTransport::new(cassette), NoFiles)
+            .expect("Tes is a Tes inventory")
     }
 
     /// The published page, then the two empty pages the walk ends each list on.
@@ -1010,7 +1006,7 @@ mod reconcile_tests {
     fn recorded_locator() -> ListingLocator {
         ListingLocator::Recorded {
             title: RecordedTitle(RECORDED.to_owned()),
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
         }
     }
 
@@ -1541,7 +1537,7 @@ mod tests {
                 item: JobItemId(uuid(2)),
                 job: JobId(uuid(3)),
                 mapping: MappingId(uuid(4)),
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 idempotency_key: IdempotencyKey(uuid(5)),
                 operation: ItemOperation::Create,
                 lease_epoch: 7,
@@ -2016,7 +2012,7 @@ mod tests {
     #[tokio::test]
     async fn the_live_catalogue_refuses_by_name_rather_than_answering_empty() {
         use crate::import::CatalogueSource as _;
-        let catalogue = super::SellerCatalogue::new(sessions_for(&[]).await, InventoryId::TesGb);
+        let catalogue = super::SellerCatalogue::new(sessions_for(&[]).await, InventoryId::Tes);
 
         let listed = catalogue
             .list()
@@ -2042,23 +2038,23 @@ mod tests {
 
     /// The source walks the inventory it was given, not one it chose.
     ///
-    /// Constructed for two different Tes inventories, the two are different
+    /// Constructed for two different inventories, the two are different
     /// values; the command takes this from the request the console names, so a
     /// source that ignored its argument would enumerate whichever shop it
     /// preferred regardless of what the seller asked to migrate.
     #[test]
     fn the_live_catalogue_carries_the_inventory_it_was_built_for() {
-        let gb = super::SellerCatalogue::new(
+        let tes = super::SellerCatalogue::new(
             std::sync::Arc::new(crate::session::memory::MemorySessionStore::default()),
-            InventoryId::TesGb,
+            InventoryId::Tes,
         );
-        let nz = super::SellerCatalogue::new(
+        let tpt = super::SellerCatalogue::new(
             std::sync::Arc::new(crate::session::memory::MemorySessionStore::default()),
-            InventoryId::TesNz,
+            InventoryId::Tpt,
         );
-        assert_eq!(gb.inventory, InventoryId::TesGb);
-        assert_eq!(nz.inventory, InventoryId::TesNz);
-        assert_ne!(gb.inventory, nz.inventory);
+        assert_eq!(tes.inventory, InventoryId::Tes);
+        assert_eq!(tpt.inventory, InventoryId::Tpt);
+        assert_ne!(tes.inventory, tpt.inventory);
     }
 
     /// A transport builder that answers from a recorded cassette.
@@ -2133,7 +2129,7 @@ mod tests {
         };
         let catalogue = super::SellerCatalogue::over(
             sessions_for(&[Marketplace::Tes]).await,
-            InventoryId::TesGb,
+            InventoryId::Tes,
             ScriptedTes(std::sync::Arc::new(cassette)),
         );
 
@@ -2414,7 +2410,7 @@ mod tests {
         let stopper = Arc::new(AtomicBool::new(false));
         let source = work(&plane, &data_dir, &stopper);
 
-        // The fixture's inventory is TesGb, and this asks as TPT.
+        // The fixture's inventory is Tes, and this asks as TPT.
         let events = source.pull(Marketplace::Tpt).await.expect("the pull lands");
         assert!(
             matches!(events.as_slice(), [WorkEvent::Failed { .. }]),

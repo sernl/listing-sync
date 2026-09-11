@@ -235,7 +235,7 @@ async fn the_status_page_needs_no_session(pool: PgPool) {
     let inventories = view["inventories"]
         .as_array()
         .expect("the inventories array");
-    assert_eq!(inventories.len(), 5, "every inventory in the closed set");
+    assert_eq!(inventories.len(), 3, "every inventory in the closed set");
     assert!(
         inventories.iter().all(|entry| entry["halted"] == false),
         "a fresh fleet has no halts"
@@ -251,9 +251,7 @@ async fn the_status_page_needs_no_session(pool: PgPool) {
     assert_eq!(
         branches,
         vec![
-            ("TesGb", "SellerDevice"),
-            ("TesUs", "SellerDevice"),
-            ("TesNz", "SellerDevice"),
+            ("Tes", "SellerDevice"),
             ("Etsy", "OfficialApi"),
             ("Tpt", "SellerDevice"),
         ],

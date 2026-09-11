@@ -1045,7 +1045,7 @@ async fn seed_claimable(app: &PgPool) {
                 id: mapping,
                 org: ORG_A,
                 product,
-                inventory: tam_types::InventoryId::TesGb,
+                inventory: tam_types::InventoryId::Tes,
                 binding: tam_domain::Binding::Unbound,
                 policies: tam_domain::FieldPolicies {
                     title: tam_domain::FieldPolicy::Managed,
@@ -1087,7 +1087,7 @@ async fn seed_claimable(app: &PgPool) {
             ORG_A,
             &tam_storage::NewJob {
                 job: tam_types::JobId(Id([0x06; 16])),
-                inventory: tam_types::InventoryId::TesGb,
+                inventory: tam_types::InventoryId::Tes,
                 stamp: tam_types::Stamp {
                     at: NOW,
                     actor: tam_types::Actor::System(tam_types::SystemComponent::Engine),
@@ -1606,10 +1606,10 @@ async fn every_write_this_endpoint_serves_lands_under_the_tenant_pin(pool: PgPoo
         serde_json::json!({ "call": "preflight_succeeded", "lease": lease }),
         serde_json::json!({
             "call": "gate_connection", "lease": lease,
-            "inventory": "TesGb", "at_ms": 1_756_000_030_000_i64,
+            "inventory": "Tes", "at_ms": 1_756_000_030_000_i64,
         }),
         serde_json::json!({
-            "call": "halt_this_tenant", "lease": lease, "inventory": "TesGb",
+            "call": "halt_this_tenant", "lease": lease, "inventory": "Tes",
             "reason": "a device asked for it", "at_ms": 1_756_000_031_000_i64,
         }),
         serde_json::json!({
@@ -1665,7 +1665,7 @@ async fn a_lost_counterpart_settles_through_the_work_route_and_the_queue_moves_o
     .execute(&engine)
     .await
     .expect("the counterpart is made unreachable");
-    sqlx::query("UPDATE job_item SET requires_bound_on = 'tes_gb'")
+    sqlx::query("UPDATE job_item SET requires_bound_on = 'tes'")
         .execute(&engine)
         .await
         .expect("the item is made to wait on that mapping");
@@ -2003,7 +2003,7 @@ async fn seed_tpt_claimable(app: &PgPool) {
     let subject = tam_types::CanonicalTermId(Id([0x77; 16]));
     let grade = tam_types::CanonicalTermId(Id([0x79; 16]));
     let declared = path(
-        tam_types::InventoryId::TesUs,
+        tam_types::InventoryId::Tes,
         tam_domain::TermKind::Phase,
         "Kindergarten",
         "17",
@@ -2044,7 +2044,7 @@ async fn seed_tpt_claimable(app: &PgPool) {
                     ),
                 ),
                 // Seeded on the source side too. The product declares its grade
-                // as a TesUs path, and the projection reaches TPT by ingesting
+                // as a Tes path, and the projection reaches TPT by ingesting
                 // that into the canonical term and projecting out again; without
                 // this edge the ingest finds nothing and the item parks on a
                 // taxonomy election instead of producing an order.
@@ -2092,7 +2092,7 @@ async fn seed_tpt_claimable(app: &PgPool) {
                 grades: tam_domain::GradeDeclaration {
                     source: tam_domain::DeclarationSource::Imported {
                         vocabulary: tam_domain::VocabularyId(
-                            tam_types::InventoryId::TesUs,
+                            tam_types::InventoryId::Tes,
                             tam_domain::TermKind::Phase,
                         ),
                     },

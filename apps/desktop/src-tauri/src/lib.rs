@@ -252,6 +252,7 @@ pub fn run() {
             commands::device_activity,
             commands::start_import,
             commands::retry_console,
+            commands::set_theme,
         ])
         .build(tauri::generate_context!());
 

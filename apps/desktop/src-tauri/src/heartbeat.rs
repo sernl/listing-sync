@@ -616,7 +616,7 @@ mod tests {
             &self,
             _request: tam_types::Uuid,
         ) -> PlaneFuture<'_, tam_types::InventoryId> {
-            Box::pin(core::future::ready(Ok(tam_types::InventoryId::TesGb)))
+            Box::pin(core::future::ready(Ok(tam_types::InventoryId::Tes)))
         }
 
         fn register<'a>(
@@ -859,7 +859,7 @@ mod tests {
             &self,
             _request: tam_types::Uuid,
         ) -> PlaneFuture<'_, tam_types::InventoryId> {
-            Box::pin(core::future::ready(Ok(tam_types::InventoryId::TesGb)))
+            Box::pin(core::future::ready(Ok(tam_types::InventoryId::Tes)))
         }
 
         fn register<'a>(

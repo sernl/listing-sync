@@ -18,7 +18,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tam_storage::{BackofficeRepo, DailyCount, IdentityAuditRepo, ItemCounts, SignupsRepo};
-use tam_types::{FailureCode, InventoryId, MappingId, OrgId, Timestamp, Uuid};
+use tam_types::{FailureCode, InventoryId, MappingId, Marketplace, OrgId, Timestamp, Uuid};
 
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::resources::ConnectionView;
@@ -260,6 +260,7 @@ pub(crate) async fn org_detail(
                 // SELECT on `connection` and the backoffice query simply does
                 // not select the two authorship columns.
                 authorship: None,
+                country: (row.marketplace == Marketplace::Tes).then_some(row.country),
             })
             .collect(),
         halts: detail

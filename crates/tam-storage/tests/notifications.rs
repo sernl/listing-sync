@@ -116,7 +116,7 @@ async fn seed_tenant(app: &PgPool, seed: u8) -> Tenant {
                 id: mapping,
                 org,
                 product,
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 binding: Binding::Unbound,
                 policies: FieldPolicies {
                     title: FieldPolicy::Managed,
@@ -159,7 +159,7 @@ async fn seed_request(app: &PgPool, org: OrgId, disposition: &str, remove: Optio
         "INSERT INTO sync_request \
          (org_id, id, source, target, disposition, intent, state, \
           create_job_id, remove_job_id, requested_at, settled_at) \
-         VALUES ($1, $2, 'tes_gb', 'tpt', $3, 'draft', 'enqueued', $4, $5, now(), now())",
+         VALUES ($1, $2, 'tes', 'tpt', $3, 'draft', 'enqueued', $4, $5, now(), now())",
     )
     .bind(db_uuid(org.0))
     .bind(db_uuid(REQUEST))
@@ -211,7 +211,7 @@ async fn enqueue(engine: &PgPool, tenant: &Tenant, job: JobId, items: &[u8]) {
             tenant.org,
             &NewJob {
                 job,
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 stamp: Stamp {
                     at: T0,
                     actor: Actor::System(SystemComponent::Engine),

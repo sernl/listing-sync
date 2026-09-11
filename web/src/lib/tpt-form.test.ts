@@ -44,7 +44,6 @@ import {
 	withMarketplaces,
 	inventoriesOf,
 	tilesOf,
-	tesNeedsCurriculum,
 	gradeLabel,
 	gradeBandLabel,
 	markUp,
@@ -176,7 +175,7 @@ const VOCABULARY: FormVocabularyView = {
  *  one thing and the refusal names that one. */
 function complete(): TptDraft {
 	// Through `withMarketplaces`, because that is the only way the form writes
-	// the three marketplace fields: a fixture that set `inventories` alone
+	// the two marketplace fields: a fixture that set `inventories` alone
 	// would be a draft the page cannot produce.
 	return withMarketplaces(
 		{
@@ -189,8 +188,7 @@ function complete(): TptDraft {
 			tags: ['centers'],
 			copyright: '1'
 		},
-		['Tpt'],
-		[]
+		['Tpt']
 	);
 }
 
@@ -401,34 +399,34 @@ describe('the additional-licence pre-fill', () => {
 
 describe('the per-marketplace divergence', () => {
 	it('follows the canonical value until the marketplace value is edited', () => {
-		const draft = { ...complete(), inventories: ['Tpt' as const, 'TesGb' as const] };
-		expect(valueFor(draft, 'TesGb', 'name')).toBe(draft.name);
-		expect(diverges(draft, 'TesGb', 'name')).toBe(false);
+		const draft = { ...complete(), inventories: ['Tpt' as const, 'Tes' as const] };
+		expect(valueFor(draft, 'Tes', 'name')).toBe(draft.name);
+		expect(diverges(draft, 'Tes', 'name')).toBe(false);
 		expect(divergentOn(draft, 'name')).toEqual([]);
 	});
 
 	it('offers Update all only once a marketplace value differs', () => {
 		const draft = withOverride(
-			{ ...complete(), inventories: ['Tpt', 'TesGb'] },
-			'TesGb',
+			{ ...complete(), inventories: ['Tpt', 'Tes'] },
+			'Tes',
 			'name',
 			'Fractions — UK edition'
 		);
-		expect(diverges(draft, 'TesGb', 'name')).toBe(true);
-		expect(divergentOn(draft, 'name')).toEqual(['TesGb']);
+		expect(diverges(draft, 'Tes', 'name')).toBe(true);
+		expect(divergentOn(draft, 'name')).toEqual(['Tes']);
 		expect(valueFor(draft, 'Tpt', 'name')).toBe(complete().name);
 	});
 
 	it('Reset drops the override rather than emptying the field', () => {
-		let draft = withOverride({ ...complete(), inventories: ['TesGb'] }, 'TesGb', 'name', 'Other');
-		draft = withOverride(draft, 'TesGb', 'name', null);
-		expect(diverges(draft, 'TesGb', 'name')).toBe(false);
-		expect(valueFor(draft, 'TesGb', 'name')).toBe(complete().name);
+		let draft = withOverride({ ...complete(), inventories: ['Tes'] }, 'Tes', 'name', 'Other');
+		draft = withOverride(draft, 'Tes', 'name', null);
+		expect(diverges(draft, 'Tes', 'name')).toBe(false);
+		expect(valueFor(draft, 'Tes', 'name')).toBe(complete().name);
 	});
 
 	it('Update all promotes one value and clears every override of that field', () => {
-		let draft: TptDraft = { ...complete(), inventories: ['Tpt', 'TesGb'] };
-		draft = withOverride(draft, 'TesGb', 'name', 'Fractions — UK edition');
+		let draft: TptDraft = { ...complete(), inventories: ['Tpt', 'Tes'] };
+		draft = withOverride(draft, 'Tes', 'name', 'Fractions — UK edition');
 		draft = applyToAll(draft, 'name', 'Fractions — UK edition');
 		expect(draft.name).toBe('Fractions — UK edition');
 		expect(divergentOn(draft, 'name')).toEqual([]);
@@ -529,8 +527,8 @@ describe('the request bodies', () => {
 
 describe('the marketplace tab contract', () => {
 	it('renders one field row per overridable field, decided by the listing', () => {
-		const projection = projectionOf({ ...complete(), inventories: ['TesGb'] }, 'TesGb');
-		expect(projection.inventory).toBe('TesGb');
+		const projection = projectionOf({ ...complete(), inventories: ['Tes'] }, 'Tes');
+		expect(projection.inventory).toBe('Tes');
 		expect(
 			projection.rows.map((row) => [row.key, row.kind, row.decided_by?.by])
 		).toEqual([
@@ -543,12 +541,12 @@ describe('the marketplace tab contract', () => {
 
 	it('marks a row the seller took away from the canonical value', () => {
 		const draft = withOverride(
-			{ ...complete(), inventories: ['TesGb'] },
-			'TesGb',
+			{ ...complete(), inventories: ['Tes'] },
+			'Tes',
 			'name',
 			'Fractions — UK edition'
 		);
-		const row = projectionOf(draft, 'TesGb').rows[0];
+		const row = projectionOf(draft, 'Tes').rows[0];
 		expect(row.decided_by?.by).toBe('listing_override');
 		expect(row.values).toEqual(['Fractions — UK edition']);
 	});
@@ -558,7 +556,7 @@ describe('the marketplace tab contract', () => {
 	 *  this file changing. */
 	it('carries a shape a server-side axis row can be fed into unchanged', () => {
 		const fromServer: MarketplaceProjection = {
-			inventory: 'TesGb',
+			inventory: 'Tes',
 			rows: [
 				{
 					key: 'subject',
@@ -589,7 +587,7 @@ describe('the marketplace tab contract', () => {
  *  is disclosed and never narrowed. */
 function vocabularyWithSubjectCap(cap: number | undefined): VocabularyView {
 	return {
-		inventory: 'TesGb',
+		inventory: 'Tes',
 		marketplace: 'Tes',
 		canonical: [],
 		natives: [],
@@ -635,9 +633,9 @@ describe('the axis rows on a marketplace tab', () => {
 		const draft = {
 			...complete(),
 			subjectAreas: ['math', 'science', 'social-studies'],
-			inventories: ['TesGb' as const]
+			inventories: ['Tes' as const]
 		};
-		const row = axisRow(projectionOf(draft, 'TesGb', vocabularyWithSubjectCap(2)), 'subject');
+		const row = axisRow(projectionOf(draft, 'Tes', vocabularyWithSubjectCap(2)), 'subject');
 		expect(row?.loss).toContain('takes 2');
 		expect(row?.loss).toContain('chosen 3');
 		// The whole point: the seller's three survive on the row and the row
@@ -652,22 +650,22 @@ describe('the axis rows on a marketplace tab', () => {
 		const draft = {
 			...complete(),
 			subjectAreas: ['math', 'science', 'social-studies'],
-			inventories: ['TesGb' as const]
+			inventories: ['Tes' as const]
 		};
-		const row = axisRow(projectionOf(draft, 'TesGb', vocabularyWithSubjectCap(undefined)), 'subject');
+		const row = axisRow(projectionOf(draft, 'Tes', vocabularyWithSubjectCap(undefined)), 'subject');
 		expect(row?.loss).toBeNull();
 		expect(row?.axis?.cap).toBeNull();
 	});
 
 	it('reads a one-valued axis as a cap of one rather than as a separate case', () => {
-		const draft = { ...complete(), inventories: ['TesGb' as const] };
-		expect(axisRow(projectionOf(draft, 'TesGb', vocabularyWithSubjectCap(3)), 'licence')?.axis?.cap)
+		const draft = { ...complete(), inventories: ['Tes' as const] };
+		expect(axisRow(projectionOf(draft, 'Tes', vocabularyWithSubjectCap(3)), 'licence')?.axis?.cap)
 			.toBe(1);
 	});
 
 	it('refuses the licence axis an override and any computed answer', () => {
-		const draft = { ...complete(), inventories: ['TesGb' as const] };
-		const projection = projectionOf(draft, 'TesGb', vocabularyWithSubjectCap(3));
+		const draft = { ...complete(), inventories: ['Tes' as const] };
+		const projection = projectionOf(draft, 'Tes', vocabularyWithSubjectCap(3));
 		const licence = axisRow(projection, 'licence');
 		expect(licence?.axis?.delegable).toBe(false);
 		expect(licence?.axis?.mode).toBe('seller_decides');
@@ -682,8 +680,8 @@ describe('the axis rows on a marketplace tab', () => {
 	});
 
 	it('decides no axis in the browser, whatever the mode says', () => {
-		const draft = { ...complete(), inventories: ['TesGb' as const] };
-		const rows = projectionOf(draft, 'TesGb', vocabularyWithSubjectCap(3)).rows.filter(
+		const draft = { ...complete(), inventories: ['Tes' as const] };
+		const rows = projectionOf(draft, 'Tes', vocabularyWithSubjectCap(3)).rows.filter(
 			(row) => row.kind === 'axis'
 		);
 		expect(rows.length).toBeGreaterThan(0);
@@ -694,8 +692,8 @@ describe('the axis rows on a marketplace tab', () => {
 	});
 
 	it('renders no axis row at all until the marketplace vocabulary has arrived', () => {
-		const draft = { ...complete(), inventories: ['TesGb' as const] };
-		expect(projectionOf(draft, 'TesGb', null).rows.every((row) => row.kind === 'field')).toBe(true);
+		const draft = { ...complete(), inventories: ['Tes' as const] };
+		expect(projectionOf(draft, 'Tes', null).rows.every((row) => row.kind === 'field')).toBe(true);
 	});
 });
 
@@ -750,11 +748,11 @@ describe('the standards a marketplace will not carry', () => {
 	it('renders no standards row on a marketplace that carries none', () => {
 		const draft = {
 			...complete(),
-			inventories: ['TesGb' as const],
+			inventories: ['Tes' as const],
 			standards: [pick('A.1'), pick('A.2')]
 		};
 		expect(
-			projectionOf(draft, 'TesGb').rows.find((one) => one.key === 'standards')
+			projectionOf(draft, 'Tes').rows.find((one) => one.key === 'standards')
 		).toBeUndefined();
 	});
 
@@ -791,7 +789,7 @@ describe('the standards heading', () => {
  *  `licence` is the one field declared required anywhere in the registry. */
 function tesGating(): VocabularyView {
 	return {
-		inventory: 'TesGb',
+		inventory: 'Tes',
 		marketplace: 'Tes',
 		canonical: [],
 		natives: [
@@ -818,7 +816,7 @@ function tesGating(): VocabularyView {
 	} as VocabularyView;
 }
 
-const GATING = new Map([['TesGb' as const, tesGating()]]);
+const GATING = new Map([['Tes' as const, tesGating()]]);
 
 describe('the licence a marketplace gates', () => {
 	// The defect this pins: `createBodyOf` sent `elections: []` and no `rights`,
@@ -828,19 +826,19 @@ describe('the licence a marketplace gates', () => {
 	it('carries the seller’s licence as a rights grant and an election', () => {
 		const listing = {
 			...complete(),
-			inventories: ['TesGb' as const],
+			inventories: ['Tes' as const],
 			free: true,
 			licence: 'CC-BY'
 		};
 		const body = createBodyOf(listing, GATING);
 		expect(body?.rights).toEqual({
-			inventory: 'TesGb',
+			inventory: 'Tes',
 			segments: ['CC-BY'],
 			native_id: 'CC-BY'
 		});
 		expect(body?.elections).toEqual([
 			{
-				inventory: 'TesGb',
+				inventory: 'Tes',
 				axis: 'licence',
 				trigger: 'supply',
 				trigger_key: 'free',
@@ -852,7 +850,7 @@ describe('the licence a marketplace gates', () => {
 	it('sends the paid branch’s key when the listing carries a price', () => {
 		const paid = {
 			...complete(),
-			inventories: ['TesGb' as const],
+			inventories: ['Tes' as const],
 			free: false,
 			price: '4.50',
 			taxCode: '1',
@@ -863,10 +861,10 @@ describe('the licence a marketplace gates', () => {
 	});
 
 	it('refuses a gating marketplace with no licence chosen, naming it', () => {
-		const bare = { ...complete(), inventories: ['TesGb' as const], free: true, licence: null };
-		expect(unlicensed(bare, GATING)).toEqual(['TesGb']);
-		// One sentence for the one Tes tile, in the panel that asks for it,
-		// rather than one per catalogue in a list at the foot of the page.
+		const bare = { ...complete(), inventories: ['Tes' as const], free: true, licence: null };
+		expect(unlicensed(bare, GATING)).toEqual(['Tes']);
+		// One sentence in the panel that asks for it, rather than one in a list
+		// at the foot of the page.
 		const said = refusalsIn(refusalsOf(bare, VOCABULARY, GATING), 'tes_options');
 		expect(said).toHaveLength(1);
 		expect(said[0].message).toBe('Choose a licence. Tes needs one to list this.');
@@ -952,10 +950,8 @@ describe('what the seller is told once the listing exists', () => {
 		expect(createdToast(3)).toContain('3 marketplaces');
 	});
 
-	// Tes is one tile and three catalogues, so a listing sent to TPT and Tes
-	// writes four mappings and the teacher ticked two marketplaces.
-	it('counts the marketplaces the teacher ticked, not the catalogues written', () => {
-		expect(marketplacesReached(['Tpt', 'TesGb', 'TesUs', 'TesNz'])).toBe(2);
+	it('counts the marketplaces the teacher ticked', () => {
+		expect(marketplacesReached(['Tpt', 'Tes'])).toBe(2);
 		expect(marketplacesReached([])).toBe(0);
 	});
 });
@@ -1341,73 +1337,32 @@ describe('taking back an upload before the draft is made', () => {
 	});
 });
 
-describe('one Tes tile, three Tes catalogues', () => {
-	// The founder's rule of 2026-09-11: the form shows one Tes, and which of
-	// its three regional catalogues a listing reaches is the Tes panel's
-	// Curriculum question. Nothing on the wire changes.
+describe('one tile, one marketplace, one inventory', () => {
+	// The founder's rule of 2026-09-12: Tes is one marketplace with no
+	// regions, so a ticked tile is the whole answer to where a listing goes.
 
-	it('sends a ticked TPT on its own, which has one catalogue', () => {
-		expect(inventoriesOf(['Tpt'], [])).toEqual(['Tpt']);
-	});
-
-	it('sends nothing for a ticked Tes with no curriculum chosen', () => {
-		// Not all three: a tile ticked and unanswered is an unfinished answer,
-		// and publishing to three catalogues nobody named is the thing the
-		// panel exists to stop.
-		expect(inventoriesOf(['Tes'], [])).toEqual([]);
-	});
-
-	it('sends one catalogue per curriculum ticked', () => {
-		expect(inventoriesOf(['Tes'], ['TesNz'])).toEqual(['TesNz']);
-		expect(inventoriesOf(['Tes'], ['TesGb', 'TesNz'])).toEqual(['TesGb', 'TesNz']);
+	it('sends the inventory of every tile ticked', () => {
+		expect(inventoriesOf(['Tpt'])).toEqual(['Tpt']);
+		expect(inventoriesOf(['Tes'])).toEqual(['Tes']);
 	});
 
 	it('orders by the tile grid rather than by the order they were ticked', () => {
-		expect(inventoriesOf(['Tes', 'Tpt'], ['TesNz', 'TesGb'])).toEqual([
-			'Tpt',
-			'TesGb',
-			'TesNz'
-		]);
-	});
-
-	it('ignores a curriculum ticked under an unticked Tes', () => {
-		expect(inventoriesOf(['Tpt'], ['TesGb'])).toEqual(['Tpt']);
+		expect(inventoriesOf(['Tes', 'Tpt'])).toEqual(['Tpt', 'Tes']);
 	});
 
 	it('sends nothing for a marketplace no adapter exists for', () => {
-		expect(inventoriesOf(['Etsy'], [])).toEqual([]);
+		expect(inventoriesOf(['Etsy'])).toEqual([]);
 	});
 
-	it('refuses a ticked Tes with nowhere on Tes to put it', () => {
-		const bare = withMarketplaces(complete(), ['Tes'], []);
-		expect(tesNeedsCurriculum(bare)).toBe(true);
-		const said = refusalsIn(refusalsOf(bare, VOCABULARY), 'tes_options');
-		expect(said.map((refusal) => refusal.message)).toEqual([
-			'Choose where on Tes this should be listed.'
-		]);
-	});
-
-	it('stops refusing once a curriculum is chosen', () => {
-		const chosen = withMarketplaces(complete(), ['Tes'], ['TesGb']);
-		expect(tesNeedsCurriculum(chosen)).toBe(false);
-		expect(refusalsIn(refusalsOf(chosen, VOCABULARY), 'tes_options')).toEqual([]);
-	});
-
-	// An edit form opens on the listing's own mappings, and three Tes rows
-	// would be the presentation the tile replaced.
-	it('reads a stored listing back as one Tes tile and its curricula', () => {
-		expect(tilesOf(['Tpt', 'TesGb', 'TesNz'])).toEqual({
-			marketplaces: ['Tpt', 'Tes'],
-			curricula: ['TesGb', 'TesNz']
-		});
-		expect(tilesOf([])).toEqual({ marketplaces: [], curricula: [] });
+	// An edit form opens on the listing's own mappings.
+	it('reads a stored listing back as the tiles it was composed from', () => {
+		expect(tilesOf(['Tpt', 'Tes'])).toEqual({ marketplaces: ['Tpt', 'Tes'] });
+		expect(tilesOf([])).toEqual({ marketplaces: [] });
 	});
 
 	it('round-trips the tiles a listing was composed from', () => {
-		const listing = withMarketplaces(complete(), ['Tpt', 'Tes'], ['TesUs']);
-		const read = tilesOf(listing.inventories);
-		expect(read.marketplaces).toEqual(listing.marketplaces);
-		expect(read.curricula).toEqual(listing.curricula);
+		const listing = withMarketplaces(complete(), ['Tpt', 'Tes']);
+		expect(tilesOf(listing.inventories).marketplaces).toEqual(listing.marketplaces);
 	});
 });
 

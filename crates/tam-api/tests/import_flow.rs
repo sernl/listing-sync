@@ -158,10 +158,8 @@ async fn seed_crosswalk(pool: &PgPool) {
         },
     ];
     let edges = vec![
-        edge(SUBJECT, InventoryId::TesGb, TermKind::Subject, "1000454"),
-        edge(TOPIC, InventoryId::TesGb, TermKind::Topic, "1000732"),
-        edge(SUBJECT, InventoryId::TesNz, TermKind::Subject, "7000454"),
-        edge(TOPIC, InventoryId::TesNz, TermKind::Topic, "7000732"),
+        edge(SUBJECT, InventoryId::Tes, TermKind::Subject, "1000454"),
+        edge(TOPIC, InventoryId::Tes, TermKind::Topic, "1000732"),
     ];
     taxonomy
         .seed(&terms, &edges)
@@ -217,13 +215,13 @@ fn observed(resource: i64, digest: u8) -> ObservedResource {
             body_format: CopyFormat::Markdown,
             native: vec![
                 tam_types::ImportedTerm {
-                    inventory: InventoryId::TesGb,
+                    inventory: InventoryId::Tes,
                     kind: Some(TermKind::Subject),
                     segments: vec!["1000454".to_owned()],
                     native_id: Some("1000454".to_owned()),
                 },
                 tam_types::ImportedTerm {
-                    inventory: InventoryId::TesGb,
+                    inventory: InventoryId::Tes,
                     kind: Some(TermKind::Subject),
                     segments: vec!["1000732".to_owned()],
                     native_id: Some("1000732".to_owned()),
@@ -267,8 +265,8 @@ async fn open_request(app: &axum::Router, token: &SessionToken, key: Uuid) -> Uu
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
                     serde_json::json!({
-                        "source": "TesGb",
-                        "target": "TesNz",
+                        "source": "Tes",
+                        "target": "Tpt",
                         "disposition": "migrate",
                         "intent": "draft",
                         "resources": [],

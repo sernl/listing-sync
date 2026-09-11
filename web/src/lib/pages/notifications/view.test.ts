@@ -29,7 +29,7 @@ function view(over: Partial<NotificationView> = {}): NotificationView {
 		id: 'n-1',
 		kind: 'sync',
 		subject_id: 'r-1',
-		inventory: 'TesGb',
+		inventory: 'Tes',
 		marketplace: 'Tes',
 		counts: { ...NONE, succeeded: 12 },
 		created_at: NOW - 90 * MINUTE,
@@ -54,7 +54,7 @@ describe('the four read states this page draws', () => {
 	it('carries the rows once there are rows', () => {
 		const state = readState(true, false, rows([view()], NOW));
 		expect(state.kind).toBe('rows');
-		expect(state.kind === 'rows' && state.rows[0]?.title).toBe('TES GB sync finished');
+		expect(state.kind === 'rows' && state.rows[0]?.title).toBe('TES sync finished');
 	});
 });
 
@@ -112,9 +112,9 @@ describe('the counts, in the outcome bar’s own words', () => {
 });
 
 describe('what a row says and where it opens', () => {
-	it('names the inventory, so two Tes sites do not read alike', () => {
-		expect(title(view({ inventory: 'TesGb' }))).toBe('TES GB sync finished');
-		expect(title(view({ inventory: 'TesUs' }))).toBe('TES US sync finished');
+	it('names the marketplace the run wrote to', () => {
+		expect(title(view({ inventory: 'Tes' }))).toBe('TES sync finished');
+		expect(title(view({ inventory: 'Tpt' }))).toBe('TPT sync finished');
 	});
 
 	it('names no platform for an import, which writes to none', () => {
@@ -151,7 +151,7 @@ describe('a kind this bundle has no word for', () => {
 	});
 
 	it('says a run finished rather than rendering a blank noun', () => {
-		expect(title(unknown)).toBe('TES GB run finished');
+		expect(title(unknown)).toBe('TES run finished');
 	});
 
 	it('offers no link rather than inventing a path', () => {

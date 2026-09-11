@@ -40,12 +40,7 @@ import type {
 import { core, loadCore } from '$lib/core';
 import { licenceElections, licenceGated, rightsOf, type LicenceIntent } from '$lib/authoring';
 import { MARKETPLACE_OF } from '$lib/listings-view';
-import {
-	MARKETPLACE_TILES,
-	MARKETPLACE_WORD,
-	TES_CURRICULA,
-	platformTitle
-} from '$lib/platforms';
+import { MARKETPLACE_TILES, MARKETPLACE_WORD, platformTitle } from '$lib/platforms';
 
 // Started at module scope so the rules are ready before the seller has typed
 // anything; guarded because there is no asset to fetch while prerendering.
@@ -99,6 +94,16 @@ export const GROUP_HELP: Partial<Record<FormAnchor, string>> = {
 	details: 'Optional.',
 	product_status: 'Active listings show up in search; a draft only you can see.'
 };
+
+/** The AI auto-fill placement, beside the Files heading on a new resource.
+ *
+ * A notice, not a control: the feature is not built, so there is nothing to
+ * press. The charter allows a model only to propose (`decisions.md`,
+ * 2026-09-12), and the promise says exactly that and nothing else — no date,
+ * no accuracy figure, and no claim about writing to a marketplace. */
+export const AI_FILL_SOON = 'AI fill — coming soon';
+export const AI_FILL_SOON_HINT =
+	'Soon Teachouse will fill this form from your file, for you to check.';
 
 /** The Education Standards heading's helper text, or nothing where the server
  *  serves no framework: with nothing to search the panel below says so at more
@@ -183,21 +188,16 @@ export interface TptDraft {
 	status: string;
 	/** The rights grant the seller states, where a chosen marketplace gates one.
 	 *
-	 *  One value for the whole listing rather than one per marketplace: the Tes
-	 *  inventories serve the identical refdata set, and a licence that differed
-	 *  between them would be the same grant issued twice. Never defaulted — a
-	 *  rights grant is the seller's to make. */
+	 *  One value for the whole listing rather than one per marketplace. Never
+	 *  defaulted — a rights grant is the seller's to make. */
 	licence: string | null;
 	/** The tiles the seller ticked. One Tes, never three, because that is what
 	 *  the form shows. */
 	marketplaces: Marketplace[];
-	/** Where on Tes this should be listed, from the Tes panel's Curriculum
-	 *  ticks. Empty until Tes is ticked and a curriculum chosen. */
-	curricula: InventoryId[];
-	/** The two answers above, resolved to what the request carries. Held on the
+	/** The answer above, resolved to what the request carries. Held on the
 	 *  draft rather than recomputed at every reader because the refusals, the
 	 *  rail, the licence gate and both request bodies all ask for it; every
-	 *  write goes through [`withMarketplaces`], so the three cannot disagree. */
+	 *  write goes through [`withMarketplaces`], so the two cannot disagree. */
 	inventories: InventoryId[];
 	/** One marketplace's own value for one field, held only where the seller
 	 *  edited it away from the canonical one. Keyed `inventory:field`. */
@@ -256,7 +256,6 @@ export function emptyTptDraft(): TptDraft {
 		status: '0',
 		licence: null,
 		marketplaces: [],
-		curricula: [],
 		inventories: [],
 		overrides: {}
 	};
@@ -264,65 +263,38 @@ export function emptyTptDraft(): TptDraft {
 
 // ------------------------------------------------------- the marketplaces
 
-/** What the request carries, from the two answers the form asks for.
+/** What the request carries, from the one answer the form asks for.
  *
- *  The founder's rule of 2026-09-11 is that the form shows one Tes, so the
- *  three Tes catalogues are not three tiles: ticking Tes says the listing goes
- *  to Tes, and the Curriculum ticks in the Tes panel say which of its three
- *  catalogues carry it. Nothing in the model changes — `inventories` is the
- *  same list it always was — and the collapse is presentation alone, which is
- *  why it is resolved here and nowhere on the wire.
+ *  One tile is one marketplace is one inventory (`decisions.md`, 2026-09-12),
+ *  so ticking a tile is the whole answer to where a listing goes.
  *
  *  Ordered by the tile grid rather than by the order the seller ticked, so two
  *  identical listings compose one identical body. */
-export function inventoriesOf(
-	marketplaces: readonly Marketplace[],
-	curricula: readonly InventoryId[]
-): InventoryId[] {
+export function inventoriesOf(marketplaces: readonly Marketplace[]): InventoryId[] {
 	return MARKETPLACE_TILES.filter(
 		(tile) => tile.authorable && marketplaces.includes(tile.marketplace)
-	).flatMap((tile) =>
-		tile.inventories.length === 1
-			? [...tile.inventories]
-			: tile.inventories.filter((inventory) => curricula.includes(inventory))
-	);
+	).map((tile) => tile.inventory);
 }
 
-/** The draft with its marketplace answers replaced and the request's own list
- *  resolved from them, which is the only way those three fields are written. */
-export function withMarketplaces(
-	draft: TptDraft,
-	marketplaces: readonly Marketplace[],
-	curricula: readonly InventoryId[]
-): TptDraft {
+/** The draft with its marketplace answer replaced and the request's own list
+ *  resolved from it, which is the only way those two fields are written. */
+export function withMarketplaces(draft: TptDraft, marketplaces: readonly Marketplace[]): TptDraft {
 	return {
 		...draft,
 		marketplaces: [...marketplaces],
-		curricula: [...curricula],
-		inventories: inventoriesOf(marketplaces, curricula)
+		inventories: inventoriesOf(marketplaces)
 	};
 }
 
-/** The two answers a stored listing's inventories stand for: the inverse of
+/** The tiles a stored listing's inventories stand for: the inverse of
  *  [`inventoriesOf`], so an edit form opens with the tiles the listing's own
- *  mappings imply rather than with three Tes rows. */
-export function tilesOf(inventories: readonly InventoryId[]): {
-	marketplaces: Marketplace[];
-	curricula: InventoryId[];
-} {
-	const marketplaces = MARKETPLACE_TILES.filter((tile) =>
-		tile.inventories.some((inventory) => inventories.includes(inventory))
-	).map((tile) => tile.marketplace);
-	const curricula = TES_CURRICULA.filter((entry) => inventories.includes(entry.inventory)).map(
-		(entry) => entry.inventory
-	);
-	return { marketplaces, curricula };
-}
-
-/** Whether Tes is ticked with nowhere on Tes to put the listing, which is the
- *  one thing the Tes panel is allowed to be incomplete about. */
-export function tesNeedsCurriculum(draft: TptDraft): boolean {
-	return draft.marketplaces.includes('Tes') && draft.curricula.length === 0;
+ *  mappings imply. */
+export function tilesOf(inventories: readonly InventoryId[]): { marketplaces: Marketplace[] } {
+	return {
+		marketplaces: MARKETPLACE_TILES.filter((tile) =>
+			inventories.includes(tile.inventory)
+		).map((tile) => tile.marketplace)
+	};
 }
 
 // ------------------------------------------------------------- the pickers
@@ -660,24 +632,11 @@ export function refusalsOf(
 			message: 'Add your file before you choose a marketplace.'
 		});
 	}
-	// Tes is one tile and three catalogues, so ticking it without saying which
-	// catalogue names a marketplace the create would reach nowhere on.
-	if (tesNeedsCurriculum(draft)) {
-		found.push({
-			group: 'tes_options',
-			control: 'Curriculum',
-			message: 'Choose where on Tes this should be listed.'
-		});
-	}
 	// Refused rather than left to the server, because the server refuses it
 	// either way: `required_fields_answered` in `crates/tam-api/src/catalogue.rs`
 	// rejects a create naming a marketplace whose registry declares a required
 	// field it cannot see answered. Sending it and reading the refusal back was
 	// how every Tes create from this form failed.
-	//
-	// One sentence per marketplace rather than per inventory: three Tes
-	// catalogues share one licence control, so three sentences would ask for
-	// the same answer three times.
 	for (const marketplace of new Set(
 		unlicensed(draft, known).map((inventory) => MARKETPLACE_OF[inventory])
 	)) {

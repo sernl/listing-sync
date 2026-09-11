@@ -8,8 +8,6 @@ import {
 	MARKETPLACE_WORD,
 	MARK_SRC,
 	PLATFORMS,
-	REGION_TAG,
-	TES_CURRICULA,
 	cardAnchor,
 	marketplacesHref,
 	platformTitle
@@ -26,28 +24,24 @@ describe('how a platform is named', () => {
 		expect(platformTitle('Tpt')).toBe('TPT (Teachers Pay Teachers)');
 	});
 
-	it('separates the three Tes sites, which are one marketplace under three inventories', () => {
-		const titles = (['TesGb', 'TesUs', 'TesNz'] as const).map(platformTitle);
-		expect(new Set(titles).size).toBe(3);
-		for (const title of titles) {
-			expect(title.startsWith('TES (Tes.com)')).toBe(true);
-		}
+	it('names every inventory the vocabulary carries', () => {
+		expect(Object.keys(PLATFORMS).sort()).toEqual([...INVENTORY_IDS].sort());
 	});
 
 	it('offers only the platforms an adapter exists for', () => {
-		expect(AUTHORABLE_PLATFORMS).toEqual(['Tpt', 'TesGb', 'TesUs', 'TesNz']);
+		expect(AUTHORABLE_PLATFORMS).toEqual(['Tpt', 'Tes']);
 	});
 });
 
 describe('the tiles the form offers', () => {
-	// The founder's rule of 2026-09-11: the form shows one Tes, not three.
-	it('draws one tile per marketplace, Tes included', () => {
+	it('draws one tile per marketplace', () => {
 		expect(MARKETPLACE_TILES.map((tile) => tile.marketplace)).toEqual(['Tpt', 'Tes', 'Etsy']);
 	});
 
-	it('stands the Tes tile for all three of its catalogues', () => {
-		const tes = MARKETPLACE_TILES.find((tile) => tile.marketplace === 'Tes');
-		expect(tes?.inventories).toEqual(['TesGb', 'TesUs', 'TesNz']);
+	// One tile, one marketplace, one inventory: the tick is the whole answer
+	// to where a listing goes, and nothing downstream has a second question.
+	it('stands each tile for exactly its own inventory', () => {
+		expect(MARKETPLACE_TILES.map((tile) => tile.inventory)).toEqual(['Tpt', 'Tes', 'Etsy']);
 	});
 
 	// Shown rather than hidden, so a teacher can see it is coming; the tile
@@ -60,14 +54,6 @@ describe('the tiles the form offers', () => {
 		for (const tile of MARKETPLACE_TILES) {
 			expect(tile.name.length, tile.marketplace).toBeGreaterThan(tile.marketplace.length);
 		}
-	});
-
-	it('offers the three Tes curricula the founder named, against their catalogues', () => {
-		expect(TES_CURRICULA).toEqual([
-			{ inventory: 'TesGb', label: 'England' },
-			{ inventory: 'TesUs', label: 'United States' },
-			{ inventory: 'TesNz', label: 'New Zealand' }
-		]);
 	});
 
 	it('has a one-word name for every marketplace, for use inside a sentence', () => {
@@ -103,23 +89,6 @@ describe('the mark each marketplace is drawn by', () => {
 	});
 });
 
-describe('the region tag beside a mark', () => {
-	it('answers for every inventory the vocabulary carries', () => {
-		expect(Object.keys(REGION_TAG).sort()).toEqual([...INVENTORY_IDS].sort());
-	});
-
-	// A tag exists to tell one inventory of a marketplace from another, which
-	// is exactly where `PLATFORMS` carries a region. Tying the two together
-	// stops a fourth Tes site arriving with a mark and no way to tell it apart.
-	it('carries a tag exactly where the platform name carries a region', () => {
-		for (const inventory of INVENTORY_IDS) {
-			expect(REGION_TAG[inventory] === null, inventory).toBe(
-				PLATFORMS[inventory].region === null
-			);
-		}
-	});
-});
-
 describe('where a marketplace card is linked to', () => {
 	it('anchors every marketplace the vocabulary carries', () => {
 		expect(Object.keys(CARD_ANCHOR).sort()).toEqual([...MARKETPLACES].sort());
@@ -127,9 +96,7 @@ describe('where a marketplace card is linked to', () => {
 	});
 
 	it('sends each inventory to its own marketplace, not to the bare page', () => {
-		expect(marketplacesHref('TesGb')).toBe('/marketplaces#mp-tes');
-		expect(marketplacesHref('TesUs')).toBe('/marketplaces#mp-tes');
-		expect(marketplacesHref('TesNz')).toBe('/marketplaces#mp-tes');
+		expect(marketplacesHref('Tes')).toBe('/marketplaces#mp-tes');
 		expect(marketplacesHref('Tpt')).toBe('/marketplaces#mp-tpt');
 		expect(marketplacesHref('Etsy')).toBe('/marketplaces#mp-etsy');
 	});

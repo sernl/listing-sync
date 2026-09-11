@@ -6,8 +6,8 @@ const HOUR = 3_600_000;
 
 describe('a run row', () => {
 	it('leads with where the run was sent rather than with its identifier', () => {
-		const [row] = runRows([job({ inventory: 'TesGb' })], 0);
-		expect(row.inventory).toBe('TesGb');
+		const [row] = runRows([job({ inventory: 'Tes' })], 0);
+		expect(row.inventory).toBe('Tes');
 	});
 
 	it('keeps the identifier and the age on the meta line', () => {
@@ -29,8 +29,8 @@ describe('a run row', () => {
 
 describe('the activity log', () => {
 	it('names the marketplace short enough for one line', () => {
-		const [entry] = runLog([job({ inventory: 'TesNz' })], 0);
-		expect(entry.what).toContain('TES NZ');
+		const [entry] = runLog([job({ inventory: 'Tes' })], 0);
+		expect(entry.what).toContain('TES');
 	});
 });
 

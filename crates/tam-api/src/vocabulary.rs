@@ -466,7 +466,7 @@ const TPT_ATTESTATION: &str = "ItemsProperty.copyright_declaration";
 
 fn authoring(inventory: InventoryId) -> AuthoringView {
     match inventory {
-        InventoryId::TesGb | InventoryId::TesUs | InventoryId::TesNz => AuthoringView {
+        InventoryId::Tes => AuthoringView {
             payload_files: PayloadFileRule::EveryPayloadFile,
             body_wire: BodyWire::CarriesDeclaredFormat,
             body_formats: CopyFormat::ALL.to_vec(),
@@ -621,7 +621,7 @@ mod tests {
 
     #[test]
     fn the_tes_licence_is_the_one_required_field_and_refuses_delegation() {
-        let rendered = view(InventoryId::TesGb);
+        let rendered = view(InventoryId::Tes);
         let licence = native(&rendered, "licence");
         assert!(
             licence.required,
@@ -659,7 +659,7 @@ mod tests {
     }
 
     #[test]
-    fn the_country_fork_reaches_the_form_as_the_phase_axis_native() {
+    fn the_phase_axis_reaches_the_form_as_the_age_range_native() {
         let phase = |inventory| {
             view(inventory)
                 .axes
@@ -668,24 +668,15 @@ mod tests {
                 .map(|axis| axis.native)
         };
         assert_eq!(
-            (
-                phase(InventoryId::TesGb),
-                phase(InventoryId::TesUs),
-                phase(InventoryId::TesNz)
-            ),
-            (
-                Some("ageRanges".to_owned()),
-                Some("yearGroups".to_owned()),
-                Some("yearGroups".to_owned())
-            ),
-            "the uploader takes ageRanges for GB and yearGroups everywhere else, so the form \
-             renders the seven-band picker or the thirty-year-group one"
+            phase(InventoryId::Tes),
+            Some("ageRanges".to_owned()),
+            "the uploader's age field is ageRanges, so the form renders the seven-band picker"
         );
     }
 
     #[test]
     fn tes_takes_one_resource_type_and_tpt_folds_it_into_the_flat_tag_array() {
-        let tes = view(InventoryId::TesGb)
+        let tes = view(InventoryId::Tes)
             .axes
             .into_iter()
             .find(|axis| axis.axis == TermKind::ResourceType)
@@ -744,7 +735,7 @@ mod tests {
             "the copyright declaration is held per connection, so the form displays it \
              rather than re-asking"
         );
-        let tes = view(InventoryId::TesGb).authoring;
+        let tes = view(InventoryId::Tes).authoring;
         assert_eq!(
             (tes.payload_files, tes.price_floor_minor_units),
             (PayloadFileRule::EveryPayloadFile, None),
@@ -754,7 +745,7 @@ mod tests {
 
     #[test]
     fn every_captured_option_reaches_the_form_with_words_beside_its_token() {
-        let ages = view(InventoryId::TesGb);
+        let ages = view(InventoryId::Tes);
         let ages = native(&ages, "ageRanges");
         let ages: Vec<(&str, &str)> = ages
             .values
@@ -778,7 +769,7 @@ mod tests {
             "a seller picks the band rather than its row number"
         );
 
-        let types = view(InventoryId::TesGb);
+        let types = view(InventoryId::Tes);
         let types = native(&types, "mainType");
         let first = types
             .values
@@ -871,7 +862,7 @@ mod tests {
     /// lands in the step named for it.
     #[test]
     fn the_tes_form_renders_as_the_uploaders_own_five_steps() {
-        let rendered = view(InventoryId::TesGb);
+        let rendered = view(InventoryId::Tes);
         let headings: Vec<(&str, &str)> = rendered
             .groups
             .iter()
@@ -910,8 +901,8 @@ mod tests {
     /// the client already holds rather than a second registry in TypeScript.
     #[test]
     fn the_tes_payload_is_enough_to_render_a_tes_create() {
-        let rendered = view(InventoryId::TesGb);
-        let entry = registry(InventoryId::TesGb);
+        let rendered = view(InventoryId::Tes);
+        let entry = registry(InventoryId::Tes);
         let written: Vec<&str> = entry
             .natives
             .iter()

@@ -31,4 +31,5 @@ Every value the founder must supply is in `src/site.js` and nowhere else: the lo
 
 `/privacy` and `/terms` are placeholders for counsel, not legal text, and must be replaced in full rather than edited.
 
-The structure and the copy decisions are in `docs/notes/design/brand-kit-and-teacher-ui.md`, which supersedes the copy, tokens and pricing of `landing-page.md`; the placeholders the founder still owes — the hero photo, the challenge illustration and the console shot, all three shipped as `-placeholder.webp` — are listed there.
+The structure and the copy decisions are in `docs/notes/design/brand-kit-and-teacher-ui.md`, which supersedes the copy, tokens and pricing of `landing-page.md`.
+The founder owes no artwork: since 2026-09-12 the hero and the challenge are inline SVG compositions drawn in tokens, and the solution is a real capture of the console's Resources board under `public/images/`, recorded under "Amended 2026-09-12" in `landing-page.md`.

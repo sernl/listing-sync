@@ -74,22 +74,16 @@ async fn provision(pool: &PgPool) {
         ),
         (
             TES_MAPPING,
-            "tes_gb",
+            "tes",
             "tes",
             Some("tes"),
             Some("https://www.tes.com/teaching-resource/x-1"),
             None,
             "bound",
         ),
-        (
-            UNBOUND_MAPPING,
-            "tes_us",
-            "tes",
-            None,
-            None,
-            None,
-            "unbound",
-        ),
+        // Etsy: the one inventory left that is neither of the two bound rows
+        // above, since one product carries one mapping per inventory.
+        (UNBOUND_MAPPING, "etsy", "etsy", None, None, None, "unbound"),
     ] {
         sqlx::query(
             "INSERT INTO mapping \
@@ -149,7 +143,7 @@ async fn the_bound_read_answers_the_identifier_the_state_label_hides(pool: PgPoo
     );
     assert_eq!(
         MappingRepo::new(pool)
-            .bound_listings(ORG_A, InventoryId::TesUs)
+            .bound_listings(ORG_A, InventoryId::Etsy)
             .await
             .expect("the bound read runs"),
         Vec::new(),

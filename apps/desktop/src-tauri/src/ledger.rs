@@ -781,13 +781,13 @@ mod tests {
     async fn the_halt_this_device_can_ask_for_is_fixed_to_its_own_tenant() {
         let halting = ledger(&LedgerAnswer::Done);
         halting
-            .halt_this_tenant(&lease(), InventoryId::TesGb, "repeated 403", AT)
+            .halt_this_tenant(&lease(), InventoryId::Tes, "repeated 403", AT)
             .await
             .expect("the halt lands");
 
         let body = halting.transport.last().await.1;
         assert!(
-            body.contains("halt_this_tenant") && body.contains("TesGb"),
+            body.contains("halt_this_tenant") && body.contains("Tes"),
             "the scope is the tenant's own inventory: {body}"
         );
         assert!(

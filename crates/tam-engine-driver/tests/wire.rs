@@ -70,7 +70,7 @@ fn a_full_work_envelope_round_trips() {
         item: JobItemId(Uuid([0x11; 16])),
         job: JobId(Uuid([0x22; 16])),
         mapping: MappingId(Uuid([0x33; 16])),
-        inventory: InventoryId::TesGb,
+        inventory: InventoryId::Tes,
         idempotency_key: IdempotencyKey(Uuid([0x55; 16])),
         operation: revision(),
         lease_epoch: 7,
@@ -199,7 +199,7 @@ fn leased() -> LeasedItem {
         item: JobItemId(Uuid([0x11; 16])),
         job: JobId(Uuid([0x22; 16])),
         mapping: MappingId(Uuid([0x33; 16])),
-        inventory: InventoryId::TesGb,
+        inventory: InventoryId::Tes,
         idempotency_key: IdempotencyKey(Uuid([0x55; 16])),
         operation: revision(),
         lease_epoch: 7,
@@ -475,7 +475,7 @@ fn every_ledger_call_and_answer_round_trips() {
     let calls = vec![
         LedgerCall::ConnectionFor {
             lease: lease(),
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
         },
         LedgerCall::PreflightSucceeded { lease: lease() },
         LedgerCall::PreflightFailed {
@@ -513,12 +513,12 @@ fn every_ledger_call_and_answer_round_trips() {
         },
         LedgerCall::GateConnection {
             lease: lease(),
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
             at_ms: 1_756_000_003_000,
         },
         LedgerCall::HaltThisTenant {
             lease: lease(),
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
             reason: "the transition table demanded a halt".to_owned(),
             at_ms: 1_756_000_004_000,
         },

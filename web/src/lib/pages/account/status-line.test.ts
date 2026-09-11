@@ -1,57 +1,137 @@
 import { describe, expect, it } from 'vitest';
-import type { InventoryStatus } from '$lib/api';
-import { statusLine } from './status-line';
+import type { DeviceView, InventoryStatus } from '$lib/api';
+import { statusRows } from './status-line';
 
 const NOW = Date.UTC(2026, 8, 5, 12);
 
-const OPERATING: InventoryStatus = {
-	// Distinct on purpose: the line used to prefix the marketplace whenever it
-	// differed from the inventory, so this shape is the one that would show a
-	// prefix if one ever came back.
-	inventory: 'TesGb',
-	marketplace: 'Tes',
-	halted: false
-};
+function entry(partial: Partial<InventoryStatus> = {}): InventoryStatus {
+	return { inventory: 'Tes', marketplace: 'Tes', halted: false, ...partial };
+}
 
-describe('the line under an inventory’s name', () => {
-	it('says nothing while it is operating', () => {
-		expect(statusLine(OPERATING, NOW)).toBe('');
+const EVERY: InventoryStatus[] = [
+	entry(),
+	entry({ inventory: 'Tpt', marketplace: 'Tpt' }),
+	entry({ inventory: 'Etsy', marketplace: 'Etsy' })
+];
+
+function device(
+	marketplace: DeviceView['sessions'][number]['marketplace'],
+	last_used_at: number,
+	partial: Partial<DeviceView> = {}
+): DeviceView {
+	return {
+		id: 'd-1',
+		name: 'Laptop',
+		os: 'windows',
+		arch: 'x86_64',
+		app_version: '1.0.0',
+		first_seen_at: 0,
+		last_seen_at: last_used_at,
+		revoked_at: null,
+		wipe_outstanding: false,
+		sessions: [
+			{ marketplace, account_label: null, linked_at: 0, last_used_at, status: 'connected' }
+		],
+		...partial
+	};
+}
+
+describe('the marketplace status rows', () => {
+	it('draws one row per marketplace, in the console’s own platform order', () => {
+		expect(statusRows(EVERY, [], NOW).map((row) => row.marketplace)).toEqual([
+			'Tpt',
+			'Tes',
+			'Etsy'
+		]);
 	});
 
-	it('carries the recorded reason and how long it has stood', () => {
-		const halted: InventoryStatus = {
-			...OPERATING,
-			halted: true,
-			reason: 'the write endpoint answered 503 four times running',
-			raised_at: NOW - 3 * 3_600_000
-		};
-		expect(statusLine(halted, NOW)).toBe(
-			'the write endpoint answered 503 four times running, since 3 h ago'
+	it('says nothing beyond the pill while a marketplace is working', () => {
+		const [row] = statusRows([entry()], [], NOW);
+		expect(row.label).toBe('Working');
+		expect(row.tone).toBe('ok');
+		expect(row.why).toBe('');
+	});
+
+	it('carries the recorded reason and how long the pause has stood', () => {
+		const [row] = statusRows(
+			[
+				entry({
+					halted: true,
+					reason: 'the write endpoint answered 503 four times running',
+					raised_at: NOW - 3 * 3_600_000
+				})
+			],
+			[],
+			NOW
+		);
+		expect(row.label).toBe('Paused');
+		expect(row.tone).toBe('bad');
+		expect(row.why).toBe(
+			'Sending here is paused: the write endpoint answered 503 four times running. Paused 3 h ago.'
 		);
 	});
 
 	// A halt with no reason is a fact about the record, not about the
 	// marketplace, so it says so rather than reading as an empty sentence.
-	it('says so where the halt carries no reason', () => {
-		expect(statusLine({ ...OPERATING, halted: true }, NOW)).toBe('no reason recorded');
+	it('says so where the halt carries no reason, and omits an age never stamped', () => {
+		const [row] = statusRows([entry({ halted: true })], [], NOW);
+		expect(row.why).toBe('Sending here is paused: no reason recorded.');
 	});
 
-	// The property the prefix was removed to establish, and the one a later edit
-	// could quietly undo: the row's heading is `platformTitle`, which names the
-	// marketplace already, so this line never does. Pinned over both shapes and
-	// both states, because the prefix it replaced was conditional on exactly the
-	// difference between the shapes.
-	it('never names the marketplace, whatever it is called', () => {
-		const sameWord: InventoryStatus = { inventory: 'Tpt', marketplace: 'Tpt', halted: false };
-		const halted = { halted: true, reason: 'paused by hand' } as const;
-		expect(statusLine(OPERATING, NOW)).not.toContain('Tes');
-		expect(statusLine({ ...OPERATING, ...halted }, NOW)).not.toContain('Tes');
-		expect(statusLine(sameWord, NOW)).not.toContain('Tpt');
-		expect(statusLine({ ...sameWord, ...halted }, NOW)).not.toContain('Tpt');
+	// The marketplace this console cannot write to is not "working": nothing
+	// is sent there, so a green pill would be a claim about a path that does
+	// not exist.
+	it('says a marketplace with no adapter is coming rather than working', () => {
+		const etsy = statusRows(EVERY, [], NOW).find((row) => row.marketplace === 'Etsy');
+		expect(etsy?.label).toBe('Coming soon');
+		expect(etsy?.tone).toBe('soon');
+		expect(etsy?.why).toContain('Not built yet');
+	});
+});
+
+describe('when the seller’s own device last worked with a marketplace', () => {
+	it('names it where a device holds a live session', () => {
+		const [row] = statusRows([entry()], [device('Tes', NOW - 2 * 3_600_000)], NOW);
+		expect(row.checked).toBe('Last checked from your device 2 h ago');
 	});
 
-	it('omits the age where the halt was never stamped', () => {
-		const halted: InventoryStatus = { ...OPERATING, halted: true, reason: 'paused by hand' };
-		expect(statusLine(halted, NOW)).toBe('paused by hand');
+	it('answers the newest across the seller’s devices', () => {
+		const rows = statusRows(
+			[entry()],
+			[
+				device('Tes', NOW - 5 * 3_600_000),
+				device('Tes', NOW - 1 * 3_600_000, { id: 'd-2' })
+			],
+			NOW
+		);
+		expect(rows[0].checked).toBe('Last checked from your device 1 h ago');
+	});
+
+	// A machine the seller signed out of, and a session that ended, both
+	// record that the path stopped being used. Neither is evidence it works.
+	it('reads nothing from a revoked device or an ended session', () => {
+		const revoked = device('Tes', NOW - 3_600_000, { revoked_at: NOW });
+		const ended = device('Tes', NOW - 3_600_000, {
+			id: 'd-3',
+			sessions: [
+				{
+					marketplace: 'Tes',
+					account_label: null,
+					linked_at: 0,
+					last_used_at: NOW - 3_600_000,
+					status: 'signed_out'
+				}
+			]
+		});
+		expect(statusRows([entry()], [revoked, ended], NOW)[0].checked).toBe('');
+	});
+
+	it('says nothing at all where the page is read with no device list', () => {
+		expect(statusRows([entry()], [], NOW)[0].checked).toBe('');
+	});
+
+	it('never claims a check for a marketplace this console cannot reach', () => {
+		const rows = statusRows(EVERY, [device('Etsy', NOW - 3_600_000)], NOW);
+		expect(rows.find((row) => row.marketplace === 'Etsy')?.checked).toBe('');
 	});
 });

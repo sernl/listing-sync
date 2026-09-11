@@ -796,7 +796,7 @@ impl ImportBatchRepo {
     /// not a report a seller can fix a sheet against.
     ///
     /// `COLLATE "C"` on the sheet name, because a linguistic collation orders
-    /// "Teachouse" before "TES GB" and a byte collation orders them the other
+    /// "Teachouse" before "TES" and a byte collation orders them the other
     /// way — and which one a cluster uses is `db/ephemeral-postgres.sh`'s to
     /// state, not this query's, since initdb is passed no locale. Pinning it
     /// makes this repository's order a fact rather than a property of where it

@@ -86,9 +86,8 @@ function sentence(word: string): string {
 
 /** The row's own sentence.
  *
- * Named by inventory rather than by marketplace, because the three Tes sites
- * are one marketplace and a seller who syncs to two of them would otherwise
- * read the same line twice. An import names no platform: it commits to the
+ * Named by the inventory the run wrote to, which is the only thing that tells
+ * two runs apart in a list. An import names no platform: it commits to the
  * catalogue and writes to none. */
 export function title(row: NotificationView): string {
 	const word = Object.hasOwn(KIND_WORD, row.kind) ? KIND_WORD[row.kind] : 'run';

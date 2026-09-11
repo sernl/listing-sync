@@ -41,9 +41,9 @@ describe('loading a saved override back into the form', () => {
 
 	it('round-trips a broader override on another marketplace and axis', () => {
 		const loaded = draftOf(
-			row({ inventory: 'TesGb', axis: 'phase', kind: 'broader', from_term: 't-9' })
+			row({ inventory: 'Tes', axis: 'phase', kind: 'broader', from_term: 't-9' })
 		);
-		expect(loaded.inventory).toBe('TesGb');
+		expect(loaded.inventory).toBe('Tes');
 		expect(loaded.axis).toBe('phase');
 		expect(loaded.kind).toBe('broader');
 		expect(loaded.from).toBe('t-9');

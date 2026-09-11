@@ -38,9 +38,8 @@ fn the_derivation_seeds_the_pinned_counts() {
     );
     assert_eq!(
         derived.edges.len(),
-        280,
-        "one Exact edge into TPT for each of the 70, and a Broader edge into each of the \
-         three Tes inventories"
+        140,
+        "one Exact edge into TPT for each of the 70, and one Broader edge into Tes"
     );
     assert_eq!(derived.skipped_hidden.len(), 1, "`independent-work`");
     assert!(
@@ -107,8 +106,7 @@ fn a_child_inherits_its_roots_value_unless_it_is_named() {
             .iter()
             .find(|edge| {
                 edge.from == term
-                    && edge.to.vocabulary
-                        == VocabularyId(InventoryId::TesGb, TermKind::ResourceType)
+                    && edge.to.vocabulary == VocabularyId(InventoryId::Tes, TermKind::ResourceType)
             })
             .and_then(|edge| edge.to.native_id.clone())
     };
@@ -148,8 +146,8 @@ fn four_facets_into_a_single_valued_axis_elect_rather_than_truncate() {
     let outcome = project_axis(
         AxisRequest {
             product: PRODUCT,
-            inventory: InventoryId::TesGb,
-            binding: resource_axis(InventoryId::TesGb),
+            inventory: InventoryId::Tes,
+            binding: resource_axis(InventoryId::Tes),
             terms: &terms,
             sources: &[],
             pricing: PricingBranch::Paid,
@@ -201,8 +199,8 @@ fn four_facets_onto_one_value_resolve_without_an_election() {
     let outcome = project_axis(
         AxisRequest {
             product: PRODUCT,
-            inventory: InventoryId::TesGb,
-            binding: resource_axis(InventoryId::TesGb),
+            inventory: InventoryId::Tes,
+            binding: resource_axis(InventoryId::Tes),
             terms: &terms,
             sources: &[],
             pricing: PricingBranch::Paid,

@@ -125,7 +125,7 @@ export type MarketplaceState =
 	| 'stranded'
 	| 'failed';
 
-/** The chip's own word. Short enough to sit inside a strip of five and still
+/** The chip's own word. Short enough to sit inside the strip and still
  *  be read at a glance, which is the whole point of the strip. */
 export const STATE_LABEL: Record<MarketplaceState, string> = {
 	not_listed: 'Not listed',

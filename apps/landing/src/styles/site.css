@@ -126,10 +126,11 @@
 }
 
 :root {
-	/* Light, as the console declares itself: this palette is the only one the
-	   site has, so a browser told nothing paints its own form controls and
-	   scrollbars dark for a visitor whose system is dark. */
-	color-scheme: light;
+	/* Both schemes, as the console declares them, so a browser paints its own
+	   form controls and scrollbars to match whichever block is in force. The
+	   two blocks below pin each one exactly, because `Base.astro` writes one
+	   of them onto the element before first paint. */
+	color-scheme: light dark;
 
 	/* grounds */
 	--ground: #F8FAF8;
@@ -148,6 +149,27 @@
 	--additive-soft: #EFE9FF;
 	--lavender: #C8B4FF;
 	--peach: #FFD6B3;
+
+	/* The drawn compositions' two grounds: the cream a resource cover and the
+	   catalogue card sit on, and the hairline they are drawn with. Mixes of
+	   kit colours rather than colours of their own, and site-only, because
+	   the console has no drawing to put on them. */
+	--cream: color-mix(in srgb, var(--peach) 18%, var(--surface));
+	/* The ground a marketplace's own mark is drawn on: its owner's colours were
+	   chosen for a light page, so on dark the tile and the strip keep a light
+	   card behind them rather than tinting the mark. */
+	--mark-ground: var(--surface);
+	--art-line: color-mix(in srgb, var(--primary) 20%, transparent);
+
+	/* The two accent surfaces this site paints a page band with, and the ink
+	   that sits on one. Written as the resolved light values the mixes they
+	   replace produced, byte for byte, because `--peach` and `--lavender` are
+	   the kit's accents and stay light on both grounds: a band mixed from one
+	   inverts the moment the ink does. The dark block re-grounds all four. */
+	--band-warm: #FFF1E4;
+	--quote-warm: #FFE6D1;
+	--band-violet: #F3EFFF;
+	--on-accent-surface: var(--primary);
 
 	/* ink and lines */
 	--text: #2D3748;
@@ -191,6 +213,98 @@
 	--measure: 1140px;
 	--lift: 0 24px 70px -45px color-mix(in srgb, var(--primary) 55%, transparent);
 	--ring: inset 0 0 0 1px color-mix(in srgb, var(--primary) 8%, transparent);
+}
+
+/* The same kit re-grounded on Indigo, transcribed from the console's
+   `web/src/lib/styles/tokens.css` and compared against it name-for-name by
+   `web/src/lib/styles/tokens.test.ts`, which also refuses a shared name that
+   one sheet re-grounds here and the other does not.
+
+   A visitor reaches this block one of two ways: their machine prefers dark
+   and they have chosen nothing, or they are a signed-in seller whose console
+   choice is in `localStorage` under `teachouse.theme` and whose page the
+   script in `Base.astro` painted before the stylesheet. */
+[data-theme=dark] {
+	color-scheme: dark;
+
+	/* grounds, the step running upward towards the content */
+	--ground: #141C3A;
+	--nav: #1A2347;
+	--surface: #1E2A5A;
+	--hover: #26335F;
+
+	/* brand: Lavender carries the primary role, because an Indigo button
+	   cannot be seen on an Indigo card */
+	--primary: #C8B4FF;
+	--on-fill: #1E2A5A;
+	--accent: #00B894;
+	--accent-ink: #00BB97;
+	--accent-soft: #103F3A;
+	--additive: #AB91FB;
+	--additive-soft: #2A2456;
+
+	/* ink and lines: three weights where light had one Slate */
+	--text: #F8FAF8;
+	--muted: #B4BCD0;
+	--faint: #9AA3B8;
+	--line: #33406B;
+
+	/* state */
+	--ok: #10B981;
+	--ok-soft: #0F3D33;
+	--warn: #F59E0B;
+	--warn-soft: #3D2F0E;
+	--bad: #EF4444;
+	--bad-soft: #4A1A1A;
+	--soon: #9AA3B8;
+	--soon-soft: #26335F;
+	--blocked: #F59E0B;
+	--queued: #36495E;
+	--tint: #1A2347;
+	--tint-edge: #232C52;
+
+	/* This site's own. The quiet strip takes the navigation ground, and the
+	   two shadows are pushed off the ink: on a dark page `--primary` is
+	   Lavender and a lift drawn with it is a halo rather than a shadow. The
+	   drawn compositions keep their cream, at a lighter hand -- 18 per cent of
+	   Peach over a dark Indigo reads as mud -- and their hairline is drawn
+	   with the ink rather than with the brand, because Lavender at 20 per cent
+	   on this ground is a colour and not a line. */
+	--rail: #1A2347;
+	--lift: 0 24px 70px -45px color-mix(in srgb, #05070F 75%, transparent);
+	--ring: inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent);
+	--cream: color-mix(in srgb, var(--peach) 12%, var(--surface));
+	--mark-ground: #f8faf8;
+	--art-line: color-mix(in srgb, var(--text) 22%, transparent);
+
+	/* The three band grounds, and the ink that goes on an accent surface.
+
+	   A band ground inverts with the page: it is the kit's Peach or Lavender
+	   over the paper, so on this ground it is a deep warm brown or a deep
+	   violet rather than a pale wash. `--quote-warm` stays a step lighter
+	   than `--band-warm` because the pull-quote sits inside the band it has
+	   to separate from. Measured against `--text` and `--muted`: the warm
+	   band 14.2 and 7.8, the quote 12.9 and 7.1, the violet band 13.5 and
+	   7.4.
+
+	   `--on-accent-surface` does not invert, and that is the point of the
+	   name: it is the ink for a surface that is Lavender or Peach on both
+	   themes, which is the founding button's fill. Indigo there measures
+	   7.45 on Lavender, and `--primary` cannot be it on this ground because
+	   `--primary` is Lavender here. It is not the quote's ink -- the quote's
+	   ground does invert, so its word follows the theme; `--primary` on
+	   `--quote-warm` is 11.4 on light and 7.36 here. */
+	--band-warm: #33241A;
+	--quote-warm: #3E2A1C;
+	--band-violet: #2A2456;
+	--on-accent-surface: #1E2A5A;
+}
+
+/* Named rather than left to `:root`'s `light dark`, because `Base.astro`
+   writes one of the two onto the element before first paint and the resolved
+   scheme has to follow the painted ground, not the visitor's system. */
+[data-theme=light] {
+	color-scheme: light;
 }
 
 *,
@@ -354,6 +468,22 @@ p {
 	background: var(--hover);
 }
 
+/* Two files, one lockup: the Indigo lettering vanishes on the dark ground,
+   so the dark page draws the copy whose lettering is the palette's own
+   near-white. The theme is an attribute, so the choice is a rule rather than
+   a `<picture>` media query. */
+.wordmark .on-dark {
+	display: none;
+}
+
+[data-theme=dark] .wordmark .on-light {
+	display: none;
+}
+
+[data-theme=dark] .wordmark .on-dark {
+	display: block;
+}
+
 /* `.site-nav a` out-specifies `.cta` and `.btn`, so without these the two
    buttons in the header take the nav link's ink and a filled pill loses its
    label. It is the ink alone that has to be restated. */
@@ -396,7 +526,7 @@ p {
 }
 
 .cta:hover {
-	background: color-mix(in srgb, var(--primary) 86%, black);
+	background: color-mix(in srgb, var(--primary) 86%, var(--text));
 }
 
 .btn:hover {
@@ -443,15 +573,15 @@ main {
 }
 
 .band-challenge {
-	background: color-mix(in srgb, var(--peach) 35%, white);
+	background: var(--band-warm);
 }
 
 .band-solution {
-	background: color-mix(in srgb, var(--accent) 10%, white);
+	background: color-mix(in srgb, var(--accent) 10%, var(--surface));
 }
 
 .band-pricing {
-	background: color-mix(in srgb, var(--lavender) 22%, white);
+	background: var(--band-violet);
 }
 
 .band-testimonials {
@@ -475,6 +605,14 @@ main {
 	width: 100%;
 	height: auto;
 	border-radius: var(--r-region);
+}
+
+/* A drawn figure sizes like a photographed one. `overflow: visible` is not
+   set here: a composition that needs to spill its viewBox says so itself. */
+.art svg {
+	display: block;
+	width: 100%;
+	height: auto;
 }
 
 /* Hero */
@@ -515,108 +653,113 @@ main {
 	max-width: 44ch;
 }
 
-/* The hero art: the photo in a rounded frame, a teal blob and a lavender blob
-   behind it, the catalogue card floating over its top corner, and the
-   handwritten line under it. The blobs are drawn rather than fetched, so the
-   whole composition costs one image. */
+/* The hero art: the Resource Atelier of 2026-09-12, section 11 of the design
+   of that date. The seller's own covers in a catalogue card, quiet teal lines
+   routing them out to four marks, and nothing photographed: no person, no
+   laptop, no script face. Every colour is a token, which is what lets the
+   same drawing read on the dark ground.
+
+   The wide drawing and the compact one are two SVGs, and exactly one is
+   displayed: under 720px there is room for one cover and a 2x2 grid of
+   tiles, and hiding half of a drawing leaves a hole where the other half
+   was. */
 
 .hero-art {
 	position: relative;
 }
 
-.blob {
-	position: absolute;
-	z-index: 0;
-	pointer-events: none;
-}
-
-.blob-teal {
-	top: -26px;
-	left: 0;
-	width: 42%;
-}
-
-.blob-lav {
-	bottom: -34px;
-	left: -6%;
-	width: 48%;
-}
-
-.sparks {
-	position: absolute;
-	z-index: 0;
-	top: 96px;
-	left: 3%;
-	width: 13%;
-}
-
-/* The placeholder photograph is portrait, so the frame is capped rather than
-   filling the column: at full width it would set the hero's height. */
-.hero-frame {
-	position: relative;
-	z-index: 1;
-	margin-left: 16%;
-	max-width: 340px;
-	border-radius: var(--r-region);
-	overflow: hidden;
-	box-shadow: var(--lift);
-}
-
-.hero-frame img {
+.atelier {
 	display: block;
 	width: 100%;
 	height: auto;
 }
 
-.catalogue-card {
-	position: absolute;
-	z-index: 3;
-	top: 26px;
-	right: -10px;
-	width: 232px;
-	max-width: 62%;
+.atelier-phone {
+	display: none;
+}
+
+/* The routing lines, drawn before everything they leave from so a card's own
+   fill hides the end of each one. */
+.route {
+	fill: none;
+	stroke: var(--accent);
+	stroke-width: 2;
+	stroke-linecap: round;
+}
+
+/* Display text inside a drawing. The compositions are inline, so this site's
+   own @font-face faces apply to them and no glyph is outlined by hand. */
+.art-display {
+	font-family: var(--display);
+	font-weight: 600;
+	font-size: 17px;
+	fill: var(--primary);
+}
+
+.art-sans {
+	font-family: var(--sans);
+	font-size: 14px;
+	fill: var(--muted);
+}
+
+/* The name beside an icon mark, which carries no lettering of its own. */
+.art-tile-name {
+	font-size: 15px;
+	fill: var(--primary);
+}
+
+/* Sized so the phone's two-thirds scale still leaves them at reading size. */
+.art-sheet-title {
+	font-size: 17px;
+}
+
+.art-sheet-pill {
+	font-size: 11px;
+	fill: var(--accent-ink);
+}
+
+.art-bracket-label {
+	font-size: 20px;
+}
+
+/* The bracket that gathers the three repeated listings under one sentence. */
+.bracket {
+	fill: none;
+	stroke: var(--peach);
+	stroke-width: 6;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
+/* The proof shot: a capture of the console's own Resources board, framed in
+   the brand's indigo under the house mark rather than bled into the band. */
+.console-shot {
+	display: grid;
+	justify-items: start;
+	gap: 14px;
+}
+
+.console-shot .house {
+	width: 30px;
+	height: 30px;
+}
+
+.console-shot .frame {
+	width: 100%;
+	border: 2px solid var(--primary);
+	border-radius: var(--r-region);
+	overflow: hidden;
 	background: var(--surface);
-	border-radius: var(--r-card);
-	padding: 14px 16px;
-	box-shadow: var(--lift), var(--ring);
+	box-shadow: var(--lift);
 }
 
-.catalogue-card .head {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	margin-bottom: 10px;
-}
-
-.catalogue-card .head img {
-	display: block;
-	width: 24px;
-	height: 24px;
-}
-
-.catalogue-card .head span {
+.console-shot figcaption {
 	font-family: var(--display);
 	font-weight: 600;
 	color: var(--primary);
-	font-size: 15px;
 }
 
-.catalogue-card ul {
-	list-style: none;
-	margin: 0;
-	padding: 0;
-	display: grid;
-	gap: 8px;
-}
-
-.catalogue-card li {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	font-size: 14px;
-	color: var(--text);
-}
-
+/* The tick the pricing chips and the founding list are built from. */
 .tick {
 	flex: none;
 	width: 18px;
@@ -627,15 +770,6 @@ main {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-}
-
-.handwrite {
-	position: absolute;
-	z-index: 3;
-	right: 0;
-	bottom: -18px;
-	width: 210px;
-	max-width: 46%;
 }
 
 /* The marketplace strip under the hero, and the disclosure that holds the rest
@@ -681,6 +815,17 @@ main {
 	display: block;
 	height: 26px;
 	width: auto;
+}
+
+[data-theme=dark] .mark img {
+	background: var(--mark-ground);
+	border-radius: 6px;
+	padding: 3px 5px;
+	height: 32px;
+}
+
+[data-theme=dark] .art-sheet-chip {
+	fill: var(--mark-ground);
 }
 
 /* A wordmark file carries the marketplace's name inside the drawing, so it is
@@ -768,7 +913,7 @@ main {
 	padding: 16px 20px;
 	border-left: 4px solid var(--peach);
 	border-radius: var(--r-panel);
-	background: color-mix(in srgb, var(--peach) 60%, white);
+	background: var(--quote-warm);
 }
 
 .quote p {
@@ -909,9 +1054,11 @@ main {
 	max-width: 34ch;
 }
 
+/* Six rungs, three across: the fifth and sixth arrived with the 2026-09-12
+   decision, and four across left the last two hanging under a full row. */
 .ladder {
 	display: grid;
-	grid-template-columns: repeat(4, minmax(0, 1fr));
+	grid-template-columns: repeat(3, minmax(0, 1fr));
 	gap: 12px;
 	margin-top: 18px;
 }
@@ -938,6 +1085,32 @@ main {
 	color: var(--primary);
 }
 
+/* The open rung is the only one a reader can act on, so it answers a pointer
+   and reads as the invitation it is rather than as a missing price. */
+.rung.ask {
+	display: block;
+	background: var(--accent-soft);
+	border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.rung.ask:hover {
+	background: color-mix(in srgb, var(--accent-soft) 70%, var(--surface));
+}
+
+.rung.ask .amount {
+	font-size: 21px;
+	color: var(--accent-ink);
+}
+
+/* What the cap counts, said on the card rather than at the invoice. */
+.way .counts {
+	margin: 12px 0 0;
+	font-size: 12.5px;
+	line-height: 1.5;
+	color: var(--muted);
+	max-width: 40ch;
+}
+
 .chips {
 	display: grid;
 	grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -960,6 +1133,14 @@ main {
 .chip .tick {
 	background: var(--accent);
 	color: var(--on-fill);
+}
+
+/* The one line sold before it is built: a hollow mark in the "soon" grey, so
+   the chip reads as planned rather than as delivered. It follows the tick
+   rule because the element carries both classes. */
+.chip .soon {
+	background: var(--soon-soft);
+	color: var(--soon);
 }
 
 .way .actions {
@@ -1003,11 +1184,11 @@ main {
 .founding .btn {
 	background: var(--lavender);
 	border-color: var(--additive);
-	color: var(--primary);
+	color: var(--on-accent-surface);
 }
 
 .founding .btn:hover {
-	background: color-mix(in srgb, var(--lavender) 75%, white);
+	background: color-mix(in srgb, var(--lavender) 75%, var(--surface));
 }
 
 /* The subscription's own figures, which only /pricing draws */
@@ -1185,11 +1366,6 @@ main {
 		gap: 40px;
 	}
 
-	.hero-frame {
-		margin-left: 10%;
-		margin-right: 6%;
-	}
-
 	/* Wrapped onto three rows, the header is a fifth of a phone screen; stuck
 	   to the top it would stay that. */
 	.site-head {
@@ -1207,6 +1383,19 @@ main {
 		margin-left: 0;
 		width: 100%;
 		gap: 4px;
+	}
+}
+
+/* The hero art swaps drawings rather than reflowing one: the wide
+   composition's three covers and four-high tile column have no room in a
+   phone column, and the compact one is the same idea in the space there is. */
+@media (max-width: 720px) {
+	.atelier-wide {
+		display: none;
+	}
+
+	.atelier-phone {
+		display: block;
 	}
 }
 
@@ -1228,32 +1417,6 @@ main {
 
 	.ladder {
 		grid-template-columns: repeat(2, minmax(0, 1fr));
-	}
-
-	.catalogue-card {
-		position: static;
-		width: auto;
-		max-width: none;
-		margin-top: 18px;
-	}
-
-	.handwrite {
-		position: static;
-		width: 200px;
-		max-width: 70%;
-		margin-top: 14px;
-	}
-
-	.hero-frame {
-		margin-left: 0;
-		margin-right: 0;
-		max-width: none;
-	}
-
-	.blob-teal,
-	.blob-lav,
-	.sparks {
-		display: none;
 	}
 
 	.site-nav a {

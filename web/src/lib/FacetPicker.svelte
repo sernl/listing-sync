@@ -368,7 +368,7 @@
 			position: fixed;
 			inset: 0;
 			z-index: 30;
-			background: color-mix(in srgb, var(--text) 42%, transparent);
+			background: var(--scrim);
 		}
 
 		.fp-sheet {

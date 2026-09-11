@@ -122,16 +122,8 @@ pub const fn uncaptured_transition(
     to: ListingState,
 ) -> Option<&'static str> {
     match (inventory, from, to) {
-        (
-            InventoryId::TesGb | InventoryId::TesUs | InventoryId::TesNz,
-            ListingState::Live,
-            ListingState::Live,
-        ) => Some("tes.edit_published"),
-        (
-            InventoryId::TesGb | InventoryId::TesUs | InventoryId::TesNz,
-            ListingState::Live,
-            ListingState::Draft,
-        ) => Some("tes.unpublish"),
+        (InventoryId::Tes, ListingState::Live, ListingState::Live) => Some("tes.edit_published"),
+        (InventoryId::Tes, ListingState::Live, ListingState::Draft) => Some("tes.unpublish"),
         _ => None,
     }
 }
@@ -153,7 +145,7 @@ pub const fn uncaptured_transition(
 #[must_use]
 pub const fn uncaptured_source(inventory: InventoryId) -> Option<&'static str> {
     match inventory {
-        InventoryId::TesGb | InventoryId::TesUs | InventoryId::TesNz => None,
+        InventoryId::Tes => None,
         InventoryId::Tpt => Some("tpt.download_resource_bundle"),
         InventoryId::Etsy => Some("etsy.download_resource_bundle"),
     }
@@ -183,7 +175,7 @@ mod tests {
     fn a_live_intent_on_nothing_lowers_to_a_create_and_a_gated_publish() {
         let operations = lower(
             ListingState::Live,
-            InventoryId::TesNz,
+            InventoryId::Tes,
             &seed("unbound", "absent"),
         )
         .expect("an unbound mapping lowers");
@@ -198,12 +190,12 @@ mod tests {
             "both adapters create a draft, so live is two writes"
         );
         assert_eq!(
-            requires_bound_on(&operations[1], InventoryId::TesNz),
-            Some(InventoryId::TesNz),
+            requires_bound_on(&operations[1], InventoryId::Tes),
+            Some(InventoryId::Tes),
             "the publish names the listing the create bound, so it waits for it"
         );
         assert_eq!(
-            requires_bound_on(&operations[0], InventoryId::TesNz),
+            requires_bound_on(&operations[0], InventoryId::Tes),
             None,
             "the create waits for nothing"
         );
@@ -214,7 +206,7 @@ mod tests {
         assert_eq!(
             lower(
                 ListingState::Draft,
-                InventoryId::TesNz,
+                InventoryId::Tes,
                 &seed("unbound", "absent")
             )
             .expect("an unbound mapping lowers"),
@@ -227,7 +219,7 @@ mod tests {
         assert_eq!(
             lower(
                 ListingState::Live,
-                InventoryId::TesNz,
+                InventoryId::Tes,
                 &seed("bound", "absent")
             ),
             Err(LoweringRefusal::LifecycleUnknown),
@@ -239,7 +231,7 @@ mod tests {
         assert_eq!(
             lower(
                 ListingState::Draft,
-                InventoryId::TesNz,
+                InventoryId::Tes,
                 &seed("creating", "absent")
             ),
             Err(LoweringRefusal::CreateInFlight),
@@ -248,7 +240,7 @@ mod tests {
 
     #[test]
     fn only_tes_has_a_captured_seller_download() {
-        assert_eq!(uncaptured_source(InventoryId::TesGb), None);
+        assert_eq!(uncaptured_source(InventoryId::Tes), None);
         assert_eq!(
             uncaptured_source(InventoryId::Tpt),
             Some("tpt.download_resource_bundle"),

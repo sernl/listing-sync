@@ -47,11 +47,11 @@ fn adapter(
     files: Vec<(FileId, FileContent)>,
 ) -> TesAdapter<CassetteTransport, StaticFiles> {
     TesAdapter::new(
-        InventoryId::TesGb,
+        InventoryId::Tes,
         CassetteTransport::new(cassette),
         StaticFiles(files),
     )
-    .expect("TesGb is a Tes inventory")
+    .expect("Tes is a Tes inventory")
 }
 
 fn ok(body: &Value) -> HttpResponse {
@@ -68,7 +68,7 @@ fn sample_listing() -> TesListing {
         description_raw: "A pack.".to_owned(),
         description_format: CopyFormat::Markdown,
         category_ids: vec![1_000_448],
-        age_channel: tam_marketplace_tes::endpoints::TesAges::Ranges(vec![4]),
+        age_channel: tam_marketplace_tes::endpoints::TesAges::new(vec![4]),
         ages: vec![11, 12],
         main_type: Some(99_009),
         main_age: Some(4),
@@ -673,7 +673,7 @@ fn a_declaration_with_no_ages_at_all_still_omits_the_pair() {
     );
 
     let spanless = TesListing {
-        age_channel: tam_marketplace_tes::endpoints::TesAges::Ranges(vec![7]),
+        age_channel: tam_marketplace_tes::endpoints::TesAges::new(vec![7]),
         ages: vec![],
         main_age: None,
         ..sample_listing()
@@ -1495,7 +1495,7 @@ fn read_back_is_gated_and_maps_the_lifecycle() {
             url: "https://www.tes.com/api/v2/resources/9001".to_owned(),
         }),
         FetchReason::FirstPartyExport {
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
         },
         observed_at,
     ))
@@ -1676,7 +1676,7 @@ fn the_catalogue_walk_pages_published_then_drafts_and_stops_on_an_empty_page() {
     let adapter = adapter(cassette, vec![]);
     let entries =
         futures::executor::block_on(adapter.list_own_resources(&FetchReason::FirstPartyExport {
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
         }))
         .expect("the first-party catalogue read succeeds");
 
@@ -1781,7 +1781,7 @@ fn a_catalogue_read_refuses_every_reason_but_the_export_and_the_reconcile() {
         FetchReason::PollLifecycle { receipt },
         FetchReason::StructuralProbe {
             grant: CanaryGrant {
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 decided_at: NOW,
             },
         },
@@ -1851,7 +1851,7 @@ fn a_published_resource_downloads_its_bundle_byte_for_byte() {
     let adapter = adapter(cassette, vec![]);
     let downloaded = futures::executor::block_on(adapter.download_resource_bundle(
         &FetchReason::FirstPartyExport {
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
         },
         DRAFT,
     ))
@@ -1908,7 +1908,7 @@ fn a_redirected_bundle_hop_is_re_issued_carrying_nothing_of_ours() {
     let adapter = adapter(cassette, vec![]);
     let downloaded = futures::executor::block_on(adapter.download_resource_bundle(
         &FetchReason::FirstPartyExport {
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
         },
         DRAFT,
     ))
@@ -1944,7 +1944,7 @@ fn a_bundle_redirect_with_no_location_refuses_by_name() {
     let adapter = adapter(cassette, vec![]);
     let refused = futures::executor::block_on(adapter.download_resource_bundle(
         &FetchReason::FirstPartyExport {
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
         },
         DRAFT,
     ))
@@ -1996,7 +1996,7 @@ fn a_bundle_redirect_back_into_the_session_origin_refuses_by_name() {
     let adapter = adapter(cassette, vec![]);
     let refused = futures::executor::block_on(adapter.download_resource_bundle(
         &FetchReason::FirstPartyExport {
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
         },
         DRAFT,
     ))
@@ -2063,7 +2063,7 @@ fn a_signed_url_that_answers_a_page_rather_than_an_archive_is_refused() {
     let adapter = adapter(cassette, vec![]);
     let refused = futures::executor::block_on(adapter.download_resource_bundle(
         &FetchReason::FirstPartyExport {
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
         },
         DRAFT,
     ))
@@ -2123,7 +2123,7 @@ fn a_signed_url_that_redirects_again_is_refused_rather_than_followed() {
     let adapter = adapter(cassette, vec![]);
     let refused = futures::executor::block_on(adapter.download_resource_bundle(
         &FetchReason::FirstPartyExport {
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
         },
         DRAFT,
     ))
@@ -2159,7 +2159,7 @@ fn a_draft_has_no_bundle_and_says_so_distinctly() {
         let adapter = adapter(cassette, vec![]);
         let refused = futures::executor::block_on(adapter.download_resource_bundle(
             &FetchReason::FirstPartyExport {
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
             },
             DRAFT,
         ));
@@ -2263,46 +2263,28 @@ fn a_delete_that_404s_is_evidence_for_the_poll_and_a_400_is_still_a_refusal() {
     );
 }
 
-/// The country fork on the write path. The uploader offers exactly one age
-/// field per country, and the two carry ids from different vocabularies, so
-/// posting a US year group under `ageRanges` is a wrong field rather than a
-/// wrong label: id 4 is the 11-14 band in one and 2nd grade in the other.
+/// The age field on the write path. The uploader offers one age field per
+/// country and the two carry ids from different vocabularies, so posting a
+/// year group under `ageRanges` would be a wrong field rather than a wrong
+/// label: id 4 is the 11-14 band in one and 2nd grade in the other. Tes is
+/// the `ageRanges` branch, and `yearGroups` never carries a written id.
 #[test]
-fn a_non_gb_projection_posts_year_groups_and_a_gb_one_posts_age_ranges() {
-    let gb = adapter(
+fn a_projection_posts_its_grades_as_age_ranges() {
+    let tes = adapter(
         Cassette {
             interactions: vec![],
         },
         vec![],
     );
-    let gb_fields = gb
+    let fields = tes
         .project_fields(&projected(PriceIntent::Free))
-        .expect("a GB listing projects");
-    let gb_grades: Value =
-        serde_json::from_str(&entry(&gb_fields, FieldKey::Grades)).expect("the grades are JSON");
-    assert_eq!(gb_grades["ageRanges"], serde_json::json!([4]));
+        .expect("a Tes listing projects");
+    let grades: Value =
+        serde_json::from_str(&entry(&fields, FieldKey::Grades)).expect("the grades are JSON");
+    assert_eq!(grades["ageRanges"], serde_json::json!([4]));
     assert!(
-        gb_grades.get("yearGroups").is_none(),
-        "the GB channel names one field and does not mention the other"
-    );
-
-    let nz = TesAdapter::new(
-        InventoryId::TesNz,
-        CassetteTransport::new(Cassette {
-            interactions: vec![],
-        }),
-        StaticFiles(vec![]),
-    )
-    .expect("TesNz is a Tes inventory");
-    let nz_fields = nz
-        .project_fields(&projected(PriceIntent::Free))
-        .expect("an NZ listing projects");
-    let nz_grades: Value =
-        serde_json::from_str(&entry(&nz_fields, FieldKey::Grades)).expect("the grades are JSON");
-    assert_eq!(nz_grades["yearGroups"], serde_json::json!([4]));
-    assert!(
-        nz_grades.get("ageRanges").is_none(),
-        "and the year-group channel does not post an age range"
+        grades.get("yearGroups").is_none(),
+        "the field set names one age field and does not mention the other"
     );
 }
 
@@ -2349,7 +2331,7 @@ fn an_import_read_carries_the_price_in_the_wires_own_minor_units() {
     let adapter = adapter(cassette, vec![]);
     let listing = futures::executor::block_on(adapter.fetch_for_import(
         &FetchReason::FirstPartyExport {
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
         },
         DRAFT,
     ))
@@ -2391,7 +2373,7 @@ fn an_import_read_refuses_a_price_that_is_not_a_whole_number_of_minor_units() {
     let adapter = adapter(cassette, vec![]);
     let refused = futures::executor::block_on(adapter.fetch_for_import(
         &FetchReason::FirstPartyExport {
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
         },
         DRAFT,
     ))
@@ -2431,7 +2413,7 @@ fn a_drafts_manifest_page_that_mentions_login_is_no_bundle_rather_than_a_dead_se
     let adapter = adapter(cassette, vec![]);
     let refused = futures::executor::block_on(adapter.download_resource_bundle(
         &FetchReason::FirstPartyExport {
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
         },
         DRAFT,
     ))
@@ -2470,7 +2452,7 @@ fn a_manifest_page_on_a_session_the_state_route_also_refuses_is_a_dead_session()
     let adapter = adapter(cassette, vec![]);
     let refused = futures::executor::block_on(adapter.download_resource_bundle(
         &FetchReason::FirstPartyExport {
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
         },
         DRAFT,
     ))

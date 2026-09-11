@@ -2475,11 +2475,9 @@ mod tests {
                     id: match inventory {
                         InventoryId::Tpt => RemoteListingId::Tpt { product_id: 77 },
                         InventoryId::Etsy => RemoteListingId::Etsy { listing_id: 77 },
-                        InventoryId::TesGb | InventoryId::TesUs | InventoryId::TesNz => {
-                            RemoteListingId::Tes {
-                                url: "https://www.tes.com/teaching-resource/x-77".to_owned(),
-                            }
-                        }
+                        InventoryId::Tes => RemoteListingId::Tes {
+                            url: "https://www.tes.com/teaching-resource/x-77".to_owned(),
+                        },
                     },
                     first_seen: Timestamp(1),
                     verified: Verification::Clean { at: Timestamp(1) },
@@ -2569,7 +2567,7 @@ mod tests {
 
     #[test]
     fn the_tes_licence_is_the_only_required_field_and_either_answer_satisfies_it() {
-        let tes = [InventoryId::TesGb];
+        let tes = [InventoryId::Tes];
         assert!(
             required_fields_answered(&tes, None, &[]).is_err(),
             "Tes declares its licence required, so a create carrying neither is refused"
@@ -2578,7 +2576,7 @@ mod tests {
             required_fields_answered(
                 &tes,
                 Some(&RightsInput {
-                    inventory: InventoryId::TesGb,
+                    inventory: InventoryId::Tes,
                     segments: vec!["CC-BY".to_owned()],
                     native_id: Some("CC-BY".to_owned()),
                 }),
@@ -2588,11 +2586,11 @@ mod tests {
             "a stated rights grant is a licence"
         );
         assert!(
-            required_fields_answered(&tes, None, &[licence_answer(InventoryId::TesGb)]).is_ok(),
+            required_fields_answered(&tes, None, &[licence_answer(InventoryId::Tes)]).is_ok(),
             "so is an already-answered licence election for that inventory"
         );
         assert!(
-            required_fields_answered(&tes, None, &[licence_answer(InventoryId::TesUs)]).is_err(),
+            required_fields_answered(&tes, None, &[licence_answer(InventoryId::Tpt)]).is_err(),
             "an answer for a different inventory does not satisfy this one"
         );
     }
@@ -2609,14 +2607,14 @@ mod tests {
     #[test]
     fn a_live_tes_listing_refuses_the_edit_and_a_live_tpt_listing_does_not() {
         let tes = uncaptured_edits(&[bound_mapping(
-            InventoryId::TesNz,
+            InventoryId::Tes,
             RemoteLifecycle::Live {
                 since: Timestamp(2),
             },
         )]);
         assert_eq!(
             tes,
-            vec![(InventoryId::TesNz, "tes.edit_published")],
+            vec![(InventoryId::Tes, "tes.edit_published")],
             "Tes serves neither live-to-live nor live-to-draft, so the edit is refused by name"
         );
         assert!(
@@ -2630,8 +2628,7 @@ mod tests {
             "TPT serves all four transitions"
         );
         assert!(
-            uncaptured_edits(&[bound_mapping(InventoryId::TesNz, RemoteLifecycle::Draft)])
-                .is_empty(),
+            uncaptured_edits(&[bound_mapping(InventoryId::Tes, RemoteLifecycle::Draft)]).is_empty(),
             "a Tes draft is editable; only a live one is not"
         );
     }

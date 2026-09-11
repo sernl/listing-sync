@@ -147,7 +147,7 @@ fn row<'a>(
         inventory: if sheet == "Teachouse" {
             None
         } else {
-            Some(InventoryId::TesGb)
+            Some(InventoryId::Tes)
         },
         intent,
         draft: held,
@@ -289,8 +289,8 @@ async fn a_batch_counts_its_own_rows_and_a_refused_row_is_failed(pool: PgPool) {
     let refused = one_problem();
     let rows = [
         row("Teachouse", 4, RowIntent::Draft, &held, &clean),
-        row("TES GB", 4, RowIntent::Live, &held, &clean),
-        row("TES GB", 5, RowIntent::Draft, &held, &refused),
+        row("TES", 4, RowIntent::Live, &held, &clean),
+        row("TES", 5, RowIntent::Draft, &held, &refused),
     ];
     let written = repo
         .create(ORG_A, &batch(BATCH_A, &rows))
@@ -311,8 +311,8 @@ async fn a_batch_counts_its_own_rows_and_a_refused_row_is_failed(pool: PgPool) {
             .map(|held| (held.sheet.clone(), held.ordinal, held.state))
             .collect::<Vec<_>>(),
         vec![
-            ("TES GB".to_owned(), 4, RowState::Parsed),
-            ("TES GB".to_owned(), 5, RowState::Failed),
+            ("TES".to_owned(), 4, RowState::Parsed),
+            ("TES".to_owned(), 5, RowState::Failed),
             ("Teachouse".to_owned(), 4, RowState::Parsed),
         ],
         "rows come back in byte-collation sheet order and then row order, which is a fact of \
@@ -326,7 +326,7 @@ async fn a_batch_counts_its_own_rows_and_a_refused_row_is_failed(pool: PgPool) {
     );
     assert_eq!(
         read.first().and_then(|held| held.inventory),
-        Some(InventoryId::TesGb),
+        Some(InventoryId::Tes),
         "a grid row names its inventory and a Teachouse row names none"
     );
     assert_eq!(
@@ -424,7 +424,7 @@ async fn the_columns_refuse_what_the_repository_would_never_write(pool: PgPool) 
     let repo = ImportBatchRepo::new(pool.clone());
     let held = draft("A worksheet");
     let clean = no_problems();
-    let rows = [row("TES GB", 4, RowIntent::Live, &held, &clean)];
+    let rows = [row("TES", 4, RowIntent::Live, &held, &clean)];
     assert!(matches!(
         repo.create(ORG_A, &batch(BATCH_A, &rows)).await,
         Ok(BatchWrite::Saved(_))
@@ -446,7 +446,7 @@ async fn the_columns_refuse_what_the_repository_would_never_write(pool: PgPool) 
     let mut tx = pinned(&pool, ORG_A).await.expect("the pin sets");
     let created_without_a_product = sqlx::query(
         "UPDATE import_batch_row SET state = 'created' \
-          WHERE org_id = $1 AND batch_id = $2 AND sheet = 'TES GB' AND ordinal = 4",
+          WHERE org_id = $1 AND batch_id = $2 AND sheet = 'TES' AND ordinal = 4",
     )
     .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
     .bind(uuid::Uuid::from_bytes(BATCH_A.0))
@@ -462,7 +462,7 @@ async fn the_columns_refuse_what_the_repository_would_never_write(pool: PgPool) 
     let mut tx = pinned(&pool, ORG_A).await.expect("the pin sets");
     let refused_but_not_failed = sqlx::query(
         "UPDATE import_batch_row SET problems = $3 \
-          WHERE org_id = $1 AND batch_id = $2 AND sheet = 'TES GB' AND ordinal = 4",
+          WHERE org_id = $1 AND batch_id = $2 AND sheet = 'TES' AND ordinal = 4",
     )
     .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
     .bind(uuid::Uuid::from_bytes(BATCH_A.0))
@@ -478,7 +478,7 @@ async fn the_columns_refuse_what_the_repository_would_never_write(pool: PgPool) 
     let mut tx = pinned(&pool, ORG_A).await.expect("the pin sets");
     let half_a_handle = sqlx::query(
         "UPDATE import_batch_row SET file_kind = 'pdf' \
-          WHERE org_id = $1 AND batch_id = $2 AND sheet = 'TES GB' AND ordinal = 4",
+          WHERE org_id = $1 AND batch_id = $2 AND sheet = 'TES' AND ordinal = 4",
     )
     .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
     .bind(uuid::Uuid::from_bytes(BATCH_A.0))
@@ -493,7 +493,7 @@ async fn the_columns_refuse_what_the_repository_would_never_write(pool: PgPool) 
     let mut tx = pinned(&pool, ORG_A).await.expect("the pin sets");
     let half_a_cover = sqlx::query(
         "UPDATE import_batch_row SET cover_kind = 'image' \
-          WHERE org_id = $1 AND batch_id = $2 AND sheet = 'TES GB' AND ordinal = 4",
+          WHERE org_id = $1 AND batch_id = $2 AND sheet = 'TES' AND ordinal = 4",
     )
     .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
     .bind(uuid::Uuid::from_bytes(BATCH_A.0))
@@ -508,7 +508,7 @@ async fn the_columns_refuse_what_the_repository_would_never_write(pool: PgPool) 
     let mut tx = pinned(&pool, ORG_A).await.expect("the pin sets");
     let claimed_without_an_identifier = sqlx::query(
         "UPDATE import_batch_row SET state = 'creating' \
-          WHERE org_id = $1 AND batch_id = $2 AND sheet = 'TES GB' AND ordinal = 4",
+          WHERE org_id = $1 AND batch_id = $2 AND sheet = 'TES' AND ordinal = 4",
     )
     .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
     .bind(uuid::Uuid::from_bytes(BATCH_A.0))
@@ -607,7 +607,7 @@ async fn the_sweep_releases_the_file_handles_its_rows_hold(pool: PgPool) {
     let repo = ImportBatchRepo::new(pool.clone());
     let held = draft("A worksheet");
     let clean = no_problems();
-    let rows = [row("TES GB", 4, RowIntent::Live, &held, &clean)];
+    let rows = [row("TES", 4, RowIntent::Live, &held, &clean)];
     assert!(matches!(
         repo.create(ORG_A, &batch(BATCH_A, &rows)).await,
         Ok(BatchWrite::Saved(_))
@@ -620,7 +620,7 @@ async fn the_sweep_releases_the_file_handles_its_rows_hold(pool: PgPool) {
             ORG_A,
             BATCH_A,
             RowAddress {
-                sheet: "TES GB",
+                sheet: "TES",
                 ordinal: 4,
             },
             RowFiles {
@@ -677,8 +677,8 @@ async fn a_bind_moves_the_row_and_the_batch_and_counts_what_still_waits(pool: Pg
     let held = draft("A worksheet");
     let clean = no_problems();
     let rows = [
-        row("TES GB", 4, RowIntent::Live, &held, &clean),
-        row("TES GB", 5, RowIntent::Draft, &held, &clean),
+        row("TES", 4, RowIntent::Live, &held, &clean),
+        row("TES", 5, RowIntent::Draft, &held, &clean),
         // A Teachouse row names no marketplace, so D32 asks it for no file and
         // it is never counted as waiting for one.
         row("Teachouse", 4, RowIntent::Draft, &held, &clean),
@@ -695,7 +695,7 @@ async fn a_bind_moves_the_row_and_the_batch_and_counts_what_still_waits(pool: Pg
             ORG_A,
             BATCH_A,
             RowAddress {
-                sheet: "TES GB",
+                sheet: "TES",
                 ordinal: 4,
             },
             RowFiles {
@@ -731,7 +731,7 @@ async fn a_bind_moves_the_row_and_the_batch_and_counts_what_still_waits(pool: Pg
             .await
             .expect("the drafts read")
             .into_iter()
-            .find(|draft| draft.sheet == "TES GB" && draft.ordinal == 4)
+            .find(|draft| draft.sheet == "TES" && draft.ordinal == 4)
             .and_then(|draft| draft.cover),
         Some(cover),
         "and the cover reaches the commit, which is the reader that writes it onto the product"
@@ -746,7 +746,7 @@ async fn a_rebind_replaces_the_handle_and_an_unbind_converges(pool: PgPool) {
     let repo = ImportBatchRepo::new(pool.clone());
     let held = draft("A worksheet");
     let clean = no_problems();
-    let rows = [row("TES GB", 4, RowIntent::Live, &held, &clean)];
+    let rows = [row("TES", 4, RowIntent::Live, &held, &clean)];
     assert!(matches!(
         repo.create(ORG_A, &batch(BATCH_A, &rows)).await,
         Ok(BatchWrite::Saved(_))
@@ -761,7 +761,7 @@ async fn a_rebind_replaces_the_handle_and_an_unbind_converges(pool: PgPool) {
                 ORG_A,
                 BATCH_A,
                 RowAddress {
-                    sheet: "TES GB",
+                    sheet: "TES",
                     ordinal: 4,
                 },
                 RowFiles {
@@ -789,7 +789,7 @@ async fn a_rebind_replaces_the_handle_and_an_unbind_converges(pool: PgPool) {
             ORG_A,
             BATCH_A,
             RowAddress {
-                sheet: "TES GB",
+                sheet: "TES",
                 ordinal: 4,
             },
         )
@@ -825,7 +825,7 @@ async fn a_rebind_replaces_the_handle_and_an_unbind_converges(pool: PgPool) {
             ORG_A,
             BATCH_A,
             RowAddress {
-                sheet: "TES GB",
+                sheet: "TES",
                 ordinal: 4,
             },
         )
@@ -846,8 +846,8 @@ async fn a_bind_is_refused_across_the_fence_and_on_a_row_that_cannot_take_one(po
     let clean = no_problems();
     let refused = one_problem();
     let rows = [
-        row("TES GB", 4, RowIntent::Live, &held, &clean),
-        row("TES GB", 5, RowIntent::Live, &held, &refused),
+        row("TES", 4, RowIntent::Live, &held, &clean),
+        row("TES", 5, RowIntent::Live, &held, &refused),
     ];
     assert!(matches!(
         repo.create(ORG_A, &batch(BATCH_A, &rows)).await,
@@ -861,7 +861,7 @@ async fn a_bind_is_refused_across_the_fence_and_on_a_row_that_cannot_take_one(po
             ORG_B,
             BATCH_A,
             RowAddress {
-                sheet: "TES GB",
+                sheet: "TES",
                 ordinal: 4,
             },
             RowFiles {
@@ -879,7 +879,7 @@ async fn a_bind_is_refused_across_the_fence_and_on_a_row_that_cannot_take_one(po
             ORG_B,
             BATCH_A,
             RowAddress {
-                sheet: "TES GB",
+                sheet: "TES",
                 ordinal: 4,
             },
         )
@@ -893,7 +893,7 @@ async fn a_bind_is_refused_across_the_fence_and_on_a_row_that_cannot_take_one(po
             ORG_A,
             BATCH_A,
             RowAddress {
-                sheet: "TES GB",
+                sheet: "TES",
                 ordinal: 9,
             },
             RowFiles {
@@ -911,7 +911,7 @@ async fn a_bind_is_refused_across_the_fence_and_on_a_row_that_cannot_take_one(po
             ORG_A,
             BATCH_A,
             RowAddress {
-                sheet: "TES GB",
+                sheet: "TES",
                 ordinal: 5,
             },
             RowFiles {
@@ -934,7 +934,7 @@ async fn a_bind_is_refused_across_the_fence_and_on_a_row_that_cannot_take_one(po
             ORG_A,
             BATCH_A,
             RowAddress {
-                sheet: "TES GB",
+                sheet: "TES",
                 ordinal: 4,
             },
             RowFiles {
@@ -952,7 +952,7 @@ async fn a_bind_is_refused_across_the_fence_and_on_a_row_that_cannot_take_one(po
             ORG_A,
             BATCH_A,
             RowAddress {
-                sheet: "TES GB",
+                sheet: "TES",
                 ordinal: 4,
             },
         )
@@ -1000,8 +1000,8 @@ async fn a_claim_skips_the_rows_another_chunk_is_holding(pool: PgPool) {
     let held = draft("One");
     let clean = no_problems();
     let rows = [
-        row("TES GB", 4, RowIntent::Draft, &held, &clean),
-        row("TES GB", 5, RowIntent::Draft, &held, &clean),
+        row("TES", 4, RowIntent::Draft, &held, &clean),
+        row("TES", 5, RowIntent::Draft, &held, &clean),
     ];
     repo.create(ORG_A, &batch(BATCH_A, &rows))
         .await
@@ -1013,7 +1013,7 @@ async fn a_claim_skips_the_rows_another_chunk_is_holding(pool: PgPool) {
             ORG_A,
             BATCH_A,
             RowAddress {
-                sheet: "TES GB",
+                sheet: "TES",
                 ordinal,
             },
             RowFiles {
@@ -1029,7 +1029,7 @@ async fn a_claim_skips_the_rows_another_chunk_is_holding(pool: PgPool) {
     let mut holding = pinned(&rival, ORG_A).await.expect("the rival pin sets");
     sqlx::query(
         "SELECT state FROM import_batch_row \
-          WHERE org_id = $1 AND batch_id = $2 AND sheet = 'TES GB' AND ordinal = 4 \
+          WHERE org_id = $1 AND batch_id = $2 AND sheet = 'TES' AND ordinal = 4 \
           FOR UPDATE",
     )
     .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
@@ -1226,8 +1226,8 @@ async fn a_stale_claim_returns_an_unfinished_batch_to_the_seller_and_settles_a_f
     let held = draft("One");
     let clean = no_problems();
     let marketplace = [
-        row("TES GB", 4, RowIntent::Live, &held, &clean),
-        row("TES GB", 5, RowIntent::Draft, &held, &clean),
+        row("TES", 4, RowIntent::Live, &held, &clean),
+        row("TES", 5, RowIntent::Draft, &held, &clean),
     ];
     let platform = [
         row("Teachouse", 4, RowIntent::Draft, &held, &clean),
@@ -1249,7 +1249,7 @@ async fn a_stale_claim_returns_an_unfinished_batch_to_the_seller_and_settles_a_f
             ORG_A,
             BATCH_A,
             RowAddress {
-                sheet: "TES GB",
+                sheet: "TES",
                 ordinal,
             },
             RowFiles {
@@ -1282,7 +1282,7 @@ async fn a_stale_claim_returns_an_unfinished_batch_to_the_seller_and_settles_a_f
         panic!("org a's claim reserved a product for row five");
     };
     for (org, id, sheet, ordinals) in [
-        (ORG_A, BATCH_A, "TES GB", &[4][..]),
+        (ORG_A, BATCH_A, "TES", &[4][..]),
         (ORG_B, BATCH_B, "Teachouse", &[4, 5][..]),
         (ORG_C, BATCH_C, "Teachouse", &[4][..]),
     ] {
@@ -1427,8 +1427,8 @@ async fn the_sweep_keeps_the_handles_of_a_row_that_became_a_product(pool: PgPool
     let held = draft("One");
     let clean = no_problems();
     let rows = [
-        row("TES GB", 4, RowIntent::Live, &held, &clean),
-        row("TES GB", 5, RowIntent::Live, &held, &clean),
+        row("TES", 4, RowIntent::Live, &held, &clean),
+        row("TES", 5, RowIntent::Live, &held, &clean),
     ];
     repo.create(ORG_A, &batch(BATCH_A, &rows))
         .await
@@ -1440,7 +1440,7 @@ async fn the_sweep_keeps_the_handles_of_a_row_that_became_a_product(pool: PgPool
             ORG_A,
             BATCH_A,
             RowAddress {
-                sheet: "TES GB",
+                sheet: "TES",
                 ordinal,
             },
             RowFiles {
@@ -1471,7 +1471,7 @@ async fn the_sweep_keeps_the_handles_of_a_row_that_became_a_product(pool: PgPool
             ORG_A,
             BATCH_A,
             RowAddress {
-                sheet: "TES GB",
+                sheet: "TES",
                 ordinal: 4,
             },
             false,

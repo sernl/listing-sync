@@ -554,7 +554,7 @@ mod tests {
         JobSettledNotice {
             kind: NotificationKind::Sync,
             subject_id: Uuid([0x2b; 16]),
-            inventory: Some(InventoryId::TesGb),
+            inventory: Some(InventoryId::Tes),
             marketplace: Some(Marketplace::Tes),
             counts,
             settled_at: Timestamp(1_757_164_800_000),

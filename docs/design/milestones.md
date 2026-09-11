@@ -95,6 +95,8 @@ The correctness discipline the entire product rests on is then unimplementable a
 
 Tes GB-to-NZ inventory duplication, 8 to 11 founder-weeks.
 
+The GB-to-NZ duplication this milestone was named for was deleted on 2026-09-12, when the founder ruled that Tes is one marketplace with no regions; see `decisions.md`, "Tes is one marketplace with no regions, 2026-09-12".
+
 The size is a judgement rather than a carried figure and the arithmetic is worth showing.
 The server-side plan priced catalogue plus bulk create on Tes at six to eight weeks once the server owns custody, isolation and correctness, and priced the GB-to-NZ duplication feature at three to four weeks on top.
 Combining them saves one to two weeks of overlap, because the catalogue is only ever built once and the mapping engine is built once, which gives eight to eleven.

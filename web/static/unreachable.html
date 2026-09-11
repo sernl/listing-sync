@@ -7,9 +7,15 @@
      served from the desktop app's own bundle when the console cannot be
      reached, so it has no stylesheet, no font and no network. Each of the six
      below is the token of the same name in web/src/lib/styles/tokens.css, and
-     every literal outside this block is named where it stands. Both are
-     checked against that file by tokens.test.ts, so a palette edit that leaves
-     this page behind fails the lane rather than shipping.
+     every literal outside these two blocks is named where it stands. All of
+     it is checked against that file by tokens.test.ts, so a palette edit that
+     leaves this page behind fails the lane rather than shipping.
+
+     Dark reached through the media query and not through the attribute the
+     console uses: this page has no script and no storage, so the machine's
+     own preference is the only signal it has. A seller who chose Light in a
+     console they cannot currently reach therefore gets the dark card on a
+     dark machine, which is the closest a page with nothing to read can come.
 
      No webfont either, so Poppins and Inter are named in the stacks and
      whatever the machine has answers instead. */
@@ -21,6 +27,21 @@
     --muted: #64748b;
     --line: #e2e8f0;
     color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground: #141c3a;
+      --surface: #1e2a5a;
+      --primary: #c8b4ff;
+      --text: #f8faf8;
+      --muted: #b4bcd0;
+      --line: #33406b;
+      color-scheme: dark;
+    }
+    /* The three rules that spell a colour out rather than reading a token
+       are overridden at the foot of this sheet, not here: they are ordinary
+       declarations of the same specificity as the ones they replace, so
+       source order is what decides them. */
   }
   body {
     margin: 0;
@@ -102,6 +123,26 @@
     margin: 12px 0 0;
     font-size: 13px;
     color: var(--primary);
+  }
+  /* The dark half of the three rules above that spell a colour out. Last in
+     the sheet because each is an ordinary declaration of the same
+     specificity as the one it replaces, and source order is what decides
+     between them; written beside the token name each one copies. */
+  @media (prefers-color-scheme: dark) {
+    button {
+      /* --on-fill */
+      color: #1e2a5a;
+    }
+    button:disabled {
+      /* --soon-soft and --soon */
+      background: #26335f;
+      color: #9aa3b8;
+    }
+    .mark svg rect {
+      /* --text. The mark's tile is Indigo, and on this page Indigo is the
+         card the tile would be sitting on. The house keeps its Teal. */
+      fill: #f8faf8;
+    }
   }
 </style>
 <main>

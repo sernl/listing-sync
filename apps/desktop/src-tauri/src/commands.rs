@@ -1018,7 +1018,7 @@ mod session_command_tests {
             &self,
             _request: tam_types::Uuid,
         ) -> PlaneFuture<'_, tam_types::InventoryId> {
-            Box::pin(core::future::ready(Ok(tam_types::InventoryId::TesGb)))
+            Box::pin(core::future::ready(Ok(tam_types::InventoryId::Tes)))
         }
 
         fn register<'a>(
@@ -1772,4 +1772,51 @@ mod session_command_tests {
 #[tauri::command]
 pub async fn retry_console<R: tauri::Runtime>(app: AppHandle<R>) -> Result<(), CommandError> {
     crate::retry_console_from(&app).await.map_err(CommandError)
+}
+
+/// Moves the window's own chrome onto the palette the console is drawn in.
+///
+/// The webview paints the page; the title bar, the frame and the platform
+/// scrollbars are the window's, and without this a seller who picks Dark gets
+/// a dark console inside a light window. `None` hands the window back to the
+/// system, which is what the console's System choice means.
+///
+/// `tauri.conf.json` names no `theme` for the window, deliberately: unset is
+/// "follow the system", which is exactly the console's own default choice, so
+/// the window is already right for every seller who has chosen nothing and is
+/// corrected by this command within one page load for everyone else. Pinning
+/// a theme there would instead make the startup window wrong for half of them.
+///
+/// A word rather than a boolean, and the same three the console stores, so
+/// System survives the trip instead of being resolved on the way and pinned
+/// to whatever the machine preferred at the moment of the click.
+///
+/// Unknown words are refused rather than defaulted: a console and an
+/// application that disagree on the vocabulary is a mismatch worth seeing in
+/// the log, and the console swallows the refusal because the page it is
+/// looking at is already the right colour.
+///
+/// `async` with nothing awaited, as every command above it is. An owned
+/// `AppHandle` is what Tauri injects, and a synchronous body that only
+/// borrows it trips `needless_pass_by_value` under the workspace's pedantic
+/// lints; taking a reference is not open, because `&AppHandle` is not a
+/// command argument Tauri knows how to supply.
+#[tauri::command]
+pub async fn set_theme<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    theme: String,
+) -> Result<(), CommandError> {
+    let wanted = match theme.as_str() {
+        "light" => Some(tauri::Theme::Light),
+        "dark" => Some(tauri::Theme::Dark),
+        "system" => None,
+        other => return Err(CommandError(format!("unknown theme {other}"))),
+    };
+    let Some(window) = app.get_webview_window(CONSOLE_WINDOW) else {
+        // The console window is the only window this application has, so
+        // there is nothing to theme and nothing to report.
+        return Ok(());
+    };
+    window.set_theme(wanted)?;
+    Ok(())
 }

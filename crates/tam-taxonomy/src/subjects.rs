@@ -58,8 +58,7 @@ use tam_types::{CanonicalTermId, InventoryId, Timestamp};
 
 use crate::grades::{derived, TaxonomyTag, TptVocabulary};
 use crate::tes::{
-    canonical_id, derive_crosswalk, Crosswalk, CrosswalkError, Residue, ResidueNode, TesSubject,
-    TesTopic, TesTree,
+    canonical_id, derive_crosswalk, Crosswalk, Residue, ResidueNode, TesSubject, TesTopic, TesTree,
 };
 
 /// The category whose facets this derivation reads. TPT files a grade, an
@@ -132,7 +131,6 @@ impl core::fmt::Display for SubjectMismatchReason {
 /// A malformed input, refused wholesale rather than degraded to residue.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubjectError {
-    Tes(CrosswalkError),
     Parse {
         file: &'static str,
         detail: String,
@@ -169,7 +167,6 @@ pub enum SubjectError {
 impl core::fmt::Display for SubjectError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Tes(error) => write!(f, "the Tes derivation refused the captures: {error}"),
             Self::Parse { file, detail } => write!(f, "{file} is not the expected shape: {detail}"),
             Self::UnknownFacet { slug } => write!(
                 f,
@@ -203,13 +200,12 @@ impl core::error::Error for SubjectError {}
 /// Pure: every capture arrives as text or as an already-parsed tree and the
 /// caller does the I/O, so `tam-taxonomy` stays inside the purity gate.
 pub fn derive_subject_crosswalk(
-    gb: &TesTree,
-    nz: &TesTree,
+    tes: &TesTree,
     tpt_json: &str,
     pairs_json: &str,
     decided_at: Timestamp,
 ) -> Result<SubjectCrosswalk, SubjectError> {
-    let base = derive_crosswalk(gb, nz, decided_at).map_err(SubjectError::Tes)?;
+    let base = derive_crosswalk(tes, decided_at);
     let tpt: TptVocabulary =
         serde_json::from_str(tpt_json).map_err(|error| SubjectError::Parse {
             file: "tpt-vocabulary.json",
@@ -220,7 +216,7 @@ pub fn derive_subject_crosswalk(
         detail: error.to_string(),
     })?;
     let facets = subject_area_facets(&tpt.taxonomy_tags.options);
-    let index = GbIndex::build(gb, &base);
+    let index = TesIndex::build(tes, &base);
     let plan = Plan::build(&file.pairs, &facets, &index)?;
     plan.emit(
         base,
@@ -239,7 +235,7 @@ pub fn derive_subject_crosswalk(
 /// function taking all of it takes one argument.
 struct Emission<'a, 'b> {
     facets: &'a BTreeMap<String, Facet>,
-    index: &'a GbIndex<'b>,
+    index: &'a TesIndex<'b>,
     decided_by: Decider,
     decided_at: Timestamp,
 }
@@ -303,22 +299,22 @@ fn subject_area_facets(tags: &BTreeMap<String, TaxonomyTag>) -> BTreeMap<String,
         .collect()
 }
 
-/// The GB capture addressed by native id, restricted to the nodes that
+/// The Tes capture addressed by native id, restricted to the nodes that
 /// actually seeded a canonical term, so a pairing can never attach an edge to
 /// a term the base derivation declined to mint.
-struct GbIndex<'a> {
+struct TesIndex<'a> {
     subjects: BTreeMap<u64, &'a TesSubject>,
     topics: BTreeMap<u64, (&'a TesSubject, &'a TesTopic)>,
     seeded: BTreeSet<u64>,
 }
 
-impl<'a> GbIndex<'a> {
-    fn build(gb: &'a TesTree, base: &Crosswalk) -> Self {
+impl<'a> TesIndex<'a> {
+    fn build(tes: &'a TesTree, base: &Crosswalk) -> Self {
         let minted: BTreeSet<[u8; 16]> = base.terms.iter().map(|term| term.id.0 .0).collect();
         let mut subjects = BTreeMap::new();
         let mut topics = BTreeMap::new();
         let mut seeded = BTreeSet::new();
-        for subject in &gb.subjects {
+        for subject in &tes.subjects {
             subjects.insert(subject.id, subject);
             if minted.contains(&canonical_id(subject.id).0 .0) {
                 seeded.insert(subject.id);
@@ -373,7 +369,7 @@ impl<'a> GbIndex<'a> {
 
     fn residue(&self, id: u64) -> Option<ResidueNode> {
         Some(ResidueNode {
-            market: InventoryId::TesGb,
+            market: InventoryId::Tes,
             kind: self.kind(id)?,
             native_id: id.to_string(),
             description: self.description(id)?.to_owned(),
@@ -411,7 +407,7 @@ struct Claims {
 }
 
 impl Claims {
-    fn contest(&mut self, node: u64, against: Option<&Facet>, index: &GbIndex<'_>) {
+    fn contest(&mut self, node: u64, against: Option<&Facet>, index: &TesIndex<'_>) {
         self.contested.insert(node);
         if let Some(record) = index.residue(node) {
             self.mismatched.push(SubjectMismatch {
@@ -432,7 +428,7 @@ impl Plan {
     fn build(
         rows: &[PairRow],
         facets: &BTreeMap<String, Facet>,
-        index: &GbIndex<'_>,
+        index: &TesIndex<'_>,
     ) -> Result<Self, SubjectError> {
         let mut bindings: BTreeMap<String, Binding> = BTreeMap::new();
         let mut claims = Claims::default();
@@ -538,7 +534,7 @@ impl Plan {
     fn pair_children(
         bindings: &mut BTreeMap<String, Binding>,
         facets: &BTreeMap<String, Facet>,
-        index: &GbIndex<'_>,
+        index: &TesIndex<'_>,
         claims: &mut Claims,
     ) {
         let mut derived_bindings: Vec<(String, Binding)> = Vec::new();
@@ -597,7 +593,7 @@ impl Plan {
     fn withdraw(
         bindings: &mut BTreeMap<String, Binding>,
         facets: &BTreeMap<String, Facet>,
-        index: &GbIndex<'_>,
+        index: &TesIndex<'_>,
         claims: &mut Claims,
     ) {
         let taken: BTreeMap<u64, String> = facets
@@ -796,12 +792,7 @@ fn tes_paths(edges: &[ProjectionEdge], term: CanonicalTermId) -> Vec<VocabularyP
     edges
         .iter()
         .filter(|edge| edge.from == term && edge.kind == EdgeKind::Exact)
-        .filter(|edge| {
-            matches!(
-                edge.to.vocabulary.0,
-                InventoryId::TesGb | InventoryId::TesUs | InventoryId::TesNz
-            )
-        })
+        .filter(|edge| matches!(edge.to.vocabulary.0, InventoryId::Tes))
         .map(|edge| edge.to.clone())
         .collect()
 }

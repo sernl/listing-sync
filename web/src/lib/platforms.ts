@@ -9,41 +9,33 @@ import type { InventoryId, Marketplace } from '$lib/generated/vocab';
 /** How one marketplace is named to a seller.
  *
  * The founder's format is the acronym followed by the full name, which is
- * what a seller recognises the platform by. `region` disambiguates the three
- * Tes sites, which are one marketplace under three inventories and would
- * otherwise render as three identical rows. */
+ * what a seller recognises the platform by. */
 export interface PlatformName {
 	acronym: string;
 	full: string;
-	region: string | null;
 }
 
 /** A total map rather than a lookup with a fallback: the union is generated
  *  from the Rust enum, so an inventory added there stops this file
  *  type-checking instead of rendering as an unnamed platform. */
 export const PLATFORMS: Record<InventoryId, PlatformName> = {
-	TesGb: { acronym: 'TES', full: 'Tes.com', region: 'United Kingdom' },
-	TesUs: { acronym: 'TES', full: 'Tes.com', region: 'United States' },
-	TesNz: { acronym: 'TES', full: 'Tes.com', region: 'New Zealand' },
-	Tpt: { acronym: 'TPT', full: 'Teachers Pay Teachers', region: null },
-	Etsy: { acronym: 'Etsy', full: 'Etsy.com', region: null }
+	Tes: { acronym: 'TES', full: 'Tes.com' },
+	Tpt: { acronym: 'TPT', full: 'Teachers Pay Teachers' },
+	Etsy: { acronym: 'Etsy', full: 'Etsy.com' }
 };
 
 /** The shortest name that still tells one inventory from another.
  *
- * A total map rather than a derivation from `PLATFORMS`, because the three
- * Tes sites differ only by region and a derived short name would render them
- * identically on a strip whose whole job is telling them apart. */
+ * A total map rather than a derivation from `PLATFORMS`, because the acronym
+ * a full title leads with is not always the word a chip has room for. */
 export const SHORT_NAME: Record<InventoryId, string> = {
 	Tpt: 'TPT',
-	TesGb: 'TES GB',
-	TesUs: 'TES US',
-	TesNz: 'TES NZ',
+	Tes: 'TES',
 	Etsy: 'Etsy'
 };
 
 /** How a marketplace is named where the surface is per-marketplace rather
- *  than per-inventory: a device holds one login for Tes, not three. */
+ *  than per-inventory: a connection, a device login, an analytics scope. */
 export const MARKETPLACE_NAME: Record<Marketplace, string> = {
 	Tpt: 'TPT (Teachers Pay Teachers)',
 	Tes: 'TES (Tes.com)',
@@ -73,8 +65,7 @@ export function platformTitle(inventory: InventoryId): string {
 		return inventory;
 	}
 	const name = PLATFORMS[inventory];
-	const head = `${name.acronym} (${name.full})`;
-	return name.region === null ? head : `${head} · ${name.region}`;
+	return `${name.acronym} (${name.full})`;
 }
 
 /** Whether this client offers the inventory on the create form.
@@ -84,9 +75,7 @@ export function platformTitle(inventory: InventoryId): string {
  * than a claim about a write nobody has made. Offering it would let a seller
  * map a platform nothing can ever send to. */
 export const AUTHORABLE: Record<InventoryId, boolean> = {
-	TesGb: true,
-	TesUs: true,
-	TesNz: true,
+	Tes: true,
 	Tpt: true,
 	Etsy: false
 };
@@ -114,11 +103,9 @@ export const MARK_SRC: Record<Marketplace, string> = {
 
 /** One tile on the form's marketplace grid.
  *
- * Keyed by marketplace rather than by inventory, which is the founder's rule
- * of 2026-09-11: Tes runs three regional catalogues and the form shows one
- * Tes. Which of the three a listing reaches is the Tes panel's Curriculum
- * question, so the tile carries the inventories it stands for and the form
- * derives the request's list from the two answers together.
+ * One tile, one marketplace, one inventory: Tes is one marketplace with no
+ * regions (`decisions.md`, 2026-09-12), so ticking a tile is the whole answer
+ * to where a listing goes.
  *
  * `authorable` is false where no adapter exists, and the tile is still drawn:
  * a marketplace the console cannot write to is a thing a seller should be able
@@ -127,8 +114,8 @@ export interface MarketplaceTileEntry {
 	marketplace: Marketplace;
 	/** The full name, shown on hover and read out to a screen reader. */
 	name: string;
-	/** The inventories this one tile stands for, in offer order. */
-	inventories: readonly InventoryId[];
+	/** The inventory this tile publishes to. */
+	inventory: InventoryId;
 	authorable: boolean;
 }
 
@@ -137,45 +124,22 @@ export const MARKETPLACE_TILES: readonly MarketplaceTileEntry[] = [
 	{
 		marketplace: 'Tpt',
 		name: MARKETPLACE_NAME.Tpt,
-		inventories: ['Tpt'],
+		inventory: 'Tpt',
 		authorable: AUTHORABLE.Tpt
 	},
 	{
 		marketplace: 'Tes',
 		name: MARKETPLACE_NAME.Tes,
-		inventories: ['TesGb', 'TesUs', 'TesNz'],
-		authorable: AUTHORABLE.TesGb
+		inventory: 'Tes',
+		authorable: AUTHORABLE.Tes
 	},
 	{
 		marketplace: 'Etsy',
 		name: MARKETPLACE_NAME.Etsy,
-		inventories: ['Etsy'],
+		inventory: 'Etsy',
 		authorable: AUTHORABLE.Etsy
 	}
 ];
-
-/** Where on Tes a listing goes: the question Tes's own upload form asks, in
- *  the words it asks it in, against the inventory each answer publishes to. */
-export const TES_CURRICULA: readonly { inventory: InventoryId; label: string }[] = [
-	{ inventory: 'TesGb', label: 'England' },
-	{ inventory: 'TesUs', label: 'United States' },
-	{ inventory: 'TesNz', label: 'New Zealand' }
-];
-
-/** The two letters that tell the three Tes sites apart beside a mark, and
- *  nothing where the mark already identifies the marketplace on its own.
- *
- * A total map rather than a slice of `PLATFORMS[inventory].region`, because
- * the region there is the country written out and this is what fits beside a
- * 28px logo. Null exactly where that region is null, which is what
- * `platforms.test.ts` holds it to. */
-export const REGION_TAG: Record<InventoryId, string | null> = {
-	Tpt: null,
-	TesGb: 'GB',
-	TesUs: 'US',
-	TesNz: 'NZ',
-	Etsy: null
-};
 
 /** The id of one marketplace's card on the Marketplaces page.
  *

@@ -61,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?);
 
     let mut failed = false;
-    for (inventory, form_seed) in [(InventoryId::TesGb, 0x01u8), (InventoryId::TesUs, 0x02)] {
+    for (inventory, form_seed) in [(InventoryId::Tes, 0x01u8)] {
         let transport = ReqwestTransport::new(&session)?;
         let adapter = TesAdapter::new(inventory, transport, NoFiles)?;
         let verdict = probe(&adapter, &halts, FormId(Uuid([form_seed; 16])), now).await?;

@@ -752,13 +752,13 @@ async fn an_upload_without_an_idempotency_key_is_refused(pool: PgPool) {
 async fn a_bind_holds_one_row_and_moves_the_batch_to_attaching(pool: PgPool) {
     provision(&pool).await;
     let document = filled_sheet(
-        "TES GB",
+        "TES",
         &[
             &[(Cell::Title, "One"), (Cell::File, "one.pdf")],
             &[(Cell::Title, "Two"), (Cell::File, "two.pdf")],
         ],
     );
-    let uploaded: UploadedBatchView = upload(&pool, &TOKEN_A, KEY_A, "TES GB.csv", document)
+    let uploaded: UploadedBatchView = upload(&pool, &TOKEN_A, KEY_A, "TES.csv", document)
         .await
         .json();
     assert_eq!(
@@ -773,7 +773,7 @@ async fn a_bind_holds_one_row_and_moves_the_batch_to_attaching(pool: PgPool) {
     let answer = bind(
         &pool,
         &TOKEN_A,
-        &row_path(batch, "TES GB", 4),
+        &row_path(batch, "TES", 4),
         &payload,
         &cover,
     )
@@ -820,15 +820,12 @@ async fn a_bind_holds_one_row_and_moves_the_batch_to_attaching(pool: PgPool) {
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_second_bind_on_one_row_replaces_the_handle(pool: PgPool) {
     provision(&pool).await;
-    let document = filled_sheet(
-        "TES GB",
-        &[&[(Cell::Title, "One"), (Cell::File, "one.pdf")]],
-    );
-    let uploaded: UploadedBatchView = upload(&pool, &TOKEN_A, KEY_A, "TES GB.csv", document)
+    let document = filled_sheet("TES", &[&[(Cell::Title, "One"), (Cell::File, "one.pdf")]]);
+    let uploaded: UploadedBatchView = upload(&pool, &TOKEN_A, KEY_A, "TES.csv", document)
         .await
         .json();
     let batch = uploaded.detail.batch.id;
-    let path = row_path(batch, "TES GB", 4);
+    let path = row_path(batch, "TES", 4);
 
     let first = seal(&pool, ORG_A, 0x21).await;
     let second = seal(&pool, ORG_A, 0x22).await;
@@ -865,15 +862,12 @@ async fn a_second_bind_on_one_row_replaces_the_handle(pool: PgPool) {
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn an_unbind_returns_the_row_to_parsed_and_answers_twice(pool: PgPool) {
     provision(&pool).await;
-    let document = filled_sheet(
-        "TES GB",
-        &[&[(Cell::Title, "One"), (Cell::File, "one.pdf")]],
-    );
-    let uploaded: UploadedBatchView = upload(&pool, &TOKEN_A, KEY_A, "TES GB.csv", document)
+    let document = filled_sheet("TES", &[&[(Cell::Title, "One"), (Cell::File, "one.pdf")]]);
+    let uploaded: UploadedBatchView = upload(&pool, &TOKEN_A, KEY_A, "TES.csv", document)
         .await
         .json();
     let batch = uploaded.detail.batch.id;
-    let path = row_path(batch, "TES GB", 4);
+    let path = row_path(batch, "TES", 4);
     let payload = seal(&pool, ORG_A, 0x31).await;
     let cover = seal(&pool, ORG_A, 0x32).await;
     assert_eq!(
@@ -903,11 +897,8 @@ async fn an_unbind_returns_the_row_to_parsed_and_answers_twice(pool: PgPool) {
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_bind_naming_bytes_this_organisation_never_uploaded_is_refused(pool: PgPool) {
     provision(&pool).await;
-    let document = filled_sheet(
-        "TES GB",
-        &[&[(Cell::Title, "One"), (Cell::File, "one.pdf")]],
-    );
-    let uploaded: UploadedBatchView = upload(&pool, &TOKEN_A, KEY_A, "TES GB.csv", document)
+    let document = filled_sheet("TES", &[&[(Cell::Title, "One"), (Cell::File, "one.pdf")]]);
+    let uploaded: UploadedBatchView = upload(&pool, &TOKEN_A, KEY_A, "TES.csv", document)
         .await
         .json();
     let batch = uploaded.detail.batch.id;
@@ -922,7 +913,7 @@ async fn a_bind_naming_bytes_this_organisation_never_uploaded_is_refused(pool: P
     let answer = bind(
         &pool,
         &TOKEN_A,
-        &row_path(batch, "TES GB", 4),
+        &row_path(batch, "TES", 4),
         &fabricated,
         &cover,
     )
@@ -949,25 +940,15 @@ async fn a_bind_naming_bytes_this_organisation_never_uploaded_is_refused(pool: P
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_bind_naming_the_other_tenants_bytes_is_refused(pool: PgPool) {
     provision(&pool).await;
-    let document = filled_sheet(
-        "TES GB",
-        &[&[(Cell::Title, "One"), (Cell::File, "one.pdf")]],
-    );
-    let uploaded: UploadedBatchView = upload(&pool, &TOKEN_A, KEY_A, "TES GB.csv", document)
+    let document = filled_sheet("TES", &[&[(Cell::Title, "One"), (Cell::File, "one.pdf")]]);
+    let uploaded: UploadedBatchView = upload(&pool, &TOKEN_A, KEY_A, "TES.csv", document)
         .await
         .json();
     let batch = uploaded.detail.batch.id;
     let theirs = seal(&pool, ORG_B, 0x51).await;
     let mine = seal(&pool, ORG_A, 0x52).await;
 
-    let answer = bind(
-        &pool,
-        &TOKEN_A,
-        &row_path(batch, "TES GB", 4),
-        &theirs,
-        &mine,
-    )
-    .await;
+    let answer = bind(&pool, &TOKEN_A, &row_path(batch, "TES", 4), &theirs, &mine).await;
     assert_eq!(
         answer.status,
         StatusCode::UNPROCESSABLE_ENTITY,
@@ -985,15 +966,12 @@ async fn a_bind_naming_the_other_tenants_bytes_is_refused(pool: PgPool) {
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn neither_tenant_binds_or_unbinds_the_others_row(pool: PgPool) {
     provision(&pool).await;
-    let document = filled_sheet(
-        "TES GB",
-        &[&[(Cell::Title, "One"), (Cell::File, "one.pdf")]],
-    );
-    let theirs: UploadedBatchView = upload(&pool, &TOKEN_B, KEY_B, "TES GB.csv", document)
+    let document = filled_sheet("TES", &[&[(Cell::Title, "One"), (Cell::File, "one.pdf")]]);
+    let theirs: UploadedBatchView = upload(&pool, &TOKEN_B, KEY_B, "TES.csv", document)
         .await
         .json();
     let batch = theirs.detail.batch.id;
-    let path = row_path(batch, "TES GB", 4);
+    let path = row_path(batch, "TES", 4);
     let payload = seal(&pool, ORG_A, 0x61).await;
     let cover = seal(&pool, ORG_A, 0x62).await;
 
@@ -1020,14 +998,14 @@ async fn neither_tenant_binds_or_unbinds_the_others_row(pool: PgPool) {
 async fn a_row_the_parse_refused_takes_no_file(pool: PgPool) {
     provision(&pool).await;
     let document = filled_sheet(
-        "TES GB",
+        "TES",
         &[
             &[(Cell::Title, "One"), (Cell::File, "one.pdf")],
             // No title, which the parse refuses by name.
             &[(Cell::Title, ""), (Cell::File, "two.pdf")],
         ],
     );
-    let uploaded: UploadedBatchView = upload(&pool, &TOKEN_A, KEY_A, "TES GB.csv", document)
+    let uploaded: UploadedBatchView = upload(&pool, &TOKEN_A, KEY_A, "TES.csv", document)
         .await
         .json();
     assert_eq!(
@@ -1042,7 +1020,7 @@ async fn a_row_the_parse_refused_takes_no_file(pool: PgPool) {
     let answer = bind(
         &pool,
         &TOKEN_A,
-        &row_path(batch, "TES GB", 5),
+        &row_path(batch, "TES", 5),
         &payload,
         &cover,
     )
@@ -1059,15 +1037,12 @@ async fn a_row_the_parse_refused_takes_no_file(pool: PgPool) {
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_settled_batch_takes_no_more_files(pool: PgPool) {
     provision(&pool).await;
-    let document = filled_sheet(
-        "TES GB",
-        &[&[(Cell::Title, "One"), (Cell::File, "one.pdf")]],
-    );
-    let uploaded: UploadedBatchView = upload(&pool, &TOKEN_A, KEY_A, "TES GB.csv", document)
+    let document = filled_sheet("TES", &[&[(Cell::Title, "One"), (Cell::File, "one.pdf")]]);
+    let uploaded: UploadedBatchView = upload(&pool, &TOKEN_A, KEY_A, "TES.csv", document)
         .await
         .json();
     let batch = uploaded.detail.batch.id;
-    let path = row_path(batch, "TES GB", 4);
+    let path = row_path(batch, "TES", 4);
     assert_eq!(
         call(
             &pool,
@@ -1264,13 +1239,13 @@ async fn report(pool: &PgPool, token: &SessionToken, batch: Uuid) -> ImportBatch
 async fn a_commit_is_refused_while_a_marketplace_row_holds_no_file(pool: PgPool) {
     provision(&pool).await;
     let document = filled_sheet(
-        "TES GB",
+        "TES",
         &[
             &[(Cell::Title, "One"), (Cell::File, "one.pdf")],
             &[(Cell::Title, "Two"), (Cell::File, "two.pdf")],
         ],
     );
-    let uploaded: UploadedBatchView = upload(&pool, &TOKEN_A, KEY_A, "TES GB.csv", document)
+    let uploaded: UploadedBatchView = upload(&pool, &TOKEN_A, KEY_A, "TES.csv", document)
         .await
         .json();
     assert_eq!(uploaded.detail.batch.failed_count, 0, "both rows parse");
@@ -1282,7 +1257,7 @@ async fn a_commit_is_refused_while_a_marketplace_row_holds_no_file(pool: PgPool)
         bind(
             &pool,
             &TOKEN_A,
-            &row_path(batch, "TES GB", 4),
+            &row_path(batch, "TES", 4),
             &payload,
             &cover
         )
@@ -1306,7 +1281,7 @@ async fn a_commit_is_refused_while_a_marketplace_row_holds_no_file(pool: PgPool)
     );
     assert_eq!(
         detail.get("rows"),
-        Some(&serde_json::json!([{ "sheet": "TES GB", "ordinal": 5 }])),
+        Some(&serde_json::json!([{ "sheet": "TES", "ordinal": 5 }])),
         "and names it, so the panel can point at the row rather than the report"
     );
     assert_eq!(
@@ -1335,7 +1310,7 @@ async fn a_commit_creates_one_resource_per_passing_row_with_its_labels(pool: PgP
     let root = store_root("commit");
     let sealing = sealing(pool.clone(), &root);
     let document = filled_sheet(
-        "TES GB",
+        "TES",
         &[
             &[
                 (Cell::Status, "live"),
@@ -1347,7 +1322,7 @@ async fn a_commit_creates_one_resource_per_passing_row_with_its_labels(pool: PgP
             &[(Cell::Title, ""), (Cell::File, "two.pdf")],
         ],
     );
-    let uploaded: UploadedBatchView = upload(&pool, &TOKEN_A, KEY_A, "TES GB.csv", document)
+    let uploaded: UploadedBatchView = upload(&pool, &TOKEN_A, KEY_A, "TES.csv", document)
         .await
         .json();
     assert_eq!(
@@ -1369,7 +1344,7 @@ async fn a_commit_creates_one_resource_per_passing_row_with_its_labels(pool: PgP
         bind(
             &pool,
             &TOKEN_A,
-            &row_path(batch, "TES GB", 4),
+            &row_path(batch, "TES", 4),
             payload,
             &bytes.cover
         )
@@ -1804,13 +1779,13 @@ async fn a_pass_killed_after_the_product_insert_is_completed_rather_than_settled
     let root = store_root("resume-trailing");
     let sealing = sealing(pool.clone(), &root);
     let document = filled_sheet(
-        "TES GB",
+        "TES",
         &[
             &[(Cell::Title, "Control"), (Cell::File, "one.pdf")],
             &[(Cell::Title, "Stranded"), (Cell::File, "one.pdf")],
         ],
     );
-    let uploaded: UploadedBatchView = upload(&pool, &TOKEN_A, KEY_A, "TES GB.csv", document)
+    let uploaded: UploadedBatchView = upload(&pool, &TOKEN_A, KEY_A, "TES.csv", document)
         .await
         .json();
     assert_eq!(
@@ -1829,7 +1804,7 @@ async fn a_pass_killed_after_the_product_insert_is_completed_rather_than_settled
             bind(
                 &pool,
                 &TOKEN_A,
-                &row_path(batch, "TES GB", ordinal),
+                &row_path(batch, "TES", ordinal),
                 payload,
                 &bytes.cover
             )
@@ -1847,7 +1822,7 @@ async fn a_pass_killed_after_the_product_insert_is_completed_rather_than_settled
         &pool,
         batch,
         RowAddress {
-            sheet: "TES GB",
+            sheet: "TES",
             ordinal: 5,
         },
         product,

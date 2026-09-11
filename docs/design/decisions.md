@@ -795,3 +795,42 @@ The founder's feedback of 2026-09-11 found the console's copy written for develo
 Every sentence on the new-resource form and on the other pages is rewritten to one rule: say what to do, in a short sentence, and never explain why a rule exists unless the teacher has to act on it.
 "Shelf" is "category"; "Localisation" is spelled "Localization" on screen; the sidebar reads Import, Crosslist and Automations in the founder's words; marketplaces are chosen from icon tiles at the top of the form, with each marketplace's own requirements grouped under a panel headed "TPT only" or "Tes only"; the errors are buttons that take the teacher to the section; and the button says "Create listing".
 The sentences that carried a decision number as their justification (D6, D7, D8, D32) keep the behaviour those decisions fixed; only the explanation leaves the screen and stays in this record.
+
+## Tes is one marketplace with no regions, 2026-09-12
+
+On all measured evidence a Tes region is a site, not a catalogue: one author account, one upload flow, one JSON API, one resource list, one price integer per resource with the currency fixed by the account, and one taxonomy tree served per country under a mechanical id prefix (probes 04 and 10).
+The three inventories `TesGb`, `TesUs` and `TesNz` were a modelling choice taken before probe 04 and kept for currency, the age field, the taxonomy prefix and the GB-to-NZ duplication, none of which is a catalogue; two live defects followed from them, a Curriculum control that wrote nothing to Tes and non-GB listings created with no age data.
+The founder decided on 2026-09-12 that Tes is one marketplace everywhere: `TesGb` becomes `Tes` (keeping idempotency tag 0), `TesUs` and `TesNz` are deleted, every Tes price is GBP, the age field is `ageRanges`, the taxonomy is the GB tree, and the country becomes a field on the Tes connection defaulted to GB so a second market is a data change and never a re-forked enum.
+The data migration refuses to run where an organisation holds one product on two Tes inventories, because that is a seller to speak to rather than a row to drop.
+This supersedes "Wedge, settled 2026-08-25", "Wedge reorientation, 2026-08-25", "The NZ currency, fixed to GBP by observation, 2026-08-28" and the model half of "The form shows one Tes, 2026-09-11"; the Tes GB-to-NZ duplication is deleted, and it was never reachable from the console.
+The GB-to-NZ crosswalk engine and its tests go with it.
+
+## Plans, capabilities and the pricing re-evaluation, 2026-09-12
+
+Every price the founder set on 2026-09-11 stands, and the research of 2026-09-12 (`../notes/design/research/2026-09-12-pricing-and-tiers.md`) adds three things the founder adopted: import is included in the subscription, because all eight comparable crosslisters bundle it and charging at activation taxes the step that makes the product useful; the Catalogue Import ladder gains $397 up to 500 resources and a conversation above that, because the measured dual-lister holds about 764 listings; and the ladder counts resources committed to the catalogue after duplicate merges, and says so.
+The Founding 100's ongoing 20 percent discount is capped at three years.
+`org.plan` is the closed set `free`, `subscriber`, `migration_only`, with `studio` reserved and unsold until a fifth of subscribers exceed 300 resources or hit the migration cap twice in a quarter.
+Every feature is gated by one `Capabilities` struct computed per request from the plan and the organisation's grants, carried on `OrgContext`, mirrored into the device entitlement token and read by the pricing page, the Account page and every disabled control, so no two surfaces can disagree about what a plan holds.
+A `migration_only` buyer reaches Import, Migrations, Export and Account; export is never gated on any plan.
+An operator can grant or revoke any plan or rung on any organisation with a reason, an optional expiry and an audit row.
+
+## AI is bundled, proposal-only, and coming soon, 2026-09-12
+
+The charter allows models in listing-copy generation and selector rediscovery and forbids agent-driven sync, so every AI feature is a proposal a seller approves and never a marketplace write.
+The first feature is auto-fill from the seller's own file: the device extracts a bounded fact sheet and the file never leaves it; deterministic facts pre-fill with a verification mark, explicit evidence pre-fills once its measured precision passes 98 percent on the founder's own evaluation set, everything else is a suggestion with its reason or is left blank; and a Rust validator blocks any numeric claim, vocabulary id or length the fact sheet cannot support, as D-M4 required.
+Packaging follows the market: bundled in the subscription with a fair-use cap of 200 fills a month and a $5 add-on for 100 more, no credit currency.
+Until it is built the pricing page and the form say "coming soon" and promise no accuracy figure, no marketplace write and no date.
+The ranked roadmap after it is `../notes/design/research/2026-09-12-ai-roadmap.md`.
+
+## No telemetry collector yet, 2026-09-12
+
+The operational charter's day-one rule stands: no product-analytics collector.
+The backoffice answers from its own Postgres reads (signups, sessions, plan changes, failures); a self-hosted collector is revisited at a hundred sellers.
+
+## Collections are references beside labels, 2026-09-12
+
+Collections ship as a plain many-to-many beside labels: a membership is a reference and never a copy, so the one-resource-per-product rule, enforced by `mapping_one_per_inventory`, is untouched by a resource sitting in several collections.
+No per-marketplace state ever lives on a collection; overrides stay on `mapping` and in templates.
+Bulk verbs resolve the distinct union, preview per resource, freeze the resolved ids into the operation and enqueue idempotently on organisation, product, marketplace and intent; publish, apply-template-or-labels and export ship first, delist waits.
+Manual only, no rules; deleting a collection deactivates nothing; a bundle is a product and a separate change.
+Full reasoning: `../notes/design/research/2026-09-12-dedup-and-collections.md`.

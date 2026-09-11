@@ -30,6 +30,12 @@ pub struct ConnectionRow {
     /// one place that reads the row, so no caller can render the link state
     /// as though it were a health check.
     pub status: ConnectionStatus,
+    /// The market this connection authors into, ISO 3166-1 alpha-2, defaulted
+    /// to `GB`. Read for Tes, where it selects the taxonomy tree and the age
+    /// vocabulary, and ignored elsewhere. A column rather than an inventory
+    /// variant, so a seller on a second Tes market is a data change
+    /// (`docs/design/decisions.md`, 2026-09-12).
+    pub country: String,
 }
 
 pub struct ConnectionRepo {
@@ -55,7 +61,7 @@ impl ConnectionRepo {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let rows = sqlx::query!(
-            "SELECT id, marketplace, state, created_at, updated_at, \
+            "SELECT id, marketplace, state, country, created_at, updated_at, \
                     session_verified_at, session_refresh_after, refresh_failures \
              FROM connection WHERE org_id = $1 ORDER BY marketplace",
             uuid_to_db(org.0),
@@ -86,6 +92,7 @@ impl ConnectionRepo {
                     created_at: timestamp_from_db(row.created_at),
                     updated_at: timestamp_from_db(row.updated_at),
                     status,
+                    country: row.country,
                 })
             })
             .collect()

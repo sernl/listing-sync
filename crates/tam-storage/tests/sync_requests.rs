@@ -24,8 +24,8 @@ const T0: Timestamp = Timestamp(1_000);
 fn request_for(id: Uuid, locators: &[&str]) -> NewSyncRequest {
     NewSyncRequest {
         id,
-        source: InventoryId::TesGb,
-        target: InventoryId::TesNz,
+        source: InventoryId::Tes,
+        target: InventoryId::Tpt,
         disposition: Disposition::Sync,
         intent: SyncIntent::Draft,
         requested_at: T0,
@@ -204,7 +204,7 @@ async fn the_cross_tenant_role_can_never_write_a_sync_request(pool: PgPool) {
     let inserted = sqlx::query(
         "INSERT INTO sync_request \
          (org_id, id, source, target, disposition, intent, state, requested_at) \
-         VALUES ($1, $2, 'tes_gb', 'tes_nz', 'sync', 'draft', 'pending', now())",
+         VALUES ($1, $2, 'tes', 'tpt', 'sync', 'draft', 'pending', now())",
     )
     .bind(org)
     .bind(uuid::Uuid::from_bytes([0x72; 16]))

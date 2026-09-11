@@ -80,12 +80,12 @@ describe('the projection preview', () => {
 	});
 
 	it('states no loss where nothing is measured, rather than implying none exists', () => {
-		const rows = core.projectPreview({ name: 'Fractions', free: true }, 'TesGb').rows;
+		const rows = core.projectPreview({ name: 'Fractions', free: true }, 'Tes').rows;
 		expect(rows.every((row) => row.cap === null && row.loss === null)).toBe(true);
 	});
 
 	it('names the axes it does not decide, because their relation lives in Postgres', () => {
-		expect(core.projectPreview({ free: true }, 'TesGb').undecided_axes).toContain('subject');
+		expect(core.projectPreview({ free: true }, 'Tes').undecided_axes).toContain('subject');
 	});
 });
 

@@ -21,7 +21,7 @@ describe('the connection status chip', () => {
 
 	it('says what each one means without asking for action where none is due', () => {
 		expect(present('checking').explanation).toMatch(/nothing for you to do/i);
-		expect(present('unstable').explanation).toMatch(/not known to be the fix/i);
-		expect(present('disconnected').explanation).toMatch(/re-link/i);
+		expect(present('unstable').explanation).toMatch(/may not be the fix/i);
+		expect(present('disconnected').explanation).toMatch(/sign in again/i);
 	});
 });

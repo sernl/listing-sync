@@ -237,9 +237,7 @@ fn arb_lifecycle() -> impl Strategy<Value = RemoteLifecycle> {
 
 fn arb_inventory() -> impl Strategy<Value = InventoryId> {
     prop_oneof![
-        Just(InventoryId::TesGb),
-        Just(InventoryId::TesUs),
-        Just(InventoryId::TesNz),
+        Just(InventoryId::Tes),
         Just(InventoryId::Etsy),
         Just(InventoryId::Tpt),
     ]
@@ -351,7 +349,7 @@ async fn a_bound_row_without_a_remote_id_is_refused(pool: PgPool) {
           policy_title, policy_description, policy_price, policy_taxonomy, \
           policy_grades, policy_files, price_rule_kind, price_explicit_kind, \
           publish_mode, lifecycle_state, created_at, updated_at) \
-         VALUES ($1, $2, $3, 'tes_gb', 'tes', 'bound', now(), 'stale', now(), 0, \
+         VALUES ($1, $2, $3, 'tes', 'tes', 'bound', now(), 'stale', now(), 0, \
                  'managed', 'managed', 'managed', 'managed', 'managed', 'managed', \
                  'explicit', 'free', 'publish', 'absent', now(), now())",
     )
@@ -388,7 +386,7 @@ async fn a_mismatch_claim_without_a_named_field_cannot_commit(pool: PgPool) {
           normaliser_version, policy_title, policy_description, policy_price, \
           policy_taxonomy, policy_grades, policy_files, price_rule_kind, \
           price_explicit_kind, publish_mode, lifecycle_state, created_at, updated_at) \
-         VALUES ($1, $2, $3, 'tes_gb', 'tes', 'bound', 'tes', 'https://example', \
+         VALUES ($1, $2, $3, 'tes', 'tes', 'bound', 'tes', 'https://example', \
                  now(), 'mismatched', now(), 0, 'managed', 'managed', 'managed', \
                  'managed', 'managed', 'managed', 'explicit', 'free', 'publish', \
                  'absent', now(), now())",

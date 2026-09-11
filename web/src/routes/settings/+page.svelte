@@ -44,6 +44,7 @@
 	import Toggle from '$lib/Toggle.svelte';
 	import { toast } from '$lib/toast';
 	import { NOT_REMOVED, avatarRefusal, pictureRefusal } from '$lib/pages/account/avatar';
+	import Preferences from '$lib/pages/account/Preferences.svelte';
 	import { STORAGE_NOT_RECLAIMED } from '$lib/pages/resources/files';
 	import '$lib/pages/account/account.css';
 
@@ -822,4 +823,6 @@
 			{/if}
 		</p>
 	</Panel>
+
+	<Preferences />
 </div>

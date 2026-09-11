@@ -92,7 +92,7 @@ async fn an_edit_replaces_what_it_names_and_leaves_what_it_does_not(pool: PgPool
             price: Some(paid),
             rights: Some(RightsDeclaration::Declared {
                 source: VocabularyPath {
-                    vocabulary: VocabularyId(InventoryId::TesGb, TermKind::Licence),
+                    vocabulary: VocabularyId(InventoryId::Tes, TermKind::Licence),
                     segments: vec!["CC-BY".to_owned()],
                     native_id: Some("CC-BY".to_owned()),
                 },
@@ -225,12 +225,12 @@ async fn an_answer_authored_on_the_form_precedes_every_mapping(pool: PgPool) {
     let elections = ElectionRepo::new(pool.clone());
     let answered = AnsweredElection {
         product: PRODUCT_A,
-        inventory: InventoryId::TesGb,
+        inventory: InventoryId::Tes,
         axis: TermKind::Licence,
         trigger_kind: ElectionTriggerKind::Supply,
         trigger_key: Some("free"),
         paths: &[VocabularyPath {
-            vocabulary: VocabularyId(InventoryId::TesGb, TermKind::Licence),
+            vocabulary: VocabularyId(InventoryId::Tes, TermKind::Licence),
             segments: vec!["CC-BY".to_owned()],
             native_id: Some("CC-BY".to_owned()),
         }],
@@ -279,7 +279,7 @@ async fn a_trigger_key_that_contradicts_its_kind_is_refused_before_the_check_fir
         .await
         .expect("the product inserts");
     let path = VocabularyPath {
-        vocabulary: VocabularyId(InventoryId::TesGb, TermKind::Licence),
+        vocabulary: VocabularyId(InventoryId::Tes, TermKind::Licence),
         segments: vec!["CC-BY".to_owned()],
         native_id: None,
     };
@@ -288,7 +288,7 @@ async fn a_trigger_key_that_contradicts_its_kind_is_refused_before_the_check_fir
             ORG_A,
             &AnsweredElection {
                 product: PRODUCT_A,
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 axis: TermKind::Licence,
                 trigger_kind: ElectionTriggerKind::Supply,
                 // A supply keys on the pricing branch; the sentinel belongs to
@@ -309,7 +309,7 @@ async fn a_trigger_key_that_contradicts_its_kind_is_refused_before_the_check_fir
             ORG_A,
             &AnsweredElection {
                 product: PRODUCT_A,
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 axis: TermKind::Licence,
                 trigger_kind: ElectionTriggerKind::Supply,
                 trigger_key: Some("free"),

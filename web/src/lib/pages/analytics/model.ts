@@ -36,9 +36,9 @@ export type ScopeId = 'all' | 'tes' | 'tpt';
  * were separate maps nothing stopped them disagreeing and putting two totals
  * for one thing on one screen. */
 const COVERAGE: Record<ScopeId, Record<InventoryId, boolean>> = {
-	all: { Tpt: true, TesGb: true, TesUs: true, TesNz: true, Etsy: true },
+	all: { Tpt: true, Tes: true, Etsy: true },
 	tes: IS_TES,
-	tpt: { Tpt: true, TesGb: false, TesUs: false, TesNz: false, Etsy: false }
+	tpt: { Tpt: true, Tes: false, Etsy: false }
 };
 
 export function covers(scope: ScopeId, inventory: InventoryId): boolean {
@@ -57,7 +57,7 @@ export interface Scope {
 
 export const SCOPES: readonly Scope[] = [
 	{ id: 'all', label: 'All', hint: 'Every marketplace your resources are set up for.', mark: null },
-	{ id: 'tes', label: 'TES', hint: 'Your listings on TES, across all three sites.', mark: 'Tes' },
+	{ id: 'tes', label: 'TES', hint: 'Your listings on TES.', mark: 'Tes' },
 	{ id: 'tpt', label: 'TPT', hint: 'Your listings on Teachers Pay Teachers.', mark: 'Tpt' }
 ];
 
@@ -86,9 +86,7 @@ export function asScope(id: string): ScopeId {
  * only one of them is worth waiting through. */
 export const REPORTS_FIGURES: Record<InventoryId, boolean> = {
 	Tpt: true,
-	TesGb: false,
-	TesUs: false,
-	TesNz: false,
+	Tes: false,
 	Etsy: false
 };
 
@@ -105,7 +103,7 @@ export function silentIn(scope: ScopeId): string[] {
 	const named = new Set<string>();
 	for (const inventory of INVENTORY_ORDER) {
 		if (covers(scope, inventory) && !REPORTS_FIGURES[inventory]) {
-			named.add(SHORT_NAME[inventory].split(' ')[0]);
+			named.add(SHORT_NAME[inventory]);
 		}
 	}
 	return [...named];

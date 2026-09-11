@@ -852,7 +852,7 @@ mod tests {
     #[test]
     fn a_fully_populated_imported_listing_round_trips() {
         let term = |kind: Option<TermKind>, native: &str| ImportedTerm {
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
             kind,
             segments: vec!["Mathematics".to_owned(), native.to_owned()],
             native_id: Some(native.to_owned()),

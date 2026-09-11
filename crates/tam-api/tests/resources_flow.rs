@@ -119,7 +119,7 @@ async fn provision(pool: &PgPool) {
                 id: MAPPING,
                 org: ORG,
                 product: PRODUCT,
-                inventory: InventoryId::TesNz,
+                inventory: InventoryId::Tes,
                 binding: Binding::Unbound,
                 policies: FieldPolicies {
                     title: FieldPolicy::Managed,
@@ -447,7 +447,7 @@ async fn the_drain_workflow_runs_entirely_through_the_api(pool: PgPool) {
             ORG,
             RaiseScope {
                 mapping: MAPPING,
-                target: InventoryId::TesNz,
+                target: InventoryId::Tes,
                 at: Timestamp(2_000),
             },
             &[(TERM, TermKind::Topic), (TERM_2, TermKind::Topic)],
@@ -544,7 +544,7 @@ async fn the_drain_workflow_runs_entirely_through_the_api(pool: PgPool) {
     );
 
     let edges = taxonomy
-        .edges_into(VocabularyId(InventoryId::TesNz, TermKind::Topic))
+        .edges_into(VocabularyId(InventoryId::Tes, TermKind::Topic))
         .await
         .expect("the edges load");
     assert_eq!(
@@ -562,7 +562,7 @@ async fn the_drain_workflow_runs_entirely_through_the_api(pool: PgPool) {
 async fn the_decision_surface_shows_the_loss_recorded_against_the_mapping(pool: PgPool) {
     provision(&pool).await;
     let grant = VocabularyPath {
-        vocabulary: VocabularyId(InventoryId::TesGb, TermKind::Licence),
+        vocabulary: VocabularyId(InventoryId::Tes, TermKind::Licence),
         segments: vec!["CC-BY".to_owned()],
         native_id: Some("CC-BY".to_owned()),
     };
@@ -572,7 +572,7 @@ async fn the_decision_surface_shows_the_loss_recorded_against_the_mapping(pool: 
             MAPPING,
             &[Election {
                 product: PRODUCT,
-                inventory: InventoryId::TesNz,
+                inventory: InventoryId::Tes,
                 axis: TermKind::Licence,
                 trigger: ElectionTrigger::Supply {
                     pricing: PricingBranch::Free,
@@ -760,13 +760,13 @@ async fn ticking_best_fit_delegates_every_axis_but_the_licence_and_the_untick_ta
             &[
                 Election {
                     product: PRODUCT,
-                    inventory: InventoryId::TesGb,
+                    inventory: InventoryId::Tes,
                     axis: TermKind::ResourceType,
                     trigger: ElectionTrigger::ElectOne { from: Vec::new() },
                 },
                 Election {
                     product: PRODUCT,
-                    inventory: InventoryId::TesGb,
+                    inventory: InventoryId::Tes,
                     axis: TermKind::Licence,
                     trigger: ElectionTrigger::Supply {
                         pricing: PricingBranch::Free,
@@ -811,7 +811,7 @@ async fn ticking_best_fit_delegates_every_axis_but_the_licence_and_the_untick_ta
         Config::default(),
         Method::PUT,
         "/v1/elections/delegation",
-        Some(serde_json::json!({ "inventory": "TesGb", "delegated": true })),
+        Some(serde_json::json!({ "inventory": "Tes", "delegated": true })),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -819,7 +819,7 @@ async fn ticking_best_fit_delegates_every_axis_but_the_licence_and_the_untick_ta
     let tes: Vec<(TermKind, bool)> = view
         .items
         .iter()
-        .filter(|item| item.inventory == InventoryId::TesGb)
+        .filter(|item| item.inventory == InventoryId::Tes)
         .map(|item| (item.axis, item.delegated))
         .collect();
     assert_eq!(
@@ -857,7 +857,7 @@ async fn ticking_best_fit_delegates_every_axis_but_the_licence_and_the_untick_ta
         Config::default(),
         Method::PUT,
         "/v1/elections/delegation",
-        Some(serde_json::json!({ "inventory": "TesGb", "delegated": false })),
+        Some(serde_json::json!({ "inventory": "Tes", "delegated": false })),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -892,7 +892,7 @@ async fn the_decision_surface_answers_for_one_resource_on_one_marketplace(pool: 
             MAPPING,
             &[Election {
                 product: PRODUCT,
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 axis: TermKind::Licence,
                 trigger: ElectionTrigger::Supply {
                     pricing: PricingBranch::Free,
@@ -909,7 +909,7 @@ async fn the_decision_surface_answers_for_one_resource_on_one_marketplace(pool: 
         Config::default(),
         Method::GET,
         &format!(
-            "/v1/elections/items?product={}&inventory=TesGb",
+            "/v1/elections/items?product={}&inventory=Tes",
             PRODUCT.0.to_hyphenated()
         ),
         None,

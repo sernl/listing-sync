@@ -37,16 +37,16 @@ describe('the marketplace of an inventory', () => {
 describe("a row's platform badges", () => {
 	it('are the inventories the product is mapped onto, in a fixed order', () => {
 		const badges = badgesFor([
-			mapping('TesNz', 'bound', 'live'),
+			mapping('Tes', 'bound', 'live'),
 			mapping('Tpt', 'unbound', 'absent')
 		]);
-		expect(badges.map((badge) => badge.inventory)).toEqual(['Tpt', 'TesNz']);
+		expect(badges.map((badge) => badge.inventory)).toEqual(['Tpt', 'Tes']);
 	});
 
 	it('mark live only what the marketplace was last recorded as showing', () => {
 		const badges = badgesFor([
 			mapping('Tpt', 'bound', 'live'),
-			mapping('TesGb', 'bound', 'draft')
+			mapping('Tes', 'bound', 'draft')
 		]);
 		expect(badges.map((badge) => badge.live)).toEqual([true, false]);
 	});
@@ -67,14 +67,14 @@ describe("a row's status", () => {
 	});
 
 	it('is live only when every mapping is', () => {
-		expect(rowStatus([mapping('Tpt', 'bound', 'live'), mapping('TesGb', 'bound', 'live')])).toEqual(
+		expect(rowStatus([mapping('Tpt', 'bound', 'live'), mapping('Tes', 'bound', 'live')])).toEqual(
 			{ label: 'Live', tone: 'ok' }
 		);
 	});
 
 	it('says how many marketplaces carry it when not all do', () => {
 		expect(
-			rowStatus([mapping('Tpt', 'bound', 'live'), mapping('TesGb', 'unbound', 'absent')])
+			rowStatus([mapping('Tpt', 'bound', 'live'), mapping('Tes', 'unbound', 'absent')])
 		).toEqual({ label: 'Live on 1 of 2', tone: 'ok' });
 	});
 
@@ -133,8 +133,8 @@ describe("a product's captured figures", () => {
 
 	const mappings: MappingHead[] = [
 		{ ...mapping('Tpt', 'bound', 'live'), id: 'm1', product: 'p1' },
-		{ ...mapping('TesGb', 'bound', 'live'), id: 'm2', product: 'p1' },
-		{ ...mapping('TesNz', 'bound', 'live'), id: 'm3', product: 'p2' }
+		{ ...mapping('Tes', 'bound', 'live'), id: 'm2', product: 'p1' },
+		{ ...mapping('Etsy', 'bound', 'live'), id: 'm3', product: 'p2' }
 	];
 
 	it('sum across the mappings that carry one, aged by the oldest', () => {

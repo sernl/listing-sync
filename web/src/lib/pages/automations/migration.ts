@@ -34,8 +34,8 @@ export function pillTone(tone: StageTone): RowTone {
 export interface MigrationRow {
 	request: string;
 	href: string;
-	/** Which shop went where, named in full: three Tes sites differ only by
-	 *  region, and a short name would render them identically. */
+	/** Which shop went where, named in full rather than by acronym: the row
+	 *  stands on its own in a list and the short name is not a sentence. */
 	source: InventoryId;
 	target: InventoryId;
 	meta: string;
@@ -135,9 +135,8 @@ export interface OpenMigration {
 /** The migration already under way from this shop, or null where there is
  *  none.
  *
- * Matched on the inventory rather than on the marketplace, because the three
- * Tes sites are three shops and migrating the New Zealand one while the
- * British one is still reading is a second intent, not a duplicate.
+ * Matched on the inventory rather than on the marketplace, so the guard is
+ * stated in the same terms the request carries.
  *
  * The newest is answered where somehow more than one is open, since that is
  * the one the seller most recently meant. */
@@ -162,42 +161,6 @@ export function openFromSource(
 }
 
 export const ALREADY_RUNNING_TITLE = 'This shop is already being migrated';
-
-/** The source a hand-over named, or null.
- *
- * Checked against the sites this page actually offers rather than cast, so a
- * link carrying a marketplace the seller has no connection for, or a value
- * that is not an inventory at all, preselects nothing instead of putting an
- * option in the field that cannot be submitted. */
-export function sourceFromQuery(
-	value: string | null,
-	offered: readonly InventoryId[]
-): InventoryId | null {
-	return offered.find((site) => site === value) ?? null;
-}
-
-/** Which shop the From field names, from the three things that can decide it.
- *
- * The seller's own pick wins, then a hand-over from another screen, then the
- * first site the connection offers — which is what this page selected before
- * any of the seeding existed, so an unusable seed lands exactly where a seller
- * arriving with no link at all lands, rather than on an empty field.
- *
- * `offered` is the caller's `sourcesOn(marketplace)`, so validation is against
- * the sites this seller can actually migrate from and not merely against the
- * three the console knows: a link naming the New Zealand site reaching a
- * seller connected only to the British one seeds nothing and falls back.
- *
- * Composed here rather than in the template, because the precedence and the
- * fallback are the whole of the behaviour and a chain of `??` in a derived
- * expression is the one part of it nothing can test. */
-export function seededSource(
-	chosen: InventoryId | null,
-	seed: string | null,
-	offered: readonly InventoryId[]
-): InventoryId | null {
-	return chosen ?? sourceFromQuery(seed, offered) ?? offered[0] ?? null;
-}
 
 /** What a migration does, said once and before anything is chosen.
  *

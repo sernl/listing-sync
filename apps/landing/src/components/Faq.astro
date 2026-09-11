@@ -1,5 +1,5 @@
 ---
-import { founding, importLadder } from '../pricing.js';
+import { founding, pricedRungs, rungCap, rungPrice, subscription } from '../pricing.js';
 
 /* Every figure in an answer comes from `src/pricing.js`, so the price list and
    the questions about it cannot disagree. */
@@ -23,11 +23,19 @@ const faqs = [
 	},
 	{
 		q: 'What does a catalogue import include?',
-		a: `We bring your existing resources into Teachouse for you, at the one-off price of the band you pick, from ${importLadder[0].price} for ${importLadder[0].cap.toLowerCase()} resources to ${importLadder[importLadder.length - 1].price} for ${importLadder[importLadder.length - 1].cap.toLowerCase()}. You look over every listing we created before anything is published.`
+		a: `We bring your existing resources into Teachouse for you, at the one-off price of the band you pick, from ${rungPrice(pricedRungs[0])} for ${rungCap(pricedRungs[0]).toLowerCase()} resources to ${rungPrice(pricedRungs[pricedRungs.length - 1])} for ${rungCap(pricedRungs[pricedRungs.length - 1]).toLowerCase()}, and a conversation above that. A resource you sell in two places is counted once, after we merge the duplicates. You look over every listing we created before anything is published.`
+	},
+	{
+		q: 'Do I pay for import?',
+		a: 'Not on the subscription: bringing your catalogue in is part of it. The one-off price is for a seller who wants their catalogue brought across without subscribing.'
+	},
+	{
+		q: 'What does AI fill do?',
+		a: `It reads the file you are listing and fills the form in from it, for you to check and change before anything is saved. It never writes to a marketplace on its own. It is coming soon, ${subscription.ai.includedFills} fills a month are part of the subscription, and we are not putting a date on it.`
 	},
 	{
 		q: 'What is the Founding 100?',
-		a: `The first ${founding.places} teachers to join: ${founding.discountYearOne}% off your first year, ${founding.discountOngoing}% off after that, and your first ${founding.freeImports} resources imported free. When the ${founding.places} places are taken, the offer closes.`
+		a: `The first ${founding.places} teachers to join: ${founding.discountYearOne}% off your first year, ${founding.discountOngoing}% off for the ${founding.ongoingYears} years after that, and your first ${founding.freeImports} resources imported free. When the ${founding.places} places are taken, the offer closes.`
 	},
 	{
 		q: 'Can I pay monthly?',

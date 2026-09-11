@@ -218,10 +218,7 @@ async fn another_marketplace_on_the_same_product_is_a_second_mapping(pool: PgPoo
         .expect("the product inserts");
 
     let repo = MappingRepo::new(pool.clone());
-    for (inventory, id) in [
-        (InventoryId::Tpt, MAPPING_1),
-        (InventoryId::TesGb, MAPPING_2),
-    ] {
+    for (inventory, id) in [(InventoryId::Tpt, MAPPING_1), (InventoryId::Tes, MAPPING_2)] {
         assert_eq!(
             repo.add(ORG_A, &unbound(ORG_A, PRODUCT_1, inventory, id), 0, NOW)
                 .await
@@ -314,7 +311,7 @@ async fn a_head_carries_the_listing_only_while_the_mapping_is_bound(pool: PgPool
     let repo = MappingRepo::new(pool.clone());
     repo.add(
         ORG_A,
-        &unbound(ORG_A, PRODUCT_1, InventoryId::TesGb, MAPPING_1),
+        &unbound(ORG_A, PRODUCT_1, InventoryId::Tes, MAPPING_1),
         0,
         NOW,
     )
@@ -547,7 +544,7 @@ async fn a_tes_paste_binds_the_canonical_identity(pool: PgPool) {
     let repo = MappingRepo::new(pool.clone());
     repo.add(
         ORG_A,
-        &unbound(ORG_A, PRODUCT_1, InventoryId::TesGb, MAPPING_1),
+        &unbound(ORG_A, PRODUCT_1, InventoryId::Tes, MAPPING_1),
         0,
         NOW,
     )

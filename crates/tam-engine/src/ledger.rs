@@ -642,7 +642,7 @@ impl tam_engine_driver::ports::LedgerInspector for PgLedger {
 }
 
 /// The wire spelling the `connection` row keys on. A connection is per
-/// marketplace rather than per inventory, so TesGb and TesUs resolve to one.
+/// marketplace rather than per inventory.
 #[cfg(feature = "pg-tests")]
 fn marketplace_wire(inventory: InventoryId) -> &'static str {
     match inventory.marketplace() {

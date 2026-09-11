@@ -88,22 +88,14 @@ impl Tab {
 /// against `InventoryId::ALL` by `every_inventory_is_a_tab_or_is_refused_by_name`
 /// below, so an inventory added to the model is a failing test rather than a
 /// tab that quietly stops existing.
-pub const TABS: [Tab; 5] = [
+pub const TABS: [Tab; 3] = [
     Tab {
         title: "Teachouse",
         inventory: None,
     },
     Tab {
-        title: "TES GB",
-        inventory: Some(InventoryId::TesGb),
-    },
-    Tab {
-        title: "TES US",
-        inventory: Some(InventoryId::TesUs),
-    },
-    Tab {
-        title: "TES NZ",
-        inventory: Some(InventoryId::TesNz),
+        title: "TES",
+        inventory: Some(InventoryId::Tes),
     },
     Tab {
         title: "TPT",
@@ -523,9 +515,7 @@ mod tests {
         for inventory in InventoryId::ALL {
             let has_tab = TABS.iter().any(|tab| tab.inventory == Some(inventory));
             let expected = match inventory {
-                InventoryId::TesGb | InventoryId::TesUs | InventoryId::TesNz | InventoryId::Tpt => {
-                    true
-                }
+                InventoryId::Tes | InventoryId::Tpt => true,
                 // No adapter, so a row on an Etsy tab could never publish.
                 InventoryId::Etsy => false,
             };
@@ -622,10 +612,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(
-            marked, 4,
-            "the Tes licence on each of three tabs, and TPT's copyright declaration"
-        );
+        assert_eq!(marked, 2, "the Tes licence and TPT's copyright declaration");
     }
 
     #[test]

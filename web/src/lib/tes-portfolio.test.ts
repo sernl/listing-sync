@@ -33,7 +33,7 @@ function mapping(
 	};
 }
 
-function live(id: string, productId: string, inventory: InventoryId = 'TesGb'): MappingHead {
+function live(id: string, productId: string, inventory: InventoryId = 'Tes'): MappingHead {
 	return mapping(id, productId, inventory, 'bound', 'live');
 }
 
@@ -68,27 +68,27 @@ describe('a catalogue price', () => {
 
 describe('where a mapping stands', () => {
 	it('reads a bound mapping by its lifecycle', () => {
-		expect(standingOf(mapping('m', 'p', 'TesGb', 'bound', 'live'))).toBe('live');
-		expect(standingOf(mapping('m', 'p', 'TesGb', 'bound', 'draft'))).toBe('draft');
+		expect(standingOf(mapping('m', 'p', 'Tes', 'bound', 'live'))).toBe('live');
+		expect(standingOf(mapping('m', 'p', 'Tes', 'bound', 'draft'))).toBe('draft');
 	});
 
 	it('calls a mapping that was never bound unsent', () => {
-		expect(standingOf(mapping('m', 'p', 'TesGb', 'unbound', 'absent'))).toBe('unsent');
+		expect(standingOf(mapping('m', 'p', 'Tes', 'unbound', 'absent'))).toBe('unsent');
 	});
 
 	it('does not read a severed mapping as live, whatever its lifecycle says', () => {
-		expect(standingOf(mapping('m', 'p', 'TesGb', 'severed', 'live'))).toBe('other');
+		expect(standingOf(mapping('m', 'p', 'Tes', 'severed', 'live'))).toBe('other');
 	});
 
 	it('holds a create in flight apart from a listing that exists', () => {
-		expect(standingOf(mapping('m', 'p', 'TesGb', 'creating', 'absent'))).toBe('other');
-		expect(standingOf(mapping('m', 'p', 'TesGb', 'ambiguous_create', 'absent'))).toBe('other');
+		expect(standingOf(mapping('m', 'p', 'Tes', 'creating', 'absent'))).toBe('other');
+		expect(standingOf(mapping('m', 'p', 'Tes', 'ambiguous_create', 'absent'))).toBe('other');
 	});
 
 	it('counts a lifecycle it has no row for rather than dropping it', () => {
-		expect(standingOf(mapping('m', 'p', 'TesGb', 'bound', 'in_review'))).toBe('other');
-		expect(standingOf(mapping('m', 'p', 'TesGb', 'bound', 'withdrawn'))).toBe('other');
-		expect(standingOf(mapping('m', 'p', 'TesGb', 'bound', 'invented'))).toBe('other');
+		expect(standingOf(mapping('m', 'p', 'Tes', 'bound', 'in_review'))).toBe('other');
+		expect(standingOf(mapping('m', 'p', 'Tes', 'bound', 'withdrawn'))).toBe('other');
+		expect(standingOf(mapping('m', 'p', 'Tes', 'bound', 'invented'))).toBe('other');
 	});
 });
 
@@ -119,14 +119,14 @@ describe('the listing figures', () => {
 	const products = [product('p1'), product('p2', 'Free'), product('p3'), product('p4')];
 	const mappings = [
 		live('m1', 'p1'),
-		live('m2', 'p2', 'TesNz'),
-		mapping('m3', 'p3', 'TesUs', 'bound', 'draft'),
-		mapping('m4', 'p4', 'TesGb', 'unbound', 'absent'),
-		mapping('m5', 'p1', 'TesUs', 'bound', 'in_review'),
+		live('m2', 'p2', 'Tes'),
+		mapping('m3', 'p3', 'Tes', 'bound', 'draft'),
+		mapping('m4', 'p4', 'Tes', 'unbound', 'absent'),
+		mapping('m5', 'p1', 'Tes', 'bound', 'in_review'),
 		live('m6', 'p3', 'Tpt')
 	];
 
-	it('counts only the mappings onto a Tes site', () => {
+	it('counts only the mappings onto Tes', () => {
 		expect(tesPortfolio(products, mappings).listings).toBe(5);
 	});
 
@@ -180,7 +180,7 @@ describe('products with no Tes listing', () => {
 	it('counts a product mapped onto Tes but never created there as listed', () => {
 		const portfolio = tesPortfolio(
 			[product('p1')],
-			[mapping('m1', 'p1', 'TesGb', 'unbound', 'absent')]
+			[mapping('m1', 'p1', 'Tes', 'unbound', 'absent')]
 		);
 		expect(portfolio.productsWithoutListing).toBe(0);
 	});

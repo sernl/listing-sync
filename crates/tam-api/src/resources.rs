@@ -797,6 +797,11 @@ pub struct ConnectionView {
     /// looking to check it must see it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authorship: Option<AuthorshipView>,
+    /// The Tes market this connection authors into, absent on every other
+    /// marketplace. Served so a second Tes market is a value this field
+    /// carries rather than a second inventory; no surface renders it yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
 }
 
 /// What this surface knows about the seller's declaration for one marketplace.
@@ -866,6 +871,7 @@ pub(crate) async fn list_connections(
                 status: row.status,
                 created_at: row.created_at,
                 updated_at: row.updated_at,
+                country: (row.marketplace == Marketplace::Tes).then_some(row.country),
             })
             .collect(),
     }))
@@ -1787,13 +1793,7 @@ pub struct InventoryStatusView {
     pub raised_at: Option<Timestamp>,
 }
 
-const ALL_INVENTORIES: [InventoryId; 5] = [
-    InventoryId::TesGb,
-    InventoryId::TesUs,
-    InventoryId::TesNz,
-    InventoryId::Etsy,
-    InventoryId::Tpt,
-];
+const ALL_INVENTORIES: [InventoryId; 3] = [InventoryId::Tes, InventoryId::Etsy, InventoryId::Tpt];
 
 pub(crate) async fn status(State(state): State<AppState>) -> Result<Json<StatusView>, APIError> {
     let halts = tam_storage::HaltRepo::new(state.pool.clone())
@@ -2683,7 +2683,7 @@ mod tests {
     fn rule(answer: ElectionAnswer) -> ElectionRule {
         match ElectionRule::new(NewElectionRule {
             org: ORG,
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
             axis: TermKind::Subject,
             trigger_kind: ElectionTriggerKind::ElectOne,
             trigger_key: None,
@@ -2736,7 +2736,7 @@ mod tests {
             assert_eq!(
                 rebuilt_trigger(
                     kind,
-                    axis(InventoryId::TesGb, TermKind::Subject),
+                    axis(InventoryId::Tes, TermKind::Subject),
                     vec![path("1")]
                 ),
                 None,
@@ -2746,7 +2746,7 @@ mod tests {
         assert_eq!(
             rebuilt_trigger(
                 ElectionTriggerKind::ElectOne,
-                axis(InventoryId::TesGb, TermKind::ResourceType),
+                axis(InventoryId::Tes, TermKind::ResourceType),
                 vec![path("1")]
             ),
             Some(ElectionTrigger::ElectOne {
@@ -2777,7 +2777,7 @@ mod tests {
             delegated_axes(&[rule(ElectionAnswer::Delegate)])
                 .into_iter()
                 .collect::<Vec<_>>(),
-            vec![(InventoryId::TesGb, TermKind::Subject)],
+            vec![(InventoryId::Tes, TermKind::Subject)],
             "the delegation is keyed on the marketplace and the axis, not on the trigger"
         );
     }
@@ -2791,7 +2791,7 @@ mod tests {
         let tes: Vec<TermKind> = view
             .items
             .iter()
-            .filter(|item| item.inventory == InventoryId::TesGb)
+            .filter(|item| item.inventory == InventoryId::Tes)
             .map(|item| item.axis)
             .collect();
         assert_eq!(
@@ -2812,7 +2812,7 @@ mod tests {
         let licence = view
             .items
             .iter()
-            .find(|item| item.inventory == InventoryId::TesGb && item.axis == TermKind::Licence);
+            .find(|item| item.inventory == InventoryId::Tes && item.axis == TermKind::Licence);
         assert_eq!(
             licence.map(|item| (item.native.as_str(), item.delegation.kind)),
             Some(("licence", crate::vocabulary::DelegationKind::Never)),

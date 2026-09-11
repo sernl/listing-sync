@@ -2122,7 +2122,7 @@ mod machine_tests {
     ) -> SyncMachine {
         SyncMachine {
             org: org(),
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
             connection: connection(),
             form: form(),
             item: item(),
@@ -2162,14 +2162,14 @@ mod machine_tests {
     fn recorded_locator() -> ListingLocator {
         ListingLocator::Recorded {
             title: recorded_title(),
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
         }
     }
 
     fn marker_locator() -> ListingLocator {
         ListingLocator::Marker {
             marker: marker_for(attempt()),
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
         }
     }
 
@@ -2177,7 +2177,7 @@ mod machine_tests {
         Effect::Halt {
             scope: HaltScope {
                 org: org(),
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
             },
         }
     }
@@ -2200,7 +2200,7 @@ mod machine_tests {
     fn entry() -> Transition {
         SyncMachine::initial(
             org(),
-            InventoryId::TesGb,
+            InventoryId::Tes,
             connection(),
             form(),
             item(),
@@ -2242,7 +2242,7 @@ mod machine_tests {
     fn row_entry_is_refused_when_the_budget_affords_nothing() {
         let refused = SyncMachine::initial(
             org(),
-            InventoryId::TesGb,
+            InventoryId::Tes,
             connection(),
             form(),
             item(),
@@ -2641,7 +2641,7 @@ mod machine_tests {
                 attempt: attempt(),
                 locator: ListingLocator::Recorded {
                     title: RecordedTitle("a resource".to_owned()),
-                    inventory: InventoryId::TesGb,
+                    inventory: InventoryId::Tes,
                 },
             },
             "the identification is recorded in the locator, out of this run's own rendered \
@@ -2832,7 +2832,7 @@ mod machine_tests {
                 attempt: attempt(),
                 locator: ListingLocator::Recorded {
                     title: RecordedTitle("a resource".to_owned()),
-                    inventory: InventoryId::TesGb,
+                    inventory: InventoryId::Tes,
                 },
             },
             "the identification is recorded out of this run's own rendered intent, which is \
@@ -3209,7 +3209,7 @@ mod machine_tests {
     fn a_removal_asserts_no_form_schema() {
         let entry = SyncMachine::initial(
             org(),
-            InventoryId::TesGb,
+            InventoryId::Tes,
             connection(),
             form(),
             item(),

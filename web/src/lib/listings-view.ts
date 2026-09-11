@@ -14,22 +14,14 @@ import type { InventoryId, Marketplace } from '$lib/generated/vocab';
  * from the Rust enum, so an inventory added there stops this file
  * type-checking instead of silently rendering as an unnamed platform. */
 export const MARKETPLACE_OF: Record<InventoryId, Marketplace> = {
-	TesGb: 'Tes',
-	TesUs: 'Tes',
-	TesNz: 'Tes',
+	Tes: 'Tes',
 	Etsy: 'Etsy',
 	Tpt: 'Tpt'
 };
 
 /** The inventories in the order a row's badges appear, so two rows never
  *  order the same pair of platforms differently. */
-export const INVENTORY_ORDER: readonly InventoryId[] = [
-	'Tpt',
-	'TesGb',
-	'TesUs',
-	'TesNz',
-	'Etsy'
-];
+export const INVENTORY_ORDER: readonly InventoryId[] = ['Tpt', 'Tes', 'Etsy'];
 
 export interface PlatformBadge {
 	inventory: InventoryId;

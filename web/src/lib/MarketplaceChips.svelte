@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { external } from '$lib/external';
 	import type { MarketplaceChip } from '$lib/inventory';
-	import { MARK_SRC, REGION_TAG, platformTitle } from '$lib/platforms';
+	import { MARK_SRC, platformTitle } from '$lib/platforms';
 	import { MARKETPLACE_OF } from '$lib/listings-view';
 
 	let { chips }: { chips: MarketplaceChip[] } = $props();
@@ -49,7 +49,7 @@
 					alt=""
 					width="14"
 					height="14"
-				/>{#if REGION_TAG[chip.inventory] !== null}<b>{REGION_TAG[chip.inventory]}</b>{/if}
+				/>
 				<i>{chip.label}</i>
 			</a>
 		{:else}
@@ -67,7 +67,7 @@
 					alt=""
 					width="14"
 					height="14"
-				/>{#if REGION_TAG[chip.inventory] !== null}<b>{REGION_TAG[chip.inventory]}</b>{/if}
+				/>
 				{#if chip.state !== 'not_listed'}<i>{chip.label}</i>{/if}
 			</span>
 		{/if}
@@ -93,7 +93,7 @@
 	   wraps this in a `.strip` of its own that already wraps, and an inline-flex
 	   child is a single flex item with the default `min-width: auto`, so the
 	   outer wrap had one unbreakable thing to wrap and every chip stayed on one
-	   line past the card's edge. Five inventories reach that at phone width. */
+	   line past the card's edge. Three inventories reach that at phone width. */
 	.strip {
 		display: flex;
 		gap: 4px;
@@ -181,12 +181,6 @@
 		object-fit: contain;
 		border-radius: 3px;
 		flex: none;
-	}
-
-	/* The region, and only where three sites of one marketplace share a mark. */
-	.mk b {
-		font-weight: 700;
-		letter-spacing: 0.02em;
 	}
 
 	.mk i {

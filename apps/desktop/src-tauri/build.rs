@@ -64,6 +64,7 @@ const COMMANDS: &[&str] = &[
     "device_activity",
     "start_import",
     "retry_console",
+    "set_theme",
 ];
 
 /// A bundle that carries a console must carry the page shown when the console

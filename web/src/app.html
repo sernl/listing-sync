@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="utf-8" />
     <meta
@@ -29,6 +29,52 @@
     <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
     <link rel="icon" href="/favicon-16.png" sizes="16x16" type="image/png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180" />
+    <!-- The palette, decided before the stylesheet so the first paint is
+         already the right colour. Inline and not a module, because a
+         `<script src>` here is a round trip the page would spend flashing
+         Cream at a seller who asked for Indigo, and an ordinary deferred
+         module runs after paint. `tam-server` hashes every inline block of
+         the page it actually serves into the policy it sends
+         (`serving::inline_script_hashes`), so this needs no grant added by
+         hand.
+
+         The attribute on `<html>` above is the no-script answer and the
+         reason `tokens.css` pins `color-scheme` per theme rather than leaving
+         it to `light dark`: whatever happens here, the element carries
+         exactly one of the two words.
+
+         This is `web/src/lib/theme.ts` run early, and it cannot import it:
+         the module graph is what this script exists to get ahead of.
+         `theme.test.ts` compares the key and the query written here against
+         that module's constants, so a rename cannot land in one of them. -->
+    <script>
+      (function () {
+        var key = 'teachouse.theme';
+        var query = '(prefers-color-scheme: dark)';
+        var media = window.matchMedia ? window.matchMedia(query) : null;
+        var paint = function () {
+          var chosen;
+          try {
+            chosen = localStorage.getItem(key);
+          } catch (refused) {
+            // Storage disabled, which is a browser setting and not a fault.
+            chosen = null;
+          }
+          if (chosen !== 'light' && chosen !== 'dark') {
+            chosen = media && media.matches ? 'dark' : 'light';
+          }
+          document.documentElement.dataset.theme = chosen;
+        };
+        paint();
+        // The choice is re-read on every system change rather than captured
+        // once, so a seller who picks Dark keeps it when the machine turns
+        // light at sunrise, and one who picks System follows it back.
+        if (media) {
+          if (media.addEventListener) media.addEventListener('change', paint);
+          else if (media.addListener) media.addListener(paint);
+        }
+      })();
+    </script>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">

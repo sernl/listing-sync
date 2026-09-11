@@ -13,7 +13,7 @@ function mapping(patch: Partial<MappingHead> = {}): MappingHead {
 	return {
 		id: 'm1',
 		product: 'p1',
-		inventory: 'TesGb',
+		inventory: 'Tes',
 		binding_state: 'unbound',
 		lifecycle_state: 'absent',
 		updated_at: 0,
@@ -80,12 +80,12 @@ function vocabulary(inventory: InventoryId, patch: Partial<VocabularyView> = {})
 
 function input(patch: Partial<ReadinessInput> = {}): ReadinessInput {
 	return {
-		inventory: 'TesGb',
+		inventory: 'Tes',
 		intent: 'draft',
 		mapping: mapping(),
 		connection: connection(),
-		status: { inventory: 'TesGb', marketplace: 'Tes', halted: false },
-		vocabulary: vocabulary('TesGb'),
+		status: { inventory: 'Tes', marketplace: 'Tes', halted: false },
+		vocabulary: vocabulary('Tes'),
 		payloadFiles: 1,
 		hasRights: true,
 		...patch
@@ -94,13 +94,13 @@ function input(patch: Partial<ReadinessInput> = {}): ReadinessInput {
 
 describe('the transitions no capture supports', () => {
 	it('refuses both Tes transitions out of live and names the capability', () => {
-		expect(uncapturedTransition('TesGb', 'live', 'live')).toBe('tes.edit_published');
-		expect(uncapturedTransition('TesNz', 'live', 'draft')).toBe('tes.unpublish');
+		expect(uncapturedTransition('Tes', 'live', 'live')).toBe('tes.edit_published');
+		expect(uncapturedTransition('Tes', 'live', 'draft')).toBe('tes.unpublish');
 	});
 
 	it('serves both transitions out of draft on Tes', () => {
-		expect(uncapturedTransition('TesUs', 'draft', 'live')).toBeNull();
-		expect(uncapturedTransition('TesUs', 'draft', 'draft')).toBeNull();
+		expect(uncapturedTransition('Tes', 'draft', 'live')).toBeNull();
+		expect(uncapturedTransition('Tes', 'draft', 'draft')).toBeNull();
 	});
 
 	it('serves all four on TPT', () => {
@@ -148,7 +148,7 @@ describe('the readiness line', () => {
 		const verdict = readinessOf(input());
 		expect(verdict.ready).toBe(true);
 		expect(verdict.line).toBe('ready to send');
-		expect(verdict.title).toBe('TES (Tes.com) · United Kingdom');
+		expect(verdict.title).toBe('TES (Tes.com)');
 	});
 
 	it('waits rather than claiming ready before the vocabulary is known', () => {
@@ -172,7 +172,7 @@ describe('the readiness line', () => {
 	it('reports a halt with the reason the status endpoint recorded', () => {
 		const verdict = readinessOf(
 			input({
-				status: { inventory: 'TesGb', marketplace: 'Tes', halted: true, reason: 'upstream outage' }
+				status: { inventory: 'Tes', marketplace: 'Tes', halted: true, reason: 'upstream outage' }
 			})
 		);
 		expect(verdict.line).toBe('sending is paused for this platform: upstream outage');
@@ -231,7 +231,7 @@ describe('the readiness line', () => {
 describe('which connection carries a platform', () => {
 	it('matches on the marketplace, because a link is held per marketplace', () => {
 		const links = [connection({ id: 'tes' }), connection({ id: 'tpt', marketplace: 'Tpt' })];
-		expect(connectionFor('TesNz', links)?.id).toBe('tes');
+		expect(connectionFor('Tes', links)?.id).toBe('tes');
 		expect(connectionFor('Tpt', links)?.id).toBe('tpt');
 		expect(connectionFor('Etsy', links)).toBeUndefined();
 	});

@@ -427,10 +427,7 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
         }
     }
 
-    fn listing_from_field_set(
-        inventory: InventoryId,
-        fields: &FieldSet,
-    ) -> Result<TesListing, AdapterError> {
+    fn listing_from_field_set(fields: &FieldSet) -> Result<TesListing, AdapterError> {
         let entry = |key: FieldKey| -> Result<&str, AdapterError> {
             fields
                 .entries
@@ -476,10 +473,7 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
                 ),
             })?,
             category_ids: ids(&taxonomy, "categories"),
-            // The channel is the inventory's, and the seam's own JSON names
-            // it, so a read-back parses the field the write emitted rather
-            // than the one this country does not use.
-            age_channel: TesAges::of(inventory, ids(&grades, TesAges::empty(inventory).field())),
+            age_channel: TesAges::new(ids(&grades, TesAges::FIELD)),
             ages: ids(&grades, "ages"),
             main_type: taxonomy.get("mainType").and_then(Value::as_i64),
             main_age: grades.get("mainAge").and_then(Value::as_i64),
@@ -557,7 +551,7 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
                 })?),
                 None => None,
             };
-        let age_channel = TesAges::of(self.inventory, grade_ids);
+        let age_channel = TesAges::new(grade_ids);
         // P.1, settled by the 2026-08-29 capture. The wire's age fields are
         // derived from the bands the seller declared, not from the canonical
         // interval: `ages` is the union of those bands' own age sets and
@@ -642,7 +636,7 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
         fields: FieldSet,
         _now: Timestamp,
     ) -> Result<SubmitEvidence, AdapterError> {
-        let listing = Self::listing_from_field_set(self.inventory, &fields)?;
+        let listing = Self::listing_from_field_set(&fields)?;
         let mut contents = Vec::with_capacity(fields.files.len());
         for file in &fields.files {
             let content =
@@ -686,7 +680,7 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
         _now: Timestamp,
     ) -> Result<SubmitEvidence, AdapterError> {
         let id = Self::draft_id_from_locator(&ListingLocator::Durable(plan.subject))?;
-        let listing = Self::listing_from_field_set(self.inventory, &plan.fields)?;
+        let listing = Self::listing_from_field_set(&plan.fields)?;
         match (plan.transition.from, plan.transition.to) {
             // The metadata POST answers with JSON naming the draft, and
             // `post_metadata` asserts it: free evidence the write's own
@@ -1099,27 +1093,16 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
             .iter()
             .map(|id| term(Some(TermKind::Subject), id))
             .collect();
-        // The country fork: the uploader takes `ageRanges` for GB and
-        // `yearGroups` everywhere else, so exactly one of the two answers the
-        // phase axis on any given resource. The other is not a second phase
-        // channel — its ids belong to a different vocabulary and mixing them
-        // would ask `derive_interval` to read a year group off the age table
-        // — so whatever the unused field carries travels untagged.
-        //
-        // The registry records the same fork on `equivalence_axes`; this is
-        // the adapter's own statement of its wire, restated rather than
-        // imported because the pure core depends on this crate and not the
-        // other way round.
-        let (phase_field, other_field) = match inventory {
-            InventoryId::TesGb => ("ageRanges", "yearGroups"),
-            InventoryId::TesUs | InventoryId::TesNz | InventoryId::Etsy | InventoryId::Tpt => {
-                ("yearGroups", "ageRanges")
-            }
-        };
-        for phase in string_list(state.get(phase_field)) {
+        // `ageRanges` answers the phase axis. `yearGroups` is not a second
+        // phase channel — its ids belong to a different vocabulary and mixing
+        // them would ask `derive_interval` to read a year group off the age
+        // table — so a resource that carries one travels it untagged. The
+        // import still reads it, because a resource created before the
+        // one-Tes collapse may hold one.
+        for phase in string_list(state.get("ageRanges")) {
             native.push(term(Some(TermKind::Phase), &phase));
         }
-        for stray in string_list(state.get(other_field)) {
+        for stray in string_list(state.get("yearGroups")) {
             native.push(term(None, &stray));
         }
         // The curriculum orientation answers no axis this model types, so it
@@ -1446,7 +1429,7 @@ fn licence_from(natives: &[NativeAxis]) -> Option<&str> {
 /// and it is what stops a 16+-only listing stating age zero.
 fn grades_entry(channel: &TesAges, ages: &[i64], main_age: Option<i64>) -> String {
     let mut entry = serde_json::Map::new();
-    entry.insert(channel.field().to_owned(), serde_json::json!(channel.ids()));
+    entry.insert(TesAges::FIELD.to_owned(), serde_json::json!(channel.ids()));
     if let Some(main_age) = main_age {
         entry.insert("ages".to_owned(), serde_json::json!(ages));
         entry.insert("mainAge".to_owned(), serde_json::json!(main_age));

@@ -201,7 +201,7 @@ mod tests {
     #[test]
     fn an_edge_into_another_marketplace_is_left_alone() {
         let tes = edge(
-            VocabularyId(InventoryId::TesNz, TermKind::Subject),
+            VocabularyId(InventoryId::Tes, TermKind::Subject),
             Some("1000448"),
         );
         assert!(

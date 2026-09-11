@@ -43,11 +43,11 @@ fn topic_term() -> CanonicalTerm {
 }
 
 fn gb_edge(from: CanonicalTermId, segments: &[&str], native: &str) -> ProjectionEdge {
-    edge(from, InventoryId::TesGb, segments, native)
+    edge(from, InventoryId::Tes, segments, native)
 }
 
 fn nz_edge(from: CanonicalTermId, segments: &[&str], native: &str) -> ProjectionEdge {
-    edge(from, InventoryId::TesNz, segments, native)
+    edge(from, InventoryId::Tpt, segments, native)
 }
 
 fn edge(
@@ -92,7 +92,7 @@ async fn fixture_mapping(app: &PgPool, org: OrgId) -> MappingId {
                 id: MAPPING_1,
                 org,
                 product: minimal_product().id,
-                inventory: InventoryId::TesNz,
+                inventory: InventoryId::Tpt,
                 binding: Binding::Unbound,
                 policies: FieldPolicies {
                     title: FieldPolicy::Managed,
@@ -117,7 +117,7 @@ async fn fixture_mapping(app: &PgPool, org: OrgId) -> MappingId {
 fn scope(mapping: MappingId) -> RaiseScope {
     RaiseScope {
         mapping,
-        target: InventoryId::TesNz,
+        target: InventoryId::Tpt,
         at: T0,
     }
 }
@@ -152,7 +152,7 @@ async fn seeding_is_idempotent_and_orders_parents_first(app: PgPool) {
         "deterministic ids make reseeding a no-op, reported as existing"
     );
     let nz = repo
-        .edges_into(VocabularyId(InventoryId::TesNz, TermKind::Subject))
+        .edges_into(VocabularyId(InventoryId::Tpt, TermKind::Subject))
         .await
         .expect("the NZ subject edges load");
     assert_eq!(nz.len(), 1, "one NZ subject edge was seeded");
@@ -207,7 +207,7 @@ async fn a_batch_raises_one_item_per_gap_and_resolution_drains_it(app: PgPool) {
         "the resolved item left the queue"
     );
     let nz = repo
-        .edges_into(VocabularyId(InventoryId::TesNz, TermKind::Subject))
+        .edges_into(VocabularyId(InventoryId::Tpt, TermKind::Subject))
         .await
         .expect("the NZ edges load");
     assert_eq!(
@@ -266,7 +266,7 @@ async fn a_second_exact_claim_on_a_target_path_is_rejected(app: PgPool) {
         ORG_A,
         RaiseScope {
             mapping,
-            target: InventoryId::TesNz,
+            target: InventoryId::Tpt,
             at: T0,
         },
         &[(TOPIC, TermKind::Subject)],
@@ -311,12 +311,12 @@ async fn no_counterpart_settles_the_item_and_records_the_omission(app: PgPool) {
     .await
     .expect("the no-counterpart resolution runs");
     let records = repo
-        .no_counterparts_into(InventoryId::TesNz)
+        .no_counterparts_into(InventoryId::Tpt)
         .await
         .expect("the records load");
     assert_eq!(
         records,
-        vec![(SUBJECT, VocabularyId(InventoryId::TesNz, TermKind::Subject))],
+        vec![(SUBJECT, VocabularyId(InventoryId::Tpt, TermKind::Subject))],
         "the omission is durable, so the term is omitted rather than blocking"
     );
     assert_eq!(
@@ -386,7 +386,7 @@ async fn a_repolled_label_replaces_the_edge_it_renames_rather_than_shadowing_it(
     );
 
     let edges = repo
-        .edges_into(VocabularyId(InventoryId::TesGb, TermKind::Subject))
+        .edges_into(VocabularyId(InventoryId::Tes, TermKind::Subject))
         .await
         .expect("the GB subject edges load");
     assert_eq!(edges.len(), 1, "one edge, carrying the new label");
@@ -398,7 +398,7 @@ async fn a_term_holds_several_narrower_edges_into_one_vocabulary(app: PgPool) {
     let repo = TaxonomyRepo::new(app);
     let narrower = |segments: &[&str], native: &str| ProjectionEdge {
         kind: EdgeKind::Narrower,
-        ..edge(SUBJECT, InventoryId::TesUs, segments, native)
+        ..edge(SUBJECT, InventoryId::Tpt, segments, native)
     };
     let report = repo
         .seed(

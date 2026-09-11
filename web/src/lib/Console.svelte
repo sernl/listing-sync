@@ -9,6 +9,7 @@
 	import { present, type StatusPresentation } from '$lib/connection-status';
 	import { desktopInvoker, registerThisMachine } from '$lib/desktop';
 	import { renderFailureReport } from '$lib/render-failure';
+	import { CARD_ANCHOR, MARKETPLACE_WORD } from '$lib/platforms';
 	import Icon from '$lib/Icon.svelte';
 	import ImpersonationBanner from '$lib/ImpersonationBanner.svelte';
 	import {
@@ -158,14 +159,27 @@
 	]);
 	const accountSection = $derived(SECTIONS.find((entry) => entry.id === 'account'));
 
-	/** The dot beside a marketplace in the top bar. `checking` earns no colour
-	 *  on purpose: it is linked and unverified, which is nothing to report. */
+	/** The dot beside a marketplace in the top bar, for the two states the
+	 *  strip raises at all. */
 	const DOT: Record<StatusPresentation['tone'], string> = {
 		ok: 'ok',
 		mut: '',
 		run: 'warn',
 		bad: 'bad'
 	};
+
+	/** The marketplaces the strip has something to say about.
+	 *
+	 * `checking` and `connected` are removed entirely rather than greyed: a
+	 * connection that is linked, or linked and verified, is nothing for the
+	 * seller to act on, and a permanent row of reassurances is the thing they
+	 * stop reading before the one row that matters appears (design of
+	 * 2026-09-12, section 6). */
+	const raised = $derived(
+		links
+			.map((link) => ({ link, shown: present(link.status) }))
+			.filter((entry) => entry.shown.alert !== null)
+	);
 
 	// The palette is the console's search now: it floats over whichever page
 	// the seller is on and opens the resource itself, rather than sending them
@@ -282,11 +296,15 @@
 	<main class="region">
 		<div class="top">
 			<span class="conn">
-				{#each links as link (link.id)}
-					<span title={present(link.status).explanation}>
-						<span class="dot {DOT[present(link.status).tone]}"></span>{link.marketplace}
-						{link.status}
-					</span>
+				{#each raised as { link, shown } (link.id)}
+					<a
+						class="conn-link"
+						href={`/marketplaces#${CARD_ANCHOR[link.marketplace]}`}
+						title={shown.explanation}
+					>
+						<span class="dot {DOT[shown.tone]}"></span>{MARKETPLACE_WORD[link.marketplace]}
+						{shown.alert}
+					</a>
 				{/each}
 			</span>
 			<span class="grow"></span>
@@ -451,5 +469,21 @@
 		color: var(--muted);
 		font-size: 12px;
 		line-height: 1.4;
+	}
+
+	/* The strip's one raised marketplace. `shell.css` owns `.conn` and the
+	   dot; this is only what makes the row a destination, because a notice
+	   the seller cannot act on from where they read it is a dead end. */
+	.conn-link {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		white-space: nowrap;
+		color: inherit;
+		text-decoration: none;
+	}
+
+	.conn-link:hover {
+		text-decoration: underline;
 	}
 </style>

@@ -23,8 +23,8 @@
 //! the four TPT options no Tes row pairs reach no band at all.
 //!
 //! The GB fork is the interesting half. The Tes editor takes `ageRanges` when
-//! the country is GB and `yearGroups` otherwise, so `VocabularyId(TesGb,
-//! Phase)` denotes the seven age bands while `VocabularyId(TesUs, Phase)`
+//! the country is GB and `yearGroups` otherwise, so `VocabularyId(Tes,
+//! Phase)` denotes the seven age bands while `VocabularyId(Tpt, Phase)`
 //! denotes the thirty year groups. A phase reaches a band by *covering*: the
 //! narrowest band that admits the lowest declared age and does not end before
 //! the highest. Where no band covers, the derivation emits no edge and a
@@ -95,9 +95,8 @@ const GRADE_PAIRS: [(u64, u64); 15] = [
 /// to these two.
 const GRADE_TAG_CATEGORIES: [&str; 2] = ["Grade-Level", "audience"];
 
-/// The three Tes inventories a TPT-only grade has no counterpart in.
-const TES_INVENTORIES: [InventoryId; 3] =
-    [InventoryId::TesGb, InventoryId::TesUs, InventoryId::TesNz];
+/// The Tes inventory a TPT-only grade has no counterpart in.
+const TES_INVENTORIES: [InventoryId; 1] = [InventoryId::Tes];
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct OptionSet<T> {
@@ -409,8 +408,7 @@ impl Mint {
         }
     }
 
-    /// One canonical term's whole Tes side: the GB band it covers into, and
-    /// its identity in the two `yearGroups` inventories.
+    /// One canonical term's whole Tes side: the band it covers into.
     ///
     /// Reached from both passes and from the same year group either way,
     /// because the ages a band is matched on are Tes's. TPT's `gradeLevels`
@@ -451,20 +449,11 @@ impl Mint {
                 building.out.uncovered.push(uncovered(year_group, group));
                 building.out.no_counterparts.push(NoCounterpart {
                     term,
-                    target: VocabularyId(InventoryId::TesGb, TermKind::Phase),
+                    target: VocabularyId(InventoryId::Tes, TermKind::Phase),
                     decided_by: self.tes_source.clone(),
                     decided_at,
                 });
             }
-        }
-        for inventory in [InventoryId::TesUs, InventoryId::TesNz] {
-            building.out.edges.push(ProjectionEdge {
-                from: term,
-                to: year_group_path(inventory, year_group, group),
-                kind: EdgeKind::Exact,
-                decided_by: self.tes_source.clone(),
-                decided_at,
-            });
         }
     }
 
@@ -473,14 +462,15 @@ impl Mint {
     ///
     /// Without these terms a GB source path ingests to nothing: the projection
     /// reverses `Exact` edges only, and every edge a covered phase holds into
-    /// `(TesGb, Phase)` is `Broader`, so a GB `ageRanges` id would enter the
+    /// `(Tes, Phase)` is `Broader`, so a GB `ageRanges` id would enter the
     /// relation as an unrecognised value on every GB-sourced listing.
     ///
     /// The relation from a band to what it covers is genuinely `Narrower` —
     /// one band covers several year groups — which the projection will never
     /// derive across, because inverting it would invent the distinction the
-    /// band dropped. So a GB grade going to a US target is a question for the
-    /// seller, and these edges are what the question offers as its candidates.
+    /// band dropped. So a Tes grade going to a TPT target is a question for
+    /// the seller, and these edges are what the question offers as its
+    /// candidates.
     ///
     /// Six band terms, not seven. The not-applicable band and the
     /// not-applicable phase denote the same thing, and the sentinel `Exact`
@@ -538,8 +528,8 @@ impl Mint {
         }
     }
 
-    /// One band's `Narrower` fan-out into the three target vocabularies, and
-    /// the measured absence a band covering no TPT grade takes instead.
+    /// One band's `Narrower` fan-out into the TPT vocabulary, and the measured
+    /// absence a band covering no TPT grade takes instead.
     fn seed_band_candidates(
         &self,
         building: &mut Building,
@@ -547,20 +537,6 @@ impl Mint {
         covering: &[u64],
         decided_at: Timestamp,
     ) {
-        for &year_group in covering {
-            let Some(group) = self.year_groups.get(&year_group) else {
-                continue;
-            };
-            for inventory in [InventoryId::TesUs, InventoryId::TesNz] {
-                building.out.edges.push(ProjectionEdge {
-                    from: term,
-                    to: year_group_path(inventory, year_group, group),
-                    kind: EdgeKind::Narrower,
-                    decided_by: self.tes_source.clone(),
-                    decided_at,
-                });
-            }
-        }
         let grades: Vec<VocabularyPath> = covering
             .iter()
             .filter_map(|year_group| building.tpt_grades.get(year_group).cloned())
@@ -749,17 +725,9 @@ fn tpt_grade_path(
     })
 }
 
-fn year_group_path(inventory: InventoryId, id: u64, group: &YearGroup) -> VocabularyPath {
-    VocabularyPath {
-        vocabulary: VocabularyId(inventory, TermKind::Phase),
-        segments: vec![group.group.clone()],
-        native_id: Some(id.to_string()),
-    }
-}
-
 fn band_path(id: u64, row: &AgeRange) -> VocabularyPath {
     VocabularyPath {
-        vocabulary: VocabularyId(InventoryId::TesGb, TermKind::Phase),
+        vocabulary: VocabularyId(InventoryId::Tes, TermKind::Phase),
         segments: vec![row.label.clone()],
         native_id: Some(id.to_string()),
     }

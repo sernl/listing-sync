@@ -11,21 +11,14 @@
 	import { anyConnectionStands } from '$lib/connection-standing';
 	import Button from '$lib/Button.svelte';
 	import { agoLabel } from '$lib/elapsed';
-	import Field from '$lib/Field.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
 	import { readState } from '$lib/pages/automations/read-state';
 	import { saveDocument } from '$lib/pages/export/download';
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
-	import { SHORT_NAME, platformTitle } from '$lib/platforms';
 	import StatusPill from '$lib/StatusPill.svelte';
-	import {
-		FILES_STAY_ON_YOUR_COMPUTER,
-		siteChoiceQuestion,
-		siteLabel
-	} from '$lib/sync-request';
-	import type { InventoryId } from '$lib/generated/vocab';
+	import { FILES_STAY_ON_YOUR_COMPUTER } from '$lib/sync-request';
 	import {
 		CONNECTIONS_UNREAD,
 		CONNECT_HREF,
@@ -34,16 +27,15 @@
 		IMPORTS_UNREAD,
 		IMPORT_IS_A_MIGRATION,
 		NOTHING_CONNECTED,
+		MIGRATION_HREF,
 		NO_IMPORT_YET,
 		WHAT_AN_IMPORT_IS,
 		deviceLine,
 		handoffBlocked,
 		importCards,
 		importRows,
-		migrationHref,
 		notConnected,
-		standingBadge,
-		type ImportCard
+		standingBadge
 	} from './import-view';
 	import { fetchTemplate, openBatchFrom, uploadSheet } from './api';
 	import { IMPORT_ALREADY_OPEN, batchHref, batchRows, listCopy } from './sheet-view';
@@ -58,8 +50,6 @@
 	let requests = $state<SyncRequestHead[]>([]);
 	let requestsLoaded = $state(false);
 	let requestsUnread = $state(false);
-
-	let chosen = $state<Record<string, InventoryId>>({});
 
 	// The spreadsheet import, which is a second way in rather than a second
 	// view of the same thing: these batches and the migrate requests below
@@ -121,10 +111,6 @@
 			requestsUnread = true;
 		}
 		requestsLoaded = true;
-	}
-
-	function siteOf(card: ImportCard): InventoryId | null {
-		return chosen[card.marketplace] ?? card.preselected;
 	}
 
 	async function loadBatches() {
@@ -260,7 +246,6 @@
 	<div class="import-cards">
 		{#each cards as card (card.marketplace)}
 			{@const blocked = handoffBlocked(card)}
-			{@const site = siteOf(card)}
 			<section class="import-card">
 				<div class="head">
 					<h2><MarketplaceMark marketplace={card.marketplace} size={22} /></h2>
@@ -276,26 +261,6 @@
 				{#if card.unreadable !== null}
 					<p class="why">{card.unreadable}</p>
 				{:else}
-					{#if card.sites.length > 1}
-						<Field
-							label={siteChoiceQuestion(card.sites)}
-							id={`import-site-${card.marketplace}`}
-						>
-							<select
-								id={`import-site-${card.marketplace}`}
-								value={site}
-								onchange={(event) =>
-									(chosen[card.marketplace] = event.currentTarget.value as InventoryId)}
-							>
-								{#each card.sites as option (option)}
-									<option value={option} title={platformTitle(option)}>
-										{SHORT_NAME[option]} — {siteLabel(option)}
-									</option>
-								{/each}
-							</select>
-						</Field>
-					{/if}
-
 					<p class="quiet">{deviceLine(card)}</p>
 
 					{#if card.standing === 'absent'}
@@ -308,8 +273,8 @@
 					{/if}
 
 					<div class="actions">
-						{#if blocked === null && site !== null}
-							<Button tier="primary" icon="arrow-right-left" href={migrationHref(site)}>
+						{#if blocked === null}
+							<Button tier="primary" icon="arrow-right-left" href={MIGRATION_HREF}>
 								{HANDOFF_LABEL}
 							</Button>
 						{:else}

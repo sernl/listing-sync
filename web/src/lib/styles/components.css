@@ -636,3 +636,17 @@
 	white-space: nowrap;
 	font-variant-numeric: tabular-nums;
 }
+
+/* A marketplace's own mark on the dark palette: a light card behind it, so
+   a navy or black wordmark stays legible. Every mark element the console
+   draws is listed; a new one joins this list or reads as a smudge on dark. */
+[data-theme='dark'] .mpmark img,
+[data-theme='dark'] .res-tile-mark,
+[data-theme='dark'] .mp-mark img,
+[data-theme='dark'] .mk img,
+[data-theme='dark'] img.mark {
+	background: var(--mark-ground);
+	border-radius: 6px;
+	padding: 2px;
+	box-sizing: content-box;
+}

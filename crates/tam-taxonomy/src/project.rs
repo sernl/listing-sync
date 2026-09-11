@@ -633,8 +633,8 @@ mod tests {
 
     const TERM: CanonicalTermId = CanonicalTermId(Uuid([0x01; 16]));
     const OTHER: CanonicalTermId = CanonicalTermId(Uuid([0x02; 16]));
-    const TARGET: VocabularyId = VocabularyId(InventoryId::TesNz, TermKind::Subject);
-    const ELSEWHERE: VocabularyId = VocabularyId(InventoryId::TesUs, TermKind::Subject);
+    const TARGET: VocabularyId = VocabularyId(InventoryId::Tes, TermKind::Subject);
+    const ELSEWHERE: VocabularyId = VocabularyId(InventoryId::Tpt, TermKind::Subject);
 
     fn path(segment: &str) -> VocabularyPath {
         VocabularyPath {
@@ -767,7 +767,7 @@ mod tests {
     ) -> ProjectionOverride {
         ProjectionOverride {
             org: OrgId(Uuid([0x0a; 16])),
-            inventory: InventoryId::TesNz,
+            inventory: InventoryId::Tes,
             axis: TermKind::Subject,
             from,
             to,
@@ -783,7 +783,7 @@ mod tests {
     fn request(terms: &[CanonicalTermId], cardinality: Cardinality) -> AxisRequest<'_> {
         AxisRequest {
             product: PRODUCT,
-            inventory: InventoryId::TesNz,
+            inventory: InventoryId::Tes,
             binding: binding(cardinality),
             terms,
             sources: &[],
@@ -924,7 +924,7 @@ mod tests {
         ];
         let settled = [SettledElection {
             product: PRODUCT,
-            inventory: InventoryId::TesNz,
+            inventory: InventoryId::Tes,
             axis: TermKind::Subject,
             trigger_kind: ElectionTriggerKind::ElectOne,
             trigger_key: None,

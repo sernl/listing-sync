@@ -62,17 +62,15 @@ function mapping(
 }
 
 describe('the marketplace scopes', () => {
-	it('puts every Tes site under TES and TPT under TPT', () => {
-		expect(covers('tes', 'TesGb')).toBe(true);
-		expect(covers('tes', 'TesUs')).toBe(true);
-		expect(covers('tes', 'TesNz')).toBe(true);
+	it('puts Tes under TES and TPT under TPT', () => {
+		expect(covers('tes', 'Tes')).toBe(true);
 		expect(covers('tes', 'Tpt')).toBe(false);
 		expect(covers('tpt', 'Tpt')).toBe(true);
-		expect(covers('tpt', 'TesGb')).toBe(false);
+		expect(covers('tpt', 'Tes')).toBe(false);
 	});
 
 	it('covers every marketplace under All, including one with no tab of its own', () => {
-		const inventories: InventoryId[] = ['Tpt', 'TesGb', 'TesUs', 'TesNz', 'Etsy'];
+		const inventories: InventoryId[] = ['Tpt', 'Tes', 'Etsy'];
 		for (const inventory of inventories) {
 			expect(covers('all', inventory)).toBe(true);
 		}
@@ -87,10 +85,10 @@ describe('the marketplace scopes', () => {
 	it('counts a mapping under All and under its own marketplace', () => {
 		const counts = scopeCounts([
 			mapping('a', 'Tpt'),
-			mapping('b', 'TesGb'),
-			mapping('c', 'TesNz')
+			mapping('b', 'Tes'),
+			mapping('c', 'Etsy')
 		]);
-		expect(counts).toEqual({ all: 3, tes: 2, tpt: 1 });
+		expect(counts).toEqual({ all: 3, tes: 1, tpt: 1 });
 	});
 });
 
@@ -163,10 +161,10 @@ describe('the scope figures', () => {
 
 describe('where the listings stand', () => {
 	const mappings = [
-		mapping('a', 'TesGb'),
-		mapping('b', 'TesUs', 'bound', 'draft'),
-		mapping('c', 'TesNz', 'unbound', 'draft'),
-		mapping('d', 'TesGb', 'bound', 'in_review'),
+		mapping('a', 'Tes'),
+		mapping('b', 'Tes', 'bound', 'draft'),
+		mapping('c', 'Tes', 'unbound', 'draft'),
+		mapping('d', 'Tes', 'bound', 'in_review'),
 		mapping('e', 'Tpt')
 	];
 
@@ -191,7 +189,7 @@ describe('the resource rows', () => {
 	const captured = [
 		listing('m2', 'Tpt', { resource_views: 40, sales_count: 1 }, 3 * HOUR),
 		listing('m1', 'Tpt', { resource_views: 100, sales_count: 2 }, HOUR),
-		listing('m3', 'TesGb', { resource_views: 999 }, HOUR)
+		listing('m3', 'Tes', { resource_views: 999 }, HOUR)
 	];
 
 	it('orders by the charted metric, best first', () => {
@@ -205,7 +203,7 @@ describe('the resource rows', () => {
 		const rows = resourceRows(captured, titles, 'all');
 		const unknown = rows.find((row) => row.mapping === 'm3');
 		expect(unknown?.title).toBeUndefined();
-		expect(unknown?.inventory).toBe('TesGb');
+		expect(unknown?.inventory).toBe('Tes');
 	});
 
 	it('breaks a tie on the charted metric by sales, then by identifier', () => {
@@ -326,7 +324,7 @@ describe('the oldest update', () => {
 		const captured = [
 			listing('m1', 'Tpt', {}, 5 * HOUR),
 			listing('m2', 'Tpt', {}, 9 * HOUR),
-			listing('m3', 'TesGb', {}, HOUR)
+			listing('m3', 'Tes', {}, HOUR)
 		];
 		expect(oldestUpdate(captured, 'tpt')).toBe(5 * HOUR);
 		expect(oldestUpdate(captured, 'all')).toBe(HOUR);
@@ -340,7 +338,7 @@ describe('the oldest update', () => {
 
 // --- the render model -----------------------------------------------------
 
-const INVENTORIES: InventoryId[] = ['Tpt', 'TesGb', 'TesUs', 'TesNz', 'Etsy'];
+const INVENTORIES: InventoryId[] = ['Tpt', 'Tes', 'Etsy'];
 const NOTHING: Standing = { listings: 0, live: 0, drafts: 0, unsent: 0, other: 0 };
 
 function figure(
@@ -636,7 +634,7 @@ describe('narrowing to a label', () => {
 	const mappings = [
 		{ ...mapping('m1', 'Tpt'), product: 'p1' },
 		{ ...mapping('m2', 'Tpt'), product: 'p3' },
-		{ ...mapping('m3', 'TesGb'), product: 'p2' }
+		{ ...mapping('m3', 'Tes'), product: 'p2' }
 	];
 
 	it('keeps only the mappings whose product survived the narrowed read', () => {
@@ -714,7 +712,7 @@ describe('the contributor count', () => {
 		const captured = [
 			listing('m1', 'Tpt', { sales_count: 1 }),
 			listing('m2', 'Tpt', {}),
-			listing('m3', 'TesGb', { sales_count: 9 })
+			listing('m3', 'Tes', { sales_count: 9 })
 		];
 		const summed = figures(captured, 'tpt')[0];
 		expect(summed.from).toBe(1);

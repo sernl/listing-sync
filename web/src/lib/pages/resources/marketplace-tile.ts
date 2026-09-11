@@ -11,7 +11,7 @@
 import { agoLabel } from '$lib/elapsed';
 import type { MappingHead } from '$lib/api';
 import type { ChipTone, MarketplaceChip } from '$lib/inventory';
-import { AUTHORABLE, MARK_SRC, REGION_TAG, platformTitle } from '$lib/platforms';
+import { AUTHORABLE, MARK_SRC, platformTitle } from '$lib/platforms';
 import { MARKETPLACE_OF } from '$lib/listings-view';
 import type { Readiness } from '$lib/publish-readiness';
 import type { InventoryId } from '$lib/generated/vocab';
@@ -35,9 +35,6 @@ export interface TileInput {
 export interface MarketplaceTileView {
 	inventory: InventoryId;
 	markSrc: string;
-	/** The two letters that tell three Tes sites apart, or null where the mark
-	 *  identifies the marketplace on its own. */
-	region: string | null;
 	label: string;
 	tone: ChipTone;
 	/** One clause, not a sentence: the tile has room for a line and the whole
@@ -163,7 +160,6 @@ export function tileFor(input: TileInput): MarketplaceTileView {
 	return {
 		inventory: chip.inventory,
 		markSrc: MARK_SRC[MARKETPLACE_OF[chip.inventory]],
-		region: REGION_TAG[chip.inventory],
 		label: chip.label,
 		tone: chip.tone,
 		detail: clauseFor(chip, mapping, input.now),

@@ -621,8 +621,8 @@ fn le_u16(bytes: &[u8], at: usize) -> Option<u16> {
 ///
 /// The tab is named by the filename, because a `.csv` carries no tab name and
 /// guessing one from the columns would guess wrong the first time two tabs
-/// shared a header prefix. `TES GB.csv`, `tes gb.csv` and `TES GB (1).csv` all
-/// name the TES GB tab; anything else is refused by name with the titles that
+/// shared a header prefix. `TES.csv`, `tes gb.csv` and `TES (1).csv` all
+/// name the TES tab; anything else is refused by name with the titles that
 /// would have worked.
 fn csv_grid(source_name: &str, bytes: &[u8]) -> Result<Grid, Malformed> {
     let text = core::str::from_utf8(bytes).map_err(|_| Malformed::UnknownFormat)?;
@@ -815,7 +815,7 @@ mod tests {
     #[test]
     fn a_filled_workbook_reads_back_as_the_tabs_and_rows_it_holds() {
         let Ok(bytes) = filled_workbook(&[
-            ("TES GB", "Fractions worksheet", "2.50"),
+            ("TES", "Fractions worksheet", "2.50"),
             ("Teachouse", "A free planning grid", "free"),
         ]) else {
             panic!("the fixture workbook writes");
@@ -823,7 +823,7 @@ mod tests {
         let Ok(read) = grids("filled.xlsx", &bytes) else {
             panic!("a filled workbook reads");
         };
-        assert_eq!(read.len(), 5, "every grid tab of the template is present");
+        assert_eq!(read.len(), 3, "every grid tab of the template is present");
         let filled: Vec<(&str, usize, u32)> = read
             .iter()
             .filter(|grid| !grid.rows.is_empty())
@@ -837,11 +837,11 @@ mod tests {
             .collect();
         assert_eq!(
             filled,
-            vec![("Teachouse", 1, 4), ("TES GB", 1, 4)],
+            vec![("Teachouse", 1, 4), ("TES", 1, 4)],
             "each filled tab holds its one row, numbered as the seller reads it"
         );
-        let Some(grid) = read.iter().find(|grid| grid.tab.title == "TES GB") else {
-            panic!("the TES GB tab is present");
+        let Some(grid) = read.iter().find(|grid| grid.tab.title == "TES") else {
+            panic!("the TES tab is present");
         };
         let held = columns(grid.tab);
         let Some(title_at) = held.iter().position(|column| column.cell == Cell::Title) else {
@@ -926,17 +926,17 @@ mod tests {
     #[test]
     fn a_csv_is_the_tab_its_filename_names_and_its_rows_start_at_four() {
         let document = filled(
-            "TES GB",
+            "TES",
             &[(Cell::Title, "A worksheet"), (Cell::Price, "2.50")],
         );
-        let Ok(read) = grids("TES GB.csv", document.as_bytes()) else {
-            panic!("a filled TES GB csv reads");
+        let Ok(read) = grids("TES.csv", document.as_bytes()) else {
+            panic!("a filled TES csv reads");
         };
         assert_eq!(read.len(), 1, "a csv is one tab");
         let Some(grid) = read.first() else {
             panic!("the one grid is present");
         };
-        assert_eq!(grid.tab.title, "TES GB");
+        assert_eq!(grid.tab.title, "TES");
         assert_eq!(grid.rows.len(), 1, "the example row is not the seller's");
         let Some(row) = grid.rows.first() else {
             panic!("the one row is present");
@@ -949,7 +949,7 @@ mod tests {
 
     #[test]
     fn a_csv_whose_filename_names_no_tab_is_refused_by_that_name() {
-        let document = filled("TES GB", &[(Cell::Title, "A worksheet")]);
+        let document = filled("TES", &[(Cell::Title, "A worksheet")]);
         let refused = grids("my resources.csv", document.as_bytes());
         assert_eq!(
             refused.err(),
@@ -962,20 +962,15 @@ mod tests {
 
     #[test]
     fn a_browsers_duplicate_suffix_still_names_its_tab() {
-        for name in [
-            "TES GB.csv",
-            "tes gb.csv",
-            "TES GB (1).csv",
-            "/tmp/TES GB.csv",
-        ] {
+        for name in ["TES.csv", "tes gb.csv", "TES (1).csv", "/tmp/TES.csv"] {
             assert_eq!(
                 csv_stem(name),
                 if name.contains("tes gb") {
                     "tes gb"
                 } else {
-                    "TES GB"
+                    "TES"
                 },
-                "{name} names the TES GB tab"
+                "{name} names the TES tab"
             );
         }
     }
@@ -1007,9 +1002,9 @@ mod tests {
     #[test]
     fn an_over_long_cell_is_refused_naming_the_cell() {
         let long = "x".repeat(CELL_BYTES_MAX + 1);
-        let document = filled("TES GB", &[(Cell::Title, "t")]);
+        let document = filled("TES", &[(Cell::Title, "t")]);
         let with_long = format!("{document}\r\n{long}");
-        let refused = grids("TES GB.csv", with_long.as_bytes());
+        let refused = grids("TES.csv", with_long.as_bytes());
         assert!(
             matches!(refused, Err(Malformed::CellTooLong { .. })),
             "a cell past the ceiling is refused by position, not truncated: {refused:?}"
@@ -1018,7 +1013,7 @@ mod tests {
 
     #[test]
     fn an_empty_upload_states_nothing_and_says_so() {
-        let Ok(read) = grids("TES GB.csv", b"") else {
+        let Ok(read) = grids("TES.csv", b"") else {
             panic!("an empty file is read as an empty tab rather than a parse fault");
         };
         assert_eq!(
@@ -1184,7 +1179,7 @@ mod tests {
         use rust_xlsxwriter::{Workbook, Worksheet};
         let mut book = Workbook::new();
         let mut sheet = Worksheet::new();
-        sheet.set_name("TES GB")?;
+        sheet.set_name("TES")?;
         // A header, so the emptiness check upstream of the walk passes and the
         // test exercises the bound rather than an earlier refusal.
         sheet.write_string(0, 0, "Status")?;

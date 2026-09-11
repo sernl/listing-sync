@@ -293,18 +293,18 @@ fn create_body(uploaded: &UploadedView, title: &str, inventories: &[&str]) -> se
         "cover": uploaded.cover,
         "inventories": inventories,
         "grades": [{
-            "inventory": "TesGb",
+            "inventory": "Tes",
             "kind": "phase",
             "segments": ["11-14"],
             "native_id": "3"
         }],
         "rights": {
-            "inventory": "TesGb",
+            "inventory": "Tes",
             "segments": ["CC-BY"],
             "native_id": "CC-BY"
         },
         "elections": [{
-            "inventory": "TesGb",
+            "inventory": "Tes",
             "axis": "licence",
             "trigger": "supply",
             "trigger_key": "free",
@@ -1010,7 +1010,7 @@ async fn a_create_without_the_block_writes_no_sidecar_row(pool: PgPool) {
         &TOKEN_A,
         Method::POST,
         "/v1/products",
-        &create_body(&uploaded, "Imported elsewhere", &["TesGb"]),
+        &create_body(&uploaded, "Imported elsewhere", &["Tes"]),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
@@ -1052,7 +1052,7 @@ async fn an_upload_then_a_create_lands_a_draft_and_enqueues_nothing(pool: PgPool
         &TOKEN_A,
         Method::POST,
         "/v1/products",
-        &create_body(&uploaded, "Fractions unit", &["TesGb", "Tpt"]),
+        &create_body(&uploaded, "Fractions unit", &["Tes", "Tpt"]),
     )
     .await;
     assert_eq!(
@@ -1147,7 +1147,7 @@ async fn one_tenants_uploads_and_products_are_invisible_to_another(pool: PgPool)
         &TOKEN_A,
         Method::POST,
         "/v1/products",
-        &create_body(&uploaded, "A's product", &["TesGb"]),
+        &create_body(&uploaded, "A's product", &["Tes"]),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
@@ -1177,7 +1177,7 @@ async fn one_tenants_uploads_and_products_are_invisible_to_another(pool: PgPool)
         &TOKEN_B,
         Method::POST,
         "/v1/products",
-        &create_body(&uploaded, "B's theft", &["TesGb"]),
+        &create_body(&uploaded, "B's theft", &["Tes"]),
     )
     .await;
     assert_eq!(
@@ -1309,7 +1309,7 @@ async fn a_selected_platform_s_required_field_is_refused_by_name(pool: PgPool) {
     let root = store_root("required");
     let state = configured(pool, &root);
     let uploaded = upload(state.clone(), &TOKEN_A, pdf("required"), "").await;
-    let mut body = create_body(&uploaded, "No licence", &["TesGb"]);
+    let mut body = create_body(&uploaded, "No licence", &["Tes"]);
     body["rights"] = serde_json::Value::Null;
     body["elections"] = serde_json::json!([]);
     let (status, response) = json_call(state, &TOKEN_A, Method::POST, "/v1/products", &body).await;
@@ -1332,7 +1332,7 @@ async fn a_selected_platform_s_required_field_is_refused_by_name(pool: PgPool) {
             missing["field"].as_str(),
             missing["label"].as_str()
         ),
-        (Some("TesGb"), Some("licence"), Some("Licence")),
+        (Some("Tes"), Some("licence"), Some("Licence")),
         "the refusal names the marketplace, the wire field a client anchors to, and the \
          words the seller reads, so the sentence can be built without a second lookup"
     );
@@ -1352,7 +1352,7 @@ async fn a_licence_election_alone_satisfies_the_field_without_a_rights_grant(poo
     let root = store_root("election-only");
     let state = configured(pool, &root);
     let uploaded = upload(state.clone(), &TOKEN_A, pdf("election"), "").await;
-    let mut body = create_body(&uploaded, "Election only", &["TesGb"]);
+    let mut body = create_body(&uploaded, "Election only", &["Tes"]);
     body["rights"] = serde_json::Value::Null;
     let (status, response) = json_call(state, &TOKEN_A, Method::POST, "/v1/products", &body).await;
     assert_eq!(
@@ -1494,7 +1494,7 @@ async fn the_listing_quota_refuses_the_create_that_would_exceed_it(pool: PgPool)
         &TOKEN_A,
         Method::POST,
         "/v1/products",
-        &create_body(&uploaded, "The last one that fits", &["TesGb"]),
+        &create_body(&uploaded, "The last one that fits", &["Tes"]),
     )
     .await;
     assert_eq!(
@@ -1509,7 +1509,7 @@ async fn the_listing_quota_refuses_the_create_that_would_exceed_it(pool: PgPool)
         &TOKEN_A,
         Method::POST,
         "/v1/products",
-        &create_body(&uploaded, "One too many", &["TesGb"]),
+        &create_body(&uploaded, "One too many", &["Tes"]),
     )
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
@@ -1635,7 +1635,7 @@ async fn a_live_tes_listing_refuses_the_edit_with_the_capability_named(pool: PgP
         &TOKEN_A,
         Method::POST,
         "/v1/products",
-        &create_body(&uploaded, "Editable", &["TesNz"]),
+        &create_body(&uploaded, "Editable", &["Tes"]),
     )
     .await;
     let created: CreatedProductView = parse(&body);
@@ -1665,7 +1665,7 @@ async fn a_live_tes_listing_refuses_the_edit_with_the_capability_named(pool: PgP
         "a field the patch did not name is left as stored rather than erased"
     );
 
-    bind_live(&pool, ORG_A, created.product, InventoryId::TesNz).await;
+    bind_live(&pool, ORG_A, created.product, InventoryId::Tes).await;
     let (status, body) = json_call(
         state.clone(),
         &TOKEN_A,
@@ -1713,12 +1713,12 @@ async fn a_delete_refuses_to_strand_a_live_listing_and_enqueues_the_removal_it_e
         &TOKEN_A,
         Method::POST,
         "/v1/products",
-        &create_body(&uploaded, "Deletable", &["TesNz"]),
+        &create_body(&uploaded, "Deletable", &["Tes"]),
     )
     .await;
     let created: CreatedProductView = parse(&body);
     let path = format!("/v1/products/{}", created.product.0.to_hyphenated());
-    bind_live(&pool, ORG_A, created.product, InventoryId::TesNz).await;
+    bind_live(&pool, ORG_A, created.product, InventoryId::Tes).await;
 
     let (status, body) = json_call(
         state.clone(),
@@ -1749,7 +1749,7 @@ async fn a_delete_refuses_to_strand_a_live_listing_and_enqueues_the_removal_it_e
         &TOKEN_A,
         Method::DELETE,
         &path,
-        &serde_json::json!({"remove_from": ["TesNz"]}),
+        &serde_json::json!({"remove_from": ["Tes"]}),
     )
     .await;
     assert_eq!(
@@ -1796,7 +1796,7 @@ async fn a_delete_refuses_to_strand_a_live_listing_and_enqueues_the_removal_it_e
         &TOKEN_A,
         Method::DELETE,
         &path,
-        &serde_json::json!({"remove_from": ["TesNz"]}),
+        &serde_json::json!({"remove_from": ["Tes"]}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -1818,11 +1818,11 @@ async fn a_delete_may_leave_a_live_listing_alone_when_the_seller_says_so(pool: P
         &TOKEN_A,
         Method::POST,
         "/v1/products",
-        &create_body(&uploaded, "Left alone", &["TesNz"]),
+        &create_body(&uploaded, "Left alone", &["Tes"]),
     )
     .await;
     let created: CreatedProductView = parse(&body);
-    bind_live(&pool, ORG_A, created.product, InventoryId::TesNz).await;
+    bind_live(&pool, ORG_A, created.product, InventoryId::Tes).await;
     let (status, body) = json_call(
         state,
         &TOKEN_A,
@@ -1835,7 +1835,7 @@ async fn a_delete_may_leave_a_live_listing_alone_when_the_seller_says_so(pool: P
     let deleted: DeletedProductView = parse(&body);
     assert_eq!(
         (deleted.removals.len(), deleted.left_live.as_slice()),
-        (0, [InventoryId::TesNz].as_slice()),
+        (0, [InventoryId::Tes].as_slice()),
         "nothing was removed remotely and the response names what was left standing"
     );
 }
@@ -1845,10 +1845,10 @@ async fn the_vocabulary_endpoint_serves_one_marketplace_s_own_registry(pool: PgP
     provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
     let state = unconfigured(pool);
 
-    let (status, body) = get(state.clone(), &TOKEN_A, "/v1/vocabulary/TesGb").await;
+    let (status, body) = get(state.clone(), &TOKEN_A, "/v1/vocabulary/Tes").await;
     assert_eq!(status, StatusCode::OK);
     let view: VocabularyView = parse(&body);
-    assert_eq!(view.inventory, InventoryId::TesGb);
+    assert_eq!(view.inventory, InventoryId::Tes);
     assert!(
         view.natives
             .iter()
@@ -1881,7 +1881,7 @@ async fn the_vocabulary_endpoint_serves_one_marketplace_s_own_registry(pool: PgP
         &SessionToken([0x00; 32]),
         Call {
             method: Method::GET,
-            path: "/v1/vocabulary/TesGb",
+            path: "/v1/vocabulary/Tes",
             body: None,
             content_type: None,
         },
@@ -2038,7 +2038,7 @@ async fn a_second_payload_file_is_added_and_reads_back_beside_the_first(pool: Pg
     provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
     let root = store_root("file-add");
     let state = configured(pool.clone(), &root);
-    let (product, _) = with_one_file(state.clone(), &TOKEN_A, "add", &["TesGb"]).await;
+    let (product, _) = with_one_file(state.clone(), &TOKEN_A, "add", &["Tes"]).await;
 
     let second = upload(state.clone(), &TOKEN_A, pdf("answer-key"), "").await;
     let (status, body) = json_call(
@@ -2063,7 +2063,7 @@ async fn a_second_payload_file_is_added_and_reads_back_beside_the_first(pool: Pg
     );
     assert_eq!(
         added.reaches,
-        vec![InventoryId::TesGb],
+        vec![InventoryId::Tes],
         "the response names the marketplace this reaches on the next send rather than \
          implying it has already reached it"
     );
@@ -2112,7 +2112,7 @@ async fn a_preview_from_its_own_upload_is_stored_and_one_over_the_cap_is_refused
     let payload = upload(state.clone(), &TOKEN_A, pdf("sellable"), "").await;
     let preview = upload(state.clone(), &TOKEN_A, pdf("first-two-pages"), "").await;
 
-    let mut body = create_body(&payload, "A resource with a preview", &["TesGb"]);
+    let mut body = create_body(&payload, "A resource with a preview", &["Tes"]);
     body["previews"] = serde_json::json!([preview.payload[0]]);
     let (status, response) =
         json_call(state.clone(), &TOKEN_A, Method::POST, "/v1/products", &body).await;
@@ -2147,7 +2147,7 @@ async fn a_preview_from_its_own_upload_is_stored_and_one_over_the_cap_is_refused
     oversized.resize(30 * 1024 * 1024 + 1, b' ');
     let bulky = upload(state.clone(), &TOKEN_A, oversized, "").await;
 
-    let mut body = create_body(&payload, "A resource with a fat preview", &["TesGb"]);
+    let mut body = create_body(&payload, "A resource with a fat preview", &["Tes"]);
     body["previews"] = serde_json::json!([bulky.payload[0]]);
     let (status, response) =
         json_call(state.clone(), &TOKEN_A, Method::POST, "/v1/products", &body).await;
@@ -2200,7 +2200,7 @@ async fn a_client_named_cover_is_refused_on_every_write_that_could_place_one(poo
     provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
     let root = store_root("file-cover-role");
     let state = configured(pool.clone(), &root);
-    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "sellable", &["TesGb"]).await;
+    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "sellable", &["Tes"]).await;
     let cover = cover_id(state.clone(), &TOKEN_A, product).await;
     let secret = upload(state.clone(), &TOKEN_A, pdf("the-paid-worksheet"), "").await;
 
@@ -2307,7 +2307,7 @@ async fn the_cover_refusal_is_a_sentence_and_holds_even_for_a_real_cover(pool: P
     provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
     let root = store_root("file-cover");
     let state = configured(pool.clone(), &root);
-    let (product, _) = with_one_file(state.clone(), &TOKEN_A, "cover", &["TesGb"]).await;
+    let (product, _) = with_one_file(state.clone(), &TOKEN_A, "cover", &["Tes"]).await;
 
     let second = upload(state.clone(), &TOKEN_A, pdf("another"), "").await;
     let (status, body) = json_call(
@@ -2354,7 +2354,7 @@ async fn a_replace_swaps_the_bytes_keeps_the_role_and_retires_the_old_row(pool: 
     provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
     let root = store_root("file-replace");
     let state = configured(pool.clone(), &root);
-    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "v1", &["TesGb"]).await;
+    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "v1", &["Tes"]).await;
 
     let revised = upload(state.clone(), &TOKEN_A, pdf("v2-with-more-pages"), "").await;
     let (status, body) = json_call(
@@ -2411,7 +2411,7 @@ async fn a_removal_takes_one_file_and_leaves_the_rest(pool: PgPool) {
     provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
     let root = store_root("file-remove");
     let state = configured(pool.clone(), &root);
-    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "keep", &["TesGb"]).await;
+    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "keep", &["Tes"]).await;
 
     let second = upload(state.clone(), &TOKEN_A, pdf("spare"), "").await;
     let (status, _) = json_call(
@@ -2473,7 +2473,7 @@ async fn removing_the_only_payload_file_is_refused_by_name_and_the_file_stands(p
     provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
     let root = store_root("file-last");
     let state = configured(pool.clone(), &root);
-    let (product, only) = with_one_file(state.clone(), &TOKEN_A, "only", &["TesGb"]).await;
+    let (product, only) = with_one_file(state.clone(), &TOKEN_A, "only", &["Tes"]).await;
 
     let (status, body) = call(
         state.clone(),
@@ -2518,9 +2518,9 @@ async fn a_live_tes_listing_refuses_every_file_change_with_the_capability_named(
     provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
     let root = store_root("file-uncaptured");
     let state = configured(pool.clone(), &root);
-    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "live", &["TesNz"]).await;
+    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "live", &["Tes"]).await;
     let spare = upload(state.clone(), &TOKEN_A, pdf("spare"), "").await;
-    bind_live(&pool, ORG_A, product, InventoryId::TesNz).await;
+    bind_live(&pool, ORG_A, product, InventoryId::Tes).await;
 
     let (status, body) = json_call(
         state.clone(),
@@ -2588,7 +2588,7 @@ async fn a_handle_this_tenant_never_uploaded_is_refused(pool: PgPool) {
     provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
     let root = store_root("file-unheld");
     let state = configured(pool.clone(), &root);
-    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "held", &["TesGb"]).await;
+    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "held", &["Tes"]).await;
 
     let invented = serde_json::json!({
         "hash": "0".repeat(64),
@@ -2628,7 +2628,7 @@ async fn one_tenants_file_is_not_reachable_from_another(pool: PgPool) {
     provision(&pool, ORG_B, USER_B, &TOKEN_B, "org-b").await;
     let root = store_root("file-tenancy");
     let state = configured(pool.clone(), &root);
-    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "theirs", &["TesGb"]).await;
+    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "theirs", &["Tes"]).await;
     let mine = upload(state.clone(), &TOKEN_B, pdf("mine"), "").await;
 
     let (status, _) = json_call(
@@ -2697,7 +2697,7 @@ async fn replacing_the_first_payload_file_redraws_the_cover_it_was_drawn_from(po
     provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
     let root = store_root("file-cover-redraw");
     let state = configured(pool.clone(), &root);
-    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "drawn", &["TesGb"]).await;
+    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "drawn", &["Tes"]).await;
     let before = cover_id(state.clone(), &TOKEN_A, product).await;
 
     let revised = upload(state.clone(), &TOKEN_A, pdf("redrawn-from-this"), "").await;
@@ -2749,7 +2749,7 @@ async fn replacing_a_later_payload_file_leaves_the_cover_alone(pool: PgPool) {
     provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
     let root = store_root("file-cover-kept");
     let state = configured(pool.clone(), &root);
-    let (product, _) = with_one_file(state.clone(), &TOKEN_A, "kept-cover", &["TesGb"]).await;
+    let (product, _) = with_one_file(state.clone(), &TOKEN_A, "kept-cover", &["Tes"]).await;
     let before = cover_id(state.clone(), &TOKEN_A, product).await;
 
     let second = upload(state.clone(), &TOKEN_A, pdf("answer-key"), "").await;
@@ -2800,7 +2800,7 @@ async fn replacing_a_later_payload_file_leaves_the_cover_alone(pool: PgPool) {
 /// The create body with each payload handle carrying the name a seller's file
 /// picker would have given it.
 fn named_create(uploaded: &UploadedView, title: &str, names: &[&str]) -> serde_json::Value {
-    let mut body = create_body(uploaded, title, &["TesGb"]);
+    let mut body = create_body(uploaded, title, &["Tes"]);
     let payload: Vec<serde_json::Value> = uploaded
         .payload
         .iter()
@@ -2937,7 +2937,7 @@ async fn a_file_nobody_named_reads_back_without_a_name_rather_than_with_a_guess(
     let state = configured(pool.clone(), &root);
     // The same body every client sent before names existed: handles with no
     // `name` at all, which is what every stored row looks like today.
-    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "unnamed", &["TesGb"]).await;
+    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "unnamed", &["Tes"]).await;
 
     let files = files_of(state, &TOKEN_A, product).await;
     assert_eq!(
@@ -2952,7 +2952,7 @@ async fn a_name_longer_than_the_column_is_refused_before_the_insert(pool: PgPool
     provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
     let root = store_root("file-long-name");
     let state = configured(pool.clone(), &root);
-    let (product, _) = with_one_file(state.clone(), &TOKEN_A, "long", &["TesGb"]).await;
+    let (product, _) = with_one_file(state.clone(), &TOKEN_A, "long", &["Tes"]).await;
 
     let second = upload(state.clone(), &TOKEN_A, pdf("verbose"), "").await;
     let (status, body) = json_call(
@@ -2998,7 +2998,7 @@ async fn a_cover_is_named_on_the_catalogue_and_served_only_to_its_own_tenant(poo
     provision(&pool, ORG_B, USER_B, &TOKEN_B, "org-b").await;
     let root = store_root("cover-route");
     let state = configured(pool.clone(), &root);
-    let (product, _payload) = with_one_file(state.clone(), &TOKEN_A, "covered", &["TesGb"]).await;
+    let (product, _payload) = with_one_file(state.clone(), &TOKEN_A, "covered", &["Tes"]).await;
 
     let (status, body) = get(state.clone(), &TOKEN_A, "/v1/products").await;
     assert_eq!(status, StatusCode::OK, "the catalogue reads");
@@ -3229,7 +3229,7 @@ async fn a_deleted_resource_stops_naming_and_stops_serving_its_cover(pool: PgPoo
     provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
     let root = store_root("cover-after-delete");
     let state = configured(pool.clone(), &root);
-    let (product, _payload) = with_one_file(state.clone(), &TOKEN_A, "doomed", &["TesGb"]).await;
+    let (product, _payload) = with_one_file(state.clone(), &TOKEN_A, "doomed", &["Tes"]).await;
     let path = format!("/v1/products/{}/cover", product.0.to_hyphenated());
 
     let (status, _) = get(state.clone(), &TOKEN_A, &path).await;
@@ -3270,7 +3270,7 @@ async fn removing_the_file_the_thumbnail_was_drawn_from_redraws_it_from_the_next
     provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
     let root = store_root("file-remove-redraw");
     let state = configured(pool.clone(), &root);
-    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "drawn-from", &["TesGb"]).await;
+    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "drawn-from", &["Tes"]).await;
     let before = cover_id(state.clone(), &TOKEN_A, product).await;
 
     // A second payload file, so the removal is permitted at all and there is
@@ -3338,7 +3338,7 @@ async fn removing_a_later_payload_file_leaves_the_thumbnail_alone(pool: PgPool) 
     provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
     let root = store_root("file-remove-keeps");
     let state = configured(pool.clone(), &root);
-    let (product, _) = with_one_file(state.clone(), &TOKEN_A, "keeps", &["TesGb"]).await;
+    let (product, _) = with_one_file(state.clone(), &TOKEN_A, "keeps", &["Tes"]).await;
     let before = cover_id(state.clone(), &TOKEN_A, product).await;
 
     let second = upload(state.clone(), &TOKEN_A, pdf("spare"), "").await;
@@ -3434,7 +3434,7 @@ async fn a_listed_resource_still_keeps_its_last_file(pool: PgPool) {
     provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
     let root = store_root("file-mapped-last");
     let state = configured(pool.clone(), &root);
-    let (product, only) = with_one_file(state.clone(), &TOKEN_A, "listed", &["TesGb"]).await;
+    let (product, only) = with_one_file(state.clone(), &TOKEN_A, "listed", &["Tes"]).await;
 
     let (status, body) = call(
         state.clone(),
@@ -3564,7 +3564,7 @@ async fn a_product_with_no_sidecar_reads_back_without_one(pool: PgPool) {
         &TOKEN_A,
         Method::POST,
         "/v1/products",
-        &create_body(&uploaded, "Imported elsewhere", &["TesGb"]),
+        &create_body(&uploaded, "Imported elsewhere", &["Tes"]),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);

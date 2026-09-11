@@ -171,7 +171,7 @@ impl<'a> ScriptedAdapter<'a> {
 
 impl MarketplaceAdapter for ScriptedAdapter<'_> {
     fn inventory(&self) -> InventoryId {
-        InventoryId::TesGb
+        InventoryId::Tes
     }
 
     fn project_fields(&self, listing: &ProjectedListing) -> Result<FieldSet, AdapterError> {

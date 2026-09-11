@@ -81,7 +81,7 @@ describe('the ledger store', () => {
 		stream.fire(
 			'ImportDrainMeasured',
 			'1',
-			'{"source":"TesGb","target":"TesNz","rows":1,"terms_seen":3,' +
+			'{"source":"Tes","target":"Tpt","rows":1,"terms_seen":3,' +
 				'"terms_unmapped":1,"terms_covered":1,"items_new":1,"items_already_open":0}'
 		);
 		expect(state().events).toHaveLength(1);

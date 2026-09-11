@@ -41,7 +41,7 @@ async fn engine_pool(app: &PgPool) -> PgPool {
 }
 
 /// One tenant's window: an item per named outcome, all settled at `T0` on
-/// TesGb. The breaker groups by inventory and never by tenant, so one tenant
+/// Tes. The breaker groups by inventory and never by tenant, so one tenant
 /// standing in for the fleet is the same arithmetic the cross-tenant case
 /// performs — what these tests vary is the outcome mix, not who owns it.
 #[expect(
@@ -103,7 +103,7 @@ async fn seed_window(app: &PgPool, engine: &PgPool, outcomes: &[&str], failure_c
                 id: mapping,
                 org: ORG,
                 product,
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 binding: Binding::Unbound,
                 policies: FieldPolicies {
                     title: FieldPolicy::Managed,
@@ -139,7 +139,7 @@ async fn seed_window(app: &PgPool, engine: &PgPool, outcomes: &[&str], failure_c
             ORG,
             &NewJob {
                 job: JobId(Uuid([0x06; 16])),
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 stamp: Stamp {
                     at: T0,
                     actor: Actor::System(SystemComponent::Engine),
@@ -184,7 +184,7 @@ async fn a_window_of_blocked_settlements_trips_the_breaker(app: PgPool) {
     .expect("the breaker runs");
     assert_eq!(
         report.tripped,
-        vec!["TesGb".to_owned()],
+        vec!["Tes".to_owned()],
         "six of six settlements blocked is a marketplace that has stopped working"
     );
     let halt: (String, String) =
@@ -261,7 +261,7 @@ async fn a_window_of_challenge_blocked_settlements_trips_the_breaker(app: PgPool
     .expect("the breaker runs");
     assert_eq!(
         report.tripped,
-        vec!["TesGb".to_owned()],
+        vec!["Tes".to_owned()],
         "the breaker reads the outcome, so a challenge-coded block reaches it exactly as \
          any other adverse settlement does"
     );

@@ -123,7 +123,7 @@ async fn seed_tenant(app: &PgPool, seed: u8, linked: bool) -> Tenant {
                 id: mapping,
                 org,
                 product,
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 binding: Binding::Unbound,
                 policies: FieldPolicies {
                     title: FieldPolicy::Managed,
@@ -352,7 +352,7 @@ async fn enqueue_operation(
             tenant.org,
             &NewJob {
                 job: JobId(Uuid([job_seed; 16])),
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 stamp: Stamp {
                     at: T0,
                     actor: Actor::System(SystemComponent::Engine),
@@ -716,7 +716,7 @@ async fn the_last_item_to_settle_finishes_the_job_once(app: PgPool) {
             tenant.org,
             &NewJob {
                 job,
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 stamp: Stamp {
                     at: T0,
                     actor: Actor::System(SystemComponent::Engine),
@@ -1100,7 +1100,7 @@ async fn halts_and_the_connection_gate_fail_closed(app: PgPool) {
     HaltRepo::new(engine.clone())
         .raise_org_inventory(
             halted.org,
-            InventoryId::TesGb,
+            InventoryId::Tes,
             &HaltCause {
                 raised_by: "test".to_owned(),
                 reason: "ambiguity".to_owned(),
@@ -1147,7 +1147,7 @@ async fn halts_and_the_connection_gate_fail_closed(app: PgPool) {
     assert_eq!(leased.org, unlinked.org, "only the linked tenant leases");
 
     leases
-        .gate_connection(leased.org, InventoryId::TesGb, T0)
+        .gate_connection(leased.org, InventoryId::Tes, T0)
         .await
         .expect("the gate flips");
     // F10: the gate is a lifecycle event, and the connection row alone cannot
@@ -1170,7 +1170,7 @@ async fn halts_and_the_connection_gate_fail_closed(app: PgPool) {
     );
     assert_eq!(
         gate_trail[0].detail.as_deref(),
-        Some("tes_gb"),
+        Some("tes"),
         "and names the inventory whose failure caused it"
     );
     leases
@@ -1240,7 +1240,7 @@ async fn a_rejected_settle_carries_its_failure_detail(app: PgPool) {
             tenant.org,
             &NewJob {
                 job,
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 stamp: Stamp {
                     at: T0,
                     actor: Actor::System(SystemComponent::Engine),
@@ -1326,7 +1326,7 @@ async fn a_reused_idempotency_key_is_named(app: PgPool) {
             tenant.org,
             &NewJob {
                 job: JobId(Uuid([0x14; 16])),
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 stamp: Stamp {
                     at: T0,
                     actor: Actor::System(SystemComponent::Engine),
@@ -1544,7 +1544,7 @@ async fn a_removal_enqueued_under_a_request_key_leases_as_a_removal(app: PgPool)
             },
             &NewJob {
                 job: JobId(Uuid([0x15; 16])),
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 stamp: Stamp {
                     at: T0,
                     actor: Actor::System(SystemComponent::Engine),
@@ -1618,7 +1618,7 @@ async fn the_completeness_count_holds_the_organisation_event_lock(app: PgPool) {
             tenant.org,
             &NewJob {
                 job,
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 stamp: Stamp {
                     at: T0,
                     actor: Actor::System(SystemComponent::Engine),
@@ -1776,7 +1776,7 @@ struct EnqueueOnto {
 }
 
 /// Enqueues onto a stated inventory, which `enqueue_operation` cannot: it
-/// fixes `InventoryId::TesGb`, and the marketplace the job carries is what
+/// fixes `InventoryId::Tes`, and the marketplace the job carries is what
 /// the re-link arm joins the connection on.
 #[expect(
     clippy::expect_used,
@@ -1964,7 +1964,7 @@ async fn a_relink_revives_the_park_the_clock_can_never_clear(app: PgPool) {
             mapping: tenant.mapping,
             job_seed: 0x71,
             item_seed: 0x72,
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
             operation: revision.clone(),
         },
     )
@@ -1993,7 +1993,7 @@ async fn a_relink_revives_the_park_the_clock_can_never_clear(app: PgPool) {
     );
     // What `Effect::RequeueBehindGate` does the moment the machine parks.
     leases
-        .gate_connection(tenant.org, InventoryId::TesGb, T0)
+        .gate_connection(tenant.org, InventoryId::Tes, T0)
         .await
         .expect("the tes connection gates");
     leases
@@ -2108,7 +2108,7 @@ async fn a_relinked_create_stays_parked_behind_its_own_duplicate_fence(app: PgPo
             mapping: tenant.mapping,
             job_seed: 0x81,
             item_seed: 0x82,
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
             operation: ItemOperation::Create,
         },
     )
@@ -2120,7 +2120,7 @@ async fn a_relinked_create_stays_parked_behind_its_own_duplicate_fence(app: PgPo
         created
     );
     leases
-        .gate_connection(tenant.org, InventoryId::TesGb, T0)
+        .gate_connection(tenant.org, InventoryId::Tes, T0)
         .await
         .expect("the connection gates");
     relink(&engine, tenant.org, "tes").await;
@@ -2190,7 +2190,7 @@ async fn a_released_publish_names_no_listing(app: PgPool) {
             mapping: tenant.mapping,
             job_seed: 0x91,
             item_seed: 0x92,
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
             operation: ItemOperation::Publish {
                 to: ListingState::Live,
             },
@@ -2204,7 +2204,7 @@ async fn a_released_publish_names_no_listing(app: PgPool) {
         published
     );
     leases
-        .gate_connection(tenant.org, InventoryId::TesGb, T0)
+        .gate_connection(tenant.org, InventoryId::Tes, T0)
         .await
         .expect("the connection gates");
     relink(&engine, tenant.org, "tes").await;
@@ -2287,55 +2287,6 @@ async fn every_declared_marketplace_has_a_transport_class_row(app: PgPool) {
 
 /// The mutex re-scope, contending half.
 ///
-/// Two inventories of one marketplace share one seller login, so they share one
-/// live-lease slot. This is the invariant the index protects, stated as the
-/// behaviour a second claimant sees.
-#[sqlx::test(migrations = "./migrations")]
-async fn two_inventories_of_one_marketplace_cannot_both_hold_a_live_lease(app: PgPool) {
-    let engine = engine_pool(&app).await;
-    let tenant = seed_tenant(&app, 0xE1, true).await;
-    let us_mapping = seed_mapping_on(&app, &tenant, 0xE4, InventoryId::TesUs).await;
-    enqueue_on(
-        &engine,
-        &tenant,
-        &EnqueueOnto {
-            mapping: tenant.mapping,
-            job_seed: 0xE5,
-            item_seed: 0xE6,
-            inventory: InventoryId::TesGb,
-            operation: ItemOperation::Create,
-        },
-    )
-    .await;
-    enqueue_on(
-        &engine,
-        &tenant,
-        &EnqueueOnto {
-            mapping: us_mapping,
-            job_seed: 0xE7,
-            item_seed: 0xE8,
-            inventory: InventoryId::TesUs,
-            operation: ItemOperation::Create,
-        },
-    )
-    .await;
-
-    let first = claim(&app, tenant.org, "w1", 60)
-        .await
-        .expect("the first item leases");
-    assert_eq!(
-        first.inventory,
-        InventoryId::TesGb,
-        "the fixture depends on FIFO order"
-    );
-    let second = claim(&app, tenant.org, "w2", 60).await;
-    assert!(
-        second.is_none(),
-        "tes_gb and tes_us are one Tes login, so the second claimant must find the slot \
-         taken rather than open a second live session on one marketplace account: {second:?}"
-    );
-}
-
 /// The mutex re-scope, non-contending half.
 ///
 /// Two marketplaces are two logins, so they are two slots. Under the
@@ -2359,7 +2310,7 @@ async fn two_marketplaces_can_each_hold_a_live_lease(app: PgPool) {
             mapping: tenant.mapping,
             job_seed: 0xF6,
             item_seed: 0xF7,
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
             operation: ItemOperation::Create,
         },
     )
@@ -2675,7 +2626,7 @@ async fn a_filtered_claim_returns_only_the_marketplace_it_asked_for(app: PgPool)
             mapping: tenant.mapping,
             job_seed: 0xCA,
             item_seed: 0xCB,
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
             operation: ItemOperation::Create,
         },
     )
@@ -2748,7 +2699,7 @@ async fn a_filtered_claim_returns_only_the_marketplace_it_asked_for(app: PgPool)
     };
     assert_eq!(
         other.inventory,
-        InventoryId::TesGb,
+        InventoryId::Tes,
         "and what it claims is the marketplace it asked for"
     );
 }
@@ -3440,7 +3391,7 @@ async fn an_attempt_naming_a_mapping_its_item_does_not_is_refused(app: PgPool) {
     // key is satisfied and the only thing wrong is that it is not the
     // mapping this item names. A mapping that did not exist at all would be
     // refused by the key before the check ran, which would prove nothing.
-    let other = seed_mapping_on(&app, &tenant, 0xDA, InventoryId::TesUs).await;
+    let other = seed_mapping_on(&app, &tenant, 0xDA, InventoryId::Tpt).await;
 
     let opened = WriteAttemptRepo::new(engine.clone())
         .open(

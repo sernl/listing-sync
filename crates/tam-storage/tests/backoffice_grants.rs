@@ -128,7 +128,7 @@ async fn seed_two_tenants(app: &PgPool) -> Result<(), sqlx::Error> {
         sqlx::query(
             "INSERT INTO job \
              (org_id, id, inventory, marketplace, created_at, actor_kind) \
-             VALUES ($1, $2, 'tes_gb', 'tes', now(), 'system')",
+             VALUES ($1, $2, 'tes', 'tes', now(), 'system')",
         )
         .bind(org_uuid)
         .bind(job)
@@ -143,7 +143,7 @@ async fn seed_two_tenants(app: &PgPool) -> Result<(), sqlx::Error> {
         .bind(org_uuid)
         .bind(job)
         .bind(serde_json::json!({
-            "source": "TesGb", "target": "TesNz", "rows": 1, "terms_seen": 3,
+            "source": "Tes", "target": "TesNz", "rows": 1, "terms_seen": 3,
             "terms_unmapped": 1, "terms_covered": 1, "items_new": 1,
             "items_already_open": 0
         }))

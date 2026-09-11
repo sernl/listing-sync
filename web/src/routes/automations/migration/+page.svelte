@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { page } from '$app/state';
 	import ActivityLog from '$lib/ActivityLog.svelte';
 	import {
 		ApiFailure,
@@ -13,10 +12,10 @@
 	import { anyConnectionStands } from '$lib/connection-standing';
 	import { APP_TOO_OLD, desktopInvoker, startImportHere } from '$lib/desktop';
 	import Field from '$lib/Field.svelte';
-	import type { InventoryId, Marketplace } from '$lib/generated/vocab';
+	import type { Marketplace } from '$lib/generated/vocab';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
-	import { MARKETPLACE_NAME, platformTitle } from '$lib/platforms';
+	import { MARKETPLACE_NAME } from '$lib/platforms';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import {
 		AUTHORSHIP_FIRST,
@@ -25,8 +24,6 @@
 		mayMigrate,
 		migrateBody,
 		migrateSource,
-		siteChoiceQuestion,
-		siteLabel,
 		sourcesOn,
 		targetAuthorship
 	} from '$lib/sync-request';
@@ -40,8 +37,7 @@
 		migrationCounts,
 		migrationLog,
 		migrationRows,
-		openFromSource,
-		seededSource
+		openFromSource
 	} from '$lib/pages/automations/migration';
 	import '$lib/pages/automations/automations.css';
 
@@ -61,11 +57,6 @@
 	let held = $state<Marketplace | null>(null);
 	let starting = $state(false);
 	let refusal = $state<string | null>(null);
-	// The site the seller picked, or null while they have not picked one and
-	// the first site the connection offers stands. Not remembered between
-	// visits: nothing on the wire records which site is theirs, so remembering
-	// it would mean this console inventing a preference it cannot confirm.
-	let chosenSite = $state<InventoryId | null>(null);
 	// Set only when the request was created and this computer then declined to
 	// run it. The request exists and must stay reachable, so the card offers it
 	// rather than leaving the seller on a refusal with nowhere to go.
@@ -76,11 +67,9 @@
 	// not change while the page is open.
 	const invoke = desktopInvoker();
 
-	// One key per site, minted once: the server takes the idempotency key as the
-	// request's own identity, so a retry after a failed submit reaches the same
-	// request rather than starting a second import of the same shop -- and a
-	// seller who corrects the site before retrying gets a new request rather
-	// than a replay of the one that names the shop they did not mean.
+	// One key per source, minted once: the server takes the idempotency key as
+	// the request's own identity, so a retry after a failed submit reaches the
+	// same request rather than starting a second import of the same shop.
 	let keys: Record<string, string> = {};
 
 	const from = $derived(migrateSource(connections));
@@ -88,38 +77,25 @@
 	/** Whether the seller has no marketplace at all, which is a different fact
 	 *  from having none this migration can read.
 	 *
-	 *  `from` answers only the second: `MIGRATE_SOURCES` is the three TES sites
-	 *  and nothing else, so it is null for a seller who connected TPT first —
+	 *  `from` answers only the second: `MIGRATE_SOURCES` is TES and nothing
+	 *  else, so it is null for a seller who connected TPT first —
 	 *  the ordinary order, since TPT is where a migration writes. Titling a
 	 *  banner "No marketplace is connected" off `from` told that seller
 	 *  something false. */
 	const nothingConnected = $derived(!connectionsUnread && !anyConnectionStands(connections));
 	const sites = $derived(from === null ? [] : sourcesOn(from));
+	// One marketplace reads out, so there is nothing for the seller to pick.
+	const source = $derived(sites[0] ?? null);
 	// The console's own gate, and until the server refuses one of its own it is
 	// the only gate: a migrate submitted with no declaration on record settles
 	// every listing it creates failed and terminal, and declaring afterwards
 	// brings none of them back.
 	const declared = $derived(mayMigrate(targetAuthorship(connections)));
-	// The seller's pick, a hand-over from another screen, or this page's own
-	// default, in that order. `sites` is `sourcesOn`, so an unknown or
-	// unofferable seed falls back to the default rather than emptying the
-	// field.
-	const source = $derived(
-		seededSource(chosenSite, page.url.searchParams.get('source'), sites)
-	);
-
 	// A migration already reading this shop. While there is one, the start
 	// control is replaced by a banner naming it: the same shop migrated twice
 	// drafts every listing on TPT twice, and the seller would have no way to
 	// tell the two runs apart afterwards.
 	const alreadyRunning = $derived(openFromSource(requests, source));
-
-	/** The picked option read back as an inventory, checked against the list the
-	 *  options were drawn from rather than asserted: a cast would be the only
-	 *  thing claiming the value is one of them. */
-	function siteFrom(value: string): InventoryId | null {
-		return sites.find((site) => site === value) ?? null;
-	}
 
 	const rows = $derived(marketplaceRows(connections, migrationCounts(requests)));
 	// The resolved selection rather than the raw click, so the highlighted row
@@ -240,16 +216,13 @@
 					<p class="migrate-lead">{WHAT_A_MIGRATION_IS}</p>
 
 					<div class="set-grid">
-						<Field label="From" id="migrate-from" hint={siteChoiceQuestion(sites)}>
-							<select
-								id="migrate-from"
-								value={source}
-								disabled={starting}
-								onchange={(event) => (chosenSite = siteFrom(event.currentTarget.value))}
-							>
-								{#each sites as site (site)}
-									<option value={site} title={platformTitle(site)}>{siteLabel(site)}</option>
-								{/each}
+						<Field
+							label="From"
+							id="migrate-from"
+							hint="The one marketplace a migration reads from, so there is nothing to choose."
+						>
+							<select id="migrate-from" disabled>
+								<option>{MARKETPLACE_NAME.Tes}</option>
 							</select>
 						</Field>
 						<Field

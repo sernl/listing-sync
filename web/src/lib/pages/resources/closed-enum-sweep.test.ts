@@ -241,7 +241,7 @@ describe('every chip the closed enums can produce', () => {
 				STATUSES.length *
 				2
 		);
-		expect(chips.length).toBeGreaterThan(30000);
+		expect(chips.length).toBeGreaterThan(20000);
 	});
 
 	it('answers with a well-formed chip for every one of them', () => {

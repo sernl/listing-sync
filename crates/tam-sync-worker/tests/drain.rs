@@ -29,8 +29,8 @@ use tam_types::{
 const ORG: OrgId = OrgId(Uuid([0xAA; 16]));
 const REQUEST: Uuid = Uuid([0x71; 16]);
 const NOW: Timestamp = Timestamp(1_756_000_000_000);
-const SOURCE: InventoryId = InventoryId::TesGb;
-const TARGET: InventoryId = InventoryId::TesNz;
+const SOURCE: InventoryId = InventoryId::Tes;
+const TARGET: InventoryId = InventoryId::Tpt;
 
 #[expect(
     clippy::expect_used,
@@ -304,7 +304,7 @@ async fn a_live_sync_enqueues_the_create_and_the_publish_it_gates(pool: PgPool) 
         rows,
         vec![
             ("create".to_owned(), None),
-            ("publish".to_owned(), Some("tes_nz".to_owned())),
+            ("publish".to_owned(), Some("tpt".to_owned())),
         ],
         "live is a create and a publish, and the publish waits for the create's own binding"
     );

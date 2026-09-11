@@ -1,11 +1,16 @@
-// The palette's own gate: contrast, drift between the sheets that declare it,
-// and the absence of any colour this file does not name.
+// The palette's own gate: contrast on both grounds, drift between the sheets
+// that declare it, and the absence of any colour this file does not name.
 //
 // It exists because the palette is the one thing in this console that is
 // correct by arithmetic rather than by looking right, and arithmetic is exactly
 // what a later edit made for looks will quietly break. Every value below is
 // read from `tokens.css` rather than restated here, so nudging a token one
 // shade fails the lane instead of shipping.
+//
+// Since 2026-09-12 the sheet declares two palettes, and every pair below is
+// measured on both. Dark is not granted the trades light was: the kit's Slate
+// on the kit's navigation card is a documented 4.29 there, and on the dark
+// ground the ink names split precisely so that nothing has to be excused.
 
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
@@ -18,22 +23,63 @@ const STATIC = `${REPO}web/static`;
 const OFFLINE = `${STATIC}/unreachable.html`;
 const FAVICON = `${STATIC}/favicon.svg`;
 
-/** The body of the first `:root` block of a stylesheet, comments dropped. */
-function rootBlock(path: string): string {
+/** The declaring blocks of a stylesheet: `:root` and the dark override, in
+ *  that order and with comments dropped.
+ *
+ *  Matched on the selector rather than on position, because the console's
+ *  sheet ends with a third block (`[data-theme='light']`) that pins
+ *  `color-scheme` and declares no token.
+ *
+ *  Two spellings of dark, because the two kinds of file reach it differently.
+ *  A page the console serves is painted from the seller's stored choice, so
+ *  the attribute is what selects; `unreachable.html` is opened from the
+ *  desktop bundle with no script and no storage, so the machine's own
+ *  preference is the only signal it has and it uses the media query. Both
+ *  are the same table and both are checked against it. */
+const THEME_SELECTORS: Record<Theme, RegExp> = {
+	light: /:root\s*\{/,
+	dark: /(?:\[data-theme=['"]?dark['"]?\]|@media \(prefers-color-scheme: dark\)\s*\{\s*:root)\s*\{/,
+};
+
+type Theme = 'light' | 'dark';
+
+const THEMES: readonly Theme[] = ['light', 'dark'];
+
+/** The body of one declaring block, comments dropped. */
+function block(path: string, theme: Theme): string {
 	const sheet = readFileSync(path, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-	const block = sheet.slice(sheet.indexOf(':root'));
-	return block.slice(block.indexOf('{') + 1, block.indexOf('}'));
+	const opens = THEME_SELECTORS[theme].exec(sheet);
+	if (!opens) throw new Error(`${path} declares no ${theme} block`);
+	const body = sheet.slice(opens.index + opens[0].length);
+	return body.slice(0, body.indexOf('}'));
 }
 
-/** Every `--name: value` inside the first `:root` block of a stylesheet. */
-function rootTokens(path: string): Map<string, string> {
-	const body = rootBlock(path);
+/** Every `--name: value` inside one declaring block. */
+function blockTokens(path: string, theme: Theme): Map<string, string> {
 	return new Map(
-		[...body.matchAll(/--([a-z0-9-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]),
+		[...block(path, theme).matchAll(/--([a-z0-9-]+)\s*:\s*([^;]+);/g)].map((m) => [
+			m[1],
+			m[2].trim(),
+		]),
 	);
 }
 
-const TOKENS = rootTokens(`${HERE}tokens.css`);
+/** What a sheet actually resolves to under one theme: the light table with
+ *  the dark block's overrides applied, which is what the cascade does and
+ *  therefore what a seller sees. A dark block that declares six tokens is a
+ *  palette of every light token but six. */
+function table(path: string, theme: Theme): Map<string, string> {
+	const light = blockTokens(path, 'light');
+	if (theme === 'light') return light;
+	return new Map([...light, ...blockTokens(path, 'dark')]);
+}
+
+const SHEET = `${HERE}tokens.css`;
+const TABLES: Record<Theme, Map<string, string>> = {
+	light: table(SHEET, 'light'),
+	dark: table(SHEET, 'dark'),
+};
+const TOKENS = TABLES.light;
 
 /** A token's colour, following `var()` aliases and resolving the one derived
  *  form this sheet uses: `color-mix(in srgb, var(--a) N%, var(--b))`.
@@ -43,17 +89,17 @@ const TOKENS = rootTokens(`${HERE}tokens.css`);
  *  darker one would be a colour the brand does not own. Resolving the mix here
  *  is what lets the contrast pairs below measure them as the browser paints
  *  them. sRGB, non-linear, which is what `color-mix(in srgb, ...)` specifies. */
-function colour(name: string): string {
-	const raw = TOKENS.get(name);
+function colour(name: string, theme: Theme = 'light'): string {
+	const raw = TABLES[theme].get(name);
 	if (raw === undefined) throw new Error(`tokens.css declares no --${name}`);
 	const alias = raw.match(/^var\(--([a-z0-9-]+)\)$/);
-	if (alias) return colour(alias[1]);
+	if (alias) return colour(alias[1], theme);
 	const mix = raw.match(
 		/^color-mix\(in srgb,\s*var\(--([a-z0-9-]+)\)\s+(\d+)%,\s*var\(--([a-z0-9-]+)\)\)$/,
 	);
 	if (!mix) return raw;
 	const share = Number(mix[2]) / 100;
-	const [a, b] = [colour(mix[1]), colour(mix[3])].map((hex) =>
+	const [a, b] = [colour(mix[1], theme), colour(mix[3], theme)].map((hex) =>
 		[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)),
 	);
 	const blend = a.map((v, i) => Math.round(v * share + b[i] * (1 - share)));
@@ -70,10 +116,10 @@ function luminance(hex: string): number {
 	return 0.2126 * channel(0) + 0.7152 * channel(2) + 0.0722 * channel(4);
 }
 
-/** WCAG 2.x contrast between two token names. */
-function ratio(ink: string, ground: string): number {
-	const a = luminance(colour(ink));
-	const b = luminance(colour(ground));
+/** WCAG 2.x contrast between two token names, on one of the two grounds. */
+function ratio(ink: string, ground: string, theme: Theme = 'light'): number {
+	const a = luminance(colour(ink, theme));
+	const b = luminance(colour(ground, theme));
 	return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
 
@@ -149,16 +195,23 @@ const ON_SOFT: Array<[string, string]> = [
 	['soon', 'soon-soft'],
 ];
 
-/** A filled control's label against its own fill.
+/** A filled control's label against its own fill, and the rail's icons
+ *  against the rail.
  *
  *  Teal is not here, because nothing fills a control with it and sets a word
  *  on top: white on the kit's Teal measures 2.54, so the accent fills discs
- *  and ticks, and `--primary` is what a solid button is. */
+ *  and ticks, and `--primary` is what a solid button is.
+ *
+ *  The rail is here rather than in `GROUNDS` because it is not a ground a
+ *  page is painted with: it is one band, `--rail-ink` is the only thing drawn
+ *  on it, and on dark it is the one surface that stays Indigo while
+ *  `--primary` moves to Lavender. */
 const ON_FILL: Array<[string, string]> = [
 	['on-fill', 'primary'],
 	['on-fill', 'additive'],
 	['on-fill', 'text'],
 	['surface', 'primary'],
+	['rail-ink', 'rail-fill'],
 ];
 
 /** The seven label hues, which are the one scale that does not follow the
@@ -212,70 +265,122 @@ const STATIC_OTHER: Record<string, string> = {
 		"The offline card's shadow, which is `--sh-2` written out: `color-mix` is what the token uses and the webview the desktop app bundles may predate it. The channels are checked against `--text` below.",
 };
 
-/** Every colour literal a file writes, comments dropped. */
+/** Every colour literal a file writes, comments dropped.
+ *
+ *  `white` and `black` are here beside the hexes since 2026-09-12, and they
+ *  are the reason the dark block found four unreadable bands on the marketing
+ *  site rather than shipping them: `color-mix(in srgb, var(--peach) 35%,
+ *  white)` reads as a token to a sweep that looks for `#` and a paren, and it
+ *  is a hard-coded Cream to a browser. A keyword ground does not follow a
+ *  theme, so it is a literal exactly as `#ffffff` is. The `(?!-)` keeps
+ *  `white-space` out of it. */
 function literalsIn(path: string): string[] {
 	// Comments go first: a hex inside one is prose about the palette, not a
 	// colour the browser will paint, and this file's own header says
-	// `color: #fff` while explaining why none may remain.
+	// `color: #fff` while explaining why none may remain. The third form is
+	// the line comment a Svelte component's script block writes; `(?<!:)`
+	// keeps a `https://` out of it, and CSS has no such comment so a sheet is
+	// unaffected.
 	const body = readFileSync(path, 'utf8')
 		.replace(/\/\*[\s\S]*?\*\//g, '')
-		.replace(/<!--[\s\S]*?-->/g, '');
+		.replace(/<!--[\s\S]*?-->/g, '')
+		.replace(/(?<!:)\/\/.*$/gm, '');
 	const sheet =
 		path.endsWith('tokens.css') || path === LANDING_CSS
-			? body.replace(/:root\s*\{[\s\S]*?\n\}/, '')
+			? // Both declaring blocks, because a palette is where a hex is
+				// allowed to be written and there are two of them now. The
+				// `[data-theme='light']` block declares no token and is left
+				// in the sweep, which is the point: a colour written there
+				// would be a third palette nobody is reading.
+				body.replace(/(?::root|\[data-theme=['"]?dark['"]?\])\s*\{[\s\S]*?\n\}/g, '')
 			: body;
-	return [...sheet.matchAll(/#[0-9a-fA-F]{3}\b|#[0-9a-fA-F]{6}\b|\brgba?\(|\bhsla?\(/g)].map(
-		([literal]) => literal,
-	);
+	return [
+		...sheet.matchAll(
+			/#[0-9a-fA-F]{3}\b|#[0-9a-fA-F]{6}\b|\brgba?\(|\bhsla?\(|\bwhite\b(?!-)|\bblack\b(?!-)/g,
+		),
+	].map(([literal]) => literal);
 }
 
 describe('contrast', () => {
-	/** A pair's own bar: `AA`, or `FLOOR` where the kit was granted a trade. */
-	const barFor = (ink: string, ground: string) =>
-		`${expand(colour(ink))} on ${expand(colour(ground))}` in KIT_TRADES ? FLOOR : AA;
+	/** A pair's own bar: `AA`, or `FLOOR` where the kit was granted a trade.
+	 *
+	 *  Keyed by the two colours rather than the two names, so a trade granted
+	 *  on light cannot silently cover a different pair of hexes on dark. */
+	const barFor = (ink: string, ground: string, theme: Theme) =>
+		`${expand(colour(ink, theme))} on ${expand(colour(ground, theme))}` in KIT_TRADES
+			? FLOOR
+			: AA;
 
-	it.each(INKS)('--%s clears its bar on every ground a page is painted with', (ink) => {
+	const pairs = THEMES.flatMap((theme) => INKS.map((ink): [Theme, string] => [theme, ink]));
+
+	it.each(pairs)('on %s, --%s clears its bar on every ground a page is painted with', (theme, ink) => {
 		for (const ground of GROUNDS) {
-			const bar = barFor(ink, ground);
-			expect(`--${ink} on --${ground}: ${ratio(ink, ground).toFixed(2)}`).toBe(
-				`--${ink} on --${ground}: ${Math.max(ratio(ink, ground), bar).toFixed(2)}`,
+			const bar = barFor(ink, ground, theme);
+			const measured = ratio(ink, ground, theme);
+			expect(`${theme}: --${ink} on --${ground}: ${measured.toFixed(2)}`).toBe(
+				`${theme}: --${ink} on --${ground}: ${Math.max(measured, bar).toFixed(2)}`,
 			);
 		}
 	});
 
 	/** A trade the kit no longer needs is a trade that has to go, or the next
-	 *  reader reads it as a standing licence. */
+	 *  reader reads it as a standing licence. Measured across both palettes,
+	 *  so a trade whose light pair went away cannot survive on a dark pair it
+	 *  was never granted for. */
 	it('every trade granted to the kit is still a trade', () => {
 		const measured = new Map<string, number>();
-		for (const ink of INKS) {
-			for (const ground of [...GROUNDS, ...ON_SOFT.map(([, g]) => g)]) {
-				measured.set(`${expand(colour(ink))} on ${expand(colour(ground))}`, ratio(ink, ground));
+		for (const theme of THEMES) {
+			for (const ink of INKS) {
+				for (const ground of [...GROUNDS, ...ON_SOFT.map(([, g]) => g)]) {
+					const pair = `${expand(colour(ink, theme))} on ${expand(colour(ground, theme))}`;
+					measured.set(pair, ratio(ink, ground, theme));
+				}
 			}
 		}
 		const spent = Object.keys(KIT_TRADES).filter((pair) => (measured.get(pair) ?? AA) >= AA);
 		expect(spent).toEqual([]);
 	});
 
-	it.each(ON_SOFT)('--%s clears its bar on --%s', (ink, ground) => {
-		expect(ratio(ink, ground)).toBeGreaterThanOrEqual(barFor(ink, ground));
+	/** Dark earns no exception, and the emptiness of this list is the claim:
+	 *  every trade in `KIT_TRADES` is a light pair. */
+	it('the dark palette is granted no trade', () => {
+		const granted = [];
+		for (const ink of INKS) {
+			for (const ground of [...GROUNDS, ...ON_SOFT.map(([, g]) => g)]) {
+				const pair = `${expand(colour(ink, 'dark'))} on ${expand(colour(ground, 'dark'))}`;
+				if (pair in KIT_TRADES) granted.push(pair);
+			}
+		}
+		expect(granted).toEqual([]);
 	});
 
-	it.each(ON_FILL)('--%s clears AA on --%s', (ink, ground) => {
-		expect(ratio(ink, ground)).toBeGreaterThanOrEqual(AA);
-	});
+	it.each(THEMES.flatMap((theme) => ON_SOFT.map(([i, g]) => [theme, i, g])))(
+		'on %s, --%s clears its bar on --%s',
+		(theme, ink, ground) => {
+			const on = theme as Theme;
+			expect(ratio(ink, ground, on)).toBeGreaterThanOrEqual(barFor(ink, ground, on));
+		},
+	);
 
-	it('every label hue clears AA on the chip and on the card', () => {
+	it.each(THEMES.flatMap((theme) => ON_FILL.map(([i, g]) => [theme, i, g])))(
+		'on %s, --%s clears AA on --%s',
+		(theme, ink, ground) => {
+			expect(ratio(ink, ground, theme as Theme)).toBeGreaterThanOrEqual(AA);
+		},
+	);
+
+	it.each(THEMES)('on %s, every label hue clears AA on the chip and on the card', (theme) => {
 		expect(LABELS.length).toBe(7);
 		const failing = LABELS.flatMap((hue) =>
 			(['ground', 'surface'] as const)
-				.filter((ground) => ratio(hue, ground) < AA)
-				.map((ground) => `--${hue} on --${ground}: ${ratio(hue, ground).toFixed(2)}`),
+				.filter((ground) => ratio(hue, ground, theme) < AA)
+				.map((ground) => `--${hue} on --${ground}: ${ratio(hue, ground, theme).toFixed(2)}`),
 		);
 		expect(failing).toEqual([]);
 	});
 
-	it('the label hues stay seven distinct colours', () => {
-		expect(new Set(LABELS.map(colour)).size).toBe(LABELS.length);
+	it.each(THEMES)('on %s, the label hues stay seven distinct colours', (theme) => {
+		expect(new Set(LABELS.map((hue) => colour(hue, theme))).size).toBe(LABELS.length);
 	});
 
 	it('every token drawn as text is one the pairs above measure', () => {
@@ -295,40 +400,67 @@ describe('contrast', () => {
 });
 
 describe('one palette, declared once', () => {
-	const landing = rootTokens(LANDING_CSS);
-	const shared = [...landing.keys()].filter((name) => TOKENS.has(name));
+	const landingTable: Record<Theme, Map<string, string>> = {
+		light: table(LANDING_CSS, 'light'),
+		dark: table(LANDING_CSS, 'dark'),
+	};
+	const shared = [...landingTable.light.keys()].filter((name) => TOKENS.has(name));
 
 	/** The landing's own value for a token, aliases followed in its own sheet.
 	 *  Both sheets write `--card: var(--surface)`, so the comparison has to
 	 *  resolve each side against the sheet it is written in or every alias
 	 *  reads as drift. */
-	const landingColour = (name: string): string => {
-		const raw = landing.get(name) ?? '';
+	const landingColour = (name: string, theme: Theme): string => {
+		const raw = landingTable[theme].get(name) ?? '';
 		const alias = raw.match(/^var\(--([a-z0-9-]+)\)$/);
-		return alias ? landingColour(alias[1]) : raw;
+		return alias ? landingColour(alias[1], theme) : raw;
 	};
 
 	/** No token is allowed to differ. The founder's kit of 2026-09-11 is one
 	 *  brand across the marketing site and the console, which retired the one
 	 *  difference this file used to grant: the landing's 2rem section card
-	 *  against the console's 16px, now `--r-card` in both. */
-	it('the landing and the console agree on every token both declare', () => {
+	 *  against the console's 16px, now `--r-card` in both.
+	 *
+	 *  Both palettes, because one brand in two themes is still one brand: a
+	 *  dark block on the console that the site did not follow would put a
+	 *  seller's own marketing page in a different indigo from their console. */
+	it.each(THEMES)('on %s, the landing and the console agree on every token both declare', (theme) => {
 		expect(shared.length).toBeGreaterThan(10);
 		const drifted = shared
-			.filter((name) => expand(landingColour(name)) !== expand(colour(name)))
-			.map((name) => `--${name}: landing ${landing.get(name)}, console ${colour(name)}`);
+			.filter((name) => expand(landingColour(name, theme)) !== expand(colour(name, theme)))
+			.map(
+				(name) =>
+					`--${name}: landing ${landingColour(name, theme)}, console ${colour(name, theme)}`,
+			);
 		expect(drifted).toEqual([]);
 	});
 
-	/** Light-only is a decision with dark deferred, not an omission, and the
-	 *  contrast pairs above are measured for light alone. A sheet that stops
-	 *  declaring it hands form controls, scrollbars and the canvas to whatever
-	 *  theme the reader's browser is set to. */
-	it('both sheets declare the light scheme', () => {
-		const missing = [`${HERE}tokens.css`, LANDING_CSS]
-			.filter((path) => !/\bcolor-scheme:\s*light\s*;/.test(rootBlock(path)))
+	/** A shared token the console re-grounds and the site does not is the
+	 *  drift the test above cannot see on its own: the site would inherit its
+	 *  light value into the dark block and read as a lighter brand rather than
+	 *  as a different one. */
+	it('the two sheets re-ground the same shared names on dark', () => {
+		const overridden = (path: string) =>
+			[...blockTokens(path, 'dark').keys()].filter((name) => shared.includes(name)).sort();
+		expect(overridden(LANDING_CSS)).toEqual(overridden(SHEET));
+	});
+
+	/** Both schemes on the root, and each block pinning its own, so a browser
+	 *  paints its form controls, scrollbars and canvas to match the ground the
+	 *  page is actually drawn on rather than the one the reader's system
+	 *  prefers. A sheet that stops declaring this hands all three back. */
+	it('both sheets declare both schemes and pin each one', () => {
+		const wrong = [SHEET, LANDING_CSS]
+			.filter(
+				(path) =>
+					!/\bcolor-scheme:\s*light dark\s*;/.test(block(path, 'light')) ||
+					!/\bcolor-scheme:\s*dark\s*;/.test(block(path, 'dark')) ||
+					!/\[data-theme=['"]?light['"]?\]\s*\{\s*color-scheme:\s*light\s*;/.test(
+						readFileSync(path, 'utf8').replace(/\/\*[\s\S]*?\*\//g, ''),
+					),
+			)
 			.map((path) => path.slice(REPO.length));
-		expect(missing).toEqual([]);
+		expect(wrong).toEqual([]);
 	});
 
 	/** The sheets and templates that must reach every colour through a token,
@@ -348,7 +480,12 @@ describe('one palette, declared once', () => {
 		),
 	];
 
-	const declared = new Set([...TOKENS.keys()].map((name) => expand(colour(name))));
+	/** Both palettes: `unreachable.html` carries a copy of each, so a dark
+	 *  ground written there is a token's own value even though no light token
+	 *  names it. */
+	const declared = new Set(
+		THEMES.flatMap((theme) => [...TABLES[theme].keys()].map((name) => expand(colour(name, theme)))),
+	);
 
 	it('every colour on screen is a token, by var() or by a checked copy', () => {
 		const stray: string[] = [];
@@ -390,14 +527,20 @@ describe('one palette, declared once', () => {
  *  cannot be reached and so has no stylesheet to import. The copy is checked
  *  rather than trusted. */
 describe('the offline page', () => {
-	const offline = rootTokens(OFFLINE);
-
-	it('declares the console value for every token it names', () => {
+	it.each(THEMES)('declares the console %s value for every token it names', (theme) => {
+		const offline = blockTokens(OFFLINE, theme);
 		expect(offline.size).toBe(6);
 		const drifted = [...offline]
-			.filter(([name, value]) => expand(value) !== expand(colour(name)))
-			.map(([name, value]) => `--${name}: offline ${value}, console ${colour(name)}`);
+			.filter(([name, value]) => expand(value) !== expand(colour(name, theme)))
+			.map(([name, value]) => `--${name}: offline ${value}, console ${colour(name, theme)}`);
 		expect(drifted).toEqual([]);
+	});
+
+	/** The page has no script and no stylesheet, so it cannot read the
+	 *  seller's stored choice; it follows the machine instead, which is the
+	 *  only signal a bundled file with no JavaScript has. */
+	it('reaches its dark block through the media query rather than the attribute', () => {
+		expect(readFileSync(OFFLINE, 'utf8')).toContain('@media (prefers-color-scheme: dark)');
 	});
 
 	it("writes the card's shadow as --text at 8 per cent", () => {

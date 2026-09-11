@@ -86,7 +86,7 @@ describe('the api client', () => {
 				return jsonResponse(201, { job: 'j', replay: false });
 			})
 		);
-		await api.createJob('TesNz', ['m1'], 'key-123');
+		await api.createJob('Tes', ['m1'], 'key-123');
 		expect(seen[0].url).toBe('/v1/jobs');
 		expect(seen[0].headers.get('idempotency-key')).toBe('key-123');
 	});
@@ -107,7 +107,7 @@ describe('the api client', () => {
 		);
 		const ack = await api.createSyncRequest(
 			{
-				source: 'TesGb',
+				source: 'Tes',
 				target: 'Tpt',
 				disposition: 'migrate',
 				intent: 'draft',
@@ -120,7 +120,7 @@ describe('the api client', () => {
 		expect(seen[0].method).toBe('POST');
 		expect(seen[0].headers.get('idempotency-key')).toBe('r-1');
 		expect(seen[0].body).toEqual({
-			source: 'TesGb',
+			source: 'Tes',
 			target: 'Tpt',
 			disposition: 'migrate',
 			intent: 'draft',
@@ -289,10 +289,10 @@ describe('the authoring endpoints', () => {
 				return jsonResponse(200, { product: 'p', removals: [], left_live: [] });
 			})
 		);
-		await api.deleteProduct('p1', { remove_from: ['TesGb'], leave_live: false });
+		await api.deleteProduct('p1', { remove_from: ['Tes'], leave_live: false });
 		expect(seen[0].method).toBe('DELETE');
 		expect(seen[0].url).toBe('/v1/products/p1');
-		expect(seen[0].body).toEqual({ remove_from: ['TesGb'], leave_live: false });
+		expect(seen[0].body).toEqual({ remove_from: ['Tes'], leave_live: false });
 	});
 
 	it('adds a marketplace to an item under that item', async () => {
@@ -531,10 +531,10 @@ describe('the authoring endpoints', () => {
 			'fetch',
 			vi.fn(async (url: string) => {
 				seen.push(url);
-				return jsonResponse(200, { inventory: 'TesGb' });
+				return jsonResponse(200, { inventory: 'Tes' });
 			})
 		);
-		await api.vocabulary('TesGb');
-		expect(seen).toEqual(['/v1/vocabulary/TesGb']);
+		await api.vocabulary('Tes');
+		expect(seen).toEqual(['/v1/vocabulary/Tes']);
 	});
 });

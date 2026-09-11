@@ -432,7 +432,7 @@ async fn halting_every_inventory_of_one_marketplace_drops_it_from_the_grant(pool
     entitled_device(&pool, &key).await;
     // Tes runs disjoint inventories; the marketplace leaves the grant only
     // when none of them is workable, which is what "any" means.
-    for inventory in ["tes_gb", "tes_us", "tes_nz"] {
+    for inventory in ["tes"] {
         sqlx::query(
             "INSERT INTO inventory_halt (inventory, marketplace, raised_by, reason, raised_at) \
              VALUES ($1, 'tes', 'operator', 'cease and desist', now())",
@@ -456,14 +456,16 @@ async fn halting_every_inventory_of_one_marketplace_drops_it_from_the_grant(pool
     );
 }
 
-// T4, the "any" rule itself.
+// T4, the "any" rule itself: a marketplace is granted while any of its
+// inventories is open. Tes has exactly one since 2026-09-12, so halting it is
+// halting the marketplace, and the claim must drop it while TPT stays.
 #[sqlx::test(migrations = "../tam-storage/migrations")]
-async fn halting_one_tes_inventory_leaves_the_marketplace_granted(pool: PgPool) {
+async fn halting_the_only_tes_inventory_drops_the_marketplace_from_the_grant(pool: PgPool) {
     let (key, public) = key_pair();
     entitled_device(&pool, &key).await;
     sqlx::query(
         "INSERT INTO inventory_halt (inventory, marketplace, raised_by, reason, raised_at) \
-         VALUES ('tes_gb', 'tes', 'operator', 'one storefront only', now())",
+         VALUES ('tes', 'tes', 'operator', 'one storefront only', now())",
     )
     .execute(&pool)
     .await
@@ -474,10 +476,11 @@ async fn halting_one_tes_inventory_leaves_the_marketplace_granted(pool: PgPool) 
         view.entitlement.as_deref().expect("a token is minted"),
         &public,
     );
-    assert!(
-        claims.marketplaces.contains(&Marketplace::Tes),
-        "the seller keeps working the two healthy Tes inventories; the claim still refuses \
-         the halted one per inventory, so granting here can never work it"
+    assert_eq!(
+        claims.marketplaces,
+        vec![Marketplace::Tpt],
+        "with one Tes inventory a halt on it is a halt on the marketplace, so the device \
+         may not work Tes until it lifts; TPT is untouched"
     );
 }
 

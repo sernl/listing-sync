@@ -17,6 +17,7 @@
 		help,
 		refusals = [],
 		advisories = [],
+		badge,
 		children
 	}: {
 		group: FormAnchor;
@@ -28,6 +29,10 @@
 		help?: string;
 		refusals?: readonly Refusal[];
 		advisories?: readonly Advisory[];
+		/** Drawn on the heading line, after the heading. For a note about the
+		 *  band as a whole that is not an instruction: help is a sentence
+		 *  telling the teacher what to do, and this is not one. */
+		badge?: Snippet;
 		children: Snippet;
 	} = $props();
 
@@ -53,6 +58,7 @@
 			<span class="res-sec-ico"><Icon name={icon} size={16} /></span>
 		{/if}
 		<h2 id="heading-{group}">{heading}</h2>
+		{#if badge}{@render badge()}{/if}
 	</div>
 	{#if help}<p class="res-sec-help">{help}</p>{/if}
 	{@render children()}

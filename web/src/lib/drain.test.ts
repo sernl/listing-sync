@@ -12,8 +12,8 @@ import {
 } from './drain';
 
 const measurement: DrainMeasurement = {
-	source: 'TesGb',
-	target: 'TesNz',
+	source: 'Tes',
+	target: 'Tpt',
 	rows: 1,
 	terms_seen: 3,
 	terms_unmapped: 1,

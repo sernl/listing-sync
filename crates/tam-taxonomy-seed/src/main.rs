@@ -55,21 +55,19 @@ fn wall_now() -> Result<Timestamp, Box<dyn std::error::Error>> {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let db_url = arguments.first().ok_or("missing db url")?;
-    let gb_path = arguments.get(1).ok_or("missing GB capture path")?;
-    let nz_path = arguments.get(2).ok_or("missing NZ capture path")?;
-    let tpt_json = read_file(arguments.get(3).ok_or("missing TPT vocabulary path")?)?;
-    let tes_json = read_file(arguments.get(4).ok_or("missing Tes vocabulary path")?)?;
-    let pairs_json = read_file(arguments.get(5).ok_or("missing subject pairing path")?)?;
+    let tree_path = arguments.get(1).ok_or("missing Tes capture path")?;
+    let tpt_json = read_file(arguments.get(2).ok_or("missing TPT vocabulary path")?)?;
+    let tes_json = read_file(arguments.get(3).ok_or("missing Tes vocabulary path")?)?;
+    let pairs_json = read_file(arguments.get(4).ok_or("missing subject pairing path")?)?;
     let resource_pairs_json = read_file(
         arguments
-            .get(6)
+            .get(5)
             .ok_or("missing resource-type pairing path")?,
     )?;
 
-    let gb = parse_tree(&read_file(gb_path)?)?;
-    let nz = parse_tree(&read_file(nz_path)?)?;
+    let tree = parse_tree(&read_file(tree_path)?)?;
     let at = wall_now()?;
-    let crosswalk = derive_subject_crosswalk(&gb, &nz, &tpt_json, &pairs_json, at)?;
+    let crosswalk = derive_subject_crosswalk(&tree, &tpt_json, &pairs_json, at)?;
     check_native_ids(&crosswalk.edges)?;
 
     let pool = sqlx::postgres::PgPoolOptions::new()
@@ -93,9 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         absences.existing,
     );
     eprintln!(
-        "residue (Tes markets): {} GB-only, {} NZ-only, {} mismatched",
-        crosswalk.tes_residue.gb_only.len(),
-        crosswalk.tes_residue.nz_only.len(),
+        "residue (Tes tree): {} withdrawn",
         crosswalk.tes_residue.mismatched.len(),
     );
     eprintln!(

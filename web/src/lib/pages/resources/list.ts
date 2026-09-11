@@ -131,7 +131,7 @@ export function countsFor(
 	return tabCounts(rows);
 }
 
-/** The five tiles the filter card shows, in the order the specification names
+/** The three tiles the filter card shows, in the order the specification names
  *  them, which is not the order rows draw their chips in. Etsy is offered and
  *  refused rather than hidden: it is a declared marketplace with no adapter,
  *  and a filter that silently omitted it would read as a marketplace we do not
@@ -146,7 +146,7 @@ export interface MarketplaceTile {
 	reason: string | null;
 }
 
-const TILE_ORDER: readonly InventoryId[] = ['TesGb', 'TesUs', 'TesNz', 'Tpt', 'Etsy'];
+const TILE_ORDER: readonly InventoryId[] = ['Tes', 'Tpt', 'Etsy'];
 
 export const MARKETPLACE_TILES: readonly MarketplaceTile[] = TILE_ORDER.map((inventory) => ({
 	inventory,
@@ -194,7 +194,7 @@ export const NO_RESOURCE_FILTERS: ResourceFilters = {
  * Whether a row survives the filter card and the tab bar together.
  *
  * Several marketplaces read as "on any of these": the marketplace filter
- * narrows which chips the standing filter reads, so TPT and TES GB with
+ * narrows which chips the standing filter reads, so TPT and TES with
  * "Failed" finds rows failing on either, and never a row failing somewhere
  * else entirely.
  */

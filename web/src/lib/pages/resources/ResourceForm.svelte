@@ -15,7 +15,6 @@
 		MARKETPLACE_TILES,
 		MARKETPLACE_WORD,
 		MARK_SRC,
-		TES_CURRICULA,
 		platformTitle
 	} from '$lib/platforms';
 	import { MARKETPLACE_OF } from '$lib/listings-view';
@@ -64,12 +63,13 @@
 		slotsFrom,
 		slotsSettling,
 		submittable,
-		tesNeedsCurriculum,
 		thumbnailHashes,
 		thumbnailRefusal,
 		suggestedAdditionalLicence,
 		withMarketplaces,
 		withOverride,
+		AI_FILL_SOON,
+		AI_FILL_SOON_HINT,
 		GRADE_LABELS_KEY,
 		GROUP_HELP,
 		OVERRIDABLE,
@@ -483,9 +483,7 @@
 	 *
 	 *  Said on the tile rather than after the submit, because a teacher who
 	 *  reads it there never reaches the refusal. A marketplace with no adapter
-	 *  is the plain case; the rest are the marketplace's own rules, and a Tes
-	 *  tile stands for three catalogues, so it is refused only where all three
-	 *  refuse it. */
+	 *  is the plain case; the rest are the marketplace's own rules. */
 	function tileRefusal(marketplace: Marketplace): string | null {
 		const tile = tileOf(marketplace);
 		if (tile === undefined) {
@@ -494,8 +492,7 @@
 		if (!tile.authorable) {
 			return 'Coming soon';
 		}
-		const reasons = tile.inventories.map((inventory) => unselectable(inventory));
-		return reasons.every((reason) => reason !== null) ? reasons[0] : null;
+		return unselectable(tile.inventory);
 	}
 
 	/** Why this inventory cannot carry this listing, or `null`.
@@ -534,41 +531,18 @@
 		const next = on
 			? [...draft.marketplaces, marketplace]
 			: draft.marketplaces.filter((held) => held !== marketplace);
-		// Unticking Tes takes its curriculum answers with it: they only mean
-		// anything under a ticked Tes, and leaving them would silently re-list
-		// three catalogues the next time it was ticked.
-		const curricula = !on && marketplace === 'Tes' ? [] : draft.curricula;
 		if (editing !== null) {
 			// Edit mode adds through the mappings route, so the tick opens the
-			// panel and the write happens per catalogue. TPT is one catalogue,
-			// so ticking it is the write.
-			draft = { ...draft, marketplaces: next, curricula };
-			// A one-catalogue marketplace has nothing more to ask, so ticking it
-			// is the write; Tes waits for a curriculum.
-			const only = tileOf(marketplace)?.inventories;
-			if (on && only?.length === 1) {
-				void addMarketplace(only[0]);
+			// panel and the write happens there; one tile is one inventory, so
+			// ticking it is the write.
+			draft = { ...draft, marketplaces: next };
+			const only = tileOf(marketplace)?.inventory;
+			if (on && only !== undefined) {
+				void addMarketplace(only);
 			}
 			return;
 		}
-		draft = withMarketplaces(draft, next, curricula);
-		if (needsFileBeforeMarketplace(draft)) {
-			fileFirst = true;
-		}
-	}
-
-	function toggleCurriculum(inventory: InventoryId, on: boolean) {
-		const next = on
-			? [...draft.curricula, inventory]
-			: draft.curricula.filter((held) => held !== inventory);
-		if (editing !== null) {
-			draft = { ...draft, curricula: next };
-			if (on) {
-				void addMarketplace(inventory);
-			}
-			return;
-		}
-		draft = withMarketplaces(draft, draft.marketplaces, next);
+		draft = withMarketplaces(draft, next);
 		if (needsFileBeforeMarketplace(draft)) {
 			fileFirst = true;
 		}
@@ -637,7 +611,7 @@
 		}
 		const kept = draft.marketplaces.filter((marketplace) => tileRefusal(marketplace) === null);
 		if (kept.length !== draft.marketplaces.length) {
-			draft = withMarketplaces(draft, kept, draft.curricula);
+			draft = withMarketplaces(draft, kept);
 		}
 	});
 
@@ -860,6 +834,15 @@
 					</FormSection>
 
 					<FormSection group="files" icon="package" help={GROUP_HELP.files} {refusals}>
+						{#snippet badge()}
+							<!-- A notice and not a control: the feature is not built, so
+							     there is nothing to press. It sits here because this is
+							     where the file the fill would read is chosen, and only on
+							     a new resource, which is the form the fill would start. -->
+							{#if editing === null}
+								<span class="res-soon" title={AI_FILL_SOON_HINT}>{AI_FILL_SOON}</span>
+							{/if}
+						{/snippet}
 						{#if editing === null}
 							<UploadField
 								files={added}
@@ -1260,28 +1243,6 @@
 								{:else}
 									<p class="res-note">TPT's own questions are still being read.</p>
 								{/if}
-							{:else}
-								<div class="res-group">
-									<span class="res-group-label" id="tes-curriculum">
-										Curriculum<span class="req">Required</span>
-									</span>
-									<span class="res-note">Choose where on Tes this should be listed.</span>
-									<div class="res-picks" role="group" aria-labelledby="tes-curriculum">
-										{#each TES_CURRICULA as entry (entry.inventory)}
-											{@const mapped = editing?.mapped.includes(entry.inventory) ?? false}
-											<label class="res-pick">
-												<input
-													type="checkbox"
-													checked={mapped || draft.curricula.includes(entry.inventory)}
-													disabled={mapped || adding !== null}
-													onchange={(event) =>
-														toggleCurriculum(entry.inventory, event.currentTarget.checked)}
-												/>
-												<span class="res-pick-t">{entry.label}</span>
-											</label>
-										{/each}
-									</div>
-								</div>
 							{/if}
 
 							{#if gatesLicence(panel.marketplace)}

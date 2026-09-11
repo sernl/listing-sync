@@ -229,11 +229,11 @@ async fn one_orgs_override_is_invisible_to_another(pool: PgPool) {
     let repo = OverrideRepo::new(pool.clone());
     let entry = ProjectionOverride::new(NewProjectionOverride {
         org: org_a,
-        inventory: InventoryId::TesGb,
+        inventory: InventoryId::Tes,
         axis: TermKind::Subject,
         from: term,
         to: VocabularyPath {
-            vocabulary: VocabularyId(InventoryId::TesGb, TermKind::Subject),
+            vocabulary: VocabularyId(InventoryId::Tes, TermKind::Subject),
             segments: vec!["Primary science".to_owned()],
             native_id: Some("1000928".to_owned()),
         },
@@ -257,7 +257,7 @@ async fn one_orgs_override_is_invisible_to_another(pool: PgPool) {
 
     assert!(
         !repo
-            .remove(org_b, InventoryId::TesGb, TermKind::Subject, term)
+            .remove(org_b, InventoryId::Tes, TermKind::Subject, term)
             .await
             .expect("org B may attempt a withdrawal"),
         "org B must not be able to withdraw org A's decision either"

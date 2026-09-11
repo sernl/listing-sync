@@ -254,14 +254,16 @@ async fn a_bound_mapping_serves_the_page_a_seller_opens(pool: PgPool) {
         ),
         (
             MappingId(Uuid([0x32; 16])),
-            tam_types::InventoryId::TesGb,
+            tam_types::InventoryId::Tes,
             Some(RemoteListingId::Tes {
                 url: "https://www.tes.com/api/v2/resources/13264370".to_owned(),
             }),
         ),
+        // Etsy, the one inventory the two bound rows above leave free on this
+        // product.
         (
             MappingId(Uuid([0x33; 16])),
-            tam_types::InventoryId::TesUs,
+            tam_types::InventoryId::Etsy,
             None,
         ),
     ] {

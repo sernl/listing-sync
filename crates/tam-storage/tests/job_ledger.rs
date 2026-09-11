@@ -26,7 +26,7 @@ fn unbound_mapping() -> Mapping {
         id: MAPPING_1,
         org: ORG_A,
         product: PRODUCT_1,
-        inventory: InventoryId::TesGb,
+        inventory: InventoryId::Tes,
         binding: Binding::Unbound,
         policies: FieldPolicies {
             title: FieldPolicy::Managed,
@@ -87,7 +87,7 @@ async fn one_write_attempt_in_flight_per_mapping(pool: PgPool) {
     sqlx::query(
         "INSERT INTO job \
          (org_id, id, inventory, marketplace, created_at, actor_kind, actor_id) \
-         VALUES ($1, $2, 'tes_gb', 'tes', now(), 'system', 'engine')",
+         VALUES ($1, $2, 'tes', 'tes', now(), 'system', 'engine')",
     )
     .bind(db_uuid(ORG_A.0))
     .bind(db_uuid(JOB_1))
@@ -175,7 +175,7 @@ async fn seed_ledger_job_only(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO job \
          (org_id, id, inventory, marketplace, created_at, actor_kind, actor_id) \
-         VALUES ($1, $2, 'tes_gb', 'tes', now(), 'system', 'engine')",
+         VALUES ($1, $2, 'tes', 'tes', now(), 'system', 'engine')",
     )
     .bind(db_uuid(ORG_A.0))
     .bind(db_uuid(JOB_1))

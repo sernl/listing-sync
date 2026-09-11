@@ -35,9 +35,9 @@ import {
 
 function row(over: Partial<ImportRowView> = {}): ImportRowView {
 	return {
-		sheet: 'TES GB',
+		sheet: 'TES',
 		ordinal: 2,
-		inventory: 'TesGb',
+		inventory: 'Tes',
 		intent: 'draft',
 		state: 'parsed',
 		problems: [],
@@ -69,13 +69,13 @@ describe('placing dropped files on the rows that named them', () => {
 	it('places a file whose name a row wrote exactly', () => {
 		const placed = matchFiles(
 			['fractions.pdf'],
-			[{ sheet: 'TES GB', ordinal: 4, fileName: 'fractions.pdf' }]
+			[{ sheet: 'TES', ordinal: 4, fileName: 'fractions.pdf' }]
 		);
 		expect(placed).toEqual([
 			{
 				name: 'fractions.pdf',
 				kind: 'matched',
-				row: { sheet: 'TES GB', ordinal: 4 },
+				row: { sheet: 'TES', ordinal: 4 },
 				pass: 'exact'
 			}
 		]);
@@ -84,7 +84,7 @@ describe('placing dropped files on the rows that named them', () => {
 	it('places a file whose name differs only in case', () => {
 		const placed = matchFiles(
 			['Fractions.PDF'],
-			[{ sheet: 'TES GB', ordinal: 4, fileName: 'fractions.pdf' }]
+			[{ sheet: 'TES', ordinal: 4, fileName: 'fractions.pdf' }]
 		);
 		expect(placed[0]).toMatchObject({ kind: 'matched', pass: 'case' });
 	});
@@ -92,7 +92,7 @@ describe('placing dropped files on the rows that named them', () => {
 	it('places a file whose name matches once the extension is dropped', () => {
 		const placed = matchFiles(
 			['fractions.zip'],
-			[{ sheet: 'TES GB', ordinal: 4, fileName: 'fractions.pdf' }]
+			[{ sheet: 'TES', ordinal: 4, fileName: 'fractions.pdf' }]
 		);
 		expect(placed[0]).toMatchObject({ kind: 'matched', pass: 'stem' });
 	});
@@ -101,7 +101,7 @@ describe('placing dropped files on the rows that named them', () => {
 		const placed = matchFiles(
 			['fractions.pdf'],
 			[
-				{ sheet: 'TES GB', ordinal: 4, fileName: 'fractions.pdf' },
+				{ sheet: 'TES', ordinal: 4, fileName: 'fractions.pdf' },
 				{ sheet: 'TPT', ordinal: 9, fileName: 'fractions.pdf' }
 			]
 		);
@@ -117,7 +117,7 @@ describe('placing dropped files on the rows that named them', () => {
 		const placed = matchFiles(
 			['fractions.pdf'],
 			[
-				{ sheet: 'TES GB', ordinal: 4, fileName: 'fractions.pdf' },
+				{ sheet: 'TES', ordinal: 4, fileName: 'fractions.pdf' },
 				{ sheet: 'TPT', ordinal: 9, fileName: 'fractions.zip' }
 			]
 		);
@@ -127,7 +127,7 @@ describe('placing dropped files on the rows that named them', () => {
 	it('sends a file no row named to the strip', () => {
 		const placed = matchFiles(
 			['stray.pdf'],
-			[{ sheet: 'TES GB', ordinal: 4, fileName: 'fractions.pdf' }]
+			[{ sheet: 'TES', ordinal: 4, fileName: 'fractions.pdf' }]
 		);
 		expect(placed).toEqual([{ name: 'stray.pdf', kind: 'unplaced', reason: NO_ROW_NAMED_IT }]);
 	});
@@ -135,7 +135,7 @@ describe('placing dropped files on the rows that named them', () => {
 	it('never binds two files of one drop to one row', () => {
 		const placed = matchFiles(
 			['fractions.pdf', 'FRACTIONS.pdf'],
-			[{ sheet: 'TES GB', ordinal: 4, fileName: 'fractions.pdf' }]
+			[{ sheet: 'TES', ordinal: 4, fileName: 'fractions.pdf' }]
 		);
 		expect(placed[0]).toMatchObject({ kind: 'matched' });
 		expect(placed[1]).toEqual({
@@ -155,7 +155,7 @@ describe('placing dropped files on the rows that named them', () => {
 		const placed = matchFiles(
 			['.keep'],
 			[
-				{ sheet: 'TES GB', ordinal: 4, fileName: '.gitignore' },
+				{ sheet: 'TES', ordinal: 4, fileName: '.gitignore' },
 				{ sheet: 'TPT', ordinal: 9, fileName: '.npmrc' }
 			]
 		);
@@ -216,11 +216,11 @@ describe('the report addressing rows', () => {
 	it("cites the seller's own spreadsheet row number rather than an index", () => {
 		const rendered = reportRows([row({ ordinal: 7 }), row({ ordinal: 12 })]);
 		expect(rendered[0].ordinal).toBe(7);
-		expect(rendered[0].label).toBe('TES GB, row 7');
-		expect(rendered[1].label).toBe('TES GB, row 12');
+		expect(rendered[0].label).toBe('TES, row 7');
+		expect(rendered[1].label).toBe('TES, row 12');
 		// The index is 0 and 1; neither may appear as the row's number.
-		expect(rendered.map((entry) => entry.label)).not.toContain('TES GB, row 0');
-		expect(rendered.map((entry) => entry.label)).not.toContain('TES GB, row 1');
+		expect(rendered.map((entry) => entry.label)).not.toContain('TES, row 0');
+		expect(rendered.map((entry) => entry.label)).not.toContain('TES, row 1');
 	});
 
 	it('keys rows by sheet and row number, so two tabs may share a number', () => {
@@ -229,9 +229,9 @@ describe('the report addressing rows', () => {
 	});
 
 	it('does not name the marketplace a second time when the tab already did', () => {
-		expect(reportRows([row({ sheet: 'TES GB', inventory: 'TesGb' })])[0].marketplace).toBeNull();
-		expect(reportRows([row({ sheet: 'Sheet1', inventory: 'TesGb' })])[0].marketplace).toBe(
-			'TES GB'
+		expect(reportRows([row({ sheet: 'TES', inventory: 'Tes' })])[0].marketplace).toBeNull();
+		expect(reportRows([row({ sheet: 'Sheet1', inventory: 'Tes' })])[0].marketplace).toBe(
+			'TES'
 		);
 		expect(reportRows([row({ sheet: 'Teachouse', inventory: null })])[0].marketplace).toBeNull();
 	});
@@ -297,14 +297,14 @@ describe('what a commit would do', () => {
 
 	it('holds the gate until every marketplace row has its bytes', () => {
 		const rows = [
-			row({ inventory: 'TesGb', file_attached: false }),
+			row({ inventory: 'Tes', file_attached: false }),
 			row({ inventory: null, sheet: 'Teachouse', file_attached: false }),
 			row({ state: 'failed', file_attached: false })
 		];
 		// The commit route's gate, stated the way the page states it: the rows
 		// still awaiting bytes, and none once the marketplace row is dropped.
 		expect(awaitingRows(rows)).toHaveLength(1);
-		expect(awaitingRows(rows)[0].sheet).toBe('TES GB');
+		expect(awaitingRows(rows)[0].sheet).toBe('TES');
 		expect(awaitingRows([rows[1], rows[2]])).toHaveLength(0);
 	});
 
@@ -428,14 +428,14 @@ describe('a commit refused for want of files', () => {
 			awaitingFrom({
 				awaiting: 2,
 				rows: [
-					{ sheet: 'TES GB', ordinal: 3 },
+					{ sheet: 'TES', ordinal: 3 },
 					{ sheet: 'TPT', ordinal: 7 }
 				]
 			})
 		).toEqual({
 			count: 2,
 			rows: [
-				{ sheet: 'TES GB', ordinal: 3 },
+				{ sheet: 'TES', ordinal: 3 },
 				{ sheet: 'TPT', ordinal: 7 }
 			]
 		});
@@ -452,7 +452,7 @@ describe('a commit refused for want of files', () => {
 		expect(
 			awaitingFrom({
 				awaiting: 3,
-				rows: [{ sheet: 'TES GB' }, { ordinal: 3 }, 'TES GB, row 4', { sheet: 'TPT', ordinal: 7 }]
+				rows: [{ sheet: 'TES' }, { ordinal: 3 }, 'TES, row 4', { sheet: 'TPT', ordinal: 7 }]
 			})
 		).toEqual({ count: 3, rows: [{ sheet: 'TPT', ordinal: 7 }] });
 	});
@@ -470,16 +470,16 @@ describe('a commit refused for want of files', () => {
 			awaitingSay({
 				count: 2,
 				rows: [
-					{ sheet: 'TES GB', ordinal: 3 },
+					{ sheet: 'TES', ordinal: 3 },
 					{ sheet: 'TPT', ordinal: 7 }
 				]
 			})
-		).toBe('2 rows still need their files before this import can run: TES GB, row 3; TPT, row 7.');
+		).toBe('2 rows still need their files before this import can run: TES, row 3; TPT, row 7.');
 	});
 
 	it('says how many more there are where the server named only the first', () => {
-		expect(awaitingSay({ count: 25, rows: [{ sheet: 'TES GB', ordinal: 3 }] })).toBe(
-			'25 rows still need their files before this import can run: TES GB, row 3, and 24 more.'
+		expect(awaitingSay({ count: 25, rows: [{ sheet: 'TES', ordinal: 3 }] })).toBe(
+			'25 rows still need their files before this import can run: TES, row 3, and 24 more.'
 		);
 	});
 

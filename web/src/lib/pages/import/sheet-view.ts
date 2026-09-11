@@ -370,7 +370,7 @@ export function rowLabel(row: { sheet: string; ordinal: number }): string {
  *  named it.
  *
  * A grid tab is titled after the marketplace it authors for, so naming both
- * renders "TES GB, row 2 — TES GB". The suffix earns its place only on a row
+ * renders "TES, row 2 — TES". The suffix earns its place only on a row
  * whose tab title and marketplace have come apart, which is what a renamed tab
  * or a registry change produces. */
 function marketplaceBeside(row: ImportRowView): string | null {

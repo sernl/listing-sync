@@ -55,10 +55,10 @@ const SUBJECT: CanonicalTermId = CanonicalTermId(Uuid([0x77; 16]));
 const GRADE: CanonicalTermId = CanonicalTermId(Uuid([0x79; 16]));
 const NOW: Timestamp = Timestamp(1_000);
 
-async fn provision(pool: &PgPool, with_nz_edge: bool, binding: tam_domain::Binding) {
+async fn provision(pool: &PgPool, with_target_edge: bool, binding: tam_domain::Binding) {
     provision_lifecycle(
         pool,
-        with_nz_edge,
+        with_target_edge,
         binding,
         tam_marketplace::RemoteLifecycle::Absent,
     )
@@ -69,11 +69,11 @@ async fn provision(pool: &PgPool, with_nz_edge: bool, binding: tam_domain::Bindi
 /// the half of `admission` every other fixture leaves incomparable.
 async fn provision_lifecycle(
     pool: &PgPool,
-    with_nz_edge: bool,
+    with_target_edge: bool,
     binding: tam_domain::Binding,
     lifecycle: tam_marketplace::RemoteLifecycle,
 ) {
-    provision_undecided(pool, with_nz_edge, binding, lifecycle).await;
+    provision_undecided(pool, with_target_edge, binding, lifecycle).await;
     seed_licence_policy(pool).await;
 }
 
@@ -85,7 +85,7 @@ async fn provision_lifecycle(
 )]
 async fn provision_undecided(
     pool: &PgPool,
-    with_nz_edge: bool,
+    with_target_edge: bool,
     binding: tam_domain::Binding,
     lifecycle: tam_marketplace::RemoteLifecycle,
 ) {
@@ -115,12 +115,11 @@ async fn provision_undecided(
     // the target by ingesting it into a term and projecting out again, which
     // is what makes the id the target's rather than the source's.
     let mut edges = vec![
-        edge(InventoryId::TesGb, "1000454"),
-        phase_edge(InventoryId::TesUs, "17"),
-        phase_edge(InventoryId::TesNz, "17"),
+        phase_edge(InventoryId::Tpt, "kindergarten"),
+        phase_edge(InventoryId::Tes, "2"),
     ];
-    if with_nz_edge {
-        edges.push(edge(InventoryId::TesNz, "7000454"));
+    if with_target_edge {
+        edges.push(edge(InventoryId::Tes, "1000454"));
     }
     taxonomy
         .seed(&terms, &edges)
@@ -150,7 +149,7 @@ async fn provision_undecided(
 )]
 async fn seed_licence_policy(pool: &PgPool) {
     let elections = ElectionRepo::new(pool.clone());
-    for inventory in [InventoryId::TesGb, InventoryId::TesNz] {
+    for inventory in [InventoryId::Tes] {
         let rule = ElectionRule::new(NewElectionRule {
             org: ORG,
             inventory,
@@ -219,12 +218,12 @@ fn canonical_product(id: ProductId, files: u8) -> tam_domain::CanonicalProduct {
         subjects: vec![SUBJECT],
         grades: tam_domain::GradeDeclaration {
             source: tam_domain::DeclarationSource::Imported {
-                vocabulary: VocabularyId(InventoryId::TesUs, TermKind::Phase),
+                vocabulary: VocabularyId(InventoryId::Tpt, TermKind::Phase),
             },
             raw: vec![VocabularyPath {
-                vocabulary: VocabularyId(InventoryId::TesUs, TermKind::Phase),
+                vocabulary: VocabularyId(InventoryId::Tpt, TermKind::Phase),
                 segments: vec!["Kindergarten".to_owned()],
-                native_id: Some("17".to_owned()),
+                native_id: Some("kindergarten".to_owned()),
             }],
             derived: Some(tam_domain::AgeInterval::new(5, 7).expect("a bounded range")),
         },
@@ -244,7 +243,7 @@ fn mapping_of(
         id,
         org: ORG,
         product,
-        inventory: InventoryId::TesNz,
+        inventory: InventoryId::Tes,
         binding,
         policies: tam_domain::FieldPolicies {
             title: tam_domain::FieldPolicy::Managed,
@@ -304,10 +303,10 @@ fn leasing(operation: tam_domain::ItemOperation) -> LeasedItem {
         item: tam_domain::JobItemId(Uuid([0x41; 16])),
         job: JobId(Uuid([0x42; 16])),
         mapping: MAPPING,
-        inventory: InventoryId::TesNz,
+        inventory: InventoryId::Tes,
         idempotency_key: derive_idempotency_key(
             ORG,
-            InventoryId::TesNz,
+            InventoryId::Tes,
             PRODUCT,
             1,
             ContentHash([0x51; 32]),
@@ -370,7 +369,7 @@ async fn a_projectable_mapping_seeds_the_machine(pool: PgPool) {
         panic!("a covered mapping seeds");
     };
     let adapter = TesAdapter::new(
-        InventoryId::TesNz,
+        InventoryId::Tes,
         CassetteTransport::new(Cassette {
             interactions: vec![],
         }),
@@ -389,26 +388,21 @@ async fn a_projectable_mapping_seeds_the_machine(pool: PgPool) {
         serde_json::from_str(&entry(&seed, FieldKey::Taxonomy)).expect("taxonomy is JSON");
     assert_eq!(
         taxonomy["categories"],
-        serde_json::json!([7_000_454]),
-        "the NZ category id travelled from the crosswalk into the seed"
+        serde_json::json!([1_000_454]),
+        "the Tes category id travelled from the crosswalk into the seed"
     );
     let grades: serde_json::Value =
         serde_json::from_str(&entry(&seed, FieldKey::Grades)).expect("grades are JSON");
     assert_eq!(
-        grades["yearGroups"],
-        serde_json::json!([17]),
-        "an NZ resource takes year groups, and the id is the one the target vocabulary \
-         uses rather than the one the source declared"
+        grades["ageRanges"],
+        serde_json::json!([2]),
+        "a Tes resource takes age bands, and the id is the one the target vocabulary uses \
+         rather than the one the source declared"
     );
-    assert!(
-        grades.get("ageRanges").is_none(),
-        "posting a year group under ageRanges would be a wrong field, not a wrong label"
-    );
-    assert!(
-        grades.get("ages").is_none() && grades.get("mainAge").is_none(),
-        "both derived age fields belong to the ageRanges vocabulary -- mainAge names one of \
-         the seven GB bands rather than an age in years -- so a year-group listing states \
-         neither rather than filling them from a table that does not address it: {grades}"
+    assert_eq!(
+        (grades["ages"].clone(), grades["mainAge"].clone()),
+        (serde_json::json!([5, 6, 7]), serde_json::json!(2)),
+        "both derived age fields are read off the declared band's own published age set"
     );
     assert_eq!(seed.fields.files, vec![FileId(Uuid([0x21; 16]))]);
 }
@@ -459,7 +453,7 @@ async fn a_sellers_override_answers_a_gap_for_that_seller_only(pool: PgPool) {
                 .expect("the preparation runs"),
             ItemPreparation::Blocked { .. }
         ),
-        "the premise: with no override at all the relation cannot reach TesNz and the item \
+        "the premise: with no override at all the relation cannot reach Tes and the item \
          blocks"
     );
 
@@ -498,7 +492,7 @@ async fn a_sellers_override_answers_a_gap_for_that_seller_only(pool: PgPool) {
     };
 }
 
-/// One organisation's decision to route the fixture's subject into TesNz,
+/// One organisation's decision to route the fixture's subject into Tes,
 /// which is the edge `provision(.., false, ..)` withholds.
 #[expect(
     clippy::expect_used,
@@ -508,11 +502,11 @@ fn nz_subject_override(org: OrgId) -> tam_domain::equivalence::ProjectionOverrid
     tam_domain::equivalence::ProjectionOverride::new(
         tam_domain::equivalence::NewProjectionOverride {
             org,
-            inventory: InventoryId::TesNz,
+            inventory: InventoryId::Tes,
             axis: TermKind::Subject,
             from: SUBJECT,
             to: VocabularyPath {
-                vocabulary: VocabularyId(InventoryId::TesNz, TermKind::Subject),
+                vocabulary: VocabularyId(InventoryId::Tes, TermKind::Subject),
                 segments: vec!["Maths for early years".to_owned()],
                 native_id: Some("7000454".to_owned()),
             },
@@ -763,7 +757,7 @@ async fn a_removal_waits_while_its_counterpart_is_still_unbound(pool: PgPool) {
     });
     // The counterpart is the mapping this fixture already wrote, and it is
     // Unbound: the target create has not landed.
-    waiting.requires_bound_on = Some(InventoryId::TesNz);
+    waiting.requires_bound_on = Some(InventoryId::Tes);
     let outcome = prepare_item(&pool, &waiting, NOW)
         .await
         .expect("the preparation runs");
@@ -796,7 +790,7 @@ async fn a_removal_whose_counterpart_can_never_bind_stops_waiting(pool: PgPool) 
         subject: tes("https://www.tes.com/teaching-resource/fractions-9001"),
         state: tam_marketplace::ListingState::Live,
     });
-    waiting.requires_bound_on = Some(InventoryId::TesNz);
+    waiting.requires_bound_on = Some(InventoryId::Tes);
     let outcome = prepare_item(&pool, &waiting, NOW)
         .await
         .expect("the preparation runs");
@@ -804,7 +798,7 @@ async fn a_removal_whose_counterpart_can_never_bind_stops_waiting(pool: PgPool) 
         matches!(
             outcome,
             ItemPreparation::CounterpartLost {
-                counterpart: InventoryId::TesNz
+                counterpart: InventoryId::Tes
             }
         ),
         "nobody knows what an ambiguous create did, so removing on the strength of it \
@@ -835,7 +829,7 @@ async fn a_severed_counterpart_is_waited_for_rather_than_given_up_on(pool: PgPoo
     let mut gated = leasing(tam_domain::ItemOperation::Publish {
         to: tam_marketplace::ListingState::Live,
     });
-    gated.requires_bound_on = Some(InventoryId::TesNz);
+    gated.requires_bound_on = Some(InventoryId::Tes);
     let outcome = prepare_item(&pool, &gated, NOW)
         .await
         .expect("the preparation runs");
@@ -868,7 +862,7 @@ async fn a_removal_runs_once_its_counterpart_has_bound(pool: PgPool) {
         subject: tes("https://www.tes.com/teaching-resource/fractions-9001"),
         state: tam_marketplace::ListingState::Live,
     });
-    waiting.requires_bound_on = Some(InventoryId::TesNz);
+    waiting.requires_bound_on = Some(InventoryId::Tes);
     let outcome = prepare_item(&pool, &waiting, NOW)
         .await
         .expect("the preparation runs");
@@ -1097,7 +1091,7 @@ async fn an_answered_election_releases_the_item_it_parked(pool: PgPool) {
             ORG,
             tam_storage::NewAnswer {
                 item: question.id,
-                paths: &[licence_path(InventoryId::TesNz, "CC-BY")],
+                paths: &[licence_path(InventoryId::Tes, "CC-BY")],
                 at: NOW,
                 promote: None,
             },
@@ -1166,7 +1160,7 @@ async fn an_answer_applied_to_the_future_settles_the_next_product_without_asking
         trigger_kind: question.trigger_kind,
         trigger_key: question.trigger_key.clone(),
         answer: ElectionAnswer::Value {
-            path: licence_path(InventoryId::TesNz, "CC-BY"),
+            path: licence_path(InventoryId::Tes, "CC-BY"),
         },
         decided_by: Decider::Human {
             user: UserId(Uuid([0x5E; 16])),
@@ -1180,7 +1174,7 @@ async fn an_answer_applied_to_the_future_settles_the_next_product_without_asking
             ORG,
             tam_storage::NewAnswer {
                 item: question.id,
-                paths: &[licence_path(InventoryId::TesNz, "CC-BY")],
+                paths: &[licence_path(InventoryId::Tes, "CC-BY")],
                 at: NOW,
                 promote: Some(&rule),
             },
@@ -1253,7 +1247,7 @@ async fn a_licence_dropped_into_tpt_is_recorded_against_the_mapping_that_dropped
     let product = ProductId(Uuid([0x03; 16]));
     let mut declared = canonical_product(product, 0x25);
     declared.rights = tam_domain::RightsDeclaration::Declared {
-        source: licence_path(InventoryId::TesGb, "CC-BY"),
+        source: licence_path(InventoryId::Tes, "CC-BY"),
     };
     ProductRepo::new(pool.clone())
         .insert(ORG, &declared, NOW)
@@ -1392,18 +1386,15 @@ async fn a_publish_that_leased_before_its_create_is_woken_by_the_binding(pool: P
     // The lowering is the API's own, so the pair under test is the pair a
     // seller's one live request actually produces.
     let seeds = tam_storage::JobReadRepo::new(pool.clone())
-        .mapping_seeds(ORG, InventoryId::TesNz, &[MAPPING])
+        .mapping_seeds(ORG, InventoryId::Tes, &[MAPPING])
         .await
         .expect("the seed reads");
     let [seed] = seeds.as_slice() else {
         panic!("one mapping, one seed: {seeds:?}");
     };
-    let operations = tam_storage::lower(
-        tam_marketplace::ListingState::Live,
-        InventoryId::TesNz,
-        seed,
-    )
-    .expect("an unbound mapping lowers");
+    let operations =
+        tam_storage::lower(tam_marketplace::ListingState::Live, InventoryId::Tes, seed)
+            .expect("an unbound mapping lowers");
     let job = JobId(Uuid([0x42; 16]));
     // The publish takes the lower id, so the tie-break the queue makes at
     // random is made here on purpose.
@@ -1419,7 +1410,7 @@ async fn a_publish_that_leased_before_its_create_is_woken_by_the_binding(pool: P
             mapping: seed.mapping,
             idempotency_key: derive_idempotency_key(
                 ORG,
-                InventoryId::TesNz,
+                InventoryId::Tes,
                 seed.product,
                 1,
                 tam_storage::intent_digest(
@@ -1429,7 +1420,7 @@ async fn a_publish_that_leased_before_its_create_is_woken_by_the_binding(pool: P
                     seed.sever_generation,
                 ),
             ),
-            requires_bound_on: tam_storage::requires_bound_on(operation, InventoryId::TesNz),
+            requires_bound_on: tam_storage::requires_bound_on(operation, InventoryId::Tes),
             operation: operation.clone(),
         })
         .collect();
@@ -1438,7 +1429,7 @@ async fn a_publish_that_leased_before_its_create_is_woken_by_the_binding(pool: P
             ORG,
             &tam_storage::NewJob {
                 job,
-                inventory: InventoryId::TesNz,
+                inventory: InventoryId::Tes,
                 stamp: Stamp {
                     at: NOW,
                     actor: Actor::System(SystemComponent::Engine),
@@ -1453,7 +1444,7 @@ async fn a_publish_that_leased_before_its_create_is_woken_by_the_binding(pool: P
     let publish = claim(&pool, "w1", 600).await.expect("an item leases");
     assert_eq!(
         (publish.item, publish.requires_bound_on),
-        (ids[1], Some(InventoryId::TesNz)),
+        (ids[1], Some(InventoryId::Tes)),
         "the publish leased first, which is the half of the coin flip this test is about"
     );
 
@@ -1578,7 +1569,7 @@ fn unaddressed_edge() -> ProjectionEdge {
     ProjectionEdge {
         from: SUBJECT,
         to: VocabularyPath {
-            vocabulary: VocabularyId(InventoryId::TesNz, TermKind::Subject),
+            vocabulary: VocabularyId(InventoryId::Tes, TermKind::Subject),
             segments: vec!["Maths for early years".to_owned()],
             native_id: None,
         },
@@ -1614,7 +1605,7 @@ async fn provision_refusing_queue(app: &PgPool, engine: &PgPool) {
             ORG,
             &tam_storage::NewJob {
                 job: REFUSING_JOB,
-                inventory: InventoryId::TesNz,
+                inventory: InventoryId::Tes,
                 stamp: Stamp {
                     at: NOW,
                     actor: Actor::System(SystemComponent::Engine),
@@ -1660,7 +1651,7 @@ async fn refuse_one(app: &PgPool, engine: &PgPool) -> (LeasedItem, RunVerdict) {
         panic!("the mapping projects; it is the rendering that refuses");
     };
     let adapter = TesAdapter::new(
-        InventoryId::TesNz,
+        InventoryId::Tes,
         CassetteTransport::new(Cassette {
             interactions: vec![],
         }),

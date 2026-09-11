@@ -783,7 +783,7 @@ mod tests {
 
     fn path(segment: &str) -> VocabularyPath {
         VocabularyPath {
-            vocabulary: VocabularyId(InventoryId::TesGb, TermKind::Licence),
+            vocabulary: VocabularyId(InventoryId::Tes, TermKind::Licence),
             segments: vec![segment.to_owned()],
             native_id: Some(segment.to_owned()),
         }
@@ -792,7 +792,7 @@ mod tests {
     fn licence_election(pricing: PricingBranch) -> Election {
         Election {
             product: PRODUCT,
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
             axis: TermKind::Licence,
             trigger: ElectionTrigger::Supply { pricing },
         }
@@ -808,7 +808,7 @@ mod tests {
     fn supply_rule(pricing: PricingBranch, answer: ElectionAnswer) -> ElectionRule {
         rule(NewElectionRule {
             org: ORG,
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
             axis: TermKind::Licence,
             trigger_kind: ElectionTriggerKind::Supply,
             trigger_key: Some(pricing.as_str().to_owned()),
@@ -850,7 +850,7 @@ mod tests {
             },
         )];
         let mut elsewhere = licence_election(PricingBranch::Free);
-        elsewhere.inventory = InventoryId::TesUs;
+        elsewhere.inventory = InventoryId::Tpt;
         assert_eq!(
             satisfied_by(&rules, &elsewhere),
             None,
@@ -866,7 +866,7 @@ mod tests {
         assert_eq!(
             ElectionRule::new(NewElectionRule {
                 org: ORG,
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 axis: TermKind::Licence,
                 trigger_kind: ElectionTriggerKind::Supply,
                 trigger_key: Some("free".to_owned()),
@@ -1037,7 +1037,7 @@ mod tests {
     fn an_override(axis: TermKind) -> NewProjectionOverride {
         NewProjectionOverride {
             org: ORG,
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
             axis,
             from: CanonicalTermId(Uuid([0x03; 16])),
             to: path("Science"),
@@ -1108,7 +1108,7 @@ mod tests {
     /// mode the caller happens to hold, so it cannot be configured away.
     #[test]
     fn the_licence_refusal_agrees_with_the_delegation_the_registry_declares() {
-        let binding = registry(InventoryId::TesGb)
+        let binding = registry(InventoryId::Tes)
             .equivalence_axes
             .iter()
             .find(|binding| binding.axis == TermKind::Licence)
@@ -1123,14 +1123,14 @@ mod tests {
     /// A delegable axis with room for exactly one value: Tes takes one
     /// `mainType`, which is the `ElectOne` shape the ranking exists for.
     fn resource_type() -> AxisBinding {
-        match registry(InventoryId::TesGb).axis(TermKind::ResourceType) {
+        match registry(InventoryId::Tes).axis(TermKind::ResourceType) {
             Some(binding) => binding,
             None => panic!("Tes binds a resource type"),
         }
     }
 
     fn licence_axis() -> AxisBinding {
-        match registry(InventoryId::TesGb).axis(TermKind::Licence) {
+        match registry(InventoryId::Tes).axis(TermKind::Licence) {
             Some(binding) => binding,
             None => panic!("Tes binds the licence axis"),
         }
@@ -1138,7 +1138,7 @@ mod tests {
 
     fn typed(segment: &str) -> VocabularyPath {
         VocabularyPath {
-            vocabulary: VocabularyId(InventoryId::TesGb, TermKind::ResourceType),
+            vocabulary: VocabularyId(InventoryId::Tes, TermKind::ResourceType),
             segments: vec![segment.to_owned()],
             native_id: Some(segment.to_owned()),
         }
@@ -1219,7 +1219,7 @@ mod tests {
     #[test]
     fn a_legal_axis_gets_no_suggestion_whatever_the_opt_in_says() {
         let licence = |segment: &str| VocabularyPath {
-            vocabulary: VocabularyId(InventoryId::TesGb, TermKind::Licence),
+            vocabulary: VocabularyId(InventoryId::Tes, TermKind::Licence),
             segments: vec![segment.to_owned()],
             native_id: Some(segment.to_owned()),
         };

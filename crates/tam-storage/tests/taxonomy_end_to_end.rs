@@ -17,13 +17,9 @@ use common::{minimal_product, seed_org_a, ORG_A};
 const T0: Timestamp = Timestamp(1_000);
 const MAPPING_1: MappingId = MappingId(Uuid([0x31; 16]));
 
-const GB_JSON: &str = include_str!(concat!(
+const TES_JSON: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../docs/design/data/tes-taxonomy-GB.json"
-));
-const NZ_JSON: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../docs/design/data/tes-taxonomy-NZ.json"
 ));
 
 #[expect(
@@ -42,7 +38,7 @@ async fn fixture_mapping(app: &PgPool) -> MappingId {
                 id: MAPPING_1,
                 org: ORG_A,
                 product: minimal_product().id,
-                inventory: InventoryId::TesNz,
+                inventory: InventoryId::Tes,
                 binding: tam_domain::Binding::Unbound,
                 policies: tam_domain::FieldPolicies {
                     title: tam_domain::FieldPolicy::Managed,
@@ -66,10 +62,8 @@ async fn fixture_mapping(app: &PgPool) -> MappingId {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn the_measured_crosswalk_seeds_projects_and_drains(app: PgPool) {
-    let gb = tam_taxonomy::tes::parse_tree(GB_JSON).expect("the GB capture parses");
-    let nz = tam_taxonomy::tes::parse_tree(NZ_JSON).expect("the NZ capture parses");
-    let crosswalk =
-        tam_taxonomy::tes::derive_crosswalk(&gb, &nz, T0).expect("the crosswalk derives");
+    let tree = tam_taxonomy::tes::parse_tree(TES_JSON).expect("the Tes capture parses");
+    let crosswalk = tam_taxonomy::tes::derive_crosswalk(&tree, T0);
 
     let repo = TaxonomyRepo::new(app.clone());
     let report = repo
@@ -79,49 +73,48 @@ async fn the_measured_crosswalk_seeds_projects_and_drains(app: PgPool) {
     assert_eq!(
         (report.terms_inserted, report.terms_existing),
         (496, 0),
-        "every GB node — 43 subjects and 453 topics — seeds one canonical term"
+        "every captured node — 43 subjects and 453 topics — seeds one canonical term"
     );
     assert_eq!(
         (report.edges_inserted, report.edges_existing),
-        (986, 0),
-        "494 GB edges plus 492 NZ edges: every paired node, minus the four \
-         withdrawn from the contested duplicate path"
+        (494, 0),
+        "one edge per term, minus the two withdrawn from the contested duplicate path"
     );
 
-    // A paired subject projects Exact through repo-loaded edges.
-    let nz_subjects = VocabularyId(InventoryId::TesNz, TermKind::Subject);
+    // A seeded subject projects Exact through repo-loaded edges.
+    let subjects = VocabularyId(InventoryId::Tes, TermKind::Subject);
     let edges = repo
-        .edges_into(nz_subjects)
+        .edges_into(subjects)
         .await
-        .expect("the NZ subject edges load");
+        .expect("the subject edges load");
     let maths = crosswalk
         .terms
         .iter()
         .find(|term| term.label == "Maths for early years" && term.kind == TermKind::Subject)
         .expect("the probe's worked example is in the capture");
-    let projected = tam_taxonomy::project::project(maths.id, nz_subjects, &edges);
+    let projected = tam_taxonomy::project::project(maths.id, subjects, &edges);
     let TermProjection::Exact { to } = projected else {
-        panic!("the measured pair must project Exact, got {projected:?}");
+        panic!("the measured node must project Exact, got {projected:?}");
     };
     assert_eq!(
         to.native_id.as_deref(),
-        Some("7000454"),
-        "the NZ id is the GB id under the market prefix transform"
+        Some("1000454"),
+        "the path carries the node's own native id"
     );
 
-    // A residue topic (GB-only) projects Absent, raises once, dedups, and
-    // resolution drains it.
-    let gb_only = crosswalk
+    // A withdrawn topic — two nodes contesting one path — projects Absent,
+    // raises once, dedups, and resolution drains it.
+    let withdrawn = crosswalk
         .residue
-        .gb_only
+        .mismatched
         .first()
-        .expect("the measured residue is non-empty at topic level");
-    // Found by the deterministic id, not the label: "Cells" also exists under
-    // Biology (paired), and only the uniform tes:{gb_id} key separates them.
+        .expect("the capture carries two Whole school topics under one description");
+    // Found by the deterministic id, not the label: the uniform tes:{id} key
+    // is what separates two nodes that share a description.
     let residue_id = tam_types::CanonicalTermId(tam_types::Uuid(
         *uuid::Uuid::new_v5(
             &uuid::Uuid::from_bytes(tam_types::NAMESPACE_TAM_TAXONOMY.0),
-            format!("tes:{}", gb_only.native_id).as_bytes(),
+            format!("tes:{}", withdrawn.node.native_id).as_bytes(),
         )
         .as_bytes(),
     ));
@@ -129,23 +122,20 @@ async fn the_measured_crosswalk_seeds_projects_and_drains(app: PgPool) {
         .terms
         .iter()
         .find(|term| term.id == residue_id)
-        .expect("a GB-only node still seeds a canonical term under the uniform key");
-    let nz_topics = VocabularyId(InventoryId::TesNz, TermKind::Topic);
-    let topic_edges = repo
-        .edges_into(nz_topics)
-        .await
-        .expect("the NZ topic edges load");
+        .expect("a withdrawn node still seeds a canonical term under the uniform key");
+    let topics = VocabularyId(InventoryId::Tes, TermKind::Topic);
+    let topic_edges = repo.edges_into(topics).await.expect("the topic edges load");
     assert_eq!(
-        tam_taxonomy::project::project(residue_term.id, nz_topics, &topic_edges),
+        tam_taxonomy::project::project(residue_term.id, topics, &topic_edges),
         TermProjection::Absent,
-        "a GB-only term has no NZ edge and is a first-class Absent"
+        "a withdrawn term holds no edge and is a first-class Absent"
     );
 
     seed_org_a(&app).await.expect("org-a seeds");
     let mapping = fixture_mapping(&app).await;
     let scope = RaiseScope {
         mapping,
-        target: InventoryId::TesNz,
+        target: InventoryId::Tes,
         at: T0,
     };
     let causes = [(residue_term.id, TermKind::Topic)];
@@ -167,7 +157,7 @@ async fn the_measured_crosswalk_seeds_projects_and_drains(app: PgPool) {
         &ProjectionEdge {
             from: residue_term.id,
             to: tam_domain::VocabularyPath {
-                vocabulary: nz_topics,
+                vocabulary: topics,
                 segments: vec![
                     "Mathematics".to_owned(),
                     "A founder-authored twin".to_owned(),
@@ -186,14 +176,14 @@ async fn the_measured_crosswalk_seeds_projects_and_drains(app: PgPool) {
     .expect("the founder resolves the gap once");
 
     let drained = repo
-        .edges_into(nz_topics)
+        .edges_into(topics)
         .await
         .expect("the NZ topic edges reload");
     assert_eq!(
-        tam_taxonomy::project::project(residue_term.id, nz_topics, &drained),
+        tam_taxonomy::project::project(residue_term.id, topics, &drained),
         TermProjection::Exact {
             to: tam_domain::VocabularyPath {
-                vocabulary: nz_topics,
+                vocabulary: topics,
                 segments: vec![
                     "Mathematics".to_owned(),
                     "A founder-authored twin".to_owned()
@@ -268,7 +258,7 @@ async fn the_whole_grade_relation_survives_every_index_and_reseeds_as_a_no_op(ap
     );
 
     let gb = repo
-        .edges_into(VocabularyId(InventoryId::TesGb, TermKind::Phase))
+        .edges_into(VocabularyId(InventoryId::Tes, TermKind::Phase))
         .await
         .expect("the GB phase edges load");
     assert_eq!(
@@ -277,18 +267,6 @@ async fn the_whole_grade_relation_survives_every_index_and_reseeds_as_a_no_op(ap
             .count(),
         27,
         "the covering relation reads back whole"
-    );
-    let us = repo
-        .edges_into(VocabularyId(InventoryId::TesUs, TermKind::Phase))
-        .await
-        .expect("the US phase edges load");
-    assert_eq!(
-        us.iter()
-            .filter(|edge| edge.kind == EdgeKind::Narrower)
-            .count(),
-        27,
-        "a band holds one narrower edge per year group it covers, which the single-valued \
-         index would have collapsed to six"
     );
     let tpt = repo
         .edges_into(VocabularyId(InventoryId::Tpt, TermKind::Phase))

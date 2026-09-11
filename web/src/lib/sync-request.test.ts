@@ -21,8 +21,6 @@ import {
 	migrateSource,
 	presentStage,
 	resourceRows,
-	siteChoiceQuestion,
-	siteLabel,
 	sourcesOn,
 	stageOf,
 	tally,
@@ -54,7 +52,7 @@ function resource(partial: Partial<SyncResourceView> = {}): SyncResourceView {
 function request(partial: Partial<SyncRequestView> = {}): SyncRequestView {
 	return {
 		request: 'r-1',
-		source: 'TesGb',
+		source: 'Tes',
 		target: 'Tpt',
 		disposition: 'migrate',
 		intent: 'draft',
@@ -319,14 +317,14 @@ describe('starting a migrate', () => {
 		}
 	});
 
-	it('names every site of the marketplace the seller may have sold on', () => {
-		expect(sourcesOn('Tes')).toEqual(['TesGb', 'TesUs', 'TesNz']);
+	it('names the inventory of the marketplace the seller may have sold on', () => {
+		expect(sourcesOn('Tes')).toEqual(['Tes']);
 		expect(sourcesOn('Tpt')).toEqual([]);
 	});
 
 	it('submits a draft migrate naming no resources', () => {
-		expect(migrateBody('TesGb')).toEqual({
-			source: 'TesGb',
+		expect(migrateBody('Tes')).toEqual({
+			source: 'Tes',
 			target: 'Tpt',
 			disposition: 'migrate',
 			intent: 'draft',
@@ -609,7 +607,7 @@ describe('the version banner and the start action, together', () => {
 function head(partial: Partial<SyncRequestHead> = {}): SyncRequestHead {
 	return {
 		request: 'r-1',
-		source: 'TesGb',
+		source: 'Tes',
 		target: 'Tpt',
 		disposition: 'migrate',
 		intent: 'draft',
@@ -674,30 +672,6 @@ describe('the list of a seller own imports', () => {
 	});
 });
 
-describe('naming the sites', () => {
-	it('labels each site by the part that tells it from its siblings', () => {
-		expect(siteLabel('TesGb')).toBe('United Kingdom');
-		expect(siteLabel('TesUs')).toBe('United States');
-		expect(siteLabel('TesNz')).toBe('New Zealand');
-	});
-
-	it('falls back to a short name where a platform has no region', () => {
-		expect(siteLabel('Tpt')).toBe('TPT');
-	});
-
-	it('names the platform once, in the question rather than in every option', () => {
-		const question = siteChoiceQuestion(sourcesOn('Tes'));
-		expect(question).toBe('Which TES site do you sell on?');
-		for (const site of sourcesOn('Tes')) {
-			expect(question).not.toContain(siteLabel(site));
-		}
-	});
-
-	it('asks something sensible even with no site to offer', () => {
-		expect(siteChoiceQuestion([])).toMatch(/site do you sell on/);
-	});
-});
-
 describe('an authorship declaration that arrives as null', () => {
 	it('reads as absent rather than throwing, as every other optional here does', () => {
 		const nulled = {
@@ -738,8 +712,8 @@ describe('the sentence a list row shows', () => {
 
 describe('what counts as the import this screen describes', () => {
 	it('needs both the device-branch source and the migrate', () => {
-		expect(isDeviceImport(request({ source: 'TesGb', disposition: 'migrate' }))).toBe(true);
-		expect(isDeviceImport(request({ source: 'TesGb', disposition: 'sync' }))).toBe(false);
+		expect(isDeviceImport(request({ source: 'Tes', disposition: 'migrate' }))).toBe(true);
+		expect(isDeviceImport(request({ source: 'Tes', disposition: 'sync' }))).toBe(false);
 	});
 
 	it('refuses a migrate whose source we work ourselves, which the disposition alone would admit', () => {

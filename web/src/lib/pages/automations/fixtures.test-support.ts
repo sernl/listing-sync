@@ -30,7 +30,7 @@ export const DECLARED: AuthorshipView = {
 export function request(over: Partial<SyncRequestHead> = {}): SyncRequestHead {
 	return {
 		request: 'r-1',
-		source: 'TesGb',
+		source: 'Tes',
 		target: 'Tpt',
 		disposition: 'migrate',
 		intent: 'draft',

@@ -61,7 +61,7 @@ async fn provision(pool: &PgPool) {
             ORG,
             &NewJob {
                 job: JOB,
-                inventory: InventoryId::TesNz,
+                inventory: InventoryId::Tes,
                 stamp: Stamp {
                     at: Timestamp(1_000),
                     actor: Actor::System(SystemComponent::Engine),

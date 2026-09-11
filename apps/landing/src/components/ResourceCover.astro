@@ -1,0 +1,81 @@
+---
+/* One resource cover, drawn rather than photographed.
+ *
+ * The Resource Atelier direction (design of 2026-09-12, section 11) puts the
+ * seller's own work at the front of the page, so a cover is line work in the
+ * brand's indigo on a cream card, with an optional peach or lavender card
+ * showing behind it. No photograph, no person, no laptop.
+ *
+ * The three motifs are the three resources the console screenshot further down
+ * the page is seeded with, so the drawing and the proof shot show one
+ * catalogue rather than two unrelated ones.
+ *
+ * It draws a `<g>` and is therefore only ever placed inside an `<svg>`. Every
+ * colour is a token, which is what lets the same drawing read on the dark
+ * ground: `tokens.test.ts` fails the lane on a literal here.
+ */
+
+const { x = 0, y = 0, rotate = 0, motif, backing = null } = Astro.props;
+
+const w = 76;
+const h = 104;
+---
+
+<g transform={`translate(${x} ${y}) rotate(${rotate} ${w / 2} ${h / 2})`}>
+	{backing && <rect x="7" y="9" width={w} height={h} rx="8" fill={`var(--${backing})`} />}
+	<rect width={w} height={h} rx="8" fill="var(--cream)" stroke="var(--art-line)" />
+	<rect x="13" y="15" width="44" height="6" rx="3" fill="var(--primary)" opacity="0.75" />
+	<rect x="13" y="27" width="28" height="5" rx="2.5" fill="var(--primary)" opacity="0.3" />
+
+	{
+		motif === 'fractions' && (
+			<>
+				<path d="M26 60V47a13 13 0 0 1 13 13z" fill="var(--primary)" opacity="0.18" />
+				<path d="M54 60V47a13 13 0 0 1 13 13z" fill="var(--primary)" opacity="0.18" />
+				<g fill="none" stroke="var(--primary)" stroke-width="2">
+					<circle cx="26" cy="60" r="13" />
+					<circle cx="54" cy="60" r="13" />
+					<path d="M26 47v26" />
+					<path d="M54 47v26" />
+					<path d="M41 60h26" />
+				</g>
+				<rect x="13" y="86" width="36" height="5" rx="2.5" fill="var(--primary)" opacity="0.22" />
+			</>
+		)
+	}
+
+	{
+		motif === 'reading' && (
+			<>
+				<g fill="var(--primary)" opacity="0.32">
+					<rect x="13" y="46" width="50" height="4" rx="2" />
+					<rect x="13" y="56" width="44" height="4" rx="2" />
+					<rect x="13" y="66" width="50" height="4" rx="2" />
+					<rect x="13" y="76" width="34" height="4" rx="2" />
+				</g>
+				<rect x="13" y="86" width="26" height="5" rx="2.5" fill="var(--primary)" opacity="0.22" />
+			</>
+		)
+	}
+
+	{
+		motif === 'checklist' && (
+			<>
+				<g fill="none" stroke="var(--primary)" stroke-width="2">
+					<rect x="13" y="45" width="11" height="11" rx="3" />
+					<rect x="13" y="61" width="11" height="11" rx="3" />
+					<rect x="13" y="77" width="11" height="11" rx="3" />
+				</g>
+				<g fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+					<path d="m15.6 50.6 2.6 2.6 4.4-5" />
+					<path d="m15.6 66.6 2.6 2.6 4.4-5" />
+				</g>
+				<g fill="var(--primary)" opacity="0.32">
+					<rect x="30" y="48" width="33" height="4" rx="2" />
+					<rect x="30" y="64" width="27" height="4" rx="2" />
+					<rect x="30" y="80" width="33" height="4" rx="2" />
+				</g>
+			</>
+		)
+	}
+</g>

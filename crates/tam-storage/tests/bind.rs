@@ -96,7 +96,7 @@ fn mapping_of(id: MappingId, product_seed: u8, binding: Binding) -> Mapping {
         id,
         org: ORG,
         product: ProductId(Uuid([product_seed; 16])),
-        inventory: InventoryId::TesGb,
+        inventory: InventoryId::Tes,
         binding,
         policies: FieldPolicies {
             title: FieldPolicy::Managed,
@@ -178,7 +178,7 @@ async fn seed(app: &PgPool, engine: &PgPool) -> Result<(), StorageError> {
             ORG,
             &NewJob {
                 job: JOB,
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 stamp: Stamp {
                     at: T0,
                     actor: Actor::System(SystemComponent::Engine),
@@ -284,7 +284,7 @@ async fn rival_lease(app: &PgPool, engine: &PgPool) -> Result<Option<LeaseRef>, 
             ORG,
             &NewJob {
                 job: RIVAL_JOB,
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 stamp: Stamp {
                     at: T0,
                     actor: Actor::System(SystemComponent::Engine),
@@ -1057,7 +1057,7 @@ async fn park_a_waiting_publish(
             ORG,
             &NewJob {
                 job,
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 stamp: Stamp {
                     at: T0,
                     actor: Actor::System(SystemComponent::Engine),
@@ -1070,7 +1070,7 @@ async fn park_a_waiting_publish(
                 operation: ItemOperation::Publish {
                     to: ListingState::Live,
                 },
-                requires_bound_on: Some(InventoryId::TesGb),
+                requires_bound_on: Some(InventoryId::Tes),
             }],
         )
         .await?;

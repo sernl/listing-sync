@@ -68,21 +68,13 @@ const LISTING_COLUMNS: [&str; 3] = ["status", "price", "link"];
 /// the order the founder asked the marketplaces in. Held against
 /// `InventoryId::ALL` by a test, so an inventory added to the model is a
 /// failing test rather than a column that quietly stops being exported.
-const EXPORT_ORDER: [InventoryId; 5] = [
-    InventoryId::TesGb,
-    InventoryId::TesUs,
-    InventoryId::TesNz,
-    InventoryId::Tpt,
-    InventoryId::Etsy,
-];
+const EXPORT_ORDER: [InventoryId; 3] = [InventoryId::Tes, InventoryId::Tpt, InventoryId::Etsy];
 
 /// How the console names each inventory on a strip narrow enough to read.
 /// Total by exhaustive match, matching `SHORT_NAME` in `web/src/lib/platforms.ts`.
 const fn short_name(inventory: InventoryId) -> &'static str {
     match inventory {
-        InventoryId::TesGb => "TES GB",
-        InventoryId::TesUs => "TES US",
-        InventoryId::TesNz => "TES NZ",
+        InventoryId::Tes => "TES",
         InventoryId::Etsy => "Etsy",
         InventoryId::Tpt => "TPT",
     }
@@ -380,11 +372,15 @@ mod tests {
     #[test]
     fn the_header_names_a_column_for_every_cell_a_row_writes() {
         let header = header_row();
-        assert_eq!(header.len(), 22, "seven catalogue columns and five triples");
-        assert_eq!(header[7], "TES GB status");
-        assert_eq!(header[12], "TES US link");
-        assert_eq!(header[17], "TPT price");
-        assert_eq!(header[21], "Etsy link");
+        assert_eq!(
+            header.len(),
+            16,
+            "seven catalogue columns and three triples"
+        );
+        assert_eq!(header[7], "TES status");
+        assert_eq!(header[9], "TES link");
+        assert_eq!(header[11], "TPT price");
+        assert_eq!(header[15], "Etsy link");
     }
 
     #[test]

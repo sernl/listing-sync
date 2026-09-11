@@ -75,12 +75,12 @@ function row(chips: MarketplaceChip[], head: Partial<ProductHead> = {}): Invento
 
 describe('the tab partition', () => {
 	it('reads listed when any marketplace shows the resource', () => {
-		const one = row([chip('Tpt', 'draft'), chip('TesGb', 'listed')]);
+		const one = row([chip('Tpt', 'draft'), chip('Tes', 'listed')]);
 		expect(standingOfRow(one)).toBe('listed');
 	});
 
 	it('reads draft only when nothing is showing it', () => {
-		expect(standingOfRow(row([chip('Tpt', 'draft'), chip('TesGb', 'not_listed')]))).toBe('draft');
+		expect(standingOfRow(row([chip('Tpt', 'draft'), chip('Tes', 'not_listed')]))).toBe('draft');
 	});
 
 	it('reads not listed when no marketplace holds it', () => {
@@ -89,7 +89,7 @@ describe('the tab partition', () => {
 
 	it('counts a resource needing a person in its own tab and in its standing tab', () => {
 		const counts = tabCounts([
-			row([chip('Tpt', 'listed'), chip('TesGb', 'failed')]),
+			row([chip('Tpt', 'listed'), chip('Tes', 'failed')]),
 			row([chip('Tpt', 'draft')]),
 			row([chip('Tpt', 'not_listed')])
 		]);
@@ -130,7 +130,7 @@ describe('the tab partition', () => {
 	});
 
 	it('puts a listed-and-failing resource in both the listed and the needs-you tab', () => {
-		const both = row([chip('Tpt', 'listed'), chip('TesGb', 'failed')]);
+		const both = row([chip('Tpt', 'listed'), chip('Tes', 'failed')]);
 		expect(inTab(both, 'listed')).toBe(true);
 		expect(inTab(both, 'attention')).toBe(true);
 		expect(inTab(both, 'draft')).toBe(false);
@@ -138,7 +138,7 @@ describe('the tab partition', () => {
 });
 
 describe('the filter card', () => {
-	const listedOnTpt = row([chip('Tpt', 'listed'), chip('TesGb', 'failed')], {
+	const listedOnTpt = row([chip('Tpt', 'listed'), chip('Tes', 'failed')], {
 		title: 'Fractions pack'
 	});
 
@@ -149,7 +149,7 @@ describe('the filter card', () => {
 	it('reads several marketplaces as any of them', () => {
 		const failingSomewhere = {
 			...NO_RESOURCE_FILTERS,
-			marketplaces: ['TesGb', 'TesUs'] as InventoryId[],
+			marketplaces: ['Tes', 'Tpt'] as InventoryId[],
 			standing: 'failed' as const
 		};
 		expect(matchesResource(listedOnTpt, failingSomewhere)).toBe(true);
@@ -167,7 +167,7 @@ describe('the filter card', () => {
 	it('narrows on the query and the marketplace at once', () => {
 		const onTes = {
 			...NO_RESOURCE_FILTERS,
-			marketplaces: ['TesGb'] as InventoryId[],
+			marketplaces: ['Tes'] as InventoryId[],
 			query: 'fractions'
 		};
 		expect(matchesResource(listedOnTpt, onTes)).toBe(true);
@@ -182,7 +182,7 @@ describe('the filter card', () => {
 		};
 		expect(matchesResource(listedOnTpt, draftAndNeedy)).toBe(false);
 		expect(
-			matchesResource(row([chip('Tpt', 'draft'), chip('TesGb', 'failed')]), draftAndNeedy)
+			matchesResource(row([chip('Tpt', 'draft'), chip('Tes', 'failed')]), draftAndNeedy)
 		).toBe(true);
 	});
 
@@ -210,13 +210,7 @@ describe('the filter card', () => {
 	});
 
 	it('offers the marketplaces in the order the specification names', () => {
-		expect(MARKETPLACE_TILES.map((tile) => tile.label)).toEqual([
-			'TES GB',
-			'TES US',
-			'TES NZ',
-			'TPT',
-			'Etsy'
-		]);
+		expect(MARKETPLACE_TILES.map((tile) => tile.label)).toEqual(['TES', 'TPT', 'Etsy']);
 	});
 
 	it('offers Etsy and refuses it, with the reason on the tile', () => {
@@ -237,12 +231,12 @@ describe('the filter card', () => {
 describe('the row', () => {
 	it('reads its meta line as age, price and who is showing it', () => {
 		const now = 4 * 24 * 60 * 60 * 1000;
-		const showing = row([chip('TesGb', 'listed'), chip('Tpt', 'listed'), chip('TesUs', 'draft')], {
+		const showing = row([chip('Tes', 'listed'), chip('Tpt', 'listed'), chip('Etsy', 'draft')], {
 			updated_at: now - 3 * 24 * 60 * 60 * 1000,
 			price: { Paid: { minor_units: 450, currency: 'Gbp' } }
 		});
 		expect(metaLine(showing.product, showing, now)).toBe(
-			'Updated 3 days ago · £4.50 · TES GB, TPT'
+			'Updated 3 days ago · £4.50 · TES, TPT'
 		);
 	});
 

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-	DEFAULT_SITE,
 	IMPORT_IS_A_MIGRATION,
 	MIGRATION_HREF,
 	connectionUnknown,
@@ -9,7 +8,6 @@ import {
 	handoffBlocked,
 	importCards,
 	importRows,
-	migrationHref,
 	NOTHING_CONNECTED,
 	notConnected,
 	standingBadge,
@@ -37,7 +35,7 @@ function connection(partial: Partial<ConnectionView> = {}): ConnectionView {
 function head(partial: Partial<SyncRequestHead> = {}): SyncRequestHead {
 	return {
 		request: 'r-1',
-		source: 'TesGb',
+		source: 'Tes',
 		target: 'Tpt',
 		disposition: 'migrate',
 		intent: 'draft',
@@ -77,15 +75,10 @@ describe('importCards', () => {
 		expect(cards.at(-1)?.unreadable).not.toBeNull();
 	});
 
-	it('offers every source the server admits, starting on the United Kingdom site', () => {
+	it('offers every source the server admits', () => {
 		const tes = cardFor('Tes');
 		expect(tes.sites).toEqual(sourcesOn('Tes'));
 		expect(tes.sites).toEqual(MIGRATE_SOURCES);
-		// A literal rather than DEFAULT_SITE: compared against the module's own
-		// constant this passes even when that constant is changed to another
-		// country, which is exactly the regression it exists to catch.
-		expect(tes.preselected).toBe('TesGb');
-		expect(DEFAULT_SITE).toBe('TesGb');
 	});
 
 	// A card with no site and no sentence would render as a marketplace that
@@ -174,23 +167,7 @@ describe('handoffBlocked', () => {
 	});
 });
 
-describe('migrationHref', () => {
-	// Marketplace Migration validates the parameter against the list
-	// `sourcesOn` yields, so the value has to be that inventory identifier and
-	// not a prettier name it would be right to reject.
-	it('carries the site as the identifier the migration page validates', () => {
-		expect(migrationHref('TesGb')).toBe(`${MIGRATION_HREF}?source=TesGb`);
-		expect(migrationHref('TesNz')).toBe(`${MIGRATION_HREF}?source=TesNz`);
-	});
-
-	it('offers a link for every site this screen shows', () => {
-		const sites = cardFor('Tes').sites;
-		expect(sites.length).toBeGreaterThan(0);
-		for (const site of sites) {
-			expect(migrationHref(site)).toBe(`${MIGRATION_HREF}?source=${site}`);
-		}
-	});
-
+describe('the handoff destination', () => {
 	it('points at the screen that owns raising the request', () => {
 		expect(MIGRATION_HREF).toBe('/automations/migration');
 	});
@@ -271,7 +248,7 @@ describe('importRows', () => {
 	});
 
 	it('names both ends of the move', () => {
-		expect(importRows([head()])[0]).toMatchObject({ source: 'TesGb', target: 'Tpt' });
+		expect(importRows([head()])[0]).toMatchObject({ source: 'Tes', target: 'Tpt' });
 	});
 
 	it('carries the stage’s own word and tone', () => {

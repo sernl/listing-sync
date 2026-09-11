@@ -48,7 +48,7 @@ async fn fixture(app: &PgPool) -> MappingId {
                 id: MAPPING_1,
                 org: ORG_A,
                 product: minimal_product().id,
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 binding: Binding::Unbound,
                 policies: FieldPolicies {
                     title: FieldPolicy::Managed,
@@ -73,7 +73,7 @@ async fn fixture(app: &PgPool) -> MappingId {
 fn supply(pricing: PricingBranch) -> Election {
     Election {
         product: minimal_product().id,
-        inventory: InventoryId::TesGb,
+        inventory: InventoryId::Tes,
         axis: TermKind::Licence,
         trigger: ElectionTrigger::Supply { pricing },
     }
@@ -81,7 +81,7 @@ fn supply(pricing: PricingBranch) -> Election {
 
 fn licence(token: &str) -> VocabularyPath {
     VocabularyPath {
-        vocabulary: VocabularyId(InventoryId::TesGb, TermKind::Licence),
+        vocabulary: VocabularyId(InventoryId::Tes, TermKind::Licence),
         segments: vec![token.to_owned()],
         native_id: Some(token.to_owned()),
     }
@@ -178,7 +178,7 @@ async fn a_standing_rule_round_trips_and_a_legal_axis_refuses_delegation_at_both
     let repo = ElectionRepo::new(app.clone());
     let rule = ElectionRule::new(NewElectionRule {
         org: ORG_A,
-        inventory: InventoryId::TesGb,
+        inventory: InventoryId::Tes,
         axis: TermKind::Licence,
         trigger_kind: ElectionTriggerKind::Supply,
         trigger_key: Some("free".to_owned()),
@@ -203,7 +203,7 @@ async fn a_standing_rule_round_trips_and_a_legal_axis_refuses_delegation_at_both
         matches!(
             ElectionRule::new(NewElectionRule {
                 org: ORG_A,
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 axis: TermKind::Licence,
                 trigger_kind: ElectionTriggerKind::Supply,
                 trigger_key: Some("free".to_owned()),
@@ -221,7 +221,7 @@ async fn a_standing_rule_round_trips_and_a_legal_axis_refuses_delegation_at_both
         "INSERT INTO election_rule \
          (org_id, inventory, axis, trigger_kind, trigger_key, answer_kind, answer, \
           decided_by, decided_source, decided_at) \
-         VALUES ($1, 'tes_gb', 'licence', 'supply', 'paid', 'delegate', '[]', \
+         VALUES ($1, 'tes', 'licence', 'supply', 'paid', 'delegate', '[]', \
                  'imported', 'direct', now())",
     )
     .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
@@ -240,7 +240,7 @@ async fn a_misspelled_axis_is_refused_by_the_column_check(app: PgPool) {
         "INSERT INTO election_rule \
          (org_id, inventory, axis, trigger_kind, trigger_key, answer_kind, answer, \
           decided_by, decided_source, decided_at) \
-         VALUES ($1, 'tes_gb', 'licences', 'supply', 'free', 'value', \
+         VALUES ($1, 'tes', 'licences', 'supply', 'free', 'value', \
                  '[{\"segments\": [\"CC-BY\"], \"native_id\": \"CC-BY\"}]', \
                  'imported', 'direct', now())",
     )
@@ -308,7 +308,7 @@ async fn the_engine_may_raise_a_question_and_may_never_answer_one(app: PgPool) {
         "INSERT INTO election_item \
          (org_id, id, product_id, inventory, axis, trigger_kind, trigger_key, raised_by, \
           raised_at, state) \
-         VALUES ($1, $2, $3, 'tes_gb', 'licence', 'supply', 'free', $4, now(), 'open')",
+         VALUES ($1, $2, $3, 'tes', 'licence', 'supply', 'free', $4, now(), 'open')",
     )
     .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
     .bind(uuid::Uuid::from_bytes([0x5A; 16]))
@@ -334,7 +334,7 @@ async fn the_engine_may_raise_a_question_and_may_never_answer_one(app: PgPool) {
         "INSERT INTO election_rule \
          (org_id, inventory, axis, trigger_kind, trigger_key, answer_kind, answer, \
           decided_by, decided_source, decided_at) \
-         VALUES ($1, 'tes_gb', 'licence', 'supply', 'free', 'value', \
+         VALUES ($1, 'tes', 'licence', 'supply', 'free', 'value', \
                  '[{\"segments\": [\"CC-BY\"], \"native_id\": \"CC-BY\"}]', \
                  'imported', 'engine', now())",
     )
@@ -424,7 +424,7 @@ async fn item_in(app: &PgPool, mapping: MappingId, state: &str, gate: Option<&st
             ORG_A,
             &NewJob {
                 job: JOB,
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 stamp: Stamp {
                     at: T0,
                     actor: Actor::System(SystemComponent::Engine),
@@ -614,7 +614,7 @@ fn delegation(org: OrgId, axis: TermKind, trigger_kind: ElectionTriggerKind) -> 
     )]
     ElectionRule::new(NewElectionRule {
         org,
-        inventory: InventoryId::TesGb,
+        inventory: InventoryId::Tes,
         axis,
         trigger_kind,
         trigger_key: None,
@@ -653,7 +653,7 @@ async fn a_delegation_is_written_whole_and_withdrawn_without_taking_the_sellers_
 
     let own_answer = ElectionRule::new(NewElectionRule {
         org: ORG_A,
-        inventory: InventoryId::TesGb,
+        inventory: InventoryId::Tes,
         axis: TermKind::Licence,
         trigger_kind: ElectionTriggerKind::Supply,
         trigger_key: Some("free".to_owned()),
@@ -676,7 +676,7 @@ async fn a_delegation_is_written_whole_and_withdrawn_without_taking_the_sellers_
     );
 
     let removed = repo
-        .revoke_delegation(ORG_A, InventoryId::TesGb)
+        .revoke_delegation(ORG_A, InventoryId::Tes)
         .await
         .expect("the untick withdraws");
     assert_eq!(
@@ -712,7 +712,7 @@ async fn a_marketplace_untick_withdraws_a_delegation_the_tick_never_wrote(app: P
     // shape `POST /v1/elections/rules` accepts and the tick cannot produce.
     let single_axis = ElectionRule::new(NewElectionRule {
         org: ORG_A,
-        inventory: InventoryId::TesGb,
+        inventory: InventoryId::Tes,
         axis: TermKind::Subject,
         trigger_kind: ElectionTriggerKind::Narrow,
         trigger_key: Some("1001595".to_owned()),
@@ -729,7 +729,7 @@ async fn a_marketplace_untick_withdraws_a_delegation_the_tick_never_wrote(app: P
 
     let own_answer = ElectionRule::new(NewElectionRule {
         org: ORG_A,
-        inventory: InventoryId::TesGb,
+        inventory: InventoryId::Tes,
         axis: TermKind::Licence,
         trigger_kind: ElectionTriggerKind::Supply,
         trigger_key: Some("free".to_owned()),
@@ -759,7 +759,7 @@ async fn a_marketplace_untick_withdraws_a_delegation_the_tick_never_wrote(app: P
     );
 
     let removed = repo
-        .revoke_delegation(ORG_A, InventoryId::TesGb)
+        .revoke_delegation(ORG_A, InventoryId::Tes)
         .await
         .expect("the untick withdraws");
     assert_eq!(
@@ -793,7 +793,7 @@ async fn one_tenants_untick_never_reaches_another_tenants_delegation(app: PgPool
     }
 
     let removed = repo
-        .revoke_delegation(ORG_A, InventoryId::TesGb)
+        .revoke_delegation(ORG_A, InventoryId::Tes)
         .await
         .expect("A unticks");
     assert_eq!(removed, 1, "A's own row and no other");

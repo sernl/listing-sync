@@ -467,7 +467,7 @@ fn pounds(price_pence: Option<i64>) -> String {
 async fn run_list(adapter: &Adapter) -> Result<(), Failure> {
     let entries = adapter
         .list_own_resources(&FetchReason::FirstPartyExport {
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
         })
         .await
         .map_err(|error| failed("the catalogue read failed", &error))?;
@@ -703,7 +703,7 @@ async fn main() -> Result<(), Failure> {
     } else {
         file_argument(&arguments)?
     };
-    let adapter = TesAdapter::new(InventoryId::TesGb, transport, OneFile(file.clone()))?;
+    let adapter = TesAdapter::new(InventoryId::Tes, transport, OneFile(file.clone()))?;
     let now = wall_now()?;
     let publish = flag(&arguments, "--yes-publish-live");
 

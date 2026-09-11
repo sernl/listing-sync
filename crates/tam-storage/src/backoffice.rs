@@ -363,7 +363,7 @@ impl BackofficeRepo {
         };
 
         let connection_rows = sqlx::query!(
-            "SELECT id, marketplace, state, created_at, updated_at, \
+            "SELECT id, marketplace, state, country, created_at, updated_at, \
                     session_verified_at, session_refresh_after, refresh_failures \
              FROM connection WHERE org_id = $1 ORDER BY marketplace",
             uuid_to_db(org.0),
@@ -394,6 +394,7 @@ impl BackofficeRepo {
                     created_at: timestamp_from_db(row.created_at),
                     updated_at: timestamp_from_db(row.updated_at),
                     status,
+                    country: row.country,
                 })
             })
             .collect::<Result<Vec<_>, StorageError>>()?;

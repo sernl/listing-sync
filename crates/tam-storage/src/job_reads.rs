@@ -704,7 +704,7 @@ mod tests {
     fn key_at(operation: &ItemOperation, job: JobId, sever_generation: i32) -> IdempotencyKey {
         derive_idempotency_key(
             ORG,
-            InventoryId::TesGb,
+            InventoryId::Tes,
             PRODUCT,
             1,
             intent_digest(operation, job, &HASHES, sever_generation),

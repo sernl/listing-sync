@@ -77,7 +77,7 @@ async fn list_it(pool: &PgPool) {
                 id: MappingId(Uuid([0x31; 16])),
                 org: ORG,
                 product: PRODUCT,
-                inventory: InventoryId::TesGb,
+                inventory: InventoryId::Tes,
                 binding: Binding::Unbound,
                 policies: FieldPolicies {
                     title: FieldPolicy::Managed,

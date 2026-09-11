@@ -513,14 +513,11 @@ async fn provision_with(pool: &PgPool, fixture: Fixture) {
                 label: "Maths for early years".to_owned(),
             }],
             &if fixture.crosswalked {
-                vec![
-                    edge(InventoryId::TesGb, "1000454"),
-                    edge(InventoryId::TesNz, "7000454"),
-                ]
+                vec![edge(InventoryId::Tes, "1000454")]
             } else {
-                // No NZ counterpart: a create would park on reconciliation,
+                // No Tes counterpart: a create would park on reconciliation,
                 // which is exactly what a removal must not do.
-                vec![edge(InventoryId::TesGb, "1000454")]
+                vec![]
             },
         )
         .await
@@ -529,7 +526,7 @@ async fn provision_with(pool: &PgPool, fixture: Fixture) {
     // required, so without one every create here parks on the election
     // instead of exercising the write path the gauntlet is about.
     let elections = ElectionRepo::new(pool.clone());
-    for inventory in [InventoryId::TesGb, InventoryId::TesNz] {
+    for inventory in [InventoryId::Tes] {
         let rule = ElectionRule::new(NewElectionRule {
             org: ORG,
             inventory,
@@ -605,7 +602,7 @@ async fn provision_with(pool: &PgPool, fixture: Fixture) {
                 id: MAPPING,
                 org: ORG,
                 product: PRODUCT,
-                inventory: InventoryId::TesNz,
+                inventory: InventoryId::Tes,
                 binding: fixture.binding,
                 policies: tam_domain::FieldPolicies {
                     title: tam_domain::FieldPolicy::Managed,
@@ -646,7 +643,7 @@ async fn provision_with(pool: &PgPool, fixture: Fixture) {
             ORG,
             &NewJob {
                 job: JOB,
-                inventory: InventoryId::TesNz,
+                inventory: InventoryId::Tes,
                 stamp: Stamp {
                     at: NOW,
                     actor: Actor::System(SystemComponent::Engine),
@@ -657,7 +654,7 @@ async fn provision_with(pool: &PgPool, fixture: Fixture) {
                 mapping: MAPPING,
                 idempotency_key: tam_marketplace::idempotency::derive_idempotency_key(
                     ORG,
-                    InventoryId::TesNz,
+                    InventoryId::Tes,
                     PRODUCT,
                     1,
                     ContentHash([0x51; 32]),
@@ -781,7 +778,7 @@ async fn pump(
             panic!("the fixture's counterpart binds; {counterpart:?} did not")
         }
     };
-    let adapter = TesAdapter::new(InventoryId::TesNz, fake, OneFile).expect("a Tes inventory");
+    let adapter = TesAdapter::new(InventoryId::Tes, fake, OneFile).expect("a Tes inventory");
     let prepared = tam_engine::seed::preparation(&item, operation.clone(), projected.clone());
     let seed = prepared.projected.as_ref().map_or_else(
         || seed_for_removal(&prepared),

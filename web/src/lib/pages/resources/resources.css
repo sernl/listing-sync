@@ -440,7 +440,23 @@
 .resources-page .res-sec-h {
 	display: flex;
 	align-items: center;
+	flex-wrap: wrap;
 	gap: 10px;
+}
+
+/* A band-level notice for something that is not built yet. Grey and quiet on
+   purpose: it is not a control and not an instruction, and a teacher who
+   never reads it has lost nothing. */
+.resources-page .res-soon {
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.01em;
+	color: var(--muted);
+	background: var(--ground);
+	border: 1px solid var(--line);
+	border-radius: 999px;
+	padding: 2px 8px;
+	white-space: nowrap;
 }
 
 /* The sans face at the band's own size, page-locally. `.panel h2` sets the

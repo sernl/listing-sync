@@ -42,9 +42,8 @@ use crate::tes::ResidueNode;
 
 const RESOURCE_CATEGORY: &str = "Type-of-Resource";
 
-/// The three inventories whose registries bind `mainType`.
-const TES_INVENTORIES: [InventoryId; 3] =
-    [InventoryId::TesGb, InventoryId::TesUs, InventoryId::TesNz];
+/// The inventory whose registry binds `mainType`.
+const TES_INVENTORIES: [InventoryId; 1] = [InventoryId::Tes];
 
 /// The resource-type relation as the captures and the authored pairing state
 /// it. No `no_counterparts`: a Tes value no facet reaches is a gap in the
@@ -269,7 +268,7 @@ fn emit(
     for (&value, label) in values {
         if !reached.contains(&value) {
             out.unclaimed_targets.push(ResidueNode {
-                market: InventoryId::TesGb,
+                market: InventoryId::Tes,
                 kind: TermKind::ResourceType,
                 native_id: value.to_string(),
                 description: label.clone(),

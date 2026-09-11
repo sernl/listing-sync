@@ -463,7 +463,7 @@ fn crosswalk_edge(
 /// The subject edge is the half that matters: it gives the relation a real
 /// answer for [`TERM`], so an override is measured against a value rather than
 /// against a gap. The grade edges are scaffolding -- seeded on the source side
-/// as well, because the product declares its grade as a TesUs path and the
+/// as well, because the product declares its grade as a Tes path and the
 /// projection reaches TPT by ingesting that into the canonical term and
 /// projecting out again.
 #[expect(
@@ -501,7 +501,7 @@ async fn seed_crosswalk(pool: &PgPool) {
                 crosswalk_edge(
                     GRADE,
                     path(
-                        tam_types::InventoryId::TesUs,
+                        tam_types::InventoryId::Tes,
                         TermKind::Phase,
                         "Kindergarten",
                         "17",
@@ -523,7 +523,7 @@ async fn seed_projectable(pool: &PgPool, org: OrgId, seed: u8) -> tam_storage::L
     let product = tam_types::ProductId(Uuid([seed; 16]));
     let mapping = tam_types::MappingId(Uuid([seed.wrapping_add(1); 16]));
     let declared = path(
-        tam_types::InventoryId::TesUs,
+        tam_types::InventoryId::Tes,
         TermKind::Phase,
         "Kindergarten",
         "17",
@@ -567,7 +567,7 @@ async fn seed_projectable(pool: &PgPool, org: OrgId, seed: u8) -> tam_storage::L
                 grades: tam_domain::GradeDeclaration {
                     source: tam_domain::DeclarationSource::Imported {
                         vocabulary: tam_domain::VocabularyId(
-                            tam_types::InventoryId::TesUs,
+                            tam_types::InventoryId::Tes,
                             TermKind::Phase,
                         ),
                     },

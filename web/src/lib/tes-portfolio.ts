@@ -6,15 +6,13 @@
 import type { MappingHead, ProductHead } from '$lib/api';
 import type { InventoryId } from '$lib/generated/vocab';
 
-/** Which of the closed inventories are Tes sites.
+/** Which of the closed inventories is Tes.
  *
  * A total map rather than a membership list: the union is generated from the
- * Rust enum, so a Tes site added there stops this file type-checking instead
- * of silently going uncounted. */
+ * Rust enum, so a marketplace added there stops this file type-checking
+ * instead of silently going uncounted. */
 export const IS_TES: Record<InventoryId, boolean> = {
-	TesGb: true,
-	TesUs: true,
-	TesNz: true,
+	Tes: true,
 	Etsy: false,
 	Tpt: false
 };
@@ -65,7 +63,7 @@ export function readPrice(price: unknown): PriceReading {
 }
 
 export interface TesPortfolio {
-	/** Every mapping onto a Tes site, whatever standing it is in. */
+	/** Every mapping onto Tes, whatever standing it is in. */
 	listings: number;
 	live: number;
 	/** Of the live listings, those whose catalogue product carries a price,
@@ -167,7 +165,7 @@ export const PORTFOLIO_ROWS: readonly PortfolioRow[] = [
 	{
 		key: 'unsent',
 		label: 'Not sent to TES yet',
-		explanation: 'Set up for a TES site, with nothing created there yet.'
+		explanation: 'Set up for TES, with nothing created there yet.'
 	},
 	{
 		key: 'other',
@@ -178,6 +176,6 @@ export const PORTFOLIO_ROWS: readonly PortfolioRow[] = [
 	{
 		key: 'productsWithoutListing',
 		label: 'Resources with no TES listing',
-		explanation: 'In your Resources, and not set up for any TES site.'
+		explanation: 'In your Resources, and not set up for TES.'
 	}
 ];

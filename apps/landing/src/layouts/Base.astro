@@ -13,10 +13,32 @@ const ogImage = new URL('/images/og.png', Astro.site);
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		{/* The palette, decided before the stylesheet so the first paint is the
+		    right colour. `teachouse.theme` is the console's own key, so a
+		    signed-in seller who chose Dark there finds the marketing site dark
+		    too; a visitor who chose nothing follows their machine. The
+		    attribute on `<html>` is the no-script answer, and it is why
+		    `site.css` pins `color-scheme` per theme. `tam-server` hashes every
+		    inline block of the page it serves into the policy it sends
+		    (`serving::inline_script_hashes`), so this needs no grant. */}
+		<script is:inline>
+			(function () {
+				var chosen = null;
+				try {
+					chosen = localStorage.getItem('teachouse.theme');
+				} catch (refused) {
+					chosen = null;
+				}
+				if (chosen !== 'light' && chosen !== 'dark') {
+					chosen = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+				}
+				document.documentElement.dataset.theme = chosen;
+			})();
+		</script>
 		<title>{title}</title>
 		<meta name="description" content={description} />
 		<link rel="canonical" href={canonical} />

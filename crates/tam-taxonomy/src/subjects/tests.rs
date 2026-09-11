@@ -20,11 +20,9 @@ use tam_types::{CanonicalTermId, InventoryId, Timestamp};
 /// `tam-marketplace`.
 const fn rank(vocabulary: VocabularyId) -> (u8, u8) {
     let inventory = match vocabulary.0 {
-        InventoryId::TesGb => 0,
-        InventoryId::TesUs => 1,
-        InventoryId::TesNz => 2,
-        InventoryId::Etsy => 3,
-        InventoryId::Tpt => 4,
+        InventoryId::Tes => 0,
+        InventoryId::Etsy => 1,
+        InventoryId::Tpt => 2,
     };
     let kind = match vocabulary.1 {
         TermKind::Subject => 0,
@@ -36,22 +34,17 @@ const fn rank(vocabulary: VocabularyId) -> (u8, u8) {
     (inventory, kind)
 }
 
-const GB: &str = include_str!("../../../../docs/design/data/tes-taxonomy-GB.json");
-const NZ: &str = include_str!("../../../../docs/design/data/tes-taxonomy-NZ.json");
+const TES: &str = include_str!("../../../../docs/design/data/tes-taxonomy-GB.json");
 const TPT: &str = include_str!("../../../../docs/design/data/tpt-vocabulary.json");
 const PAIRS: &str = include_str!("../../../../docs/design/data/tpt-tes-subject-pairs.json");
 const AT: Timestamp = Timestamp(1_787_000_000_000);
 
-fn trees() -> (TesTree, TesTree) {
-    (
-        parse_tree(GB).expect("the GB capture parses"),
-        parse_tree(NZ).expect("the NZ capture parses"),
-    )
+fn tree() -> TesTree {
+    parse_tree(TES).expect("the Tes capture parses")
 }
 
 fn crosswalk() -> SubjectCrosswalk {
-    let (gb, nz) = trees();
-    derive_subject_crosswalk(&gb, &nz, TPT, PAIRS, AT).expect("the committed captures derive")
+    derive_subject_crosswalk(&tree(), TPT, PAIRS, AT).expect("the committed captures derive")
 }
 
 fn tpt_edges(derived: &SubjectCrosswalk) -> Vec<&tam_domain::ProjectionEdge> {
@@ -70,8 +63,7 @@ fn tpt_edges(derived: &SubjectCrosswalk) -> Vec<&tam_domain::ProjectionEdge> {
 /// a canonical id, or narrows an edge.
 #[test]
 fn no_edge_the_tes_derivation_holds_is_lost_by_the_inversion() {
-    let (gb, nz) = trees();
-    let base = derive_crosswalk(&gb, &nz, AT).expect("the captures derive");
+    let base = derive_crosswalk(&tree(), AT);
     let derived = crosswalk();
     let held: BTreeSet<([u8; 16], (u8, u8), Vec<String>, bool)> = derived
         .edges
@@ -111,8 +103,7 @@ fn no_edge_the_tes_derivation_holds_is_lost_by_the_inversion() {
 /// `reconciliation_item`, and from every stored product.
 #[test]
 fn every_existing_canonical_id_survives_unchanged() {
-    let (gb, nz) = trees();
-    let base = derive_crosswalk(&gb, &nz, AT).expect("the captures derive");
+    let base = derive_crosswalk(&tree(), AT);
     let derived = crosswalk();
     let after: BTreeMap<[u8; 16], (TermKind, Option<CanonicalTermId>)> = derived
         .terms
@@ -433,8 +424,8 @@ fn the_derivation_seeds_the_pinned_counts() {
     );
     assert_eq!(
         derived.edges.len(),
-        1146,
-        "986 from the Tes half, 158 into TPT, and the two Tes paths `not-subject-specific` \
+        653,
+        "494 from the Tes half, 158 into TPT, and the one Tes path `not-subject-specific` \
          reaches through Broader"
     );
 }

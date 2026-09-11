@@ -111,16 +111,12 @@ export const SLUG_PROMPTS: readonly SlugPrompt[] = [
 ];
 
 export type InventoryId =
-  | "TesGb"
-  | "TesUs"
-  | "TesNz"
+  | "Tes"
   | "Etsy"
   | "Tpt";
 
 export const INVENTORY_IDS: readonly InventoryId[] = [
-  "TesGb",
-  "TesUs",
-  "TesNz",
+  "Tes",
   "Etsy",
   "Tpt",
 ];

@@ -89,7 +89,7 @@ fn sample_product(org: OrgId) -> CanonicalProduct {
         grades: GradeDeclaration {
             source: DeclarationSource::Seller,
             raw: vec![VocabularyPath {
-                vocabulary: VocabularyId(InventoryId::TesGb, TermKind::Phase),
+                vocabulary: VocabularyId(InventoryId::Tes, TermKind::Phase),
                 segments: vec!["primary".to_owned(), "ks2".to_owned()],
                 native_id: None,
             }],
@@ -101,7 +101,7 @@ fn sample_product(org: OrgId) -> CanonicalProduct {
         // value, and a licence is a kind a term may have.
         rights: RightsDeclaration::Declared {
             source: VocabularyPath {
-                vocabulary: VocabularyId(InventoryId::TesGb, TermKind::Licence),
+                vocabulary: VocabularyId(InventoryId::Tes, TermKind::Licence),
                 segments: vec!["Creative Commons Attribution-ShareAlike".to_owned()],
                 native_id: Some("CC-BY-SA".to_owned()),
             },
@@ -207,7 +207,7 @@ async fn a_half_declared_grant_is_refused_by_the_database_and_not_only_by_the_ty
         "INSERT INTO product \
          (org_id, id, title, body, price_kind, rights_state, rights_source_inventory, \
           created_at, updated_at) \
-         VALUES ($1, $2, 'x', 'y', 'free', 'declared', 'tes_gb', now(), now())",
+         VALUES ($1, $2, 'x', 'y', 'free', 'declared', 'tes', now(), now())",
     )
     .bind(db_uuid(ORG_A.0))
     .bind(db_uuid(Uuid([0x5A; 16])))

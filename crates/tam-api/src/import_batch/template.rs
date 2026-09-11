@@ -333,7 +333,7 @@ fn write_read_me(sheet: &mut Worksheet) -> Result<(), XlsxError> {
     write(
         sheet,
         "Upload the whole .xlsx and every tab is read at once. If you save a single tab as a \
-         .csv instead, name the file after the tab — \"TES GB.csv\", \"Teachouse.csv\" — because \
+         .csv instead, name the file after the tab — \"TES.csv\", \"Teachouse.csv\" — because \
          a .csv carries no tab name of its own and that filename is the only thing that says \
          which tab it is.",
         false,

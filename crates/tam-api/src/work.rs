@@ -603,7 +603,7 @@ mod tests {
             item: tam_domain::JobItemId(Uuid([0x02; 16])),
             job: JobId(Uuid([0x03; 16])),
             mapping: MAPPING,
-            inventory: InventoryId::TesGb,
+            inventory: InventoryId::Tes,
             idempotency_key: IdempotencyKey(Uuid([0x05; 16])),
             operation: tam_domain::ItemOperation::Create,
             lease_epoch: 7,

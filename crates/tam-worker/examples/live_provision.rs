@@ -391,9 +391,9 @@ async fn fixture(
 ) -> Result<Fixture, Failure> {
     match inventory {
         InventoryId::Tpt => Ok(tpt_fixture(price, at)),
-        InventoryId::TesGb => tes_fixture(taxonomy, inventory, price, at).await,
-        InventoryId::TesUs | InventoryId::TesNz | InventoryId::Etsy => {
-            Err(format!("{inventory:?} has no fixture here; this provisions tpt and tes-gb").into())
+        InventoryId::Tes => tes_fixture(taxonomy, inventory, price, at).await,
+        InventoryId::Etsy => {
+            Err(format!("{inventory:?} has no fixture here; this provisions tpt and tes").into())
         }
     }
 }
@@ -642,7 +642,7 @@ async fn create(pool: &PgPool, inputs: &CreateInputs<'_>) -> Result<(), Failure>
 /// The column's own check constraint is the closed set.
 const fn marketplace_of(inventory: InventoryId) -> &'static str {
     match inventory {
-        InventoryId::TesGb | InventoryId::TesUs | InventoryId::TesNz => "tes",
+        InventoryId::Tes => "tes",
         InventoryId::Tpt => "tpt",
         InventoryId::Etsy => "etsy",
     }
@@ -860,11 +860,9 @@ fn render(inventory: InventoryId, projected: &ProjectedListing) -> Result<FieldS
     match inventory {
         InventoryId::Tpt => write_model::project_fields(projected)
             .map_err(|error| format!("Tpt refused the projection: {error:?}").into()),
-        InventoryId::TesGb | InventoryId::TesUs | InventoryId::TesNz => {
-            TesAdapter::new(inventory, NoTransport, NoFiles)?
-                .project_fields(projected)
-                .map_err(|error| format!("Tes refused the projection: {error:?}").into())
-        }
+        InventoryId::Tes => TesAdapter::new(inventory, NoTransport, NoFiles)?
+            .project_fields(projected)
+            .map_err(|error| format!("Tes refused the projection: {error:?}").into()),
         InventoryId::Etsy => Err("no adapter renders Etsy".into()),
     }
 }
@@ -974,7 +972,7 @@ fn mapping_argument(raw: Option<&String>) -> Result<MappingId, Failure> {
 fn inventory_argument(raw: Option<&String>) -> Result<InventoryId, Failure> {
     match raw.ok_or(USAGE)?.as_str() {
         "tpt" => Ok(InventoryId::Tpt),
-        "tes-gb" => Ok(InventoryId::TesGb),
+        "tes-gb" => Ok(InventoryId::Tes),
         other => Err(
             format!("{other:?} is not a provisionable inventory; expected tpt or tes-gb").into(),
         ),
