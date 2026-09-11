@@ -4,7 +4,9 @@
 # It is a separate build from the console for the reason recorded in
 # `apps/landing/README.md`, and it takes no build-time argument, because
 # nothing on the page is configured: there is no checkout, no captcha and no
-# social provider, and every price is a literal in `src/pricing.js`.
+# social provider, and every price is a literal in the checked-in
+# `src/plans.generated.js`, which `cargo run -p tam-typegen` emits and
+# `just web-check` diffs, so this build reads a file rather than a service.
 {
   lib,
   stdenv,

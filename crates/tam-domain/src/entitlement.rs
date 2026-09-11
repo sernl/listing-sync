@@ -18,6 +18,7 @@
 //! control-plane call regardless, and the device's gate can only ever refuse.
 
 use serde::{Deserialize, Serialize};
+pub use tam_limits::Plan;
 use tam_types::Marketplace;
 
 use crate::{ENTITLEMENT_GRACE_HOURS, ENTITLEMENT_TOKEN_VALIDITY_SECS};
@@ -56,6 +57,24 @@ pub struct Claims {
     /// The marketplaces this device may work. A marketplace absent here is
     /// revoked, which is the per-marketplace kill switch.
     pub marketplaces: Vec<Marketplace>,
+    /// The plan the organisation held when this token was minted, so the
+    /// device's offline UI can say why something is unavailable rather than
+    /// only that it is.
+    ///
+    /// One name, not a set of per-feature booleans: the module doc above is
+    /// explicit that no claim names an organisation's permissions, and the
+    /// server re-decides every control-plane call in Postgres. The token
+    /// exists so a device can run scheduled no-API work between check-ins,
+    /// and its gate can only ever refuse.
+    ///
+    /// `serde(default)` is load-bearing rather than tidy. `tam-desktop`
+    /// deserialises this whole struct, and the fleet is version-skewed
+    /// against the server by definition, so a required field would make
+    /// every build on the previous release reject every new token — exactly
+    /// the failure mode `marketplaces` was designed to avoid. The default is
+    /// `Free`, which is the fail-closed reading of a token that names none.
+    #[serde(default)]
+    pub plan: Plan,
     /// When revalidation is due, in seconds since the epoch. Seconds because
     /// that is what RFC 7519 fixes `exp` to be; `tam_types::Timestamp` is
     /// milliseconds, and the two are converted at every comparison rather than
@@ -84,6 +103,7 @@ impl Claims {
         subject: String,
         device: String,
         marketplaces: Vec<Marketplace>,
+        plan: Plan,
         issued_at_secs: i64,
     ) -> Self {
         let exp = issued_at_secs.saturating_add(ENTITLEMENT_TOKEN_VALIDITY_SECS);
@@ -93,6 +113,7 @@ impl Claims {
             iss: ISSUER.to_owned(),
             device,
             marketplaces,
+            plan,
             exp,
             grace: exp.saturating_add(i64::from(ENTITLEMENT_GRACE_HOURS) * SECS_PER_HOUR),
         }
@@ -102,6 +123,7 @@ impl Claims {
 #[cfg(test)]
 mod tests {
     use super::{Claims, AUDIENCE, ISSUER};
+    use tam_limits::Plan;
     use tam_types::Marketplace;
 
     const NOW: i64 = 1_756_000_000;
@@ -111,6 +133,7 @@ mod tests {
             "11111111-2222-3333-4444-555555555555".to_owned(),
             "11112222333344445555666677778888".to_owned(),
             vec![Marketplace::Tpt, Marketplace::Tes],
+            Plan::Subscriber,
             NOW,
         )
     }
@@ -136,6 +159,7 @@ mod tests {
             "org".to_owned(),
             "device".to_owned(),
             vec![Marketplace::Tpt],
+            Plan::Free,
             i64::MAX,
         );
         assert!(

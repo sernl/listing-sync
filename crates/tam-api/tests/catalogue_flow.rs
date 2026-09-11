@@ -45,7 +45,7 @@ const NOW: Timestamp = Timestamp(5_000);
 /// against. Read from `tam-limits` rather than restated, so a re-priced tier
 /// moves the test with it.
 fn free_listings_max() -> u32 {
-    tam_limits::Tier::Free.quota().listings_max
+    tam_limits::Plan::Free.capabilities(None).resources_max
 }
 
 #[expect(
@@ -1537,7 +1537,8 @@ async fn the_storage_quota_refuses_the_upload_before_a_byte_is_sealed(pool: PgPo
         .execute(&mut *tx)
         .await
         .unwrap_or_else(|e| panic!("the pin applies: {e}"));
-    let full = i64::try_from(tam_limits::Tier::Free.quota().storage_bytes_max).unwrap_or(i64::MAX);
+    let full = i64::try_from(tam_limits::Plan::Free.capabilities(None).storage_bytes_max)
+        .unwrap_or(i64::MAX);
     sqlx::query(
         "INSERT INTO blob (org_id, hash, byte_len, object_key, dek_key_version, first_seen_at) \
          VALUES ($1, $2, $3, 'already-full', 0, now())",

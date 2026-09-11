@@ -13,12 +13,13 @@ use tam_domain::{ItemOperation, ItemOutcome, JobItemId};
 use tam_marketplace::idempotency::derive_idempotency_key;
 use tam_marketplace::ListingState;
 use tam_storage::{
-    intent_digest, Disposition, EventRow, ItemCounts, ItemRow, ItemsPageParams, JobOrigin,
-    JobReadRepo, JobRepo, LedgerCursor, MappingSeed, NewJob, NewJobItem, NewSyncRequest,
+    intent_digest, Disposition, EntitlementRepo, EventRow, ItemCounts, ItemRow, ItemsPageParams,
+    JobOrigin, JobReadRepo, JobRepo, LedgerCursor, MappingSeed, NewJob, NewJobItem, NewSyncRequest,
     StorageError, SyncIntent, SyncRequestRepo,
 };
 use tam_types::{Actor, FailureCode, InventoryId, JobId, MappingId, OrgId, Stamp, Timestamp, Uuid};
 
+use crate::entitlement::migration_refusal;
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::{AppState, OrgContext};
 
@@ -419,6 +420,32 @@ pub(crate) async fn create_sync_request(
     if !device_enumerated && body.resources.is_empty() {
         return Err(validation("a sync names at least one resource"));
     }
+    // The month's migration allowance, counted in resources rather than in
+    // requests: a per-request cap is gamed by batching, and the figure the
+    // pricing page names is resources. A device-enumerated migrate names
+    // none here, so it is admitted while the counter has any room at all and
+    // its pages are counted as they land.
+    let caps = context.entitlement.caps;
+    let now = (state.wall)();
+    let entitlements = EntitlementRepo::new(state.pool.clone());
+    let used = entitlements
+        .migrations_used_this_month(context.org, now)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    let requested = i64::try_from(body.resources.len()).unwrap_or(i64::MAX);
+    if used.saturating_add(requested.max(1)) > i64::from(caps.migrations_per_month) {
+        let resets_at = entitlements
+            .usage(context.org, now)
+            .await
+            .map_err(|error| storage_fault(&state, &error))?
+            .migrations_reset_at;
+        return Err(migration_refusal(
+            used,
+            caps.migrations_per_month,
+            requested,
+            resets_at,
+        ));
+    }
     let new = NewSyncRequest {
         // The idempotency key is the request's identity, so a retried submit
         // is the same request rather than a second one.
@@ -427,7 +454,7 @@ pub(crate) async fn create_sync_request(
         target: body.target,
         disposition,
         intent,
-        requested_at: (state.wall)(),
+        requested_at: now,
         locators: body.resources,
     };
     // The insert decides the replay, rather than a read the two submits then

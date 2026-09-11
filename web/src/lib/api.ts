@@ -28,10 +28,12 @@ import type {
 	NotificationKind,
 	PayloadFileRule,
 	FormGroup,
+	Plan,
 	SlugPrompt,
 	StandardsState,
 	TermKind
 } from '$lib/generated/vocab';
+import type { Capabilities, PlansView } from '$lib/generated/plans';
 
 export interface APIErrorEntry {
 	code?: APIErrorCode;
@@ -632,6 +634,62 @@ export interface BillingView {
 	subscription: SubscriptionView | null;
 }
 
+// -------------------------------------------------------------- entitlement
+
+/** The capability struct, the price table and the ladder's rungs are
+ *  `tam-limits`' own, emitted by `just web-typegen`. Re-exported here so a
+ *  page reads one module for a wire shape and the shape still has one
+ *  definition: the server derives capabilities from the plan, and a second
+ *  hand-written copy of those twenty fields is how the pricing page and the
+ *  request gate came to disagree in the first place. */
+export type {
+	AiOffer,
+	Capabilities,
+	Founding,
+	PlanRow,
+	PlansView,
+	Rung
+} from '$lib/generated/plans';
+
+/** What the seller has used, against the figures above. */
+export interface EntitlementUsage {
+	resources: number;
+	marketplaces: number;
+	migrations_this_month: number;
+	/** When the monthly migration count returns to zero: the first instant of
+	 *  the next UTC month. */
+	migrations_reset_at: number;
+	templates: number;
+	labels: number;
+	devices: number;
+}
+
+/** Where an organisation's plan came from.
+ *
+ *  An organisation nobody has granted anything is on `free`, and the
+ *  provenance fields are null rather than invented: "nobody granted this" is
+ *  a different fact from "an operator granted it". */
+export interface Grant {
+	plan: Plan;
+	/** The import ladder rung bought, on a `migration_only` grant alone. */
+	rung: number | null;
+	granted_by: 'paddle' | 'operator' | null;
+	granted_at: number | null;
+	expires_at: number | null;
+}
+
+/** `/v1/entitlement`: the grant, what it allows, and what has been used.
+ *
+ *  Carries no Paddle identifier — the seller's own page has no use for one
+ *  and `/v1/billing` already serves it. */
+export interface EntitlementView extends Grant {
+	capabilities: Capabilities;
+	usage: EntitlementUsage;
+}
+
+// `PlansView` is re-exported above rather than restated: `GET /v1/plans`
+// serves the generated table verbatim.
+
 // ----------------------------------------------------------------- operator
 
 /** One day and what was counted on it. The instant is the day's start in UTC,
@@ -690,11 +748,36 @@ export interface SubscriptionStateView {
 	occurred_at: number;
 }
 
+/** One row of the grant ledger, as the operator surface serves it.
+ *
+ *  Every grant ever written is here, revoked and expired ones included: the
+ *  panel's job is to say who set what and why, which a table that kept only
+ *  the live row could not answer. */
+export interface GrantRowView extends Grant {
+	id: string;
+	granted_by: 'paddle' | 'operator';
+	granted_at: number;
+	/** The operator who wrote a manual grant. Null on a Paddle grant, which
+	 *  no human signed. */
+	grantor_user: string | null;
+	/** Why, on a manual grant. Required of the operator writing one. */
+	reason: string | null;
+	/** Paddle's subscription or transaction identifier, where Paddle wrote
+	 *  the grant. */
+	source_ref: string | null;
+	revoked_at: number | null;
+}
+
 export interface OrgDetailView {
 	org: OrgSummaryView;
 	connections: ConnectionView[];
 	halts: HaltView[];
 	subscription?: SubscriptionStateView;
+	/** The grant in force. Always present: an organisation with no rows reads
+	 *  `free` with null provenance, which is what it is. */
+	plan: Grant & { source_ref: string | null };
+	/** Every grant ever written, newest first. */
+	grants: GrantRowView[];
 }
 
 /** The ledger across every tenant, in the stored state vocabulary rather than
@@ -1938,6 +2021,17 @@ export const api = {
 
 	billing: () => request<BillingView>('/v1/billing'),
 
+	/** The price table and what each plan allows. Public: naming a price needs
+	 *  no session, and the landing build reads the same figures out of the
+	 *  generated module rather than over the wire. */
+	plans: () => request<PlansView>('/v1/plans'),
+
+	/** What this organisation is entitled to, where the entitlement came from,
+	 *  and what it has used. One read per session: the request path computes
+	 *  the same capabilities itself on every call, so this is what the console
+	 *  renders rather than what it enforces. */
+	entitlement: () => request<EntitlementView>('/v1/entitlement'),
+
 	// The operator surface. Every one of these answers a blank 401 to a caller
 	// who is not an operator — the same body an anonymous request gets, so the
 	// refusal is never an oracle. A client reading one treats it as "not an
@@ -1949,7 +2043,21 @@ export const api = {
 	adminFailedWrites: () => request<FailedWritesView>('/v1/admin/failed-writes'),
 	adminImportDrain: () => request<ImportDrainView>('/v1/admin/import-drain'),
 	adminDeadLetters: () => request<DeadLettersView>('/v1/admin/dead-letters'),
-	adminImpersonations: () => request<ImpersonationsView>('/v1/admin/impersonations')
+	adminImpersonations: () => request<ImpersonationsView>('/v1/admin/impersonations'),
+
+	/** Writes an operator grant on one organisation, and answers the org
+	 *  detail so the panel redraws from the server's own record rather than
+	 *  from what the form thought it sent. A reason is required: a plan set by
+	 *  hand with no stated why is an audit row that explains nothing. */
+	grantPlan: (
+		org: string,
+		body: { plan: Plan; rung?: number; expires_at?: number; reason: string }
+	) => post<OrgDetailView>(`/v1/admin/orgs/${org}/plan`, body),
+	/** Revokes one grant. The org falls back to its next strongest unexpired
+	 *  grant, which for most organisations is nothing at all and therefore
+	 *  `free`. */
+	revokeGrant: (org: string, grant: string) =>
+		post<OrgDetailView>(`/v1/admin/orgs/${org}/plan/${grant}/revoke`, {})
 };
 
 /** Walks every page of a cursor-paginated endpoint, accumulating rows. */

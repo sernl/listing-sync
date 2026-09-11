@@ -257,6 +257,26 @@ fn authorship_of(view: &ConnectionsView, marketplace: tam_types::Marketplace) ->
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn an_undeclared_marketplace_says_so_rather_than_saying_nothing(pool: PgPool) {
     provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    // Two marketplaces, so the tenant needs a plan that connects more than
+    // one: the free allowance is a catalogue rather than a crosslister, and
+    // adopting a second marketplace on it is refused by the plan gate.
+    tam_storage::EntitlementRepo::new(pool.clone())
+        .grant(
+            ORG_A,
+            &tam_storage::NewGrant {
+                id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
+                plan: tam_limits::Plan::Subscriber,
+                rung: None,
+                granted_by: tam_storage::GrantedBy::Paddle,
+                grantor_user: None,
+                reason: None,
+                source_ref: Some("sub_authorship"),
+                granted_at: Timestamp(1_000),
+                expires_at: None,
+            },
+        )
+        .await
+        .unwrap_or_else(|error| panic!("the fixture grant seeds: {error}"));
     connected(&pool, &TOKEN_A, "Tes").await;
     assert_eq!(
         declare(pool.clone(), &TOKEN_A, "A Teacher").await,

@@ -7,6 +7,7 @@
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
 	import { currentSessionToken, listBrowserSessions } from '$lib/browser-sessions';
+	import { entitlementRead, limitOf } from '$lib/entitlement-read';
 	import {
 		APP_CANNOT_CONNECT,
 		connectHere,
@@ -86,6 +87,13 @@
 	const inPlace = signsInPlace(invoke, userAgent);
 
 	const queryClient = useQueryClient();
+
+	// The plan, from the cache the shell filled. Only an unlinked card is
+	// refused: re-signing in to a marketplace this tenant already holds adds
+	// no connection, and disabling that control at the cap would strand a
+	// seller whose one link had expired.
+	const plan = createQuery(() => entitlementRead);
+	const connectRefusal = $derived(limitOf(plan.data, 'marketplaces'));
 
 	let requesting = $state(false);
 
@@ -389,6 +397,7 @@
 						}
 					: undefined}
 				running={busyAt(busy, card.tile.marketplace)}
+				refusal={connectionFor(card.tile.marketplace) === undefined ? connectRefusal : null}
 				onrun={connect}
 				ondisconnect={disconnect}
 			/>

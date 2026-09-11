@@ -38,6 +38,7 @@ use tam_types::{
 };
 
 use crate::catalogue::parse_hash;
+use crate::entitlement::{quota_refusal, QuotaKind};
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::jobs::{decode_cursor, encode_cursor};
 use crate::product::{StandardInput, TptBaseInput};
@@ -1555,7 +1556,35 @@ pub(crate) async fn set_product_labels(
             names.push(name);
         }
     }
-    let records = LabelRepo::new(state.pool.clone())
+
+    // The plan's label allowance is the organisation's whole shelf, not this
+    // item's: a label is a filing system, and twenty of them across a
+    // catalogue is a different quantity from twenty on one resource. Only
+    // names this organisation does not already hold count against it, so
+    // re-labelling an item with labels it already has is never refused.
+    let labels = LabelRepo::new(state.pool.clone());
+    let held = labels
+        .list(context.org)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    let fresh = names
+        .iter()
+        .filter(|name| {
+            !held
+                .iter()
+                .any(|record| record.name.eq_ignore_ascii_case(name))
+        })
+        .count();
+    let after = held.len().saturating_add(fresh);
+    let allowed = usize::try_from(context.entitlement.caps.labels_max).unwrap_or(usize::MAX);
+    if fresh > 0 && after > allowed {
+        return Err(quota_refusal(
+            QuotaKind::Labels,
+            i64::try_from(held.len()).unwrap_or(i64::MAX),
+            u64::from(context.entitlement.caps.labels_max),
+        ));
+    }
+    let records = labels
         .set_for_product(context.org, product, &names, (state.wall)())
         .await
         .map_err(|error| storage_fault(&state, &error))?;

@@ -293,7 +293,9 @@ export function editBlockedBy(mappings: readonly MappingHead[]): InventoryId[] {
 
 /** The quota refusal's detail, rendered as the sentence the server composed it
  *  to allow. Returns `null` for a detail this client does not recognise, so a
- *  shape it cannot read falls back to the server's own message. */
+ *  shape it cannot read falls back to the server's own message — which is the
+ *  path every kind added in phase 1 takes, because the server's own wording
+ *  for those already names the allowance and what to do about it. */
 export function quotaSentence(detail: unknown): string | null {
 	if (typeof detail !== 'object' || detail === null) {
 		return null;
@@ -306,7 +308,7 @@ export function quotaSentence(detail: unknown): string | null {
 		return `Your plan stores up to ${formatBytes(limit)} and ${formatBytes(used)} is in use.`;
 	}
 	if (quota === 'listings_max') {
-		return `Your plan carries up to ${limit} listings and ${used} are in the catalogue.`;
+		return `Your plan carries up to ${limit} resources and ${used} are in your catalogue.`;
 	}
 	return null;
 }

@@ -2,6 +2,7 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import { api } from '$lib/api';
 	import Button from '$lib/Button.svelte';
+	import { entitlementRead, limitOf } from '$lib/entitlement-read';
 	import PageHead from '$lib/PageHead.svelte';
 	import TabBar from '$lib/TabBar.svelte';
 	import { queryKeys } from '$lib/query';
@@ -29,6 +30,13 @@
 		queryFn: () => templates.list()
 	}));
 
+	// The template cap, from the plan the shell already read. Both controls
+	// that open a blank form — this page's own and the one inside the tab —
+	// read the same figure, so neither can offer a form the save would then
+	// be refused for.
+	const plan = createQuery(() => entitlementRead);
+	const capped = $derived(limitOf(plan.data, 'templates'));
+
 	// `?? null` rather than `?? 0`: before the first read there is no figure,
 	// and after a failed one there is no figure either. Once a read has
 	// succeeded the cache keeps its answer, so a failed refetch reports the
@@ -51,7 +59,15 @@
 		description="Saved answers you reuse when you add a resource or list it on a marketplace."
 	>
 		{#snippet aside()}
-			<Button tier="primary" icon="circle-plus" onclick={newTemplate}>New template</Button>
+			<Button
+				tier="primary"
+				icon="circle-plus"
+				disabled={capped !== null}
+				reason={capped ?? undefined}
+				onclick={newTemplate}
+			>
+				New template
+			</Button>
 		{/snippet}
 	</PageHead>
 

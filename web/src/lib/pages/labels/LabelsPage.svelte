@@ -4,6 +4,7 @@
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
 	import Field from '$lib/Field.svelte';
+	import { entitlementRead, limitOf } from '$lib/entitlement-read';
 	import Icon from '$lib/Icon.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
@@ -32,6 +33,13 @@
 		queryKey: queryKeys.labels,
 		queryFn: () => api.labels().then((view) => view.labels)
 	}));
+
+	// The label cap, from the plan the shell already read. A marketplace's own
+	// automatic labels are excluded from the count on the server's side, so
+	// this figure is the seller's own vocabulary and not what a connection
+	// added to it.
+	const plan = createQuery(() => entitlementRead);
+	const capped = $derived(limitOf(plan.data, 'labels'));
 
 	/** The vocabulary the counts are taken over, read once so the key and the
 	 *  walk cannot be built from two different readings of it. */
@@ -209,7 +217,15 @@
 		description="Your own words for grouping resources, up to twenty on each one."
 	>
 		{#snippet aside()}
-			<Button tier="additive" icon="plus" onclick={() => (newAsked = !newAsked)}>New label</Button>
+			<Button
+				tier="additive"
+				icon="plus"
+				disabled={capped !== null}
+				reason={capped ?? undefined}
+				onclick={() => (newAsked = !newAsked)}
+			>
+				New label
+			</Button>
 		{/snippet}
 	</PageHead>
 

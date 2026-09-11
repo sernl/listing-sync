@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE entitlement_grant SET revoked_at = $3 WHERE org_id = $1 AND id = $2 AND revoked_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6064c69875488b522f658374d5357552859b7aad917fc91d57e512c2e36a37fc"
+}

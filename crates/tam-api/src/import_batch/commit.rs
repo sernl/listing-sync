@@ -33,6 +33,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use tam_limits::Capabilities;
 use tam_storage::{
     BatchState, ClaimedRow, CommitOpening, ImportBatchRepo, LabelRepo, ProductRepo, RowAddress,
     RowRef,
@@ -126,7 +127,7 @@ pub(crate) async fn commit(
             sheet: &row.sheet,
             ordinal: row.ordinal,
         };
-        match create_row(&state, context.org, row).await {
+        match create_row(&state, context.org, context.entitlement.caps, row).await {
             Ok(true) => {
                 batches
                     .record_created(context.org, batch, at, false)
@@ -206,7 +207,12 @@ pub(crate) async fn commit(
 /// which is a replace and so the same set. Either road ends with a product
 /// carrying everything its row named, which is what lets the caller record the
 /// row `created` on both.
-async fn create_row(state: &AppState, org: OrgId, row: &ClaimedRow) -> Result<bool, APIError> {
+async fn create_row(
+    state: &AppState,
+    org: OrgId,
+    caps: Capabilities,
+    row: &ClaimedRow,
+) -> Result<bool, APIError> {
     let already = ProductRepo::new(state.pool.clone())
         .get(org, row.product)
         .await
@@ -217,7 +223,7 @@ async fn create_row(state: &AppState, org: OrgId, row: &ClaimedRow) -> Result<bo
         finish_one(state, org, &body, row.product, &mappings).await?;
         false
     } else {
-        create_one(state, org, &body, row.product, &mappings).await?;
+        create_one(state, org, caps, &body, row.product, &mappings).await?;
         true
     };
 

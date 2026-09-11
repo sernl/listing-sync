@@ -22,6 +22,7 @@ pub mod billing;
 pub mod blocking;
 pub mod catalogue;
 pub mod devices;
+pub mod entitlement;
 pub mod error;
 pub mod export;
 pub mod import;
@@ -34,7 +35,6 @@ pub mod org;
 pub mod paddle;
 pub mod product;
 pub mod profile;
-pub mod quota;
 pub mod resource_templates;
 pub mod resources;
 pub mod session;
@@ -59,8 +59,11 @@ pub use crate::{
     auth::{
         AuthBridge, JwkSet, JwksFuture, JwksSource, JwksUnavailable, VerifiedSubject, AUDIENCE,
     },
-    billing::{BillingView, SubscriptionView, WebhookSecret, ORG_CUSTOM_DATA_KEY},
+    billing::{
+        BillingView, PriceMap, PricedPlan, SubscriptionView, WebhookSecret, ORG_CUSTOM_DATA_KEY,
+    },
     catalogue::{FileHandle, UploadedView},
+    entitlement::{Entitlement, EntitlementView, PlansView, QuotaKind},
     error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind, Disclosure},
     session::{OperatorContext, OrgContext, StreamAuth, SESSION_COOKIE},
     version::{APIVersion, VersionError},
@@ -76,6 +79,12 @@ pub struct Config {
     /// authenticates the billing webhook. Absent, that route answers 503:
     /// there is no unauthenticated mode of it to fall back to.
     pub paddle_webhook_secret: Option<billing::WebhookSecret>,
+    /// Which Paddle price identifier sells which plan and rung.
+    ///
+    /// Empty by default, which is the fail-closed posture: a completed
+    /// transaction naming a price this map does not know grants nothing and
+    /// says so on the log, rather than being guessed into the largest rung.
+    pub paddle_price_map: billing::PriceMap,
     /// The Ed25519 signing key for the entitlement tokens the heartbeat mints
     /// under decision D10. Absent in development, and the heartbeat then
     /// answers without a token: the client gate reads that as closed.
@@ -188,6 +197,11 @@ pub fn router(state: AppState) -> Router {
         .route("/{version}/org/slug/{slug}", get(org::slug_availability))
         .route("/{version}/billing", get(billing::billing_view))
         .route("/{version}/billing/webhook", post(billing::webhook))
+        // The price list, unauthenticated: the pricing page is public, and a
+        // price a seller cannot read before signing up is not a price list.
+        .route("/{version}/plans", get(entitlement::plans_view))
+        // What this tenant holds, where it came from, and what it has used.
+        .route("/{version}/entitlement", get(entitlement::entitlement_view))
         .route(
             "/{version}/jobs",
             post(jobs::create_job).get(jobs::list_jobs),
@@ -455,6 +469,15 @@ pub fn router(state: AppState) -> Router {
         .route("/{version}/admin/signups", get(admin::signups))
         .route("/{version}/admin/orgs", get(admin::list_orgs))
         .route("/{version}/admin/orgs/{org}", get(admin::org_detail))
+        // The one write on the operator surface. It goes through the
+        // application pool with the target organisation pinned, because the
+        // backoffice role is SELECT-only by grant and widening it would
+        // create a second, unfenced way to change what a tenant holds.
+        .route("/{version}/admin/orgs/{org}/plan", post(admin::grant_plan))
+        .route(
+            "/{version}/admin/orgs/{org}/plan/{grant}/revoke",
+            post(admin::revoke_plan),
+        )
         .route("/{version}/admin/sync-health", get(admin::sync_health))
         .route("/{version}/admin/failed-writes", get(admin::failed_writes))
         .route("/{version}/admin/import-drain", get(admin::import_drain))

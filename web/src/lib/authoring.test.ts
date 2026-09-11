@@ -317,9 +317,9 @@ describe('the quota refusal', () => {
 		);
 	});
 
-	it('renders the listing sentence', () => {
+	it('renders the catalogue sentence in the word the console uses for one', () => {
 		expect(quotaSentence({ quota: 'listings_max', used: 100, limit: 100 })).toMatch(
-			/up to 100 listings and 100 are/
+			/up to 100 resources and 100 are/
 		);
 	});
 

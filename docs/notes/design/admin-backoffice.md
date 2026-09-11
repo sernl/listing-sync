@@ -84,7 +84,8 @@ If the organisation count stays small enough that per-organisation iteration und
 
 ## 3. The v1 surface
 
-Every route is a read, sits under one prefix, and takes `OperatorContext`.
+Every route sits under one prefix and takes `OperatorContext`.
+All but one are reads; the exception is the plan grant, described at the end of this section.
 
 `GET /{version}/admin/signups` returns counts over time from two sources: identity signups from `auth.auth_event` where `event = 'user_signed_up'` (`db/auth/0002_audit_event.sql:39`, index at `:69`), and app-side provisioning from `app_user.created_at` (`0014:8-12`), which `session.rs:238-253` writes on a subject's first login.
 It needs one new repo read and no new grant, because `tam_app` already holds SELECT on `auth_event` (`0002_audit_event.sql:81`); nothing in Rust reads that table today.
@@ -92,7 +93,8 @@ It needs one new repo read and no new grant, because `tam_app` already holds SEL
 `GET /{version}/admin/orgs` lists organisations (`0001_product.sql:4-10`) with per-organisation counts of products, mappings, connections and users.
 `organisation` and `app_user` are global and need no privilege (`rls_matrix.rs:53-63`); `product`, `mapping` and `connection` are fenced and are what the new role is for.
 
-`GET /{version}/admin/orgs/{org}` renders one organisation: its connections in the shape `ConnectionView` already uses, stored `state` beside the derived `status` (`crates/tam-api/src/resources.rs:282-294`), its halts, and its counts.
+`GET /{version}/admin/orgs/{org}` renders one organisation: its connections in the shape `ConnectionView` already uses, stored `state` beside the derived `status` (`crates/tam-api/src/resources.rs:282-294`), its halts, its counts, the plan it currently holds, and every grant it has ever held.
+The plan is a derivation rather than a column: it is the strongest unexpired row of `entitlement_grant` (migration 0069), which is also what the request path reads.
 
 `GET /{version}/admin/sync-health` aggregates `job` and `job_item` across tenants by state, over the vocabulary the lease and settle constraints already fix (`0005_job_ledger.sql:49-56`), with settled outcomes beside it.
 
@@ -102,15 +104,28 @@ The vocabulary is the shared `FailureCode`, which the worker, the API, the clien
 Operational settings need no new endpoint in v1.
 `GET /{version}/status` already answers the inventory halts unpinned and cross-tenant, because `inventory_halt` is global (`crates/tam-api/src/resources.rs:695-715`), and the operator page calls it unchanged.
 
-The only mutations in v1 are the identity plane's own.
+### The one write, and why it does not use the backoffice pool
+
+`POST /{version}/admin/orgs/{org}/plan` grants a plan or a rung, with a reason, an optional expiry and an audit row; `POST /{version}/admin/orgs/{org}/plan/{grant}/revoke` withdraws one, keeping the row.
+Both answer the same org-detail object the read above answers, so the console's plan panel renders from one shape rather than two.
+
+This is the first operator route that writes app data, and it deliberately does not write through `tam_backoffice`.
+That role holds SELECT and nothing else, and the reason every other handler on this surface is safe is precisely that the connection it holds cannot write across the tenant fence.
+Granting it INSERT on one table to shorten one handler would give that property away for all of them: the next operator route added would inherit a writable cross-tenant connection nobody chose to give it.
+So the grant opens the application pool — `tam_app`, the same role a seller's own write uses — and pins the target organisation from the path, exactly as a tenant write pins it from the session.
+`OperatorContext` names no organisation by design, so this is the one place the pin comes from somewhere other than the session, and it is written out rather than hidden behind a helper.
+
+The visible cost is a read through one pool before a write through the other: the organisation is read with the backoffice pool first, so a grant naming an organisation that does not exist answers 404 rather than conjuring a tenant.
+A grant with a blank reason is refused, because an audit row whose reason is empty answers none of the questions an audit row exists for, and a `migration_only` grant naming no rung is refused, because the rung *is* the allowance and a grant without one would grant nothing.
+
+Every other mutation in v1 is still the identity plane's own.
 Bans, unbans and role changes go to better-auth's admin endpoints through the identity service (`auth/src/auth.ts:185`); the Rust API neither proxies nor re-implements them.
-Nothing new writes app data.
 Raising a halt stays what it is today, an operator act outside the API (`docs/design/schema.md:330-333`), because wiring it to a button is a cross-tenant write and therefore a separate decision.
 
 ## 4. Deliberately not in v1
 
 Impersonation, which better-auth's admin plugin ships and this design does not expose, because it would turn an identity-plane elevation into an app-plane session and collapse the separation section 1 exists to hold.
-Cross-tenant writes of every kind, including halts, job cancellation, reconciliation resolution and election answers.
+Cross-tenant writes of every kind except the plan grant above, including halts, job cancellation, reconciliation resolution and election answers.
 Any credential-adjacent surface: no column of `connection_secret` reaches a view, not the ciphertext, not the nonce, not the wrapped DEK, not the key version (`0006_halts_connection_audit.sql:86-98`).
 Anything reading the vault, and any path from an operator route to `tam-session-broker`.
 Any `auth`-schema read beyond `auth_event`, so no email, no password hash and no `jwks`, holding the one-directional grant at `db/auth/0002_audit_event.sql:76-81`.

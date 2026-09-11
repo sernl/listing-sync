@@ -20,7 +20,8 @@ The site must keep working under the policy `landing_policy` in `crates/tam-serv
 The policy admits no third-party origin at all: `style-src` carried `'unsafe-inline'` and `fonts.googleapis.com`, and `font-src` carried `fonts.gstatic.com`, until the console's fonts were bundled and those origins were dropped, so a stylesheet or a font fetched from anywhere but this origin is now refused rather than merely unnecessary.
 
 Every call to action goes to `/login` or to `/pricing/#founding`, and both `/` and `/pricing` carry the same price list because both render `components/Pricing.astro` from `src/pricing.js`.
-Every price on the site is in that one file, in USD, from the founder's mockup of 2026-09-11.
+Every price and cap on the site comes from `src/plans.generated.js`, which `cargo run -p tam-typegen` emits from the `tam-limits` plan table the server enforces and `just web-check` diffs; `src/pricing.js` holds only the landing's own phrasing of it, in USD.
+Changing a price is an edit in `tam-limits` and a regeneration, never an edit here.
 
 The brand files under `public/brand/`, the marks under `public/marks/` and the faces under `public/fonts/` are byte copies of the console's, not links: the two trees build separately, and `landing-band.test.ts` fails a copy that drifted.
 `public/images/og.png` is the social card, 1200 by 630, rendered from `public/brand/logo.svg` with resvg; nothing rebuilds it, so refreshing the logo means re-rendering the card.

@@ -16,6 +16,7 @@ use tam_engine_driver::vocabulary::{BoundListing, MetricSnapshot};
 use tam_storage::{AnalyticsRepo, LatestMetric};
 use tam_types::{InventoryId, MappingId, Timestamp};
 
+use crate::entitlement::feature_refusal;
 use crate::error::APIError;
 use crate::{AppState, OrgContext};
 
@@ -74,6 +75,12 @@ pub(crate) async fn analytics_summary(
     State(state): State<AppState>,
     context: OrgContext,
 ) -> Result<Json<AnalyticsSummary>, APIError> {
+    if !context.entitlement.caps.analytics {
+        return Err(feature_refusal(
+            "analytics",
+            "Your plan does not include analytics. Upgrade to see how your listings do.",
+        ));
+    }
     let rows = AnalyticsRepo::new(state.pool.clone())
         .latest(context.org)
         .await
@@ -221,7 +228,7 @@ async fn may_capture(
         return Ok(false);
     }
     devices
-        .entitlement_stands(org, tam_domain::ENTITLEMENT_GRACE_HOURS)
+        .entitlement_stands(org)
         .await
         .map_err(|error| state.internal(&error.to_string()))
 }

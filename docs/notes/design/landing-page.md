@@ -171,8 +171,11 @@ Two questions join the FAQ: "Do I pay for import?", which says the subscription 
 
 ## Where the code holds each decision
 
-`apps/landing/src/pricing.js` holds every price, tier feature line, migration band and combining rule.
-`/` and `/pricing` both import it, which is what makes the two pages incapable of disagreeing, and changing a number is one edit in one file.
+Amended 2026-09-12, phase 1: the prices are no longer the landing's own.
+`apps/landing/src/plans.generated.js` is emitted by `cargo run -p tam-typegen` from the `tam-limits` plan table, the same table the server enforces a quota against and `GET /v1/plans` serves, and it carries the four plans with their `capabilities`, the import ladder in cents, the Founding overlay and the AI packaging.
+`apps/landing/src/pricing.js` now holds only what the landing alone owns — the phrasing of a rung, dollar formatting from cents, the sentence under the ladder, the chips the subscription card derives from `capabilities`, and the questions — and `/` and `/pricing` read the figures through it, so the two pages still cannot disagree with each other and can no longer disagree with the server either.
+`just web-check` diffs the emitted file against the tree and fails when a number moved in Rust without the landing being regenerated, which is the gate; the landing lane has no price check of its own, and changing a price is an edit in `tam-limits` and nowhere else.
+`studio` is in the table with `sold: false` and is rendered nowhere on this site.
 
 `apps/landing/src/site.js` holds what the founder must supply and nothing else: the login path, the support address, the desktop download URL and the availability sentence.
 `downloadUrl` is null, and a null renders as "Download link to come" rather than as a link, so no broken download can ship by being forgotten.

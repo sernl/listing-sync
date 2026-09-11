@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { createQuery } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
 	import ActivityLog from '$lib/ActivityLog.svelte';
 	import {
@@ -11,6 +12,8 @@
 	import Button from '$lib/Button.svelte';
 	import { anyConnectionStands } from '$lib/connection-standing';
 	import { APP_TOO_OLD, desktopInvoker, startImportHere } from '$lib/desktop';
+	import { dayMonth, migrationsLine } from '$lib/entitlement';
+	import { entitlementRead } from '$lib/entitlement-read';
 	import Field from '$lib/Field.svelte';
 	import type { Marketplace } from '$lib/generated/vocab';
 	import PageHead from '$lib/PageHead.svelte';
@@ -105,6 +108,30 @@
 	// label recomputes with its list instead of freezing at mount.
 	const past = $derived(migrationRows(requests, Date.now()));
 	const log = $derived(migrationLog(requests, Date.now()));
+
+	// The monthly migration allowance, and why the submit is refused once it
+	// is spent. The line stands above the control whether or not the
+	// allowance is spent: a seller about to move forty resources on a
+	// twenty-a-month plan needs the figure before they press, not after the
+	// server refuses them.
+	const plan = createQuery(() => entitlementRead);
+	const monthly = $derived(
+		plan.data === undefined
+			? null
+			: migrationsLine(plan.data.usage, plan.data.capabilities)
+	);
+	const capped = $derived.by(() => {
+		const held = plan.data;
+		if (held === undefined) {
+			return null;
+		}
+		if (held.capabilities.migrations_per_month === 0) {
+			return 'Your plan does not move resources between marketplaces. Upgrade to migrate.';
+		}
+		return held.usage.migrations_this_month >= held.capabilities.migrations_per_month
+			? `Your plan moves ${held.capabilities.migrations_per_month} resources a month and you have used them. It resets ${dayMonth(held.usage.migrations_reset_at)}.`
+			: null;
+	});
 
 	async function load() {
 		try {
@@ -256,10 +283,18 @@
 						</Banner>
 					{:else}
 						<div class="set-foot">
+							{#if monthly !== null}
+								<p class="foot-note">{monthly}</p>
+							{/if}
 							<Button
 								tier="primary"
-								disabled={starting || source === null}
-								reason={starting ? 'The migration is starting.' : undefined}
+								disabled={capped !== null || starting || source === null}
+								reason={capped ??
+									(starting
+										? 'The migration is starting.'
+										: source === null
+											? 'No marketplace this migration could read is connected.'
+											: undefined)}
 								onclick={() => void start()}
 							>
 								{starting ? 'Starting…' : 'Start migration'}

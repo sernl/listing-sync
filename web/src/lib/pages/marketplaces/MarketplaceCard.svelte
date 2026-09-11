@@ -25,6 +25,7 @@
 		action,
 		disconnect,
 		running,
+		refusal = null,
 		onrun,
 		ondisconnect,
 		pending = false
@@ -69,6 +70,13 @@
 		 *  place of it on a phone — and can stand for a minute either way, so a
 		 *  card with no busy state reads as a button that did nothing. */
 		running?: 'action' | 'disconnect';
+		/** Why this card's action cannot run at all, where a plan withholds it
+		 *  — the connection cap being the one that does. Null where it can.
+		 *  Stated in `title` on the control, because a disabled control with no
+		 *  reason reads as a fault; the route refuses the same request on its
+		 *  own, so this is the earlier of two refusals rather than the only
+		 *  one. */
+		refusal?: string | null;
 		onrun?: (marketplace: Marketplace) => void;
 		ondisconnect?: (marketplace: Marketplace) => void;
 		/** Not built, and so not a state that can change: the card takes a
@@ -150,7 +158,8 @@
 					<button
 						class="go"
 						type="button"
-						disabled={running !== undefined}
+						disabled={running !== undefined || refusal !== null}
+						title={refusal ?? undefined}
 						onclick={() => onrun?.(marketplace)}
 					>
 						{running === 'action' ? `Signing in to ${name}…` : action.label}

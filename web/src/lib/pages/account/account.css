@@ -1,6 +1,7 @@
-/* The Account section's own rules: the subscription tier grid, the marketplace
- * status list, and the small definition list the preferences and subscription
- * pages state a recorded fact in.
+/* The Account section's own rules: the plan card, the allowance list, the
+ * one-off import ladder, the marketplace status list, and the small
+ * definition list the preferences and subscription pages state a recorded
+ * fact in.
  *
  * Everything else on these pages is the catalogue — `Panel`, `Field`,
  * `Button`, `Banner`, `StatusPill`, `Placeholder` — so what is here is only
@@ -11,11 +12,11 @@
  * be two definitions of one shape.
  */
 
-/* --- the subscription tiers ---------------------------------------------- */
+/* --- the plan card, the usage list and the import ladder ----------------- */
 
-/* The cadence switch sits above the grid rather than on each card: one price
-   is shown at a time, so a per-card switch would let two cards disagree about
-   which cadence the seller is comparing. */
+/* The cadence switch sits above the card rather than inside it: the price on
+   the card is one cadence at a time, and a switch inside the thing it
+   retitles reads as part of what is being bought. */
 .acct-cadence {
 	display: flex;
 	align-items: center;
@@ -30,15 +31,9 @@
 	color: var(--muted);
 }
 
-.acct-plan-grid {
-	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(196px, 1fr));
-	gap: 16px;
-	align-items: stretch;
-}
-
-/* The Marketplaces card treatment: a border and no shadow, because four of
-   these sit side by side and four shadows read as clutter. */
+/* The Marketplaces card treatment: a border and no shadow. One card now
+   rather than a grid of four — the deployment sells one recurring plan and
+   the one-off ladder is a list of rungs, not a column of tiers. */
 .acct-plan {
 	display: flex;
 	flex-direction: column;
@@ -50,8 +45,9 @@
 	min-width: 0;
 }
 
-/* The tier the billing record actually proves, which today is only ever the
-   free one: one Paddle price cannot say which paid tier is running. */
+/* The plan the grant names. Marked rather than merely stated, because the
+   card is also the buy control and a seller already on it is managing rather
+   than purchasing. */
 .acct-plan.acct-current {
 	border-color: var(--accent);
 	box-shadow: var(--sh-1);
@@ -132,19 +128,89 @@
 	color: var(--ok-ink);
 }
 
-/* Where the one checkout control would stand on a build that has no Paddle
-   price: a sentence rather than a greyed button nobody can press. */
+/* Where the purchase controls would stand on a build that has no Paddle
+   token and price map: a sentence rather than greyed buttons nobody can
+   press. */
 .acct-checkout-note {
 	margin: 18px 0 0;
 	font-size: 13px;
 	color: var(--muted);
 }
 
-/* The one checkout control sits under the grid rather than inside a card,
-   because it buys the single price this deployment sells and not any one of
-   the tiers above it. */
-.acct-plan-grid + .actions {
-	margin-top: 18px;
+/* The buy control sits at the foot of the card it buys, because there is one
+   card and one price on it at a time. */
+.acct-plan .actions {
+	margin-top: 4px;
+}
+
+/* --- what has been used ---------------------------------------------------
+
+   The allowance list on the plan panel. Shares `.acct-tick` with the card's
+   feature list because both are a glyph and a line; the difference is that a
+   full allowance is marked, since that is the row the seller opened the page
+   about. */
+.acct-usage {
+	list-style: none;
+	margin: 14px 0 16px;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 7px;
+}
+
+.acct-usage li {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	font-size: 13px;
+	line-height: 1.35;
+}
+
+.acct-usage li .acct-tick {
+	display: grid;
+	flex: none;
+	margin-top: 1px;
+	color: var(--ok-ink);
+}
+
+.acct-usage li.acct-full {
+	color: var(--warn-ink);
+}
+
+.acct-usage li.acct-full .acct-tick {
+	color: var(--warn-ink);
+}
+
+/* --- the one-off import ladder --------------------------------------------
+
+   A list of rows rather than a grid of cards: the rungs differ in one number
+   each, and six cards of one number apiece read as six plans. The row wraps
+   at the phone width so the price keeps its own line above its button. */
+.acct-ladder {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+.acct-ladder li {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	flex-wrap: wrap;
+	padding: 12px 2px;
+	border-top: 1px solid var(--line);
+}
+
+.acct-ladder li:first-child {
+	border-top: 0;
+}
+
+.acct-ladder .rung {
+	font-size: 13.5px;
+	font-variant-numeric: tabular-nums;
 }
 
 /* --- a recorded fact ------------------------------------------------------ */

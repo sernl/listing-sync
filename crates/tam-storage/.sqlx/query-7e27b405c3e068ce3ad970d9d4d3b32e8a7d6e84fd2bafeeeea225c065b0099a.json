@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT plan, rung, granted_by, granted_at, expires_at, source_ref FROM entitlement_grant WHERE org_id = $1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "plan",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "rung",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "granted_by",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "granted_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "expires_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "source_ref",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "7e27b405c3e068ce3ad970d9d4d3b32e8a7d6e84fd2bafeeeea225c065b0099a"
+}

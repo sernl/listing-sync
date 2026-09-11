@@ -1,11 +1,12 @@
 <script lang="ts">
-	import { createMutation, useQueryClient } from '@tanstack/svelte-query';
+	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { api, type DeviceView } from '$lib/api';
 	import { revokeBrowserSession } from '$lib/browser-sessions';
 	import Button from '$lib/Button.svelte';
 	import { type CheckInHere, checkInHere, desktopInvoker } from '$lib/desktop';
 	import { type BrowserSession, matchNote, type Merged } from '$lib/device-merge';
 	import { deviceFootnote, deviceRows, deviceSummary } from '$lib/devices-view';
+	import { entitlementRead, limitOf } from '$lib/entitlement-read';
 	import { agoLabel } from '$lib/elapsed';
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
 	import { queryKeys } from '$lib/query';
@@ -75,6 +76,12 @@
 		}
 	}));
 
+	// The check-in is what registers this machine, so the device cap is what
+	// refuses it. The plan's refusal takes precedence over the in-flight one:
+	// at the cap the control never runs, so "the check-in is running" would be
+	// a sentence about something that is not happening.
+	const plan = createQuery(() => entitlementRead);
+	const capped = $derived(limitOf(plan.data, 'devices'));
 	const control = $derived(checkInControl(checkingIn.isPending));
 	const note = $derived(asked === null ? null : checkInNote(asked));
 
@@ -148,8 +155,8 @@
 				<Button
 					tier="outline"
 					small
-					disabled={control.disabled}
-					reason={control.reason}
+					disabled={capped !== null || control.disabled}
+					reason={capped ?? control.reason}
 					onclick={() => checkingIn.mutate()}
 				>
 					{control.label}

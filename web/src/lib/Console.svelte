@@ -9,6 +9,10 @@
 	import { present, type StatusPresentation } from '$lib/connection-status';
 	import { desktopInvoker, registerThisMachine } from '$lib/desktop';
 	import { renderFailureReport } from '$lib/render-failure';
+	import { sectionAllowed, sectionReason } from '$lib/entitlement';
+	import { entitlementRead, limitOf } from '$lib/entitlement-read';
+	import Placeholder from '$lib/Placeholder.svelte';
+	import Button from '$lib/Button.svelte';
 	import { CARD_ANCHOR, MARKETPLACE_WORD } from '$lib/platforms';
 	import Icon from '$lib/Icon.svelte';
 	import ImpersonationBanner from '$lib/ImpersonationBanner.svelte';
@@ -48,6 +52,13 @@
 	const verdict = $derived(
 		operatorVerdict({ answered: probe.data !== undefined, failure: probe.error ?? null })
 	);
+
+	// The plan, beside the operator probe and for the same reason: one read
+	// per session, shared by every page that draws a capped control. The rail
+	// below hides a section this plan does not reach, which is courtesy —
+	// every one of those routes refuses the request on its own.
+	const entitlement = createQuery(() => entitlementRead);
+	const caps = $derived(entitlement.data?.capabilities);
 
 	// The identity session, read rather than remembered: a reload mid
 	// impersonation must raise the banner from what it finds.
@@ -153,10 +164,29 @@
 	const card = $derived(section !== null && section.items.length > 0 ? section : null);
 	// Account sits at the foot of the rail beside Help, which is where the
 	// founder's own sketch and Vendoo both put it; the rest run under the mark.
+	//
+	// A section this plan does not reach leaves the rail. Only once the plan
+	// has been read: while the read is pending every section stands, because
+	// a rail that filled in a second late would move under the seller's
+	// cursor, and hiding a section they are entitled to is worse than showing
+	// one they are not — the route refuses it either way.
 	const railSections = $derived([
-		...SECTIONS.filter((entry) => entry.id !== 'account'),
+		...SECTIONS.filter(
+			(entry) => entry.id !== 'account' && (caps === undefined || sectionAllowed(caps, entry.id))
+		),
 		...(operator ? [ADMIN_SECTION] : [])
 	]);
+	// Why the page in the region is not on this plan, where it is not. The
+	// section rather than the path: a page inside a reachable section states
+	// its own reason, because only it knows which capability it wanted.
+	const gated = $derived(
+		caps === undefined || section === null ? null : sectionReason(caps, section.id)
+	);
+	// The two controls in this shell that start a resource: the section card's
+	// primary and the top strip's own. Crosslist is the only section that
+	// declares a primary, and both land on the create form, so one figure
+	// refuses both rather than two derivations that could disagree.
+	const createRefusal = $derived(limitOf(entitlement.data, 'resources'));
 	const accountSection = $derived(SECTIONS.find((entry) => entry.id === 'account'));
 
 	/** The dot beside a marketplace in the top bar, for the two states the
@@ -258,11 +288,24 @@
 				<p class="nav-hint">{card.hint}</p>
 			</div>
 
+			<!-- The section-primary control, refused at the catalogue cap rather
+			     than opening a form the create route will then refuse. Plain
+			     elements on the shell's own classes, as everything else in this
+			     card is, and the reason travels in `title` exactly as
+			     `Button.svelte` puts it there: a disabled control with no stated
+			     reason reads as a fault. -->
 			{#if card.primary}
-				<a class="cta nav-primary" href={card.primary.href}>
-					<Icon name={card.primary.icon} size={16} />
-					{card.primary.label}
-				</a>
+				{#if createRefusal === null}
+					<a class="cta nav-primary" href={card.primary.href}>
+						<Icon name={card.primary.icon} size={16} />
+						{card.primary.label}
+					</a>
+				{:else}
+					<button class="cta nav-primary" type="button" disabled title={createRefusal}>
+						<Icon name={card.primary.icon} size={16} />
+						{card.primary.label}
+					</button>
+				{/if}
 			{/if}
 
 			<!-- Named directly rather than by `aria-labelledby`: the title it would
@@ -313,7 +356,11 @@
 				<span class="search-said">Search resources…</span>
 				<kbd>ctrl K</kbd>
 			</button>
-			<a class="cta" href={CREATE_TAB.href}>{CREATE_TAB.label}</a>
+			{#if createRefusal === null}
+				<a class="cta" href={CREATE_TAB.href}>{CREATE_TAB.label}</a>
+			{:else}
+				<button class="cta" type="button" disabled title={createRefusal}>{CREATE_TAB.label}</button>
+			{/if}
 			<!-- Named here rather than by its contents: the avatar is `aria-hidden`
 			     because the initials are decoration, so without this label the link
 			     announces as the organisation's name rather than as Account. It
@@ -372,7 +419,21 @@
 		     as the board's own filter, does not touch `pathname`. -->
 		{#key pathname}
 			<svelte:boundary onerror={(error) => reportDrawFailure(error)}>
-				{@render children()}
+				{#if gated !== null}
+					<!-- The section is not on this plan. The page is not drawn at all
+					     rather than drawn and then refused control by control: every
+					     route inside it answers 422, so a rendered page would be a
+					     screen of dead switches. -->
+					<div class="page">
+						<Placeholder icon="credit-card" headline="Not on your plan" body={gated}>
+							{#snippet actions()}
+								<Button tier="primary" href="/settings/subscription">See plans</Button>
+							{/snippet}
+						</Placeholder>
+					</div>
+				{:else}
+					{@render children()}
+				{/if}
 
 				{#snippet failed()}
 					<div class="page">

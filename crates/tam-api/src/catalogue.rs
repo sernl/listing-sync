@@ -44,10 +44,11 @@ use tam_types::{
 
 use tam_authoring::refusal_of;
 use tam_domain::product::ProductName;
+use tam_limits::Capabilities;
 
+use crate::entitlement::{quota_refusal, QuotaKind};
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::product::{record_of, verdict, DraftHead, TptBaseInput};
-use crate::quota::{quota_for, QuotaKind};
 use crate::resources::{
     file_view, kind_from_str, kind_str, tpt_base_input, FileView, MappingHeadView,
 };
@@ -359,7 +360,7 @@ pub(crate) async fn upload(
     }
     let now = (state.wall)();
     let products = ProductRepo::new(state.pool.clone());
-    let quota = quota_for(&state, context.org).await?;
+    let caps = context.entitlement.caps;
     let used = products
         .stored_bytes(context.org)
         .await
@@ -369,11 +370,11 @@ pub(crate) async fn upload(
     // exploding archive writes more than it arrived as, so this bounds the
     // dominant term rather than the exact one; the exact total is reported
     // back below and the next upload is refused against it.
-    if used.saturating_add(incoming) > i64::try_from(quota.storage_bytes_max).unwrap_or(i64::MAX) {
+    if used.saturating_add(incoming) > i64::try_from(caps.storage_bytes_max).unwrap_or(i64::MAX) {
         return Err(quota_refusal(
             QuotaKind::StorageBytes,
             used,
-            quota.storage_bytes_max,
+            caps.storage_bytes_max,
         ));
     }
 
@@ -414,23 +415,9 @@ pub(crate) async fn upload(
             cover: FileHandle::of(&ingested.cover),
             previews: ingested.previews.iter().map(FileHandle::of).collect(),
             stored_bytes,
-            storage_bytes_max: quota.storage_bytes_max,
+            storage_bytes_max: caps.storage_bytes_max,
         }),
     ))
-}
-
-fn quota_refusal(kind: QuotaKind, used: i64, limit: u64) -> APIError {
-    APIError::new(
-        StatusCode::UNPROCESSABLE_ENTITY,
-        APIErrorEntry::new(kind.message())
-            .code(APIErrorCode::QuotaExceeded)
-            .kind(APIErrorKind::Validation)
-            .detail(serde_json::json!({
-                "quota": kind.as_str(),
-                "used": used,
-                "limit": limit,
-            })),
-    )
 }
 
 // ------------------------------------------------------------ picture slots
@@ -933,7 +920,15 @@ pub(crate) async fn create_product(
         .iter()
         .map(|_| MappingId(fresh_uuid()))
         .collect();
-    let created = create_one(&state, context.org, &body, product, &mappings).await?;
+    let created = create_one(
+        &state,
+        context.org,
+        context.entitlement.caps,
+        &body,
+        product,
+        &mappings,
+    )
+    .await?;
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -953,9 +948,16 @@ pub(crate) async fn create_product(
 /// The handler above mints its own and is unchanged by the arrangement. The
 /// writes after the product row are [`finish_one`], which the import also
 /// calls on its own for a row whose product a dead pass had already written.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the identifiers are the caller's by design, and the plan's capabilities \
+              are the sixth: folding them into a struct would name a parameter bag \
+              nothing else holds"
+)]
 pub(crate) async fn create_one(
     state: &AppState,
     org: OrgId,
+    caps: Capabilities,
     body: &CreateProductBody,
     product: ProductId,
     mappings: &[MappingId],
@@ -1002,16 +1004,15 @@ pub(crate) async fn create_one(
 
     let now = (state.wall)();
     let products = ProductRepo::new(state.pool.clone());
-    let quota = quota_for(state, org).await?;
     let live = products
         .live_count(org)
         .await
         .map_err(|error| storage_fault(state, &error))?;
-    if live >= i64::from(quota.listings_max) {
+    if live >= i64::from(caps.resources_max) {
         return Err(quota_refusal(
             QuotaKind::Listings,
             live,
-            u64::from(quota.listings_max),
+            u64::from(caps.resources_max),
         ));
     }
 

@@ -1,40 +1,59 @@
 /**
- * The published price list, from the founder's landing mockup of 2026-09-11 and
- * the pricing decision of 2026-09-12, in USD. It replaces the four-tier ladder
- * approved on 2026-09-05.
+ * What the landing page adds to the server's plan table.
  *
- * Prices are quoted in USD only: TPT is a US marketplace and Tes is UK-centred,
- * so NZD is neither buyer's currency and quoting it puts an FX conversion in
- * front of a small ticket. Changing a number here changes it on both `/` and
- * `/pricing`, which are the only two places it appears.
+ * Every price, cap and capability now arrives from `plans.generated.js`, which
+ * `cargo run -p tam-typegen` emits from `tam-limits` and `just web-check`
+ * diffs, so the pricing page cannot drift from what the server actually
+ * enforces. Changing a number is a change in the Rust table, never here.
+ *
+ * What stays here is what the landing alone owns: the phrasing of a rung, the
+ * dollar formatting, the sentence under the ladder, the chips the subscription
+ * card derives from `capabilities`, and the questions. Prices are quoted in
+ * USD only: TPT is a US marketplace and Tes is UK-centred, so NZD is neither
+ * buyer's currency and quoting it puts an FX conversion in front of a small
+ * ticket.
  */
+
+import { AI, FOUNDING, IMPORT_LADDER, LADDER_ABOVE, PLANS } from './plans.generated.js';
+
+export { AI, FOUNDING };
+
+/** `u32::MAX` is how the plan table spells "no cap". */
+const UNCAPPED = 4294967295;
+
+/** "$24", or "$24.50" where a price is not whole dollars. */
+export const dollars = (cents) =>
+	cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`;
 
 /**
- * The one-off import, priced by how much of a catalogue comes across.
- *
- * A rung is a cap and a price rather than two display strings, so the FAQ and
- * the cards phrase the same rung their own way and no page can quote a band
- * this file does not hold. The last rung has no cap and no price: the measured
- * dual-lister holds about 764 listings, which is a conversation rather than a
- * band (decision of 2026-09-12).
+ * The one subscription, as the server's table holds it. `studio` is in the
+ * same table with `sold: false`; nothing on this site may render it.
  */
-export const importLadder = [
-	{ upTo: 20, price: 47 },
-	{ upTo: 50, price: 77 },
-	{ upTo: 100, price: 127 },
-	{ upTo: 250, price: 247 },
-	{ upTo: 500, price: 397 },
-	{ upTo: null, label: 'Talk to us' }
-];
+export const subscription = PLANS.find((plan) => plan.id === 'subscriber');
+
+/** The cadence is the landing's own phrasing of `monthly_cents`/`yearly_cents`. */
+export const subscriptionCadence = 'monthly or annual';
+
+/**
+ * The one-off import, priced by how much of a catalogue comes across, with
+ * the open rung appended.
+ *
+ * The generated ladder is the five priced rungs; above them the founder's
+ * answer is a conversation rather than a band, because the measured
+ * dual-lister holds about 764 listings (decision of 2026-09-12). The open rung
+ * is a display concern and so is made here rather than in the plan table.
+ */
+export const importLadder = [...IMPORT_LADDER, { up_to: null, label: LADDER_ABOVE }];
 
 /** "Up to 250", or the open rung's own label. */
-export const rungCap = (rung) => rung.label ?? `Up to ${rung.upTo}`;
+export const rungCap = (rung) => rung.label ?? `Up to ${rung.up_to}`;
 
 /** "$247", or the invitation the open rung carries in place of a figure. */
-export const rungPrice = (rung) => (rung.price === undefined ? 'Ask us' : `$${rung.price}`);
+export const rungPrice = (rung) =>
+	rung.price_cents === undefined ? 'Ask us' : dollars(rung.price_cents);
 
 /** Every rung that names a figure, which is the ladder minus the open one. */
-export const pricedRungs = importLadder.filter((rung) => rung.price !== undefined);
+export const pricedRungs = IMPORT_LADDER;
 
 /**
  * What the cap counts. The ladder is priced by resources, and an import of two
@@ -44,51 +63,93 @@ export const pricedRungs = importLadder.filter((rung) => rung.price !== undefine
 export const importLadderNote =
 	'Counted as resources added to your catalogue after duplicates are merged.';
 
-/**
- * AI auto-fill, which is sold today and built later. `status` is what the
- * cards read to decide whether they may promise it; "coming soon" promises no
- * accuracy figure, no marketplace write and no date, per the decision of
- * 2026-09-12.
- */
-const ai = {
-	status: 'coming-soon',
-	includedFills: 200,
-	addOn: { fills: 100, price: 5 }
+/** "every 6 hours", from the interval the plan table carries in seconds. */
+const cadenceOf = (secs) => {
+	if (secs % 86400 === 0) return secs === 86400 ? 'daily' : `every ${secs / 86400} days`;
+	if (secs % 3600 === 0) return secs === 3600 ? 'hourly' : `every ${secs / 3600} hours`;
+	return `every ${Math.round(secs / 60)} minutes`;
 };
 
 /**
- * The one subscription. `monthly` is the old Studio price, unchanged: the
- * mockup states no figure for the subscription, and the founder's four tiers
- * collapsed into this single plan, so the middle tier's price carries over
- * rather than a new number being invented.
+ * The subscription card's lines, read off `capabilities` rather than typed out
+ * beside them.
  *
- * `includesImport` is the 2026-09-12 decision: every comparable crosslister
- * bundles import, and charging at the moment of activation taxes the one step
- * that makes the product useful.
+ * A hand-written chip is a second price list: it goes stale the day a cap
+ * moves in `tam-limits` and nothing fails. These are the capabilities a
+ * teacher is choosing between, in the order they matter, and `soon` marks the
+ * one line that is sold before it is built so a tick cannot claim otherwise.
  */
-export const subscription = {
-	name: 'Teachouse Subscription',
-	cadence: 'monthly or annual',
-	monthly: 24,
-	yearly: 240,
-	includesImport: true,
-	ai,
-	/* A feature is a line and, where it is sold before it is built, the state
-	   that stops a tick claiming otherwise. */
-	features: [
-		{ text: 'Central catalogue' },
-		{ text: 'Bulk tools' },
-		{ text: 'Import included' },
-		{ text: `AI fill \u2014 coming soon (${ai.includedFills} a month)`, soon: true },
-		{ text: 'Marketplace management' }
-	]
+export const planFeatures = (plan) => {
+	const caps = plan.capabilities;
+	const lines = [
+		{ text: `Up to ${caps.resources_max} resources` },
+		{
+			text: caps.marketplaces_max >= UNCAPPED ? 'All your marketplaces' : `${caps.marketplaces_max} marketplace`
+		}
+	];
+	if (caps.import_spreadsheet && caps.import_marketplace) lines.push({ text: 'Import included' });
+	if (caps.migrations_per_month > 0)
+		lines.push({ text: `${caps.migrations_per_month} resources moved a month` });
+	if (caps.scheduling) lines.push({ text: 'Scheduling' });
+	if (caps.sync_pull_interval_secs !== null)
+		lines.push({ text: `Sync ${cadenceOf(caps.sync_pull_interval_secs)}` });
+	if (caps.templates_max > 0) lines.push({ text: `${caps.templates_max} templates` });
+	if (caps.collections_max > 0) lines.push({ text: `${caps.collections_max} collections` });
+	if (caps.analytics) lines.push({ text: 'Analytics' });
+	lines.push({ text: caps.devices_max === 1 ? '1 computer' : `${caps.devices_max} computers` });
+	if (caps.ai_fills_per_month > 0 && AI.status === 'coming_soon')
+		lines.push({
+			text: `AI fill \u2014 coming soon (${caps.ai_fills_per_month} a month)`,
+			soon: true
+		});
+	return lines;
 };
 
-/** The founding offer, and the only scarcity claim on the site. */
-export const founding = {
-	discountYearOne: 25,
-	discountOngoing: 20,
-	ongoingYears: 3,
-	freeImports: 20,
-	places: 100
-};
+/**
+ * The questions, and the only place the site answers one.
+ *
+ * Every figure in an answer is interpolated from the plan table above, so the
+ * price list and the questions about it cannot disagree.
+ */
+export const faqs = [
+	{
+		q: 'Do you get my marketplace password?',
+		a: 'No. You sign in to each marketplace yourself, in a window on your own computer, and what is kept is the session that sign-in creates, on that computer, never your password.'
+	},
+	{
+		q: 'Do my files go through your servers?',
+		a: 'No. Where a marketplace publishes no interface for tools like this one, every request to it is sent from your own computer under your own login, and an upload is one of those requests.'
+	},
+	{
+		q: 'Do I need to install anything?',
+		a: 'For the marketplaces that publish no interface, yes: a small app you install once on the computer that does that work. Your catalogue, your settings and your results are on our side and open in any browser.'
+	},
+	{
+		q: 'What happens to a listing when I change it?',
+		a: 'Teachouse edits the listing that is already there. It does not delete your listing and create a new one, which is the thing that would cost you its address, its reviews and the followers attached to it.'
+	},
+	{
+		q: 'What does a catalogue import include?',
+		a: `We bring your existing resources into Teachouse for you, at the one-off price of the band you pick, from ${rungPrice(pricedRungs[0])} for ${rungCap(pricedRungs[0]).toLowerCase()} resources to ${rungPrice(pricedRungs[pricedRungs.length - 1])} for ${rungCap(pricedRungs[pricedRungs.length - 1]).toLowerCase()}, and a conversation above that. A resource you sell in two places is counted once, after we merge the duplicates. You look over every listing we created before anything is published.`
+	},
+	{
+		q: 'Do I pay for import?',
+		a: 'Not on the subscription: bringing your catalogue in is part of it. The one-off price is for a seller who wants their catalogue brought across without subscribing.'
+	},
+	{
+		q: 'What does AI fill do?',
+		a: `It reads the file you are listing and fills the form in from it, for you to check and change before anything is saved. It never writes to a marketplace on its own. It is coming soon, ${AI.included_fills} fills a month are part of the subscription, and we are not putting a date on it.`
+	},
+	{
+		q: 'What is the Founding 100?',
+		a: `The first ${FOUNDING.places} teachers to join: ${FOUNDING.discount_year_one_pct}% off your first year, ${FOUNDING.discount_ongoing_pct}% off for the ${FOUNDING.ongoing_years} years after that, and your first ${FOUNDING.free_imports} resources imported free. When the ${FOUNDING.places} places are taken, the offer closes.`
+	},
+	{
+		q: 'Can I pay monthly?',
+		a: 'Yes. The subscription is monthly or annual, the annual price is two months cheaper, and you can cancel from the billing screen. Prices are in US dollars.'
+	},
+	{
+		q: 'Are you part of any of these marketplaces?',
+		a: 'No. Teachouse is an independent tool, no marketplace endorses it, and your relationship with each one stays your own.'
+	}
+];

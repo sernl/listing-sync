@@ -67,6 +67,27 @@ async fn provision(pool: &PgPool) {
             .execute(pool)
             .await
             .expect("the org seeds");
+        // A spreadsheet import is a paid capability, and one batch here runs
+        // past the free catalogue allowance: the fixture tenant subscribes,
+        // so these tests measure the import machinery rather than the plan
+        // gate in front of it.
+        tam_storage::EntitlementRepo::new(pool.clone())
+            .grant(
+                org,
+                &tam_storage::NewGrant {
+                    id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
+                    plan: tam_limits::Plan::Subscriber,
+                    rung: None,
+                    granted_by: tam_storage::GrantedBy::Paddle,
+                    grantor_user: None,
+                    reason: None,
+                    source_ref: Some(name),
+                    granted_at: Timestamp(1_000),
+                    expires_at: None,
+                },
+            )
+            .await
+            .expect("the fixture grant seeds");
     }
     let sessions = SessionRepo::new(pool.clone());
     for (org, user, email, token) in [

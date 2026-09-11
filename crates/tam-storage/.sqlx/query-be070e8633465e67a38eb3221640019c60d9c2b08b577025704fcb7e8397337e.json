@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT NOT (\n                 EXISTS (SELECT 1 FROM entitlement_grant g WHERE g.org_id = $1)\n                 AND NOT EXISTS (\n                   SELECT 1 FROM entitlement_grant g\n                   WHERE g.org_id = $1 AND g.revoked_at IS NULL\n                     AND (g.expires_at IS NULL OR g.expires_at > now())\n                 )\n               ) AS \"stands!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "stands!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "be070e8633465e67a38eb3221640019c60d9c2b08b577025704fcb7e8397337e"
+}

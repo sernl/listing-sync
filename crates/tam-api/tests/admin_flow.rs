@@ -57,7 +57,15 @@ const ADMIN_PATHS: [&str; 8] = [
 /// Listing it here keeps the closure below failing for the next route somebody
 /// forgets, which is the whole point of closing the world; an unlisted absence
 /// would make the closure vacuous instead.
-const ADMIN_PATHS_UNCOVERED: [&str; 1] = ["/{version}/admin/marketplace-requests"];
+/// The two plan-grant routes are here rather than in `ADMIN_PATHS` because
+/// that list drives GET refusal loops, and a POST route answered by those
+/// loops would be testing method routing rather than the operator fence.
+/// Their own refusal is asserted by `a_seller_cannot_grant_themselves_a_plan`.
+const ADMIN_PATHS_UNCOVERED: [&str; 3] = [
+    "/{version}/admin/marketplace-requests",
+    "/{version}/admin/orgs/{org}/plan",
+    "/{version}/admin/orgs/{org}/plan/{grant}/revoke",
+];
 
 #[expect(
     clippy::expect_used,
@@ -1144,4 +1152,165 @@ async fn a_deployment_without_a_backoffice_database_refuses_every_route(pool: Pg
         let seller = call(pool.clone(), None, path, Some(&TOKEN_SELLER)).await;
         assert_blank_refusal(&seller, &format!("a seller on unconfigured {path}"));
     }
+}
+
+// ------------------------------------------------------- the one write here
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn post_json(
+    pool: PgPool,
+    backoffice: Option<PgPool>,
+    path: &str,
+    token: Option<&SessionToken>,
+    body: serde_json::Value,
+) -> Answer {
+    let request = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header(header::CONTENT_TYPE, "application/json");
+    let request = match token {
+        Some(token) => request.header(
+            header::COOKIE,
+            format!("{SESSION_COOKIE}={}", token.to_hex()),
+        ),
+        None => request,
+    };
+    let response = router(state(pool, backoffice))
+        .oneshot(
+            request
+                .body(Body::from(body.to_string()))
+                .expect("the request builds"),
+        )
+        .await
+        .expect("the router serves");
+    let status = response.status();
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body collects")
+        .to_bytes()
+        .to_vec();
+    Answer { status, body }
+}
+
+fn org_path(org: OrgId) -> String {
+    format!("/v1/admin/orgs/{}", org.0.to_hyphenated())
+}
+
+/// The backoffice grant end to end: an operator sets a plan with a reason and
+/// an expiry, the org detail reports it, and revoking it puts the
+/// organisation back on Free while keeping the row.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_operator_grants_a_plan_and_takes_it_back(pool: PgPool) {
+    provision(&pool).await;
+    grant_operator(&pool).await;
+    let backoffice = backoffice_pool(&pool).await;
+
+    let answer = post_json(
+        pool.clone(),
+        Some(backoffice.clone()),
+        &format!("{}/plan", org_path(ORG_A)),
+        Some(&TOKEN_OPERATOR),
+        serde_json::json!({
+            "plan": "studio",
+            "expires_at": 9_000_000,
+            "reason": "customer zero, for the migration"
+        }),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::OK, "the grant lands");
+    let view: OrgDetailView = answer.json();
+    assert_eq!(view.plan.plan, tam_limits::Plan::Studio);
+    assert_eq!(view.plan.granted_by.as_deref(), Some("operator"));
+    assert_eq!(view.grants.len(), 1);
+    assert_eq!(
+        view.grants[0].reason.as_deref(),
+        Some("customer zero, for the migration"),
+        "the audit row carries the operator's own words"
+    );
+    assert_eq!(
+        view.grants[0].grantor_user.map(|user| user.to_hyphenated()),
+        Some(USER_OPERATOR.0.to_hyphenated()),
+        "and names who made it"
+    );
+    let grant = view.grants[0].id.to_hyphenated();
+
+    let answer = post_json(
+        pool.clone(),
+        Some(backoffice.clone()),
+        &format!("{}/plan/{grant}/revoke", org_path(ORG_A)),
+        Some(&TOKEN_OPERATOR),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::OK);
+    let view: OrgDetailView = answer.json();
+    assert_eq!(
+        view.plan.plan,
+        tam_limits::Plan::Free,
+        "a revoked grant stops entitling"
+    );
+    assert_eq!(
+        view.grants.len(),
+        1,
+        "and stays in the record, which is what the audit trail is for"
+    );
+    assert!(view.grants[0].revoked_at.is_some());
+}
+
+/// A grant with no reason is refused, because an audit row whose reason is
+/// blank answers none of the questions an audit row exists for.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_grant_without_a_reason_is_refused(pool: PgPool) {
+    provision(&pool).await;
+    grant_operator(&pool).await;
+    let backoffice = backoffice_pool(&pool).await;
+
+    let answer = post_json(
+        pool.clone(),
+        Some(backoffice.clone()),
+        &format!("{}/plan", org_path(ORG_A)),
+        Some(&TOKEN_OPERATOR),
+        serde_json::json!({ "plan": "subscriber", "reason": "   " }),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let answer = post_json(
+        pool.clone(),
+        Some(backoffice),
+        &format!("{}/plan", org_path(ORG_A)),
+        Some(&TOKEN_OPERATOR),
+        serde_json::json!({ "plan": "migration_only", "reason": "bought over the phone" }),
+    )
+    .await;
+    assert_eq!(
+        answer.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a Catalogue Import grant with no rung would grant nothing, so it is refused \
+         rather than written"
+    );
+}
+
+/// The seller session is refused on the write exactly as it is on the reads:
+/// a 401 that says nothing about whether the operator surface exists.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_seller_cannot_grant_themselves_a_plan(pool: PgPool) {
+    provision(&pool).await;
+    grant_operator(&pool).await;
+    let backoffice = backoffice_pool(&pool).await;
+
+    let answer = post_json(
+        pool.clone(),
+        Some(backoffice),
+        &format!("{}/plan", org_path(ORG_A)),
+        Some(&TOKEN_SELLER),
+        serde_json::json!({ "plan": "studio", "reason": "please" }),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::UNAUTHORIZED);
 }

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { createQuery } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
 	import {
 		ApiFailure,
@@ -11,6 +12,7 @@
 	import { anyConnectionStands } from '$lib/connection-standing';
 	import Button from '$lib/Button.svelte';
 	import { agoLabel } from '$lib/elapsed';
+	import { entitlementRead, featureOf } from '$lib/entitlement-read';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
@@ -69,6 +71,14 @@
 	const sheetInputId = `${base}-sheet`;
 
 	const cards = $derived(importCards(connections));
+
+	// The two ways in are two capabilities, and a plan can carry one without
+	// the other: the free plan reads a spreadsheet and cannot read a shop.
+	// Each control states its own refusal rather than the page stating one for
+	// both.
+	const plan = createQuery(() => entitlementRead);
+	const uploadRefusal = $derived(featureOf(plan.data, 'import_spreadsheet'));
+	const handoffRefusal = $derived(featureOf(plan.data, 'import_marketplace'));
 
 	/** Whether the seller has no marketplace connected at all.
 	 *
@@ -222,7 +232,9 @@
 			>
 				{downloading ? 'Building the template…' : 'Download the template'}
 			</Button>
-			{#if openBatch === null}
+			{#if uploadRefusal !== null}
+				<Button disabled reason={uploadRefusal}>Upload a filled sheet</Button>
+			{:else if openBatch === null}
 				<!-- A label rather than a Button, because the control has to be the
 				     file input's own: a button that then clicks a hidden input is a
 				     second control the keyboard reaches separately. -->
@@ -245,7 +257,7 @@
 
 	<div class="import-cards">
 		{#each cards as card (card.marketplace)}
-			{@const blocked = handoffBlocked(card)}
+			{@const blocked = handoffRefusal ?? handoffBlocked(card)}
 			<section class="import-card">
 				<div class="head">
 					<h2><MarketplaceMark marketplace={card.marketplace} size={22} /></h2>

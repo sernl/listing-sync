@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 
 use sqlx::PgPool;
 
-const TENANT_TABLES: [&str; 43] = [
+const TENANT_TABLES: [&str; 44] = [
     "billing_subscription",
     "binding_candidate",
     "blob",
@@ -21,6 +21,7 @@ const TENANT_TABLES: [&str; 43] = [
     "device_marketplace_session",
     "election_item",
     "election_rule",
+    "entitlement_grant",
     "field_audit",
     "field_mismatch",
     "grade_declaration",
@@ -94,9 +95,10 @@ const GLOBAL_TABLES: [&str; 11] = [
 /// and has no business with the rest of a tenant's ledger; migration 0067 opens
 /// exactly the dead letters, because those are the rows nothing else reads.
 /// That asymmetry is the point of listing quals here rather than table names.
-const BACKOFFICE_READABLE: [(&str, &str); 12] = [
+const BACKOFFICE_READABLE: [(&str, &str); 13] = [
     ("billing_subscription", "true"),
     ("connection", "true"),
+    ("entitlement_grant", "true"),
     ("job", "true"),
     ("job_event", "(kind = 'ImportDrainMeasured'::text)"),
     ("job_item", "true"),

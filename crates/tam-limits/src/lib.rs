@@ -9,7 +9,8 @@
 //!
 //! Every constant admitted to the resource-bound set carries a provenance
 //! marker in its doc comment, a factual claim about where the number came
-//! from; the three per-tier rates are covered by the marker on `Tier::quota`.
+//! from; the plan table's figures are covered by the marker on
+//! `Plan::capabilities` and `PLANS`.
 //! `MEASURED` cites a recorded observation, named in the comment.
 //! `SIZED` means derived by arithmetic from a quantity that is known
 //! independently of measurement, such as the box's RAM or a protocol limit.
@@ -21,76 +22,466 @@
 //! so lowering the budget is a deliberate edit and raising it cannot pass
 //! unnoticed. Drive it to zero before taking money.
 //!
-//! This crate has no dependencies and must keep none, so that every other
-//! crate can depend on it without acquiring an edge.
+//! This crate's only dependency is `serde`, and it acquires no other. The
+//! plan table below is a wire vocabulary as well as a bound — the same rows
+//! answer `GET /v1/plans`, the console and the landing build — so the derive
+//! lives where the numbers do rather than in a second struct that could
+//! disagree with them. `serde` is already inside the pure-core fence that
+//! `just purity` polices, so no crate acquires a runtime, a client or a
+//! database handle by depending on this one.
 
 #![forbid(unsafe_code)]
 
-use std::num::NonZeroU32;
+use serde::{Deserialize, Serialize};
 
-/// Billing tier.
+/// What an organisation holds. The closed set, and the only axis any feature
+/// is gated on.
 ///
-/// Declared here rather than in the billing crate because `limits` is a leaf
-/// with no workspace dependencies and the quota table below is keyed by it.
-/// The billing crate re-exports this type; it does not redeclare it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Tier {
+/// `Studio` exists in code and is never sold: decisions.md, "Plans,
+/// capabilities and the pricing re-evaluation, 2026-09-12" defers it until a
+/// fifth of subscribers exceed 300 resources or hit the migration cap twice
+/// in a quarter. Declaring it now is what makes that trigger a row in
+/// [`PLANS`] with `sold: false` rather than a second pricing model invented
+/// under pressure.
+///
+/// `Free` is the default in every direction a plan can go missing: an
+/// organisation with no grant, a grant that has expired, a device token
+/// minted by an older server. Falling back to the smallest plan is the
+/// fail-closed direction.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Plan {
+    #[default]
     Free,
-    Pro,
+    Subscriber,
+    MigrationOnly,
     Studio,
 }
 
-/// The quotas a single tier grants.
-///
-/// One struct per tier rather than parallel arrays indexed by a discriminant.
-/// Arrays would need an index, a bounds check, and a length assertion per
-/// array; a struct returned from an exhaustive `match` needs none of those,
-/// and adding a tier becomes a compile error at the one site that matters.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TierQuota {
-    pub api_requests_per_minute: NonZeroU32,
-    pub listings_max: u32,
-    pub storage_bytes_max: u64,
-}
-
-impl Tier {
-    /// Every tier. Test-only scaffolding: nothing in production indexes it.
+impl Plan {
+    /// Every plan, weakest first.
     ///
-    /// Rust cannot check on stable that this array is total over the enum, so
-    /// the forcing function is the exhaustive `match` in `all_is_total_over_the_enum`,
-    /// which fails to compile when a variant is added. `wildcard_enum_match_arm`
-    /// is denied workspace-wide, so that match cannot be silenced with `_`.
-    pub const ALL: [Self; 3] = [Self::Free, Self::Pro, Self::Studio];
+    /// The order is the precedence order [`Plan::strength`] renders, so a
+    /// reader of either sees the same ladder. Rust cannot check on stable
+    /// that this array is total over the enum, so the forcing function is the
+    /// exhaustive `match` in `all_is_total_over_the_enum`, which fails to
+    /// compile when a variant is added. `wildcard_enum_match_arm` is denied
+    /// workspace-wide, so that match cannot be silenced with `_`.
+    pub const ALL: [Self; 4] = [
+        Self::Free,
+        Self::MigrationOnly,
+        Self::Subscriber,
+        Self::Studio,
+    ];
 
-    /// DECIDED (decisions.md, "Limits calibration, 2026-08-28"): placeholder
-    /// admission bounds for tiers not sold in M1, the free rate unable to
-    /// saturate one box at the concurrency below; re-priced with M5's billing
-    /// work, which owns tiers and pricing.
+    /// The wire spelling, which is also the spelling the `plan` CHECK
+    /// constraint in migration 0069 enumerates.
     #[must_use]
-    pub const fn quota(self) -> TierQuota {
+    pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Free => TierQuota {
-                api_requests_per_minute: FREE_RPM,
-                listings_max: 100,
+            Self::Free => "free",
+            Self::Subscriber => "subscriber",
+            Self::MigrationOnly => "migration_only",
+            Self::Studio => "studio",
+        }
+    }
+
+    /// The plan a stored spelling names, or `None` for a spelling this build
+    /// does not know.
+    ///
+    /// `None` rather than a fallback to `Free`: a row carrying a plan this
+    /// binary cannot read is a deployment running behind its own database,
+    /// and silently downgrading a paying tenant is worse than saying so.
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|plan| plan.as_str() == raw)
+    }
+
+    /// How plans compare when an organisation holds more than one unexpired
+    /// grant. Larger wins.
+    ///
+    /// Not `Ord` on the enum, because the derive would key on declaration
+    /// order and make the precedence an accident of where a variant was
+    /// typed. Studio outranks Subscriber outranks MigrationOnly outranks
+    /// Free: a one-off import bought by an organisation that later subscribes
+    /// must not hold the subscription down to the one-off's narrower set.
+    #[must_use]
+    pub const fn strength(self) -> u8 {
+        match self {
+            Self::Free => 0,
+            Self::MigrationOnly => 1,
+            Self::Subscriber => 2,
+            Self::Studio => 3,
+        }
+    }
+
+    /// What this plan grants, at the rung it was bought at.
+    ///
+    /// DECIDED (decisions.md, "Plans, capabilities and the pricing
+    /// re-evaluation, 2026-09-12", against the gating matrix in
+    /// `docs/notes/design/research/2026-09-12-pricing-and-tiers.md` section
+    /// 6): every figure here is the founder's, carried unchanged. The
+    /// migration cap re-opens on the first subscriber who hits it twice in a
+    /// quarter, which is also the trigger that ships `Studio`.
+    ///
+    /// `rung` is read only by `MigrationOnly`, whose whole product is the
+    /// volume bought; every other plan ignores it. A `MigrationOnly` grant
+    /// with no rung grants nothing, which is the honest reading of a purchase
+    /// whose price we could not map: the buyer is refused and support can see
+    /// why, rather than silently receiving the largest rung.
+    #[must_use]
+    pub const fn capabilities(self, rung: Option<u32>) -> Capabilities {
+        match self {
+            Self::Free => Capabilities {
+                resources_max: 20,
+                marketplaces_max: 1,
                 storage_bytes_max: 1 << 30,
+                import_spreadsheet: true,
+                import_marketplace: false,
+                duplicate_review: false,
+                publish_marketplaces_max: 1,
+                edit_days_after_purchase: None,
+                migrations_per_month: 0,
+                scheduling: false,
+                sync_pull_interval_secs: None,
+                auto_publish_rules: false,
+                templates_max: 1,
+                collections_max: 0,
+                labels_max: 5,
+                analytics: false,
+                export: true,
+                devices_max: 1,
+                ai_fills_per_month: 0,
+                support: Support::Guides,
             },
-            Self::Pro => TierQuota {
-                api_requests_per_minute: PRO_RPM,
-                listings_max: 5_000,
+            Self::Subscriber => Capabilities {
+                resources_max: 400,
+                marketplaces_max: u32::MAX,
                 storage_bytes_max: 20 << 30,
+                import_spreadsheet: true,
+                import_marketplace: true,
+                duplicate_review: true,
+                publish_marketplaces_max: u32::MAX,
+                edit_days_after_purchase: None,
+                migrations_per_month: 20,
+                scheduling: true,
+                sync_pull_interval_secs: Some(6 * 3_600),
+                auto_publish_rules: true,
+                templates_max: 20,
+                collections_max: 20,
+                labels_max: 20,
+                analytics: true,
+                export: true,
+                devices_max: 2,
+                ai_fills_per_month: 200,
+                support: Support::Email2Days,
             },
-            Self::Studio => TierQuota {
-                api_requests_per_minute: STUDIO_RPM,
-                listings_max: 100_000,
+            // One publish pass over the imported set, and thirty days in
+            // which to correct it. `publish_marketplaces_max` is every
+            // marketplace because a move has two sides; what bounds the pass
+            // is the rung, which is also the migration allowance.
+            Self::MigrationOnly => {
+                let bought = match rung {
+                    Some(bought) => bought,
+                    None => 0,
+                };
+                Capabilities {
+                    resources_max: bought,
+                    marketplaces_max: u32::MAX,
+                    storage_bytes_max: 5 << 30,
+                    import_spreadsheet: true,
+                    import_marketplace: true,
+                    duplicate_review: true,
+                    publish_marketplaces_max: u32::MAX,
+                    edit_days_after_purchase: Some(30),
+                    migrations_per_month: bought,
+                    scheduling: false,
+                    sync_pull_interval_secs: None,
+                    auto_publish_rules: false,
+                    templates_max: 1,
+                    collections_max: 0,
+                    labels_max: 0,
+                    analytics: false,
+                    export: true,
+                    devices_max: 1,
+                    ai_fills_per_month: 0,
+                    support: Support::Email30DaysAfterPurchase,
+                }
+            }
+            Self::Studio => Capabilities {
+                resources_max: u32::MAX,
+                marketplaces_max: u32::MAX,
                 storage_bytes_max: 200 << 30,
+                import_spreadsheet: true,
+                import_marketplace: true,
+                duplicate_review: true,
+                publish_marketplaces_max: u32::MAX,
+                edit_days_after_purchase: None,
+                migrations_per_month: 100,
+                scheduling: true,
+                sync_pull_interval_secs: Some(3_600),
+                auto_publish_rules: true,
+                templates_max: u32::MAX,
+                collections_max: u32::MAX,
+                labels_max: 50,
+                analytics: true,
+                export: true,
+                devices_max: 3,
+                ai_fills_per_month: 600,
+                support: Support::Email1Day,
             },
         }
     }
 }
 
-const FREE_RPM: NonZeroU32 = NonZeroU32::new(60).unwrap();
-const PRO_RPM: NonZeroU32 = NonZeroU32::new(600).unwrap();
-const STUDIO_RPM: NonZeroU32 = NonZeroU32::new(3_000).unwrap();
+/// How quickly support answers, which is a plan's promise rather than a
+/// bound, and is in the table because the pricing page renders it from the
+/// same row every other figure comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Support {
+    #[serde(rename = "guides")]
+    Guides,
+    #[serde(rename = "email_2_days")]
+    Email2Days,
+    #[serde(rename = "email_1_day")]
+    Email1Day,
+    #[serde(rename = "email_30_days_after_purchase")]
+    Email30DaysAfterPurchase,
+}
+
+impl Support {
+    /// Every level, for the same reason [`Plan::ALL`] exists.
+    pub const ALL: [Self; 4] = [
+        Self::Guides,
+        Self::Email2Days,
+        Self::Email1Day,
+        Self::Email30DaysAfterPurchase,
+    ];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Guides => "guides",
+            Self::Email2Days => "email_2_days",
+            Self::Email1Day => "email_1_day",
+            Self::Email30DaysAfterPurchase => "email_30_days_after_purchase",
+        }
+    }
+}
+
+/// Everything one plan grants, as one value.
+///
+/// One struct returned from an exhaustive `match` rather than a lookup keyed
+/// by a discriminant: adding a plan is then a compile error at the one site
+/// that matters, and no caller needs an index, a bounds check or a fallback.
+/// Every field is required for the same reason — an `Option` per capability
+/// would let a plan answer "unspecified" to a question every gate has to ask.
+///
+/// `u32::MAX` means "no ceiling" on the count fields. A sentinel rather than
+/// an `Option<u32>` because every reader of those fields is a comparison, and
+/// `used >= max` is correct at the sentinel while an `Option` would push a
+/// match into each of the nine gate sites. The two genuinely absent
+/// quantities are `Option`: no edit deadline, and no sync cadence at all.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the eight flags are the price list's own rows, not a state machine; \
+              collapsing them into a bitset or sub-structs would make the struct \
+              disagree with the table every surface renders from it"
+)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Capabilities {
+    pub resources_max: u32,
+    pub marketplaces_max: u32,
+    /// The blob ceiling, which is the one capability measured in bytes and
+    /// the only survivor of the deleted `TierQuota`. The per-tier request
+    /// rates that sat beside it went with it: they were never enforced, and
+    /// rate limiting is a shared-resource bound rather than a plan axis, so
+    /// reinstating one belongs beside the limiter and not in a price list.
+    pub storage_bytes_max: u64,
+    pub import_spreadsheet: bool,
+    pub import_marketplace: bool,
+    pub duplicate_review: bool,
+    /// How many marketplaces one resource may be published to. `u32::MAX` is
+    /// every marketplace; `0` would be none, which no plan holds.
+    pub publish_marketplaces_max: u32,
+    /// How long after the purchase a marketplace listing may still be edited
+    /// or deleted. `None` is unlimited, which is every recurring plan.
+    pub edit_days_after_purchase: Option<u32>,
+    /// Resources, not batches: the cap counts the resources a month's copies
+    /// and moves name, because a per-batch cap is gamed by batching.
+    pub migrations_per_month: u32,
+    pub scheduling: bool,
+    /// How often the device re-enumerates a shop. `None` is no sync pulls.
+    pub sync_pull_interval_secs: Option<u32>,
+    pub auto_publish_rules: bool,
+    pub templates_max: u32,
+    pub collections_max: u32,
+    pub labels_max: u32,
+    pub analytics: bool,
+    /// Never false on any plan, and a field rather than an omission: the
+    /// decision that a seller who cannot get their catalogue out will not put
+    /// one in is worth being able to point at, and a test pins it.
+    pub export: bool,
+    pub devices_max: u32,
+    pub ai_fills_per_month: u32,
+    pub support: Support,
+}
+
+/// One row of the price list.
+///
+/// `monthly_cents` and `yearly_cents` are absent for the two plans that carry
+/// no recurring price: Free, which charges nothing, and Catalogue Import,
+/// which is priced by the rung ladder below rather than by the row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanRow {
+    pub id: Plan,
+    pub name: &'static str,
+    pub monthly_cents: Option<u32>,
+    pub yearly_cents: Option<u32>,
+    pub trial_days: u32,
+    /// Whether a checkout may route to this plan. False for Studio, which is
+    /// priced and deferred: the figures are published so the trigger has
+    /// something to ship, and no surface offers it.
+    pub sold: bool,
+}
+
+/// One rung of the Catalogue Import ladder: a resource ceiling and its price.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Rung {
+    pub up_to: u32,
+    pub price_cents: u32,
+}
+
+/// The Founding 100 overlay.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Founding {
+    pub discount_year_one_pct: u32,
+    pub discount_ongoing_pct: u32,
+    /// How many years the ongoing discount runs before it lapses, capped by
+    /// the founder's decision of 2026-09-12.
+    pub ongoing_years: u32,
+    pub free_imports: u32,
+    pub places: u32,
+}
+
+/// What the AI auto-fill offer promises, which today is that it is coming.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AiOffer {
+    pub status: AiStatus,
+    pub included_fills: u32,
+    pub add_on_fills: u32,
+    pub add_on_cents: u32,
+}
+
+/// Where the AI auto-fill offer stands. One variant today, and a closed set
+/// rather than a free string so the day it ships is a compile error at every
+/// surface that renders "coming soon".
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiStatus {
+    ComingSoon,
+}
+
+impl AiStatus {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ComingSoon => "coming_soon",
+        }
+    }
+}
+
+/// The price list, in the order a pricing page reads it.
+///
+/// DECIDED (decisions.md, "Plans, capabilities and the pricing re-evaluation,
+/// 2026-09-12"): every price the founder set on 2026-09-11 stands. Re-opened
+/// by the Studio trigger, which is the only pending pricing decision.
+pub const PLANS: [PlanRow; 4] = [
+    PlanRow {
+        id: Plan::Free,
+        name: "Free",
+        monthly_cents: None,
+        yearly_cents: None,
+        trial_days: 0,
+        sold: true,
+    },
+    PlanRow {
+        id: Plan::Subscriber,
+        name: "Teachouse Subscription",
+        monthly_cents: Some(2_400),
+        yearly_cents: Some(24_000),
+        trial_days: 14,
+        sold: true,
+    },
+    PlanRow {
+        id: Plan::MigrationOnly,
+        name: "Catalogue Import",
+        monthly_cents: None,
+        yearly_cents: None,
+        trial_days: 0,
+        sold: true,
+    },
+    PlanRow {
+        id: Plan::Studio,
+        name: "Studio",
+        monthly_cents: Some(4_400),
+        yearly_cents: Some(44_000),
+        trial_days: 0,
+        sold: false,
+    },
+];
+
+/// The one-off Catalogue Import ladder, cheapest rung first.
+///
+/// DECIDED (decisions.md, 2026-09-12): the founder's four rungs plus the two
+/// the research added, because the measured dual-lister holds about 764
+/// listings and the published ladder stopped short of its best customer. A
+/// rung counts resources committed to the catalogue after duplicate merges.
+pub const IMPORT_LADDER: [Rung; 5] = [
+    Rung {
+        up_to: 20,
+        price_cents: 4_700,
+    },
+    Rung {
+        up_to: 50,
+        price_cents: 7_700,
+    },
+    Rung {
+        up_to: 100,
+        price_cents: 12_700,
+    },
+    Rung {
+        up_to: 250,
+        price_cents: 24_700,
+    },
+    Rung {
+        up_to: 500,
+        price_cents: 39_700,
+    },
+];
+
+/// What a catalogue above the top rung is offered: a conversation, not a
+/// price. Carried here rather than written into the page's copy so the server
+/// and the two clients say the same words.
+pub const LADDER_ABOVE: &str = "Talk to us";
+
+/// The Founding 100 offer, whose four numbers the founder kept unchanged.
+pub const FOUNDING: Founding = Founding {
+    discount_year_one_pct: 25,
+    discount_ongoing_pct: 20,
+    ongoing_years: 3,
+    free_imports: 20,
+    places: 100,
+};
+
+/// The AI auto-fill packaging: bundled with a fair-use cap and a small
+/// add-on, no credit currency.
+pub const AI: AiOffer = AiOffer {
+    status: AiStatus::ComingSoon,
+    included_fills: 200,
+    add_on_fills: 100,
+    add_on_cents: 500,
+};
 
 pub mod http {
     /// SIZED against RAM, not against traffic: at this ceiling the concurrent
@@ -261,7 +652,7 @@ const _: () = {
 
 #[cfg(test)]
 mod tests {
-    use super::{http, ingest, job, Tier};
+    use super::{http, ingest, job, Plan, Support, IMPORT_LADDER, PLANS};
 
     /// The `UNCALIBRATED` markers are a countdown, not decoration.
     ///
@@ -287,23 +678,168 @@ mod tests {
 
     #[test]
     fn all_is_total_over_the_enum() {
-        for tier in Tier::ALL {
-            match tier {
-                Tier::Free | Tier::Pro | Tier::Studio => {}
+        for plan in Plan::ALL {
+            match plan {
+                Plan::Free | Plan::Subscriber | Plan::MigrationOnly | Plan::Studio => {}
             }
         }
         assert_eq!(
-            Tier::ALL.len(),
-            3,
-            "a variant was added to Tier without being added to Tier::ALL"
+            Plan::ALL.len(),
+            4,
+            "a variant was added to Plan without being added to Plan::ALL"
+        );
+        for support in Support::ALL {
+            match support {
+                Support::Guides
+                | Support::Email2Days
+                | Support::Email1Day
+                | Support::Email30DaysAfterPurchase => {}
+            }
+        }
+        assert_eq!(PLANS.len(), Plan::ALL.len(), "every plan needs a price row");
+        for plan in Plan::ALL {
+            assert!(
+                PLANS.iter().any(|row| row.id == plan),
+                "{} has no row in PLANS, so no surface can price or name it",
+                plan.as_str()
+            );
+        }
+    }
+
+    /// The recurring ladder has to climb, or the plans are three names for
+    /// one product. `MigrationOnly` is left out on purpose: its allowance is
+    /// the rung bought rather than a place on this ladder.
+    #[test]
+    fn every_recurring_plan_grants_strictly_more_resources_than_the_one_below() {
+        let ladder = [Plan::Free, Plan::Subscriber, Plan::Studio];
+        let allowances: Vec<u32> = ladder
+            .iter()
+            .map(|plan| plan.capabilities(None).resources_max)
+            .collect();
+        for pair in allowances.windows(2) {
+            assert!(
+                pair[1] > pair[0],
+                "resource allowances must increase: {pair:?}"
+            );
+        }
+    }
+
+    /// A rung is the whole product `migration_only` sells, so the capability
+    /// derivation must carry it rather than round it to a tier.
+    #[test]
+    fn a_catalogue_import_grants_exactly_the_rung_it_was_bought_at() {
+        for rung in IMPORT_LADDER {
+            let caps = Plan::MigrationOnly.capabilities(Some(rung.up_to));
+            assert_eq!(
+                caps.resources_max, rung.up_to,
+                "the {} rung must grant {} resources",
+                rung.price_cents, rung.up_to
+            );
+            assert_eq!(
+                caps.migrations_per_month, rung.up_to,
+                "the rung is also the one migration pass it pays for"
+            );
+        }
+        assert_eq!(
+            Plan::MigrationOnly.capabilities(None).resources_max,
+            0,
+            "a one-off purchase whose price we could not map grants nothing, \
+             rather than silently granting the largest rung"
         );
     }
 
+    /// A plan a checkout can route to must have somewhere to route: either a
+    /// recurring price on its row or the one-off ladder. Studio is the one
+    /// row carrying a price nothing sells, which is what deferring it means.
     #[test]
-    fn every_tier_grants_a_strictly_larger_listing_quota_than_the_one_below() {
-        let quotas: Vec<u32> = Tier::ALL.iter().map(|t| t.quota().listings_max).collect();
-        for pair in quotas.windows(2) {
-            assert!(pair[1] > pair[0], "tier quotas must increase: {pair:?}");
+    fn every_sold_plan_names_a_price_and_the_only_unsold_one_is_studio() {
+        for row in PLANS {
+            let priced = row.monthly_cents.is_some();
+            assert_eq!(
+                priced,
+                row.yearly_cents.is_some(),
+                "{} names one recurring price and not the other",
+                row.id.as_str()
+            );
+            if row.sold {
+                let reachable = priced || row.id == Plan::Free || row.id == Plan::MigrationOnly;
+                assert!(
+                    reachable,
+                    "{} is sold but no price names it",
+                    row.id.as_str()
+                );
+            } else {
+                assert_eq!(
+                    row.id,
+                    Plan::Studio,
+                    "Studio is the only deferred plan; anything else unsold is a pricing \
+                     decision that never reached decisions.md"
+                );
+            }
+        }
+        assert!(
+            PLANS.iter().filter(|row| !row.sold).count() == 1,
+            "exactly one plan is deferred"
+        );
+        assert!(
+            IMPORT_LADDER
+                .windows(2)
+                .all(|pair| pair[1].up_to > pair[0].up_to
+                    && pair[1].price_cents > pair[0].price_cents),
+            "a ladder whose price does not climb with its volume is not a ladder"
+        );
+    }
+
+    /// The one capability the founder ruled is never gated.
+    #[test]
+    fn export_is_granted_on_every_plan() {
+        for plan in Plan::ALL {
+            assert!(
+                plan.capabilities(Some(20)).export,
+                "{} must be able to get its catalogue out",
+                plan.as_str()
+            );
+        }
+    }
+
+    /// Precedence is what decides which of several unexpired grants an
+    /// organisation is served under, so it must be a strict order rather than
+    /// an artefact of declaration order.
+    #[test]
+    fn the_strength_order_is_strict_and_free_is_the_floor() {
+        let mut strengths: Vec<u8> = Plan::ALL.iter().map(|plan| plan.strength()).collect();
+        let ordered = strengths.clone();
+        strengths.sort_unstable();
+        strengths.dedup();
+        assert_eq!(
+            strengths, ordered,
+            "Plan::ALL is ordered weakest first and no two plans tie"
+        );
+        assert_eq!(Plan::Free.strength(), 0, "no grant is the weakest position");
+    }
+
+    /// The spelling crosses the wire, the database CHECK and the generated
+    /// client, so the three renderings have to agree.
+    #[test]
+    fn a_plans_spelling_round_trips_through_its_wire_name() {
+        for plan in Plan::ALL {
+            assert_eq!(Plan::parse(plan.as_str()), Some(plan));
+            assert_eq!(
+                serde_json::to_string(&plan).expect("a plan serialises"),
+                format!("\"{}\"", plan.as_str()),
+                "serde and as_str must spell a plan the same way"
+            );
+        }
+        assert_eq!(
+            Plan::parse("pro"),
+            None,
+            "a spelling this build does not know is refused rather than downgraded"
+        );
+        for support in Support::ALL {
+            assert_eq!(
+                serde_json::to_string(&support).expect("a support level serialises"),
+                format!("\"{}\"", support.as_str())
+            );
         }
     }
 

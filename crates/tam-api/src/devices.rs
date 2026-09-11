@@ -27,13 +27,14 @@ use axum::Json;
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
 use tam_domain::entitlement::Claims;
-use tam_domain::ENTITLEMENT_GRACE_HOURS;
+use tam_limits::Plan;
 use tam_storage::{
-    ConnectionFactsRepo, DeviceRecord, DeviceRegistration, DeviceRepo, DeviceSessionRecord,
-    DeviceSessionReport, DeviceSessionStatus,
+    ConnectionFactsRepo, ConnectionRepo, DeviceRecord, DeviceRegistration, DeviceRepo,
+    DeviceSessionRecord, DeviceSessionReport, DeviceSessionStatus,
 };
 use tam_types::{Marketplace, OrgId, Timestamp, TransportClass};
 
+use crate::entitlement::{quota_refusal, QuotaKind};
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::{AppState, OrgContext};
 
@@ -374,6 +375,36 @@ pub(crate) async fn declare_authorship(
              server-side and no device composes a write to declare authorship on"
         )));
     }
+    // The plan's marketplace allowance binds here, because this is the act
+    // that adopts a marketplace: a seller declares who authored what they
+    // publish, once per connection, and nothing else on this surface is a
+    // seller saying "I sell here". Marketplaces this organisation already
+    // has a live connection for never count against it, so a re-declaration
+    // is never refused.
+    let connected: Vec<Marketplace> = ConnectionRepo::new(state.pool.clone())
+        .list(context.org, (state.wall)())
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?
+        .into_iter()
+        .filter(|row| row.state != "revoked")
+        .map(|row| row.marketplace)
+        .collect();
+    let mut distinct: Vec<Marketplace> = Vec::new();
+    for held in connected {
+        if !distinct.contains(&held) {
+            distinct.push(held);
+        }
+    }
+    let caps = context.entitlement.caps;
+    if !distinct.contains(&marketplace)
+        && distinct.len() >= usize::try_from(caps.marketplaces_max).unwrap_or(usize::MAX)
+    {
+        return Err(quota_refusal(
+            QuotaKind::Marketplaces,
+            i64::try_from(distinct.len()).unwrap_or(i64::MAX),
+            u64::from(caps.marketplaces_max),
+        ));
+    }
     let name = bounded("an authorship name", &body.name, AUTHORSHIP_MAX_CHARS)?;
     let record = ConnectionFactsRepo::new(state.pool.clone())
         .declare_authorship(context.org, marketplace, name, (state.wall)())
@@ -398,7 +429,27 @@ pub(crate) async fn register(
         arch: bounded("an architecture", &body.arch, FACET_MAX_CHARS)?,
         app_version: bounded("an application version", &body.app_version, FACET_MAX_CHARS)?,
     };
-    let record = DeviceRepo::new(state.pool.clone())
+    // One computer per device row, and the plan says how many. Revoked
+    // devices are excluded: a machine the seller signed out is in the record
+    // rather than in the allowance.
+    let devices = DeviceRepo::new(state.pool.clone());
+    let held = devices
+        .list(context.org)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?;
+    let live = held
+        .iter()
+        .filter(|record| record.revoked_at.is_none() && record.id != registration.id)
+        .count();
+    let caps = context.entitlement.caps;
+    if live >= usize::try_from(caps.devices_max).unwrap_or(usize::MAX) {
+        return Err(quota_refusal(
+            QuotaKind::Devices,
+            i64::try_from(live).unwrap_or(i64::MAX),
+            u64::from(caps.devices_max),
+        ));
+    }
+    let record = devices
         .register(context.org, &registration, (state.wall)())
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
@@ -434,7 +485,14 @@ pub(crate) async fn heartbeat(
     let entitlement = if beat.revoked() {
         None
     } else {
-        mint_entitlement(&state, context.org, device, now).await?
+        mint_entitlement(
+            &state,
+            context.org,
+            context.entitlement.grant.plan,
+            device,
+            now,
+        )
+        .await?
     };
     Ok(Json(HeartbeatView {
         revoked: beat.revoked(),
@@ -463,6 +521,7 @@ pub(crate) async fn heartbeat(
 async fn mint_entitlement(
     state: &AppState,
     org: OrgId,
+    plan: Plan,
     device: &str,
     now: Timestamp,
 ) -> Result<Option<String>, APIError> {
@@ -470,7 +529,7 @@ async fn mint_entitlement(
         return Ok(None);
     };
     let marketplaces = DeviceRepo::new(state.pool.clone())
-        .entitled_marketplaces(org, device, ENTITLEMENT_GRACE_HOURS)
+        .entitled_marketplaces(org, device)
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
     if marketplaces.is_empty() {
@@ -480,6 +539,7 @@ async fn mint_entitlement(
         org.0.to_hyphenated(),
         device.to_owned(),
         marketplaces,
+        plan,
         now.0.div_euclid(MILLIS_PER_SEC),
     );
     encode(&Header::new(Algorithm::EdDSA), &claims, &key.signing_key())

@@ -58,6 +58,27 @@ async fn provision(pool: &PgPool) {
             .execute(pool)
             .await
             .expect("the org seeds");
+        // The unpaged listing's own ceiling is what this file measures, and
+        // it sits above every plan's allowance but one: the fixture tenant
+        // holds the unbounded plan so the store's bound is the one reached.
+        // The plan's own allowance has its own test beside it.
+        tam_storage::EntitlementRepo::new(pool.clone())
+            .grant(
+                org,
+                &tam_storage::NewGrant {
+                    id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
+                    plan: tam_limits::Plan::Studio,
+                    rung: None,
+                    granted_by: tam_storage::GrantedBy::Operator,
+                    grantor_user: None,
+                    reason: Some("the template suite's fixture tenant"),
+                    source_ref: None,
+                    granted_at: Timestamp(1_000),
+                    expires_at: None,
+                },
+            )
+            .await
+            .expect("the fixture grant seeds");
     }
     let sessions = SessionRepo::new(pool.clone());
     for (org, user, email, token) in [
@@ -628,5 +649,47 @@ async fn the_shelf_fills_at_the_ceiling_the_unpaged_listing_rests_on(pool: PgPoo
             .any(|message| message.contains(&TEMPLATES_PER_ORG_MAX.to_string())),
         "the refusal states the ceiling it applied, which is what bounds an answer \
          that has no cursor: {messages:?}"
+    );
+}
+
+/// The plan's own template allowance, which is a different bound from the
+/// store ceiling the test above reaches: a seller on Free may save one.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_plan_that_allows_one_template_refuses_the_second(pool: PgPool) {
+    provision(&pool).await;
+    let mut tx = pool.begin().await.expect("the transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the pin applies");
+    sqlx::query("DELETE FROM entitlement_grant WHERE org_id = $1")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+        .execute(&mut *tx)
+        .await
+        .expect("the fixture grant is withdrawn");
+    tx.commit().await.expect("the withdrawal commits");
+
+    let first = call(
+        &pool,
+        Method::POST,
+        "/v1/templates",
+        &TOKEN_A,
+        Some(serde_json::json!({ "name": "Fractions", "draft": draft() })),
+    )
+    .await;
+    assert_eq!(first.status, StatusCode::CREATED, "the first one fits");
+    let second = call(
+        &pool,
+        Method::POST,
+        "/v1/templates",
+        &TOKEN_A,
+        Some(serde_json::json!({ "name": "Reading", "draft": draft() })),
+    )
+    .await;
+    assert_eq!(
+        second.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "and the second meets the plan rather than the store's hundred"
     );
 }

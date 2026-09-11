@@ -36,7 +36,7 @@ use crate::device::DeviceId;
 /// The audience and issuer every accepted token must name, and the claim set
 /// itself, re-exported from the crate that defines them so this module's own
 /// surface is unchanged by where they live.
-pub use tam_domain::entitlement::{Claims, AUDIENCE, ISSUER};
+pub use tam_domain::entitlement::{Claims, Plan, AUDIENCE, ISSUER};
 
 /// Ed25519 public keys are thirty-two bytes.
 pub const PUBLIC_KEY_BYTES: usize = 32;
@@ -340,6 +340,7 @@ pub(crate) mod testing {
             "org-1".to_owned(),
             device().as_str().to_owned(),
             marketplaces,
+            super::Plan::Subscriber,
             issued_at,
         )
     }

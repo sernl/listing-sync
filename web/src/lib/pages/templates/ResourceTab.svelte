@@ -4,6 +4,7 @@
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
 	import FacetPicker from '$lib/FacetPicker.svelte';
+	import { entitlementRead, limitOf } from '$lib/entitlement-read';
 	import Field from '$lib/Field.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
@@ -39,6 +40,11 @@
 		queryKey: templateKeys.all,
 		queryFn: () => templates.list()
 	}));
+
+	// The same figure the page header's control reads, so the two "New
+	// template" controls cannot disagree about whether one more will fit.
+	const plan = createQuery(() => entitlementRead);
+	const capped = $derived(limitOf(plan.data, 'templates'));
 
 	// The same controlled lists the create form renders, so a template's
 	// starting points are chosen from the marketplace's own vocabulary rather
@@ -308,7 +314,15 @@
 	{/if}
 	<Placeholder icon="layout-template" headline={EMPTY_HEADING} body={EMPTY_BODY}>
 		{#snippet actions()}
-			<Button tier="primary" icon="circle-plus" onclick={blank}>New template</Button>
+			<Button
+				tier="primary"
+				icon="circle-plus"
+				disabled={capped !== null}
+				reason={capped ?? undefined}
+				onclick={blank}
+			>
+				New template
+			</Button>
 		{/snippet}
 	</Placeholder>
 {/if}

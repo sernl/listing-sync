@@ -363,11 +363,23 @@ export const FILE_ROLES: readonly FileRole[] = [
 
 export type QuotaKind =
   | "listings_max"
-  | "storage_bytes_max";
+  | "storage_bytes_max"
+  | "marketplaces_max"
+  | "migrations_per_month"
+  | "templates_max"
+  | "labels_max"
+  | "devices_max"
+  | "plan_feature";
 
 export const QUOTA_KINDS: readonly QuotaKind[] = [
   "listings_max",
   "storage_bytes_max",
+  "marketplaces_max",
+  "migrations_per_month",
+  "templates_max",
+  "labels_max",
+  "devices_max",
+  "plan_feature",
 ];
 
 export type NativeDirection =
@@ -534,4 +546,46 @@ export const JOB_EVENT_KINDS: readonly JobEventKind[] = [
   "ItemBindAnomaly",
   "ImportPageApplied",
   "ImportCompleted",
+];
+
+export type Plan =
+  | "free"
+  | "migration_only"
+  | "subscriber"
+  | "studio";
+
+export const PLAN_IDS: readonly Plan[] = [
+  "free",
+  "migration_only",
+  "subscriber",
+  "studio",
+];
+
+export type SupportLevel =
+  | "guides"
+  | "email_2_days"
+  | "email_1_day"
+  | "email_30_days_after_purchase";
+
+export const SUPPORT_LEVELS: readonly SupportLevel[] = [
+  "guides",
+  "email_2_days",
+  "email_1_day",
+  "email_30_days_after_purchase",
+];
+
+export type AiStatus =
+  | "coming_soon";
+
+export const AI_STATUSES: readonly AiStatus[] = [
+  "coming_soon",
+];
+
+export type GrantedBy =
+  | "paddle"
+  | "operator";
+
+export const GRANTED_BY: readonly GrantedBy[] = [
+  "paddle",
+  "operator",
 ];

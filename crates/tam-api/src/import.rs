@@ -37,6 +37,7 @@ use tam_types::{
     SystemComponent, Timestamp, TransportClass, Uuid,
 };
 
+use crate::entitlement::feature_refusal;
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::jobs::{missing, storage_fault, validation};
 use crate::{AppState, OrgContext};
@@ -79,6 +80,15 @@ pub(crate) async fn import_page(
     Path((_version, device)): Path<(String, String)>,
     Json(page): Json<ImportPage>,
 ) -> Result<(StatusCode, Json<ImportAck>), APIError> {
+    // Before the blob check, because a plan that does not read shops is a
+    // refusal the seller can act on and a missing object store is not.
+    if !context.entitlement.caps.import_marketplace {
+        return Err(feature_refusal(
+            "import_marketplace",
+            "Your plan does not include reading your shop. Upgrade to import from a \
+             marketplace.",
+        ));
+    }
     let blobs = state.blobs.clone().ok_or_else(|| {
         APIError::new(
             StatusCode::SERVICE_UNAVAILABLE,

@@ -361,47 +361,53 @@ async fn a_revoked_device_is_told_so_and_granted_nothing(pool: PgPool) {
     );
 }
 
-// T3
+// T3. The lapse is read off `entitlement_grant` rather than off Paddle's
+// recorded status: the grace is folded into the grant's own expiry when the
+// webhook writes it, so what the device gate asks is "does this organisation
+// hold a live grant", and an organisation that has held one and holds none
+// now is the lapsed case.
 #[sqlx::test(migrations = "../tam-storage/migrations")]
-async fn a_plan_that_lapsed_past_the_grace_is_granted_nothing(pool: PgPool) {
+async fn a_plan_that_lapsed_is_granted_nothing(pool: PgPool) {
     let (key, _public) = key_pair();
     entitled_device(&pool, &key).await;
     pinned(
         &pool,
         ORG_A,
-        "INSERT INTO billing_subscription (org_id, paddle_subscription_id, paddle_customer_id, \
-         status, current_period_end, occurred_at, updated_at) \
-         VALUES ($1, 'sub_1', 'ctm_1', 'canceled', now() - interval '48 hours', now(), now())",
+        "INSERT INTO entitlement_grant \
+         (org_id, id, plan, granted_by, source_ref, granted_at, expires_at) \
+         VALUES ($1, gen_random_uuid(), 'subscriber', 'paddle', 'sub_1', \
+                 now() - interval '40 days', now() - interval '1 hour')",
     )
     .await;
 
     let view = beat(&pool, Some(key), &TOKEN_A, LAPTOP).await.view();
     assert_eq!(
         view.entitlement, None,
-        "what blocks is a plan that lapsed and stayed lapsed past D11's grace"
+        "a subscription whose grant has run out stops granting the device any work"
     );
 }
 
 // T3, the other half: the fact that an organisation which never subscribed is
 // entitled is the one most easily broken by a predicate written the other way
-// round, and T1 already asserts it -- ORG_A has no billing row at all there.
+// round, and T1 already asserts it -- ORG_A has no grant at all there.
 #[sqlx::test(migrations = "../tam-storage/migrations")]
-async fn a_plan_inside_its_grace_still_grants(pool: PgPool) {
+async fn a_plan_still_inside_its_expiry_grants(pool: PgPool) {
     let (key, _public) = key_pair();
     entitled_device(&pool, &key).await;
     pinned(
         &pool,
         ORG_A,
-        "INSERT INTO billing_subscription (org_id, paddle_subscription_id, paddle_customer_id, \
-         status, current_period_end, occurred_at, updated_at) \
-         VALUES ($1, 'sub_1', 'ctm_1', 'canceled', now() - interval '1 hour', now(), now())",
+        "INSERT INTO entitlement_grant \
+         (org_id, id, plan, granted_by, source_ref, granted_at, expires_at) \
+         VALUES ($1, gen_random_uuid(), 'subscriber', 'paddle', 'sub_1', \
+                 now() - interval '10 days', now() + interval '20 days')",
     )
     .await;
 
     let view = beat(&pool, Some(key), &TOKEN_A, LAPTOP).await.view();
     assert!(
         view.entitlement.is_some(),
-        "a plan that lapsed an hour ago is inside the twenty-four the grace allows"
+        "a live grant is what lets the device work between check-ins"
     );
 }
 
@@ -548,7 +554,7 @@ async fn the_repository_grants_nothing_for_another_tenants_device(pool: PgPool) 
     let devices = tam_storage::DeviceRepo::new(pool.clone());
 
     let mine = devices
-        .entitled_marketplaces(ORG_A, LAPTOP, tam_domain::ENTITLEMENT_GRACE_HOURS)
+        .entitled_marketplaces(ORG_A, LAPTOP)
         .await
         .expect("the read runs");
     assert!(
@@ -558,7 +564,7 @@ async fn the_repository_grants_nothing_for_another_tenants_device(pool: PgPool) 
     );
 
     let theirs = devices
-        .entitled_marketplaces(ORG_B, LAPTOP, tam_domain::ENTITLEMENT_GRACE_HOURS)
+        .entitled_marketplaces(ORG_B, LAPTOP)
         .await
         .expect("the read runs");
     assert!(

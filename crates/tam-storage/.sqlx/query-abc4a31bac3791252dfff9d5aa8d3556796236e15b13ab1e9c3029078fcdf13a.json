@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, plan, rung, granted_by, grantor_user, reason, source_ref, granted_at, expires_at, revoked_at FROM entitlement_grant WHERE org_id = $1 ORDER BY granted_at DESC, id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "plan",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "rung",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "granted_by",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "grantor_user",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "reason",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "source_ref",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "granted_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 8,
+        "name": "expires_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "revoked_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "abc4a31bac3791252dfff9d5aa8d3556796236e15b13ab1e9c3029078fcdf13a"
+}

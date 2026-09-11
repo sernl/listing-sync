@@ -8,6 +8,9 @@ publish = false
 # The ledger vocabulary the device exchanges is defined once and derived
 # here, so the wire shapes and the domain types cannot drift apart.
 serde = { version = "1", features = ["derive"] }
+# The plan vocabulary the entitlement token carries, defined once where the
+# capability table is.
+tam-limits      = { path = "../tam-limits" }
 tam-marketplace = { path = "../tam-marketplace" }
 tam-types       = { path = "../tam-types" }
 

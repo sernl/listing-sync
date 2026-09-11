@@ -432,3 +432,241 @@ async fn the_read_is_closed_to_a_session_that_does_not_resolve(pool: PgPool) {
         "the read is org-scoped like every sibling, so no session is no answer"
     );
 }
+
+// ------------------------------------------------------- grants from Paddle
+
+/// How many grant rows one organisation holds, counted through the tenant
+/// pin the policies demand: an unpinned statement matches nothing, which
+/// would make every count in this file a vacuous zero.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn grants_held(pool: &PgPool, org: OrgId) -> i64 {
+    let mut tx = pool.begin().await.expect("the transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(org.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the pin applies");
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM entitlement_grant WHERE org_id = $1")
+        .bind(uuid::Uuid::from_bytes(org.0 .0))
+        .fetch_one(&mut *tx)
+        .await
+        .expect("the count runs");
+    rows
+}
+
+/// The price map a deployment would be started with: one recurring price and
+/// one rung of the Catalogue Import ladder.
+fn price_map() -> tam_api::PriceMap {
+    tam_api::PriceMap::parse(
+        r#"{
+             "pri_subscriber_monthly": { "plan": "subscriber" },
+             "pri_rung_50": { "plan": "migration_only", "rung": 50 }
+           }"#,
+    )
+    .unwrap_or_default()
+}
+
+fn priced_state(pool: PgPool) -> AppState {
+    let mut built = state(pool, Some(SECRET));
+    built.config.paddle_price_map = price_map();
+    built
+}
+
+/// One `transaction.completed` as Paddle v2 renders it: the price lives on
+/// the line item, the organisation in `custom_data`, and the transaction's
+/// own identifier is what the grant is attributed to.
+fn transaction(org: OrgId, price: &str) -> String {
+    serde_json::json!({
+        "event_id": "evt_02",
+        "event_type": "transaction.completed",
+        "occurred_at": "2027-01-15T00:00:00.000000Z",
+        "data": {
+            "id": "txn_01",
+            "status": "completed",
+            "items": [{ "price": { "id": price }, "quantity": 1 }],
+            "custom_data": { ORG_CUSTOM_DATA_KEY: org.0.to_hyphenated() }
+        }
+    })
+    .to_string()
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn post_priced_webhook(pool: PgPool, body: &str) -> StatusCode {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/billing/webhook")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("Paddle-Signature", sign(NOW_SECS, body, SECRET))
+        .body(Body::from(body.to_owned()))
+        .expect("the request builds");
+    router(priced_state(pool))
+        .oneshot(request)
+        .await
+        .expect("the router serves")
+        .status()
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn read_entitlement(pool: PgPool, token: &SessionToken) -> serde_json::Value {
+    let request = Request::builder()
+        .uri("/v1/entitlement")
+        .header(
+            header::COOKIE,
+            format!("{SESSION_COOKIE}={}", token.to_hex()),
+        )
+        .body(Body::empty())
+        .expect("the request builds");
+    let response = router(priced_state(pool))
+        .oneshot(request)
+        .await
+        .expect("the router serves");
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "the entitlement read answers the session that asked"
+    );
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body collects")
+        .to_bytes();
+    serde_json::from_slice(&body).expect("the answer is the entitlement shape")
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_entitling_subscription_grants_the_subscriber_plan(pool: PgPool) {
+    provision(&pool).await;
+    let body = notification(
+        ORG_A,
+        "subscription.created",
+        "active",
+        "2027-01-15T00:00:00Z",
+    );
+    assert_eq!(
+        post_priced_webhook(pool.clone(), &body).await,
+        StatusCode::OK
+    );
+
+    let held = read_entitlement(pool.clone(), &TOKEN_A).await;
+    assert_eq!(held["plan"], "subscriber");
+    assert_eq!(held["granted_by"], "paddle");
+    assert_eq!(
+        held["capabilities"]["resources_max"], 400,
+        "the plan's capabilities are what the Account page reads back"
+    );
+    assert_eq!(
+        read_entitlement(pool, &TOKEN_B).await["plan"],
+        "free",
+        "the grant lands on the organisation the signed payload named and no other"
+    );
+}
+
+/// A renewal stream must renew one grant rather than pile up a row per
+/// delivery, because `subscription.updated` arrives on every card change.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_repeated_subscription_event_renews_one_grant(pool: PgPool) {
+    provision(&pool).await;
+    for event in ["subscription.created", "subscription.updated"] {
+        let body = notification(ORG_A, event, "active", "2027-01-15T00:00:00Z");
+        assert_eq!(
+            post_priced_webhook(pool.clone(), &body).await,
+            StatusCode::OK
+        );
+    }
+    let rows = grants_held(&pool, ORG_A).await;
+    assert_eq!(rows, 1, "two deliveries of one subscription are one grant");
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_cancellation_lets_the_grant_run_to_the_period_end(pool: PgPool) {
+    provision(&pool).await;
+    let live = notification(
+        ORG_A,
+        "subscription.created",
+        "active",
+        "2027-01-15T00:00:00Z",
+    );
+    assert_eq!(
+        post_priced_webhook(pool.clone(), &live).await,
+        StatusCode::OK
+    );
+    let gone = notification(
+        ORG_A,
+        "subscription.canceled",
+        "canceled",
+        "2027-01-16T00:00:00Z",
+    );
+    assert_eq!(
+        post_priced_webhook(pool.clone(), &gone).await,
+        StatusCode::OK
+    );
+
+    let held = read_entitlement(pool, &TOKEN_A).await;
+    assert_eq!(
+        held["plan"], "subscriber",
+        "a cancelled subscription keeps entitling until the period it was paid for ends"
+    );
+    assert_eq!(
+        held["expires_at"],
+        serde_json::json!(1_802_649_600_000_i64),
+        "and the expiry is the period end Paddle named, with no grace added to a \
+         cancellation the seller chose"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_completed_one_off_grants_the_rung_its_price_names(pool: PgPool) {
+    provision(&pool).await;
+    let body = transaction(ORG_A, "pri_rung_50");
+    assert_eq!(
+        post_priced_webhook(pool.clone(), &body).await,
+        StatusCode::OK
+    );
+
+    let held = read_entitlement(pool.clone(), &TOKEN_A).await;
+    assert_eq!(held["plan"], "migration_only");
+    assert_eq!(held["rung"], 50);
+    assert_eq!(held["expires_at"], serde_json::Value::Null);
+    assert_eq!(
+        held["capabilities"]["resources_max"], 50,
+        "the rung bought is the resource allowance"
+    );
+    assert_eq!(
+        held["capabilities"]["edit_days_after_purchase"], 30,
+        "and the thirty-day edit window rides on the plan rather than on the grant"
+    );
+
+    // A retried delivery of one purchase must not grant twice.
+    assert_eq!(
+        post_priced_webhook(pool.clone(), &body).await,
+        StatusCode::OK
+    );
+    let rows = grants_held(&pool, ORG_A).await;
+    assert_eq!(rows, 1, "a replayed transaction is the same purchase");
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_price_the_map_does_not_know_grants_nothing(pool: PgPool) {
+    provision(&pool).await;
+    let body = transaction(ORG_A, "pri_a_rung_nobody_configured");
+    assert_eq!(
+        post_priced_webhook(pool.clone(), &body).await,
+        StatusCode::OK,
+        "Paddle is acknowledged, because refusing would have it retry forever"
+    );
+    assert_eq!(
+        read_entitlement(pool, &TOKEN_A).await["plan"],
+        "free",
+        "and nothing is granted, rather than the largest rung being guessed at"
+    );
+}

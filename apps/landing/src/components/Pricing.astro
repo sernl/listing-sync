@@ -1,12 +1,24 @@
 ---
 import Tick from './Tick.astro';
 import { loginUrl, supportEmail } from '../site.js';
-import { founding, importLadder, importLadderNote, rungCap, rungPrice, subscription } from '../pricing.js';
+import {
+	dollars,
+	FOUNDING,
+	importLadder,
+	importLadderNote,
+	planFeatures,
+	rungCap,
+	rungPrice,
+	subscription,
+	subscriptionCadence
+} from '../pricing.js';
 
 /* The two ways to start, and the founding offer beside them. One component
    draws both `/` and `/pricing`: `detail` is what the fuller page adds, which
    is the subscription's own figures and a join button in place of the link to
-   itself. Every number comes from `src/pricing.js`. */
+   itself. Every number comes from the server's plan table by way of
+   `src/pricing.js`, and the one plan that table holds unsold (`studio`) is
+   rendered nowhere. */
 
 const { level = 2, detail = false } = Astro.props;
 const Heading = level === 1 ? 'h1' : 'h2';
@@ -31,7 +43,7 @@ const askHref = supportEmail ? `mailto:${supportEmail}` : '/pricing/#founding';
 				<div class="ladder">
 					{
 						importLadder.map((rung) =>
-							rung.price === undefined ? (
+							rung.price_cents === undefined ? (
 								<a class="rung ask" href={askHref}>
 									<span class="cap">{rungCap(rung)}</span>
 									<span class="amount">{rungPrice(rung)}</span>
@@ -49,13 +61,13 @@ const askHref = supportEmail ? `mailto:${supportEmail}` : '/pricing/#founding';
 			</div>
 
 			<div class="way">
-				<h3>2. {subscription.name} <span class="cadence">({subscription.cadence})</span></h3>
+				<h3>2. {subscription.name} <span class="cadence">({subscriptionCadence})</span></h3>
 				<p>Manage, update and distribute your catalogue across multiple marketplaces.</p>
 				{/* A tick beside a line that is not built yet would claim it is.
 				    The one coming-soon line takes a hollow mark instead. */}
 				<div class="chips">
 					{
-						subscription.features.map((feature) => (
+						planFeatures(subscription).map((feature) => (
 							<span class="chip">
 								{
 									feature.soon ? (
@@ -76,8 +88,8 @@ const askHref = supportEmail ? `mailto:${supportEmail}` : '/pricing/#founding';
 				{
 					detail && (
 						<p class="price">
-							${subscription.monthly}
-							<span class="per"> a month, or ${subscription.yearly} a year</span>
+							{dollars(subscription.monthly_cents)}
+							<span class="per"> a month, or {dollars(subscription.yearly_cents)} a year</span>
 						</p>
 					)
 				}
@@ -101,10 +113,10 @@ const askHref = supportEmail ? `mailto:${supportEmail}` : '/pricing/#founding';
 					<h3>Founding 100</h3>
 				</div>
 				<ul>
-					<li><strong>{founding.discountYearOne}% off Year 1</strong></li>
-					<li>{founding.discountOngoing}% off for {founding.ongoingYears} years after</li>
-					<li>First {founding.freeImports} resources imported free</li>
-					<li>Only {founding.places} places available.</li>
+					<li><strong>{FOUNDING.discount_year_one_pct}% off Year 1</strong></li>
+					<li>{FOUNDING.discount_ongoing_pct}% off for {FOUNDING.ongoing_years} years after</li>
+					<li>First {FOUNDING.free_imports} resources imported free</li>
+					<li>Only {FOUNDING.places} places available.</li>
 				</ul>
 				<a class="btn" href={detail ? loginUrl : '/pricing/#founding'}>
 					{detail ? 'Join the Founding 100' : 'Learn more'}

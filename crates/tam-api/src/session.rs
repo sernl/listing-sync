@@ -7,9 +7,10 @@
 
 use axum::extract::FromRequestParts;
 use axum::http::{header, request::Parts, StatusCode};
-use tam_storage::{NewTenant, OperatorRepo, SessionRepo, SessionToken};
+use tam_storage::{EntitlementRepo, NewTenant, OperatorRepo, SessionRepo, SessionToken};
 use tam_types::{OrgId, Timestamp, UserId};
 
+use crate::entitlement::Entitlement;
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::AppState;
 
@@ -17,11 +18,23 @@ use crate::AppState;
 /// serving deployment's to set when it mints; the API only ever reads.
 pub const SESSION_COOKIE: &str = "tam_session";
 
-/// Who an authenticated request speaks for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Who an authenticated request speaks for, and what their plan allows.
+///
+/// The entitlement is resolved here rather than by each handler, because
+/// here is the only place every authenticated request passes through: a gate
+/// a handler has to remember to ask for is a gate that is missing from
+/// whichever handler ships next. It costs one indexed read of one
+/// organisation's live grants per request, beside the session resolution
+/// that already happens.
+///
+/// No longer `Copy`: a grant carries the Paddle identifier it came from, and
+/// a heap string is worth more than the convenience of an implicit copy on a
+/// value every handler takes by move anyway.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrgContext {
     pub org: OrgId,
     pub user: UserId,
+    pub entitlement: Entitlement,
 }
 
 /// Pulls the session token out of a Cookie header's pair list, tolerating
@@ -56,13 +69,22 @@ async fn resolve(parts: &Parts, state: &AppState) -> Result<Option<OrgContext>, 
     else {
         return Ok(None);
     };
+    let now = (state.wall)();
     let identity = SessionRepo::new(state.pool.clone())
-        .resolve(&token, (state.wall)())
+        .resolve(&token, now)
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
-    Ok(identity.map(|identity| OrgContext {
+    let Some(identity) = identity else {
+        return Ok(None);
+    };
+    let grant = EntitlementRepo::new(state.pool.clone())
+        .current(identity.org, now)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?;
+    Ok(Some(OrgContext {
         org: identity.org,
         user: identity.user,
+        entitlement: Entitlement::of(grant),
     }))
 }
 
@@ -118,7 +140,7 @@ impl FromRequestParts<AppState> for OperatorContext {
 /// The stream route's authentication: identical resolution, but a missing or
 /// dead session is `Stop` — rendered as a bare 204 — because 401 as a stream
 /// response would permanently halt the client's reconnection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamAuth {
     Live(OrgContext),
     Stop,

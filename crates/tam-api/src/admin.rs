@@ -1,23 +1,39 @@
-//! The operator backoffice: eight reads over the whole platform rather than
-//! one tenant.
+//! The operator backoffice: reads over the whole platform rather than one
+//! tenant, and one write.
 //!
 //! Every route here takes [`OperatorContext`], so the marking is checked
-//! before a handler runs and no route can forget it. Every route is a read.
-//! Nothing here writes app data, and nothing here creates or modifies an
-//! operator: the marking is granted by the `tam-admin` one-shot on the box,
-//! so there is no self-elevation endpoint to attack.
+//! before a handler runs and no route can forget it. Nothing here creates or
+//! modifies an operator: the marking is granted by the `tam-admin` one-shot
+//! on the box, so there is no self-elevation endpoint to attack.
 //!
 //! The cross-tenant queries run on a second pool connected as
-//! `tam_backoffice`, whose whole reach is the SELECT grants and read policies
-//! of migration 0037. A deployment that passes no `--backoffice-db-url`
-//! serves no operator surface at all, rather than half of one.
+//! `tam_backoffice`, whose whole reach is the SELECT grants and read
+//! policies of migrations 0037, 0039, 0060, 0067 and 0069. A deployment that
+//! passes no `--backoffice-db-url` serves no operator surface at all, rather
+//! than half of one.
+//!
+//! The one write is the plan grant, and it does not go through that pool.
+//! `tam_backoffice` holds SELECT and nothing else, deliberately: the reason
+//! every other handler on this surface is safe is that the connection it
+//! holds cannot write across the tenant fence, and granting it INSERT on one
+//! table to shorten one handler would give that property away for all of
+//! them. So `grant_plan` and `revoke_plan` open the application pool with
+//! the target organisation pinned, exactly as a tenant's own write does —
+//! [`OperatorContext`] names no organisation, so the pin is taken from the
+//! path and the write is fenced to it. Read-then-write through two pools is
+//! the visible cost: the organisation is read through the backoffice pool
+//! before the write, so a grant cannot conjure a tenant by naming one.
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use tam_storage::{BackofficeRepo, DailyCount, IdentityAuditRepo, ItemCounts, SignupsRepo};
+use tam_limits::Plan;
+use tam_storage::{
+    BackofficeRepo, DailyCount, EntitlementRepo, Grant, GrantRecord, GrantedBy, IdentityAuditRepo,
+    ItemCounts, NewGrant, SignupsRepo,
+};
 use tam_types::{FailureCode, InventoryId, MappingId, Marketplace, OrgId, Timestamp, Uuid};
 
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
@@ -214,6 +230,68 @@ impl SubscriptionStateView {
     }
 }
 
+/// The entitlement an organisation holds right now, as the operator reads
+/// it.
+///
+/// Every field but `plan` is null for an organisation with no grant, which
+/// is what most organisations are: nobody granted `free`, so naming a
+/// grantor for it would state something false on the panel.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GrantView {
+    pub plan: Plan,
+    pub rung: Option<u32>,
+    pub granted_by: Option<String>,
+    pub granted_at: Option<Timestamp>,
+    pub expires_at: Option<Timestamp>,
+    pub source_ref: Option<String>,
+}
+
+impl GrantView {
+    fn of(grant: Grant) -> Self {
+        Self {
+            plan: grant.plan,
+            rung: grant.rung,
+            granted_by: grant.granted_by.map(|by| by.as_str().to_owned()),
+            granted_at: grant.granted_at,
+            expires_at: grant.expires_at,
+            source_ref: grant.source_ref,
+        }
+    }
+}
+
+/// One grant as recorded, revocations included. The audit trail the design
+/// asks a manual grant to leave.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GrantRecordView {
+    pub id: Uuid,
+    pub plan: Plan,
+    pub rung: Option<u32>,
+    pub granted_by: String,
+    pub grantor_user: Option<Uuid>,
+    pub reason: Option<String>,
+    pub source_ref: Option<String>,
+    pub granted_at: Timestamp,
+    pub expires_at: Option<Timestamp>,
+    pub revoked_at: Option<Timestamp>,
+}
+
+impl GrantRecordView {
+    fn of(record: GrantRecord) -> Self {
+        Self {
+            id: record.id,
+            plan: record.plan,
+            rung: record.rung,
+            granted_by: record.granted_by.as_str().to_owned(),
+            grantor_user: record.grantor_user,
+            reason: record.reason,
+            source_ref: record.source_ref,
+            granted_at: record.granted_at,
+            expires_at: record.expires_at,
+            revoked_at: record.revoked_at,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OrgDetailView {
     pub org: OrgSummaryView,
@@ -223,6 +301,10 @@ pub struct OrgDetailView {
     /// different fact from a cancelled subscription.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subscription: Option<SubscriptionStateView>,
+    /// What the organisation holds now, derived rather than stored.
+    pub plan: GrantView,
+    /// Every grant it has ever held, newest first.
+    pub grants: Vec<GrantRecordView>,
 }
 
 pub(crate) async fn org_detail(
@@ -231,12 +313,32 @@ pub(crate) async fn org_detail(
     Path((_version, org)): Path<(String, String)>,
 ) -> Result<Json<OrgDetailView>, APIError> {
     let org = OrgId(parse_id(&org)?);
-    let detail = BackofficeRepo::new(backoffice(&state)?)
+    Ok(Json(detail_view(&state, org).await?))
+}
+
+/// The org detail, assembled once and answered by three routes: the read,
+/// the grant and the revoke. A grant panel that re-rendered from a different
+/// shape than the one it was loaded with would be two views of one fact.
+async fn detail_view(state: &AppState, org: OrgId) -> Result<OrgDetailView, APIError> {
+    let pool = backoffice(state)?;
+    let detail = BackofficeRepo::new(pool.clone())
         .org(org, (state.wall)())
         .await
-        .map_err(|error| storage_fault(&state, &error))?
+        .map_err(|error| storage_fault(state, &error))?
         .ok_or_else(|| missing("no such organisation"))?;
-    Ok(Json(OrgDetailView {
+    // Through the backoffice pool, like every other read on this surface:
+    // migration 0069 grants it SELECT and a read policy over the grant table
+    // for exactly this panel.
+    let entitlements = EntitlementRepo::new(pool);
+    let held = entitlements
+        .current(org, (state.wall)())
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    let history = entitlements
+        .history(org)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    Ok(OrgDetailView {
         org: OrgSummaryView::of(detail.summary),
         connections: detail
             .connections
@@ -251,14 +353,14 @@ pub(crate) async fn org_detail(
                 updated_at: row.updated_at,
                 // The operator surface does not serve the seller's own
                 // authorship declaration, and `None` says exactly that: the
-                // field is omitted rather than reported as `undeclared`, which
-                // would state something false about every seller. It is the
-                // seller's statement about their own work rather than a fact
-                // about the link, so whether an operator sees it is a founder
-                // decision rather than an oversight. Nothing stands in the way
-                // of taking it: migration 0037 grants this pool table-level
-                // SELECT on `connection` and the backoffice query simply does
-                // not select the two authorship columns.
+                // field is omitted rather than reported as `undeclared`,
+                // which would state something false about every seller. It is
+                // the seller's statement about their own work rather than a
+                // fact about the link, so whether an operator sees it is a
+                // founder decision rather than an oversight. Nothing stands
+                // in the way of taking it: migration 0037 grants this pool
+                // table-level SELECT on `connection` and the backoffice query
+                // simply does not select the two authorship columns.
                 authorship: None,
                 country: (row.marketplace == Marketplace::Tes).then_some(row.country),
             })
@@ -274,7 +376,111 @@ pub(crate) async fn org_detail(
             })
             .collect(),
         subscription: detail.subscription.map(SubscriptionStateView::of),
-    }))
+        plan: GrantView::of(held),
+        grants: history.into_iter().map(GrantRecordView::of).collect(),
+    })
+}
+
+/// What an operator grant says.
+///
+/// `reason` is required and bounded, because an audit row whose reason is
+/// blank answers none of the questions an audit row exists for.
+#[derive(Debug, Deserialize)]
+pub struct GrantPlanBody {
+    pub plan: String,
+    #[serde(default)]
+    pub rung: Option<u32>,
+    #[serde(default)]
+    pub expires_at: Option<Timestamp>,
+    pub reason: String,
+}
+
+/// How long a reason may be. A bound on this route's own input, so it is a
+/// constant beside its caller rather than an entry in `tam-limits`.
+const REASON_MAX_CHARS: usize = 500;
+
+/// The operator sets an organisation's plan.
+///
+/// The write goes through `state.pool` — the application role — with the
+/// target organisation pinned, not through the backoffice pool. The
+/// backoffice role holds SELECT and nothing else by design, and the reason it
+/// holds nothing else is that a connection able to write across tenants is
+/// the one thing no other handler on this surface can accidentally acquire.
+/// Pinning an organisation from a context that deliberately names none is the
+/// price of that, and it is paid here, once, in the open.
+pub(crate) async fn grant_plan(
+    State(state): State<AppState>,
+    operator: OperatorContext,
+    Path((_version, org)): Path<(String, String)>,
+    Json(body): Json<GrantPlanBody>,
+) -> Result<Json<OrgDetailView>, APIError> {
+    let org = OrgId(parse_id(&org)?);
+    // Through the backoffice pool, so a grant cannot create an organisation
+    // by naming one that does not exist.
+    let _known = detail_view(&state, org).await?;
+    let plan = Plan::parse(&body.plan).ok_or_else(|| {
+        validation(&format!(
+            "{} is not a plan; the set is free, subscriber, migration_only and studio",
+            body.plan
+        ))
+    })?;
+    let reason = body.reason.trim();
+    if reason.is_empty() || reason.chars().count() > REASON_MAX_CHARS {
+        return Err(validation(
+            "a manual grant states its reason, in at most five hundred characters",
+        ));
+    }
+    if plan == Plan::MigrationOnly && body.rung.is_none_or(|rung| rung == 0) {
+        return Err(validation(
+            "a migration_only grant names the rung it was bought at, which is its \
+             resource allowance",
+        ));
+    }
+    let now = (state.wall)();
+    EntitlementRepo::new(state.pool.clone())
+        .grant(
+            org,
+            &NewGrant {
+                id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
+                plan,
+                rung: body.rung,
+                granted_by: GrantedBy::Operator,
+                grantor_user: Some(operator.user.0),
+                reason: Some(reason),
+                source_ref: None,
+                granted_at: now,
+                expires_at: body.expires_at,
+            },
+        )
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    Ok(Json(detail_view(&state, org).await?))
+}
+
+/// The operator withdraws a grant they or Paddle made.
+pub(crate) async fn revoke_plan(
+    State(state): State<AppState>,
+    _operator: OperatorContext,
+    Path((_version, org, grant)): Path<(String, String, String)>,
+) -> Result<Json<OrgDetailView>, APIError> {
+    let org = OrgId(parse_id(&org)?);
+    let grant = parse_id(&grant)?;
+    let _known = detail_view(&state, org).await?;
+    let revoked = EntitlementRepo::new(state.pool.clone())
+        .revoke(org, grant, (state.wall)())
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    if !revoked {
+        return Err(missing("no such live grant on that organisation"));
+    }
+    Ok(Json(detail_view(&state, org).await?))
+}
+
+fn validation(message: &str) -> APIError {
+    APIError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        APIErrorEntry::new(message).kind(APIErrorKind::Validation),
+    )
 }
 
 // --------------------------------------------------------------- sync health

@@ -75,6 +75,27 @@ async fn provision(pool: &PgPool) {
             .execute(pool)
             .await
             .expect("the org seeds");
+        // Several devices and several marketplaces per tenant here, so the
+        // fixture holds the plan that allows them: the free allowance is one
+        // of each, and these tests are about the device surface rather than
+        // about the plan gate in front of it.
+        tam_storage::EntitlementRepo::new(pool.clone())
+            .grant(
+                org,
+                &tam_storage::NewGrant {
+                    id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
+                    plan: tam_limits::Plan::Studio,
+                    rung: None,
+                    granted_by: tam_storage::GrantedBy::Operator,
+                    grantor_user: None,
+                    reason: Some("the device suite's fixture tenant"),
+                    source_ref: None,
+                    granted_at: Timestamp(1_000),
+                    expires_at: None,
+                },
+            )
+            .await
+            .expect("the fixture grant seeds");
     }
     let sessions = SessionRepo::new(pool.clone());
     for (org, user, email, token) in [

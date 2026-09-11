@@ -21,7 +21,9 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use tam_storage::{BillingRepo, SubscriptionState};
+use std::collections::BTreeMap;
+use tam_limits::Plan;
+use tam_storage::{BillingRepo, EntitlementRepo, GrantedBy, NewGrant, SubscriptionState};
 use tam_types::{OrgId, Timestamp, Uuid};
 
 use crate::error::{APIError, APIErrorEntry, APIErrorKind};
@@ -42,11 +44,75 @@ const SIGNATURE_HEADER: &str = "Paddle-Signature";
 /// readers.
 pub const ORG_CUSTOM_DATA_KEY: &str = "org";
 
-/// The three subscription events this milestone acts on. Every other event
-/// type Paddle sends is acknowledged and ignored.
+/// The four events this route acts on. Every other event type Paddle sends
+/// is acknowledged and ignored.
 const SUBSCRIPTION_CREATED: &str = "subscription.created";
 const SUBSCRIPTION_UPDATED: &str = "subscription.updated";
 const SUBSCRIPTION_CANCELED: &str = "subscription.canceled";
+const TRANSACTION_COMPLETED: &str = "transaction.completed";
+
+/// The Paddle subscription statuses that carry an entitlement.
+///
+/// Anything else — `past_due`, `paused`, `canceled`, or a status Paddle adds
+/// later — grants nothing, which is the fail-closed direction: a lapsed
+/// subscription stops entitling rather than entitling indefinitely. This is
+/// the one place the Paddle vocabulary is interpreted rather than recorded.
+const ENTITLING: [&str; 2] = ["active", "trialing"];
+
+/// How long a subscription keeps entitling past the period Paddle last
+/// named.
+///
+/// A renewal notification arriving late must not take a paying seller's plan
+/// away between the period ending and the webhook landing. A day is the same
+/// grace the device entitlement token carries, and for the same reason: the
+/// cost of a day of over-entitlement is one day, and the cost of
+/// under-entitlement is a customer locked out of work they paid for.
+const SUBSCRIPTION_GRACE_HOURS: i64 = 24;
+const MILLIS_PER_HOUR: i64 = 3_600_000;
+
+/// Which plan a Paddle price identifier sells.
+///
+/// `rung` is the resource volume a one-off Catalogue Import price buys, and
+/// is absent for a recurring price.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PricedPlan {
+    pub plan: Plan,
+    #[serde(default)]
+    pub rung: Option<u32>,
+}
+
+/// Paddle's price identifiers mapped to what they sell.
+///
+/// Configuration rather than a constant, because a price identifier is
+/// minted in Paddle's dashboard per environment: the sandbox and the live
+/// account name the same product differently, and a table compiled in would
+/// make the binary environment-specific. The server reads it from
+/// `--paddle-price-map`; absent, the map is empty and a one-off purchase is
+/// ignored and logged rather than guessed at.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PriceMap(BTreeMap<String, PricedPlan>);
+
+impl PriceMap {
+    /// Reads the JSON object the `--paddle-price-map` file carries.
+    pub fn parse(raw: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(raw).map(Self)
+    }
+
+    #[must_use]
+    pub fn get(&self, price: &str) -> Option<PricedPlan> {
+        self.0.get(price).copied()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
 
 /// The Paddle notification-webhook secret, held so it cannot reach a log line
 /// or a `Debug` render of the configuration that carries it.
@@ -126,7 +192,7 @@ pub(crate) async fn billing_view(
 ///
 /// Every field below `event_type` and `occurred_at` is optional because
 /// Paddle's payload shape varies by event, and this route is reached by every
-/// event type the notification setting subscribes to — not only the three it
+/// event type the notification setting subscribes to — not only the four it
 /// acts on. Requiring a subscription's fields on an unrelated event would
 /// turn an event we mean to ignore into one we refuse.
 #[derive(Debug, Deserialize)]
@@ -149,12 +215,29 @@ struct NotificationData {
     current_billing_period: Option<BillingPeriod>,
     #[serde(default)]
     custom_data: Option<serde_json::Value>,
+    /// A completed transaction's line items, which is where a one-off
+    /// purchase names the price it was bought at. Absent on every
+    /// subscription event.
+    #[serde(default)]
+    items: Vec<TransactionItem>,
 }
 
 #[derive(Debug, Deserialize)]
 struct BillingPeriod {
     #[serde(default)]
     ends_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TransactionItem {
+    #[serde(default)]
+    price: Option<TransactionPrice>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TransactionPrice {
+    #[serde(default)]
+    id: Option<String>,
 }
 
 /// The organisation this notification speaks for, if it names one we can read.
@@ -240,13 +323,19 @@ fn unreadable() -> APIError {
 /// body extractor rather than `Json` because the signature covers the bytes
 /// as received. Reading them any other way would verify a re-rendering.
 ///
-/// Acknowledged with 200 and no action: an event type this milestone does not
+/// Acknowledged with 200 and no action: an event type this route does not
 /// handle, and an event whose payload names no organisation we can resolve.
-/// Both are ordinary — the notification setting may subscribe to more than
-/// three event types, and a subscription created outside our checkout carries
-/// no `custom_data` of ours. Neither is logged: the payload is Paddle's to
-/// shape, and a log line per unhandled delivery is a disk-filling primitive
-/// handed to whoever can cause one.
+/// Both are ordinary — the notification setting may subscribe to more event
+/// types than the four acted on, and a subscription created outside our
+/// checkout carries no `custom_data` of ours. Neither is logged: the payload
+/// is Paddle's to shape, and a log line per unhandled delivery is a
+/// disk-filling primitive handed to whoever can cause one.
+///
+/// A completed transaction naming a price this deployment's map does not
+/// know is the one ignored case that *is* logged, because it is the one
+/// caused by our own configuration rather than by Paddle's traffic: a rung
+/// added in the dashboard and not in `--paddle-price-map` is a seller who
+/// paid and received nothing, and it must not be silent.
 pub(crate) async fn webhook(
     _version: APIVersion,
     State(state): State<AppState>,
@@ -270,13 +359,16 @@ pub(crate) async fn webhook(
     };
     if !matches!(
         notification.event_type.as_str(),
-        SUBSCRIPTION_CREATED | SUBSCRIPTION_UPDATED | SUBSCRIPTION_CANCELED
+        SUBSCRIPTION_CREATED | SUBSCRIPTION_UPDATED | SUBSCRIPTION_CANCELED | TRANSACTION_COMPLETED
     ) {
         return Ok(StatusCode::OK);
     }
     let Some(org) = org_from(&notification.data) else {
         return Ok(StatusCode::OK);
     };
+    if notification.event_type == TRANSACTION_COMPLETED {
+        return one_off(&state, org, &notification).await;
+    }
     let subscription = state_from(&notification).ok_or_else(unreadable)?;
 
     // The answer is 200 whether the state landed or was declined as stale: a
@@ -286,6 +378,148 @@ pub(crate) async fn webhook(
         .apply(org, &subscription, (state.wall)())
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
+
+    // `billing_subscription` keeps being what its migration says it is — a
+    // record of what Paddle said — and the entitlement is a separate write
+    // beside it. Two facts, two rows: the operator can see that Paddle
+    // reported `past_due` while the grant still runs to the period end, and
+    // neither answer has to be reconstructed from the other.
+    entitle_subscription(&state, org, &notification, &subscription).await?;
+    Ok(StatusCode::OK)
+}
+
+/// The subscription half of the grant write.
+///
+/// An entitling status renews one grant rather than accumulating a row per
+/// delivery: `subscription.updated` arrives on every renewal and every card
+/// change, and a grant per delivery would make the history unreadable within
+/// a month. A cancellation moves the same grant's expiry to the period end,
+/// so the seller keeps what they paid for until it runs out.
+async fn entitle_subscription(
+    state: &AppState,
+    org: OrgId,
+    notification: &Notification,
+    subscription: &SubscriptionState,
+) -> Result<(), APIError> {
+    let entitlements = EntitlementRepo::new(state.pool.clone());
+    let held = entitlements
+        .paddle_grant(org, &subscription.paddle_subscription_id)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?;
+    let entitling = ENTITLING.contains(&subscription.status.as_str());
+    if notification.event_type == SUBSCRIPTION_CANCELED || !entitling {
+        // The period end without the grace: a cancellation is the seller's
+        // own decision, and extending it by a day would keep charging them
+        // nothing for a day they did not ask for.
+        if let Some(grant) = held {
+            let _moved: bool = entitlements
+                .set_expiry(org, grant, subscription.current_period_end)
+                .await
+                .map_err(|error| state.internal(&error.to_string()))?;
+        }
+        return Ok(());
+    }
+    let expires_at = subscription.current_period_end.map(|end| {
+        Timestamp(
+            end.0
+                .saturating_add(SUBSCRIPTION_GRACE_HOURS * MILLIS_PER_HOUR),
+        )
+    });
+    match held {
+        Some(grant) => {
+            let _moved: bool = entitlements
+                .set_expiry(org, grant, expires_at)
+                .await
+                .map_err(|error| state.internal(&error.to_string()))?;
+        }
+        None => entitlements
+            .grant(
+                org,
+                &NewGrant {
+                    id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
+                    plan: Plan::Subscriber,
+                    rung: None,
+                    granted_by: GrantedBy::Paddle,
+                    grantor_user: None,
+                    reason: None,
+                    source_ref: Some(&subscription.paddle_subscription_id),
+                    granted_at: subscription.occurred_at,
+                    expires_at,
+                },
+            )
+            .await
+            .map_err(|error| state.internal(&error.to_string()))?,
+    }
+    Ok(())
+}
+
+/// A completed transaction: the one-off Catalogue Import purchase.
+///
+/// The rung comes from the price identifier rather than from the amount
+/// paid, because an amount is a currency, a discount and a tax decision and
+/// a price identifier is the thing the seller actually chose. The grant
+/// carries no expiry: a catalogue someone paid to import does not stop being
+/// theirs, and the thirty-day edit window is a capability of the plan rather
+/// than the life of the grant.
+async fn one_off(
+    state: &AppState,
+    org: OrgId,
+    notification: &Notification,
+) -> Result<StatusCode, APIError> {
+    let Some(transaction) = notification.data.id.as_deref() else {
+        return Err(unreadable());
+    };
+    let occurred_at = paddle::instant_from_rfc3339(&notification.occurred_at)
+        .map_err(|_unreadable| unreadable())?;
+    let entitlements = EntitlementRepo::new(state.pool.clone());
+    for item in &notification.data.items {
+        let Some(price) = item.price.as_ref().and_then(|price| price.id.as_deref()) else {
+            continue;
+        };
+        let Some(sold) = state.config.paddle_price_map.get(price) else {
+            eprintln!(
+                "tam-api: paddle price {price} is not in the price map, so the completed \
+                 transaction granted nothing"
+            );
+            continue;
+        };
+        if sold.plan != Plan::MigrationOnly {
+            // A recurring price reaching a transaction event is the
+            // subscription's own invoice; the grant for it is written by the
+            // subscription events, and writing a second here would give one
+            // purchase two grants.
+            continue;
+        }
+        // Idempotent on the transaction identifier, because Paddle retries a
+        // delivery it did not hear a 200 for and a replayed purchase must
+        // not grant twice.
+        if entitlements
+            .paddle_grant(org, transaction)
+            .await
+            .map_err(|error| state.internal(&error.to_string()))?
+            .is_some()
+        {
+            return Ok(StatusCode::OK);
+        }
+        entitlements
+            .grant(
+                org,
+                &NewGrant {
+                    id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
+                    plan: Plan::MigrationOnly,
+                    rung: sold.rung,
+                    granted_by: GrantedBy::Paddle,
+                    grantor_user: None,
+                    reason: None,
+                    source_ref: Some(transaction),
+                    granted_at: occurred_at,
+                    expires_at: None,
+                },
+            )
+            .await
+            .map_err(|error| state.internal(&error.to_string()))?;
+        return Ok(StatusCode::OK);
+    }
     Ok(StatusCode::OK)
 }
 

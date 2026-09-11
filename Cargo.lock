@@ -5197,6 +5197,7 @@ version = "0.0.0"
 dependencies = [
  "proptest",
  "serde",
+ "tam-limits",
  "tam-marketplace",
  "tam-types",
 ]
@@ -5281,6 +5282,10 @@ dependencies = [
 [[package]]
 name = "tam-limits"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "tam-marketplace"
@@ -5436,6 +5441,7 @@ dependencies = [
  "sqlx",
  "tam-domain",
  "tam-engine-driver",
+ "tam-limits",
  "tam-marketplace",
  "tam-pipeline",
  "tam-secrets",

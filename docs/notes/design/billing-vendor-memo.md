@@ -115,6 +115,34 @@ The standardwebhooks crate (v1.0.1) was last published 2024-03-04 even though th
 Minimal path: a Polar checkout link, then order and subscription events, then the Polar customer portal.
 Either crate is small enough to vendor the verification logic instead, which keeps the dependency gate closed.
 
+## 3a. What was actually built
+
+The shape above survived contact, with three additions the memo did not anticipate.
+
+**A price map, not a price id.**
+The server is started with `--paddle-price-map <path>`, a JSON object of `"<price_id>": { "plan": "subscriber" }` or `{ "plan": "migration_only", "rung": 50 }`.
+It is configuration rather than a constant because a price identifier is minted per Paddle environment: the sandbox and the live account name the same product differently, and a table compiled into the binary would make the binary environment-specific.
+Absent, the map is empty; a completed one-off transaction then grants nothing and says so on the log, which is the fail-closed direction for a purchase we cannot interpret.
+A malformed map stops the server at startup rather than being half-applied, because the alternative is a seller paying for a rung the running process cannot read.
+
+**A fourth event, `transaction.completed`.**
+The memo's minimal path was the three subscription events, which is correct for a subscription and cannot express the Catalogue Import ladder, where the seller pays once and never again.
+The handler reads `data.items[].price.id`, looks each up in the map, and writes one grant for the first item naming a `migration_only` price.
+The rung comes from the price identifier rather than from the amount paid, because an amount is a currency, a discount and a tax decision, and a price identifier is the thing the seller actually chose.
+The grant is idempotent on `data.id`, the transaction identifier, because Paddle retries any delivery it did not hear a 200 for.
+A recurring price arriving on a transaction event is the subscription's own invoice and is skipped: the grant for it is written by the subscription events, and writing a second here would give one purchase two grants.
+
+**Two tables, not one.**
+`billing_subscription` stays exactly what migration 0038 says it is — a record of what Paddle said, in Paddle's own status vocabulary, stored verbatim.
+Entitlement is a second write beside it, `entitlement_grant` (migration 0069), carrying the plan, the rung, who granted it, why, and when it lapses.
+Keeping them apart is what lets an operator see that Paddle reported `past_due` while the grant still runs to the period end, without either answer having to be reconstructed from the other — and it is what makes an operator grant and a Paddle purchase the same kind of fact, recorded the same way.
+
+The plan an organisation holds is therefore a query rather than a column: the strongest unexpired grant, and `free` where there is none.
+An entitling subscription status (`active` or `trialing`) renews one grant rather than adding a row per delivery, because `subscription.updated` arrives on every renewal and every card change.
+Its expiry is the period end Paddle named plus twenty-four hours of grace, so a renewal notification arriving late cannot take a paying seller's plan away between the period ending and the webhook landing.
+A cancellation moves that same grant's expiry to the period end with no grace added, because a cancellation is the seller's own decision and extending it would give them a day they did not ask for.
+A one-off grant carries no expiry at all: a catalogue someone paid to import does not stop being theirs, and the thirty-day edit window is a capability of the plan rather than the life of the grant.
+
 ## 4. Recommendation
 
 Take Paddle, as merchant of record, at 5% + 50c.

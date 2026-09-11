@@ -29,6 +29,7 @@ use tam_storage::{
 };
 use tam_types::{Timestamp, Uuid};
 
+use crate::entitlement::{quota_refusal, QuotaKind};
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::product::{record_of, DraftInput};
 use crate::session::OrgContext;
@@ -506,7 +507,24 @@ pub(crate) async fn create(
 ) -> Result<(StatusCode, Json<ResourceTemplateView>), APIError> {
     let name = validated_name(&body.name)?;
     validated_draft(&body.draft)?;
-    let written = ResourceTemplateRepo::new(state.pool.clone())
+    // The plan's allowance, checked before the store's own absolute ceiling:
+    // one is what this seller bought and the other is what the listing can
+    // render, and a seller on Free meeting "a hundred templates" would be
+    // told about a bound that is not theirs.
+    let repo = ResourceTemplateRepo::new(state.pool.clone());
+    let held = repo
+        .list(context.org)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    let allowed = usize::try_from(context.entitlement.caps.templates_max).unwrap_or(usize::MAX);
+    if held.len() >= allowed {
+        return Err(quota_refusal(
+            QuotaKind::Templates,
+            i64::try_from(held.len()).unwrap_or(i64::MAX),
+            u64::from(context.entitlement.caps.templates_max),
+        ));
+    }
+    let written = repo
         .create(
             context.org,
             &NewResourceTemplate {

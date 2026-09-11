@@ -4,5 +4,16 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+[dependencies]
+# The plan table is a wire vocabulary as well as a bound, so the rows that
+# answer GET /v1/plans derive their own serialisation rather than being
+# copied into a second struct in the API crate. This is the crate's only
+# dependency and stays so: `just purity` already admits serde to the pure
+# core, so nothing acquires a runtime or a client by depending on limits.
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"
+
 [lints]
 workspace = true

@@ -157,6 +157,26 @@ async fn provision(pool: &PgPool) {
             .execute(pool)
             .await
             .expect("the org seeds");
+        // Analytics is a subscriber capability, so the fixture tenant holds
+        // a subscription: without one every read here would be answered by
+        // the plan gate rather than by the figures it is written to check.
+        tam_storage::EntitlementRepo::new(pool.clone())
+            .grant(
+                org,
+                &tam_storage::NewGrant {
+                    id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
+                    plan: tam_limits::Plan::Subscriber,
+                    rung: None,
+                    granted_by: tam_storage::GrantedBy::Paddle,
+                    grantor_user: None,
+                    reason: None,
+                    source_ref: Some(name),
+                    granted_at: Timestamp(1_000),
+                    expires_at: None,
+                },
+            )
+            .await
+            .expect("the fixture grant seeds");
     }
     let sessions = SessionRepo::new(pool.clone());
     for (org, user, email, token) in [
@@ -383,17 +403,16 @@ async fn lapse_entitlement(pool: &PgPool, org: OrgId) {
         .execute(&mut *tx)
         .await
         .expect("tenant pin applies");
+    // The lapse is a grant that has run out, not a Paddle status: the grace
+    // is folded into the grant's own expiry when the webhook writes it.
     sqlx::query(
-        "INSERT INTO billing_subscription \
-         (org_id, paddle_subscription_id, paddle_customer_id, status, current_period_end, \
-          occurred_at, updated_at) \
-         VALUES ($1, $2, 'ctm_x', 'canceled', now() - interval '30 days', now(), now())",
+        "UPDATE entitlement_grant SET expires_at = now() - interval '30 days' \
+          WHERE org_id = $1",
     )
     .bind(uuid::Uuid::from_bytes(org.0 .0))
-    .bind(format!("sub_{}", org.0 .0[0]))
     .execute(&mut *tx)
     .await
-    .expect("the lapsed subscription seeds");
+    .expect("the grant lapses");
     tx.commit().await.expect("the fixture commits");
 }
 
@@ -632,5 +651,42 @@ async fn an_unstorable_instant_costs_its_own_row_and_no_other(pool: PgPool) {
         metrics.get("sales_count"),
         Some(&1.0),
         "and the unstorable one is simply absent rather than recorded at some other instant"
+    );
+}
+
+/// The gate itself: a plan that does not include analytics is refused
+/// server-side, not merely hidden in the console's rail.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_plan_without_analytics_is_refused_the_summary(pool: PgPool) {
+    provision(&pool).await;
+    let mut tx = pool.begin().await.expect("the transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the pin applies");
+    sqlx::query("DELETE FROM entitlement_grant WHERE org_id = $1")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+        .execute(&mut *tx)
+        .await
+        .expect("the fixture grant is withdrawn");
+    tx.commit().await.expect("the withdrawal commits");
+
+    let request = Request::builder()
+        .uri("/v1/analytics/summary")
+        .header(
+            header::COOKIE,
+            format!("{SESSION_COOKIE}={}", TOKEN_A.to_hex()),
+        )
+        .body(Body::empty())
+        .expect("the request builds");
+    let response = router(state(pool))
+        .oneshot(request)
+        .await
+        .expect("the router serves");
+    assert_eq!(
+        response.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "hiding the section in the rail is courtesy; the refusal is the fence"
     );
 }

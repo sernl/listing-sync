@@ -10,6 +10,7 @@
 	import CrossListDialog from '$lib/CrossListDialog.svelte';
 	import DeleteDialog from '$lib/DeleteDialog.svelte';
 	import Field from '$lib/Field.svelte';
+	import { entitlementRead, featureOf, limitOf } from '$lib/entitlement-read';
 	import Icon from '$lib/Icon.svelte';
 	import {
 		WORK_RUNS,
@@ -63,6 +64,13 @@
 		'Copying a resource needs each file’s hash, which the product view does not serve.';
 
 	const queryClient = useQueryClient();
+
+	// The plan, from the cache the shell filled. Both controls in the empty
+	// board start something the server will refuse at the cap, so the refusal
+	// is stated on the control rather than after the form.
+	const plan = createQuery(() => entitlementRead);
+	const createRefusal = $derived(limitOf(plan.data, 'resources'));
+	const importRefusal = $derived(featureOf(plan.data, 'import_marketplace'));
 
 	// The two filters the server answers ride the URL: the Labels page links
 	// straight to `/resources?label=<name>`, and a narrowed board is a place
@@ -637,9 +645,24 @@
 			body="Import brings your existing shop across as drafts you review. Creating one starts from a blank form."
 		>
 			{#snippet actions()}
-				<Button tier="primary" href="/import" icon="download">Import from a marketplace</Button>
+				<Button
+					tier="primary"
+					href="/import"
+					icon="download"
+					disabled={importRefusal !== null}
+					reason={importRefusal ?? undefined}
+				>
+					Import from a marketplace
+				</Button>
 				<span class="res-note">or</span>
-				<Button href="/resources/new" icon="plus">Create a resource</Button>
+				<Button
+					href="/resources/new"
+					icon="plus"
+					disabled={createRefusal !== null}
+					reason={createRefusal ?? undefined}
+				>
+					Create a resource
+				</Button>
 			{/snippet}
 		</Placeholder>
 	{:else if rows.length === 0}

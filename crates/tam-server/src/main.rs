@@ -13,7 +13,7 @@
 //! Given an engine-role url it also hosts the two service loops the design
 //! puts in this process: the outbox drainer and the job-event pruner.
 //!
-//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--paddle-webhook-secret <secret>] [--ui-dir <path>] [--landing-dir <path>] [--downloads-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> --blob-store-root <path>] [--entitlement-key-path <path>] [--entitlement-public-key <hex>] [--require-entitlement-key] [--resend-api-key-file <path> --email-from <address> --console-url <url> --auth-internal-url <url> --auth-internal-secret-file <path>] [--disclose-internals]
+//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--paddle-webhook-secret <secret>] [--paddle-price-map <path>] [--ui-dir <path>] [--landing-dir <path>] [--downloads-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> --blob-store-root <path>] [--entitlement-key-path <path>] [--entitlement-public-key <hex>] [--require-entitlement-key] [--resend-api-key-file <path> --email-from <address> --console-url <url> --auth-internal-url <url> --auth-internal-secret-file <path>] [--disclose-internals]
 
 #![forbid(unsafe_code)]
 
@@ -26,7 +26,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tam_api::devices::EntitlementKey;
 use tam_api::{
     AppState, AuthBridge, BlobStore, Config, Disclosure, JwkSet, JwksFuture, JwksSource,
-    JwksUnavailable, WebhookSecret,
+    JwksUnavailable, PriceMap, WebhookSecret,
 };
 use tam_engine::outbox::{drain, Deliverer, LoggingDeliverer};
 use tam_storage::{ImportBatchRepo, NotificationRepo, OutboxRepo, PruneRepo};
@@ -63,6 +63,17 @@ const BACKOFFICE_DB_FLAG: &str = "--backoffice-db-url";
 /// outside the one crate that will own them. Absent, `/{version}/billing/webhook`
 /// answers 503: there is no unauthenticated mode of that route to fall back to.
 const PADDLE_WEBHOOK_SECRET_FLAG: &str = "--paddle-webhook-secret";
+
+/// The file mapping Paddle price identifiers to what they sell: a JSON
+/// object of `"<price_id>": { "plan": "subscriber" }` or
+/// `{ "plan": "migration_only", "rung": 50 }`.
+///
+/// A file rather than a flag value, because the map is per environment and
+/// grows a line per rung, and a path is the shape the deployment already
+/// uses for the key material beside it. Absent, the map is empty: a
+/// completed one-off transaction then grants nothing and says so on the log,
+/// which is the fail-closed direction for a purchase we cannot interpret.
+const PADDLE_PRICE_MAP_FLAG: &str = "--paddle-price-map";
 
 /// The built client directory, served as the router's fallback so the API
 /// and the UI share one origin; unknown paths fall through to index.html,
@@ -455,6 +466,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if invocation.config.paddle_webhook_secret.is_some() {
         eprintln!("tam-server accepting Paddle billing notifications");
     }
+    if invocation.config.paddle_price_map.is_empty() {
+        eprintln!(
+            "tam-server has no Paddle price map ({PADDLE_PRICE_MAP_FLAG}); a completed one-off \
+             transaction will grant nothing"
+        );
+    } else {
+        eprintln!(
+            "tam-server mapping {} Paddle prices to plans",
+            invocation.config.paddle_price_map.len()
+        );
+    }
     if invocation.config.disclosure == Disclosure::Full {
         eprintln!("tam-server disclosing fault internals ({DISCLOSE_FLAG}); development only");
     }
@@ -615,6 +637,11 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
                     .next()
                     .ok_or("--paddle-webhook-secret needs a secret argument")?,
             ));
+        } else if argument == PADDLE_PRICE_MAP_FLAG {
+            let path = arguments
+                .next()
+                .ok_or("--paddle-price-map needs a path argument")?;
+            config.paddle_price_map = load_price_map(&path)?;
         } else if argument == UI_FLAG {
             ui_dir = Some(std::path::PathBuf::from(
                 arguments.next().ok_or("--ui-dir needs a path argument")?,
@@ -815,6 +842,34 @@ fn read_secret(path: &str) -> Result<String, Box<dyn std::error::Error>> {
         return Err(format!("{path} is empty").into());
     }
     Ok(secret)
+}
+
+/// How large the Paddle price map may be. A line per price and a handful of
+/// prices; anything at this cap is a mis-pointed path rather than a map.
+const PRICE_MAP_BYTES_MAX: u64 = 64 * 1024;
+
+/// The Paddle price map off disk: a bounded read, for the reason the two
+/// key loaders beside it are bounded, and a parse that refuses rather than
+/// half-applies. A malformed map must stop the server at startup, because
+/// the alternative is a seller paying for a rung the running process cannot
+/// interpret.
+fn load_price_map(path: &str) -> Result<PriceMap, Box<dyn std::error::Error>> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .map_err(|error| format!("{PADDLE_PRICE_MAP_FLAG} {path}: {error}"))?
+        .take(PRICE_MAP_BYTES_MAX + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("{PADDLE_PRICE_MAP_FLAG} {path}: {error}"))?;
+    if bytes.len() as u64 > PRICE_MAP_BYTES_MAX {
+        return Err(format!(
+            "{path} is larger than {PRICE_MAP_BYTES_MAX} bytes, so it is not a price map"
+        )
+        .into());
+    }
+    let raw = String::from_utf8(bytes)
+        .map_err(|_| format!("{PADDLE_PRICE_MAP_FLAG} {path} is not utf-8"))?;
+    PriceMap::parse(&raw).map_err(|error| format!("{PADDLE_PRICE_MAP_FLAG} {path}: {error}").into())
 }
 
 /// The key-encryption key off disk, read the way `tam-worker` reads its own:

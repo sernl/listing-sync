@@ -111,6 +111,17 @@ let
     "--paddle-webhook-secret"
     cfg.server.paddleWebhookSecret
   ]
+  ++ lib.optionals (cfg.server.paddlePriceMap != { }) [
+    "--paddle-price-map"
+    (pkgs.writeText "teachouse-paddle-price-map.json" (
+      builtins.toJSON (
+        lib.mapAttrs (
+          _: priced:
+          { inherit (priced) plan; } // lib.optionalAttrs (priced.rung != null) { inherit (priced) rung; }
+        ) cfg.server.paddlePriceMap
+      )
+    ))
+  ]
   ++ lib.optionals mailEnabled [
     "--resend-api-key-file"
     cfg.server.mail.resendApiKeyFile
@@ -863,6 +874,44 @@ in
           `/proc/<pid>/cmdline` to every local account. Left null the webhook
           answers 503, which is the intended state until the binary grows a
           `--paddle-webhook-secret-path`.
+        '';
+      };
+
+      paddlePriceMap = lib.mkOption {
+        type = lib.types.attrsOf (
+          lib.types.submodule {
+            options = {
+              plan = lib.mkOption {
+                type = lib.types.enum [
+                  "subscriber"
+                  "migration_only"
+                ];
+                description = "The plan a purchase of this Paddle price grants.";
+              };
+              rung = lib.mkOption {
+                type = lib.types.nullOr lib.types.ints.positive;
+                default = null;
+                description = "For a one-off Catalogue Import, the rung bought (resources); null for a subscription.";
+              };
+            };
+          }
+        );
+        default = { };
+        example = {
+          "pri_01abc" = {
+            plan = "subscriber";
+          };
+          "pri_01def" = {
+            plan = "migration_only";
+            rung = 50;
+          };
+        };
+        description = ''
+          Paddle price identifiers and the plan each grants when the webhook
+          reports it paid. Rendered to a file in the store, which is fine: a
+          price id is public and appears in the console bundle too. Empty, the
+          webhook still records the subscription but grants no plan, and the
+          server says so at startup.
         '';
       };
 

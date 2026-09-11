@@ -297,23 +297,19 @@ impl DeviceRepo {
     /// only as a clause inside its own statement, and a second surface that
     /// spends a seller's marketplace budget needs the same gate rather than a
     /// second spelling of it.
-    pub async fn entitlement_stands(
-        &self,
-        org: OrgId,
-        grace_hours: i32,
-    ) -> Result<bool, StorageError> {
+    pub async fn entitlement_stands(&self, org: OrgId) -> Result<bool, StorageError> {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let stands = sqlx::query_scalar!(
-            r#"SELECT NOT EXISTS (
-                 SELECT 1 FROM billing_subscription bs
-                 WHERE bs.org_id = $1
-                   AND bs.status NOT IN ('active', 'trialing')
-                   AND bs.current_period_end IS NOT NULL
-                   AND bs.current_period_end < now() - make_interval(hours => $2)
+            r#"SELECT NOT (
+                 EXISTS (SELECT 1 FROM entitlement_grant g WHERE g.org_id = $1)
+                 AND NOT EXISTS (
+                   SELECT 1 FROM entitlement_grant g
+                   WHERE g.org_id = $1 AND g.revoked_at IS NULL
+                     AND (g.expires_at IS NULL OR g.expires_at > now())
+                 )
                ) AS "stands!""#,
             uuid_to_db(org.0),
-            grace_hours,
         )
         .fetch_one(&mut *tx)
         .await?;
@@ -357,7 +353,6 @@ impl DeviceRepo {
         &self,
         org: OrgId,
         device: &str,
-        grace_hours: i32,
     ) -> Result<Vec<Marketplace>, StorageError> {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
@@ -368,11 +363,10 @@ impl DeviceRepo {
                  AND EXISTS (SELECT 1 FROM device d
                        WHERE d.org_id = $1 AND d.id = $2
                          AND d.revoked_at IS NULL)
-                 AND NOT EXISTS (SELECT 1 FROM billing_subscription bs
-                       WHERE bs.org_id = $1
-                         AND bs.status NOT IN ('active', 'trialing')
-                         AND bs.current_period_end IS NOT NULL
-                         AND bs.current_period_end < now() - make_interval(hours => $3))
+                 AND NOT (EXISTS (SELECT 1 FROM entitlement_grant g WHERE g.org_id = $1)
+                     AND NOT EXISTS (SELECT 1 FROM entitlement_grant g
+                           WHERE g.org_id = $1 AND g.revoked_at IS NULL
+                             AND (g.expires_at IS NULL OR g.expires_at > now())))
                  AND NOT EXISTS (SELECT 1 FROM org_halt oh WHERE oh.org_id = $1)
                  AND EXISTS (SELECT 1 FROM connection c
                        WHERE c.org_id = $1 AND c.marketplace = mi.marketplace
@@ -385,7 +379,6 @@ impl DeviceRepo {
                ORDER BY 1"#,
             uuid_to_db(org.0),
             device,
-            grace_hours,
         )
         .fetch_all(&mut *tx)
         .await?;

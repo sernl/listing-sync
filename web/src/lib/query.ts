@@ -88,6 +88,13 @@ export const queryKeys = {
 	profile: ['profile'] as const,
 	passkeys: ['passkeys'] as const,
 	billing: ['billing'] as const,
+	/** What this organisation's plan allows and what it has used. Asked once
+	 *  by the shell and read from the cache by every page that draws a gated
+	 *  control, so a cap is stated the same way everywhere on one answer. */
+	entitlement: ['entitlement'] as const,
+	/** The price table. Served publicly and identical for every caller, so it
+	 *  is one entry with no tenant in its key. */
+	plans: ['plans'] as const,
 	/** The newest runs read in full, which the jobs list alone cannot give:
 	 *  its heads carry no phase and no counts. */
 	activity: ['job-activity'] as const,

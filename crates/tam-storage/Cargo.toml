@@ -25,6 +25,11 @@ tam-domain = { path = "../tam-domain" }
 # so the conversions live here rather than there.
 tam-engine-driver = { path = "../tam-engine-driver" }
 tam-marketplace = { path = "../tam-marketplace" }
+# The plan vocabulary the entitlement grants are stored in. One enum decides
+# what a row may hold, what the CHECK in migration 0069 enumerates and what
+# every gate reads, so the storage layer parses into it rather than handing
+# strings upwards.
+tam-limits = { path = "../tam-limits" }
 tam-pipeline = { path = "../tam-pipeline" }
 tam-secrets = { path = "../tam-secrets" }
 tam-types = { path = "../tam-types" }

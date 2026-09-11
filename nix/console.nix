@@ -19,7 +19,11 @@
   turnstileSiteKey ? "",
   socialProviders ? "",
   paddleClientToken ? "",
-  paddlePriceId ? "",
+  # A JSON object of price keys to Paddle price identifiers, because the
+  # deployment sells a recurring plan at two cadences and five one-off ladder
+  # rungs; `web/src/lib/paddle.ts` treats an unparseable or empty map as no
+  # checkout at all.
+  paddlePrices ? "",
   paddleEnvironment ? "",
 }:
 stdenv.mkDerivation {
@@ -46,7 +50,7 @@ stdenv.mkDerivation {
     VITE_TURNSTILE_SITE_KEY = turnstileSiteKey;
     VITE_SOCIAL_PROVIDERS = socialProviders;
     VITE_PADDLE_CLIENT_TOKEN = paddleClientToken;
-    VITE_PADDLE_PRICE_ID = paddlePriceId;
+    VITE_PADDLE_PRICES = paddlePrices;
     VITE_PADDLE_ENVIRONMENT = paddleEnvironment;
   };
 

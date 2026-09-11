@@ -89,6 +89,27 @@ async fn provision(pool: &PgPool) {
             .execute(pool)
             .await
             .expect("the org seeds");
+        // Copying and moving is a paid capability, so the fixture tenant is
+        // a subscriber: without a grant every sync in this file would be
+        // answered by the migration cap rather than by the job machinery it
+        // is written to exercise.
+        tam_storage::EntitlementRepo::new(pool.clone())
+            .grant(
+                org,
+                &tam_storage::NewGrant {
+                    id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
+                    plan: tam_limits::Plan::Subscriber,
+                    rung: None,
+                    granted_by: tam_storage::GrantedBy::Paddle,
+                    grantor_user: None,
+                    reason: None,
+                    source_ref: Some(name),
+                    granted_at: Timestamp(1_000),
+                    expires_at: None,
+                },
+            )
+            .await
+            .expect("the fixture grant seeds");
     }
     let sessions = SessionRepo::new(pool.clone());
     for (org, user, email, token) in [
@@ -793,5 +814,58 @@ async fn an_outcome_filter_on_the_jobs_list_is_refused_rather_than_dropped(pool:
         listed.status,
         StatusCode::OK,
         "the page itself is unchanged; only the filter it never applied is refused"
+    );
+}
+
+/// The migration cap, which is the one bound a seller can wait out: the
+/// refusal names the allowance, what is left, and the day the counter
+/// returns to zero.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_tenant_with_no_migration_allowance_is_refused_with_its_reset_date(pool: PgPool) {
+    provision(&pool).await;
+    let mut tx = pool.begin().await.expect("the transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the pin applies");
+    sqlx::query("DELETE FROM entitlement_grant WHERE org_id = $1")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+        .execute(&mut *tx)
+        .await
+        .expect("the fixture grant is withdrawn");
+    tx.commit().await.expect("the withdrawal commits");
+
+    let answer = call(
+        pool,
+        Method::POST,
+        "/v1/sync",
+        &TOKEN_A,
+        Some("11111111-1111-1111-1111-111111111111"),
+        Some(serde_json::json!({
+            "source": "Tes",
+            "target": "Tpt",
+            "disposition": "sync",
+            "intent": "live",
+            "resources": ["13549794"],
+        })),
+    )
+    .await;
+    assert_eq!(
+        answer.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a plan that copies nothing refuses the copy rather than enqueuing it"
+    );
+    let refusal: APIError = serde_json::from_slice(&answer.body).expect("the refusal parses");
+    let detail = refusal.errors[0]
+        .detail
+        .as_ref()
+        .expect("the refusal names the bound it hit");
+    assert_eq!(detail["quota"], "migrations_per_month");
+    assert_eq!(detail["limit"], 0);
+    assert!(
+        refusal.errors[0].message.starts_with("Your plan"),
+        "the sentence is the seller's: {}",
+        refusal.errors[0].message
     );
 }

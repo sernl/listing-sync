@@ -93,6 +93,26 @@ async fn provision(pool: &PgPool, org: OrgId, user: UserId, token: &SessionToken
         .execute(pool)
         .await
         .expect("the org seeds");
+    // Reading a shop is a paid capability, so the fixture tenant subscribes:
+    // without a grant every page in this file would be answered by the plan
+    // gate rather than by the import machinery it is written to exercise.
+    tam_storage::EntitlementRepo::new(pool.clone())
+        .grant(
+            org,
+            &tam_storage::NewGrant {
+                id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
+                plan: tam_limits::Plan::Subscriber,
+                rung: None,
+                granted_by: tam_storage::GrantedBy::Paddle,
+                grantor_user: None,
+                reason: None,
+                source_ref: Some(&format!("sub_{}", org.0 .0[0])),
+                granted_at: Timestamp(1_000),
+                expires_at: None,
+            },
+        )
+        .await
+        .expect("the fixture grant seeds");
     let sessions = SessionRepo::new(pool.clone());
     sessions
         .create_user(org, user, &format!("{}@example.test", org.0 .0[0]), NOW)

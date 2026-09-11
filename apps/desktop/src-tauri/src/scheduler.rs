@@ -294,6 +294,7 @@ mod tests {
             iss: crate::entitlement::ISSUER.to_owned(),
             device: "11112222333344445555666677778888".to_owned(),
             marketplaces,
+            plan: crate::entitlement::Plan::Subscriber,
             exp: NOW_SECONDS + 3_600,
             grace: NOW_SECONDS + 3_600 + 86_400,
         }))

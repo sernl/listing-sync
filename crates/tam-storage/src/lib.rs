@@ -17,6 +17,7 @@ pub mod blobs;
 mod codec;
 pub mod connections;
 pub mod device;
+pub mod entitlement;
 pub mod file_source;
 pub mod import_batches;
 pub mod job_reads;
@@ -56,6 +57,7 @@ pub use device::{
     DeviceHeartbeat, DeviceRecord, DeviceRegistration, DeviceRepo, DeviceSessionRecord,
     DeviceSessionReport, DeviceSessionStatus,
 };
+pub use entitlement::{EntitlementRepo, Grant, GrantRecord, GrantedBy, NewGrant, Usage};
 pub use file_source::ProductFileSourceRepo;
 pub use import_batches::{
     AttachCounts, BatchState, BatchWrite, BindOutcome, BoundRow, ClaimedRow, CommitCounts,

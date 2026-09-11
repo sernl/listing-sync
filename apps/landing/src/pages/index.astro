@@ -10,7 +10,7 @@ import ResourceCover from '../components/ResourceCover.astro';
 import { markSlot } from '../art.js';
 import { marks } from '../marketplaces.js';
 import { downloadUrl } from '../site.js';
-import { founding } from '../pricing.js';
+import { FOUNDING } from '../pricing.js';
 
 const title = 'Teachouse \u2014 create once, sell everywhere';
 const description =
@@ -58,8 +58,8 @@ const steps = [
 					<a class="btn large" href="#how">See how it works</a>
 				</div>
 				<p class="under">
-					Only {founding.places} Founding Member places. {founding.discountYearOne}% off Year 1,
-					plus your first {founding.freeImports} resources cross-listed free.
+					Only {FOUNDING.places} Founding Member places. {FOUNDING.discount_year_one_pct}% off Year 1,
+					plus your first {FOUNDING.free_imports} resources cross-listed free.
 				</p>
 				<MarketplaceBand />
 			</div>

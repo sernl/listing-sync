@@ -1,92 +1,17 @@
-// The subscription page's own model: the four tiers as the founder approved
-// them, the two payment cadences, and what the recorded billing state can
-// honestly be said to prove.
+// The subscription page's own model: how the served price table renders, and
+// what the entitlement read can honestly be said to prove.
 //
-// The tier table lives on the client because no server surface carries one:
-// `/v1/billing` serves Paddle's status and nothing else, and the module doc
-// for it is explicit that nothing there gates a feature, meters a quota or
-// decides an entitlement. So these figures are what the seller is being
-// offered, not what the platform enforces, and the page says so.
+// The table itself is no longer here. `tam-limits` holds it, `GET /v1/plans`
+// serves it, and `just web-typegen` mirrors it into `$lib/generated/plans`,
+// so the pricing page, this page and the request gate read one set of
+// figures. What is left is the rendering: dollars out of cents, the saving a
+// year states, and the three states an entitlement read has.
 
-import type { SubscriptionView } from '$lib/api';
-
-export type PlanId = 'free' | 'solo' | 'studio' | 'publisher';
+import type { EntitlementView, PlanRow } from '$lib/api';
+import { PLANS } from '$lib/generated/plans';
+import type { Plan } from '$lib/generated/vocab';
 
 export type Cadence = 'monthly' | 'annual';
-
-export interface Plan {
-	id: PlanId;
-	name: string;
-	/** What the tier is for, in one line. */
-	blurb: string;
-	/** Whole US dollars. Null on the free tier, which has no price at all
-	 *  rather than a price of zero to render. */
-	monthly: number | null;
-	annual: number | null;
-	/** The allowances, in the order every card lists them. The free tier
-	 *  carries three because the founder named three; a fourth invented to
-	 *  square the columns would be a figure nobody decided. */
-	allowances: readonly string[];
-	/** The free trial this tier carries, where it carries one. */
-	trialDays?: number;
-}
-
-/** The trial, named once. */
-export const TRIAL_DAYS = 14;
-
-export const PLANS: readonly Plan[] = [
-	{
-		id: 'free',
-		name: 'Free',
-		blurb: 'Enough to see whether this works for your shop.',
-		monthly: null,
-		annual: null,
-		allowances: ['One marketplace', 'Twenty resources', 'Manual sync']
-	},
-	{
-		id: 'solo',
-		name: 'Solo',
-		blurb: 'One teacher selling on a couple of marketplaces.',
-		monthly: 12,
-		annual: 120,
-		allowances: [
-			'100 resources kept in sync',
-			'2 marketplaces',
-			'Daily sync',
-			'1 device',
-			'50 resources migrated a year'
-		]
-	},
-	{
-		id: 'studio',
-		name: 'Studio',
-		blurb: 'A working shop across every marketplace we support.',
-		monthly: 24,
-		annual: 240,
-		allowances: [
-			'400 resources kept in sync',
-			'All marketplaces',
-			'Sync every 6 hours',
-			'2 devices',
-			'200 resources migrated a year'
-		],
-		trialDays: TRIAL_DAYS
-	},
-	{
-		id: 'publisher',
-		name: 'Publisher',
-		blurb: 'A big catalogue that needs the sync to keep up.',
-		monthly: 48,
-		annual: 480,
-		allowances: [
-			'Unlimited resources kept in sync',
-			'All marketplaces',
-			'Hourly sync',
-			'3 devices',
-			'500 resources migrated a year'
-		]
-	}
-];
 
 export interface Price {
 	/** What the figure reads as, already carrying its currency mark. */
@@ -95,145 +20,158 @@ export interface Price {
 	per: string;
 }
 
-/** A tier's price at one cadence. */
-export function priceOf(plan: Plan, cadence: Cadence): Price {
-	const dollars = cadence === 'annual' ? plan.annual : plan.monthly;
-	if (dollars === null) {
+/** Cents as the page prints money: whole dollars where the price is whole,
+ *  and cents where it is not.
+ *
+ *  Rounding a price to the dollar would misstate what a card is charged, and
+ *  printing `$24.00` beside `$47` reads as two different kinds of figure. */
+export function dollars(cents: number): string {
+	return cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`;
+}
+
+/** A plan's price at one cadence. */
+export function priceOf(plan: PlanRow, cadence: Cadence): Price {
+	const cents = cadence === 'annual' ? plan.yearly_cents : plan.monthly_cents;
+	if (cents === null) {
 		return { amount: 'Free', per: '' };
 	}
-	return { amount: `$${dollars}`, per: cadence === 'annual' ? 'per year' : 'per month' };
+	return { amount: dollars(cents), per: cadence === 'annual' ? 'per year' : 'per month' };
 }
 
 /**
- * How many months of the yearly price are not charged, against paying monthly.
+ * How many months of the yearly price are not charged, against paying
+ * monthly.
  *
- * Null where either figure is absent, and null where the yearly price is not a
- * whole number of months cheaper: a saving stated as "two months free" has to
- * be exactly that or it is a rounded claim about money.
+ * Null where either figure is absent, and null where the yearly price is not
+ * a whole number of months cheaper: a saving stated as "two months free" has
+ * to be exactly that or it is a rounded claim about money.
  */
-export function monthsFreeOnAnnual(plan: Plan): number | null {
-	if (plan.monthly === null || plan.annual === null || plan.monthly === 0) {
+export function monthsFreeOnAnnual(plan: PlanRow): number | null {
+	const { monthly_cents: monthly, yearly_cents: yearly } = plan;
+	if (monthly === null || yearly === null || monthly === 0) {
 		return null;
 	}
-	const saved = plan.monthly * 12 - plan.annual;
-	if (saved <= 0 || saved % plan.monthly !== 0) {
+	const saved = monthly * 12 - yearly;
+	if (saved <= 0 || saved % monthly !== 0) {
 		return null;
 	}
-	return saved / plan.monthly;
+	return saved / monthly;
+}
+
+/** The plans this deployment actually sells, in table order.
+ *
+ *  `studio` ships in the code with a price and `sold: false`, because the
+ *  founder's trigger for selling it is a measurement rather than a date. A
+ *  card for it would offer a plan no checkout can buy. */
+export function soldPlans(plans: readonly PlanRow[] = PLANS): PlanRow[] {
+	return plans.filter((plan) => plan.sold);
 }
 
 /**
- * What the billing read has told us, in the three states it actually has.
+ * What the entitlement read has told us, in the three states it has.
  *
  * A pending read and a failed read are both `unread`. Collapsing either into
- * "no subscription" is what let a paying seller be shown the free tier in
- * green and offered a second subscription, so the absence of an answer is a
- * value here rather than a `null` that means two things.
+ * "no plan" is what let a paying seller be shown the free plan in green and
+ * offered a second subscription, so the absence of an answer is a value here
+ * rather than a `null` that means two things.
  */
-export type BillingRead =
+export type EntitlementRead =
 	| { state: 'unread' }
-	| { state: 'read'; subscription: SubscriptionView | null };
+	| { state: 'read'; entitlement: EntitlementView };
 
-export type StandingKind = 'unread' | 'free' | 'subscribed';
+export type StandingKind = 'unread' | 'read';
 
 export interface Standing {
 	kind: StandingKind;
-	/** The tier the record proves this organisation is on, or null where it
-	 *  cannot say which — which includes every unread state. */
-	plan: PlanId | null;
-	/** Paddle's own word for the subscription, passed through untranslated,
-	 *  or null where there is no subscription to have a status. */
-	status: string | null;
+	/** The plan the server says this organisation holds, or null where the
+	 *  read has not answered. Never a guess: the grant names the plan. */
+	plan: Plan | null;
+	/** The plan's own name out of the served table, where the table carries
+	 *  the plan the grant names. */
+	name: string | null;
 	headline: string;
 	detail: string;
 }
 
 /**
- * What the billing record says the organisation is on.
+ * What the entitlement says the organisation is on.
  *
- * The deployment sells through exactly one Paddle price, so a recorded
- * subscription proves that money is arriving and cannot prove which tier it is
- * for. Naming a tier from that would be a guess printed as a fact, so the
- * standing says which of the three situations this is and stops there. An
- * unread read names no tier at all: the page marks no card and offers no
- * purchase until the read answers.
+ * This used to name no plan at all: one Paddle price could not prove which
+ * tier money was arriving for, so a running subscription was rendered as "a
+ * subscription is running" and nothing else. The grant names the plan, so the
+ * page can now say which — and an unread read still names none, because a
+ * plan printed before the server answered is a guess printed as a fact.
  */
-export function standingFor(read: BillingRead): Standing {
+export function standingFor(read: EntitlementRead, plans: readonly PlanRow[] = PLANS): Standing {
 	if (read.state === 'unread') {
 		return {
 			kind: 'unread',
 			plan: null,
-			status: null,
-			headline: 'The billing record has not answered.',
+			name: null,
+			headline: 'Your plan has not been read yet.',
 			detail:
-				'Until it does, we cannot say which plan you are on, so nothing below is marked and nothing can be bought.'
+				'Until it answers, we cannot say which plan you are on, so nothing below is marked and nothing can be bought.'
 		};
 	}
-	if (read.subscription === null) {
-		return {
-			kind: 'free',
-			plan: 'free',
-			status: null,
-			headline: 'You are on the free tier.',
-			detail:
-				'You have never reached checkout; a cancelled subscription would show here with its status instead.'
-		};
-	}
+	const held = read.entitlement.plan;
+	const row = plans.find((plan) => plan.id === held);
+	const name = row?.name ?? null;
 	return {
-		kind: 'subscribed',
-		plan: null,
-		status: read.subscription.status,
-		headline: `Paddle records this subscription as ${read.subscription.status}.`,
-		detail:
-			'We sell one price today, so this says a subscription is running, not which plan below it pays for.'
+		kind: 'read',
+		plan: held,
+		name,
+		headline: name === null ? `You are on ${held}.` : `You are on ${name}.`,
+		detail: standingDetail(read.entitlement)
 	};
 }
 
+/** The sentence under the headline: what the plan is doing next, where it is
+ *  doing anything. */
+function standingDetail(entitlement: EntitlementView): string {
+	if (entitlement.granted_by === 'operator') {
+		return 'Teachouse set this plan for you. Ask us before changing it here.';
+	}
+	if (entitlement.plan === 'migration_only') {
+		return 'You bought a one-off Catalogue Import. Subscribe below to keep publishing after it runs out.';
+	}
+	if (entitlement.plan === 'free') {
+		return 'The free plan does not run out. Subscribe below when you need more of it.';
+	}
+	return 'Your subscription renews on its own. Manage it below.';
+}
+
 /** When the recorded billing period ends, in the browser's own locale. */
-export function periodLabel(subscription: SubscriptionView): string {
+export function periodLabel(subscription: { current_period_end: number | null }): string {
 	return subscription.current_period_end === null
 		? 'Paddle recorded no billing period'
 		: new Date(subscription.current_period_end).toLocaleDateString();
 }
 
 /** What stands where the checkout control would, on a build that was given no
- *  Paddle token and price.
+ *  Paddle token and prices.
  *
  *  A sentence rather than a disabled button: there is nothing to press, and a
  *  greyed control invites the press anyway and then refuses it. */
 export const CHECKOUT_DORMANT = 'Billing opens soon. Nothing on this page can be bought yet.';
 
 /**
- * The label the one checkout control carries, or null for no control at all.
+ * The label the subscription control carries, or null for no control at all.
  *
- * Null on an unread read, so a control cannot be rendered without a successful
- * one: the guard is the return type rather than a sibling `{#if}` a later
- * edit could drop. The deployment sells a single Paddle price, so this control
- * buys that price and cannot buy a tier; a per-tier button appears only once a
- * per-tier price exists.
+ * Null on an unread read, so a control cannot be rendered over a standing
+ * that does not know what it would be changing: the guard is the return type
+ * rather than a sibling `{#if}` a later edit could drop. A seller already on
+ * a recurring plan manages it rather than buying it again.
  */
-export function checkoutLabel(read: BillingRead): string | null {
+export function checkoutLabel(read: EntitlementRead): string | null {
 	if (read.state === 'unread') {
 		return null;
 	}
-	return read.subscription === null ? 'Subscribe' : 'Change plan';
+	const held = read.entitlement.plan;
+	return held === 'subscriber' || held === 'studio' ? 'Manage' : 'Subscribe';
 }
 
-/**
- * The months a year costs less than twelve monthly payments, where every paid
- * tier agrees on the figure.
- *
- * Null where they disagree or where any of them withholds its saving, so the
- * page's one sentence about money is derived from the table rather than typed
- * beside it and left to drift.
- */
-export function sharedMonthsFree(plans: readonly Plan[] = PLANS): number | null {
-	const savings = plans
-		.filter((plan) => plan.monthly !== null)
-		.map((plan) => monthsFreeOnAnnual(plan));
-	if (savings.length === 0 || savings.some((months) => months === null)) {
-		return null;
-	}
-	const first = savings[0];
-	return savings.every((months) => months === first) ? first : null;
+/** One rung of the import ladder, as its button reads: "$47 · up to 20
+ *  resources". */
+export function rungLabel(rung: { up_to: number; price_cents: number }): string {
+	return `${dollars(rung.price_cents)} · up to ${rung.up_to} resources`;
 }

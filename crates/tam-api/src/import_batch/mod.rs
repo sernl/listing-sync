@@ -47,6 +47,7 @@ use tam_storage::{
 use tam_types::{InventoryId, Marketplace, ProductId, Timestamp, Uuid};
 
 use crate::blocking::spawn_supervised_blocking;
+use crate::entitlement::feature_refusal;
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::jobs::RequestKey;
 use crate::{AppState, OrgContext};
@@ -409,6 +410,12 @@ pub(crate) async fn upload(
     Query(params): Query<UploadParams>,
     body: Bytes,
 ) -> Result<(StatusCode, Json<UploadedBatchView>), APIError> {
+    if !context.entitlement.caps.import_spreadsheet {
+        return Err(feature_refusal(
+            "import_spreadsheet",
+            "Your plan does not include spreadsheet import. Upgrade to use it.",
+        ));
+    }
     let source_name = params.name.trim();
     if source_name.is_empty() {
         return Err(validation(

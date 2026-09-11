@@ -240,16 +240,26 @@ db-test-all: db-wait db-verify
 # learn that before the database lane than after it.
 pre-push: auth-check check web-check landing-check db-verify db-test-all check-portable
 
-# Regenerate the client's vocabulary from the closed Rust enums.
+# Regenerate every generated client artefact from the Rust source of truth:
+# the closed enums, the console's plan table, and the landing build's copy of
+# the same table.
 #
-# Through a temporary file, because `> vocab.ts` truncates the file before cargo
-# runs: a compile failure would leave the vocabulary empty, and the next
-# `web-check` would then compare a correct tree against nothing. `cat` rather
-# than `mv` so the file keeps its own mode instead of mktemp's 0600.
+# Through a temporary file each, because `> vocab.ts` truncates the file
+# before cargo runs: a compile failure would leave the artefact empty, and the
+# next `web-check` would then compare a correct tree against nothing. `cat`
+# rather than `mv` so each file keeps its own mode instead of mktemp's 0600.
 web-typegen:
-    vocab="$(mktemp)"; trap 'rm -f "$vocab"' EXIT; \
-        cargo run -p tam-api --bin typegen > "$vocab" \
-        && cat "$vocab" > web/src/lib/generated/vocab.ts
+    #!/usr/bin/env bash
+    set -euo pipefail
+    emit() {
+        tmp="$(mktemp)"
+        trap 'rm -f "$tmp"' RETURN
+        cargo run -p tam-api --bin typegen -- "$1" > "$tmp"
+        cat "$tmp" > "$2"
+    }
+    emit vocab    web/src/lib/generated/vocab.ts
+    emit plans-ts web/src/lib/generated/plans.ts
+    emit plans-js apps/landing/src/plans.generated.js
 
 # The browser's copy of the core: the same rules the API answers with, compiled
 # to wasm32 and bound for the browser. Generated output is gitignored and built
@@ -319,7 +329,8 @@ extension-source-package:
 web-wasm-fixtures:
     cargo run -q -p tam-core-wasm --bin verdict-fixtures > crates/tam-core-wasm/fixtures/verdicts.json
 
-# The web lane: lockfile install, vocabulary freshness, types, tests, build
+# The web lane: lockfile install, generated-artefact freshness, types, tests,
+# build
 #
 # bash under `set -euo pipefail`, matching `purity` and `deny`, because a gate
 # that can fail quietly is a gate that passes vacuously. The vocabulary step is
@@ -327,19 +338,29 @@ web-wasm-fixtures:
 # reaches `diff` as empty input, the whole vocabulary reads as deleted, and the
 # recipe reports that vocab.ts is stale — which is false, and sends the reader
 # to `just web-typegen`, which would then truncate a correct file.
+#
+# All three generated artefacts are diffed here, the landing build's included:
+# the whole point of generating the landing page's price list is that it
+# cannot drift from the server's, and a gate that checked only the console's
+# copy would let it.
 web-check: web-wasm
     #!/usr/bin/env bash
     set -euo pipefail
-    vocab="$(mktemp)"
-    trap 'rm -f "$vocab"' EXIT
-    if ! cargo run -p tam-api --bin typegen > "$vocab"; then
-        echo "typegen did not build, so the vocabulary was not checked; the compiler's error is above" >&2
-        exit 1
-    fi
-    if ! diff -u web/src/lib/generated/vocab.ts "$vocab"; then
-        echo "vocab.ts is stale; run just web-typegen" >&2
-        exit 1
-    fi
+    generated="$(mktemp)"
+    trap 'rm -f "$generated"' EXIT
+    fresh() {
+        if ! cargo run -p tam-api --bin typegen -- "$1" > "$generated"; then
+            echo "typegen did not build, so $2 was not checked; the compiler's error is above" >&2
+            exit 1
+        fi
+        if ! diff -u "$2" "$generated"; then
+            echo "$2 is stale; run just web-typegen" >&2
+            exit 1
+        fi
+    }
+    fresh vocab    web/src/lib/generated/vocab.ts
+    fresh plans-ts web/src/lib/generated/plans.ts
+    fresh plans-js apps/landing/src/plans.generated.js
     cd web
     npm ci --no-audit --no-fund
     npx svelte-kit sync
