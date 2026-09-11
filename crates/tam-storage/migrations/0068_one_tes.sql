@@ -21,11 +21,16 @@
 --    transaction with the rewrite, so no statement outside this migration
 --    ever observes an unfenced table. The set is named once, in a temporary
 --    table both halves read, so a table cannot be lifted and left lifted.
+--    `product_file`, `write_attempt` and `binding_candidate` are read rather
+--    than rewritten: the deferred trigger `mapping_payload_nonempty` looks
+--    for a live payload when a mapping row is updated, and step 2a looks for
+--    attempts and candidates, and a fenced read answers nothing here too.
 CREATE TEMP TABLE one_tes_unfenced (name text PRIMARY KEY) ON COMMIT DROP;
 INSERT INTO one_tes_unfenced (name) VALUES
     ('mapping'), ('job'), ('job_item'), ('notification'), ('election_rule'),
     ('election_item'), ('projection_override'), ('import_batch_row'), ('sync_request'),
     ('grade_declaration'), ('grade_declaration_path'), ('native_residue'), ('product'),
+    ('product_file'), ('write_attempt'), ('binding_candidate'),
     ('org_inventory_halt'), ('reconciliation_item');
 
 DO $$

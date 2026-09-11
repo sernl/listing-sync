@@ -132,6 +132,25 @@ async fn seed_mapping(
         .unwrap_or_else(|error| panic!("the {inventory} mapping seeds: {error}"));
 }
 
+/// Run 0068 the way `teachouse-migrate` does: on a connection with no tenant
+/// pinned. The fixtures above pin one to seed, and a migration that only
+/// works with a tenant pinned is a migration that fails on the host. The
+/// tenant is pinned again afterwards so the assertions can read their rows.
+async fn run_one_tes(
+    connection: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
+) -> Result<(), sqlx::Error> {
+    connection
+        .as_mut()
+        .execute("SELECT set_config('app.current_org', '', false);")
+        .await?;
+    connection.as_mut().execute(ONE_TES).await?;
+    connection
+        .as_mut()
+        .execute(format!("SELECT set_config('app.current_org', '{ORG}', false);").as_str())
+        .await
+        .map(|_| ())
+}
+
 #[sqlx::test(migrations = false)]
 async fn the_one_tes_migration_drops_unbound_ticks_and_keeps_one_row_per_product(pool: PgPool) {
     schema_before_one_tes(&pool).await;
@@ -141,9 +160,7 @@ async fn the_one_tes_migration_drops_unbound_ticks_and_keeps_one_row_per_product
         seed_mapping(&mut connection, id, inventory, Binding::Unbound).await;
     }
 
-    connection
-        .as_mut()
-        .execute(ONE_TES)
+    run_one_tes(&mut connection)
         .await
         .expect("three unbound ticks on one product are one intent, not three listings");
 
@@ -177,9 +194,7 @@ async fn the_one_tes_migration_refuses_an_org_holding_one_product_on_two_tes_inv
         seed_mapping(&mut connection, id, inventory, Binding::Bound).await;
     }
 
-    let refusal = connection
-        .as_mut()
-        .execute(ONE_TES)
+    let refusal = run_one_tes(&mut connection)
         .await
         .expect_err("one product on two Tes inventories is a seller to talk to");
     let message = refusal.to_string();
@@ -235,9 +250,7 @@ async fn the_one_tes_migration_rewrites_a_single_tes_mapping_and_retires_the_old
         .await
         .expect("one Tes mapping seeds");
 
-    connection
-        .as_mut()
-        .execute(ONE_TES)
+    run_one_tes(&mut connection)
         .await
         .expect("a seller with one Tes listing per product migrates");
 
