@@ -48,6 +48,10 @@ The walk skips comments now, and `a_tag_inside_a_comment_is_prose` pins it.
 
 Bot Fight Mode itself cannot be exempted by any rule on the free plan and the vendor documents that it may challenge mobile-app traffic; if a WebView is still refused after this, the founder's choice is Bot Fight Mode off for the zone, which is a dashboard toggle and not a code change.
 
+The 0.5.0 app on the founder's phone showed the new screen's network sentence: the page rendered, the Rust probe of `/healthz` had passed, and the page's own `fetch` threw rather than answering.
+A document that loads over TCP followed by a fetch that fails at the network layer is the shape of an HTTP/3 fallback failure: the edge advertised `alt-svc: h3` and the WebView, unlike the probe, honours it, and a carrier or NAT that drops UDP 443 leaves the WebView's second connection with nothing.
+HTTP/3 is off for the zone since 2026-09-12 (`PATCH /zones/:id/settings/http3`, with the DNS token, which turned out to hold zone-settings edit), which removes that class whether or not it was this instance; the card now prints what was thrown and a second look — whether the page came off the device's cache, whether the platform believes it is online, and what a cache-bypassing `/healthz` answers — so the next screenshot decides it.
+
 ## `/app`, and what the desktop client has to do about it
 
 The console's home moved to `/app` and its deep routes did not move with it, so `/labels` and `/sync` are still where they were.

@@ -10,9 +10,12 @@
 	import { statusRows } from '$lib/pages/account/status-line';
 	import '$lib/pages/account/account.css';
 
+	// The inventories under the shared key, as the Resources board and the
+	// resource page cache them; see the registry read below for why one key
+	// holds one shape.
 	const status = createQuery(() => ({
 		queryKey: queryKeys.status,
-		queryFn: () => api.status()
+		queryFn: () => api.status().then((view) => view.inventories)
 	}));
 
 	// This page needs no sign-in, so the devices read is allowed to fail: a
@@ -20,15 +23,22 @@
 	// which is the honest answer rather than a sign-in wall on the one page
 	// that matters when signing in is what is broken. Not retried, because a
 	// 401 is an answer and repeating it only delays the rest of the page.
-	const devices = createQuery(() => ({
+	//
+	// The whole view under the shared key, exactly as Settings and
+	// Marketplaces cache it. A query key names one shape: this page used to
+	// store the array alone, so a visit here after either of those pages read
+	// the view found an object where it expected a list and could not be
+	// drawn, and a visit there after this one found a list with no
+	// `.devices`. The unwrap belongs below, on the read.
+	const registry = createQuery(() => ({
 		queryKey: queryKeys.devices,
-		queryFn: () => api.devices().then((view) => view.devices),
+		queryFn: () => api.devices(),
 		retry: false
 	}));
 
 	const now = Date.now();
 	const rows = $derived(
-		statusRows(status.data?.inventories ?? [], devices.data ?? [], now)
+		statusRows(status.data ?? [], registry.data?.devices ?? [], now)
 	);
 	const paused = $derived(rows.filter((row) => row.tone === 'bad').length);
 </script>

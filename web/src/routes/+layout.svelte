@@ -19,6 +19,7 @@
 	import { afterToastDismissed, captureSlots, focusRegion } from '$lib/focus-return';
 	import type { IconName } from '$lib/icons';
 	import { dismiss, sweep, toastStore, type Toast } from '$lib/toast';
+	import { probeReachability } from '$lib/unreachable';
 
 	let { data, children } = $props();
 
@@ -61,6 +62,14 @@
 	);
 
 	let bannerDismissed = $state(false);
+
+	// The second look the reachability card shows, taken once the card is up.
+	let probed = $state<string | null>(null);
+	$effect(() => {
+		if (data.unreachable) {
+			void probeReachability().then((facts) => (probed = facts));
+		}
+	});
 	const verdict = $derived(
 		consoleGate({
 			prompt: data.session?.slug_prompt,
@@ -185,6 +194,16 @@
 				<h1>Teachouse could not be reached</h1>
 				<p>{data.unreachable.sentence}</p>
 				<Button tier="primary" onclick={() => location.reload()}>Try again</Button>
+				<!-- The facts for the report, in small type: what was thrown and
+				     what a second look found. A seller sends a screenshot of this
+				     card, and the sentence alone could not tell a blocked fetch
+				     from a page served off the device's cache. -->
+				<p class="unreachable-detail">
+					{data.unreachable.detail}
+					{#if probed !== null}
+						· {probed}
+					{/if}
+				</p>
 			</div>
 		</div>
 	{:else if data.session && verdict === 'claim-screen'}

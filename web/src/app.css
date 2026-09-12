@@ -799,6 +799,15 @@ input:focus-visible {
 	letter-spacing: -0.01em;
 }
 
+/* The facts under the reachability card: small, muted, and wrapping on the
+   error text, which is one long unbroken token on a phone. */
+.unreachable-detail {
+	margin: 14px 0 0;
+	font-size: 11px;
+	color: var(--muted);
+	overflow-wrap: anywhere;
+}
+
 .auth-card > p {
 	margin: 0 0 16px;
 	color: var(--muted);

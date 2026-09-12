@@ -1,8 +1,8 @@
 export const ssr = false;
 export const prerender = false;
 
-import { api, ApiFailure, type Whoami } from "$lib/api";
-import { describeUnreachable, type Unreachable } from "$lib/unreachable";
+import { api, ApiFailure, type Whoami } from '$lib/api';
+import { describeUnreachable, type Unreachable } from '$lib/unreachable';
 
 /** What the one request every console visit begins with came back as.
  *
@@ -14,16 +14,13 @@ import { describeUnreachable, type Unreachable } from "$lib/unreachable";
  *  answered `/v1/whoami` with something other than JSON. The status that
  *  actually came back, and whether anything came back at all, is the one thing
  *  that screen needs to say and the one thing it could not. */
-export async function load(): Promise<{
-  session: Whoami | null;
-  unreachable: Unreachable | null;
-}> {
-  try {
-    return { session: await api.whoami(), unreachable: null };
-  } catch (failure) {
-    if (failure instanceof ApiFailure && failure.status === 401) {
-      return { session: null, unreachable: null };
-    }
-    return { session: null, unreachable: describeUnreachable(failure) };
-  }
+export async function load(): Promise<{ session: Whoami | null; unreachable: Unreachable | null }> {
+	try {
+		return { session: await api.whoami(), unreachable: null };
+	} catch (failure) {
+		if (failure instanceof ApiFailure && failure.status === 401) {
+			return { session: null, unreachable: null };
+		}
+		return { session: null, unreachable: describeUnreachable(failure) };
+	}
 }
