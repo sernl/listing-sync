@@ -262,7 +262,10 @@ jobs:
           CLI_VERSION: ${{ env.TAURI_CLI_VERSION }}
         run: |
           set -euo pipefail
-          cargo binstall --no-confirm --locked "tauri-cli@$CLI_VERSION"
+          # `--force`: the restored cargo cache can carry binstall's record of
+          # the install without the binary, and the record alone made the
+          # 0.8.0 run skip the download and fail on `cargo tauri`.
+          cargo binstall --no-confirm --locked --force "tauri-cli@$CLI_VERSION"
           cargo tauri --version
 
       - name: point the build at the pinned NDK
