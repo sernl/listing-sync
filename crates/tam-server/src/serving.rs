@@ -568,6 +568,19 @@ pub(crate) fn inline_script_hashes(page: &str) -> Vec<String> {
     let mut hashes = Vec::new();
     let mut at = 0usize;
     while let Some(open) = find_from(bytes, at, b"<script") {
+        // A tag inside a comment is prose, not a script. The shell's own
+        // comment above its theme block says `<script src>` in passing, and
+        // the version of this walk that did not look for comments took that
+        // for the tag, hashed the comment's tail together with the real
+        // block's head, and stepped over the real block: the theme script was
+        // refused on every page this origin served, in every browser, and the
+        // header carried one hash that admitted nothing.
+        if let Some(comment) = find_from(bytes, at, b"<!--") {
+            if comment < open {
+                at = find_from(bytes, comment, b"-->").map_or(bytes.len(), |end| end + 3);
+                continue;
+            }
+        }
         let Some(gt) = find_from(bytes, open, b">") else {
             break;
         };
@@ -1003,6 +1016,34 @@ mod tests {
             !policy.contains("'unsafe-inline' 'sha256")
                 && !policy.contains("script-src 'self' 'unsafe-inline'"),
             "an inline block is admitted by hash, never by 'unsafe-inline': {policy}"
+        );
+    }
+
+    /// A `<script` inside an HTML comment is not a script.
+    ///
+    /// The shell's theme block sits under a comment that mentions
+    /// `<script src>`; the hash the policy carries has to be the block's,
+    /// and the block has to be found at all.
+    #[test]
+    fn a_tag_inside_a_comment_is_prose() {
+        use base64::Engine as _;
+        use sha2::Digest as _;
+        let page = "<html><head><!-- a `<script src>` here is a round trip -->\
+                    <script>paint()</script></head></html>";
+        let hashes = super::inline_script_hashes(page);
+        let expected = format!(
+            "sha256-{}",
+            base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(b"paint()"))
+        );
+        assert_eq!(
+            hashes,
+            vec![expected],
+            "the one real block, hashed over its own body"
+        );
+        assert_eq!(
+            super::inline_script_hashes("<!-- <script>never()</script> -->"),
+            Vec::<String>::new(),
+            "a commented-out block admits nothing"
         );
     }
 
