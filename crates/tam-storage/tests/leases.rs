@@ -4200,20 +4200,25 @@ async fn set_app_version(app: &PgPool, tenant: &Tenant, device: &str, version: &
     tx.commit().await.expect("the fixture commits");
 }
 
-/// A client too old to decode a marketplace source is never handed one.
+/// A client too old to run a marketplace-sourced payload is never handed one.
 ///
-/// The item waits rather than failing: a published client below the shim reads
-/// a work order naming a `Marketplace` source as a decode failure, and fails
+/// The item waits rather than failing. A client below the floor either reads a
+/// work order naming a `Marketplace` source as a decode failure or, at 0.8.0,
+/// decodes it and holds no way to fetch the file it names; either way it fails
 /// after the claim, so serving it would leave the item leased until its lease
 /// expired while the device reported a failure every poll. Declining costs a
 /// delay that ends at the device's next upgrade.
+///
+/// 0.8.0 is the version this pins, because it is the one the raised floor
+/// newly excludes: the decode shim alone was enough for it and the TPT
+/// download hop was not.
 #[sqlx::test(migrations = "./migrations")]
-async fn a_device_below_the_shim_is_not_handed_a_marketplace_sourced_item(app: PgPool) {
+async fn a_device_below_the_floor_is_not_handed_a_marketplace_sourced_item(app: PgPool) {
     let tenant = seed_tenant(&app, 0xF1, true).await;
     let engine = engine_pool(&app).await;
     enqueue_one(&engine, &tenant, 0xF2, 0xF3).await;
     register_device(&app, tenant.org, "device-a").await;
-    set_app_version(&app, &tenant, "device-a", "0.1.3").await;
+    set_app_version(&app, &tenant, "device-a", "0.8.0").await;
     make_payload_sourced(&app, &tenant).await;
 
     let claimed = LeaseRepo::new(app.clone())
@@ -4246,7 +4251,7 @@ async fn a_device_below_the_shim_is_not_handed_a_marketplace_sourced_item(app: P
 /// The gate keys on the item rather than on the device's whole eligibility, so
 /// an old client keeps doing everything it could do before.
 #[sqlx::test(migrations = "./migrations")]
-async fn a_device_below_the_shim_still_claims_a_blob_backed_item(app: PgPool) {
+async fn a_device_below_the_floor_still_claims_a_blob_backed_item(app: PgPool) {
     let tenant = seed_tenant(&app, 0xF4, true).await;
     let engine = engine_pool(&app).await;
     enqueue_one(&engine, &tenant, 0xF5, 0xF6).await;
@@ -4275,14 +4280,14 @@ async fn a_device_below_the_shim_still_claims_a_blob_backed_item(app: PgPool) {
     );
 }
 
-/// A client at the shim gets the item the old one could not have.
+/// A client at the floor gets the item the old one could not have.
 #[sqlx::test(migrations = "./migrations")]
-async fn a_device_at_the_shim_is_handed_the_marketplace_sourced_item(app: PgPool) {
+async fn a_device_at_the_floor_is_handed_the_marketplace_sourced_item(app: PgPool) {
     let tenant = seed_tenant(&app, 0xF7, true).await;
     let engine = engine_pool(&app).await;
     enqueue_one(&engine, &tenant, 0xF8, 0xF9).await;
     register_device(&app, tenant.org, "device-a").await;
-    set_app_version(&app, &tenant, "device-a", "0.2.0").await;
+    set_app_version(&app, &tenant, "device-a", "0.9.0").await;
     make_payload_sourced(&app, &tenant).await;
 
     let claimed = LeaseRepo::new(app.clone())
@@ -4303,18 +4308,18 @@ async fn a_device_at_the_shim_is_handed_the_marketplace_sourced_item(app: PgPool
         .expect("the claim runs");
     assert!(
         matches!(claimed, DeviceClaim::Leased(_)),
-        "a device at the shim must not be starved of the work it exists to do: {claimed:?}"
+        "a device at the floor must not be starved of the work it exists to do: {claimed:?}"
     );
 }
 
-/// An unreadable version is treated as below the shim, proved at the claim.
+/// An unreadable version is treated as below the floor, proved at the claim.
 ///
 /// The parser's own test covers the same ground, but the direction matters
 /// where it bites rather than only where it is decided: a device reporting
 /// something we cannot read is a client this code has never seen, and admitting
 /// it wrongly costs a stuck lease while refusing it wrongly costs a delay.
 #[sqlx::test(migrations = "./migrations")]
-async fn an_unreadable_app_version_is_treated_as_below_the_shim(app: PgPool) {
+async fn an_unreadable_app_version_is_treated_as_below_the_floor(app: PgPool) {
     let tenant = seed_tenant(&app, 0xFA, true).await;
     let engine = engine_pool(&app).await;
     enqueue_one(&engine, &tenant, 0xFB, 0xFC).await;
@@ -4389,7 +4394,7 @@ async fn the_claim_and_the_item_read_agree_about_what_is_sourced(app: PgPool) {
         .expect("the claim runs");
     assert!(
         matches!(served, DeviceClaim::Leased(_)),
-        "what the read calls not-sourced, the claim must serve to a client below the shim"
+        "what the read calls not-sourced, the claim must serve to a client below the floor"
     );
 
     // Sourced: the read says sourced, and the claim declines it.
@@ -4421,7 +4426,7 @@ async fn the_claim_and_the_item_read_agree_about_what_is_sourced(app: PgPool) {
     assert_eq!(
         declined,
         DeviceClaim::Empty,
-        "what the read calls sourced, the claim must decline for a client below the shim; \
+        "what the read calls sourced, the claim must decline for a client below the floor; \
          a disagreement here is the item view telling a seller the wrong reason"
     );
 }
@@ -4463,7 +4468,7 @@ async fn make_cover_sourced(app: &PgPool, tenant: &Tenant) {
 /// A sourced cover does not gate an item whose payload is blob-backed.
 ///
 /// The payload manifest is what carries the source and a cover is not in it,
-/// so such an item decodes on a client below the shim and must still be
+/// so such an item decodes on a client below the floor and must still be
 /// served. Gating it would strand work for a reason that is not true of it.
 #[sqlx::test(migrations = "./migrations")]
 async fn a_sourced_cover_does_not_gate_a_blob_backed_payload(app: PgPool) {

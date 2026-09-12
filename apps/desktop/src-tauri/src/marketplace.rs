@@ -35,7 +35,7 @@ use tam_types::{Marketplace, Timestamp};
 use tokio::sync::Mutex;
 
 use crate::connect::login_target;
-use crate::session::{SessionStore, StoreError};
+use crate::session::{CookieJar, SessionStore, StoreError};
 
 /// Why this device can hold no local transport for a marketplace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -330,6 +330,16 @@ impl LiveTransport for TesLive {
             .map_err(|why| why.to_string())?;
         tam_marketplace_tes::ReqwestTransport::new(&session).map_err(|why| why.to_string())
     }
+}
+
+/// TES also issues `TESSession` to anonymous visitors. Only its own
+/// authenticated principal makes a candidate safe to file as a login.
+pub(crate) async fn verify_tes_login(jar: &CookieJar) -> Result<bool, String> {
+    let transport = TesLive.build(&jar.header_value())?;
+    tam_marketplace_tes::read_seller_user_id(&transport)
+        .await
+        .map(|principal| principal.is_some())
+        .map_err(|why| why.to_string())
 }
 
 /// The shipping TPT transport: the keychain jar, bound to TPT's own origin.

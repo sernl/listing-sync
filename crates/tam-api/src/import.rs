@@ -115,6 +115,24 @@ pub(crate) async fn import_page(
     if let Some(request) = page.request {
         return legacy_page(state, context, device, page, blobs, request, now).await;
     }
+    // A catalogue page must name the attempt its device was granted, and an
+    // unfenced one is refused here — before the cover is stored, before the
+    // matcher is asked, before anything is written. An old client cannot be
+    // given a default attempt: a default is a fence nobody granted, and a
+    // page under it cannot be told from one a taken-over phone sent. The
+    // separately authorised migration path above is untouched, which is what
+    // keeps an in-flight migration from an older build working.
+    if page.attempt.is_none() {
+        return Err(APIError::new(
+            StatusCode::CONFLICT,
+            APIErrorEntry::new(
+                "this app is too old to import into your catalogue: update it and start the \
+                 import again",
+            )
+            .code(APIErrorCode::ImportClientUpdateRequired)
+            .kind(APIErrorKind::Validation),
+        ));
+    }
     crate::import_runs::run_page(&state, &context, &device, &page, now).await
 }
 

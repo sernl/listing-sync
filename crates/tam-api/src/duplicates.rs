@@ -19,7 +19,7 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use tam_storage::{
-    DuplicateRepo, FingerprintRepo, ImportRunRepo, LabelRepo, ProductEdit, ProductRepo, Verdict,
+    DuplicateRepo, FingerprintRepo, ImportRunRepo, ProductEdit, ProductRepo, Verdict,
 };
 use tam_types::{InventoryId, OrgId, ProductId, Timestamp, Uuid};
 
@@ -124,6 +124,13 @@ pub(crate) async fn list_duplicates(
 }
 
 /// Records the seller's answer about one pair.
+///
+/// The answer and everything it does — the merge, the tombstone, the import
+/// row returning to the commit queue — are written in one organisation-scoped
+/// decision transaction, the same one the import's own commit takes. That is
+/// what orders a verdict against a commit rather than letting the two
+/// interleave: a cancellation that committed first rejects the commit this
+/// answer would have unblocked, and a commit that ran first stays visible.
 pub(crate) async fn decide(
     State(state): State<AppState>,
     context: OrgContext,
@@ -139,38 +146,75 @@ pub(crate) async fn decide(
     }
     let (lo, hi) = tam_storage::ordered_pair(ProductId(parse_id(&lo)?), ProductId(parse_id(&hi)?));
     let now = (state.wall)();
-    let duplicates = DuplicateRepo::new(state.pool.clone());
-    let held = duplicates
-        .get(context.org, lo, hi)
-        .await
-        .map_err(|error| storage_fault(&state, &error))?
-        .ok_or_else(|| missing("no such duplicate question"))?;
-    if held.verdict != Verdict::Parked {
-        return Err(APIError::new(
-            StatusCode::CONFLICT,
-            APIErrorEntry::new("this pair has been answered already")
-                .code(APIErrorCode::DuplicatePairSettled)
-                .kind(APIErrorKind::Validation),
-        ));
-    }
-
-    let (verdict, kept) = match &body {
-        VerdictBody::Same { keep, fields } => {
+    // The survivor the seller named, checked before anything else: a survivor
+    // outside the pair would tombstone both sides and keep neither.
+    let keep = match &body {
+        VerdictBody::Same { keep, .. } => {
             let keep = ProductId(*keep);
             if keep != lo && keep != hi {
                 return Err(validation(
                     "the resource you keep has to be one of the two this question is about",
                 ));
             }
+            Some(keep)
+        }
+        VerdictBody::Different | VerdictBody::Parked => None,
+    };
+
+    let mut tx = crate::import_runs::begin_guarded(&state, context.org).await?;
+    // The pair itself, re-read under the lock that is about to act on it.
+    //
+    // Not tidiness: two answers to one card can both pass an unlocked
+    // eligibility check, and then the first tombstones B while the second
+    // tombstones A and overwrites the verdict to keep the product it has just
+    // deleted. The row is taken `FOR UPDATE` here, so the second answer finds
+    // the question answered and says so.
+    let standing = tam_storage::pair_verdict(&mut tx, context.org, lo, hi)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    let Some((Verdict::Parked, _, _)) = standing else {
+        tx.rollback().await.map_err(|error| {
+            state.internal(&format!("the database refused a transaction: {error}"))
+        })?;
+        return Err(match standing {
+            Some(_) => APIError::new(
+                StatusCode::CONFLICT,
+                APIErrorEntry::new("this pair has been answered already")
+                    .code(APIErrorCode::DuplicatePairSettled)
+                    .kind(APIErrorKind::Validation),
+            ),
+            None => missing("no such duplicate question"),
+        });
+    };
+
+    // Each side that is an import row is decided under its own run's guard: a
+    // run the seller cancelled does not advance items, however the question
+    // about them is answered. The verdict itself is still recorded — the
+    // seller answered it, and the answer is theirs to keep.
+    let (verdict, kept) = match &body {
+        VerdictBody::Same { fields, .. } => {
+            let keep = keep.ok_or_else(|| state.internal("a merge names no survivor"))?;
             let loser = if keep == lo { hi } else { lo };
-            merge(&state, context.org, keep, loser, lo, hi, fields, now).await?;
+            merge(
+                &state,
+                &mut tx,
+                context.org,
+                &Merging {
+                    keep,
+                    loser,
+                    lo,
+                    hi,
+                    fields,
+                },
+                now,
+            )
+            .await?;
             (Verdict::Same, Some(keep))
         }
         VerdictBody::Different => (Verdict::Different, None),
         VerdictBody::Parked => (Verdict::Parked, None),
     };
-    duplicates
-        .decide(context.org, lo, hi, verdict, kept, now)
+    tam_storage::decide_verdict(&mut tx, context.org, lo, hi, verdict, kept, now)
         .await
         .map_err(|error| storage_fault(&state, &error))?;
     // The answer is what unblocks the item. An import run item is held in
@@ -178,8 +222,11 @@ pub(crate) async fn decide(
     // last of them has to move it -- otherwise a seller who said "different"
     // would watch a commit that never reaches the resource they just said to
     // keep.
-    unblock(&state, context.org, lo).await?;
-    unblock(&state, context.org, hi).await?;
+    unblock(&state, &mut tx, context.org, lo).await?;
+    unblock(&state, &mut tx, context.org, hi).await?;
+    tx.commit()
+        .await
+        .map_err(|error| state.internal(&format!("the database refused a transaction: {error}")))?;
     Ok(Json(VerdictAck {
         product_lo: lo,
         product_hi: hi,
@@ -191,6 +238,11 @@ pub(crate) async fn decide(
 }
 
 /// Reverses a merge, inside the window the seller was told.
+///
+/// A compensation rather than a reopening: the historical run stays settled
+/// and keeps what it recorded, and what comes back is the resource — the
+/// tombstoned product restored, or the import row returned to its run's
+/// commit queue if that run still permits work.
 pub(crate) async fn undo(
     State(state): State<AppState>,
     context: OrgContext,
@@ -204,19 +256,28 @@ pub(crate) async fn undo(
     }
     let (lo, hi) = tam_storage::ordered_pair(ProductId(parse_id(&lo)?), ProductId(parse_id(&hi)?));
     let now = (state.wall)();
-    let duplicates = DuplicateRepo::new(state.pool.clone());
-    let held = duplicates
-        .get(context.org, lo, hi)
+
+    let mut tx = crate::import_runs::begin_guarded(&state, context.org).await?;
+    // The merge this reverses, re-read under the lock that is about to undo
+    // it: two undos racing, or an undo racing a re-decision, otherwise both
+    // pass an unlocked eligibility check and the second acts on a merge that
+    // no longer stands.
+    let standing = tam_storage::pair_verdict(&mut tx, context.org, lo, hi)
         .await
-        .map_err(|error| storage_fault(&state, &error))?
-        .ok_or_else(|| missing("no such duplicate question"))?;
-    let (Verdict::Same, Some(kept), Some(until)) = (held.verdict, held.kept, held.reversible_until)
-    else {
-        return Err(validation(
-            "only a merge can be undone, and this pair was not merged",
-        ));
+        .map_err(|error| storage_fault(&state, &error))?;
+    let Some((Verdict::Same, Some(kept), Some(until))) = standing else {
+        tx.rollback().await.map_err(|error| {
+            state.internal(&format!("the database refused a transaction: {error}"))
+        })?;
+        return Err(match standing {
+            Some(_) => validation("only a merge can be undone, and this pair was not merged"),
+            None => missing("no such duplicate question"),
+        });
     };
     if now.0 > until.0 {
+        tx.rollback().await.map_err(|error| {
+            state.internal(&format!("the database refused a transaction: {error}"))
+        })?;
         return Err(validation(
             "the thirty days to undo this merge have passed; the two are one resource now",
         ));
@@ -224,41 +285,57 @@ pub(crate) async fn undo(
     let loser = if kept == lo { hi } else { lo };
 
     // Either the loser was a product this merge tombstoned, or it was a run
-    // item this merge skipped. Both are reversed, and neither is a special
-    // case of the other: the run item's reversal is what puts the resource
-    // back in the import's own commit queue.
-    let products = ProductRepo::new(state.pool.clone());
-    let restored = products
-        .restore(context.org, loser, now)
+    // item this merge skipped. Both are reversed in this transaction, and
+    // neither is a special case of the other: the run item's reversal is what
+    // puts the resource back in the import's own queue.
+    let restored = tam_storage::restore_product(&mut tx, context.org, loser, now)
         .await
         .map_err(|error| storage_fault(&state, &error))?;
     if restored {
         if let Some(marketplace) = marketplace_of(&state, context.org, loser).await? {
-            LabelRepo::new(state.pool.clone())
-                .attach_system_label(context.org, loser, marketplace, now)
+            tam_storage::attach_system_label(&mut tx, context.org, loser, marketplace, now)
                 .await
                 .map_err(|error| storage_fault(&state, &error))?;
         }
-    } else if let Some((run, locator)) = ImportRunRepo::new(state.pool.clone())
-        .item_by_product(context.org, loser)
+    } else if let Some((run, locator)) = tam_storage::item_of_product(&mut tx, context.org, loser)
         .await
         .map_err(|error| storage_fault(&state, &error))?
     {
-        ImportRunRepo::new(state.pool.clone())
-            .record_verdict(
-                context.org,
+        // Only while that run still permits work. A completed or cancelled
+        // run is not reopened by an undo — the compensation is audited against
+        // the catalogue, not against a historical run's state.
+        if advanceable(&state, &mut tx, context.org, run).await? {
+            let at = tam_storage::ItemAddress {
                 run,
-                &locator,
-                tam_storage::RunItemState::Matched,
-            )
-            .await
-            .map_err(|error| storage_fault(&state, &error))?;
+                locator: &locator,
+            };
+            // A merged item is `skipped` and settled, which the ordinary
+            // verdict write refuses to move. Reopening it is the undo's own
+            // transition: without it the pair came back as a question while
+            // the resource stayed skipped, and no answer the seller then gave
+            // could ever commit it.
+            if !tam_storage::reopen_skipped(&mut tx, context.org, at)
+                .await
+                .map_err(|error| storage_fault(&state, &error))?
+            {
+                tam_storage::record_verdict(
+                    &mut tx,
+                    context.org,
+                    at,
+                    tam_storage::RunItemState::Review,
+                )
+                .await
+                .map_err(|error| storage_fault(&state, &error))?;
+            }
+        }
     }
 
-    duplicates
-        .decide(context.org, lo, hi, Verdict::Parked, None, now)
+    tam_storage::decide_verdict(&mut tx, context.org, lo, hi, Verdict::Parked, None, now)
         .await
         .map_err(|error| storage_fault(&state, &error))?;
+    tx.commit()
+        .await
+        .map_err(|error| state.internal(&format!("the database refused a transaction: {error}")))?;
     Ok(Json(VerdictAck {
         product_lo: lo,
         product_hi: hi,
@@ -268,36 +345,62 @@ pub(crate) async fn undo(
     }))
 }
 
+/// Whether this run still lets its items move.
+///
+/// The run guard, read under the same lock as the write it gates: an open run
+/// advances, and a settled one — completed, failed or stopped — does not.
+async fn advanceable(
+    state: &AppState,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    run: Uuid,
+) -> Result<bool, APIError> {
+    Ok(tam_storage::guard_run(tx, org, run)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+        .is_some_and(|guard| guard.state.open()))
+}
+
 /// Returns one side to the commit queue if nothing is still owed about it.
 ///
-/// Only where that side is an import run item still in review: a product needs
-/// no unblocking, and an item the seller merged away is settled rather than
-/// waiting.
-async fn unblock(state: &AppState, org: OrgId, product: ProductId) -> Result<(), APIError> {
-    let runs = ImportRunRepo::new(state.pool.clone());
-    let Some((run, locator)) = runs
-        .item_by_product(org, product)
+/// Only where that side is an import run item still in review, and only while
+/// its run's guard permits work: a product needs no unblocking, and an item
+/// the seller merged away is settled rather than waiting.
+async fn unblock(
+    state: &AppState,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    product: ProductId,
+) -> Result<(), APIError> {
+    let Some((run, locator)) = tam_storage::item_of_product(tx, org, product)
         .await
         .map_err(|error| storage_fault(state, &error))?
     else {
         return Ok(());
     };
-    let held = runs
-        .item(org, run, &locator)
+    let at = tam_storage::ItemAddress {
+        run,
+        locator: &locator,
+    };
+    if tam_storage::reserved_state(tx, org, at)
         .await
-        .map_err(|error| storage_fault(state, &error))?;
-    if held.map(|item| item.state) != Some(tam_storage::RunItemState::Review) {
+        .map_err(|error| storage_fault(state, &error))?
+        != Some(tam_storage::RunItemState::Review)
+    {
         return Ok(());
     }
-    if DuplicateRepo::new(state.pool.clone())
-        .parked_for(org, product)
+    if tam_storage::parked_for(tx, org, product)
         .await
         .map_err(|error| storage_fault(state, &error))?
         > 0
     {
         return Ok(());
     }
-    runs.record_verdict(org, run, &locator, tam_storage::RunItemState::Matched)
+    if !advanceable(state, tx, org, run).await? {
+        return Ok(());
+    }
+
+    tam_storage::record_verdict(tx, org, at, tam_storage::RunItemState::Matched)
         .await
         .map_err(|error| storage_fault(state, &error))?;
     Ok(())
@@ -305,26 +408,37 @@ async fn unblock(state: &AppState, org: OrgId, product: ProductId) -> Result<(),
 
 // ------------------------------------------------------------------ merge
 
-/// Applies a `same` verdict: the survivor keeps the fields the seller chose,
-/// and the loser stops being a second resource.
-#[allow(clippy::too_many_arguments)]
-async fn merge(
-    state: &AppState,
-    org: OrgId,
+/// One merge, as the seller answered it.
+struct Merging<'a> {
     keep: ProductId,
     loser: ProductId,
     lo: ProductId,
     hi: ProductId,
-    fields: &WinningFields,
+    fields: &'a WinningFields,
+}
+
+/// Applies a `same` verdict: the survivor keeps the fields the seller chose,
+/// and the loser stops being a second resource.
+///
+/// Every write is on the caller's transaction, so the survivor's fields, the
+/// loser's tombstone, the label that moves and the verdict recording the
+/// decision either all stand or none do. A process that stopped between them
+/// used to leave a tombstoned resource beside a question that still read as
+/// unanswered, with no recorded merge to reverse.
+async fn merge(
+    state: &AppState,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    merging: &Merging<'_>,
     now: Timestamp,
 ) -> Result<(), APIError> {
     let products = ProductRepo::new(state.pool.clone());
     let held_lo = products
-        .get(org, lo)
+        .get(org, merging.lo)
         .await
         .map_err(|error| storage_fault(state, &error))?;
     let held_hi = products
-        .get(org, hi)
+        .get(org, merging.hi)
         .await
         .map_err(|error| storage_fault(state, &error))?;
 
@@ -344,32 +458,30 @@ async fn merge(
         WinningSide::Lo => held_lo.as_ref(),
         WinningSide::Hi => held_hi.as_ref(),
     };
-    if let Some(chosen) = fields.title.and_then(pick) {
+    if let Some(chosen) = merging.fields.title.and_then(pick) {
         edit.title = Some(chosen.product.title.clone());
     }
-    if let Some(chosen) = fields.description.and_then(pick) {
+    if let Some(chosen) = merging.fields.description.and_then(pick) {
         edit.body = Some(chosen.product.body.clone());
     }
-    if let Some(chosen) = fields.price.and_then(pick) {
+    if let Some(chosen) = merging.fields.price.and_then(pick) {
         edit.price = Some(chosen.product.price);
     }
     if edit.title.is_some() || edit.body.is_some() || edit.price.is_some() {
-        products
-            .update(org, keep, &edit, now)
+        tam_storage::update_product(tx, org, merging.keep, &edit, now)
             .await
             .map_err(|error| storage_fault(state, &error))?;
     }
 
     // The survivor gains the label of the shop the loser came from, because it
     // now stands for that listing too.
-    if let Some(marketplace) = marketplace_of(state, org, loser).await? {
-        LabelRepo::new(state.pool.clone())
-            .attach_system_label(org, keep, marketplace, now)
+    if let Some(marketplace) = marketplace_of(state, org, merging.loser).await? {
+        tam_storage::attach_system_label(tx, org, merging.keep, marketplace, now)
             .await
             .map_err(|error| storage_fault(state, &error))?;
     }
 
-    let loser_is_a_product = if keep == lo {
+    let loser_is_a_product = if merging.keep == merging.lo {
         held_hi.is_some()
     } else {
         held_lo.is_some()
@@ -377,8 +489,7 @@ async fn merge(
     if loser_is_a_product {
         // Tombstoned rather than erased, which is exactly what makes the
         // thirty-day reversal possible.
-        products
-            .soft_delete(org, loser, now)
+        tam_storage::soft_delete_product(tx, org, merging.loser, now)
             .await
             .map_err(|error| storage_fault(state, &error))?;
         return Ok(());
@@ -387,23 +498,36 @@ async fn merge(
     // The loser is a resource an import read and has not created. Skipping it
     // is the merge: the survivor already holds this resource, and creating a
     // second one is precisely what the verdict says not to do.
-    if let Some((run, locator)) = ImportRunRepo::new(state.pool.clone())
-        .item_by_product(org, loser)
+    //
+    // Only while that import still permits work, and the guard is read here
+    // rather than left to the unblock afterwards: an answer that arrives
+    // after the seller stopped the run would otherwise settle a row of a
+    // terminal import, which is the one thing the cancellation was supposed
+    // to have stopped. The verdict itself is still recorded — the seller
+    // answered the question and the answer is theirs to keep.
+    if let Some((run, locator)) = tam_storage::item_of_product(tx, org, merging.loser)
         .await
         .map_err(|error| storage_fault(state, &error))?
     {
-        let title = products
-            .get(org, keep)
+        if !advanceable(state, tx, org, run).await? {
+            return Ok(());
+        }
+        let title = tam_storage::title_of(tx, org, merging.keep)
             .await
             .map_err(|error| storage_fault(state, &error))?
-            .map_or_else(
-                || "a resource you already have".to_owned(),
-                |record| record.product.title.0.clone(),
-            );
-        ImportRunRepo::new(state.pool.clone())
-            .record_skipped(org, run, &locator, &format!("same as {title}"), now)
-            .await
-            .map_err(|error| storage_fault(state, &error))?;
+            .unwrap_or_else(|| "a resource you already have".to_owned());
+        tam_storage::record_skipped(
+            tx,
+            org,
+            tam_storage::ItemAddress {
+                run,
+                locator: &locator,
+            },
+            &format!("same as {title}"),
+            now,
+        )
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
     }
     Ok(())
 }

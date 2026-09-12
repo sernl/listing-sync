@@ -70,9 +70,9 @@ Storage: `product_fingerprint` (versioned sketches, `title_norm` under `pg_trgm`
 
 **The review**: between parse and commit, where import already pauses. One card per pair: both listings side by side with marketplace, cover, title, price and grades; one sentence of evidence ("the same file, byte for byte: worksheet-pack.pdf, 2.4 MB"), never a score; three buttons, *Same resource, keep one* / *Different resources* / *Decide later*; on "same", a which-side-wins step per field, per-marketplace values kept on `mapping`; reversible for 30 days; parked pairs never block the import.
 
-### A capture this depends on
+### TPT own-file capture
 
-TPT's own-file download is uncaptured (`uncaptured_source(Tpt) = "tpt.download_resource_bundle"`). Until the founder supervises that capture, a TPT import carries title, description, price, grades, cover and page count but no file digest or text sketch, so a TPT-to-Tes duplicate is found by L3, L4 and L5 alone and is always asked, never auto-merged.
+The founder-supervised capture on 2026-09-13 resolved TPT's own-file download: the seller's `/Download/{slug}-{id}` redirects to a signed asset URL on `rc-assets.teacherspayteachers.com`. The phone fetched the ZIP without sending marketplace cookies to that host. The 0.9.0 native binding uses this flow for import fingerprints and publishing file resolution; missing, changed or malformed files remain refusals, not publishing-ready metadata. Physical import and destination acceptance remain tracked in the repair plan until exercised.
 
 ## 3. Marketplace lifecycle
 
@@ -80,7 +80,7 @@ TPT's own-file download is uncaptured (`uncaptured_source(Tpt) = "tpt.download_r
 |---|---|---|
 | enumerate catalogue | wired | wired |
 | read one listing | wired | wired |
-| download own file | **uncaptured** | wired |
+| download own file | wired (captured 2026-09-13) | wired |
 | create draft / publish live | wired | wired |
 | edit published | wired | **uncaptured** (`tes.edit_published`) |
 | unpublish | n/a | **uncaptured** (`tes.unpublish`) |
@@ -238,4 +238,4 @@ Every phase ends with a release, by founder rule of 2026-09-12: `docs/releases/<
 The app halves must be clean under `cargo clippy -p tam-desktop -- -D warnings`, `cargo nextest run -p tam-desktop` and the Windows cross-check, and anything the phase changed that the desktop or the phone must follow (a route move, a theme, a permission) lands in the same release rather than being left to the landing page or the browser.
 Phases 0 to 2 shipped together as 0.4.0; phase 3 with the console-start fix and the phone bar as 0.5.0; phase 4 as 0.6.0; phase 5 as 0.7.0.
 
-Founder-supervised captures owed, none blocking phase 0 to 2: TPT own-file download, Tes edit-published, Tes unpublish, TPT preview slot (from 2026-09-11).
+Founder-supervised captures still owed: Tes edit-published, Tes unpublish and TPT preview slot (from 2026-09-11). TPT own-file download was captured on 2026-09-13; its physical import and publishing checks belong to the pre-Phase-7 repair gate.

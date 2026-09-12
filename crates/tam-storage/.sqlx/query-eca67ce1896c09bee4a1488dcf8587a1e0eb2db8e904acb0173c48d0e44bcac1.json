@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO guide_tag_assignment (guide_id, taxon_id, scope) SELECT $1, taxon, $3 FROM unnest($2::uuid[]) AS taxon ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "eca67ce1896c09bee4a1488dcf8587a1e0eb2db8e904acb0173c48d0e44bcac1"
+}

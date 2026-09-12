@@ -32,14 +32,13 @@ use tam_pipeline::pipeline::{ingest, ArchiveMode, IngestContext, IngestError};
 use tam_pipeline::scan::EicarScanner;
 use tam_pipeline::store::LocalObjectStore;
 use tam_storage::{
-    intent_digest, AnsweredElection, BlobRepo, ElectionRepo, JobRepo, MappingAdd, MappingRecord,
-    MappingRepo, NewJob, NewJobItem, ProductEdit, ProductRepo, StorageError, TenantBlobSink,
-    TptBaseRepo,
+    intent_digest, AnsweredElection, BlobRepo, JobRepo, MappingAdd, MappingRecord, MappingRepo,
+    NewJob, NewJobItem, ProductEdit, ProductRepo, StorageError, TenantBlobSink, TptBaseRepo,
 };
 use tam_types::{
     Actor, CanonicalTermId, ContentHash, CopyFormat, FileBytes, FileId, FileRole, ImportedTerm,
-    InventoryId, JobId, ListingCopy, MappingId, Money, OrgId, PayloadSet, PriceIntent, PriceRule,
-    ProductFile, ProductId, ScanOutcome, Stamp, Timestamp, Title, Uuid,
+    InventoryId, JobId, ListingCopy, MappingId, Marketplace, Money, OrgId, PayloadSet, PriceIntent,
+    PriceRule, ProductFile, ProductId, ScanOutcome, Stamp, Timestamp, Title, Uuid,
 };
 
 use tam_authoring::refusal_of;
@@ -793,6 +792,146 @@ fn required_fields_answered(
     rights: Option<&RightsInput>,
     elections: &[ElectionInput],
 ) -> Result<(), APIError> {
+    refuse_unmet_required(&unmet_required_fields(inventories, |inventory| {
+        rights.is_some()
+            || elections.iter().any(|election| {
+                election.inventory == inventory
+                    && election.axis == TermKind::Licence
+                    && !election.answers.is_empty()
+            })
+    }))
+}
+
+/// Why this resource cannot have a listing created for it on a marketplace it
+/// does not have one on yet.
+///
+/// One answer for every surface that mints an unbound mapping — the
+/// cross-list route below, the migration preview, the collection publish and
+/// the schedule's own tick — because they were four places deciding the same
+/// thing and three of them decided less of it. Deliberately scoped to a
+/// *creation*: a bound listing already exists, and what a create would have
+/// needed is not the question a revise, a hide or a delete asks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CreationBlocked {
+    /// D32's other half: a resource kept on Teachouse alone carries no file,
+    /// and a marketplace listing cannot be made of one.
+    NoPayload,
+    /// The bytes are the seller's own, held by a marketplace this tree has no
+    /// captured download for, so nothing can upload them anywhere else.
+    PayloadUnacquirable {
+        marketplace: Marketplace,
+        capability: &'static str,
+    },
+    /// The target declares a field this resource answers nowhere, in the
+    /// shape [`refuse_unmet_required`] reports.
+    RequiredFields(Vec<serde_json::Value>),
+}
+
+impl CreationBlocked {
+    /// The sentence a per-row preview renders beside a blocked resource.
+    ///
+    /// A row rather than a refusal, because a seller ticking forty resources
+    /// is owed the reason for the one that cannot move rather than a refusal
+    /// of all forty.
+    pub(crate) fn reason(&self) -> String {
+        match self {
+            Self::NoPayload => "no file".to_owned(),
+            Self::PayloadUnacquirable {
+                marketplace,
+                capability,
+            } => format!(
+                "this resource's file is held by {marketplace:?} and we cannot download it yet \
+                 ({capability}), so it cannot be uploaded anywhere else"
+            ),
+            Self::RequiredFields(unmet) => {
+                let named: Vec<String> = unmet
+                    .iter()
+                    .filter_map(|field| field["label"].as_str().map(str::to_owned))
+                    .collect();
+                format!("that marketplace requires {}", named.join(", "))
+            }
+        }
+    }
+
+    /// The refusal a whole-request route answers with.
+    ///
+    /// Each arm keeps the code the surface that already refused it used, so a
+    /// client anchoring on `payload_missing` or on `required_field_missing`'s
+    /// `detail.missing[]` reads the same answer it always did.
+    pub(crate) fn refusal(&self) -> APIError {
+        match self {
+            Self::NoPayload => coded(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "a listing on a marketplace needs a file buyers can download; upload it first",
+                APIErrorCode::PayloadMissing,
+            ),
+            Self::PayloadUnacquirable { .. } => validation(&self.reason()),
+            Self::RequiredFields(unmet) => refuse_unmet_required(unmet)
+                .err()
+                // Unreachable: this arm is only ever built from a non-empty
+                // list, and `refuse_unmet_required` answers `Ok` only for an
+                // empty one. Stated rather than unwrapped.
+                .unwrap_or_else(|| validation(&self.reason())),
+        }
+    }
+}
+
+/// The one eligibility decision, over facts a caller read in one go.
+///
+/// Synchronous and total: every read it needs is in
+/// [`tam_storage::ProductCreationFacts`], which is what lets a forty-row
+/// preview ask it forty times without forty transactions.
+pub(crate) fn creation_blocked(
+    facts: &tam_storage::ProductCreationFacts,
+    inventory: InventoryId,
+) -> Option<CreationBlocked> {
+    if facts.payload_files == 0 {
+        return Some(CreationBlocked::NoPayload);
+    }
+    if let Some((marketplace, capability)) = facts
+        .payload_sources
+        .iter()
+        .find_map(|held| unacquirable_from(*held).map(|capability| (*held, capability)))
+    {
+        return Some(CreationBlocked::PayloadUnacquirable {
+            marketplace,
+            capability,
+        });
+    }
+    let unmet = unmet_required_fields(&[inventory], |target| {
+        facts.rights_declared
+            || (target == inventory && facts.settled_axes.contains(&TermKind::Licence))
+    });
+    (!unmet.is_empty()).then_some(CreationBlocked::RequiredFields(unmet))
+}
+
+/// Which marketplace-held file this tree has no way to fetch, if any.
+///
+/// The registry answer `uncaptured_source` gives about a sync's source, asked
+/// instead about the marketplace holding a resource's bytes — the same
+/// question `SellerFiles` answers on the device, and the same capability
+/// name, so the preview and the run cannot disagree about which download
+/// exists. Exhaustive rather than defaulted: a marketplace added later is a
+/// build to fix here, not a resource silently admitted.
+const fn unacquirable_from(marketplace: Marketplace) -> Option<&'static str> {
+    tam_storage::uncaptured_source(match marketplace {
+        Marketplace::Tes => InventoryId::Tes,
+        Marketplace::Tpt => InventoryId::Tpt,
+        Marketplace::Etsy => InventoryId::Etsy,
+    })
+}
+
+/// The registry walk the two callers share.
+///
+/// Only the answer half differs between them — a create reads the body it was
+/// sent, a cross-listing reads what the catalogue holds — so that half arrives
+/// as a predicate and the walk itself stays one implementation. A second walk
+/// would be a second answer to "does this platform require a field this
+/// product does not carry".
+fn unmet_required_fields(
+    inventories: &[InventoryId],
+    licence_answered: impl Fn(InventoryId) -> bool,
+) -> Vec<serde_json::Value> {
     let mut unmet: Vec<serde_json::Value> = Vec::new();
     for inventory in inventories {
         for native in registry(*inventory).natives {
@@ -805,14 +944,7 @@ fn required_fields_answered(
                 .find(|binding| binding.native == native.name)
                 .map(|binding| binding.axis);
             let answered = match axis {
-                Some(TermKind::Licence) => {
-                    rights.is_some()
-                        || elections.iter().any(|election| {
-                            election.inventory == *inventory
-                                && election.axis == TermKind::Licence
-                                && !election.answers.is_empty()
-                        })
-                }
+                Some(TermKind::Licence) => licence_answered(*inventory),
                 // No other required field exists in the registry today. A new
                 // one arrives unanswerable rather than silently satisfied,
                 // which is the honest default: the form has to be taught it.
@@ -832,6 +964,10 @@ fn required_fields_answered(
             }
         }
     }
+    unmet
+}
+
+fn refuse_unmet_required(unmet: &[serde_json::Value]) -> Result<(), APIError> {
     if unmet.is_empty() {
         return Ok(());
     }
@@ -932,36 +1068,31 @@ pub(crate) async fn create_product(
     Ok((StatusCode::CREATED, Json(created)))
 }
 
-/// Creates one product under identifiers the caller already holds.
+/// Validates and resolves one create under identifiers the caller already
+/// holds, writing nothing.
 ///
 /// Split out of the handler above so that a second authoring path takes this
 /// one rather than a copy of it: the spreadsheet import commits a row by
-/// building a [`CreateProductBody`] and calling this, so every rule the create
-/// form meets -- the title cap, the price constructor, the required-field
-/// check, the held-bytes and picture-slot checks, the listing quota -- is one
-/// implementation with two callers rather than two that agree on the day they
-/// are written.
+/// building a [`CreateProductBody`] and preparing it here, so every rule the
+/// create form meets -- the title cap, the price constructor, the
+/// required-field check, the held-bytes and picture-slot checks, the listing
+/// quota -- is one implementation with two callers rather than two that agree
+/// on the day they are written.
 ///
-/// The identifiers are the caller's because the import reserves them before it
-/// creates anything: a pass resumed after a closed browser has to be able to
-/// finish the row it already claimed rather than mint a second product for it.
-/// The handler above mints its own and is unchanged by the arrangement. The
-/// writes after the product row are [`finish_one`], which the import also
-/// calls on its own for a row whose product a dead pass had already written.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the identifiers are the caller's by design, and the plan's capabilities \
-              are the sixth: folding them into a struct would name a parameter bag \
-              nothing else holds"
-)]
-pub(crate) async fn create_one(
+/// The identifiers are the caller's because the import reserves them before
+/// it creates anything: a pass resumed after a closed browser finishes the
+/// row it already claimed rather than minting a second product for it.
+///
+/// Every refusal a seller can act on is decided here, and every read the
+/// write needs is taken here, so the transaction that applies the row holds
+/// nothing but its writes. [`apply_create`] is that transaction's half.
+pub(crate) async fn prepare_create(
     state: &AppState,
     org: OrgId,
     caps: Capabilities,
     body: &CreateProductBody,
     product: ProductId,
-    mappings: &[MappingId],
-) -> Result<CreatedProductView, APIError> {
+) -> Result<PreparedCreate, APIError> {
     checked_title(&body.title)?;
     // Named before the general refusal below, because the two are different
     // situations and only this one is about something the seller just chose. A
@@ -1115,84 +1246,169 @@ pub(crate) async fn create_one(
         }
     };
 
-    products
-        .insert_named(
+    // Everything above is a read or a refusal; everything below is a write.
+    // The two halves are split here so a caller that owns a transaction — the
+    // spreadsheet import, under its organisation's catalogue guard — can
+    // apply the whole row atomically, while the ordinary create opens one of
+    // its own.
+    let prepared = PreparedCreate {
+        product,
+        canonical: CanonicalProduct {
+            id: product,
             org,
-            &CanonicalProduct {
-                id: product,
-                org,
-                title: Title(body.title.clone()),
-                body: ListingCopy {
-                    body: body.body.clone(),
-                    format: body.body_format,
-                },
-                payload,
-                cover,
-                previews,
-                subjects: body.subjects.clone(),
-                grades,
-                price,
-                rights,
-                // Empty from the create form, which authors in this
-                // model's own axes and has no source values to keep. The
-                // spreadsheet import fills it: a sheet cell in an axis this
-                // model does not yet type is kept verbatim rather than
-                // dropped, which is what this field is for.
-                native_residue: body.natives.clone(),
+            title: Title(body.title.clone()),
+            body: ListingCopy {
+                body: body.body.clone(),
+                format: body.body_format,
             },
-            &names,
-            now,
-        )
+            payload,
+            cover,
+            previews,
+            subjects: body.subjects.clone(),
+            grades,
+            price,
+            rights,
+            // Empty from the create form, which authors in this model's own
+            // axes and has no source values to keep. The spreadsheet import
+            // fills it: a sheet cell in an axis this model does not yet type
+            // is kept verbatim rather than dropped, which is what this field
+            // is for.
+            native_residue: body.natives.clone(),
+        },
+        names,
+        sidecar,
+        price,
+        held_mappings: MappingRepo::new(state.pool.clone())
+            .list_for_product(org, product)
+            .await
+            .map_err(|error| storage_fault(state, &error))?
+            .into_iter()
+            .map(|record| record.mapping.id)
+            .collect(),
+    };
+    Ok(prepared)
+}
+
+/// One create, validated and resolved, with nothing written yet.
+///
+/// Held apart from the writes so the import can apply a whole row inside the
+/// transaction its guard already owns: the product, its sidecar, its mappings
+/// and its elections either all land or none do, and a pass that stops
+/// mid-row leaves nothing half-created behind.
+pub(crate) struct PreparedCreate {
+    product: ProductId,
+    canonical: CanonicalProduct,
+    names: std::collections::HashMap<FileId, String>,
+    sidecar: Option<tam_storage::TptBaseRecord>,
+    price: PriceIntent,
+    /// The mappings this product already holds, read before the write: a
+    /// resumed create inserts only what is missing, and reading it here keeps
+    /// the guarded transaction free of a second connection's query.
+    held_mappings: Vec<MappingId>,
+}
+
+/// Writes one prepared create inside a transaction the caller owns.
+pub(crate) async fn apply_create(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    state: &AppState,
+    org: OrgId,
+    prepared: &PreparedCreate,
+    plan: &CreatePlan<'_>,
+) -> Result<CreatedProductView, APIError> {
+    let now = (state.wall)();
+    tam_storage::insert_product(tx, org, &prepared.canonical, &prepared.names, now)
         .await
         .map_err(|error| create_fault(state, &error))?;
 
-    if let Some(record) = &sidecar {
+    if let Some(record) = &prepared.sidecar {
         // After the product row, because the sidecar's foreign key names it.
-        TptBaseRepo::new(state.pool.clone())
-            .upsert(org, product, record, now)
+        tam_storage::upsert_tpt_base(tx, org, prepared.product, record, now)
             .await
             .map_err(|error| create_fault(state, &error))?;
     }
 
-    finish_one(state, org, body, product, mappings).await
+    finish_in(
+        tx,
+        state,
+        org,
+        prepared.product,
+        prepared.price,
+        &prepared.held_mappings,
+        plan,
+        now,
+    )
+    .await
+}
+
+/// What a create is to be bound to and what its seller answered.
+pub(crate) struct CreatePlan<'a> {
+    pub inventories: &'a [InventoryId],
+    pub elections: &'a [ElectionInput],
+    pub mappings: &'a [MappingId],
+}
+
+/// Creates one product, in a transaction of its own.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the state, the tenant, its plan's capabilities, the body, the reserved product and its mapping identifiers; every caller passes all six"
+)]
+pub(crate) async fn create_one(
+    state: &AppState,
+    org: OrgId,
+    caps: Capabilities,
+    body: &CreateProductBody,
+    product: ProductId,
+    mappings: &[MappingId],
+) -> Result<CreatedProductView, APIError> {
+    let prepared = prepare_create(state, org, caps, body, product).await?;
+    let plan = CreatePlan {
+        inventories: &body.inventories,
+        elections: &body.elections,
+        mappings,
+    };
+    let mut tx = crate::import_runs::begin_guarded(state, org).await?;
+    let created = apply_create(&mut tx, state, org, &prepared, &plan).await?;
+    tx.commit()
+        .await
+        .map_err(|error| state.internal(&format!("the database refused a transaction: {error}")))?;
+    Ok(created)
 }
 
 /// The writes that trail the product row: its mappings and its elections.
 ///
-/// Split from [`create_one`] at the product insert because that is where a
-/// pass can die. The spreadsheet import reserves a row's identifiers, creates
-/// the product, and writes these afterwards, each in its own transaction; a
-/// commit resumed after a crash between the insert and these finds the
-/// product and calls this to complete what is missing. So every write here
-/// holds for a product that already carries some of them: a mapping is
-/// inserted only where the product does not already hold one under that
-/// identifier, and an answered election the tenant has already recorded for
-/// this product writes no second row, which is the guard
-/// [`ElectionRepo::record_answered`] carries for a retried create.
+/// In the caller's transaction, with the product itself. That is the change
+/// the import's atomic-row contract asks for: a pass that stops mid-row now
+/// leaves nothing rather than a product missing the mappings and answers its
+/// row named.
+///
+/// Every write here still holds for a product that already carries some of
+/// them, because a resumed create reaches it again: a mapping is inserted
+/// only where the product does not already hold one under that identifier,
+/// and an answered election the tenant has already recorded writes no second
+/// row.
 ///
 /// None of the create's refusals runs again here — not the quota, which would
 /// count the product that exists, and not the held-bytes read-back, which the
 /// stored product already passed — because the product's existence is the
 /// proof those were met.
-pub(crate) async fn finish_one(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the transaction, the state, the tenant, the product, its price, the mappings it already holds, the plan and the instant; the two callers pass all eight"
+)]
+async fn finish_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     state: &AppState,
     org: OrgId,
-    body: &CreateProductBody,
     product: ProductId,
-    mappings: &[MappingId],
+    price: PriceIntent,
+    existing: &[MappingId],
+    plan: &CreatePlan<'_>,
+    now: Timestamp,
 ) -> Result<CreatedProductView, APIError> {
-    let price = checked_price(body.price)?;
-    let now = (state.wall)();
-    let bindings = MappingRepo::new(state.pool.clone());
-    let existing: Vec<MappingId> = bindings
-        .list_for_product(org, product)
-        .await
-        .map_err(|error| storage_fault(state, &error))?
-        .into_iter()
-        .map(|record| record.mapping.id)
-        .collect();
-    let mut written = Vec::with_capacity(body.inventories.len());
-    for (slot, inventory) in body.inventories.iter().enumerate() {
+    let body_inventories = plan.inventories;
+    let mappings = plan.mappings;
+    let mut written = Vec::with_capacity(body_inventories.len());
+    for (slot, inventory) in body_inventories.iter().enumerate() {
         // One identifier per inventory, by position. A caller that supplied
         // fewer than it named is ours rather than a seller's, and answering it
         // as an internal fault is what keeps this total without a panic.
@@ -1200,15 +1416,15 @@ pub(crate) async fn finish_one(
             state.internal("a create was handed fewer mapping identifiers than it names platforms")
         })?;
         if !existing.contains(&mapping) {
-            bindings
-                .insert(
-                    org,
-                    &unbound_mapping(org, product, *inventory, mapping, price),
-                    0,
-                    now,
-                )
-                .await
-                .map_err(|error| storage_fault(state, &error))?;
+            tam_storage::insert_mapping(
+                tx,
+                org,
+                &unbound_mapping(org, product, *inventory, mapping, price),
+                0,
+                now,
+            )
+            .await
+            .map_err(|error| storage_fault(state, &error))?;
         }
         written.push(MappingView {
             inventory: *inventory,
@@ -1216,9 +1432,8 @@ pub(crate) async fn finish_one(
         });
     }
 
-    let elections = ElectionRepo::new(state.pool.clone());
     let mut recorded = 0usize;
-    for election in &body.elections {
+    for election in plan.elections {
         let kind = trigger_kind_of(&election.trigger).ok_or_else(|| {
             validation("an election trigger is supply, elect_one, over_cap or narrow")
         })?;
@@ -1242,32 +1457,32 @@ pub(crate) async fn finish_one(
                 })
             })
             .collect::<Result<Vec<_>, APIError>>()?;
-        let wrote = elections
-            .record_answered(
-                org,
-                &AnsweredElection {
-                    product,
-                    inventory: election.inventory,
-                    axis: election.axis,
-                    trigger_kind: kind,
-                    trigger_key: election.trigger_key.as_deref(),
-                    paths: &paths,
-                },
-                now,
-            )
-            .await
-            .map_err(|error| match error {
-                StorageError::Inconsistent { ref reason } => validation(reason),
-                other @ (StorageError::Db(_)
-                | StorageError::TimestampOutOfRange { .. }
-                | StorageError::CorruptRow { .. }
-                | StorageError::OrgMismatch
-                | StorageError::StaleLease
-                | StorageError::DuplicateIdempotencyKey { .. }
-                | StorageError::AttemptInFlight
-                | StorageError::MappingAlreadyBound
-                | StorageError::ListingAlreadyBound) => storage_fault(state, &other),
-            })?;
+        let wrote = tam_storage::record_answered_election(
+            tx,
+            org,
+            &AnsweredElection {
+                product,
+                inventory: election.inventory,
+                axis: election.axis,
+                trigger_kind: kind,
+                trigger_key: election.trigger_key.as_deref(),
+                paths: &paths,
+            },
+            now,
+        )
+        .await
+        .map_err(|error| match error {
+            StorageError::Inconsistent { ref reason } => validation(reason),
+            other @ (StorageError::Db(_)
+            | StorageError::TimestampOutOfRange { .. }
+            | StorageError::CorruptRow { .. }
+            | StorageError::OrgMismatch
+            | StorageError::StaleLease
+            | StorageError::DuplicateIdempotencyKey { .. }
+            | StorageError::AttemptInFlight
+            | StorageError::MappingAlreadyBound
+            | StorageError::ListingAlreadyBound) => storage_fault(state, &other),
+        })?;
         recorded += usize::from(wrote);
     }
 
@@ -1276,6 +1491,59 @@ pub(crate) async fn finish_one(
         mappings: written,
         elections_recorded: recorded,
     })
+}
+
+/// Completes what trails a product an earlier pass already created, in the
+/// caller's transaction.
+///
+/// The resumed road of a spreadsheet row: the product exists, so the create's
+/// refusals are not re-run — its existence is the proof they were met — and
+/// only the mappings and elections it is missing are written.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the transaction, the state, the tenant, the product it completes, the body it was created from and the plan; the one caller passes all six"
+)]
+pub(crate) async fn finish_existing(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    state: &AppState,
+    org: OrgId,
+    product: ProductId,
+    body: &CreateProductBody,
+    plan: &CreatePlan<'_>,
+) -> Result<CreatedProductView, APIError> {
+    // Read outside the guarded transaction's writes but inside it: a single
+    // indexed read of this product's own bindings, which is what decides
+    // which mappings are missing.
+    let held: Vec<MappingId> = MappingRepo::new(state.pool.clone())
+        .list_for_product(org, product)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+        .into_iter()
+        .map(|record| record.mapping.id)
+        .collect();
+    finish_in(
+        tx,
+        state,
+        org,
+        product,
+        checked_price(body.price)?,
+        &held,
+        plan,
+        (state.wall)(),
+    )
+    .await
+}
+
+/// Replaces a product's seller-owned labels, in the caller's transaction.
+pub(crate) async fn set_labels(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    product: ProductId,
+    names: &[String],
+    at: Timestamp,
+) -> Result<(), tam_storage::StorageError> {
+    tam_storage::set_labels_for_product(tx, org, product, names, at).await?;
+    Ok(())
 }
 
 /// A product insert whose one seller-reachable failure is a handle whose
@@ -1355,23 +1623,30 @@ pub(crate) async fn add_mapping(
     Json(body): Json<AddMappingBody>,
 ) -> Result<(StatusCode, Json<MappingHeadView>), APIError> {
     let product = parse_product_id(&product)?;
-    let stored = ProductRepo::new(state.pool.clone())
+    let products = ProductRepo::new(state.pool.clone());
+    let stored = products
         .get(context.org, product)
         .await
         .map_err(|error| storage_fault(&state, &error))?
         .ok_or_else(|| missing("no such product"))?;
 
-    // The other half of D32, and the half that is not vacuous: a resource kept
-    // on Teachouse may carry no file, so the moment it is pointed at a
-    // marketplace is the moment one becomes necessary. Refused here rather than
-    // at the write, because a mapping is what a publish lowers and a seller who
-    // learns this from a failed job learns it far too late.
-    if !stored.product.has_payload() {
-        return Err(coded(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "a listing on a marketplace needs a file buyers can download; upload it first",
-            APIErrorCode::PayloadMissing,
-        ));
+    // Everything a listing that does not exist yet needs, asked once and
+    // asked the same way the previews ask it. D32's other half is in there —
+    // a resource kept on Teachouse carries no file, and the moment it is
+    // pointed at a marketplace is the moment one becomes necessary — and so
+    // is the create's own required-field check, which this route did not run
+    // although the mapping it mints is the create's own. Refused here rather
+    // than at the write, because a mapping is what a publish lowers and a
+    // seller who learns this from a failed job learns it far too late.
+    let facts = products
+        .creation_facts(context.org, &[product], body.inventory)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    let facts = facts
+        .first()
+        .ok_or_else(|| state.internal("the product just read has no creation facts"))?;
+    if let Some(blocked) = creation_blocked(facts, body.inventory) {
+        return Err(blocked.refusal());
     }
 
     let now = (state.wall)();
@@ -2589,17 +2864,18 @@ pub fn upload_body_limit() -> DefaultBodyLimit {
 #[cfg(test)]
 mod tests {
     use super::{
-        hex_encode, parse_hash, required_fields_answered, trigger_kind_of, uncaptured_edits,
-        ElectionInput, FileHandle, RightsInput, FILE_NAME_MAX,
+        creation_blocked, hex_encode, parse_hash, required_fields_answered, trigger_kind_of,
+        uncaptured_edits, CreationBlocked, ElectionInput, FileHandle, RightsInput, FILE_NAME_MAX,
     };
     use tam_domain::equivalence::ElectionTriggerKind;
     use tam_domain::{
         Binding, FieldPolicies, FieldPolicy, Mapping, PublishMode, TermKind, Verification,
     };
     use tam_marketplace::{RemoteLifecycle, RemoteListingId};
-    use tam_storage::MappingRecord;
+    use tam_storage::{MappingRecord, ProductCreationFacts};
     use tam_types::{
-        FileRole, InventoryId, MappingId, OrgId, PriceIntent, PriceRule, ProductId, Timestamp, Uuid,
+        FileRole, InventoryId, MappingId, Marketplace, OrgId, PriceIntent, PriceRule, ProductId,
+        Timestamp, Uuid,
     };
 
     fn licence_answer(inventory: InventoryId) -> ElectionInput {
@@ -2613,6 +2889,119 @@ mod tests {
                 native_id: Some("CC-BY".to_owned()),
             }],
         }
+    }
+
+    /// Facts a resource the catalogue holds would bring to a new listing.
+    fn facts() -> ProductCreationFacts {
+        ProductCreationFacts {
+            product: ProductId(Uuid([0x31; 16])),
+            payload_files: 1,
+            payload_sources: vec![],
+            rights_declared: false,
+            settled_axes: vec![],
+        }
+    }
+
+    /// The three reasons a creation is blocked, decided against the real
+    /// registry rather than a stubbed one.
+    ///
+    /// Every value this asserts comes from the tree's own tables: the
+    /// capability string is `tam_storage::uncaptured_source`'s own, and the
+    /// field and its label are read out of `registry(Tes)`. A resource whose
+    /// bytes a marketplace holds and nobody can fetch is the arm the HTTP
+    /// tests cannot reach — no route writes such a row while Etsy is refused
+    /// as a sync source — so it is pinned here, where the rule lives.
+    #[test]
+    fn a_creation_is_blocked_by_its_file_its_source_and_the_targets_own_fields() {
+        assert_eq!(
+            creation_blocked(
+                &ProductCreationFacts {
+                    payload_files: 0,
+                    ..facts()
+                },
+                InventoryId::Tpt
+            ),
+            Some(CreationBlocked::NoPayload),
+            "a resource kept on Teachouse alone has nothing a buyer could download"
+        );
+
+        assert_eq!(
+            creation_blocked(
+                &ProductCreationFacts {
+                    payload_sources: vec![Marketplace::Etsy],
+                    rights_declared: true,
+                    ..facts()
+                },
+                InventoryId::Tes
+            ),
+            Some(CreationBlocked::PayloadUnacquirable {
+                marketplace: Marketplace::Etsy,
+                capability: "etsy.download_resource_bundle",
+            }),
+            "the capability is the registry's own word, so the preview and the device's own \
+             refusal name one thing"
+        );
+        assert_eq!(
+            creation_blocked(
+                &ProductCreationFacts {
+                    payload_sources: vec![Marketplace::Tes, Marketplace::Tpt],
+                    rights_declared: true,
+                    ..facts()
+                },
+                InventoryId::Tpt
+            ),
+            None,
+            "and the two whose seller download is captured block nothing, TPT's since the \
+             2026-09-13 capture"
+        );
+
+        let missing = creation_blocked(&facts(), InventoryId::Tes)
+            .expect("Tes declares its licence required and these facts answer it nowhere");
+        let CreationBlocked::RequiredFields(unmet) = &missing else {
+            panic!("a resource with a file and no licence is blocked on the field: {missing:?}");
+        };
+        assert_eq!(
+            (
+                unmet[0]["inventory"].as_str(),
+                unmet[0]["field"].as_str(),
+                unmet[0]["label"].as_str()
+            ),
+            (Some("Tes"), Some("licence"), Some("Licence")),
+            "the per-row reason carries the same three words the whole-request refusal does"
+        );
+        assert!(
+            missing.reason().contains("Licence"),
+            "and the sentence a blocked row renders names the field: {}",
+            missing.reason()
+        );
+
+        assert_eq!(
+            creation_blocked(
+                &ProductCreationFacts {
+                    rights_declared: true,
+                    ..facts()
+                },
+                InventoryId::Tes
+            ),
+            None,
+            "the product's own rights grant answers it"
+        );
+        assert_eq!(
+            creation_blocked(
+                &ProductCreationFacts {
+                    settled_axes: vec![TermKind::Licence],
+                    ..facts()
+                },
+                InventoryId::Tes
+            ),
+            None,
+            "so does a licence this tenant already settled for that inventory"
+        );
+        assert_eq!(
+            creation_blocked(&facts(), InventoryId::Tpt),
+            None,
+            "and TPT declares no required field, so the same resource crosses to it"
+        );
     }
 
     fn bound_mapping(inventory: InventoryId, lifecycle: RemoteLifecycle) -> MappingRecord {

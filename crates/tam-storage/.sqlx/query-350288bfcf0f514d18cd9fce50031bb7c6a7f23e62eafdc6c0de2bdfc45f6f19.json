@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT kept_product FROM duplicate_verdict WHERE org_id = $1 AND verdict = 'same' AND $2 IN (product_lo, product_hi) AND kept_product IS NOT NULL AND kept_product <> $2 LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "kept_product",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "350288bfcf0f514d18cd9fce50031bb7c6a7f23e62eafdc6c0de2bdfc45f6f19"
+}

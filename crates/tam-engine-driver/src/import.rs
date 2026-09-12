@@ -569,6 +569,34 @@ pub struct ImportPage {
     /// and a page names one or the other.
     #[serde(default)]
     pub request: Option<Uuid>,
+    /// The fence this page was produced under.
+    ///
+    /// The attempt the device's own claim granted it. `serde(default)` and
+    /// therefore `None` for a client that predates the fence — and that
+    /// absence is exactly what the server refuses a catalogue page for,
+    /// before any effect: an unfenced page cannot be told from one a
+    /// taken-over device sent, and a default attempt would be a fence nobody
+    /// granted. The separately authorised migration path, which names a
+    /// `request` rather than a run, is unaffected.
+    #[serde(default)]
+    pub attempt: Option<u64>,
+    /// This page's own logical key, stable across attempts.
+    ///
+    /// What makes a lost acknowledgement safe to resend: the server stores
+    /// the answer it gave under this key and replays that answer rather than
+    /// applying the page twice. The attempt is deliberately not part of the
+    /// content identity — a device that resumed under a new fence and resent
+    /// the page it never got an answer for is sending the same page.
+    #[serde(default)]
+    pub receipt: Option<Uuid>,
+    /// Whether the shop's own list is now complete.
+    ///
+    /// The list may arrive over several pages, so `listed` being present no
+    /// longer means discovery is over. This bit alone closes it, which is
+    /// what stops a run with a partially enumerated shop being selected from
+    /// as though it were whole.
+    #[serde(default)]
+    pub enumeration_complete: bool,
     /// The shop as the enumeration saw it, on the one page that carries it.
     ///
     /// The first page of a run and no other. It is what the selection step
@@ -612,6 +640,114 @@ pub struct ImportPage {
     /// reads them unchanged.
     #[serde(default)]
     pub failed: Option<Reason>,
+}
+
+/// What a claim or a renewal granted, on the wire.
+///
+/// Here rather than on either side for this module's own reason: the device
+/// renews against these numbers and the server issues them, and two structs
+/// that happen to match today is a coincidence rather than a contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ImportLease {
+    /// The fence. Every page, renewal and progress report names it, and the
+    /// server refuses anything carrying an older one.
+    pub attempt: u64,
+    /// When the hold lapses, in milliseconds since the epoch, by the
+    /// server's own database clock rather than by either machine's wall
+    /// clock.
+    pub lease_expires_at: i64,
+}
+
+/// Whether a claim may take a run from another device.
+///
+/// A seller with two phones is ordinary, and so is a phone that has been off
+/// since Tuesday. `false` refuses rather than stealing, so the console can
+/// say which other machine holds the import; `true` is the seller answering
+/// that question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ImportClaim {
+    #[serde(default)]
+    pub takeover: bool,
+}
+
+/// A renewal, which names the fence it is renewing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ImportRenewal {
+    pub attempt: u64,
+}
+
+/// A stop, which names the fence it is stopping.
+///
+/// The device's own half of the seller pressing stop: the phone queues the
+/// instruction and replays it after an outage, so the attempt travels with it
+/// and an attempt that is no longer this device's writes nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ImportStop {
+    pub attempt: u64,
+}
+
+/// What a stop settled.
+///
+/// `true` is the only value this server sends: the field exists so a device
+/// replaying a queued stop can tell a delivered abandonment from a gateway's
+/// 200, and a body that does not carry it is not this server's answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ImportStopAck {
+    pub abandoned: bool,
+}
+
+/// What the owner is doing, as it reports it.
+///
+/// Reported rather than inferred, and that is the whole point: a browser
+/// holding an event stream open cannot tell whether the machine on the other
+/// side is alive, and before this nothing else could either.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportStage {
+    Discovering,
+    Selecting,
+    Reading,
+    /// The owner stopped, and another attempt may resume. Not terminal.
+    Interrupted,
+    /// The import is over.
+    Failed,
+}
+
+/// Why an import stopped, as a closed code.
+///
+/// Closed because the console renders a next action from it: "sign in to Tes
+/// on this phone" is a different answer from "update the app". The sentence
+/// beside it is the device's own words, bounded by [`Reason`], and carries no
+/// marketplace response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportReasonCode {
+    MissingSession,
+    NotPermitted,
+    UnsupportedSource,
+    EnumerationFailed,
+    DescriptionFailed,
+    SubmissionFailed,
+    ActivationExpired,
+    LeaseExpired,
+    Stopped,
+    ClientUpdateRequired,
+}
+
+/// One progress report, under the owner's own fence.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ImportProgressReport {
+    pub attempt: u64,
+    pub stage: ImportStage,
+    /// How many resources the owner has found. Never decreases as far as the
+    /// server is concerned: a smaller number is a device that restarted its
+    /// own counter, not a shop that shrank.
+    pub discovered: u32,
+    pub processed: u32,
+    #[serde(default)]
+    pub reason_code: Option<ImportReasonCode>,
+    #[serde(default)]
+    pub reason: Option<Reason>,
 }
 
 /// Why one resource could not be described.

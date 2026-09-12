@@ -37,6 +37,7 @@
 	let refusal = $state<string | null>(null);
 	let live = $state(false);
 	let ledger: Ledger | null = null;
+	let generation = 0;
 
 	// Nothing here asks a computer to run the work any more. The Teachouse app
 	// reads a shop into Resources, which the Import screen owns; moving one
@@ -48,10 +49,15 @@
 		if (!requestId) {
 			return;
 		}
+		const id = requestId;
+		const current = ++generation;
 		try {
-			view = await api.syncRequest(requestId);
+			const next = await api.syncRequest(id);
+			if (current !== generation || id !== requestId) return;
+			view = next;
 			refusal = null;
 		} catch (caught) {
+			if (current !== generation || id !== requestId) return;
 			refusal =
 				caught instanceof ApiFailure ? caught.message : 'This import could not be read.';
 		}
@@ -60,15 +66,19 @@
 	// The same liveness the run page beside this one uses: one event stream per
 	// tab, and a refetch when the ledger moves or resyncs.
 	$effect(() => {
-		void refetch();
 		ledger = createLedger((cursor) => new EventSource(`/v1/events/stream?cursor=${cursor}`));
+		void refetch();
+		let revision = 0;
 		const unsubscribe = ledger.subscribe((state) => {
 			live = state.connected;
-			if (state.events.length > 0 || state.resyncs > 0) {
+			if (state.revision === revision) return;
+			revision = state.revision;
+			if ([...state.kinds].some((kind) => kind === 'resync' || kind.startsWith('Import'))) {
 				void refetch();
 			}
 		});
 		return () => {
+			generation += 1;
 			unsubscribe();
 			ledger?.close();
 		};

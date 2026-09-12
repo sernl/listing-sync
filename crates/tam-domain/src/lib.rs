@@ -76,19 +76,28 @@ pub const ENTITLEMENT_TOKEN_VALIDITY_SECS: i64 = 3_600;
 
 /// The desktop version that can run a marketplace-sourced payload.
 ///
-/// Desktop 0.1.3 is published and auto-updating, and its own copy of
-/// `PayloadManifest` declares `hash` and `byte_len` as required top-level
-/// fields. A work order naming a `Marketplace` source emits neither, so that
-/// client fails to decode it — and fails *after* the claim, leaving the item
-/// leased until its lease expires while the device reports a failure every
-/// poll. The claim therefore never hands such an item to a client below this
-/// version; the item waits instead, which costs a delay rather than a stuck
-/// lease.
+/// Two reasons, one line. The first is decoding: desktop 0.1.3 is published
+/// and auto-updating, and its own copy of `PayloadManifest` declares `hash`
+/// and `byte_len` as required top-level fields. A work order naming a
+/// `Marketplace` source emits neither, so that client fails to decode it —
+/// and fails *after* the claim, leaving the item leased until its lease
+/// expires while the device reports a failure every poll.
 ///
-/// The window ends when every registered device reports an `app_version` at or
-/// past this, at which point the gate and the manifest's compatibility
+/// The second is fetching, and it is why this reads 0.9.0 rather than the
+/// 0.2.0 the decoding shim alone needed. A `Marketplace` source now names
+/// TPT as well as Tes, and the hop that obtains a seller's own TPT file is
+/// the one the 2026-09-13 capture witnessed: it ships in 0.9.0. A 0.8.0
+/// client decodes such an order perfectly and then has no way to fetch what
+/// it names, which is the same stuck lease by a later route. The floor is
+/// therefore what a device must report to be handed sourced work at all.
+///
+/// The claim hands such an item to no client below this version; the item
+/// waits instead, which costs a delay rather than a stuck lease.
+///
+/// The window ends when every registered device reports an `app_version` at
+/// or past this, at which point the gate and the manifest's compatibility
 /// serialisation can go together.
-pub const SOURCED_PAYLOAD_MIN_VERSION: (u32, u32, u32) = (0, 2, 0);
+pub const SOURCED_PAYLOAD_MIN_VERSION: (u32, u32, u32) = (0, 9, 0);
 
 /// Whether a device reporting this `app_version` can be handed an item whose
 /// payload names a marketplace-sourced file.
@@ -117,12 +126,12 @@ pub fn runs_sourced_payloads(app_version: &str) -> bool {
 /// strings would not, which is the defect this exists to avoid rather than a
 /// detail of how it is written.
 fn parse_version_triple(raw: &str) -> Option<(u32, u32, u32)> {
-    // A pre-release or build suffix on the shim version reads as at the shim,
-    // because a beta of the release that carries the vocabulary carries the
-    // vocabulary: 0.2.0-beta.1 decodes a marketplace source exactly as 0.2.0
-    // does, and gating it would refuse the very build the shim was written
-    // for. Everything before the first `-` or `+` after the third number is
-    // the version; the rest names which build of it.
+    // A pre-release or build suffix on the floor version reads as at the
+    // floor, because a beta of the release that carries the capability
+    // carries it: 0.9.0-beta.1 decodes and fetches a marketplace source
+    // exactly as 0.9.0 does, and gating it would refuse the very build the
+    // floor was raised for. Everything before the first `-` or `+` after the
+    // third number is the version; the rest names which build of it.
     let numeric = raw.split(['-', '+']).next()?;
     let mut parts = numeric.split('.');
     let major = segment(parts.next()?)?;
@@ -4264,14 +4273,19 @@ mod sourced_payload_gate {
     #[test]
     fn the_comparison_is_numeric_rather_than_lexicographic() {
         assert!(
-            !runs_sourced_payloads("0.1.9"),
-            "below the shim on the patch and minor"
+            !runs_sourced_payloads("0.8.0"),
+            "the published client that decodes a marketplace source and cannot fetch a TPT \
+             file, which is the version the floor was raised past"
         );
         assert!(
-            runs_sourced_payloads("0.2.0"),
-            "at the shim, which is the boundary the constant names"
+            !runs_sourced_payloads("0.8.9"),
+            "below the floor on the minor, however high the patch"
         );
-        assert!(runs_sourced_payloads("0.2.1"), "above on the patch");
+        assert!(
+            runs_sourced_payloads("0.9.0"),
+            "at the floor, which is the boundary the constant names"
+        );
+        assert!(runs_sourced_payloads("0.9.1"), "above on the patch");
         assert!(
             runs_sourced_payloads("0.10.0"),
             "above on a two-digit minor, which a string comparison reads as below"
@@ -4279,23 +4293,23 @@ mod sourced_payload_gate {
         assert!(runs_sourced_payloads("1.0.0"), "above on the major");
     }
 
-    /// Anything unreadable is below the shim.
+    /// Anything unreadable is below the floor.
     ///
     /// The direction is the point rather than the parsing: a version this code
-    /// has never seen is a client whose manifest handling is unknown, and the
-    /// cost of admitting it wrongly is a leased item stuck until its lease
-    /// expires, while refusing it wrongly costs a delay that ends at the next
-    /// upgrade.
+    /// has never seen is a client whose manifest handling and whose download
+    /// hop are both unknown, and the cost of admitting it wrongly is a leased
+    /// item stuck until its lease expires, while refusing it wrongly costs a
+    /// delay that ends at the next upgrade.
     #[test]
-    fn anything_unparseable_reads_as_below_the_shim() {
+    fn anything_unparseable_reads_as_below_the_floor() {
         for raw in [
-            "", "0.2", "0.2.x", "v0.2.0", "0.2.0.1", "0.2.-1", " 0.2.0", "0.2.0 ", "latest",
+            "", "0.9", "0.9.x", "v0.9.0", "0.9.0.1", "0.9.-1", " 0.9.0", "0.9.0 ", "latest",
             // The suffix split cuts at the first `+`, so these arrive as an
             // empty version and a two-segment one respectively.
-            "+0.2.0", "+0.+2.+0", "0.+2.0",
+            "+0.9.0", "+0.+9.+0", "0.+9.0",
             // Two spellings of one version, in a comparison whose job is to
             // be exact.
-            "00.2.0", "0.02.0",
+            "00.9.0", "0.09.0",
         ] {
             assert!(
                 !runs_sourced_payloads(raw),
@@ -4304,34 +4318,34 @@ mod sourced_payload_gate {
         }
     }
 
-    /// A pre-release or build of the shim release is at the shim.
+    /// A pre-release or build of the floor release is at the floor.
     ///
-    /// The build that carries the vocabulary carries it whether or not its
+    /// The build that carries the capability carries it whether or not its
     /// version has a suffix, so refusing a beta would refuse the very client
-    /// the shim was written for.
+    /// the floor was raised for.
     #[test]
-    fn a_prerelease_or_build_of_the_shim_release_is_at_the_shim() {
+    fn a_prerelease_or_build_of_the_floor_release_is_at_the_floor() {
         for raw in [
-            "0.2.0-beta.1",
-            "0.2.0+build.7",
-            "0.2.0-rc1+exp",
-            "0.3.0-alpha",
+            "0.9.0-beta.1",
+            "0.9.0+build.7",
+            "0.9.0-rc1+exp",
+            "0.10.0-alpha",
         ] {
             assert!(
                 runs_sourced_payloads(raw),
-                "{raw:?} is a build of a release at or past the shim"
+                "{raw:?} is a build of a release at or past the floor"
             );
         }
         assert!(
-            !runs_sourced_payloads("0.1.9-beta.1"),
-            "a build of a release below the shim is still below it"
+            !runs_sourced_payloads("0.8.9-beta.1"),
+            "a build of a release below the floor is still below it"
         );
     }
 
     /// The constant is the one the gate and the message share, so a change to
     /// it moves both rather than one.
     #[test]
-    fn the_shim_version_is_the_one_the_gate_compares_against() {
+    fn the_floor_version_is_the_one_the_gate_compares_against() {
         let (major, minor, patch) = SOURCED_PAYLOAD_MIN_VERSION;
         assert!(
             runs_sourced_payloads(&format!("{major}.{minor}.{patch}")),

@@ -1338,6 +1338,113 @@ async fn a_selected_platform_s_required_field_is_refused_by_name(pool: PgPool) {
     );
 }
 
+/// Cross-listing is held to the create's own required-field rule.
+///
+/// The shape is an imported TPT resource's. TPT carries no licence anywhere on
+/// its wire, so a resource read from it reaches the catalogue with its rights
+/// unstated, and pointing it at Tes afterwards is where the one refusal
+/// anybody has measured becomes reachable. Until this stood, the create
+/// refused that body and `add_mapping` refused nothing, so the seller learnt
+/// of it from a job item that failed at the marketplace.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn cross_listing_is_refused_for_a_field_the_target_declares_required(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("crosslist-required");
+    let state = configured(pool, &root);
+
+    // A resource reaching only TPT and answering a licence nowhere: TPT
+    // declares no required field, so the create admits exactly this.
+    let uploaded = upload(state.clone(), &TOKEN_A, pdf("crosslist"), "").await;
+    let mut body = create_body(&uploaded, "No licence anywhere", &["Tpt"]);
+    body["rights"] = serde_json::Value::Null;
+    body["elections"] = serde_json::json!([]);
+    let (status, response) =
+        json_call(state.clone(), &TOKEN_A, Method::POST, "/v1/products", &body).await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&response)
+    );
+    let created: CreatedProductView = parse(&response);
+
+    let (status, refused) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        &format!(
+            "/v1/products/{}/mappings",
+            created.product.0.to_hyphenated()
+        ),
+        &serde_json::json!({ "inventory": "Tes" }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "Tes declares its licence required and this resource answers it nowhere"
+    );
+    let error: APIError = parse(&refused);
+    assert_eq!(
+        error.errors[0].code,
+        Some(APIErrorCode::RequiredFieldMissing)
+    );
+    let missing = error.errors[0]
+        .detail
+        .as_ref()
+        .map_or(serde_json::Value::Null, |detail| {
+            detail["missing"][0].clone()
+        });
+    assert_eq!(
+        (
+            missing["inventory"].as_str(),
+            missing["field"].as_str(),
+            missing["label"].as_str()
+        ),
+        (Some("Tes"), Some("licence"), Some("Licence")),
+        "the cross-listing refusal names what the create's names, so one client sentence serves \
+         both"
+    );
+
+    // The gate is the requirement and not the route: the same cross-listing
+    // with the product's own rights grant behind it is admitted.
+    let second = upload(state.clone(), &TOKEN_A, pdf("crosslist-stated"), "").await;
+    let mut stated = create_body(&second, "Licence stated", &["Tpt"]);
+    stated["elections"] = serde_json::json!([]);
+    let (status, response) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        "/v1/products",
+        &stated,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&response)
+    );
+    let granted: CreatedProductView = parse(&response);
+    let (status, added) = json_call(
+        state,
+        &TOKEN_A,
+        Method::POST,
+        &format!(
+            "/v1/products/{}/mappings",
+            granted.product.0.to_hyphenated()
+        ),
+        &serde_json::json!({ "inventory": "Tes" }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "the stored rights grant answers the required licence: {}",
+        String::from_utf8_lossy(&added)
+    );
+}
+
 /// An already-answered election satisfies the licence on its own.
 ///
 /// `required_fields_answered` accepts either a rights declaration or a licence

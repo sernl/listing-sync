@@ -191,7 +191,7 @@
 				<img src="/brand/logo.svg" alt="Teachouse" width="220" />
 			</div>
 			<div class="auth-card">
-				<h1>Teachouse could not be reached</h1>
+				<h1>This page could not load</h1>
 				<p>{data.unreachable.sentence}</p>
 				<Button tier="primary" onclick={() => location.reload()}>Try again</Button>
 				<!-- The facts for the report, in small type: what was thrown and

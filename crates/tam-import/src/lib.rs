@@ -6,8 +6,10 @@
 //! the drain report the kill gate reads falls out of the run itself.
 //!
 //! Customer zero's file bytes arrive from disk (the founder has the
-//! originals); the marketplace file-download leg is an uncaptured endpoint
-//! and ships only after a supervised capture, per the plan.
+//! originals). A catalogue read hands over no file of its own: the bytes
+//! come from the seller's own download hop, which a migration's device
+//! performs under the seller's session, so this crate applies what its
+//! caller observed and fetches nothing.
 
 #![forbid(unsafe_code)]
 
@@ -15,8 +17,8 @@ use sqlx::PgPool;
 use tam_domain::registry::{registry, NativeVocabulary};
 use tam_marketplace::{ImportedListing, ListingState, RemoteListingId};
 use tam_storage::{
-    ElectionRepo, EventScope, JobRepo, MappingRepo, NewJob, OverrideRepo, ProductRepo, RaiseReport,
-    RaiseScope, StorageError, TaxonomyRepo,
+    bind_listing, insert_product, ElectionRepo, EventScope, JobRepo, MappingRepo, NewJob,
+    OverrideRepo, RaiseReport, RaiseScope, StorageError, TaxonomyRepo,
 };
 use tam_taxonomy::listing::{project_listing_with_overrides, ListingContext};
 use tam_taxonomy::project::ingest_by_native_id;
@@ -80,10 +82,10 @@ pub struct AppliedResource {
     ///
     /// D32 moved the payload requirement from the product to the mapping
     /// (migration 0061), so a resource kept on Teachouse alone may carry
-    /// nothing: a TPT import is exactly that case, because
-    /// `tpt.download_resource_bundle` is uncaptured and a TPT read names no
-    /// file. A catalogue-only import names no target and therefore no
-    /// mapping, so the trigger that would refuse it does not fire.
+    /// nothing: a catalogue-only import is exactly that case, because the
+    /// read describes a listing and names no file, whichever marketplace it
+    /// came from. Such an import names no target and therefore no mapping,
+    /// so the trigger that would refuse it does not fire.
     pub payload: Vec<ImportedFile>,
     /// The cover, where one could be rendered. Absent exactly when the
     /// payload is: the cover is derived from the file, so no file is no cover.
@@ -529,17 +531,73 @@ pub async fn uncovered_terms(
     Ok(uncovered)
 }
 
-/// Applies one resource to the catalogue: a canonical product, its target
-/// mapping, and one projection so every gap raises its queue item on the spot.
+/// One resource, prepared: everything the catalogue write needs, with every
+/// read that does not have to happen inside the decision transaction already
+/// done.
 ///
-/// It reads no marketplace and stores no bytes. Everything about where the
-/// files came from is settled before this is called, which is what lets one
-/// apply half serve an operator importing from disk and a device importing
-/// under the seller's own session.
-pub async fn import_one(
+/// The halves exist because of what the import's commit has to be able to
+/// promise. The product, the listing it was read from and the import row's
+/// outcome are one decision, so they are written in one transaction under one
+/// organisation-scoped lock — and nothing slow may happen under that lock.
+/// So the taxonomy reads, the price resolution and the grade derivation
+/// happen here, before it is taken.
+pub struct PreparedResource {
+    /// The row report's own handle on the resource.
+    pub resource: i64,
+    pub product: tam_domain::CanonicalProduct,
+    /// The listing this was read from, as a binding on the source.
+    pub source_mapping: tam_domain::Mapping,
+    pub listing: ImportedListing,
+    pub terms_seen: usize,
+    pub terms_mapped: usize,
+    pub terms_uncovered: usize,
+    pub unmapped_native_ids: Vec<String>,
+    /// The price the source stated, resolved once and reused by the target
+    /// mapping.
+    pub price: PriceIntent,
+}
+
+impl PreparedResource {
+    /// What this resource became for a run that drafts nowhere.
+    ///
+    /// No mapping, neither projectable nor blocked and nothing raised: those
+    /// are answers about a destination, and a catalogue-only import has none.
+    #[must_use]
+    pub fn catalogue_report(&self) -> ImportRowReport {
+        ImportRowReport {
+            resource: self.resource,
+            product: self.product.id,
+            mapping: None,
+            title: self.listing.title.clone(),
+            terms_seen: self.terms_seen,
+            terms_mapped: self.terms_mapped,
+            terms_uncovered: self.terms_uncovered,
+            unmapped_native_ids: self.unmapped_native_ids.clone(),
+            curriculum: curriculum_of(&self.listing),
+            raised: RaiseReport {
+                new: 0,
+                already_open: 0,
+            },
+            projectable: false,
+            blocked_by: None,
+            source: self.listing.remote.clone(),
+            source_state: self.listing.state,
+        }
+    }
+}
+
+/// Reads everything one resource's catalogue write depends on, and writes
+/// nothing.
+///
+/// # Errors
+///
+/// A price that will not denominate, a currency nobody has measured, or a
+/// resource with no payload where the run drafts onto a marketplace: each is
+/// something about the seller's own listing rather than a fault.
+pub async fn prepare_one(
     run: &ImportRun,
     applied: &AppliedResource,
-) -> Result<ImportRowReport, ImportError> {
+) -> Result<PreparedResource, ImportError> {
     let listing = applied.listing.clone();
 
     let payloads: Vec<ProductFile> = applied
@@ -564,9 +622,9 @@ pub async fn import_one(
     });
     // A run with a target drafts onto a marketplace and so must carry a file;
     // a catalogue-only run mints no target mapping, and D32 says a resource
-    // kept here alone may carry none. So the refusal follows the target rather than the
-    // list: reading an empty payload as a fault would refuse every TPT import,
-    // whose own-file download is uncaptured.
+    // kept here alone may carry none. So the refusal follows the target rather
+    // than the list: reading an empty payload as a fault would refuse every
+    // catalogue-only import, whose read names no file.
     let mut payload_iter = payloads.into_iter();
     let payload = match payload_iter.next() {
         Some(head) => Some(PayloadSet::new(head, payload_iter.collect())),
@@ -577,18 +635,14 @@ pub async fn import_one(
     // Taxonomy inbound by native id over the source vocabulary's edges. An
     // unmapped id is retained verbatim in the report — the item type cannot
     // name a canonical term that does not exist — and the outbound raise
-    // below covers every term that does.
+    // covers every term that does.
     let taxonomy = TaxonomyRepo::new(run.pool.clone());
     let inbound = inbound_terms(&taxonomy, run.source, &listing).await?;
     // The coverage number, from the one helper the measurement also uses, and
     // taken here while the mapped terms are still in hand rather than after
-    // the product has consumed them. It runs on those terms rather than on the
-    // projection's outcome, so a listing blocked on a currency or a cover still
-    // reports a truthful count instead of a zero produced by never reaching
-    // the taxonomy.
-    // Only against a target. "How many of this resource's terms have nowhere
-    // to go" is a question about a destination, and a run with none has not
-    // measured zero of them.
+    // the product has consumed them. Only against a target: "how many of this
+    // resource's terms have nowhere to go" is a question about a destination,
+    // and a run with none has not measured zero of them.
     let uncovered = match run.target {
         Some(target) => uncovered_terms(&taxonomy, target, &inbound.subjects, &COVERAGE_AXES)
             .await?
@@ -650,34 +704,58 @@ pub async fn import_one(
         rights,
         native_residue,
     };
-    ProductRepo::new(run.pool.clone())
-        .insert(run.org, &product, run.now)
-        .await?;
 
-    // The listing this was read from is a listing this product is on, so the
-    // catalogue says so: a mapping on the source, bound to the remote the
-    // read named, with the lifecycle the read observed. Without it an
-    // imported resource shows "not listed" on the very shop it came from,
-    // the status page cannot draw it, and a migration from that shop has
-    // nothing to move. This is a record of what exists, not a draft: nothing
-    // is projected, nothing is enqueued, and the mode is `DryRun` so no write
-    // to the source can follow from it. A read that did not carry the state
-    // — every TPT capture on file — binds with `Absent`, the one lifecycle
-    // that claims nothing about the listing's side of the draft line; a Copy
-    // still works from it and a Move is refused until the state is verified.
-    //
-    // A remote already bound to another product of this org is left as it
-    // is rather than failing the import: that is the duplicate review's
-    // question, not this write's, and the resource still lands.
-    let source_mapping = tam_domain::Mapping {
+    let source_mapping = source_binding(run.org, product_id, run.source, &listing, price, run.now);
+
+    Ok(PreparedResource {
+        resource: applied.resource,
+        product,
+        source_mapping,
+        listing,
+        terms_seen,
+        terms_mapped,
+        terms_uncovered: uncovered,
+        unmapped_native_ids: inbound.unmapped,
+        price,
+    })
+}
+
+/// The mapping that records the listing a read came from.
+///
+/// Public and shared, because two paths need exactly this record: the commit
+/// that creates the product, and the commit that decides the resource is one
+/// the catalogue already holds and binds this shop's listing onto the
+/// survivor instead. A second construction of it would be a second answer to
+/// "where is this resource listed".
+///
+/// A record of what exists rather than a draft: nothing is projected, nothing
+/// is enqueued, and the mode is `DryRun`, so no write to the source can
+/// follow from it. A read that did not carry the listing's state — every TPT
+/// capture on file — binds with `Absent`, the one lifecycle that claims
+/// nothing about the listing's side of the draft line; a Copy still works
+/// from it and a Move is refused until the state is verified.
+#[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the tenant, the product, the shop, the listing, its resolved price and the instant; every one comes from a different place and both callers pass all six"
+)]
+pub fn source_binding(
+    org: OrgId,
+    product: ProductId,
+    source: InventoryId,
+    listing: &ImportedListing,
+    price: PriceIntent,
+    now: Timestamp,
+) -> tam_domain::Mapping {
+    tam_domain::Mapping {
         id: MappingId(fresh_uuid()),
-        org: run.org,
-        product: product_id,
-        inventory: run.source,
+        org,
+        product,
+        inventory: source,
         binding: tam_domain::Binding::Bound {
             id: listing.remote.clone(),
-            first_seen: run.now,
-            verified: tam_domain::Verification::Clean { at: run.now },
+            first_seen: now,
+            verified: tam_domain::Verification::Clean { at: now },
         },
         policies: tam_domain::FieldPolicies {
             title: tam_domain::FieldPolicy::Managed,
@@ -690,197 +768,268 @@ pub async fn import_one(
         price_rule: tam_types::PriceRule::Explicit(price),
         publish: tam_domain::PublishMode::DryRun,
         lifecycle: match listing.state {
-            Some(ListingState::Live) => tam_marketplace::RemoteLifecycle::Live { since: run.now },
+            Some(ListingState::Live) => tam_marketplace::RemoteLifecycle::Live { since: now },
             Some(ListingState::Draft) => tam_marketplace::RemoteLifecycle::Draft,
             None => tam_marketplace::RemoteLifecycle::Absent,
         },
-    };
-    match MappingRepo::new(run.pool.clone())
-        .insert(run.org, &source_mapping, 0, run.now)
-        .await
-    {
-        Ok(()) | Err(StorageError::ListingAlreadyBound) => {}
-        Err(error) => return Err(error.into()),
     }
+}
 
-    // The target mapping and the one projection, both of which exist only for
-    // a run that names a target.
-    //
-    // A catalogue-only import is the ordinary case since phase 2: the outcome
-    // is a resource in the catalogue, bound to where it already is and drafted
-    // nowhere, so there is no target mapping to mint, no gaps to raise and no
-    // coverage to report. Skipping them is not a degraded import -- it is the
-    // whole of what "nothing drafted" means, and minting an unbound `DryRun`
-    // mapping into a shop nobody chose is what the phase deletes.
-    let (mapping, projectable, blocked_by, raised) = match run.target {
-        None => (
-            None,
-            // Neither projectable nor blocked: nothing was projected. The two
-            // are answers about a destination and this run has none.
+/// Writes the product and the listing it was read from, in a transaction the
+/// caller owns.
+///
+/// The catalogue half of an import and the whole of it for a run that drafts
+/// nowhere.
+///
+/// A listing another product of this organisation already binds is left where
+/// it is rather than failing the import: that is the duplicate review's
+/// question, not this write's, and the resource still lands. The check is a
+/// read before the write rather than a caught unique violation, because
+/// PostgreSQL aborts the whole transaction on the violation — catching the
+/// Rust error inside a caller's transaction would roll back the product this
+/// call had just inserted while the caller carried on as though it existed.
+///
+/// The binding is written only where the product carries a payload, and that
+/// is not an optimisation. Migration 0061 moved the file requirement from the
+/// product to the mapping: a product no marketplace carries may have no file
+/// yet, and a mapping onto a payload-less product raises
+/// `product % reaches a marketplace and has no live payload file` at commit.
+/// Every catalogue read that named no file is exactly that product, so
+/// binding it unconditionally rolled the whole commit back and the item was
+/// retried forever. The metadata and the product land; the listing binds when
+/// the file arrives, which is the download hop's own step.
+///
+/// Answers whether the source binding was written.
+///
+/// # Errors
+///
+/// Only storage: everything a seller can act on was decided in
+/// [`prepare_one`].
+pub async fn apply_prepared(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    prepared: &PreparedResource,
+    now: Timestamp,
+) -> Result<bool, ImportError> {
+    insert_product(
+        tx,
+        org,
+        &prepared.product,
+        &std::collections::HashMap::new(),
+        now,
+    )
+    .await?;
+    if prepared.product.payload.is_none() {
+        return Ok(false);
+    }
+    bind_listing(tx, org, &prepared.source_mapping, 0, now).await?;
+    Ok(true)
+}
+
+/// Applies one resource to the catalogue: a canonical product, its target
+/// mapping, and one projection so every gap raises its queue item on the spot.
+///
+/// It reads no marketplace and stores no bytes. Everything about where the
+/// files came from is settled before this is called, which is what lets one
+/// apply half serve an operator importing from disk and a device importing
+/// under the seller's own session.
+///
+/// The product and its source binding are written in one transaction opened
+/// here; the target mapping and its projection follow it, as they always did,
+/// because the projection raises reconciliation items against a mapping that
+/// has to exist for them to reference.
+pub async fn import_one(
+    run: &ImportRun,
+    applied: &AppliedResource,
+) -> Result<ImportRowReport, ImportError> {
+    let prepared = prepare_one(run, applied).await?;
+    let mut tx = run.pool.begin().await.map_err(StorageError::from)?;
+    tam_storage::pin_tenant(&mut tx, run.org).await?;
+    // Whether the source listing bound is not this caller's business: a read
+    // whose bytes are uncaptured lands as a product without one, and the
+    // report's catalogue half says the same either way.
+    let _bound = apply_prepared(&mut tx, run.org, &prepared, run.now).await?;
+    tx.commit().await.map_err(StorageError::from)?;
+
+    let Some(target) = run.target else {
+        return Ok(prepared.catalogue_report());
+    };
+    let projected = project_target(run, &prepared, target).await?;
+    let mut report = prepared.catalogue_report();
+    report.mapping = Some(projected.mapping);
+    report.projectable = projected.projectable;
+    report.blocked_by = projected.blocked_by;
+    report.raised = projected.raised;
+    Ok(report)
+}
+
+/// What the target mapping and its one projection answered.
+struct Projected {
+    mapping: MappingId,
+    projectable: bool,
+    blocked_by: Option<String>,
+    raised: RaiseReport,
+}
+
+/// The target mapping and the one projection, both of which exist only for a
+/// run that names a target.
+///
+/// A catalogue-only import is the ordinary case since phase 2: the outcome is
+/// a resource in the catalogue, bound to where it already is and drafted
+/// nowhere, so there is no target mapping to mint, no gaps to raise and no
+/// coverage to report. Skipping them is not a degraded import -- it is the
+/// whole of what "nothing drafted" means.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the projection's blocked arms are one match over a closed error type; splitting them would put the gate's own vocabulary in two places"
+)]
+async fn project_target(
+    run: &ImportRun,
+    prepared: &PreparedResource,
+    target: InventoryId,
+) -> Result<Projected, ImportError> {
+    let product = &prepared.product;
+    let taxonomy = TaxonomyRepo::new(run.pool.clone());
+    let mapping_id = MappingId(fresh_uuid());
+    MappingRepo::new(run.pool.clone())
+        .insert(
+            run.org,
+            &tam_domain::Mapping {
+                id: mapping_id,
+                org: run.org,
+                product: product.id,
+                inventory: target,
+                binding: tam_domain::Binding::Unbound,
+                policies: tam_domain::FieldPolicies {
+                    title: tam_domain::FieldPolicy::Managed,
+                    description: tam_domain::FieldPolicy::Managed,
+                    price: tam_domain::FieldPolicy::Managed,
+                    taxonomy: tam_domain::FieldPolicy::Managed,
+                    grades: tam_domain::FieldPolicy::Managed,
+                    files: tam_domain::FieldPolicy::Managed,
+                },
+                price_rule: tam_types::PriceRule::Explicit(prepared.price),
+                publish: tam_domain::PublishMode::DryRun,
+                lifecycle: tam_marketplace::RemoteLifecycle::Absent,
+            },
+            0,
+            run.now,
+        )
+        .await?;
+
+    // Project once, immediately: the gaps raise their items now, which is
+    // what makes the import's own report the drain measurement.
+    let terms = taxonomy.terms().await?;
+    let target_edges = taxonomy
+        .edges_into_all(&tam_taxonomy::projection_vocabularies(target, product))
+        .await?;
+    let no_counterparts = taxonomy.no_counterparts_into(target).await?;
+    let elections = ElectionRepo::new(run.pool.clone());
+    let rules = elections.rules(run.org).await?;
+    // A freshly minted product has settled nothing, and the read is here
+    // anyway so the two projection sites stay one shape rather than two.
+    let settled = elections.answered_for(run.org, product.id).await?;
+    // This projection is outbound — the imported product into `target` — so
+    // the seller's own mapping decisions apply to it exactly as they apply to
+    // a sync run's.
+    let overrides = OverrideRepo::new(run.pool.clone()).for_org(run.org).await?;
+    let outcome = project_listing_with_overrides(
+        product,
+        &ListingContext {
+            org: run.org,
+            mapping: mapping_id,
+            inventory: target,
+            now: run.now,
+            terms: &terms,
+            edges: &target_edges,
+            no_counterparts: &no_counterparts,
+            rules: &rules,
+            settled: &settled,
+        },
+        &overrides,
+    );
+    let (projectable, blocked_by, raised) = match outcome {
+        Ok(projection) => {
+            record_losses(run, mapping_id, &projection.loss).await?;
+            (
+                true,
+                None,
+                RaiseReport {
+                    new: 0,
+                    already_open: 0,
+                },
+            )
+        }
+        Err(tam_domain::ProjectionBlocked::Blocked {
+            gaps,
+            elections,
+            loss,
+            ..
+        }) => {
+            record_losses(run, mapping_id, &loss).await?;
+            let causes: Vec<(CanonicalTermId, tam_domain::TermKind)> = gaps
+                .iter()
+                .map(|gap| {
+                    let tam_domain::VocabularyId(_, kind) = gap.target;
+                    (gap.term, kind)
+                })
+                .collect();
+            let raised = taxonomy
+                .raise(
+                    run.org,
+                    RaiseScope {
+                        mapping: mapping_id,
+                        target,
+                        at: run.now,
+                    },
+                    &causes,
+                )
+                .await?;
+            let gate = if gaps.is_empty() && !elections.is_empty() {
+                "election"
+            } else {
+                "taxonomy"
+            };
+            (false, Some(gate.to_owned()), raised)
+        }
+        Err(tam_domain::ProjectionBlocked::CurrencyUnknown { .. }) => (
             false,
-            None,
+            Some("currency_unknown".to_owned()),
             RaiseReport {
                 new: 0,
                 already_open: 0,
             },
         ),
-        Some(target) => {
-            let mapping_id = MappingId(fresh_uuid());
-            MappingRepo::new(run.pool.clone())
-                .insert(
-                    run.org,
-                    &tam_domain::Mapping {
-                        id: mapping_id,
-                        org: run.org,
-                        product: product_id,
-                        inventory: target,
-                        binding: tam_domain::Binding::Unbound,
-                        policies: tam_domain::FieldPolicies {
-                            title: tam_domain::FieldPolicy::Managed,
-                            description: tam_domain::FieldPolicy::Managed,
-                            price: tam_domain::FieldPolicy::Managed,
-                            taxonomy: tam_domain::FieldPolicy::Managed,
-                            grades: tam_domain::FieldPolicy::Managed,
-                            files: tam_domain::FieldPolicy::Managed,
-                        },
-                        price_rule: tam_types::PriceRule::Explicit(price),
-                        publish: tam_domain::PublishMode::DryRun,
-                        lifecycle: tam_marketplace::RemoteLifecycle::Absent,
-                    },
-                    0,
-                    run.now,
-                )
-                .await?;
-
-            // Project once, immediately: the gaps raise their items now, which is
-            // what makes the import's own report the drain measurement.
-            let terms = taxonomy.terms().await?;
-            let target_edges = taxonomy
-                .edges_into_all(&tam_taxonomy::projection_vocabularies(target, &product))
-                .await?;
-            let no_counterparts = taxonomy.no_counterparts_into(target).await?;
-            let elections = ElectionRepo::new(run.pool.clone());
-            let rules = elections.rules(run.org).await?;
-            // A freshly minted product has settled nothing, and the read is here
-            // anyway so the two projection sites stay one shape rather than two.
-            let settled = elections.answered_for(run.org, product_id).await?;
-            // This projection is outbound — the imported product into `target` —
-            // so the seller's own mapping decisions apply to it exactly as they apply
-            // to a sync run's. Reading them here is what makes the import's gap report
-            // the same measurement the engine would produce, rather than one that
-            // raises gaps the seller has already answered.
-            let overrides = OverrideRepo::new(run.pool.clone()).for_org(run.org).await?;
-            let outcome = project_listing_with_overrides(
-                &product,
-                &ListingContext {
-                    org: run.org,
-                    mapping: mapping_id,
-                    inventory: target,
-                    now: run.now,
-                    terms: &terms,
-                    edges: &target_edges,
-                    no_counterparts: &no_counterparts,
-                    rules: &rules,
-                    settled: &settled,
-                },
-                &overrides,
-            );
-            let projected = match outcome {
-                Ok(projection) => {
-                    record_losses(run, mapping_id, &projection.loss).await?;
-                    (
-                        true,
-                        None,
-                        RaiseReport {
-                            new: 0,
-                            already_open: 0,
-                        },
-                    )
-                }
-                Err(tam_domain::ProjectionBlocked::Blocked {
-                    gaps,
-                    elections,
-                    loss,
-                    ..
-                }) => {
-                    record_losses(run, mapping_id, &loss).await?;
-                    let causes: Vec<(CanonicalTermId, tam_domain::TermKind)> = gaps
-                        .iter()
-                        .map(|gap| {
-                            let tam_domain::VocabularyId(_, kind) = gap.target;
-                            (gap.term, kind)
-                        })
-                        .collect();
-                    let raised = taxonomy
-                        .raise(
-                            run.org,
-                            RaiseScope {
-                                mapping: mapping_id,
-                                target,
-                                at: run.now,
-                            },
-                            &causes,
-                        )
-                        .await?;
-                    let gate = if gaps.is_empty() && !elections.is_empty() {
-                        "election"
-                    } else {
-                        "taxonomy"
-                    };
-                    (false, Some(gate.to_owned()), raised)
-                }
-                Err(tam_domain::ProjectionBlocked::CurrencyUnknown { .. }) => (
-                    false,
-                    Some("currency_unknown".to_owned()),
-                    RaiseReport {
-                        new: 0,
-                        already_open: 0,
-                    },
-                ),
-                Err(tam_domain::ProjectionBlocked::CurrencyMismatch { .. }) => (
-                    false,
-                    Some("currency_mismatch".to_owned()),
-                    RaiseReport {
-                        new: 0,
-                        already_open: 0,
-                    },
-                ),
-                Err(tam_domain::ProjectionBlocked::CoverMissing) => (
-                    false,
-                    Some("cover_missing".to_owned()),
-                    RaiseReport {
-                        new: 0,
-                        already_open: 0,
-                    },
-                ),
-                Err(tam_domain::ProjectionBlocked::ScanIncomplete { .. }) => (
-                    false,
-                    Some("scan_incomplete".to_owned()),
-                    RaiseReport {
-                        new: 0,
-                        already_open: 0,
-                    },
-                ),
-            };
-            (Some(mapping_id), projected.0, projected.1, projected.2)
-        }
+        Err(tam_domain::ProjectionBlocked::CurrencyMismatch { .. }) => (
+            false,
+            Some("currency_mismatch".to_owned()),
+            RaiseReport {
+                new: 0,
+                already_open: 0,
+            },
+        ),
+        Err(tam_domain::ProjectionBlocked::CoverMissing) => (
+            false,
+            Some("cover_missing".to_owned()),
+            RaiseReport {
+                new: 0,
+                already_open: 0,
+            },
+        ),
+        Err(tam_domain::ProjectionBlocked::ScanIncomplete { .. }) => (
+            false,
+            Some("scan_incomplete".to_owned()),
+            RaiseReport {
+                new: 0,
+                already_open: 0,
+            },
+        ),
     };
-
-    Ok(ImportRowReport {
-        resource: applied.resource,
-        product: product_id,
-        mapping,
-        title: listing.title.clone(),
-        terms_seen,
-        terms_mapped,
-        terms_uncovered: uncovered,
-        unmapped_native_ids: inbound.unmapped,
-        curriculum: curriculum_of(&listing),
-        raised,
+    Ok(Projected {
+        mapping: mapping_id,
         projectable,
         blocked_by,
-        source: listing.remote.clone(),
-        source_state: listing.state,
+        raised,
     })
 }
 
@@ -955,7 +1104,10 @@ pub const INTENT_VERSION: u32 = 1;
 /// designed answer and the variant's own doc says a probe removes it, not a
 /// guess -- which is what happened to TPT, whose rule the founder settled in
 /// the seller account rather than by reading its dollar sign.
-fn resolve_price(source: InventoryId, price: &ImportedPrice) -> Result<PriceIntent, ImportError> {
+pub fn resolve_price(
+    source: InventoryId,
+    price: &ImportedPrice,
+) -> Result<PriceIntent, ImportError> {
     let ImportedPrice::Paid {
         minor_units,
         denomination,

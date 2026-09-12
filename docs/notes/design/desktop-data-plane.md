@@ -55,8 +55,8 @@ The server does not render the field set, and could not without composing.
 
 The interpreter then runs the item against the marketplace, under the seller's session, through the device's own transport, with the device's own file source, its own attempt-id source, and the cancellation described above.
 
-When the run is over the device settles: one envelope fenced on the item and the lease epoch, which the server refuses if a different device holds that lease.
-The settle is not literally the last request of the run, and it is not meant to be: the interpreter notifies the seller once the item is terminal, so a notification and a journal append follow it, and nothing after the settle writes to the item.
+When the run is over the device settles with one envelope fenced on the item, lease epoch and holder device, including the device's asserted instant. The server changes the item state, records `ItemSettled`, derives any `JobSettled`, and releases the lease in one transaction. The client therefore does not post the terminal event afterwards under a lease the settlement deliberately ended.
+The settle is not literally the last activity of the run: notification and local payload-cache cleanup follow it, and nothing after the settle writes to the item.
 
 Every step of that sequence is recorded as a typed event naming the device that produced it, and the console reads them back.
 That is D1's interface rule rather than a convenience: with the work on the seller's own machines, "which device did this" becomes a question the seller can ask, and one they must be able to answer.
@@ -171,10 +171,11 @@ The single-flight claim is taken and released by each command separately.
 Holding it across the seller's decision would mean a run that could never be retried until the application restarted, for a step that may take them a week.
 
 The Tes-only refusal is gone.
-A TPT catalogue is now read by a second `CatalogueSource` binding over `TptAdapter::{list_own_resources, fetch_for_import}`, and `CatalogueSource::bundle` answers `Option<Vec<u8>>` so that binding can say the honest thing: `tpt.download_resource_bundle` is uncaptured, so this device holds no way to obtain the seller's TPT file at all.
-That is `Ok(None)` and not `Err`, and the difference is what the seller reads.
-A fetch that was attempted and failed is a skip with a sentence; a source that has no file download is a resource that still crosses, carrying its listing with `ObservedResource.file` and `cover_png` both absent.
-Both fields are therefore `Option` on the wire, with `serde(default)`.
+A TPT catalogue is read through a second `CatalogueSource` binding over `TptAdapter::{list_own_resources, fetch_for_import}`.
+The founder-supervised 2026-09-13 capture added `download_resource_bundle`: an owned product's download route redirects to a signed `rc-assets.teacherspayteachers.com` asset, which the phone fetches without marketplace cookies.
+The binding validates the ZIP container before it records the payload descriptor.
+A failed fetch is a skip with a sentence; an absent file still crosses as metadata with `ObservedResource.file` unset.
+`ObservedResource.file` and `cover_png` therefore remain `Option` on the wire, with `serde(default)`.
 
 What `describe` now measures is a `Fingerprint`, from `tam-fingerprint`, and the device asserts it in the voice `0052_product_file_source.sql` reserves for a claim about bytes the server never held.
 It is a 64-bit SimHash and a 128-hash MinHash over 5-word shingles of the extracted PDF text, the page count from the PDF page tree, a perceptual hash of the cover for an image payload only, and the normalised title.

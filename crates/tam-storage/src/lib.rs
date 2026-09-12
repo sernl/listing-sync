@@ -69,28 +69,40 @@ pub use device::{
     DeviceSessionReport, DeviceSessionStatus,
 };
 pub use duplicates::{
-    ordered as ordered_pair, DecidedBy, DuplicateRepo, Evidence, EvidenceUnit, MatchLayer,
-    NewVerdict, Polarity, Verdict, VerdictRecord, REVERSIBLE_MS,
+    answered_pairs, decide_verdict, ordered as ordered_pair, pair_verdict, raise_verdict,
+    DecidedBy, DuplicateRepo, Evidence, EvidenceUnit, MatchLayer, NewVerdict, Polarity, Verdict,
+    VerdictRecord, REVERSIBLE_MS,
 };
 pub use entitlement::{EntitlementRepo, Grant, GrantRecord, GrantedBy, NewGrant, Usage};
 pub use file_source::ProductFileSourceRepo;
 pub use fingerprints::{
-    CandidateSketch, FingerprintRepo, FingerprintWrite, PayloadDigest, ProductMeta,
-    TextSketchColumns,
+    candidates_in, digest_frequency_in, digests_for_in, metadata_for_in, products_by_digest_in,
+    put_fingerprint, title_frequency_in, CandidateSketch, FingerprintRepo, FingerprintWrite,
+    PayloadDigest, ProductMeta, TextSketchColumns,
 };
 pub use guide::{
-    ensure_platform_org, platform_org, GuideEdit, GuideHead, GuideRecord, GuideRepo, GuideStatus,
-    GuideWrite, NewGuide, PLATFORM_ORG_SLUG,
+    ensure_platform_org, escape_like, platform_org, GuideDelete, GuideEdit, GuideHead,
+    GuidePublication, GuidePublishedHead, GuidePublishedPage, GuideRecord, GuideRepo,
+    GuideRevisionWrite, GuideSearch, GuideStatus, GuideTaxon, GuideTaxonKind, GuideTaxonWrite,
+    GuideTaxonomy, GuideWrite, NewGuide, PLATFORM_ORG_SLUG,
 };
 pub use import_batches::{
-    AttachCounts, BatchState, BatchWrite, BindOutcome, BoundRow, ClaimedRow, CommitCounts,
-    CommitOpening, ImportBatchDraftRecord, ImportBatchRecord, ImportBatchRepo,
-    ImportBatchRowRecord, NewImportBatch, NewImportBatchRow, RowAddress, RowFile, RowFiles,
-    RowIntent, RowRef, RowState, StaleReport, SweepReport, UnbindOutcome, BATCHES_LISTED_MAX,
+    record_row_created, record_row_skipped_in, AttachCounts, BatchState, BatchWrite, BindOutcome,
+    BoundRow, ClaimedRow, CommitCounts, CommitOpening, ImportBatchDraftRecord, ImportBatchRecord,
+    ImportBatchRepo, ImportBatchRowRecord, NewImportBatch, NewImportBatchRow, RowAddress, RowFile,
+    RowFiles, RowIntent, RowRef, RowState, StaleReport, SweepReport, UnbindOutcome,
+    BATCHES_LISTED_MAX,
 };
 pub use import_runs::{
-    ImportRunHead, ImportRunItemRecord, ImportRunRecord, ImportRunRepo, ListedRow, NewImportRun,
-    ReadItem, RunCounts, RunItemState, RunKind, RunOpening, RunState, Selection, RUNS_LISTED_MAX,
+    append_listed, bound_product, claim_receipt, close_enumeration, counts_of, described_of,
+    fenced, guard_run, item_of_product, lock_org_catalogue, merged_into, note_contact, parked_for,
+    record_failed, record_imported, record_read, record_skipped, record_verdict, reopen_skipped,
+    reserved_product, reserved_state, select_items, set_run_state, store_receipt, ClaimOutcome,
+    FenceOutcome, ImportLease, ImportReasonCode, ImportRunHead, ImportRunItemRecord,
+    ImportRunRecord, ImportRunRepo, ImportStage, ItemAddress, ListedRow, NewImportRun,
+    ProgressReport, ReadItem, ReceiptAck, ReceiptOutcome, RunCounts, RunExecution, RunGuard,
+    RunItemState, RunKind, RunOpening, RunState, Selection, SelectionOutcome, StartKeyBinding,
+    StopOutcome, StoredReceipt, LEASE_SECS, MANUAL_ACTIVATION_SECS, RENEWAL_SECS, RUNS_LISTED_MAX,
 };
 pub use job_reads::{
     intent_digest, payload_digest, EventRow, ItemCounts, ItemRow, ItemStateKind, ItemsPageParams,
@@ -106,13 +118,16 @@ pub use jobs::{
     AWAITING_COUNTERPART, AWAITING_MARKETPLACE_ANSWER, AWAITING_SELLER_SIGNIN, ELECTION,
     REAUTH_REQUIRED, REVIVABLE_GATES,
 };
-pub use labels::{system_label_name, Colour, LabelRecord, LabelRename, LabelRepo};
+pub use labels::{
+    attach_system_label, set_labels_for_product, system_label_name, Colour, LabelRecord,
+    LabelRename, LabelRepo,
+};
 pub use lowering::{
     lower, lower_head, requires_bound_on, uncaptured_source, uncaptured_transition, LoweringRefusal,
 };
 pub use mapping::{
-    BoundListing, LossScope, MappingAdd, MappingHead, MappingRecord, MappingRepo, PastedBind,
-    RecordedLoss,
+    bind_listing, bound_product_for, insert_mapping, BoundListing, LossScope, MappingAdd,
+    MappingHead, MappingRecord, MappingRepo, PastedBind, RecordedLoss,
 };
 pub use marketplace_requests::{
     MarketplaceRequestBackofficeRepo, MarketplaceRequestRecord, MarketplaceRequestRepo,
@@ -126,9 +141,10 @@ pub use operators::{OperatorRecord, OperatorRepo};
 pub use org::{OrgRecord, OrgRepo, OrgWrite};
 pub use overrides::OverrideRepo;
 pub use product::{
+    insert_product, restore_product, soft_delete_product, title_of, update_product,
     ExportedListing, ExportedResource, FileRefusal, FileReplacement, FileSwap, FileTarget,
-    ProductEdit, ProductFiles, ProductRecord, ProductRepo, ProductSummary, ReplacedFiles,
-    StoredCover, ThumbnailChange,
+    ProductCreationFacts, ProductEdit, ProductFiles, ProductRecord, ProductRepo, ProductSummary,
+    ReplacedFiles, StoredCover, ThumbnailChange,
 };
 pub use profile::{AvatarWrite, ProfileRepo};
 pub use pruning::{PruneRepo, PruneReport};
@@ -146,10 +162,12 @@ pub use sync_settings::{
     ActivityKind, ActivityRow, MultiListedRow, SyncSettingRecord, SyncSettingRepo,
     ACTIVITY_LISTED_MAX,
 };
-pub use tpt_base::{TptBaseRecord, TptBaseRepo};
+pub use tpt_base::{upsert_tpt_base, TptBaseRecord, TptBaseRepo};
 pub mod elections;
 pub mod sync_requests;
-pub use elections::{AnswerReport, AnsweredElection, ElectionRepo, NewAnswer, OpenElection};
+pub use elections::{
+    record_answered_election, AnswerReport, AnsweredElection, ElectionRepo, NewAnswer, OpenElection,
+};
 pub use sync_requests::{
     job_request_key, CanonicalResource, Canonicalised, Completion, Disposition, Enqueued, Mint,
     NewMigration, NewSyncRequest, Observed, ResourceCoverage, SyncIntent, SyncRequestRecord,

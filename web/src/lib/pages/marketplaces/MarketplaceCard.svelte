@@ -5,7 +5,7 @@
 	import type { Marketplace } from '$lib/generated/vocab';
 	import TileMark from './TileMark.svelte';
 	import type { Mark } from './catalogue';
-	import type { CardAction } from './view';
+	import type { BusyAt, CardAction, HereFace } from './view';
 
 	/** Whether the mark's own proportions are square, and so whether it takes
 	 *  the narrow tile. A glyph is drawn square by definition; an image is
@@ -20,14 +20,17 @@
 		handle,
 		status,
 		body,
+		here = null,
 		about,
 		transport,
 		action,
 		disconnect,
+		signOut,
 		running,
 		refusal = null,
 		onrun,
 		ondisconnect,
+		onsignout,
 		pending = false
 	}: {
 		mark: Mark;
@@ -61,15 +64,28 @@
 		 *  rendered whole rather than composed with `name` here, because the
 		 *  browser arm is a sentence and not a verb. */
 		action?: CardAction;
-		/** The quiet second control, offered only where there is a connection
-		 *  to remove. Separate from `action` because a card can offer both, and
-		 *  because this one is destructive and the other is not. */
+		/** What this machine itself holds, where it answered. Stated beside the
+		 *  organisation's own pill rather than in place of it, because they are
+		 *  two facts: a marketplace can be connected for the account and absent
+		 *  from the computer the seller is standing at, which is the case that
+		 *  used to leave them no way in. Null where nothing may be claimed — a
+		 *  browser, an application too old to answer, a read in flight. */
+		here?: HereFace | null;
+		/** The account-level way out, offered only where a connection stands.
+		 *  Separate from `action` because a card can offer both, and because
+		 *  this one is destructive and the other is not. */
 		disconnect?: { label: string; marketplace: Marketplace };
+		/** The local way out: this machine's own login, offered only where this
+		 *  machine holds one. A third control rather than a mode of the second,
+		 *  because the two reach different things — one machine's store, and the
+		 *  organisation's connection — and a seller pressing either must know
+		 *  which. */
+		signOut?: { label: string; marketplace: Marketplace };
 		/** Which control on this card is mid-flight. A connect opens the
 		 *  marketplace's own sign-in — beside the console on a computer, in
 		 *  place of it on a phone — and can stand for a minute either way, so a
 		 *  card with no busy state reads as a button that did nothing. */
-		running?: 'action' | 'disconnect';
+		running?: BusyAt;
 		/** Why this card's action cannot run at all, where a plan withholds it
 		 *  — the connection cap being the one that does. Null where it can.
 		 *  Stated in `title` on the control, because a disabled control with no
@@ -79,6 +95,7 @@
 		refusal?: string | null;
 		onrun?: (marketplace: Marketplace) => void;
 		ondisconnect?: (marketplace: Marketplace) => void;
+		onsignout?: (marketplace: Marketplace) => void;
 		/** Not built, and so not a state that can change: the card takes a
 		 *  dashed edge and carries no action. */
 		pending?: boolean;
@@ -148,7 +165,19 @@
 		</div>
 	{/if}
 
-	{#if action || disconnect}
+	<!-- What this machine holds, under what the account holds. Its own line
+	     rather than a second pill in the header, because the header pill is the
+	     organisation's and the two disagree exactly when it matters: a
+	     marketplace connected on the seller's other computer, and absent from
+	     this one. -->
+	{#if here}
+		<div class="mp-here">
+			<span>{here.line}</span>
+			<StatusPill tone={here.tone} label={here.label} />
+		</div>
+	{/if}
+
+	{#if action || disconnect || signOut}
 		<div class="mp-foot">
 			{#if action}
 				{#if action.kind === 'link'}
@@ -167,16 +196,35 @@
 					</button>
 				{/if}
 			{/if}
-			{#if disconnect}
-				{@const removing = disconnect.marketplace}
-				<button
-					class="off"
-					type="button"
-					disabled={running !== undefined}
-					onclick={() => ondisconnect?.(removing)}
-				>
-					{running === 'disconnect' ? 'Disconnecting…' : disconnect.label}
-				</button>
+			<!-- The two ways out, grouped so the foot stays one action on one side
+			     and the ways out on the other however many of them a card has. The
+			     local sign-out leads, because it is the smaller act of the two and
+			     the one a seller on a shared machine wants. -->
+			{#if signOut || disconnect}
+				<span class="mp-offs">
+					{#if signOut}
+						{@const forgetting = signOut.marketplace}
+						<button
+							class="off"
+							type="button"
+							disabled={running !== undefined}
+							onclick={() => onsignout?.(forgetting)}
+						>
+							{running === 'signout' ? 'Signing out…' : signOut.label}
+						</button>
+					{/if}
+					{#if disconnect}
+						{@const removing = disconnect.marketplace}
+						<button
+							class="off"
+							type="button"
+							disabled={running !== undefined}
+							onclick={() => ondisconnect?.(removing)}
+						>
+							{running === 'disconnect' ? 'Disconnecting…' : disconnect.label}
+						</button>
+					{/if}
+				</span>
 			{/if}
 		</div>
 	{/if}

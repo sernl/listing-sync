@@ -64,6 +64,7 @@ const COMMANDS: &[&str] = &[
     "device_activity",
     "start_import",
     "continue_import",
+    "stop_import",
     "retry_console",
     "set_theme",
 ];

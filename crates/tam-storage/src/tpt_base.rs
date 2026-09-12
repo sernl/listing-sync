@@ -140,86 +140,9 @@ impl TptBaseRepo {
         record: &TptBaseRecord,
         now: Timestamp,
     ) -> Result<(), StorageError> {
-        let standards = write_standards(&record.standards);
-        let thumbnails: Vec<Vec<u8>> = record
-            .thumbnails
-            .iter()
-            .map(|handle| decode_hex(handle.as_str()))
-            .collect::<Result<Vec<_>, StorageError>>()?;
-        let video = record
-            .video_preview
-            .as_ref()
-            .map(|handle| decode_hex(handle.as_str()))
-            .transpose()?;
-
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
-        sqlx::query!(
-            "INSERT INTO product_tpt_base \
-             (org_id, product_id, thumbnail_mode, thumbnail_hashes, video_preview_hash, \
-              additional_licence_minor_units, bundle_discount_minor_units, tax_code_id, \
-              subject_area_slugs, tag_slugs, format_slugs, custom_categories, standards, \
-              teaching_duration_id, pages_or_slides, answer_key_id, \
-              copyright_declaration_id, status_user, appropriate_for_country, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, \
-                     $17, $18, $19, $20) \
-             ON CONFLICT (org_id, product_id) DO UPDATE SET \
-                 thumbnail_mode                 = EXCLUDED.thumbnail_mode, \
-                 thumbnail_hashes               = EXCLUDED.thumbnail_hashes, \
-                 video_preview_hash             = EXCLUDED.video_preview_hash, \
-                 additional_licence_minor_units = EXCLUDED.additional_licence_minor_units, \
-                 bundle_discount_minor_units    = EXCLUDED.bundle_discount_minor_units, \
-                 tax_code_id                    = EXCLUDED.tax_code_id, \
-                 subject_area_slugs             = EXCLUDED.subject_area_slugs, \
-                 tag_slugs                      = EXCLUDED.tag_slugs, \
-                 format_slugs                   = EXCLUDED.format_slugs, \
-                 custom_categories              = EXCLUDED.custom_categories, \
-                 standards                      = EXCLUDED.standards, \
-                 teaching_duration_id           = EXCLUDED.teaching_duration_id, \
-                 pages_or_slides                = EXCLUDED.pages_or_slides, \
-                 answer_key_id                  = EXCLUDED.answer_key_id, \
-                 copyright_declaration_id       = EXCLUDED.copyright_declaration_id, \
-                 status_user                    = EXCLUDED.status_user, \
-                 appropriate_for_country        = EXCLUDED.appropriate_for_country, \
-                 updated_at                     = EXCLUDED.updated_at",
-            uuid_to_db(org.0),
-            uuid_to_db(product.0),
-            i16::from(record.thumbnail_mode.wire_id()),
-            &thumbnails,
-            video.as_deref(),
-            record.additional_licence_minor_units,
-            record.bundle_discount_minor_units,
-            record.tax_code.map(|code| i16::from(code.wire_id())),
-            &slug_strings(&record.categories.subject_areas),
-            &slug_strings(&record.categories.tags),
-            &slug_strings(&record.categories.formats),
-            &record.categories.custom_categories,
-            standards,
-            record
-                .details
-                .teaching_duration
-                .map(|duration| i16::from(duration.wire_id())),
-            record
-                .details
-                .pages_or_slides
-                .map(i32::try_from)
-                .transpose()
-                .map_err(|_| StorageError::Inconsistent {
-                    reason: "the page count is larger than the column holds".to_owned(),
-                })?,
-            record
-                .details
-                .answer_key
-                .map(|key| i16::from(key.wire_id())),
-            record
-                .copyright
-                .map(|declaration| i16::from(declaration.wire_id())),
-            i16::from(record.status.wire_id()),
-            record.categories.appropriate_for_country,
-            timestamp_to_db(now)?,
-        )
-        .execute(&mut *tx)
-        .await?;
+        upsert_tpt_base(&mut tx, org, product, record, now).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -382,4 +305,96 @@ fn encode_hex(bytes: &[u8]) -> Result<UploadRef, StorageError> {
     UploadRef::new(&hex).map_err(|_| StorageError::CorruptRow {
         reason: format!("a stored file handle is {} bytes, expected 32", bytes.len()),
     })
+}
+
+/// Writes one product's TPT-base row inside a transaction the caller owns.
+///
+/// The one implementation. A create writes the sidecar in the same
+/// transaction as the product it hangs from, so a process that stops between
+/// them cannot leave a product whose seller-answered TPT controls were lost.
+pub async fn upsert_tpt_base(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    product: ProductId,
+    record: &TptBaseRecord,
+    now: Timestamp,
+) -> Result<(), StorageError> {
+    let standards = write_standards(&record.standards);
+    let thumbnails: Vec<Vec<u8>> = record
+        .thumbnails
+        .iter()
+        .map(|handle| decode_hex(handle.as_str()))
+        .collect::<Result<Vec<_>, StorageError>>()?;
+    let video = record
+        .video_preview
+        .as_ref()
+        .map(|handle| decode_hex(handle.as_str()))
+        .transpose()?;
+    sqlx::query!(
+        "INSERT INTO product_tpt_base \
+         (org_id, product_id, thumbnail_mode, thumbnail_hashes, video_preview_hash, \
+          additional_licence_minor_units, bundle_discount_minor_units, tax_code_id, \
+          subject_area_slugs, tag_slugs, format_slugs, custom_categories, standards, \
+          teaching_duration_id, pages_or_slides, answer_key_id, \
+          copyright_declaration_id, status_user, appropriate_for_country, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, \
+                 $17, $18, $19, $20) \
+         ON CONFLICT (org_id, product_id) DO UPDATE SET \
+             thumbnail_mode                 = EXCLUDED.thumbnail_mode, \
+             thumbnail_hashes               = EXCLUDED.thumbnail_hashes, \
+             video_preview_hash             = EXCLUDED.video_preview_hash, \
+             additional_licence_minor_units = EXCLUDED.additional_licence_minor_units, \
+             bundle_discount_minor_units    = EXCLUDED.bundle_discount_minor_units, \
+             tax_code_id                    = EXCLUDED.tax_code_id, \
+             subject_area_slugs             = EXCLUDED.subject_area_slugs, \
+             tag_slugs                      = EXCLUDED.tag_slugs, \
+             format_slugs                   = EXCLUDED.format_slugs, \
+             custom_categories              = EXCLUDED.custom_categories, \
+             standards                      = EXCLUDED.standards, \
+             teaching_duration_id           = EXCLUDED.teaching_duration_id, \
+             pages_or_slides                = EXCLUDED.pages_or_slides, \
+             answer_key_id                  = EXCLUDED.answer_key_id, \
+             copyright_declaration_id       = EXCLUDED.copyright_declaration_id, \
+             status_user                    = EXCLUDED.status_user, \
+             appropriate_for_country        = EXCLUDED.appropriate_for_country, \
+             updated_at                     = EXCLUDED.updated_at",
+        uuid_to_db(org.0),
+        uuid_to_db(product.0),
+        i16::from(record.thumbnail_mode.wire_id()),
+        &thumbnails,
+        video.as_deref(),
+        record.additional_licence_minor_units,
+        record.bundle_discount_minor_units,
+        record.tax_code.map(|code| i16::from(code.wire_id())),
+        &slug_strings(&record.categories.subject_areas),
+        &slug_strings(&record.categories.tags),
+        &slug_strings(&record.categories.formats),
+        &record.categories.custom_categories,
+        standards,
+        record
+            .details
+            .teaching_duration
+            .map(|duration| i16::from(duration.wire_id())),
+        record
+            .details
+            .pages_or_slides
+            .map(i32::try_from)
+            .transpose()
+            .map_err(|_| StorageError::Inconsistent {
+                reason: "the page count is larger than the column holds".to_owned(),
+            })?,
+        record
+            .details
+            .answer_key
+            .map(|key| i16::from(key.wire_id())),
+        record
+            .copyright
+            .map(|declaration| i16::from(declaration.wire_id())),
+        i16::from(record.status.wire_id()),
+        record.categories.appropriate_for_country,
+        timestamp_to_db(now)?,
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }

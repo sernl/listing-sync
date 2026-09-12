@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT g.slug, g.published_title AS \"title!\", g.published_body AS \"body!\", g.published_at AS \"published_at!\", t.id AS \"topic_id?\", t.slug AS \"topic_slug?\", t.name AS \"topic_name?\", t.retired AS \"topic_retired?\", tags.ids AS \"tag_ids?\", tags.slugs AS \"tag_slugs?\", tags.names AS \"tag_names?\", tags.retireds AS \"tag_retireds?\" FROM guide g LEFT JOIN guide_taxon t ON t.id = g.published_topic_id LEFT JOIN LATERAL ( SELECT array_agg(x.id ORDER BY lower(x.name), x.slug) AS ids, array_agg(x.slug ORDER BY lower(x.name), x.slug) AS slugs, array_agg(x.name ORDER BY lower(x.name), x.slug) AS names, array_agg(x.retired ORDER BY lower(x.name), x.slug) AS retireds FROM guide_tag_assignment a JOIN guide_taxon x ON x.id = a.taxon_id WHERE a.guide_id = g.id AND a.scope = 'published') tags ON true WHERE g.slug = $1 AND g.published_at IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "title!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "body!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "published_at!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "topic_id?",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "topic_slug?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "topic_name?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "topic_retired?",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 8,
+        "name": "tag_ids?",
+        "type_info": "UuidArray"
+      },
+      {
+        "ordinal": 9,
+        "name": "tag_slugs?",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 10,
+        "name": "tag_names?",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 11,
+        "name": "tag_retireds?",
+        "type_info": "BoolArray"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "0b95bafcc8f09f86ad4ba4914d0fc6ddc7d1536246bd9406015dd8c05977c16f"
+}

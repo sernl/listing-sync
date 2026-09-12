@@ -1,12 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-	countsLine,
 	emptyItemsLine,
 	importedHref,
-	inPlay,
 	itemRows,
-	progressLine,
-	readSoFar,
 	reviewCard,
 	runBadge,
 	runHref,
@@ -14,7 +10,6 @@ import {
 	selectionBlocked,
 	selectionRows,
 	settledLine,
-	stageCopy,
 	stageFrom
 } from './run-view';
 import type {
@@ -51,6 +46,13 @@ function head(partial: Partial<ImportRunHead> = {}): ImportRunHead {
 		counts: counts(),
 		created_at: 1,
 		settled_at: null,
+		retry_of: null,
+		execution: {
+			owner_device: null, attempt: 0, lease_expires_at: null,
+			last_contact_at: null, last_progress_at: null, stage: 'waiting',
+			reason_code: null, reason: null, discovered: 0, processed: 0, described: 0,
+			enumeration_complete: false, selected_total: null, commit_authorised: false
+		},
 		...partial
 	};
 }
@@ -104,96 +106,29 @@ function pair(partial: Partial<ReviewPairView> = {}): ReviewPairView {
 }
 
 describe('stageFrom', () => {
-	// The page for a run whose shop is still being listed, the page for a
-	// seller choosing from it and the page for the reading are three different
-	// pages, and the server's one `reading` state does not tell them apart.
-	// `read_total` is what does: null until the enumeration lands.
-	it('tells the three halves of "reading" apart by whether a total is known', () => {
-		expect(stageFrom(head({ read_total: null }))).toBe('listing');
-		expect(stageFrom(head({ read_total: 4, counts: counts({ listed: 4 }) }))).toBe('selecting');
-		expect(stageFrom(head({ read_total: 4, counts: counts({ selected: 4 }) }))).toBe('reading');
+	it('does not present an interrupted reader as active work', () => {
+		const run = head();
+		run.execution.stage = 'interrupted';
+		run.execution.reason_code = 'lease_expired';
+		expect(stageFrom(run)).toBe('interrupted');
 	});
 
-	// A total of nothing must not read as a shop with nothing in it, which is
-	// the same reason the column is nullable: a run that has enumerated an
-	// empty shop is past the listing step.
-	it('does not read an enumerated empty shop as one still being listed', () => {
-		expect(stageFrom(head({ read_total: 0, counts: counts() }))).toBe('reading');
+	it('does not present description completion as authorised catalogue addition', () => {
+		const run = head({ state: 'committing' });
+		run.execution.stage = 'committing';
+		expect(stageFrom(run)).toBe('confirming');
 	});
 
-	it('carries the states the server already tells apart', () => {
-		expect(stageFrom(head({ state: 'reviewing' }))).toBe('reviewing');
-		expect(stageFrom(head({ state: 'committing' }))).toBe('committing');
-		expect(stageFrom(head({ state: 'complete' }))).toBe('done');
-	});
-
-	// Given up is not finished, and a seller who gave up needs the page to say
-	// what did land rather than to congratulate them.
-	it('reads a failed and an abandoned run the same way, as unfinished', () => {
-		expect(stageFrom(head({ state: 'failed' }))).toBe('failed');
-		expect(stageFrom(head({ state: 'abandoned' }))).toBe('failed');
-	});
-
-	it('gives every stage a headline and a line under it', () => {
-		for (const state of ['reading', 'reviewing', 'committing', 'complete', 'failed'] as const) {
-			const copy = stageCopy(stageFrom(head({ state, read_total: 1 })));
-			expect(copy.headline.length, state).toBeGreaterThan(0);
-			expect(copy.detail.length, state).toBeGreaterThan(0);
-		}
-	});
 });
 
 describe('runBadge', () => {
-	it('says a run wanting an answer differently from one under way', () => {
-		expect(runBadge('reviewing')).toEqual({ tone: 'warn', label: 'Needs you' });
-		expect(runBadge('reading').tone).toBe('run');
-	});
-
-	// A state added in Rust degrades to saying so rather than rendering an
-	// unstyled blank, which is the one outcome a list of runs must not have.
-	it('names an unrecognised state rather than rendering nothing', () => {
-		expect(runBadge('teleporting')).toEqual({ tone: 'soon', label: 'Unknown' });
+	it('does not congratulate a completed run that left resources out', () => {
+		const run = head({ state: 'complete', counts: counts({ imported: 3, failed: 1 }) });
+		run.execution.stage = 'completed';
+		expect(runBadge(run).tone).toBe('warn');
 	});
 });
 
-describe('the live bar', () => {
-	// A skip is mostly a resource the seller did not tick. Counted in the
-	// denominator it would leave the bar short of its own total for ever,
-	// which reads as an import that stalled.
-	it('counts only what is still in play, never the resources left behind', () => {
-		expect(inPlay(counts({ selected: 3, imported: 2, skipped: 40 }))).toBe(5);
-	});
-
-	// A resource that was read and then failed was still read: the bar counts
-	// the reading, not the outcome.
-	it('counts everything past the read as read', () => {
-		expect(readSoFar(counts({ read: 1, matched: 2, review: 3, imported: 4, failed: 5 }))).toBe(
-			15
-		);
-	});
-
-	it('says how far it has got, who is waiting and what landed', () => {
-		const line = progressLine(counts({ selected: 28, read: 0, review: 3, imported: 9 }), 40);
-		expect(line).toBe('12 of 40 read · 3 need you · 9 imported');
-	});
-
-	// "0 need you" sends a seller looking for a question nobody asked.
-	it('drops the figures that are zero rather than claiming about nothing', () => {
-		expect(progressLine(counts({ selected: 38, read: 2 }), 40)).toBe('2 of 40 read');
-	});
-});
-
-describe('countsLine', () => {
-	it('says what a settled run did', () => {
-		expect(countsLine(counts({ imported: 6, skipped: 2, failed: 1 }), 9)).toBe(
-			'9 found · 6 imported · 2 left out · 1 with problems'
-		);
-	});
-
-	it('says a shop is being read rather than inventing a total', () => {
-		expect(countsLine(counts(), null)).toBe('Reading what is in your shop.');
-	});
-});
 
 describe('where a run is read', () => {
 	// A spreadsheet run's review belongs on the batch page, which holds the

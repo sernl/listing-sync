@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE guide SET published_title    = title, published_body     = body, published_topic_id = topic_id, published_revision = revision, published_at       = $5, updated_by         = $4, updated_at         = $5, revision           = revision + 1 WHERE slug = $1 AND id = $2 AND revision = $3 RETURNING id, revision",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "revision",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Int4",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "6b23397ed744195ac3887faca45b73f800de53ea32ce3dc3851d10c00854ba82"
+}

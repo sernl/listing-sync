@@ -421,12 +421,31 @@ impl HttpControlPlane {
 }
 
 impl crate::ledger::LedgerTransport for HttpControlPlane {
+    /// One POST to one of our own paths, with the statuses the callers act on
+    /// kept apart.
+    ///
+    /// A conflict is the import protocol's fence answer: another attempt owns
+    /// the run, the lease lapsed, or the run is over. The device must stop on
+    /// that and must not stop on an outage, so the two cannot share a
+    /// variant. An unauthorised or forbidden answer is the console session
+    /// this request spoke under being refused, which no number of retries
+    /// changes, so it is kept apart from an outage for the opposite reason:
+    /// what is owed is dropped rather than offered again forever.
     fn post<'a>(&'a self, path: &'a str, body: String) -> PlaneFuture<'a, String> {
         Box::pin(async move {
             let reply = self.dispatch(path, body).await?;
             match reply.status {
-                200 | 202 => Ok(reply.body),
+                // Two-hundred-and-four included: the abandonment route
+                // answers no content, and a success read as a refusal would
+                // have the device replay a stop the server had accepted
+                // forever.
+                200 | 202 | 204 => Ok(reply.body),
+                401 | 403 => Err(ControlPlaneError::Denied(excerpt(&reply.body))),
                 404 => Err(ControlPlaneError::Unregistered),
+                // The whole body rather than an excerpt: the caller reads the
+                // structured `code` off it to tell a settled run from a
+                // fenced one, and a truncated body is one it cannot parse.
+                409 | 410 => Err(ControlPlaneError::Fenced(reply.body.clone())),
                 status => Err(ControlPlaneError::Refused(format!(
                     "{status}: {}",
                     excerpt(&reply.body)
@@ -487,6 +506,21 @@ pub fn sync_request_path(request: tam_types::Uuid) -> String {
         "/v1/sync/{}",
         uuid::Uuid::from_bytes(request.0).as_hyphenated()
     )
+}
+
+/// One count off a run's execution block.
+///
+/// Required, and a value that is not a `u32` is a refusal rather than a zero.
+/// The protocol states these counts on every run; a client that filled a
+/// missing one in would resume a takeover from a number nobody sent.
+fn counted(execution: &serde_json::Value, field: &str) -> Result<u32, ControlPlaneError> {
+    execution
+        .get(field)
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|count| u32::try_from(count).ok())
+        .ok_or_else(|| {
+            ControlPlaneError::Refused(format!("the import states no {field} this client can read"))
+        })
 }
 
 /// The path the device reads an import run from.
@@ -559,7 +593,7 @@ impl ControlPlane for HttpControlPlane {
         })
     }
 
-    fn import_run_source(&self, run: tam_types::Uuid) -> PlaneFuture<'_, tam_types::InventoryId> {
+    fn import_run_facts(&self, run: tam_types::Uuid) -> PlaneFuture<'_, crate::import::RunFacts> {
         Box::pin(async move {
             let view = self
                 .view(&import_run_path(run), "this sign-in has no such import")
@@ -567,8 +601,30 @@ impl ControlPlane for HttpControlPlane {
             let source = view.get("source").cloned().ok_or_else(|| {
                 ControlPlaneError::Refused("the import names no source inventory".to_owned())
             })?;
-            serde_json::from_value(source)
-                .map_err(|why| ControlPlaneError::Refused(why.to_string()))
+            let source = serde_json::from_value(source)
+                .map_err(|why| ControlPlaneError::Refused(why.to_string()))?;
+            // Required, every one of them. These are what a device taking a
+            // run over resumes from, so a view this client cannot read is a
+            // view it must refuse: inferring zero would report work the run
+            // has already done as undone, and would do it silently, which is
+            // the class of defect this whole repair is about.
+            let execution = view.get("execution").ok_or_else(|| {
+                ControlPlaneError::Refused("the import states no execution".to_owned())
+            })?;
+            Ok(crate::import::RunFacts {
+                source,
+                discovered: counted(execution, "discovered")?,
+                processed: counted(execution, "processed")?,
+                described: counted(execution, "described")?,
+                enumeration_complete: execution
+                    .get("enumeration_complete")
+                    .and_then(serde_json::Value::as_bool)
+                    .ok_or_else(|| {
+                        ControlPlaneError::Refused(
+                            "the import does not say whether its discovery is complete".to_owned(),
+                        )
+                    })?,
+            })
         })
     }
 
@@ -595,22 +651,26 @@ impl ControlPlane for HttpControlPlane {
         })
     }
 
-    fn open_import_run<'a>(
+    fn open_import_runs<'a>(
         &'a self,
         device: &'a DeviceId,
-    ) -> PlaneFuture<'a, Option<crate::import::OpenImportRun>> {
+    ) -> PlaneFuture<'a, Vec<crate::import::OpenImportRun>> {
         Box::pin(async move {
             let reply = self.read(&crate::import::open_import_path(device)).await?;
             match reply.status {
-                // Two spellings of "nothing to do", and neither is a fault: a
-                // `null` body from a server that has no run open, and a
-                // not-found from one a version behind that does not serve this
-                // route at all. A device asks this at every check-in, so an
-                // ordinary answer that travelled as an error would be an
-                // hourly failure in the seller's activity saying nothing.
-                200 => serde_json::from_slice(&reply.body)
-                    .map_err(|why| ControlPlaneError::Refused(why.to_string())),
-                404 => Ok(None),
+                // Three spellings of "nothing to do", and none is a fault: an
+                // empty array, a `null` body from a server that has no run
+                // open, and a not-found from one a version behind that does
+                // not serve this route at all. A device asks this at every
+                // check-in, so an ordinary answer that travelled as an error
+                // would be an hourly failure in the seller's activity saying
+                // nothing.
+                200 => {
+                    serde_json::from_slice::<Option<Vec<crate::import::OpenImportRun>>>(&reply.body)
+                        .map(Option::unwrap_or_default)
+                        .map_err(|why| ControlPlaneError::Refused(why.to_string()))
+                }
+                404 => Ok(Vec::new()),
                 status => Err(ControlPlaneError::Refused(format!(
                     "{status}: {}",
                     excerpt(&String::from_utf8_lossy(&reply.body))

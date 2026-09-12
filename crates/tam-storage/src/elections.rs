@@ -188,55 +188,11 @@ impl ElectionRepo {
         answered: &AnsweredElection<'_>,
         at: Timestamp,
     ) -> Result<bool, StorageError> {
-        if answered.paths.is_empty() {
-            return Err(StorageError::Inconsistent {
-                reason: "an answered election names at least one value".to_owned(),
-            });
-        }
-        // The CHECK ties the sentinel to the trigger kind, so a violation here
-        // would surface as a bare constraint failure the caller cannot read.
-        let keyed = matches!(
-            answered.trigger_kind,
-            ElectionTriggerKind::Supply | ElectionTriggerKind::Narrow
-        );
-        let key = answered.trigger_key.unwrap_or_default();
-        if keyed == key.is_empty() {
-            return Err(StorageError::Inconsistent {
-                reason: format!(
-                    "a {} election carries {} trigger key",
-                    answered.trigger_kind.as_str(),
-                    if keyed { "no" } else { "a" }
-                ),
-            });
-        }
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
-        let written = sqlx::query!(
-            "INSERT INTO election_item \
-             (org_id, id, product_id, inventory, axis, trigger_kind, trigger_key, \
-              raised_by, raised_at, state, answer, resolved_at) \
-             SELECT $1, $2, $3, $4, $5, $6, $7, NULL, $8, 'answered', $9, $8 \
-             WHERE NOT EXISTS ( \
-                 SELECT 1 FROM election_item \
-                 WHERE org_id = $1 AND product_id = $3 AND inventory = $4 \
-                   AND axis = $5 AND trigger_kind = $6 AND trigger_key = $7 \
-                   AND state = 'answered') \
-             ON CONFLICT DO NOTHING",
-            uuid_to_db(org.0),
-            uuid::Uuid::new_v4(),
-            uuid_to_db(answered.product.0),
-            inventory_to_db(answered.inventory),
-            term_kind_to_db(answered.axis),
-            answered.trigger_kind.as_str(),
-            key,
-            timestamp_to_db(at)?,
-            encode_paths(answered.paths),
-        )
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
+        let written = record_answered_election(&mut tx, org, answered, at).await?;
         tx.commit().await?;
-        Ok(written == 1)
+        Ok(written)
     }
 
     /// Every open question for one tenant, in a deterministic order.
@@ -713,4 +669,64 @@ pub fn answered_paths(
     vocabulary: VocabularyId,
 ) -> Result<Vec<VocabularyPath>, StorageError> {
     decode_paths(value, vocabulary)
+}
+
+/// Records one answered election inside a transaction the caller owns.
+///
+/// The one implementation. A create writes its elections in the same
+/// transaction as the product they belong to, so a resource cannot exist with
+/// the seller's answers lost — and the `NOT EXISTS` guard is what makes a
+/// retried create write no second row.
+pub async fn record_answered_election(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    answered: &AnsweredElection<'_>,
+    at: Timestamp,
+) -> Result<bool, StorageError> {
+    if answered.paths.is_empty() {
+        return Err(StorageError::Inconsistent {
+            reason: "an answered election names at least one value".to_owned(),
+        });
+    }
+    // The CHECK ties the sentinel to the trigger kind, so a violation here
+    // would surface as a bare constraint failure the caller cannot read.
+    let keyed = matches!(
+        answered.trigger_kind,
+        ElectionTriggerKind::Supply | ElectionTriggerKind::Narrow
+    );
+    let key = answered.trigger_key.unwrap_or_default();
+    if keyed == key.is_empty() {
+        return Err(StorageError::Inconsistent {
+            reason: format!(
+                "a {} election carries {} trigger key",
+                answered.trigger_kind.as_str(),
+                if keyed { "no" } else { "a" }
+            ),
+        });
+    }
+    let written = sqlx::query!(
+        "INSERT INTO election_item \
+         (org_id, id, product_id, inventory, axis, trigger_kind, trigger_key, \
+          raised_by, raised_at, state, answer, resolved_at) \
+         SELECT $1, $2, $3, $4, $5, $6, $7, NULL, $8, 'answered', $9, $8 \
+         WHERE NOT EXISTS ( \
+             SELECT 1 FROM election_item \
+             WHERE org_id = $1 AND product_id = $3 AND inventory = $4 \
+               AND axis = $5 AND trigger_kind = $6 AND trigger_key = $7 \
+               AND state = 'answered') \
+         ON CONFLICT DO NOTHING",
+        uuid_to_db(org.0),
+        uuid::Uuid::new_v4(),
+        uuid_to_db(answered.product.0),
+        inventory_to_db(answered.inventory),
+        term_kind_to_db(answered.axis),
+        answered.trigger_kind.as_str(),
+        key,
+        timestamp_to_db(at)?,
+        encode_paths(answered.paths),
+    )
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+    Ok(written == 1)
 }

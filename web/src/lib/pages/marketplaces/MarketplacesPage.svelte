@@ -13,6 +13,8 @@
 		connectHere,
 		desktopInvoker,
 		forgetHere,
+		type LocalSessionOutcome,
+		sessionStatusHere,
 		type SessionOutcome
 	} from '$lib/desktop';
 	import { merge } from '$lib/device-merge';
@@ -45,8 +47,13 @@
 		disconnectSay,
 		disconnectable,
 		headerAction,
+		heldHere,
+		hereFace,
 		hostOf,
 		liveFace,
+		signOutHereAsk,
+		signOutHereLabel,
+		signOutHereSay,
 		signsInPlace,
 		transportLine,
 		withBusy
@@ -116,6 +123,61 @@
 				: 'read'
 	);
 
+	/** What THIS machine holds, one answer per live marketplace, as this
+	 *  machine itself answered it.
+	 *
+	 *  A separate read from everything above, because it is a separate fact: the
+	 *  connection list says some machine of the seller's is signed in, and the
+	 *  card's Connect has to follow what the machine in front of them holds. An
+	 *  unanswered marketplace is absent from the map and is handed on as null,
+	 *  never as "not connected".
+	 *
+	 *  Fenced by a generation counter, as the import screen's own local read is:
+	 *  a visibility refresh while a slower read is in flight would otherwise
+	 *  land the older answer last. */
+	let localRead = 0;
+	let localSessions = $state<Map<Marketplace, LocalSessionOutcome>>(new Map());
+
+	async function loadLocalSessions() {
+		if (invoke === null) {
+			return;
+		}
+		const current = ++localRead;
+		const answers = await Promise.all(
+			LIVE.map(async (tile) => ({
+				marketplace: tile.marketplace,
+				outcome: await sessionStatusHere(invoke, tile.marketplace)
+			}))
+		);
+		if (current !== localRead) {
+			return;
+		}
+		localSessions = new Map(answers.map((answer) => [answer.marketplace, answer.outcome]));
+	}
+
+	/** Read on entry, and again whenever this window comes back to the seller.
+	 *
+	 *  A marketplace login is captured in a window beside this page, or on
+	 *  another machine entirely, so the answer goes stale while the console is
+	 *  in the background and nothing tells it. The teardown advances the fence
+	 *  so a read in flight when the page goes cannot write into the next one. */
+	$effect(() => {
+		const refresh = () => void loadLocalSessions();
+		const visible = () => {
+			if (document.visibilityState === 'visible') {
+				refresh();
+			}
+		};
+		refresh();
+		window.addEventListener('focus', refresh);
+		document.addEventListener('visibilitychange', visible);
+		return () => {
+			localRead += 1;
+			window.removeEventListener('focus', refresh);
+			document.removeEventListener('visibilitychange', visible);
+		};
+	});
+
 	/** The two connected marketplaces, in the catalogue's order rather than the
 	 *  device view's: this page leads with them, and the order they are tiled in
 	 *  is a decision of the page's own.
@@ -128,9 +190,15 @@
 	const liveCards = $derived(
 		LIVE.map((tile) => {
 			const row = rows.find((entry) => entry.marketplace === tile.marketplace);
+			const local = localSessions.get(tile.marketplace) ?? null;
 			const held: LiveRead =
 				read === 'read' && row !== undefined ? { state: 'read', row } : { state: read === 'failed' ? 'failed' : 'pending' };
-			return { tile, face: liveFace(held, host) };
+			return {
+				tile,
+				face: liveFace(held, host, local),
+				here: hereFace(local, tile.marketplace),
+				heldHere: heldHere(local)
+			};
 		})
 	);
 
@@ -185,7 +253,7 @@
 				// silent button is the failure this whole change is fixing.
 				toast('error', `${name} is connected from the Teachouse app on your computer.`);
 			}
-			await refetchConnections();
+			await Promise.all([loadLocalSessions(), refetchConnections()]);
 		},
 		onError: () => {
 			toast('error', 'The sign-in could not be opened on this machine.');
@@ -203,48 +271,65 @@
 		}
 	}));
 
-	/** Disconnect one marketplace: this machine first, then the control plane.
+	/** Sign this machine out of one marketplace, and nothing else.
 	 *
-	 *  In that order because until the jar is gone the machine still holds
-	 *  cookies for a marketplace the server has been told is disconnected, and
-	 *  because its very next check-in would lift the row back to linked.
+	 *  `forgetHere` alone, deliberately: the account-level disconnect is the
+	 *  other control on the card and is the only one that asks the control
+	 *  plane. One control that did both is the defect this pair replaces — a
+	 *  seller signing a shared computer out of TPT stopped scheduled work on
+	 *  every other machine they own.
 	 *
-	 *  The server half runs whatever the device half answered. A machine that
-	 *  could not forget is a reason to tell the seller so, never a reason to
-	 *  leave scheduled work running. */
-	const disconnecting = createMutation(() => ({
-		mutationFn: async (marketplace: Marketplace) => {
-			const forgotten: SessionOutcome =
-				host === 'app'
-					? await forgetHere(invoke, marketplace)
-					: { kind: 'unavailable' };
-			const connection = connectionFor(marketplace);
-			// Caught rather than thrown, because the sentence depends on what
-			// the device half already did and `onError` is not given it. A
-			// server refusal after a machine has forgotten its login is the one
-			// disconnect that half-happened, and it is `disconnectSay` that has
-			// both facts to say so with.
-			let server: DisconnectServer = { kind: 'moved', moved: 0 };
-			if (connection !== undefined) {
-				try {
-					server = { kind: 'moved', moved: (await api.disconnect(connection.id)).connections };
-				} catch {
-					server = { kind: 'refused' };
-				}
-			}
-			return { forgotten, server };
-		},
-		onSuccess: async (
-			done: { forgotten: SessionOutcome; server: DisconnectServer },
-			marketplace: Marketplace
-		) => {
-			const say = disconnectSay(marketplace, done.forgotten, done.server);
+	 *  The local read is taken again afterwards, because it is the fact the
+	 *  card's Connect now follows. The server reads are invalidated too: the
+	 *  connection's standing follows what machines report, and the application
+	 *  may already have checked in by the time this resolves. */
+	const signingOut = createMutation(() => ({
+		mutationFn: (marketplace: Marketplace) => forgetHere(invoke, marketplace),
+		onSuccess: async (forgotten: SessionOutcome, marketplace: Marketplace) => {
+			const say = signOutHereSay(marketplace, forgotten);
 			toast(say.tone, say.message);
-			await refetchConnections();
+			await Promise.all([loadLocalSessions(), refetchConnections()]);
 		},
-		// The server half no longer throws, so this is left for a genuinely
-		// unexpected one -- the device call itself failing outside its own four
-		// answers.
+		onError: () => {
+			toast('error', 'The login could not be removed from this machine.');
+		},
+		onSettled: (_data, _error, marketplace: Marketplace) => {
+			busy = withBusy(busy, marketplace, null);
+		}
+	}));
+
+	/** Disconnect one marketplace from the account: the control plane alone.
+	 *
+	 *  No machine's login is touched here, and the prompt says as much rather
+	 *  than implying otherwise — a machine that keeps checking in while holding
+	 *  the login lifts the connection back to linked on its next beat, which is
+	 *  exactly what a check-in is for. Removing a login is the other control,
+	 *  on the machine that holds it. */
+	const disconnecting = createMutation(() => ({
+		mutationFn: async (marketplace: Marketplace): Promise<DisconnectServer> => {
+			const connection = connectionFor(marketplace);
+			if (connection === undefined) {
+				return { kind: 'moved', moved: 0 };
+			}
+			// Caught rather than thrown, because a refusal is one of the two
+			// answers `disconnectSay` words and `onError` is handed none of
+			// them.
+			try {
+				return { kind: 'moved', moved: (await api.disconnect(connection.id)).connections };
+			} catch {
+				return { kind: 'refused' };
+			}
+		},
+		onSuccess: async (server: DisconnectServer, marketplace: Marketplace) => {
+			const say = disconnectSay(marketplace, server);
+			toast(say.tone, say.message);
+			// The local read as well, though this act reaches no machine: the
+			// card's Connect follows it, and the seller is looking at the card
+			// the toast is about.
+			await Promise.all([loadLocalSessions(), refetchConnections()]);
+		},
+		// The one call it makes catches its own refusal, so this is left for a
+		// genuinely unexpected failure.
 		onError: () => {
 			toast('error', 'The marketplace could not be disconnected.');
 		},
@@ -279,6 +364,7 @@
 			return;
 		}
 		toast(said.tone, said.message);
+		void loadLocalSessions();
 		const rest = new URLSearchParams(page.url.searchParams);
 		rest.delete(CONNECT_RETURN_PARAM);
 		rest.delete(CONNECT_RETURN_MARKETPLACE_PARAM);
@@ -296,11 +382,19 @@
 	}
 
 	function disconnect(marketplace: Marketplace) {
-		if (!confirm(disconnectAsk(marketplace, host, connectionFor(marketplace), inPlace))) {
+		if (!confirm(disconnectAsk(marketplace, connectionFor(marketplace)))) {
 			return;
 		}
 		busy = withBusy(busy, marketplace, 'disconnect');
 		disconnecting.mutate(marketplace);
+	}
+
+	function signOutOfHere(marketplace: Marketplace) {
+		if (!confirm(signOutHereAsk(marketplace, inPlace))) {
+			return;
+		}
+		busy = withBusy(busy, marketplace, 'signout');
+		signingOut.mutate(marketplace);
 	}
 
 	/** Only the marketplaces this page offers an action for.
@@ -391,6 +485,7 @@
 				handle={card.face.handle}
 				status={card.face.status}
 				body={card.face.body}
+				here={card.here}
 				about={card.tile.about}
 				transport={{
 					badge: TRANSPORT_BADGE[TRANSPORT_OF[card.tile.marketplace]],
@@ -403,10 +498,17 @@
 							marketplace: card.tile.marketplace
 						}
 					: undefined}
+				signOut={card.heldHere
+					? {
+							label: signOutHereLabel(card.tile.marketplace),
+							marketplace: card.tile.marketplace
+						}
+					: undefined}
 				running={busyAt(busy, card.tile.marketplace)}
 				refusal={connectionFor(card.tile.marketplace) === undefined ? connectRefusal : null}
 				onrun={connect}
 				ondisconnect={disconnect}
+				onsignout={signOutOfHere}
 			/>
 		{/each}
 

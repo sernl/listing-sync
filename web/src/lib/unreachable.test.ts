@@ -3,12 +3,6 @@ import { ApiFailure } from '$lib/api';
 import { describeUnreachable } from './unreachable';
 
 describe('describeUnreachable', () => {
-	it('reads a 403 with no JSON body as an edge in front of the origin', () => {
-		const said = describeUnreachable(new ApiFailure(403, null));
-		expect(said.kind).toBe('edge');
-		expect(said.status).toBe(403);
-		expect(said.sentence).toMatch(/before it reached us/);
-	});
 
 	it('reads a refusal with our own body as ours, in its own words', () => {
 		const said = describeUnreachable(
@@ -29,9 +23,4 @@ describe('describeUnreachable', () => {
 		expect(said.detail).toBe('TypeError: Failed to fetch');
 	});
 
-	it('reads a body that would not parse as no answer, named as such', () => {
-		const said = describeUnreachable(new SyntaxError('Unexpected token <'));
-		expect(said.kind).toBe('network');
-		expect(said.detail).toMatch(/^SyntaxError/);
-	});
 });

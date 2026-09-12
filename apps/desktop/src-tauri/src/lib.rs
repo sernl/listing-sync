@@ -161,8 +161,6 @@ pub fn run() {
             // unsizing coercion these two bindings exist to perform.
             let sessions: Arc<dyn crate::session::SessionStore> = store.clone();
             let registry: Arc<dyn crate::heartbeat::ControlPlane> = plane.clone();
-            // Taken before `plane` is moved into the work source below.
-            let probe: Arc<dyn crate::heartbeat::ControlPlane> = plane.clone();
             // The same object again, as the other trait it implements. An
             // import posts its pages over the ledger transport rather than the
             // registry, and a state holding only the first could hand the
@@ -173,6 +171,7 @@ pub fn run() {
             ));
             let state = DesktopState::with_control_plane(device.clone(), sessions, registry)
                 .with_ledger(ledger)
+                .with_journal(Arc::new(crate::import::FileJournal::in_data_dir(&data_dir)))
                 .with_notifier(notifier);
             let work = DeviceWork::new(
                 device.id.clone(),
@@ -181,39 +180,18 @@ pub fn run() {
                 &data_dir,
                 state.stopper(),
             );
-            // The console is served from the control plane, not from the
-            // bundle. Navigating at startup rather than declaring the origin in
-            // `tauri.conf.json` is the only form that keeps `TAM_CONTROL_PLANE`
-            // working: a url in the configuration is fixed at build time, and
-            // the development override is a run-time variable, so a build-time
-            // url would silently ignore it and point a developer's window at
-            // production.
-            //
-            // Why the console is not the bundle at all: `api.ts` issues
-            // same-origin relative fetches to `/v1`, so a window at the Tauri
-            // origin reaches no control plane, and `console_session.rs` reads
-            // the session cookie for `base_url()` — which only exists on a
-            // window that is at that origin.
-            //
-            // Probed before navigating, and this is not caution for its own
-            // sake: navigating to an origin that does not answer shows the
-            // webview's own error page, so a seller who installed the
-            // application five seconds ago reads "this site can't be reached"
-            // and has no way to tell a network problem from broken software.
-            // The probe costs one unauthenticated request and buys a sentence
-            // we wrote. It runs in the background so start-up is not gated on
-            // the network, and the scheduler starts either way.
-            let opening = app.handle().clone();
-            let target = origin.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(why) = open_console(&opening, probe.as_ref(), &target).await {
-                    // Not fatal: the fallback page is already showing and the
-                    // scheduler is already running, so the seller can retry
-                    // from the window rather than restarting the application.
-                    eprintln!("the console could not be opened at {target}: {why}");
-                }
-            });
             app.manage(state);
+
+            // The bootstrap can invoke as soon as its document loads.
+            // Expose the window only after its command state exists.
+            let window = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|window| window.label == "main")
+                .ok_or("the main window configuration is missing")?;
+            tauri::WebviewWindowBuilder::from_config(app, window)?.build()?;
 
             // A process killed mid-run runs neither the payload cache's discard
             // nor its drop, so start-up is where its bytes stop being kept.
@@ -221,7 +199,16 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 payload::sweep(&sweep_dir).await.ok();
             });
-            // One task rather than two, because the order is the guarantee.
+            // An import this device was working when the process died is
+            // recovered by `run_schedule`'s first cycle. It must not have a
+            // separate start-up task: `DesktopState` begins with its
+            // entitlement gate closed, while the cycle checks in and installs
+            // the current entitlement before `serve_open_runs` can claim or
+            // report against a nominated run.
+            //
+            // On desktop that ordered cycle follows the bounded updater check;
+            // on mobile it runs immediately. Both are earlier than their next
+            // cadence or resume, without racing an uninitialised gate.
             // Installing an update ends the process — on Windows from inside
             // the install itself (tauri-plugin-updater 2.11.0,
             // `src/updater.rs:876`) — so it has to happen before the schedule
@@ -252,6 +239,7 @@ pub fn run() {
             commands::device_activity,
             commands::start_import,
             commands::continue_import,
+            commands::stop_import,
             commands::retry_console,
             commands::set_theme,
         ])
@@ -388,10 +376,6 @@ async fn run_schedule<W: scheduler::WorkSource>(app: AppHandle, work: W) {
     }
 }
 
-/// Points the main window at the console, or at the page that explains why not.
-///
-/// Shared by start-up and the retry command so the two cannot diverge on what
-/// "reachable" means or on where the fallback lives.
 /// Whether replacing the page the window is showing leaves it in history.
 ///
 /// A value rather than a `cfg` for the reason `ConnectSurface` is one: both
@@ -460,49 +444,6 @@ pub(crate) fn show_console<R: tauri::Runtime>(
         StartUpNav::Replace => window
             .eval(replacing(url.as_str()))
             .map_err(|why| why.to_string()),
-    }
-}
-
-async fn open_console<R: tauri::Runtime>(
-    app: &tauri::AppHandle<R>,
-    plane: &dyn crate::heartbeat::ControlPlane,
-    origin: &str,
-) -> Result<(), String> {
-    let Some(window) = app.get_webview_window("main") else {
-        return Err("this build has no console window".to_owned());
-    };
-    match plane.reachable().await {
-        Ok(()) => {
-            let url = console_home(origin)?;
-            show_console(&window, url, start_up_nav())?;
-            Ok(())
-        }
-        Err(why) => {
-            // The fallback is bundled, so it loads with no network at all.
-            //
-            // Resolved by the runtime rather than written: the custom-protocol
-            // origin is `tauri://localhost` on macOS and Linux but
-            // `http://tauri.localhost` on Windows and Android (tauri 2.11.5,
-            // manager/mod.rs:339-346). A written scheme is therefore wrong on
-            // the one platform an installer is built for, and it fails twice
-            // over — WebView2 shows its own error page instead of this one,
-            // which is the outcome the probe exists to remove, and `is_local_url`
-            // would answer false for it so the retry button would be refused
-            // as well.
-            // Joined onto the window's own current url, which at start-up is
-            // the bundle the runtime chose, so the platform's scheme and host
-            // come from the runtime rather than from a string here.
-            match window.url().and_then(|at| {
-                at.join("unreachable.html")
-                    .map_err(tauri::Error::InvalidUrl)
-            }) {
-                Ok(url) => {
-                    show_console(&window, url, start_up_nav()).ok();
-                }
-                Err(error) => eprintln!("the fallback page could not be resolved: {error}"),
-            }
-            Err(why.to_string())
-        }
     }
 }
 

@@ -301,13 +301,11 @@ impl<T: LedgerTransport> ItemLedger for HttpLedger<T> {
     /// The terminal call, and the only one that does not go to the ledger
     /// path.
     ///
-    /// `/settle` already exists and is already fenced on the epoch and on the
-    /// holder's device id, which is a stronger fence than the ledger path
-    /// carries. `at` has nowhere to go in `SettleEnvelope` today: section 5 of
-    /// the split note requires two instants on a device-originated row, the
-    /// device's assertion and the server's receipt, and the envelope carries
-    /// neither. Recorded as owed in `docs/notes/design/desktop-data-plane.md`
-    /// rather than smuggled into a field that does not mean it.
+    /// `/settle` already exists and is fenced on the epoch and the holder's
+    /// device id. Its envelope carries the device's asserted instant; the
+    /// server records the terminal event and releases the lease in one
+    /// transaction, so the driver must not follow settlement with a second
+    /// event request under a lease that no longer exists.
     async fn settle_item(
         &self,
         lease: &LeaseRef,
@@ -426,6 +424,9 @@ impl<T: LedgerTransport> ItemLedger for HttpLedger<T> {
         payload: &JobEventPayload,
         at: Timestamp,
     ) -> Result<(), LedgerError> {
+        if matches!(payload, JobEventPayload::ItemSettled { .. }) {
+            return Ok(());
+        }
         self.write(&LedgerCall::RecordEvent {
             lease: *lease,
             payload: payload.clone(),
@@ -812,6 +813,27 @@ mod tests {
                 payload,
                 at_ms: AT.0,
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn the_terminal_event_is_already_recorded_by_settle_and_is_not_posted_after_lease_release(
+    ) {
+        let recording = ledger(&LedgerAnswer::Done);
+        recording
+            .record_event(
+                &lease(),
+                &JobEventPayload::ItemSettled {
+                    outcome: "Succeeded".to_owned(),
+                },
+                AT,
+            )
+            .await
+            .expect("the atomic settle already recorded this event");
+        assert!(
+            recording.transport.sent.lock().await.is_empty(),
+            "posting the event after settlement reaches a route that must reject the released \
+             lease and makes a successful write look abandoned on the device"
         );
     }
 

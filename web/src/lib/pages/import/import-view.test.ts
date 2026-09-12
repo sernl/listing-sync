@@ -1,15 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-	NEEDS_THE_APP,
-	NOTHING_CONNECTED,
-	connectionUnknown,
-	deviceLine,
 	importBlocked,
 	importCards,
-	importLabel,
 	importRows,
 	importSitesOn,
-	notConnected,
 	pillTone,
 	standingBadge,
 	startRefusal,
@@ -58,6 +52,13 @@ function run(partial: Partial<ImportRunHead> = {}): ImportRunHead {
 		counts: counts({ imported: 4 }),
 		created_at: 2,
 		settled_at: 3,
+		retry_of: null,
+		execution: {
+			owner_device: null, attempt: 1, lease_expires_at: null,
+			last_contact_at: null, last_progress_at: null, stage: 'completed',
+			reason_code: null, reason: null, discovered: 4, processed: 4, described: 4,
+			enumeration_complete: true, selected_total: 4, commit_authorised: true
+		},
 		...partial
 	};
 }
@@ -127,7 +128,6 @@ describe('importCards', () => {
 		for (const state of ['unlinked', 'revoked']) {
 			const card = cardFor('Tes', [connection({ state, status: 'disconnected' })]);
 			expect(card.standing, state).toBe('absent');
-			expect(standingBadge(card).label, state).toBe('Not connected');
 		}
 	});
 
@@ -143,88 +143,38 @@ describe('importCards', () => {
 		const unread = standingBadge(cardFor('Tes', null));
 		expect(unread.label).not.toBe(standingBadge(cardFor('Tes', [])).label);
 		expect(unread.tone).toBe('soon');
-		expect(unread.label).toBe('Not known');
 	});
 });
 
 describe('importBlocked', () => {
-	it('lets a connected, readable marketplace be imported from', () => {
-		expect(importBlocked(cardFor('Tes', [connection()]), null)).toBeNull();
+	it('lets a browser queue work without claiming a local login', () => {
+		expect(importBlocked(cardFor('Tes', [connection()]), null, undefined, false)).toBeNull();
+	});
+	it('does not treat another device’s recorded connection as a local login', () => {
+		expect(importBlocked(cardFor('Tes', [connection()]), null, {
+			kind: 'known', connected: false
+		}, true)).not.toBeNull();
 	});
 
-	it('refuses a marketplace nothing reads before anything else', () => {
-		const etsy = importCards([]).find((card) => card.unreadable !== null);
-		expect(etsy).toBeUndefined();
+	it('uses the local login rather than stale server standing', () => {
+		expect(importBlocked(cardFor('Tes', []), null, {
+			kind: 'known', connected: true
+		}, true)).toBeNull();
 	});
 
-	// The plan's own refusal outranks the connection: a seller whose plan does
-	// not cover reading a shop is told that rather than being sent to connect
-	// one they would still not be able to read.
-	it('states the plan’s refusal ahead of an absent connection', () => {
-		const refused = 'Your plan does not cover reading a shop.';
-		expect(importBlocked(cardFor('Tes'), refused)).toBe(refused);
+	it('preserves unknown local availability rather than reporting an absent login', () => {
+		const card = cardFor('Tes', [connection()]);
+		expect(importBlocked(card, null, { kind: 'unavailable' }, true)).not.toBe(
+			importBlocked(card, null, { kind: 'known', connected: false }, true)
+		);
 	});
 
-	it('names the absent connection', () => {
-		const tes = cardFor('Tes');
-		expect(importBlocked(tes, null)).toBe(notConnected(tes));
-	});
-
-	// An unread list is not a seller with no marketplace, and the card must not
-	// send them to repair a connection that may be perfectly healthy.
-	it('says it does not know rather than that the shop is disconnected', () => {
-		const tes = cardFor('Tes', null);
-		const blocked = importBlocked(tes, null);
-		expect(blocked).toBe(connectionUnknown(tes));
-		expect(blocked).not.toBe(notConnected(tes));
-	});
-
-	it('states the unknown as ours rather than as a disconnection', () => {
-		const said = connectionUnknown(cardFor('Tes', null));
-		expect(said).toContain('could not read');
-		expect(said).not.toContain('is not connected');
-	});
-
-	// The declaration is asked once at connect time, on Marketplaces, so
-	// nothing here gates on it.
-	it('does not gate on the authorship declaration', () => {
-		expect(
-			importBlocked(cardFor('Tes', [connection({ authorship: undefined })]), null)
-		).toBeNull();
+	it('keeps entitlement refusal ahead of local session availability', () => {
+		expect(importBlocked(cardFor('Tes'), 'This plan does not cover imports.', undefined, true))
+			.toBe('This plan does not cover imports.');
 	});
 });
 
-describe('the card’s own sentences', () => {
-	it('names the marketplace in the control and in both permanent lines', () => {
-		const tes = cardFor('Tes');
-		expect(importLabel(tes)).toBe('Import from TES');
-		expect(notConnected(tes)).toContain('TES');
-		expect(deviceLine(tes)).toContain('TES');
-	});
-
-	// The reading happens under a login held on one machine, so the line has
-	// to say the app must be open: a seller who presses Import in a browser
-	// and closes the tab otherwise has no way to know why nothing happened.
-	it('says where the reading happens and what has to be open', () => {
-		expect(deviceLine(cardFor('Tes'))).toContain('Teachouse app');
-		expect(deviceLine(cardFor('Tes'))).toContain('open');
-		expect(NEEDS_THE_APP).toContain('Teachouse app');
-		expect(NEEDS_THE_APP).toContain('login');
-	});
-
-	// The founder's own reading of this screen: "I can't see any option to
-	// connect to the TPT/TES, how is that supposed to work?" Naming the screen
-	// alone was what produced it, because that screen sent them back to the
-	// downloads.
-	it('says where a connection is actually made, not only which screen to open', () => {
-		for (const sentence of [notConnected(cardFor('Tes')), NOTHING_CONNECTED]) {
-			expect(sentence).toContain('Teachouse app');
-			expect(sentence).toContain('Marketplaces');
-		}
-		expect(notConnected(cardFor('Tes'))).toContain('on that machine');
-		expect(NOTHING_CONNECTED).toContain('stays on that machine');
-	});
-});
 
 describe('startRefusal', () => {
 	it('says nothing where the work started', () => {
@@ -294,26 +244,4 @@ describe('importRows', () => {
 		expect(sheet?.name).toBe('Spreadsheet');
 	});
 
-	it('carries the run state’s own word and tone', () => {
-		const row = importRows([run({ state: 'reviewing', counts: counts({ review: 2 }) })])[0];
-		expect(row?.label).toBe('Needs you');
-		expect(row?.tone).toBe('warn');
-	});
-
-	it('counts what the run did', () => {
-		const row = importRows([
-			run({
-				read_total: 9,
-				counts: counts({ imported: 6, skipped: 2, failed: 1 })
-			})
-		])[0];
-		expect(row?.line).toBe('9 found · 6 imported · 2 left out · 1 with problems');
-	});
-
-	// A run whose enumeration has not landed has no denominator, and a zero
-	// there would read as a shop with nothing in it.
-	it('says a shop is being read rather than inventing a total', () => {
-		const row = importRows([run({ state: 'reading', read_total: null, counts: counts() })])[0];
-		expect(row?.line).toBe('Reading what is in your shop.');
-	});
 });

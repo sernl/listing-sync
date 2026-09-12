@@ -1404,24 +1404,11 @@ impl ImportBatchRepo {
         at: RowAddress<'_>,
         skipped: bool,
     ) -> Result<bool, StorageError> {
-        let RowAddress { sheet, ordinal } = at;
-        let ordinal = ordinal_to_db(ordinal)?;
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
-        let written = sqlx::query!(
-            "UPDATE import_batch_row SET state = 'created', skipped = $5 \
-              WHERE org_id = $1 AND batch_id = $2 AND sheet = $3 AND ordinal = $4 \
-                AND state = 'creating'",
-            uuid_to_db(org.0),
-            uuid_to_db(batch),
-            sheet,
-            ordinal,
-            skipped,
-        )
-        .execute(&mut *tx)
-        .await?;
+        let written = record_row_created(&mut tx, org, batch, at, skipped).await?;
         tx.commit().await?;
-        Ok(written.rows_affected() == 1)
+        Ok(written)
     }
 
     /// Records that this row created nothing because another resource already
@@ -1442,24 +1429,11 @@ impl ImportBatchRepo {
         batch: Uuid,
         at: RowAddress<'_>,
     ) -> Result<bool, StorageError> {
-        let RowAddress { sheet, ordinal } = at;
-        let ordinal = ordinal_to_db(ordinal)?;
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
-        let written = sqlx::query!(
-            "UPDATE import_batch_row \
-                SET state = 'skipped', product_id = NULL, mapping_id = NULL \
-              WHERE org_id = $1 AND batch_id = $2 AND sheet = $3 AND ordinal = $4 \
-                AND state = 'creating'",
-            uuid_to_db(org.0),
-            uuid_to_db(batch),
-            sheet,
-            ordinal,
-        )
-        .execute(&mut *tx)
-        .await?;
+        let written = record_row_skipped_in(&mut tx, org, batch, at).await?;
         tx.commit().await?;
-        Ok(written.rows_affected() == 1)
+        Ok(written)
     }
 
     /// Records that this row's create was refused, in the words the seller
@@ -1883,4 +1857,58 @@ fn ordinal_to_db(ordinal: u32) -> Result<i32, StorageError> {
     i32::try_from(ordinal).map_err(|_| StorageError::Inconsistent {
         reason: format!("spreadsheet row {ordinal} is past what the column can state"),
     })
+}
+
+/// Records that this row was created, inside a transaction the caller owns.
+///
+/// The row's breadcrumb and the product it names are one decision: the
+/// import's commit writes them together, so a pass that stops mid-row leaves
+/// neither rather than a product whose row still reads `creating`.
+pub async fn record_row_created(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    batch: Uuid,
+    at: RowAddress<'_>,
+    skipped: bool,
+) -> Result<bool, StorageError> {
+    let RowAddress { sheet, ordinal } = at;
+    let ordinal = ordinal_to_db(ordinal)?;
+    let written = sqlx::query!(
+        "UPDATE import_batch_row SET state = 'created', skipped = $5 \
+          WHERE org_id = $1 AND batch_id = $2 AND sheet = $3 AND ordinal = $4 \
+            AND state = 'creating'",
+        uuid_to_db(org.0),
+        uuid_to_db(batch),
+        sheet,
+        ordinal,
+        skipped,
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(written.rows_affected() == 1)
+}
+
+/// Records that this row created nothing because another resource already
+/// stands for it, inside a transaction the caller owns.
+pub async fn record_row_skipped_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    batch: Uuid,
+    at: RowAddress<'_>,
+) -> Result<bool, StorageError> {
+    let RowAddress { sheet, ordinal } = at;
+    let ordinal = ordinal_to_db(ordinal)?;
+    let written = sqlx::query!(
+        "UPDATE import_batch_row \
+            SET state = 'skipped', product_id = NULL, mapping_id = NULL \
+          WHERE org_id = $1 AND batch_id = $2 AND sheet = $3 AND ordinal = $4 \
+            AND state = 'creating'",
+        uuid_to_db(org.0),
+        uuid_to_db(batch),
+        sheet,
+        ordinal,
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(written.rows_affected() == 1)
 }

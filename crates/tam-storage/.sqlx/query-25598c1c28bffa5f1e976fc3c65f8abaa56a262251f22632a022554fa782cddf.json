@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE import_run SET state = 'failed', settled_at = now(), failure_detail = $3, reason_code = 'activation_expired', reason = $3, reported_stage = 'failed' WHERE org_id = $1 AND state = 'reading' AND NOT scheduled AND attempt = 0 AND created_at <= now() - make_interval(secs => $2) AND NOT EXISTS ( SELECT 1 FROM import_run_item item WHERE item.org_id = import_run.org_id AND item.run_id = import_run.id AND item.state <> 'listed' ) RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Float8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "25598c1c28bffa5f1e976fc3c65f8abaa56a262251f22632a022554fa782cddf"
+}

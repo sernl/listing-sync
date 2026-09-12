@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE import_run SET state = 'committing', commit_authorised_at = COALESCE(commit_authorised_at, $4), commit_authorised_by = COALESCE(commit_authorised_by, $3) WHERE org_id = $1 AND id = $2 AND state IN ('reading', 'reviewing', 'committing')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7415fed1426dd5b54d8a1e78ff0c4567e25fd47d7045a7327c5064de8ef747fa"
+}

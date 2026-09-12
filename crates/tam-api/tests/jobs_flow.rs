@@ -381,11 +381,16 @@ async fn a_migrate_from_a_device_enumerated_source_names_no_resources(pool: PgPo
 /// A source the drain cannot read is refused at submit, not by a request that
 /// never settles.
 ///
-/// `download_resource_bundle` is uncaptured on every adapter but Tes, and the
-/// endpoint validated only that source and target differ. The row was written
-/// `pending`, the drain built a Tes adapter for it regardless, failed before
-/// it could mark anything, and re-picked the same row every poll -- taking a
+/// `download_resource_bundle` is uncaptured on Etsy, and the endpoint
+/// validated only that source and target differ. The row was written
+/// `pending`, the drain built an adapter for it regardless, failed before it
+/// could mark anything, and re-picked the same row every poll -- taking a
 /// broker lease each pass while the seller polled `pending` forever.
+///
+/// TPT is the other half, and it is the same rule read the other way: its
+/// own-file download was captured on 2026-09-13, so a TPT source is admitted
+/// here rather than refused. The refusal is about what has been captured,
+/// which is why the two live in one test.
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_source_with_no_captured_read_is_refused_at_submit(pool: PgPool) {
     provision(&pool).await;
@@ -396,21 +401,23 @@ async fn a_source_with_no_captured_read_is_refused_at_submit(pool: PgPool) {
         &TOKEN_A,
         Some(KEY_1),
         Some(serde_json::json!({
-            "source": "Tpt",
+            "source": "Etsy",
             "target": "Tes",
-            "resources": ["13549794"],
+            "resources": ["1846029571"],
         })),
     )
     .await;
     assert_eq!(response.status, StatusCode::UNPROCESSABLE_ENTITY);
     let refusal: serde_json::Value = response.json();
     assert!(
-        refusal.to_string().contains("tpt.download_resource_bundle"),
+        refusal
+            .to_string()
+            .contains("etsy.download_resource_bundle"),
         "the refusal names the capture the source is waiting on: {refusal}"
     );
 
     let view = call(
-        pool,
+        pool.clone(),
         Method::GET,
         &format!("/v1/sync/{KEY_1}"),
         &TOKEN_A,
@@ -422,6 +429,27 @@ async fn a_source_with_no_captured_read_is_refused_at_submit(pool: PgPool) {
         view.status,
         StatusCode::NOT_FOUND,
         "a refused submit writes no request for the drain to pick up"
+    );
+
+    let captured = call(
+        pool.clone(),
+        Method::POST,
+        "/v1/sync",
+        &TOKEN_A,
+        Some(KEY_2),
+        Some(serde_json::json!({
+            "source": "Tpt",
+            "target": "Tes",
+            "resources": ["13042099"],
+        })),
+    )
+    .await;
+    assert_eq!(
+        captured.status,
+        StatusCode::ACCEPTED,
+        "a TPT source names a download the seller's own device can perform, so the request is \
+         written: {}",
+        String::from_utf8_lossy(&captured.body)
     );
 }
 

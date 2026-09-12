@@ -26,7 +26,7 @@ use tam_api::migrations::MigrationVerdict;
 use tam_api::{router, APIError, AppState, Config, SESSION_COOKIE};
 use tam_domain::{
     Binding, CanonicalProduct, DeclarationSource, FieldPolicies, FieldPolicy, GradeDeclaration,
-    Mapping, PublishMode, RightsDeclaration, Verification,
+    Mapping, PublishMode, RightsDeclaration, TermKind, Verification, VocabularyId, VocabularyPath,
 };
 use tam_marketplace::{RemoteLifecycle, RemoteListingId};
 use tam_storage::{LabelRepo, MappingRepo, ProductRepo, SessionRepo, SessionToken};
@@ -53,6 +53,9 @@ const LANDED: u8 = 0x02;
 /// In the catalogue and in no collection, which is what the export filter has
 /// to leave out.
 const OUTSIDE: u8 = 0x03;
+/// A member carrying a rights grant of its own, which is the half of the
+/// creation check a licence-less member fails.
+const GRANTED: u8 = 0x04;
 
 fn state(pool: PgPool) -> AppState {
     AppState {
@@ -98,6 +101,21 @@ fn product(org: OrgId, tag: u8) -> CanonicalProduct {
         price: PriceIntent::Free,
         rights: RightsDeclaration::Unstated,
         native_residue: vec![],
+    }
+}
+
+/// The same resource with the licence Tes declares required already stated on
+/// it, so the two members differ in exactly the thing under test.
+fn granted(org: OrgId, tag: u8) -> CanonicalProduct {
+    CanonicalProduct {
+        rights: RightsDeclaration::Declared {
+            source: VocabularyPath {
+                vocabulary: VocabularyId(InventoryId::Tes, TermKind::Licence),
+                segments: vec!["CC-BY".to_owned()],
+                native_id: Some("CC-BY".to_owned()),
+            },
+        },
+        ..product(org, tag)
     }
 }
 
@@ -584,5 +602,114 @@ async fn a_plan_that_includes_no_collections_refuses_the_first_one(pool: PgPool)
     assert!(
         listed.collections.is_empty(),
         "and nothing was written: {listed:?}"
+    );
+}
+
+/// A member the target would refuse blocks its own row and nothing else.
+///
+/// Tes declares its licence required, and a resource imported from a
+/// marketplace that carries no licence on its wire reaches the catalogue with
+/// its rights unstated. Until the creation check stood, a collection
+/// published to Tes admitted every member holding a file, minted each one a
+/// mapping and queued each one a create, and the seller learnt which of them
+/// could never land from the items that failed at the marketplace.
+///
+/// The two members differ in the rights grant alone, so the eligible one
+/// proves this is the requirement talking and not the route.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_member_the_target_would_refuse_blocks_its_row_and_not_the_collection(pool: PgPool) {
+    provision(&pool).await;
+    ProductRepo::new(pool.clone())
+        .insert(ORG, &granted(ORG, GRANTED), Timestamp(1_000))
+        .await
+        .expect("the granted product inserts");
+
+    let made = call(
+        &pool,
+        &TOKEN,
+        Method::POST,
+        "/v1/collections",
+        Some(serde_json::json!({ "name": "Cross-list set" })),
+    )
+    .await;
+    assert_eq!(made.status, StatusCode::CREATED, "{}", made.text());
+    let collection: CollectionView = made.json();
+    let id = uuid::Uuid::from_bytes(collection.id.0).to_string();
+
+    let filed = call(
+        &pool,
+        &TOKEN,
+        Method::PUT,
+        &format!("/v1/collections/{id}/members"),
+        Some(serde_json::json!({
+            "products": [hyphenated(FRESH), hyphenated(GRANTED)],
+        })),
+    )
+    .await;
+    assert_eq!(filed.status, StatusCode::OK, "{}", filed.text());
+
+    let previewed = call(
+        &pool,
+        &TOKEN,
+        Method::POST,
+        &format!("/v1/collections/{id}/publish/plan"),
+        Some(serde_json::json!({ "inventory": "Tes", "intent": "draft" })),
+    )
+    .await;
+    assert_eq!(previewed.status, StatusCode::OK, "{}", previewed.text());
+    let plan: CollectionPublishPlanView = previewed.json();
+    assert_eq!(
+        plan.rows
+            .iter()
+            .map(|row| (row.title.as_str(), row.verdict))
+            .collect::<Vec<_>>(),
+        vec![
+            ("Fixture 1", MigrationVerdict::Blocked),
+            ("Fixture 4", MigrationVerdict::WillCreate),
+        ],
+        "the member with no licence is blocked and the one carrying a grant is not: {plan:?}"
+    );
+    assert_eq!(
+        (plan.counts.blocked, plan.counts.will_create),
+        (1, 1),
+        "and the blocked member is counted as blocked rather than as one that will be created"
+    );
+    assert!(
+        plan.rows
+            .first()
+            .and_then(|row| row.reason.as_deref())
+            .is_some_and(|reason| reason.contains("Licence")),
+        "the row says which field the marketplace wants, which is the only thing the seller \
+         can act on: {plan:?}"
+    );
+
+    let queued = call(
+        &pool,
+        &TOKEN,
+        Method::POST,
+        &format!("/v1/collections/{id}/publish"),
+        Some(serde_json::json!({ "inventory": "Tes", "intent": "draft" })),
+    )
+    .await;
+    assert_eq!(queued.status, StatusCode::OK, "{}", queued.text());
+    let ack: CollectionPublishAck = queued.json();
+    assert_eq!(
+        (ack.queued, ack.skipped),
+        (1, 1),
+        "the confirm re-plans, so the blocked member is skipped there too rather than queued \
+         behind a preview that said no: {ack:?}"
+    );
+
+    // And nothing was minted for it: a mapping written for a resource that
+    // can never land is the artefact this check exists to avoid.
+    let mappings = MappingRepo::new(pool.clone())
+        .list_for_product(ORG, ProductId(Uuid([FRESH; 16])))
+        .await
+        .expect("the mappings read back");
+    assert!(
+        mappings
+            .iter()
+            .all(|record| record.mapping.inventory != InventoryId::Tes),
+        "the blocked member has no Tes mapping: {mappings:?}"
     );
 }

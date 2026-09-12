@@ -10,6 +10,8 @@
 //! units>` — `Taxonomy` is JSON `{"categories": [..], "mainType": n}`, and
 //! `Grades` is JSON `{"ageRanges": [..], "ages": [..], "mainAge": n}`.
 
+use std::collections::HashSet;
+
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tam_marketplace::transport::{HttpResponse, ResponseHeader, Transport};
@@ -827,32 +829,73 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
         //
         // This is the only non-export caller. A third is a decision rather
         // than a precedent.
-        if !matches!(
+        self.list_own_resources_observed(reason, &|_found| {}).await
+    }
+
+    /// The same walk, reporting how many distinct resources it has seen after each page.
+    ///
+    /// The observer exists because the caller cannot see inside this walk: a
+    /// catalogue of several hundred resources is a dozen requests behind one
+    /// future, and a seller watching an import was shown nothing at all until
+    /// every one of them had answered. It is handed the running total rather
+    /// than the rows, because what the caller reports is a count and handing
+    /// over the entries would invite a second copy of them.
+    ///
+    /// Nothing about pagination is exposed. The page index is this walk's own
+    /// business and is not a cursor a caller could resume from: the contract
+    /// is still that the walk reaches its end or refuses.
+    pub async fn list_own_resources_observed(
+        &self,
+        reason: &FetchReason,
+        found: &(dyn Fn(u32) + Send + Sync),
+    ) -> Result<Vec<CatalogueEntry>, AdapterError> {
+        Self::justified(reason)?;
+        let mut entries = Vec::new();
+        let mut seen = HashSet::new();
+        self.walk_catalogue(
+            (endpoints::list_resources_request, true),
+            &mut entries,
+            &mut seen,
+            found,
+        )
+        .await?;
+        self.walk_catalogue(
+            (endpoints::list_drafts_request, false),
+            &mut entries,
+            &mut seen,
+            found,
+        )
+        .await?;
+        Ok(entries)
+    }
+
+    /// Whether this reason admits an enumeration at all.
+    fn justified(reason: &FetchReason) -> Result<(), AdapterError> {
+        if matches!(
             reason,
             FetchReason::FirstPartyExport { .. } | FetchReason::VerifyAttempt { .. }
         ) {
-            return Err(AdapterError::Rejected {
-                code: FailureCode::Other,
-                detail: FailureDetail(
-                    "a catalogue read is justified by the first-party-export capability or by \
-                     the fencing row of the attempt it is reconciling, and by nothing else"
-                        .to_owned(),
-                ),
-            });
+            return Ok(());
         }
-        let mut entries = Vec::new();
-        self.walk_catalogue(endpoints::list_resources_request, true, &mut entries)
-            .await?;
-        self.walk_catalogue(endpoints::list_drafts_request, false, &mut entries)
-            .await?;
-        Ok(entries)
+        Err(AdapterError::Rejected {
+            code: FailureCode::Other,
+            detail: FailureDetail(
+                "a catalogue read is justified by the first-party-export capability or by the \
+                 fencing row of the attempt it is reconciling, and by nothing else"
+                    .to_owned(),
+            ),
+        })
     }
 
     async fn walk_catalogue(
         &self,
-        build: fn(u32, u32) -> tam_marketplace::transport::HttpRequest,
-        published: bool,
+        (build, published): (
+            fn(u32, u32) -> tam_marketplace::transport::HttpRequest,
+            bool,
+        ),
         entries: &mut Vec<CatalogueEntry>,
+        seen: &mut HashSet<i64>,
+        found: &(dyn Fn(u32) + Send + Sync),
     ) -> Result<(), AdapterError> {
         for page in 0..CATALOGUE_PAGE_MAX {
             let response = self
@@ -868,7 +911,10 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
             if rows.is_empty() {
                 return Ok(());
             }
-            entries.extend(rows);
+            // getAllResources can include drafts also returned by getAllDrafts.
+            // Deduplicate before reporting: accepted progress cannot regress.
+            entries.extend(rows.into_iter().filter(|row| seen.insert(row.id)));
+            found(u32::try_from(entries.len()).unwrap_or(u32::MAX));
         }
         // Reaching the cap means the catalogue never ended, so what was
         // collected is a truncation; the import must not mistake it for the

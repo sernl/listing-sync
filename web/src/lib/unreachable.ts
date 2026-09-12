@@ -5,7 +5,7 @@ export interface Unreachable {
 	/** The HTTP status that came back, or null when nothing did. */
 	status: number | null;
 	/** What kind of failure it was, which decides the sentence. */
-	kind: 'network' | 'edge' | 'server' | 'refused';
+	kind: 'network' | 'protocol' | 'server' | 'refused';
 	/** One sentence for the seller, and the same one for a bug report. */
 	sentence: string;
 	/** What was actually thrown or answered, for the report the sentence
@@ -13,34 +13,31 @@ export interface Unreachable {
 	detail: string;
 }
 
-/** The sentence for each outcome, decided by what came back rather than by
- *  what should have.
- *
- *  A failure with no structured body is not ours: this origin answers every
- *  route under `/v1` with JSON, so HTML or nothing on a 403 or a 5xx came from
- *  an edge in front of it — a bot check, a cache, a proxy — and the sentence
- *  says so, because "signing in again" does not clear a challenge the seller
- *  never saw. A network failure is `fetch` throwing rather than answering:
- *  no status at all, and the sentence names the device's own connection. A
- *  body that would not parse lands here too, as the SyntaxError it threw, so
- *  the detail line tells the two apart. */
+/** Describe the observed response without guessing which intermediary sent it. */
 export function describeUnreachable(failure: unknown): Unreachable {
 	if (failure instanceof ApiFailure) {
-		const ours = failure.body !== null;
+		if (failure.response?.problem !== undefined || (failure.body === null && failure.status < 500)) {
+			const response = failure.response;
+			return {
+				status: failure.status,
+				kind: 'protocol',
+				sentence: `The request returned an unexpected response (${failure.status}), not the data this page needs. Reload; if it happens again, report these details.`,
+				detail: response === null
+					? `${failure.status} without a Teachouse error body`
+					: [
+						`${failure.status} ${response.content_type ?? 'no content type'}`,
+						response.requested_path,
+						response.redirected ? `redirected to ${response.final_path ?? 'an unknown route'}` : null,
+						response.problem
+					].filter(Boolean).join(' · ')
+			};
+		}
 		if (failure.status >= 500) {
 			return {
 				status: failure.status,
 				kind: 'server',
 				sentence: `Teachouse answered with an error (${failure.status}). Reloading is the first thing to try; if it keeps happening, tell us the time it happened.`,
 				detail: `${failure.status} ${failure.message}`
-			};
-		}
-		if (!ours) {
-			return {
-				status: failure.status,
-				kind: 'edge',
-				sentence: `Something between this device and Teachouse refused the request (${failure.status}) before it reached us. This is usually a network check that does not recognise the app; opening teachouse.stowiq.io in your browser once, then reopening the app, usually clears it.`,
-				detail: `${failure.status} without a Teachouse body`
 			};
 		}
 		return {
@@ -50,11 +47,19 @@ export function describeUnreachable(failure: unknown): Unreachable {
 			detail: `${failure.status} ${failure.code() ?? ''}`.trim()
 		};
 	}
+	if (failure instanceof SyntaxError) {
+		return {
+			status: null,
+			kind: 'protocol',
+			sentence: 'A response could not be read. Reload; if it happens again, report the time and page.',
+			detail: 'SyntaxError: response parsing failed'
+		};
+	}
 	return {
 		status: null,
 		kind: 'network',
 		sentence:
-			'This device could not reach Teachouse at all. Check its connection, then reload; if the connection is fine, a VPN or a private DNS setting on the device may be sending Teachouse somewhere it is not.',
+			'The request did not finish. Check this device’s connection, then reload; if it keeps happening, report the time and page.',
 		detail: failure instanceof Error ? `${failure.name}: ${failure.message}` : String(failure)
 	};
 }

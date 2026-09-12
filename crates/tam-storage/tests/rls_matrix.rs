@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 
 use sqlx::PgPool;
 
-const TENANT_TABLES: [&str; 58] = [
+const TENANT_TABLES: [&str; 60] = [
     "auto_publish_rule",
     "auto_publish_run",
     "billing_subscription",
@@ -36,6 +36,8 @@ const TENANT_TABLES: [&str; 58] = [
     "import_batch_row",
     "import_run",
     "import_run_item",
+    "import_run_receipt",
+    "import_run_start_key",
     "job",
     "job_event",
     "job_item",
@@ -84,11 +86,13 @@ const TENANT_TABLES: [&str; 58] = [
 /// platform writes and every tenant reads. The rest are genuinely global:
 /// reference data, the canonical taxonomy, the fleet kill switch, and sqlx's
 /// migration bookkeeping.
-const GLOBAL_TABLES: [&str; 12] = [
+const GLOBAL_TABLES: [&str; 14] = [
     "_sqlx_migrations",
     "app_user",
     "canonical_term",
     "guide",
+    "guide_tag_assignment",
+    "guide_taxon",
     "inventory_halt",
     "marketplace_inventory",
     "organisation",

@@ -47,7 +47,7 @@ const SUBJECT: CanonicalTermId = CanonicalTermId(Uuid([0x77; 16]));
 const TOPIC: CanonicalTermId = CanonicalTermId(Uuid([0x78; 16]));
 /// At or past `tam_domain::SOURCED_PAYLOAD_MIN_VERSION`, so the claim gate
 /// would hand this device a sourced item.
-const CURRENT: &str = "0.2.0";
+const CURRENT: &str = "0.9.0";
 /// Below it, which is what makes the waiting reason appear.
 const STALE: &str = "0.1.3";
 
@@ -422,6 +422,11 @@ async fn a_page_applies_its_resources_and_keeps_only_their_covers(pool: PgPool) 
         // request's, and the run identifier it carries is never read.
         run: tam_types::Uuid([0; 16]),
         request: Some(request),
+        // The migration path names a request rather than a run, and is fenced
+        // by that request rather than by a device attempt.
+        attempt: None,
+        receipt: None,
+        enumeration_complete: false,
         listed: None,
         resources: vec![observed(13_549_794, 0x5A), observed(13_549_795, 0x5B)],
         skipped: Vec::new(),
@@ -502,6 +507,11 @@ async fn the_same_page_twice_describes_each_resource_once(pool: PgPool) {
         // request's, and the run identifier it carries is never read.
         run: tam_types::Uuid([0; 16]),
         request: Some(request),
+        // The migration path names a request rather than a run, and is fenced
+        // by that request rather than by a device attempt.
+        attempt: None,
+        receipt: None,
+        enumeration_complete: false,
         listed: None,
         resources: vec![observed(13_549_794, 0x5A)],
         skipped: Vec::new(),
@@ -550,6 +560,11 @@ async fn a_completing_page_mints_the_create_job_once(pool: PgPool) {
         // request's, and the run identifier it carries is never read.
         run: tam_types::Uuid([0; 16]),
         request: Some(request),
+        // The migration path names a request rather than a run, and is fenced
+        // by that request rather than by a device attempt.
+        attempt: None,
+        receipt: None,
+        enumeration_complete: false,
         listed: None,
         resources: vec![observed(13_549_794, 0x5A), observed(13_549_795, 0x5B)],
         skipped: Vec::new(),
@@ -598,6 +613,11 @@ async fn an_empty_catalogue_completes_rather_than_failing(pool: PgPool) {
         // request's, and the run identifier it carries is never read.
         run: tam_types::Uuid([0; 16]),
         request: Some(request),
+        // The migration path names a request rather than a run, and is fenced
+        // by that request rather than by a device attempt.
+        attempt: None,
+        receipt: None,
+        enumeration_complete: false,
         listed: None,
         resources: Vec::new(),
         skipped: vec![SkippedResource {
@@ -665,6 +685,11 @@ async fn a_page_is_refused_across_a_tenant_and_for_a_revoked_device(pool: PgPool
         // request's, and the run identifier it carries is never read.
         run: tam_types::Uuid([0; 16]),
         request: Some(request),
+        // The migration path names a request rather than a run, and is fenced
+        // by that request rather than by a device attempt.
+        attempt: None,
+        receipt: None,
+        enumeration_complete: false,
         listed: None,
         resources: vec![observed(13_549_794, 0x5A)],
         skipped: Vec::new(),
@@ -760,7 +785,7 @@ async fn the_waiting_reason_names_the_version_until_a_device_reaches_it(pool: Pg
     let stale = view(&app, &TOKEN_A, request).await;
     assert_eq!(
         stale.waiting_for_device_version.as_deref(),
-        Some("0.2.0"),
+        Some("0.9.0"),
         "the seller is told which version their machine needs, rather than watching an item \
          wait in silence"
     );
@@ -805,6 +830,11 @@ async fn the_serialized_view_is_what_the_console_receives(pool: PgPool) {
         // request's, and the run identifier it carries is never read.
         run: tam_types::Uuid([0; 16]),
         request: Some(request),
+        // The migration path names a request rather than a run, and is fenced
+        // by that request rather than by a device attempt.
+        attempt: None,
+        receipt: None,
+        enumeration_complete: false,
         listed: None,
         resources: vec![observed(13_549_794, 0x5A)],
         skipped: vec![SkippedResource {
@@ -871,6 +901,11 @@ async fn a_field_that_carries_a_payload_is_refused_at_the_wire(pool: PgPool) {
         // request's, and the run identifier it carries is never read.
         run: tam_types::Uuid([0; 16]),
         request: Some(request),
+        // The migration path names a request rather than a run, and is fenced
+        // by that request rather than by a device attempt.
+        attempt: None,
+        receipt: None,
+        enumeration_complete: false,
         listed: None,
         resources: vec![observed(13_549_794, 0x5A)],
         skipped: Vec::new(),
@@ -934,6 +969,11 @@ async fn the_sync_list_reaches_a_request_that_minted_no_job(pool: PgPool) {
     let page = ImportPage {
         run: tam_types::Uuid([0; 16]),
         request: Some(second),
+        // The migration path names a request rather than a run, and is fenced
+        // by that request rather than by a device attempt.
+        attempt: None,
+        receipt: None,
+        enumeration_complete: false,
         listed: None,
         resources: vec![observed(13_549_794, 0x5A)],
         skipped: vec![SkippedResource {
@@ -1045,6 +1085,11 @@ async fn a_device_that_stopped_settles_the_request_with_its_reason(pool: PgPool)
         // request's, and the run identifier it carries is never read.
         run: tam_types::Uuid([0; 16]),
         request: Some(request),
+        // The migration path names a request rather than a run, and is fenced
+        // by that request rather than by a device attempt.
+        attempt: None,
+        receipt: None,
+        enumeration_complete: false,
         listed: None,
         resources: Vec::new(),
         skipped: Vec::new(),
@@ -1075,6 +1120,11 @@ async fn a_device_that_stopped_settles_the_request_with_its_reason(pool: PgPool)
         // request's, and the run identifier it carries is never read.
         run: tam_types::Uuid([0; 16]),
         request: Some(request),
+        // The migration path names a request rather than a run, and is fenced
+        // by that request rather than by a device attempt.
+        attempt: None,
+        receipt: None,
+        enumeration_complete: false,
         listed: None,
         resources: Vec::new(),
         skipped: Vec::new(),

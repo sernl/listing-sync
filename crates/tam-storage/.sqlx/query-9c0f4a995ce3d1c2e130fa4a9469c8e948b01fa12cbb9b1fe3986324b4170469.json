@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT identity, applied, skipped, described_total, complete FROM import_run_receipt WHERE org_id = $1 AND run_id = $2 AND receipt = $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "identity",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 1,
+        "name": "applied",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "skipped",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "described_total",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "complete",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "9c0f4a995ce3d1c2e130fa4a9469c8e948b01fa12cbb9b1fe3986324b4170469"
+}

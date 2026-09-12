@@ -8,6 +8,7 @@
 //! learns by reading the webview's cookie store from Rust.
 
 use core::time::Duration;
+use std::sync::Arc;
 
 use serde::Serialize;
 use tam_types::Marketplace;
@@ -17,7 +18,7 @@ use crate::connect::{login_target, return_url, ConnectVerdict, LoginTarget};
 use crate::heartbeat::{check_in, first_run, CheckIn, CheckInError};
 use crate::run::wall_now;
 use crate::session::{Cookie, CookieJar, SessionRecord, SessionStatus};
-use crate::state::{DesktopState, DeviceActivity, WorkEvent};
+use crate::state::{DesktopState, DeviceActivity};
 use crate::webview_session::CONSOLE_WINDOW;
 
 /// How often the login window's cookie store is read while waiting.
@@ -372,8 +373,15 @@ fn capture_here<R: tauri::Runtime>(
     let login = tauri::Url::parse(target.login_url).map_err(|why| CommandError(why.to_string()))?;
     let base = crate::control_plane::base_url();
     let console = tauri::Url::parse(&base).map_err(|why| CommandError(why.to_string()))?;
+    let attempt = app.state::<DesktopState>().begin_login().ok_or_else(|| {
+        CommandError("a marketplace sign-in is already open on this phone".to_owned())
+    })?;
 
     let app = app.clone();
+    // The token crosses the task boundary and is dropped only after the final
+    // verdict navigation. A second attempt cannot overtake a slow identity
+    // check and be interrupted by this attempt's late answer.
+    let attempt = attempt;
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(CONSOLE_HANDOVER).await;
         let verdict = if window.navigate(login).is_ok() {
@@ -384,6 +392,7 @@ fn capture_here<R: tauri::Runtime>(
         if let Ok(back) = tauri::Url::parse(&return_url(&base, target.marketplace, verdict)) {
             window.navigate(back).ok();
         }
+        drop(attempt);
     });
     Ok(())
 }
@@ -476,20 +485,39 @@ async fn sign_in_showing<R: tauri::Runtime>(
 /// Read from Rust rather than from the page: `document.cookie` cannot see the
 /// HttpOnly session cookie, which is the only one that matters.
 type ReadJar = Box<dyn FnMut() -> Result<CookieJar, CommandError> + Send>;
+type VerifyFuture<'a> =
+    core::pin::Pin<Box<dyn core::future::Future<Output = Result<bool, CommandError>> + Send + 'a>>;
+type VerifyJar = Box<dyn for<'a> FnMut(Marketplace, &'a CookieJar) -> VerifyFuture<'a> + Send>;
+
+fn verify_login_candidate(marketplace: Marketplace, jar: &CookieJar) -> VerifyFuture<'_> {
+    Box::pin(async move {
+        match marketplace {
+            Marketplace::Tes => crate::marketplace::verify_tes_login(jar)
+                .await
+                .map_err(CommandError),
+            Marketplace::Tpt => Ok(true),
+            Marketplace::Etsy => Err(CommandError(
+                "Etsy does not use a device-held login".to_owned(),
+            )),
+        }
+    })
+}
 
 /// What a login capture reads, and how long it is given to read it.
 ///
 /// The reader is a value rather than a call to [`read_jar`] in place, and that
 /// is what puts the success path under test at all:
 /// `tauri::test::MockRuntime::cookies_for_url` answers every read with an empty
-/// jar, so on the mock runtime `LoginTarget::is_logged_in` is false forever and
+/// jar, so on the mock runtime `LoginTarget::has_login_cookies` is false forever and
 /// neither a capture nor a deadline can be reached. Without the seam the one
 /// outcome the whole surface exists to produce would ship with no test at any
 /// level.
 struct Capture {
     poll: Duration,
     deadline: Duration,
+    verification_interval: Duration,
     read: ReadJar,
+    verify: VerifyJar,
 }
 
 impl Capture {
@@ -501,13 +529,14 @@ impl Capture {
         Self {
             poll: POLL_INTERVAL,
             deadline: LOGIN_DEADLINE,
+            verification_interval: Duration::from_secs(5),
             read: Box::new(move || read_jar(&window, &origin)),
+            verify: Box::new(verify_login_candidate),
         }
     }
 }
 
-/// Read the jar every [`Capture::poll`] until the marketplace's own session is
-/// in it, and answer why not when it never is.
+/// Read candidates until the marketplace's login condition is confirmed.
 ///
 /// The one wait both surfaces take, so the logged-in condition, the interval
 /// and the deadline cannot come to differ between a computer and a phone.
@@ -519,17 +548,36 @@ async fn await_session(
     mut left: impl FnMut() -> bool + Send,
 ) -> Result<CookieJar, Waited> {
     let deadline = tokio::time::Instant::now() + capture.deadline;
+    let mut rejected = None;
+    let mut verify_after = tokio::time::Instant::now();
     loop {
         tokio::time::sleep(capture.poll).await;
         if left() {
             return Err(Waited::Left);
         }
-        let jar = (capture.read)().map_err(Waited::Unreadable)?;
-        if target.is_logged_in(&jar) {
-            return Ok(jar);
-        }
-        if tokio::time::Instant::now() >= deadline {
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
             return Err(Waited::Deadline);
+        }
+        let jar = (capture.read)().map_err(Waited::Unreadable)?;
+        if target.has_login_cookies(&jar)
+            && (rejected.as_ref() != Some(&jar) || now >= verify_after)
+        {
+            let verified =
+                tokio::time::timeout_at(deadline, (capture.verify)(target.marketplace, &jar))
+                    .await
+                    .map_err(|_| Waited::Deadline)?
+                    .map_err(Waited::Unreadable)?;
+            if left() {
+                return Err(Waited::Left);
+            }
+            if verified {
+                return Ok(jar);
+            }
+            // Login can activate a session without replacing its cookie.
+            // Changed jars are checked immediately; unchanged ones are bounded.
+            verify_after = tokio::time::Instant::now() + capture.verification_interval;
+            rejected = Some(jar);
         }
     }
 }
@@ -723,39 +771,57 @@ fn read_jar<R: tauri::Runtime>(
 }
 
 /// What starting an import answered.
+///
+/// Durable acceptance rather than a result: the answer says the run is this
+/// device's, under this attempt, until the lease it names expires. What the
+/// shop holds is no longer here, because it is no longer known by the time
+/// this answers — the enumeration happens after, and the run's own execution
+/// view is where the console reads the counts from.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ImportStarted {
     /// Echoed so the console can match the answer to the run it asked about,
     /// rather than assuming the only start in flight is its own.
     pub run: String,
-    /// How many resources the seller's shop holds, known because the
-    /// enumeration happens before this answer rather than after it. The
-    /// console can show a total from the first moment instead of a count with
-    /// no denominator.
-    pub listed: u32,
+    /// The fence this device now holds. Every page and every report it posts
+    /// carries it, and a later attempt's arrival is what invalidates them.
+    pub attempt: u64,
+    /// When the lease lapses if nothing renews it, in milliseconds since the
+    /// epoch: the console's own timestamp convention, and the server's clock
+    /// rather than this device's.
+    pub lease_expires_at: i64,
 }
 
-/// What continuing an import answered.
+/// What continuing an import answered. The same acceptance, for the half the
+/// seller's selection names.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ImportContinued {
     pub run: String,
-    /// How many resources the seller ticked, read back from the run rather
-    /// than counted by the console.
-    pub selected: u32,
+    pub attempt: u64,
+    pub lease_expires_at: i64,
 }
 
-/// Everything a pass needs, checked before one is built.
-///
-/// Every refusal is named, and each is checked here rather than left to the
-/// pass, because a refusal the seller sees immediately is one they can act on
-/// while a refusal that surfaces from a background task is one they have to
-/// discover. The pass re-checks the entitlement and the revocation itself,
-/// between resources, which is a different guarantee: this stops a run that
-/// should not start, and that stops a run that should not continue.
-pub(crate) struct ImportReady<P: crate::ledger::LedgerTransport + ?Sized> {
-    pub(crate) pass: crate::import::ImportPass<Box<dyn crate::import::CatalogueSource>, P>,
-    pub(crate) marketplace: Marketplace,
-    pub(crate) now: tam_types::Timestamp,
+/// What stopping an import on this device answered.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ImportStopped {
+    pub run: String,
+    /// Whether this device was working the run at all. False is not a
+    /// failure: the seller may be stopping a run another device holds, and
+    /// the server settles that one.
+    pub was_running: bool,
+    /// Whether the stop was written down on this device.
+    ///
+    /// False means the work here has ended but the intention was not kept, so
+    /// a restart could pick the run up again before the server settles it.
+    /// Surfaced rather than folded into the line below, because it is a
+    /// different thing from waiting on the server and has a different remedy.
+    pub recorded: bool,
+    /// Whether the server has yet to be told. Always true here: this device
+    /// never learns at this moment that the server agreed. The console's own
+    /// abandon call is what settles the run, and the local mark is cleared
+    /// only once a later cycle sees the server stop offering it — so the
+    /// honest answer now is "stopped on this device, confirmation pending"
+    /// rather than a claim about a server this device has not spoken to.
+    pub server_pending: bool,
 }
 
 /// The catalogue reader for a shop, chosen by which marketplace it is.
@@ -764,17 +830,21 @@ pub(crate) struct ImportReady<P: crate::ledger::LedgerTransport + ?Sized> {
 /// way `SellerFiles::fetch` names it for a download. A marketplace with an
 /// official API is read on our own servers under a sanctioned token, so it is
 /// not a shop this device enumerates.
+///
+/// It reads the session store out of the import context rather than out of
+/// the application state, because a run outlives the command that started it:
+/// the task holds the handles, not a borrow of the state.
 pub(crate) fn catalogue_for(
-    state: &DesktopState,
+    ctx: &crate::import::ImportContext,
     source: tam_types::InventoryId,
 ) -> Result<Box<dyn crate::import::CatalogueSource>, String> {
     match source.marketplace() {
         Marketplace::Tes => Ok(Box::new(crate::work::SellerCatalogue::new(
-            state.store_handle(),
+            Arc::clone(&ctx.sessions),
             source,
         ))),
         Marketplace::Tpt => Ok(Box::new(crate::work::TptSellerCatalogue::new(
-            state.store_handle(),
+            Arc::clone(&ctx.sessions),
             source,
         ))),
         other @ Marketplace::Etsy => Err(format!(
@@ -783,227 +853,141 @@ pub(crate) fn catalogue_for(
     }
 }
 
-/// Checks every gate, claims the single flight, and builds the pass.
-///
-/// Shared by both halves of the flow because both make marketplace requests
-/// under the same rules: a seller whose subscription lapsed between ticking
-/// and continuing must be refused at the second press as firmly as at the
-/// first. Shared with [`crate::import::serve_open_run`] for the same reason,
-/// which is also why the single-flight claim is taken here rather than by each
-/// caller: a scheduled pass and a console press must not walk one shop twice.
-///
-/// `source` is the run's own inventory, read from the run by every caller
-/// rather than taken from the console: a console that named the shop could
-/// otherwise ask this device to enumerate one the run does not name.
-pub(crate) async fn ready_to_import(
-    state: &DesktopState,
-    run: tam_types::Uuid,
-    source: tam_types::InventoryId,
-    catalogue: crate::import::CatalogueFactory<'_>,
-) -> Result<ImportReady<dyn crate::ledger::LedgerTransport>, CommandError> {
-    let ledger = require_ledger(state)?;
-    let marketplace = source.marketplace();
-    let catalogue = catalogue(state, source).map_err(CommandError)?;
-    if state.store().get(marketplace).await?.is_none() {
-        return Err(CommandError(format!(
-            "this device is not signed in to {marketplace:?}, so it cannot read your shop. Connect it on this device and start the import again"
-        )));
-    }
-    let now = wall_now();
-    if !state.gate_handle().lock().await.may_work(marketplace, now) {
-        return Err(CommandError(
-            "your subscription does not currently allow work to run on this device, so the import was not started".to_owned(),
-        ));
-    }
-    if !state.claim_import(run).await {
-        return Err(CommandError(
-            "an import for this run is already running on this device".to_owned(),
-        ));
-    }
-    Ok(ImportReady {
-        pass: crate::import::ImportPass::new(
-            state.device().id.clone(),
-            catalogue,
-            ledger,
-            run,
-            crate::import::SourcePermission {
-                marketplace,
-                gate: state.gate_handle(),
-                stopper: state.stopper(),
-            },
-        ),
-        marketplace,
-        now,
-    })
+/// The factory every real build hands the supervisor.
+#[must_use]
+pub fn live_catalogue() -> crate::import::CatalogueFactory {
+    Arc::new(catalogue_for)
 }
 
 /// The transport an import posts its pages over, or the refusal a build with
 /// none owes the seller.
-fn require_ledger(
-    state: &DesktopState,
-) -> Result<std::sync::Arc<dyn crate::ledger::LedgerTransport>, CommandError> {
-    state.ledger().ok_or_else(|| {
+fn require_ledger(state: &DesktopState) -> Result<crate::import::ImportContext, CommandError> {
+    crate::import::ImportContext::of(state).ok_or_else(|| {
         CommandError(
             "this build has no way to reach the server, so an import would have nowhere to post what it read".to_owned(),
         )
     })
 }
 
-/// The run's source inventory, read from the run itself.
+/// One press, as the supervisor reads it.
 ///
-/// The console asks by run id alone, so a console that named the inventory
-/// could ask this device to enumerate a shop the run does not name; and the
-/// server answers this under the organisation's own session, so another
-/// tenant's run is absent here rather than readable.
-async fn source_of(
-    state: &DesktopState,
+/// The run and nothing else, because that is all the console knows and all it
+/// should: the device reads which shop the run names from the run itself, and
+/// it does that after taking the fence so a read that fails is recorded
+/// against a run this device owns rather than lost with the window.
+fn pressed(
     run: tam_types::Uuid,
-) -> Result<tam_types::InventoryId, CommandError> {
-    // Before the run is read rather than after it, so a build that could post
-    // nothing says that rather than reporting the transport failure its own
-    // absence produced. The order the seller reads the refusals in is the
-    // order they can act on them.
-    require_ledger(state)?;
-    state
-        .control_plane()
-        .import_run_source(run)
-        .await
-        .map_err(|why| CommandError(why.to_string()))
+    phase: crate::import::RunPhase,
+    takeover: Option<bool>,
+) -> crate::import::RunOrder {
+    crate::import::RunOrder {
+        run,
+        source: None,
+        phase,
+        intent: crate::import::StartIntent::Pressed {
+            takeover: takeover.unwrap_or(false),
+        },
+    }
 }
 
-/// Reads the seller's shop and posts what is in it, so they can choose.
+/// Asks this device to read the shop one run names.
 ///
-/// Awaited rather than backgrounded, and that is the difference from the pass
-/// that follows: enumerating is one walk the seller is watching, everything
-/// that can fail before a page lands fails in this call, and the answer is
-/// what makes the selection step renderable at all. Answering "started" and
-/// enumerating in the background would leave those failures with nowhere to
-/// go — the run's own view holds nothing until a page lands, so the console
-/// would sit on its pre-start state with the seller told nothing.
+/// Answers once the run is durably this device's rather than once the shop
+/// has been read, and that is the repair rather than a convenience. The old
+/// command awaited the enumeration, so every failure before the first page
+/// lived in one window's promise: a seller who navigated away — which the
+/// console does as soon as a start is accepted — left the run in the state
+/// the server gave it at creation, which the console renders as under way.
+/// Now the claim is taken first, every refusal after it is reported to the
+/// run, and the walk happens in a task the window's lifetime has no bearing
+/// on.
+///
+/// `takeover` is false unless the seller has confirmed that this machine
+/// should take a run another one holds. An ordinary press must not wrench a
+/// run out of a phone that is reading a shop right now, so the claim is
+/// refused and the console offers the confirmation instead.
 #[tauri::command]
 pub async fn start_import<R: tauri::Runtime>(
     app: AppHandle<R>,
     run: tam_types::Uuid,
+    takeover: Option<bool>,
 ) -> Result<ImportStarted, CommandError> {
     let state = app.state::<DesktopState>();
-    let source = source_of(state.inner(), run).await?;
-    let ready = ready_to_import(state.inner(), run, source, &catalogue_for).await?;
-    let listed = match ready.pass.enumerate(ready.now).await {
-        Ok(listed) => listed,
-        Err(why) => {
-            state.release_import(run).await;
-            return Err(CommandError(why.to_string()));
-        }
-    };
-    let counted = u32::try_from(listed.len()).unwrap_or(u32::MAX);
-    if let Err(why) = ready.pass.post_listing(listed).await {
-        state.release_import(run).await;
-        return Err(CommandError(why.to_string()));
-    }
-    // Released here rather than held across the seller's decision: the
-    // describe pass claims it again, and holding it through a step that may
-    // take the seller a week would refuse every retry until the application
-    // restarted.
-    state.release_import(run).await;
+    let ctx = require_ledger(state.inner())?;
+    let accepted = ctx
+        .supervisor
+        .accept(
+            &ctx,
+            pressed(run, crate::import::RunPhase::Discover, takeover),
+        )
+        .await
+        .map_err(|why| CommandError(why.to_string()))?;
     Ok(ImportStarted {
         run: uuid::Uuid::from_bytes(run.0).as_hyphenated().to_string(),
-        listed: counted,
+        attempt: accepted.attempt,
+        lease_expires_at: accepted.lease_expires_at,
     })
 }
 
-/// Describes what the seller ticked, in the background.
+/// Asks this device to read the resources the seller ticked.
 ///
-/// Background rather than awaited, because a shop of several hundred
-/// resources is minutes of work and the seller navigates away: the command
-/// answers as soon as the pass is running, and the console watches the run's
-/// own view for progress. The task therefore outlives this call by design.
-///
-/// One consequence of holding the running set in memory, stated rather than
-/// removed: a device that restarts mid-pass forgets what was running, so a
-/// second continue re-describes the selection. That is survivable rather than
-/// wasteful in the way it looks — the route's breadcrumb identity is the
-/// marketplace resource id within the run, so every resource an earlier pass
-/// posted is recognised and becomes a no-op, and only what had not been
-/// described is described again.
-///
-/// Generic over the runtime where its neighbours are not, so the mock runtime
-/// can invoke it by name. That is the only assertion that this command is
-/// registered at all — the console's own test can compare its constant to a
-/// copy of itself and nothing more — and it is worth one type parameter.
+/// The same acceptance as the half above, for the same reason: a shop of
+/// several hundred resources is minutes of work, the seller navigates away,
+/// and the run's own view is what they come back to. What the selection holds
+/// is not counted here — the server froze that total when it accepted the
+/// selection, and counting it again on the device would be a second answer to
+/// a question that already has one.
 #[tauri::command]
 pub async fn continue_import<R: tauri::Runtime>(
     app: AppHandle<R>,
     run: tam_types::Uuid,
+    takeover: Option<bool>,
 ) -> Result<ImportContinued, CommandError> {
     let state = app.state::<DesktopState>();
-    let source = source_of(state.inner(), run).await?;
-    let ready = ready_to_import(state.inner(), run, source, &catalogue_for).await?;
-    let marketplace = ready.marketplace;
-    let pass = ready.pass;
-    // The run's own record of what was ticked, not a list the browser carried
-    // over: a seller who chose, closed the window and came back continues the
-    // import they chose.
-    let selection = match state
-        .control_plane()
-        .import_selection(&state.device().id, run)
+    let ctx = require_ledger(state.inner())?;
+    let accepted = ctx
+        .supervisor
+        .accept(
+            &ctx,
+            pressed(run, crate::import::RunPhase::Describe, takeover),
+        )
         .await
-    {
-        Ok(selection) => selection,
-        Err(why) => {
-            state.release_import(run).await;
-            return Err(CommandError(why.to_string()));
-        }
-    };
-    let chosen: Vec<i64> = selection
-        .iter()
-        .filter_map(|locator| locator.parse().ok())
-        .collect();
-    let counted = u32::try_from(chosen.len()).unwrap_or(u32::MAX);
-
-    let handle = app.app_handle().clone();
-    tauri::async_runtime::spawn(async move {
-        // What the pass posts is the run's, and the console reads it from the
-        // run's own view; a second copy of that here would drift. What is NOT
-        // the run's is a terminal failure that posted nothing — a first page
-        // that could not be sent, a sign-out mid-pass — and in exactly those
-        // cases the run's view holds nothing until the report below puts the
-        // reason in it.
-        let outcome = pass.describe_all(chosen, wall_now, |_progress| {}).await;
-        let state = handle.state::<DesktopState>();
-        if let Err(why) = outcome {
-            // To the RUN, because that is the page the seller is looking at:
-            // a terminal failure that posted nothing leaves the run holding
-            // exactly nothing, so without this the console watches a state
-            // that never changes.
-            //
-            // The activity record beside it is read by nothing today, and
-            // that is stated rather than implied: `record` appends to an
-            // in-memory ring buffer, `device_activity` returns it, and no
-            // console screen calls that command — `settings/devices` is a
-            // redirect stub. It is kept because a devices screen is the place
-            // a seller looks when they do not know WHICH import went wrong,
-            // and the record has to exist before that screen can read it.
-            pass.report_failure(&why).await;
-            state
-                .record(
-                    marketplace,
-                    wall_now(),
-                    WorkEvent::Abandoned {
-                        item: uuid::Uuid::from_bytes(run.0).as_hyphenated().to_string(),
-                        reason: why.to_string(),
-                    },
-                )
-                .await;
-        }
-        // Released on both endings. A pass that ended by an error and left
-        // its claim standing would refuse every later attempt for this run
-        // until the application restarted, which is a worse failure than the
-        // one that caused it.
-        state.release_import(run).await;
-    });
+        .map_err(|why| CommandError(why.to_string()))?;
     Ok(ImportContinued {
         run: uuid::Uuid::from_bytes(run.0).as_hyphenated().to_string(),
-        selected: counted,
+        attempt: accepted.attempt,
+        lease_expires_at: accepted.lease_expires_at,
+    })
+}
+
+/// Stops this device's work on one run.
+///
+/// The console's Stop settles the run on the server, which is the authority;
+/// this is the half only the device can do, and before it existed the two
+/// disagreed — the run settled while the phone went on making marketplace
+/// requests for it, because the claim set could say a run was running and
+/// could not stop it.
+///
+/// It needs no server: raising the run's own handle is local and immediate,
+/// which is what makes a stop work on a phone with no signal. It does need
+/// the journal, because a stop that lived only in memory was undone by the
+/// next restart.
+#[tauri::command]
+pub async fn stop_import<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    run: tam_types::Uuid,
+) -> Result<ImportStopped, CommandError> {
+    let state = app.state::<DesktopState>();
+    let journal = state.journal();
+    let stopped = state
+        .supervisor()
+        .cancel(&journal, &state.device().id, run)
+        .await;
+    Ok(ImportStopped {
+        run: uuid::Uuid::from_bytes(run.0).as_hyphenated().to_string(),
+        was_running: stopped.was_running,
+        recorded: stopped.recorded,
+        server_pending: stopped.server_pending,
     })
 }
 
@@ -1155,7 +1139,7 @@ mod import_command_tests {
             Arc::new(MemorySessionStore::default()),
         ));
 
-        let refusal = super::start_import(app.handle().clone(), tam_types::Uuid([0x71; 16]))
+        let refusal = super::start_import(app.handle().clone(), tam_types::Uuid([0x71; 16]), None)
             .await
             .expect_err("a build with no ledger transport cannot import");
         assert!(
@@ -1163,6 +1147,290 @@ mod import_command_tests {
             "the refusal names what is missing rather than failing in the background, because a \
              seller can act on the first and can only discover the second. Got: {}",
             refusal.0
+        );
+        drop(app);
+    }
+}
+
+#[cfg(test)]
+mod import_early_failure_tests {
+    //! What a run is told when the device refuses before it reads anything.
+    //!
+    //! The incident of 2026-09-12 is exactly this hole: the server accepted
+    //! six runs, every one of them held zero items and a null `read_total`,
+    //! and five were abandoned by the seller while one sat in `reading`. The
+    //! device had already decided it could not proceed — no local session for
+    //! the shop, or a source it cannot enumerate at all — and it said so to
+    //! the window that pressed the button and to nothing else. A window that
+    //! has navigated away is nowhere, so the run kept the state the server
+    //! gave it on creation.
+    //!
+    //! Driven through the real command rather than through a pass or a
+    //! reporter in isolation. The defect is in what the command caller does
+    //! with a refusal, so a test that called a reporter itself would pass
+    //! over the whole of it.
+
+    use crate::device::{DeviceId, DeviceIdentity};
+    use crate::heartbeat::{CheckIn, ControlPlane, HostFacts, PlaneFuture, SessionReport};
+    use crate::ledger::LedgerTransport;
+    use crate::session::memory::MemorySessionStore;
+    use crate::session::{Cookie, CookieJar, SessionRecord, SessionStore};
+    use crate::state::DesktopState;
+    use std::sync::Arc;
+    use tam_types::{Marketplace, Timestamp};
+    use tauri::test::{mock_builder, mock_context, noop_assets};
+    use tauri::Manager;
+    use tokio::sync::Mutex;
+
+    const DEVICE: &str = "11112222333344445555666677778888";
+    /// The run the server already accepted. One value, because the assertion
+    /// is that what reaches the transport names this run rather than that
+    /// something reached it.
+    const RUN: tam_types::Uuid = tam_types::Uuid([0x71; 16]);
+    const NOW: Timestamp = Timestamp(1_756_000_000_000);
+
+    /// The run transport, as the server would see it: every call this device
+    /// made, with the path and the body it carried.
+    ///
+    /// Both traits on one object because that is what a real build has — the
+    /// control plane and the ledger transport are two traits over one
+    /// `HttpControlPlane` — and because the question this fake answers is
+    /// "did anything about this refusal leave the device", which cannot be
+    /// asked of a transport the command does not hold.
+    struct RunObserver {
+        source: tam_types::InventoryId,
+        calls: Mutex<Vec<(String, String)>>,
+    }
+
+    impl RunObserver {
+        fn for_source(source: tam_types::InventoryId) -> Arc<Self> {
+            Arc::new(Self {
+                source,
+                calls: Mutex::new(Vec::new()),
+            })
+        }
+
+        /// Everything the device posted that names this run, as one string per
+        /// call. The path as well as the body, because a claim names the run
+        /// in its path alone.
+        async fn about(&self, run: tam_types::Uuid) -> Vec<String> {
+            let hyphenated = uuid::Uuid::from_bytes(run.0).as_hyphenated().to_string();
+            let simple = uuid::Uuid::from_bytes(run.0).simple().to_string();
+            self.calls
+                .lock()
+                .await
+                .iter()
+                .map(|(path, body)| format!("{path} {body}"))
+                .filter(|call| call.contains(&hyphenated) || call.contains(&simple))
+                .collect()
+        }
+    }
+
+    impl LedgerTransport for RunObserver {
+        /// Records the call, and answers a claim with a lease.
+        ///
+        /// The lease is the one thing this fake has to do rather than merely
+        /// observe: the device claims the run before it checks whether it can
+        /// read the shop, which is the order that makes the refusal durable,
+        /// so a fake that answered a claim with nothing would stop the flow
+        /// before the refusal this test is about.
+        fn post<'a>(&'a self, path: &'a str, body: String) -> PlaneFuture<'a, String> {
+            Box::pin(async move {
+                let claimed = path.ends_with("/claim");
+                self.calls.lock().await.push((path.to_owned(), body));
+                if claimed {
+                    return Ok(serde_json::json!({
+                        "attempt": 1,
+                        "lease_expires_at": 1_756_000_060_000_i64,
+                    })
+                    .to_string());
+                }
+                Ok(String::new())
+            })
+        }
+    }
+
+    impl ControlPlane for RunObserver {
+        fn reachable(&self) -> PlaneFuture<'_, ()> {
+            Box::pin(core::future::ready(Ok(())))
+        }
+
+        fn sync_request_source(
+            &self,
+            _request: tam_types::Uuid,
+        ) -> PlaneFuture<'_, tam_types::InventoryId> {
+            Box::pin(core::future::ready(Ok(self.source)))
+        }
+
+        /// The run exists and names its shop: the server accepted this import,
+        /// which is what makes the silence that follows a defect rather than a
+        /// refusal to start something that was never started.
+        fn import_run_facts(
+            &self,
+            _run: tam_types::Uuid,
+        ) -> PlaneFuture<'_, crate::import::RunFacts> {
+            Box::pin(core::future::ready(Ok(crate::import::RunFacts {
+                source: self.source,
+                discovered: 0,
+                processed: 0,
+                described: 0,
+                enumeration_complete: false,
+            })))
+        }
+
+        fn import_selection<'a>(
+            &'a self,
+            _device: &'a DeviceId,
+            _run: tam_types::Uuid,
+        ) -> PlaneFuture<'a, Vec<String>> {
+            Box::pin(core::future::ready(Ok(Vec::new())))
+        }
+
+        fn open_import_runs<'a>(
+            &'a self,
+            _device: &'a DeviceId,
+        ) -> PlaneFuture<'a, Vec<crate::import::OpenImportRun>> {
+            Box::pin(core::future::ready(Ok(Vec::new())))
+        }
+
+        fn register<'a>(
+            &'a self,
+            _device: &'a DeviceIdentity,
+            _facts: HostFacts,
+        ) -> PlaneFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn heartbeat<'a>(
+            &'a self,
+            _device: &'a DeviceId,
+            _sessions: &'a [SessionReport],
+        ) -> PlaneFuture<'a, CheckIn> {
+            Box::pin(async {
+                Ok(CheckIn {
+                    revoked: false,
+                    entitlement: None,
+                })
+            })
+        }
+    }
+
+    fn identity() -> DeviceIdentity {
+        DeviceIdentity {
+            id: DeviceId::from_raw(DEVICE),
+            label: "the founder's phone".to_owned(),
+        }
+    }
+
+    /// An application holding the state the command reads, with the observer
+    /// as both the registry and the run transport.
+    fn app_with(
+        store: Arc<MemorySessionStore>,
+        observer: &Arc<RunObserver>,
+    ) -> tauri::App<tauri::test::MockRuntime> {
+        let app = mock_builder()
+            .build(mock_context(noop_assets()))
+            .expect("the mock application builds");
+        // Cloned at the concrete type and then unsized, which is the form the
+        // application's own `setup` uses: `Arc::clone` would resolve its type
+        // parameter against the annotation and refuse the coercion.
+        let registry: Arc<dyn ControlPlane> = Arc::<RunObserver>::clone(observer);
+        let ledger: Arc<dyn LedgerTransport> = Arc::<RunObserver>::clone(observer);
+        app.manage(
+            DesktopState::with_control_plane(identity(), store, registry).with_ledger(ledger),
+        );
+        app
+    }
+
+    async fn signed_in_to(marketplace: Marketplace) -> Arc<MemorySessionStore> {
+        let store = Arc::new(MemorySessionStore::default());
+        let record = SessionRecord {
+            marketplace,
+            account_label: Some("the seller".to_owned()),
+            captured_at: NOW,
+            device_id: identity().id,
+            jar: CookieJar::new(vec![Cookie {
+                name: "sessionKey".to_owned(),
+                value: "s3cr3t".to_owned(),
+            }]),
+        };
+        store
+            .put(&record)
+            .await
+            .expect("the memory store keeps a session");
+        store
+    }
+
+    /// A start the device cannot perform reaches the run, not only the window.
+    ///
+    /// The seller pressed Start on a phone that holds no Tes session. The
+    /// device knows that before it composes a single marketplace request, so
+    /// there is nothing slow or uncertain about the answer — and the run it
+    /// was handed is the one page the seller looks at afterwards. A refusal
+    /// that travels only in the command's rejection is lost the moment the
+    /// console navigates, which is what the console does as soon as a start
+    /// is accepted.
+    ///
+    /// Asserted on the transport rather than on what the command answered,
+    /// deliberately: telling the pressing window is not wrong, it is
+    /// insufficient, so the property is that the run was told and not that
+    /// the window was not.
+    #[tokio::test]
+    async fn a_start_without_a_local_session_reports_to_the_run() {
+        let observer = RunObserver::for_source(tam_types::InventoryId::Tes);
+        // Signed in to the other no-API marketplace, so the state under test
+        // is "no session for THIS shop" rather than "no sessions at all",
+        // which is also the shape of the reported incident: a phone that had
+        // been connected to something.
+        let store = signed_in_to(Marketplace::Tpt).await;
+        let app = app_with(store, &observer);
+
+        let answered = super::start_import(app.handle().clone(), RUN, None).await;
+
+        let about = observer.about(RUN).await;
+        assert!(
+            !about.is_empty(),
+            "the run the server accepted must learn that this device refused it, or the console \
+             shows `reading` forever while the only account of the refusal is a promise the \
+             pressing window has already dropped. The device answered {answered:?} and posted \
+             nothing naming the run"
+        );
+        let told = about.join("\n");
+        assert!(
+            told.contains("missing_session"),
+            "and it must name the class the seller acts on — connecting this device — rather \
+             than a sentence the console has to parse. Got: {told}"
+        );
+        drop(app);
+    }
+
+    /// A source this device cannot enumerate at all reaches the run too.
+    ///
+    /// The second early refusal on the same path, and the one that shows the
+    /// first is about delivery rather than about sessions: here the device
+    /// holds a session, and what it cannot do is read that kind of shop from
+    /// a device at all. Both refusals happen before a page exists, both are
+    /// durable facts about the run, and both were silent.
+    #[tokio::test]
+    async fn an_import_of_an_unsupported_source_reports_to_the_run() {
+        let observer = RunObserver::for_source(tam_types::InventoryId::Etsy);
+        let store = signed_in_to(Marketplace::Etsy).await;
+        let app = app_with(store, &observer);
+
+        let answered = super::start_import(app.handle().clone(), RUN, None).await;
+
+        let about = observer.about(RUN).await;
+        assert!(
+            !about.is_empty(),
+            "a run whose source no device can read must be failed on the server rather than \
+             left open: nothing will ever claim it. The device answered {answered:?} and posted \
+             nothing naming the run"
+        );
+        let told = about.join("\n");
+        assert!(
+            told.contains("unsupported_source"),
+            "and the reason is that class rather than a missing session or a transport fault, \
+             because the seller's remedy differs for each. Got: {told}"
         );
         drop(app);
     }
@@ -1249,11 +1517,17 @@ mod session_command_tests {
             Box::pin(core::future::ready(Ok(tam_types::InventoryId::Tes)))
         }
 
-        fn import_run_source(
+        fn import_run_facts(
             &self,
             _run: tam_types::Uuid,
-        ) -> PlaneFuture<'_, tam_types::InventoryId> {
-            Box::pin(core::future::ready(Ok(tam_types::InventoryId::Tes)))
+        ) -> PlaneFuture<'_, crate::import::RunFacts> {
+            Box::pin(core::future::ready(Ok(crate::import::RunFacts {
+                source: tam_types::InventoryId::Tes,
+                discovered: 0,
+                processed: 0,
+                described: 0,
+                enumeration_complete: false,
+            })))
         }
 
         fn import_selection<'a>(
@@ -1264,11 +1538,11 @@ mod session_command_tests {
             Box::pin(core::future::ready(Ok(Vec::new())))
         }
 
-        fn open_import_run<'a>(
+        fn open_import_runs<'a>(
             &'a self,
             _device: &'a crate::device::DeviceId,
-        ) -> PlaneFuture<'a, Option<crate::import::OpenImportRun>> {
-            Box::pin(core::future::ready(Ok(None)))
+        ) -> PlaneFuture<'a, Vec<crate::import::OpenImportRun>> {
+            Box::pin(core::future::ready(Ok(Vec::new())))
         }
 
         fn register<'a>(
@@ -1883,7 +2157,7 @@ mod session_command_tests {
     ///
     /// `tauri::test::MockRuntime::cookies_for_url` answers every read with an
     /// empty jar, so without this the two verdicts that matter most are
-    /// unreachable on a host: `is_logged_in` is false forever, so a capture
+    /// unreachable on a host: `has_login_cookies` is false forever, so a capture
     /// never happens, and a deadline is ten minutes away.
     fn a_capture(
         poll: core::time::Duration,
@@ -1893,7 +2167,9 @@ mod session_command_tests {
         super::Capture {
             poll,
             deadline,
+            verification_interval: core::time::Duration::from_secs(5),
             read: Box::new(read),
+            verify: Box::new(|_, _| Box::pin(core::future::ready(Ok(true)))),
         }
     }
 
@@ -2017,6 +2293,121 @@ mod session_command_tests {
             plane.beats().await.is_empty(),
             "and nothing is reported to the server, because nothing was captured"
         );
+        drop(app);
+    }
+
+    #[tokio::test]
+    async fn an_anonymous_tes_cookie_does_not_complete_the_sign_in() {
+        let store = Arc::new(MemorySessionStore::new());
+        let plane = Recorder::allowing();
+        let app = app_holding(Arc::clone(&store), Arc::clone(&plane));
+        let window = a_console_window(&app);
+        let target = super::login_target(Marketplace::Tes).expect("TES signs in on the device");
+        let mut capture = a_capture(
+            core::time::Duration::from_millis(20),
+            core::time::Duration::from_millis(100),
+            || {
+                Ok(CookieJar::new(vec![Cookie {
+                    name: "TESSession".to_owned(),
+                    value: "anonymous-session".to_owned(),
+                }]))
+            },
+        );
+        capture.verify = Box::new(|_, _| Box::pin(core::future::ready(Ok(false))));
+        super::capture_here(app.handle(), target, window.clone(), capture)
+            .expect("the phone opens TES");
+
+        let back = settles_at(&window, |at| at.contains("connect=")).await;
+        assert_eq!(
+            back,
+            "https://teachouse.stowiq.io/marketplaces?connect=deadline&marketplace=Tes"
+        );
+        assert!(store
+            .get(Marketplace::Tes)
+            .await
+            .expect("store reads")
+            .is_none());
+        assert!(plane.beats().await.is_empty());
+        drop(app);
+    }
+
+    #[tokio::test]
+    async fn a_tes_login_can_activate_without_replacing_the_cookie() {
+        let store = Arc::new(MemorySessionStore::new());
+        let plane = Recorder::allowing();
+        let app = app_holding(Arc::clone(&store), Arc::clone(&plane));
+        let window = a_console_window(&app);
+        let target = super::login_target(Marketplace::Tes).expect("TES signs in on the device");
+        let mut capture = a_capture(
+            core::time::Duration::from_millis(20),
+            core::time::Duration::from_secs(5),
+            || {
+                Ok(CookieJar::new(vec![Cookie {
+                    name: "TESSession".to_owned(),
+                    value: "same-session".to_owned(),
+                }]))
+            },
+        );
+        capture.verification_interval = core::time::Duration::from_millis(20);
+        let mut probes = 0;
+        capture.verify = Box::new(move |_, _| {
+            probes += 1;
+            Box::pin(core::future::ready(Ok(probes == 2)))
+        });
+        super::capture_here(app.handle(), target, window.clone(), capture)
+            .expect("the phone opens TES");
+
+        let back = settles_at(&window, |at| at.contains("connect=")).await;
+        assert_eq!(
+            back,
+            "https://teachouse.stowiq.io/marketplaces?connect=captured&marketplace=Tes"
+        );
+        assert!(store
+            .get(Marketplace::Tes)
+            .await
+            .expect("store reads")
+            .is_some());
+        drop(app);
+    }
+
+    #[tokio::test]
+    async fn a_second_phone_login_cannot_overtake_the_first() {
+        let store = Arc::new(MemorySessionStore::new());
+        let plane = Recorder::allowing();
+        let app = app_holding(Arc::clone(&store), Arc::clone(&plane));
+        let window = a_console_window(&app);
+        let never_verified = || {
+            let mut capture = a_capture(
+                core::time::Duration::from_millis(20),
+                core::time::Duration::from_millis(100),
+                || Ok(a_signed_in_jar()),
+            );
+            capture.verify = Box::new(|_, _| Box::pin(core::future::ready(Ok(false))));
+            capture
+        };
+        super::capture_here(
+            app.handle(),
+            a_stub_target(),
+            window.clone(),
+            never_verified(),
+        )
+        .expect("the first sign-in owns the phone");
+
+        let refusal = super::capture_here(
+            app.handle(),
+            a_stub_target(),
+            window.clone(),
+            never_verified(),
+        )
+        .expect_err("one webview cannot hold two sign-ins");
+        assert!(refusal.0.contains("already open on this phone"));
+        let back = settles_at(&window, |at| at.contains("connect=")).await;
+        assert!(back.contains("connect=deadline"));
+        assert!(store
+            .get(Marketplace::Tpt)
+            .await
+            .expect("store reads")
+            .is_none());
         drop(app);
     }
 

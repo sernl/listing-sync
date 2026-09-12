@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { SIGN_IN_LABEL } from '$lib/devices-view';
 import type { MarketplaceRow, MarketplaceSignIn, SignInState } from '$lib/devices-view';
-import { APP_CANNOT_FORGET, type SessionOutcome } from '$lib/desktop';
+import { APP_CANNOT_FORGET, type LocalSessionOutcome, type SessionOutcome } from '$lib/desktop';
 import type { Marketplace } from '$lib/generated/vocab';
 import { osLabel, sessionLabel, sessionTone, sessionWords } from './machines';
 import {
@@ -24,10 +24,15 @@ import {
 	disconnectable,
 	footerAction,
 	headerAction,
+	heldHere,
+	hereFace,
 	hostOf,
 	liveFace,
 	pillTone,
 	connectReturn,
+	signOutHereAsk,
+	signOutHereLabel,
+	signOutHereSay,
 	signsInPlace,
 	transportLine,
 	withBusy
@@ -46,7 +51,14 @@ function row(
 	return {
 		marketplace,
 		transport: marketplace === 'Etsy' ? 'OfficialApi' : 'SellerDevice',
-		signIn: { marketplace, state, device: null, accountLabel: null, line: 'x', tone },
+		signIn: {
+			marketplace,
+			state,
+			device: null,
+			accountLabel: null,
+			line: 'x',
+			tone
+		},
 		connection: null,
 		quiet: false,
 		wipeOutstandingOn: []
@@ -75,7 +87,13 @@ describe('whether a marketplace is carrying work', () => {
 	});
 
 	it('counts nothing else, including a seller with no machine at all', () => {
-		for (const state of ['needs_signin', 'unverified', 'no_account', 'no_device', 'all_signed_out'] as const) {
+		for (const state of [
+			'needs_signin',
+			'unverified',
+			'no_account',
+			'no_device',
+			'all_signed_out'
+		] as const) {
 			expect(carrying(row(state, 'bad')), state).toBe(false);
 		}
 	});
@@ -194,14 +212,54 @@ describe('what a returning sign-in tells the seller', () => {
 	});
 });
 
+const HERE: LocalSessionOutcome = { kind: 'known', connected: true };
+const NOT_HERE: LocalSessionOutcome = { kind: 'known', connected: false };
+const NO_LOCAL_ANSWER: readonly (LocalSessionOutcome | null)[] = [
+	null,
+	{ kind: 'unavailable' },
+	{ kind: 'refused', detail: 'The application would not say.' }
+];
+
 describe('the card footer action', () => {
-	it('opens onto the machine holding the login when one is carrying work', () => {
-		for (const host of ['app', 'browser'] as const) {
-			expect(footerAction(row('signed_in', 'ok'), host)).toEqual({
+	// The defect this covers: the action was read off `carrying`, which is true
+	// as soon as ANY machine reports a login, so a seller at a second computer
+	// was shown "Open TPT" and the only other control disconnected the whole
+	// account. Signing in on a second device meant taking the first one's
+	// login away.
+	it('offers a local login even when another device holds the marketplace session', () => {
+		const action = footerAction(row('signed_in', 'ok'), 'app', NOT_HERE);
+		expect(action).toMatchObject({ kind: 'command', marketplace: 'Tpt' });
+	});
+
+	it('renews a saved local login without requiring a sign-out first', () => {
+		expect(footerAction(row('signed_in', 'ok'), 'app', HERE)).toMatchObject({
+			kind: 'command',
+			marketplace: 'Tpt'
+		});
+	});
+
+	// Absent, refused and not-yet-answered are none of them "this machine has
+	// no login": offering a sign-in on any of them would be acting on a fact we
+	// do not have, which is the defect this change exists to stop making one
+	// layer up.
+	it('points at the machine that reports a login while this one has not answered', () => {
+		for (const local of NO_LOCAL_ANSWER) {
+			expect(footerAction(row('signed_in', 'ok'), 'app', local)).toEqual({
 				kind: 'link',
 				label: 'Open TPT',
 				href: MACHINES_ANCHOR
 			});
+		}
+	});
+
+	it('does not offer a new login while this device has not answered', () => {
+		for (const state of ['no_device', 'all_signed_out', 'needs_signin'] as const) {
+			for (const local of NO_LOCAL_ANSWER) {
+				expect(footerAction(row(state, 'bad'), 'app', local)).toMatchObject({
+					kind: 'link',
+					href: MACHINES_ANCHOR
+				});
+			}
 		}
 	});
 
@@ -211,7 +269,7 @@ describe('the card footer action', () => {
 	// anywhere that opened a marketplace login.
 	it('connects here when this console is the app, for both device-branch marketplaces', () => {
 		for (const marketplace of ['Tpt', 'Tes'] as const) {
-			expect(footerAction(row('no_device', 'bad', marketplace), 'app')).toEqual({
+			expect(footerAction(row('no_device', 'bad', marketplace), 'app', NOT_HERE)).toEqual({
 				kind: 'command',
 				label: `Connect ${CARD_NAME[marketplace]}`,
 				marketplace
@@ -221,7 +279,7 @@ describe('the card footer action', () => {
 
 	it('names the app rather than offering a dead button when it cannot connect', () => {
 		for (const marketplace of ['Tpt', 'Tes'] as const) {
-			const action = footerAction(row('no_device', 'bad', marketplace), 'browser');
+			const action = footerAction(row('no_device', 'bad', marketplace), 'browser', null);
 			expect(action.kind).toBe('link');
 			expect(action).toEqual({
 				kind: 'link',
@@ -231,19 +289,74 @@ describe('the card footer action', () => {
 		}
 	});
 
+	// A browser holds no marketplace session and has no command to open one, so
+	// a local answer there cannot turn its arm into an act it is unable to
+	// perform. `sessionStatusHere` answers `unavailable` in a browser; a
+	// `known` answer is only reachable by a caller passing one, and this is the
+	// assertion that a caller doing so gets no dead button.
+	it('never offers a browser a local sign-in, whatever the local answer says', () => {
+		for (const local of [NOT_HERE, HERE, ...NO_LOCAL_ANSWER]) {
+			expect(footerAction(row('no_device', 'bad'), 'browser', local).kind).toBe('link');
+			expect(footerAction(row('signed_in', 'ok'), 'browser', local).kind).toBe('link');
+		}
+	});
+
 	it('never leaves for the marketplace itself, on either host', () => {
 		for (const host of ['app', 'browser'] as const) {
 			for (const state of ['signed_in', 'no_device', 'needs_signin'] as const) {
-				const action = footerAction(row(state, 'bad'), host);
-				if (action.kind === 'link') {
-					expect(action.href.startsWith('#'), `${host}/${state}`).toBe(true);
+				for (const local of [HERE, NOT_HERE, ...NO_LOCAL_ANSWER]) {
+					const action = footerAction(row(state, 'bad'), host, local);
+					if (action.kind === 'link') {
+						expect(action.href.startsWith('#'), `${host}/${state}`).toBe(true);
+					}
 				}
 			}
 		}
 	});
 });
 
-describe('disconnecting a marketplace', () => {
+describe('what this machine says about its own session', () => {
+	// The pill above this line is the organisation's, lifted from whatever
+	// machine last reported a login. A seller at a second computer read it as a
+	// statement about the computer in front of them, so the two facts are now
+	// stated separately and have to differ.
+	it('tells a login held here apart from one held elsewhere', () => {
+		const held = hereFace(HERE, 'Tpt');
+		const absent = hereFace(NOT_HERE, 'Tpt');
+		expect(held?.label).not.toBe(absent?.label);
+		expect(held?.tone).toBe('ok');
+		expect(absent?.tone).not.toBe('bad');
+		expect(held?.line).toContain('TPT');
+		expect(absent?.line).toContain('TPT');
+	});
+
+	it('says nothing at all where nothing may be claimed', () => {
+		// A read in flight and an application too old to answer are not a
+		// machine with no login. Saying "not on this device" on either would be
+		// the same defect the status pill had, one line further down.
+		expect(hereFace(null, 'Tpt')).toBeNull();
+		expect(hereFace({ kind: 'unavailable' }, 'Tpt')).toBeNull();
+	});
+
+	it('passes a refusal through, which is the one unknown a seller can act on', () => {
+		const refused = hereFace({ kind: 'refused', detail: 'Permission was not granted.' }, 'Tes');
+		expect(refused?.line).toBe('Permission was not granted.');
+		expect(refused?.label).not.toBe(hereFace(NOT_HERE, 'Tes')?.label);
+	});
+
+	it('claims a login here only on a plain yes', () => {
+		// What the local sign-out control is offered on. Offering it on an
+		// unanswered read would put a destructive button on a card we know
+		// nothing about.
+		expect(heldHere(HERE)).toBe(true);
+		expect(heldHere(NOT_HERE)).toBe(false);
+		for (const local of NO_LOCAL_ANSWER) {
+			expect(heldHere(local), String(local?.kind)).toBe(false);
+		}
+	});
+});
+
+describe('disconnecting a marketplace from the account', () => {
 	it('is offered only where a connection stands', () => {
 		expect(disconnectable({ state: 'linked' })).toBe(true);
 		expect(disconnectable({ state: 'needs_reauth' })).toBe(true);
@@ -263,25 +376,25 @@ describe('disconnecting a marketplace', () => {
 		expect(disconnectable({ state: 'revoked' })).toBe(false);
 	});
 
-	it('names the marketplace it removes', () => {
-		expect(disconnectLabel('Tpt')).toBe('Disconnect TPT');
-		expect(disconnectLabel('Tes')).toBe('Disconnect TES');
-	});
-
-	it('promises no removal from the marketplace and no loss of listings', () => {
-		for (const host of ['app', 'browser'] as const) {
-			const prompt = disconnectPrompt('Tpt', host, true);
-			expect(prompt, host).toContain('Nothing is removed from TPT itself');
-			expect(prompt, host).toContain('listings stay here');
-			expect(prompt, host).toContain('Scheduled work for TPT stops');
+	// Two controls now reach two different things — one machine's own store,
+	// and the organisation's connection — so a seller pressing either has to be
+	// able to tell which they pressed.
+	it('labels the two ways out apart, and names the marketplace in both', () => {
+		for (const marketplace of ['Tpt', 'Tes'] as const) {
+			const name = CARD_NAME[marketplace];
+			expect(disconnectLabel(marketplace)).not.toBe(signOutHereLabel(marketplace));
+			expect(disconnectLabel(marketplace)).toContain(name);
+			expect(signOutHereLabel(marketplace)).toContain(name);
 		}
 	});
 
-	it('says the login is removed from this machine when the app can remove it', () => {
-		const prompt = disconnectPrompt('Tpt', 'app', true);
-		expect(prompt).toContain('removed from this machine');
-		// Never the browser's account of a login it cannot reach: this host can.
-		expect(prompt).not.toContain('still on the machine');
+	it('promises no removal from the marketplace and no loss of listings', () => {
+		for (const heldOnAMachine of [true, false]) {
+			const prompt = disconnectPrompt('Tpt', heldOnAMachine);
+			expect(prompt).toContain('Nothing is removed from TPT itself');
+			expect(prompt).toContain('listings stay here');
+			expect(prompt).toContain('Scheduled work for TPT stops');
+		}
 	});
 
 	// R4, and the half a bare "the login remains there" would leave out. A
@@ -289,17 +402,42 @@ describe('disconnecting a marketplace', () => {
 	// connection back to linked on its next beat, because that is what a
 	// check-in does. A seller told only that the login remains would watch the
 	// marketplace reconnect itself with no account of why.
-	it('says a browser cannot remove the login and that the machine will reconnect it', () => {
-		const prompt = disconnectPrompt('Tes', 'browser', true);
+	it('says the login stays on its machine and that the machine will reconnect it', () => {
+		const prompt = disconnectPrompt('Tes', true);
 		expect(prompt).toContain('still on the machine');
 		expect(prompt).toContain('reconnects TES by itself');
 		expect(prompt).toContain('sign the machine out');
 	});
 
 	it('claims no reconnection where no machine holds the login', () => {
-		const prompt = disconnectPrompt('Tes', 'browser', false);
+		const prompt = disconnectPrompt('Tes', false);
 		expect(prompt).not.toContain('reconnects TES by itself');
 		expect(prompt).toContain('Scheduled work for TES stops');
+	});
+
+	// The boundary this control has, stated rather than papered over: it asks
+	// the control plane to unlink and reaches no machine's store. A prompt that
+	// claimed a login was removed would be false in the app as well as in a
+	// browser, because this control no longer calls `forgetHere` on either.
+	it('never claims a machine loses its login', () => {
+		for (const heldOnAMachine of [true, false]) {
+			expect(disconnectPrompt('Tpt', heldOnAMachine)).not.toContain('removed from this machine');
+		}
+	});
+});
+
+describe('signing this machine out of a marketplace', () => {
+	it('says the login is removed from this machine', () => {
+		expect(signOutHereAsk('Tpt')).toContain('removed from this machine');
+	});
+
+	// The whole reason the control exists: a seller signing a shared computer
+	// out of TPT must not stop the work running on the computer at home, and
+	// must not be told they have.
+	it('promises the other machines keep their logins, and stops scheduled work nowhere', () => {
+		const prompt = signOutHereAsk('Tes');
+		expect(prompt).toContain('other machines keep their own TES logins');
+		expect(prompt).not.toContain('Scheduled work for TES stops');
 	});
 
 	// The failure this prevents: a seller disconnects on a phone, presses
@@ -310,20 +448,19 @@ describe('disconnecting a marketplace', () => {
 	// could — `clear_all_browsing_data` — would only clear by signing the seller
 	// out of Teachouse as well.
 	it('warns on a phone that the marketplace keeps its own sign-in', () => {
-		const prompt = disconnectPrompt('Tpt', 'app', true, true);
-		expect(prompt).toContain('removed from this machine');
+		const prompt = signOutHereAsk('Tpt', true);
 		expect(prompt).toContain("stays in this phone's browser");
 		expect(prompt).toContain('may not ask for your password');
 	});
 
 	it('says none of that on a computer, where the login window is our own', () => {
-		const prompt = disconnectPrompt('Tpt', 'app', true);
+		const prompt = signOutHereAsk('Tpt');
 		expect(prompt).not.toContain("this phone's browser");
 		expect(prompt).not.toContain('may not ask for your password');
 	});
 });
 
-describe('what a card asks before disconnecting', () => {
+describe('what a card asks before disconnecting the account', () => {
 	// The regression this covers: the page derived this boolean itself, from the
 	// device registry's sign-in state, which is a second computation of the same
 	// heartbeat and a third answer to a question the rest of this feature reads
@@ -331,33 +468,14 @@ describe('what a card asks before disconnecting', () => {
 	// because that is the field `derive_link` lifts and the disconnect route
 	// writes.
 	it('warns of a reconnect only where a machine is still reporting the login', () => {
-		expect(disconnectAsk('Tpt', 'browser', { state: 'linked' })).toContain(
-			'reconnects TPT by itself'
-		);
+		expect(disconnectAsk('Tpt', { state: 'linked' })).toContain('reconnects TPT by itself');
 	});
 
 	it('makes no reconnect claim for a connection nothing is reporting', () => {
 		for (const state of ['needs_reauth', 'linking', 'unlinked', 'revoked']) {
-			expect(disconnectAsk('Tpt', 'browser', { state }), state).not.toContain(
-				'reconnects TPT by itself'
-			);
+			expect(disconnectAsk('Tpt', { state }), state).not.toContain('reconnects TPT by itself');
 		}
-		expect(disconnectAsk('Tpt', 'browser', null)).not.toContain('reconnects TPT by itself');
-	});
-
-	it('says the machine loses the login when the app is the one asking', () => {
-		expect(disconnectAsk('Tes', 'app', { state: 'linked' })).toContain(
-			'removed from this machine'
-		);
-	});
-
-	it('carries the phone warning through from the page that knows the surface', () => {
-		expect(disconnectAsk('Tes', 'app', { state: 'linked' }, true)).toContain(
-			"stays in this phone's browser"
-		);
-		expect(disconnectAsk('Tes', 'app', { state: 'linked' })).not.toContain(
-			"stays in this phone's browser"
-		);
+		expect(disconnectAsk('Tpt', null)).not.toContain('reconnects TPT by itself');
 	});
 });
 
@@ -432,45 +550,48 @@ describe('what a live tile says when the read has not landed or failed', () => {
 		// The failure this replaces: on a failed read the two tiles vanished and
 		// the grid began at Etsy, on a page titled "Every marketplace you sell on".
 		for (const state of ['pending', 'failed'] as const) {
-			const face = liveFace({ state }, 'app');
+			const face = liveFace({ state }, 'app', null);
 			expect(face.status.label, state).not.toBe(SIGN_IN_LABEL.needs_signin);
 			expect(face.status.tone, state).toBe('soon');
 		}
 	});
 
 	it('offers no action, because neither Open nor Connect is known to be right', () => {
-		expect(liveFace({ state: 'pending' }, 'app').action).toBeUndefined();
-		expect(liveFace({ state: 'failed' }, 'app').action).toBeUndefined();
+		for (const local of [null, HERE, NOT_HERE]) {
+			expect(liveFace({ state: 'pending' }, 'app', local).action).toBeUndefined();
+			expect(liveFace({ state: 'failed' }, 'app', local).action).toBeUndefined();
+		}
 	});
 
 	it('shows no account handle it has not read', () => {
-		expect(liveFace({ state: 'pending' }, 'app').handle).toBeNull();
-		expect(liveFace({ state: 'failed' }, 'app').handle).toBeNull();
+		expect(liveFace({ state: 'pending' }, 'app', null).handle).toBeNull();
+		expect(liveFace({ state: 'failed' }, 'app', null).handle).toBeNull();
 	});
 
 	it('tells a pending read apart from a failed one, which a seller acts on differently', () => {
-		expect(liveFace({ state: 'pending' }, 'app').body).not.toBe(
-			liveFace({ state: 'failed' }, 'app').body
+		expect(liveFace({ state: 'pending' }, 'app', null).body).not.toBe(
+			liveFace({ state: 'failed' }, 'app', null).body
 		);
-		expect(liveFace({ state: 'failed' }, 'app').body).toContain('could not read');
+		expect(liveFace({ state: 'failed' }, 'app', null).body).toContain('could not read');
 	});
 
-	it('carries the row through untouched once the read lands', () => {
+	it('carries the server’s marketplace standing through once the read lands', () => {
 		const held = row('signed_in', 'ok', 'Tes');
-		const face = liveFace({ state: 'read', row: held }, 'app');
+		const face = liveFace({ state: 'read', row: held }, 'app', HERE);
 		expect(face.status).toEqual({ tone: 'ok', label: SIGN_IN_LABEL.signed_in });
 		expect(face.body).toBe(held.signIn.line);
-		expect(face.action).toEqual({ kind: 'link', label: 'Open TES', href: MACHINES_ANCHOR });
 	});
 
-	it('carries the host through to the action once the read lands', () => {
-		const held = row('no_device', 'bad', 'Tpt');
-		expect(liveFace({ state: 'read', row: held }, 'app').action).toEqual({
+	// The acceptance case, through the function the page actually calls: a
+	// marketplace the server reports signed in on some machine, read on a
+	// machine that holds no login for it, offers the sign-in here.
+	it('carries this machine’s own answer through to the action', () => {
+		const held = row('signed_in', 'ok', 'Tpt');
+		expect(liveFace({ state: 'read', row: held }, 'app', NOT_HERE).action).toEqual({
 			kind: 'command',
 			label: 'Connect TPT',
 			marketplace: 'Tpt'
 		});
-		expect(liveFace({ state: 'read', row: held }, 'browser').action?.kind).toBe('link');
 	});
 });
 
@@ -489,9 +610,7 @@ describe('the marketplaces a copyright declaration is made for', () => {
 
 	it('drops the marketplaces that run on our own servers', () => {
 		const held = [row('served_here', 'ok', 'Etsy'), row('signed_in', 'ok', 'Tpt')];
-		expect(deviceBranchInTileOrder(held, TILED).map((entry) => entry.marketplace)).toEqual([
-			'Tpt'
-		]);
+		expect(deviceBranchInTileOrder(held, TILED).map((entry) => entry.marketplace)).toEqual(['Tpt']);
 	});
 
 	it('keeps a device-branch marketplace this page does not tile, after the ones it does', () => {
@@ -533,12 +652,10 @@ describe('one machine and the logins on it', () => {
 	});
 
 	it('names the account a marketplace shows, where the device reported one', () => {
-		expect(
-			sessionWords({ status: 'connected', account_label: 'Ms Kahu' } as never)
-		).toBe('signed in as Ms Kahu');
-		expect(sessionWords({ status: 'connected', account_label: null } as never)).toBe(
-			'signed in'
+		expect(sessionWords({ status: 'connected', account_label: 'Ms Kahu' } as never)).toBe(
+			'signed in as Ms Kahu'
 		);
+		expect(sessionWords({ status: 'connected', account_label: null } as never)).toBe('signed in');
 	});
 
 	it('never puts a stored identifier on screen, which the pill would uppercase', () => {
@@ -557,108 +674,107 @@ describe('one machine and the logins on it', () => {
 	});
 });
 
-describe('what a finished disconnect says', () => {
+describe('what a finished account disconnect says', () => {
+	it('treats a refusal as an error and claims nothing the server did not do', () => {
+		// The specific regression this guards: the success wording reaching a
+		// seller whose connection still stands.
+		const say = disconnectSay('Tes', { kind: 'refused' });
+		expect(say.tone).toBe('error');
+		expect(say.message).not.toContain('is disconnected');
+		expect(say.message).not.toContain('was already disconnected');
+	});
+
+	it('tells a seller nothing was standing when the server moved none', () => {
+		expect(disconnectSay('Etsy', { kind: 'moved', moved: 0 })).toEqual({
+			tone: 'info',
+			message: 'Etsy was already disconnected.'
+		});
+	});
+
+	it('confirms a disconnect the server performed', () => {
+		const say = disconnectSay('Tes', { kind: 'moved', moved: 1 });
+		expect(say.tone).toBe('info');
+		expect(say.message).toContain('TES is disconnected from your account');
+	});
+
+	// The boundary: this control asks the control plane and reaches no
+	// machine's store, so no answer it gives may report a login removed. The
+	// sentence it replaced said exactly that, because the one control did both.
+	it('reports no machine’s login, on any answer', () => {
+		for (const server of [
+			{ kind: 'refused' } as const,
+			{ kind: 'moved', moved: 0 } as const,
+			{ kind: 'moved', moved: 2 } as const
+		]) {
+			const say = disconnectSay('Tpt', server);
+			expect(say.message, server.kind).not.toContain('this machine');
+			expect(say.message.length, server.kind).toBeGreaterThan(0);
+		}
+	});
+});
+
+describe('what a finished local sign-out says', () => {
 	const REFUSAL = 'The window would not close.';
-	const REFUSED: SessionOutcome = { kind: 'refused', detail: REFUSAL };
-	const HALVES: readonly SessionOutcome[] = [
+	const ANSWERS: readonly SessionOutcome[] = [
 		{ kind: 'done' },
-		REFUSED,
+		{ kind: 'opening' },
+		{ kind: 'signedOut' },
+		{ kind: 'refused', detail: REFUSAL },
 		{ kind: 'unsupported' },
 		{ kind: 'unavailable' }
 	];
 
-	it('names both halves when the machine forgot and the server refused', () => {
-		// The case the whole change exists for. A single sentence saying the
-		// disconnect failed is false about the half that ran, and false in the
-		// direction that matters: the cookies are gone and the leases are not.
-		const say = disconnectSay('Tpt', { kind: 'done' }, { kind: 'refused' });
-		expect(say.tone).toBe('error');
-		expect(say.message).toContain('login has been removed from this machine');
-		expect(say.message).toContain('TPT is still connected here');
-		expect(say.message).toContain('scheduled work has not stopped');
+	it('confirms the login is gone from this machine', () => {
+		const say = signOutHereSay('Tpt', { kind: 'done' });
+		expect(say.tone).toBe('info');
+		expect(say.message).toContain('removed from this machine');
 	});
 
-	it('says only that nothing happened when nothing was forgotten either', () => {
-		// A browser has no local login to forget, so a server refusal there did
-		// leave everything as it was. Naming the marketplace is the only thing
-		// this gains over the sentence it replaces.
-		const say = disconnectSay('Tes', { kind: 'unavailable' }, { kind: 'refused' });
-		expect(say).toEqual({ tone: 'error', message: 'TES could not be disconnected.' });
-	});
-
-	it('treats every server refusal as an error, whatever the machine answered', () => {
-		// An implementation that let the device half decide the tone would call
-		// a standing connection an `info`.
-		for (const forgotten of HALVES) {
-			expect(disconnectSay('Tpt', forgotten, { kind: 'refused' }).tone, forgotten.kind).toBe(
-				'error'
-			);
-		}
-	});
-
-	it('never claims a disconnect the server refused', () => {
-		// The specific regression this guards: the success wording reaching a
-		// seller whose connection still stands.
-		for (const forgotten of HALVES) {
-			const { message } = disconnectSay('Tpt', forgotten, { kind: 'refused' });
-			expect(message, forgotten.kind).not.toContain('is disconnected');
-			expect(message, forgotten.kind).not.toContain('was already disconnected');
-		}
-	});
-
-	it('reports an app that cannot forget, once the server half has landed', () => {
-		expect(disconnectSay('Tpt', { kind: 'unsupported' }, { kind: 'moved', moved: 1 })).toEqual({
+	it('reports an app that cannot forget', () => {
+		expect(signOutHereSay('Tpt', { kind: 'unsupported' })).toEqual({
 			tone: 'error',
 			message: APP_CANNOT_FORGET
 		});
 	});
 
 	it('passes the machine’s own refusal through', () => {
-		expect(disconnectSay('Tpt', REFUSED, { kind: 'moved', moved: 1 })).toEqual({
+		expect(signOutHereSay('Tpt', { kind: 'refused', detail: REFUSAL })).toEqual({
 			tone: 'error',
 			message: REFUSAL
 		});
 	});
 
-	it('tells a seller nothing was standing when the server moved none', () => {
-		for (const forgotten of [{ kind: 'done' } as const, { kind: 'unavailable' } as const]) {
-			expect(disconnectSay('Etsy', forgotten, { kind: 'moved', moved: 0 })).toEqual({
-				tone: 'info',
-				message: 'Etsy was already disconnected.'
-			});
+	// The act this control does not perform, and must never claim to: the
+	// account's connection stands until a machine stops reporting the login.
+	// A seller told their marketplace was disconnected would stop looking for
+	// the scheduled work that is still running.
+	it('never says the marketplace was disconnected', () => {
+		for (const forgotten of ANSWERS) {
+			const say = signOutHereSay('Tes', forgotten);
+			expect(say.message, forgotten.kind).not.toContain('is disconnected');
+			expect(say.message, forgotten.kind).not.toContain('was already disconnected');
 		}
 	});
 
-	it('confirms a disconnect that both halves completed', () => {
-		const say = disconnectSay('Tes', { kind: 'done' }, { kind: 'moved', moved: 1 });
-		expect(say.tone).toBe('info');
-		expect(say.message).toBe('TES is disconnected. Connecting again is the same button.');
-	});
-
-	it('answers every pairing of the two halves', () => {
-		// Totality, checked rather than asserted: `SessionOutcome`'s four kinds
-		// against the server's two. A branch that fell through would return
-		// undefined here rather than a sentence.
-		const servers = [
-			{ kind: 'refused' } as const,
-			{ kind: 'moved', moved: 0 } as const,
-			{ kind: 'moved', moved: 2 } as const
-		];
-		for (const forgotten of HALVES) {
-			for (const server of servers) {
-				const say = disconnectSay('Tpt', forgotten, server);
-				expect(say.message.length, `${forgotten.kind}/${server.kind}`).toBeGreaterThan(0);
-				expect(['info', 'error'], `${forgotten.kind}/${server.kind}`).toContain(say.tone);
-			}
+	it('answers every outcome the application can give', () => {
+		// Totality, checked rather than asserted: all six of `SessionOutcome`'s
+		// kinds. The sentence this replaced defaulted three of them into its
+		// confirming arm, so `opening` and `signedOut` read as a success.
+		for (const forgotten of ANSWERS) {
+			const say = signOutHereSay('Tpt', forgotten);
+			expect(say.message.length, forgotten.kind).toBeGreaterThan(0);
+			expect(['info', 'error'], forgotten.kind).toContain(say.tone);
+		}
+		expect(signOutHereSay('Tpt', { kind: 'done' }).tone).toBe('info');
+		for (const forgotten of ANSWERS.filter((answer) => answer.kind !== 'done')) {
+			expect(signOutHereSay('Tpt', forgotten).tone, forgotten.kind).toBe('error');
 		}
 	});
 });
 
 describe('the address the application and this page share', () => {
 	const connectRs = readFileSync(
-		fileURLToPath(
-			new URL('../../../../../apps/desktop/src-tauri/src/connect.rs', import.meta.url)
-		),
+		fileURLToPath(new URL('../../../../../apps/desktop/src-tauri/src/connect.rs', import.meta.url)),
 		'utf8'
 	);
 

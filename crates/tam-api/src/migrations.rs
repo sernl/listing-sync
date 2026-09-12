@@ -30,9 +30,7 @@ use tam_storage::{
     lower_head, uncaptured_source, CanonicalResource, Disposition, EntitlementRepo, HaltRepo,
     MappingRepo, NewMigration, ProductRepo, ProductSummary, SyncIntent, SyncRequestRepo,
 };
-use tam_types::{
-    Currency, CurrencyRule, InventoryId, MappingId, Money, PriceIntent, ProductId, Timestamp, Uuid,
-};
+use tam_types::{CurrencyRule, InventoryId, MappingId, PriceIntent, ProductId, Timestamp, Uuid};
 
 use crate::catalogue::unbound_mapping;
 use crate::entitlement::{feature_refusal, migration_refusal, QuotaKind};
@@ -117,9 +115,6 @@ pub struct MigrationRow {
     /// The listing this resource already has on the target, where it has one.
     pub remote: Option<String>,
     pub reason: Option<String>,
-    /// What the seller should check after the move, where the two
-    /// marketplaces price in different currencies and nothing converts.
-    pub price_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -429,8 +424,11 @@ async fn plan(
         .heads_for_products(context.org, body.target, &ids)
         .await
         .map_err(|error| storage_fault(state, &error))?;
-    let with_payload = products
-        .with_payload(context.org, &ids)
+    // What a listing that does not exist yet would need, for the whole tick
+    // list at once. Read against the target, because the required fields and
+    // the acquirable bytes are the target's question rather than the source's.
+    let facts = products
+        .creation_facts(context.org, &ids, body.target)
         .await
         .map_err(|error| storage_fault(state, &error))?;
     let halts = HaltRepo::new(state.pool.clone())
@@ -465,14 +463,6 @@ async fn plan(
             counts.blocked = counts.blocked.saturating_add(1);
             continue;
         };
-        if !with_payload.contains(&product.id) {
-            // Silent until now: `mapping_seeds` inner-joins the payload file,
-            // so a product without one simply yields no item and the create
-            // job carries a short list nobody is told about.
-            rows.push(blocked(product, "no file".to_owned()));
-            counts.blocked = counts.blocked.saturating_add(1);
-            continue;
-        }
         if let Some(reason) = halted.clone() {
             rows.push(blocked(product, reason));
             counts.blocked = counts.blocked.saturating_add(1);
@@ -486,9 +476,26 @@ async fn plan(
                 verdict: MigrationVerdict::AlreadyThere,
                 remote: Some(locator_of(remote)),
                 reason: None,
-                price_note: None,
             });
             counts.already_there = counts.already_there.saturating_add(1);
+            continue;
+        }
+        // Everything a listing that does not exist yet needs, asked after the
+        // already-there arm and not before it: a resource the target already
+        // carries is having nothing created for it, so what a create would
+        // have required of it is not a reason to block the row.
+        if let Some(why) = facts
+            .iter()
+            .find(|facts| facts.product == product.id)
+            .and_then(|facts| crate::catalogue::creation_blocked(facts, body.target))
+        {
+            rows.push(blocked(product, why.reason()));
+            counts.blocked = counts.blocked.saturating_add(1);
+            continue;
+        }
+        if let Some(reason) = currency_refusal(product.price, body.target) {
+            rows.push(blocked(product, reason));
+            counts.blocked = counts.blocked.saturating_add(1);
             continue;
         }
         if let Some(refusal) =
@@ -532,7 +539,6 @@ async fn plan(
             verdict: MigrationVerdict::WillCreate,
             remote: None,
             reason: None,
-            price_note: price_note(product.price, body.source, body.target),
         });
         counts.will_create = counts.will_create.saturating_add(1);
         admitted.push(Admitted {
@@ -585,7 +591,6 @@ fn blocked(product: &ProductSummary, reason: String) -> MigrationRow {
         verdict: MigrationVerdict::Blocked,
         remote: None,
         reason: Some(reason),
-        price_note: None,
     }
 }
 
@@ -647,83 +652,59 @@ fn listing_state_of(stored: &str) -> Option<ListingState> {
     }
 }
 
-/// What happens to a price crossing two marketplaces that name different
-/// currencies.
+/// Refuses a paid migration whose canonical price is not denominated in the
+/// target inventory's selling currency.
 ///
-/// Nothing converts it: `resolve_price` denominates the number in the target's
-/// own fixed currency and no FX step exists anywhere in the tree. That is a
-/// deliberate answer rather than an oversight, so the row says so and the
-/// seller checks it, instead of finding a four-pound worksheet priced at four
-/// dollars and concluding the migration mangled it.
-fn price_note(price: PriceIntent, source: InventoryId, target: InventoryId) -> Option<String> {
+/// No FX rate exists in this system, and changing only the currency label
+/// would change the price without the seller choosing one. The device
+/// projection enforces the same rule; checking it here keeps a plan from
+/// promising work that can only park after confirmation.
+fn currency_refusal(price: PriceIntent, target: InventoryId) -> Option<String> {
     let PriceIntent::Paid(money) = price else {
         return None;
     };
-    let (CurrencyRule::Fixed(from), CurrencyRule::Fixed(to)) =
-        (source.currency_rule(), target.currency_rule())
-    else {
-        return None;
+    let CurrencyRule::Fixed(sells) = target.currency_rule() else {
+        return Some(format!(
+            "{} does not have a verified selling currency yet",
+            name_of(target)
+        ));
     };
-    if from == to {
+    if money.currency() == sells {
         return None;
     }
     Some(format!(
-        "{} becomes {} on {}; check it after it lands.",
-        amount(money, from),
-        amount(money, to),
+        "the price is in {} but {} sells in {}; edit the price to {} before migrating",
+        money.currency().code(),
         name_of(target),
+        sells.code(),
+        sells.code(),
     ))
-}
-
-/// The same number under two symbols, which is precisely what the note is
-/// about.
-///
-/// `div_euclid` rather than `/`: the workspace denies the integer-division
-/// operator, and the euclidean pair is the one whose remainder is never
-/// negative, so the minor half needs no sign correction.
-fn amount(money: Money, currency: Currency) -> String {
-    let minor = money.minor_units();
-    let symbol = match currency {
-        Currency::Gbp => '£',
-        Currency::Usd => '$',
-    };
-    let (whole, part) = (minor.div_euclid(100), minor.rem_euclid(100));
-    format!("{symbol}{whole}.{part:02}")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{price_note, InventoryId, Money, PriceIntent};
-    use tam_types::Currency;
+    use super::{currency_refusal, InventoryId, PriceIntent};
+    use tam_types::{Currency, Money};
 
-    fn paid(minor: i64) -> PriceIntent {
-        PriceIntent::Paid(Money::new(minor, Currency::Gbp).expect("a positive price"))
+    fn paid(minor: i64, currency: Currency) -> PriceIntent {
+        PriceIntent::Paid(Money::new(minor, currency).expect("a positive price"))
     }
 
-    /// The number crosses unchanged and the row says so.
-    ///
-    /// Nothing in the tree converts a price: both write models mint the
-    /// denomination from the target's own fixed rule, so a £4.50 worksheet
-    /// arrives on TPT at $4.50. The seller finding that out from the preview
-    /// rather than from their own shop is the whole point of the note.
     #[test]
-    fn a_price_crossing_two_currencies_says_the_number_carries() {
+    fn a_price_in_another_currency_is_blocked_before_the_device_claims_it() {
         assert_eq!(
-            price_note(paid(450), InventoryId::Tes, InventoryId::Tpt).as_deref(),
-            Some("£4.50 becomes $4.50 on TPT; check it after it lands."),
+            currency_refusal(paid(450, Currency::Gbp), InventoryId::Tpt).as_deref(),
+            Some(
+                "the price is in GBP but TPT sells in USD; edit the price to USD before migrating"
+            ),
         );
     }
 
-    /// A free resource has no number to carry, and a pair that prices in one
-    /// currency has nothing to warn about. Both would be noise on every row.
     #[test]
-    fn there_is_nothing_to_say_about_a_free_resource_or_a_single_currency() {
+    fn a_free_or_correctly_denominated_price_needs_no_currency_refusal() {
+        assert_eq!(currency_refusal(PriceIntent::Free, InventoryId::Tpt), None,);
         assert_eq!(
-            price_note(PriceIntent::Free, InventoryId::Tes, InventoryId::Tpt),
-            None,
-        );
-        assert_eq!(
-            price_note(paid(450), InventoryId::Tes, InventoryId::Tes),
+            currency_refusal(paid(450, Currency::Usd), InventoryId::Tpt),
             None,
         );
     }

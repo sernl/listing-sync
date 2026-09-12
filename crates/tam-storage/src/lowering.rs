@@ -171,18 +171,21 @@ pub const fn uncaptured_transition(
 /// source whose download the drain cannot perform is one it could pick up
 /// every poll and never serve.
 ///
-/// TPT stays listed although its download is now implemented, because the
-/// route is gated on a browser clearance a server-side cookie jar does not
-/// hold -- a 2026-08-29 probe met the sign-in gate with a jar that
-/// authenticates every other TPT hop. Until a session carries that clearance
-/// TPT-as-source sync runs on the operator-manifest path, and admitting the
-/// request here would promise a drain that refuses. Removing the row is a
-/// founder decision that a live download witnesses.
+/// TPT was listed here until 2026-09-13, because the download route met a
+/// sign-in gate under a server-side cookie jar. That was the transport and
+/// not the route: under the seller's own session, on the seller's own
+/// device, an owned resource's `Download` hop answers 302 to a signed asset
+/// URL that serves the archive, and the founder-supervised capture
+/// witnessed one. The row is gone because the capability exists, and the
+/// device is where it exists -- which is D1's rule rather than an exception
+/// to it.
+///
+/// Etsy stays listed: no download of a seller's own files has been captured
+/// there at all.
 #[must_use]
 pub const fn uncaptured_source(inventory: InventoryId) -> Option<&'static str> {
     match inventory {
-        InventoryId::Tes => None,
-        InventoryId::Tpt => Some("tpt.download_resource_bundle"),
+        InventoryId::Tes | InventoryId::Tpt => None,
         InventoryId::Etsy => Some("etsy.download_resource_bundle"),
     }
 }
@@ -275,16 +278,17 @@ mod tests {
     }
 
     #[test]
-    fn only_tes_has_a_captured_seller_download() {
+    fn etsy_alone_has_no_captured_seller_download() {
         assert_eq!(uncaptured_source(InventoryId::Tes), None);
         assert_eq!(
             uncaptured_source(InventoryId::Tpt),
-            Some("tpt.download_resource_bundle"),
-            "the capability the adapter itself refuses with, so both name one thing"
+            None,
+            "the own-file download the supervised capture witnessed on the seller's device"
         );
         assert_eq!(
             uncaptured_source(InventoryId::Etsy),
             Some("etsy.download_resource_bundle"),
+            "the capability the adapter itself refuses with, so both name one thing"
         );
     }
 }

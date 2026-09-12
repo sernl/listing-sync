@@ -297,6 +297,10 @@ async fn the_backoffice_role_sees_only_the_tables_it_was_granted(app: PgPool) {
         // exists to cross the tenant fence has no business with a table that
         // sits on neither side of it.
         "guide",
+        "guide_tag_assignment",
+        "guide_taxon",
+        "import_run_receipt",
+        "import_run_start_key",
     ] {
         let denied = sqlx::query(&format!("SELECT count(*) FROM {table}"))
             .fetch_one(&backoffice)

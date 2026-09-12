@@ -420,8 +420,8 @@ The marketplace source arm is marketplace-agnostic, the locator names a marketpl
 
 What is Tes-specific is the two-step manifest-then-bundle flow, the `zipUrls` parsing, the ZIP-bundle shape with its single-entry unwrap, and the published-only rule.
 
-TPT to Tes needs TPT's own-file download, and while `TptAdapter::download_resource_bundle` exists it is uncaptured: the registry refuses through it by name in `crates/tam-storage/src/lowering.rs:157`, and `crates/tam-api/tests/jobs_flow.rs:280` asserts that refusal.
-So the reverse direction is gated on a TPT capture of the same kind that settled Tes's, and everything else will already be built.
+TPT to Tes now uses the TPT own-file download captured on 2026-09-13.
+The registry admits that source only for clients at or above 0.9.0; the device fetches the signed asset without marketplace cookies and the shared file resolver validates it before a destination attempt.
 
 Etsy is the opposite case, and it is the two-branch rule working rather than a contradiction.
 D1 puts a sanctioned marketplace's automation server-side under its own token, so an Etsy upload is a server upload and the bytes must be on the server, which is why the control-plane source arm never goes away.

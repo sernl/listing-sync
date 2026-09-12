@@ -43,7 +43,7 @@ const ORG: OrgId = OrgId(Uuid([0xA1; 16]));
 const USER: UserId = UserId(Uuid([0x0A; 16]));
 const TOKEN: SessionToken = SessionToken([0x51; 32]);
 const DEVICE: &str = "11112222333344445555666677778888";
-const CURRENT: &str = "0.2.0";
+const CURRENT: &str = "0.9.0";
 
 /// 2026-09-11, a Friday, at noon UTC. Named as an instant rather than derived
 /// from a clock because the whole subject is "which minute has passed": a
@@ -561,8 +561,10 @@ async fn a_due_sync_setting_pulls_commits_and_publishes(pool: PgPool) {
         "the run is flagged as the pass's own"
     );
 
-    // The device asks at check-in and is told to enumerate.
-    let open: Option<OpenRunView> = call(
+    // The device asks at check-in and is told to enumerate. A list rather
+    // than a nullable singleton: one open run per shop means the device is
+    // handed every run this organisation has open and picks what it can serve.
+    let open: Vec<OpenRunView> = call(
         &app,
         Method::GET,
         &format!("/v1/devices/{DEVICE}/import/open"),
@@ -570,12 +572,30 @@ async fn a_due_sync_setting_pulls_commits_and_publishes(pool: PgPool) {
     )
     .await
     .json();
-    let open = open.expect("a run is open");
+    let open = open.into_iter().next().expect("a run is open");
     assert_eq!(open.source, tam_types::InventoryId::Tes);
     assert!(!open.listed, "the shop has not been enumerated yet");
     assert!(!open.selected, "so nothing has been ticked either");
+    assert!(open.scheduled, "and the pass is what opened it");
 
-    // The list lands. Nobody is at the keyboard, so the server ticks it.
+    // The device claims it before it reads anything: the fence every page is
+    // posted under, and the reason a report of "no session on this phone" has
+    // a run to be recorded against.
+    let claimed = call(
+        &app,
+        Method::POST,
+        &format!(
+            "/v1/devices/{DEVICE}/import/{}/claim",
+            open.run.to_hyphenated()
+        ),
+        Some(serde_json::json!({ "takeover": false })),
+    )
+    .await;
+    assert_eq!(claimed.status, StatusCode::OK, "{}", claimed.body);
+    let attempt = claimed.body["attempt"].as_u64().unwrap_or_default();
+
+    // The list lands, whole. Nobody is at the keyboard, so the server ticks
+    // it once the enumeration is closed.
     let posted = call(
         &app,
         Method::POST,
@@ -584,6 +604,9 @@ async fn a_due_sync_setting_pulls_commits_and_publishes(pool: PgPool) {
             serde_json::to_value(ImportPage {
                 run: open.run,
                 request: None,
+                attempt: Some(attempt),
+                receipt: Some(tam_types::Uuid(*uuid::Uuid::new_v4().as_bytes())),
+                enumeration_complete: true,
                 listed: Some(vec![listed("https://www.tes.com/x/1", "Fractions Pack")]),
                 resources: Vec::new(),
                 skipped: Vec::new(),
@@ -595,7 +618,7 @@ async fn a_due_sync_setting_pulls_commits_and_publishes(pool: PgPool) {
     )
     .await;
     assert_eq!(posted.status, StatusCode::OK, "{}", posted.body);
-    let after: Option<OpenRunView> = call(
+    let after: Vec<OpenRunView> = call(
         &app,
         Method::GET,
         &format!("/v1/devices/{DEVICE}/import/open"),
@@ -603,18 +626,24 @@ async fn a_due_sync_setting_pulls_commits_and_publishes(pool: PgPool) {
     )
     .await
     .json();
-    let after = after.expect("the run is still open");
+    let after = after.into_iter().next().expect("the run is still open");
     assert!(
         after.listed,
-        "the enumeration is recorded, so it is not run twice"
+        "the enumeration is closed, so it is not run twice"
     );
     assert!(
         after.selected,
         "and a scheduled run selects everything still listed itself"
     );
+    assert_eq!(
+        after.owner_device.as_deref(),
+        Some(DEVICE),
+        "and the run names the machine that holds it"
+    );
 
-    // The description completes with no duplicate owed, so the run is ready
-    // to commit and the seller is not asked anything.
+    // The description completes with no duplicate owed. A scheduled run
+    // carries its own separately approved rule, so it is the one kind of run
+    // that may reach `committing` without a seller confirming anything.
     let described = call(
         &app,
         Method::POST,
@@ -623,6 +652,9 @@ async fn a_due_sync_setting_pulls_commits_and_publishes(pool: PgPool) {
             serde_json::to_value(ImportPage {
                 run: open.run,
                 request: None,
+                attempt: Some(attempt),
+                receipt: Some(tam_types::Uuid(*uuid::Uuid::new_v4().as_bytes())),
+                enumeration_complete: false,
                 listed: None,
                 resources: vec![observed("https://www.tes.com/x/1", "Fractions Pack")],
                 skipped: Vec::new(),
@@ -646,6 +678,10 @@ async fn a_due_sync_setting_pulls_commits_and_publishes(pool: PgPool) {
         run.state,
         ImportRunState::Committing,
         "nothing is owed to the seller, so the pass may finish it"
+    );
+    assert!(
+        run.execution.commit_authorised,
+        "and the rule that opened it is the authorisation, not a seller's confirmation"
     );
 
     // The next pass commits it and the rule publishes what it created.

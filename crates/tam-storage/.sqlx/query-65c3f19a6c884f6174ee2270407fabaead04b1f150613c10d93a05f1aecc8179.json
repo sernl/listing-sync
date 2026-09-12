@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT m.product_id FROM mapping m JOIN product p ON p.org_id = m.org_id AND p.id = m.product_id WHERE m.org_id = $1 AND m.inventory = $2 AND m.binding_state = 'bound' AND p.deleted_at IS NULL AND m.remote_id_kind = $3 AND ((m.remote_url IS NOT DISTINCT FROM $4 AND $4 IS NOT NULL) OR (m.remote_numeric_id IS NOT DISTINCT FROM $5 AND $5 IS NOT NULL)) LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "product_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "65c3f19a6c884f6174ee2270407fabaead04b1f150613c10d93a05f1aecc8179"
+}

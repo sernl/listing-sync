@@ -1,0 +1,178 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT g.id, g.slug, g.title, g.body, g.revision, g.updated_by, g.updated_at, g.published_title, g.published_body, g.published_revision, g.published_at, t.id AS \"topic_id?\", t.slug AS \"topic_slug?\", t.name AS \"topic_name?\", t.retired AS \"topic_retired?\", p.id AS \"published_topic_id?\", p.slug AS \"published_topic_slug?\", p.name AS \"published_topic_name?\", p.retired AS \"published_topic_retired?\", draft.ids AS \"tag_ids?\", draft.slugs AS \"tag_slugs?\", draft.names AS \"tag_names?\", draft.retireds AS \"tag_retireds?\", live.ids AS \"published_tag_ids?\", live.slugs AS \"published_tag_slugs?\", live.names AS \"published_tag_names?\", live.retireds AS \"published_tag_retireds?\" FROM guide g LEFT JOIN guide_taxon t ON t.id = g.topic_id LEFT JOIN guide_taxon p ON p.id = g.published_topic_id LEFT JOIN LATERAL ( SELECT array_agg(x.id ORDER BY lower(x.name), x.slug) AS ids, array_agg(x.slug ORDER BY lower(x.name), x.slug) AS slugs, array_agg(x.name ORDER BY lower(x.name), x.slug) AS names, array_agg(x.retired ORDER BY lower(x.name), x.slug) AS retireds FROM guide_tag_assignment a JOIN guide_taxon x ON x.id = a.taxon_id WHERE a.guide_id = g.id AND a.scope = 'draft') draft ON true LEFT JOIN LATERAL ( SELECT array_agg(x.id ORDER BY lower(x.name), x.slug) AS ids, array_agg(x.slug ORDER BY lower(x.name), x.slug) AS slugs, array_agg(x.name ORDER BY lower(x.name), x.slug) AS names, array_agg(x.retired ORDER BY lower(x.name), x.slug) AS retireds FROM guide_tag_assignment a JOIN guide_taxon x ON x.id = a.taxon_id WHERE a.guide_id = g.id AND a.scope = 'published') live ON true WHERE g.slug = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "body",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "revision",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "updated_by",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "published_title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "published_body",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "published_revision",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 10,
+        "name": "published_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 11,
+        "name": "topic_id?",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 12,
+        "name": "topic_slug?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 13,
+        "name": "topic_name?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 14,
+        "name": "topic_retired?",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 15,
+        "name": "published_topic_id?",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 16,
+        "name": "published_topic_slug?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 17,
+        "name": "published_topic_name?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 18,
+        "name": "published_topic_retired?",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 19,
+        "name": "tag_ids?",
+        "type_info": "UuidArray"
+      },
+      {
+        "ordinal": 20,
+        "name": "tag_slugs?",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 21,
+        "name": "tag_names?",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 22,
+        "name": "tag_retireds?",
+        "type_info": "BoolArray"
+      },
+      {
+        "ordinal": 23,
+        "name": "published_tag_ids?",
+        "type_info": "UuidArray"
+      },
+      {
+        "ordinal": 24,
+        "name": "published_tag_slugs?",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 25,
+        "name": "published_tag_names?",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 26,
+        "name": "published_tag_retireds?",
+        "type_info": "BoolArray"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "976f44459bbb57c4a303ec3d8327bb798c2d717831385cff1534b7a680c9fbe0"
+}

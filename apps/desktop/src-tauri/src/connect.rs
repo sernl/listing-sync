@@ -7,10 +7,9 @@
 //! App-Bound Encryption exists to block. Section 7 of
 //! `docs/notes/design/client-side-architecture.md` records both.
 //!
-//! The logged-in condition is per marketplace and is read off the cookie jar
-//! rather than off the page, because the jar is what the adapter will actually
-//! authenticate with. Getting it from the page would mean agreeing with the
-//! markup; getting it from the jar means agreeing with the transport.
+//! Cookie names identify login candidates, not authenticated principals. TES
+//! also issues `TESSession` to anonymous visitors. The command confirms its
+//! principal through the device-side transport before filing that candidate.
 
 use tam_types::Marketplace;
 
@@ -38,7 +37,7 @@ impl core::fmt::Display for NotSellerDevice {
 
 impl core::error::Error for NotSellerDevice {}
 
-/// One marketplace's login page and the jar that proves the login took.
+/// One marketplace's login page and the cookies needed to attempt authentication.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LoginTarget {
     pub marketplace: Marketplace,
@@ -55,14 +54,12 @@ pub struct LoginTarget {
 }
 
 impl LoginTarget {
-    /// Whether this jar constitutes a logged-in session.
+    /// Whether the jar contains the cookies the adapter needs.
     ///
-    /// A conservative reading: it asks for the cookies the adapter cannot work
-    /// without, and stops there. It is a first-contact heuristic against the
-    /// committed fixtures rather than a live-verified condition, and
-    /// `docs/notes/design/desktop-client.md` records that.
+    /// Necessary, not sufficient: the command must also apply the marketplace's
+    /// confirmation gate before reporting a successful capture.
     #[must_use]
-    pub fn is_logged_in(&self, jar: &CookieJar) -> bool {
+    pub fn has_login_cookies(&self, jar: &CookieJar) -> bool {
         let all_present = self.required.iter().all(|name| jar.contains(name));
         let any_present =
             self.required_any.is_empty() || self.required_any.iter().any(|name| jar.contains(name));
@@ -262,29 +259,29 @@ mod tests {
     #[test]
     fn tpt_needs_the_csrf_cookie_and_a_session_cookie() {
         let target = login_target(Marketplace::Tpt).expect("tpt is a seller-device marketplace");
-        assert!(target.is_logged_in(&jar(&["csrfToken", "sessionKey"])));
+        assert!(target.has_login_cookies(&jar(&["csrfToken", "sessionKey"])));
         assert!(
-            target.is_logged_in(&jar(&["csrfToken", "TPT", "_ga"])),
+            target.has_login_cookies(&jar(&["csrfToken", "TPT", "_ga"])),
             "either session cookie spelling counts, and unrelated cookies do not interfere"
         );
         assert!(
-            !target.is_logged_in(&jar(&["sessionKey"])),
+            !target.has_login_cookies(&jar(&["sessionKey"])),
             "without csrfToken the adapter cannot authorise one request, so this is not a \
              usable session however logged in the page looks"
         );
         assert!(
-            !target.is_logged_in(&jar(&["csrfToken"])),
+            !target.has_login_cookies(&jar(&["csrfToken"])),
             "a CSRF cookie is handed out before login too, so on its own it proves nothing"
         );
-        assert!(!target.is_logged_in(&jar(&[])));
+        assert!(!target.has_login_cookies(&jar(&[])));
     }
 
     #[test]
     fn tes_needs_its_session_cookie() {
         let target = login_target(Marketplace::Tes).expect("tes is a seller-device marketplace");
-        assert!(target.is_logged_in(&jar(&["TESSession", "siteCountry"])));
+        assert!(target.has_login_cookies(&jar(&["TESSession", "siteCountry"])));
         assert!(
-            !target.is_logged_in(&jar(&["siteCountry"])),
+            !target.has_login_cookies(&jar(&["siteCountry"])),
             "the country cookie is set for anonymous visitors too"
         );
     }

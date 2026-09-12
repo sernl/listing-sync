@@ -31,6 +31,8 @@ import type {
 	ImportRunItemState,
 	ImportRunKind,
 	ImportRunState,
+	ImportRunStage,
+	ImportReasonCode,
 	MatchLayer,
 	MigrationVerdict,
 	Plan,
@@ -53,18 +55,27 @@ export interface APIErrorBody {
 	errors: APIErrorEntry[];
 }
 
+export interface ApiResponseContext {
+	requested_path: string;
+	final_path: string | null;
+	content_type: string | null;
+	redirected: boolean;
+	problem?: 'unexpected_content_type' | 'invalid_json' | 'invalid_error_body';
+}
+
 /** A failing response, thrown with its structured body when one existed. */
 export class ApiFailure extends Error {
 	readonly status: number;
 	readonly body: APIErrorBody | null;
 
-	constructor(status: number, body: APIErrorBody | null) {
-		// `errors?.[0]` rather than `errors[0]`: the optional chain has to guard
-		// the array too. A failing response whose body parses but carries no
-		// `errors` — a bare `{}` — threw a TypeError here, inside the
-		// constructor, so the ApiFailure was never built and the throw escaped
-		// every `catch` that tests for one, taking the app to its 500 page.
-		super(body?.errors?.[0]?.message ?? `request failed with ${status}`);
+	constructor(
+		status: number,
+		body: APIErrorBody | null,
+		readonly response: ApiResponseContext | null = null
+	) {
+		super(response?.problem
+			? `Unexpected API response (${status}); reload or report this request.`
+			: body?.errors?.[0]?.message ?? `request failed with ${status}`);
 		this.status = status;
 		this.body = body;
 	}
@@ -76,22 +87,42 @@ export class ApiFailure extends Error {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	const response = await fetch(path, {
-		headers: { accept: 'application/json', ...(init?.headers ?? {}) },
-		...init
+		...init,
+		headers: { accept: 'application/json', ...(init?.headers ?? {}) }
 	});
 	if (response.status === 204) {
 		return undefined as T;
 	}
-	if (!response.ok) {
-		let body: APIErrorBody | null = null;
-		try {
-			body = (await response.json()) as APIErrorBody;
-		} catch {
-			body = null;
-		}
-		throw new ApiFailure(response.status, body);
+	const context: ApiResponseContext = {
+		requested_path: path.split(/[?#]/, 1)[0],
+		final_path: response.url ? new URL(response.url).pathname : null,
+		content_type: response.headers.get('content-type'),
+		redirected: response.redirected
+	};
+	const mediaType = context.content_type?.split(';', 1)[0].trim().toLowerCase();
+	if (mediaType !== 'application/json' && !mediaType?.endsWith('+json')) {
+		throw new ApiFailure(response.status, null, {
+			...context, problem: 'unexpected_content_type'
+		});
 	}
-	return (await response.json()) as T;
+	let body: unknown;
+	try {
+		body = await response.json();
+	} catch {
+		throw new ApiFailure(response.status, null, { ...context, problem: 'invalid_json' });
+	}
+	if (!response.ok) {
+		const envelope = typeof body === 'object' && body !== null &&
+			'errors' in body && Array.isArray(body.errors) &&
+			body.errors.every((entry: unknown) =>
+				typeof entry === 'object' && entry !== null &&
+				'message' in entry && typeof entry.message === 'string'
+			) && 'status' in body && typeof body.status === 'number';
+		throw envelope
+			? new ApiFailure(response.status, body as APIErrorBody, context)
+			: new ApiFailure(response.status, null, { ...context, problem: 'invalid_error_body' });
+	}
+	return body as T;
 }
 
 function post<T>(path: string, body: unknown, headers?: Record<string, string>): Promise<T> {
@@ -572,15 +603,13 @@ export interface MigrationCap {
 
 /** One resource's projection. `remote` is the listing already on the target,
  *  which only an `already_there` row carries; `reason` is why a `blocked` row
- *  is blocked; `price_note` is set where the two marketplaces price in
- *  different currencies and the number carries across unconverted. */
+ *  is blocked. */
 export interface MigrationPlanRow {
 	product: string;
 	title: string;
 	verdict: MigrationVerdict;
 	remote: string | null;
 	reason: string | null;
-	price_note: string | null;
 }
 
 export interface MigrationCounts {
@@ -1138,30 +1167,102 @@ export interface AdminUsersView {
  *  the whole of a guide's publication state. */
 export type GuideStatus = 'draft' | 'published';
 
+export type GuideTaxonKind = 'topics' | 'tags';
+
+export interface GuideTaxon {
+	id: string;
+	slug: string;
+	name: string;
+	retired: boolean;
+}
+
+export interface GuideTaxonomyView {
+	topics: GuideTaxon[];
+	tags: GuideTaxon[];
+}
+
+export interface GuidePublishedSnapshot {
+	title: string;
+	body: string;
+	html: string;
+	topic: GuideTaxon | null;
+	tags: GuideTaxon[];
+	source_revision: number;
+	published_at: number;
+}
+
+export interface GuideDraftBody {
+	title: string;
+	body: string;
+	topic_id: string | null;
+	tag_ids: string[];
+}
+
+/** Which guide, at which revision, a write is for.
+ *
+ * Both halves are required by every write that changes a stored guide, and
+ * the server checks both under the one lock. The revision alone would be a
+ * check with a hole in it: deleting a guide and creating another at the same
+ * slug starts the revisions again at one, so a write sent against revision one
+ * of a guide that no longer exists would match revision one of the guide that
+ * replaced it and overwrite something nobody here has read. */
+export interface GuideExpectation {
+	expected_id: string;
+	expected_revision: number;
+}
+
+export interface GuideFilters {
+	q?: string;
+	topic?: string;
+	tags?: string[];
+}
+
 /** One guide on a listing. No body: a list draws titles, and a body is up to
  *  200 KiB of Markdown nobody is reading there.
  *
  *  One shape for both listings. The reader's route answers published guides
  *  only, so `status` is always `published` there; it is carried rather than
- *  dropped because one shape serving both is one shape to keep in step. */
+ *  dropped because one shape serving both is one shape to keep in step.
+ *
+ *  `id` is carried so a row can be acted on as the guide it was drawn from.
+ *  A slug and a revision do not identify one: a guide deleted and recreated at
+ *  the same address starts again at revision one, and every other field on a
+ *  row can agree by coincidence.
+ *
+ *  One caveat on the shared shape: on the reader's rows `revision` is the
+ *  published snapshot's source revision, not the guide's current one, so a
+ *  reader row is never what a write is sent against. The admin rows carry the
+ *  current revision, and they are the ones a delete names. */
 export interface GuideHeadView {
+	id: string;
 	slug: string;
 	title: string;
 	status: GuideStatus;
 	updated_at: number;
 	updated_by?: string;
+	revision: number;
+	topic: GuideTaxon | null;
+	tags: GuideTaxon[];
 }
 
 export interface GuidesView {
 	guides: GuideHeadView[];
+	total: number;
 }
 
 /** One guide as the editor reads it: `body` is the Markdown the operator
  *  types, `html` is what the server rendered from the body it last stored.
  *  Both, because the editor writes the first and previews the second — and
  *  the rendering is the same function the published page goes through, so the
- *  preview cannot disagree with what a seller sees. */
+ *  preview cannot disagree with what a seller sees.
+ *
+ *  `id` is the guide itself, as against `slug`, which is only where it
+ *  currently answers. A slug can be deleted and given to a new guide whose
+ *  revisions start again at one, so a revision on its own says nothing about
+ *  which guide it belongs to: a write names both or it can land on a guide
+ *  nobody here has read. */
 export interface GuideDetailView {
+	id: string;
 	slug: string;
 	title: string;
 	body: string;
@@ -1169,6 +1270,10 @@ export interface GuideDetailView {
 	status: GuideStatus;
 	updated_at: number;
 	updated_by?: string;
+	revision: number;
+	topic: GuideTaxon | null;
+	tags: GuideTaxon[];
+	published: GuidePublishedSnapshot | null;
 }
 
 /** A published guide as a seller reads it: rendered, with no Markdown source
@@ -1178,6 +1283,127 @@ export interface GuidePageView {
 	title: string;
 	html: string;
 	updated_at: number;
+	topic: GuideTaxon | null;
+	tags: GuideTaxon[];
+}
+
+// A guide's own replies are checked rather than cast.
+//
+// `request` parses a successful body and casts it: that is enough everywhere a
+// bad shape only draws a wrong screen, and not enough here. The editor writes
+// the answer to a save into its baseline and its fields, so a 200 carrying
+// syntactically valid nonsense — `{}` from a proxy, a truncated envelope —
+// would set the title and body to `undefined` and then throw partway through
+// adopting it, corrupting the buffer before anything could recover. Checked
+// before the value is handed back, a malformed success becomes an ordinary
+// unconfirmed write: the editor keeps the operator's text and reads the guide
+// back to find out what the server actually stored.
+//
+// Only the guide replies the editor's state is built from are checked. A
+// missing optional stays optional; an unexpected extra key is ignored, because
+// a server that adds a field is not a server this client has to refuse.
+
+function isTaxon(value: unknown): value is GuideTaxon {
+	return (
+		typeof value === 'object' &&
+		value !== null &&
+		'id' in value &&
+		typeof value.id === 'string' &&
+		'slug' in value &&
+		typeof value.slug === 'string' &&
+		'name' in value &&
+		typeof value.name === 'string' &&
+		'retired' in value &&
+		typeof value.retired === 'boolean'
+	);
+}
+
+function isSnapshot(value: unknown): value is GuidePublishedSnapshot {
+	return (
+		typeof value === 'object' &&
+		value !== null &&
+		'title' in value &&
+		typeof value.title === 'string' &&
+		'body' in value &&
+		typeof value.body === 'string' &&
+		'html' in value &&
+		typeof value.html === 'string' &&
+		'topic' in value &&
+		(value.topic === null || isTaxon(value.topic)) &&
+		'tags' in value &&
+		Array.isArray(value.tags) &&
+		value.tags.every(isTaxon) &&
+		'source_revision' in value &&
+		typeof value.source_revision === 'number' &&
+		'published_at' in value &&
+		typeof value.published_at === 'number'
+	);
+}
+
+function isGuideDetail(value: unknown): value is GuideDetailView {
+	return (
+		typeof value === 'object' &&
+		value !== null &&
+		// Checked as hard as the revision is, and for the same reason: a reply
+		// without an identity cannot be written against, and a write sent
+		// against a guessed one is the overwrite this field exists to stop.
+		'id' in value &&
+		typeof value.id === 'string' &&
+		value.id.length > 0 &&
+		'slug' in value &&
+		typeof value.slug === 'string' &&
+		'title' in value &&
+		typeof value.title === 'string' &&
+		'body' in value &&
+		typeof value.body === 'string' &&
+		'html' in value &&
+		typeof value.html === 'string' &&
+		'status' in value &&
+		(value.status === 'draft' || value.status === 'published') &&
+		'updated_at' in value &&
+		typeof value.updated_at === 'number' &&
+		'revision' in value &&
+		typeof value.revision === 'number' &&
+		'topic' in value &&
+		(value.topic === null || isTaxon(value.topic)) &&
+		'tags' in value &&
+		Array.isArray(value.tags) &&
+		value.tags.every(isTaxon) &&
+		'published' in value &&
+		(value.published === null || isSnapshot(value.published))
+	);
+}
+
+/** A malformed success, thrown in the shape a lost answer already has.
+ *
+ * `invalid_json` rather than a new code: to every caller this is the same fact
+ * — the response was acknowledged and its body is not something this client can
+ * act on — and that fact is what makes a write unconfirmed rather than
+ * refused. */
+function malformed(path: string): ApiFailure {
+	return new ApiFailure(200, null, {
+		requested_path: path,
+		final_path: null,
+		content_type: null,
+		redirected: false,
+		problem: 'invalid_json'
+	});
+}
+
+async function guideReply(path: string, init?: RequestInit): Promise<GuideDetailView> {
+	const body = await request<unknown>(path, init);
+	if (!isGuideDetail(body)) {
+		throw malformed(path);
+	}
+	return body;
+}
+
+async function renderedReply(path: string, init?: RequestInit): Promise<{ html: string }> {
+	const body = await request<unknown>(path, init);
+	if (typeof body !== 'object' || body === null || !('html' in body) || typeof body.html !== 'string') {
+		throw malformed(path);
+	}
+	return { html: body.html };
 }
 
 // ---------------------------------------------------------------- authoring
@@ -2073,6 +2299,23 @@ export interface ReviewPairView {
 	hi: ReviewSideView;
 }
 
+export interface ImportExecutionView {
+	owner_device: string | null;
+	attempt: number;
+	lease_expires_at: number | null;
+	last_contact_at: number | null;
+	last_progress_at: number | null;
+	stage: ImportRunStage;
+	reason_code: ImportReasonCode | null;
+	reason: string | null;
+	discovered: number;
+	processed: number;
+	described: number;
+	enumeration_complete: boolean;
+	selected_total: number | null;
+	commit_authorised: boolean;
+}
+
 /** One run as the list serves it: enough to name it, place it in time, link to
  *  it and say how far it got. No items and no pairs, for the reason
  *  `SyncRequestHead` carries counts rather than rows. */
@@ -2090,6 +2333,8 @@ export interface ImportRunHead {
 	counts: ImportRunCounts;
 	created_at: number;
 	settled_at: number | null;
+	retry_of: string | null;
+	execution: ImportExecutionView;
 }
 
 /** One run with its items and whatever pairs are still parked on it. */
@@ -2131,17 +2376,10 @@ export interface DuplicatesView {
 	pairs: ReviewPairView[];
 }
 
-/** What one chunk of a run's commit applied. `CommitAck`'s shape with the
- *  run's state in place of the batch's, so a caller cannot hold one where it
- *  means the other. */
-export interface RunCommitAck {
-	applied: number;
-	skipped: number;
-	failed: number;
-	total: number;
-	remaining: number;
-	complete: boolean;
-	run_state: ImportRunState;
+/** Confirmation is durable; subsequent work is owned by the server. */
+export interface RunConfirmAck {
+	accepted: boolean;
+	run: ImportRunView;
 }
 
 /** One row's file, addressed by the sheet name and the seller's own row
@@ -2442,15 +2680,9 @@ export const api = {
 	commitImport: (batch: string) =>
 		request<CommitAck>(`/v1/imports/${encodeURIComponent(batch)}/commit`, { method: 'POST' }),
 
-	/** Start a marketplace import: one run, in `reading`, with nothing read
-	 *  yet. The device does the reading, so this call only creates the row the
-	 *  device and the console then both address.
-	 *
-	 *  No idempotency key. One open run per organisation is the server's own
-	 *  invariant, and a second press is refused with the open run named, which
-	 *  is a better answer than a silent replay of a run the seller may have
-	 *  meant to abandon. */
-	createImportRun: (source: InventoryId) => post<ImportRunView>('/v1/imports/runs', { source }),
+	/** One retained key per explicit start intent, including retries after a lost reply. */
+	createImportRun: (source: InventoryId, startKey: string, retryOf: string | null = null) =>
+		post<ImportRunView>('/v1/imports/runs', { source, start_key: startKey, retry_of: retryOf }),
 	/** Every import run this organisation has made, newest first and bounded
 	 *  by the server. Heads only: the list draws a counts line and a pill. */
 	importRuns: () => request<ImportRunsView>('/v1/imports/runs'),
@@ -2462,16 +2694,15 @@ export const api = {
 	 *  page needs no follow-up read; everything left unticked is skipped. */
 	selectImportRun: (run: string, selection: RunSelection) =>
 		post<ImportRunView>(`/v1/imports/runs/${encodeURIComponent(run)}/select`, selection),
-	/** Commit the next chunk of a run, in the shape the spreadsheet commit
-	 *  established: bodiless, no key, resumable by the item breadcrumb. Items
-	 *  still in review are passed over until their pair is decided. */
-	commitImportRun: (run: string) =>
-		request<RunCommitAck>(`/v1/imports/runs/${encodeURIComponent(run)}/commit`, {
-			method: 'POST'
+	/** Authorise catalogue addition; the server continues without this page. */
+	confirmImportRun: (run: string) =>
+		request<RunConfirmAck>(`/v1/imports/runs/${encodeURIComponent(run)}/commit`, {
+			method: 'POST',
+			keepalive: true
 		}),
-	/** Give up on a run. Answers the run as it now stands. */
+	/** Cancel future work; previously committed resources remain. */
 	abandonImportRun: (run: string) =>
-		post<ImportRunView>(`/v1/imports/runs/${encodeURIComponent(run)}/abandon`, {}),
+		post<void>(`/v1/imports/runs/${encodeURIComponent(run)}/abandon`, {}),
 
 	/** The pairs still waiting on the seller, for one run or for the whole
 	 *  organisation where none is named. */
@@ -2632,17 +2863,56 @@ export const api = {
 	// published ones; there is no anonymous reader, because `/guides` sits
 	// behind the session gate like every other console route.
 	adminGuides: () => request<GuidesView>('/v1/admin/guides'),
-	adminGuide: (slug: string) =>
-		request<GuideDetailView>(`/v1/admin/guides/${encodeURIComponent(slug)}`),
+	/** One guide as the editor reads it. `signal` is taken so a read a caller
+	 *  has stopped caring about is cancelled at the socket rather than left to
+	 *  answer into a cache the caller no longer owns. */
+	adminGuide: (slug: string, signal?: AbortSignal) =>
+		guideReply(`/v1/admin/guides/${encodeURIComponent(slug)}`, signal ? { signal } : undefined),
+	adminGuideTaxonomy: () => request<GuideTaxonomyView>('/v1/admin/guides/_taxonomy'),
+	guideTaxonomy: () => request<GuideTaxonomyView>('/v1/guides/_taxonomy'),
+	createGuideTaxon: (kind: GuideTaxonKind, body: { slug: string; name: string }) =>
+		post<GuideTaxon>(`/v1/admin/guides/_taxonomy/${kind}`, body),
+	updateGuideTaxon: (kind: GuideTaxonKind, id: string, body: { name: string; retired: boolean }) =>
+		put<GuideTaxon>(`/v1/admin/guides/_taxonomy/${kind}/${encodeURIComponent(id)}`, body),
+	previewGuide: (body: { body: string }) =>
+		renderedReply('/v1/admin/guides/_preview', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify(body)
+		}),
+	publishGuide: (slug: string, at: GuideExpectation) =>
+		guideReply(`/v1/admin/guides/${encodeURIComponent(slug)}/publish`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify(at)
+		}),
+	unpublishGuide: (slug: string, at: GuideExpectation) =>
+		guideReply(`/v1/admin/guides/${encodeURIComponent(slug)}/unpublish`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify(at)
+		}),
 	/** Creates a guide. A POST rather than a PUT on a fresh slug, because the
 	 *  update is update-only and 404s a slug nothing holds: that way a typo in
 	 *  the address bar cannot conjure a guide. */
-	createGuide: (body: { slug: string; title: string; body: string; status: GuideStatus }) =>
-		post<GuideDetailView>('/v1/admin/guides', body),
-	saveGuide: (slug: string, body: { title: string; body: string; status: GuideStatus }) =>
-		put<GuideDetailView>(`/v1/admin/guides/${encodeURIComponent(slug)}`, body),
-	deleteGuide: (slug: string) =>
-		request<void>(`/v1/admin/guides/${encodeURIComponent(slug)}`, { method: 'DELETE' }),
+	createGuide: (body: GuideDraftBody & { slug: string }) =>
+		guideReply('/v1/admin/guides', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify(body)
+		}),
+	saveGuide: (slug: string, body: GuideDraftBody & GuideExpectation) =>
+		guideReply(`/v1/admin/guides/${encodeURIComponent(slug)}`, {
+			method: 'PUT',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify(body)
+		}),
+	deleteGuide: (slug: string, at: GuideExpectation) =>
+		request<void>(`/v1/admin/guides/${encodeURIComponent(slug)}`, {
+			method: 'DELETE',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify(at)
+		}),
 	/** Bytes for a guide's illustration, stored against the platform's own
 	 *  organisation so every seller can read them back — a guide image kept
 	 *  under the operator's tenant would 404 for everybody else.
@@ -2660,7 +2930,14 @@ export const api = {
 		}),
 
 	/** The published guides, newest first. */
-	guides: () => request<GuidesView>('/v1/guides'),
+	guides: (filters: GuideFilters = {}) => {
+		const query = new URLSearchParams();
+		if (filters.q) query.set('q', filters.q);
+		if (filters.topic) query.set('topic', filters.topic);
+		if (filters.tags?.length) query.set('tags', filters.tags.join(','));
+		const suffix = query.toString();
+		return request<GuidesView>(`/v1/guides${suffix ? `?${suffix}` : ''}`);
+	},
 	/** One published guide, rendered. A draft is a 404 here rather than a
 	 *  refusal: an unpublished guide is not a guide a seller has. */
 	guide: (slug: string) => request<GuidePageView>(`/v1/guides/${encodeURIComponent(slug)}`)

@@ -131,6 +131,23 @@ pub enum APIErrorCode {
     /// rather than to make the seller find it in a list -- which is what a
     /// double press of the button means.
     ImportRunOpen,
+    /// The device writing to this import does not hold it: a later attempt
+    /// exists, another device owns it, or none does. A conflict rather than a
+    /// generic refusal because the device branches on it — it stops local work
+    /// on this, and retries from its own outbox on anything else.
+    ImportRunFenced,
+    /// The import has settled. A late page, renewal or confirmation changes
+    /// nothing, and the device stops rather than retrying.
+    ImportRunSettled,
+    /// The client posted a catalogue page with no attempt, which only a build
+    /// from before the fence existed does. Refused before any effect.
+    ImportClientUpdateRequired,
+    /// The same page receipt has already been accepted carrying different
+    /// contents, so this delivery was not applied.
+    ImportReceiptConflict,
+    /// This start key was already spent on a different intent. `detail.source`
+    /// names the shop it was spent on.
+    ImportStartKeySpent,
     /// The duplicate pair this verdict addresses is not one the seller was
     /// asked about, or has been answered already. Named apart from a bare
     /// not-found because the remedy differs: re-read the run's open pairs.
@@ -141,7 +158,7 @@ pub enum APIErrorCode {
 impl APIErrorCode {
     /// The closed set, in a stable order; the closed-set test and the
     /// vocabulary generator read this single source.
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 30] = [
         Self::UnsupportedApiVersion,
         Self::VersionParameterMissing,
         Self::VersionParameterUnreadable,
@@ -165,6 +182,11 @@ impl APIErrorCode {
         Self::ListingAlreadyClaimed,
         Self::OrgSlugTaken,
         Self::ImportRunOpen,
+        Self::ImportRunFenced,
+        Self::ImportRunSettled,
+        Self::ImportClientUpdateRequired,
+        Self::ImportReceiptConflict,
+        Self::ImportStartKeySpent,
         Self::DuplicatePairSettled,
         Self::Internal,
     ];
@@ -195,6 +217,11 @@ impl APIErrorCode {
             Self::ListingAlreadyClaimed => "listing_already_claimed",
             Self::OrgSlugTaken => "org_slug_taken",
             Self::ImportRunOpen => "import_run_open",
+            Self::ImportRunFenced => "import_run_fenced",
+            Self::ImportRunSettled => "import_run_settled",
+            Self::ImportClientUpdateRequired => "import_client_update_required",
+            Self::ImportReceiptConflict => "import_receipt_conflict",
+            Self::ImportStartKeySpent => "import_start_key_spent",
             Self::DuplicatePairSettled => "duplicate_pair_settled",
             Self::Internal => "internal",
         }
@@ -426,6 +453,11 @@ mod tests {
                 | APIErrorCode::ListingAlreadyClaimed
                 | APIErrorCode::OrgSlugTaken
                 | APIErrorCode::ImportRunOpen
+                | APIErrorCode::ImportRunFenced
+                | APIErrorCode::ImportRunSettled
+                | APIErrorCode::ImportClientUpdateRequired
+                | APIErrorCode::ImportReceiptConflict
+                | APIErrorCode::ImportStartKeySpent
                 | APIErrorCode::DuplicatePairSettled
                 | APIErrorCode::Internal => {}
             }

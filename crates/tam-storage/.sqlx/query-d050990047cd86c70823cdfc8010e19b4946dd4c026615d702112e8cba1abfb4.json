@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE import_run SET state = $3, settled_at = $4, failure_detail = COALESCE($5, failure_detail) WHERE org_id = $1 AND id = $2 AND state IN ('reading', 'reviewing', 'committing')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d050990047cd86c70823cdfc8010e19b4946dd4c026615d702112e8cba1abfb4"
+}

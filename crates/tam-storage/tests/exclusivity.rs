@@ -178,3 +178,22 @@ async fn a_half_linked_connection_is_not_leasable(app: PgPool) {
          against an account this organisation has not been shown to own"
     );
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_linked_connection_is_leasable_through_the_application_role(app: PgPool) {
+    seed_orgs(&app).await;
+    insert_connection(&app, ORG_A, CONNECTION_A, "linked", Some(&SHARED_DIGEST))
+        .await
+        .expect("the linked connection inserts");
+
+    let found = LeaseRepo::new(app)
+        .connection_for(ORG_A, InventoryId::Tpt)
+        .await
+        .expect("the connection lookup runs");
+    assert_eq!(
+        found.map(|connection| connection.0),
+        Some(CONNECTION_A),
+        "the device ledger runs on tam_app, so its tenant-scoped connection lookup must pin RLS \
+         before reading the linked row"
+    );
+}

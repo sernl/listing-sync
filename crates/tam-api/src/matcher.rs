@@ -33,10 +33,7 @@
 use std::collections::HashMap;
 
 use tam_fingerprint::{hamming, minhash_jaccard, token_jaccard};
-use tam_storage::{
-    DecidedBy, DuplicateRepo, Evidence, EvidenceUnit, FingerprintRepo, MatchLayer, Polarity,
-    Verdict,
-};
+use tam_storage::{DecidedBy, Evidence, EvidenceUnit, MatchLayer, Polarity, Verdict};
 use tam_types::{ContentHash, Marketplace, Money, OrgId, ProductId};
 
 use crate::error::APIError;
@@ -140,6 +137,27 @@ pub enum Outcome {
     Different,
 }
 
+/// What an exact payload digest is worth, and the one place the number lives.
+///
+/// Read by the scorer and by the commit's own revalidation, which re-asks this
+/// layer against what is committed now: a pair decided at commit time has to
+/// be recorded with the same weight and the same evidence the matcher would
+/// have recorded, or the console's one sentence would be generated from two
+/// different definitions of one finding.
+pub const L1_LOG_ODDS: f32 = 6.0;
+
+/// The evidence an exact payload digest is, in the shape the verdict stores.
+#[must_use]
+pub fn exact_file_evidence(byte_len: u64, name: Option<String>) -> Evidence {
+    Evidence {
+        layer: MatchLayer::L1,
+        polarity: Polarity::Positive,
+        measure: byte_measure(byte_len),
+        unit: EvidenceUnit::Bytes,
+        observed_in: name,
+    }
+}
+
 /// Scores one pair. Pure: no database, no clock, no organisation.
 #[must_use]
 pub fn score(lhs: &Side, rhs: &Side, frequency: &Frequencies, trigram: f32) -> Score {
@@ -161,14 +179,11 @@ pub fn score(lhs: &Side, rhs: &Side, frequency: &Frequencies, trigram: f32) -> S
     // ---- L1: one payload entry, byte for byte.
     if let Some((file, other)) = exact_entry(&left_files, &right_files) {
         decisive = true;
-        log_odds += 6.0;
-        evidence.push(Evidence {
-            layer: MatchLayer::L1,
-            polarity: Polarity::Positive,
-            measure: byte_measure(file.byte_len),
-            unit: EvidenceUnit::Bytes,
-            observed_in: file.name.clone().or_else(|| other.name.clone()),
-        });
+        log_odds += L1_LOG_ODDS;
+        evidence.push(exact_file_evidence(
+            file.byte_len,
+            file.name.clone().or_else(|| other.name.clone()),
+        ));
     } else if let Some(overlap) = digest_overlap(&left_files, &right_files) {
         // ---- L1b: the sets overlap, which is a Tes multi-file bundle against
         // a TPT single file. Only where L1 did not fire, because the two are
@@ -412,37 +427,54 @@ impl Match {
     }
 }
 
-/// Blocks, scores and decides one described resource against the org's
-/// catalogue.
+/// One question put to the matcher.
 ///
-/// `subject` is the resource as read; `marketplace` is the shop it was read
-/// from, which is what the cross-marketplace rule compares against. `reviews`
-/// is false on a plan without duplicate review, and on that plan every pair
-/// that would have been asked is treated as different — so nothing blocks and
-/// the import runs straight through, which is the documented behaviour rather
-/// than a silent degradation.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the blocking keys are separate arguments because they come from different               places -- the sketch's bands, the normalised title, the run's marketplace --               and a struct over them would be a second name for this call"
-)]
-pub async fn match_one(
-    state: &AppState,
-    org: OrgId,
-    version: i16,
-    subject: &Side,
-    subject_product: ProductId,
-    marketplace: Option<Marketplace>,
-    bands: Option<[i16; 4]>,
-    reviews: bool,
+/// A struct rather than eight arguments, and the only way in: every caller
+/// scores inside its own guarded transaction, because a verdict is acted on
+/// under the organisation's catalogue lock and a merge is irreversible for
+/// thirty days. A pool-owned form existed and was deleted with the page
+/// path's pre-lock scoring; nothing should be able to ask this question
+/// outside the transaction that writes the answer.
+pub struct Asking<'a> {
+    pub state: &'a AppState,
+    pub org: OrgId,
+    pub version: i16,
+    pub subject: &'a Side,
+    pub subject_product: ProductId,
+    pub marketplace: Option<Marketplace>,
+    pub bands: Option<[i16; 4]>,
+    pub reviews: bool,
+}
+
+/// Blocks, scores and decides one resource inside a transaction the caller
+/// owns.
+///
+/// The commit calls this under the organisation's catalogue lock, and that is
+/// the whole reason it exists: a decision the matcher reached when a page
+/// landed is re-asked against the catalogue as it stands at the instant the
+/// resource is about to be created, so a product another source committed in
+/// the meantime is seen — by every layer, with every exclusion, rather than
+/// by a digest comparison standing in for the scorer.
+pub async fn match_one_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    asking: &Asking<'_>,
 ) -> Result<Match, APIError> {
-    let repo = FingerprintRepo::new(state.pool.clone());
+    let Asking {
+        state,
+        org,
+        version,
+        subject,
+        subject_product,
+        marketplace,
+        bands,
+        reviews,
+    } = *asking;
     let digests: Vec<ContentHash> = subject.files.iter().map(|file| file.digest).collect();
 
     // The third blocking key: products already carrying one of these digests.
     // Read first because it feeds the candidate query, so a pair that agrees
     // on bytes and on nothing else is still scored.
-    let by_digest = repo
-        .products_by_digest(org, &digests)
+    let by_digest = tam_storage::products_by_digest_in(tx, org, &digests)
         .await
         .map_err(|error| storage_fault(state, &error))?;
     let mut also: Vec<ProductId> = Vec::new();
@@ -452,10 +484,10 @@ pub async fn match_one(
         }
     }
 
-    let candidates = repo
-        .candidates(org, version, bands, &subject.title_norm, &also)
-        .await
-        .map_err(|error| storage_fault(state, &error))?;
+    let candidates =
+        tam_storage::candidates_in(tx, org, version, bands, &subject.title_norm, &also)
+            .await
+            .map_err(|error| storage_fault(state, &error))?;
     let others: Vec<ProductId> = candidates
         .iter()
         .map(|candidate| candidate.product)
@@ -465,24 +497,20 @@ pub async fn match_one(
         return Ok(Match::default());
     }
 
-    let metadata = repo
-        .metadata_for(org, &others)
+    let metadata = tam_storage::metadata_for_in(tx, org, &others)
         .await
         .map_err(|error| storage_fault(state, &error))?;
-    let files = repo
-        .digests_for(org, &others)
+    let files = tam_storage::digests_for_in(tx, org, &others)
         .await
         .map_err(|error| storage_fault(state, &error))?;
     let mut frequency = Frequencies {
-        digests: repo
-            .digest_frequency(org, &digests)
+        digests: tam_storage::digest_frequency_in(tx, org, &digests)
             .await
             .map_err(|error| storage_fault(state, &error))?
             .into_iter()
             .map(|(digest, held)| (digest.0, held))
             .collect(),
-        title: repo
-            .title_frequency(org, version, &subject.title_norm)
+        title: tam_storage::title_frequency_in(tx, org, version, &subject.title_norm)
             .await
             .map_err(|error| storage_fault(state, &error))?,
     };
@@ -496,8 +524,7 @@ pub async fn match_one(
         .iter()
         .map(|other| (subject_product, *other))
         .collect();
-    let answered = DuplicateRepo::new(state.pool.clone())
-        .answered(org, &pairs)
+    let answered = tam_storage::answered_pairs(tx, org, &pairs)
         .await
         .map_err(|error| storage_fault(state, &error))?;
 

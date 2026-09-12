@@ -116,7 +116,10 @@ describe('the three states that must never be confused', () => {
 describe('the states that carry resources', () => {
 	it('pending with resources named is queued rather than waiting for a device', () => {
 		const stage = stageOf(
-			request({ state: 'pending', resources: [resource({ state: 'pending' })] })
+			request({
+				state: 'pending',
+				resources: [resource({ state: 'pending' })]
+			})
 		);
 		expect(stage.kind).toBe('queued');
 		expect(presentStage(stage).headline).not.toBe(WAITING_FOR_DEVICE);
@@ -139,7 +142,11 @@ describe('the states that carry resources', () => {
 				state: 'enqueued',
 				resources: [
 					resource({ ordinal: 0 }),
-					resource({ ordinal: 1, state: 'failed', failure_detail: 'no file on the listing' })
+					resource({
+						ordinal: 1,
+						state: 'failed',
+						failure_detail: 'no file on the listing'
+					})
 				]
 			})
 		);
@@ -162,9 +169,9 @@ describe('the states that carry resources', () => {
 			unrecognised: 0,
 			total: 3
 		});
-		expect(
-			counted.imported + counted.skipped + counted.unsettled + counted.unrecognised
-		).toBe(counted.total);
+		expect(counted.imported + counted.skipped + counted.unsettled + counted.unrecognised).toBe(
+			counted.total
+		);
 	});
 
 	it("a skipped resource shows the device's own words, unaltered", () => {
@@ -172,7 +179,10 @@ describe('the states that carry resources', () => {
 			request({
 				state: 'enqueued',
 				resources: [
-					resource({ state: 'failed', failure_detail: 'Tes answered 403 for this resource' })
+					resource({
+						state: 'failed',
+						failure_detail: 'Tes answered 403 for this resource'
+					})
 				]
 			})
 		);
@@ -201,9 +211,7 @@ describe('coverage, where absent and zero are different facts', () => {
 
 	it("a resource's coverage counts terms only, not the row it is already on", () => {
 		expect(termCoverageRows(TERM_ZEROS)).toHaveLength(4);
-		expect(termCoverageRows(TERM_ZEROS).map((row) => row.label)).not.toContain(
-			'Listings measured'
-		);
+		expect(termCoverageRows(TERM_ZEROS).map((row) => row.label)).not.toContain('Listings measured');
 	});
 
 	it('every counter is written out, with its own label', () => {
@@ -222,10 +230,7 @@ describe('coverage, where absent and zero are different facts', () => {
 		const rows = resourceRows(
 			request({
 				state: 'enqueued',
-				resources: [
-					resource({ ordinal: 0 }),
-					resource({ ordinal: 1, coverage: TERM_ZEROS })
-				]
+				resources: [resource({ ordinal: 0 }), resource({ ordinal: 1, coverage: TERM_ZEROS })]
 			})
 		);
 		expect(rows[0].coverage).toBeNull();
@@ -287,8 +292,8 @@ describe('starting a migrate', () => {
 		expect(migrateSource([])).toBeNull();
 	});
 
-	it('does not offer one from a marketplace a migrate cannot read', () => {
-		expect(migrateSource([connection('Tpt')])).toBeNull();
+	it('offers TPT as a captured source but leaves Etsy unavailable', () => {
+		expect(migrateSource([connection('Tpt')])).toBe('Tpt');
 		expect(migrateSource([connection('Etsy')])).toBeNull();
 	});
 
@@ -308,7 +313,11 @@ describe('starting a migrate', () => {
 
 	it('offers none from a marketplace the seller disconnected, or one revoked', () => {
 		for (const state of ['unlinked', 'revoked']) {
-			const off = { ...connection('Tes'), state, status: 'disconnected' as const };
+			const off = {
+				...connection('Tes'),
+				state,
+				status: 'disconnected' as const
+			};
 			expect(migrateSource([off]), state).toBeNull();
 		}
 	});
@@ -331,8 +340,12 @@ describe('the authorship gate', () => {
 	});
 
 	it('refuses where nothing is on record, without claiming the seller failed to declare', () => {
-		expect(targetAuthorship([connection('Tes')], 'Tpt')).toEqual({ kind: 'unrecorded' });
-		expect(targetAuthorship([connection('Tpt')], 'Tpt')).toEqual({ kind: 'unrecorded' });
+		expect(targetAuthorship([connection('Tes')], 'Tpt')).toEqual({
+			kind: 'unrecorded'
+		});
+		expect(targetAuthorship([connection('Tpt')], 'Tpt')).toEqual({
+			kind: 'unrecorded'
+		});
 		expect(mayMigrate({ kind: 'unrecorded' })).toBe(false);
 	});
 
@@ -373,7 +386,12 @@ describe('which requests a computer can still be asked to run', () => {
 
 	it('a sync that named its own resources is not a device import', () => {
 		expect(
-			canStartHere(request({ state: 'pending', resources: [resource({ state: 'pending' })] }))
+			canStartHere(
+				request({
+					state: 'pending',
+					resources: [resource({ state: 'pending' })]
+				})
+			)
 		).toBe(false);
 	});
 
@@ -385,7 +403,10 @@ describe('which requests a computer can still be asked to run', () => {
 
 describe('a state this console does not know', () => {
 	it('degrades to saying so rather than blanking the page', () => {
-		const view = { ...request(), state: 'cancelled' as unknown as SyncRequestView['state'] };
+		const view = {
+			...request(),
+			state: 'cancelled' as unknown as SyncRequestView['state']
+		};
 		const stage = stageOf(view);
 		expect(stage.kind).toBe('unrecognised');
 		const shown = presentStage(stage);
@@ -401,9 +422,9 @@ describe('a state this console does not know', () => {
 		};
 		const counted = tally([resource(), odd]);
 		expect(counted.unrecognised).toBe(1);
-		expect(
-			counted.imported + counted.skipped + counted.unsettled + counted.unrecognised
-		).toBe(counted.total);
+		expect(counted.imported + counted.skipped + counted.unsettled + counted.unrecognised).toBe(
+			counted.total
+		);
 		expect(Number.isNaN(counted.total)).toBe(false);
 	});
 
@@ -412,14 +433,21 @@ describe('a state this console does not know', () => {
 			...resource(),
 			state: 'quarantined' as unknown as SyncResourceView['state']
 		};
-		const rows = resourceRows({ ...request(), state: 'enqueued', resources: [odd] });
+		const rows = resourceRows({
+			...request(),
+			state: 'enqueued',
+			resources: [odd]
+		});
 		expect(rows[0].label).not.toBe('undefined');
 		expect(rows[0].label).not.toBe('');
 		expect(rows[0].label.toLowerCase()).toContain('unrecognised');
 	});
 
 	it('an unknown state never claims the import succeeded or failed', () => {
-		const view = { ...request(), state: 'cancelled' as unknown as SyncRequestView['state'] };
+		const view = {
+			...request(),
+			state: 'cancelled' as unknown as SyncRequestView['state']
+		};
 		const shown = presentStage(stageOf(view));
 		expect(shown.tone).not.toBe('ok');
 		expect(shown.tone).not.toBe('bad');
@@ -466,9 +494,7 @@ describe('the branches a settled import can end in', () => {
 	});
 
 	it('only an import with nothing left over is toned as clean', () => {
-		const clean = presentStage(
-			stageOf(request({ state: 'enqueued', resources: [resource()] }))
-		);
+		const clean = presentStage(stageOf(request({ state: 'enqueued', resources: [resource()] })));
 		expect(clean.tone).toBe('ok');
 		expect(clean.detail).toBe('');
 	});
@@ -555,14 +581,16 @@ describe('the version banner and the start action, together', () => {
 	it('the banner speaks only where its sentence is true, which is the waiting stage', () => {
 		expect(deviceUpdateNotice(request({ state: 'pending', ...owed }))).not.toBeNull();
 		for (const state of ['draining', 'enqueued', 'failed'] as const) {
-			expect(
-				deviceUpdateNotice(request({ state, resources: [resource()], ...owed }))
-			).toBeNull();
+			expect(deviceUpdateNotice(request({ state, resources: [resource()], ...owed }))).toBeNull();
 		}
 	});
 
 	it('a finished import is never told that no machine can run it', () => {
-		const done = request({ state: 'enqueued', resources: [resource()], ...owed });
+		const done = request({
+			state: 'enqueued',
+			resources: [resource()],
+			...owed
+		});
 		expect(deviceUpdateNotice(done)).toBeNull();
 		expect(presentStage(stageOf(done)).headline).toBe('1 listing imported.');
 	});
@@ -599,9 +627,7 @@ describe('the list of a seller own imports', () => {
 		expect(headStage(head()).kind).toBe('waiting_for_device');
 		expect(headStage(head({ state: 'enqueued' })).kind).toBe('nothing_to_import');
 		expect(headStage(head({ state: 'failed' })).kind).toBe('failed');
-		expect(
-			headStage(head({ state: 'draining', resources_total: 3 })).kind
-		).toBe('importing');
+		expect(headStage(head({ state: 'draining', resources_total: 3 })).kind).toBe('importing');
 	});
 
 	it('reads imported as what did not fail', () => {
@@ -678,9 +704,7 @@ describe('the sentence a list row shows', () => {
 	});
 
 	it('the request page keeps the sentence that belongs to it', () => {
-		expect(presentStage(stageOf(request({ state: 'pending' }))).headline).toBe(
-			WAITING_FOR_DEVICE
-		);
+		expect(presentStage(stageOf(request({ state: 'pending' }))).headline).toBe(WAITING_FOR_DEVICE);
 		expect(WAITING_FOR_DEVICE).toMatch(/from this page/i);
 	});
 });

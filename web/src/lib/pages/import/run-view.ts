@@ -12,7 +12,6 @@ import type {
 	ImportRunCounts,
 	ImportRunHead,
 	ImportRunItemView,
-	ImportRunState,
 	ImportRunView,
 	ObservedPrice,
 	ReviewPairView,
@@ -26,72 +25,49 @@ import type { PillTone } from './import-view';
 
 // --------------------------------------------------------------------- stage
 
-/** The one thing a run is doing, which is what its page is laid out around.
- *
- * Six rather than the server's six states, and they are not the same six: a
- * run in `reading` is either waiting for its shop to be enumerated, waiting
- * for the seller to tick what to bring, or reading what they ticked, and
- * those are three different pages. The three the server tells apart —
- * reviewing, committing, settled — it tells apart already. */
+/** Presentation of the server's authoritative lifecycle and execution facts. */
 export type RunStage =
-	'listing' | 'selecting' | 'reading' | 'reviewing' | 'committing' | 'done' | 'failed';
+	'waiting' | 'listing' | 'selecting' | 'reading' | 'reviewing' |
+	'confirming' | 'committing' | 'interrupted' | 'done' | 'failed';
 
-/** Which step a run is standing on.
- *
- * `read_total` is what splits the first three. It is null until the
- * enumeration lands, and a total of nothing must not read as a shop with
- * nothing in it — which is the same reason the column is nullable. Once it is
- * known, anything still `listed` is a resource the seller has not answered
- * for, so the page is the tick list; with none left the device is reading. */
 export function stageFrom(run: ImportRunHead): RunStage {
-	switch (run.state) {
-		case 'reviewing':
-			return 'reviewing';
-		case 'committing':
-			return 'committing';
-		case 'complete':
+	switch (run.execution.stage) {
+		case 'discovering':
+			return 'listing';
+		case 'completed':
 			return 'done';
-		case 'failed':
 		case 'abandoned':
 			return 'failed';
-		case 'reading':
-			break;
+		case 'committing':
+			return run.execution.commit_authorised ? 'committing' : 'confirming';
+		default:
+			return run.execution.stage;
 	}
-	if (run.read_total === null) {
-		return 'listing';
-	}
-	return run.counts.listed > 0 ? 'selecting' : 'reading';
 }
-
-/** The badge a run state renders as, on its own page and in the listing
- *  alike.
- *
- * Over the state rather than over the stage, because the listing draws a
- * badge from a head and the three `reading` stages are one word to a seller
- * reading a list: the run is under way.
- *
- * `unrecognised` is not decoration: a state added in Rust degrades to saying
- * so rather than rendering an unstyled blank. */
-const BADGE: Record<ImportRunState, StageBadge> = {
-	reading: { tone: 'run', label: 'Under way' },
-	reviewing: { tone: 'warn', label: 'Needs you' },
-	committing: { tone: 'run', label: 'Adding to your catalogue' },
-	complete: { tone: 'ok', label: 'Imported' },
-	failed: { tone: 'bad', label: 'Finished with problems' },
-	abandoned: { tone: 'soon', label: 'Abandoned' }
-};
 
 export interface StageBadge {
 	tone: PillTone;
 	label: string;
 }
 
-/** `state` is a bare string rather than the closed union on purpose: the
- *  value arrives off the wire, and typing the parameter as the union would
- *  make the unknown arm unreachable in the type checker while staying
- *  perfectly reachable at runtime. */
-export function runBadge(state: string): StageBadge {
-	return BADGE[state as ImportRunState] ?? { tone: 'soon', label: 'Unknown' };
+const BADGE: Record<RunStage, StageBadge> = {
+	waiting: { tone: 'soon', label: 'Waiting for a device' },
+	listing: { tone: 'run', label: 'Finding resources' },
+	selecting: { tone: 'warn', label: 'Choose resources' },
+	reading: { tone: 'run', label: 'Reading resources' },
+	reviewing: { tone: 'warn', label: 'Needs you' },
+	confirming: { tone: 'warn', label: 'Ready for your confirmation' },
+	committing: { tone: 'run', label: 'Adding to your catalogue' },
+	interrupted: { tone: 'warn', label: 'Reading paused' },
+	done: { tone: 'ok', label: 'Imported' },
+	failed: { tone: 'bad', label: 'Stopped' }
+};
+
+export function runBadge(run: ImportRunHead): StageBadge {
+	if (run.state === 'complete' && (run.counts.failed > 0 || run.counts.skipped > 0)) {
+		return { tone: 'warn', label: 'Finished with items left out' };
+	}
+	return BADGE[stageFrom(run)];
 }
 
 /** What the page leads with, and the line under it. */
@@ -101,6 +77,18 @@ export interface StageCopy {
 }
 
 const STAGE_COPY: Record<RunStage, StageCopy> = {
+	waiting: {
+		headline: 'Waiting for the Teachouse app.',
+		detail: 'Open the app on a connected device to begin reading. No device is reading this shop yet.'
+	},
+	interrupted: {
+		headline: 'Reading has paused.',
+		detail: 'Reconnect on the device that was reading, then resume. Resources already added stay in your catalogue.'
+	},
+	confirming: {
+		headline: 'Ready to add to your catalogue.',
+		detail: 'Check the results below, then confirm. Nothing is published to a marketplace by importing.'
+	},
 	listing: {
 		headline: 'Reading what is in your shop.',
 		detail:
@@ -118,14 +106,12 @@ const STAGE_COPY: Record<RunStage, StageCopy> = {
 			'the reading carries on and this list fills as it goes.'
 	},
 	reviewing: {
-		headline: 'Some of these look like resources you already have.',
-		detail:
-			'Answer each pair below and nothing is created until you do. Anything you leave for ' +
-			'later is not in the way.'
+		headline: 'Check these resources before adding them.',
+		detail: 'Answer any duplicate questions below, then confirm what is ready.'
 	},
 	committing: {
 		headline: 'Adding them to your catalogue.',
-		detail: 'A batch at a time, so a closed window loses only the batch in flight.'
+		detail: 'The server is adding the resources you approved. You can close this page.'
 	},
 	done: {
 		headline: 'This import is finished.',
@@ -141,47 +127,6 @@ export function stageCopy(stage: RunStage): StageCopy {
 	return STAGE_COPY[stage];
 }
 
-// ------------------------------------------------------------------ progress
-
-/** How many resources this run is still working through.
- *
- * Everything but the skips, because a skip is mostly a resource the seller
- * did not tick: counting those in the denominator would leave the bar stuck
- * short of its own total for ever, reading as an import that stalled. */
-export function inPlay(counts: ImportRunCounts): number {
-	return (
-		counts.listed +
-		counts.selected +
-		counts.read +
-		counts.matched +
-		counts.review +
-		counts.imported +
-		counts.failed
-	);
-}
-
-/** How many have been read: everything past the read, whatever became of it
- *  afterwards. A resource that was read and then failed was still read. */
-export function readSoFar(counts: ImportRunCounts): number {
-	return counts.read + counts.matched + counts.review + counts.imported + counts.failed;
-}
-
-/** The live bar, in one line.
- *
- * Three figures and no more: how far the reading has got, how many are
- * waiting on the seller, and how many are in the catalogue. The two that are
- * zero drop out rather than reading as claims about nothing — "0 need you"
- * invites a seller to go looking for the question. */
-export function progressLine(counts: ImportRunCounts, total: number): string {
-	const parts = [`${readSoFar(counts)} of ${total} read`];
-	if (counts.review > 0) {
-		parts.push(`${counts.review} need you`);
-	}
-	if (counts.imported > 0) {
-		parts.push(`${counts.imported} imported`);
-	}
-	return parts.join(' · ');
-}
 
 /** The line the listing draws under a run's name.
  *
@@ -190,7 +135,7 @@ export function progressLine(counts: ImportRunCounts, total: number): string {
  * and says so in words rather than in a zero. */
 export function countsLine(counts: ImportRunCounts, readTotal: number | null): string {
 	if (readTotal === null) {
-		return 'Reading what is in your shop.';
+		return 'No resource count yet.';
 	}
 	const said: string[] = [`${readTotal} found`];
 	if (counts.imported > 0) {
@@ -426,11 +371,16 @@ export function settledLine(counts: ImportRunCounts): string {
  *  on why it holds none. */
 export function emptyItemsLine(stage: RunStage): string {
 	switch (stage) {
+		case 'waiting':
+			return 'Waiting for a device to find the first resource.';
+		case 'interrupted':
+			return 'No resources were recorded before reading paused.';
 		case 'listing':
 			return 'Nothing has been listed yet.';
 		case 'selecting':
 		case 'reading':
 		case 'reviewing':
+		case 'confirming':
 		case 'committing':
 			return 'Nothing has arrived yet.';
 		case 'done':

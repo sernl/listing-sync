@@ -21,37 +21,32 @@
 	let loaded = $state(false);
 	let drafts = $state<Record<string, string>>({});
 	let busy = $state<string | null>(null);
+	let generation = 0;
 
 	const questions = $derived(questionRows(items, Date.now()));
 
 	async function refetch() {
+		const current = ++generation;
 		const [queue, drain] = await Promise.all([api.queue(), api.drainStats()]);
+		if (current !== generation) return;
 		items = queue.items;
 		stats = drain;
 		loaded = true;
 	}
 
 	$effect(() => {
-		void refetch();
-		// An import finishing is when new questions appear, so the queue is
-		// refetched on the event that reports one rather than polled. Events
-		// are kept by seq rather than read out of the store's rolling buffer,
-		// which a busy tenant's item traffic would push them out of.
-		const seen = new Set<number>();
 		const ledger = createLedger((cursor) => new EventSource(`/v1/events/stream?cursor=${cursor}`));
+		void refetch();
+		let revision = 0;
 		const unsubscribe = ledger.subscribe((state) => {
-			let fresh = false;
-			for (const event of state.events) {
-				if (event.kind === 'ImportDrainMeasured' && !seen.has(event.seq)) {
-					seen.add(event.seq);
-					fresh = true;
-				}
-			}
-			if (fresh) {
+			if (state.revision === revision) return;
+			revision = state.revision;
+			if (state.kinds.has('resync') || state.kinds.has('ImportDrainMeasured')) {
 				void refetch();
 			}
 		});
 		return () => {
+			generation += 1;
 			unsubscribe();
 			ledger.close();
 		};

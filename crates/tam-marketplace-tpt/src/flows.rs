@@ -220,6 +220,22 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
         //
         // This is the only non-export caller. A third is a decision rather
         // than a precedent.
+        self.list_own_resources_observed(reason, &|_found| {}).await
+    }
+
+    /// The same walk, reporting how many rows it has seen after each page.
+    ///
+    /// The observer exists for the reason the Tes adapter's does: the walk is
+    /// several requests behind one future, and a seller watching an import
+    /// was shown nothing until all of them had answered. It reports the
+    /// running total and nothing about the offset, which is deliberate — a
+    /// TPT offset is not a snapshot and must never become a cursor a caller
+    /// resumes from.
+    pub async fn list_own_resources_observed(
+        &self,
+        reason: &FetchReason,
+        found: &(dyn Fn(u32) + Send + Sync),
+    ) -> Result<Vec<TptCatalogueEntry>, AdapterError> {
         if !matches!(
             reason,
             FetchReason::FirstPartyExport { .. } | FetchReason::VerifyAttempt { .. }
@@ -251,6 +267,7 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
             let rows = page.entries.len();
             let target = page.total_results;
             entries.extend(page.entries);
+            found(u32::try_from(entries.len()).unwrap_or(u32::MAX));
             if entries.len() as u64 >= target {
                 return Ok(entries);
             }
@@ -818,33 +835,53 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
     }
 }
 
+/// The four bytes every ZIP archive opens with, and what the captured asset
+/// hop returned 14,110,742 of.
+///
+/// Stated here as well as in [`crate::classify`] deliberately. The shared
+/// classifier owns the origin's answer, where a 200 that is not an archive
+/// means the browser clearance the download route is gated on. That remedy
+/// cannot apply on the asset network, whose refusal states the status and
+/// the size it observed and names no cause. Reusing the classifier there
+/// would import its diagnosis along with its test.
+const ARCHIVE_MAGIC: &[u8; 4] = b"PK\x03\x04";
+
 impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
     /// The seller's own copy of one of their products: the bytes behind the
     /// Download control on its product page.
     ///
-    /// Two hops. The catalogue read names the product's `canonicalSlug`,
-    /// which is what `downloadurl` is built from, and the download itself is
-    /// a session-authenticated document navigation to `/Download/{slug}-{id}`
-    /// -- a plain anchor on the page, with no minted token to reproduce.
+    /// Three hops, and the third is the marketplace's own choice. The
+    /// catalogue read names the product's `canonicalSlug`, which is what
+    /// `downloadurl` is built from; the download itself is a
+    /// session-authenticated document navigation to `/Download/{slug}-{id}`,
+    /// a plain anchor on the page with no minted token to reproduce; and that
+    /// answers `302` to a signed url on the asset network, which is fetched
+    /// carrying nothing of ours.
     ///
     /// The redirect is followed explicitly rather than by the client, whose
     /// policy is `none` so the write path can read a product id out of a
-    /// submit's `Location`. That is the better arrangement here too: a signed
-    /// second hop stays visible in the cassette instead of disappearing
-    /// inside reqwest, and an off-origin one is refused rather than followed,
-    /// which is what keeps the seller's cookies on the marketplace.
+    /// submit's `Location`. That is the better arrangement here too: the
+    /// signed second hop stays visible in the cassette instead of
+    /// disappearing inside reqwest, its destination is measured against the
+    /// captured shape before anything is sent to it, and it is re-issued as
+    /// [`tam_marketplace::transport::RequestAuth::Redirected`] — which is
+    /// what keeps the seller's session cookie and CSRF pair on the
+    /// marketplace and off a host the marketplace named.
     ///
-    /// What is live-proven and what is not, stated plainly. The entry point,
-    /// the identifier and the payload's declared shape are read from a
-    /// capture of the product page. The download hop itself is not: a
-    /// 2026-08-29 probe of the founder's own product answered `302` to the
-    /// sign-in gate for a cookie jar that authenticates every GraphQL read
-    /// and the entire write path, and navigation headers did not change it.
-    /// So this route is gated on a browser clearance a server-side jar does
-    /// not hold, TPT-as-source sync ships on the operator-manifest path
-    /// instead, and what is written here is the flow as the wire format
-    /// determines it -- correct the moment a session carries that clearance,
-    /// and refusing legibly until then.
+    /// What is proven, and where. The route was captured on 2026-09-13 on the
+    /// founder's own device, against their own product: the authenticated
+    /// download answered `302` to
+    /// `rc-assets.teacherspayteachers.com/resources/{id}/assets/{opaque}`
+    /// with a `verify` token, and fetching that with credentials omitted
+    /// answered `200 application/zip` opening `PK\x03\x04`. A 2026-08-29
+    /// probe from a server-side jar had answered `302` to the sign-in gate
+    /// instead, and that arm is still here, still refusing: the clearance the
+    /// route is gated on is a browser one, so which of the two a run meets is
+    /// decided by where the session came from rather than by this code.
+    ///
+    /// The catalogue check stays ahead of every hop. This read downloads the
+    /// seller's own file and nothing else, and the only thing that makes the
+    /// product theirs is its presence in their own enumeration.
     pub async fn download_resource_bundle(
         &self,
         reason: &FetchReason,
@@ -879,32 +916,112 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
             .await?;
         let response = match first.header(ResponseHeader::Location) {
             None => first,
-            Some(location) => match endpoints::download_redirect(location) {
+            Some(location) => match endpoints::download_redirect(location, id) {
                 endpoints::DownloadRedirect::Authorization => {
                     return Err(uncleared_download(
                         "the download redirected to the sign-in gate",
                     ))
                 }
-                // No capture carries a signed hop, so its shape is unknown;
-                // what is known is that it would leave the origin, and the
-                // transport refuses a session request to any other host.
-                // Inventing the request that would satisfy it is not a
-                // substitute for capturing one.
-                endpoints::DownloadRedirect::OffOrigin(url) => {
+                // The destination is the marketplace's choice rather than
+                // ours, so it is refused here, before a request exists, and
+                // the refusal names only the part of the shape that was
+                // wrong: a rejected `Location` can still carry a live
+                // `verify` token. The transport asserts the host again on the
+                // way out, but only as a retryable `NotSent`; a permanent
+                // condition is named as one here.
+                endpoints::DownloadRedirect::Refused(why) => {
                     return Err(AdapterError::Rejected {
                         code: FailureCode::UnexpectedOrigin,
                         detail: FailureDetail(format!(
-                            "the download redirected off the origin to {url:?}; no capture \
-                             carries a signed download hop, so what it needs is unknown"
+                            "the download for product {} redirected somewhere this fetch will \
+                             not follow: {why}",
+                            id.0
                         )),
                     })
+                }
+                endpoints::DownloadRedirect::CapturedAsset(asset) => {
+                    return self.captured_asset_bytes(asset, id).await
                 }
                 endpoints::DownloadRedirect::SameOrigin(url) => {
                     self.send(endpoints::download_redirect_request(url)).await?
                 }
             },
         };
-        classify_read_bytes(&response).map(<[u8]>::to_vec)
+        classify_read_bytes(&response)?;
+        Ok(response.body)
+    }
+
+    /// The captured asset hop, and what its answer must be to count as the
+    /// seller's file.
+    ///
+    /// Exactly `200`, exactly once, opening with the archive signature. The
+    /// capture on 2026-09-13 answered `200 application/zip`, and every other
+    /// status is something else: a `206` is a slice whose bounds the network
+    /// chose, where this fetch asked for no range and the opening bytes of a
+    /// slice say nothing about the rest; a `204` is no body at all. Both
+    /// pass a leading-bytes test that a whole archive would pass, so the
+    /// status is judged first and narrowly.
+    ///
+    /// Judged here rather than by [`classify_read_bytes`], and the reason is
+    /// the diagnosis rather than the checks. That classifier reads a 200 that
+    /// is not an archive as the TPT browser clearance the download route is
+    /// gated on, which is the right call on the origin and the wrong one
+    /// here: this host is a content network, and naming a clearance would
+    /// send an operator after a remedy that cannot apply. What this hop can
+    /// state is what it observed — the status and the size — and it states
+    /// that and stops: why a content network answered something other than
+    /// the file is not knowable from one response, and a guessed cause is
+    /// read as a finding. A network's own 5xx is a fetch that failed rather
+    /// than an outcome nobody can determine, too — this hop wrote nothing,
+    /// so it is refused instead of halting the tenant's inventory as
+    /// ambiguous.
+    async fn captured_asset_bytes(
+        &self,
+        asset: endpoints::SignedAssetUrl,
+        id: ProductId,
+    ) -> Result<Vec<u8>, AdapterError> {
+        let followed = self.send(endpoints::signed_asset_request(asset)).await?;
+        // One hop, and the second redirect is where that is enforced.
+        // Re-issuing again would be this crate walking a chain the
+        // marketplace controls, which is the thing the client's `none` policy
+        // exists to stop being automatic.
+        if (300..400).contains(&followed.status)
+            || followed.header(ResponseHeader::Location).is_some()
+        {
+            return Err(AdapterError::Rejected {
+                code: FailureCode::Other,
+                detail: FailureDetail(format!(
+                    "the asset hop for product {} redirected again, and one hop is all this \
+                     download re-issues",
+                    id.0
+                )),
+            });
+        }
+        if followed.status != 200 {
+            return Err(AdapterError::Rejected {
+                code: FailureCode::Other,
+                detail: FailureDetail(format!(
+                    "the asset hop for product {} answered {} with {} bytes, and the seller's \
+                     file is a 200; the hop wrote nothing, so this is a fetch that failed \
+                     rather than an outcome nobody can determine",
+                    id.0,
+                    followed.status,
+                    followed.body.len()
+                )),
+            });
+        }
+        if !followed.body.starts_with(ARCHIVE_MAGIC) {
+            return Err(AdapterError::Rejected {
+                code: FailureCode::VerificationMismatch,
+                detail: FailureDetail(format!(
+                    "the asset hop for product {} answered 200 with {} bytes that do not open \
+                     with the archive signature",
+                    id.0,
+                    followed.body.len()
+                )),
+            });
+        }
+        Ok(followed.body)
     }
 
     /// The first-party import read: the seller's own product whole, through

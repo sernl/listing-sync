@@ -504,9 +504,6 @@
 											{#if resource.reason !== null}
 												<span class="block">{resource.reason}</span>
 											{/if}
-											{#if resource.price_note !== null}
-												<span class="block quiet">{resource.price_note}</span>
-											{/if}
 										</span>
 									</div>
 								{/each}

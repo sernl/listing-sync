@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT verdict, kept_product, reversible_until FROM duplicate_verdict WHERE org_id = $1 AND product_lo = $2 AND product_hi = $3 FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "verdict",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "kept_product",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "reversible_until",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "40a2c88a5fa4af8981a5f95bec7eba8dea46289c581cd4b5ae1b6f73f223a7b6"
+}

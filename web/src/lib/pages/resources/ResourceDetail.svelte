@@ -160,9 +160,12 @@
 
 	$effect(() => {
 		ledger = createLedger((cursor) => new EventSource(`/v1/events/stream?cursor=${cursor}`));
+		let revision = 0;
 		const unsubscribe = ledger.subscribe((state) => {
 			live = state.connected;
-			if (state.events.length > 0 || state.resyncs > 0) {
+			if (state.revision === revision) return;
+			revision = state.revision;
+			if ([...state.kinds].some((kind) => kind === 'resync' || kind.startsWith('Job') || kind.startsWith('Item') || kind === 'ImportCompleted')) {
 				void queryClient.invalidateQueries({ queryKey: queryKeys.mappings });
 			}
 		});

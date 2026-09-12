@@ -729,8 +729,11 @@ async fn publish_plan(
         .list(context.org)
         .await
         .map_err(|error| storage_fault(state, &error))?;
-    let with_payload = prices
-        .with_payload(context.org, &products)
+    // What a listing that does not exist yet would need, for every member at
+    // once. One read rather than one per member: a collection is forty
+    // resources and this is asked of each of them.
+    let facts = prices
+        .creation_facts(context.org, &products, body.inventory)
         .await
         .map_err(|error| storage_fault(state, &error))?;
     let mappings = MappingRepo::new(state.pool.clone());
@@ -775,15 +778,18 @@ async fn publish_plan(
             counts.already_there = counts.already_there.saturating_add(1);
             continue;
         }
-        // Silent until now: `mapping_seeds` inner-joins the payload file, so
-        // a resource without one yields no item and the job would carry a
-        // short list nobody is told about.
-        if !with_payload.contains(&member.product) {
-            rows.push(row(
-                MigrationVerdict::Blocked,
-                None,
-                Some("no file".to_owned()),
-            ));
+        // Everything a listing that does not exist yet needs, asked after the
+        // already-there arm above: a member the target already carries is
+        // having nothing created for it. Silent until now — `mapping_seeds`
+        // inner-joins the payload file, so a member without one yielded no
+        // item and the job carried a short list nobody was told about — and
+        // the target's own required fields were never asked at all.
+        if let Some(why) = facts
+            .iter()
+            .find(|facts| facts.product == member.product)
+            .and_then(|facts| crate::catalogue::creation_blocked(facts, body.inventory))
+        {
+            rows.push(row(MigrationVerdict::Blocked, None, Some(why.reason())));
             counts.blocked = counts.blocked.saturating_add(1);
             continue;
         }

@@ -8,59 +8,59 @@
  */
 
 .mp-title {
-	display: flex;
-	align-items: flex-start;
-	gap: 16px;
-	flex-wrap: wrap;
-	margin-bottom: 24px;
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
 }
 
 .mp-title h1 {
-	margin: 0;
-	font-family: var(--display);
-	font-size: 28px;
-	font-weight: 600;
-	letter-spacing: -0.015em;
-	text-wrap: balance;
+  margin: 0;
+  font-family: var(--display);
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
 }
 
 .mp-title p {
-	margin: 4px 0 0;
-	font-size: 13px;
-	color: var(--muted);
-	max-width: 62ch;
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+  max-width: 62ch;
 }
 
 .mp-title .act {
-	margin-left: auto;
-	flex: none;
+  margin-left: auto;
+  flex: none;
 }
 
 /* --- the card grids ------------------------------------------------------ */
 
 .mp-grid {
-	display: grid;
-	grid-template-columns: repeat(3, minmax(0, 1fr));
-	gap: 20px;
-	align-items: stretch;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+  align-items: stretch;
 }
 
 /* Each of the page's stacked parts: the extension cards, the downloads, the
    machines, the copyright declarations. The grid at the top is not one, because
    nothing precedes it. */
 .mp-part {
-	margin-top: 40px;
+  margin-top: 40px;
 }
 
 .mp-card {
-	display: flex;
-	flex-direction: column;
-	gap: 10px;
-	background: var(--surface);
-	border: 1px solid var(--line);
-	border-radius: var(--r-card);
-	padding: 18px;
-	min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  padding: 18px;
+  min-width: 0;
 }
 
 /* Nothing here is actionable and nothing here is a state that can change: a
@@ -68,8 +68,8 @@
    is merely disconnected, which is the distinction the two grey badges would
    otherwise blur. */
 .mp-card.pending {
-	border-style: dashed;
-	background: none;
+  border-style: dashed;
+  background: none;
 }
 
 /* Wraps at every width rather than in the two-column band alone. A marketplace
@@ -83,11 +83,11 @@
    what its name needs: `Etsy` keeps its pill on the first line where
    `TeachMzantsi` cannot, instead of one number deciding for both. */
 .mp-cap {
-	display: flex;
-	align-items: flex-start;
-	gap: 12px;
-	flex-wrap: wrap;
-	min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 /* Wider than it is tall, against the specification's 40px square. Most of
@@ -107,17 +107,17 @@
    that percentage against the tile, so the image cannot outgrow what holds
    it. */
 .mp-mark {
-	width: 96px;
-	height: 56px;
-	flex: none;
-	border-radius: 12px;
-	border: 1px solid var(--line);
-	background: var(--surface);
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	overflow: hidden;
-	padding: 8px;
+  width: 96px;
+  height: 56px;
+  flex: none;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 8px;
 }
 
 /* The square tile, for a mark whose own proportions are square: a glyph, an
@@ -131,7 +131,7 @@
    box and not of mark — what it removes is the dead space, which is what made
    the grid read as though the square marks were smaller than the wide ones. */
 .mp-mark.mp-square {
-	width: 56px;
+  width: 56px;
 }
 
 /* Fills the tile rather than capping at an intrinsic size. `width`/`height`
@@ -142,10 +142,10 @@
    size fitting both axes and centres it, so no mark is stretched off its own
    proportions and none is cut. */
 .mp-mark img {
-	display: block;
-	width: 100%;
-	height: 100%;
-	object-fit: contain;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 /* A neutral drawing of our own, for a tile whose owner's mark we may not show:
@@ -156,7 +156,7 @@
    ours coloured to look like a vendor's mark is the closer imitation of it.
    `docs/notes/design/marketplace-logo-sources.md` has each owner's terms. */
 .mp-mark svg {
-	color: var(--muted);
+  color: var(--muted);
 }
 
 /* One marketplace's rule cannot be met truthfully, so its name in our own
@@ -164,17 +164,17 @@
    that Google routes its product icons through an approval we have not been
    granted. `docs/notes/design/marketplace-logo-sources.md` has both reasons. */
 .mp-mark .word {
-	font-family: var(--display);
-	font-weight: 600;
-	color: var(--muted);
-	line-height: 1;
-	letter-spacing: -0.01em;
-	white-space: nowrap;
+  font-family: var(--display);
+  font-weight: 600;
+  color: var(--muted);
+  line-height: 1;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
 }
 
 .mp-who {
-	min-width: auto;
-	flex: 1;
+  min-width: auto;
+  flex: 1;
 }
 
 /* `break-word` rather than `anywhere`, and the difference is the whole of the
@@ -186,44 +186,44 @@
    arbitrary text the marketplace reports, and an unbroken sixty character one
    must not set the card's width. */
 .mp-who .t {
-	display: inline-block;
-	font-size: 17px;
-	font-weight: 600;
-	line-height: 1.2;
-	overflow-wrap: break-word;
-	color: var(--text);
-	text-decoration: none;
+  display: inline-block;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.2;
+  overflow-wrap: break-word;
+  color: var(--text);
+  text-decoration: none;
 }
 
 .mp-who a.t:hover {
-	text-decoration: underline;
+  text-decoration: underline;
 }
 
 a.mp-mark:hover {
-	border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
 }
 
 /* The name is a link that leaves for the marketplace's own site, which anyone
    reading the page visually can tell from the cursor and cannot tell from the
    text. Read aloud rather than shown. */
 .mp-away {
-	position: absolute;
-	width: 1px;
-	height: 1px;
-	margin: -1px;
-	padding: 0;
-	overflow: hidden;
-	clip-path: inset(50%);
-	white-space: nowrap;
-	border: 0;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 .mp-who .handle {
-	display: block;
-	margin-top: 2px;
-	font-size: 12.5px;
-	color: var(--muted);
-	overflow-wrap: anywhere;
+  display: block;
+  margin-top: 2px;
+  font-size: 12.5px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
 /* `margin-left: auto` puts the pill at the card's right edge on whichever line
@@ -232,16 +232,16 @@ a.mp-mark:hover {
    card that ran out of room on the first line still reads like the cards next
    to it rather than like a different layout. */
 .mp-cap .status {
-	flex: none;
-	margin-top: 2px;
-	margin-left: auto;
+  flex: none;
+  margin-top: 2px;
+  margin-left: auto;
 }
 
 .mp-body {
-	margin: 0;
-	font-size: 13px;
-	color: var(--muted);
-	line-height: 1.45;
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.45;
 }
 
 /* What the marketplace is, above what the card is saying about it. The same
@@ -251,19 +251,32 @@ a.mp-mark:hover {
    gap, since a rule inside each of twenty-one cards is more furniture than the
    distinction is worth. */
 .mp-about {
-	margin: 0;
-	font-size: 13px;
-	color: var(--muted);
-	line-height: 1.45;
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.45;
 }
 
 .mp-transport {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	flex-wrap: wrap;
-	font-size: 12.5px;
-	color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* What this machine holds, laid out as the transport line is: a sentence and
+   the pill that says the same thing shorter. The same shape rather than a new
+   one, because it sits directly under it and a second layout for a second
+   one-line fact would read as a different kind of statement. */
+.mp-here {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  color: var(--muted);
 }
 
 /* The foot sits at the bottom of whichever card in a row is tallest, so a row
@@ -273,13 +286,13 @@ a.mp-mark:hover {
    names the app in a sentence, and at 390px that sentence is wider than the
    card on its own. */
 .mp-foot {
-	margin-top: auto;
-	padding-top: 4px;
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 10px;
-	flex-wrap: wrap;
+  margin-top: auto;
+  padding-top: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 /* One rule for both elements the primary action can be. The command arm is a
@@ -290,50 +303,61 @@ a.mp-mark:hover {
    of being a flex item parked at the right edge. The browser-side connect is a
    sentence naming the app and the machine, and at 390px it takes two lines. */
 .mp-foot .go {
-	display: inline;
-	font-size: 13.5px;
-	font-weight: 600;
-	color: var(--primary);
-	text-decoration: none;
-	background: none;
-	border: 0;
-	padding: 0;
-	font-family: inherit;
-	text-align: left;
-	cursor: pointer;
+  display: inline;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--primary);
+  text-decoration: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .mp-foot .go:hover {
-	text-decoration: underline;
+  text-decoration: underline;
 }
 
 .mp-foot .go:disabled {
-	cursor: default;
-	opacity: 0.6;
-	text-decoration: none;
+  cursor: default;
+  opacity: 0.6;
+  text-decoration: none;
 }
 
 /* The disconnect. Quiet by construction: it is the destructive control on the
    card and must not compete with the one that connects. */
 .mp-foot .off {
-	background: none;
-	border: 0;
-	padding: 0;
-	font-family: inherit;
-	font-size: 13px;
-	color: var(--muted);
-	text-decoration: underline;
-	cursor: pointer;
+  background: none;
+  border: 0;
+  padding: 0;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--muted);
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .mp-foot .off:hover {
-	color: var(--bad-ink);
+  color: var(--bad-ink);
 }
 
 .mp-foot .off:disabled {
-	cursor: default;
-	opacity: 0.6;
-	text-decoration: none;
+  cursor: default;
+  opacity: 0.6;
+  text-decoration: none;
+}
+
+/* The ways out, grouped. The foot is `space-between` over two items, and a
+   card can now offer two quiet controls beside the one action: without this
+   the third item takes the middle and the action, the sign-out and the
+   disconnect read as three peers. */
+.mp-foot .mp-offs {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 /* --- the request card ---------------------------------------------------- */
@@ -342,179 +366,179 @@ a.mp-mark:hover {
    three fields do not fit a third of the grid, and a form that scrolls sideways
    is worse than a grid with a gap in it. */
 .mp-request {
-	grid-column: 1 / -1;
-	background: var(--surface);
-	border: 1px solid var(--line);
-	border-radius: var(--r-card);
-	padding: 22px;
+  grid-column: 1 / -1;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  padding: 22px;
 }
 
 .mp-request h3 {
-	margin: 0 0 14px;
-	font-size: 17px;
-	font-weight: 600;
+  margin: 0 0 14px;
+  font-size: 17px;
+  font-weight: 600;
 }
 
 .mp-request .rows {
-	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
-	gap: 14px 18px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 18px;
 }
 
 .mp-request .wide {
-	grid-column: 1 / -1;
+  grid-column: 1 / -1;
 }
 
 /* A URL field, which the global sheet styles for text, email, password and
    search but not for this one. */
-.mp-request input[type='url'] {
-	border: 1px solid var(--line);
-	background: var(--surface);
-	border-radius: var(--r-field);
-	padding: 8px 11px;
-	font: inherit;
-	font-weight: 400;
-	color: var(--text);
-	min-width: 0;
+.mp-request input[type="url"] {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: var(--r-field);
+  padding: 8px 11px;
+  font: inherit;
+  font-weight: 400;
+  color: var(--text);
+  min-width: 0;
 }
 
-.mp-request input[type='url']:focus-visible {
-	border-color: var(--accent);
+.mp-request input[type="url"]:focus-visible {
+  border-color: var(--accent);
 }
 
 /* Three lines, against the 150px the global sheet gives a textarea: this one
    takes a sentence about a shop, not a listing description. */
 .mp-request .field textarea {
-	min-height: 76px;
+  min-height: 76px;
 }
 
 .mp-request .acts {
-	display: flex;
-	align-items: center;
-	gap: 12px;
-	flex-wrap: wrap;
-	margin-top: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 16px;
 }
 
 .mp-request .helper {
-	font-size: 12px;
-	color: var(--muted);
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .mp-request .refused {
-	margin: 12px 0 0;
-	font-size: 13px;
-	color: var(--bad-ink);
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: var(--bad-ink);
 }
 
 /* --- sections ------------------------------------------------------------ */
 
 .mp-sect {
-	margin-bottom: 16px;
+  margin-bottom: 16px;
 }
 
 .mp-sect h2 {
-	margin: 0;
-	font-family: var(--display);
-	font-size: 20px;
-	font-weight: 600;
+  margin: 0;
+  font-family: var(--display);
+  font-size: 20px;
+  font-weight: 600;
 }
 
 .mp-sect p {
-	margin: 4px 0 0;
-	font-size: 13px;
-	color: var(--muted);
-	max-width: 72ch;
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+  max-width: 72ch;
 }
 
 .mp-version {
-	margin: 8px 0 0;
-	font-size: 12px;
-	color: var(--muted);
-	font-variant-numeric: tabular-nums;
-	overflow-wrap: anywhere;
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
 
 /* --- the machines list --------------------------------------------------- */
 
 .mp-machine {
-	border-top: 1px solid var(--line);
-	padding: 14px 0;
+  border-top: 1px solid var(--line);
+  padding: 14px 0;
 }
 
 .mp-machine:first-of-type {
-	border-top: 0;
+  border-top: 0;
 }
 
 .mp-machine .who {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	flex-wrap: wrap;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .mp-machine .who .t {
-	font-size: 15.5px;
-	font-weight: 600;
-	min-width: 0;
-	overflow-wrap: anywhere;
+  font-size: 15.5px;
+  font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .mp-machine .spec {
-	margin: 4px 0 0;
-	font-size: 12.5px;
-	color: var(--muted);
-	font-variant-numeric: tabular-nums;
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .mp-machine .act {
-	margin-left: auto;
+  margin-left: auto;
 }
 
 .mp-held {
-	margin: 10px 0 0 14px;
-	padding-left: 14px;
-	border-left: 1px solid var(--line);
+  margin: 10px 0 0 14px;
+  padding-left: 14px;
+  border-left: 1px solid var(--line);
 }
 
 /* A device name and the account label beside a held login are both arbitrary
    text the desktop app reports. Neither could break, so an unbroken sixty
    character hostname pushed the card wider than the page at 390. */
 .mp-held .one {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	flex-wrap: wrap;
-	padding: 5px 0;
-	font-size: 13px;
-	min-width: 0;
-	overflow-wrap: anywhere;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 5px 0;
+  font-size: 13px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .mp-held .when {
-	margin-left: auto;
-	font-size: 12px;
-	color: var(--faint);
-	white-space: nowrap;
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--faint);
+  white-space: nowrap;
 }
 
 .mp-warned {
-	margin: 8px 0 0;
-	font-size: 12.5px;
-	color: var(--bad-ink);
-	max-width: 76ch;
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--bad-ink);
+  max-width: 76ch;
 }
 
 /* --- the footer disclaimer ----------------------------------------------- */
 
 .mp-disclaimer {
-	margin: 40px 0 0;
-	padding-top: 18px;
-	border-top: 1px solid var(--line);
-	font-size: 12px;
-	color: var(--muted);
-	line-height: 1.55;
-	max-width: 88ch;
+  margin: 40px 0 0;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.55;
+  max-width: 88ch;
 }
 
 /* The attribution sentences under the disclaimer are five paragraphs of one
@@ -523,9 +547,9 @@ a.mp-mark:hover {
    footers rather than as the licence conditions belonging to the sentence above
    them. */
 .mp-disclaimer.mp-attribution {
-	margin-top: 8px;
-	padding-top: 0;
-	border-top: 0;
+  margin-top: 8px;
+  padding-top: 0;
+  border-top: 0;
 }
 
 /* --- responsive ---------------------------------------------------------- */
@@ -534,9 +558,9 @@ a.mp-mark:hover {
    viewport widths rather than container widths, which is what the rest of the
    shell measures on. */
 @media (max-width: 980px) {
-	.mp-grid {
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-	}
+  .mp-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 /* Below the three-column band a card's interior is about 269px in two columns
@@ -545,39 +569,39 @@ a.mp-mark:hover {
    pill in the band to its own line, rather than only the pills on the cards
    with the longest names, so a narrow grid reads as one layout. */
 @media (max-width: 980px) {
-	.mp-who {
-		min-width: 130px;
-	}
+  .mp-who {
+    min-width: 130px;
+  }
 }
 
 @media (max-width: 720px) {
-	.mp-grid {
-		grid-template-columns: minmax(0, 1fr);
-		gap: 14px;
-	}
+  .mp-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
 
-	.mp-request .rows {
-		grid-template-columns: minmax(0, 1fr);
-	}
+  .mp-request .rows {
+    grid-template-columns: minmax(0, 1fr);
+  }
 
-	.mp-title h1 {
-		font-size: 24px;
-	}
+  .mp-title h1 {
+    font-size: 24px;
+  }
 
-	/* The one action on the title row goes full width rather than sitting in a
+  /* The one action on the title row goes full width rather than sitting in a
 	   column two words wide beside a wrapped title. */
-	.mp-title .act {
-		margin-left: 0;
-		flex: 1 1 100%;
-	}
+  .mp-title .act {
+    margin-left: 0;
+    flex: 1 1 100%;
+  }
 
-	.mp-title .act .cta {
-		width: 100%;
-		justify-content: center;
-	}
+  .mp-title .act .cta {
+    width: 100%;
+    justify-content: center;
+  }
 
-	.mp-machine .act {
-		margin-left: 0;
-		flex: 1 1 100%;
-	}
+  .mp-machine .act {
+    margin-left: 0;
+    flex: 1 1 100%;
+  }
 }

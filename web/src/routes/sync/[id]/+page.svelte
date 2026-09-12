@@ -21,13 +21,17 @@
 	let expanded = $state<Record<string, ItemDetail>>({});
 	let live = $state(false);
 	let ledger: Ledger | null = null;
+	let generation = 0;
 
 	async function refetch() {
 		if (!jobId) {
 			return;
 		}
-		job = await api.job(jobId);
-		const first = await api.items(jobId);
+		const id = jobId;
+		const current = ++generation;
+		const [next, first] = await Promise.all([api.job(id), api.items(id)]);
+		if (current !== generation || id !== jobId) return;
+		job = next;
 		items = first.items;
 		nextCursor = first.next_cursor;
 	}
@@ -42,15 +46,19 @@
 	}
 
 	$effect(() => {
-		void refetch();
 		ledger = createLedger((cursor) => new EventSource(`/v1/events/stream?cursor=${cursor}`));
+		void refetch();
+		let revision = 0;
 		const unsubscribe = ledger.subscribe((state) => {
 			live = state.connected;
-			if (state.events.length > 0 || state.resyncs > 0) {
+			if (state.revision === revision) return;
+			revision = state.revision;
+			if ([...state.kinds].some((kind) => kind === 'resync' || kind.startsWith('Job') || kind.startsWith('Item'))) {
 				void refetch();
 			}
 		});
 		return () => {
+			generation += 1;
 			unsubscribe();
 			ledger?.close();
 		};

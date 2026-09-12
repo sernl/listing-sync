@@ -208,72 +208,11 @@ impl LabelRepo {
         names: &[String],
         at: Timestamp,
     ) -> Result<Vec<LabelRecord>, StorageError> {
-        let org_db = uuid_to_db(org.0);
-        let product_db = uuid_to_db(product.0);
-        let at_db = timestamp_to_db(at)?;
-
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
-
-        let detached = sqlx::query_scalar!(
-            "DELETE FROM product_label pl \
-              USING label l \
-              WHERE l.org_id = pl.org_id AND l.id = pl.label_id \
-                AND pl.org_id = $1 AND pl.product_id = $2 AND l.system = false \
-             RETURNING pl.label_id",
-            org_db,
-            product_db,
-        )
-        .fetch_all(&mut *tx)
-        .await?;
-
-        for name in names {
-            // The insert is the resolution: the unique index on the folded name
-            // decides whether this is a label the organisation already has, so
-            // two requests naming a new label at once agree on one row rather
-            // than racing to create two.
-            let label = sqlx::query!(
-                "INSERT INTO label (org_id, id, name, colour, created_at) \
-                 VALUES ($1, $2, $3, $4, $5) \
-                 ON CONFLICT (org_id, lower(name)) DO UPDATE SET name = label.name \
-                 RETURNING id",
-                org_db,
-                uuid_to_db(Uuid(*uuid::Uuid::new_v4().as_bytes())),
-                name.as_str(),
-                Colour::of_name(name).as_str(),
-                at_db,
-            )
-            .fetch_one(&mut *tx)
-            .await?;
-
-            sqlx::query!(
-                "INSERT INTO product_label (org_id, product_id, label_id, applied_at) \
-                 VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
-                org_db,
-                product_db,
-                label.id,
-                at_db,
-            )
-            .execute(&mut *tx)
-            .await?;
-        }
-
-        sweep_abandoned(&mut tx, org, &detached).await?;
-
-        let rows = sqlx::query!(
-            "SELECT l.name, l.colour, l.system FROM product_label pl \
-             JOIN label l ON l.org_id = pl.org_id AND l.id = pl.label_id \
-             WHERE pl.org_id = $1 AND pl.product_id = $2 \
-             ORDER BY lower(l.name)",
-            org_db,
-            product_db,
-        )
-        .fetch_all(&mut *tx)
-        .await?;
+        let set = set_labels_for_product(&mut tx, org, product, names, at).await?;
         tx.commit().await?;
-        rows.into_iter()
-            .map(|row| decode(row.name, &row.colour, row.system))
-            .collect()
+        Ok(set)
     }
 
     /// Attaches one marketplace's own label to a product, minting the label
@@ -297,43 +236,11 @@ impl LabelRepo {
         marketplace: Marketplace,
         at: Timestamp,
     ) -> Result<LabelRecord, StorageError> {
-        let org_db = uuid_to_db(org.0);
-        let at_db = timestamp_to_db(at)?;
-        let name = system_label_name(marketplace);
-        let colour = Colour::of_marketplace(marketplace);
-
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
-        let label = sqlx::query!(
-            "INSERT INTO label (org_id, id, name, colour, created_at, system) \
-             VALUES ($1, $2, $3, $4, $5, true) \
-             ON CONFLICT (org_id, lower(name)) DO UPDATE SET \
-               name = EXCLUDED.name, colour = EXCLUDED.colour, system = true \
-             RETURNING id",
-            org_db,
-            uuid_to_db(Uuid(*uuid::Uuid::new_v4().as_bytes())),
-            name,
-            colour.as_str(),
-            at_db,
-        )
-        .fetch_one(&mut *tx)
-        .await?;
-        sqlx::query!(
-            "INSERT INTO product_label (org_id, product_id, label_id, applied_at) \
-             VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
-            org_db,
-            uuid_to_db(product.0),
-            label.id,
-            at_db,
-        )
-        .execute(&mut *tx)
-        .await?;
+        let attached = attach_system_label(&mut tx, org, product, marketplace, at).await?;
         tx.commit().await?;
-        Ok(LabelRecord {
-            name: name.to_owned(),
-            colour,
-            system: true,
-        })
+        Ok(attached)
     }
 
     /// Gives one label a new name, keeping every item that carries it.
@@ -484,4 +391,130 @@ fn decode(name: String, colour: &str, system: bool) -> Result<LabelRecord, Stora
         })?,
         system,
     })
+}
+
+/// Attaches the marketplace's own label inside a transaction the caller owns.
+///
+/// The one implementation. The import's commit attaches it in the same
+/// transaction that creates the product, because the label says "this
+/// resource is on that shop" and a label that outlived a rolled-back product
+/// says it about nothing.
+pub async fn attach_system_label(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    product: ProductId,
+    marketplace: Marketplace,
+    at: Timestamp,
+) -> Result<LabelRecord, StorageError> {
+    let org_db = uuid_to_db(org.0);
+    let at_db = timestamp_to_db(at)?;
+    let name = system_label_name(marketplace);
+    let colour = Colour::of_marketplace(marketplace);
+
+    let label = sqlx::query!(
+        "INSERT INTO label (org_id, id, name, colour, created_at, system) \
+         VALUES ($1, $2, $3, $4, $5, true) \
+         ON CONFLICT (org_id, lower(name)) DO UPDATE SET \
+           name = EXCLUDED.name, colour = EXCLUDED.colour, system = true \
+         RETURNING id",
+        org_db,
+        uuid_to_db(Uuid(*uuid::Uuid::new_v4().as_bytes())),
+        name,
+        colour.as_str(),
+        at_db,
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    sqlx::query!(
+        "INSERT INTO product_label (org_id, product_id, label_id, applied_at) \
+         VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+        org_db,
+        uuid_to_db(product.0),
+        label.id,
+        at_db,
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(LabelRecord {
+        name: name.to_owned(),
+        colour,
+        system: true,
+    })
+}
+
+/// Replaces a product's seller-owned labels inside a transaction the caller
+/// owns.
+///
+/// The one implementation. The import's commit writes a row's labels in the
+/// same transaction as the product they hang from, so a pass that stops
+/// between them leaves neither.
+pub async fn set_labels_for_product(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    product: ProductId,
+    names: &[String],
+    at: Timestamp,
+) -> Result<Vec<LabelRecord>, StorageError> {
+    let org_db = uuid_to_db(org.0);
+    let product_db = uuid_to_db(product.0);
+    let at_db = timestamp_to_db(at)?;
+
+    let detached = sqlx::query_scalar!(
+        "DELETE FROM product_label pl \
+          USING label l \
+          WHERE l.org_id = pl.org_id AND l.id = pl.label_id \
+            AND pl.org_id = $1 AND pl.product_id = $2 AND l.system = false \
+         RETURNING pl.label_id",
+        org_db,
+        product_db,
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+
+    for name in names {
+        // The insert is the resolution: the unique index on the folded name
+        // decides whether this is a label the organisation already has, so
+        // two requests naming a new label at once agree on one row rather
+        // than racing to create two.
+        let label = sqlx::query!(
+            "INSERT INTO label (org_id, id, name, colour, created_at) \
+             VALUES ($1, $2, $3, $4, $5) \
+             ON CONFLICT (org_id, lower(name)) DO UPDATE SET name = label.name \
+             RETURNING id",
+            org_db,
+            uuid_to_db(Uuid(*uuid::Uuid::new_v4().as_bytes())),
+            name.as_str(),
+            Colour::of_name(name).as_str(),
+            at_db,
+        )
+        .fetch_one(&mut **tx)
+        .await?;
+
+        sqlx::query!(
+            "INSERT INTO product_label (org_id, product_id, label_id, applied_at) \
+             VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+            org_db,
+            product_db,
+            label.id,
+            at_db,
+        )
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    sweep_abandoned(tx, org, &detached).await?;
+
+    let rows = sqlx::query!(
+        "SELECT l.name, l.colour, l.system FROM product_label pl \
+         JOIN label l ON l.org_id = pl.org_id AND l.id = pl.label_id \
+         WHERE pl.org_id = $1 AND pl.product_id = $2 \
+         ORDER BY lower(l.name)",
+        org_db,
+        product_db,
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    rows.into_iter()
+        .map(|row| decode(row.name, &row.colour, row.system))
+        .collect()
 }

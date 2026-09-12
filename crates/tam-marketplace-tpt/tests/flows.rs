@@ -14,7 +14,9 @@
 
 use serde_json::{json, Value};
 use tam_marketplace::cassette::{Cassette, CassetteTransport, Interaction};
-use tam_marketplace::transport::{HttpResponse, ResponseHeader};
+use tam_marketplace::transport::{
+    HttpRequest, HttpResponse, Method, RequestAuth, RequestBody, ResponseHeader,
+};
 use tam_marketplace::{
     AdapterError, CanaryGrant, FetchReason, FieldDiffReport, FileContent, FileSource,
     FileSourceError, FirstPartyExport, ListingState, Outcome, RemoteListingId,
@@ -481,12 +483,17 @@ fn a_statistics_read_without_the_export_capability_is_refused() {
 const DOWNLOADED: ProductId = ProductId(90_000_042);
 const DOWNLOADED_SLUG: &str = "Sample-Fractions-Pack-90000042";
 
-/// A synthetic archive. Only its first four bytes matter to the classifier,
-/// and those four are what every ZIP opens with.
+/// The archive these downloads carry: a real, whole ZIP holding one stored
+/// text entry, generated for this fixture and committed beside it.
+///
+/// A four-byte `PK\x03\x04` prefix in front of a sentence would satisfy this
+/// adapter, which reads the leading bytes and nothing else, and it would
+/// satisfy nothing downstream: the pipeline that receives a downloaded
+/// bundle reads the archive's directory, so a prefix stands in for a file
+/// the rest of the system refuses. The bytes here are what a download that
+/// succeeded looks like, and no byte of them came off the founder's device.
 fn archive() -> Vec<u8> {
-    let mut bytes = b"PK\x03\x04".to_vec();
-    bytes.extend_from_slice(b"synthetic archive body");
-    bytes
+    include_bytes!("fixtures/synthetic-bundle.zip").to_vec()
 }
 
 fn catalogue_row() -> Value {
@@ -512,14 +519,14 @@ fn slug_read(response: HttpResponse) -> Vec<Interaction> {
 }
 
 /// G-O3. The download is the product page's own control reproduced: the
-/// catalogue read names the slug, and the archive comes back from
-/// `/Download/{slug}-{id}` under the session.
+/// catalogue read names the slug, and an archive answered at
+/// `/Download/{slug}-{id}` under the session is taken as it stands.
 ///
-/// Cassette-verified, and live-unverified on purpose. A 2026-08-29 probe of
-/// the founder's own product met a redirect to the sign-in gate with a jar
-/// that authenticates every other hop this crate makes, so no live run can
-/// witness this path until a session carries the browser clearance it is
-/// gated on.
+/// The arm where the route answers the bytes directly, which is the one the
+/// device capture did not take: on 2026-09-13 the same call answered `302`
+/// to the asset network instead, and the test below carries that. A
+/// `/Download/` that ever answers `200` with a ZIP is still this flow's
+/// answer rather than an error, so the arm is exercised rather than removed.
 #[test]
 fn the_download_fetches_the_sellers_own_archive_through_the_page_control() {
     let adapter = adapter(
@@ -540,6 +547,41 @@ fn the_download_fetches_the_sellers_own_archive_through_the_page_control() {
         0,
         "two hops and no others: the slug read and the download itself"
     );
+}
+
+/// The route as the 2026-09-13 device capture took it: the authenticated
+/// download answers `302` to a signed url on the asset network, and that url
+/// is fetched carrying nothing of the seller's — `Redirected` rather than
+/// `Session`, which is what the transport's routing rule turns into a
+/// cookie-free client. The location here is the captured shape with a
+/// synthetic opaque segment and a synthetic signature; no real token or byte
+/// left the device.
+#[test]
+fn an_owned_download_follows_the_captured_asset_hop_without_a_session() {
+    let location = "https://rc-assets.teacherspayteachers.com/resources/90000042/assets/synthetic-asset?file_name=worksheet.zip&verify=synthetic-signature";
+    let mut interactions = slug_read(HttpResponse {
+        status: 302,
+        body: Vec::new(),
+        headers: vec![(ResponseHeader::Location, location.to_owned())],
+    });
+    interactions.push(Interaction {
+        request: tam_marketplace::transport::HttpRequest {
+            method: tam_marketplace::transport::Method::Get,
+            url: location.to_owned(),
+            body: tam_marketplace::transport::RequestBody::Empty,
+            auth: tam_marketplace::transport::RequestAuth::Redirected,
+        },
+        response: HttpResponse::plain(200, archive()),
+    });
+    let adapter = adapter(Cassette { interactions }, 1);
+    let result = futures::executor::block_on(FirstPartyExport::download_resource_bundle(
+        &adapter,
+        &export(),
+        DOWNLOADED,
+    ))
+    .expect("the captured signed asset URL yields the seller's archive");
+    assert_eq!(result, archive());
+    assert_eq!(adapter.transport().remaining(), 0);
 }
 
 /// The reason an archive is asserted positively rather than inferred from a
@@ -617,23 +659,109 @@ fn a_download_redirected_to_the_sign_in_gate_names_the_clearance_it_needs() {
     );
 }
 
-/// A redirect off the origin is refused rather than followed. No capture
-/// carries a signed download hop, so its shape is unknown; the transport
-/// would refuse a session request to another host anyway, and inventing the
-/// request that satisfies one is not a substitute for capturing it.
-#[test]
-fn a_download_redirected_off_the_origin_refuses_rather_than_guessing_the_hop() {
-    let redirect = HttpResponse {
+/// One 302, spelled by the marketplace.
+fn redirect_to(location: &str) -> HttpResponse {
+    HttpResponse {
         status: 302,
         body: Vec::new(),
-        headers: vec![(
-            ResponseHeader::Location,
-            "https://files.example.invalid/signed/object.zip".to_owned(),
-        )],
-    };
+        headers: vec![(ResponseHeader::Location, location.to_owned())],
+    }
+}
+
+/// The captured asset url for the product these tests download, with a
+/// synthetic token. The host and the path shape are the 2026-09-13 device
+/// capture's own; the opaque segment and the signature are not.
+fn owned_asset_location() -> String {
+    format!(
+        "https://rc-assets.teacherspayteachers.com/resources/{}/assets/9f2c1b?file_name=worksheet.zip&verify=synthetic-signature",
+        DOWNLOADED.0
+    )
+}
+
+/// An independent oracle for the cookie-free GET observed on the device.
+fn asset_hop(location: &str, response: HttpResponse) -> Interaction {
+    Interaction {
+        request: HttpRequest {
+            method: Method::Get,
+            url: location.to_owned(),
+            body: RequestBody::Empty,
+            auth: RequestAuth::Redirected,
+        },
+        response,
+    }
+}
+
+/// The slug read, the gated download, and the signed hop answering it.
+fn captured_download(response: HttpResponse) -> Vec<Interaction> {
+    let location = owned_asset_location();
+    let mut interactions = slug_read(redirect_to(&location));
+    interactions.push(asset_hop(&location, response));
+    interactions
+}
+
+/// Every other destination is refused with a reason rather than improvised
+/// into a request.
+///
+/// Each row is the same 302 with a different `Location`: the captured host
+/// spelled to resemble itself, the plaintext scheme, another product's
+/// resource under the right host, a credential in the authority, another
+/// port, and a content network nobody captured. This hop is the one place
+/// in the crate where a value the marketplace chose decides where a request
+/// goes, and the refusal carries no part of that value.
+#[test]
+fn a_download_redirected_anywhere_but_this_products_asset_is_refused() {
+    for location in [
+        "https://rc-assets.teacherspayteachers.com.example/resources/90000042/assets/9f2c1b?verify=synthetic-signature",
+        "http://rc-assets.teacherspayteachers.com/resources/90000042/assets/9f2c1b",
+        "https://rc-assets.teacherspayteachers.com/resources/13042099/assets/9f2c1b?verify=synthetic-signature",
+        "https://user:pw@rc-assets.teacherspayteachers.com/resources/90000042/assets/9f2c1b",
+        "https://rc-assets.teacherspayteachers.com:8443/resources/90000042/assets/9f2c1b",
+        "https://files.example.invalid/signed/object.zip",
+    ] {
+        let adapter = adapter(
+            Cassette {
+                interactions: slug_read(redirect_to(location)),
+            },
+            1,
+        );
+        let refused = futures::executor::block_on(FirstPartyExport::download_resource_bundle(
+            &adapter,
+            &export(),
+            DOWNLOADED,
+        ));
+        let Err(AdapterError::Rejected { code, detail }) = refused else {
+            panic!("{location} is not this product's captured asset hop, got {refused:?}");
+        };
+        assert_eq!(
+            code,
+            FailureCode::UnexpectedOrigin,
+            "a destination outside the capture is a permanent condition, not a retry: {location}"
+        );
+        assert!(
+            !detail.0.contains("synthetic-signature") && !detail.0.contains(location),
+            "and the refusal names the shape that was wrong rather than the destination, got {}",
+            detail.0
+        );
+        assert_eq!(
+            adapter.transport().remaining(),
+            0,
+            "nothing was sent to {location}: the slug read and the download itself are the \
+             whole cassette"
+        );
+    }
+}
+
+/// One hop. A second redirect is the marketplace proposing a chain, and this
+/// download re-issues exactly one link of it -- the client's own policy
+/// follows nothing, so the 3xx arrives here to be refused rather than being
+/// chased inside reqwest.
+#[test]
+fn a_second_redirect_on_the_asset_hop_ends_the_download() {
     let adapter = adapter(
         Cassette {
-            interactions: slug_read(redirect),
+            interactions: captured_download(redirect_to(
+                "https://rc-assets.teacherspayteachers.com/resources/90000042/assets/again",
+            )),
         },
         1,
     );
@@ -642,15 +770,113 @@ fn a_download_redirected_off_the_origin_refuses_rather_than_guessing_the_hop() {
         &export(),
         DOWNLOADED,
     ));
+    let Err(AdapterError::Rejected { code, detail }) = refused else {
+        panic!("a chain is refused at its second link, got {refused:?}");
+    };
+    assert_eq!(code, FailureCode::Other);
+    assert!(
+        detail.0.contains("one hop"),
+        "and the refusal says what the limit is, got {}",
+        detail.0
+    );
+    assert_eq!(
+        adapter.transport().remaining(),
+        0,
+        "the second link was read and not followed"
+    );
+}
+
+/// What the asset host answers is judged on the bytes.
+///
+/// An expired `verify` token answers with a page rather than a file. Handing
+/// that to the origin's classifier would report the browser clearance the
+/// `/Download/` route is gated on, which is a remedy that cannot apply to a
+/// content network.
+#[test]
+fn an_asset_hop_that_is_not_an_archive_is_not_a_clearance_problem() {
+    let page = b"<html><head><title>Sign In</title></head><body>sign-in</body></html>".to_vec();
+    let gated = adapter(
+        Cassette {
+            interactions: captured_download(HttpResponse::plain(200, page)),
+        },
+        1,
+    );
+    let refused = futures::executor::block_on(FirstPartyExport::download_resource_bundle(
+        &gated,
+        &export(),
+        DOWNLOADED,
+    ));
+    let Err(AdapterError::Rejected { code, detail }) = refused else {
+        panic!("a page where the archive should be is a rejection, got {refused:?}");
+    };
+    assert_eq!(
+        code,
+        FailureCode::VerificationMismatch,
+        "the bytes decide what they are before anything reads them for what they say"
+    );
+    assert!(
+        !detail.0.contains("clearance"),
+        "and the remedy named is not the origin's browser clearance, got {}",
+        detail.0
+    );
+}
+
+/// The asset network's own outage is a fetch that failed rather than an
+/// outcome nobody can determine: this hop wrote nothing, so it is refused
+/// instead of halting the tenant's inventory as ambiguous.
+#[test]
+fn an_asset_hop_that_answers_a_server_error_is_a_failed_fetch() {
+    let unavailable = adapter(
+        Cassette {
+            interactions: captured_download(HttpResponse::plain(503, Vec::new())),
+        },
+        1,
+    );
+    let refused = futures::executor::block_on(FirstPartyExport::download_resource_bundle(
+        &unavailable,
+        &export(),
+        DOWNLOADED,
+    ));
     assert!(
         matches!(
             refused,
             Err(AdapterError::Rejected {
-                code: FailureCode::UnexpectedOrigin,
+                code: FailureCode::Other,
                 ..
             })
         ),
-        "an uncaptured signed hop is named, not improvised: {refused:?}"
+        "a content network's 5xx is describable, unlike a write whose outcome is unknown: \
+         {refused:?}"
+    );
+}
+
+/// The captured hop answered `200`, and only a `200` is the seller's file.
+///
+/// This fetch sends no `Range`, so a `206` is a slice the asset network
+/// chose the bounds of. Its opening `PK\x03\x04` says the slice starts where
+/// an archive starts and says nothing about the rest, and the download that
+/// accepted it handed a partial bundle to the importer as the product.
+#[test]
+fn a_partial_content_answer_on_the_asset_hop_is_not_the_sellers_file() {
+    let partial = adapter(
+        Cassette {
+            interactions: captured_download(HttpResponse::plain(206, archive())),
+        },
+        1,
+    );
+    let refused = futures::executor::block_on(FirstPartyExport::download_resource_bundle(
+        &partial,
+        &export(),
+        DOWNLOADED,
+    ));
+    let Err(AdapterError::Rejected { code, detail }) = refused else {
+        panic!("a slice of an archive is not the archive, got {refused:?}");
+    };
+    assert_eq!(code, FailureCode::Other);
+    assert!(
+        detail.0.contains("206"),
+        "and the refusal states the status that was answered, got {}",
+        detail.0
     );
 }
 

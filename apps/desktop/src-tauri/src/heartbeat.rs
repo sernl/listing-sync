@@ -140,6 +140,23 @@ pub enum ControlPlaneError {
     /// revocation: it is the ordinary state of a machine at a sign-in screen,
     /// and it resolves itself when the seller signs in.
     NoSession,
+    /// The server refused this attempt's fence: another device holds the run,
+    /// the lease lapsed, or the run is over.
+    ///
+    /// Its own variant rather than a refusal carrying a status, because the
+    /// device acts on it: work stops and nothing it still holds may be
+    /// written. A refusal that could not be told from an outage would make
+    /// one of the two behave as the other, and both mistakes are bad — a
+    /// device that read an outage as a takeover would abandon work it could
+    /// finish, and one that read a takeover as an outage would go on reading
+    /// a shop for a run somebody else owns.
+    Fenced(String),
+    /// The server refused the console session this request spoke under.
+    ///
+    /// Never retried: no number of attempts turns a revoked sign-in into a
+    /// valid one, so what was owed is dropped rather than kept in the outbox
+    /// for a connection that will refuse it identically.
+    Denied(String),
 }
 
 impl core::fmt::Display for ControlPlaneError {
@@ -149,6 +166,8 @@ impl core::fmt::Display for ControlPlaneError {
             Self::Refused(why) => write!(f, "the control plane refused: {why}"),
             Self::Unregistered => f.write_str("this device is not registered"),
             Self::NoSession => f.write_str("nobody is signed in to the console on this device"),
+            Self::Fenced(why) => write!(f, "this device no longer holds that import: {why}"),
+            Self::Denied(why) => write!(f, "the server refused this device's sign-in: {why}"),
         }
     }
 }
@@ -203,7 +222,14 @@ pub trait ControlPlane: Send + Sync {
     /// [`Self::sync_request_source`] gives: the console asks this device to
     /// start an import by run id alone, so a console that named the shop
     /// could ask a device to enumerate one the run does not name.
-    fn import_run_source(&self, run: tam_types::Uuid) -> PlaneFuture<'_, tam_types::InventoryId>;
+    /// Which shop an import run names, and how far the run has got.
+    ///
+    /// Both from the run's own view rather than as arguments, and the counts
+    /// as well as the source because the counts are only authoritative here:
+    /// a device taking a run over has nothing recorded about it, and a
+    /// baseline from its own journal would report work already done as
+    /// undone.
+    fn import_run_facts(&self, run: tam_types::Uuid) -> PlaneFuture<'_, crate::import::RunFacts>;
 
     /// Which resources of that run the seller ticked.
     ///
@@ -217,18 +243,23 @@ pub trait ControlPlane: Send + Sync {
         run: tam_types::Uuid,
     ) -> PlaneFuture<'a, Vec<String>>;
 
-    /// The one import run the organisation has open, and how far it has got.
+    /// Every import run this device may owe work on, and how far each has
+    /// got.
     ///
     /// Asked at every check-in rather than pushed, because a server that told
     /// a device to read a shop now would be the causation D1 keeps on this
     /// side of the wire: the seller's cadence mints a run on the server, and
-    /// the run then waits here until a device asks. `None` is the ordinary
-    /// answer — most cycles have no run open — and is a value rather than an
-    /// error for that reason.
-    fn open_import_run<'a>(
+    /// the run then waits here until a device asks. An empty list is the
+    /// ordinary answer — most cycles have nothing open — and is a value
+    /// rather than an error for that reason.
+    ///
+    /// A list rather than one run, because an organisation may have a Tes run
+    /// and a TPT run open at once: the singleton this replaced is what made
+    /// stopping or stalling one source stop the other.
+    fn open_import_runs<'a>(
         &'a self,
         device: &'a DeviceId,
-    ) -> PlaneFuture<'a, Option<crate::import::OpenImportRun>>;
+    ) -> PlaneFuture<'a, Vec<crate::import::OpenImportRun>>;
 }
 
 /// The control plane a build with no configured transport gets: one that
@@ -252,7 +283,7 @@ impl ControlPlane for Offline {
         Box::pin(core::future::ready(Err(ControlPlaneError::NotConfigured)))
     }
 
-    fn import_run_source(&self, _run: tam_types::Uuid) -> PlaneFuture<'_, tam_types::InventoryId> {
+    fn import_run_facts(&self, _run: tam_types::Uuid) -> PlaneFuture<'_, crate::import::RunFacts> {
         Box::pin(core::future::ready(Err(ControlPlaneError::NotConfigured)))
     }
 
@@ -264,10 +295,10 @@ impl ControlPlane for Offline {
         Box::pin(core::future::ready(Err(ControlPlaneError::NotConfigured)))
     }
 
-    fn open_import_run<'a>(
+    fn open_import_runs<'a>(
         &'a self,
         _device: &'a DeviceId,
-    ) -> PlaneFuture<'a, Option<crate::import::OpenImportRun>> {
+    ) -> PlaneFuture<'a, Vec<crate::import::OpenImportRun>> {
         Box::pin(core::future::ready(Err(ControlPlaneError::NotConfigured)))
     }
 
@@ -497,7 +528,11 @@ pub async fn cycle<W: WorkSource + ?Sized>(
     // runs. It is the device's half of the seller's sync cadence — the server
     // mints the run and waits — and it answers nothing on the ordinary cycle
     // where no run is open.
-    crate::import::serve_open_run(state, plane, now, &crate::commands::catalogue_for).await;
+    // Runs found here are accepted and worked in the background rather than
+    // awaited: a cycle that walked a shop inline would hold the check-in
+    // behind a marketplace, which is what made a stalled source stop
+    // everything else this device had to do.
+    crate::import::serve_open_runs(state, plane).await;
     let gate = state.gate().await;
     let report = scheduler
         .tick(
@@ -556,6 +591,14 @@ pub(crate) async fn resume<W: WorkSource + ?Sized>(
         return Some(cycle(state, plane, scheduler, source, at.now).await);
     }
     check_in_or_register(state, plane).await.ok();
+    // Imports are asked about on every resume rather than on the cadence, and
+    // that is not the work pull this function exists to rate-limit. A phone
+    // has no background schedule, so a resume is the only moment an import
+    // this device was working can be picked up again; it costs one read, the
+    // supervisor's own handle stops a run in flight being taken twice, and a
+    // seller who brings the application forward to get on with their import
+    // is not made to wait out the hour.
+    crate::import::serve_open_runs(state, plane).await;
     None
 }
 
@@ -640,11 +683,6 @@ mod tests {
         registrations: AtomicUsize,
         beats: AtomicUsize,
         last: tokio::sync::Mutex<Vec<SessionReport>>,
-        /// How many times a cycle asked for the organisation's open import
-        /// run. The count is the assertion: the poll has to sit on the
-        /// scheduled path or a scheduled pull waits on a console nobody
-        /// opened.
-        opens: AtomicUsize,
     }
 
     impl Fake {
@@ -655,7 +693,6 @@ mod tests {
                 registrations: AtomicUsize::new(0),
                 beats: AtomicUsize::new(0),
                 last: tokio::sync::Mutex::new(Vec::new()),
-                opens: AtomicUsize::new(0),
             }
         }
 
@@ -684,11 +721,17 @@ mod tests {
             Box::pin(core::future::ready(Ok(tam_types::InventoryId::Tes)))
         }
 
-        fn import_run_source(
+        fn import_run_facts(
             &self,
             _run: tam_types::Uuid,
-        ) -> PlaneFuture<'_, tam_types::InventoryId> {
-            Box::pin(core::future::ready(Ok(tam_types::InventoryId::Tes)))
+        ) -> PlaneFuture<'_, crate::import::RunFacts> {
+            Box::pin(core::future::ready(Ok(crate::import::RunFacts {
+                source: tam_types::InventoryId::Tes,
+                discovered: 0,
+                processed: 0,
+                described: 0,
+                enumeration_complete: false,
+            })))
         }
 
         fn import_selection<'a>(
@@ -699,12 +742,11 @@ mod tests {
             Box::pin(core::future::ready(Ok(Vec::new())))
         }
 
-        fn open_import_run<'a>(
+        fn open_import_runs<'a>(
             &'a self,
             _device: &'a DeviceId,
-        ) -> PlaneFuture<'a, Option<crate::import::OpenImportRun>> {
-            self.opens.fetch_add(1, Ordering::SeqCst);
-            Box::pin(core::future::ready(Ok(None)))
+        ) -> PlaneFuture<'a, Vec<crate::import::OpenImportRun>> {
+            Box::pin(core::future::ready(Ok(Vec::new())))
         }
 
         fn register<'a>(
@@ -950,11 +992,17 @@ mod tests {
             Box::pin(core::future::ready(Ok(tam_types::InventoryId::Tes)))
         }
 
-        fn import_run_source(
+        fn import_run_facts(
             &self,
             _run: tam_types::Uuid,
-        ) -> PlaneFuture<'_, tam_types::InventoryId> {
-            Box::pin(core::future::ready(Ok(tam_types::InventoryId::Tes)))
+        ) -> PlaneFuture<'_, crate::import::RunFacts> {
+            Box::pin(core::future::ready(Ok(crate::import::RunFacts {
+                source: tam_types::InventoryId::Tes,
+                discovered: 0,
+                processed: 0,
+                described: 0,
+                enumeration_complete: false,
+            })))
         }
 
         fn import_selection<'a>(
@@ -965,11 +1013,11 @@ mod tests {
             Box::pin(core::future::ready(Ok(Vec::new())))
         }
 
-        fn open_import_run<'a>(
+        fn open_import_runs<'a>(
             &'a self,
             _device: &'a DeviceId,
-        ) -> PlaneFuture<'a, Option<crate::import::OpenImportRun>> {
-            Box::pin(core::future::ready(Ok(None)))
+        ) -> PlaneFuture<'a, Vec<crate::import::OpenImportRun>> {
+            Box::pin(core::future::ready(Ok(Vec::new())))
         }
 
         fn register<'a>(
@@ -1024,10 +1072,10 @@ mod tests {
             ))))
         }
 
-        fn import_run_source(
+        fn import_run_facts(
             &self,
             _run: tam_types::Uuid,
-        ) -> PlaneFuture<'_, tam_types::InventoryId> {
+        ) -> PlaneFuture<'_, crate::import::RunFacts> {
             Box::pin(core::future::ready(Err(ControlPlaneError::Refused(
                 "502".to_owned(),
             ))))
@@ -1043,10 +1091,10 @@ mod tests {
             ))))
         }
 
-        fn open_import_run<'a>(
+        fn open_import_runs<'a>(
             &'a self,
             _device: &'a DeviceId,
-        ) -> PlaneFuture<'a, Option<crate::import::OpenImportRun>> {
+        ) -> PlaneFuture<'a, Vec<crate::import::OpenImportRun>> {
             Box::pin(core::future::ready(Err(ControlPlaneError::Refused(
                 "502".to_owned(),
             ))))
@@ -1138,34 +1186,6 @@ mod tests {
             "the ordinary tick costs one request, not two"
         );
         assert_eq!(plane.beats.load(Ordering::SeqCst), 1);
-    }
-
-    /// Where the scheduled pull is actually triggered from.
-    ///
-    /// A run the seller's cadence minted sits in `reading` state until a
-    /// device asks for it, so a cycle that did not ask would leave every
-    /// scheduled pull waiting on a console press the seller was told they no
-    /// longer had to make.
-    #[tokio::test]
-    async fn a_cycle_asks_the_server_what_import_run_is_open() {
-        let state = state_with(Arc::new(MemorySessionStore::new()));
-        let plane = Fake::new(false);
-        let (scheduler, source) = idle_cycle_parts();
-
-        super::cycle(
-            &state,
-            &plane,
-            &scheduler,
-            &source,
-            Timestamp(1_756_000_000_000),
-        )
-        .await;
-
-        assert_eq!(
-            plane.opens.load(Ordering::SeqCst),
-            1,
-            "once per cycle, beside the check-in rather than instead of it"
-        );
     }
 
     #[tokio::test]

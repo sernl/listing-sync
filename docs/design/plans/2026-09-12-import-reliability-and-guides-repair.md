@@ -64,7 +64,7 @@ The production snapshot is incident evidence, not a substitute for this regressi
 
 ## I1 — Add durable ownership and progress protocol
 
-- [ ] Persist import attempts and replay-safe progress
+- [x] Persist import attempts and replay-safe progress
 
 **Modify:** `crates/tam-storage/src/import_runs.rs`, `crates/tam-api/src/{import_runs,import}.rs`, `crates/tam-engine-driver/src/import.rs`, existing API vocab/typegen definitions, import-flow tests and `crates/tam-storage/tests/rls_matrix.rs` for any new tenant receipt table.
 **Create:** the numbered import execution migration only.
@@ -94,7 +94,7 @@ Also replay a lost start acknowledgement after activation expiry and after compl
 
 ## I2 — Supervise native imports independently of pages
 
-- [ ] Run cancellable imports outside page promises
+- [x] Run cancellable imports outside page promises
 
 **Modify:** `apps/desktop/src-tauri/src/{commands,import,state,heartbeat,lib}.rs`, the existing local persistence/session seams only where required, `web/src/lib/desktop.ts`, and native command capabilities if the command set changes.
 
@@ -119,7 +119,7 @@ Do not reset or copy secure sessions between phones.
 
 ## I3 — Serialize catalogue decisions without serializing reads
 
-- [ ] Revalidate duplicate matches inside atomic commits
+- [x] Revalidate duplicate matches inside atomic commits
 
 **Modify:** `crates/tam-api/src/{import_runs,duplicates}.rs`, existing matcher/fingerprint/storage seams, `crates/tam-api/src/import_batch/*`, and scheduler commit callers.
 Retain existing identity/mapping constraints.
@@ -150,7 +150,7 @@ No lock spans marketplace/file/fingerprint I/O.
 
 ## I4 — Cut over independent runs and truthful console state
 
-- [ ] Enable independent imports and accurate status
+- [x] Enable independent imports and accurate status
 
 **Modify:** import storage open-run queries, `crates/tam-api/src/{import_runs,scheduler}.rs`, native open-work discovery, `web/src/lib/pages/import/*`, `web/src/lib/ledger.ts` and affected ledger consumers, `web/src/lib/{api,unreachable}.ts`, and their existing regression tests.
 
@@ -174,7 +174,9 @@ Measure network requests and observe rendered states; do not use source-string t
 
 ## I5 — Prove imports can feed explicit publishing
 
-- [ ] Verify imported resources through publishing readiness
+- [x] Verify imported resources through publishing readiness
+
+The physical-phone proof reconciled both marketplace imports. The TPT run committed one selected resource, skipped 153 unselected rows, and acquired its 14,110,742-byte ZIP through the captured device-local source path. A renewed TES session created one uniquely marked TES draft from that imported resource, the device adapter completed its destination read-back, and an independent TES catalogue read found the marker. The cleanup removed only that draft; a fresh catalogue read returned the original four resources and no marker. Importing alone issued no marketplace write or deletion, the source TPT listing was left untouched, and the proof never published a live listing.
 
 **Modify only where the exercised path requires:** existing catalogue import/source-binding, file-source resolution, `apps/desktop/src-tauri/src/{marketplace,work}.rs`, publish readiness/migration preview and the TPT/TES adapters.
 Reuse the existing marketplace-source descriptors and fingerprint pipeline; the manual upload path stores originals on the server and is not a device-local acquisition fallback.
@@ -198,7 +200,7 @@ Physical-phone access, the TPT capture and live-write authorisation are explicit
 
 ## G1 — Separate guide drafts and published taxonomy
 
-- [ ] Add revisioned guide content and taxonomy
+- [x] Add revisioned guide content and taxonomy
 
 **Modify:** `crates/tam-storage/src/guide.rs`, `crates/tam-storage/tests/rls_matrix.rs`, `crates/tam-api/src/guides.rs`, guide routes/OpenAPI, web API types and existing guide API tests.
 **Create:** the reserved guides migration.
@@ -210,8 +212,8 @@ Add published title/body/topic/tag assignments, publication time and published s
 Choose a join table for guide/tag assignments with a draft/published discriminator; retain referential integrity and atomic snapshot replacement.
 Register the topic, tag and assignment tables in the closed-world `GLOBAL_TABLES` registry.
 Keep guide operations on the existing application pool behind operator authorisation; grant no additional backoffice database access.
-3. Add one monotonically increasing aggregate revision.
-Draft save, publish and unpublish require `expected_revision`; stale writes return a conflict with the current revision without discarding the client's buffer.
+3. Use the guide's existing immutable identifier together with one monotonically increasing aggregate revision.
+Draft save, publish, unpublish and delete require `expected_id` and `expected_revision`; stale or replaced writes return a conflict with the current identity and revision without discarding the client's buffer.
 4. Migrate currently published content into an identical published snapshot and leave never-published guides unavailable to readers.
 Preserve slugs and current visible content; existing guides start without invented topics/tags.
 5. Publish copies every field and assignment from the exact acknowledged draft in one transaction.
@@ -219,13 +221,13 @@ Reader updated time, search text, counts and taxonomy come from that snapshot, n
 6. Replace the old unconditional update path and every caller; do not keep a route that bypasses revision checks.
 Retain the draft/published visibility invariant and make unpublish explicit.
 
-**Severe RED cases:** a draft save on a published guide changes neither reader prose nor its tags/topic/search result; two operators cannot silently overwrite each other; stale publish cannot publish somebody else's content; draft routes and search remain inaccessible; taxonomy retirement does not delete content; migration preserves an existing published page.
+**Severe RED cases:** a draft save on a published guide changes neither reader prose nor its tags/topic/search result; two operators cannot silently overwrite each other; deleting and recreating one slug cannot admit a stale editor's write; stale publish cannot publish somebody else's content; draft routes and search remain inaccessible; taxonomy retirement does not delete content; migration preserves an existing published page.
 
 **Acceptance:** saving a guide is distinct from publishing it, for content and taxonomy alike.
 
 ## G2 — Share safe Markdown preview and reader rendering
 
-- [ ] Add safe preview and requested Markdown
+- [x] Add safe preview and requested Markdown
 
 **Modify:** `crates/tam-api/src/guides.rs`, route/OpenAPI definitions, `crates/tam-server/src/main.rs` console policy, `apps/desktop/src-tauri/tauri.conf.json`, and `web/src/lib/pages/guides/guides.css`.
 
@@ -249,7 +251,7 @@ Use independent expected output semantics, not one production renderer to comput
 
 ## G3 — Build the revision-safe guide editor
 
-- [ ] Align fields and add safe autosaving
+- [x] Align fields and add safe autosaving
 
 **Modify:** both operator guide routes, `web/src/lib/pages/guides/{editor.ts,guides.css}`, existing Markdown insertion helpers where already shared, and web API bindings through the integration owner.
 
@@ -277,7 +279,7 @@ Use real browser interaction for routine toolbar and layout proof rather than ad
 
 ## G4 — Make published guides searchable and filterable
 
-- [ ] Add published-guide search and taxonomy filters
+- [x] Add published-guide search and taxonomy filters
 
 **Modify:** published guide list/detail handlers and storage queries, `web/src/routes/guides/+page.svelte`, `web/src/routes/guides/[slug]/+page.svelte`, guide styles and web API bindings.
 
@@ -298,6 +300,8 @@ Show guide topic/tags on results and detail; keep retired-but-referenced taxonom
 ## V1 — Resolve review findings and verify the assembled repair
 
 - [ ] Review integrated behaviour and run standard verification
+
+Independent reviews, standard gates and local browser checks passed; the physical-client and live-marketplace acceptance scenarios below remain open.
 
 1. Obtain an independent correctness review of ownership/replay/cancellation/duplicate matching and a separate review of draft isolation/URL safety/editor races.
 Use the slow-model advisor for unresolved or ambiguous decisions, not as a substitute for executed evidence.

@@ -32,7 +32,7 @@ pub fn probe_kind(bytes: &[u8]) -> Option<FileKind> {
         return Some(FileKind::Image);
     }
     if bytes.starts_with(ZIP_MAGIC) {
-        return Some(probe_zip_container(bytes));
+        return probe_zip_container(bytes);
     }
     None
 }
@@ -40,23 +40,31 @@ pub fn probe_kind(bytes: &[u8]) -> Option<FileKind> {
 /// A ZIP container is a plain ZIP unless it carries an OOXML content-types
 /// part naming the document kind. The part is small and near the front, so
 /// reading the archive directory is cheap.
-fn probe_zip_container(bytes: &[u8]) -> FileKind {
-    let Ok(mut archive) = zip::ZipArchive::new(Cursor::new(bytes)) else {
-        return FileKind::Zip;
-    };
+///
+/// The directory is read to decide the kind and, before that, to decide
+/// there is a file here at all. The four leading bytes open one entry's
+/// local header; what makes the bytes an archive is the central directory at
+/// the end, which a download cut short, a truncated blob store read or a
+/// ranged response does not carry. Answering `Zip` on the magic alone let
+/// those bytes be stored as a payload, rendered a placeholder cover and
+/// reported as a file the seller owns — evidence of a file no reader can
+/// open. An archive whose directory does not parse is therefore `None`, the
+/// same answer this probe gives anything else it cannot recognise.
+fn probe_zip_container(bytes: &[u8]) -> Option<FileKind> {
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).ok()?;
     let Ok(mut entry) = archive.by_name("[Content_Types].xml") else {
-        return FileKind::Zip;
+        return Some(FileKind::Zip);
     };
     let mut content_types = String::new();
     if entry.read_to_string(&mut content_types).is_err() {
-        return FileKind::Zip;
+        return Some(FileKind::Zip);
     }
     if content_types.contains("presentationml") {
-        FileKind::Pptx
+        Some(FileKind::Pptx)
     } else if content_types.contains("wordprocessingml") {
-        FileKind::Docx
+        Some(FileKind::Docx)
     } else {
-        FileKind::Zip
+        Some(FileKind::Zip)
     }
 }
 
@@ -129,6 +137,20 @@ mod tests {
     #[test]
     fn a_plain_zip_probes_as_zip_not_a_document() {
         assert_eq!(probe_kind(&plain_zip()), Some(FileKind::Zip));
+    }
+
+    /// An archive whose directory never arrived is not a file this pipeline
+    /// recognises. The four leading bytes are a claim; the central directory
+    /// is what makes the claim true, and a download cut short keeps the
+    /// first and loses the second. Calling that a Zip stored a payload no
+    /// reader can open and minted evidence that a file exists.
+    #[test]
+    fn a_structurally_truncated_zip_is_not_a_recognised_file() {
+        let whole = plain_zip();
+        let truncated = whole
+            .get(..16)
+            .expect("the ZIP fixture contains its local-file header");
+        assert_eq!(probe_kind(truncated), None);
     }
 
     #[test]

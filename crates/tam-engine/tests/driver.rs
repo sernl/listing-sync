@@ -585,6 +585,16 @@ async fn a_healthy_preflight_wipes_the_streak(app: PgPool) {
         "one success wipes the streak; leaving it at 2 would spend the bound on failures \
          that were never consecutive"
     );
+    let terminal_events: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM job_event WHERE kind = 'ItemSettled'")
+            .fetch_one(&engine)
+            .await
+            .expect("the terminal event count reads");
+    assert_eq!(
+        terminal_events, 1,
+        "settlement owns one terminal transition: recording it again after the atomic settle \
+         would show the same item ending twice"
+    );
     let connection: String = sqlx::query_scalar("SELECT state FROM connection LIMIT 1")
         .fetch_one(&engine)
         .await
@@ -1265,6 +1275,43 @@ async fn a_device_write_records_both_the_asserted_instant_and_our_receipt(app: P
         ("system", "device"),
         "and the row is attributed to the device rather than to our own engine"
     );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn settling_an_item_records_its_event_before_releasing_the_device_lease(app: PgPool) {
+    use tam_engine_driver::ports::ItemLedger;
+    use tam_engine_driver::vocabulary::ItemVerdict;
+
+    let engine = engine_pool(&app).await;
+    seed(&app, &engine).await;
+    let lease = claim(&app, DEVICE, LEASE_SECONDS)
+        .await
+        .expect("the item leases");
+    let asserted = Timestamp(1_600_000_000_000);
+    let ledger = PgLedger::for_device(engine.clone(), lease.job, DEVICE.to_owned());
+    ledger
+        .settle_item(
+            &to_wire_item(&lease).lease_ref(),
+            &ItemVerdict {
+                outcome: ItemOutcome::Succeeded,
+                failure_code: None,
+                failure_detail: None,
+            },
+            asserted,
+        )
+        .await
+        .expect("the device settles the item");
+
+    let event: (String, Option<i64>) = sqlx::query_as(
+        "SELECT actor_id, (extract(epoch FROM asserted_at) * 1000)::bigint \
+         FROM job_event WHERE job_item_id = $1 AND kind = 'ItemSettled'",
+    )
+    .bind(uuid::Uuid::from_bytes(lease.item.0 .0))
+    .fetch_one(&engine)
+    .await
+    .expect("item settlement records its event in the settlement call");
+    assert_eq!(event.0, "device");
+    assert_eq!(event.1, Some(asserted.0));
 }
 
 /// The rate grant's window and ceiling are the server's, whatever the device

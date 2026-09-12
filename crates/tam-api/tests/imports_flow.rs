@@ -1606,6 +1606,164 @@ async fn a_chunked_commit_finishes_without_creating_a_second_product(pool: PgPoo
     );
 }
 
+/// The run guard, from the spreadsheet side: a seller who stops the import
+/// between two chunks creates nothing more.
+///
+/// The batch and the run are two rows, and before the guard the second chunk
+/// read only the batch — so a stopped run went on creating charged products
+/// for the rows it had left. The refusal is the assertion, and the product
+/// count beside it is what says no row slipped through with it.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_commit_stops_where_the_seller_stopped_the_run(pool: PgPool) {
+    provision(&pool).await;
+    let titles: Vec<String> = (0..30).map(|index| format!("Pack {index}")).collect();
+    let rows: Vec<Vec<(Cell, &str)>> = titles
+        .iter()
+        .map(|title| vec![(Cell::Title, title.as_str())])
+        .collect();
+    let borrowed: Vec<&[(Cell, &str)]> = rows.iter().map(Vec::as_slice).collect();
+    let uploaded: UploadedBatchView = upload(
+        &pool,
+        &TOKEN_A,
+        KEY_A,
+        "Teachouse.csv",
+        filled_sheet("Teachouse", &borrowed),
+    )
+    .await
+    .json();
+    let batch = uploaded.detail.batch.id;
+
+    let first: CommitAck = commit(state(pool.clone()), &TOKEN_A, batch).await.json();
+    assert_eq!(
+        (first.applied, first.remaining, first.complete),
+        (25, 5, false),
+        "the first chunk is a page, so five rows are still owed"
+    );
+
+    // The seller stops the import the batch is reviewed through, which is the
+    // run rather than the batch.
+    let run = run_of_batch(&pool, ORG_A).await;
+    assert_eq!(
+        call(
+            &pool,
+            Method::POST,
+            &format!("/v1/imports/runs/{}/abandon", run.hyphenated()),
+            &TOKEN_A,
+        )
+        .await
+        .status,
+        StatusCode::NO_CONTENT,
+        "the run settles at the seller's own request"
+    );
+
+    assert_eq!(
+        commit(state(pool.clone()), &TOKEN_A, batch).await.status,
+        StatusCode::CONFLICT,
+        "and the next chunk is refused rather than creating the rows it had left"
+    );
+    assert_eq!(
+        products_held(&pool, ORG_A).await,
+        25,
+        "nothing was created after the stop, counted rather than trusted"
+    );
+}
+
+/// The spreadsheet run this organisation's batch opened.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn run_of_batch(pool: &PgPool, org: OrgId) -> uuid::Uuid {
+    let mut tx = pool.begin().await.expect("the transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(org.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pin sets");
+    let id: uuid::Uuid =
+        sqlx::query_scalar("SELECT id FROM import_run WHERE org_id = $1 AND kind = 'spreadsheet'")
+            .bind(uuid::Uuid::from_bytes(org.0 .0))
+            .fetch_one(&mut *tx)
+            .await
+            .expect("the batch opened a run");
+    tx.commit().await.expect("the read commits");
+    id
+}
+
+/// A row parked in a duplicate question is never created behind it, however
+/// the evidence has since moved.
+///
+/// The commit re-asks the matcher under the catalogue lock, which is right —
+/// but the never-ask-twice rule reads answered pairs only, so a parked pair
+/// is re-scored from scratch. Where the evidence has since fallen below the
+/// review floor the re-score returns no question at all, and the row would be
+/// created: the duplicate the seller was asked about, made anyway while their
+/// answer was still outstanding. The park is honoured before the scorer is
+/// asked.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_row_parked_in_a_question_is_not_created_behind_it(pool: PgPool) {
+    provision(&pool).await;
+    let document = filled_sheet("Teachouse", &[&[(Cell::Title, "Parked pack")]]);
+    let uploaded: UploadedBatchView = upload(&pool, &TOKEN_A, KEY_A, "Teachouse.csv", document)
+        .await
+        .json();
+    let batch = uploaded.detail.batch.id;
+
+    // The row's reserved identifier, which is the side of the pair the
+    // question was asked about.
+    let reserved = ProductId(Uuid([0xD4; 16]));
+    claim_by_hand(&pool, batch, 4, uuid::Uuid::from_bytes([0xD4; 16])).await;
+
+    // The other side is an existing resource, and the pair is parked: the
+    // seller has been asked and has not answered. Raised through the
+    // repository, because no route parks a pair for a row nobody has read.
+    let other = ProductId(Uuid([0xD5; 16]));
+    let (lo, hi) = tam_storage::ordered_pair(reserved, other);
+    tam_storage::DuplicateRepo::new(pool.clone())
+        .raise(
+            ORG_A,
+            &tam_storage::NewVerdict {
+                lo,
+                hi,
+                verdict: tam_storage::Verdict::Parked,
+                decided_by: tam_storage::DecidedBy::Seller,
+                winning_layer: tam_storage::MatchLayer::L4,
+                log_odds: 3.5,
+                fingerprint_version: 1,
+                run: None,
+                kept: None,
+                raised_at: MADE,
+                decided_at: None,
+                reversible_until: None,
+                evidence: &[tam_storage::Evidence {
+                    layer: tam_storage::MatchLayer::L4,
+                    polarity: tam_storage::Polarity::Positive,
+                    measure: 0.9,
+                    unit: tam_storage::EvidenceUnit::Jaccard,
+                    observed_in: None,
+                }],
+            },
+        )
+        .await
+        .expect("the question is raised");
+
+    let ack: CommitAck = commit(state(pool.clone()), &TOKEN_A, batch).await.json();
+    assert_eq!(
+        (ack.applied, ack.skipped, ack.failed),
+        (0, 0, 0),
+        "the row is neither created nor settled: it waits for the answer"
+    );
+    assert_eq!(
+        products_held(&pool, ORG_A).await,
+        0,
+        "and nothing was created behind the seller's open question"
+    );
+    assert!(
+        !ack.complete,
+        "the batch is not finished while a row still owes an answer"
+    );
+}
+
 /// A pass killed between the claim and the create, which is the state the
 /// reserved identifier exists for.
 ///
@@ -1652,7 +1810,14 @@ async fn a_row_left_creating_is_finished_under_the_identifier_it_reserved(pool: 
     // The other half: the product exists and the breadcrumb does not, which is
     // a pass killed a moment later.
     claim_by_hand(&pool, batch, 4, reserved).await;
-    let second: CommitAck = commit(state(pool.clone()), &TOKEN_A, batch).await.json();
+    let answer = commit(state(pool.clone()), &TOKEN_A, batch).await;
+    assert_eq!(
+        answer.status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&answer.body)
+    );
+    let second: CommitAck = answer.json();
     assert_eq!(
         (second.applied, second.skipped, second.failed),
         (0, 1, 0),
@@ -1682,9 +1847,9 @@ async fn claim_by_hand(pool: &PgPool, batch: Uuid, ordinal: u32, product: uuid::
 }
 
 /// Puts one row of any tab back into the state a killed pass leaves it in —
-/// `creating`, with the identifiers the claim reserved — and the batch with
-/// it. Written by statement rather than by the route, because the route never
-/// leaves this state on purpose.
+/// `creating`, with the identifiers the claim reserved — and reopens the batch
+/// and its run around it. Written by statement rather than by the route,
+/// because the route never leaves this state on purpose.
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
@@ -1722,6 +1887,16 @@ async fn reserve_by_hand(
         .execute(&mut *tx)
         .await
         .expect("the batch is reopened by hand");
+    sqlx::query(
+        "UPDATE import_run \
+            SET state = 'committing', settled_at = NULL, failure_detail = NULL \
+          WHERE org_id = $1 AND batch_id = $2",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+    .bind(uuid::Uuid::from_bytes(batch.0))
+    .execute(&mut *tx)
+    .await
+    .expect("the run is reopened by hand when it already exists");
     tx.commit().await.expect("the surgery commits");
 }
 

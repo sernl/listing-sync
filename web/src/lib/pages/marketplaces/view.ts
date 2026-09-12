@@ -2,7 +2,7 @@
 // already builds. Pure, so it tests without a component.
 
 import { connectionIsLinked, connectionStands } from '$lib/connection-standing';
-import { APP_CANNOT_FORGET, type SessionOutcome } from '$lib/desktop';
+import { APP_CANNOT_FORGET, type LocalSessionOutcome, type SessionOutcome } from '$lib/desktop';
 import { platformOf } from '$lib/device-merge';
 import { SIGN_IN_LABEL } from '$lib/devices-view';
 import type { MarketplaceRow, MarketplaceSignIn, SignInState } from '$lib/devices-view';
@@ -126,34 +126,72 @@ export type CardAction =
 	| { kind: 'command'; label: string; marketplace: Marketplace };
 
 /**
- * The card's one action.
+ * The card's one action, decided by what THIS machine holds rather than by
+ * what some machine holds.
  *
- * A marketplace carrying work opens onto the machine holding its login, which
- * is the only thing there is to look at. One that is not is connected here
- * where this console can do it, and named as an act for elsewhere where it
- * cannot: a login for a marketplace on the device branch is captured in the
- * app on the seller's own machine or nowhere, because D1 leaves no server-side
- * connect for it and no endpoint links one on the API branch either.
+ * The defect this replaces: the action was read off `carrying`, which is true
+ * as soon as any one of the seller's machines reports a login. A seller
+ * standing at a second computer was shown "Open TPT", pointing at the first
+ * one, and the card's only other control disconnected the marketplace for the
+ * whole account — so the way to sign in on a second device was to take the
+ * first one's login away.
  *
- * The label carries the marketplace's name rather than the card appending it,
- * because the browser arm is a sentence and not a verb, and "Connect from the
- * Teachouse app TPT" is what appending would produce.
+ * `local` is this machine's own answer and null is "not answered yet": a read
+ * in flight is never read as absent, because acting on a fact we do not have
+ * is the same defect one layer down. Where the answer is `known` and negative
+ * the app offers its own sign-in whatever other machines report. A saved
+ * local login can also be renewed: cookie presence does not promise the
+ * marketplace still accepts it. An unanswered read keeps the machine link.
+ *
+ * A browser ignores `local` and has to: it holds no session, and
+ * `sessionStatusHere` has no command to ask there. Its arm names the app
+ * instead, as a sentence rather than a verb, because "Connect from the
+ * Teachouse app TPT" is what appending a name to a verb would produce.
  *
  * Neither arm ever leaves for the marketplace's own website. The command hands
  * a name to the application; the link goes to our own downloads.
  */
-export function footerAction(row: MarketplaceRow, host: ConnectHost): CardAction {
+export function footerAction(
+	row: MarketplaceRow,
+	host: ConnectHost,
+	local: LocalSessionOutcome | null
+): CardAction {
 	const name = CARD_NAME[row.marketplace];
+	if (host === 'app' && !carrying(row) && local?.kind !== 'known') {
+		return { kind: 'link', label: 'Check this device', href: MACHINES_ANCHOR };
+	}
+	if (host === 'app' && local?.kind === 'known') {
+		return {
+			kind: 'command',
+			label: local.connected ? `Sign in to ${name} again` : `Connect ${name}`,
+			marketplace: row.marketplace
+		};
+	}
 	if (carrying(row)) {
 		return { kind: 'link', label: `Open ${name}`, href: MACHINES_ANCHOR };
 	}
-	return host === 'app'
-		? { kind: 'command', label: `Connect ${name}`, marketplace: row.marketplace }
-		: {
-				kind: 'link',
-				label: `Connect ${name} from the Teachouse app on your computer or phone`,
-				href: DOWNLOADS_ANCHOR
-			};
+	return {
+		kind: 'link',
+		label: `Connect ${name} from the Teachouse app on your computer or phone`,
+		href: DOWNLOADS_ANCHOR
+	};
+}
+
+/** Whether this machine itself holds a login for one marketplace.
+ *
+ * False on every answer that is not a plain yes, null included. The two
+ * predicates below are deliberately not each other's negation: a read in
+ * flight, an application too old to answer and a refusal are none of them a
+ * statement about what this machine holds. */
+export function heldHere(local: LocalSessionOutcome | null): boolean {
+	return local !== null && local.kind === 'known' && local.connected;
+}
+
+/** Whether this machine is known to hold no login for one marketplace, which
+ *  is the one fact that earns a Connect on a card another machine is already
+ *  signed in on. */
+export function missingHere(local: LocalSessionOutcome | null): boolean {
+	return local !== null && local.kind === 'known' && !local.connected;
 }
 
 /**
@@ -172,60 +210,60 @@ export function disconnectable(connection: { state: string } | null | undefined)
 	return connectionStands(connection);
 }
 
-/** The disconnect control's label, which names the marketplace for the same
- *  reason the footer action does. */
+/** The account-level control's label, which says which of the two ways out it
+ *  is. This one is about the organisation's connection and removes no
+ *  machine's login; the label has to carry that, because the card now offers
+ *  both and a bare "Disconnect TPT" would be either. */
 export function disconnectLabel(marketplace: Marketplace): string {
-	return `Disconnect ${CARD_NAME[marketplace]}`;
+	return `Disconnect ${CARD_NAME[marketplace]} from your account`;
+}
+
+/** The local control's label. A sign-out rather than a disconnect, because
+ *  that is exactly what it does: it removes this machine's copy of the login
+ *  and asks the control plane for nothing. */
+export function signOutHereLabel(marketplace: Marketplace): string {
+	return `Sign out of ${CARD_NAME[marketplace]} on this device`;
 }
 
 /**
- * What the seller is asked before a disconnect, which differs by what this
- * console can actually reach.
+ * What the seller is asked before the account-level disconnect.
  *
  * Three facts, and the third is the one a control plane must not leave unsaid.
  * Scheduled work stops, because every lease requires a linked connection.
  * Nothing is removed from the marketplace and the listings stay here as
  * records, because a disconnect is a statement about us rather than about the
- * listing. And in a browser the marketplace login is still on whichever
- * machine holds it — which is not merely a leftover: a machine that goes on
- * checking in while holding that login lifts the connection back to linked on
- * its next beat, because that is exactly what a check-in is for. Saying only
- * "the login remains on that machine" would leave a seller watching the
- * marketplace reconnect itself with no account of why.
+ * listing. And the marketplace login is still on whichever machine holds it —
+ * which is not merely a leftover: a machine that goes on checking in while
+ * holding that login lifts the connection back to linked on its next beat,
+ * because that is exactly what a check-in is for. Saying only "the login
+ * remains on that machine" would leave a seller watching the marketplace
+ * reconnect itself with no account of why.
+ *
+ * Host-independent now, and that is the repair: this control performs one act
+ * on one side, so the app is told the same thing a browser is. The claim that
+ * a login is removed from this machine belongs to `signOutHereAsk`, which is
+ * the control that removes it.
  */
-export function disconnectPrompt(
-	marketplace: Marketplace,
-	host: ConnectHost,
-	heldOnAMachine: boolean,
-	inPlace = false
-): string {
+export function disconnectPrompt(marketplace: Marketplace, heldOnAMachine: boolean): string {
 	const name = CARD_NAME[marketplace];
 	const shared =
 		`Scheduled work for ${name} stops. Nothing is removed from ${name} itself, and your ` +
 		'listings stay here as records. Connecting again is the same button.';
-	if (host === 'app') {
-		return (
-			`Disconnect ${name}?\n\n` +
-			`The ${name} login is removed from this machine first. ` +
-			shared +
-			(inPlace ? `\n\n${STAYS_IN_THE_PHONES_BROWSER(name)}` : '')
-		);
-	}
 	if (!heldOnAMachine) {
-		return `Disconnect ${name}?\n\n${shared}`;
+		return `Disconnect ${name} from your account?\n\n${shared}`;
 	}
 	return (
-		`Disconnect ${name}?\n\n` +
+		`Disconnect ${name} from your account?\n\n` +
 		shared +
-		`\n\nThe ${name} login is still on the machine that holds it, and this page cannot ` +
-		'remove it: your logins are never on our servers. While that machine keeps checking in ' +
-		`it reconnects ${name} by itself. To remove the login, disconnect in the Teachouse app ` +
-		'on that machine, or sign the machine out under Your machines below.'
+		`\n\nThis removes no machine's login: your logins are never on our servers, so the ` +
+		`${name} login is still on the machine that holds it. While that machine keeps checking ` +
+		`in it reconnects ${name} by itself. To remove the login, sign out of ${name} in the ` +
+		'Teachouse app on that machine, or sign the machine out under Your machines below.'
 	);
 }
 
 /**
- * The whole of what a card asks before disconnecting, from the values the page
+ * The whole of what the account-level control asks, from the values the page
  * holds rather than from a boolean it derived itself.
  *
  * The derivation is here and not at the call site because it is the part that
@@ -237,15 +275,36 @@ export function disconnectPrompt(
  */
 export function disconnectAsk(
 	marketplace: Marketplace,
-	host: ConnectHost,
-	connection: { state: string } | null | undefined,
-	inPlace = false
+	connection: { state: string } | null | undefined
 ): string {
-	return disconnectPrompt(marketplace, host, connectionIsLinked(connection), inPlace);
+	return disconnectPrompt(marketplace, connectionIsLinked(connection));
 }
 
 /**
- * What a phone's disconnect has to say that a computer's does not.
+ * What the seller is asked before signing this machine out of a marketplace.
+ *
+ * Bounded on purpose, and the bound is the honest part: this act reaches one
+ * machine's own store. Other machines keep their logins, and the account's
+ * connection is not unlinked by it — it follows what machines report, so where
+ * this was the only machine holding a login the connection falls away on its
+ * next check-in rather than at the press of this button. Promising either more
+ * or less than that is what a seller would catch us out on.
+ */
+export function signOutHereAsk(marketplace: Marketplace, inPlace = false): string {
+	const name = CARD_NAME[marketplace];
+	return (
+		`Sign out of ${name} on this device?\n\n` +
+		`The ${name} login is removed from this machine. Nothing is removed from ${name} ` +
+		'itself, your listings stay here as records, and your other machines keep their own ' +
+		`${name} logins. Your account stays connected while a machine still reports a ${name} ` +
+		'login, so if this was the only one the connection falls away on its next check-in. ' +
+		'Signing in again is the same button.' +
+		(inPlace ? `\n\n${STAYS_IN_THE_PHONES_BROWSER(name)}` : '')
+	);
+}
+
+/**
+ * What a phone's local sign-out has to say that a computer's does not.
  *
  * Our own copy of the session is gone either way. What is left on Android is
  * the marketplace's own cookie, in the WebView's process-global store, and we
@@ -255,8 +314,8 @@ export function disconnectAsk(
  * seller out of Teachouse as a side effect of disconnecting a marketplace.
  *
  * Said rather than silently accepted, because the alternative is a seller who
- * disconnects, presses Connect again, is signed straight in with no password,
- * and reasonably concludes the disconnect did nothing.
+ * signs out, presses Connect again, is signed straight in with no password,
+ * and reasonably concludes the sign-out did nothing.
  */
 const STAYS_IN_THE_PHONES_BROWSER = (name: string) =>
 	`Your ${name} sign-in stays in this phone's browser, where we cannot remove it, so ` +
@@ -264,11 +323,10 @@ const STAYS_IN_THE_PHONES_BROWSER = (name: string) =>
 
 /** What the control plane answered when asked to disconnect.
  *
- * As total as `SessionOutcome` already makes the device half, and for the same
- * reason: the sentence a seller reads depends on both halves, and a half that
- * throws out of the mutation cannot be one of the inputs to it. `moved` is the
- * number of connections the route reported disconnected, which is zero where
- * there was nothing standing to disconnect. */
+ * Total, because the sentence a seller reads is decided from it and a half
+ * that throws out of the mutation cannot be one of the inputs to it. `moved`
+ * is the number of connections the route reported disconnected, which is zero
+ * where there was nothing standing to disconnect. */
 export type DisconnectServer = { kind: 'moved'; moved: number } | { kind: 'refused' };
 
 /** What a seller is told after a disconnect, and in which voice. */
@@ -278,50 +336,61 @@ export interface DisconnectSay {
 }
 
 /**
- * The sentence a finished disconnect leaves behind, from what both halves
- * answered.
+ * The sentence a finished account-level disconnect leaves behind.
  *
- * The order the two halves run in is what makes this a decision rather than two
- * independent sentences: the machine forgets first, and only then is the
- * control plane asked. So a server refusal arrives with the login already gone,
- * and the seller is standing in front of a machine that is signed out of a
- * marketplace this console still calls connected — which is not a half-failure
- * to be reported as a failure, because the half that matters is the one that
- * did not run: while the connection stands, so does every lease against it.
- *
- * A server refusal therefore leads, ahead of anything the device half reported.
- * Where the device half also failed, nothing at all happened, and saying so is
- * the whole of it; the machine's own refusal is reached on the retry that gets
- * past the server.
+ * One half rather than two, because this control is one half: it asks the
+ * control plane to unlink and touches no machine's login. What a machine holds
+ * is the local sign-out's business and has its own sentence below, so neither
+ * one reports an act the other performed.
  */
-export function disconnectSay(
-	marketplace: Marketplace,
-	forgotten: SessionOutcome,
-	server: DisconnectServer
-): DisconnectSay {
+export function disconnectSay(marketplace: Marketplace, server: DisconnectServer): DisconnectSay {
 	const name = CARD_NAME[marketplace];
 	if (server.kind === 'refused') {
-		return {
-			tone: 'error',
-			message:
-				forgotten.kind === 'done'
-					? `The ${name} login has been removed from this machine, but ${name} is still ` +
-						'connected here, so scheduled work has not stopped. Try Disconnect again.'
-					: `${name} could not be disconnected.`
-		};
-	}
-	if (forgotten.kind === 'unsupported') {
-		return { tone: 'error', message: APP_CANNOT_FORGET };
-	}
-	if (forgotten.kind === 'refused') {
-		return { tone: 'error', message: forgotten.detail };
+		return { tone: 'error', message: `${name} could not be disconnected.` };
 	}
 	return server.moved === 0
 		? { tone: 'info', message: `${name} was already disconnected.` }
 		: {
 				tone: 'info',
-				message: `${name} is disconnected. Connecting again is the same button.`
+				message: `${name} is disconnected from your account. Connecting again is the same button.`
 			};
+}
+
+/**
+ * The sentence a finished local sign-out leaves behind, total over every
+ * answer the application can give.
+ *
+ * Total rather than defaulted, because the default is what made the old
+ * two-half sentence claim success on answers that were not one: `opening` and
+ * `signedOut` are in `SessionOutcome` and fell through to the confirming arm.
+ * Each is named here for what it is instead.
+ */
+export function signOutHereSay(marketplace: Marketplace, forgotten: SessionOutcome): DisconnectSay {
+	const name = CARD_NAME[marketplace];
+	switch (forgotten.kind) {
+		case 'done':
+			return {
+				tone: 'info',
+				message: `The ${name} login is removed from this machine.`
+			};
+		case 'unsupported':
+			return { tone: 'error', message: APP_CANNOT_FORGET };
+		case 'refused':
+			return { tone: 'error', message: forgotten.detail };
+		case 'signedOut':
+			return {
+				tone: 'error',
+				message:
+					`This machine was signed out from the console, which already removed its ${name} ` +
+					'login. Sign the machine back in under Your machines.'
+			};
+		case 'opening':
+		case 'unavailable':
+			return {
+				tone: 'error',
+				message: `The ${name} login can only be removed in the Teachouse app on this machine.`
+			};
+	}
 }
 
 /** The query parameter the application returns a phone's sign-in verdict in,
@@ -386,7 +455,10 @@ export type ConnectVerdictCode = (typeof CONNECT_VERDICT_CODES)[number];
  * all.
  */
 const CONNECT_SAID: Record<ConnectVerdictCode, (name: string) => ConnectReturn> = {
-	captured: (name) => ({ tone: 'info', message: `${name} is connected on this device.` }),
+	captured: (name) => ({
+		tone: 'info',
+		message: `${name} is connected on this device.`
+	}),
 	deadline: (name) => ({
 		tone: 'error',
 		message: `The ${name} sign-in was not finished in time, so nothing was saved. Press Connect ${name} to try again.`
@@ -419,7 +491,10 @@ const CONNECT_SAID: Record<ConnectVerdictCode, (name: string) => ConnectReturn> 
  * lower case — and "Press Connect marketplace to try again."
  */
 const CONNECT_SAID_UNNAMED: Record<ConnectVerdictCode, ConnectReturn> = {
-	captured: { tone: 'info', message: 'Your marketplace sign-in is saved on this device.' },
+	captured: {
+		tone: 'info',
+		message: 'Your marketplace sign-in is saved on this device.'
+	},
 	deadline: {
 		tone: 'error',
 		message:
@@ -490,21 +565,22 @@ function isVerdictCode(code: string): code is ConnectVerdictCode {
 	return Object.hasOwn(CONNECT_SAID, code);
 }
 
+/** What one card can be mid-flight at. Three acts now, and the sign-out is
+ *  its own: signing this machine out of a marketplace is not the account-level
+ *  disconnect, so a card doing one must not report the other. */
+export type BusyAt = 'action' | 'disconnect' | 'signout';
+
 /** Which card is mid-flight, and at what. A record rather than one slot,
  *  because the cards are independent: two marketplaces are two logins on two
  *  windows, and a seller starting the second must not make the first look
  *  idle while its own login window is still open. */
-export type Busy = Partial<Record<Marketplace, 'action' | 'disconnect'>>;
+export type Busy = Partial<Record<Marketplace, BusyAt>>;
 
 /** Start or end one card's busy state, leaving every other card's alone.
  *
  * A new record rather than a mutation, so a caller holding the old one cannot
  * observe a half-applied change. */
-export function withBusy(
-	busy: Busy,
-	marketplace: Marketplace,
-	at: 'action' | 'disconnect' | null
-): Busy {
+export function withBusy(busy: Busy, marketplace: Marketplace, at: BusyAt | null): Busy {
 	const next: Busy = { ...busy };
 	if (at === null) {
 		delete next[marketplace];
@@ -515,7 +591,7 @@ export function withBusy(
 }
 
 /** What this one card is doing, or undefined where it is idle. */
-export function busyAt(busy: Busy, marketplace: Marketplace): 'action' | 'disconnect' | undefined {
+export function busyAt(busy: Busy, marketplace: Marketplace): BusyAt | undefined {
 	return busy[marketplace];
 }
 
@@ -527,7 +603,10 @@ export function busyAt(busy: Busy, marketplace: Marketplace): 'action' | 'discon
  * a no-op dressed as the page's main action; what the downloads section is
  * still for there is the seller's other machine.
  */
-export function headerAction(host: ConnectHost): { label: string; href: string } {
+export function headerAction(host: ConnectHost): {
+	label: string;
+	href: string;
+} {
 	return host === 'app'
 		? { label: 'Install on another machine', href: DOWNLOADS_ANCHOR }
 		: { label: 'Connect a marketplace', href: DOWNLOADS_ANCHOR };
@@ -564,9 +643,7 @@ export function transportLine(transport: TransportClass, name: string): string {
  *  already uses for the same reason: a plausible stand-in is worse than an
  *  honest absence. */
 export type LiveRead =
-	| { state: 'read'; row: MarketplaceRow }
-	| { state: 'pending' }
-	| { state: 'failed' };
+	{ state: 'read'; row: MarketplaceRow } | { state: 'pending' } | { state: 'failed' };
 
 export interface LiveFace {
 	status: { tone: Tone; label: string };
@@ -590,14 +667,21 @@ export interface LiveFace {
  * branch a marketplace runs on is a recorded fact about the marketplace rather
  * than anything a read discovers, so D1's badge stands on all three answers.
  */
-export function liveFace(held: LiveRead, host: ConnectHost): LiveFace {
+export function liveFace(
+	held: LiveRead,
+	host: ConnectHost,
+	local: LocalSessionOutcome | null
+): LiveFace {
 	switch (held.state) {
 		case 'read':
 			return {
-				status: { tone: pillTone(held.row), label: SIGN_IN_LABEL[held.row.signIn.state] },
+				status: {
+					tone: pillTone(held.row),
+					label: SIGN_IN_LABEL[held.row.signIn.state]
+				},
 				handle: held.row.signIn.accountLabel,
 				body: held.row.signIn.line,
-				action: footerAction(held.row, host)
+				action: footerAction(held.row, host, local)
 			};
 		case 'pending':
 			return {
@@ -612,6 +696,53 @@ export function liveFace(held: LiveRead, host: ConnectHost): LiveFace {
 				body: 'We could not read this one just now. Reload to try again.'
 			};
 	}
+}
+
+/** How a card states what THIS machine holds, which the status pill above it
+ *  cannot: that one is the organisation's, lifted from whatever machine last
+ *  reported a login, and a seller standing at a second computer read it as a
+ *  statement about the computer in front of them. */
+export interface HereFace {
+	tone: Tone;
+	label: string;
+	line: string;
+}
+
+/**
+ * What this machine says about its own session for one marketplace, or null
+ * where there is nothing honest to say.
+ *
+ * Null on three answers, not one. A browser has no session and no command to
+ * ask with; an application too old to answer `session_status` answers
+ * `unavailable`; and a read still in flight is null here. Rendering any of
+ * those as "not on this device" would be the same defect the pill above had,
+ * one line further down, so they say nothing at all instead.
+ *
+ * A refusal does speak, and carries the application's own words: it is the one
+ * unknown a seller can act on.
+ */
+export function hereFace(
+	local: LocalSessionOutcome | null,
+	marketplace: Marketplace
+): HereFace | null {
+	if (local === null || local.kind === 'unavailable') {
+		return null;
+	}
+	const name = CARD_NAME[marketplace];
+	if (local.kind === 'refused') {
+		return { tone: 'warn', label: 'This device not known', line: local.detail };
+	}
+	return local.connected
+		? {
+				tone: 'ok',
+				label: 'Signed in on this device',
+				line: `The ${name} login is on this machine.`
+			}
+		: {
+				tone: 'soon',
+				label: 'Not on this device',
+				line: `This machine holds no ${name} login.`
+			};
 }
 
 /**

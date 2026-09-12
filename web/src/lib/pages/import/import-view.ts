@@ -10,7 +10,7 @@
 
 import type { ConnectionView, ImportRunHead } from '$lib/api';
 import { standingMarketplaces } from '$lib/connection-standing';
-import { APP_TOO_OLD, type StartOutcome } from '$lib/desktop';
+import { APP_TOO_OLD, type LocalSessionOutcome, type StartOutcome } from '$lib/desktop';
 import { TRANSPORT_OF } from '$lib/inventory';
 import { MARKETPLACE_OF, INVENTORY_ORDER } from '$lib/listings-view';
 import { AUTHORABLE_PLATFORMS } from '$lib/platforms';
@@ -155,46 +155,33 @@ function onDeviceBranch(): Marketplace[] {
 	return [...seen];
 }
 
-/** The sites an import can read on one marketplace, in the console's own
- *  platform order.
- *
- * The authorable ones, which is a wider set than a migration's: a migration
- * has to download the listing's file and `tam_storage::uncaptured_source`
- * refuses TPT for that, while an import reads what describes a listing and
- * needs no file at all. A TPT import therefore carries a title, a price and
- * grades and no digest, which is exactly what the duplicate review is told
- * about it. */
+/** The authorable sites an import can read on one marketplace, in platform order. */
 export function importSitesOn(marketplace: Marketplace): InventoryId[] {
 	return AUTHORABLE_PLATFORMS.filter((inventory) => MARKETPLACE_OF[inventory] === marketplace);
 }
 
-/** Why a shop cannot be read from this card, or null where it can.
- *
- * Three answers rather than four: the TPT copyright declaration is asked once
- * at connect time, on the Marketplaces screen, so it is no longer this page's
- * to gate on. What remains is whether a shop can be read at all, whether this
- * console knows the seller has one, and whether the plan covers reading one —
- * which the page supplies, because it is a fact about the account rather than
- * about the card.
- *
- * Tested in the order a seller can act on the answers: a marketplace nothing
- * reads is not theirs to fix, and an absent connection is fixed on their own
- * machine. A disabled control states its reason, which is what `Button`
- * requires of every caller. */
-export function importBlocked(card: ImportCard, planRefusal: string | null): string | null {
+/** Account entitlement and this device's login gate a start independently
+ * of the last connection standing reported to the server. */
+export function importBlocked(
+	card: ImportCard,
+	planRefusal: string | null,
+	local: LocalSessionOutcome | undefined,
+	inApp: boolean
+): string | null {
 	if (card.unreadable !== null) {
 		return card.unreadable;
 	}
 	if (planRefusal !== null) {
 		return planRefusal;
 	}
-	if (card.standing === 'unread') {
-		return connectionUnknown(card);
+	if (!inApp) return null;
+	if (local === undefined || local.kind === 'unavailable') {
+		return 'This device’s marketplace login is not known. Open the current Teachouse app and check its connection.';
 	}
-	if (card.standing === 'absent') {
-		return notConnected(card);
-	}
-	return null;
+	if (local.kind === 'refused') return local.detail;
+	return local.connected
+		? null
+		: `${card.name} is not signed in on this device. Connect it on Marketplaces here.`;
 }
 
 /** What the card's own control says. Names the shop, because a page offering
@@ -210,8 +197,8 @@ export function importLabel(card: ImportCard): string {
  * either way, so the sentence names where to carry on rather than telling
  * them nothing happened. */
 export const NEEDS_THE_APP =
-	'Your shop is read by the Teachouse app on your own computer, where your marketplace login ' +
-	'is kept. Open this page in the app to start the reading.';
+	'This import waits for an eligible device. Open the current Teachouse app on a device ' +
+	'signed in to this marketplace to begin reading.';
 
 /** What the card says while this console could not read the connections list.
  *
@@ -230,9 +217,9 @@ export function connectionUnknown(card: ImportCard): string {
  * being omitted: a card with no badge at all reads as connected by default,
  * which is the claim this whole type exists to avoid making. */
 const STANDING_BADGE: Record<ConnectionStanding, { tone: PillTone; label: string }> = {
-	held: { tone: 'ok', label: 'Connected' },
-	absent: { tone: 'bad', label: 'Not connected' },
-	unread: { tone: 'soon', label: 'Not known' }
+	held: { tone: 'ok', label: 'Connection recorded' },
+	absent: { tone: 'soon', label: 'No connection recorded' },
+	unread: { tone: 'soon', label: 'Server standing not known' }
 };
 
 export function standingBadge(card: ImportCard): {
@@ -251,9 +238,8 @@ export function standingBadge(card: ImportCard): {
  * could connect anything. */
 export function notConnected(card: ImportCard): string {
 	return (
-		`${card.name} is not connected. Connect it on Marketplaces, in the Teachouse app on your ` +
-		'computer: the app opens the marketplace sign-in and keeps your login on that machine, ' +
-		'which is the only place it is kept.'
+		`No ${card.name} connection is currently recorded by the server. ` +
+		'Check the login on this device in Marketplaces; a login held on another device is not available here.'
 	);
 }
 
@@ -261,8 +247,8 @@ export function notConnected(card: ImportCard): string {
  *  and therefore what has to be open for it to run at all. */
 export function deviceLine(card: ImportCard): string {
 	return (
-		`${card.name} is read by the Teachouse app on your own computer, under the login kept ` +
-		'there. The app has to be open while it reads.'
+		`${card.name} is read by the Teachouse app on your own device, under the login kept ` +
+		'there. Keep the app open; on Android, keep it in the foreground. You can leave this page.'
 	);
 }
 
@@ -273,8 +259,7 @@ export function deviceLine(card: ImportCard): string {
  * is `FILES_STAY_ON_YOUR_COMPUTER`'s sentence, and stating it twice on one
  * screen makes a seller read the second as a correction of the first. */
 export const WHAT_AN_IMPORT_IS =
-	'An import copies your listings into Resources, with their details and where each file ' +
-	'sits on your computer.';
+	'An import adds your marketplace listings and their details to Resources. Files and target requirements are checked separately before crosslisting.';
 
 /** Where a connection is made, which is the marketplaces screen.
  *
@@ -350,7 +335,7 @@ export interface ImportRow {
  * which is newest first, so nothing is re-sorted here. */
 export function importRows(runs: readonly ImportRunHead[]): ImportRow[] {
 	return runs.map((run) => {
-		const badge = runBadge(run.state);
+		const badge = runBadge(run);
 		return {
 			id: run.id,
 			href: runHref(run),

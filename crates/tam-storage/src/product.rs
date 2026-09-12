@@ -51,6 +51,29 @@ pub struct ProductSummary {
     pub updated_at: Timestamp,
 }
 
+/// What one resource brings to a listing that does not exist yet.
+///
+/// Read by [`ProductRepo::creation_facts`] and decided on by the caller. Every
+/// member is something the catalogue holds rather than something a target
+/// requires: which marketplace declares which field is the registry's answer,
+/// and a copy of it down here would be a second one to keep in step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProductCreationFacts {
+    pub product: ProductId,
+    /// How many undeleted payload files it carries. Zero is a resource kept
+    /// on Teachouse alone (D32), which no marketplace listing can be made of.
+    pub payload_files: usize,
+    /// The marketplaces holding those bytes, where any of them are the
+    /// seller's own file on a shop rather than bytes we sealed. Empty for a
+    /// wholly blob-backed payload, and never longer than the payload set.
+    pub payload_sources: Vec<tam_types::Marketplace>,
+    /// Whether the product carries a rights declaration of its own.
+    pub rights_declared: bool,
+    /// The axes this tenant has already settled for the inventory the facts
+    /// were read against, which is the other way a required field is met.
+    pub settled_axes: Vec<TermKind>,
+}
+
 /// One resource as the catalogue export writes it: the product's own columns,
 /// the labels it carries and one entry per marketplace listing.
 ///
@@ -231,118 +254,9 @@ impl ProductRepo {
         names: &HashMap<FileId, String>,
         at: Timestamp,
     ) -> Result<(), StorageError> {
-        if product.org != org {
-            return Err(StorageError::OrgMismatch);
-        }
-        let org_db = uuid_to_db(org.0);
-        let product_db = uuid_to_db(product.id.0);
-        let at_db = timestamp_to_db(at)?;
-
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
-
-        let price = PriceColumns::from_intent(product.price);
-        let rights = RightsColumns::encode(&product.rights);
-        sqlx::query!(
-            "INSERT INTO product \
-             (org_id, id, title, body, body_format, price_kind, price_minor_units, \
-              price_currency, rights_state, rights_source_inventory, rights_segments, \
-              rights_native_id, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)",
-            org_db,
-            product_db,
-            product.title.0,
-            product.body.body,
-            copy_format_to_db(product.body.format),
-            price.kind,
-            price.minor_units,
-            price.currency,
-            rights.state,
-            rights.inventory,
-            rights.segments.as_deref(),
-            rights.native_id,
-            at_db,
-        )
-        .execute(&mut *tx)
-        .await?;
-
-        let write = FileWrite {
-            org: org_db,
-            product: product_db,
-            at: at_db,
-        };
-        let mut position: i32 = 0;
-        for file in product.payload_files() {
-            let downloaded = NewFile {
-                position,
-                slot: FileRole::Payload,
-                file,
-                name: named_as(names, file),
-            };
-            insert_file(&mut tx, &write, downloaded).await?;
-            position += 1;
-        }
-        if let Some(cover) = &product.cover {
-            // No name: a cover is generated from the first payload's bytes
-            // rather than chosen, so there is nothing a seller called it.
-            let drawn = NewFile {
-                position,
-                slot: FileRole::Cover,
-                file: cover,
-                name: None,
-            };
-            insert_file(&mut tx, &write, drawn).await?;
-            position += 1;
-        }
-        for preview in &product.previews {
-            let shown = NewFile {
-                position,
-                slot: FileRole::Preview,
-                file: preview,
-                name: named_as(names, preview),
-            };
-            insert_file(&mut tx, &write, shown).await?;
-            position += 1;
-        }
-
-        for (index, term) in product.subjects.iter().enumerate() {
-            let term_position = i32::try_from(index).map_err(|_| StorageError::Inconsistent {
-                reason: format!("subject position {index} exceeds the column range"),
-            })?;
-            sqlx::query!(
-                "INSERT INTO product_term (org_id, product_id, term_id, position) \
-                 VALUES ($1, $2, $3, $4)",
-                org_db,
-                product_db,
-                uuid_to_db(term.0),
-                term_position,
-            )
-            .execute(&mut *tx)
-            .await?;
-        }
-
-        insert_grades(&mut tx, org_db, product_db, &product.grades).await?;
-
-        for (index, term) in product.native_residue.iter().enumerate() {
-            let position = i32::try_from(index).map_err(|_| StorageError::Inconsistent {
-                reason: format!("residue position {index} exceeds the column range"),
-            })?;
-            sqlx::query!(
-                "INSERT INTO native_residue \
-                 (org_id, product_id, position, inventory, term_kind, segments, native_id) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
-                org_db,
-                product_db,
-                position,
-                inventory_to_db(term.inventory),
-                term.kind.map(term_kind_to_db),
-                &term.segments,
-                term.native_id.as_deref(),
-            )
-            .execute(&mut *tx)
-            .await?;
-        }
-
+        insert_product(&mut tx, org, product, names, at).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -514,97 +428,11 @@ impl ProductRepo {
         edit: &ProductEdit,
         at: Timestamp,
     ) -> Result<bool, StorageError> {
-        let org_db = uuid_to_db(org.0);
-        let product_db = uuid_to_db(id.0);
-        let at_db = timestamp_to_db(at)?;
-        let price = edit.price.map(PriceColumns::from_intent);
-        let rights = edit.rights.as_ref().map(RightsColumns::encode);
-
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
-        let touched = sqlx::query!(
-            "UPDATE product SET \
-             title = COALESCE($3, title), \
-             body = COALESCE($4, body), \
-             body_format = COALESCE($5, body_format), \
-             price_kind = COALESCE($6, price_kind), \
-             price_minor_units = CASE WHEN $6 IS NULL THEN price_minor_units ELSE $7 END, \
-             price_currency = CASE WHEN $6 IS NULL THEN price_currency ELSE $8 END, \
-             rights_state = COALESCE($9, rights_state), \
-             rights_source_inventory = \
-                 CASE WHEN $9 IS NULL THEN rights_source_inventory ELSE $10 END, \
-             rights_segments = CASE WHEN $9 IS NULL THEN rights_segments ELSE $11 END, \
-             rights_native_id = CASE WHEN $9 IS NULL THEN rights_native_id ELSE $12 END, \
-             updated_at = $13 \
-             WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL",
-            org_db,
-            product_db,
-            edit.title.as_ref().map(|title| title.0.as_str()),
-            edit.body.as_ref().map(|copy| copy.body.as_str()),
-            edit.body
-                .as_ref()
-                .map(|copy| copy_format_to_db(copy.format)),
-            price.as_ref().map(|price| price.kind),
-            price.as_ref().and_then(|price| price.minor_units),
-            price.as_ref().and_then(|price| price.currency),
-            rights.as_ref().map(|rights| rights.state),
-            rights.as_ref().and_then(|rights| rights.inventory.clone()),
-            rights
-                .as_ref()
-                .and_then(|rights| rights.segments.as_deref()),
-            rights
-                .as_ref()
-                .and_then(|rights| rights.native_id.as_deref()),
-            at_db,
-        )
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
-        if touched == 0 {
-            tx.commit().await?;
-            return Ok(false);
-        }
-
-        if let Some(subjects) = &edit.subjects {
-            sqlx::query!(
-                "DELETE FROM product_term WHERE org_id = $1 AND product_id = $2",
-                org_db,
-                product_db,
-            )
-            .execute(&mut *tx)
-            .await?;
-            for (index, term) in subjects.iter().enumerate() {
-                let position = i32::try_from(index).map_err(|_| StorageError::Inconsistent {
-                    reason: format!("subject position {index} exceeds the column range"),
-                })?;
-                sqlx::query!(
-                    "INSERT INTO product_term (org_id, product_id, term_id, position) \
-                     VALUES ($1, $2, $3, $4)",
-                    org_db,
-                    product_db,
-                    uuid_to_db(term.0),
-                    position,
-                )
-                .execute(&mut *tx)
-                .await?;
-            }
-        }
-
-        if let Some(grades) = &edit.grades {
-            // grade_declaration_path cascades off the declaration row, so one
-            // delete clears both and the reinsert is the whole replacement.
-            sqlx::query!(
-                "DELETE FROM grade_declaration WHERE org_id = $1 AND product_id = $2",
-                org_db,
-                product_db,
-            )
-            .execute(&mut *tx)
-            .await?;
-            insert_grades(&mut tx, org_db, product_db, grades).await?;
-        }
-
+        let touched = update_product(&mut tx, org, id, edit, at).await?;
         tx.commit().await?;
-        Ok(true)
+        Ok(touched)
     }
 
     /// Which of these content hashes this tenant actually holds bytes for, and
@@ -1060,43 +888,122 @@ impl ProductRepo {
             .collect()
     }
 
-    /// Which of these products hold a payload file a write could upload.
+    /// What decides whether a new listing can be created for these resources
+    /// on one marketplace, read once for the whole selection.
     ///
-    /// The same join `mapping_seeds` makes, asked before a job exists. A
-    /// product with no payload yields no seed there, so it is silently absent
-    /// from the items a create job carries; a migration preview has to be able
-    /// to say "no file" about that product rather than admit it and move
-    /// nothing.
-    pub async fn with_payload(
+    /// Facts and no policy: this reports what the catalogue holds and the
+    /// caller decides what the target requires of it, because requiredness is
+    /// the registry's answer and a copy of it here would be a second one.
+    ///
+    /// Batched deliberately. The three questions are asked of forty ticked
+    /// resources at a time by a preview, and the per-product reads that would
+    /// otherwise answer them — [`Self::get`] and `ElectionRepo::answered_for`
+    /// — are a transaction each.
+    ///
+    /// This replaced a read that answered only the first question. A product
+    /// with no payload yields no seed from `mapping_seeds`, so it is silently
+    /// absent from the items a create job carries, and a preview has to be
+    /// able to say so; the other two are the same kind of silence, one step
+    /// further on — bytes nobody can fetch, and a field the target refuses.
+    pub async fn creation_facts(
         &self,
         org: OrgId,
         products: &[ProductId],
-    ) -> Result<Vec<ProductId>, StorageError> {
+        inventory: InventoryId,
+    ) -> Result<Vec<ProductCreationFacts>, StorageError> {
+        let org_db = uuid_to_db(org.0);
         let ids: Vec<uuid::Uuid> = products
             .iter()
             .map(|product| uuid_to_db(product.0))
             .collect();
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
-        let rows = sqlx::query_scalar!(
-            "SELECT DISTINCT product_id FROM product_file \
-             WHERE org_id = $1 AND product_id = ANY($2) \
-               AND role = 'payload' AND deleted_at IS NULL",
-            uuid_to_db(org.0),
+        let carried = sqlx::query!(
+            "SELECT id, rights_state FROM product \
+             WHERE org_id = $1 AND id = ANY($2) AND deleted_at IS NULL",
+            org_db,
             &ids,
         )
         .fetch_all(&mut *tx)
         .await?;
+        let files = sqlx::query!(
+            "SELECT product_id, source_marketplace FROM product_file \
+             WHERE org_id = $1 AND product_id = ANY($2) \
+               AND role = 'payload' AND deleted_at IS NULL",
+            org_db,
+            &ids,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        let answered = sqlx::query!(
+            "SELECT product_id, axis FROM election_item \
+             WHERE org_id = $1 AND product_id = ANY($2) \
+               AND inventory = $3 AND state = 'answered'",
+            org_db,
+            &ids,
+            inventory_to_db(inventory),
+        )
+        .fetch_all(&mut *tx)
+        .await?;
         tx.commit().await?;
-        Ok(rows
+
+        let mut facts: Vec<ProductCreationFacts> = carried
             .into_iter()
-            .map(|id| ProductId(uuid_from_db(id)))
-            .collect())
+            .map(|row| {
+                Ok(ProductCreationFacts {
+                    product: ProductId(uuid_from_db(row.id)),
+                    // The two states migration 0003 admits. Anything else is a
+                    // corrupt row rather than a resource we guess about, which
+                    // is the position `rights_from_db` takes on the same
+                    // column.
+                    rights_declared: match row.rights_state.as_str() {
+                        "declared" => true,
+                        "unstated" => false,
+                        state => {
+                            return Err(StorageError::CorruptRow {
+                                reason: format!("unknown rights state {state:?}"),
+                            })
+                        }
+                    },
+                    payload_files: 0,
+                    payload_sources: Vec::new(),
+                    settled_axes: Vec::new(),
+                })
+            })
+            .collect::<Result<Vec<_>, StorageError>>()?;
+
+        for row in files {
+            let product = ProductId(uuid_from_db(row.product_id));
+            let Some(held) = facts.iter_mut().find(|facts| facts.product == product) else {
+                continue;
+            };
+            held.payload_files = held.payload_files.saturating_add(1);
+            if let Some(raw) = row.source_marketplace.as_deref() {
+                let marketplace = crate::connections::marketplace_from_db(raw)?;
+                if !held.payload_sources.contains(&marketplace) {
+                    held.payload_sources.push(marketplace);
+                }
+            }
+        }
+        for row in answered {
+            let product = ProductId(uuid_from_db(row.product_id));
+            let Some(held) = facts.iter_mut().find(|facts| facts.product == product) else {
+                continue;
+            };
+            let axis = term_kind_from_db(&row.axis)?;
+            if !held.settled_axes.contains(&axis) {
+                held.settled_axes.push(axis);
+            }
+        }
+        Ok(facts)
     }
 }
 
 /// What the seller called this file, where the write carried a name for it.
-fn named_as<'a>(names: &'a HashMap<FileId, String>, file: &ProductFile) -> Option<&'a str> {
+fn named_as<'a, S: std::hash::BuildHasher>(
+    names: &'a HashMap<FileId, String, S>,
+    file: &ProductFile,
+) -> Option<&'a str> {
     // Only the blob-backed arm may carry one: a sourced row's own name is
     // `payload_file_name`, which migration 0052 governs.
     if matches!(file.bytes, tam_types::FileBytes::Sourced { .. }) {
@@ -2176,4 +2083,297 @@ fn decode_listing(row: ExportListingRow) -> Result<ExportedListing, StorageError
         remote,
         listed_price,
     })
+}
+
+/// Writes a product inside a transaction the caller owns.
+///
+/// The one implementation of the catalogue insert, and the reason it is
+/// reachable this way is the import's commit: the product, its source
+/// binding, its sketch and the import row's outcome are one decision, and a
+/// product written by its own transaction is a product that survives a
+/// rolled-back decision. [`ProductRepo::insert_named`] is this call with a
+/// transaction opened around it, which is what every standalone caller wants.
+pub async fn insert_product<S: std::hash::BuildHasher>(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    product: &CanonicalProduct,
+    names: &HashMap<FileId, String, S>,
+    at: Timestamp,
+) -> Result<(), StorageError> {
+    if product.org != org {
+        return Err(StorageError::OrgMismatch);
+    }
+    let org_db = uuid_to_db(org.0);
+    let product_db = uuid_to_db(product.id.0);
+    let at_db = timestamp_to_db(at)?;
+
+    let price = PriceColumns::from_intent(product.price);
+    let rights = RightsColumns::encode(&product.rights);
+    sqlx::query!(
+        "INSERT INTO product \
+         (org_id, id, title, body, body_format, price_kind, price_minor_units, \
+          price_currency, rights_state, rights_source_inventory, rights_segments, \
+          rights_native_id, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)",
+        org_db,
+        product_db,
+        product.title.0,
+        product.body.body,
+        copy_format_to_db(product.body.format),
+        price.kind,
+        price.minor_units,
+        price.currency,
+        rights.state,
+        rights.inventory,
+        rights.segments.as_deref(),
+        rights.native_id,
+        at_db,
+    )
+    .execute(&mut **tx)
+    .await?;
+
+    let write = FileWrite {
+        org: org_db,
+        product: product_db,
+        at: at_db,
+    };
+    let mut position: i32 = 0;
+    for file in product.payload_files() {
+        let downloaded = NewFile {
+            position,
+            slot: FileRole::Payload,
+            file,
+            name: named_as(names, file),
+        };
+        insert_file(tx, &write, downloaded).await?;
+        position += 1;
+    }
+    if let Some(cover) = &product.cover {
+        // No name: a cover is generated from the first payload's bytes
+        // rather than chosen, so there is nothing a seller called it.
+        let drawn = NewFile {
+            position,
+            slot: FileRole::Cover,
+            file: cover,
+            name: None,
+        };
+        insert_file(tx, &write, drawn).await?;
+        position += 1;
+    }
+    for preview in &product.previews {
+        let shown = NewFile {
+            position,
+            slot: FileRole::Preview,
+            file: preview,
+            name: named_as(names, preview),
+        };
+        insert_file(tx, &write, shown).await?;
+        position += 1;
+    }
+
+    for (index, term) in product.subjects.iter().enumerate() {
+        let term_position = i32::try_from(index).map_err(|_| StorageError::Inconsistent {
+            reason: format!("subject position {index} exceeds the column range"),
+        })?;
+        sqlx::query!(
+            "INSERT INTO product_term (org_id, product_id, term_id, position) \
+             VALUES ($1, $2, $3, $4)",
+            org_db,
+            product_db,
+            uuid_to_db(term.0),
+            term_position,
+        )
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    insert_grades(tx, org_db, product_db, &product.grades).await?;
+
+    for (index, term) in product.native_residue.iter().enumerate() {
+        let position = i32::try_from(index).map_err(|_| StorageError::Inconsistent {
+            reason: format!("residue position {index} exceeds the column range"),
+        })?;
+        sqlx::query!(
+            "INSERT INTO native_residue \
+             (org_id, product_id, position, inventory, term_kind, segments, native_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            org_db,
+            product_db,
+            position,
+            inventory_to_db(term.inventory),
+            term.kind.map(term_kind_to_db),
+            &term.segments,
+            term.native_id.as_deref(),
+        )
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
+}
+
+/// One product's title, read inside a transaction the caller owns.
+///
+/// The import's commit needs it for a sentence the seller reads — "same as
+/// Fractions pack" — about a product it has just decided against creating a
+/// second copy of. Read under the same lock as the decision rather than
+/// before it, because before the lock nobody knows which product the answer
+/// will be about.
+pub async fn title_of(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    product: ProductId,
+) -> Result<Option<String>, StorageError> {
+    let row = sqlx::query!(
+        "SELECT title FROM product WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL",
+        uuid_to_db(org.0),
+        uuid_to_db(product.0),
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(row.map(|row| row.title))
+}
+
+/// Edits one product inside a transaction the caller owns.
+///
+/// The one implementation. The duplicate review's merge writes the survivor's
+/// winning fields, tombstones the loser and records the verdict as one
+/// decision, so a process that stops between them cannot leave a tombstoned
+/// resource beside a question that still reads as unanswered.
+pub async fn update_product(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    id: ProductId,
+    edit: &ProductEdit,
+    at: Timestamp,
+) -> Result<bool, StorageError> {
+    let org_db = uuid_to_db(org.0);
+    let product_db = uuid_to_db(id.0);
+    let at_db = timestamp_to_db(at)?;
+    let price = edit.price.map(PriceColumns::from_intent);
+    let rights = edit.rights.as_ref().map(RightsColumns::encode);
+
+    let touched = sqlx::query!(
+        "UPDATE product SET \
+         title = COALESCE($3, title), \
+         body = COALESCE($4, body), \
+         body_format = COALESCE($5, body_format), \
+         price_kind = COALESCE($6, price_kind), \
+         price_minor_units = CASE WHEN $6 IS NULL THEN price_minor_units ELSE $7 END, \
+         price_currency = CASE WHEN $6 IS NULL THEN price_currency ELSE $8 END, \
+         rights_state = COALESCE($9, rights_state), \
+         rights_source_inventory = \
+             CASE WHEN $9 IS NULL THEN rights_source_inventory ELSE $10 END, \
+         rights_segments = CASE WHEN $9 IS NULL THEN rights_segments ELSE $11 END, \
+         rights_native_id = CASE WHEN $9 IS NULL THEN rights_native_id ELSE $12 END, \
+         updated_at = $13 \
+         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL",
+        org_db,
+        product_db,
+        edit.title.as_ref().map(|title| title.0.as_str()),
+        edit.body.as_ref().map(|copy| copy.body.as_str()),
+        edit.body
+            .as_ref()
+            .map(|copy| copy_format_to_db(copy.format)),
+        price.as_ref().map(|price| price.kind),
+        price.as_ref().and_then(|price| price.minor_units),
+        price.as_ref().and_then(|price| price.currency),
+        rights.as_ref().map(|rights| rights.state),
+        rights.as_ref().and_then(|rights| rights.inventory.clone()),
+        rights
+            .as_ref()
+            .and_then(|rights| rights.segments.as_deref()),
+        rights
+            .as_ref()
+            .and_then(|rights| rights.native_id.as_deref()),
+        at_db,
+    )
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+    if touched == 0 {
+        return Ok(false);
+    }
+
+    if let Some(subjects) = &edit.subjects {
+        sqlx::query!(
+            "DELETE FROM product_term WHERE org_id = $1 AND product_id = $2",
+            org_db,
+            product_db,
+        )
+        .execute(&mut **tx)
+        .await?;
+        for (index, term) in subjects.iter().enumerate() {
+            let position = i32::try_from(index).map_err(|_| StorageError::Inconsistent {
+                reason: format!("subject position {index} exceeds the column range"),
+            })?;
+            sqlx::query!(
+                "INSERT INTO product_term (org_id, product_id, term_id, position) \
+                 VALUES ($1, $2, $3, $4)",
+                org_db,
+                product_db,
+                uuid_to_db(term.0),
+                position,
+            )
+            .execute(&mut **tx)
+            .await?;
+        }
+    }
+
+    if let Some(grades) = &edit.grades {
+        // grade_declaration_path cascades off the declaration row, so one
+        // delete clears both and the reinsert is the whole replacement.
+        sqlx::query!(
+            "DELETE FROM grade_declaration WHERE org_id = $1 AND product_id = $2",
+            org_db,
+            product_db,
+        )
+        .execute(&mut **tx)
+        .await?;
+        insert_grades(tx, org_db, product_db, grades).await?;
+    }
+    Ok(true)
+}
+
+/// Tombstones one product inside a transaction the caller owns.
+///
+/// A tombstone rather than an erasure, which is what makes the thirty-day
+/// reversal possible; reachable here so the merge that decided it and the
+/// verdict recording that decision are one transaction.
+pub async fn soft_delete_product(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    id: ProductId,
+    at: Timestamp,
+) -> Result<bool, StorageError> {
+    let deleted = sqlx::query!(
+        "UPDATE product SET deleted_at = $3, updated_at = $3 \
+         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL",
+        uuid_to_db(org.0),
+        uuid_to_db(id.0),
+        timestamp_to_db(at)?,
+    )
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+    Ok(deleted > 0)
+}
+
+/// Brings a tombstoned product back inside a transaction the caller owns.
+pub async fn restore_product(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    id: ProductId,
+    at: Timestamp,
+) -> Result<bool, StorageError> {
+    let restored = sqlx::query!(
+        "UPDATE product SET deleted_at = NULL, updated_at = $3 \
+         WHERE org_id = $1 AND id = $2 AND deleted_at IS NOT NULL",
+        uuid_to_db(org.0),
+        uuid_to_db(id.0),
+        timestamp_to_db(at)?,
+    )
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+    Ok(restored > 0)
 }

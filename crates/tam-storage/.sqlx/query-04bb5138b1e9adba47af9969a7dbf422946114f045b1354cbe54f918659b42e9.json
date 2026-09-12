@@ -1,0 +1,104 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT g.id, g.slug, g.title, g.revision, g.updated_by, g.updated_at, (g.published_at IS NOT NULL) AS \"published!\", t.id AS \"topic_id?\", t.slug AS \"topic_slug?\", t.name AS \"topic_name?\", t.retired AS \"topic_retired?\", tags.ids AS \"tag_ids?\", tags.slugs AS \"tag_slugs?\", tags.names AS \"tag_names?\", tags.retireds AS \"tag_retireds?\" FROM guide g LEFT JOIN guide_taxon t ON t.id = g.topic_id LEFT JOIN LATERAL ( SELECT array_agg(x.id ORDER BY lower(x.name), x.slug) AS ids, array_agg(x.slug ORDER BY lower(x.name), x.slug) AS slugs, array_agg(x.name ORDER BY lower(x.name), x.slug) AS names, array_agg(x.retired ORDER BY lower(x.name), x.slug) AS retireds FROM guide_tag_assignment a JOIN guide_taxon x ON x.id = a.taxon_id WHERE a.guide_id = g.id AND a.scope = 'draft') tags ON true ORDER BY g.updated_at DESC, g.slug",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "revision",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "updated_by",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "published!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
+        "name": "topic_id?",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 8,
+        "name": "topic_slug?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "topic_name?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "topic_retired?",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 11,
+        "name": "tag_ids?",
+        "type_info": "UuidArray"
+      },
+      {
+        "ordinal": 12,
+        "name": "tag_slugs?",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 13,
+        "name": "tag_names?",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 14,
+        "name": "tag_retireds?",
+        "type_info": "BoolArray"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      null,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "04bb5138b1e9adba47af9969a7dbf422946114f045b1354cbe54f918659b42e9"
+}

@@ -299,12 +299,10 @@ pub fn router(state: AppState) -> Router {
             "/{version}/imports/runs/{run}/select",
             post(import_runs::select),
         )
-        // The commit takes no body and creates a page of items per call, for
-        // the spreadsheet commit's own reason: the chunking is the server's,
-        // and a client asks for the next page by asking again.
+        // This records confirmation; the server's drain owns catalogue writes.
         .route(
             "/{version}/imports/runs/{run}/commit",
-            post(import_runs::commit),
+            post(import_runs::confirm),
         )
         .route(
             "/{version}/imports/runs/{run}/abandon",
@@ -520,7 +518,23 @@ pub fn router(state: AppState) -> Router {
         // "open".
         .route(
             "/{version}/devices/{device}/import/open",
-            get(import_runs::device_open_run),
+            get(import_runs::device_open_runs),
+        )
+        .route(
+            "/{version}/devices/{device}/import/{run}/claim",
+            post(import_runs::claim),
+        )
+        .route(
+            "/{version}/devices/{device}/import/{run}/renew",
+            post(import_runs::renew),
+        )
+        .route(
+            "/{version}/devices/{device}/import/{run}/progress",
+            post(import_runs::progress),
+        )
+        .route(
+            "/{version}/devices/{device}/import/{run}/stop",
+            post(import_runs::device_stop),
         )
         .route(
             "/{version}/devices/{device}/import/{run}/selection",
@@ -634,6 +648,7 @@ pub fn router(state: AppState) -> Router {
         // order is what makes that true of the router rather than only of the
         // vocabulary.
         .route("/{version}/guides", get(guides::published_guides))
+        .route("/{version}/guides/_taxonomy", get(guides::guide_taxonomy))
         .route(
             "/{version}/guides/images/{handle}",
             get(guides::guide_image),
@@ -677,10 +692,34 @@ pub fn router(state: AppState) -> Router {
             post(guides::upload_guide_image).layer(guides::image_body_limit()),
         )
         .route(
+            "/{version}/admin/guides/_preview",
+            post(guides::preview_guide),
+        )
+        .route(
+            "/{version}/admin/guides/_taxonomy",
+            get(guides::admin_guide_taxonomy),
+        )
+        .route(
+            "/{version}/admin/guides/_taxonomy/{kind}",
+            post(guides::create_guide_taxon),
+        )
+        .route(
+            "/{version}/admin/guides/_taxonomy/{kind}/{id}",
+            put(guides::update_guide_taxon),
+        )
+        .route(
             "/{version}/admin/guides/{slug}",
             get(guides::guide_detail)
-                .put(guides::update_guide)
+                .put(guides::save_guide)
                 .delete(guides::delete_guide),
+        )
+        .route(
+            "/{version}/admin/guides/{slug}/publish",
+            post(guides::publish_guide),
+        )
+        .route(
+            "/{version}/admin/guides/{slug}/unpublish",
+            post(guides::unpublish_guide),
         )
         .route("/{version}/admin/users", get(admin::list_users))
         .route("/{version}/openapi.json", get(openapi::serve_document))

@@ -13,7 +13,7 @@ use tokio::sync::Mutex;
 use crate::device::{DeviceId, DeviceIdentity};
 use crate::entitlement::{EntitlementGate, EMBEDDED_PUBLIC_KEYS, PUBLIC_KEY_BYTES};
 use crate::heartbeat::{ControlPlane, Offline};
-use crate::import::ScheduledStep;
+use crate::import::{CatalogueFactory, ImportJournal, ImportSupervisor, MemoryJournal};
 use crate::notify::{Notifier, Silent};
 use crate::session::SessionStore;
 
@@ -88,6 +88,18 @@ pub struct DeviceActivity {
     pub event: WorkEvent,
 }
 
+/// Exclusive ownership of the phone's one login webview.
+///
+/// Dropping the token releases the surface even when the asynchronous attempt
+/// returns early. A second marketplace login can never overtake the first and
+/// then be interrupted by its late verdict.
+pub(crate) struct LoginAttempt(Arc<AtomicBool>);
+
+impl Drop for LoginAttempt {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
 pub struct DesktopState {
     device: DeviceIdentity,
     store: Arc<dyn SessionStore>,
@@ -115,6 +127,8 @@ pub struct DesktopState {
     /// a sign-in screen is neither entitled nor revoked, and the interface
     /// owes the seller that distinction rather than a bare "not syncing".
     signed_in: AtomicBool,
+    /// Exactly one marketplace login may own the phone's one webview.
+    login_active: Arc<AtomicBool>,
     /// How this device reaches the server's registry. `Offline` by default,
     /// because this slice ships no transport and a client that believed it had
     /// checked in would never learn it had been revoked.
@@ -140,18 +154,29 @@ pub struct DesktopState {
     /// [`crate::commands::start_import`] refuse rather than start a pass that
     /// could post nothing.
     ledger: Option<Arc<dyn crate::ledger::LedgerTransport>>,
-    /// Which imports are running, so a second start for one request is
-    /// refused rather than walking the seller's shop twice at once.
-    imports: Mutex<std::collections::HashSet<tam_types::Uuid>>,
-    /// Which halves of which open runs this process has already served without
-    /// the console asking, so the check-in poll walks a shop once rather than
-    /// once an hour.
+    /// The runs this device is working, one cancellation handle each.
     ///
-    /// Per process rather than persisted, and that is the honest bound: the
-    /// run's own `listed` and `selected` flags are the durable record, and
-    /// this only covers the window between a pass finishing and the server
-    /// answering the next poll with the flag it set.
-    scheduled: Mutex<std::collections::HashSet<(tam_types::Uuid, ScheduledStep)>>,
+    /// Replaces the claim set this state used to hold. A set could say that a
+    /// run was claimed and could not stop it, which is how the console's Stop
+    /// came to settle a run on the server while the phone went on making
+    /// marketplace requests for it.
+    supervisor: Arc<ImportSupervisor>,
+    /// Where a checkpoint and an unacknowledged page survive a restart.
+    ///
+    /// [`MemoryJournal`] by default, because a state built without a data
+    /// directory has nowhere to write: the application hands in the
+    /// file-backed one, and a test hands in its own. Not a silent fallback
+    /// mid-run — it is chosen once, at construction, and a build that chose
+    /// the memory one loses checkpoints at a restart rather than losing them
+    /// while running.
+    journal: Arc<dyn ImportJournal>,
+    /// How a run reaches the seller's shop.
+    ///
+    /// A field rather than a call into [`crate::commands`], because a run
+    /// outlives the command that started it and the task therefore cannot
+    /// borrow the factory from a caller. It is the production factory in
+    /// every build the seller has.
+    catalogue: CatalogueFactory,
     /// What tells the seller, on this device's own screen, what a cycle
     /// settled. [`Silent`] by default, because a state built without a
     /// surface to show one on has nothing to raise it on.
@@ -176,12 +201,14 @@ impl DesktopState {
             gate: Arc::new(Mutex::new(EntitlementGate::closed())),
             revoked: Arc::new(AtomicBool::new(false)),
             signed_in: AtomicBool::new(false),
+            login_active: Arc::new(AtomicBool::new(false)),
             plane,
             verifying_keys: EMBEDDED_PUBLIC_KEYS.to_vec(),
             activity: Mutex::new(VecDeque::new()),
             ledger: None,
-            imports: Mutex::new(std::collections::HashSet::new()),
-            scheduled: Mutex::new(std::collections::HashSet::new()),
+            supervisor: Arc::new(ImportSupervisor::new()),
+            journal: Arc::new(MemoryJournal::default()),
+            catalogue: crate::commands::live_catalogue(),
             notifier: Arc::new(Silent),
         }
     }
@@ -204,6 +231,43 @@ impl DesktopState {
         self.ledger.clone()
     }
 
+    /// Where this device's import checkpoints are kept. A separate step for
+    /// the reason [`Self::with_ledger`] is one: the application hands in the
+    /// file under its data directory, and a test hands in its own.
+    #[must_use]
+    pub fn with_journal(mut self, journal: Arc<dyn ImportJournal>) -> Self {
+        self.journal = journal;
+        self
+    }
+
+    #[must_use]
+    pub fn journal(&self) -> Arc<dyn ImportJournal> {
+        Arc::clone(&self.journal)
+    }
+
+    /// How a run reaches the seller's shop.
+    ///
+    /// A seam rather than a constant, and the one the import tests drive: the
+    /// production factory builds a marketplace client over the seller's
+    /// stored session, so a test that had to go through it could not exercise
+    /// the real command without a marketplace.
+    #[must_use]
+    pub fn with_catalogue(mut self, catalogue: CatalogueFactory) -> Self {
+        self.catalogue = catalogue;
+        self
+    }
+
+    #[must_use]
+    pub fn catalogue(&self) -> CatalogueFactory {
+        Arc::clone(&self.catalogue)
+    }
+
+    /// The runs this device is working.
+    #[must_use]
+    pub fn supervisor(&self) -> Arc<ImportSupervisor> {
+        Arc::clone(&self.supervisor)
+    }
+
     /// What raises the one notification a cycle earns. A separate step for
     /// the reason [`Self::with_ledger`] is one: the application hands it the
     /// plugin, and a test hands it a recorder or nothing.
@@ -223,34 +287,6 @@ impl DesktopState {
     #[must_use]
     pub fn store_handle(&self) -> Arc<dyn SessionStore> {
         Arc::clone(&self.store)
-    }
-
-    /// Claims the right to run one import, or reports that it is already
-    /// running.
-    ///
-    /// Claim and release rather than a flag the command sets and clears on its
-    /// own path: the pass runs in the background and can end by an error, so
-    /// the release has to be somewhere both endings reach.
-    pub async fn claim_import(&self, request: tam_types::Uuid) -> bool {
-        self.imports.lock().await.insert(request)
-    }
-
-    pub async fn release_import(&self, request: tam_types::Uuid) {
-        self.imports.lock().await.remove(&request);
-    }
-
-    /// Whether this process has already served that half of that run.
-    ///
-    /// Read and marked as two steps rather than claimed as one, because the
-    /// mark belongs after the pass succeeded: a cycle that could not reach the
-    /// marketplace must be retried at the next one, and a claim taken up front
-    /// would refuse it until the application restarted.
-    pub async fn scheduled_step_done(&self, run: tam_types::Uuid, step: ScheduledStep) -> bool {
-        self.scheduled.lock().await.contains(&(run, step))
-    }
-
-    pub async fn mark_scheduled_step(&self, run: tam_types::Uuid, step: ScheduledStep) {
-        self.scheduled.lock().await.insert((run, step));
     }
 
     /// A state whose entitlement verifier is a key set the test generated.
@@ -276,6 +312,14 @@ impl DesktopState {
     #[must_use]
     pub fn control_plane(&self) -> &dyn ControlPlane {
         self.plane.as_ref()
+    }
+
+    /// The registry, shared, for a run that outlives the call that started
+    /// it: an import reads its own selection and renews its own fence long
+    /// after the command has answered.
+    #[must_use]
+    pub fn plane_handle(&self) -> Arc<dyn ControlPlane> {
+        Arc::clone(&self.plane)
     }
 
     #[must_use]
@@ -343,6 +387,14 @@ impl DesktopState {
 
     pub fn set_signed_in(&self, signed_in: bool) {
         self.signed_in.store(signed_in, Ordering::SeqCst);
+    }
+
+    /// Claims the one-window login surface until the returned token is dropped.
+    pub(crate) fn begin_login(&self) -> Option<LoginAttempt> {
+        self.login_active
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .ok()
+            .map(|_| LoginAttempt(Arc::clone(&self.login_active)))
     }
 
     /// Records one thing this device did, dropping the oldest entry once the

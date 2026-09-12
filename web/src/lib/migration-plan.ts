@@ -9,12 +9,7 @@
 // bundle for other reasons, so a new marketplace either arrives with them
 // answered or fails the type check here.
 
-import type {
-	Disposition,
-	MigrationBody,
-	MigrationCap,
-	MigrationCounts
-} from '$lib/api';
+import type { Disposition, MigrationBody, MigrationCap, MigrationCounts } from '$lib/api';
 import { migrationsReason } from '$lib/entitlement';
 import type { InventoryId, MigrationVerdict } from '$lib/generated/vocab';
 import { INVENTORY_ORDER } from '$lib/listings-view';
@@ -68,13 +63,13 @@ export function confirmLabel(disposition: Disposition, count: number): string {
 /** Which download this marketplace has no capture for, or null where a
  *  migration can read it.
  *
- * Mirrors `tam_storage::uncaptured_source`: Tes is the one marketplace whose
- * files Teachouse can fetch, so TPT and Etsy are refused as sources at submit.
+ * Mirrors `tam_storage::uncaptured_source`: TES and TPT have captured
+ * device-local downloads; Etsy remains unavailable as a source.
  * A total map rather than a list, so an inventory added in Rust stops this
  * file type-checking instead of being offered as a source nothing can read. */
 export const UNCAPTURED_SOURCE: Record<InventoryId, string | null> = {
 	Tes: null,
-	Tpt: 'tpt.download_resource_bundle',
+	Tpt: null,
 	Etsy: 'etsy.download_resource_bundle'
 };
 

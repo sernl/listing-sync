@@ -239,12 +239,23 @@ impl MarketplaceFiles for SellerFiles {
                         .await
                         .map_err(|why| format!("{why:?}"))
                 }
-                // Tpt's own-file download is uncaptured, and Etsy's automation
-                // runs server-side under a sanctioned token, so its bytes are
-                // the server's to hold and never this device's to fetch.
-                Marketplace::Tpt | Marketplace::Etsy => Err(format!(
-                    "no capture exists for a {marketplace:?} file download"
-                )),
+                Marketplace::Tpt => {
+                    let id: u64 = resource
+                        .parse()
+                        .map_err(|_| format!("{resource:?} is not a TPT product id"))?;
+                    let transport = SessionTransport::new(TptLive, Arc::clone(&self.sessions))
+                        .map_err(|why| why.to_string())?;
+                    TptAdapter::new(transport, NoUploads, SleepingPause)
+                        .download_resource_bundle(
+                            &FetchReason::FirstPartyExport {
+                                inventory: InventoryId::Tpt,
+                            },
+                            tam_marketplace_tpt::read_model::ProductId(id),
+                        )
+                        .await
+                        .map_err(|why| format!("{why:?}"))
+                }
+                Marketplace::Etsy => Err("no capture exists for an Etsy file download".to_owned()),
             }
         })
     }
@@ -362,13 +373,23 @@ impl<B: LiveTransport + Clone> crate::import::CatalogueSource for SellerCatalogu
     /// seller can read, and a filter here would instead make a draft vanish
     /// from the migration silently — which is the outcome
     /// `ImportPage::skipped` exists to prevent, one step earlier.
-    fn list(&self) -> SourceFuture<'_, Vec<ListedResource>> {
+    fn list<'a>(
+        &'a self,
+        found: &'a crate::import::CatalogueProgress,
+    ) -> SourceFuture<'a, Vec<ListedResource>> {
         Box::pin(async move {
             let adapter = self.adapter()?;
+            // The observed walk, so the caller learns the count after each
+            // page rather than only when the last one has answered. The
+            // unobserved form is still what the create's read-back uses,
+            // which watches nothing.
             let entries = adapter
-                .list_own_resources(&FetchReason::FirstPartyExport {
-                    inventory: self.inventory,
-                })
+                .list_own_resources_observed(
+                    &FetchReason::FirstPartyExport {
+                        inventory: self.inventory,
+                    },
+                    found,
+                )
                 .await
                 .map_err(|why| self.answered(&why))?;
             Ok(entries
@@ -431,11 +452,8 @@ impl<B: LiveTransport + Clone> crate::import::CatalogueSource for SellerCatalogu
 /// struct at the cost of the thing that makes each binding checkable, which
 /// is that it names its own marketplace's vocabulary.
 ///
-/// It reads and it does not fetch. `tpt.download_resource_bundle` is
-/// uncaptured, so this device holds no way to obtain the seller's TPT file,
-/// and `bundle` says so by answering `None` rather than by failing: a TPT
-/// import brings across the listing, and the file layers of the duplicate
-/// matcher are simply unavailable for it.
+/// Its bundle follows the seller's signed download on this device. The
+/// importer fingerprints those bytes without uploading the originals.
 pub struct TptSellerCatalogue<B: LiveTransport = TptLive> {
     sessions: Arc<dyn SessionStore>,
     inventory: InventoryId,
@@ -484,13 +502,19 @@ impl<B: LiveTransport + Clone> TptSellerCatalogue<B> {
 }
 
 impl<B: LiveTransport + Clone> crate::import::CatalogueSource for TptSellerCatalogue<B> {
-    fn list(&self) -> SourceFuture<'_, Vec<ListedResource>> {
+    fn list<'a>(
+        &'a self,
+        found: &'a crate::import::CatalogueProgress,
+    ) -> SourceFuture<'a, Vec<ListedResource>> {
         Box::pin(async move {
             let adapter = self.adapter()?;
             let entries = adapter
-                .list_own_resources(&FetchReason::FirstPartyExport {
-                    inventory: self.inventory,
-                })
+                .list_own_resources_observed(
+                    &FetchReason::FirstPartyExport {
+                        inventory: self.inventory,
+                    },
+                    found,
+                )
                 .await
                 .map_err(|why| self.answered(&why))?;
             Ok(entries
@@ -529,11 +553,22 @@ impl<B: LiveTransport + Clone> crate::import::CatalogueSource for TptSellerCatal
         })
     }
 
-    /// No capture exists for TPT's own-file download, so there is no file to
-    /// hand over — an absence this device knows in advance rather than a
-    /// fetch it attempts and fails.
-    fn bundle(&self, _resource: i64) -> SourceFuture<'_, Option<Vec<u8>>> {
-        Box::pin(core::future::ready(Ok(None)))
+    fn bundle(&self, resource: i64) -> SourceFuture<'_, Option<Vec<u8>>> {
+        Box::pin(async move {
+            let adapter = self.adapter()?;
+            adapter
+                .download_resource_bundle(
+                    &FetchReason::FirstPartyExport {
+                        inventory: self.inventory,
+                    },
+                    tam_marketplace_tpt::read_model::ProductId(u64::try_from(resource).map_err(
+                        |_| SourceError::NoClient("a TPT product id cannot be negative".to_owned()),
+                    )?),
+                )
+                .await
+                .map(Some)
+                .map_err(|why| self.answered(&why))
+        })
     }
 }
 
@@ -2147,7 +2182,7 @@ mod tests {
         let catalogue = super::SellerCatalogue::new(sessions_for(&[]).await, InventoryId::Tes);
 
         let listed = catalogue
-            .list()
+            .list(&|_found| {})
             .await
             .expect_err("a device nobody signed in on enumerates nothing");
         assert!(
@@ -2265,7 +2300,34 @@ mod tests {
             ScriptedTes(std::sync::Arc::new(cassette)),
         );
 
-        let listed = catalogue.list().await.expect("the catalogue walks");
+        // What the walk reported as it went, which is what the run's
+        // discovery stage renders: before the observer there was one answer
+        // at the end and nothing at all before it.
+        let pages = std::sync::Arc::new(core::sync::atomic::AtomicU32::new(0));
+        let rows = std::sync::Arc::new(core::sync::atomic::AtomicU32::new(0));
+        let counting = (std::sync::Arc::clone(&pages), std::sync::Arc::clone(&rows));
+        let listed = catalogue
+            .list(&move |found| {
+                counting
+                    .0
+                    .fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+                counting
+                    .1
+                    .store(found, core::sync::atomic::Ordering::SeqCst);
+            })
+            .await
+            .expect("the catalogue walks");
+        assert!(
+            pages.load(core::sync::atomic::Ordering::SeqCst) > 0,
+            "the walk reports what it has found as it reads each page, or a seller watching a \
+             large shop is shown nothing until every request has answered"
+        );
+        assert_eq!(
+            rows.load(core::sync::atomic::Ordering::SeqCst) as usize,
+            listed.len(),
+            "and the last count it reported is the number of rows it actually returned, rather \
+             than a total it assumed"
+        );
         let located: Vec<&str> = listed.iter().map(|row| row.locator.as_str()).collect();
         assert!(
             located.contains(&"13549795"),

@@ -34,6 +34,10 @@ pub mod sheet;
 pub mod sweep;
 pub mod template;
 
+/// The server's own finish for an authorised batch, so the scheduler can
+/// reach it by run kind without knowing how a batch is committed.
+pub(crate) use commit::drain_batch_run;
+
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::IntoResponse;

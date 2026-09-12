@@ -536,12 +536,38 @@ pub fn is_product_form(url: &str) -> bool {
 /// The route the product page's Download control points at. The control is a
 /// plain `<a href target="_blank">` reading `Product.downloadurl` verbatim
 /// from the page's own SSR state, with no minted token, no nonce and no XHR,
-/// so a server-side caller reproduces it as an ordinary document navigation.
+/// so a caller reproduces it as an ordinary document navigation.
 const DOWNLOAD_PREFIX: &str = "/Download/";
 
 /// The origin's sign-in gate, which is where a download redirects when the
 /// session is not cleared for it.
 const AUTHORIZATION_PATH: &str = "/Request-Authorization";
+
+/// The content network an owned download redirects to.
+///
+/// Captured on the founder's own device on 2026-09-13, on their own
+/// `product13042099`: an authenticated `GET /Download/<slug>-13042099`
+/// answered `302` to
+/// `https://rc-assets.teacherspayteachers.com/resources/13042099/assets/<opaque>?file_name=<name>.zip&verify=<token>`,
+/// and a fetch of that url with credentials omitted answered `200`
+/// `application/zip`, 14,110,742 bytes opening `PK\x03\x04`.
+///
+/// One host, exactly, and no suffix rule: this is the host that was
+/// observed. A `.ends_with` test here would admit
+/// `rc-assets.teacherspayteachers.com.example`, and widening to every https
+/// host would make a `Location` the thing that decides where the seller's
+/// own files are fetched from.
+pub const ASSET_HOST: &str = "rc-assets.teacherspayteachers.com";
+
+/// The only port the asset host is addressed on. An explicit `:443` is the
+/// same destination written longhand; any other port names a different
+/// service on a host we were pointed at, and is refused rather than reached.
+const HTTPS_PORT: &str = "443";
+
+/// The fixed segments either side of the resource id in the captured path,
+/// `/resources/{id}/assets/{opaque}`.
+const RESOURCES_SEGMENT: &str = "resources";
+const ASSETS_SEGMENT: &str = "assets";
 
 /// The seller's own copy of one of their products.
 ///
@@ -570,47 +596,242 @@ pub fn is_download_path(url: &str) -> bool {
             .is_some_and(|rest| rest.starts_with(DOWNLOAD_PREFIX))
 }
 
-/// Where a download's redirect points, which decides whether there is a
-/// second hop to make.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DownloadRedirect {
-    /// The origin's own sign-in gate. A 2026-08-29 live probe met this with a
-    /// jar that authenticates the GraphQL reads and the whole write path, so
-    /// the download is gated on something those are not.
-    Authorization,
-    /// Elsewhere on the origin, which a session request may follow.
-    SameOrigin(String),
-    /// Off the origin, which no capture shows. The session must not follow
-    /// it: the transport refuses a session request to any other host, and
-    /// that rule is what keeps the seller's cookies on the marketplace.
-    OffOrigin(String),
-}
+/// One signed asset url, exactly as the marketplace's `Location` spelled it.
+///
+/// A newtype for two reasons. The url carries a `verify` token minted for
+/// one resource and one moment, so its `Debug` prints none of it: a refusal,
+/// a log line or a panic message that formatted this would copy a live
+/// credential somewhere it was never scoped for. And the url travels byte
+/// for byte — no re-encoding, no query reordering, no normalisation —
+/// because the token signs those bytes and any repair of them invalidates it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SignedAssetUrl(String);
 
-/// Reads a redirect's `Location` against the origin. A relative location is
-/// resolved against it, an absolute one on the origin is kept, and anything
-/// else is off-origin -- including a protocol-relative `//host/path`, which
-/// is a different host wearing a leading slash.
-#[must_use]
-pub fn download_redirect(location: &str) -> DownloadRedirect {
-    let path = if location.starts_with("//") {
-        return DownloadRedirect::OffOrigin(location.to_owned());
-    } else if location.starts_with('/') {
-        location
-    } else if let Some(rest) = location.strip_prefix(ORIGIN) {
-        rest
-    } else {
-        return DownloadRedirect::OffOrigin(location.to_owned());
-    };
-    if path.starts_with(AUTHORIZATION_PATH) {
-        DownloadRedirect::Authorization
-    } else {
-        DownloadRedirect::SameOrigin(format!("{ORIGIN}{path}"))
+impl SignedAssetUrl {
+    /// The bytes, at the one place that sends them.
+    #[must_use]
+    pub fn into_url(self) -> String {
+        self.0
     }
 }
 
-/// The second hop of a download, where the first answered a redirect that
-/// stays on the origin. Session-authenticated like the first, because it is
-/// the same origin and the same navigation.
+impl core::fmt::Debug for SignedAssetUrl {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("SignedAssetUrl(<redacted>)")
+    }
+}
+
+/// Why a redirect this download will not follow was refused.
+///
+/// A reason, and no url. What a refusal may say is which part of the shape
+/// was wrong, never the destination: a rejected `Location` can still carry a
+/// live `verify` token, and an error message is the one place a value is
+/// certain to be written down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RedirectRefusal {
+    /// Not an absolute `https://` url: plaintext, a protocol-relative
+    /// authority, a relative reference, or a scheme this fetch does not
+    /// speak.
+    NotHttps,
+    /// Userinfo in the authority, which is a credential in a url.
+    CredentialsInUrl,
+    /// A port other than 443.
+    NonStandardPort,
+    /// A fragment, which no request sends and which hides the tail of a url
+    /// from a naive path test.
+    Fragment,
+    /// A host that is not the one captured asset host.
+    ForeignHost,
+    /// That host, and a path that is not this product's own asset.
+    ForeignResource,
+    /// Characters a URL parser would discard or reinterpret.
+    NonCanonicalUrl,
+}
+
+impl core::fmt::Display for RedirectRefusal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::NotHttps => "the location is not an absolute https url",
+            Self::CredentialsInUrl => "the location carries userinfo credentials",
+            Self::NonStandardPort => "the location names a port other than 443",
+            Self::Fragment => "the location carries a fragment",
+            Self::ForeignHost => "the location names a host other than the captured asset host",
+            Self::ForeignResource => "the location names another resource than the one requested",
+            Self::NonCanonicalUrl => "the location is not canonically encoded",
+        })
+    }
+}
+
+/// Where a download's redirect points, which decides whether there is a
+/// second hop to make and what may carry it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DownloadRedirect {
+    /// The origin's own sign-in gate. A 2026-08-29 live probe met this with a
+    /// server-side jar that authenticates the GraphQL reads and the whole
+    /// write path, so the download is gated on something those are not.
+    Authorization,
+    /// Elsewhere on the origin, which a session request may follow.
+    SameOrigin(String),
+    /// The captured asset hop: the one observed content-network host, and a
+    /// path bound to the product that was asked for. Followed once, carrying
+    /// nothing of ours.
+    CapturedAsset(SignedAssetUrl),
+    /// Anywhere else, and which part of the shape refused it.
+    Refused(RedirectRefusal),
+}
+
+/// Reads a redirect's `Location` against the origin and against the one
+/// captured asset host, for the product the download asked for.
+///
+/// A relative location is resolved against the origin and an absolute one on
+/// the origin is kept. Anything else is measured against the captured asset
+/// shape and refused with a reason if it does not match — including a
+/// protocol-relative `//host/path`, which is a different host wearing a
+/// leading slash.
+///
+/// The product id is a parameter because it is the binding. A `Location`
+/// naming the right host and somebody else's resource is the one plausible
+/// way this hop fetches a file nobody asked for, and the id in the path is
+/// the only part of that url this code can check against the request that
+/// produced it.
+#[must_use]
+pub fn download_redirect(location: &str, product: ProductId) -> DownloadRedirect {
+    let path = if location.starts_with("//") {
+        None
+    } else if location.starts_with('/') {
+        Some(location)
+    } else {
+        // The origin prefix must end the authority rather than merely begin
+        // it, or `https://www.teacherspayteachers.com.example/x` reads as a
+        // path on the origin.
+        match location.strip_prefix(ORIGIN) {
+            Some("") => Some("/"),
+            Some(rest) if rest.starts_with(['/', '?', '#']) => Some(rest),
+            Some(_) | None => None,
+        }
+    };
+    match path {
+        Some(path) if path.starts_with(AUTHORIZATION_PATH) => DownloadRedirect::Authorization,
+        Some(path) => DownloadRedirect::SameOrigin(format!("{ORIGIN}{path}")),
+        None => match captured_asset(location, product) {
+            Ok(asset) => DownloadRedirect::CapturedAsset(asset),
+            Err(why) => DownloadRedirect::Refused(why),
+        },
+    }
+}
+
+/// One `Location` measured against the captured asset hop, whole: the
+/// authority by [`asset_target`] and the path by [`is_product_asset_path`].
+/// The url handed back is the input's own bytes.
+fn captured_asset(location: &str, product: ProductId) -> Result<SignedAssetUrl, RedirectRefusal> {
+    let target = asset_target(location)?;
+    let path = target.split('?').next().unwrap_or(target);
+    if !is_product_asset_path(path, product) {
+        return Err(RedirectRefusal::ForeignResource);
+    }
+    Ok(SignedAssetUrl(location.to_owned()))
+}
+
+/// The path and query of an absolute https url on the captured asset host,
+/// and a reason for anything else.
+///
+/// Scheme, userinfo, port, fragment and host are decided here and nowhere
+/// else, because the same question is asked twice — of a `Location` that
+/// arrived and of a request about to leave — and two spellings of it would
+/// eventually disagree about one of them.
+fn asset_target(url: &str) -> Result<&str, RedirectRefusal> {
+    if !url.is_ascii()
+        || url.bytes().any(|byte| {
+            byte.is_ascii_control()
+                || byte.is_ascii_whitespace()
+                || matches!(byte, b'\\' | b'"' | b'<' | b'>' | b'`' | b'\'')
+        })
+    {
+        return Err(RedirectRefusal::NonCanonicalUrl);
+    }
+    if url.contains('#') {
+        return Err(RedirectRefusal::Fragment);
+    }
+    let rest = url
+        .strip_prefix("https://")
+        .ok_or(RedirectRefusal::NotHttps)?;
+    let authority_end = rest
+        .find(['/', '?'])
+        .ok_or(RedirectRefusal::ForeignResource)?;
+    let (authority, target) = rest
+        .split_at_checked(authority_end)
+        .ok_or(RedirectRefusal::ForeignHost)?;
+    if authority.contains('@') {
+        return Err(RedirectRefusal::CredentialsInUrl);
+    }
+    let host = match authority.split_once(':') {
+        None => authority,
+        Some((host, port)) if port == HTTPS_PORT => host,
+        Some(_) => return Err(RedirectRefusal::NonStandardPort),
+    };
+    if !host.eq_ignore_ascii_case(ASSET_HOST) {
+        return Err(RedirectRefusal::ForeignHost);
+    }
+    Ok(target)
+}
+
+/// `/resources/{id}/assets/{opaque}`, for one id: the captured shape, with
+/// the requested product's own decimal id in it and nothing after the asset.
+fn is_product_asset_path(path: &str, product: ProductId) -> bool {
+    let expected = product.0.to_string();
+    let mut segments = path.strip_prefix('/').unwrap_or(path).split('/');
+    segments.next() == Some(RESOURCES_SEGMENT)
+        && segments.next() == Some(expected.as_str())
+        && segments.next() == Some(ASSETS_SEGMENT)
+        && segments.next().is_some_and(is_asset_segment)
+        && segments.next().is_none()
+}
+
+/// An opaque, unreserved path segment: escaped separators and dot segments
+/// must not be normalized into a different product's path.
+fn is_asset_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment != "."
+        && segment != ".."
+        && segment
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~'))
+}
+
+/// True where a url is an absolute https url on the captured asset host,
+/// with no userinfo, no other port and no fragment.
+///
+/// The transport's half of the asset rule. It stops short of the resource
+/// binding deliberately: which product a request is for is the flow's
+/// knowledge, and a path-shape test here without it would read as a stronger
+/// check than it is.
+#[must_use]
+pub fn is_asset_url(url: &str) -> bool {
+    asset_target(url).is_ok()
+}
+
+/// The captured second hop, re-issued carrying nothing of ours.
+///
+/// [`RequestAuth::Redirected`] is what keeps the seller's cookie and CSRF
+/// pair off it: the transport routes that authentication to the client
+/// holding no jar and following no redirect, and refuses the pairing of a
+/// session with this host outright. The body is empty and the method is GET
+/// because that is the request the capture made, and the url is the
+/// marketplace's own bytes unaltered — the `verify` token signs them.
+#[must_use]
+pub fn signed_asset_request(asset: SignedAssetUrl) -> HttpRequest {
+    HttpRequest {
+        method: Method::Get,
+        url: asset.into_url(),
+        body: RequestBody::Empty,
+        auth: RequestAuth::Redirected,
+    }
+}
+
+/// The second hop of a download whose redirect stayed on the origin.
+/// Session-authenticated like the first, because it is the same origin and
+/// the same navigation. No capture carries one; the asset hop above is what
+/// the observed redirect produces.
 #[must_use]
 pub fn download_redirect_request(url: String) -> HttpRequest {
     HttpRequest::get(url)
@@ -874,13 +1095,197 @@ pub fn remove_resource_request(product: ProductId) -> HttpRequest {
 #[cfg(test)]
 mod tests {
     use super::{
-        all_time_stats_request, form_page_request, is_gateway, is_product_form,
-        my_product_listings_request, remove_resource_request, AllTimeMetric, FormTarget, Service,
-        MY_PRODUCT_LISTINGS_QUERY, ORIGIN,
+        all_time_stats_request, download_redirect, form_page_request, is_asset_url, is_gateway,
+        is_product_form, my_product_listings_request, remove_resource_request,
+        signed_asset_request, AllTimeMetric, DownloadRedirect, FormTarget, RedirectRefusal,
+        Service, ASSET_HOST, MY_PRODUCT_LISTINGS_QUERY, ORIGIN,
     };
     use crate::read_model::ProductId;
     use serde_json::{json, Value};
-    use tam_marketplace::transport::RequestBody;
+    use tam_marketplace::transport::{Method, RequestAuth, RequestBody};
+
+    /// The product and the url shape the 2026-09-13 device capture carries.
+    /// The token is synthetic; the path and the host are the observed ones.
+    const OWNED: ProductId = ProductId(13_042_099);
+
+    fn captured_location() -> String {
+        format!(
+            "https://{ASSET_HOST}/resources/13042099/assets/9f2c1b?file_name=worksheet.zip&verify=token"
+        )
+    }
+
+    #[test]
+    fn the_captured_asset_location_is_followed_byte_for_byte() {
+        let location = captured_location();
+        let DownloadRedirect::CapturedAsset(asset) = download_redirect(&location, OWNED) else {
+            panic!("the captured shape is the one redirect this download follows");
+        };
+        let request = signed_asset_request(asset);
+        assert_eq!(
+            request.url, location,
+            "the verify token signs these bytes, so nothing re-encodes or reorders them"
+        );
+        assert_eq!(
+            (request.method, request.body, request.auth),
+            (Method::Get, RequestBody::Empty, RequestAuth::Redirected),
+            "the capture is a bodyless GET carrying none of the seller's session"
+        );
+        assert!(
+            is_asset_url(&location),
+            "and the transport's own half of the rule admits the same url"
+        );
+    }
+
+    /// Neither a refusal nor a `Debug` line may carry the signed url.
+    ///
+    /// The token authorises a fetch of the seller's file by itself, and an
+    /// error message is the one value certain to be written down somewhere
+    /// nobody scoped for it.
+    #[test]
+    fn no_refusal_or_debug_line_repeats_the_signed_url() {
+        let location = captured_location();
+        let followed = download_redirect(&location, OWNED);
+        let printed = format!("{followed:?}");
+        assert!(
+            !printed.contains("verify") && !printed.contains("9f2c1b"),
+            "the url is redacted where it is printed, and printed: {printed}"
+        );
+        let refused = format!(
+            "{:?} {}",
+            download_redirect(&location, ProductId(90_000_042)),
+            RedirectRefusal::ForeignResource
+        );
+        assert!(
+            !refused.contains("verify") && !refused.contains(ASSET_HOST),
+            "a refusal names the shape that was wrong and not the destination, and said: \
+             {refused}"
+        );
+    }
+
+    /// Every way of pointing somewhere else while resembling the captured
+    /// hop. Each row is a refusal with a reason, because a `Location` decides
+    /// nothing here beyond which of these it matches.
+    #[test]
+    fn a_redirect_that_is_not_the_captured_asset_is_refused_with_its_reason() {
+        let expected = [
+            (
+                format!("http://{ASSET_HOST}/resources/13042099/assets/9f2c1b"),
+                RedirectRefusal::NotHttps,
+            ),
+            (
+                "//rc-assets.teacherspayteachers.com/resources/13042099/assets/9f2c1b".to_owned(),
+                RedirectRefusal::NotHttps,
+            ),
+            (
+                format!("https://{ASSET_HOST}.example/resources/13042099/assets/9f2c1b"),
+                RedirectRefusal::ForeignHost,
+            ),
+            (
+                format!("https://example.invalid/{ASSET_HOST}/resources/13042099/assets/9f2c1b"),
+                RedirectRefusal::ForeignHost,
+            ),
+            (
+                format!("https://{ASSET_HOST}@example.invalid/resources/13042099/assets/9f2c1b"),
+                RedirectRefusal::CredentialsInUrl,
+            ),
+            (
+                format!("https://{ASSET_HOST}:8443/resources/13042099/assets/9f2c1b"),
+                RedirectRefusal::NonStandardPort,
+            ),
+            (
+                format!("https://{ASSET_HOST}/resources/13042099/assets/9f2c1b#x"),
+                RedirectRefusal::Fragment,
+            ),
+            (
+                format!("https://{ASSET_HOST}/resources/90000042/assets/9f2c1b?verify=token"),
+                RedirectRefusal::ForeignResource,
+            ),
+            (
+                format!("https://{ASSET_HOST}/resources/13042099/assets/"),
+                RedirectRefusal::ForeignResource,
+            ),
+            (
+                format!("https://{ASSET_HOST}/resources/13042099/assets/..%2f..%2fresources"),
+                RedirectRefusal::ForeignResource,
+            ),
+            (
+                format!("https://{ASSET_HOST}/resources/13042099/assets/9f2c1b/extra"),
+                RedirectRefusal::ForeignResource,
+            ),
+            (
+                format!("https://{ASSET_HOST}/downloads/13042099"),
+                RedirectRefusal::ForeignResource,
+            ),
+            (
+                format!("https://{ASSET_HOST}"),
+                RedirectRefusal::ForeignResource,
+            ),
+            (
+                "Download/worksheet-13042099".to_owned(),
+                RedirectRefusal::NotHttps,
+            ),
+        ];
+        for (location, why) in expected {
+            assert_eq!(
+                download_redirect(&location, OWNED),
+                DownloadRedirect::Refused(why),
+                "{location} is not the captured asset hop"
+            );
+            assert!(
+                !is_asset_url(&location) || matches!(why, RedirectRefusal::ForeignResource),
+                "and the transport refuses it too, except where only the resource binding — \
+                 which the transport cannot know — is what failed: {location}"
+            );
+        }
+    }
+
+    /// The origin's own answers, which are read before the asset rule and
+    /// are not affected by it.
+    #[test]
+    fn the_origins_own_redirects_are_still_read_as_the_origins() {
+        assert_eq!(
+            download_redirect("/Request-Authorization?authModal=login", OWNED),
+            DownloadRedirect::Authorization,
+            "the sign-in gate is the condition the 2026-08-29 server-side probe met"
+        );
+        assert_eq!(
+            download_redirect(&format!("{ORIGIN}/Request-Authorization"), OWNED),
+            DownloadRedirect::Authorization,
+            "spelled absolutely, it is the same gate"
+        );
+        assert_eq!(
+            download_redirect("/Download/worksheet-13042099?attempt=2", OWNED),
+            DownloadRedirect::SameOrigin(format!("{ORIGIN}/Download/worksheet-13042099?attempt=2")),
+            "somewhere else on the origin is a hop the session may make"
+        );
+        assert_eq!(
+            download_redirect(&format!("{ORIGIN}.example/Download/x"), OWNED),
+            DownloadRedirect::Refused(RedirectRefusal::ForeignHost),
+            "a host that merely begins with the origin is another host, not a path on ours"
+        );
+    }
+
+    #[test]
+    fn asset_paths_that_a_url_parser_would_rewrite_are_refused() {
+        for segment in [
+            r"x\..\..\..\90000042\assets\other",
+            "%2e",
+            ".%2e",
+            "asset\tname",
+            "asset\nname",
+        ] {
+            let location = format!(
+                "https://rc-assets.teacherspayteachers.com/resources/13042099/assets/{segment}?verify=synthetic"
+            );
+            assert!(
+                matches!(
+                    download_redirect(&location, OWNED),
+                    DownloadRedirect::Refused(_)
+                ),
+                "a noncanonical path must not escape the product binding"
+            );
+        }
+    }
 
     #[test]
     fn the_two_services_are_told_apart_by_the_url_alone() {

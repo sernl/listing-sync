@@ -5,10 +5,14 @@
 //! session client alone, and what a request declares about its own
 //! authentication decides which client may carry it.
 //!
-//! Redirects are never followed. The create and edit submits answer 302 with
-//! an empty body, and the `Location` is the only place the product id
-//! appears — a transport that chased it would discard the identifier and hand
-//! the flow the product page instead.
+//! Redirects are never followed by a client. The create and edit submits
+//! answer 302 with an empty body, and the `Location` is the only place the
+//! product id appears — a transport that chased it would discard the
+//! identifier and hand the flow the product page instead. The own-bundle
+//! download answers 302 too, to a signed url on the marketplace's asset
+//! network, and that one the flow re-issues itself: it arrives declaring
+//! `Redirected`, which routes it to the client holding no jar, and it is
+//! admitted only to the host the capture named.
 //!
 //! The header envelope is per request rather than per client, because the
 //! capture distinguishes three shapes on one host: the product form renders
@@ -164,6 +168,14 @@ impl ReqwestTransport {
 enum Route {
     Session,
     Bare,
+    /// The asset hop the marketplace named. It rides the bare client, which
+    /// already holds no jar and — like every client this transport builds —
+    /// follows nothing; a third identical client would assert nothing a test
+    /// of those two does not. The variant exists so the decision is a named
+    /// one: routing a marketplace-named destination is not the same act as
+    /// routing a request to the bucket, and a future change to either client
+    /// has to say which it meant.
+    Redirected,
 }
 
 /// The host of an absolute http(s) url, without userinfo or port. `None` for
@@ -182,31 +194,48 @@ fn is_s3_host(host: &str) -> bool {
     host == S3_HOST || host.ends_with(".s3.amazonaws.com")
 }
 
+/// The asset hop's own assertion, which is narrower than the other two
+/// arms rather than looser.
+///
+/// The Tes adapter admits any https host but its own, because that
+/// marketplace's content network may be re-pointed and no constant could be
+/// maintained for it. Here the host was captured — `rc-assets`, on the
+/// marketplace's own domain — so it is named, and a `Location` pointing
+/// anywhere else never becomes a request. The method and body are asserted
+/// because the capture is a bodyless GET: a redirected POST is a shape
+/// nobody has measured, and a body on this hop would be ours travelling to
+/// a host we were merely pointed at.
+fn is_captured_asset_hop(request: &HttpRequest) -> bool {
+    matches!(request.method, Method::Get)
+        && matches!(request.body, RequestBody::Empty)
+        && endpoints::is_asset_url(&request.url)
+}
+
 /// The host assertion. A request's declared authentication and its
 /// destination must agree or it never leaves, so the seller's session cannot
-/// reach the bucket and an upload signature cannot reach TPT, whatever
+/// reach the bucket, an upload signature cannot reach TPT, and a redirected
+/// hop cannot reach anything but the one captured asset host — whatever
 /// request value a future flow builds.
 fn route(request: &HttpRequest) -> Result<Route, TransportError> {
     let host = host_of(&request.url).ok_or(TransportError::NotSent(ConnectFailure::DnsFailure))?;
     let permitted = match request.auth {
         RequestAuth::Session => host == SESSION_HOST,
         RequestAuth::Anonymous | RequestAuth::S3SigV2 { .. } => is_s3_host(host),
-        // Refused outright here, unlike on the Tes adapter, and the asymmetry
-        // is the honest state rather than an omission. A redirected hop is a
-        // destination a marketplace named, and this adapter has no flow that
-        // re-issues one: TPT's own-file download is uncaptured, so nothing
-        // here has ever seen the redirect that would produce such a request.
-        // Admitting it on the strength of the other adapter's capture would be
-        // asserting a shape nobody has measured on this one.
-        RequestAuth::Redirected => false,
+        // The own-bundle download's second hop, captured on the founder's own
+        // device on 2026-09-13. The session arm above is what keeps the
+        // seller's cookie off it, and this arm is what stops the pairing
+        // being used in reverse: a `Location` cannot route a credential-free
+        // request back into the marketplace origin, nor out to a host the
+        // capture never named.
+        RequestAuth::Redirected => is_captured_asset_hop(request),
     };
     if !permitted {
         return Err(TransportError::NotSent(ConnectFailure::NoRouteToHost));
     }
-    Ok(if request.auth.is_session() {
-        Route::Session
-    } else {
-        Route::Bare
+    Ok(match request.auth {
+        RequestAuth::Session => Route::Session,
+        RequestAuth::Redirected => Route::Redirected,
+        RequestAuth::Anonymous | RequestAuth::S3SigV2 { .. } => Route::Bare,
     })
 }
 
@@ -587,31 +616,103 @@ mod tests {
         HttpRequest, Method, RequestAuth, RequestBody, ResponseHeader, TransportError,
     };
 
-    /// This adapter refuses a marketplace-named hop rather than routing one.
+    /// The captured asset hop rides the client that carries nothing of ours,
+    /// and only that hop does.
     ///
-    /// The arm exists because a new `RequestAuth` variant is a compile error
-    /// in every exhaustive match, and without a test it only compiles. The
-    /// refusal is deliberate rather than an omission: TPT's own-file download
-    /// is uncaptured, so nothing here has ever seen the redirect that would
-    /// produce such a request, and admitting it on the strength of the other
-    /// adapter's capture would assert a shape nobody has measured on this
-    /// marketplace.
+    /// The url is the 2026-09-13 capture's shape with a synthetic token. What
+    /// the adversarial rows guard is the pairing itself: `Redirected` is the
+    /// one authentication that reaches a host other than the origin and the
+    /// bucket, so every way of writing "somewhere else" while looking like
+    /// the asset host is a way of aiming a request this transport will send.
     #[test]
-    fn a_redirected_hop_is_refused_because_no_capture_produces_one_here() {
+    fn the_captured_asset_hop_is_the_only_redirected_destination() {
+        let asset = format!(
+            "https://{}/resources/13042099/assets/9f2c1b?file_name=worksheet.zip&verify=token",
+            crate::endpoints::ASSET_HOST
+        );
+        assert_eq!(
+            route(&redirected(asset.clone())),
+            Ok(Route::Redirected),
+            "the signed url the download redirected to rides the cookie-free client"
+        );
+        assert_eq!(
+            route(&redirected(format!(
+                "https://{}:443/resources/13042099/assets/9f2c1b?verify=token",
+                crate::endpoints::ASSET_HOST
+            ))),
+            Ok(Route::Redirected),
+            "an explicit 443 is the same destination written longhand"
+        );
         for url in [
-            "https://d111111abcdef8.cloudfront.net/bundle?Signature=abc",
-            "https://www.teacherspayteachers.com/Product/1",
+            asset.replace("https://", "http://"),
+            asset.replace(
+                crate::endpoints::ASSET_HOST,
+                &format!("{}.example", crate::endpoints::ASSET_HOST),
+            ),
+            format!(
+                "https://example.invalid/{}/resources/13042099/assets/9f2c1b",
+                crate::endpoints::ASSET_HOST
+            ),
+            format!(
+                "https://{}@example.invalid/resources/13042099/assets/9f2c1b",
+                crate::endpoints::ASSET_HOST
+            ),
+            asset.replace(
+                crate::endpoints::ASSET_HOST,
+                &format!("{}:8443", crate::endpoints::ASSET_HOST),
+            ),
+            format!("{asset}#/resources/13042099/assets/9f2c1b"),
+            format!("{ORIGIN}/Download/anything-13042099"),
+            "https://d111111abcdef8.cloudfront.net/bundle?Signature=abc".to_owned(),
         ] {
-            let request = HttpRequest {
-                method: Method::Get,
-                url: (*url).to_owned(),
+            assert_eq!(
+                route(&redirected(url.clone())),
+                Err(TransportError::NotSent(
+                    tam_marketplace::ConnectFailure::NoRouteToHost
+                )),
+                "a redirected hop to {url} is a destination no capture named"
+            );
+        }
+        assert_eq!(
+            route(&HttpRequest::get(asset.clone())),
+            Err(TransportError::NotSent(
+                tam_marketplace::ConnectFailure::NoRouteToHost
+            )),
+            "and the seller's session may not reach the asset host at all, which is what keeps \
+             the cookie off the signed hop"
+        );
+        assert_eq!(
+            route(&HttpRequest {
+                method: Method::Post,
+                url: asset.clone(),
                 body: RequestBody::Empty,
                 auth: RequestAuth::Redirected,
-            };
-            assert!(
-                super::route(&request).is_err(),
-                "{url} must be refused: this adapter has no flow that re-issues a hop"
-            );
+            }),
+            Err(TransportError::NotSent(
+                tam_marketplace::ConnectFailure::NoRouteToHost
+            )),
+            "the capture is a GET, and a redirected POST is a shape nobody has measured"
+        );
+        assert_eq!(
+            route(&HttpRequest {
+                method: Method::Get,
+                url: asset,
+                body: RequestBody::Bytes(b"ours".to_vec()),
+                auth: RequestAuth::Redirected,
+            }),
+            Err(TransportError::NotSent(
+                tam_marketplace::ConnectFailure::NoRouteToHost
+            )),
+            "and a body on this hop would be ours, travelling to a host we were merely pointed at"
+        );
+    }
+
+    fn redirected(url: String) -> HttpRequest {
+        HttpRequest {
+            method: Method::Get,
+            url,
+            body: RequestBody::Empty,
+            auth: RequestAuth::Redirected,
         }
     }
 
@@ -912,6 +1013,43 @@ mod tests {
                     ACCEPT_LANGUAGE.to_lowercase()
                 )),
             "both clients carry the seller's browser identity, and the head was: {head}"
+        );
+    }
+
+    /// The asset hop as it goes out: no cookie, no CSRF mirror, no origin,
+    /// and a 3xx that arrives rather than being chased.
+    ///
+    /// `route` proves which client the hop is handed to and this proves what
+    /// that client sends, which is the half a routing assertion cannot
+    /// reach: a default header added to the wrong client would leave every
+    /// route test green while putting the seller's session on a host the
+    /// marketplace named.
+    #[tokio::test]
+    async fn the_redirected_hop_carries_nothing_of_ours_and_follows_nothing() {
+        let (url, server) = echo_once(
+            "HTTP/1.1 302 Found\r\nlocation: https://elsewhere.invalid/again\r\n\
+             content-length: 0\r\nconnection: close\r\n\r\n",
+        );
+        let bare = build_client(bare_headers()).expect("the bare client builds");
+        let response = probe(&bare, redirected(url))
+            .await
+            .expect("the probe server answers");
+        let head = server.join().expect("the probe server finishes");
+        assert!(
+            !head.contains("cookie:")
+                && !head.contains("x-csrf-token:")
+                && !head.contains("origin:"),
+            "the signed hop names neither the seller's session nor the marketplace, and sent: \
+             {head}"
+        );
+        assert_eq!(
+            response.status, 302,
+            "a client that chased the second redirect would report what it found there instead"
+        );
+        assert_eq!(
+            response.header(ResponseHeader::Location),
+            Some("https://elsewhere.invalid/again"),
+            "and the flow sees the second hop it refuses, rather than reqwest making it"
         );
     }
 

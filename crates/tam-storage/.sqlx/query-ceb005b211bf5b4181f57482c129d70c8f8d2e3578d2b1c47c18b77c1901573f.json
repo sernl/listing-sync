@@ -1,0 +1,96 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT g.id, g.slug, g.published_title AS \"title!\", g.published_revision AS \"source_revision!\", g.published_at AS \"published_at!\", t.id AS \"topic_id?\", t.slug AS \"topic_slug?\", t.name AS \"topic_name?\", t.retired AS \"topic_retired?\", tags.ids AS \"tag_ids?\", tags.slugs AS \"tag_slugs?\", tags.names AS \"tag_names?\", tags.retireds AS \"tag_retireds?\" FROM guide g LEFT JOIN guide_taxon t ON t.id = g.published_topic_id LEFT JOIN LATERAL ( SELECT array_agg(x.id ORDER BY lower(x.name), x.slug) AS ids, array_agg(x.slug ORDER BY lower(x.name), x.slug) AS slugs, array_agg(x.name ORDER BY lower(x.name), x.slug) AS names, array_agg(x.retired ORDER BY lower(x.name), x.slug) AS retireds FROM guide_tag_assignment a JOIN guide_taxon x ON x.id = a.taxon_id WHERE a.guide_id = g.id AND a.scope = 'published') tags ON true WHERE g.published_at IS NOT NULL AND ($1::text IS NULL OR g.published_title ILIKE '%' || $1 || '%' ESCAPE '\\' OR g.published_body ILIKE '%' || $1 || '%' ESCAPE '\\' OR t.name ILIKE '%' || $1 || '%' ESCAPE '\\' OR EXISTS ( SELECT 1 FROM guide_tag_assignment a JOIN guide_taxon x ON x.id = a.taxon_id WHERE a.guide_id = g.id AND a.scope = 'published' AND x.name ILIKE '%' || $1 || '%' ESCAPE '\\')) AND ($2::uuid IS NULL OR g.published_topic_id = $2) AND (cardinality($3::uuid[]) = 0 OR EXISTS ( SELECT 1 FROM guide_tag_assignment a WHERE a.guide_id = g.id AND a.scope = 'published' AND a.taxon_id = ANY($3))) ORDER BY g.published_at DESC, g.slug",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "title!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "source_revision!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "published_at!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "topic_id?",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "topic_slug?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "topic_name?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "topic_retired?",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "tag_ids?",
+        "type_info": "UuidArray"
+      },
+      {
+        "ordinal": 10,
+        "name": "tag_slugs?",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 11,
+        "name": "tag_names?",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 12,
+        "name": "tag_retireds?",
+        "type_info": "BoolArray"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "ceb005b211bf5b4181f57482c129d70c8f8d2e3578d2b1c47c18b77c1901573f"
+}

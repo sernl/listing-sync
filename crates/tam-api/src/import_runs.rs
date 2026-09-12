@@ -19,13 +19,17 @@ use axum::extract::{Path, State};
 use axum::http::{header, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use tam_engine_driver::import::ObservedResource;
-use tam_import::{import_one, AppliedResource, HeldFile, ImportRun, ImportedFile};
+use tam_engine_driver::import::{
+    ImportClaim, ImportLease, ImportProgressReport, ImportRenewal, ImportStop, ImportStopAck,
+    ObservedResource,
+};
+use tam_import::{AppliedResource, HeldFile, ImportRun, ImportedFile};
 use tam_storage::{
-    job_request_key, BlobRepo, DuplicateRepo, EventScope, FingerprintRepo, FingerprintWrite,
-    ImportRunHead, ImportRunItemRecord, ImportRunRepo, JobOrigin, JobRepo, LabelRepo, MatchLayer,
-    NewImportRun, NewJob, NewVerdict, RunCounts, RunItemState, RunKind, RunOpening, RunState,
-    Selection, TextSketchColumns, IMPORT_LEG,
+    job_request_key, BlobRepo, ClaimOutcome, EventScope, FenceOutcome, FingerprintWrite,
+    ImportReasonCode, ImportRunHead, ImportRunItemRecord, ImportRunRepo, ImportStage, JobOrigin,
+    JobRepo, MatchLayer, NewImportRun, NewJob, NewVerdict, ProgressReport, ReceiptOutcome,
+    RunCounts, RunItemState, RunKind, RunOpening, RunState, Selection, TextSketchColumns,
+    IMPORT_LEG,
 };
 use tam_types::{
     Actor, ContentHash, FileBytes, FileKind, InventoryId, JobEventPayload, JobId, Marketplace,
@@ -178,6 +182,251 @@ impl RunCountsView {
     }
 }
 
+/// The displayed lifecycle of a run, decided by the server.
+///
+/// One vocabulary combining the run's own state with who holds it and how
+/// fresh their contact is, because the alternative is what this replaces: a
+/// browser inferring liveness from an event stream it happens to be holding
+/// open, which cannot tell a working device from a phone that has been off
+/// since Tuesday.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportRunStage {
+    /// Nothing has claimed it yet.
+    Waiting,
+    Discovering,
+    Selecting,
+    Reading,
+    Reviewing,
+    Committing,
+    /// It was claimed, and its owner stopped answering. Resumable.
+    Interrupted,
+    Failed,
+    Completed,
+    Abandoned,
+}
+
+impl ImportRunStage {
+    /// The closed set, in a stable order, for the vocabulary generator.
+    pub const ALL: [Self; 10] = [
+        Self::Waiting,
+        Self::Discovering,
+        Self::Selecting,
+        Self::Reading,
+        Self::Reviewing,
+        Self::Committing,
+        Self::Interrupted,
+        Self::Failed,
+        Self::Completed,
+        Self::Abandoned,
+    ];
+}
+
+/// Why an import stopped, on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportReasonCodeView {
+    MissingSession,
+    NotPermitted,
+    UnsupportedSource,
+    EnumerationFailed,
+    DescriptionFailed,
+    SubmissionFailed,
+    ActivationExpired,
+    LeaseExpired,
+    Stopped,
+    ClientUpdateRequired,
+}
+
+impl ImportReasonCodeView {
+    pub const ALL: [Self; 10] = [
+        Self::MissingSession,
+        Self::NotPermitted,
+        Self::UnsupportedSource,
+        Self::EnumerationFailed,
+        Self::DescriptionFailed,
+        Self::SubmissionFailed,
+        Self::ActivationExpired,
+        Self::LeaseExpired,
+        Self::Stopped,
+        Self::ClientUpdateRequired,
+    ];
+
+    #[must_use]
+    pub const fn of(code: ImportReasonCode) -> Self {
+        match code {
+            ImportReasonCode::MissingSession => Self::MissingSession,
+            ImportReasonCode::NotPermitted => Self::NotPermitted,
+            ImportReasonCode::UnsupportedSource => Self::UnsupportedSource,
+            ImportReasonCode::EnumerationFailed => Self::EnumerationFailed,
+            ImportReasonCode::DescriptionFailed => Self::DescriptionFailed,
+            ImportReasonCode::SubmissionFailed => Self::SubmissionFailed,
+            ImportReasonCode::ActivationExpired => Self::ActivationExpired,
+            ImportReasonCode::LeaseExpired => Self::LeaseExpired,
+            ImportReasonCode::Stopped => Self::Stopped,
+            ImportReasonCode::ClientUpdateRequired => Self::ClientUpdateRequired,
+        }
+    }
+
+    #[must_use]
+    pub const fn into_storage(self) -> ImportReasonCode {
+        match self {
+            Self::MissingSession => ImportReasonCode::MissingSession,
+            Self::NotPermitted => ImportReasonCode::NotPermitted,
+            Self::UnsupportedSource => ImportReasonCode::UnsupportedSource,
+            Self::EnumerationFailed => ImportReasonCode::EnumerationFailed,
+            Self::DescriptionFailed => ImportReasonCode::DescriptionFailed,
+            Self::SubmissionFailed => ImportReasonCode::SubmissionFailed,
+            Self::ActivationExpired => ImportReasonCode::ActivationExpired,
+            Self::LeaseExpired => ImportReasonCode::LeaseExpired,
+            Self::Stopped => ImportReasonCode::Stopped,
+            Self::ClientUpdateRequired => ImportReasonCode::ClientUpdateRequired,
+        }
+    }
+}
+
+/// Who is executing a run, and what the server knows about it.
+///
+/// Every field is read from a stored fact. `stage` is the one the console
+/// renders: it is the run's lifecycle and its freshness combined here, on the
+/// server, so "live" never means "a stream is open" and an interrupted run
+/// says so.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportExecutionView {
+    pub owner_device: Option<String>,
+    pub attempt: u64,
+    /// Unix milliseconds, which is every other timestamp on this wire.
+    pub lease_expires_at: Option<Timestamp>,
+    pub last_contact_at: Option<Timestamp>,
+    /// When something last actually moved, which is not the same as when the
+    /// owner last spoke.
+    pub last_progress_at: Option<Timestamp>,
+    pub stage: ImportRunStage,
+    pub reason_code: Option<ImportReasonCodeView>,
+    pub reason: Option<String>,
+    pub discovered: u32,
+    /// What the owner reported it had worked through, failures included.
+    pub processed: u32,
+    /// How many items were actually described, counted from the stored
+    /// descriptions rather than reported: `observed` is written by the read
+    /// and by nothing else. Listed and unselected rows have no description,
+    /// a row skipped at selection was never read, and a row whose source read
+    /// failed holds a reason instead — so this excludes all of those and
+    /// includes every row that was described, whatever it has since become
+    /// (matched, in review, imported, merged away, or failed at the commit).
+    ///
+    /// A device taking a run over has no journal of its own, and this is what
+    /// it resumes from. `processed` cannot serve: it counts failures too.
+    pub described: u32,
+    pub enumeration_complete: bool,
+    /// The frozen denominator of the reading stage.
+    pub selected_total: Option<u32>,
+    /// Whether a catalogue commit has been authorised: the seller's own
+    /// confirmation, or the scheduler's approved rule. Finishing the
+    /// descriptions is neither.
+    pub commit_authorised: bool,
+}
+
+impl ImportExecutionView {
+    /// `described` is read separately because it is a count over the run's
+    /// items rather than a fact on the run's own row; every caller has it to
+    /// hand or reads it beside the head.
+    #[must_use]
+    pub fn of(head: &ImportRunHead, described: u32) -> Self {
+        let execution = &head.execution;
+        Self {
+            owner_device: execution.owner_device.clone(),
+            attempt: execution.attempt,
+            lease_expires_at: execution.lease_expires_at,
+            last_contact_at: execution.last_contact_at,
+            last_progress_at: execution.last_progress_at,
+            stage: stage_of(head),
+            reason_code: execution.reason_code.map(ImportReasonCodeView::of),
+            reason: execution.reason.clone(),
+            discovered: execution.discovered,
+            processed: execution.processed,
+            described,
+            enumeration_complete: execution.enumeration_complete,
+            selected_total: execution.selected_total,
+            commit_authorised: execution.commit_authorised(head.scheduled),
+        }
+    }
+}
+
+/// The stage the console draws, decided here.
+///
+/// A settled run says what it settled as. An open one is described in this
+/// order, and the order is the substance.
+///
+/// A device that reported an interruption said something true about the read,
+/// and nothing derived overrides it. Next comes the selection: a closed
+/// enumeration with no frozen selection is the seller's own step, and no
+/// machine owes anything while they choose — the device's keeper ends with
+/// its worker, so the lease lapses and the owner clears exactly when the run
+/// is waiting for a person. Reading that as `waiting` or `interrupted` is the
+/// defect this ordering exists to prevent, and the maintenance sweep exempts
+/// the same runs for the same reason.
+///
+/// Only past the selection does a stage need a live machine. An ownerless run
+/// that has done nothing is waiting for a device; one that has discovered or
+/// described anything and then lost its owner stopped part way, which is an
+/// interruption rather than a fresh wait. A live owner's own reported stage is
+/// preferred over anything derived, because it is the only party that knows.
+#[must_use]
+fn stage_of(head: &ImportRunHead) -> ImportRunStage {
+    let execution = &head.execution;
+    match head.state {
+        RunState::Complete => return ImportRunStage::Completed,
+        RunState::Failed => return ImportRunStage::Failed,
+        RunState::Abandoned => return ImportRunStage::Abandoned,
+        RunState::Committing => return ImportRunStage::Committing,
+        RunState::Reviewing => return ImportRunStage::Reviewing,
+        RunState::Reading => {}
+    }
+    if matches!(execution.reported_stage, Some(ImportStage::Interrupted)) {
+        return ImportRunStage::Interrupted;
+    }
+    // The seller's step, from the run's own authoritative facts rather than
+    // from who is holding it.
+    if execution.enumeration_complete && execution.selected_total.is_none() {
+        return ImportRunStage::Selecting;
+    }
+    if execution.owner_device.is_none() {
+        return if execution.enumeration_complete
+            || execution.discovered > 0
+            || execution.processed > 0
+        {
+            ImportRunStage::Interrupted
+        } else {
+            ImportRunStage::Waiting
+        };
+    }
+    if !execution.lease_live {
+        return ImportRunStage::Interrupted;
+    }
+    match execution.reported_stage {
+        Some(ImportStage::Discovering) => ImportRunStage::Discovering,
+        Some(ImportStage::Selecting) => ImportRunStage::Selecting,
+        Some(ImportStage::Reading) => ImportRunStage::Reading,
+        // Handled above, and named here rather than wildcarded so a stage
+        // added to the device's vocabulary fails this match instead of
+        // silently becoming a read.
+        Some(ImportStage::Interrupted) => ImportRunStage::Interrupted,
+        // Claimed, live, and nothing reported yet — or a failure reported
+        // while the run is still open. Described by what the run itself has
+        // reached: an open enumeration is discovery, and a frozen selection
+        // is the read. The closed-enumeration-without-selection case is
+        // already answered above.
+        Some(ImportStage::Failed) | None => {
+            if execution.enumeration_complete {
+                ImportRunStage::Reading
+            } else {
+                ImportRunStage::Discovering
+            }
+        }
+    }
+}
+
 /// One resource of a run, as the item list renders it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportRunItemView {
@@ -237,6 +486,11 @@ pub struct ImportRunHeadView {
     pub counts: RunCountsView,
     pub created_at: Timestamp,
     pub settled_at: Option<Timestamp>,
+    /// The settled run a seller asked to retry, where this run is that
+    /// retry. The terminal run keeps everything it recorded; this is the
+    /// lineage beside it.
+    pub retry_of: Option<Uuid>,
+    pub execution: ImportExecutionView,
 }
 
 /// One run with its rows and its open questions.
@@ -253,6 +507,8 @@ pub struct ImportRunView {
     pub review_pairs: Vec<ReviewPairView>,
     pub created_at: Timestamp,
     pub settled_at: Option<Timestamp>,
+    pub retry_of: Option<Uuid>,
+    pub execution: ImportExecutionView,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -260,26 +516,32 @@ pub struct ImportRunsView {
     pub runs: Vec<ImportRunHeadView>,
 }
 
-/// What one commit chunk did, and where the run stands after it.
+/// What confirming a run answered.
 ///
-/// `CommitAck`'s shape, field for field, with `run_state` where that one says
-/// `batch_state`: the console runs the same loop over both, and a second shape
-/// would make it two loops.
+/// The confirmation is a durable request rather than a chunk of work: the
+/// server's own drain creates the resources, so the answer is "accepted, and
+/// here is the run" rather than "here is what one chunk did". That is what
+/// removes the browser-owned commit loop — a seller who navigates away
+/// mid-commit loses nothing, because nothing was being driven by their tab.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RunCommitAck {
-    pub applied: u32,
-    pub skipped: u32,
-    pub failed: u32,
-    pub total: u32,
-    pub remaining: u32,
-    pub complete: bool,
-    pub run_state: ImportRunState,
+pub struct RunConfirmAck {
+    pub accepted: bool,
+    pub run: ImportRunView,
 }
 
-/// Which shop to read.
+/// Which shop to read, and which press of the button this is.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateRunBody {
     pub source: InventoryId,
+    /// The client's own key for this intent, retained across its retries and
+    /// across a native handoff. Required: without it a lost answer mints a
+    /// second import, which is the defect it exists to close.
+    pub start_key: Uuid,
+    /// The settled run this start retries, where the seller pressed Retry on
+    /// one. Validated against a terminal run of this organisation on the same
+    /// shop; never sent by an ordinary start.
+    #[serde(default)]
+    pub retry_of: Option<Uuid>,
 }
 
 /// What the seller ticked.
@@ -302,7 +564,14 @@ pub struct RunSelectionView {
 
 // ---------------------------------------------------------------- handlers
 
-/// Opens a marketplace import run.
+/// Opens a marketplace import run, or answers with the one this intent
+/// already opened.
+///
+/// The start key is consulted before the open-run fence, and the order
+/// matters: a client whose answer was lost retries with the same key, and a
+/// key already spent has to reach the run it made even after that run has
+/// settled or expired. Checking the fence first would mint a second run for
+/// a completed one.
 pub(crate) async fn create_run(
     State(state): State<AppState>,
     context: OrgContext,
@@ -325,6 +594,23 @@ pub(crate) async fn create_run(
         ));
     }
     let now = (state.wall)();
+    let runs = ImportRunRepo::new(state.pool.clone());
+
+    // The replay, before anything else is decided. A settled run is a
+    // perfectly good answer here: the seller's client is asking what became
+    // of the import it started, not for a new one.
+    if let Some(held) = runs
+        .start_key_run(context.org, body.start_key)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+    {
+        if held.source != body.source || held.retry_of != body.retry_of {
+            return Err(start_key_spent(held.source));
+        }
+        let view = view_of(&state, context.org, held.run).await?;
+        return Ok((StatusCode::OK, Json(view)));
+    }
+
     // Every file a run imports is fetched back through the seller's own
     // connection (D27), so a shop with no linked connection has nothing an
     // import could keep. Refused here, before the device reads anything,
@@ -337,7 +623,11 @@ pub(crate) async fn create_run(
             "Connect this marketplace on the Marketplaces page first, then import from it.",
         ));
     }
-    let runs = ImportRunRepo::new(state.pool.clone());
+
+    if let Some(parent) = body.retry_of {
+        retryable(&state, context.org, parent, body.source).await?;
+    }
+
     let run = fresh_uuid();
     let anchor = anchor_job(&state, context.org, run, body.source, now).await?;
     let opening = runs
@@ -356,6 +646,8 @@ pub(crate) async fn create_run(
                 // A seller pressed Import. Only the pass sets this; see
                 // migration 0071.
                 scheduled: false,
+                start_key: Some(body.start_key),
+                retry_of: body.retry_of,
             },
         )
         .await
@@ -365,8 +657,42 @@ pub(crate) async fn create_run(
             let view = view_of(&state, context.org, run).await?;
             Ok((StatusCode::CREATED, Json(view)))
         }
-        RunOpening::AlreadyOpen(open) => Err(already_open(open)),
+        // Pressing the button twice on one shop is one import, and the answer
+        // is that import rather than a refusal: the console's next move is to
+        // show it.
+        RunOpening::AlreadyOpen(open) => {
+            let view = view_of(&state, context.org, open).await?;
+            Ok((StatusCode::OK, Json(view)))
+        }
+        RunOpening::KeySpent { source } => Err(start_key_spent(source)),
     }
+}
+
+/// The run a retry may name: this organisation's, on the same shop, and
+/// settled.
+///
+/// A terminal run is not reopened — it keeps everything it recorded — so the
+/// retry is a new run that names it. An open parent would mean two live runs
+/// for one shop, which the per-source fence refuses anyway; saying so here is
+/// the answer the seller can act on.
+async fn retryable(
+    state: &AppState,
+    org: OrgId,
+    parent: Uuid,
+    source: InventoryId,
+) -> Result<(), APIError> {
+    let head = head_or_missing(state, org, parent).await?;
+    if head.source != Some(source) {
+        return Err(validation(
+            "a retry reads the same shop the import it retries read",
+        ));
+    }
+    if head.state.open() {
+        return Err(validation(
+            "that import has not finished, so there is nothing to retry yet",
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) async fn list_runs(
@@ -384,7 +710,11 @@ pub(crate) async fn list_runs(
             .counts(context.org, head.id)
             .await
             .map_err(|error| storage_fault(&state, &error))?;
-        runs.push(head_view(&head, counts));
+        let described = repo
+            .described(context.org, head.id)
+            .await
+            .map_err(|error| storage_fault(&state, &error))?;
+        runs.push(head_view(&head, counts, described));
     }
     Ok(Json(ImportRunsView { runs }))
 }
@@ -407,12 +737,6 @@ pub(crate) async fn select(
 ) -> Result<Json<ImportRunView>, APIError> {
     let run = parse_id(&run)?;
     let repo = ImportRunRepo::new(state.pool.clone());
-    let head = head_or_missing(&state, context.org, run).await?;
-    if head.state != RunState::Reading {
-        return Err(validation(
-            "this import has finished reading, so its selection is settled",
-        ));
-    }
     let selection = match &body {
         SelectBody::All { all } => {
             if !*all {
@@ -425,9 +749,25 @@ pub(crate) async fn select(
         }
         SelectBody::Named { locators } => Selection::Locators(locators),
     };
-    repo.select(context.org, run, selection, (state.wall)())
+    // The run's own guard is inside the write's transaction rather than read
+    // here first: a selection that passed a check and then landed after the
+    // seller stopped the import would move a terminal run's rows, and one
+    // taken over a half-walked shop would freeze a prefix of their catalogue
+    // as the whole of it.
+    match repo
+        .select(context.org, run, selection, (state.wall)())
         .await
-        .map_err(|error| storage_fault(&state, &error))?;
+        .map_err(|error| storage_fault(&state, &error))?
+    {
+        tam_storage::SelectionOutcome::Taken { .. } => {}
+        tam_storage::SelectionOutcome::Discovering => {
+            return Err(validation(
+                "this import is still reading your shop; the list is not complete yet",
+            ))
+        }
+        tam_storage::SelectionOutcome::Settled(state) => return Err(run_settled(state)),
+        tam_storage::SelectionOutcome::Missing => return Err(missing("no such import")),
+    }
     Ok(Json(view_of(&state, context.org, run).await?))
 }
 
@@ -447,113 +787,252 @@ pub(crate) async fn device_selection(
     Ok(Json(RunSelectionView { locators }))
 }
 
-/// The one import this organisation has open, for a device to pick up.
+/// One import this organisation has open, for a device to pick up.
 ///
-/// The device asks at every check-in and acts on the answer: a run whose list
-/// has not landed is enumerated, a run whose list has landed and been
-/// selected is described, and a run in neither state is left alone. Two bools
-/// rather than the run's state, because the device's two decisions are
-/// exactly those two questions and the run's own state vocabulary is the
-/// console's.
+/// A list rather than a singleton, which is the cutover: one open run per
+/// source means a seller reading Tes can start TPT, and a device that can
+/// only serve one of them picks the one it has a session for and leaves the
+/// other alone rather than failing somebody else's run.
 ///
-/// `null` rather than a 404 for "nothing open": absent work is the ordinary
-/// answer at almost every check-in, and a device that had to read a not-found
-/// as success could not tell it from a route it is talking to wrongly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// The two bools are the device's own two decisions, and the run's state
+/// vocabulary stays the console's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenRunView {
     pub run: Uuid,
     pub source: InventoryId,
-    /// Whether the shop's own list has already been posted. False means run
-    /// the enumeration; true means never list twice.
+    /// Whether the shop's own list is complete. False means carry on
+    /// enumerating; true means never list again.
     pub listed: bool,
     /// Whether the seller -- or, on a scheduled run, the server -- has ticked
     /// what to describe.
     pub selected: bool,
+    /// Whether the scheduler opened this rather than a seller. A device with
+    /// no session skips a scheduled run quietly; a seller's own start is
+    /// theirs to report a refusal against.
+    pub scheduled: bool,
+    /// Which device holds it, where one does. `null` is unclaimed work.
+    pub owner_device: Option<String>,
 }
 
-pub(crate) async fn device_open_run(
+pub(crate) async fn device_open_runs(
     State(state): State<AppState>,
     context: OrgContext,
     Path((_version, device)): Path<(String, String)>,
-) -> Result<Json<Option<OpenRunView>>, APIError> {
+) -> Result<Json<Vec<OpenRunView>>, APIError> {
     crate::import::admissible_device(&state, context.org, &device).await?;
     let repo = ImportRunRepo::new(state.pool.clone());
-    let Some(head) = repo
-        .open(context.org)
-        .await
-        .map_err(|error| storage_fault(&state, &error))?
-    else {
-        return Ok(Json(None));
-    };
-    // A run past `reading` is a review or a commit, and neither is device
-    // work; a spreadsheet run names no shop to read. Both answer as nothing
-    // open rather than as a run the device would not know what to do with.
-    let (RunState::Reading, Some(source)) = (head.state, head.source) else {
-        return Ok(Json(None));
-    };
-    let counts = repo
-        .counts(context.org, head.id)
+    let heads = repo
+        .open_runs(context.org)
         .await
         .map_err(|error| storage_fault(&state, &error))?;
-    Ok(Json(Some(OpenRunView {
-        run: head.id,
-        source,
-        // `read_total` is written by the list and by nothing else, so its
-        // presence is the question "has the shop been enumerated" answered
-        // exactly. A row count would read a shop that holds nothing as
-        // un-enumerated and list it again at every check-in.
-        listed: head.read_total.is_some(),
-        selected: counts.selected > 0,
-    })))
+    let mut open = Vec::with_capacity(heads.len());
+    for head in &heads {
+        // A run past `reading` is a review or a commit, and neither is device
+        // work; a spreadsheet run names no shop to read. Both are omitted
+        // rather than offered as work a device would not know what to do with.
+        let (RunState::Reading, Some(source)) = (head.state, head.source) else {
+            continue;
+        };
+        open.push(OpenRunView {
+            run: head.id,
+            source,
+            // The device's own bit rather than the presence of a total: a
+            // listed page may be partial now, so only the enumeration being
+            // closed means the shop has been walked.
+            listed: head.execution.enumeration_complete,
+            // The frozen denominator, not a live count of rows still waiting
+            // to be described. A run whose last description landed before its
+            // completion did has no `selected` rows left, and reading that as
+            // "not selected yet" left a resumed device with no phase it was
+            // owed: it would not describe, because the list was empty, and it
+            // would not report completion, because it believed the seller had
+            // not chosen yet. The frozen total says the choice was made,
+            // whatever has since been described.
+            selected: head.execution.selected_total.is_some(),
+            scheduled: head.scheduled,
+            owner_device: head.execution.owner_device.clone(),
+        });
+    }
+    Ok(Json(open))
 }
 
-/// Creates the next chunk of a run's matched items.
-pub(crate) async fn commit(
+/// Claims a run for one device, raising the fence.
+///
+/// Before any local preflight, deliberately: the device claims first and only
+/// then looks for its own marketplace session, so "this phone is not signed
+/// in to Tes" is a durable report against a run this device owns rather than
+/// a refusal nobody recorded. Revocation and the organisation's own plan
+/// still gate it.
+pub(crate) async fn claim(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, device, run)): Path<(String, String, String)>,
+    Json(body): Json<ImportClaim>,
+) -> Result<Json<ImportLease>, APIError> {
+    let run = parse_id(&run)?;
+    if !context.entitlement.caps.import_marketplace {
+        return Err(feature_refusal(
+            "import_marketplace",
+            "Your plan does not include reading your shop. Upgrade to import from a \
+             marketplace.",
+        ));
+    }
+    crate::import::admissible_device(&state, context.org, &device).await?;
+    head_or_missing(&state, context.org, run).await?;
+    let outcome = ImportRunRepo::new(state.pool.clone())
+        .claim(context.org, run, &device, body.takeover)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    match outcome {
+        ClaimOutcome::Granted(lease) => {
+            // A claim changes who the console is watching and what stage it
+            // shows, so the observers hear about it: this is the moment a
+            // waiting run becomes a run a named device is executing.
+            let head = head_or_missing(&state, context.org, run).await?;
+            let counts = ImportRunRepo::new(state.pool.clone())
+                .counts(context.org, run)
+                .await
+                .map_err(|error| storage_fault(&state, &error))?;
+            progress_event(&state, context.org, &head, counts).await?;
+            Ok(Json(wire_lease(lease)))
+        }
+        ClaimOutcome::HeldBy {
+            device: owner,
+            lease_expires_at,
+        } => Err(held_by(&owner, lease_expires_at)),
+        ClaimOutcome::Settled(state) => Err(run_settled(state)),
+    }
+}
+
+/// Extends the owner's hold under its own fence.
+pub(crate) async fn renew(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, device, run)): Path<(String, String, String)>,
+    Json(body): Json<ImportRenewal>,
+) -> Result<Json<ImportLease>, APIError> {
+    let run = parse_id(&run)?;
+    crate::import::admissible_device(&state, context.org, &device).await?;
+    let repo = ImportRunRepo::new(state.pool.clone());
+    if let Some(lease) = repo
+        .renew(context.org, run, &device, body.attempt)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+    {
+        return Ok(Json(wire_lease(lease)));
+    }
+    Err(refused_fence(&state, context.org, run, &device, body.attempt).await?)
+}
+
+/// Records what the owner says it is doing.
+///
+/// No marketplace session is consulted and none is required: the whole point
+/// of this route is that a device with no session for the shop can say so,
+/// durably, against a run it owns.
+pub(crate) async fn progress(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, device, run)): Path<(String, String, String)>,
+    Json(body): Json<ImportProgressReport>,
+) -> Result<Json<ImportExecutionView>, APIError> {
+    let run = parse_id(&run)?;
+    crate::import::admissible_device(&state, context.org, &device).await?;
+    let repo = ImportRunRepo::new(state.pool.clone());
+    let reason = body
+        .reason
+        .as_ref()
+        .map(|reason| reason.as_str().to_owned());
+    let moved = repo
+        .report_progress(
+            context.org,
+            run,
+            &device,
+            &ProgressReport {
+                attempt: body.attempt,
+                stage: storage_stage(body.stage),
+                discovered: body.discovered,
+                processed: body.processed,
+                reason_code: body.reason_code.map(storage_reason),
+                reason: reason.as_deref(),
+            },
+        )
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    if moved.is_none() {
+        return Err(refused_fence(&state, context.org, run, &device, body.attempt).await?);
+    }
+    let head = head_or_missing(&state, context.org, run).await?;
+    if head.state == RunState::Failed {
+        settled_event(&state, context.org, &head, RunState::Failed).await?;
+    }
+    // The console learns what the device said from the ledger, and this is
+    // the only thing that puts it there: a run whose worker reports per-item
+    // progress sends no page between metadata pages, so without an event the
+    // page a seller is watching keeps its stale counts, its stale stage and
+    // its stale last contact for as long as the pass runs.
+    let counts = ImportRunRepo::new(state.pool.clone())
+        .counts(context.org, run)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    progress_event(&state, context.org, &head, counts).await?;
+    let described = ImportRunRepo::new(state.pool.clone())
+        .described(context.org, run)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    Ok(Json(ImportExecutionView::of(&head, described)))
+}
+
+/// The seller confirms that this run's resources are to be created.
+///
+/// Durable request rather than work: it records who confirmed and when, moves
+/// the run to `committing`, and answers. The server's own drain creates the
+/// resources, which is what lets the seller navigate away — and what stops a
+/// finished description pass from adding anything nobody confirmed.
+pub(crate) async fn confirm(
     State(state): State<AppState>,
     context: OrgContext,
     Path((_version, run)): Path<(String, String)>,
-) -> Result<Json<RunCommitAck>, APIError> {
+) -> Result<(StatusCode, Json<RunConfirmAck>), APIError> {
     let run = parse_id(&run)?;
     let head = head_or_missing(&state, context.org, run).await?;
     if !head.state.open() {
-        return Err(validation(
-            "this import has settled and creates nothing more",
-        ));
+        return Err(run_settled(head.state));
     }
-    let chunk = commit_chunk(&state, context.org, &head).await?;
-    let outstanding = chunk.counts.outstanding();
-    Ok(Json(RunCommitAck {
-        applied: chunk.applied,
-        skipped: chunk.counts.skipped,
-        failed: chunk.failed,
-        total: chunk
-            .counts
-            .imported
-            .saturating_add(chunk.counts.matched)
-            .saturating_add(chunk.counts.review)
-            .saturating_add(chunk.counts.read),
-        remaining: outstanding,
-        complete: outstanding == 0,
-        run_state: state_view(chunk.run_state),
-    }))
+    let actor = uuid_text(context.user.0);
+    let accepted = ImportRunRepo::new(state.pool.clone())
+        .authorise_commit(context.org, run, &actor, (state.wall)())
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    if !accepted {
+        return Err(run_settled(head.state));
+    }
+    let view = view_of(&state, context.org, run).await?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(RunConfirmAck {
+            accepted,
+            run: view,
+        }),
+    ))
 }
 
 /// What one chunk of a commit did, and where the run stands after it.
 pub(crate) struct ChunkReport {
     pub applied: u32,
     pub failed: u32,
-    pub counts: RunCounts,
     pub run_state: RunState,
 }
 
-/// One chunk of a commit: up to [`ITEMS_PER_CHUNK`] matched items created,
-/// the run moved, and the progress event emitted.
+/// One chunk of a commit: up to [`ITEMS_PER_CHUNK`] authorised items decided
+/// and created, the run moved, and the progress event emitted.
 ///
-/// Extracted from the handler rather than restated, because the scheduler's
-/// pass commits a scheduled run with no seller pressing anything and the two
-/// must create resources identically -- the same chunk size, the same
-/// per-item refusal rule, the same settle. A second loop would be a second
-/// definition of what a commit is.
+/// One definition for every caller — the seller's confirmed run, the
+/// scheduler's own rule, the spreadsheet's batch — because the guards are the
+/// point: two loops would be two answers to "may this resource be created".
+///
+/// Authorisation is checked here rather than assumed by the caller, and it is
+/// not the run's state: a description pass that finished says nothing about
+/// whether the seller asked for these resources.
 pub(crate) async fn commit_chunk(
     state: &AppState,
     org: OrgId,
@@ -561,86 +1040,176 @@ pub(crate) async fn commit_chunk(
 ) -> Result<ChunkReport, APIError> {
     let run = head.id;
     let repo = ImportRunRepo::new(state.pool.clone());
-    repo.set_state(org, run, RunState::Committing, None, (state.wall)())
-        .await
-        .map_err(|error| storage_fault(state, &error))?;
-
     let page = repo
         .commit_page(org, run, ITEMS_PER_CHUNK)
         .await
         .map_err(|error| storage_fault(state, &error))?;
     let mut applied = 0_u32;
     let mut failed = 0_u32;
+    // Whether one of the item transactions below is what moved the run to
+    // `complete`. It travels out of [`commit_one`] rather than being inferred
+    // from a re-read, because `set_run_state` moves an open run exactly once:
+    // the caller it answered `true` is the only one that may announce the
+    // settlement, and a state re-read here could not tell this chunk's own
+    // write from somebody else's.
+    let mut settled = false;
     for item in &page {
         match commit_one(state, org, head, item).await {
-            Ok(()) => applied = applied.saturating_add(1),
+            Ok(committed) => {
+                settled = settled || committed.settled;
+                match committed.effect {
+                    CommitEffect::Created => applied = applied.saturating_add(1),
+                    // Bound onto a resource the catalogue already holds, or
+                    // left for the seller's answer. Neither is a creation and
+                    // neither is a failure.
+                    CommitEffect::Bound | CommitEffect::Held => {}
+                }
+            }
             Err(refusal) => {
                 // A refusal the seller can act on is recorded against the item
                 // and the chunk carries on; anything else is ours and fails
                 // the request, leaving the item `matched` for the next chunk.
                 // Marking an item permanently failed because the database was
                 // briefly unreachable would cost the seller a resource over a
-                // fault that has already passed. This is `commit.rs`'s own
-                // rule, restated because the consequence is the same.
+                // fault that has already passed.
                 if refusal.status_code().is_server_error() {
                     return Err(refusal);
                 }
-                repo.record_failed(
+                if record_failure(
+                    state,
                     org,
-                    run,
+                    head,
                     item.locator.as_str(),
                     &reason_of(&refusal),
-                    (state.wall)(),
                 )
-                .await
-                .map_err(|error| storage_fault(state, &error))?;
-                failed = failed.saturating_add(1);
+                .await?
+                {
+                    failed = failed.saturating_add(1);
+                }
             }
         }
     }
 
-    let counts = repo
-        .counts(org, run)
+    // The recount, and the settlement it implies — under the run's own guard,
+    // because the item transactions above may have created nothing at all.
+    //
+    // An import whose listings the catalogue already held, whose descriptions
+    // all matched existing resources, or whose last committable row was
+    // refused reaches zero outstanding without any successful create. Before
+    // this it stayed `committing` forever, every drain pass returning without
+    // progress, with its shop fenced against the seller's next import.
+    let mut tx = begin_guarded(state, org).await?;
+    let counts = tam_storage::counts_of(&mut tx, org, run)
         .await
         .map_err(|error| storage_fault(state, &error))?;
-    let outstanding = counts.outstanding();
-    let run_state = if outstanding == 0 {
-        repo.set_state(org, run, RunState::Complete, None, (state.wall)())
+    if counts.outstanding() == 0
+        && tam_storage::set_run_state(&mut tx, org, run, RunState::Complete, None, (state.wall)())
             .await
-            .map_err(|error| storage_fault(state, &error))?;
+            .map_err(|error| storage_fault(state, &error))?
+    {
+        // The recount is what moved it: every item transaction still saw work
+        // outstanding, and what emptied the run was a refusal recorded above
+        // rather than a create.
+        settled = true;
+    }
+    let standing = tam_storage::guard_run(&mut tx, org, run)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+        .map_or(head.state, |guard| guard.state);
+    tx.commit()
+        .await
+        .map_err(|error| sql_fault(state, &error))?;
+    if settled {
         settled_event(state, org, head, RunState::Complete).await?;
-        RunState::Complete
-    } else {
-        RunState::Committing
-    };
+    }
     progress_event(state, org, head, counts).await?;
     Ok(ChunkReport {
         applied,
         failed,
-        counts,
-        run_state,
+        run_state: standing,
     })
 }
 
-/// Commits a run the pass opened, to the end.
+/// Records one item's refusal under the run's own guard.
 ///
-/// The seller's commit is chunked because a browser is holding it open and a
-/// closed tab should lose only the chunk in flight. The pass has no tab, so
-/// it runs the chunks itself -- but still as chunks, because the pacing is
-/// what keeps one tenant's five-hundred-resource shop from holding a
-/// transaction for a minute. It stops when nothing is left to commit or when
-/// a chunk made no progress, which is a run whose remaining rows are all
-/// under review: those wait for the seller and the run stays `committing`.
-pub(crate) async fn commit_scheduled(
+/// In a guarded transaction, and conditional on the item, because the item's
+/// own transaction has already ended by the time the caller reaches here.
+/// Between the two a stop can settle the run and a concurrent pass can create
+/// or merge the very resource this refusal is about, and writing `failed`
+/// over either would tell the seller that a resource they hold does not
+/// exist, or advance a run they stopped. The run guard answers the first and
+/// [`tam_storage::record_failed`]'s own condition answers the second.
+///
+/// Answers whether the refusal was recorded, so the chunk counts only what it
+/// actually settled.
+async fn record_failure(
+    state: &AppState,
+    org: OrgId,
+    head: &ImportRunHead,
+    locator: &str,
+    detail: &str,
+) -> Result<bool, APIError> {
+    let mut tx = begin_guarded(state, org).await?;
+    let Some(guard) = tam_storage::guard_run(&mut tx, org, head.id)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+    else {
+        tx.rollback()
+            .await
+            .map_err(|error| sql_fault(state, &error))?;
+        return Ok(false);
+    };
+    if !guard.state.open() {
+        // The seller stopped it, or it settled. Their ending stands; this
+        // refusal is about work that no longer belongs to an open run.
+        tx.rollback()
+            .await
+            .map_err(|error| sql_fault(state, &error))?;
+        return Ok(false);
+    }
+    let written =
+        tam_storage::record_failed(&mut tx, org, head.id, locator, detail, (state.wall)())
+            .await
+            .map_err(|error| storage_fault(state, &error))?;
+    tx.commit()
+        .await
+        .map_err(|error| sql_fault(state, &error))?;
+    if written {
+        item_settled_event(state, org, head, locator, "failed").await?;
+    }
+    Ok(written)
+}
+
+/// How many chunks one drain pass runs per run.
+///
+/// Bounded rather than "to the end", because the drain shares a pass with
+/// every other tenant's work: a five-hundred-resource shop is finished across
+/// consecutive passes rather than by holding this one for a minute. The run
+/// stays `committing` in between, which is now a truthful state — the server
+/// owns the work and the console says so.
+const CHUNKS_PER_DRAIN: u32 = 8;
+
+/// Creates what one authorised run still owes, in bounded chunks.
+///
+/// This is what replaces the browser's commit loop. A seller who confirms and
+/// navigates away, and a server restarted mid-commit, both end at the same
+/// place: the run is authorised, the drain picks it up, and the resources
+/// exist exactly once.
+pub(crate) async fn drain_run(
     state: &AppState,
     org: OrgId,
     head: &ImportRunHead,
 ) -> Result<u32, APIError> {
+    if !head.execution.commit_authorised(head.scheduled) {
+        return Ok(0);
+    }
     let mut created = 0_u32;
     let mut standing = head.clone();
-    loop {
+    for _ in 0..CHUNKS_PER_DRAIN {
         let chunk = commit_chunk(state, org, &standing).await?;
         created = created.saturating_add(chunk.applied);
+        // Nothing moved: everything left is a question the seller owes an
+        // answer to, so the run waits rather than spinning.
         if chunk.applied == 0 && chunk.failed == 0 {
             return Ok(created);
         }
@@ -649,9 +1218,16 @@ pub(crate) async fn commit_scheduled(
         }
         standing.state = chunk.run_state;
     }
+    Ok(created)
 }
 
 /// Settles an open run at the seller's own request.
+///
+/// The write is conditional on the run still being open, and the refusal it
+/// can answer with is the point: if the last guarded commit completed between
+/// the read above and this write, the stop does not overwrite `complete` with
+/// `abandoned` and does not replace the instant or the sentence the seller was
+/// already given. They are told what actually stands.
 pub(crate) async fn abandon(
     State(state): State<AppState>,
     context: OrgContext,
@@ -660,9 +1236,9 @@ pub(crate) async fn abandon(
     let run = parse_id(&run)?;
     let head = head_or_missing(&state, context.org, run).await?;
     if !head.state.open() {
-        return Err(validation("this import has already settled"));
+        return Err(run_settled(head.state));
     }
-    ImportRunRepo::new(state.pool.clone())
+    let stopped = ImportRunRepo::new(state.pool.clone())
         .set_state(
             context.org,
             run,
@@ -672,8 +1248,68 @@ pub(crate) async fn abandon(
         )
         .await
         .map_err(|error| storage_fault(&state, &error))?;
+    if !stopped {
+        let standing = head_or_missing(&state, context.org, run).await?;
+        return Err(run_settled(standing.state));
+    }
     settled_event(&state, context.org, &head, RunState::Abandoned).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// The device's own stop, replayable.
+///
+/// The console's [`abandon`] is the seller pressing stop in the browser and
+/// answers 204. This is the same instruction arriving from the machine that
+/// was running the import, and it differs in three ways the phone needs.
+///
+/// It is fenced: the attempt travels in the body, so a device whose run was
+/// taken over while it was offline stops nothing when its queue drains.
+/// A lapsed hold is admitted deliberately — the device that owned this
+/// attempt may still stop it, because stopping takes no work from anyone and
+/// refusing it would strand the instruction on a phone that can no longer
+/// renew. A *later* attempt, or another device's, is refused.
+///
+/// It is idempotent: a run already abandoned answers the same 200 body rather
+/// than a conflict, because the queued instruction is a replay of one that
+/// may already have landed — from this device, or from the console. Only a
+/// run that settled some *other* way refuses, because then the stop is a
+/// claim about the ending that is not true.
+///
+/// And it answers a body: `{"abandoned": true}` is what tells the device its
+/// queued stop was delivered by this server rather than answered by something
+/// in between.
+pub(crate) async fn device_stop(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, device, run)): Path<(String, String, String)>,
+    Json(body): Json<ImportStop>,
+) -> Result<Json<ImportStopAck>, APIError> {
+    let run = parse_id(&run)?;
+    crate::import::admissible_device(&state, context.org, &device).await?;
+    // One call, one transaction, one version of the row: the ownership test,
+    // the attempt test and the transition are taken together under the run's
+    // lock. A fence read here followed by a write afterwards would let a
+    // takeover land between them, and this device's hour-old stop would
+    // abandon the new owner's work.
+    let head = head_or_missing(&state, context.org, run).await?;
+    let outcome = ImportRunRepo::new(state.pool.clone())
+        .stop_owned(context.org, run, &device, body.attempt, (state.wall)())
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+        .ok_or_else(|| missing("no such import"))?;
+    match outcome {
+        tam_storage::StopOutcome::Stopped => {
+            settled_event(&state, context.org, &head, RunState::Abandoned).await?;
+            Ok(Json(ImportStopAck { abandoned: true }))
+        }
+        // The replay's own case: already stopped is what this caller asked
+        // for, however many times it asks, and whoever stopped it.
+        tam_storage::StopOutcome::Settled(RunState::Abandoned) => {
+            Ok(Json(ImportStopAck { abandoned: true }))
+        }
+        tam_storage::StopOutcome::Settled(settled) => Err(run_settled(settled)),
+        tam_storage::StopOutcome::Fenced(fence) => Err(fence_refusal(&fence)),
+    }
 }
 
 /// The cover one read produced, served to the browser that renders the card.
@@ -734,7 +1370,11 @@ pub(crate) async fn view_of(
         .counts(org, run)
         .await
         .map_err(|error| storage_fault(state, &error))?;
-    let head = head_view(&record.head, counts);
+    let described = repo
+        .described(org, run)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    let head = head_view(&record.head, counts, described);
     let pairs = crate::duplicates::pairs_of(state, org, Some(run)).await?;
     Ok(ImportRunView {
         id: head.id,
@@ -752,11 +1392,17 @@ pub(crate) async fn view_of(
         review_pairs: pairs,
         created_at: head.created_at,
         settled_at: head.settled_at,
+        retry_of: head.retry_of,
+        execution: head.execution.clone(),
     })
 }
 
 #[must_use]
-pub(crate) fn head_view(head: &ImportRunHead, counts: RunCounts) -> ImportRunHeadView {
+pub(crate) fn head_view(
+    head: &ImportRunHead,
+    counts: RunCounts,
+    described: u32,
+) -> ImportRunHeadView {
     ImportRunHeadView {
         id: head.id,
         kind: match head.kind {
@@ -770,6 +1416,8 @@ pub(crate) fn head_view(head: &ImportRunHead, counts: RunCounts) -> ImportRunHea
         counts: RunCountsView::of(counts),
         created_at: head.created_at,
         settled_at: head.settled_at,
+        retry_of: head.retry_of,
+        execution: ImportExecutionView::of(head, described),
     }
 }
 
@@ -823,11 +1471,19 @@ pub(crate) fn item_cover_url(run: Uuid, ordinal: u32) -> String {
 
 /// One page of a run, as the device posts it.
 ///
-/// Four things a page can carry, and it may carry several: a failure, a list,
-/// descriptions, refusals, and a completion. The order below is the order they
-/// have to happen in — a terminal failure settles the run before anything else
-/// is considered, because a device that stopped mid-pass sends nothing else and
-/// the seller's own page is the record they read.
+/// Five things a page can carry, and it may carry several: a failure, part of
+/// the shop's list, descriptions, refusals, and a completion. Two properties
+/// hold over all of them.
+///
+/// It is fenced. A catalogue page names the attempt its device was granted,
+/// and a page whose attempt is not the current one changes nothing — which is
+/// what makes a taken-over phone harmless rather than a second writer.
+///
+/// It is atomic and replay-safe. Everything the page moves is written in one
+/// transaction with the run row locked, and the acknowledgement is stored
+/// under the page's own receipt: a device that never received an answer
+/// resends the page and is told what it was told the first time, rather than
+/// having it applied twice.
 pub(crate) async fn run_page(
     state: &AppState,
     context: &OrgContext,
@@ -835,56 +1491,135 @@ pub(crate) async fn run_page(
     page: &tam_engine_driver::import::ImportPage,
     now: Timestamp,
 ) -> Result<(StatusCode, Json<crate::import::ImportAck>), APIError> {
-    let repo = ImportRunRepo::new(state.pool.clone());
     // Another organisation's run is missing rather than forbidden: the caller
     // learns nothing about whether the identifier exists, which is the posture
     // every other org-scoped read here takes.
     let head = head_or_missing(state, context.org, page.run).await?;
+    // An unfenced catalogue page is refused before any effect. `import.rs`
+    // makes the same refusal at the boundary; this is it stated where the run
+    // is known, so no path reaches the writes without an attempt.
+    let Some(attempt) = page.attempt else {
+        return Err(client_update_required());
+    };
 
+    // A page that says the import stopped. Fenced like every other write, and
+    // settled before anything else is considered, because the device sends
+    // nothing else with it and the seller's own run page is the record they
+    // read.
     if let Some(why) = page.failed.as_ref() {
-        if head.state.open() {
-            repo.set_state(
-                context.org,
-                page.run,
-                RunState::Failed,
-                Some(why.as_str()),
-                now,
-            )
+        let mut tx = begin_guarded(state, context.org).await?;
+        let outcome = tam_storage::fenced(&mut tx, context.org, page.run, device, attempt)
             .await
-            .map_err(|error| storage_fault(state, &error))?;
-            settled_event(state, context.org, &head, RunState::Failed).await?;
+            .map_err(|error| storage_fault(state, &error))?
+            .ok_or_else(|| missing("no such import"))?;
+        // A terminal run is not reopened and its reason is not overwritten: a
+        // late failure from a device that has already been taken over or
+        // cancelled says nothing about the run as it stands.
+        if outcome != FenceOutcome::Current {
+            tx.rollback()
+                .await
+                .map_err(|error| sql_fault(state, &error))?;
+            return Err(fence_refusal(&outcome));
         }
-        let counts = repo
-            .counts(context.org, page.run)
+        tam_storage::set_run_state(
+            &mut tx,
+            context.org,
+            page.run,
+            RunState::Failed,
+            Some(why.as_str()),
+            now,
+        )
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+        let counts = tam_storage::counts_of(&mut tx, context.org, page.run)
             .await
             .map_err(|error| storage_fault(state, &error))?;
+        tx.commit()
+            .await
+            .map_err(|error| sql_fault(state, &error))?;
+        settled_event(state, context.org, &head, RunState::Failed).await?;
         return Ok((StatusCode::OK, Json(run_ack(counts, 0, 0, true))));
     }
 
     if !head.state.open() {
-        return Err(APIError::new(
-            StatusCode::CONFLICT,
-            APIErrorEntry::new(
-                "this import has already settled, and a settled import is not extended",
-            )
-            .kind(APIErrorKind::Validation),
-        ));
+        return Err(run_settled(head.state));
     }
 
-    // The list. `Some(vec![])` is a shop that holds nothing and `None` is an
-    // ordinary page of descriptions, which is why the field is an option: an
-    // empty vector on every page would reset the total to whatever the last
-    // page happened to say.
-    if let Some(listed) = page.listed.as_ref() {
-        let rows: Vec<tam_storage::ListedRow> = listed
-            .iter()
-            .map(|row| tam_storage::ListedRow {
-                locator: row.locator.as_str().to_owned(),
-                title: row.title.clone(),
-                price: listed_row_price(row, head.source),
-            })
-            .collect();
-        repo.append_listed(context.org, page.run, &rows, now)
+    // Everything slow, before the lock: the cover bytes, the matcher's own
+    // reads, and the catalogue lookup for listings this organisation already
+    // holds. Nothing here writes to the run.
+    let rows: Vec<tam_storage::ListedRow> = page
+        .listed
+        .as_ref()
+        .map(|listed| {
+            listed
+                .iter()
+                .map(|row| tam_storage::ListedRow {
+                    locator: row.locator.as_str().to_owned(),
+                    title: row.title.clone(),
+                    price: listed_row_price(row, head.source),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let held_bindings = match head.source {
+        Some(source) if !rows.is_empty() => already_held(state, context.org, source, &rows).await?,
+        _ => Vec::new(),
+    };
+    let mut prepared = Vec::with_capacity(page.resources.len());
+    for resource in &page.resources {
+        prepared.push(
+            prepare_match(
+                state,
+                context.org,
+                &head,
+                resource,
+                context.entitlement.caps.duplicate_review,
+            )
+            .await?,
+        );
+    }
+
+    let identity = page_identity(page);
+    let mut tx = begin_guarded(state, context.org).await?;
+    let outcome = tam_storage::fenced(&mut tx, context.org, page.run, device, attempt)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+        .ok_or_else(|| missing("no such import"))?;
+    if outcome != FenceOutcome::Current {
+        tx.rollback()
+            .await
+            .map_err(|error| sql_fault(state, &error))?;
+        return Err(fence_refusal(&outcome));
+    }
+
+    // The receipt, read under the same lock the writes take. A replay is
+    // answered with the acknowledgement the first delivery was given, because
+    // the device reads `applied` to decide whether it still owes us this page.
+    if let Some(receipt) = page.receipt {
+        match tam_storage::claim_receipt(&mut tx, context.org, page.run, receipt, &identity)
+            .await
+            .map_err(|error| storage_fault(state, &error))?
+        {
+            ReceiptOutcome::Fresh => {}
+            ReceiptOutcome::Replay(ack) => {
+                tx.rollback()
+                    .await
+                    .map_err(|error| sql_fault(state, &error))?;
+                return Ok((StatusCode::OK, Json(replayed_ack(ack))));
+            }
+            ReceiptOutcome::Conflict => {
+                tx.rollback()
+                    .await
+                    .map_err(|error| sql_fault(state, &error))?;
+                return Err(receipt_conflict());
+            }
+        }
+    }
+
+    let mut listed_now = 0_u32;
+    if !rows.is_empty() {
+        listed_now = tam_storage::append_listed(&mut tx, context.org, page.run, &rows, now)
             .await
             .map_err(|error| storage_fault(state, &error))?;
         // A listing the catalogue already holds is skipped as it lands,
@@ -892,48 +1627,52 @@ pub(crate) async fn run_page(
         // imported resource is bound to the listing it came from, so a second
         // import of the same shop finds every one of them here. The matcher
         // could not have caught it — it compares across marketplaces only,
-        // and this pair is the same listing on the same one — and without
-        // this a re-import created every resource twice.
-        if let Some(source) = head.source {
-            let known = already_held(state, context.org, source, &rows).await?;
-            for (locator, title) in &known {
-                repo.record_skipped(
-                    context.org,
-                    page.run,
+        // and this pair is the same listing on the same one.
+        for (locator, title) in &held_bindings {
+            tam_storage::record_skipped(
+                &mut tx,
+                context.org,
+                tam_storage::ItemAddress {
+                    run: page.run,
                     locator,
-                    &format!("already in Resources as {title}"),
-                    now,
-                )
-                .await
-                .map_err(|error| storage_fault(state, &error))?;
-            }
+                },
+                &format!("already in Resources as {title}"),
+                now,
+            )
+            .await
+            .map_err(|error| storage_fault(state, &error))?;
         }
+    }
+
+    // Discovery closes when the device says so and not when a page happens to
+    // carry a list: a listed page may be partial, and selecting from half a
+    // shop is the defect this bit exists to stop.
+    if page.enumeration_complete {
+        tam_storage::close_enumeration(&mut tx, context.org, page.run)
+            .await
+            .map_err(|error| storage_fault(state, &error))?;
         // A scheduled run has no seller at the keyboard, so the server ticks
-        // the list itself: everything still listed, which is everything the
-        // rule above did not already skip as held. `Selection::All` is the
+        // the list itself once the shop is whole: everything still listed,
+        // which is everything the held rule above did not already skip. The
         // same write the seller's own "select everything" makes, so a
         // scheduled run and a ticked one reach the describe step identically.
         if head.scheduled {
-            repo.select(context.org, page.run, Selection::All, now)
+            tam_storage::select_items(&mut tx, context.org, page.run, Selection::All, now)
                 .await
                 .map_err(|error| storage_fault(state, &error))?;
         }
-        let counts = repo
-            .counts(context.org, page.run)
-            .await
-            .map_err(|error| storage_fault(state, &error))?;
-        listed_event(state, context.org, &head, counts.listed).await?;
     }
 
     let mut applied = 0_u32;
-    for resource in &page.resources {
-        record_and_match(
+    for matched in &prepared {
+        apply_matched(
+            &mut tx,
             state,
             context.org,
             &head,
-            resource,
+            matched,
             Some(device),
-            context.entitlement.caps.duplicate_review,
+            now,
         )
         .await?;
         applied = applied.saturating_add(1);
@@ -941,10 +1680,13 @@ pub(crate) async fn run_page(
 
     let mut skipped = 0_u32;
     for skip in &page.skipped {
-        repo.record_skipped(
+        tam_storage::record_skipped(
+            &mut tx,
             context.org,
-            page.run,
-            skip.locator.as_str(),
+            tam_storage::ItemAddress {
+                run: page.run,
+                locator: skip.locator.as_str(),
+            },
             skip.why.as_str(),
             now,
         )
@@ -953,31 +1695,160 @@ pub(crate) async fn run_page(
         skipped = skipped.saturating_add(1);
     }
 
-    let counts = repo
-        .counts(context.org, page.run)
+    let counts = tam_storage::counts_of(&mut tx, context.org, page.run)
         .await
         .map_err(|error| storage_fault(state, &error))?;
-    progress_event(state, context.org, &head, counts).await?;
 
-    if page.complete {
-        // A run with a question owed goes to the seller; one with none is
-        // ready for the console to commit. Not committed here: the chunk loop
-        // is the client's, so that a closed browser loses only the chunk in
-        // flight.
-        let next = if counts.review > 0 {
-            RunState::Reviewing
-        } else {
+    // Where the run stands after this page, decided here and written once.
+    //
+    // A closed enumeration with nothing outstanding is a finished import,
+    // whatever the page said: an empty shop, or a shop every listing of which
+    // the catalogue already holds, has nothing to describe, nothing to
+    // confirm and nothing to create. Before this it sat `reading` forever
+    // with its source fenced against the seller's next import, because the
+    // only thing that ever moved a run on was a device sending a completion
+    // it had no reason to send.
+    let closed = page.enumeration_complete || head.execution.enumeration_complete;
+    let next = if closed && counts.outstanding() == 0 {
+        Some(RunState::Complete)
+    } else if page.complete {
+        // Completion closes the description and authorises nothing. A manual
+        // run goes to the seller — that is where the confirmation comes from,
+        // and an unconfirmed run creates no products however finished its
+        // reading is. A scheduled run carries its own separately approved
+        // rule, so it is the one that may go straight to committing.
+        Some(if head.scheduled {
             RunState::Committing
-        };
-        repo.set_state(context.org, page.run, next, None, now)
+        } else {
+            RunState::Reviewing
+        })
+    } else {
+        None
+    };
+    if let Some(next) = next {
+        tam_storage::set_run_state(&mut tx, context.org, page.run, next, None, now)
             .await
             .map_err(|error| storage_fault(state, &error))?;
     }
 
-    Ok((
-        StatusCode::OK,
-        Json(run_ack(counts, applied, skipped, page.complete)),
-    ))
+    let ack = run_ack(counts, applied, skipped, page.complete);
+    if let Some(receipt) = page.receipt {
+        tam_storage::store_receipt(
+            &mut tx,
+            context.org,
+            page.run,
+            receipt,
+            &tam_storage::StoredReceipt {
+                identity: &identity,
+                ack: tam_storage::ReceiptAck {
+                    applied: ack.applied,
+                    skipped: ack.skipped,
+                    described_total: ack.described_total,
+                    complete: ack.complete,
+                },
+                at: now,
+            },
+        )
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    }
+    // The owner spoke, and a page that carried anything moved something.
+    tam_storage::note_contact(
+        &mut tx,
+        context.org,
+        page.run,
+        listed_now > 0 || applied > 0 || skipped > 0,
+    )
+    .await
+    .map_err(|error| storage_fault(state, &error))?;
+    tx.commit()
+        .await
+        .map_err(|error| sql_fault(state, &error))?;
+
+    if listed_now > 0 {
+        listed_event(state, context.org, &head, counts.listed).await?;
+    }
+    progress_event(state, context.org, &head, counts).await?;
+    if next == Some(RunState::Complete) {
+        settled_event(state, context.org, &head, RunState::Complete).await?;
+    }
+    Ok((StatusCode::OK, Json(ack)))
+}
+
+/// One page's content identity, with the attempt deliberately left out.
+///
+/// A device that resumed under a new fence and resent the page it never got
+/// an answer for is sending the same page; a different page under the same
+/// receipt is a client bug or a modified device, and conflicts.
+fn page_identity(page: &tam_engine_driver::import::ImportPage) -> Vec<u8> {
+    use sha2::Digest as _;
+    // The page as it would be re-sent, with only the envelope cleared: the
+    // fence, because a resume under a new attempt is the same page, and the
+    // receipt, because it is the key rather than the content.
+    //
+    // Everything else is hashed through the vocabulary's own serialisation
+    // rather than field by field, and that is the point: a title, a body, a
+    // price, a listing binding, a fingerprint, a cover or a skip reason that
+    // changed under one receipt is a different page, and a hash that read
+    // only the locators would acknowledge it while applying nothing — the
+    // device would then discard a description the server never accepted.
+    // Serialisation is canonical here because every field of the vocabulary
+    // is ordered by its own type, and the maps serde writes are struct
+    // fields in declaration order.
+    let mut identity_input = page.clone();
+    identity_input.attempt = None;
+    identity_input.receipt = None;
+    let encoded = serde_json::to_vec(&identity_input).unwrap_or_default();
+    let mut digest = sha2::Sha256::new();
+    digest.update(&encoded);
+    // A page that would not serialise cannot be given an identity, and
+    // hashing an empty encoding for every such page would make two different
+    // ones replay each other. The run's own identifier keeps that case
+    // distinct per run, and a page this route accepted has already decoded,
+    // so it serialises.
+    digest.update(uuid_text(page.run).as_bytes());
+    digest.finalize().to_vec()
+}
+
+/// The acknowledgement one stored receipt answers with.
+fn replayed_ack(ack: tam_storage::ReceiptAck) -> crate::import::ImportAck {
+    crate::import::ImportAck {
+        // Zero applied, deliberately: nothing was applied by this delivery.
+        // The device reads this to know the page is already ours.
+        applied: 0,
+        skipped: 0,
+        described_total: ack.described_total,
+        create_job: None,
+        complete: ack.complete,
+    }
+}
+
+/// A transaction with the tenant pinned and this organisation's catalogue
+/// decisions serialised.
+///
+/// Everything slow happens before this is called: no marketplace request, no
+/// file read and no fingerprint computation happens under the lock, and
+/// nothing inside it opens a second transaction of its own.
+pub(crate) async fn begin_guarded(
+    state: &AppState,
+    org: OrgId,
+) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, APIError> {
+    let mut tx = state
+        .pool
+        .begin()
+        .await
+        .map_err(|error| sql_fault(state, &error))?;
+    tam_storage::pin_tenant(&mut tx, org)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    tam_storage::lock_org_catalogue(&mut tx, org)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    Ok(tx)
+}
+
+fn sql_fault(state: &AppState, error: &sqlx::Error) -> APIError {
+    state.internal(&format!("the database refused a transaction: {error}"))
 }
 
 /// Of the listed rows, those whose listing a product of this org is already
@@ -1065,25 +1936,62 @@ fn run_ack(
     }
 }
 
-/// Stores one described resource on its item and runs the matcher over it.
+/// One described resource, ready to be matched and written.
 ///
-/// The one place both sources meet. It is called per resource of a device page
-/// and per row of a spreadsheet commit, so "what the matcher was given" cannot
-/// differ between them.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the state, the tenant, the run, the resource, its device and the plan's review capability; a struct over them would name this call and nothing else, and both callers pass all six"
-)]
-pub(crate) async fn record_and_match(
+/// The halves exist for the reason the commit's do: every slow read — the
+/// cover's bytes into the blob store, the item's reserved identifier —
+/// happens before the run's row is locked. The scorer is not among them. It
+/// runs under the lock, in [`apply_matched`], because a verdict reached
+/// against the catalogue as it was a moment ago is not a verdict about the
+/// catalogue this write lands in: another source committing, a digest's
+/// frequency moving, or this very shop's listing being bound to something
+/// else all change what the scorer answers, and a merge is irreversible for
+/// thirty days. So this struct carries the subject the scorer is asked about
+/// rather than an answer about it.
+pub(crate) struct MatchedRead {
+    locator: String,
+    observed: serde_json::Value,
+    title: String,
+    price: Option<Money>,
+    cover_hash: Option<ContentHash>,
+    /// The identifier this resource's product will take: the row's reserved
+    /// one where the run already listed it, and a fresh one otherwise. The
+    /// matcher is asked about this identifier, because a question answered
+    /// about one nothing took would be asked again on the next import.
+    product: ProductId,
+    /// What the scorer compares, built from the read.
+    subject: Side,
+    /// The subject's simhash bands, which are its blocking key.
+    bands: Option<[i16; 4]>,
+    /// Whether this plan includes the duplicate review.
+    reviews: bool,
+    source: InventoryId,
+    /// The listing as read, for the one branch that writes a binding without
+    /// creating a product: a resource the matcher decided the catalogue
+    /// already holds binds this shop's listing onto the survivor.
+    listing: tam_marketplace::ImportedListing,
+    /// That listing's price, resolved by the source's own currency rule.
+    /// Free where the rule cannot denominate it, which is the same absence
+    /// the card already renders: this value only ever reaches a binding's
+    /// price rule, and the commit that creates a product resolves it again
+    /// through `import_one`, which refuses properly.
+    price_intent: tam_types::PriceIntent,
+}
+
+/// Stores one description's cover and assembles what the matcher will be
+/// asked, writing nothing to the run and asking nothing yet.
+///
+/// The one place both sources meet, so "what the matcher was given" cannot
+/// differ between a device page and a spreadsheet row. The asking itself is
+/// [`apply_matched`]'s, under the run's lock.
+pub(crate) async fn prepare_match(
     state: &AppState,
     org: OrgId,
     head: &ImportRunHead,
     resource: &ObservedResource,
-    device: Option<&str>,
     reviews: bool,
-) -> Result<RunItemState, APIError> {
+) -> Result<MatchedRead, APIError> {
     let now = (state.wall)();
-    let repo = ImportRunRepo::new(state.pool.clone());
 
     // The cover, stored as a held blob directly rather than through the ingest
     // pipeline, which would derive a cover from the cover.
@@ -1107,109 +2015,285 @@ pub(crate) async fn record_and_match(
         .source
         .ok_or_else(|| state.internal("a marketplace run names no source"))?;
     let price = listed_price(resource, source);
-    let fresh = repo
-        .record_read(
-            org,
-            head.id,
-            &tam_storage::ReadItem {
-                locator: resource.locator.as_str(),
-                observed: &observed,
-                title: resource.listing.title.as_str(),
-                price,
-                cover_hash,
-                device,
-                product: None,
-            },
-            now,
-        )
-        .await
-        .map_err(|error| storage_fault(state, &error))?;
-    let item = repo
+    // The identifier the product will take. A row the enumeration already
+    // listed carries a reserved one, and using a second would ask the matcher
+    // about an identifier nothing takes.
+    let product = ImportRunRepo::new(state.pool.clone())
         .item(org, head.id, resource.locator.as_str())
         .await
         .map_err(|error| storage_fault(state, &error))?
-        .ok_or_else(|| state.internal("an item just written reads back missing"))?;
-    if !fresh {
-        return Ok(item.state);
-    }
+        .map_or_else(|| ProductId(fresh_uuid()), |item| item.product);
 
     let subject = side_of(resource, source);
     let bands = subject
         .text
         .map(|text| tam_fingerprint::simhash_bands(text.simhash))
         .map(|bands| bands.map(|band| i16::from_ne_bytes(band.to_ne_bytes())));
-    let found = matcher::match_one(
-        state,
-        org,
-        sketch_version(),
-        &subject,
-        item.product,
-        Some(source.marketplace()),
+
+    Ok(MatchedRead {
+        locator: resource.locator.as_str().to_owned(),
+        observed,
+        title: resource.listing.title.clone(),
+        price,
+        cover_hash,
+        product,
+        subject,
         bands,
         reviews,
+        source,
+        // The listing itself, kept for the one branch that has to write a
+        // binding without a product of its own: a read the matcher decided is
+        // a resource the catalogue already holds, which binds this shop's
+        // listing onto the survivor.
+        listing: resource.listing.clone(),
+        price_intent: tam_import::resolve_price(source, &resource.listing.price)
+            .unwrap_or(tam_types::PriceIntent::Free),
+    })
+}
+
+/// Writes one matched description: the row, the scorer's decision under this
+/// transaction's lock, the questions it raised, and the verdict it reached.
+///
+/// Inside the caller's transaction, because the row's state and the pairs
+/// holding it in review are one fact: a review item whose questions were
+/// written by a transaction that rolled back waits for an answer nobody was
+/// asked for.
+///
+/// The scorer runs here rather than before the lock, and that is the whole
+/// design of this call. A merge is a thirty-day-irreversible write, so the
+/// evidence it rests on has to be the evidence that stands when it lands: a
+/// digest's frequency moves as another source commits, this shop's listing
+/// may have been bound to another product since the page was posted, and a
+/// candidate may have been deleted or merged away. Re-resolving the survivor
+/// alone was not enough — the verdict itself can change without the survivor
+/// moving at all.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the transaction, the state the scorer needs, the tenant, the run, the matched read, the device that described it and the instant; each comes from a different place and every caller passes all seven"
+)]
+pub(crate) async fn apply_matched(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    state: &AppState,
+    org: OrgId,
+    head: &ImportRunHead,
+    matched: &MatchedRead,
+    device: Option<&str>,
+    now: Timestamp,
+) -> Result<RunItemState, APIError> {
+    let at = tam_storage::ItemAddress {
+        run: head.id,
+        locator: matched.locator.as_str(),
+    };
+    let fresh = tam_storage::record_read(
+        tx,
+        org,
+        head.id,
+        &tam_storage::ReadItem {
+            locator: matched.locator.as_str(),
+            observed: &matched.observed,
+            title: matched.title.as_str(),
+            price: matched.price,
+            cover_hash: matched.cover_hash,
+            device,
+            product: Some(matched.product),
+        },
+        now,
+    )
+    .await
+    .map_err(|error| storage_fault_tx(org, &error))?;
+    if !fresh {
+        // Already described. A replayed page is told nothing changed rather
+        // than having a product's input moved under a commit that may have
+        // read it.
+        return Ok(tam_storage::reserved_state(tx, org, at)
+            .await
+            .map_err(|error| storage_fault_tx(org, &error))?
+            .unwrap_or(RunItemState::Read));
+    }
+
+    // The identifier the row actually holds, read back after the write. The
+    // one this call was handed is a proposal: `prepare_match` mints a fresh
+    // identifier for a locator the run does not yet hold, and a combined page
+    // — a list and descriptions in one post — reserves the row's own
+    // identifier by `append_listed` earlier in this very transaction. The
+    // insert's conflict clause keeps the reserved one, so scoring, raising a
+    // pair or settling under the proposed one would key the seller's question
+    // to an identifier no row carries: `item_of_product` finds nothing, a
+    // `different` answer cannot unblock the row, and it waits in review
+    // forever. Everything below therefore uses this.
+    let product = tam_storage::reserved_product(tx, org, at)
+        .await
+        .map_err(|error| storage_fault_tx(org, &error))?
+        .unwrap_or(matched.product);
+
+    // A pair this resource is already parked in is the seller's to answer,
+    // and the scorer cannot see it: the never-ask-twice rule reads answered
+    // pairs only. Honoured before the scorer is asked, so evidence that has
+    // since fallen below the review floor cannot turn an open question into a
+    // creation.
+    if tam_storage::parked_for(tx, org, product)
+        .await
+        .map_err(|error| storage_fault_tx(org, &error))?
+        > 0
+    {
+        tam_storage::record_verdict(tx, org, at, RunItemState::Review)
+            .await
+            .map_err(|error| storage_fault_tx(org, &error))?;
+        return Ok(RunItemState::Review);
+    }
+
+    // The scorer, whole, against the catalogue as it stands inside this lock.
+    let found = matcher::match_one_in(
+        tx,
+        &matcher::Asking {
+            state,
+            org,
+            version: sketch_version(),
+            subject: &matched.subject,
+            subject_product: product,
+            marketplace: Some(matched.source.marketplace()),
+            bands: matched.bands,
+            reviews: matched.reviews,
+        },
     )
     .await?;
 
-    let duplicates = DuplicateRepo::new(state.pool.clone());
+    // Even scored here, the survivor is resolved rather than assumed: the
+    // candidate query and this write are one transaction, but a product
+    // merged away by an earlier item of this very page is followed one hop to
+    // what now stands, and one that stands nowhere is not merged onto.
+    let survivor = match found.merged.first() {
+        Some(raised) => survivor_now(tx, org, raised.other).await?,
+        None => None,
+    };
+    let merge_withdrawn = !found.merged.is_empty() && survivor.is_none();
+
     for raised in found.merged.iter().chain(found.asked.iter()) {
-        let (lo, hi) = tam_storage::ordered_pair(item.product, raised.other);
-        let kept = matches!(raised.verdict, tam_storage::Verdict::Same).then_some(raised.other);
-        duplicates
-            .raise(
-                org,
-                &NewVerdict {
-                    lo,
-                    hi,
-                    verdict: raised.verdict,
-                    decided_by: raised.decided_by,
-                    winning_layer: raised.layer,
-                    log_odds: raised.log_odds,
-                    fingerprint_version: sketch_version(),
-                    run: Some(head.id),
-                    kept,
-                    raised_at: now,
-                    decided_at: matches!(raised.verdict, tam_storage::Verdict::Same).then_some(now),
-                    reversible_until: matches!(raised.verdict, tam_storage::Verdict::Same)
-                        .then_some(Timestamp(now.0.saturating_add(tam_storage::REVERSIBLE_MS))),
-                    evidence: &raised.evidence,
-                },
-            )
-            .await
-            .map_err(|error| storage_fault(state, &error))?;
+        let merged = matches!(raised.verdict, tam_storage::Verdict::Same) && !merge_withdrawn;
+        let other = match (merged, survivor.as_ref()) {
+            (true, Some((product, _))) => *product,
+            _ => raised.other,
+        };
+        let (lo, hi) = tam_storage::ordered_pair(product, other);
+        // A withdrawn merge is parked, not decided — and a park is the
+        // seller's question, never the system's claim. Migration 0070 states
+        // that as a database fact: `duplicate_verdict_system_is_decisive`
+        // admits `system` only on a `same` verdict from a decisive layer, so
+        // parking with the scorer's own `system` voice would be refused by
+        // the check and take the whole page's transaction with it.
+        let (verdict, decided_by) =
+            if merge_withdrawn && matches!(raised.verdict, tam_storage::Verdict::Same) {
+                (tam_storage::Verdict::Parked, tam_storage::DecidedBy::Seller)
+            } else {
+                (raised.verdict, raised.decided_by)
+            };
+        tam_storage::raise_verdict(
+            tx,
+            org,
+            &NewVerdict {
+                lo,
+                hi,
+                verdict,
+                decided_by,
+                winning_layer: raised.layer,
+                log_odds: raised.log_odds,
+                fingerprint_version: sketch_version(),
+                run: Some(head.id),
+                kept: merged.then_some(other),
+                raised_at: now,
+                decided_at: merged.then_some(now),
+                reversible_until: merged
+                    .then_some(Timestamp(now.0.saturating_add(tam_storage::REVERSIBLE_MS))),
+                evidence: &raised.evidence,
+            },
+        )
+        .await
+        .map_err(|error| storage_fault_tx(org, &error))?;
     }
 
     // A pair the system decided on its own is a merge, and the merge is the
     // skip: the kept product already holds this resource, so creating a second
-    // one is exactly what the verdict says not to do. The kept product gains
-    // the source's label, because it now carries a listing from that shop.
-    if let Some(merged) = found.merged.first() {
-        LabelRepo::new(state.pool.clone())
-            .attach_system_label(org, merged.other, source.marketplace(), now)
-            .await
-            .map_err(|error| storage_fault(state, &error))?;
-        let title = held_title(state, org, merged.other).await?;
-        repo.record_skipped(
+    // one is exactly what the verdict says not to do.
+    //
+    // The survivor gains this shop's listing as well as its label, and the
+    // binding is the half that used to go missing. A skipped item never
+    // reaches the commit — `commit_page` takes `matched` rows only — so
+    // without writing the mapping here the catalogue showed a Tes label on a
+    // product with no Tes listing, and the next import of that shop could not
+    // recognise the listing as one it already held and read it again.
+    if let Some((product, title)) = survivor {
+        tam_storage::bind_listing(
+            tx,
             org,
-            head.id,
-            resource.locator.as_str(),
-            &format!("same as {title}"),
+            &tam_import::source_binding(
+                org,
+                product,
+                matched.source,
+                &matched.listing,
+                matched.price_intent,
+                now,
+            ),
+            0,
             now,
         )
         .await
-        .map_err(|error| storage_fault(state, &error))?;
-        item_settled_event(state, org, head, resource.locator.as_str(), "skipped").await?;
+        .map_err(|error| storage_fault_tx(org, &error))?;
+        tam_storage::attach_system_label(tx, org, product, matched.source.marketplace(), now)
+            .await
+            .map_err(|error| storage_fault_tx(org, &error))?;
+        tam_storage::record_skipped(tx, org, at, &format!("same as {title}"), now)
+            .await
+            .map_err(|error| storage_fault_tx(org, &error))?;
         return Ok(RunItemState::Skipped);
     }
 
-    let next = if found.needs_review() {
+    // A withdrawn merge is a question owed, so the item waits for the seller
+    // rather than being created behind a pair nobody answered.
+    let next = if merge_withdrawn || found.needs_review() {
         RunItemState::Review
     } else {
         RunItemState::Matched
     };
-    repo.record_verdict(org, head.id, resource.locator.as_str(), next)
+    tam_storage::record_verdict(tx, org, at, next)
         .await
-        .map_err(|error| storage_fault(state, &error))?;
+        .map_err(|error| storage_fault_tx(org, &error))?;
     Ok(next)
+}
+
+/// The product a candidate survivor has become, where it still stands.
+///
+/// Read inside the caller's guarded transaction, which is the whole point: a
+/// candidate the matcher named before the lock may since have been deleted by
+/// the seller or merged away by the duplicate review. A merge is followed one
+/// hop to the product that now holds the resource; `None` means nothing does,
+/// and nothing may be bound onto it.
+async fn survivor_now(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    candidate: ProductId,
+) -> Result<Option<(ProductId, String)>, APIError> {
+    let standing = tam_storage::merged_into(tx, org, candidate)
+        .await
+        .map_err(|error| storage_fault_tx(org, &error))?
+        .unwrap_or(candidate);
+    // `title_of` reads live products only, so its absence is the tombstone.
+    let title = tam_storage::title_of(tx, org, standing)
+        .await
+        .map_err(|error| storage_fault_tx(org, &error))?;
+    Ok(title.map(|title| (standing, title)))
+}
+
+/// A storage fault raised inside a transaction, where the fault reporter's
+/// own connection is not available.
+fn storage_fault_tx(org: OrgId, error: &tam_storage::StorageError) -> APIError {
+    APIError::new(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        APIErrorEntry::new(&format!(
+            "the catalogue decision could not be written for {}: {error}",
+            org.0.to_hyphenated()
+        ))
+        .kind(APIErrorKind::Internal),
+    )
 }
 
 /// The run that reviews one spreadsheet batch, found or opened.
@@ -1250,83 +2334,56 @@ pub(crate) async fn run_for_batch(
                 anchor_job: anchor,
                 created_at: now,
                 scheduled: false,
+                // A batch is its own identity, so there is no start key to
+                // mint, and a batch commit is never a retry of another run.
+                start_key: None,
+                retry_of: None,
             },
         )
         .await
         .map_err(|error| storage_fault(state, &error))?;
     match opening {
         RunOpening::Opened => head_or_missing(state, org, run).await,
-        // Another import is open. A batch commit is not refused for it: the
-        // batch has its own one-open-per-org index and the seller reached this
-        // by pressing a button on a batch that was already theirs, so the
-        // honest answer is the refusal the run index gives, naming what is
-        // open.
-        RunOpening::AlreadyOpen(open) => Err(already_open(open)),
+        // A run for this batch appeared between the read above and this
+        // write, which is two commit chunks racing on one batch: the answer
+        // is that run, because it is the one this batch is reviewed through.
+        RunOpening::AlreadyOpen(open) => head_or_missing(state, org, open).await,
+        // A spreadsheet run spends no start key, so this is unreachable; it
+        // is named rather than wildcarded so that a third opening answer
+        // fails here rather than falling into a silent branch.
+        RunOpening::KeySpent { .. } => {
+            Err(state.internal("a spreadsheet run answered with a spent start key"))
+        }
     }
 }
 
-/// Puts one claimed spreadsheet row through the matcher.
+/// One claimed spreadsheet row, ready for the matcher.
 ///
-/// Called after the claim rather than before it, because the claim is what
-/// reserves the row's product identifier and the pair has to be keyed on the
-/// identifier the product will actually take: a question answered about an
-/// identifier nothing took would be asked again on the next import, which is
-/// the one failure a stored `different` exists to prevent.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the state, the tenant, the run, the row's handle, the row and the plan's review capability; the same six as the marketplace path, deliberately"
-)]
-pub(crate) async fn match_spreadsheet_row(
-    state: &AppState,
-    org: OrgId,
-    head: &ImportRunHead,
-    locator: &str,
+/// The row's own draft is what the commit builds a product from, so it is
+/// what the matcher is asked about — and the identifier it is asked under is
+/// the one the claim reserved, because a question answered about an
+/// identifier nothing took would be asked again on the next import.
+pub(crate) struct SpreadsheetMatch {
+    title: String,
+    subject: Side,
+    product: ProductId,
+    draft: serde_json::Value,
+    cover: Option<ContentHash>,
+    reviews: bool,
+}
+
+/// Assembles what the matcher will be asked about one row, reading nothing
+/// the decision transaction has to hold.
+pub(crate) fn prepare_spreadsheet_match(
     row: &tam_storage::ClaimedRow,
     reviews: bool,
-) -> Result<RunItemState, APIError> {
-    let repo = ImportRunRepo::new(state.pool.clone());
-    if let Some(held) = repo
-        .item(org, head.id, locator)
-        .await
-        .map_err(|error| storage_fault(state, &error))?
-    {
-        // Already described and decided. A resumed commit reads the verdict
-        // rather than asking the matcher a second question about one row.
-        if !matches!(held.state, RunItemState::Listed | RunItemState::Selected) {
-            return Ok(held.state);
-        }
-    }
-    let now = (state.wall)();
+) -> SpreadsheetMatch {
     let title = row
         .draft
         .get("title")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("")
         .to_owned();
-    // The write's own answer is not read: a row reaching this twice is a
-    // resumed commit, and the state read above is what decided whether to ask
-    // the matcher again.
-    let _fresh = repo
-        .record_read(
-            org,
-            head.id,
-            &tam_storage::ReadItem {
-                locator,
-                // The row's own draft, which is the create form's shape: this
-                // is the document the commit is about to build a product from,
-                // so it is the honest record of what was matched.
-                observed: &row.draft,
-                title: &title,
-                price: None,
-                cover_hash: row.cover.as_ref().map(|cover| cover.hash),
-                device: None,
-                product: Some(row.product),
-            },
-            now,
-        )
-        .await
-        .map_err(|error| storage_fault(state, &error))?;
-
     let subject = Side {
         title: title.clone(),
         title_norm: tam_fingerprint::normalise_title(&title),
@@ -1353,64 +2410,187 @@ pub(crate) async fn match_spreadsheet_row(
             })
             .unwrap_or_default(),
     };
-    let found = matcher::match_one(
-        state,
-        org,
-        sketch_version(),
-        &subject,
-        row.product,
-        // A spreadsheet row is on no marketplace, so the cross-marketplace
-        // rule admits every candidate: there is no same-shop pair to exclude.
-        None,
-        None,
+    SpreadsheetMatch {
+        title,
+        subject,
+        product: row.product,
+        draft: row.draft.clone(),
+        cover: row.cover.as_ref().map(|cover| cover.hash),
         reviews,
+    }
+}
+
+/// Decides one spreadsheet row inside the caller's guarded transaction.
+///
+/// The matcher runs here rather than before the lock, which is what makes a
+/// resumed batch safe: a row matched an hour ago, against a catalogue another
+/// source has since committed into, is decided against what stands now. The
+/// row, the questions it raises and the verdict it reaches are one write with
+/// the product the caller is about to create.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the transaction, the tenant, the run, the row's handle, the prepared match and the instant; each comes from a different place and the one caller passes all six"
+)]
+pub(crate) async fn apply_spreadsheet_match(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    state: &AppState,
+    org: OrgId,
+    head: &ImportRunHead,
+    locator: &str,
+    matched: &SpreadsheetMatch,
+    now: Timestamp,
+) -> Result<RunItemState, APIError> {
+    let at = tam_storage::ItemAddress {
+        run: head.id,
+        locator,
+    };
+    // A row that has settled keeps its answer: an imported row created its
+    // product, a skipped one was decided against, a failed one recorded why.
+    // A row merely `matched` or in `review` is asked again, which is the whole
+    // point of asking here.
+    if let Some(held) = tam_storage::reserved_state(tx, org, at)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+    {
+        if matches!(
+            held,
+            RunItemState::Imported | RunItemState::Skipped | RunItemState::Failed
+        ) {
+            return Ok(held);
+        }
+    }
+
+    tam_storage::record_read(
+        tx,
+        org,
+        head.id,
+        &tam_storage::ReadItem {
+            locator,
+            // The row's own draft, which is the create form's shape: this is
+            // the document the commit is about to build a product from, so it
+            // is the honest record of what was matched.
+            observed: &matched.draft,
+            title: &matched.title,
+            price: None,
+            cover_hash: matched.cover,
+            device: None,
+            product: Some(matched.product),
+        },
+        now,
+    )
+    .await
+    .map_err(|error| storage_fault(state, &error))?;
+
+    // A pair this row is already parked in is a question the seller owes an
+    // answer to, and the scorer cannot see it: `answered_pairs` excludes only
+    // answered pairs from the never-ask-twice rule, so a parked pair is
+    // re-scored from scratch. If the evidence has since fallen below the
+    // review floor — another source committed, the frequency weighting moved
+    // — the re-score returns no question at all and the row is created,
+    // which is the duplicate the parked pair exists to prevent. So the park
+    // is honoured before the scorer is asked.
+    if tam_storage::parked_for(tx, org, matched.product)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+        > 0
+    {
+        tam_storage::record_verdict(tx, org, at, RunItemState::Review)
+            .await
+            .map_err(|error| storage_fault(state, &error))?;
+        return Ok(RunItemState::Review);
+    }
+
+    let found = matcher::match_one_in(
+        tx,
+        &matcher::Asking {
+            state,
+            org,
+            version: sketch_version(),
+            subject: &matched.subject,
+            subject_product: matched.product,
+            // A spreadsheet row is on no marketplace, so the
+            // cross-marketplace rule admits every candidate: there is no
+            // same-shop pair to exclude.
+            marketplace: None,
+            bands: None,
+            reviews: matched.reviews,
+        },
     )
     .await?;
 
-    let duplicates = DuplicateRepo::new(state.pool.clone());
+    // The survivor a merge names, re-resolved under this same lock: the
+    // matcher's candidate query and this decision are one transaction, but a
+    // product merged away earlier in this very pass is still followed one hop
+    // to what stands, and one that stands nowhere is not merged onto.
+    let survivor = match found.merged.first() {
+        Some(raised) => survivor_now(tx, org, raised.other).await?,
+        None => None,
+    };
+    let merge_withdrawn = !found.merged.is_empty() && survivor.is_none();
+
     for raised in found.merged.iter().chain(found.asked.iter()) {
-        let (lo, hi) = tam_storage::ordered_pair(row.product, raised.other);
-        let merged = matches!(raised.verdict, tam_storage::Verdict::Same);
-        duplicates
-            .raise(
-                org,
-                &NewVerdict {
-                    lo,
-                    hi,
-                    verdict: raised.verdict,
-                    decided_by: raised.decided_by,
-                    winning_layer: raised.layer,
-                    log_odds: raised.log_odds,
-                    fingerprint_version: sketch_version(),
-                    run: Some(head.id),
-                    kept: merged.then_some(raised.other),
-                    raised_at: now,
-                    decided_at: merged.then_some(now),
-                    reversible_until: merged
-                        .then_some(Timestamp(now.0.saturating_add(tam_storage::REVERSIBLE_MS))),
-                    evidence: &raised.evidence,
-                },
-            )
-            .await
-            .map_err(|error| storage_fault(state, &error))?;
+        let merged = matches!(raised.verdict, tam_storage::Verdict::Same) && !merge_withdrawn;
+        let other = match (merged, survivor.as_ref()) {
+            (true, Some((product, _))) => *product,
+            _ => raised.other,
+        };
+        let (lo, hi) = tam_storage::ordered_pair(matched.product, other);
+        // Parked, not decided — and a park is the seller's question, never
+        // the system's claim. `duplicate_verdict_system_is_decisive` admits
+        // `system` only on a `same` verdict from a decisive layer, so parking
+        // in the scorer's own voice would be refused by the check and take
+        // this row's whole transaction with it.
+        let (verdict, decided_by) =
+            if merge_withdrawn && matches!(raised.verdict, tam_storage::Verdict::Same) {
+                (tam_storage::Verdict::Parked, tam_storage::DecidedBy::Seller)
+            } else {
+                (raised.verdict, raised.decided_by)
+            };
+        tam_storage::raise_verdict(
+            tx,
+            org,
+            &NewVerdict {
+                lo,
+                hi,
+                verdict,
+                decided_by,
+                winning_layer: raised.layer,
+                log_odds: raised.log_odds,
+                fingerprint_version: sketch_version(),
+                run: Some(head.id),
+                kept: merged.then_some(other),
+                raised_at: now,
+                decided_at: merged.then_some(now),
+                reversible_until: merged
+                    .then_some(Timestamp(now.0.saturating_add(tam_storage::REVERSIBLE_MS))),
+                evidence: &raised.evidence,
+            },
+        )
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
     }
 
-    if let Some(merged) = found.merged.first() {
-        let title = held_title(state, org, merged.other).await?;
-        repo.record_skipped(org, head.id, locator, &format!("same as {title}"), now)
+    if let Some((_, title)) = survivor {
+        tam_storage::record_skipped(tx, org, at, &format!("same as {title}"), now)
             .await
             .map_err(|error| storage_fault(state, &error))?;
         return Ok(RunItemState::Skipped);
     }
-    let next = if found.needs_review() {
+    let next = if merge_withdrawn || found.needs_review() {
         RunItemState::Review
     } else {
         RunItemState::Matched
     };
-    repo.record_verdict(org, head.id, locator, next)
+    tam_storage::record_verdict(tx, org, at, next)
         .await
         .map_err(|error| storage_fault(state, &error))?;
     Ok(next)
+}
+
+/// The refusal a settled run answers a caller with.
+#[must_use]
+pub(crate) fn run_settled_refusal(state: RunState) -> APIError {
+    run_settled(state)
 }
 
 /// One spreadsheet row's handle inside the run, which is how migration 0070's
@@ -1430,20 +2610,86 @@ pub(crate) async fn settle_run(
     if !head.state.open() {
         return Ok(());
     }
-    ImportRunRepo::new(state.pool.clone())
+    // The write is conditional on the run still being open, and a refusal is
+    // not an error here: a batch finishing its last row after the seller
+    // stopped the import does not overwrite that abandonment with a
+    // completion, and the answer the seller was given stands. Nothing is
+    // announced either, because nothing moved.
+    let settled = ImportRunRepo::new(state.pool.clone())
         .set_state(org, head.id, run_state, None, (state.wall)())
         .await
         .map_err(|error| storage_fault(state, &error))?;
+    if !settled {
+        return Ok(());
+    }
     settled_event(state, org, head, run_state).await
 }
 
-/// Creates one matched item: the product, its label and its sketch.
+/// What committing one item did.
+pub(crate) enum CommitEffect {
+    /// A product was created.
+    Created,
+    /// The resource was bound onto a product the catalogue already held, and
+    /// the item settled as a skip. One resource, one product, both listings.
+    Bound,
+    /// Left where it is: a question is still owed about it, or the run's own
+    /// guard refused the commit.
+    Held,
+}
+
+/// What committing one item did, and whether its own transaction is what
+/// settled the run.
+///
+/// The two travel together because they are one fact. The last item of a run
+/// completes it inside the transaction that finished it — [`settle_if_done`]
+/// — and the terminal event is appended after that transaction commits. A
+/// chunk that re-read the run's state to decide whether to announce anything
+/// would find `complete` and no way to tell whose write made it so, which is
+/// how a finished import ended up with no `ImportRunSettled` event at all:
+/// the chunk's own conditional transition found the run already settled and
+/// read that as "nothing moved".
+pub(crate) struct ItemCommit {
+    pub effect: CommitEffect,
+    pub settled: bool,
+}
+
+impl ItemCommit {
+    /// An item that left the run exactly where it found it.
+    const fn held() -> Self {
+        Self {
+            effect: CommitEffect::Held,
+            settled: false,
+        }
+    }
+}
+
+/// Creates one authorised item: the product, its source binding, its label,
+/// its sketch and the row's outcome — in one transaction, under this
+/// organisation's catalogue lock.
+///
+/// The order is the whole design. Everything slow happens first and outside
+/// the lock: the stored description is decoded, the seller's connection is
+/// resolved, the cover's bytes are read back, and the catalogue write is
+/// prepared. Then the lock is taken, and under it the decision is made
+/// against what is committed *now* rather than against what the matcher saw
+/// when the page landed.
+///
+/// Four things can be true under that lock, and each has one answer:
+/// a question is still parked, so the item waits; the seller merged this
+/// resource away, so it binds onto the survivor; the shop's own listing is
+/// already bound to a product, so it binds onto that; a decisive digest twin
+/// exists, so the two sources end as one product carrying both bindings.
+/// Only if none of them holds is a product created.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the four revalidation answers and the create are one decision taken under one lock; splitting them would put half of what the lock protects outside the function that takes it"
+)]
 async fn commit_one(
     state: &AppState,
     org: OrgId,
     head: &ImportRunHead,
     item: &ImportRunItemRecord,
-) -> Result<(), APIError> {
+) -> Result<ItemCommit, APIError> {
     let now = (state.wall)();
     let observed = item
         .observed
@@ -1487,17 +2733,18 @@ async fn commit_one(
                 },
             }]
         }
-        // A TPT read names no file, because `tpt.download_resource_bundle` is
-        // uncaptured. D32 and migration 0061 make that a product with no
-        // payload rather than a refusal, and a run drafts nowhere so no
-        // mapping exists for the trigger to fire on.
+        // A catalogue read names no file: the first-party-export read carries
+        // what describes a listing, and the seller's own file arrives by the
+        // separate download hop a migration's device performs. D32 and
+        // migration 0061 make that a product with no payload rather than a
+        // refusal, and a run drafts nowhere so no mapping exists for the
+        // trigger to fire on.
         None => Vec::new(),
     };
 
-    // The cover's length, read back from the blob it was stored as. One
-    // decrypt of one 512x384 PNG per item, which is cheaper than carrying a
-    // length in the stored document and having two places that could disagree
-    // about it.
+    // The cover's length, read back from the blob it was stored as. Before the
+    // lock, deliberately: this is a file read, and no file read happens under
+    // the catalogue lock.
     let cover = match item.cover_hash {
         Some(hash) => {
             let bytes = cover_bytes(state, org, hash).await?;
@@ -1521,57 +2768,311 @@ async fn commit_one(
         payload,
         cover,
     };
-    let report = import_one(&run, &applied)
+    let prepared = tam_import::prepare_one(&run, &applied)
         .await
-        .map_err(|error| match error {
-            tam_import::ImportError::Storage(error) => storage_fault(state, &error),
-            // Every one of these is something about the seller's own listing:
-            // a resource with nothing to sell, a price that will not
-            // denominate, a currency nobody has measured. Each is theirs to
-            // act on, which is what makes them validation rather than faults.
-            refused @ (tam_import::ImportError::NoPayload
-            | tam_import::ImportError::Price(_)
-            | tam_import::ImportError::CurrencyUnknown { .. }) => validation(&refused.to_string()),
-            // A run names no target, so nothing lowers an intent and nothing
-            // asks for one.
-            impossible @ (tam_import::ImportError::Lowering(_)
-            | tam_import::ImportError::NoTarget) => {
-                state.internal(&format!("the import answered {impossible}"))
-            }
-        })?;
+        .map_err(|error| import_refusal(state, error))?;
 
-    LabelRepo::new(state.pool.clone())
-        .attach_system_label(org, report.product, source.marketplace(), now)
+    // The matcher's own subject, and the plan's review capability, read
+    // before the lock: the subject is pure, and the entitlement is one
+    // indexed read that has nothing to do with the catalogue decision.
+    let subject = side_of(&resource, source);
+    let bands = subject
+        .text
+        .map(|text| tam_fingerprint::simhash_bands(text.simhash))
+        .map(|bands| bands.map(|band| i16::from_ne_bytes(band.to_ne_bytes())));
+    let reviews = crate::entitlement::Entitlement::of(
+        tam_storage::EntitlementRepo::new(state.pool.clone())
+            .current(org, now)
+            .await
+            .map_err(|error| storage_fault(state, &error))?,
+    )
+    .caps
+    .duplicate_review;
+
+    let at = tam_storage::ItemAddress {
+        run: head.id,
+        locator: item.locator.as_str(),
+    };
+    let mut tx = begin_guarded(state, org).await?;
+    let guard = tam_storage::guard_run(&mut tx, org, head.id)
         .await
-        .map_err(|error| storage_fault(state, &error))?;
+        .map_err(|error| storage_fault(state, &error))?
+        .ok_or_else(|| missing("no such import"))?;
+    // The cancellation ordering, stated once: a cancellation that committed
+    // before this transaction took the row's lock is visible here and rejects
+    // the commit; one that arrives after this transaction commits finds the
+    // resource created and stops the later work instead. Authorisation is
+    // checked in the same read, so an unconfirmed manual run creates nothing
+    // however finished its description pass is.
+    if !guard.state.open() || !guard.commit_authorised {
+        tx.rollback()
+            .await
+            .map_err(|error| sql_fault(state, &error))?;
+        return Ok(ItemCommit::held());
+    }
 
+    // A question still owed about this resource. The item goes back to review
+    // rather than being created behind the seller's answer.
+    if tam_storage::parked_for(&mut tx, org, item.product)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+        > 0
+    {
+        tam_storage::record_verdict(&mut tx, org, at, RunItemState::Review)
+            .await
+            .map_err(|error| storage_fault(state, &error))?;
+        tx.commit()
+            .await
+            .map_err(|error| sql_fault(state, &error))?;
+        return Ok(ItemCommit::held());
+    }
+
+    // The revalidation, against the catalogue as it stands at this instant.
+    //
+    // Two answers that already exist are read first: a merge the seller
+    // decided, and this shop's own listing already bound to a product. Then
+    // the matcher itself is re-asked — the whole scorer, with every layer,
+    // the cross-marketplace rule, the frequency weighting, the negative
+    // evidence and the never-ask-twice exclusions — because a decision
+    // reached against an empty catalogue cannot be trusted after another
+    // source has committed into it. A digest comparison standing in for the
+    // scorer would miss exactly the pair the scorer exists to catch: matching
+    // titles and text over different bytes.
+    let existing = match tam_storage::merged_into(&mut tx, org, item.product)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+    {
+        Some(kept) => Some(kept),
+        None => tam_storage::bound_product(&mut tx, org, source, resource.locator.as_str())
+            .await
+            .map_err(|error| storage_fault(state, &error))?,
+    };
+
+    let (twin, decided) = if let Some(bound) = existing {
+        (Some(bound), None)
+    } else {
+        let found = matcher::match_one_in(
+            &mut tx,
+            &matcher::Asking {
+                state,
+                org,
+                version: sketch_version(),
+                subject: &subject,
+                subject_product: item.product,
+                marketplace: Some(source.marketplace()),
+                bands,
+                reviews,
+            },
+        )
+        .await?;
+        let merged = found.merged.first().map(|raised| raised.other);
+        (merged, Some(found))
+    };
+
+    // Whatever the revalidation raised is written here, in this transaction:
+    // the merge it decided, and every question it now owes the seller. A pair
+    // the machinery decided and did not store is a decision the next import
+    // cannot read, and a review the commit held without a stored pair is a
+    // resource waiting for a question nobody was asked.
+    if let Some(found) = decided.as_ref() {
+        for raised in found.merged.iter().chain(found.asked.iter()) {
+            let (lo, hi) = tam_storage::ordered_pair(item.product, raised.other);
+            let merged = matches!(raised.verdict, tam_storage::Verdict::Same);
+            tam_storage::raise_verdict(
+                &mut tx,
+                org,
+                &NewVerdict {
+                    lo,
+                    hi,
+                    verdict: raised.verdict,
+                    decided_by: raised.decided_by,
+                    winning_layer: raised.layer,
+                    log_odds: raised.log_odds,
+                    fingerprint_version: sketch_version(),
+                    run: Some(head.id),
+                    kept: merged.then_some(raised.other),
+                    raised_at: now,
+                    decided_at: merged.then_some(now),
+                    reversible_until: merged
+                        .then_some(Timestamp(now.0.saturating_add(tam_storage::REVERSIBLE_MS))),
+                    evidence: &raised.evidence,
+                },
+            )
+            .await
+            .map_err(|error| storage_fault(state, &error))?;
+        }
+        // A question the revalidation raised is the seller's to answer, and
+        // this item waits for it rather than being created behind it.
+        if twin.is_none() && found.needs_review() {
+            tam_storage::record_verdict(&mut tx, org, at, RunItemState::Review)
+                .await
+                .map_err(|error| storage_fault(state, &error))?;
+            tx.commit()
+                .await
+                .map_err(|error| sql_fault(state, &error))?;
+            item_settled_event(state, org, head, item.locator.as_str(), "review").await?;
+            return Ok(ItemCommit::held());
+        }
+    }
+
+    if let Some(twin) = twin {
+        // One resource, one product, both bindings. The survivor gains this
+        // shop's listing and this shop's label, and the item settles as a skip
+        // rather than as a second product.
+        // The product the listing ends up on, which is the twin unless
+        // another product of this organisation already held that listing.
+        let holder = bind_onto(state, &mut tx, org, twin, &prepared, now).await?;
+        let title = tam_storage::title_of(&mut tx, org, holder)
+            .await
+            .map_err(|error| storage_fault(state, &error))?
+            .unwrap_or_else(|| "a resource you already have".to_owned());
+        tam_storage::record_skipped(&mut tx, org, at, &format!("same as {title}"), now)
+            .await
+            .map_err(|error| storage_fault(state, &error))?;
+        let settled = settle_if_done(state, &mut tx, org, head.id, now).await?;
+        tx.commit()
+            .await
+            .map_err(|error| sql_fault(state, &error))?;
+        item_settled_event(state, org, head, item.locator.as_str(), "skipped").await?;
+        return Ok(ItemCommit {
+            effect: CommitEffect::Bound,
+            settled,
+        });
+    }
+
+    let bound = tam_import::apply_prepared(&mut tx, org, &prepared, now)
+        .await
+        .map_err(|error| import_refusal(state, error))?;
+    // The shop's label follows the binding. A read whose bytes are still
+    // uncaptured lands as a product with no mapping — migration 0061's rule —
+    // and labelling it would put a marketplace chip on a resource that shop's
+    // listing does not hold, which is the mismatch the binding exists to
+    // prevent. The capture writes both.
+    if bound {
+        tam_storage::attach_system_label(&mut tx, org, item.product, source.marketplace(), now)
+            .await
+            .map_err(|error| storage_fault(state, &error))?;
+    }
     if let Some(fingerprint) = resource.fingerprint.as_ref() {
         write_fingerprint(
-            state,
+            &mut tx,
             org,
-            report.product,
+            item.product,
             fingerprint,
             item.device.as_deref(),
             now,
         )
         .await?;
     }
-
-    ImportRunRepo::new(state.pool.clone())
-        .record_imported(org, head.id, item.locator.as_str(), report.product, now)
+    tam_storage::record_imported(&mut tx, org, at, item.product, now)
         .await
         .map_err(|error| storage_fault(state, &error))?;
+    let settled = settle_if_done(state, &mut tx, org, head.id, now).await?;
+    tx.commit()
+        .await
+        .map_err(|error| sql_fault(state, &error))?;
     item_settled_event(state, org, head, item.locator.as_str(), "imported").await?;
-    Ok(())
+    Ok(ItemCommit {
+        effect: CommitEffect::Created,
+        settled,
+    })
 }
 
-/// Stores one product's sketch, in the columns the matcher blocks on.
+/// Binds the listing this run read onto a product the catalogue already
+/// holds, and gives that product this shop's label.
+///
+/// Through [`tam_storage::bind_listing`], which reads before it writes. The
+/// distinction is not tidiness: PostgreSQL aborts the whole transaction on a
+/// unique violation, so catching `ListingAlreadyBound` from the insert would
+/// leave this caller carrying on inside a transaction the database had
+/// already thrown away — the label below and the item's own settlement would
+/// be silently discarded, and the item would be retried forever. A listing
+/// this organisation has already bound is an ordinary outcome of a
+/// re-imported shop, not a fault, so it must never reach the insert.
+///
+/// Answers which product holds the listing afterwards, which is the product
+/// this shop's label belongs on: where another product already held it, that
+/// one, because binding is what the label follows.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the transaction, state and tenant bound the decision; the product, prepared source \
+              and instant are the write itself, and a parameter bag would only rename them"
+)]
+async fn bind_onto(
+    state: &AppState,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    product: ProductId,
+    prepared: &tam_import::PreparedResource,
+    now: Timestamp,
+) -> Result<ProductId, APIError> {
+    let mut binding = prepared.source_mapping.clone();
+    binding.id = tam_types::MappingId(fresh_uuid());
+    binding.product = product;
+    let held = tam_storage::bind_listing(tx, org, &binding, 0, now)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    tam_storage::attach_system_label(tx, org, held, binding.inventory.marketplace(), now)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    Ok(held)
+}
+
+/// Settles the run inside the same transaction that finished its last item,
+/// answering whether this transaction is the one that moved it.
+///
+/// In the transaction rather than after it, so a run cannot be seen holding
+/// nothing outstanding while still saying it is committing. The answer is
+/// returned rather than discarded because the transition is what earns the
+/// terminal event: `set_run_state` moves an open run once, and the caller it
+/// answered `true` owes the announcement.
+async fn settle_if_done(
+    state: &AppState,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    run: Uuid,
+    now: Timestamp,
+) -> Result<bool, APIError> {
+    let counts = tam_storage::counts_of(tx, org, run)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    if counts.outstanding() != 0 {
+        return Ok(false);
+    }
+    tam_storage::set_run_state(tx, org, run, RunState::Complete, None, now)
+        .await
+        .map_err(|error| storage_fault(state, &error))
+}
+
+/// What an import refusal is, on the way out.
+///
+/// Every arm the seller can act on is a validation answer about their own
+/// listing; the rest are ours.
+fn import_refusal(state: &AppState, error: tam_import::ImportError) -> APIError {
+    match error {
+        tam_import::ImportError::Storage(error) => storage_fault(state, &error),
+        refused @ (tam_import::ImportError::NoPayload
+        | tam_import::ImportError::Price(_)
+        | tam_import::ImportError::CurrencyUnknown { .. }) => validation(&refused.to_string()),
+        // A run names no target, so nothing lowers an intent and nothing asks
+        // for one.
+        impossible @ (tam_import::ImportError::Lowering(_) | tam_import::ImportError::NoTarget) => {
+            state.internal(&format!("the import answered {impossible}"))
+        }
+    }
+}
+
+/// Stores one product's sketch, in the columns the matcher blocks on, inside
+/// the transaction that created the product.
+///
+/// In the transaction because a sketch that outlived a rolled-back product is
+/// a candidate the matcher would offer for a resource nobody has.
 #[expect(
     clippy::too_many_arguments,
     reason = "the sketch is a device's assertion, so the write carries the machine and the instant beside the value; folding them into a struct would hide exactly the distinction 0052 exists to keep"
 )]
 pub(crate) async fn write_fingerprint(
-    state: &AppState,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     org: OrgId,
     product: ProductId,
     fingerprint: &tam_fingerprint::Fingerprint,
@@ -1586,27 +3087,27 @@ pub(crate) async fn write_fingerprint(
         bands: tam_fingerprint::simhash_bands(text.simhash)
             .map(|band| i16::from_ne_bytes(band.to_ne_bytes())),
     });
-    FingerprintRepo::new(state.pool.clone())
-        .put(
-            org,
-            &FingerprintWrite {
-                product,
-                version: i16::try_from(fingerprint.version).unwrap_or(i16::MAX),
-                text,
-                page_count: fingerprint
-                    .page_count
-                    .map(|count| i32::try_from(count).unwrap_or(i32::MAX)),
-                cover_phash: fingerprint
-                    .cover_phash
-                    .map(|phash| i64::from_ne_bytes(phash.to_ne_bytes())),
-                title_norm: fingerprint.title_norm.as_str(),
-                observed_by_device: device,
-                observed_at: now,
-            },
-            now,
-        )
-        .await
-        .map_err(|error| storage_fault(state, &error))?;
+    tam_storage::put_fingerprint(
+        tx,
+        org,
+        &FingerprintWrite {
+            product,
+            version: i16::try_from(fingerprint.version).unwrap_or(i16::MAX),
+            text,
+            page_count: fingerprint
+                .page_count
+                .map(|count| i32::try_from(count).unwrap_or(i32::MAX)),
+            cover_phash: fingerprint
+                .cover_phash
+                .map(|phash| i64::from_ne_bytes(phash.to_ne_bytes())),
+            title_norm: fingerprint.title_norm.as_str(),
+            observed_by_device: device,
+            observed_at: now,
+        },
+        now,
+    )
+    .await
+    .map_err(|error| storage_fault_tx(org, &error))?;
     Ok(())
 }
 
@@ -1678,17 +3179,6 @@ fn listed_price(resource: &ObservedResource, source: InventoryId) -> Option<Mone
         return None;
     }
     Money::new(*minor_units, currency).ok()
-}
-
-async fn held_title(state: &AppState, org: OrgId, product: ProductId) -> Result<String, APIError> {
-    let held = tam_storage::ProductRepo::new(state.pool.clone())
-        .get(org, product)
-        .await
-        .map_err(|error| storage_fault(state, &error))?;
-    Ok(held.map_or_else(
-        || "a resource you already have".to_owned(),
-        |record| record.product.title.0.clone(),
-    ))
 }
 
 async fn store_cover(
@@ -1871,20 +3361,175 @@ async fn emit(
 
 // --------------------------------------------------------------- refusals
 
-/// One import at a time, and this is which one.
+/// The lease, in the shape the device reads: milliseconds since the epoch,
+/// which is every other timestamp on this wire.
+fn wire_lease(lease: tam_storage::ImportLease) -> ImportLease {
+    ImportLease {
+        attempt: lease.attempt,
+        lease_expires_at: lease.lease_expires_at.0,
+    }
+}
+
+/// The stage a device reported, in the storage vocabulary.
+const fn storage_stage(stage: tam_engine_driver::import::ImportStage) -> ImportStage {
+    match stage {
+        tam_engine_driver::import::ImportStage::Discovering => ImportStage::Discovering,
+        tam_engine_driver::import::ImportStage::Selecting => ImportStage::Selecting,
+        tam_engine_driver::import::ImportStage::Reading => ImportStage::Reading,
+        tam_engine_driver::import::ImportStage::Interrupted => ImportStage::Interrupted,
+        tam_engine_driver::import::ImportStage::Failed => ImportStage::Failed,
+    }
+}
+
+/// The reason a device gave, in the storage vocabulary.
+const fn storage_reason(code: tam_engine_driver::import::ImportReasonCode) -> ImportReasonCode {
+    match code {
+        tam_engine_driver::import::ImportReasonCode::MissingSession => {
+            ImportReasonCode::MissingSession
+        }
+        tam_engine_driver::import::ImportReasonCode::NotPermitted => ImportReasonCode::NotPermitted,
+        tam_engine_driver::import::ImportReasonCode::UnsupportedSource => {
+            ImportReasonCode::UnsupportedSource
+        }
+        tam_engine_driver::import::ImportReasonCode::EnumerationFailed => {
+            ImportReasonCode::EnumerationFailed
+        }
+        tam_engine_driver::import::ImportReasonCode::DescriptionFailed => {
+            ImportReasonCode::DescriptionFailed
+        }
+        tam_engine_driver::import::ImportReasonCode::SubmissionFailed => {
+            ImportReasonCode::SubmissionFailed
+        }
+        tam_engine_driver::import::ImportReasonCode::ActivationExpired => {
+            ImportReasonCode::ActivationExpired
+        }
+        tam_engine_driver::import::ImportReasonCode::LeaseExpired => ImportReasonCode::LeaseExpired,
+        tam_engine_driver::import::ImportReasonCode::Stopped => ImportReasonCode::Stopped,
+        tam_engine_driver::import::ImportReasonCode::ClientUpdateRequired => {
+            ImportReasonCode::ClientUpdateRequired
+        }
+    }
+}
+
+/// Why this device may not write, classified under the run's own lock.
 ///
-/// The open run's identifier travels on the entry, because the console's next
-/// move is to show it: a seller who pressed the button twice wants the import
-/// they started, not a list to find it in.
-fn already_open(run: Uuid) -> APIError {
+/// Every one of these is a conflict rather than a generic refusal, and that
+/// is the device's requirement rather than a preference: a device retries
+/// from its own outbox on anything it reads as transport trouble, so an
+/// outage and a cancellation sharing a status would have it keep reading a
+/// run the seller stopped.
+async fn refused_fence(
+    state: &AppState,
+    org: OrgId,
+    run: Uuid,
+    device: &str,
+    attempt: u64,
+) -> Result<APIError, APIError> {
+    let outcome = ImportRunRepo::new(state.pool.clone())
+        .fence(org, run, device, attempt)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+        .ok_or_else(|| missing("no such import"))?;
+    Ok(fence_refusal(&outcome))
+}
+
+fn fence_refusal(outcome: &FenceOutcome) -> APIError {
+    match outcome {
+        // Reachable when the row moved between the write and this read; the
+        // honest answer is still "not yours to write".
+        FenceOutcome::Current | FenceOutcome::Stale { .. } => conflict(
+            "this import has moved on to a later attempt, so this one writes nothing more",
+            APIErrorCode::ImportRunFenced,
+        ),
+        FenceOutcome::NotOwner { owner } => match owner {
+            Some(owner) => conflict(
+                &format!("another device ({owner}) is running this import"),
+                APIErrorCode::ImportRunFenced,
+            ),
+            None => conflict(
+                "no device holds this import; claim it before reporting on it",
+                APIErrorCode::ImportRunFenced,
+            ),
+        },
+        // The hold lapsed. Told apart from a takeover because the remedy is
+        // its own: claim again, and the device's readiness is fresh rather
+        // than assumed from before it stopped answering.
+        FenceOutcome::Expired => conflict(
+            "this import's hold has lapsed; claim it again before writing to it",
+            APIErrorCode::ImportRunFenced,
+        ),
+        FenceOutcome::Settled(state) => run_settled(*state),
+    }
+}
+
+/// Another device holds this import, and this is which.
+fn held_by(device: &str, lease_expires_at: Option<Timestamp>) -> APIError {
+    APIError::new(
+        StatusCode::CONFLICT,
+        APIErrorEntry::new(&format!(
+            "another device ({device}) is running this import. Take it over from this one to \
+             continue here."
+        ))
+        .code(APIErrorCode::ImportRunFenced)
+        .kind(APIErrorKind::Validation)
+        .detail(serde_json::json!({
+            "owner_device": device,
+            "lease_expires_at": lease_expires_at.map(|at| at.0),
+        })),
+    )
+}
+
+/// The run has settled, so nothing more is written to it.
+fn run_settled(state: RunState) -> APIError {
+    conflict(
+        match state {
+            RunState::Abandoned => "this import was stopped, so it creates nothing more",
+            RunState::Failed => "this import failed, so it creates nothing more",
+            RunState::Reading | RunState::Reviewing | RunState::Committing | RunState::Complete => {
+                "this import has settled, and a settled import is not extended"
+            }
+        },
+        APIErrorCode::ImportRunSettled,
+    )
+}
+
+/// The page carries no fence, which only an old client sends.
+fn client_update_required() -> APIError {
+    conflict(
+        "this app is too old to import into your catalogue: update it and start the import \
+         again",
+        APIErrorCode::ImportClientUpdateRequired,
+    )
+}
+
+/// The same receipt, different content.
+fn receipt_conflict() -> APIError {
+    conflict(
+        "this page has already been accepted with different contents, so it was not applied \
+         again",
+        APIErrorCode::ImportReceiptConflict,
+    )
+}
+
+/// The start key was spent on a different intent.
+fn start_key_spent(source: InventoryId) -> APIError {
     APIError::new(
         StatusCode::CONFLICT,
         APIErrorEntry::new(
-            "you already have an import in progress. Finish or stop it before starting another.",
+            "this import was already started for a different shop; start a new import instead",
         )
-        .code(APIErrorCode::ImportRunOpen)
+        .code(APIErrorCode::ImportStartKeySpent)
         .kind(APIErrorKind::Validation)
-        .detail(serde_json::json!({ "run": uuid_text(run) })),
+        .detail(serde_json::json!({ "source": source })),
+    )
+}
+
+fn conflict(message: &str, code: APIErrorCode) -> APIError {
+    APIError::new(
+        StatusCode::CONFLICT,
+        APIErrorEntry::new(message)
+            .code(code)
+            .kind(APIErrorKind::Validation),
     )
 }
 

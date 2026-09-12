@@ -35,13 +35,11 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use tam_limits::Capabilities;
 use tam_storage::{
-    BatchState, ClaimedRow, CommitOpening, ImportBatchRepo, LabelRepo, ProductRepo, RowAddress,
-    RowRef,
+    BatchState, ClaimedRow, CommitOpening, ImportBatchRepo, ProductRepo, RowAddress, RowRef,
 };
 use tam_types::OrgId;
 
-use crate::catalogue::{create_one, finish_one};
-use crate::error::{APIError, APIErrorEntry, APIErrorKind};
+use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::{AppState, OrgContext};
 
 use super::lower::{lower, Lowered};
@@ -92,11 +90,57 @@ pub(crate) async fn commit(
     Path((_version, batch)): Path<(String, String)>,
 ) -> Result<Json<CommitAck>, APIError> {
     let batch = parse_id(&batch)?;
-    let batches = ImportBatchRepo::new(state.pool.clone());
-    let held = batches
+    if ImportBatchRepo::new(state.pool.clone())
         .get(context.org, batch)
         .await
         .map_err(|error| storage_fault(&state, &error))?
+        .is_none()
+    {
+        return Err(missing());
+    }
+    // The run this batch is reviewed through, opened on the first chunk. The
+    // duplicate review is one thing for both sources -- one pair table, one
+    // verdict, one card -- so a batch reaches it by having a run rather than
+    // by growing a second review of its own.
+    let run = crate::import_runs::run_for_batch(&state, context.org, batch).await?;
+    // Pressing Commit on a batch is the seller's own confirmation that these
+    // resources are to be created, recorded against the run with the actor
+    // and the instant beside it. The same fact the marketplace path records,
+    // so both sources reach the catalogue through one authorisation rule
+    // rather than two — and it is what lets the server's own drain finish
+    // this batch after the seller closes the tab.
+    tam_storage::ImportRunRepo::new(state.pool.clone())
+        .authorise_commit(
+            context.org,
+            run.id,
+            &uuid::Uuid::from_bytes(context.user.0 .0).to_string(),
+            (state.wall)(),
+        )
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    chunk(&state, context.org, context.entitlement.caps, batch, &run).await
+}
+
+/// One chunk of a batch commit: claim a page of rows, decide each under the
+/// organisation's guard, create what may be created, and settle when nothing
+/// is left.
+///
+/// One implementation for the seller's own press of the button and for the
+/// server's drain, because the guards are the point: a resumed batch must not
+/// create from a decision the catalogue has moved under, and neither caller
+/// may advance a run the seller stopped.
+async fn chunk(
+    state: &AppState,
+    org: OrgId,
+    caps: Capabilities,
+    batch: tam_types::Uuid,
+    run: &tam_storage::ImportRunHead,
+) -> Result<Json<CommitAck>, APIError> {
+    let batches = ImportBatchRepo::new(state.pool.clone());
+    let held = batches
+        .get(org, batch)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
         .ok_or_else(missing)?;
     // The parse's own counts, and the reason they are read before anything is
     // claimed: `row_count` and `failed_count` are written once, at upload, and
@@ -105,9 +149,9 @@ pub(crate) async fn commit(
     let total = held.row_count.saturating_sub(held.failed_count);
 
     match batches
-        .open_commit(context.org, batch)
+        .open_commit(org, batch)
         .await
-        .map_err(|error| storage_fault(&state, &error))?
+        .map_err(|error| storage_fault(state, &error))?
     {
         CommitOpening::Open => {}
         CommitOpening::NoSuchBatch => return Err(missing()),
@@ -115,77 +159,34 @@ pub(crate) async fn commit(
         CommitOpening::Awaiting { count, rows } => return Err(awaiting_files(count, &rows)),
     }
 
-    // The run this batch is reviewed through, opened on the first chunk. The
-    // duplicate review is one thing for both sources -- one pair table, one
-    // verdict, one card -- so a batch reaches it by having a run rather than
-    // by growing a second review of its own.
-    let run = crate::import_runs::run_for_batch(&state, context.org, batch).await?;
-
     let claimed = batches
-        .claim_page(context.org, batch, ROWS_PER_CHUNK, (state.wall)())
+        .claim_page(org, batch, ROWS_PER_CHUNK, (state.wall)())
         .await
-        .map_err(|error| storage_fault(&state, &error))?;
+        .map_err(|error| storage_fault(state, &error))?;
     let mut applied = 0_u32;
     let mut skipped = 0_u32;
     let mut failed = 0_u32;
     for row in &claimed {
-        let at = RowAddress {
-            sheet: &row.sheet,
-            ordinal: row.ordinal,
-        };
-        // The matcher, before the create. A row whose duplicate the seller has
-        // not decided stays claimed and is retried by the next chunk, which is
-        // what "a parked pair never blocks the import" means for a row: it
-        // blocks that row and nothing else.
-        let locator = crate::import_runs::row_locator(&row.sheet, row.ordinal);
-        let verdict = crate::import_runs::match_spreadsheet_row(
-            &state,
-            context.org,
-            &run,
-            &locator,
-            row,
-            context.entitlement.caps.duplicate_review,
-        )
-        .await?;
-        match verdict {
-            // Left claimed on purpose: `claim_page` re-claims a `creating`
-            // row, so the next chunk after the seller answers picks it up
-            // without the batch having to remember anything.
-            tam_storage::RunItemState::Review => continue,
-            // The seller answered that another resource already stands for
-            // this row, so creating it is exactly what they said not to do.
-            tam_storage::RunItemState::Skipped => {
-                batches
-                    .record_row_skipped(context.org, batch, at)
-                    .await
-                    .map_err(|error| storage_fault(&state, &error))?;
+        match apply_row(state, org, caps, run, batch, row).await {
+            Ok(RowOutcome::Created) => applied = applied.saturating_add(1),
+            // A row whose product an earlier pass had already created, and a
+            // row another resource already stands for: neither is new work
+            // and neither is a failure.
+            Ok(RowOutcome::Completed | RowOutcome::Skipped) => {
                 skipped = skipped.saturating_add(1);
-                continue;
             }
-            // Every other state is one the create is the next step for. Named
-            // rather than wildcarded, so a state added to the run's own
-            // vocabulary fails here rather than falling silently into a create.
-            tam_storage::RunItemState::Listed
-            | tam_storage::RunItemState::Selected
-            | tam_storage::RunItemState::Read
-            | tam_storage::RunItemState::Matched
-            | tam_storage::RunItemState::Imported
-            | tam_storage::RunItemState::Failed => {}
-        }
-        match create_row(&state, context.org, context.entitlement.caps, row).await {
-            Ok(true) => {
-                batches
-                    .record_created(context.org, batch, at, false)
-                    .await
-                    .map_err(|error| storage_fault(&state, &error))?;
-                applied = applied.saturating_add(1);
-            }
-            Ok(false) => {
-                batches
-                    .record_created(context.org, batch, at, true)
-                    .await
-                    .map_err(|error| storage_fault(&state, &error))?;
-                skipped = skipped.saturating_add(1);
+            // A question is owed about it. Left claimed on purpose:
+            // `claim_page` re-claims a `creating` row, so the next chunk after
+            // the seller answers picks it up without the batch having to
+            // remember anything.
+            Ok(RowOutcome::Held) => {}
+            Err(refusal)
+                if refusal
+                    .errors
+                    .iter()
+                    .any(|entry| entry.code == Some(APIErrorCode::ImportRunSettled)) =>
+            {
+                return Err(refusal);
             }
             Err(refusal) => {
                 // A refusal the seller can act on is recorded against the row
@@ -198,34 +199,40 @@ pub(crate) async fn commit(
                 // ends with its transaction and a row left `creating` by a
                 // crash reads no differently from one a live chunk holds, so
                 // both can claim it, and both are handed the same reserved
-                // product identifier. The loser's insert is refused by the
-                // primary key rather than minting a second product, and the
-                // 500 it raises is retriable here — the row stays claimed for
-                // the next chunk. That doubled pickup is the accepted
-                // tradeoff, not a fault.
+                // product identifier. The loser's whole row transaction is
+                // refused rather than minting a second product, and the 500 it
+                // raises is retriable here. That doubled pickup is the
+                // accepted tradeoff, not a fault.
                 if refusal.status_code().is_server_error() {
                     return Err(refusal);
                 }
                 batches
-                    .record_row_failed(context.org, batch, at, &reason_of(&refusal))
+                    .record_row_failed(
+                        org,
+                        batch,
+                        RowAddress {
+                            sheet: &row.sheet,
+                            ordinal: row.ordinal,
+                        },
+                        &reason_of(&refusal),
+                    )
                     .await
-                    .map_err(|error| storage_fault(&state, &error))?;
+                    .map_err(|error| storage_fault(state, &error))?;
                 failed = failed.saturating_add(1);
             }
         }
     }
 
     let counts = batches
-        .pending_counts(context.org, batch)
+        .pending_counts(org, batch)
         .await
-        .map_err(|error| storage_fault(&state, &error))?;
+        .map_err(|error| storage_fault(state, &error))?;
     let batch_state = if counts.outstanding == 0 {
         let settled = batches
-            .settle(context.org, batch, (state.wall)())
+            .settle(org, batch, (state.wall)())
             .await
-            .map_err(|error| storage_fault(&state, &error))?;
-        crate::import_runs::settle_run(&state, context.org, &run, tam_storage::RunState::Complete)
-            .await?;
+            .map_err(|error| storage_fault(state, &error))?;
+        crate::import_runs::settle_run(state, org, run, tam_storage::RunState::Complete).await?;
         settled
     } else {
         BatchState::Importing
@@ -242,49 +249,214 @@ pub(crate) async fn commit(
     }))
 }
 
-/// Creates one claimed row, answering whether this pass is what created its
-/// product.
+/// How many chunks one drain pass runs for a batch.
 ///
-/// The existence read comes first and decides which road the row takes. A row
-/// whose reserved product does not exist is created whole, under that
-/// identifier. A row whose product exists was created by an earlier pass that
-/// died before its breadcrumb, and creating it again would charge the seller
-/// twice for one spreadsheet row — so that pass's trailing writes run instead:
-/// [`finish_one`] completes the mapping and the elections the product is
-/// missing and re-writes nothing it holds, and the labels are set again,
-/// which is a replace and so the same set. Either road ends with a product
-/// carrying everything its row named, which is what lets the caller record the
-/// row `created` on both.
-async fn create_row(
+/// The same reasoning as the marketplace drain's: bounded, because the pass
+/// is shared with every other tenant's work, and a batch too large for one
+/// pass is finished by the next.
+const CHUNKS_PER_DRAIN: u32 = 8;
+
+/// Finishes an authorised batch that nothing is driving.
+///
+/// This is what a closed browser used to cost: the batch stayed `importing`
+/// with its rows claimed and its run authorised, and nothing picked it up
+/// until the expiry sweep abandoned it days later. The seller's press of
+/// Commit is the authorisation, and the server's own pass is what finishes
+/// the work.
+pub(crate) async fn drain_batch_run(
+    state: &AppState,
+    org: OrgId,
+    run: &tam_storage::ImportRunHead,
+) -> Result<u32, APIError> {
+    if !run.execution.commit_authorised(run.scheduled) {
+        return Ok(0);
+    }
+    let Some(batch) = run.batch_id else {
+        return Ok(0);
+    };
+    let caps = crate::entitlement::Entitlement::of(
+        tam_storage::EntitlementRepo::new(state.pool.clone())
+            .current(org, (state.wall)())
+            .await
+            .map_err(|error| storage_fault(state, &error))?,
+    )
+    .caps;
+    let mut created = 0_u32;
+    for _ in 0..CHUNKS_PER_DRAIN {
+        let ack = match chunk(state, org, caps, batch, run).await {
+            Ok(ack) => ack,
+            // A batch that has settled, or whose files are still missing, is
+            // not this pass's to force: the seller's own page says what it is
+            // waiting for, and a drain that failed the tenant's whole pass
+            // over it would take every other run with it.
+            Err(refusal) if !refusal.status_code().is_server_error() => return Ok(created),
+            Err(refusal) => return Err(refusal),
+        };
+        created = created.saturating_add(ack.applied);
+        if ack.complete || (ack.applied == 0 && ack.failed == 0) {
+            return Ok(created);
+        }
+    }
+    Ok(created)
+}
+
+/// One claimed row, decided and applied in one transaction.
+///
+/// Everything the row's outcome consists of is written under the
+/// organisation's catalogue guard: the matcher's revalidated decision, the
+/// product with its sidecar, its mappings, its elections, its labels and the
+/// row's own breadcrumb. A pass that stops mid-row therefore leaves nothing —
+/// no product whose row still reads `creating`, and no row marked created
+/// against a product that was rolled back.
+///
+/// The existence read still decides which road a resumed row takes: a row
+/// whose reserved product exists was created by an earlier pass, and creating
+/// it again would charge the seller twice, so the trailing writes run instead
+/// and each completes what is missing without rewriting what stands.
+///
+/// Answers what this pass did with the row.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the state, the tenant, its capabilities, the run the row is reviewed through, the batch, the row itself and the plan's review capability; each comes from a different place"
+)]
+async fn apply_row(
     state: &AppState,
     org: OrgId,
     caps: Capabilities,
+    run: &tam_storage::ImportRunHead,
+    batch: tam_types::Uuid,
     row: &ClaimedRow,
-) -> Result<bool, APIError> {
+) -> Result<RowOutcome, APIError> {
+    let at = RowAddress {
+        sheet: &row.sheet,
+        ordinal: row.ordinal,
+    };
+    let locator = crate::import_runs::row_locator(&row.sheet, row.ordinal);
+    // Everything slow and everything refusable, before the lock: the row's
+    // own lowering, the create's validation and reads, and the matcher's
+    // blocking reads.
     let already = ProductRepo::new(state.pool.clone())
         .get(org, row.product)
         .await
-        .map_err(|error| storage_fault(state, &error))?;
+        .map_err(|error| storage_fault(state, &error))?
+        .is_some();
     let Lowered { body, labels } = lower(row)?;
     let mappings: Vec<tam_types::MappingId> = row.mapping.into_iter().collect();
-    let created = if already.is_some() {
-        finish_one(state, org, &body, row.product, &mappings).await?;
-        false
+    let prepared = if already {
+        None
     } else {
-        create_one(state, org, caps, &body, row.product, &mappings).await?;
-        true
+        Some(crate::catalogue::prepare_create(state, org, caps, &body, row.product).await?)
     };
+    let matched = crate::import_runs::prepare_spreadsheet_match(row, caps.duplicate_review);
 
+    let now = (state.wall)();
+    let mut tx = crate::import_runs::begin_guarded(state, org).await?;
+    // The run's own guard: a batch whose import the seller stopped advances
+    // nothing, and the refusal is the answer rather than a silent no-op that
+    // lets the create run anyway.
+    let guard = tam_storage::guard_run(&mut tx, org, run.id)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+        .ok_or_else(missing)?;
+    if !guard.state.open() {
+        tx.rollback()
+            .await
+            .map_err(|error| storage_fault_tx(state, &error))?;
+        return Err(crate::import_runs::run_settled_refusal(guard.state));
+    }
+
+    // The decision, re-asked here against what is committed now, so a batch
+    // that paused while another source committed the same resource does not
+    // create a second one.
+    if !already {
+        let verdict = crate::import_runs::apply_spreadsheet_match(
+            &mut tx, state, org, run, &locator, &matched, now,
+        )
+        .await?;
+        match verdict {
+            // Left claimed on purpose: `claim_page` re-claims a `creating` row, so
+            // the next chunk after the seller answers picks it up without the
+            // batch having to remember anything.
+            tam_storage::RunItemState::Review => {
+                tx.commit()
+                    .await
+                    .map_err(|error| storage_fault_tx(state, &error))?;
+                return Ok(RowOutcome::Held);
+            }
+            // The seller answered that another resource already stands for this
+            // row, so creating it is exactly what they said not to do.
+            tam_storage::RunItemState::Skipped => {
+                tam_storage::record_row_skipped_in(&mut tx, org, batch, at)
+                    .await
+                    .map_err(|error| storage_fault(state, &error))?;
+                tx.commit()
+                    .await
+                    .map_err(|error| storage_fault_tx(state, &error))?;
+                return Ok(RowOutcome::Skipped);
+            }
+            // Every other state is one the create is the next step for. Named
+            // rather than wildcarded, so a state added to the run's own vocabulary
+            // fails here rather than falling silently into a create.
+            tam_storage::RunItemState::Listed
+            | tam_storage::RunItemState::Selected
+            | tam_storage::RunItemState::Read
+            | tam_storage::RunItemState::Matched
+            | tam_storage::RunItemState::Imported
+            | tam_storage::RunItemState::Failed => {}
+        }
+    }
+
+    let plan = crate::catalogue::CreatePlan {
+        inventories: &body.inventories,
+        elections: &body.elections,
+        mappings: &mappings,
+    };
+    match prepared.as_ref() {
+        Some(prepared) => {
+            crate::catalogue::apply_create(&mut tx, state, org, prepared, &plan).await?;
+        }
+        // The product exists from an earlier pass, so only what trails it is
+        // completed.
+        None => {
+            crate::catalogue::finish_existing(&mut tx, state, org, row.product, &body, &plan)
+                .await?;
+        }
+    }
     // After the create, because `product_label` names a product. A label the
     // organisation does not hold yet is created by this write, which is what
-    // the report's new-label warning told the seller it would do; the names
-    // reached the column through the label route's own rules at parse time,
-    // so nothing is validated a second time here.
-    LabelRepo::new(state.pool.clone())
-        .set_for_product(org, row.product, &labels, (state.wall)())
+    // the report's new-label warning told the seller it would do.
+    crate::catalogue::set_labels(&mut tx, org, row.product, &labels, now)
         .await
         .map_err(|error| storage_fault(state, &error))?;
-    Ok(created)
+    tam_storage::record_row_created(&mut tx, org, batch, at, already)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    tx.commit()
+        .await
+        .map_err(|error| storage_fault_tx(state, &error))?;
+    Ok(if already {
+        RowOutcome::Completed
+    } else {
+        RowOutcome::Created
+    })
+}
+
+/// What one row's pass did.
+enum RowOutcome {
+    /// A product was created for it.
+    Created,
+    /// Its product existed from an earlier pass; the trailing writes were
+    /// completed.
+    Completed,
+    /// Another resource already stands for it.
+    Skipped,
+    /// A question is owed about it, so it stays claimed for the next chunk.
+    Held,
+}
+
+/// A transaction the database refused, reported as ours.
+fn storage_fault_tx(state: &AppState, error: &sqlx::Error) -> APIError {
+    state.internal(&format!("the database refused a transaction: {error}"))
 }
 
 /// The sentence a refused row carries on the report.

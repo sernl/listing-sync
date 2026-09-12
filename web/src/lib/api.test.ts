@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { allPages, api, ApiFailure } from './api';
+import { describeUnreachable } from './unreachable';
 
 afterEach(() => {
 	vi.unstubAllGlobals();
@@ -54,6 +55,25 @@ describe('a failing response whose body is not the error envelope', () => {
 });
 
 describe('the api client', () => {
+	it('keeps an HTML success response distinct from a network failure', async () => {
+		vi.stubGlobal('fetch', vi.fn(async () => new Response('<!DOCTYPE html><p>private page</p>', {
+			status: 200,
+			headers: { 'content-type': 'text/html; charset=utf-8' }
+		})));
+		const failure = await api.whoami().catch((caught: unknown) => caught);
+		expect(failure).toBeInstanceOf(ApiFailure);
+		expect(failure).toMatchObject({
+			status: 200,
+			response: {
+				requested_path: '/v1/whoami',
+				content_type: 'text/html; charset=utf-8',
+				problem: 'unexpected_content_type'
+			}
+		});
+		expect(describeUnreachable(failure)).toMatchObject({ kind: 'protocol', status: 200 });
+		expect(describeUnreachable(failure).detail).not.toContain('private page');
+	});
+
 	it('parses the structured error into a typed failure', async () => {
 		vi.stubGlobal(
 			'fetch',
@@ -89,6 +109,19 @@ describe('the api client', () => {
 		await api.createJob('Tes', ['m1'], 'key-123');
 		expect(seen[0].url).toBe('/v1/jobs');
 		expect(seen[0].headers.get('idempotency-key')).toBe('key-123');
+	});
+
+	it('keeps an accepted import confirmation alive while the page unloads', async () => {
+		let seen: RequestInit | undefined;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (_url: string, init?: RequestInit) => {
+				seen = init;
+				return jsonResponse(202, { accepted: true, run: {} });
+			})
+		);
+		await api.confirmImportRun('run-1');
+		expect(seen?.keepalive).toBe(true);
 	});
 
 	it('a device-branch migrate is submitted with no resources named', async () => {

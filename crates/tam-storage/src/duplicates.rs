@@ -256,58 +256,11 @@ impl DuplicateRepo {
     /// import that would have asked again reads it instead. Answers whether
     /// this write is what created the row.
     pub async fn raise(&self, org: OrgId, new: &NewVerdict<'_>) -> Result<bool, StorageError> {
-        let (lo, hi) = ordered(new.lo, new.hi);
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
-        let inserted = sqlx::query!(
-            "INSERT INTO duplicate_verdict \
-               (org_id, product_lo, product_hi, verdict, decided_by, winning_layer, \
-                log_odds, fingerprint_version, run_id, kept_product, raised_at, \
-                decided_at, reversible_until) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
-             ON CONFLICT (org_id, product_lo, product_hi) DO NOTHING",
-            uuid_to_db(org.0),
-            uuid_to_db(lo.0),
-            uuid_to_db(hi.0),
-            new.verdict.as_str(),
-            new.decided_by.as_str(),
-            new.winning_layer.as_str(),
-            new.log_odds,
-            new.fingerprint_version,
-            new.run.map(uuid_to_db),
-            new.kept.map(|kept| uuid_to_db(kept.0)),
-            timestamp_to_db(new.raised_at)?,
-            new.decided_at.map(timestamp_to_db).transpose()?,
-            new.reversible_until.map(timestamp_to_db).transpose()?,
-        )
-        .execute(&mut *tx)
-        .await?;
-        if inserted.rows_affected() == 0 {
-            tx.commit().await?;
-            return Ok(false);
-        }
-        for (position, evidence) in new.evidence.iter().enumerate() {
-            sqlx::query!(
-                "INSERT INTO duplicate_evidence \
-                   (org_id, product_lo, product_hi, position, layer, polarity, measure, \
-                    unit, observed_in) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
-                 ON CONFLICT (org_id, product_lo, product_hi, layer) DO NOTHING",
-                uuid_to_db(org.0),
-                uuid_to_db(lo.0),
-                uuid_to_db(hi.0),
-                i32::try_from(position).unwrap_or(i32::MAX),
-                evidence.layer.as_str(),
-                evidence.polarity.as_str(),
-                evidence.measure,
-                evidence.unit.as_str(),
-                evidence.observed_in.as_deref(),
-            )
-            .execute(&mut *tx)
-            .await?;
-        }
+        let raised = raise_verdict(&mut tx, org, new).await?;
         tx.commit().await?;
-        Ok(true)
+        Ok(raised)
     }
 
     /// The seller's answer, or the reversal of one.
@@ -326,36 +279,11 @@ impl DuplicateRepo {
         kept: Option<ProductId>,
         at: Timestamp,
     ) -> Result<bool, StorageError> {
-        let (lo, hi) = ordered(lo, hi);
-        let decided = match verdict {
-            Verdict::Parked => None,
-            Verdict::Same | Verdict::Different => Some(timestamp_to_db(at)?),
-        };
-        let reversible = match verdict {
-            Verdict::Same => Some(timestamp_to_db(Timestamp(
-                at.0.saturating_add(REVERSIBLE_MS),
-            ))?),
-            Verdict::Different | Verdict::Parked => None,
-        };
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
-        let moved = sqlx::query!(
-            "UPDATE duplicate_verdict \
-                SET verdict = $4, decided_by = 'seller', kept_product = $5, \
-                    decided_at = $6, reversible_until = $7 \
-              WHERE org_id = $1 AND product_lo = $2 AND product_hi = $3",
-            uuid_to_db(org.0),
-            uuid_to_db(lo.0),
-            uuid_to_db(hi.0),
-            verdict.as_str(),
-            kept.map(|kept| uuid_to_db(kept.0)),
-            decided,
-            reversible,
-        )
-        .execute(&mut *tx)
-        .await?;
+        let moved = decide_verdict(&mut tx, org, lo, hi, verdict, kept, at).await?;
         tx.commit().await?;
-        Ok(moved.rows_affected() > 0)
+        Ok(moved)
     }
 
     /// One pair, with its evidence.
@@ -529,38 +457,11 @@ impl DuplicateRepo {
         org: OrgId,
         pairs: &[(ProductId, ProductId)],
     ) -> Result<Vec<(ProductId, ProductId, Verdict)>, StorageError> {
-        if pairs.is_empty() {
-            return Ok(Vec::new());
-        }
-        let mut los = Vec::with_capacity(pairs.len());
-        let mut his = Vec::with_capacity(pairs.len());
-        for (lo, hi) in pairs {
-            let (lo, hi) = ordered(*lo, *hi);
-            los.push(uuid_to_db(lo.0));
-            his.push(uuid_to_db(hi.0));
-        }
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
-        let rows = sqlx::query!(
-            "SELECT product_lo, product_hi, verdict FROM duplicate_verdict \
-              WHERE org_id = $1 AND (product_lo, product_hi) \
-                    IN (SELECT * FROM unnest($2::uuid[], $3::uuid[]))",
-            uuid_to_db(org.0),
-            &los,
-            &his,
-        )
-        .fetch_all(&mut *tx)
-        .await?;
+        let found = answered_pairs(&mut tx, org, pairs).await?;
         tx.commit().await?;
-        rows.into_iter()
-            .map(|row| {
-                Ok((
-                    ProductId(uuid_from_db(row.product_lo)),
-                    ProductId(uuid_from_db(row.product_hi)),
-                    Verdict::from_db(&row.verdict)?,
-                ))
-            })
-            .collect()
+        Ok(found)
     }
 }
 
@@ -573,4 +474,194 @@ pub fn ordered(a: ProductId, b: ProductId) -> (ProductId, ProductId) {
     } else {
         (b, a)
     }
+}
+
+/// Which of these pairs already carry an answer, inside a transaction.
+///
+/// Reachable this way because the commit re-asks the matcher under the
+/// organisation's catalogue lock, and the never-ask-twice rule is part of
+/// what it has to re-read: a pair the seller called different last month is
+/// not raised again by a revalidation either.
+pub async fn answered_pairs(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    pairs: &[(ProductId, ProductId)],
+) -> Result<Vec<(ProductId, ProductId, Verdict)>, StorageError> {
+    if pairs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut los = Vec::with_capacity(pairs.len());
+    let mut his = Vec::with_capacity(pairs.len());
+    for (lo, hi) in pairs {
+        let (lo, hi) = ordered(*lo, *hi);
+        los.push(uuid_to_db(lo.0));
+        his.push(uuid_to_db(hi.0));
+    }
+    let rows = sqlx::query!(
+        "SELECT product_lo, product_hi, verdict FROM duplicate_verdict \
+          WHERE org_id = $1 AND (product_lo, product_hi) \
+                IN (SELECT * FROM unnest($2::uuid[], $3::uuid[]))",
+        uuid_to_db(org.0),
+        &los,
+        &his,
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok((
+                ProductId(uuid_from_db(row.product_lo)),
+                ProductId(uuid_from_db(row.product_hi)),
+                Verdict::from_db(&row.verdict)?,
+            ))
+        })
+        .collect()
+}
+
+/// One pair as it stands, read inside a transaction.
+///
+/// The seller's answer is applied under the organisation's lock, and the
+/// eligibility it depends on — that the pair is still parked, that the
+/// survivor is still a side of it — has to be re-read there: two answers to
+/// one card can otherwise both pass an unlocked check and each tombstone the
+/// other's survivor.
+pub async fn pair_verdict(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    lo: ProductId,
+    hi: ProductId,
+) -> Result<Option<(Verdict, Option<ProductId>, Option<Timestamp>)>, StorageError> {
+    let (lo, hi) = ordered(lo, hi);
+    let row = sqlx::query!(
+        "SELECT verdict, kept_product, reversible_until FROM duplicate_verdict \
+          WHERE org_id = $1 AND product_lo = $2 AND product_hi = $3 FOR UPDATE",
+        uuid_to_db(org.0),
+        uuid_to_db(lo.0),
+        uuid_to_db(hi.0),
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    row.map(|row| {
+        Ok((
+            Verdict::from_db(&row.verdict)?,
+            row.kept_product.map(|kept| ProductId(uuid_from_db(kept))),
+            row.reversible_until.map(timestamp_from_db),
+        ))
+    })
+    .transpose()
+}
+
+/// Records a pair the matcher raised, in a transaction the caller owns.
+///
+/// The conflict clause is the whole of the never-ask-twice rule: a seller who
+/// said `different` last month has their answer standing, and the import that
+/// would have asked again reads it instead. Answers whether this write is
+/// what created the row.
+///
+/// Reachable inside a caller's transaction because the question and the item
+/// it holds in review are one decision: a review item whose pair was written
+/// by a transaction that then rolled back is a resource waiting for an answer
+/// to a question nobody was asked.
+pub async fn raise_verdict(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    new: &NewVerdict<'_>,
+) -> Result<bool, StorageError> {
+    let (lo, hi) = ordered(new.lo, new.hi);
+    let inserted = sqlx::query!(
+        "INSERT INTO duplicate_verdict \
+           (org_id, product_lo, product_hi, verdict, decided_by, winning_layer, \
+            log_odds, fingerprint_version, run_id, kept_product, raised_at, \
+            decided_at, reversible_until) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
+         ON CONFLICT (org_id, product_lo, product_hi) DO NOTHING",
+        uuid_to_db(org.0),
+        uuid_to_db(lo.0),
+        uuid_to_db(hi.0),
+        new.verdict.as_str(),
+        new.decided_by.as_str(),
+        new.winning_layer.as_str(),
+        new.log_odds,
+        new.fingerprint_version,
+        new.run.map(uuid_to_db),
+        new.kept.map(|kept| uuid_to_db(kept.0)),
+        timestamp_to_db(new.raised_at)?,
+        new.decided_at.map(timestamp_to_db).transpose()?,
+        new.reversible_until.map(timestamp_to_db).transpose()?,
+    )
+    .execute(&mut **tx)
+    .await?;
+    if inserted.rows_affected() == 0 {
+        return Ok(false);
+    }
+    for (position, evidence) in new.evidence.iter().enumerate() {
+        sqlx::query!(
+            "INSERT INTO duplicate_evidence \
+               (org_id, product_lo, product_hi, position, layer, polarity, measure, \
+                unit, observed_in) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             ON CONFLICT (org_id, product_lo, product_hi, layer) DO NOTHING",
+            uuid_to_db(org.0),
+            uuid_to_db(lo.0),
+            uuid_to_db(hi.0),
+            i32::try_from(position).unwrap_or(i32::MAX),
+            evidence.layer.as_str(),
+            evidence.polarity.as_str(),
+            evidence.measure,
+            evidence.unit.as_str(),
+            evidence.observed_in.as_deref(),
+        )
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(true)
+}
+
+/// The seller's answer, or the reversal of one, in a transaction the caller
+/// owns.
+///
+/// Inside the caller's transaction because a verdict and what it does to the
+/// catalogue — a merge, a tombstone, an import row returning to the commit
+/// queue — are one decision, ordered against the run's own cancellation by
+/// the lock the caller took.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the pair is two identifiers by construction -- the column CHECK states the order -- and folding them into a struct would name a parameter bag whose whole content is already this table's primary key"
+)]
+pub async fn decide_verdict(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    lo: ProductId,
+    hi: ProductId,
+    verdict: Verdict,
+    kept: Option<ProductId>,
+    at: Timestamp,
+) -> Result<bool, StorageError> {
+    let (lo, hi) = ordered(lo, hi);
+    let decided = match verdict {
+        Verdict::Parked => None,
+        Verdict::Same | Verdict::Different => Some(timestamp_to_db(at)?),
+    };
+    let reversible = match verdict {
+        Verdict::Same => Some(timestamp_to_db(Timestamp(
+            at.0.saturating_add(REVERSIBLE_MS),
+        ))?),
+        Verdict::Different | Verdict::Parked => None,
+    };
+    let moved = sqlx::query!(
+        "UPDATE duplicate_verdict \
+            SET verdict = $4, decided_by = 'seller', kept_product = $5, \
+                decided_at = $6, reversible_until = $7 \
+          WHERE org_id = $1 AND product_lo = $2 AND product_hi = $3",
+        uuid_to_db(org.0),
+        uuid_to_db(lo.0),
+        uuid_to_db(hi.0),
+        verdict.as_str(),
+        kept.map(|kept| uuid_to_db(kept.0)),
+        decided,
+        reversible,
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(moved.rows_affected() > 0)
 }

@@ -62,6 +62,11 @@ pub struct PassReport {
     pub committed: u32,
     /// Pulled resources a rule's template filled fields on.
     pub filled: u32,
+    /// Manual runs no device picked up inside the activation window.
+    pub expired: u32,
+    /// Runs whose owner stopped answering, marked interrupted so the console
+    /// stops saying a dead device is reading.
+    pub interrupted: u32,
     /// One tenant's failure, named. The pass carries on past each of these.
     pub failures: Vec<String>,
 }
@@ -75,6 +80,8 @@ impl PassReport {
             || self.pulls > 0
             || self.committed > 0
             || self.filled > 0
+            || self.expired > 0
+            || self.interrupted > 0
             || !self.failures.is_empty()
     }
 }
@@ -126,6 +133,12 @@ async fn tenant_pass(
             }
         }
     }
+
+    // Maintenance first, so a run whose device died is interrupted rather
+    // than reported as reading for one more minute, and a manual start
+    // nobody answered reaches an actionable failure rather than waiting
+    // forever.
+    maintain(state, org, report).await?;
 
     if caps.sync_pull_interval_secs.is_some() {
         pull(state, org, now, report).await?;
@@ -215,6 +228,21 @@ async fn send(
         .await
         .map_err(|error| storage_fault(state, &error))?;
     let prices = prices_of(state, org).await?;
+    // What a create on this marketplace needs, read once for the tick's
+    // members rather than per member. Facts only: whether the resource holds
+    // a payload, where those bytes come from, whether its grant is declared
+    // and which axes it has settled. The policy over them is
+    // `catalogue::creation_blocked`, which is the same decision the seller's
+    // own "add this marketplace" answers with.
+    //
+    // Checked before the mint rather than after it, and that is the point: a
+    // member this marketplace will refuse used to get a mapping and a job
+    // item anyway, and a fileless one used to yield no seed and no
+    // explanation. Now it gets neither, and the run row says why.
+    let facts = ProductRepo::new(state.pool.clone())
+        .creation_facts(org, &ids, inventory)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
 
     let mut rows: Vec<ScheduleRunWrite> = Vec::new();
     let mut chosen: Vec<(ProductId, MappingId)> = Vec::new();
@@ -234,6 +262,19 @@ async fn send(
             // by every write to the listing, so the comparison is the drift
             // signal and nothing has to be stored to compute it.
             if member.updated_at.0 <= head.updated_at.0 {
+                continue;
+            }
+        }
+        // A member the marketplace would refuse is skipped before anything is
+        // minted for it. An already-bound republish is past this: its listing
+        // exists, so what a create would need is not the question being asked.
+        if head.is_none_or(|head| head.binding_state != "bound") {
+            let blocked = facts
+                .iter()
+                .find(|held| held.product == member.product)
+                .and_then(|held| crate::catalogue::creation_blocked(held, inventory));
+            if let Some(blocked) = blocked {
+                rows.push(skipped(member.product, inventory, &blocked.reason()));
                 continue;
             }
         }
@@ -358,12 +399,14 @@ fn skipped(product: ProductId, inventory: InventoryId, reason: &str) -> Schedule
 
 // ------------------------------------------------------------- sync pulls
 
-/// Opens an import run for the shop whose interval has elapsed.
+/// Opens an import run for every shop whose interval has elapsed and has no
+/// run open.
 ///
-/// At most one, because `import_run_one_open_per_org` allows one open run per
-/// organisation: a tenant syncing two shops reads them on consecutive passes
-/// rather than both at once, which is also the only order a single device
-/// could serve.
+/// Per source since migration 0074: a tenant syncing two shops no longer
+/// reads them on consecutive passes, because the fence that made that
+/// necessary was organisation-wide and is now per shop. One device may still
+/// only serve one at a time, and that is the device's own decision rather
+/// than a fence here.
 async fn pull(
     state: &AppState,
     org: OrgId,
@@ -371,14 +414,6 @@ async fn pull(
     report: &mut PassReport,
 ) -> Result<(), APIError> {
     let runs = ImportRunRepo::new(state.pool.clone());
-    if runs
-        .open(org)
-        .await
-        .map_err(|error| storage_fault(state, &error))?
-        .is_some()
-    {
-        return Ok(());
-    }
     let settings = SyncSettingRepo::new(state.pool.clone());
     let due: Vec<InventoryId> = settings
         .list(org)
@@ -392,6 +427,14 @@ async fn pull(
         })
         .collect();
     for inventory in due {
+        if runs
+            .open_for_source(org, inventory)
+            .await
+            .map_err(|error| storage_fault(state, &error))?
+            .is_some()
+        {
+            continue;
+        }
         // Every file a run imports is fetched back through the seller's own
         // connection, so a shop with no linked one has nothing an import
         // could keep. Skipped rather than failed: a revoked connection is the
@@ -416,6 +459,10 @@ async fn pull(
                     anchor_job: anchor,
                     created_at: now,
                     scheduled: true,
+                    // The interval is this run's identity; there is no client
+                    // retry to deduplicate and no seller pressing Retry.
+                    start_key: None,
+                    retry_of: None,
                 },
             )
             .await
@@ -432,19 +479,25 @@ async fn pull(
                     .map_err(|error| storage_fault(state, &error))?;
                 report.pulls = report.pulls.saturating_add(1);
             }
-            // Another run opened between the read above and this write. The
-            // index is the authority; this pass does nothing more.
-            RunOpening::AlreadyOpen(_) => {}
+            // A run for this shop opened between the read above and this
+            // write. The index is the authority; this pass does nothing more
+            // for that shop and carries on to the next.
+            RunOpening::AlreadyOpen(_) | RunOpening::KeySpent { .. } => {}
         }
-        return Ok(());
     }
     Ok(())
 }
 
 // -------------------------------------------------------- finishing a run
 
-/// Commits a scheduled run the device has finished, then publishes what it
-/// created.
+/// Creates what every authorised run of this tenant still owes, then
+/// publishes what a scheduled one created.
+///
+/// Authorisation rather than state is the predicate, and it is what removes
+/// the browser's commit loop: a seller who confirmed and closed the tab, and
+/// a scheduled run carrying its own approved rule, are the same work here. A
+/// run whose descriptions merely finished is not drained, which is what stops
+/// an unconfirmed manual import creating anything.
 async fn finish(
     state: &AppState,
     org: OrgId,
@@ -453,27 +506,93 @@ async fn finish(
     report: &mut PassReport,
 ) -> Result<(), APIError> {
     let runs = ImportRunRepo::new(state.pool.clone());
-    let Some(head) = runs
-        .open(org)
+    let drainable = runs
+        .drainable(org)
         .await
-        .map_err(|error| storage_fault(state, &error))?
-    else {
-        return Ok(());
-    };
-    // Only a run the pass opened, and only one the device has finished
-    // reading. A `reviewing` run has a duplicate question owed and belongs to
-    // the seller -- the console already shows it -- and committing behind
-    // their back is the one thing the review exists to prevent.
-    if !head.scheduled || head.state != RunState::Committing {
-        return Ok(());
-    }
-    let created = crate::import_runs::commit_scheduled(state, org, &head).await?;
-    report.committed = report.committed.saturating_add(created);
-    if rules_held {
-        publish(state, org, &head, now, report).await?;
+        .map_err(|error| storage_fault(state, &error))?;
+    for head in &drainable {
+        // By kind, because the two sources' remaining work is not the same
+        // work. A marketplace run's items hold a device's `ObservedResource`
+        // and name a shop; a spreadsheet run's hold the seller's own draft
+        // and name a batch, so handing one to the other's commit would try to
+        // decode a draft as a marketplace read and fail the tenant's whole
+        // drain with it.
+        let created = match head.kind {
+            tam_storage::RunKind::Marketplace => {
+                crate::import_runs::drain_run(state, org, head).await?
+            }
+            tam_storage::RunKind::Spreadsheet => {
+                crate::import_batch::drain_batch_run(state, org, head).await?
+            }
+        };
+        report.committed = report.committed.saturating_add(created);
+        // Publishing follows a scheduled run's own rule. A manual import
+        // drafts nowhere, which is the whole of what phase 2 means by
+        // "nothing drafted anywhere".
+        if head.scheduled && rules_held {
+            publish(state, org, head, now, report).await?;
+        }
     }
     Ok(())
 }
+
+/// The maintenance half of a pass: activations that expired and leases that
+/// lapsed.
+///
+/// Here rather than in a loop of its own, because this is the existing
+/// per-tenant pass and the facts it writes are the ones the console reads. A
+/// scheduled run is never expired for waiting: it truthfully awaits a device.
+async fn maintain(state: &AppState, org: OrgId, report: &mut PassReport) -> Result<(), APIError> {
+    let runs = ImportRunRepo::new(state.pool.clone());
+    let expired = runs
+        .expire_activations(org, ACTIVATION_EXPIRED)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    for run in &expired {
+        if let Some(head) = runs
+            .head(org, *run)
+            .await
+            .map_err(|error| storage_fault(state, &error))?
+        {
+            crate::import_runs::settled_event(state, org, &head, RunState::Failed).await?;
+            report.expired = report.expired.saturating_add(1);
+        }
+    }
+    let interrupted = runs
+        .interrupt_stale_leases(org)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    report.interrupted = report
+        .interrupted
+        .saturating_add(u32::try_from(interrupted.len()).unwrap_or(u32::MAX));
+    // The console reads these from the ledger like everything else, so the
+    // rows this pass moved are announced: a run whose phone stopped answering
+    // shows as interrupted on a page nobody reloaded, and an expired manual
+    // start shows its actionable failure.
+    for run in &interrupted {
+        if let Some(head) = runs
+            .head(org, *run)
+            .await
+            .map_err(|error| storage_fault(state, &error))?
+        {
+            let counts = runs
+                .counts(org, *run)
+                .await
+                .map_err(|error| storage_fault(state, &error))?;
+            crate::import_runs::progress_event(state, org, &head, counts).await?;
+        }
+    }
+    Ok(())
+}
+
+/// What a run that nobody picked up is told, in the seller's own words.
+///
+/// Stated rather than left to a code: the console renders this line, and a
+/// failure with no sentence reads as something having gone wrong on our side
+/// rather than as an import no device answered.
+const ACTIVATION_EXPIRED: &str =
+    "no device picked this import up, so it was stopped. Open the app on the phone that has \
+     your shop signed in, then start it again.";
 
 /// Sends what a pull brought in on to the seller's chosen marketplaces,
 /// filling each resource from the rule's template first.

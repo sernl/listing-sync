@@ -1826,6 +1826,28 @@ impl LeaseRepo {
         verdict: &ItemVerdict,
         at: Timestamp,
     ) -> Result<(), StorageError> {
+        self.settle_inner(lease, verdict, at, None).await
+    }
+
+    /// Settles one device-served item and records its terminal event before
+    /// releasing the lease that authenticates both writes.
+    pub async fn settle_recorded(
+        &self,
+        lease: &LeaseRef,
+        verdict: &ItemVerdict,
+        at: Timestamp,
+        event: (Stamp, Option<Timestamp>),
+    ) -> Result<(), StorageError> {
+        self.settle_inner(lease, verdict, at, Some(event)).await
+    }
+
+    async fn settle_inner(
+        &self,
+        lease: &LeaseRef,
+        verdict: &ItemVerdict,
+        at: Timestamp,
+        event: Option<(Stamp, Option<Timestamp>)>,
+    ) -> Result<(), StorageError> {
         let LeaseRef {
             org,
             item,
@@ -1858,7 +1880,24 @@ impl LeaseRepo {
         let Some(row) = settled else {
             return Err(StorageError::StaleLease);
         };
-        settle_if_complete(&mut tx, org, JobId(uuid_from_db(row.job_id)), at).await?;
+        let job = JobId(uuid_from_db(row.job_id));
+        if let Some((stamp, asserted)) = event {
+            append_event_asserted(
+                &mut tx,
+                &EventScope {
+                    org,
+                    job,
+                    item: Some(item),
+                },
+                &JobEventPayload::ItemSettled {
+                    outcome: format!("{outcome:?}"),
+                },
+                stamp,
+                asserted,
+            )
+            .await?;
+        }
+        settle_if_complete(&mut tx, org, job, at).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -2378,14 +2417,17 @@ impl LeaseRepo {
         org: OrgId,
         inventory: InventoryId,
     ) -> Result<Option<tam_types::ConnectionId>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
         let row = sqlx::query_scalar!(
             r#"SELECT id AS "id!" FROM connection
              WHERE org_id = $1 AND marketplace = $2 AND state = 'linked'"#,
             uuid_to_db(org.0),
             marketplace_to_db(inventory.marketplace()),
         )
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(row.map(|id| tam_types::ConnectionId(uuid_from_db(id))))
     }
 

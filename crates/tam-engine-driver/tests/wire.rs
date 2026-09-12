@@ -797,6 +797,9 @@ fn an_import_page_round_trips_over_both_file_arms_and_a_skip() {
     let page = ImportPage {
         run: Uuid([0x71; 16]),
         request: None,
+        attempt: Some(3),
+        receipt: Some(Uuid([0x7C; 16])),
+        enumeration_complete: false,
         listed: None,
         resources: vec![
             ObservedResource {
@@ -859,6 +862,9 @@ fn a_listed_page_round_trips() {
     let page = ImportPage {
         run: Uuid([0x71; 16]),
         request: None,
+        attempt: Some(3),
+        receipt: Some(Uuid([0x7C; 16])),
+        enumeration_complete: false,
         listed: Some(vec![ListedResource {
             locator: Locator::from_resource_id(13_549_794),
             title: "Fractions on a number line".to_owned(),
@@ -947,6 +953,9 @@ fn a_page_decodes_across_a_version_skew_in_both_directions() {
     let page = ImportPage {
         run: Uuid([0x71; 16]),
         request: None,
+        attempt: Some(3),
+        receipt: Some(Uuid([0x7C; 16])),
+        enumeration_complete: false,
         listed: None,
         resources: Vec::new(),
         skipped: Vec::new(),
@@ -967,4 +976,34 @@ fn a_page_decodes_across_a_version_skew_in_both_directions() {
     let decoded: ImportPage =
         serde_json::from_value(encoded).expect("and the page without it is unchanged");
     assert_eq!(decoded, page);
+}
+
+/// A page from before the fence decodes, and decodes as unfenced.
+///
+/// Both halves matter. The decode has to succeed, because the direction that
+/// hurts is a newer server against an older device — a required field would
+/// make an already-shipped build fail to post after walking the seller's
+/// whole shop. And the absence has to survive as an absence: the server
+/// refuses an unfenced catalogue page before any effect, and a default
+/// attempt would be a fence nobody granted, indistinguishable from one a
+/// taken-over phone posted.
+#[test]
+fn a_page_from_before_the_fence_decodes_as_unfenced() {
+    let old = serde_json::json!({
+        "run": "71717171-7171-7171-7171-717171717171",
+        "resources": [],
+        "skipped": [],
+        "complete": false,
+    });
+    let decoded: ImportPage =
+        serde_json::from_value(old).expect("a page from before the fence still decodes");
+    assert_eq!(
+        decoded.attempt, None,
+        "an absent attempt stays absent rather than defaulting to a fence"
+    );
+    assert_eq!(decoded.receipt, None);
+    assert!(
+        !decoded.enumeration_complete,
+        "and an old page claims nothing about whether the shop was walked"
+    );
 }

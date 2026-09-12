@@ -401,8 +401,15 @@ fn spawn_scheduler_pass(state: AppState, cancel: CancellationToken) {
                 Ok(report) if report.eventful() => {
                     eprintln!(
                         "tam-server scheduler fired {} schedule ticks, minted {} jobs, opened {} \
-                         marketplace reads and committed {} resources across {} tenants",
-                        report.ticks, report.jobs, report.pulls, report.committed, report.tenants
+                         marketplace reads, committed {} resources, expired {} activations and \
+                         interrupted {} stale reads across {} tenants",
+                        report.ticks,
+                        report.jobs,
+                        report.pulls,
+                        report.committed,
+                        report.expired,
+                        report.interrupted,
+                        report.tenants
                     );
                     // Per tenant, because that is the scope the pass isolates
                     // to: one seller's revoked connection or unparseable zone
@@ -1147,6 +1154,8 @@ async fn nothing_here() -> axum::http::StatusCode {
 /// pdf.js falls back to a worker built from a blob URL, and the fallback
 /// fails silently under a policy that admits only `'self'`. Nothing else on
 /// the console starts a worker.
+/// Direct HTTPS guide images are loaded by the reader, never proxied by the
+/// server. The guide renderer suppresses their referrers per image.
 fn console_policy(shell: &str) -> String {
     let mut script = String::from("script-src 'self' 'wasm-unsafe-eval'");
     for hash in serving::inline_script_hashes(shell) {
@@ -1157,7 +1166,7 @@ fn console_policy(shell: &str) -> String {
     script.push_str(" https://challenges.cloudflare.com https://cdn.paddle.com");
     format!(
         "default-src 'self'; connect-src 'self'; {script}; \
-         img-src 'self' data: blob:; \
+         img-src 'self' data: blob: https:; \
          style-src 'self' 'unsafe-inline'; \
          font-src 'self' data:; \
          frame-src 'self' https://challenges.cloudflare.com; \
@@ -1171,6 +1180,9 @@ async fn console_security_headers(
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     let immutable = request.uri().path().starts_with("/_app/immutable/");
+    let guide_page = matches!(request.uri().path(), "/guides" | "/admin/guides")
+        || request.uri().path().starts_with("/guides/")
+        || request.uri().path().starts_with("/admin/guides/");
     let mut response = next.run(request).await;
     // A page carries a fresh nonce beside the hashes and an asset carries the
     // policy as built; see `serving::fresh_nonce` for the script it admits.
@@ -1179,6 +1191,12 @@ async fn console_security_headers(
         .get(axum::http::header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value.starts_with("text/html"));
+    if is_page && guide_page {
+        response.headers_mut().insert(
+            axum::http::header::REFERRER_POLICY,
+            axum::http::HeaderValue::from_static("no-referrer"),
+        );
+    }
     // The shell must be revalidated on every load and the bundle under it may
     // be kept for a year: the shell names its chunks by content hash, so a
     // shell a browser kept past a deploy asks for chunks the new build no

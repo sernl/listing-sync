@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT DISTINCT product_id FROM product_file WHERE org_id = $1 AND product_id = ANY($2) AND role = 'payload' AND deleted_at IS NULL",
+  "query": "SELECT product_id FROM import_run_item WHERE org_id = $1 AND run_id = $2 AND locator = $3",
   "describe": {
     "columns": [
       {
@@ -12,12 +12,13 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "UuidArray"
+        "Uuid",
+        "Text"
       ]
     },
     "nullable": [
-      false
+      true
     ]
   },
-  "hash": "dbd4b78214e72ae821aeea4fece6067dc7d3f394c3bc48132b4ead08934bf948"
+  "hash": "1e7fad647a2beaa8eddd9b91f79083cb568678b54c84e1b95213d2dfc70b0d50"
 }

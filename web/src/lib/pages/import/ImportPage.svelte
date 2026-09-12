@@ -1,12 +1,13 @@
 <script lang="ts">
 	import { createQuery } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { ApiFailure, api, type ConnectionView, type ImportRunHead } from '$lib/api';
-	import type { InventoryId } from '$lib/generated/vocab';
+	import type { InventoryId, Marketplace } from '$lib/generated/vocab';
 	import Banner from '$lib/Banner.svelte';
 	import { anyConnectionStands } from '$lib/connection-standing';
 	import Button from '$lib/Button.svelte';
-	import { desktopInvoker, startImportHere } from '$lib/desktop';
+	import { desktopInvoker, sessionStatusHere, startImportHere, type LocalSessionOutcome } from '$lib/desktop';
 	import { agoLabel } from '$lib/elapsed';
 	import { entitlementRead, featureOf } from '$lib/entitlement-read';
 	import PageHead from '$lib/PageHead.svelte';
@@ -30,9 +31,8 @@
 		importCards,
 		importLabel,
 		importRows,
-		notConnected,
+		startRefusal,
 		standingBadge,
-		startRefusal
 	} from './import-view';
 	import { fetchTemplate, openBatchFrom, uploadSheet } from './api';
 	import { IMPORT_ALREADY_OPEN, batchHref } from './sheet-view';
@@ -51,6 +51,10 @@
 	let runsLoaded = $state(false);
 	let runsUnread = $state(false);
 
+	let runsRead = 0;
+	let connectionRead = 0;
+	let localRead = 0;
+	let localSessions = $state<Map<Marketplace, LocalSessionOutcome>>(new Map());
 	// The open batch, so the spreadsheet card's upload control states why it
 	// is unavailable rather than losing its button. The server's own answer
 	// rather than a search of a list.
@@ -59,9 +63,7 @@
 	let sending = $state(false);
 	let downloading = $state(false);
 
-	// Which marketplace is being started, so one card's spinner never claims
-	// the other's. Null while nothing is starting.
-	let starting = $state<string | null>(null);
+	let starting = $state<Set<InventoryId>>(new Set());
 	// The application's own words when it declines, kept apart from the read
 	// failures above: one is this page failing to read something, the other is
 	// this computer declining to run something, and they are different facts.
@@ -77,6 +79,7 @@
 	// Read once: whether this console is running inside the desktop
 	// application does not change while the page is open.
 	const invoke = desktopInvoker();
+	const inApp = invoke !== null;
 
 	const cards = $derived(importCards(connections));
 
@@ -100,28 +103,62 @@
 		!connectionsUnread && connections !== null && !anyConnectionStands(connections)
 	);
 	const rows = $derived(importRows(runs));
+	let startEpoch = 0;
 
 	$effect(() => {
-		void api
-			.connections()
-			.then((held) => {
-				connections = held;
-				connectionsUnread = false;
-			})
-			.catch(() => {
-				connections = null;
-				connectionsUnread = true;
-			});
-		void loadRuns();
+		startEpoch += 1;
+		const refresh = () => {
+			void loadConnections();
+			void loadLocalSessions();
+			void loadRuns();
+		};
+		const visible = () => { if (document.visibilityState === 'visible') refresh(); };
+		refresh();
 		void loadOpenBatch();
+		window.addEventListener('focus', refresh);
+		document.addEventListener('visibilitychange', visible);
+		return () => {
+			startEpoch += 1;
+			runsRead += 1;
+			connectionRead += 1;
+			localRead += 1;
+			window.removeEventListener('focus', refresh);
+			document.removeEventListener('visibilitychange', visible);
+		};
 	});
 
-	async function loadRuns() {
+	async function loadConnections() {
+		const current = ++connectionRead;
 		try {
-			runs = (await api.importRuns()).runs;
+			const held = await api.connections();
+			if (current !== connectionRead) return;
+			connections = held;
+			connectionsUnread = false;
+		} catch {
+			if (current !== connectionRead) return;
+			connectionsUnread = true;
+		}
+	}
+
+	async function loadLocalSessions() {
+		const current = ++localRead;
+		const answers = await Promise.all(importCards(null).map(async (card) => ({
+			marketplace: card.marketplace,
+			outcome: await sessionStatusHere(invoke, card.marketplace)
+		})));
+		if (current !== localRead) return;
+		localSessions = new Map(answers.map((answer) => [answer.marketplace, answer.outcome]));
+	}
+
+	async function loadRuns() {
+		const current = ++runsRead;
+		try {
+			const answer = await api.importRuns();
+			if (current !== runsRead) return;
+			runs = answer.runs;
 			runsUnread = false;
 		} catch {
-			runs = [];
+			if (current !== runsRead) return;
 			runsUnread = true;
 		}
 		runsLoaded = true;
@@ -191,34 +228,53 @@
 	 *  seller can open and carry on from, which is why the identifier is kept
 	 *  rather than discarded with the refusal. */
 	async function startImport(inventory: InventoryId) {
-		if (starting !== null) {
-			return;
-		}
-		starting = inventory;
+		if (starting.has(inventory)) return;
+		const epoch = startEpoch;
+		const href = page.url.href;
+		const org = page.data.session?.org;
+		const retryOf = page.url.searchParams.get('source') === inventory
+			? page.url.searchParams.get('retry') : null;
+		const active = () => epoch === startEpoch && href === page.url.href
+			&& org === page.data.session?.org;
+		starting = new Set([...starting, inventory]);
 		declined = null;
 		raised = null;
 		try {
-			const run = await api.createImportRun(inventory);
-			raised = run.id;
-			const outcome = await startImportHere(invoke, run.id);
-			const refused = startRefusal(outcome);
-			if (refused !== null) {
-				declined = refused;
+			if (org === undefined) {
+				declined = 'Your account could not be read. Reload before starting.';
 				return;
 			}
-			if (outcome.kind === 'unavailable') {
-				declined = NEEDS_THE_APP;
-				return;
+			const card = cards.find((candidate) => candidate.sites.includes(inventory));
+			if (card === undefined) return;
+			const local = await sessionStatusHere(invoke, card.marketplace);
+			if (!active()) return;
+			localSessions = new Map(localSessions).set(card.marketplace, local);
+			const blocked = importBlocked(card, shopRefusal, local, inApp);
+			if (blocked !== null) { declined = blocked; return; }
+			const intent = `teachouse.import.intent:${org}:${inventory}:${retryOf ?? 'new'}`;
+			const startKey = localStorage.getItem(intent) ?? crypto.randomUUID();
+			localStorage.setItem(intent, startKey);
+			const run = await api.createImportRun(inventory, startKey, retryOf);
+			if (active()) raised = run.id;
+			if (!['complete', 'failed', 'abandoned'].includes(run.state) && inApp) {
+				const outcome = await startImportHere(invoke, run.id);
+				const refused = startRefusal(outcome);
+				if (refused !== null || outcome.kind === 'unavailable') {
+					if (active()) declined = refused ?? NEEDS_THE_APP;
+					return;
+				}
 			}
-			await goto(`/imports/runs/${run.id}`);
+			if (active()) await goto(`/imports/runs/${run.id}`);
+			if (localStorage.getItem(intent) === startKey) localStorage.removeItem(intent);
 		} catch (failure) {
-			declined =
-				failure instanceof ApiFailure
+			if (active()) {
+				declined = failure instanceof ApiFailure
 					? failure.message
-					: 'That did not reach us. No import was started.';
+					: 'The start request was not acknowledged. Retry here to reconcile the same attempt.';
+			}
 		} finally {
-			starting = null;
-			await loadRuns();
+			starting = new Set([...starting].filter((source) => source !== inventory));
+			if (active()) await loadRuns();
 		}
 	}
 </script>
@@ -235,7 +291,7 @@
 	{#if connectionsUnread}
 		<Banner tone="bad" title="We could not read your marketplaces">{CONNECTIONS_UNREAD}</Banner>
 	{:else if nothingHeld}
-		<Banner tone="warn" title="No marketplace is connected" action={toMarketplaces}>
+		<Banner tone="info" title="No marketplace connection is recorded" action={toMarketplaces}>
 			{NOTHING_CONNECTED}
 		</Banner>
 	{/if}
@@ -307,7 +363,9 @@
 	<div class="import-cards">
 		{#each cards as card (card.marketplace)}
 			{@const site = card.sites[0]}
-			{@const blocked = importBlocked(card, shopRefusal)}
+			{@const local = localSessions.get(card.marketplace)}
+			{@const blocked = importBlocked(card, shopRefusal, local, inApp)}
+			{@const open = runs.find((run) => run.source === site && !['complete', 'failed', 'abandoned'].includes(run.state))}
 			<section class="import-card">
 				<div class="head">
 					<h2><MarketplaceMark marketplace={card.marketplace} size={22} /></h2>
@@ -316,7 +374,10 @@
 							{@const badge = standingBadge(card)}
 							<StatusPill tone={badge.tone} label={badge.label} />
 						{/if}
-						<StatusPill tone="flat" label="On your device" />
+						<StatusPill
+							tone={!inApp ? 'soon' : local?.kind === 'known' ? local.connected ? 'ok' : 'warn' : 'soon'}
+							label={!inApp ? 'Waiting for the app' : local?.kind === 'known' ? local.connected ? 'Login on this device' : 'Not signed in here' : 'This device: not known'}
+						/>
 					</span>
 				</div>
 
@@ -325,29 +386,31 @@
 				{:else}
 					<p class="quiet">{deviceLine(card)}</p>
 
-					{#if card.standing === 'absent'}
-						<Banner tone="bad">
-							{notConnected(card)}
+					{#if local?.kind === 'known' && !local.connected}
+						<Banner tone="warn">
+							{card.name} is not signed in on this device.
 							{#snippet action()}
 								<Button href={CONNECT_HREF}>{CONNECT_LABEL}</Button>
 							{/snippet}
 						</Banner>
 					{/if}
 
-					{#if invoke === null}
+					{#if !inApp}
 						<p class="why">{NEEDS_THE_APP}</p>
 					{/if}
 
 					<div class="actions">
-						{#if blocked === null && site !== undefined}
+						{#if open !== undefined}
+							<Button tier="primary" href={`/imports/runs/${open.id}`}>Open this import</Button>
+						{:else if blocked === null && site !== undefined}
 							<Button
 								tier="primary"
 								icon="download"
-								disabled={starting !== null}
-								reason={starting !== null ? 'An import is starting.' : undefined}
+								disabled={starting.has(site)}
+								reason={starting.has(site) ? 'This import is starting.' : undefined}
 								onclick={() => void startImport(site)}
 							>
-								{starting === site ? 'Starting…' : importLabel(card)}
+								{starting.has(site) ? 'Starting…' : importLabel(card)}
 							</Button>
 						{:else}
 							<!-- Disabled rather than absent, so the card still shows what

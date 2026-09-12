@@ -218,9 +218,27 @@ describe('asking this computer to run an import', () => {
 		// halves send the run under the name the commands declare and nothing
 		// else. A page that still sent `request` would be answered by an
 		// application that saw no run at all.
+		//
+		// `takeover` travels with it and is false unless the seller has said
+		// otherwise: an ordinary press must never take a run away from a phone
+		// that is reading a shop right now.
 		expect(calls).toEqual([
-			{ command: START_IMPORT, args: { run: 'r-7' } },
-			{ command: CONTINUE_IMPORT, args: { run: 'r-7' } }
+			{ command: START_IMPORT, args: { run: 'r-7', takeover: false } },
+			{ command: CONTINUE_IMPORT, args: { run: 'r-7', takeover: false } }
+		]);
+	});
+
+	it('carries a confirmed takeover, and only when it was asked for', async () => {
+		const calls: Array<Record<string, unknown>> = [];
+		const invoke: Invoke = async (_command, args) => {
+			calls.push(args);
+			return null;
+		};
+		await startImportHere(invoke, 'r-7', true);
+		await continueImportHere(invoke, 'r-7', true);
+		expect(calls).toEqual([
+			{ run: 'r-7', takeover: true },
+			{ run: 'r-7', takeover: true }
 		]);
 	});
 

@@ -62,7 +62,7 @@ const ADMIN_PATHS: [&str; 9] = [
 /// that list drives GET refusal loops, and a POST route answered by those
 /// loops would be testing method routing rather than the operator fence.
 /// Their own refusal is asserted by `a_seller_cannot_grant_themselves_a_plan`.
-const ADMIN_PATHS_UNCOVERED: [&str; 6] = [
+const ADMIN_PATHS_UNCOVERED: [&str; 12] = [
     "/{version}/admin/marketplace-requests",
     "/{version}/admin/orgs/{org}/plan",
     "/{version}/admin/orgs/{org}/plan/{grant}/revoke",
@@ -75,7 +75,13 @@ const ADMIN_PATHS_UNCOVERED: [&str; 6] = [
     // same blank 401 this file demands everywhere else.
     "/{version}/admin/guides",
     "/{version}/admin/guides/images",
+    "/{version}/admin/guides/_preview",
+    "/{version}/admin/guides/_taxonomy",
+    "/{version}/admin/guides/_taxonomy/{kind}",
+    "/{version}/admin/guides/_taxonomy/{kind}/{id}",
     "/{version}/admin/guides/{slug}",
+    "/{version}/admin/guides/{slug}/publish",
+    "/{version}/admin/guides/{slug}/unpublish",
 ];
 
 #[expect(

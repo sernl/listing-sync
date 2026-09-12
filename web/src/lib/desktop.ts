@@ -234,35 +234,179 @@ export const ORIGIN_NOT_GRANTED = 'This page is not one the Teachouse app accept
  * than reporting a failure, because nothing failed.
  *
  * The run rather than a request: an import is an import, and the run is the
- * row the console, the server and this computer all address it by. */
-export async function startImportHere(invoke: Invoke | null, run: string): Promise<StartOutcome> {
-	return ranOnRun(invoke, START_IMPORT, run);
+ * row the console, the server and this computer all address it by.
+ *
+ * `takeover` is the seller having said, in so many words, that this machine
+ * should take a run another one holds. It defaults to false, and that default
+ * is the safe half: an ordinary press must not wrench a run out of a phone
+ * that is reading a shop right now, so the application refuses and the caller
+ * offers the confirmation instead. */
+export async function startImportHere(
+	invoke: Invoke | null,
+	run: string,
+	takeover = false
+): Promise<StartOutcome> {
+	return ranOnRun(invoke, START_IMPORT, run, takeover);
 }
 
 /** Ask this computer to read the resources the seller ticked.
  *
  * The second half of one import, and a separate command because the seller
  * stands between them: the first posts what is in the shop, the seller says
- * which of it to bring, and this one reads those. */
+ * which of it to bring, and this one reads those.
+ *
+ * `takeover` means what it means above, and is needed here for the same
+ * reason: a seller who ticked on a laptop and continues on a phone is moving
+ * the run, which is a thing to confirm rather than to do by accident. */
 export async function continueImportHere(
 	invoke: Invoke | null,
-	run: string
+	run: string,
+	takeover = false
 ): Promise<StartOutcome> {
-	return ranOnRun(invoke, CONTINUE_IMPORT, run);
+	return ranOnRun(invoke, CONTINUE_IMPORT, run, takeover);
+}
+
+/** The desktop command that puts one run down on this computer.
+ *
+ * Its own name rather than a flag on the two above, because it is a different
+ * act: starting asks this machine to take a run, and stopping asks it to stop
+ * reading one — which it can do while offline, holding work the server has not
+ * acknowledged yet. */
+export const STOP_IMPORT = 'stop_import';
+
+/** What asking this computer to stop one run produced.
+ *
+ * `stopped` carries whether the server has acknowledged it. A machine that is
+ * offline stops reading immediately and cannot say the run is stopped
+ * anywhere else yet, and the seller is owed that difference: the work on this
+ * machine has ended either way, and the run's own page will agree once the
+ * device reaches us. A caller renders `serverPending` as "Stopped on this
+ * device; server confirmation pending" rather than as a failure, because
+ * nothing failed. */
+export type StopOutcome =
+	| { kind: 'stopped'; serverPending: boolean; recorded: boolean }
+	| { kind: 'refused'; detail: string }
+	| { kind: 'unsupported' }
+	| { kind: 'unavailable' };
+
+/** Ask this computer to stop reading the shop one run names.
+ *
+ * The console's Stop also settles the run on the server, and that is the
+ * authority; this is the half only the device can do, which is ending the
+ * marketplace work already in flight. Both are needed: without the server the
+ * run would be reclaimed, and without this the device would go on reading a
+ * run nobody is waiting for. */
+export async function stopImportHere(invoke: Invoke | null, run: string): Promise<StopOutcome> {
+	if (invoke === null) {
+		return { kind: 'unavailable' };
+	}
+	try {
+		const answer = await invoke(STOP_IMPORT, { run });
+		// Narrowed rather than asserted, and read conservatively: an answer
+		// whose shape this console does not recognise is not a reason to tell
+		// the seller the stop failed, and the honest reading of a field that
+		// is not there is that the server has yet to confirm.
+		const confirmed =
+			typeof answer === 'object' &&
+			answer !== null &&
+			'server_pending' in answer &&
+			answer.server_pending === false;
+		// Whether the machine wrote the stop down, which is a different fact
+		// from waiting on the server: an unrecorded stop can be undone by a
+		// restart, and the seller is owed that distinction rather than one
+		// sentence covering both.
+		const recorded =
+			typeof answer === 'object' &&
+			answer !== null &&
+			'recorded' in answer &&
+			answer.recorded === true;
+		return { kind: 'stopped', serverPending: !confirmed, recorded };
+	} catch (caught) {
+		const detail = refusalText(caught, STOP_REFUSED_SILENTLY);
+		if (originNotGranted(detail, STOP_IMPORT)) {
+			return { kind: 'refused', detail: ORIGIN_NOT_GRANTED };
+		}
+		return unknownCommand(detail) ? { kind: 'unsupported' } : { kind: 'refused', detail };
+	}
+}
+
+/** The desktop command that reads whether THIS machine holds a session for one
+ *  marketplace.
+ *
+ * A different question from the organisation's connection standing, which is
+ * the server's and says that some device is connected. An import runs on the
+ * machine the seller is standing at, so "connected" on the console and "can
+ * read your shop from here" are two facts, and conflating them is what let a
+ * seller press Start on a phone that held no session. */
+export const SESSION_STATUS = 'session_status';
+
+/** What this machine knows about its own session for one marketplace.
+ *
+ * `known` is an answer and carries it; `unavailable` is a browser, where the
+ * question cannot be asked at all and no answer may be inferred. The two are
+ * kept apart deliberately: an unanswered question rendered as "not connected"
+ * is the same defect one layer up, and a caller showing "Connect this device"
+ * to a seller in a browser would be offering a remedy that does not exist
+ * there. */
+export type LocalSessionOutcome =
+	| { kind: 'known'; connected: boolean }
+	| { kind: 'refused'; detail: string }
+	| { kind: 'unavailable' };
+
+/** Ask this computer whether it holds a session for one marketplace.
+ *
+ * Read-only: it opens nothing, captures nothing and changes nothing, so a
+ * caller may ask it on entry, on visibility and before a start without
+ * costing the seller anything. */
+export async function sessionStatusHere(
+	invoke: Invoke | null,
+	marketplace: Marketplace
+): Promise<LocalSessionOutcome> {
+	if (invoke === null) {
+		return { kind: 'unavailable' };
+	}
+	try {
+		const answer = await invoke(SESSION_STATUS, { marketplace });
+		// An answer whose shape this console does not recognise is unavailable
+		// rather than disconnected: absent and unknown are different facts,
+		// and only one of them has a remedy the seller can act on.
+		if (typeof answer === 'object' && answer !== null && 'connected' in answer) {
+			const connected = answer.connected;
+			if (typeof connected === 'boolean') {
+				return { kind: 'known', connected };
+			}
+		}
+		return { kind: 'unavailable' };
+	} catch (caught) {
+		const detail = refusalText(caught, SESSION_UNREADABLE);
+		if (originNotGranted(detail, SESSION_STATUS)) {
+			return { kind: 'refused', detail: ORIGIN_NOT_GRANTED };
+		}
+		// An application too old to answer is not a machine with no session:
+		// it is a question that could not be asked, which is what
+		// `unavailable` means everywhere else in this module.
+		return unknownCommand(detail) ? { kind: 'unavailable' } : { kind: 'refused', detail };
+	}
 }
 
 /** Both halves' shared body. One classification of a rejection, so a start and
- * a continue cannot come to read this computer's refusals differently. */
+ * a continue cannot come to read this computer's refusals differently.
+ *
+ * `takeover` is sent on every call rather than only when true, because Tauri
+ * matches an argument by name and a command whose parameter is absent reads
+ * its own default: sending it always means the console and the application
+ * agree on one answer rather than two defaults that could drift. */
 async function ranOnRun(
 	invoke: Invoke | null,
 	command: string,
-	run: string
+	run: string,
+	takeover: boolean
 ): Promise<StartOutcome> {
 	if (invoke === null) {
 		return { kind: 'unavailable' };
 	}
 	try {
-		await invoke(command, { run });
+		await invoke(command, { run, takeover });
 		return { kind: 'started' };
 	} catch (caught) {
 		const detail = refusalText(caught, IMPORT_REFUSED_SILENTLY);
@@ -548,3 +692,6 @@ const CONNECT_REFUSED_SILENTLY = 'This computer refused to open the sign-in and 
 const FORGET_REFUSED_SILENTLY =
 	'This computer refused to remove the marketplace login and gave no reason.';
 const OPEN_REFUSED_SILENTLY = 'This computer refused to open the link and gave no reason.';
+const STOP_REFUSED_SILENTLY = 'This computer refused to stop the import and gave no reason.';
+const SESSION_UNREADABLE =
+	'This computer could not say whether it is signed in to that marketplace.';

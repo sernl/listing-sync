@@ -16,7 +16,10 @@
 
 use tam_api::duplicates::DuplicateVerdictView;
 use tam_api::entitlement::QuotaKind;
-use tam_api::import_runs::{ImportRunItemState, ImportRunKind, ImportRunState, MatchLayerView};
+use tam_api::import_runs::{
+    ImportReasonCodeView, ImportRunItemState, ImportRunKind, ImportRunStage, ImportRunState,
+    MatchLayerView,
+};
 use tam_api::jobs::{outcome_str, JobPhase, ALL_OUTCOMES};
 use tam_api::migrations::MigrationVerdict;
 use tam_api::org::SlugPrompt;
@@ -349,6 +352,20 @@ fn vocab() -> String {
         "ImportRunState",
         "IMPORT_RUN_STATES",
         &ImportRunState::ALL,
+        serde_name,
+    ));
+    out.push('\n');
+    out.push_str(&closed(
+        "ImportRunStage",
+        "IMPORT_RUN_STAGES",
+        &ImportRunStage::ALL,
+        serde_name,
+    ));
+    out.push('\n');
+    out.push_str(&closed(
+        "ImportReasonCode",
+        "IMPORT_REASON_CODES",
+        &ImportReasonCodeView::ALL,
         serde_name,
     ));
     out.push('\n');

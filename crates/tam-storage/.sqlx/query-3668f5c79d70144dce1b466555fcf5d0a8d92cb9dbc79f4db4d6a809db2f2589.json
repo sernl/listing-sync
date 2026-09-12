@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT x.id, x.kind, x.slug, x.name, x.retired FROM guide_taxon x WHERE EXISTS ( SELECT 1 FROM guide g WHERE g.published_at IS NOT NULL AND g.published_topic_id = x.id) OR EXISTS ( SELECT 1 FROM guide_tag_assignment a JOIN guide g ON g.id = a.guide_id WHERE a.taxon_id = x.id AND a.scope = 'published' AND g.published_at IS NOT NULL) ORDER BY x.retired, lower(x.name), x.slug",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "slug",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "retired",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3668f5c79d70144dce1b466555fcf5d0a8d92cb9dbc79f4db4d6a809db2f2589"
+}

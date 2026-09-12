@@ -303,8 +303,37 @@ async fn a_move_previews_each_resource_and_queues_only_what_it_admitted(pool: Pg
         "the preview states the allowance against the selection, before any of it is spent"
     );
 
-    // The other direction is offered and refused with the reason, rather than
-    // being absent: TPT's download is the capture this tree is waiting on.
+    // A source whose download nobody has captured is offered and refused with
+    // the reason, rather than being absent: Etsy is the capture this tree is
+    // still waiting on.
+    let unreadable = call(
+        pool.clone(),
+        "/v1/migrations/plan",
+        None,
+        serde_json::json!({
+            "source": "Etsy",
+            "target": "Tes",
+            "disposition": "sync",
+            "selection": { "all": true },
+        }),
+    )
+    .await;
+    let unreadable: MigrationPlanView = unreadable.json();
+    assert!(!unreadable.pair.allowed);
+    assert!(
+        unreadable
+            .pair
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("etsy.download_resource_bundle")),
+        "the refusal names the capture, which is what the console shows under the disabled \
+         option"
+    );
+    assert_eq!(unreadable.counts.blocked, 3, "no pair, no admitted rows");
+
+    // And the direction that was refused until 2026-09-13 is now offered: the
+    // seller's own device performs the TPT download the capture witnessed, so
+    // the pair carries no reason at all.
     let backwards = call(
         pool.clone(),
         "/v1/migrations/plan",
@@ -318,17 +347,11 @@ async fn a_move_previews_each_resource_and_queues_only_what_it_admitted(pool: Pg
     )
     .await;
     let backwards: MigrationPlanView = backwards.json();
-    assert!(!backwards.pair.allowed);
-    assert!(
-        backwards
-            .pair
-            .reason
-            .as_deref()
-            .is_some_and(|reason| reason.contains("tpt.download_resource_bundle")),
-        "the refusal names the capture, which is what the console shows under the disabled \
-         option"
+    assert_eq!(
+        (backwards.pair.allowed, backwards.pair.reason.as_deref()),
+        (true, None),
+        "TPT as a source is a captured download now, so nothing about the pair refuses it"
     );
-    assert_eq!(backwards.counts.blocked, 3, "no pair, no admitted rows");
 
     let accepted = call(pool.clone(), "/v1/migrations", Some(KEY), move_body()).await;
     assert_eq!(accepted.status, StatusCode::ACCEPTED);

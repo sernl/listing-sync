@@ -1,6 +1,6 @@
 # Import reliability and guides repair
 
-- Status: approved by the founder; implementation in progress.
+- Status: implementation and physical-phone acceptance complete; coordinated release in progress.
 - Created: 2026-09-12.
 - Scope: repair the reported APK imports and guides before Phase 7.
 - Implementation plan: [bounded execution tasks](plans/2026-09-12-import-reliability-and-guides-repair.md).
@@ -223,14 +223,12 @@ Before publication, revalidate that the executing device can resolve the require
 A changed source file or unavailable file produces an explicit readiness blocker, not reuse of stale approval.
 Missing target fields, permissions, session, file-download capability or destination support are separate blockers with a next action.
 
-TPT own-file download remains explicitly uncaptured in the governing design.
-The available `downloads.har` is a TES capture; inspection of `tpt-capture-options.har` found no download/bundle endpoint or resource-payload GET, only font GETs among its binary responses.
-Those candidate captures do not discharge the TPT own-file gate.
-Do not claim automatic TPT-to-TES publication from imported resources works until that capture is implemented and verified on-device.
-The existing manual attachment path is not a local-only fallback: `FilesPanel` calls `api.upload`, which posts bytes to `/v1/uploads`, and native `payload.rs` retrieves those originals from server object storage.
-Preserve that separately consented existing upload behaviour, but do not route marketplace-imported bytes through it to bypass this capture gate.
-A genuinely device-local original-file attachment mode would be a separately approved contract, not an existing capability or a hidden addition to this repair.
-The plan includes the capture gate; it is not silently deferred behind a metadata-only success label.
+The founder-supervised capture on 2026-09-13 closed the TPT own-file gate.
+An owned product's `/Download/{slug}-{id}` route redirected the Samsung SM-N975F to a signed asset URL on `rc-assets.teacherspayteachers.com`; a cookie-free fetch on that phone returned a 14,110,742-byte ZIP.
+No original file, marketplace cookie or signed URL was persisted on the workstation or server.
+The adapter now accepts one HTTPS redirect on that exact host, binds its canonical path to the requested product, refuses partial responses and validates the ZIP structure before recording file evidence.
+The native import and publishing resolver share this path.
+The existing manual attachment path remains separate: `FilesPanel` calls `api.upload`, which posts bytes to `/v1/uploads`, and native `payload.rs` retrieves those originals from server object storage.
 Import itself never performs a new marketplace publication or source deletion.
 A real publish smoke requires separate seller authorisation and an independently observed destination result; an ambiguous external write must reconcile before retry.
 
@@ -246,8 +244,8 @@ Retire referenced taxonomy entries or refuse deletion with an explanation; never
 An explicit taxonomy rename changes its displayed name globally; an autosaved guide edit does not change published taxonomy assignments.
 
 Preserve a complete working draft separately from a complete published snapshot: title, body, topic and tags all belong to both.
-Use a monotonically increasing aggregate revision for optimistic concurrency, not timestamp equality or a short content hash.
-Every draft save, publish and unpublish checks the expected revision and returns the new revision.
+Use the guide's existing immutable identifier together with a monotonically increasing aggregate revision for optimistic concurrency, not timestamp equality or a short content hash.
+Every draft save, publish, unpublish and delete checks both the expected identifier and revision, so deleting and recreating one slug cannot let an old editor overwrite the replacement.
 Backfill published guides from their existing content so URLs and visible text survive migration; draft guides remain unreadable to readers.
 Do not add arbitrary revision-history retention: one working copy and one published snapshot meet this request.
 

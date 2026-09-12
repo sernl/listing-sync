@@ -6,12 +6,11 @@
 		type DuplicateDecision,
 		type ImportRunView,
 		type PairFieldChoice,
-		type PairSide,
-		type RunCommitAck
+		type PairSide
 	} from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
-	import { continueImportHere, desktopInvoker } from '$lib/desktop';
+	import { continueImportHere, desktopInvoker, startImportHere, stopImportHere } from '$lib/desktop';
 	import { createLedger, type Ledger } from '$lib/ledger';
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
 	import PageHead from '$lib/PageHead.svelte';
@@ -26,9 +25,7 @@
 		RUN_UNREAD,
 		emptyItemsLine,
 		importedHref,
-		inPlay,
 		itemRows,
-		progressLine,
 		runBadge,
 		runName,
 		selectionRows,
@@ -48,6 +45,12 @@
 	let refusal = $state<string | null>(null);
 	let live = $state(false);
 	let ledger: Ledger | null = null;
+	let generation = 0;
+	let runEpoch = 0;
+
+	function current(target: { id: string; epoch: number }): boolean {
+		return target.id === runId && target.epoch === runEpoch;
+	}
 
 	// Read once: whether this console runs inside the desktop application does
 	// not change while the page is open.
@@ -60,11 +63,9 @@
 	let sending = $state(false);
 	let declined = $state<string | null>(null);
 
-	// The commit loop, in the shape the spreadsheet commit established: one
-	// chunk per call, so a closed browser loses only the chunk in flight.
 	let committing = $state(false);
-	let ack = $state<RunCommitAck | null>(null);
 	let commitRefusal = $state<string | null>(null);
+	let stopPending = $state(false);
 
 	const stage = $derived(view === null ? null : stageFrom(view));
 	const rows = $derived(view === null ? [] : itemRows(view));
@@ -75,10 +76,15 @@
 		if (!runId) {
 			return;
 		}
+		const id = runId;
+		const current = ++generation;
 		try {
-			view = await api.importRun(runId);
+			const next = await api.importRun(id);
+			if (current !== generation || id !== runId) return;
+			view = next;
 			refusal = null;
 		} catch (caught) {
+			if (current !== generation || id !== runId) return;
 			refusal = caught instanceof ApiFailure ? caught.message : RUN_UNREAD;
 		}
 	}
@@ -88,15 +94,31 @@
 	// payloads are never read — the snapshot is what the page renders, so a
 	// projection here would be a second copy of the server's own counting.
 	$effect(() => {
-		void refetch();
+		const id = runId;
+		void id;
+		runEpoch += 1;
+		view = null;
+		refusal = null;
+		chosen = new Set();
+		sending = false;
+		committing = false;
+		declined = null;
+		commitRefusal = null;
+		stopPending = false;
 		ledger = createLedger((cursor) => new EventSource(`/v1/events/stream?cursor=${cursor}`));
+		void refetch();
+		let revision = 0;
 		const unsubscribe = ledger.subscribe((state) => {
 			live = state.connected;
-			if (state.events.length > 0 || state.resyncs > 0) {
+			if (state.revision === revision) return;
+			revision = state.revision;
+			if ([...state.kinds].some((kind) => kind === 'resync' || kind.startsWith('ImportRun'))) {
 				void refetch();
 			}
 		});
 		return () => {
+			runEpoch += 1;
+			generation += 1;
 			unsubscribe();
 			ledger?.close();
 		};
@@ -116,88 +138,119 @@
 		chosen = new Set(offered.map((item) => item.locator));
 	}
 
-	/** Send the tick list, then ask this computer to read what was ticked.
-	 *
-	 *  Whether every resource was ticked is sent as `all` rather than as every
-	 *  locator: a shop that grew between the enumeration and the tick is still
-	 *  "all of it", and the server is the side that knows what all of it is
-	 *  now. */
+	/** The server freezes the selected rows before the device begins reading. */
 	async function continueHere() {
-		if (sending || chosenCount === 0) {
-			return;
-		}
+		if (sending || chosenCount === 0) return;
+		const target = { id: runId, epoch: runEpoch };
+		const selection = chosenCount === offered.length
+			? { all: true as const } : { locators: [...chosen] };
 		sending = true;
 		declined = null;
 		try {
-			const everything = chosenCount === offered.length;
-			view = await api.selectImportRun(
-				runId,
-				everything ? { all: true } : { locators: [...chosen] }
-			);
-			const outcome = await continueImportHere(invoke, runId);
-			declined = startRefusal(outcome) ?? (outcome.kind === 'unavailable' ? NEEDS_THE_APP : null);
+			const selected = await api.selectImportRun(target.id, selection);
+			if (current(target)) view = selected;
+			const outcome = await continueImportHere(invoke, target.id);
+			if (current(target)) {
+				declined = startRefusal(outcome) ?? (outcome.kind === 'unavailable' ? NEEDS_THE_APP : null);
+			}
 		} catch (caught) {
-			declined =
-				caught instanceof ApiFailure
-					? caught.message
-					: 'Your choice did not reach us. Nothing has been read.';
+			if (current(target)) {
+				declined = caught instanceof ApiFailure
+					? caught.message : 'Your choice was not acknowledged. Check this import before retrying.';
+			}
 		} finally {
-			sending = false;
-			await refetch();
+			if (current(target)) {
+				sending = false;
+				await refetch();
+			}
 		}
 	}
 
-	/** The chunk loop. Each call is one chunk, and the loop stops the moment
-	 *  the server says it is complete, so nothing here decides when a commit
-	 *  is finished. */
+	/** Confirmation is durable; the server owns the work after this request. */
 	async function commit() {
-		if (committing) {
-			return;
-		}
+		if (committing) return;
+		const target = { id: runId, epoch: runEpoch };
 		committing = true;
 		commitRefusal = null;
 		try {
-			for (;;) {
-				const next = await api.commitImportRun(runId);
-				ack = next;
-				if (next.complete) {
-					break;
-				}
-			}
+			const confirmed = await api.confirmImportRun(target.id);
+			if (current(target)) view = confirmed.run;
 		} catch (caught) {
-			commitRefusal =
-				caught instanceof ApiFailure
-					? caught.message
-					: 'That chunk did not reach us. Nothing more was added.';
+			if (current(target)) {
+				commitRefusal = caught instanceof ApiFailure
+					? caught.message : 'The confirmation was not acknowledged. Check the import before retrying.';
+			}
 		} finally {
-			committing = false;
-			await refetch();
+			if (current(target)) {
+				committing = false;
+				await refetch();
+			}
 		}
 	}
 
 	async function decide(lo: string, hi: string, decision: DuplicateDecision) {
+		const target = { id: runId, epoch: runEpoch };
 		try {
 			await api.decideDuplicate(lo, hi, decision);
-			commitRefusal = null;
+			if (current(target)) commitRefusal = null;
 		} catch (caught) {
-			commitRefusal =
-				caught instanceof ApiFailure ? caught.message : 'That answer did not reach us.';
+			if (current(target)) {
+				commitRefusal = caught instanceof ApiFailure ? caught.message : 'That answer was not acknowledged.';
+			}
 		}
-		await refetch();
+		if (current(target)) await refetch();
+	}
+
+	async function resume() {
+		if (sending || view === null) return;
+		const target = { id: runId, epoch: runEpoch };
+		const enumerated = view.execution.enumeration_complete;
+		if (!window.confirm('Resume this import on this device? Any previous device will lose ownership.')) return;
+		sending = true;
+		declined = null;
+		try {
+			const outcome = enumerated
+				? await continueImportHere(invoke, target.id, true)
+				: await startImportHere(invoke, target.id, true);
+			if (current(target)) {
+				if (outcome.kind === 'refused') declined = outcome.detail;
+				if (outcome.kind === 'unavailable') declined = NEEDS_THE_APP;
+			}
+		} finally {
+			if (current(target)) {
+				sending = false;
+				await refetch();
+			}
+		}
 	}
 
 	async function abandon() {
-		if (sending) {
-			return;
-		}
+		if (sending) return;
+		const target = { id: runId, epoch: runEpoch };
+		let locallyStopped = false;
 		sending = true;
+		declined = null;
 		try {
-			view = await api.abandonImportRun(runId);
+			const local = await stopImportHere(invoke, target.id);
+			if (local.kind === 'stopped') {
+				locallyStopped = true;
+				if (current(target)) {
+					stopPending = local.serverPending;
+				}
+			}
+			await api.abandonImportRun(target.id);
+			if (current(target)) stopPending = false;
 		} catch (caught) {
-			declined =
-				caught instanceof ApiFailure ? caught.message : 'That did not reach us.';
+			if (current(target)) {
+				declined = locallyStopped
+					? 'Stopped on this device; server confirmation pending.'
+					: caught instanceof ApiFailure ? caught.message : 'The stop request was not acknowledged.';
+			}
 		} finally {
-			sending = false;
+			if (current(target)) {
+				sending = false;
+				await refetch();
+			}
 		}
 	}
 
@@ -213,7 +266,7 @@
 <div class="page">
 	{#if view !== null && stage !== null}
 		{@const run = view}
-		{@const badge = runBadge(run.state)}
+		{@const badge = runBadge(run)}
 		{@const copy = stageCopy(stage)}
 		<PageHead
 			icon="download"
@@ -223,7 +276,7 @@
 		>
 			{#snippet aside()}
 				<StatusPill tone={badge.tone} label={badge.label} />
-				<StatusPill tone={live ? 'ok' : 'soon'} label={live ? 'Live' : 'Reconnecting'} />
+				<StatusPill tone={live ? 'ok' : 'soon'} label={live ? 'Updates connected' : 'Updates reconnecting'} />
 			{/snippet}
 		</PageHead>
 
@@ -233,15 +286,37 @@
 			</Banner>
 		{/if}
 		{#if declined !== null}
-			<Banner tone="bad" title="This computer did not carry on">{declined}</Banner>
+			<Banner tone={stopPending ? 'info' : 'bad'} title={stopPending ? 'Stopped locally' : 'This device did not carry on'}>{declined}</Banner>
 		{/if}
 
 		<Panel title="Where this import stands">
 			<p class="import-stage">{copy.headline}</p>
 			<p class="quiet">{copy.detail}</p>
 
-			{#if stage === 'reading' || stage === 'reviewing' || stage === 'committing'}
-				<p class="run-bar">{progressLine(run.counts, inPlay(run.counts))}</p>
+			<p class="quiet">
+				{run.execution.discovered} resources found.
+				{#if run.execution.selected_total !== null}{run.execution.selected_total} selected.{/if}
+			</p>
+			{#if run.execution.reason !== null}
+				<p class="run-bar">{run.execution.reason}</p>
+			{/if}
+			{#if run.execution.owner_device !== null}
+				<p class="quiet">Reading device: {run.execution.owner_device} · attempt {run.execution.attempt}.</p>
+			{/if}
+			{#if run.execution.last_contact_at !== null}
+				<p class="quiet">Last device contact: {new Date(run.execution.last_contact_at).toLocaleString('en-GB')}.</p>
+			{/if}
+			{#if run.execution.last_progress_at !== null}
+				<p class="quiet">Last progress: {new Date(run.execution.last_progress_at).toLocaleString('en-GB')}.</p>
+			{/if}
+			{#if (stage === 'reading' || stage === 'committing') && run.execution.selected_total !== null && run.execution.selected_total > 0}
+				{@const total = run.execution.selected_total}
+				{@const progressed = stage === 'committing' ? run.counts.imported : run.execution.processed}
+				<progress value={progressed} max={total} aria-label={stage === 'committing' ? 'Resources added' : 'Resources processed'}></progress>
+				<p class="run-bar">
+					{progressed} of {total} selected resources {stage === 'committing' ? 'added' : 'processed'}
+					({Math.round(progressed / total * 100)}%).
+				</p>
 			{/if}
 
 			{#if stage === 'done' || stage === 'failed'}
@@ -250,16 +325,22 @@
 					<Button tier="primary" icon="layout-list" href={importedHref(run.source)}>
 						Open them in Resources
 					</Button>
+					{#if stage === 'failed' && run.source !== null}
+						<Button href={`/import?source=${encodeURIComponent(run.source)}&retry=${encodeURIComponent(run.id)}`}>Start a new attempt</Button>
+					{/if}
 				</div>
 			{:else}
 				<div class="actions">
+					{#if (stage === 'waiting' || stage === 'interrupted') && invoke !== null}
+						<Button tier="primary" disabled={sending} onclick={() => void resume()}>Resume on this device</Button>
+					{/if}
 					<Button
 						danger
 						disabled={sending}
 						reason={sending ? 'An answer is on its way.' : undefined}
 						onclick={() => void abandon()}
 					>
-						Give up on this import
+						Stop this import
 					</Button>
 				</div>
 			{/if}
@@ -320,7 +401,7 @@
 			/>
 		{/if}
 
-		{#if stage === 'reviewing' || stage === 'committing'}
+		{#if stage === 'reviewing' || stage === 'confirming' || stage === 'committing'}
 			<Panel
 				title="Add them to your catalogue"
 				description="Everything that is ready is created here. Anything you have left for later waits."
@@ -328,25 +409,19 @@
 				{#if commitRefusal !== null}
 					<Banner tone="bad" title="That did not finish">{commitRefusal}</Banner>
 				{/if}
-				{#if ack !== null}
-					<p class="quiet">
-						{ack.applied} added, {ack.remaining} to go.
-					</p>
-				{/if}
 				{@const ready = run.counts.matched}
 				<div class="actions">
 					<Button
 						tier="primary"
 						icon="circle-plus"
-						disabled={committing || ready === 0}
-						reason={committing
-							? 'Adding them now.'
-							: ready === 0
-								? 'Answer the pairs above and these are ready to add.'
-								: undefined}
+						disabled={committing || run.execution.commit_authorised || ready === 0}
+						reason={run.execution.commit_authorised
+							? 'Already confirmed. The server will continue when any remaining questions are answered.'
+							: committing ? 'Sending your confirmation.'
+								: ready === 0 ? 'Answer the pairs above before adding these resources.' : undefined}
 						onclick={() => void commit()}
 					>
-						{committing ? 'Adding…' : 'Add to catalogue'}
+						{run.execution.commit_authorised ? 'Confirmed' : committing ? 'Confirming…' : 'Add to catalogue'}
 					</Button>
 				</div>
 			</Panel>

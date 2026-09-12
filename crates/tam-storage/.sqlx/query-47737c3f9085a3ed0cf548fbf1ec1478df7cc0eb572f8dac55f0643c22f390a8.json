@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT product_id, axis FROM election_item WHERE org_id = $1 AND product_id = ANY($2) AND inventory = $3 AND state = 'answered'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "axis",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "47737c3f9085a3ed0cf548fbf1ec1478df7cc0eb572f8dac55f0643c22f390a8"
+}

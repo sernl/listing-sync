@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 139] = [
+pub const ROUTES: [Route; 153] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -279,7 +279,7 @@ pub const ROUTES: [Route; 139] = [
     Route {
         method: "post",
         path: "/{version}/imports/runs",
-        summary: "Open a marketplace import run for the seller's device to read",
+        summary: "Start or reattach a source-specific import using a retained intent key",
     },
     Route {
         method: "get",
@@ -299,7 +299,7 @@ pub const ROUTES: [Route; 139] = [
     Route {
         method: "post",
         path: "/{version}/imports/runs/{run}/commit",
-        summary: "Create the next chunk of a run's matched resources; drafts nothing",
+        summary: "Confirm catalogue addition; the server drains the approved resources",
     },
     Route {
         method: "post",
@@ -529,6 +529,41 @@ pub const ROUTES: [Route; 139] = [
     },
     Route {
         method: "post",
+        path: "/{version}/devices/{device}/import",
+        summary: "Accept a fenced import page and replay its durable receipt",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/devices/{device}/import/open",
+        summary: "All import runs this device may resume or claim",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/devices/{device}/import/{run}/claim",
+        summary: "Claim an import attempt or explicitly take over its device ownership",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/devices/{device}/import/{run}/renew",
+        summary: "Renew the current fenced import attempt",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/devices/{device}/import/{run}/progress",
+        summary: "Record current import progress or an actionable interruption",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/devices/{device}/import/{run}/stop",
+        summary: "Stop the owning import attempt without abandoning newer work",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/devices/{device}/import/{run}/selection",
+        summary: "The acknowledged selection a device should read",
+    },
+    Route {
+        method: "post",
         path: "/{version}/connections/{marketplace}/authorship",
         summary: "The seller declares who authored what this connection publishes",
     },
@@ -689,6 +724,26 @@ pub const ROUTES: [Route; 139] = [
         summary: "Operator: store a picture a guide body points at, under the platform org",
     },
     Route {
+        method: "post",
+        path: "/{version}/admin/guides/_preview",
+        summary: "Operator: render unsaved Markdown without writing",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/admin/guides/_taxonomy",
+        summary: "Operator: every guide topic and tag, including retired terms",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/guides/_taxonomy/{kind}",
+        summary: "Operator: add a guide topic or tag",
+    },
+    Route {
+        method: "put",
+        path: "/{version}/admin/guides/_taxonomy/{kind}/{id}",
+        summary: "Operator: rename or retire a guide topic or tag",
+    },
+    Route {
         method: "get",
         path: "/{version}/admin/guides/{slug}",
         summary: "Operator: one guide, its Markdown and that Markdown rendered",
@@ -696,17 +751,32 @@ pub const ROUTES: [Route; 139] = [
     Route {
         method: "put",
         path: "/{version}/admin/guides/{slug}",
-        summary: "Operator: rewrite one guide's title, body and status",
+        summary: "Operator: save a guide working copy at a known revision",
     },
     Route {
         method: "delete",
         path: "/{version}/admin/guides/{slug}",
-        summary: "Operator: delete one guide",
+        summary: "Operator: delete a guide at a known revision",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/guides/{slug}/publish",
+        summary: "Operator: publish the specified draft revision",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/guides/{slug}/unpublish",
+        summary: "Operator: withdraw the published snapshot",
     },
     Route {
         method: "get",
         path: "/{version}/guides",
-        summary: "The published help guides, newest edit first",
+        summary: "Published help guides filtered by text, topic and tags",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/guides/_taxonomy",
+        summary: "Topics and tags used by published guides",
     },
     Route {
         method: "get",

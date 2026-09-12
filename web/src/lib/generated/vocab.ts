@@ -59,6 +59,11 @@ export type APIErrorCode =
   | "listing_already_claimed"
   | "org_slug_taken"
   | "import_run_open"
+  | "import_run_fenced"
+  | "import_run_settled"
+  | "import_client_update_required"
+  | "import_receipt_conflict"
+  | "import_start_key_spent"
   | "duplicate_pair_settled"
   | "internal";
 
@@ -86,6 +91,11 @@ export const API_ERROR_CODES: readonly APIErrorCode[] = [
   "listing_already_claimed",
   "org_slug_taken",
   "import_run_open",
+  "import_run_fenced",
+  "import_run_settled",
+  "import_client_update_required",
+  "import_receipt_conflict",
+  "import_start_key_spent",
   "duplicate_pair_settled",
   "internal",
 ];
@@ -586,6 +596,56 @@ export const IMPORT_RUN_STATES: readonly ImportRunState[] = [
   "complete",
   "failed",
   "abandoned",
+];
+
+export type ImportRunStage =
+  | "waiting"
+  | "discovering"
+  | "selecting"
+  | "reading"
+  | "reviewing"
+  | "committing"
+  | "interrupted"
+  | "failed"
+  | "completed"
+  | "abandoned";
+
+export const IMPORT_RUN_STAGES: readonly ImportRunStage[] = [
+  "waiting",
+  "discovering",
+  "selecting",
+  "reading",
+  "reviewing",
+  "committing",
+  "interrupted",
+  "failed",
+  "completed",
+  "abandoned",
+];
+
+export type ImportReasonCode =
+  | "missing_session"
+  | "not_permitted"
+  | "unsupported_source"
+  | "enumeration_failed"
+  | "description_failed"
+  | "submission_failed"
+  | "activation_expired"
+  | "lease_expired"
+  | "stopped"
+  | "client_update_required";
+
+export const IMPORT_REASON_CODES: readonly ImportReasonCode[] = [
+  "missing_session",
+  "not_permitted",
+  "unsupported_source",
+  "enumeration_failed",
+  "description_failed",
+  "submission_failed",
+  "activation_expired",
+  "lease_expired",
+  "stopped",
+  "client_update_required",
 ];
 
 export type ImportRunItemState =

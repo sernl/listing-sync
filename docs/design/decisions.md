@@ -384,6 +384,12 @@ Two things are deliberately not invented.
 An off-origin redirect is refused rather than followed: no capture carries a signed hop, and the transport refuses a session request to any host but the origin, which is the rule that keeps the seller's cookies on the marketplace.
 And the refusal for the gate is its own condition rather than `SessionExpired`, because the same jar that meets it authenticates everything else, so re-authenticating is the wrong remedy to send an operator after.
 
+### Signed asset capture, 2026-09-13
+
+The founder authorised completion of the capture and signed in on the Samsung SM-N975F. Its WebView observed an owned product's download redirect to `https://rc-assets.teacherspayteachers.com/resources/{product-id}/assets/{opaque}?file_name=...&verify=...`. A cookie-free fetch on that phone returned HTTP 200 and a 14,110,742-byte ZIP; no original file or signed token was persisted on the workstation or server.
+
+This supersedes the uncaptured-source decision above. The adapter follows one HTTPS asset hop, bound to the requested product, through its cookie-free transport. It refuses other hosts, noncanonical paths, additional redirects and partial responses. The existing file pipeline checks ZIP structure before an import can record file evidence. The native importer and publishing file resolver use the same download, and the sourced-payload client floor is 0.9.0. Live import and destination verification remain release acceptance gates; capture alone does not prove them.
+
 ## The body carriage: pass-through one way, rendered the other, 2026-08-29
 
 The founder approved `pulldown-cmark` as the workspace's Markdown-to-HTML renderer, which is the one dependency this decision adds.
@@ -841,7 +847,7 @@ The unit a seller copies or moves is a resource in the catalogue, not a listing 
 For that to be true of an imported catalogue, an import binds each resource to the listing it was read from — a bound mapping on the source inventory, `DryRun`, never projected — so the catalogue says where a resource already is, the status page can draw it, and a second read of the same shop skips every listing the catalogue holds as it lands, named after the resource it already is.
 A read that carried no state binds with `Absent`, which a Copy accepts and a Move refuses until the state is verified.
 Copy and Move both consume `migrations_per_month`, since the design counts migrations of either kind and the pricing copy says so.
-Any two of Tes, TPT and Etsy may be chosen at either end; a pair the tree cannot serve is offered disabled with its reason (the uncaptured download for TPT and Etsy as source, no adapter for Etsy as target), so Tes to TPT is the one live pair today and nothing about the page changes when the next is captured.
+Any two of Tes, TPT and Etsy may be chosen at either end; the planner and device worker admit Tes to TPT and TPT to Tes, while Etsy remains disabled as a source and target because its official API adapter is not implemented. A real destination readback remains a release gate rather than an inference from that support.
 A price carries as the same number in the target's currency, as the import already does, and the preview says so on the row rather than converting silently.
 A create the seller confirmed and a device has not yet claimed is previewed as on its way, not as will create, so a second confirm cannot queue the same create twice.
 

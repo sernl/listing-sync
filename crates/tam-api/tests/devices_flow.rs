@@ -2854,7 +2854,7 @@ async fn the_work_route_gates_a_sourced_item_on_the_devices_reported_version(poo
     );
 
     // The same device reporting an upgrade is served the same item.
-    register_at(&pool, "0.2.0").await;
+    register_at(&pool, "0.9.0").await;
     let served = call(
         pool.clone(),
         Call {
@@ -2880,7 +2880,7 @@ async fn the_work_route_gates_a_sourced_item_on_the_devices_reported_version(poo
 /// This is the test that catches version-from-request, which is the wrong
 /// implementation and the tempting one: the device is the governed party, so a
 /// gate that asked it what it may run would be asking the thing being gated.
-/// The body below says 0.2.0 while the row says 0.1.3, and the item must still
+/// The body below says 0.9.0 while the row says 0.1.3, and the item must still
 /// wait.
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_version_claimed_in_the_request_body_is_ignored(pool: PgPool) {
@@ -2900,7 +2900,7 @@ async fn a_version_claimed_in_the_request_body_is_ignored(pool: PgPool) {
             method: Method::POST,
             path: &format!("/v1/devices/{LAPTOP}/work"),
             token: &TOKEN_A,
-            body: Some(serde_json::json!({ "app_version": "0.2.0", "marketplace": "Tes" })),
+            body: Some(serde_json::json!({ "app_version": "0.9.0", "marketplace": "Tes" })),
             wall: t0,
         },
     )
@@ -2917,7 +2917,7 @@ async fn a_version_claimed_in_the_request_body_is_ignored(pool: PgPool) {
     );
 }
 
-/// A blob-backed item is still served to a client below the shim.
+/// A blob-backed item is still served to a client below the floor.
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn the_work_route_still_serves_a_blob_backed_item_to_an_old_client(pool: PgPool) {
     provision(&pool).await;

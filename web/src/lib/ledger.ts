@@ -1,29 +1,16 @@
-// The snapshot-plus-delta store: one EventSource per tab projects the
-// ledger, the cursor is the org_seq scalar carried as the SSE event id, and
-// a resync event means the replay window was pruned past — refetch
-// snapshots rather than trust a partial replay. Framework-free (the
-// subscribe contract Svelte auto-subscribes to) so the merge logic tests
-// without a component in sight.
-
 import { JOB_EVENT_KINDS } from '$lib/generated/vocab';
-
-export interface LedgerEvent {
-	seq: number;
-	kind: string;
-	payload: unknown;
-}
 
 export interface LedgerState {
 	cursor: number;
 	connected: boolean;
-	/** Bumped on resync; consumers refetch their snapshots when it changes. */
+	/** Changes only when a coalesced event batch needs a new snapshot. */
+	revision: number;
 	resyncs: number;
-	events: LedgerEvent[];
+	kinds: ReadonlySet<string>;
 }
 
 type Subscriber = (state: LedgerState) => void;
 
-/** The subset of EventSource the store consumes; tests script a fake. */
 export interface EventStream {
 	addEventListener(kind: string, handler: (event: MessageEvent) => void): void;
 	close(): void;
@@ -31,78 +18,92 @@ export interface EventStream {
 
 export interface Ledger {
 	subscribe(run: Subscriber): () => void;
-	/** Feeds one wire event; exported for the fake-driven tests. */
-	ingest(kind: string, id: string, data: string): void;
 	close(): void;
 }
 
-const KEPT_EVENTS = 250;
+let scope: string | null = null;
+let rememberedCursor = 0;
+const active = new Set<Ledger>();
 
+/** A cursor is valid only for the authenticated organisation that issued it. */
+export function setLedgerScope(org: string | null): void {
+	if (org !== null && org === scope) return;
+	for (const ledger of active) ledger.close();
+	scope = org;
+	rememberedCursor = 0;
+}
+
+/** Open before requesting the snapshot, so no event can fall between the two. */
 export function createLedger(
 	openStream: (cursor: number) => EventStream,
-	initialCursor = 0
+	initialCursor = rememberedCursor
 ): Ledger {
 	let state: LedgerState = {
 		cursor: initialCursor,
 		connected: false,
+		revision: 0,
 		resyncs: 0,
-		events: []
+		kinds: new Set()
 	};
 	const subscribers = new Set<Subscriber>();
+	let pendingKinds = new Set<string>();
+	let pendingResyncs = 0;
+	let timer: number | NodeJS.Timeout | undefined;
+	let closed = false;
 	const notify = () => {
-		for (const run of subscribers) {
-			run(state);
-		}
+		for (const run of subscribers) run(state);
 	};
-
-	const ingest = (kind: string, id: string, data: string) => {
-		const seq = Number.parseInt(id, 10);
-		if (!Number.isFinite(seq)) {
-			return;
-		}
-		if (kind === 'resync') {
-			// The pruning watermark passed our cursor: adopt the snapshot
-			// cursor and tell consumers to refetch rather than merge.
-			state = { ...state, cursor: seq, resyncs: state.resyncs + 1, events: [] };
-			notify();
-			return;
-		}
-		if (seq <= state.cursor) {
-			return;
-		}
-		let payload: unknown = null;
-		try {
-			payload = JSON.parse(data);
-		} catch {
-			payload = null;
-		}
-		const events = [...state.events, { seq, kind, payload }].slice(-KEPT_EVENTS);
-		state = { ...state, cursor: seq, events };
-		notify();
-	};
-
 	const stream = openStream(initialCursor);
 	for (const kind of ['resync', ...JOB_EVENT_KINDS]) {
-		stream.addEventListener(kind, (event) => ingest(kind, event.lastEventId, event.data));
+		stream.addEventListener(kind, (event) => {
+			if (closed || !/^\d+$/.test(event.lastEventId)) return;
+			const seq = Number(event.lastEventId);
+			if (!Number.isSafeInteger(seq) || seq < 0) return;
+			if (kind !== 'resync' && seq <= state.cursor) return;
+			state = { ...state, cursor: Math.max(state.cursor, seq) };
+			rememberedCursor = Math.max(rememberedCursor, state.cursor);
+			pendingKinds.add(kind);
+			if (kind === 'resync') pendingResyncs += 1;
+			if (timer !== undefined) return;
+			// A fixed window coalesces replay without starving progress on a busy stream.
+			timer = setTimeout(() => {
+				timer = undefined;
+				state = {
+					...state,
+					revision: state.revision + 1,
+					resyncs: state.resyncs + pendingResyncs,
+					kinds: pendingKinds
+				};
+				pendingKinds = new Set();
+				pendingResyncs = 0;
+				notify();
+			}, 100);
+		});
 	}
 	stream.addEventListener('open', () => {
+		if (closed) return;
 		state = { ...state, connected: true };
 		notify();
 	});
 	stream.addEventListener('error', () => {
+		if (closed) return;
 		state = { ...state, connected: false };
 		notify();
 	});
-
-	return {
-		subscribe(run: Subscriber) {
+	const ledger: Ledger = {
+		subscribe(run) {
 			run(state);
 			subscribers.add(run);
 			return () => subscribers.delete(run);
 		},
-		ingest,
 		close() {
+			closed = true;
+			clearTimeout(timer);
+			subscribers.clear();
 			stream.close();
+			active.delete(ledger);
 		}
 	};
+	active.add(ledger);
+	return ledger;
 }

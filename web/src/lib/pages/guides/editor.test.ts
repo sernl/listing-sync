@@ -3,9 +3,13 @@ import {
 	BODY_MAX_BYTES,
 	bodyRefusal,
 	dirty,
-	draftRefusal,
+	editRefusal,
+	footnoteIdentifiers,
 	imageMarkdown,
 	insertAt,
+	loadsRemoteImages,
+	markGuide,
+	nextFootnoteId,
 	slugRefusal,
 	slugify,
 	titleRefusal
@@ -74,10 +78,18 @@ describe('a guide body', () => {
 		expect(bodyRefusal(`${emoji}🙂`)).not.toBeNull();
 	});
 
-	it('is what the draft refusal reports once the title is fine', () => {
-		expect(draftRefusal({ title: 'Fine', body: '🙂'.repeat(BODY_MAX_BYTES), status: 'draft' }))
-			.not.toBeNull();
-		expect(draftRefusal({ title: 'Fine', body: 'Short', status: 'published' })).toBeNull();
+	it('is what the edit refusal reports once the title is fine', () => {
+		expect(
+			editRefusal({
+				title: 'Fine',
+				body: '🙂'.repeat(BODY_MAX_BYTES),
+				topic_id: null,
+				tag_ids: []
+			})
+		).not.toBeNull();
+		expect(
+			editRefusal({ title: 'Fine', body: 'Short', topic_id: null, tag_ids: [] })
+		).toBeNull();
 	});
 });
 
@@ -109,15 +121,101 @@ describe('an inserted image', () => {
 });
 
 describe('an unsaved guide', () => {
-	const saved = { title: 'T', body: 'B', status: 'draft' } as const;
+	const saved = { title: 'T', body: 'B', topic_id: 'topic-1', tag_ids: ['a', 'b'] };
 
 	it('is clean against its own saved copy', () => {
 		expect(dirty(saved, { ...saved })).toBe(false);
 	});
 
-	it('notices each field on its own, status included', () => {
+	it('notices each field on its own', () => {
 		expect(dirty(saved, { ...saved, title: 'T2' })).toBe(true);
 		expect(dirty(saved, { ...saved, body: 'B2' })).toBe(true);
-		expect(dirty(saved, { ...saved, status: 'published' })).toBe(true);
+		expect(dirty(saved, { ...saved, topic_id: null })).toBe(true);
+		expect(dirty(saved, { ...saved, tag_ids: ['a'] })).toBe(true);
+	});
+
+	it('reads a reordered tag set as the same edit', () => {
+		// The server stores a set. Reading an order as an edit would leave the
+		// guide permanently dirty, and autosave sending the same tags forever.
+		expect(dirty(saved, { ...saved, tag_ids: ['b', 'a'] })).toBe(false);
+	});
+});
+
+describe('a footnote', () => {
+	it('takes an identifier the body does not already hold', () => {
+		expect(nextFootnoteId('')).toBe('fn1');
+		expect(nextFootnoteId('a[^fn1] b\n\n[^fn1]: note')).toBe('fn2');
+		// The collision that matters: a gap in the sequence is still a
+		// collision on the identifier that exists, and reusing `fn2` would
+		// merge two notes into whichever the renderer read first.
+		expect(nextFootnoteId('[^fn2] and [^fn1]')).toBe('fn3');
+		expect(footnoteIdentifiers('[^a] [^b]: x')).toEqual(new Set(['a', 'b']));
+	});
+
+	it('marks the selected phrase rather than replacing it, and opens the note', () => {
+		const marked = markGuide('Rates vary.', 0, 5, 'footnote');
+		expect(marked.text).toBe('Rates[^fn1] vary.\n\n[^fn1]: ');
+		// The caret is in the definition, which is the part still to write.
+		expect(marked.start).toBe(marked.text.length);
+		expect(marked.end).toBe(marked.text.length);
+	});
+
+	it('does not stack blank lines before the definition', () => {
+		expect(markGuide('Text\n\n', 4, 4, 'footnote').text).toBe('Text[^fn1]\n\n[^fn1]: ');
+	});
+});
+
+describe('the guide toolbar', () => {
+	it('changes a heading level rather than prefixing a second one', () => {
+		const once = markGuide('Title', 0, 0, 'heading');
+		expect(once.text).toBe('## Title');
+		expect(markGuide(once.text, 0, 0, 'subheading').text).toBe('### Title');
+	});
+
+	it('marks the whole lines a selection touches and keeps them selected', () => {
+		const marked = markGuide('one\ntwo\nthree', 5, 6, 'heading');
+		expect(marked.text).toBe('one\n## two\nthree');
+		expect(marked.text.slice(marked.start, marked.end)).toBe('## two');
+	});
+
+	it('keeps a selected phrase as a link label and selects the address', () => {
+		const marked = markGuide('see the docs here', 8, 12, 'link');
+		expect(marked.text).toBe('see the [docs](https://) here');
+		expect(marked.text.slice(marked.start, marked.end)).toBe('https://');
+	});
+
+	it('selects the label where there was no selection to keep', () => {
+		const marked = markGuide('', 0, 0, 'link');
+		expect(marked.text).toBe('[link text](https://)');
+		expect(marked.text.slice(marked.start, marked.end)).toBe('link text');
+	});
+
+	it('writes a picture by address with the address selected', () => {
+		const marked = markGuide('a b', 2, 3, 'image');
+		expect(marked.text).toBe('a ![b](https://)');
+		expect(marked.text.slice(marked.start, marked.end)).toBe('https://');
+	});
+});
+
+describe('the external-picture disclosure', () => {
+	it('recognises the scheme however it is spelled', () => {
+		// The renderer permits a scheme case-insensitively and writes the
+		// address back as it was typed, so a lowercase-only test loads a
+		// third-party picture and says nothing about it.
+		for (const scheme of ['https:', 'HTTPS:', 'HttpS:']) {
+			expect(
+				loadsRemoteImages(
+					`<p><img src="${scheme}//img.example/a.png" alt="" referrerpolicy="no-referrer" loading="lazy" /></p>`
+				),
+				scheme
+			).toBe(true);
+		}
+	});
+
+	it('says nothing about pictures this site serves itself', () => {
+		expect(
+			loadsRemoteImages('<img src="/v1/guides/images/abc" alt="" referrerpolicy="no-referrer" />')
+		).toBe(false);
+		expect(loadsRemoteImages('<p>No picture at all.</p>')).toBe(false);
 	});
 });

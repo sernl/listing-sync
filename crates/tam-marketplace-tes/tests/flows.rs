@@ -1634,7 +1634,7 @@ fn a_missing_ambiguity_cause_is_not_invented() {
 }
 
 #[test]
-fn the_catalogue_walk_pages_published_then_drafts_and_stops_on_an_empty_page() {
+fn the_catalogue_walk_counts_a_resource_once_when_the_dashboard_lists_overlap() {
     let limit = endpoints::CATALOGUE_PAGE_LIMIT;
     let published_page = json!([
         {
@@ -1644,6 +1644,10 @@ fn the_catalogue_walk_pages_published_then_drafts_and_stops_on_an_empty_page() {
         {
             "id": 9002, "title": "Free starter", "licence": "CC-BY",
             "price": 0, "draft": false, "url": "/teaching-resource/free-starter-9002"
+        },
+        {
+            "id": 9003, "title": "Half written", "licence": "CC-BY-SA",
+            "price": 0, "draft": true, "url": "/teaching-resource/half-written-9003"
         },
     ]);
     let drafts_page = json!([
@@ -1674,11 +1678,23 @@ fn the_catalogue_walk_pages_published_then_drafts_and_stops_on_an_empty_page() {
         ],
     };
     let adapter = adapter(cassette, vec![]);
-    let entries =
-        futures::executor::block_on(adapter.list_own_resources(&FetchReason::FirstPartyExport {
+    let discovered = std::sync::atomic::AtomicU32::new(0);
+    let observer = |found| {
+        discovered.fetch_max(found, std::sync::atomic::Ordering::Relaxed);
+    };
+    let entries = futures::executor::block_on(adapter.list_own_resources_observed(
+        &FetchReason::FirstPartyExport {
             inventory: InventoryId::Tes,
-        }))
-        .expect("the first-party catalogue read succeeds");
+        },
+        &observer,
+    ))
+    .expect("the first-party catalogue read succeeds");
+
+    assert_eq!(
+        discovered.load(std::sync::atomic::Ordering::Relaxed),
+        3,
+        "progress must never count one resource twice"
+    );
 
     assert_eq!(
         entries,

@@ -5,7 +5,6 @@ import {
 	DISPOSITION_LINE,
 	DISPOSITION_WORD,
 	MIGRATION_SOURCES,
-	UNCAPTURED_SOURCE,
 	VERDICT_WORD,
 	capSentence,
 	confirmLabel,
@@ -33,31 +32,12 @@ describe('the pair table', () => {
 		expect(migrationTargets().map((side) => side.inventory)).toEqual(['Tpt', 'Tes', 'Etsy']);
 	});
 
-	it('gives every disabled end a reason and every enabled end none', () => {
-		for (const side of [...migrationSources(), ...migrationTargets()]) {
-			expect(side.enabled, side.inventory).toBe(side.reason === null);
-			if (!side.enabled) {
-				expect(side.reason?.length ?? 0, side.inventory).toBeGreaterThan(20);
-			}
-		}
-	});
-
-	it('refuses as a source exactly what the server has no download for', () => {
+	it('allows captured sources and leaves Etsy unavailable', () => {
 		const refused = migrationSources()
 			.filter((side) => !side.enabled)
 			.map((side) => side.inventory);
-		expect(refused).toEqual(['Tpt', 'Etsy']);
-		expect(MIGRATION_SOURCES).toEqual(['Tes']);
-		for (const inventory of refused) {
-			expect(UNCAPTURED_SOURCE[inventory]).not.toBeNull();
-		}
-	});
-
-	it('says a refused source cannot be read rather than that it does not exist', () => {
-		const tpt = migrationSources().find((side) => side.inventory === 'Tpt');
-		expect(tpt?.reason).toBe(
-			'Teachouse cannot yet download files from TPT, so it cannot be a source.'
-		);
+		expect(refused).toEqual(['Etsy']);
+		expect(MIGRATION_SOURCES).toEqual(['Tpt', 'Tes']);
 	});
 
 	it('refuses Etsy as a target because nothing writes to it yet', () => {
@@ -67,7 +47,7 @@ describe('the pair table', () => {
 		expect(migrationTargets().find((side) => side.inventory === 'Tes')?.enabled).toBe(true);
 	});
 
-	it('leaves Tes to TPT as the one pair that runs today', () => {
+	it('allows both directions between TES and TPT', () => {
 		const pairs: string[] = [];
 		for (const source of migrationSources()) {
 			for (const target of migrationTargets()) {
@@ -76,7 +56,7 @@ describe('the pair table', () => {
 				}
 			}
 		}
-		expect(pairs).toEqual(['Tes->Tpt']);
+		expect(pairs).toEqual(['Tpt->Tes', 'Tes->Tpt']);
 	});
 
 	it('refuses a pair whose two ends are the same marketplace, and says which', () => {
@@ -138,7 +118,9 @@ describe('the cap sentence', () => {
 	});
 
 	it('leaves out the selection clause where nothing is selected yet', () => {
-		expect(capSentence(CAP, 0).line).toBe('You have 12 of 20 moves left this month. Resets 1 October.');
+		expect(capSentence(CAP, 0).line).toBe(
+			'You have 12 of 20 moves left this month. Resets 1 October.'
+		);
 		expect(capSentence(CAP, 0).refusal).toBeNull();
 	});
 

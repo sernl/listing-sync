@@ -134,7 +134,19 @@ export const queryKeys = {
 	/** One guide as its editor reads it — body and rendered html. Distinct
 	 *  from `guide` below, which carries no Markdown source. */
 	adminGuide: (slug: string) => ['admin-guide', slug] as const,
-	/** The published guides a seller can read, and one of them. */
+	/** Every topic and tag a guide can be filed under: the operator's list,
+	 *  which includes the retired ones, and the reader's, which is only the
+	 *  taxonomy published guides actually carry. */
+	adminGuideTaxonomy: ['admin-guide-taxonomy'] as const,
+	guideTaxonomy: ['guide-taxonomy'] as const,
+	/** The published guides a seller can read.
+	 *
+	 *  The family rather than one entry: the reader's list appends its
+	 *  narrowing — `[...queryKeys.guides, filterKey(filters)]` — because the
+	 *  server answers the search and the taxonomy filters, so each set of
+	 *  filters is its own answer and a slow reply to an abandoned narrowing
+	 *  must not land in the current one. Invalidating this key clears every
+	 *  narrowing at once, which is what a publish has to do. */
 	guides: ['guides'] as const,
 	guide: (slug: string) => ['guide', slug] as const
 };

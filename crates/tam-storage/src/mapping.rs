@@ -110,123 +110,9 @@ impl MappingRepo {
         normaliser_version: u32,
         at: Timestamp,
     ) -> Result<(), StorageError> {
-        if mapping.org != org {
-            return Err(StorageError::OrgMismatch);
-        }
-        let org_db = uuid_to_db(org.0);
-        let mapping_db = uuid_to_db(mapping.id.0);
-        let at_db = timestamp_to_db(at)?;
-        let binding = BindingColumns::encode(&mapping.binding)?;
-        let verify = VerifyColumns::encode(&mapping.binding)?;
-        let price = PriceRuleColumns::encode(mapping.price_rule);
-        let lifecycle = LifecycleColumns::encode(&mapping.lifecycle)?;
-        let normaliser =
-            i32::try_from(normaliser_version).map_err(|_| StorageError::Inconsistent {
-                reason: format!("normaliser version {normaliser_version} exceeds the column range"),
-            })?;
-
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
-
-        let inserted = sqlx::query!(
-            "INSERT INTO mapping \
-             (org_id, id, product_id, inventory, marketplace, \
-              binding_state, remote_id_kind, remote_url, remote_numeric_id, \
-              binding_attempt, binding_marker, first_seen_at, ambiguous_since, \
-              severed_at, sever_cause, \
-              verify_state, verified_at, verify_stale_since, normaliser_version, \
-              policy_title, policy_description, policy_price, policy_taxonomy, \
-              policy_grades, policy_files, \
-              price_rule_kind, price_rate_micros, price_rounding, \
-              price_explicit_kind, price_explicit_minor_units, price_explicit_currency, \
-              publish_mode, lifecycle_state, lifecycle_since, lifecycle_reason, \
-              created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, \
-                     $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, \
-                     $29, $30, $31, $32, $33, $34, $35, $36, $37)",
-            org_db,
-            mapping_db,
-            uuid_to_db(mapping.product.0),
-            inventory_to_db(mapping.inventory),
-            marketplace_to_db(mapping.inventory.marketplace()),
-            binding.state,
-            binding.remote_id_kind,
-            binding.remote_url,
-            binding.remote_numeric_id,
-            binding.attempt,
-            binding.marker,
-            binding.first_seen_at,
-            binding.ambiguous_since,
-            binding.severed_at,
-            binding.sever_cause,
-            verify.state,
-            verify.verified_at,
-            verify.stale_since,
-            normaliser,
-            policy_to_db(mapping.policies.title),
-            policy_to_db(mapping.policies.description),
-            policy_to_db(mapping.policies.price),
-            policy_to_db(mapping.policies.taxonomy),
-            policy_to_db(mapping.policies.grades),
-            policy_to_db(mapping.policies.files),
-            price.kind,
-            price.rate_micros,
-            price.rounding,
-            price.explicit_kind,
-            price.explicit_minor_units,
-            price.explicit_currency,
-            publish_to_db(mapping.publish),
-            lifecycle.state,
-            lifecycle.since,
-            lifecycle.reason,
-            at_db,
-            at_db,
-        )
-        .execute(&mut *tx)
-        .await;
-        map_bound_claim(inserted)?;
-
-        for (position, mismatch) in verify.mismatches.iter().enumerate() {
-            let row = MismatchColumns::encode(mismatch)?;
-            let position = i32::try_from(position).map_err(|_| StorageError::Inconsistent {
-                reason: format!("mismatch position {position} exceeds the column range"),
-            })?;
-            sqlx::query!(
-                "INSERT INTO field_mismatch \
-                 (org_id, mapping_id, position, field, class, observed_in, limit_observed) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
-                org_db,
-                mapping_db,
-                position,
-                row.field,
-                row.class,
-                row.observed_in,
-                row.limit_observed,
-            )
-            .execute(&mut *tx)
-            .await?;
-        }
-
-        for (position, candidate) in binding.candidates.iter().enumerate() {
-            let row = RemoteIdColumns::encode(candidate)?;
-            let position = i32::try_from(position).map_err(|_| StorageError::Inconsistent {
-                reason: format!("candidate position {position} exceeds the column range"),
-            })?;
-            sqlx::query!(
-                "INSERT INTO binding_candidate \
-                 (org_id, mapping_id, position, remote_id_kind, remote_url, remote_numeric_id) \
-                 VALUES ($1, $2, $3, $4, $5, $6)",
-                org_db,
-                mapping_db,
-                position,
-                row.kind,
-                row.url,
-                row.numeric_id,
-            )
-            .execute(&mut *tx)
-            .await?;
-        }
-
+        insert_mapping(&mut tx, org, mapping, normaliser_version, at).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -1444,4 +1330,201 @@ fn loss_kind_from_db(raw: &str) -> Result<LossKind, StorageError> {
             reason: format!("unknown loss kind {other}"),
         }),
     }
+}
+
+/// Writes a mapping inside a transaction the caller owns.
+///
+/// The one implementation of the mapping insert. The import's commit binds
+/// the listing it read in the same transaction that creates the product, so
+/// that a rolled-back product cannot leave a binding claiming a listing for
+/// a resource nobody has. [`MappingRepo::insert`] is this call with a
+/// transaction opened around it.
+pub async fn insert_mapping(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    mapping: &Mapping,
+    normaliser_version: u32,
+    at: Timestamp,
+) -> Result<(), StorageError> {
+    if mapping.org != org {
+        return Err(StorageError::OrgMismatch);
+    }
+    let org_db = uuid_to_db(org.0);
+    let mapping_db = uuid_to_db(mapping.id.0);
+    let at_db = timestamp_to_db(at)?;
+    let binding = BindingColumns::encode(&mapping.binding)?;
+    let verify = VerifyColumns::encode(&mapping.binding)?;
+    let price = PriceRuleColumns::encode(mapping.price_rule);
+    let lifecycle = LifecycleColumns::encode(&mapping.lifecycle)?;
+    let normaliser = i32::try_from(normaliser_version).map_err(|_| StorageError::Inconsistent {
+        reason: format!("normaliser version {normaliser_version} exceeds the column range"),
+    })?;
+
+    let inserted = sqlx::query!(
+        "INSERT INTO mapping \
+         (org_id, id, product_id, inventory, marketplace, \
+          binding_state, remote_id_kind, remote_url, remote_numeric_id, \
+          binding_attempt, binding_marker, first_seen_at, ambiguous_since, \
+          severed_at, sever_cause, \
+          verify_state, verified_at, verify_stale_since, normaliser_version, \
+          policy_title, policy_description, policy_price, policy_taxonomy, \
+          policy_grades, policy_files, \
+          price_rule_kind, price_rate_micros, price_rounding, \
+          price_explicit_kind, price_explicit_minor_units, price_explicit_currency, \
+          publish_mode, lifecycle_state, lifecycle_since, lifecycle_reason, \
+          created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, \
+                 $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, \
+                 $29, $30, $31, $32, $33, $34, $35, $36, $37)",
+        org_db,
+        mapping_db,
+        uuid_to_db(mapping.product.0),
+        inventory_to_db(mapping.inventory),
+        marketplace_to_db(mapping.inventory.marketplace()),
+        binding.state,
+        binding.remote_id_kind,
+        binding.remote_url,
+        binding.remote_numeric_id,
+        binding.attempt,
+        binding.marker,
+        binding.first_seen_at,
+        binding.ambiguous_since,
+        binding.severed_at,
+        binding.sever_cause,
+        verify.state,
+        verify.verified_at,
+        verify.stale_since,
+        normaliser,
+        policy_to_db(mapping.policies.title),
+        policy_to_db(mapping.policies.description),
+        policy_to_db(mapping.policies.price),
+        policy_to_db(mapping.policies.taxonomy),
+        policy_to_db(mapping.policies.grades),
+        policy_to_db(mapping.policies.files),
+        price.kind,
+        price.rate_micros,
+        price.rounding,
+        price.explicit_kind,
+        price.explicit_minor_units,
+        price.explicit_currency,
+        publish_to_db(mapping.publish),
+        lifecycle.state,
+        lifecycle.since,
+        lifecycle.reason,
+        at_db,
+        at_db,
+    )
+    .execute(&mut **tx)
+    .await;
+    map_bound_claim(inserted)?;
+
+    for (position, mismatch) in verify.mismatches.iter().enumerate() {
+        let row = MismatchColumns::encode(mismatch)?;
+        let position = i32::try_from(position).map_err(|_| StorageError::Inconsistent {
+            reason: format!("mismatch position {position} exceeds the column range"),
+        })?;
+        sqlx::query!(
+            "INSERT INTO field_mismatch \
+             (org_id, mapping_id, position, field, class, observed_in, limit_observed) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            org_db,
+            mapping_db,
+            position,
+            row.field,
+            row.class,
+            row.observed_in,
+            row.limit_observed,
+        )
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    for (position, candidate) in binding.candidates.iter().enumerate() {
+        let row = RemoteIdColumns::encode(candidate)?;
+        let position = i32::try_from(position).map_err(|_| StorageError::Inconsistent {
+            reason: format!("candidate position {position} exceeds the column range"),
+        })?;
+        sqlx::query!(
+            "INSERT INTO binding_candidate \
+             (org_id, mapping_id, position, remote_id_kind, remote_url, remote_numeric_id) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+            org_db,
+            mapping_db,
+            position,
+            row.kind,
+            row.url,
+            row.numeric_id,
+        )
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
+}
+
+/// The live product of this organisation already bound to this listing, read
+/// inside a transaction.
+///
+/// Keyed on the remote id as the columns store it, so a caller holding a
+/// `RemoteListingId` does not have to know which of the two partial unique
+/// indexes would have refused its insert.
+pub async fn bound_product_for(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    inventory: InventoryId,
+    remote: &RemoteListingId,
+) -> Result<Option<ProductId>, StorageError> {
+    let columns = RemoteIdColumns::encode(remote)?;
+    let row = sqlx::query!(
+        "SELECT m.product_id FROM mapping m \
+           JOIN product p ON p.org_id = m.org_id AND p.id = m.product_id \
+          WHERE m.org_id = $1 AND m.inventory = $2 AND m.binding_state = 'bound' \
+            AND p.deleted_at IS NULL \
+            AND m.remote_id_kind = $3 \
+            AND ((m.remote_url IS NOT DISTINCT FROM $4 AND $4 IS NOT NULL) \
+              OR (m.remote_numeric_id IS NOT DISTINCT FROM $5 AND $5 IS NOT NULL)) \
+          LIMIT 1",
+        uuid_to_db(org.0),
+        inventory_to_db(inventory),
+        columns.kind,
+        columns.url,
+        columns.numeric_id,
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(row.map(|row| ProductId(uuid_from_db(row.product_id))))
+}
+
+/// Binds a listing to a product, leaving an existing claim standing.
+///
+/// The conflict this expects is an ordinary seller outcome rather than a
+/// fault: a re-imported listing, a migration replayed under a second key. It
+/// is answered by a read before the write rather than by catching the unique
+/// violation, and the difference matters inside a caller's transaction —
+/// PostgreSQL aborts the whole transaction on the violation, so catching the
+/// Rust error would leave every earlier write in that transaction rolled back
+/// while the caller carried on as though the resource had been created.
+///
+/// Answers which product holds the listing afterwards: the one this call
+/// bound it to, or the one that already held it.
+pub async fn bind_listing(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    mapping: &Mapping,
+    normaliser_version: u32,
+    at: Timestamp,
+) -> Result<ProductId, StorageError> {
+    let remote = match &mapping.binding {
+        Binding::Bound { id, .. } => Some(id.clone()),
+        Binding::Unbound
+        | Binding::Creating { .. }
+        | Binding::AmbiguousCreate { .. }
+        | Binding::Severed { .. } => None,
+    };
+    if let Some(remote) = remote.as_ref() {
+        if let Some(held) = bound_product_for(tx, org, mapping.inventory, remote).await? {
+            return Ok(held);
+        }
+    }
+    insert_mapping(tx, org, mapping, normaliser_version, at).await?;
+    Ok(mapping.product)
 }

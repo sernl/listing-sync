@@ -12,12 +12,14 @@ import { goto, invalidateAll } from '$app/navigation';
 import type { QueryClient } from '@tanstack/svelte-query';
 import { signOutEverywhere } from '$lib/auth-client';
 import { toast } from '$lib/toast';
+import { setLedgerScope } from '$lib/ledger';
 
 /** End both sessions, drop everything read under them, and return to sign-in.
  *
  * The client is passed in rather than read from context, because the layout
  * that creates it cannot read the context it provides. */
 export async function signOut(queryClient: QueryClient): Promise<void> {
+	setLedgerScope(null);
 	const complete = await signOutEverywhere();
 	if (!complete) {
 		toast('error', 'Signed out here, but one of the two sessions may still be open.');

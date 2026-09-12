@@ -202,16 +202,53 @@
 	align-items: start;
 }
 
+/* The creation row and the editor's own field row.
+ *
+ * Aligned on the controls rather than on the bottom of each field. A flex row
+ * ending at `flex-end` aligned the field boxes, so one field carrying a hint
+ * and the next carrying none put their inputs a hint's height — 23.75px at the
+ * console's type scale — apart. Here every cell is the full height of the row
+ * and pushes its control to the bottom of that cell, so a hint, a wrapped
+ * label or a two-line group label moves nothing: the inputs and the button sit
+ * on one line whatever is above them. Any hint belongs under the row, in
+ * `.gd-head-hint`.
+ *
+ * `auto-fit` at 180px is also the phone layout: below about 400px of column
+ * there is one track, so the form stacks with no second rule to keep in step. */
 .gd-head {
-	display: flex;
-	align-items: flex-end;
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 	gap: 12px;
-	flex-wrap: wrap;
+	align-items: stretch;
 }
 
-.gd-head .grow {
-	flex: 1 1 240px;
+.gd-head > * {
+	display: flex;
+	flex-direction: column;
+	justify-content: flex-end;
+	gap: 6px;
 	min-width: 0;
+}
+
+.gd-head-hint {
+	margin: 8px 0 0;
+	font-size: 12px;
+	color: var(--muted);
+}
+
+/* The action never stretches to a field's width; it sits at the row's end and
+   on its own line once the row has stacked. */
+.gd-head-act,
+.gd-head-tags {
+	align-items: flex-start;
+}
+
+/* A group of controls that is not one field, labelled the same way a field is
+   so the two read as one row. */
+.gd-group-label {
+	font-size: 12.5px;
+	font-weight: 600;
+	color: var(--muted);
 }
 
 .gd-md {
@@ -285,6 +322,196 @@
 	padding: 14px 16px;
 	max-height: 70vh;
 	overflow: auto;
+}
+
+/* What happened to a write that did not simply succeed. Stated in the flow of
+   the editor rather than in a toast, because a toast is gone by the time the
+   operator decides what to do about it. */
+.gd-halt {
+	margin-top: 12px;
+	border: 1px solid color-mix(in srgb, var(--label-amber) 45%, var(--line));
+	border-radius: var(--r-panel);
+	background: var(--soon-soft);
+	padding: 11px 13px;
+	font-size: 13px;
+	color: var(--text);
+	display: grid;
+	gap: 6px;
+}
+
+.gd-halt.bad {
+	border-color: color-mix(in srgb, var(--label-red) 45%, var(--line));
+}
+
+.gd-halt p {
+	margin: 0;
+}
+
+.gd-halt .t {
+	font-weight: 600;
+}
+
+.gd-halt-acts {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin-top: 2px;
+}
+
+/* A rendering that is not of the body as it now stands. Held rather than
+   blanked — an operator scrolling a long guide keeps their place — and marked,
+   because the one thing it must not do is pass for the current one. */
+.gd-stale {
+	opacity: 0.55;
+}
+
+/* --- topics and tags ------------------------------------------------------ */
+
+/* One topic or tag, wherever one is shown: a row in either list, the reader's
+   filter menu, a guide's own page. */
+.gd-tax {
+	display: inline-flex;
+	align-items: center;
+	font-size: 12px;
+	font-weight: 600;
+	border-radius: 999px;
+	padding: 3px 10px;
+	border: 1px solid var(--line);
+	background: var(--ground);
+	color: var(--muted);
+	text-decoration: none;
+}
+
+a.gd-tax:hover {
+	background: var(--hover);
+}
+
+/* The topic reads as the stronger of the two, because a guide has one. */
+.gd-tax-topic {
+	color: var(--text);
+	border-color: color-mix(in srgb, var(--primary) 35%, var(--line));
+}
+
+.gd-row-tax {
+	display: flex;
+	gap: 6px;
+	flex-wrap: wrap;
+	align-items: center;
+}
+
+.gd-detail-tax {
+	margin-bottom: 14px;
+}
+
+.gd-tax-cols {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+	gap: 18px;
+}
+
+.gd-tax-col h3 {
+	font-family: var(--display);
+	font-size: 15px;
+	margin: 0 0 10px;
+}
+
+.gd-tax-row,
+.gd-tax-add {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	padding: 6px 0;
+	border-bottom: 1px solid var(--line);
+}
+
+.gd-tax-row input[type='text'],
+.gd-tax-add input[type='text'] {
+	flex: 1 1 140px;
+	min-width: 0;
+}
+
+/* A retired one stays legible: it is still on every guide that carries it. */
+.gd-tax-row.retired {
+	opacity: 0.7;
+}
+
+.gd-tax-slug {
+	font-size: 12px;
+	color: var(--muted);
+	font-family: ui-monospace, 'SFMono-Regular', 'Menlo', monospace;
+}
+
+.gd-tax-add {
+	border-bottom: 0;
+	padding-top: 10px;
+}
+
+/* --- the reader's filters ------------------------------------------------- */
+
+.gd-filters {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+	gap: 12px;
+	align-items: stretch;
+}
+
+.gd-filters > * {
+	display: flex;
+	flex-direction: column;
+	justify-content: flex-end;
+	gap: 6px;
+	min-width: 0;
+}
+
+.gd-group {
+	align-items: flex-start;
+}
+
+.gd-filter-foot {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	flex-wrap: wrap;
+	margin-top: 12px;
+}
+
+/* A menu of checkboxes rather than a `<select multiple>`, for the reason the
+   resources board gives: a native multiple select shows three rows and no
+   count of what is chosen. */
+.gd-tag-menu {
+	max-height: 280px;
+	overflow-y: auto;
+	min-width: 220px;
+	padding: 4px;
+}
+
+.gd-tag-menu label {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	padding: 6px 8px;
+	border-radius: var(--r-field);
+	cursor: pointer;
+	font-size: 13px;
+}
+
+.gd-tag-menu label:hover {
+	background: var(--hover);
+}
+
+.gd-tag-menu .none {
+	padding: 8px 10px;
+	font-size: 12.5px;
+	color: var(--muted);
+	margin: 0;
+}
+
+/* A guide's row on the reader's list carries its taxonomy between the title
+   and the timestamp, so the three wrap as one line and stack as three. */
+.guide-list a .gd-row-tax {
+	flex: 1 1 auto;
 }
 
 @media (max-width: 980px) {

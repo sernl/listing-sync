@@ -304,8 +304,9 @@ impl ItemLedger for PgLedger {
             failure_code: verdict.failure_code,
             failure_detail: verdict.failure_detail.clone(),
         };
+        let (stamp, asserted) = self.stamped(at, Self::receipt());
         self.leases
-            .settle(&to_storage_lease(lease), &verdict, at)
+            .settle_recorded(&to_storage_lease(lease), &verdict, at, (stamp, asserted))
             .await
             .map_err(|error| to_wire_error(&error))
     }
@@ -444,6 +445,14 @@ impl ItemLedger for PgLedger {
         payload: &JobEventPayload,
         at: Timestamp,
     ) -> Result<(), wire::LedgerError> {
+        // `settle_item` records this terminal event in the same storage
+        // transaction that changes the item and releases its lease. The
+        // driver's following call exists for ledgers whose settle operation
+        // cannot do that atomically; repeating it here would expose two
+        // terminal transitions for one item.
+        if matches!(payload, JobEventPayload::ItemSettled { .. }) {
+            return Ok(());
+        }
         let (stamp, asserted) = self.stamped(at, Self::receipt());
         self.append_event(
             &EventScope {
