@@ -37,7 +37,7 @@ The static decision is layered outside the console's policy layer, and that plac
 
 The console's home moved to `/app` and its deep routes did not move with it, so `/labels` and `/sync` are still where they were.
 That is the whole of what the server needs to know about the move, because the shell answers any path no other tier claims, so `/app` and everything below it resolve exactly as an unknown console route always did.
-The consequence for the desktop client is that its window must navigate to `/app` rather than to `/`, and until a release does that the landing page itself is what sends the app on.
+The consequence for the desktop client is that its window must navigate to `/app` rather than to `/`, which it does from 0.4.0 (`console_home` in `apps/desktop/src-tauri/src/lib.rs`); the landing page's redirect script stays for older clients.
 `--landing-dir` and `--downloads-dir` are both optional and, absent, the server behaves exactly as it did before either flag existed.
 
 ## The downloads tier, and the unit that fills it

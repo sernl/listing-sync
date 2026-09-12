@@ -3,7 +3,7 @@
 How a Teachouse Windows release is built, signed, published and updated, and what the founder must do by hand before the first one.
 
 - date: 2026-09-03
-- status: `v0.1.3` is published and verified from outside, with the channelled updater endpoint, written release notes and a GitHub release beside the Cloud one; its Android job failed and the APK was attached to the GitHub release afterwards by dispatch, which is the only half of that repair the Cloud permits
+- status: every tag from `v0.1.3` to `v0.3.4` is published to both the Cloud's beta channel and GitHub; from `v0.2.0` the Android job succeeds in the same run, so the APK and its sums file ride the release rather than a repair dispatch; `v0.4.0` is the release that follows each phase of the 2026-09-12 plan of record, and a release is now owed at every phase's end; Windows builds are still unsigned because no Azure Artifact Signing account exists
 - decisions it implements: D2 (Windows desktop first, Tauri v2, distributed through CrabNebula Cloud), D29 (build infrastructure: release builds run on a GitHub Windows runner where the MSI and the signing step are native)
 - companion: `docs/notes/design/desktop-client.md`, which is the client itself
 

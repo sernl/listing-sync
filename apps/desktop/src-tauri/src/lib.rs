@@ -433,6 +433,22 @@ pub(crate) fn replacing(url: &str) -> String {
     )
 }
 
+/// The console's home on `origin`.
+///
+/// `/app` rather than the origin itself: the origin answers with the landing
+/// page where a deployment serves one, and the landing's redirect script would
+/// only then send the window on, which is a marketing page load and — on a
+/// phone — a history entry the seller's back press finds. The path is joined
+/// rather than written so an override with a trailing slash and one without
+/// both resolve to the same address.
+pub(crate) fn console_home(origin: &str) -> Result<tauri::Url, String> {
+    let mut url = tauri::Url::parse(origin).map_err(|why| why.to_string())?;
+    if !url.path().ends_with('/') {
+        url.set_path(&format!("{}/", url.path()));
+    }
+    url.join("app").map_err(|why| why.to_string())
+}
+
 /// Put the window on `url`, leaving the page it was showing in history or not.
 pub(crate) fn show_console<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
@@ -457,7 +473,7 @@ async fn open_console<R: tauri::Runtime>(
     };
     match plane.reachable().await {
         Ok(()) => {
-            let url = tauri::Url::parse(origin).map_err(|why| why.to_string())?;
+            let url = console_home(origin)?;
             show_console(&window, url, start_up_nav())?;
             Ok(())
         }
@@ -505,7 +521,7 @@ pub(crate) async fn retry_console_from<R: tauri::Runtime>(
         .reachable()
         .await
         .map_err(|why| why.to_string())?;
-    let url = tauri::Url::parse(&origin).map_err(|why| why.to_string())?;
+    let url = console_home(&origin)?;
     show_console(&window, url, start_up_nav())
 }
 
@@ -564,7 +580,7 @@ async fn run_schedule<W: scheduler::WorkSource>(
 
 #[cfg(test)]
 mod start_up_tests {
-    use super::{replacing, show_console, StartUpNav};
+    use super::{console_home, replacing, show_console, StartUpNav};
     use tauri::test::{mock_builder, mock_context, noop_assets};
     use tauri::{WebviewUrl, WebviewWindowBuilder};
 
@@ -613,6 +629,27 @@ mod start_up_tests {
             "a quote in the address must survive as part of the address rather than ending the \
              literal and starting a statement. Script was: {script}"
         );
+    }
+
+    /// The window opens on the console's home, not on the origin.
+    ///
+    /// The origin is where the landing page answers, and a client that lands
+    /// there depends on the landing's redirect script to reach the console.
+    #[test]
+    fn the_window_opens_on_the_console_home() {
+        for origin in [
+            "https://teachouse.stowiq.io",
+            "https://teachouse.stowiq.io/",
+            "http://127.0.0.1:8080",
+        ] {
+            let home = console_home(origin).expect("the origin is a url");
+            assert_eq!(home.path(), "/app", "{origin}");
+            assert_eq!(
+                home.host_str(),
+                tauri::Url::parse(origin).unwrap().host_str()
+            );
+        }
+        assert!(console_home("not a url").is_err());
     }
 
     /// A computer leaves the start page in history and a phone does not.
