@@ -255,6 +255,45 @@ export function migrationsLine(usage: EntitlementUsage, caps: Capabilities): str
 	return `${usage.migrations_this_month} of ${caps.migrations_per_month} this month; resets ${dayMonth(usage.migrations_reset_at)}`;
 }
 
+/** The monthly allowance as a control reads it: the sentence to print, and the
+ *  refusal that disables the confirm where the selection does not fit.
+ *
+ * Structural parameters rather than `Capabilities` and `EntitlementUsage`
+ * themselves, so the same writer serves both doors this figure arrives
+ * through: the entitlement read the shell already holds, and the `cap` block
+ * a migration plan answers with. Both satisfy these shapes, and the seller
+ * must not be told one figure before the preview and another after it.
+ *
+ * The refusal is a separate field rather than a null line, because a seller
+ * over the cap still needs the figures — how many are left and when the month
+ * turns — beside the reason they cannot press the button. */
+export function migrationsReason(
+	caps: { migrations_per_month: number },
+	usage: { migrations_this_month: number; migrations_reset_at: number },
+	requested: number
+): { line: string; refusal: string | null } {
+	const limit = caps.migrations_per_month;
+	if (limit === 0) {
+		return {
+			line: 'Your plan moves no resources between marketplaces.',
+			refusal: 'Your plan does not move resources between marketplaces. Upgrade to migrate.'
+		};
+	}
+	const left = Math.max(0, limit - usage.migrations_this_month);
+	const resets = dayMonth(usage.migrations_reset_at);
+	const line =
+		requested === 0
+			? `You have ${left} of ${limit} moves left this month.`
+			: `You have ${left} of ${limit} moves left this month; this uses ${requested}.`;
+	if (requested > left) {
+		return {
+			line,
+			refusal: `Your plan moves ${limit} resources a month and you have ${left} left, so ${requested} is more than this month can take. It resets ${resets}.`
+		};
+	}
+	return { line: `${line} Resets ${resets}.`, refusal: null };
+}
+
 /** Why this organisation is on the plan it is on, where a person put it
  *  there.
  *

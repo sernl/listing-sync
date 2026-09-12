@@ -314,7 +314,8 @@ export const VERB_PHRASE: Record<BulkVerb, string> = {
 	mark_listed: 'mark as listed',
 	labels: 'label',
 	delete: 'delete',
-	edit: 'edit'
+	edit: 'edit',
+	move: 'copy or move to another marketplace'
 };
 
 /**

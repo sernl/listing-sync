@@ -635,6 +635,17 @@ export const MATCH_LAYERS: readonly MatchLayer[] = [
   "l5",
 ];
 
+export type MigrationVerdict =
+  | "will_create"
+  | "already_there"
+  | "blocked";
+
+export const MIGRATION_VERDICTS: readonly MigrationVerdict[] = [
+  "will_create",
+  "already_there",
+  "blocked",
+];
+
 export type Plan =
   | "free"
   | "migration_only"

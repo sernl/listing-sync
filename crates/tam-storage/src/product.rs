@@ -1059,6 +1059,40 @@ impl ProductRepo {
             })
             .collect()
     }
+
+    /// Which of these products hold a payload file a write could upload.
+    ///
+    /// The same join `mapping_seeds` makes, asked before a job exists. A
+    /// product with no payload yields no seed there, so it is silently absent
+    /// from the items a create job carries; a migration preview has to be able
+    /// to say "no file" about that product rather than admit it and move
+    /// nothing.
+    pub async fn with_payload(
+        &self,
+        org: OrgId,
+        products: &[ProductId],
+    ) -> Result<Vec<ProductId>, StorageError> {
+        let ids: Vec<uuid::Uuid> = products
+            .iter()
+            .map(|product| uuid_to_db(product.0))
+            .collect();
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let rows = sqlx::query_scalar!(
+            "SELECT DISTINCT product_id FROM product_file \
+             WHERE org_id = $1 AND product_id = ANY($2) \
+               AND role = 'payload' AND deleted_at IS NULL",
+            uuid_to_db(org.0),
+            &ids,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(rows
+            .into_iter()
+            .map(|id| ProductId(uuid_from_db(id)))
+            .collect())
+    }
 }
 
 /// What the seller called this file, where the write carried a name for it.

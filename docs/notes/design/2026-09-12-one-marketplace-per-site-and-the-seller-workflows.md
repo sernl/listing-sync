@@ -93,6 +93,7 @@ The console shows every verb; the two uncaptured ones render disabled with the s
 - **Copy** is `Disposition::Sync`; **Move** is `Disposition::Migrate` (creates on the target, then removes from the source once bound). Both exist; the console gains the choice and a per-resource preview (*will create* / *already there* / *blocked: reason*) before confirm.
 - Source and target are any two authorable marketplaces; TPT as a source needs the file-download capture above, so until then a TPT-to-Tes move is offered disabled with the reason.
 - The selection is all resources or a tick list, or a collection (section 7).
+- Built 2026-09-12 (phase 3): the unit is a catalogue resource bound on the source, the confirm drains its own legs, an import binds the source listing, and a confirmed create not yet claimed previews as on its way; see `../../design/decisions.md` under that date.
 
 ### Plans, capabilities and the one-off purchase
 
@@ -234,6 +235,6 @@ Each phase's verification includes a 1280 and a 390 capture of every new page, a
 
 Every phase ends with a release, by founder rule of 2026-09-12: `docs/releases/<version>.md`, the version bump in both desktop files, `just release-check`, and the `v<version>` tag that runs `desktop-release.yml` to GitHub Releases and CrabNebula Cloud for Windows and Android; then the deployment branch is re-pinned and `teachouse-downloads-refresh` is seen to publish the new set.
 The app halves must be clean under `cargo clippy -p tam-desktop -- -D warnings`, `cargo nextest run -p tam-desktop` and the Windows cross-check, and anything the phase changed that the desktop or the phone must follow (a route move, a theme, a permission) lands in the same release rather than being left to the landing page or the browser.
-Phases 0 to 2 shipped together as 0.4.0.
+Phases 0 to 2 shipped together as 0.4.0; phase 3 with the console-start fix and the phone bar as 0.5.0.
 
 Founder-supervised captures owed, none blocking phase 0 to 2: TPT own-file download, Tes edit-published, Tes unpublish, TPT preview slot (from 2026-09-11).

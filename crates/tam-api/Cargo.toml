@@ -63,6 +63,9 @@ tam-pipeline = { path = "../tam-pipeline" }
 tam-secrets = { path = "../tam-secrets" }
 tam-standards = { path = "../tam-standards" }
 tam-storage = { path = "../tam-storage" }
+# The drain: a catalogue migration is canonicalised in full at confirm and no
+# device page follows to drain it, so the confirm handler mints its legs.
+tam-sync-worker = { path = "../tam-sync-worker" }
 tam-taxonomy = { path = "../tam-taxonomy" }
 tam-types = { path = "../tam-types" }
 # `rt` is named rather than inherited: `import_batch` puts the spreadsheet

@@ -32,6 +32,7 @@ import type {
 	ImportRunKind,
 	ImportRunState,
 	MatchLayer,
+	MigrationVerdict,
 	Plan,
 	SlugPrompt,
 	StandardsState,
@@ -526,6 +527,83 @@ export interface SyncRequestBody {
 	disposition: 'sync' | 'migrate';
 	intent: PublishIntent;
 	resources: string[];
+}
+
+// ------------------------------------------------------- copying and moving
+
+/** Which of the two a migration is: a Copy leaves the source listing where it
+ *  is, a Move takes it down once the target carries it. The server's own
+ *  `Disposition`, spelled as the wire spells it rather than in the console's
+ *  own words, which `$lib/migration-plan` owns. */
+export type Disposition = 'sync' | 'migrate';
+
+/** What the seller asked to move: the whole source shop, or the resources
+ *  they ticked. Two shapes rather than a list and a flag, so "all" cannot
+ *  arrive alongside a list that contradicts it. */
+export type MigrationSelection = { all: true } | { products: string[] };
+
+/** A plan request and a submit take the same body: the submit is the plan the
+ *  seller looked at, confirmed. */
+export interface MigrationBody {
+	source: InventoryId;
+	target: InventoryId;
+	disposition: Disposition;
+	selection: MigrationSelection;
+}
+
+/** Whether this pair of marketplaces can be migrated between at all, and why
+ *  not where it cannot. Answered by the server rather than inferred from the
+ *  rows, because a refused pair blocks every row for one reason and the
+ *  seller should read that reason once. */
+export interface MigrationPair {
+	allowed: boolean;
+	reason: string | null;
+}
+
+/** The monthly allowance as the plan sees it, so the figure the seller reads
+ *  before confirming is the figure the submit is checked against. */
+export interface MigrationCap {
+	limit: number;
+	used: number;
+	remaining: number;
+	resets_at: number;
+}
+
+/** One resource's projection. `remote` is the listing already on the target,
+ *  which only an `already_there` row carries; `reason` is why a `blocked` row
+ *  is blocked; `price_note` is set where the two marketplaces price in
+ *  different currencies and the number carries across unconverted. */
+export interface MigrationPlanRow {
+	product: string;
+	title: string;
+	verdict: MigrationVerdict;
+	remote: string | null;
+	reason: string | null;
+	price_note: string | null;
+}
+
+export interface MigrationCounts {
+	will_create: number;
+	already_there: number;
+	blocked: number;
+}
+
+/** The whole preview. It writes nothing, so it can be asked again for every
+ *  change of selection. */
+export interface MigrationPlanView {
+	pair: MigrationPair;
+	cap: MigrationCap;
+	rows: MigrationPlanRow[];
+	counts: MigrationCounts;
+}
+
+/** What a confirmed migration answers with: the request to watch, and the two
+ *  figures that say the submit is not the selection — a row already on the
+ *  target or blocked is skipped rather than queued. */
+export interface MigrationAck {
+	request: string;
+	queued: number;
+	skipped: number;
 }
 
 /** What a surface knows about the seller's declaration for one marketplace.
@@ -2077,6 +2155,17 @@ export const api = {
 	 *  while it is pending, so until it does there is nothing else in the
 	 *  console that names it. */
 	syncRequests: () => request<SyncRequestsView>('/v1/sync'),
+
+	/** What a migration would do, per resource, before anything is written.
+	 *  Asked again on every change of selection, which is safe because the
+	 *  endpoint writes nothing and takes no idempotency key. */
+	migrationPlan: (body: MigrationBody) =>
+		post<MigrationPlanView>('/v1/migrations/plan', body),
+	/** Confirm the plan. The key is the request's own identity, as it is for
+	 *  `createSyncRequest`, so a retried confirm reaches the same request
+	 *  rather than moving the seller's shop twice. */
+	createMigration: (body: MigrationBody, idempotencyKey: string) =>
+		post<MigrationAck>('/v1/migrations', body, { 'idempotency-key': idempotencyKey }),
 
 	/** Every spreadsheet import this organisation has made, newest first, with
 	 *  the open one named. Deliberately apart from `syncRequests` above: the

@@ -277,6 +277,15 @@ async fn enqueue_create(
 /// unverifiable, so a listing migrated away could never be published,
 /// revised or re-synced again with an error saying nothing was verified.
 ///
+/// Inserted only where the product has no mapping on the source yet, which is
+/// the device-import case this leg was written for: the read discovered the
+/// listing, so nothing in the catalogue named it before. A migration started
+/// from the catalogue is the other case -- the product is eligible precisely
+/// because it already holds a bound mapping on the source -- and
+/// `mapping_one_per_inventory` admits one row per product and inventory, so
+/// inserting there would refuse the whole drain. The existing row is the
+/// same observation by a different route, so the removal item names it.
+///
 /// A source whose read carried no state is refused rather than removed: a
 /// removal must never post a lifecycle nobody has observed.
 ///
@@ -299,6 +308,13 @@ async fn enqueue_removal(
         ));
     }
     let mappings = MappingRepo::new(run.pool.clone());
+    let products: Vec<tam_types::ProductId> = canonicalised.iter().map(|row| row.product).collect();
+    let on_source: Vec<(tam_types::ProductId, MappingId)> = mappings
+        .heads_for_products(run.org, record.source, &products)
+        .await?
+        .into_iter()
+        .map(|head| (head.product, head.id))
+        .collect();
     let mut items = Vec::new();
     let job = JobId(fresh_uuid());
     for row in canonicalised {
@@ -309,31 +325,38 @@ async fn enqueue_removal(
                     .to_owned(),
             ));
         };
-        // The policies and the price rule are the target mapping's, which the
-        // canonicalisation just derived from this very read. Inventing a
-        // second set here would be two answers to one question about one
-        // product.
-        let target = mappings
-            .get(run.org, row.mapping)
-            .await?
-            .ok_or_else(|| DrainError::Locator("the canonicalised mapping vanished".to_owned()))?;
-        let mapping = MappingId(fresh_uuid());
-        let source = Mapping {
-            id: mapping,
-            org: run.org,
-            product: row.product,
-            inventory: record.source,
-            binding: Binding::Bound {
-                id: row.source.clone(),
-                first_seen: run.now,
-                verified: Verification::Clean { at: run.now },
-            },
-            policies: target.mapping.policies,
-            price_rule: target.mapping.price_rule,
-            publish: PublishMode::DryRun,
-            lifecycle: lifecycle_of(state, run.now),
+        let mapping = if let Some(&(_, existing)) = on_source
+            .iter()
+            .find(|(product, _)| *product == row.product)
+        {
+            existing
+        } else {
+            // The policies and the price rule are the target mapping's,
+            // which the canonicalisation just derived from this very read.
+            // Inventing a second set here would be two answers to one
+            // question about one product.
+            let target = mappings.get(run.org, row.mapping).await?.ok_or_else(|| {
+                DrainError::Locator("the canonicalised mapping vanished".to_owned())
+            })?;
+            let mapping = MappingId(fresh_uuid());
+            let source = Mapping {
+                id: mapping,
+                org: run.org,
+                product: row.product,
+                inventory: record.source,
+                binding: Binding::Bound {
+                    id: row.source.clone(),
+                    first_seen: run.now,
+                    verified: Verification::Clean { at: run.now },
+                },
+                policies: target.mapping.policies,
+                price_rule: target.mapping.price_rule,
+                publish: PublishMode::DryRun,
+                lifecycle: lifecycle_of(state, run.now),
+            };
+            mappings.insert(run.org, &source, 0, run.now).await?;
+            mapping
         };
-        mappings.insert(run.org, &source, 0, run.now).await?;
         items.push(NewJobItem {
             item: JobItemId(fresh_uuid()),
             mapping,

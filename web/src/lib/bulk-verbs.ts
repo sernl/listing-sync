@@ -1,13 +1,15 @@
 // The verbs the inventory board offers over a selection, and what each one is
 // waiting on where it is not built. Pure, so it tests without a component.
 //
-// The set is founder decision Q3: edit, cross-list, labels, delete and
-// mark-as-listed. Delist-and-relist is refused under any name, because it
-// discards the reviews, ratings, sales history and URL a teaching resource
-// accumulates; the reconciliation verb is revise-in-place
-// (`docs/notes/design/seller-dashboard.md`).
+// The set is founder decision Q3 — edit, cross-list, labels, delete and
+// mark-as-listed — with `move`, which hands a tick list to the Migrations page
+// so a selection made on this board can be copied or moved to another
+// marketplace without being re-picked there. Delist-and-relist is refused
+// under any name, because it discards the reviews, ratings, sales history and
+// URL a teaching resource accumulates; the reconciliation verb is
+// revise-in-place (`docs/notes/design/seller-dashboard.md`).
 
-export type BulkVerb = 'cross_list' | 'edit' | 'labels' | 'delete' | 'mark_listed';
+export type BulkVerb = 'cross_list' | 'move' | 'edit' | 'labels' | 'delete' | 'mark_listed';
 
 export interface BulkAction {
 	verb: BulkVerb;
@@ -27,7 +29,8 @@ const MISSING: Record<BulkVerb, string | null> = {
 	delete: null,
 	edit: 'No screen chooses which fields change across a selection. Editing one resource at a time works; the screen for editing several at once is what does not exist.',
 	labels: null,
-	mark_listed: null
+	mark_listed: null,
+	move: null
 };
 
 const LABEL: Record<BulkVerb, string> = {
@@ -35,7 +38,8 @@ const LABEL: Record<BulkVerb, string> = {
 	edit: 'Edit',
 	labels: 'Labels',
 	delete: 'Delete',
-	mark_listed: 'Mark as listed'
+	mark_listed: 'Mark as listed',
+	move: 'Copy or move'
 };
 
 /** The order the board shows them in: what is built first, then what is
@@ -43,6 +47,7 @@ const LABEL: Record<BulkVerb, string> = {
 export const BULK_VERBS: readonly BulkVerb[] = [
 	'cross_list',
 	'mark_listed',
+	'move',
 	'labels',
 	'delete',
 	'edit'

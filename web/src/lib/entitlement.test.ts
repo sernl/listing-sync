@@ -10,6 +10,7 @@ import {
 	grantNotice,
 	limitReason,
 	migrationsLine,
+	migrationsReason,
 	sectionAllowed,
 	sectionReason,
 	usageLine,
@@ -193,6 +194,46 @@ describe('the migration line', () => {
 		expect(migrationsLine(usage(), caps('free'))).toBe(
 			'Your plan moves no resources between marketplaces.'
 		);
+	});
+});
+
+describe('the allowance a selection is checked against', () => {
+	it('counts what is left rather than what is spent, and names the selection', () => {
+		const standing = migrationsReason(
+			caps('subscriber'),
+			usage({ migrations_this_month: 8 }),
+			8
+		);
+		expect(standing.line).toBe(
+			'You have 12 of 20 moves left this month; this uses 8. Resets 1 October.'
+		);
+		expect(standing.refusal).toBeNull();
+	});
+
+	it('lets a selection fill the allowance exactly', () => {
+		expect(
+			migrationsReason(caps('subscriber'), usage({ migrations_this_month: 8 }), 12).refusal
+		).toBeNull();
+	});
+
+	it('refuses one past it, saying how many would fit and when the rest can go', () => {
+		const over = migrationsReason(caps('subscriber'), usage({ migrations_this_month: 8 }), 13);
+		expect(over.refusal).toBe(
+			'Your plan moves 20 resources a month and you have 12 left, so 13 is more than this month can take. It resets 1 October.'
+		);
+	});
+
+	// A count the server has already moved past the limit is "none left", not a
+	// negative allowance the sentence would print as "-3 of 20".
+	it('never counts below nothing left', () => {
+		const spent = migrationsReason(caps('subscriber'), usage({ migrations_this_month: 25 }), 1);
+		expect(spent.line).toContain('0 of 20');
+	});
+
+	it('refuses a plan that moves nothing before counting anything', () => {
+		const none = migrationsReason(caps('free'), usage(), 0);
+		expect(none.line).toBe('Your plan moves no resources between marketplaces.');
+		expect(none.refusal).toContain('Upgrade to migrate.');
 	});
 });
 

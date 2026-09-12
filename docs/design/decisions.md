@@ -834,3 +834,20 @@ No per-marketplace state ever lives on a collection; overrides stay on `mapping`
 Bulk verbs resolve the distinct union, preview per resource, freeze the resolved ids into the operation and enqueue idempotently on organisation, product, marketplace and intent; publish, apply-template-or-labels and export ship first, delist waits.
 Manual only, no rules; deleting a collection deactivates nothing; a bundle is a product and a separate change.
 Full reasoning: `../notes/design/research/2026-09-12-dedup-and-collections.md`.
+
+## A migration is of catalogue resources, and an import binds where they already are, 2026-09-12
+
+The unit a seller copies or moves is a resource in the catalogue, not a listing named on a source marketplace: the request's rows are canonicalised at confirm from the product's own binding on the source, and the confirm drains them itself, since no device page follows a catalogue migration to do it.
+For that to be true of an imported catalogue, an import binds each resource to the listing it was read from — a bound mapping on the source inventory, `DryRun`, never projected — so the catalogue says where a resource already is, the status page can draw it, and a second read of the same shop skips every listing the catalogue holds as it lands, named after the resource it already is.
+A read that carried no state binds with `Absent`, which a Copy accepts and a Move refuses until the state is verified.
+Copy and Move both consume `migrations_per_month`, since the design counts migrations of either kind and the pricing copy says so.
+Any two of Tes, TPT and Etsy may be chosen at either end; a pair the tree cannot serve is offered disabled with its reason (the uncaptured download for TPT and Etsy as source, no adapter for Etsy as target), so Tes to TPT is the one live pair today and nothing about the page changes when the next is captured.
+A price carries as the same number in the target's currency, as the import already does, and the preview says so on the row rather than converting silently.
+A create the seller confirmed and a device has not yet claimed is previewed as on its way, not as will create, so a second confirm cannot queue the same create twice.
+
+## The edge's script and the first request's failure, 2026-09-12
+
+The zone runs Cloudflare's Bot Fight Mode, whose detection script is injected inline into every page and can be admitted only by a per-response nonce; both content-security policies now carry one beside their hashes.
+The console's root layout no longer throws on a non-401 first answer: it renders one screen naming what came back, with the status and a retry, in place of `error.html`'s "Internal Error (500)".
+Bot Fight Mode cannot be exempted by rule on the free plan; if a WebView is still refused, the founder's remaining choice is the zone toggle, not code.
+Full reasoning: `../notes/design/console-serving.md`.

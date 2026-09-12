@@ -2,13 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { BULK_ACTIONS, BULK_VERBS, unavailable } from './bulk-verbs';
 
 describe('the bulk verbs', () => {
-	it('are the five founder decision Q3 named, and no more', () => {
+	it('are the five founder decision Q3 named plus the migration hand-off, and no more', () => {
 		expect([...BULK_VERBS].sort()).toEqual([
 			'cross_list',
 			'delete',
 			'edit',
 			'labels',
-			'mark_listed'
+			'mark_listed',
+			'move'
 		]);
 	});
 
@@ -20,14 +21,25 @@ describe('the bulk verbs', () => {
 		}
 	});
 
-	it('offers the four the API already serves', () => {
+	it('offers the five the API already serves', () => {
 		const built = BULK_ACTIONS.filter((action) => action.missing === null);
 		expect(built.map((action) => action.verb)).toEqual([
 			'cross_list',
 			'mark_listed',
+			'move',
 			'labels',
 			'delete'
 		]);
+	});
+
+	// Copy and Move are one control here rather than two, because which of them
+	// the seller wants is a decision they take on the Migrations page beside the
+	// preview of what each would do, not blind on a bulk bar.
+	it('offers copying and moving under one verb, worded as both', () => {
+		const move = BULK_ACTIONS.find((action) => action.verb === 'move');
+		expect(move?.missing).toBeNull();
+		expect(move?.label.toLowerCase()).toContain('copy');
+		expect(move?.label.toLowerCase()).toContain('move');
 	});
 
 	it('gives every verb it cannot run a reason naming what is missing', () => {

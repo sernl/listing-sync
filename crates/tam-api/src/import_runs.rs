@@ -10,8 +10,10 @@
 //! twenty-five at a time, each chunk a point the seller can close the tab at.
 //!
 //! Nothing is drafted anywhere. A run names no target, so `import_one` mints
-//! no mapping and runs no outbound projection: the outcome is resources in the
-//! catalogue and the seller decides afterwards where they go.
+//! no target mapping and runs no outbound projection: the outcome is resources
+//! in the catalogue, each bound to the listing it was read from so the
+//! catalogue says where it already is, and the seller decides afterwards
+//! where else it goes.
 
 use axum::extract::{Path, State};
 use axum::http::{header, StatusCode};
@@ -760,6 +762,27 @@ pub(crate) async fn run_page(
         repo.append_listed(context.org, page.run, &rows, now)
             .await
             .map_err(|error| storage_fault(state, &error))?;
+        // A listing the catalogue already holds is skipped as it lands,
+        // before the seller can tick it and before the device reads it: an
+        // imported resource is bound to the listing it came from, so a second
+        // import of the same shop finds every one of them here. The matcher
+        // could not have caught it — it compares across marketplaces only,
+        // and this pair is the same listing on the same one — and without
+        // this a re-import created every resource twice.
+        if let Some(source) = head.source {
+            let known = already_held(state, context.org, source, &rows).await?;
+            for (locator, title) in &known {
+                repo.record_skipped(
+                    context.org,
+                    page.run,
+                    locator,
+                    &format!("already in Resources as {title}"),
+                    now,
+                )
+                .await
+                .map_err(|error| storage_fault(state, &error))?;
+            }
+        }
         let counts = repo
             .counts(context.org, page.run)
             .await
@@ -820,6 +843,51 @@ pub(crate) async fn run_page(
         StatusCode::OK,
         Json(run_ack(counts, applied, skipped, page.complete)),
     ))
+}
+
+/// Of the listed rows, those whose listing a product of this org is already
+/// bound to on `source`, with that product's title.
+///
+/// One read of the tenant's mapping heads and one of its product summaries,
+/// on the page that carries the list — which is the first page of a run and
+/// no other — rather than a lookup per row.
+async fn already_held(
+    state: &AppState,
+    org: OrgId,
+    source: InventoryId,
+    rows: &[tam_storage::ListedRow],
+) -> Result<Vec<(String, String)>, APIError> {
+    let heads = tam_storage::MappingRepo::new(state.pool.clone())
+        .list_heads(org)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    let bound: Vec<(String, ProductId)> = heads
+        .iter()
+        .filter(|head| head.inventory == source)
+        .filter_map(|head| {
+            head.remote
+                .as_ref()
+                .map(|remote| (crate::migrations::locator_of(remote), head.product))
+        })
+        .collect();
+    if bound.is_empty() {
+        return Ok(Vec::new());
+    }
+    let products = tam_storage::ProductRepo::new(state.pool.clone())
+        .list(org)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    Ok(rows
+        .iter()
+        .filter_map(|row| {
+            let (_, product) = bound.iter().find(|(locator, _)| *locator == row.locator)?;
+            let title = products
+                .iter()
+                .find(|summary| summary.id == *product)
+                .map_or_else(|| row.title.clone(), |summary| summary.title.0.clone());
+            Some((row.locator.clone(), title))
+        })
+        .collect())
 }
 
 /// The list row's price, denominated by the source's own rule.

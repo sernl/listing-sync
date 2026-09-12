@@ -96,7 +96,7 @@ pub use jobs::{
 };
 pub use labels::{system_label_name, Colour, LabelRecord, LabelRename, LabelRepo};
 pub use lowering::{
-    lower, requires_bound_on, uncaptured_source, uncaptured_transition, LoweringRefusal,
+    lower, lower_head, requires_bound_on, uncaptured_source, uncaptured_transition, LoweringRefusal,
 };
 pub use mapping::{
     BoundListing, LossScope, MappingAdd, MappingHead, MappingRecord, MappingRepo, PastedBind,
@@ -130,9 +130,9 @@ pub mod elections;
 pub mod sync_requests;
 pub use elections::{AnswerReport, AnsweredElection, ElectionRepo, NewAnswer, OpenElection};
 pub use sync_requests::{
-    job_request_key, Canonicalised, Completion, Disposition, Enqueued, Mint, NewSyncRequest,
-    Observed, ResourceCoverage, SyncIntent, SyncRequestRecord, SyncRequestRepo, SyncRequestSummary,
-    SyncResourceRecord, CREATE_LEG, IMPORT_LEG, REMOVE_LEG,
+    job_request_key, CanonicalResource, Canonicalised, Completion, Disposition, Enqueued, Mint,
+    NewMigration, NewSyncRequest, Observed, ResourceCoverage, SyncIntent, SyncRequestRecord,
+    SyncRequestRepo, SyncRequestSummary, SyncResourceRecord, CREATE_LEG, IMPORT_LEG, REMOVE_LEG,
 };
 pub use taxonomy::{
     DrainStats, NoCounterpartReport, OpenItem, RaiseReport, RaiseScope, SeedReport, TaxonomyRepo,

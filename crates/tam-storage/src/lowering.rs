@@ -86,6 +86,42 @@ pub fn lower(
     }
 }
 
+/// The same table asked of a [`MappingHead`] instead of a [`MappingSeed`].
+///
+/// A migration preview answers "would this create, or is it refused" before
+/// any job exists, and it reads heads because a product with no mapping on the
+/// target has no seed to read. The table itself is [`lower`]: this adapts the
+/// input rather than restating the rows, because two answers to "what does
+/// live mean" is exactly what the module header refuses.
+///
+/// The three fields lowering reads are the binding, the lifecycle and the
+/// subject, and a head carries all three. The payload hashes and the sever
+/// generation belong to the idempotency key rather than to the table, so they
+/// are empty here and no caller of this may mint an item from the result.
+///
+/// # Errors
+///
+/// Whatever [`lower`] refuses this mapping.
+pub fn lower_head(
+    to: ListingState,
+    inventory: InventoryId,
+    head: &crate::mapping::MappingHead,
+) -> Result<Vec<ItemOperation>, LoweringRefusal> {
+    lower(
+        to,
+        inventory,
+        &MappingSeed {
+            mapping: head.id,
+            product: head.product,
+            payload_hashes: Vec::new(),
+            sever_generation: 0,
+            binding_state: head.binding_state.clone(),
+            lifecycle_state: head.lifecycle_state.clone(),
+            subject: head.remote.clone(),
+        },
+    )
+}
+
 /// Whether a publish must wait for the create that binds the listing it
 /// publishes, stated where the lowering is rather than at each caller.
 ///

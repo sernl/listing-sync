@@ -563,8 +563,8 @@ pub async fn import_one(
         },
     });
     // A run with a target drafts onto a marketplace and so must carry a file;
-    // a catalogue-only run mints no mapping, and D32 says a resource kept here
-    // alone may carry none. So the refusal follows the target rather than the
+    // a catalogue-only run mints no target mapping, and D32 says a resource
+    // kept here alone may carry none. So the refusal follows the target rather than the
     // list: reading an empty payload as a fault would refuse every TPT import,
     // whose own-file download is uncaptured.
     let mut payload_iter = payloads.into_iter();
@@ -654,15 +654,64 @@ pub async fn import_one(
         .insert(run.org, &product, run.now)
         .await?;
 
+    // The listing this was read from is a listing this product is on, so the
+    // catalogue says so: a mapping on the source, bound to the remote the
+    // read named, with the lifecycle the read observed. Without it an
+    // imported resource shows "not listed" on the very shop it came from,
+    // the status page cannot draw it, and a migration from that shop has
+    // nothing to move. This is a record of what exists, not a draft: nothing
+    // is projected, nothing is enqueued, and the mode is `DryRun` so no write
+    // to the source can follow from it. A read that did not carry the state
+    // — every TPT capture on file — binds with `Absent`, the one lifecycle
+    // that claims nothing about the listing's side of the draft line; a Copy
+    // still works from it and a Move is refused until the state is verified.
+    //
+    // A remote already bound to another product of this org is left as it
+    // is rather than failing the import: that is the duplicate review's
+    // question, not this write's, and the resource still lands.
+    let source_mapping = tam_domain::Mapping {
+        id: MappingId(fresh_uuid()),
+        org: run.org,
+        product: product_id,
+        inventory: run.source,
+        binding: tam_domain::Binding::Bound {
+            id: listing.remote.clone(),
+            first_seen: run.now,
+            verified: tam_domain::Verification::Clean { at: run.now },
+        },
+        policies: tam_domain::FieldPolicies {
+            title: tam_domain::FieldPolicy::Managed,
+            description: tam_domain::FieldPolicy::Managed,
+            price: tam_domain::FieldPolicy::Managed,
+            taxonomy: tam_domain::FieldPolicy::Managed,
+            grades: tam_domain::FieldPolicy::Managed,
+            files: tam_domain::FieldPolicy::Managed,
+        },
+        price_rule: tam_types::PriceRule::Explicit(price),
+        publish: tam_domain::PublishMode::DryRun,
+        lifecycle: match listing.state {
+            Some(ListingState::Live) => tam_marketplace::RemoteLifecycle::Live { since: run.now },
+            Some(ListingState::Draft) => tam_marketplace::RemoteLifecycle::Draft,
+            None => tam_marketplace::RemoteLifecycle::Absent,
+        },
+    };
+    match MappingRepo::new(run.pool.clone())
+        .insert(run.org, &source_mapping, 0, run.now)
+        .await
+    {
+        Ok(()) | Err(StorageError::ListingAlreadyBound) => {}
+        Err(error) => return Err(error.into()),
+    }
+
     // The target mapping and the one projection, both of which exist only for
     // a run that names a target.
     //
     // A catalogue-only import is the ordinary case since phase 2: the outcome
-    // is a resource in the catalogue and nothing drafted anywhere, so there is
-    // no mapping to mint, no gaps to raise and no coverage to report. Skipping
-    // them is not a degraded import -- it is the whole of what "nothing
-    // drafted" means, and minting an unbound `DryRun` mapping into a shop
-    // nobody chose is what the phase deletes.
+    // is a resource in the catalogue, bound to where it already is and drafted
+    // nowhere, so there is no target mapping to mint, no gaps to raise and no
+    // coverage to report. Skipping them is not a degraded import -- it is the
+    // whole of what "nothing drafted" means, and minting an unbound `DryRun`
+    // mapping into a shop nobody chose is what the phase deletes.
     let (mapping, projectable, blocked_by, raised) = match run.target {
         None => (
             None,

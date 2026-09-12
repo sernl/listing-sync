@@ -5287,6 +5287,7 @@ dependencies = [
  "tam-secrets",
  "tam-standards",
  "tam-storage",
+ "tam-sync-worker",
  "tam-taxonomy",
  "tam-types",
  "tokio",

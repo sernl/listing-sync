@@ -13,7 +13,6 @@ import type {
 	ConnectionView,
 	SyncRequestHead,
 	SyncCoverageView,
-	SyncRequestBody,
 	SyncRequestView,
 	SyncResourceState,
 	SyncResourceView,
@@ -22,6 +21,7 @@ import type {
 import { connectionStands } from '$lib/connection-standing';
 import { TRANSPORT_OF, onSellerDevice } from '$lib/inventory';
 import { MARKETPLACE_OF } from '$lib/listings-view';
+import { MIGRATION_SOURCES } from '$lib/migration-plan';
 import type { InventoryId, Marketplace } from '$lib/generated/vocab';
 
 /** The tones the console's pills already carry. */
@@ -484,23 +484,7 @@ export function resourceRows(view: SyncRequestView): ResourceRow[] {
 	}));
 }
 
-// ------------------------------------------------------- starting a migrate
-
-/** Where a migrate can read from, and it is a fact rather than a preference:
- *  `tam_storage::uncaptured_source` admits Tes as a sync's source and refuses
- *  TPT and Etsy, so a migrate offered from either would be refused at submit.
- *  Mirrored here because no view serves it.
- *
- *  A `readonly InventoryId[]` requires no exhaustiveness, so this array is not
- *  what stops the lane when an inventory is added in Rust. What stops it is
- *  `MARKETPLACE_OF`, the total `Record<InventoryId, Marketplace>` that
- *  `migrateSource` and `sourcesOn` both read through: a new inventory leaves
- *  that record incomplete and fails the type check there. */
-export const MIGRATE_SOURCES: readonly InventoryId[] = ['Tes'];
-
-/** Where a migrate writes to. One value, because TPT is the only marketplace
- *  this console can create a listing on. */
-export const MIGRATE_TARGET: InventoryId = 'Tpt';
+// ------------------------------------------------------- starting a migration
 
 /** The marketplace the seller can migrate from, or null where they have no
  *  connection on one.
@@ -512,9 +496,15 @@ export const MIGRATE_TARGET: InventoryId = 'Tpt';
  * not tell apart — `$lib/connection-standing` owns that line.
  *
  * Both halves must still hold — the marketplace has to run on the seller's own
- * device, and a migrate has to be able to read from it. */
+ * device, and a migration has to be able to read from it, which is
+ * `MIGRATION_SOURCES` and ultimately the total `UNCAPTURED_SOURCE` map an
+ * inventory added in Rust cannot slip past.
+ *
+ * This answers whether the seller has any shop to bring across at all. Which
+ * pair they choose is the Migrations page's own question, and
+ * `$lib/migration-plan` answers it. */
 export function migrateSource(connections: readonly ConnectionView[]): Marketplace | null {
-	const readable = new Set(MIGRATE_SOURCES.map((inventory) => MARKETPLACE_OF[inventory]));
+	const readable = new Set(MIGRATION_SOURCES.map((inventory) => MARKETPLACE_OF[inventory]));
 	for (const connection of connections) {
 		const marketplace = connection.marketplace;
 		if (
@@ -528,30 +518,15 @@ export function migrateSource(connections: readonly ConnectionView[]): Marketpla
 	return null;
 }
 
-/** The sources a migrate offers on one marketplace, in the console's own
- *  platform order, which is what the seller chooses a site from. */
-export function sourcesOn(marketplace: Marketplace): InventoryId[] {
-	return MIGRATE_SOURCES.filter((inventory) => MARKETPLACE_OF[inventory] === marketplace);
-}
-
-/** The submit a migrate makes: no resources, because the seller's device
- *  enumerates the shop and posts what it finds, and a draft, because
- *  publishing is a later decision the seller takes over the imported items
- *  rather than one taken blind before the import has run. */
-export function migrateBody(source: InventoryId): SyncRequestBody {
-	return {
-		source,
-		target: MIGRATE_TARGET,
-		disposition: 'migrate',
-		intent: 'draft',
-		resources: []
-	};
-}
-
 // ---------------------------------------------------- the authorship gate
 
 /** What this console holds about the seller's authorship declaration for the
- *  marketplace a migrate writes to.
+ *  marketplace a migration writes to.
+ *
+ * The target is a parameter now that the seller chooses it: a declaration is
+ * the writing marketplace's own requirement, and a gate hard-wired to TPT
+ * would have refused a migration to somewhere else for a declaration that
+ * marketplace never asked for.
  *
  * Three outcomes rather than a boolean, because the two that refuse are
  * different facts and only one of them is about the seller. `undeclared` is
@@ -566,9 +541,10 @@ export type AuthorshipStanding =
 	| { kind: 'unrecorded' };
 
 export function targetAuthorship(
-	connections: readonly ConnectionView[]
+	connections: readonly ConnectionView[],
+	target: InventoryId
 ): AuthorshipStanding {
-	const marketplace = MARKETPLACE_OF[MIGRATE_TARGET];
+	const marketplace = MARKETPLACE_OF[target];
 	// `?? undefined` so a null reaches the same arm as an absent field. The
 	// endpoint omits the key rather than nulling it, so this is unreachable
 	// today; it is written because every other optional in this file treats the

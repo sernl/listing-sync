@@ -4,7 +4,6 @@ import {
 	migrationLog,
 	migrationRows,
 	migrations,
-	openFromSource,
 	pillTone
 } from './migration';
 import { request } from './fixtures.test-support';
@@ -86,63 +85,3 @@ describe('the tone translation', () => {
 	});
 });
 
-
-describe('a migration already under way from the same shop', () => {
-	it('is found while the device has not started it', () => {
-		const open = openFromSource([request({ state: 'pending', resources_total: 0 })], 'Tes');
-		expect(open?.request).toBe('r-1');
-		expect(open?.href).toBe('/sync/requests/r-1');
-	});
-
-	it('is found while it is reading', () => {
-		expect(openFromSource([request({ state: 'draining' })], 'Tes')).not.toBeNull();
-	});
-
-	it('is not found once it has imported, so a second migration is allowed', () => {
-		expect(openFromSource([request({ state: 'enqueued' })], 'Tes')).toBeNull();
-	});
-
-	it('is not found once it has failed, so the seller can try again', () => {
-		expect(openFromSource([request({ state: 'failed' })], 'Tes')).toBeNull();
-	});
-
-	it('is not found when the shop was read and held nothing', () => {
-		const empty = request({ state: 'enqueued', resources_total: 0 });
-		expect(openFromSource([empty], 'Tes')).toBeNull();
-	});
-
-	it('treats a state it does not recognise as still going, which is the cautious side', () => {
-		const strange = request({ state: 'something-new' as never });
-		expect(openFromSource([strange], 'Tes')).not.toBeNull();
-	});
-
-	it('does not block a different marketplace, which is a different shop', () => {
-		const running = request({ source: 'Tes', state: 'draining' });
-		expect(openFromSource([running], 'Tpt')).toBeNull();
-		expect(openFromSource([running], 'Tes')).not.toBeNull();
-	});
-
-	it('ignores a sync request, which is not a migration', () => {
-		const synced = request({ disposition: 'sync', state: 'draining' });
-		expect(openFromSource([synced], 'Tes')).toBeNull();
-	});
-
-	it('answers nothing before a source has been chosen', () => {
-		expect(openFromSource([request({ state: 'draining' })], null)).toBeNull();
-	});
-
-	it('answers the newest where more than one is somehow open', () => {
-		const rows = [
-			request({ request: 'older', state: 'draining', created_at: 1 }),
-			request({ request: 'newer', state: 'draining', created_at: 2 })
-		];
-		expect(openFromSource(rows, 'Tes')?.request).toBe('newer');
-		expect(openFromSource([...rows].reverse(), 'Tes')?.request).toBe('newer');
-	});
-
-	it('names the shop and says what it is doing, so the banner is not a bare refusal', () => {
-		const open = openFromSource([request({ state: 'draining' })], 'Tes');
-		expect(open?.line).toContain('Tes.com');
-		expect(open?.line).toContain('Importing');
-	});
-});

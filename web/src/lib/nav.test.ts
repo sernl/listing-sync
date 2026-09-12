@@ -287,12 +287,12 @@ describe('the section the rail lights', () => {
 
 	// An import's detail page sits under `/sync` in the URL because a sync
 	// request carries it, but what the seller is looking at is an import.
-	// A past migrate request is opened from the Marketplace Migration list, so
+	// A past migrate request is opened from the Migrations list, so
 	// it belongs to Automations rather than to the section that owns the path
 	// it happens to sit beneath (D8).
-	it('follows a request detail page to Migration rather than to Marketplace Sync', () => {
+	it('follows a request detail page to Migrations rather than to Marketplace Sync', () => {
 		expect(sectionFor('/sync/requests/9f2c8a11')?.id).toBe('automations');
-		expect(breadcrumbFor('/sync/requests/9f2c8a11')).toBe('Marketplace Migration');
+		expect(breadcrumbFor('/sync/requests/9f2c8a11')).toBe('Migrations');
 	});
 
 	it('leaves every other path under /sync on Marketplace Sync', () => {
@@ -425,7 +425,7 @@ describe('the breadcrumb', () => {
 			(item) => item.href === '/automations/migration'
 		);
 		expect(owner?.owns).toEqual(['/sync/requests']);
-		expect(breadcrumbFor('/sync/requests')).toBe('Marketplace Migration');
+		expect(breadcrumbFor('/sync/requests')).toBe('Migrations');
 	});
 
 	it('leaves exactly one destination owning that prefix', () => {

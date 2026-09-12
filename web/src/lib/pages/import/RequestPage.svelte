@@ -85,7 +85,7 @@
 		{@const anyCoverage = rows.some((row) => row.coverage !== null)}
 		<PageHead
 			icon="arrow-right-left"
-			back={{ href: MIGRATION_HREF, label: 'Back to Marketplace Migration' }}
+			back={{ href: MIGRATION_HREF, label: 'Back to Migrations' }}
 			title={`${isDeviceImport(request) ? 'Move' : 'Request'} ${request.request.slice(0, 8)}…`}
 			description={`${platformTitle(request.source)} → ${platformTitle(request.target)}`}
 		>
@@ -188,14 +188,14 @@
 	{:else if refusal !== null}
 		<PageHead
 			icon="arrow-right-left"
-			back={{ href: MIGRATION_HREF, label: 'Back to Marketplace Migration' }}
+			back={{ href: MIGRATION_HREF, label: 'Back to Migrations' }}
 			title="Migration"
 			description="We could not read this migration."
 		/>
 		<Panel>
 			<Placeholder icon="arrow-right-left" headline="We could not read this migration" body={refusal}>
 				{#snippet actions()}
-					<Button href={MIGRATION_HREF}>Back to Marketplace Migration</Button>
+					<Button href={MIGRATION_HREF}>Back to Migrations</Button>
 				{/snippet}
 			</Placeholder>
 		</Panel>

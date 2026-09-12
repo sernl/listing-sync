@@ -153,8 +153,8 @@ describe('every consumer of the list, on the real shape', () => {
 	});
 
 	it('reads the declaration standing off the list', () => {
-		expect(targetAuthorship(held)).toEqual({ kind: 'declared', name: 'Kauri Classroom' });
-		expect(targetAuthorship(none)).toEqual({ kind: 'unrecorded' });
+		expect(targetAuthorship(held, 'Tpt')).toEqual({ kind: 'declared', name: 'Kauri Classroom' });
+		expect(targetAuthorship(none, 'Tpt')).toEqual({ kind: 'unrecorded' });
 	});
 
 	it('builds the marketplaces rows and sign-in states from the list', () => {

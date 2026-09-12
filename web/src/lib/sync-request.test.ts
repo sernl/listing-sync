@@ -5,8 +5,6 @@ import {
 	NOT_AN_IMPORT,
 	TERM_COVERAGE_LEGEND,
 	WAITING_IN_LIST,
-	MIGRATE_SOURCES,
-	MIGRATE_TARGET,
 	WAITING_FOR_DEVICE,
 	canStartHere,
 	coverageOf,
@@ -17,11 +15,9 @@ import {
 	isDeviceImport,
 	listRowLine,
 	mayMigrate,
-	migrateBody,
 	migrateSource,
 	presentStage,
 	resourceRows,
-	sourcesOn,
 	stageOf,
 	tally,
 	targetAuthorship,
@@ -316,53 +312,32 @@ describe('starting a migrate', () => {
 			expect(migrateSource([off]), state).toBeNull();
 		}
 	});
-
-	it('names the inventory of the marketplace the seller may have sold on', () => {
-		expect(sourcesOn('Tes')).toEqual(['Tes']);
-		expect(sourcesOn('Tpt')).toEqual([]);
-	});
-
-	it('submits a draft migrate naming no resources', () => {
-		expect(migrateBody('Tes')).toEqual({
-			source: 'Tes',
-			target: 'Tpt',
-			disposition: 'migrate',
-			intent: 'draft',
-			resources: []
-		});
-	});
-
-	it('never submits a source that is also the target', () => {
-		for (const source of MIGRATE_SOURCES) {
-			expect(migrateBody(source).source).not.toBe(MIGRATE_TARGET);
-		}
-	});
 });
 
 describe('the authorship gate', () => {
 	it('lets a migrate through only once a declaration is on record', () => {
-		const standing = targetAuthorship([connection('Tes'), connection('Tpt', DECLARED)]);
+		const standing = targetAuthorship([connection('Tes'), connection('Tpt', DECLARED)], 'Tpt');
 		expect(standing).toEqual({ kind: 'declared', name: 'A Teacher' });
 		expect(mayMigrate(standing)).toBe(true);
 	});
 
 	it('refuses while the seller has not declared', () => {
-		const standing = targetAuthorship([
-			connection('Tes'),
-			connection('Tpt', { state: 'undeclared' })
-		]);
+		const standing = targetAuthorship(
+			[connection('Tes'), connection('Tpt', { state: 'undeclared' })],
+			'Tpt'
+		);
 		expect(standing).toEqual({ kind: 'undeclared' });
 		expect(mayMigrate(standing)).toBe(false);
 	});
 
 	it('refuses where nothing is on record, without claiming the seller failed to declare', () => {
-		expect(targetAuthorship([connection('Tes')])).toEqual({ kind: 'unrecorded' });
-		expect(targetAuthorship([connection('Tpt')])).toEqual({ kind: 'unrecorded' });
+		expect(targetAuthorship([connection('Tes')], 'Tpt')).toEqual({ kind: 'unrecorded' });
+		expect(targetAuthorship([connection('Tpt')], 'Tpt')).toEqual({ kind: 'unrecorded' });
 		expect(mayMigrate({ kind: 'unrecorded' })).toBe(false);
 	});
 
 	it("reads the target's declaration rather than the source's", () => {
-		const standing = targetAuthorship([connection('Tes', DECLARED), connection('Tpt')]);
+		const standing = targetAuthorship([connection('Tes', DECLARED), connection('Tpt')], 'Tpt');
 		expect(mayMigrate(standing)).toBe(false);
 	});
 
@@ -678,8 +653,8 @@ describe('an authorship declaration that arrives as null', () => {
 			...connection('Tpt'),
 			authorship: null as unknown as ConnectionView['authorship']
 		};
-		expect(() => targetAuthorship([nulled])).not.toThrow();
-		expect(targetAuthorship([nulled])).toEqual({ kind: 'unrecorded' });
+		expect(() => targetAuthorship([nulled], 'Tpt')).not.toThrow();
+		expect(targetAuthorship([nulled], 'Tpt')).toEqual({ kind: 'unrecorded' });
 	});
 });
 

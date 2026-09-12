@@ -33,6 +33,21 @@ The hashes are computed by the same routine the console's policy uses, generalis
 A download carries no policy at all, because a policy governs a document and nothing renders an installer.
 The static decision is layered outside the console's policy layer, and that placement is load-bearing: a landing or download answer short-circuits before the console's layer can insert the console's header over it.
 
+### The edge's own script, and the nonce that admits it
+
+Amended 2026-09-12.
+The zone in front of this origin runs Cloudflare's Bot Fight Mode, and Bot Fight Mode injects its JavaScript Detections block inline into every HTML page the edge serves, a block that differs on every response and so can never be admitted by hash.
+Both policies refused it, on every page, in every browser, and the refusal was silent except in the browser's console: no client of this origin ever ran the detection and so none ever earned the `cf_clearance` cookie the scoring reads, which is what leaves a client the scoring already distrusts — an Android WebView, WebView2 — to be refused on its next fetch.
+That refusal is what the Android app showed as "Internal Error (500)": `/v1/whoami` answered by the edge with something other than our JSON, and the root layout load throwing on it.
+Both policies now carry a fresh `'nonce-…'` on `script-src` for every HTML response, beside the hashes; the edge parses the header and stamps the nonce on the block it injects, which is the vendor's documented way through a policy.
+An asset carries the policy as built, because the edge injects into HTML alone.
+The console's root layout no longer throws on a non-401 first answer: it renders one screen naming what came back — an edge refusal without our body, a server error, a refusal of ours, or no answer at all — with the status and a retry, so the next such failure says what it is.
+
+The same day's investigation found the hash walk taking a `<script src>` mentioned in an HTML comment for a tag: it hashed the comment's tail with the theme block's head and stepped over the block, so the shell's theme bootstrap had been refused since it landed and the header carried one hash admitting nothing.
+The walk skips comments now, and `a_tag_inside_a_comment_is_prose` pins it.
+
+Bot Fight Mode itself cannot be exempted by any rule on the free plan and the vendor documents that it may challenge mobile-app traffic; if a WebView is still refused after this, the founder's choice is Bot Fight Mode off for the zone, which is a dashboard toggle and not a code change.
+
 ## `/app`, and what the desktop client has to do about it
 
 The console's home moved to `/app` and its deep routes did not move with it, so `/labels` and `/sync` are still where they were.

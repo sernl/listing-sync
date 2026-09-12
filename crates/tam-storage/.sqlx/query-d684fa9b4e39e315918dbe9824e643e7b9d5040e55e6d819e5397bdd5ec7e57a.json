@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO sync_request_resource (org_id, request_id, ordinal, locator, state, product_id, mapping_id, source_kind, source_url, source_numeric_id, source_state) VALUES ($1, $2, $3, $4, 'canonicalised', $5, $6, $7, $8, $9, $10)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4",
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d684fa9b4e39e315918dbe9824e643e7b9d5040e55e6d819e5397bdd5ec7e57a"
+}

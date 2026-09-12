@@ -118,7 +118,7 @@ export const SECTIONS: readonly NavSection[] = [
 			{ href: '/automations/sharing', label: 'Marketplace Sharing', icon: 'share-2', soon: true },
 			{
 				href: '/automations/migration',
-				label: 'Marketplace Migration',
+				label: 'Migrations',
 				icon: 'arrow-right-left',
 				// A past migrate request is opened from this page's own list, so
 				// `/sync/requests/<id>` belongs here rather than under the path it

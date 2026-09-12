@@ -18,6 +18,7 @@ use tam_api::duplicates::DuplicateVerdictView;
 use tam_api::entitlement::QuotaKind;
 use tam_api::import_runs::{ImportRunItemState, ImportRunKind, ImportRunState, MatchLayerView};
 use tam_api::jobs::{outcome_str, JobPhase, ALL_OUTCOMES};
+use tam_api::migrations::MigrationVerdict;
 use tam_api::org::SlugPrompt;
 use tam_api::product::StandardsState;
 use tam_api::resources::{kind_str, role_str};
@@ -367,6 +368,18 @@ fn vocab() -> String {
         "MatchLayer",
         "MATCH_LAYERS",
         &MatchLayerView::ALL,
+        serde_name,
+    ));
+    out.push('\n');
+    // The migration preview's per-resource answer. Emitted because the
+    // console renders a chip per verdict and branches the confirm on
+    // `will_create`, so a fourth verdict added in Rust without a member here
+    // would reach a seller as an unhandled row rather than failing the web
+    // lane.
+    out.push_str(&closed(
+        "MigrationVerdict",
+        "MIGRATION_VERDICTS",
+        &MigrationVerdict::ALL,
         serde_name,
     ));
     out.push('\n');

@@ -32,6 +32,7 @@ pub mod import_runs;
 pub mod jobs;
 pub mod marketplace_requests;
 pub mod matcher;
+pub mod migrations;
 pub mod notifications;
 pub mod openapi;
 pub mod org;
@@ -214,6 +215,15 @@ pub fn router(state: AppState) -> Router {
             post(jobs::create_sync_request).get(jobs::list_sync_requests),
         )
         .route("/{version}/sync/{request}", get(jobs::sync_request_view))
+        // Copying and moving between two marketplaces. The plan is a read
+        // that writes nothing and is listed before the collection so the
+        // literal segment matches ahead of any identifier the route family
+        // grows later.
+        .route(
+            "/{version}/migrations/plan",
+            post(migrations::plan_migration),
+        )
+        .route("/{version}/migrations", post(migrations::create_migration))
         .route("/{version}/jobs/{job}", get(jobs::job_view))
         .route("/{version}/jobs/{job}/items", get(jobs::job_items))
         .route("/{version}/jobs/{job}/items/{item}", get(jobs::item_detail))

@@ -122,6 +122,39 @@ pub struct NewSyncRequest {
     pub locators: Vec<String>,
 }
 
+/// One resource of a migration, already canonicalised.
+///
+/// Everything [`Canonicalised`] carries, before the request exists rather than
+/// after a read produced it. The values come from the source mapping's own
+/// binding, which is why a migration needs no marketplace read to start: the
+/// catalogue already knows the product, and the binding already names the
+/// listing the removal leg takes down and the state it takes it down from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanonicalResource {
+    /// How the source marketplace addresses this listing, rendered from the
+    /// binding so the row reads the same as one a device wrote.
+    pub locator: String,
+    pub product: ProductId,
+    /// The mapping on the request's *target*, which is what the create leg
+    /// projects: `mapping_seeds` filters on the job's inventory, so a source
+    /// mapping here would yield an itemless create job.
+    pub mapping: MappingId,
+    pub source: RemoteListingId,
+    pub source_state: Option<ListingState>,
+}
+
+/// A migration between two marketplaces, resources and all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewMigration {
+    pub id: Uuid,
+    pub source: InventoryId,
+    pub target: InventoryId,
+    pub disposition: Disposition,
+    pub intent: SyncIntent,
+    pub requested_at: Timestamp,
+    pub resources: Vec<CanonicalResource>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncRequestRecord {
     pub id: Uuid,
@@ -336,6 +369,85 @@ impl SyncRequestRepo {
                 uuid_to_db(new.id),
                 ordinal,
                 locator,
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(true)
+    }
+
+    /// A request whose resources are canonicalised as they are written.
+    ///
+    /// [`create`] writes locators the drain has yet to resolve, because a
+    /// device-enumerated import is the only thing that can turn a seller's
+    /// marketplace address into a product. A migration between two
+    /// marketplaces moves resources the catalogue already holds: the product
+    /// exists, the source mapping is bound, and the listing identifier the
+    /// removal leg needs is already in that binding. There is nothing left for
+    /// a read to discover, so the breadcrumb is written up front and the drain
+    /// skips straight to minting the jobs.
+    ///
+    /// One transaction for the head and its resources, and the same
+    /// `ON CONFLICT DO NOTHING` idempotency [`create`] has: the request's
+    /// identity is the seller's key, so a double-clicked confirm is one
+    /// migration.
+    ///
+    /// [`create`]: Self::create
+    pub async fn create_canonicalised(
+        &self,
+        org: OrgId,
+        new: &NewMigration,
+    ) -> Result<bool, StorageError> {
+        // A migration with no resources would settle complete having moved
+        // nothing, which is `create`'s rule for a server-branch source and is
+        // this path's rule unconditionally: nothing here is device-enumerated,
+        // because the selection is the catalogue's own.
+        if new.resources.is_empty() {
+            return Err(StorageError::Inconsistent {
+                reason: "a migration names at least one resource".to_owned(),
+            });
+        }
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let written = sqlx::query!(
+            "INSERT INTO sync_request \
+             (org_id, id, source, target, disposition, intent, state, requested_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7) \
+             ON CONFLICT (org_id, id) DO NOTHING",
+            uuid_to_db(org.0),
+            uuid_to_db(new.id),
+            inventory_to_db(new.source),
+            inventory_to_db(new.target),
+            new.disposition.as_str(),
+            new.intent.as_str(),
+            timestamp_to_db(new.requested_at)?,
+        )
+        .execute(&mut *tx)
+        .await?;
+        if written.rows_affected() == 0 {
+            return Ok(false);
+        }
+        for (ordinal, resource) in new.resources.iter().enumerate() {
+            let ordinal = i32::try_from(ordinal).map_err(|_| StorageError::Inconsistent {
+                reason: "a migration holds fewer resources than this".to_owned(),
+            })?;
+            let columns = RemoteIdColumns::encode(&resource.source)?;
+            sqlx::query!(
+                "INSERT INTO sync_request_resource \
+                 (org_id, request_id, ordinal, locator, state, product_id, mapping_id, \
+                  source_kind, source_url, source_numeric_id, source_state) \
+                 VALUES ($1, $2, $3, $4, 'canonicalised', $5, $6, $7, $8, $9, $10)",
+                uuid_to_db(org.0),
+                uuid_to_db(new.id),
+                ordinal,
+                resource.locator,
+                uuid_to_db(resource.product.0),
+                uuid_to_db(resource.mapping.0),
+                columns.kind,
+                columns.url,
+                columns.numeric_id,
+                resource.source_state.map(listing_state_to_db),
             )
             .execute(&mut *tx)
             .await?;

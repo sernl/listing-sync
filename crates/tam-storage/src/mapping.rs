@@ -1102,6 +1102,78 @@ impl MappingRepo {
         rows.into_iter().map(decode_head).collect()
     }
 
+    /// One inventory's heads for a named set of products, which is the
+    /// question "is this product already on that marketplace, and as what".
+    ///
+    /// `list_heads` answers it too, by returning every mapping the tenant
+    /// holds and leaving the caller to filter: a migration preview over four
+    /// ticked resources would read a five-hundred-resource catalogue's worth
+    /// of rows twice, once per side of the pair. A product with no mapping on
+    /// this inventory yields no row, which is the same absence `head` means.
+    pub async fn heads_for_products(
+        &self,
+        org: OrgId,
+        inventory: InventoryId,
+        products: &[ProductId],
+    ) -> Result<Vec<MappingHead>, StorageError> {
+        let ids: Vec<uuid::Uuid> = products
+            .iter()
+            .map(|product| uuid_to_db(product.0))
+            .collect();
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let rows = sqlx::query_as!(
+            HeadRow,
+            "SELECT id, product_id, inventory, binding_state, lifecycle_state, updated_at, \
+             remote_id_kind, remote_url, remote_numeric_id \
+             FROM mapping \
+             WHERE org_id = $1 AND inventory = $2 AND product_id = ANY($3) \
+             ORDER BY product_id",
+            uuid_to_db(org.0),
+            inventory_to_db(inventory),
+            &ids,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        rows.into_iter().map(decode_head).collect()
+    }
+
+    /// Of the named mappings, those with a write still owed: an item on them
+    /// that has not settled.
+    ///
+    /// The question a migration preview asks after "is it there" and before
+    /// "will create": a create the seller confirmed a minute ago has not
+    /// moved the binding, because the binding moves when a device claims the
+    /// item, so a preview reading the binding alone would offer the same
+    /// create twice and the second would settle refused after the seller had
+    /// waited for it.
+    pub async fn with_open_items(
+        &self,
+        org: OrgId,
+        mappings: &[MappingId],
+    ) -> Result<Vec<MappingId>, StorageError> {
+        let ids: Vec<uuid::Uuid> = mappings
+            .iter()
+            .map(|mapping| uuid_to_db(mapping.0))
+            .collect();
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let rows: Vec<(uuid::Uuid,)> = sqlx::query_as(
+            "SELECT DISTINCT mapping_id FROM job_item \
+             WHERE org_id = $1 AND mapping_id = ANY($2) AND settled_at IS NULL",
+        )
+        .bind(uuid_to_db(org.0))
+        .bind(&ids)
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(rows
+            .into_iter()
+            .map(|(id,)| MappingId(uuid_from_db(id)))
+            .collect())
+    }
+
     /// One mapping's head, so a write that mints a mapping answers with the
     /// same projection the listing serves rather than a second rendering of
     /// the state columns.

@@ -29,8 +29,8 @@ use tam_fingerprint::{Fingerprint, TextSketch};
 use tam_marketplace::{ImportedListing, ListingState, RemoteListingId};
 use tam_storage::{DeviceRegistration, DeviceRepo, SessionRepo, SessionToken};
 use tam_types::{
-    ContentHash, CopyFormat, FileKind, ImportedPrice, OrgId, ProductId, ScanOutcome, Timestamp,
-    UserId, Uuid,
+    ContentHash, CopyFormat, FileKind, ImportedPrice, Marketplace, OrgId, ProductId, ScanOutcome,
+    Timestamp, UserId, Uuid,
 };
 use tower::ServiceExt;
 
@@ -138,11 +138,12 @@ async fn provision(pool: &PgPool) {
         .expect("the tenant pins");
     sqlx::query(
         "INSERT INTO connection (org_id, id, marketplace, state, created_at, updated_at) \
-         VALUES ($1, $2, 'tes', 'linked', $3, $3)",
+         VALUES ($1, $2, 'tes', 'linked', $3, $3), ($1, $4, 'tpt', 'linked', $3, $3)",
     )
     .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
     .bind(uuid::Uuid::from_bytes([0xC1; 16]))
     .bind(sqlx::types::chrono::DateTime::from_timestamp_millis(NOW.0).expect("a valid instant"))
+    .bind(uuid::Uuid::from_bytes([0xC2; 16]))
     .execute(&mut *tx)
     .await
     .expect("the connection seeds");
@@ -210,17 +211,25 @@ async fn call(
 }
 
 async fn open_run(app: &axum::Router) -> Answer {
+    open_run_on(app, "Tes").await
+}
+
+async fn open_run_on(app: &axum::Router, source: &str) -> Answer {
     call(
         app,
         Method::POST,
         "/v1/imports/runs",
-        Some(serde_json::json!({ "source": "Tes" })),
+        Some(serde_json::json!({ "source": source })),
     )
     .await
 }
 
 async fn started_run(app: &axum::Router) -> Uuid {
-    let answer = open_run(app).await;
+    started_run_on(app, "Tes").await
+}
+
+async fn started_run_on(app: &axum::Router, source: &str) -> Uuid {
+    let answer = open_run_on(app, source).await;
     assert_eq!(
         answer.status,
         StatusCode::CREATED,
@@ -319,22 +328,43 @@ fn listed(locator: &str, title: &str) -> ListedResource {
 }
 
 /// One resource as a device describes it.
-#[expect(
-    clippy::expect_used,
-    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
-)]
 fn observed(
     locator: &str,
     title: &str,
     digest: Option<(u8, u64)>,
     text: Option<TextSketch>,
 ) -> ObservedResource {
+    observed_on(Marketplace::Tes, locator, title, digest, text)
+}
+
+/// The same read from the shop named: a TPT locator is the product's number,
+/// which is what its remote id carries.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+fn observed_on(
+    shop: Marketplace,
+    locator: &str,
+    title: &str,
+    digest: Option<(u8, u64)>,
+    text: Option<TextSketch>,
+) -> ObservedResource {
+    let remote = match shop {
+        Marketplace::Tes => RemoteListingId::Tes {
+            url: locator.to_owned(),
+        },
+        Marketplace::Tpt => RemoteListingId::Tpt {
+            product_id: locator.parse().expect("a TPT locator is a number"),
+        },
+        Marketplace::Etsy => RemoteListingId::Etsy {
+            listing_id: locator.parse().expect("an Etsy locator is a number"),
+        },
+    };
     ObservedResource {
         locator: Locator::new(locator).expect("a bounded locator"),
         listing: ImportedListing {
-            remote: RemoteListingId::Tes {
-                url: locator.to_owned(),
-            },
+            remote,
             title: title.to_owned(),
             body: "A worksheet.".to_owned(),
             body_format: CopyFormat::Markdown,
@@ -492,22 +522,20 @@ async fn a_run_lists_selects_matches_reviews_and_commits(pool: PgPool) {
         "an imported resource carries the shop's own label, in that shop's own colour"
     );
 
-    // ---- the second run: one byte-identical, one similar, one new.
-    let run = started_run(&app).await;
+    // ---- the second run reads the seller's other shop: one byte-identical,
+    // one similar, one new. The other shop and not the same one, because the
+    // matcher compares across marketplaces only: every product the first run
+    // made is bound to the Tes listing it came from, and a second Tes listing
+    // by the same seller is a product they chose to have twice.
+    let run = started_run_on(&app, "Tpt").await;
     let list = ImportPage {
         run,
         request: None,
         listed: Some(vec![
-            listed(
-                "https://www.tes.com/teaching-resource/-11",
-                "Fractions pack",
-            ),
-            listed(
-                "https://www.tes.com/teaching-resource/-12",
-                "Long division worksheets pack",
-            ),
-            listed("https://www.tes.com/teaching-resource/-13", "Number bonds"),
-            listed("https://www.tes.com/teaching-resource/-14", "Left behind"),
+            listed("11", "Fractions pack"),
+            listed("12", "Long division worksheets pack"),
+            listed("13", "Number bonds"),
+            listed("14", "Left behind"),
         ]),
         resources: Vec::new(),
         skipped: Vec::new(),
@@ -527,11 +555,7 @@ async fn a_run_lists_selects_matches_reviews_and_commits(pool: PgPool) {
         Method::POST,
         &format!("/v1/imports/runs/{}/select", uuid_text(run)),
         Some(serde_json::json!({
-            "locators": [
-                "https://www.tes.com/teaching-resource/-11",
-                "https://www.tes.com/teaching-resource/-12",
-                "https://www.tes.com/teaching-resource/-13",
-            ]
+            "locators": ["11", "12", "13"]
         })),
     )
     .await;
@@ -541,7 +565,7 @@ async fn a_run_lists_selects_matches_reviews_and_commits(pool: PgPool) {
     let left = view
         .items
         .iter()
-        .find(|item| item.locator.ends_with("-14"))
+        .find(|item| item.locator.as_str() == "14")
         .expect("the unchosen row is on the run");
     assert_eq!(left.state, ImportRunItemState::Skipped);
     assert_eq!(left.skip_reason.as_deref(), Some("not chosen"));
@@ -566,8 +590,9 @@ async fn a_run_lists_selects_matches_reviews_and_commits(pool: PgPool) {
         vec![
             // Byte for byte the first run's first resource: decisive, and the
             // seller is never asked.
-            observed(
-                "https://www.tes.com/teaching-resource/-11",
+            observed_on(
+                Marketplace::Tpt,
+                "11",
                 "Fractions pack",
                 Some((0x5A, BIG)),
                 None,
@@ -575,15 +600,17 @@ async fn a_run_lists_selects_matches_reviews_and_commits(pool: PgPool) {
             // The same text at ninety of a hundred and twenty-eight positions
             // and nearly the same title: two moderate signals, which is the
             // ask-the-seller band.
-            observed(
-                "https://www.tes.com/teaching-resource/-12",
+            observed_on(
+                Marketplace::Tpt,
+                "12",
                 "Long division worksheets pack",
                 Some((0x7B, BIG)),
                 Some(sketch(0x0F0F_0F0F_0F0F_0F0F, 90, 2)),
             ),
             // Nothing in common with anything.
-            observed(
-                "https://www.tes.com/teaching-resource/-13",
+            observed_on(
+                Marketplace::Tpt,
+                "13",
                 "Number bonds",
                 Some((0x7C, BIG)),
                 None,
@@ -603,21 +630,21 @@ async fn a_run_lists_selects_matches_reviews_and_commits(pool: PgPool) {
     let by = |suffix: &str| -> ImportRunItemState {
         view.items
             .iter()
-            .find(|item| item.locator.ends_with(suffix))
+            .find(|item| item.locator.as_str() == suffix)
             .map_or(ImportRunItemState::Failed, |item| item.state)
     };
     assert_eq!(
-        by("-11"),
+        by("11"),
         ImportRunItemState::Skipped,
         "an exact, large, rare file is the same resource and is not imported twice"
     );
     assert_eq!(
-        by("-12"),
+        by("12"),
         ImportRunItemState::Review,
         "two moderate signals are a question, not an answer"
     );
     assert_eq!(
-        by("-13"),
+        by("13"),
         ImportRunItemState::Matched,
         "silence is not a merge"
     );
@@ -625,7 +652,7 @@ async fn a_run_lists_selects_matches_reviews_and_commits(pool: PgPool) {
     let merged = view
         .items
         .iter()
-        .find(|item| item.locator.ends_with("-11"))
+        .find(|item| item.locator.as_str() == "11")
         .expect("the merged row is on the run");
     assert_eq!(
         merged.skip_reason.as_deref(),
@@ -965,6 +992,67 @@ async fn a_second_run_is_refused_and_names_the_open_one(pool: PgPool) {
         .find(|head| head.id == run)
         .expect("the stopped run is listed");
     assert_eq!(stopped.state, ImportRunState::Abandoned);
+}
+
+/// Reading the same shop twice creates nothing twice: every resource the
+/// first run made is bound to the listing it came from, so the second run
+/// skips those listings as they land, with the resource named, and only the
+/// one the shop gained is left to tick.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_second_read_of_the_same_shop_skips_what_the_catalogue_holds(pool: PgPool) {
+    provision(&pool).await;
+    let app = router(configured(pool.clone(), &store_root("again")));
+    seed_catalogue(&app).await;
+    assert_eq!(products_held(&pool).await, 3);
+
+    let run = started_run(&app).await;
+    let list = ImportPage {
+        run,
+        request: None,
+        listed: Some(vec![
+            listed("https://www.tes.com/teaching-resource/-1", "Fractions pack"),
+            listed(
+                "https://www.tes.com/teaching-resource/-2",
+                "Long division worksheet pack",
+            ),
+            listed("https://www.tes.com/teaching-resource/-4", "New this week"),
+        ]),
+        resources: Vec::new(),
+        skipped: Vec::new(),
+        complete: false,
+        failed: None,
+    };
+    assert_eq!(post_page(&app, &list).await.status, StatusCode::OK);
+
+    let view = run_view(&app, run).await;
+    assert_eq!(
+        (view.counts.listed, view.counts.skipped),
+        (1, 2),
+        "the two the catalogue holds are settled before anything is ticked"
+    );
+    let held = view
+        .items
+        .iter()
+        .find(|item| item.locator.ends_with("-1"))
+        .expect("the held listing is on the run");
+    assert_eq!(held.state, ImportRunItemState::Skipped);
+    assert_eq!(
+        held.skip_reason.as_deref(),
+        Some("already in Resources as Fractions pack"),
+        "the seller is told which resource it already is"
+    );
+
+    // Ticking everything ticks only what is still open.
+    let selected = call(
+        &app,
+        Method::POST,
+        &format!("/v1/imports/runs/{}/select", uuid_text(run)),
+        Some(serde_json::json!({ "all": true })),
+    )
+    .await;
+    assert_eq!(selected.status, StatusCode::OK);
+    let view: ImportRunView = selected.json();
+    assert_eq!((view.counts.selected, view.counts.skipped), (1, 2));
 }
 
 // ------------------------------------------------------------------ counted

@@ -33,6 +33,7 @@
 	import { platformTitle } from '$lib/platforms';
 	import { queryKeys } from '$lib/query';
 	import RowCard from '$lib/RowCard.svelte';
+	import { MIGRATION_HREF } from '$lib/sync-request';
 	import TabBar from '$lib/TabBar.svelte';
 	import { toast } from '$lib/toast';
 	import type { InventoryId } from '$lib/generated/vocab';
@@ -333,8 +334,14 @@
 	let labelling = $state(false);
 	let deleting = $state(false);
 
-	/** Only the four built verbs open anything; Edit is disabled at the control
-	 *  with its recorded reason, so this is exhaustive over what can be run. */
+	/** Only the five built verbs do anything; Edit is disabled at the control
+	 *  with its recorded reason, so this is exhaustive over what can be run.
+	 *
+	 *  Copy-or-move leaves this page rather than opening a dialog: the seller
+	 *  chooses a pair of marketplaces, a disposition and reads a per-resource
+	 *  preview before anything is queued, which is a screen and not a
+	 *  confirmation. The selection travels in the address so the page it lands
+	 *  on can be reopened with the same tick list. */
 	function run(chosenVerb: BulkVerb) {
 		if (chosenVerb === 'cross_list') {
 			crossListing = true;
@@ -344,6 +351,12 @@
 			labelling = true;
 		} else if (chosenVerb === 'delete') {
 			deleting = true;
+		} else if (chosenVerb === 'move') {
+			// Each identifier escaped and the commas left as commas: the separator
+			// is part of the address's own grammar, and escaping it whole turned a
+			// readable link into `products=p4%2Cp5`.
+			const products = chosen.map((row) => encodeURIComponent(row.product.id)).join(',');
+			void goto(`${MIGRATION_HREF}?products=${products}`);
 		}
 	}
 

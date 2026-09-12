@@ -1300,7 +1300,7 @@ fn create_fault(state: &AppState, error: &StorageError) -> APIError {
     }
 }
 
-fn unbound_mapping(
+pub(crate) fn unbound_mapping(
     org: OrgId,
     product: ProductId,
     inventory: InventoryId,

@@ -87,7 +87,12 @@ export function migrationState(facts: AutomationFacts): CardState {
 	if (migrateSource(facts.connections) === null) {
 		return { label: 'No shop connected', tone: 'warn' };
 	}
-	if (!mayMigrate(targetAuthorship(facts.connections))) {
+	// TPT named here rather than left to the seller's choice, because this card
+	// states one summary for a page where the pair is not yet chosen and TPT is
+	// the only target a migration can be authored to today. A card that said
+	// "Ready" while the one available target refused every listing for a
+	// missing declaration would be the wrong summary of the two.
+	if (!mayMigrate(targetAuthorship(facts.connections, 'Tpt'))) {
 		return { label: 'Copyright needed', tone: 'warn' };
 	}
 	return { label: 'Ready', tone: 'ok' };
@@ -135,7 +140,7 @@ export function cards(facts: AutomationFacts): AutomationCard[] {
 		{
 			id: 'migration',
 			href: '/automations/migration',
-			title: 'Marketplace Migration',
+			title: 'Migrations',
 			icon: 'arrow-right-left',
 			what: MIGRATION_WHAT,
 			state: migrationState(facts)
