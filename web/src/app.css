@@ -1365,17 +1365,47 @@ dialog {
 	font: inherit;
 }
 
+dialog::backdrop {
+	background: var(--scrim);
+}
+
+.dialog-body {
+	padding: 18px 20px 16px;
+	max-height: calc(100vh - 64px);
+	overflow-y: auto;
+}
+
+.dialog-body h2 {
+	margin: 0 0 3px;
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.dialog-body > p {
+	margin: 0 0 12px;
+	color: var(--muted);
+	font-size: 12.5px;
+}
+
+.dialog-body .actions {
+	margin-top: 16px;
+	justify-content: flex-end;
+}
+
 /* A dialog becomes a sheet at the bottom edge on a phone, which is where the
    app's one sourced positional fact puts an item's actions — "a pink down
    arrow in the bottom right corner"
    (`docs/research/rethink/vendoo-console-cross-reference.md:163`).
 
-   It lives here, after the base rule, rather than with the rest of the phone
-   layout above it. Both blocks set `width`, `max-height`, `border-radius` and
-   `margin`; a media query adds no specificity, so whichever comes last wins,
-   and while this sat above the base rule every one of its declarations was
-   dead except the two the base rule does not name. Moving a rule is what makes
-   this one apply at all. */
+   It lives here, after every base rule it overrides — the dialog's and the
+   body's both — rather than with the rest of the phone layout above them. Each
+   block sets `width`, `max-height`, `border-radius`, `margin` and the body's
+   padding; a media query adds no specificity, so whichever comes last wins.
+   Sitting above the base `dialog` rule made its own declarations dead; sitting
+   above the base `.dialog-body` left the sheet's body capped at the desktop's
+   `calc(100vh - 64px)` inside a sheet capped at `86vh`, which put the actions
+   of any dialog taller than the sheet below its bottom edge, unreachable by
+   scrolling. Order is the whole of what makes this block apply. */
 @media (max-width: 620px) {
 	dialog {
 		width: 100vw;
@@ -1404,33 +1434,6 @@ dialog {
 	.dialog-body .actions > * {
 		flex: 1;
 	}
-}
-
-dialog::backdrop {
-	background: var(--scrim);
-}
-
-.dialog-body {
-	padding: 18px 20px 16px;
-	max-height: calc(100vh - 64px);
-	overflow-y: auto;
-}
-
-.dialog-body h2 {
-	margin: 0 0 3px;
-	font-size: 15px;
-	font-weight: 600;
-}
-
-.dialog-body > p {
-	margin: 0 0 12px;
-	color: var(--muted);
-	font-size: 12.5px;
-}
-
-.dialog-body .actions {
-	margin-top: 16px;
-	justify-content: flex-end;
 }
 
 /* ---------------------------------------------------------------- the create

@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT cm.product_id, cm.position, p.title FROM collection_member cm JOIN product p ON p.org_id = cm.org_id AND p.id = cm.product_id WHERE cm.org_id = $1 AND cm.collection_id = $2 AND p.deleted_at IS NULL ORDER BY cm.position, cm.product_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "position",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "title",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "203f986da8730d58c106cbd4cfc5536725388f706dffaa70e66da5028c72c7b2"
+}

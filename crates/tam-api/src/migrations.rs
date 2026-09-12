@@ -616,7 +616,7 @@ fn pair_view(source: InventoryId, target: InventoryId) -> PairView {
 }
 
 /// What a seller calls each marketplace, which is not what `Debug` calls it.
-const fn name_of(inventory: InventoryId) -> &'static str {
+pub(crate) const fn name_of(inventory: InventoryId) -> &'static str {
     match inventory {
         InventoryId::Tes => "Tes",
         InventoryId::Tpt => "TPT",

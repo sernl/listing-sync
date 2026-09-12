@@ -5,6 +5,7 @@
 	import {
 		ApiFailure,
 		api,
+		collectionsApi,
 		type MappingHead,
 		type VocabularyView
 	} from '$lib/api';
@@ -40,6 +41,7 @@
 	import StatusPill from '$lib/StatusPill.svelte';
 	import { connectionFor, readinessOf } from '$lib/publish-readiness';
 	import { queryKeys } from '$lib/query';
+	import { COLLECTIONS_KEY, countLine } from '$lib/pages/collections/collections';
 	import { toast } from '$lib/toast';
 	import type { InventoryId } from '$lib/generated/vocab';
 	import { PILL_TONE } from './list';
@@ -60,6 +62,14 @@
 	const labels = createQuery(() => ({
 		queryKey: queryKeys.productLabels(id),
 		queryFn: () => api.productLabels(id).then((view) => view.labels),
+		enabled: id.length > 0
+	}));
+	// Which collections pick this resource. Keyed by the product, and nested
+	// under the collections prefix so a membership written on the Collections
+	// page moves this panel on the next read.
+	const collections = createQuery(() => ({
+		queryKey: [...COLLECTIONS_KEY, 'of-product', id],
+		queryFn: () => collectionsApi.forProduct(id).then((view) => view.collections),
 		enabled: id.length > 0
 	}));
 	const allMappings = createQuery(() => ({
@@ -545,6 +555,28 @@
 						<LabelChip name={label.name} colour={label.colour} system={label.system} />
 					{/each}
 				</div>
+			</Panel>
+		{/if}
+
+		<!-- Which sets this resource is picked by. Its own read rather than a
+		     field of the aggregate: a collection is an ordered set of resources
+		     and the product knows nothing about being in one, so the reverse
+		     read is what answers it. Drawn only where there is one, like the
+		     Labels panel above: an empty panel on every resource page would be a
+		     heading standing in for a fact. -->
+		{#if (collections.data ?? []).length > 0}
+			<Panel
+				title="Collections"
+				description="The sets this resource is in. A collection is published, templated and exported whole, so a change to one of these reaches this resource."
+			>
+				{#each collections.data ?? [] as collection (collection.id)}
+					<a class="res-line" href={`/collections/${collection.id}`}>
+						<span class="res-line-what">
+							<span class="res-line-t">{collection.name}</span>
+						</span>
+						<span class="res-line-at">{countLine(collection.count)}</span>
+					</a>
+				{/each}
 			</Panel>
 		{/if}
 

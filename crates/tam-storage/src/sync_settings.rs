@@ -36,6 +36,14 @@ pub struct SyncSettingRecord {
     /// Where a resource this shop brings in is published, as the seller's own
     /// rules name it.
     pub publish_to: Vec<InventoryId>,
+    /// The template a rule fills a pulled resource from, or `None` where the
+    /// seller has named none.
+    ///
+    /// One per source rather than one per rule, because the control is one
+    /// picker on the shop's card: `auto_publish_rule` carries the column on
+    /// every row of the set and this read takes the first, so the finer grain
+    /// is available to a later control without a migration.
+    pub template: Option<Uuid>,
 }
 
 impl SyncSettingRecord {
@@ -130,7 +138,7 @@ impl SyncSettingRepo {
         .fetch_all(&mut *tx)
         .await?;
         let rules = sqlx::query!(
-            "SELECT source_inventory, target_inventory FROM auto_publish_rule \
+            "SELECT source_inventory, target_inventory, template_id FROM auto_publish_rule \
              WHERE org_id = $1 ORDER BY source_inventory, target_inventory",
             org_db,
         )
@@ -140,9 +148,11 @@ impl SyncSettingRepo {
         rows.into_iter()
             .map(|row| {
                 let inventory = inventory_from_db(&row.inventory)?;
-                let publish_to = rules
+                let mut mine = rules
                     .iter()
-                    .filter(|rule| rule.source_inventory == row.inventory)
+                    .filter(|rule| rule.source_inventory == row.inventory);
+                let publish_to = mine
+                    .clone()
                     .map(|rule| inventory_from_db(&rule.target_inventory))
                     .collect::<Result<Vec<_>, StorageError>>()?;
                 Ok(SyncSettingRecord {
@@ -151,6 +161,7 @@ impl SyncSettingRepo {
                     interval_secs: u32::try_from(row.interval_secs).unwrap_or(u32::MAX),
                     last_pull_at: row.last_pull_at.map(timestamp_from_db),
                     publish_to,
+                    template: mine.find_map(|rule| rule.template_id).map(uuid_from_db),
                 })
             })
             .collect()
@@ -163,10 +174,15 @@ impl SyncSettingRepo {
     /// so a rule the seller unticked is one this statement no longer writes.
     /// `last_pull_at` is untouched -- changing the interval does not mean the
     /// shop was just read.
+    ///
+    /// The template is written on every rule row of the source's set, because
+    /// the control that names it is one picker on the shop's card: the column
+    /// admits a template per target and no surface states one yet.
     #[expect(
         clippy::too_many_arguments,
         reason = "the row is addressed by tenant and marketplace and carries its three stored \
-                  values; a struct over those five would name the call"
+                  values and the template its rules fill from; a struct over those six would \
+                  name the call"
     )]
     pub async fn upsert(
         &self,
@@ -175,6 +191,7 @@ impl SyncSettingRepo {
         enabled: bool,
         interval_secs: u32,
         publish_to: &[InventoryId],
+        template: Option<Uuid>,
     ) -> Result<(), StorageError> {
         let org_db = uuid_to_db(org.0);
         let inventory_db = inventory_to_db(inventory);
@@ -202,11 +219,13 @@ impl SyncSettingRepo {
         .await?;
         for target in publish_to {
             sqlx::query!(
-                "INSERT INTO auto_publish_rule (org_id, source_inventory, target_inventory) \
-                 VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+                "INSERT INTO auto_publish_rule \
+                     (org_id, source_inventory, target_inventory, template_id) \
+                 VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
                 org_db,
                 inventory_db,
                 inventory_to_db(*target),
+                template.map(uuid_to_db),
             )
             .execute(&mut *tx)
             .await?;
@@ -472,6 +491,7 @@ mod tests {
             interval_secs: SIX_HOURS,
             last_pull_at,
             publish_to: vec![],
+            template: None,
         }
     }
 

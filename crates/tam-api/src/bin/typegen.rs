@@ -23,6 +23,7 @@ use tam_api::org::SlugPrompt;
 use tam_api::product::StandardsState;
 use tam_api::resources::{kind_str, role_str};
 use tam_api::schedules::ScheduleRepeatView;
+use tam_api::template_apply::TemplateApplyVerdict;
 use tam_api::vocabulary::{
     BodyWire, CardinalityKind, DelegationKind, DirectionView, NonDelegableReason, PayloadFileRule,
     VocabularyKind,
@@ -381,6 +382,17 @@ fn vocab() -> String {
         "MigrationVerdict",
         "MIGRATION_VERDICTS",
         &MigrationVerdict::ALL,
+        serde_name,
+    ));
+    out.push('\n');
+    // The template apply preview's per-resource answer. A separate closed set
+    // from the migration's, because the questions differ: one asks whether a
+    // listing will be created and the other whether fields will be written,
+    // and a shared three-word enum would make `will_create` mean two things.
+    out.push_str(&closed(
+        "TemplateApplyVerdict",
+        "TEMPLATE_APPLY_VERDICTS",
+        &TemplateApplyVerdict::ALL,
         serde_name,
     ));
     out.push('\n');

@@ -27,6 +27,7 @@
 	import { columnCopy, readState } from '$lib/pages/automations/read-state';
 	import {
 		CONNECT_FIRST,
+		FILLS_WHAT_THE_PULL_LEFT_EMPTY,
 		NOTHING_MULTI_LISTED,
 		NO_ACTIVITY_YET,
 		NO_RUN_YET,
@@ -38,8 +39,10 @@
 		openQuestionsLabel,
 		runRows,
 		syncCards,
+		templateChoices,
 		type SyncCard
 	} from '$lib/pages/automations/sync';
+	import { templates, type TemplateHead } from '$lib/pages/templates/api';
 	import '$lib/pages/automations/automations.css';
 
 	let jobs = $state<JobHead[]>([]);
@@ -66,6 +69,12 @@
 	let activityCursor = $state<number | null>(null);
 	let activityUnread = $state(false);
 
+	// The templates a rule may fill a new pull from. Heads only: the picker
+	// needs a name and a scope, and the draft is the server's business when it
+	// applies the rule.
+	let heads = $state<TemplateHead[]>([]);
+	let headsUnread = $state(false);
+
 	// Null until the figure has actually been read. A count this page failed to
 	// fetch is not a count of zero, so the header control drops the figure
 	// rather than claiming one.
@@ -80,6 +89,9 @@
 		enabled: boolean;
 		interval: number;
 		publishTo: InventoryId[];
+		/** The template a new pull is filled from, or `''` for none. Empty
+		 *  string rather than null because it is a `<select>` value. */
+		template: string;
 	}
 
 	// What each card holds while it is being edited, keyed by inventory. The
@@ -121,7 +133,8 @@
 			edits[card.inventory] ?? {
 				enabled: stored.enabled,
 				interval: heldCadence(stored.interval_secs, stored.minimum_secs ?? planFloor),
-				publishTo: [...stored.publish_to]
+				publishTo: [...stored.publish_to],
+				template: stored.template_id ?? ''
 			}
 		);
 	}
@@ -170,6 +183,13 @@
 	$effect(() => {
 		void loadPage();
 		void loadActivity();
+		void templates
+			.list()
+			.then((listed) => {
+				heads = listed;
+				headsUnread = false;
+			})
+			.catch(() => (headsUnread = true));
 		void loadSettings();
 		void api
 			.connections()
@@ -207,7 +227,8 @@
 			await api.setSyncSetting(inventory, {
 				enabled: wanted.enabled,
 				interval_secs: wanted.interval,
-				publish_to: wanted.publishTo
+				publish_to: wanted.publishTo,
+				template_id: wanted.template === '' ? null : wanted.template
 			});
 			// The stored row is what the card reads from once it is saved, so
 			// the local edit is dropped rather than left to shadow it.
@@ -358,6 +379,49 @@
 								<p class="foot-note">{rulesGate}</p>
 							{/if}
 							<p class="foot-note">{PUBLISHED_WITH_CATALOGUE_WORDS}</p>
+
+							<!-- The template the rule fills a new pull from. Under the
+							     publish targets rather than above them, because which
+							     templates may be chosen is decided by what is ticked
+							     there: a template written for one marketplace fills
+							     fields nothing carries unless the rule publishes to it,
+							     and the server answers 422 for exactly that. -->
+							{#if headsUnread}
+								<p class="foot-note">
+									Your templates could not be read, so this card is offering none. Any
+									template already set on this rule still runs.
+								</p>
+							{:else if heads.length > 0}
+								{@const choices = templateChoices(heads, pull.publishTo)}
+								<div class="set-grid">
+									<Field label="Fill new pulls from template" id={`template-${card.inventory}`}>
+										<select
+											id={`template-${card.inventory}`}
+											disabled={why !== null || rulesGate !== null}
+											value={pull.template}
+											onchange={(event) =>
+												change(card.inventory, {
+													...pull,
+													template: event.currentTarget.value
+												})}
+										>
+											<option value="">No template</option>
+											{#each choices as choice (choice.id)}
+												<option
+													value={choice.id}
+													disabled={choice.reason !== null}
+													title={choice.reason ?? undefined}
+												>
+													{choice.label}{choice.reason === null
+														? ''
+														: ' — not a target of this rule'}
+												</option>
+											{/each}
+										</select>
+									</Field>
+								</div>
+								<p class="foot-note">{FILLS_WHAT_THE_PULL_LEFT_EMPTY}</p>
+							{/if}
 
 							<div class="set-foot">
 								<Button

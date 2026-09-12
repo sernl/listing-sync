@@ -37,6 +37,7 @@ function usage(over: Partial<EntitlementUsage> = {}): EntitlementUsage {
 		// 1 October 2026, 00:00 UTC.
 		migrations_reset_at: Date.UTC(2026, 9, 1),
 		templates: 0,
+		collections: 0,
 		labels: 0,
 		devices: 0,
 		...over
@@ -173,6 +174,7 @@ describe('the allowance lines the Account page reads out', () => {
 			'resources',
 			'marketplaces',
 			'templates',
+			'collections',
 			'labels',
 			'devices'
 		]);

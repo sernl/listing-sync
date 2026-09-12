@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT m.product_id, m.inventory FROM collection_member cm JOIN mapping m ON m.org_id = cm.org_id AND m.product_id = cm.product_id WHERE cm.org_id = $1 AND cm.collection_id = $2 AND m.binding_state = 'bound' ORDER BY m.product_id, m.inventory",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "inventory",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "95154d761ba0150ce780bde251e7e5e84750257efad8c8992c11710af1687609"
+}

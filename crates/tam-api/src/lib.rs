@@ -21,6 +21,7 @@ pub mod auth;
 pub mod billing;
 pub mod blocking;
 pub mod catalogue;
+pub mod collections;
 pub mod devices;
 pub mod duplicates;
 pub mod entitlement;
@@ -48,6 +49,7 @@ pub mod stream;
 pub mod sync_activity;
 pub mod sync_settings;
 pub mod taxonomy;
+pub mod template_apply;
 pub mod text;
 pub mod version;
 pub mod vocabulary;
@@ -386,6 +388,13 @@ pub fn router(state: AppState) -> Router {
             "/{version}/products/{product}/labels",
             get(resources::product_labels).put(resources::set_product_labels),
         )
+        // Which collections a resource is in, which is the resource page's
+        // own panel. A sub-resource of the product rather than a query on the
+        // collection list, because the question is about this resource.
+        .route(
+            "/{version}/products/{product}/collections",
+            get(collections::for_product),
+        )
         // The Template Manager's second tab: a named partial draft of the
         // create form, saved to prefill the next one.
         .route(
@@ -397,6 +406,48 @@ pub fn router(state: AppState) -> Router {
             get(resource_templates::get)
                 .patch(resource_templates::update)
                 .delete(resource_templates::delete),
+        )
+        // Applying one to resources the catalogue already holds. The plan is
+        // a read that writes nothing and is listed before the confirm, so the
+        // longer literal path matches ahead of the shorter one.
+        .route(
+            "/{version}/templates/{template}/apply/plan",
+            post(template_apply::plan_apply),
+        )
+        .route(
+            "/{version}/templates/{template}/apply",
+            post(template_apply::apply),
+        )
+        // A named, ordered set of resources the seller acts on together. The
+        // two publish paths are listed before the collection's own routes for
+        // the reason the migration plan is listed before the migration: a
+        // literal segment has to match ahead of any identifier the family
+        // grows later.
+        .route(
+            "/{version}/collections/{collection}/publish/plan",
+            post(collections::plan_publish),
+        )
+        .route(
+            "/{version}/collections/{collection}/publish",
+            post(collections::publish),
+        )
+        .route(
+            "/{version}/collections/{collection}/members",
+            put(collections::set_members),
+        )
+        .route(
+            "/{version}/collections/{collection}/labels",
+            put(collections::add_labels),
+        )
+        .route(
+            "/{version}/collections",
+            get(collections::list).post(collections::create),
+        )
+        .route(
+            "/{version}/collections/{collection}",
+            get(collections::get)
+                .put(collections::update)
+                .delete(collections::delete),
         )
         .route("/{version}/labels", get(resources::list_labels))
         // Named by the label's own text, because that is how a label is

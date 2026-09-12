@@ -313,6 +313,8 @@ export const VERB_PHRASE: Record<BulkVerb, string> = {
 	cross_list: 'cross-list',
 	mark_listed: 'mark as listed',
 	labels: 'label',
+	add_to_collection: 'add to a collection',
+	apply_template: 'apply a template to',
 	delete: 'delete',
 	edit: 'edit',
 	move: 'copy or move to another marketplace'

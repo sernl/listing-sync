@@ -60,6 +60,8 @@ pub struct PassReport {
     pub pulls: u32,
     /// Resources a scheduled run committed into the catalogue.
     pub committed: u32,
+    /// Pulled resources a rule's template filled fields on.
+    pub filled: u32,
     /// One tenant's failure, named. The pass carries on past each of these.
     pub failures: Vec<String>,
 }
@@ -72,6 +74,7 @@ impl PassReport {
             || self.jobs > 0
             || self.pulls > 0
             || self.committed > 0
+            || self.filled > 0
             || !self.failures.is_empty()
     }
 }
@@ -472,12 +475,25 @@ async fn finish(
     Ok(())
 }
 
-/// Sends what a pull brought in on to the seller's chosen marketplaces.
+/// Sends what a pull brought in on to the seller's chosen marketplaces,
+/// filling each resource from the rule's template first.
 ///
-/// The catalogue projection, not a marketplace-tailored one:
-/// `resource_template.draft` is a partial catalogue form with no marketplace
-/// scope, so there is nothing yet for a rule to apply. That is phase 5's
-/// template widening, and the console says so beside the control.
+/// A freshly pulled resource is bound on its source alone and carries what
+/// that shop held, which is never the whole form: no marketplace answers our
+/// copyright attestation, our tax code, our formats or our details. So the
+/// rule's template fills those — fill-empty, so nothing the pull did carry is
+/// overwritten — and the fill happens once per resource, before the target
+/// loop, because the fields it writes live on the product and its sidecar
+/// rather than on any one marketplace's mapping.
+///
+/// Before the seed rather than after: `mapping_seeds` is what the lowering
+/// consumes, so a template applied after it would reach the next sync and not
+/// this one.
+///
+/// A resource the template cannot fill — a merge the create form's own rules
+/// refuse — is published unfilled rather than failing the tenant's pass. The
+/// seller sees it on the resource page with the fields still blank, which is
+/// the state it would have been in with no template at all.
 async fn publish(
     state: &AppState,
     org: OrgId,
@@ -489,13 +505,15 @@ async fn publish(
         return Ok(());
     };
     let settings = SyncSettingRepo::new(state.pool.clone());
-    let targets: Vec<InventoryId> = settings
+    let setting = settings
         .list(org)
         .await
         .map_err(|error| storage_fault(state, &error))?
         .into_iter()
-        .find(|setting| setting.inventory == source)
-        .map(|setting| setting.publish_to)
+        .find(|setting| setting.inventory == source);
+    let targets: Vec<InventoryId> = setting
+        .as_ref()
+        .map(|setting| setting.publish_to.clone())
         .unwrap_or_default();
     if targets.is_empty() {
         return Ok(());
@@ -507,8 +525,25 @@ async fn publish(
     if products.is_empty() {
         return Ok(());
     }
-    let prices = prices_of(state, org).await?;
     let mappings = MappingRepo::new(state.pool.clone());
+    if let Some(draft) =
+        rule_template(state, org, setting.and_then(|setting| setting.template)).await?
+    {
+        for product in &products {
+            let bound = mappings
+                .list_for_product(org, *product)
+                .await
+                .map_err(|error| storage_fault(state, &error))?;
+            let filled = crate::template_apply::fill_from_template(
+                state, org, *product, &draft, &bound, now,
+            )
+            .await;
+            if let Ok(true) = filled {
+                report.filled = report.filled.saturating_add(1);
+            }
+        }
+    }
+    let prices = prices_of(state, org).await?;
     let reads = JobReadRepo::new(state.pool.clone());
     for target in targets {
         let heads = mappings
@@ -599,6 +634,29 @@ async fn publish(
 }
 
 // ------------------------------------------------------------------ shared
+
+/// The draft a rule's template holds, or `None` where the rule names none.
+///
+/// A template deleted between the rule being written and this pass reads as
+/// no template at all, which is the column's own `ON DELETE SET NULL`: the
+/// rule keeps publishing and fills nothing, which is what it did before a
+/// template could be named. A stored document that will not read back as a
+/// draft is read the same way rather than failing the pass, because a
+/// template nobody can parse must not stop a tenant's shop being published.
+async fn rule_template(
+    state: &AppState,
+    org: OrgId,
+    template: Option<Uuid>,
+) -> Result<Option<crate::product::DraftInput>, APIError> {
+    let Some(id) = template else {
+        return Ok(None);
+    };
+    Ok(tam_storage::ResourceTemplateRepo::new(state.pool.clone())
+        .get(org, id)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+        .and_then(|held| serde_json::from_value(held.draft).ok()))
+}
 
 /// Every catalogue price, for the mappings a tick or a rule mints.
 ///

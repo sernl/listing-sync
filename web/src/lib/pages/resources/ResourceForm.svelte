@@ -14,19 +14,15 @@
 		AUTHORABLE_PLATFORMS,
 		MARKETPLACE_TILES,
 		MARKETPLACE_WORD,
-		MARK_SRC,
 		platformTitle
 	} from '$lib/platforms';
 	import { MARKETPLACE_OF } from '$lib/listings-view';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
 	import Field from '$lib/Field.svelte';
-	import FacetPicker from '$lib/FacetPicker.svelte';
 	import FormSection from '$lib/FormSection.svelte';
-	import GradeGrid from '$lib/GradeGrid.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
-	import StandardsPicker from '$lib/StandardsPicker.svelte';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import TabBar from '$lib/TabBar.svelte';
 	import UploadField from '$lib/UploadField.svelte';
@@ -36,14 +32,22 @@
 	import MarketplacePicker from './MarketplacePicker.svelte';
 	import PreviewField from './PreviewField.svelte';
 	import ThumbnailSlots from './ThumbnailSlots.svelte';
+	import CategoriesPanel from './panels/CategoriesPanel.svelte';
+	import DescriptionPanel from './panels/DescriptionPanel.svelte';
+	import DetailsPanel from './panels/DetailsPanel.svelte';
+	import MarketplacePanel from './panels/MarketplacePanel.svelte';
+	import PricePanel from './panels/PricePanel.svelte';
+	import StandardsPanel from './panels/StandardsPanel.svelte';
+	import StatusPanel from './panels/StatusPanel.svelte';
 	import { createRefusal, sentenceFor } from './refusal';
+	import { templateKeys, templates } from '$lib/pages/templates/api';
+	import { filledLine, mergeIntoEmpty } from '$lib/pages/templates/resource-template';
 	import './resources.css';
 	import { toast } from '$lib/toast';
 	import {
 		advisoriesOf,
 		applyToAll,
 		canonicalValue,
-		capOf,
 		createBodyOf,
 		createdToast,
 		diverges,
@@ -51,7 +55,6 @@
 		draftOf,
 		emptySlots,
 		emptyTptDraft,
-		markUp,
 		marketplacesReached,
 		needsFileBeforeMarketplace,
 		patchBodyOf,
@@ -73,11 +76,9 @@
 		GRADE_LABELS_KEY,
 		GROUP_HELP,
 		OVERRIDABLE,
-		STANDARDS_HELP,
 		type FormAnchor,
 		type FormMode,
 		type GradeLabels,
-		type MarkKind,
 		type Refusal,
 		type StoredFile,
 		type ThumbnailSlot,
@@ -107,6 +108,62 @@
 		queryFn: () => api.formVocabulary(),
 		staleTime: Infinity
 	}));
+
+	/** The templates this seller has saved, for the picker at the head of a new
+	 *  resource. Heads only, which is what the list serves: the draft is read
+	 *  when one is picked, so opening the form costs one small request rather
+	 *  than every draft the seller holds. Not read at all in edit mode — a
+	 *  template is a starting point, and a saved resource has already
+	 *  started. */
+	const templateHeads = createQuery(() => ({
+		queryKey: templateKeys.all,
+		queryFn: () => templates.list(),
+		enabled: mode.kind === 'create'
+	}));
+
+	/** What the last template filled, and what the draft was before it did, so
+	 *  Undo puts back exactly what the seller had. Cleared by the next pick
+	 *  and by the Undo itself. */
+	let started = $state<{ name: string; filled: string[]; before: TptDraft } | null>(null);
+	let starting = $state(false);
+	let startRefusal = $state<string | null>(null);
+
+	/** Reads one template and fills the fields this draft has not answered.
+	 *
+	 *  Fill-the-empty-ones rather than replace: a seller who picks a template
+	 *  after typing keeps what they typed, which is the same rule the apply
+	 *  route follows over saved resources. */
+	async function startFrom(id: string) {
+		if (id === '') {
+			return;
+		}
+		starting = true;
+		startRefusal = null;
+		try {
+			const template = await queryClient.fetchQuery({
+				queryKey: templateKeys.one(id),
+				queryFn: () => templates.read(id)
+			});
+			const merged = mergeIntoEmpty(draft, template.draft);
+			draft = merged.draft;
+			started = { name: template.name, filled: merged.filled, before: merged.before };
+		} catch (failure) {
+			startRefusal =
+				failure instanceof ApiFailure
+					? failure.message
+					: 'That template could not be read, so nothing was filled.';
+		} finally {
+			starting = false;
+		}
+	}
+
+	function undoStart() {
+		if (started === null) {
+			return;
+		}
+		draft = started.before;
+		started = null;
+	}
 
 	// Whose name the preview maker writes across the pages. The teacher's own
 	// shop name, never one composed here, and the maker asks before it writes
@@ -157,7 +214,6 @@
 	// The four TPT slots, each holding the seller's own bytes as the browser can
 	// draw them and, once the upload answers, the handle the create carries.
 	let slots = $state<ThumbnailSlot[]>(emptySlots());
-	let descriptionBox = $state<HTMLTextAreaElement | null>(null);
 
 	/** Which words the grade grid is written in.
 	 *
@@ -630,23 +686,6 @@
 		}
 	});
 
-	/** One toolbar button: Markdown written around what the teacher selected,
-	 *  and the caret put back where they would type next. */
-	function format(kind: MarkKind) {
-		const box = descriptionBox;
-		if (box === null) {
-			return;
-		}
-		const marked = markUp(box.value, box.selectionStart, box.selectionEnd, kind);
-		set('description', marked.text);
-		// After the render that carries the new value, or the browser would
-		// restore the caret into the old one.
-		queueMicrotask(() => {
-			box.focus();
-			box.setSelectionRange(marked.start, marked.end);
-		});
-	}
-
 	/** The band a refusal belongs to, scrolled to and its first control
 	 *  focused. Clicking an error is how the founder asked to reach the field,
 	 *  so the page moves and the caret lands rather than only the URL changing. */
@@ -773,6 +812,42 @@
 		</Banner>
 	{/if}
 
+	<!-- Above the form rather than inside it: a template is where this form
+	     starts, not one of the things it asks. Only on a new resource, and only
+	     where the seller has saved one — an empty select would advertise a
+	     screen they have not been to. -->
+	{#if editing === null && (templateHeads.data?.length ?? 0) > 0}
+		<div class="res-start">
+			<Field
+				label="Start from a template"
+				id="start-from-template"
+				hint="It fills the fields you have not answered yet. Anything you have typed is left alone."
+			>
+				<select
+					id="start-from-template"
+					disabled={starting}
+					onchange={(event) => void startFrom(event.currentTarget.value)}
+				>
+					<option value="">{starting ? 'Reading the template…' : 'None'}</option>
+					{#each templateHeads.data ?? [] as head (head.id)}
+						<option value={head.id}>
+							{head.name}{head.scope === null ? '' : ` — ${MARKETPLACE_WORD[head.scope]}`}
+						</option>
+					{/each}
+				</select>
+			</Field>
+			{#if started !== null}
+				<p class="res-start-said">
+					{filledLine(started.name, started.filled)}
+					<Button small tier="quiet" onclick={undoStart}>Undo</Button>
+				</p>
+			{/if}
+			{#if startRefusal !== null}
+				<p class="res-start-said">{startRefusal}</p>
+			{/if}
+		</div>
+	{/if}
+
 	<form class="res-form" onsubmit={submit}>
 		<!-- One surface rather than a dozen cards: the tabs are its head strip,
 		     the sections are hairline-separated bands inside it, and the actions
@@ -894,401 +969,40 @@
 						{/if}
 					</FormSection>
 
-					<FormSection
-						group="description"
-						icon="book-open"
-						help={GROUP_HELP.description}
+					<DescriptionPanel {draft} {form} {refusals} {set} />
+
+					<PricePanel {draft} {form} {refusals} {advisories} {set} />
+
+					<CategoriesPanel
+						{draft}
+						{form}
 						{refusals}
-					>
-						<Field label="Description" id="draft-description" required>
-							<div class="res-md" role="group" aria-label="Formatting">
-								<button type="button" class="res-md-b" onclick={() => format('bold')}>
-									<b>B</b><span class="sr-only">Bold</span>
-								</button>
-								<button type="button" class="res-md-b" onclick={() => format('italic')}>
-									<i>I</i><span class="sr-only">Italic</span>
-								</button>
-								<button type="button" class="res-md-b" onclick={() => format('bullets')}>
-									•<span class="sr-only">Bulleted list</span>
-								</button>
-								<button type="button" class="res-md-b" onclick={() => format('numbers')}>
-									1.<span class="sr-only">Numbered list</span>
-								</button>
-							</div>
-							<textarea
-								id="draft-description"
-								bind:this={descriptionBox}
-								aria-required="true"
-								placeholder="Describe your product and how it can be helpful to another educator"
-								value={draft.description}
-								oninput={(event) => set('description', event.currentTarget.value)}
-							></textarea>
-							{#if form}
-								<span
-									class="res-count"
-									class:over={draft.description.length > form.limits.description_max_length}
-								>
-									{draft.description.length} of {form.limits.description_max_length} characters
-								</span>
-							{/if}
-						</Field>
-						<p class="res-foot">
-							Use the buttons to format. Each marketplace shows it in its own style.
-						</p>
-					</FormSection>
+						{gradeLabels}
+						onLabels={setGradeLabels}
+						{set}
+					/>
 
-					<FormSection
-						group="price"
-						icon="credit-card"
-						help={GROUP_HELP.price}
-						{refusals}
-						{advisories}
-					>
-						<fieldset class="res-choices">
-							<legend>Free or paid</legend>
-							<label>
-								<input
-									type="checkbox"
-									checked={draft.free}
-									onchange={(event) => set('free', event.currentTarget.checked)}
-								/>
-								Free Resource
-							</label>
-							{#if form}
-								<span class="res-note">
-									Keep a free resource to {form.limits.free_resource_page_guidance} pages or fewer.
-								</span>
-							{/if}
-						</fieldset>
+					<StandardsPanel {draft} {form} {refusals} {set} />
 
-						{#if !draft.free}
-							<div class="res-row">
-								<Field label="Price" id="draft-price" required>
-									<input
-										id="draft-price"
-										type="text"
-										inputmode="decimal"
-										aria-required="true"
-										placeholder="0.00"
-										value={draft.price}
-										oninput={(event) => set('price', event.currentTarget.value)}
-									/>
-								</Field>
-								<!-- The percentage is TPT's own and is stated only when TPT
-								     has been asked. A literal here read as a rule of theirs
-								     on a page whose banner said their rules could not be
-								     read. -->
-								<Field
-									label="Multiple Licenses"
-									id="draft-additional-licence"
-									required
-									hint={form === null
-										? 'Set the price for extra copies.'
-										: `We suggest ${form.limits.additional_licence_percentage}% of the price. Change it if you like.`}
-								>
-									<input
-										id="draft-additional-licence"
-										type="text"
-										inputmode="decimal"
-										aria-required="true"
-										placeholder="0.00"
-										value={draft.additionalLicence}
-										oninput={(event) => set('additionalLicence', event.currentTarget.value)}
-									/>
-								</Field>
-								<Field
-									label="Bundle Discount Price"
-									id="draft-bundle-discount"
-									hint="Enter the price for the whole bundle. A price is easier for buyers to compare than a percentage."
-								>
-									<input
-										id="draft-bundle-discount"
-										type="text"
-										inputmode="decimal"
-										placeholder="0.00"
-										value={draft.bundleDiscount}
-										oninput={(event) => set('bundleDiscount', event.currentTarget.value)}
-									/>
-								</Field>
-							</div>
-						{/if}
-					</FormSection>
-
-					<FormSection
-						group="categories"
-						icon="layout-template"
-						help={GROUP_HELP.categories}
-						{refusals}
-					>
-						{#if form}
-							<GradeGrid
-								vocabulary={form}
-								chosen={draft.grades}
-								labels={gradeLabels}
-								onChange={(grades) => set('grades', grades)}
-								onLabels={setGradeLabels}
-							/>
-
-							<FacetPicker
-								label="Subject Area"
-								required
-								placeholder="Select up to three subject areas"
-								facets={form.subject_areas}
-								chosen={draft.subjectAreas}
-								cap={capOf(form.caps, 'subjectAreas')}
-								onChange={(values) => set('subjectAreas', values)}
-							/>
-
-							<FacetPicker
-								label="Tag (Theme, Audience, Language)"
-								required
-								placeholder="Select up to six tags"
-								facets={form.tags}
-								chosen={draft.tags}
-								cap={capOf(form.caps, 'tags')}
-								onChange={(values) => set('tags', values)}
-							/>
-
-							<FacetPicker
-								label="Format"
-								placeholder="Select up to three formats"
-								facets={form.formats}
-								chosen={draft.formats}
-								cap={capOf(form.caps, 'formats')}
-								onChange={(values) => set('formats', values)}
-							/>
-
-							<Field
-								label="Custom Category"
-								id="draft-custom-category"
-								hint="A custom category is any word or phrase you would like to use to group your own resources. These are your own categories rather than a marketplace vocabulary, which is why they are different from the three options above."
-							>
-								<input
-									id="draft-custom-category"
-									type="text"
-									placeholder="Add a category and press Enter"
-									onkeydown={(event) => {
-										if (event.key === 'Enter') {
-											event.preventDefault();
-											const typed = event.currentTarget.value.trim();
-											if (typed.length > 0 && !draft.customCategories.includes(typed)) {
-												set('customCategories', [...draft.customCategories, typed]);
-											}
-											event.currentTarget.value = '';
-										}
-									}}
-								/>
-								{#if draft.customCategories.length > 0}
-									<div class="res-chips" role="list">
-										{#each draft.customCategories as category (category)}
-											<span class="res-chip" role="listitem">
-												{category}
-												<button
-													type="button"
-													aria-label="Remove {category}"
-													onclick={() =>
-														set(
-															'customCategories',
-															draft.customCategories.filter((held) => held !== category)
-														)}
-												>
-													×
-												</button>
-											</span>
-										{/each}
-									</div>
-								{/if}
-							</Field>
-						{:else}
-							<p class="res-note">The category lists are still being read.</p>
-						{/if}
-					</FormSection>
-
-					<FormSection
-						group="education_standards"
-						icon="shield-check"
-						help={(form?.standards_frameworks.length ?? 0) > 0 ? STANDARDS_HELP : undefined}
-						{refusals}
-					>
-						{#if form}
-							<StandardsPicker
-								frameworks={form.standards_frameworks}
-								chosen={draft.standards}
-								onChange={(standards) => set('standards', standards)}
-							/>
-						{:else}
-							<p class="res-note">The standards frameworks are still being read.</p>
-						{/if}
-					</FormSection>
-
-					<FormSection
-						group="details"
-						icon="sliders-horizontal"
-						help={GROUP_HELP.details}
-						{refusals}
-					>
-						<div class="res-row">
-							<Field label="Teaching Duration" id="draft-teaching-duration">
-								<select
-									id="draft-teaching-duration"
-									value={draft.teachingDuration ?? ''}
-									onchange={(event) =>
-										set(
-											'teachingDuration',
-											event.currentTarget.value === '' ? null : event.currentTarget.value
-										)}
-								>
-									<option value="">N/A</option>
-									{#each form?.teaching_durations ?? [] as duration (duration.id)}
-										<option value={duration.id}>{duration.label}</option>
-									{/each}
-								</select>
-							</Field>
-							<Field label="Number of Pages or Slides" id="draft-pages">
-								<input
-									id="draft-pages"
-									type="text"
-									inputmode="numeric"
-									placeholder="Total pages or slides"
-									value={draft.pagesOrSlides}
-									oninput={(event) => set('pagesOrSlides', event.currentTarget.value)}
-								/>
-							</Field>
-							<Field label="Answer Key" id="draft-answer-key">
-								<select
-									id="draft-answer-key"
-									value={draft.answerKey ?? ''}
-									onchange={(event) =>
-										set(
-											'answerKey',
-											event.currentTarget.value === '' ? null : event.currentTarget.value
-										)}
-								>
-									<option value="">N/A</option>
-									{#each form?.answer_keys ?? [] as key (key.id)}
-										<option value={key.id}>{key.label}</option>
-									{/each}
-								</select>
-							</Field>
-						</div>
-					</FormSection>
+					<DetailsPanel {draft} {form} {refusals} {set} />
 
 					<!-- One panel per marketplace the teacher ticked, headed by its
 					     own mark, holding only what that marketplace asks for. The
 					     founder's rule: a field that belongs to one marketplace has
 					     to say so where it is asked. -->
 					{#each panels as panel (panel.marketplace)}
-						{@const anchor = panel.marketplace === 'Tpt' ? 'tpt_options' : 'tes_options'}
-						<FormSection group={anchor} mark={MARK_SRC[panel.marketplace]} {refusals}>
-							{#if panel.marketplace === 'Tpt'}
-								{#if form}
-									<div class="res-picks" role="radiogroup" aria-label="Copyright">
-										<p class="res-lede">{form.copyright.preamble}</p>
-										{#each form.copyright.options as option (option.id)}
-											<label class="res-pick">
-												<input
-													type="radio"
-													name="copyright"
-													checked={draft.copyright === option.id}
-													onchange={() => set('copyright', option.id)}
-												/>
-												<span class="res-pick-t">{option.label}</span>
-											</label>
-										{/each}
-									</div>
-
-									{#if !draft.free}
-										<Field
-											label="Tax Code"
-											id="draft-tax-code"
-											required
-											hint="Needed so sales tax can be collected on TPT."
-										>
-											<select
-												id="draft-tax-code"
-												aria-required="true"
-												value={draft.taxCode ?? ''}
-												onchange={(event) =>
-													set(
-														'taxCode',
-														event.currentTarget.value === '' ? null : event.currentTarget.value
-													)}
-											>
-												<option value="">Select a tax code</option>
-												{#each form.tax_codes as code (code.id)}
-													<option value={code.id}>{code.label}</option>
-												{/each}
-											</select>
-										</Field>
-									{/if}
-
-									<fieldset class="res-choices">
-										<legend>Localization</legend>
-										<label>
-											<!-- Three states, because the sidecar holds three. A
-											     product that was never asked draws the box
-											     indeterminate rather than unticked: reading the two
-											     the same way is what would let a first save turn
-											     "not stated" into "explicitly no". -->
-											<input
-												type="checkbox"
-												checked={draft.appropriateForCountry === true}
-												indeterminate={draft.appropriateForCountry === null}
-												onchange={(event) =>
-													set('appropriateForCountry', event.currentTarget.checked)}
-											/>
-											{form.localisation.label ?? form.localisation.generic_label}
-										</label>
-									</fieldset>
-								{:else}
-									<p class="res-note">TPT's own questions are still being read.</p>
-								{/if}
-							{/if}
-
-							{#if gatesLicence(panel.marketplace)}
-								<Field
-									label="Licence"
-									id="draft-licence"
-									required
-									hint="{MARKETPLACE_WORD[panel.marketplace]} needs a licence to list this."
-								>
-									<select
-										id="draft-licence"
-										aria-required="true"
-										value={draft.licence ?? ''}
-										onchange={(event) =>
-											set('licence', event.currentTarget.value === '' ? null : event.currentTarget.value)}
-									>
-										<option value="">Choose a licence</option>
-										{#each licences as option (option.id)}
-											<option value={option.id}>{option.label}</option>
-										{/each}
-									</select>
-								</Field>
-							{/if}
-						</FormSection>
+						<MarketplacePanel
+							marketplace={panel.marketplace}
+							{draft}
+							{form}
+							{refusals}
+							gatesLicence={gatesLicence(panel.marketplace)}
+							{licences}
+							{set}
+						/>
 					{/each}
 
-					<FormSection
-						group="product_status"
-						icon="circle-check"
-						help={GROUP_HELP.product_status}
-						{refusals}
-					>
-						<div class="res-choices" role="radiogroup" aria-label="Product status">
-							{#each form?.statuses ?? [] as status (status.id)}
-								<label>
-									<input
-										type="radio"
-										name="status"
-										checked={draft.status === status.id}
-										onchange={() => set('status', status.id)}
-									/>
-									{status.label}
-								</label>
-							{/each}
-						</div>
-					</FormSection>
+					<StatusPanel {draft} {form} {refusals} {set} />
 				{:else}
 					{@const where = tab as InventoryId}
 					{@const view = known.get(where)}

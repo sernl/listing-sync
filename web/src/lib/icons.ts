@@ -34,6 +34,7 @@ import HeartPulse from '@lucide/svelte/icons/heart-pulse';
 import Image from '@lucide/svelte/icons/image';
 import Info from '@lucide/svelte/icons/info';
 import Laptop from '@lucide/svelte/icons/laptop';
+import Layers from '@lucide/svelte/icons/layers';
 import LayoutDashboard from '@lucide/svelte/icons/layout-dashboard';
 import LayoutList from '@lucide/svelte/icons/layout-list';
 import LayoutTemplate from '@lucide/svelte/icons/layout-template';
@@ -86,6 +87,7 @@ export const ICONS = {
 	image: Image,
 	info: Info,
 	laptop: Laptop,
+	layers: Layers,
 	'layout-dashboard': LayoutDashboard,
 	'layout-list': LayoutList,
 	'layout-template': LayoutTemplate,

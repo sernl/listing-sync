@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { BULK_ACTIONS, BULK_VERBS, unavailable } from './bulk-verbs';
 
 describe('the bulk verbs', () => {
-	it('are the five founder decision Q3 named plus the migration hand-off, and no more', () => {
+	it('are the five founder decision Q3 named, the migration hand-off and the two set verbs', () => {
 		expect([...BULK_VERBS].sort()).toEqual([
+			'add_to_collection',
+			'apply_template',
 			'cross_list',
 			'delete',
 			'edit',
@@ -21,13 +23,15 @@ describe('the bulk verbs', () => {
 		}
 	});
 
-	it('offers the five the API already serves', () => {
+	it('offers everything the API already serves', () => {
 		const built = BULK_ACTIONS.filter((action) => action.missing === null);
 		expect(built.map((action) => action.verb)).toEqual([
 			'cross_list',
 			'mark_listed',
 			'move',
 			'labels',
+			'add_to_collection',
+			'apply_template',
 			'delete'
 		]);
 	});

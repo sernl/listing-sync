@@ -32,12 +32,15 @@
 //! API takes a date from a caller. Whether a seller's local date is worth a
 //! request parameter is a founder decision, not one to make here.
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::header;
 use axum::response::IntoResponse;
+use serde::Deserialize;
 use tam_domain::registry::listing_url::listing_url;
-use tam_storage::{ExportedResource, LedgerCursor, ProductRepo, StorageError};
-use tam_types::{Currency, InventoryId, Money, OrgId, PriceIntent, Timestamp};
+use tam_storage::{
+    ExportedResource, LedgerCursor, ProductRepo, ResourceCollectionRepo, StorageError,
+};
+use tam_types::{Currency, InventoryId, Money, OrgId, PriceIntent, ProductId, Timestamp, Uuid};
 
 use crate::error::APIError;
 use crate::{AppState, OrgContext};
@@ -80,11 +83,33 @@ const fn short_name(inventory: InventoryId) -> &'static str {
     }
 }
 
+/// Which resources the document covers.
+///
+/// Absent is the whole catalogue, which is what this route answered before a
+/// collection existed and still answers. A collection or an explicit list
+/// narrows it, and the narrowing is a filter over the same page walk rather
+/// than a second read: the columns are per inventory and built from
+/// `export_page`'s own join, so a selection-shaped statement would be a
+/// second definition of the document's rows.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ExportParams {
+    /// A collection whose members are exported, in catalogue order rather
+    /// than the collection's own: a spreadsheet is sorted by whoever opens it,
+    /// and the row order a CSV carries is not a thing the seller set here.
+    #[serde(default)]
+    pub collection: Option<String>,
+    /// A comma-separated tick list, for a selection the seller has not named.
+    #[serde(default)]
+    pub products: Option<String>,
+}
+
 pub(crate) async fn export_catalogue(
     State(state): State<AppState>,
     context: OrgContext,
+    Query(params): Query<ExportParams>,
 ) -> Result<impl IntoResponse, APIError> {
-    let document = document(&state, context.org).await?;
+    let only = selected(&state, context.org, &params).await?;
+    let document = document(&state, context.org, only.as_deref()).await?;
     let today = civil_date((state.wall)());
     Ok((
         [
@@ -98,18 +123,83 @@ pub(crate) async fn export_catalogue(
     ))
 }
 
+/// The resources this request names, or `None` for the whole catalogue.
+///
+/// A collection this organisation does not hold answers an empty document
+/// rather than not-found: the pin is what decides, and a caller guessing
+/// identifiers must not learn which guesses were right from the difference.
+/// An unparseable identifier in the list is refused, because that is a client
+/// fault rather than a stale tab.
+async fn selected(
+    state: &AppState,
+    org: OrgId,
+    params: &ExportParams,
+) -> Result<Option<Vec<ProductId>>, APIError> {
+    if let Some(collection) = params.collection.as_deref() {
+        let named = uuid::Uuid::parse_str(collection.trim()).map_err(|_unused| {
+            APIError::new(
+                axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                crate::error::APIErrorEntry::new(
+                    "the collection parameter is a collection identifier",
+                )
+                .kind(crate::error::APIErrorKind::Validation),
+            )
+        })?;
+        let members = ResourceCollectionRepo::new(state.pool.clone())
+            .members(org, Uuid(*named.as_bytes()))
+            .await
+            .map_err(|error| storage_fault(state, &error))?;
+        return Ok(Some(
+            members.into_iter().map(|member| member.product).collect(),
+        ));
+    }
+    let Some(listed) = params.products.as_deref() else {
+        return Ok(None);
+    };
+    listed
+        .split(',')
+        .map(str::trim)
+        .filter(|raw| !raw.is_empty())
+        .map(|raw| {
+            uuid::Uuid::parse_str(raw)
+                .map(|parsed| ProductId(Uuid(*parsed.as_bytes())))
+                .map_err(|_unused| {
+                    APIError::new(
+                        axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                        crate::error::APIErrorEntry::new(
+                            "the products parameter is a comma-separated list of resource \
+                             identifiers",
+                        )
+                        .kind(crate::error::APIErrorKind::Validation),
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>, APIError>>()
+        .map(Some)
+}
+
 fn storage_fault(state: &AppState, error: &StorageError) -> APIError {
     state.internal(&error.to_string())
 }
 
-/// The whole document, gathered through the export page walk under this
+/// The document, gathered through the export page walk under this
 /// organisation's row-level security.
 ///
 /// Two statements per page and none per resource: `export_page` reads a
 /// page's products, their labels and their listings together, because the
 /// per-resource composition it replaced cost about eighteen statements and two
 /// transactions for every row of the document.
-async fn document(state: &AppState, org: OrgId) -> Result<String, APIError> {
+///
+/// `only` names the resources a selection admits, and `None` is the whole
+/// catalogue. The walk is the same either way and the filter is on the rows,
+/// because the page read is what composes a row from four tables and a
+/// selection-shaped variant of it would be a second definition of the
+/// document.
+async fn document(
+    state: &AppState,
+    org: OrgId,
+    only: Option<&[ProductId]>,
+) -> Result<String, APIError> {
     let products = ProductRepo::new(state.pool.clone());
     let mut out = String::new();
     write_row(&mut out, &header_row());
@@ -127,7 +217,10 @@ async fn document(state: &AppState, org: OrgId) -> Result<String, APIError> {
             id: last.id.0,
         });
         let exhausted = i64::try_from(page.len()).unwrap_or(i64::MAX) < PAGE;
-        for resource in &page {
+        for resource in page
+            .iter()
+            .filter(|resource| only.is_none_or(|ids| ids.contains(&resource.id)))
+        {
             write_row(&mut out, &row(resource));
         }
         if exhausted {

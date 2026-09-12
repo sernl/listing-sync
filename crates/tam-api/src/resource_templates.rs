@@ -24,10 +24,10 @@ use tam_domain::product::{
     AuthoringError, FacetSlug, Picker, ProductName, ThumbnailMode, UploadRef,
 };
 use tam_storage::{
-    NewResourceTemplate, ResourceTemplateRecord, ResourceTemplateRepo, ResourceTemplateSummary,
-    TemplateChange, TemplateEdit, TemplateWrite, TEMPLATES_PER_ORG_MAX,
+    Given, NewResourceTemplate, ResourceTemplateRecord, ResourceTemplateRepo,
+    ResourceTemplateSummary, TemplateChange, TemplateEdit, TemplateWrite, TEMPLATES_PER_ORG_MAX,
 };
-use tam_types::{Timestamp, Uuid};
+use tam_types::{InventoryId, Timestamp, Uuid};
 
 use crate::entitlement::{quota_refusal, QuotaKind};
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
@@ -96,6 +96,21 @@ fn parse_id(raw: &str) -> Result<Uuid, APIError> {
 pub struct ResourceTemplateView {
     pub id: Uuid,
     pub name: String,
+    /// The seller's own note about when to reach for this template.
+    ///
+    /// Not the resource description: that is `draft.description` and travels
+    /// into the listing, while this one never leaves the console. Two fields
+    /// rather than one, so a note reading "for the phonics packs, not the
+    /// assessments" cannot reach a marketplace.
+    pub description: Option<String>,
+    /// The marketplace this template is written for, or `null` for one that
+    /// is written for none.
+    ///
+    /// What it decides is which marketplace's panel the console shows while
+    /// the seller fills the template in, and which auto-publish rules may
+    /// name it. A scoped template still fills catalogue fields; the scope is
+    /// not a second place a field lives.
+    pub scope: Option<InventoryId>,
     /// The partial draft, in the shape the create form's own controls hold.
     pub draft: serde_json::Value,
     pub created_at: Timestamp,
@@ -107,6 +122,8 @@ impl ResourceTemplateView {
         Self {
             id: record.id,
             name: record.name,
+            description: record.description,
+            scope: record.scope,
             draft: record.draft,
             created_at: record.created_at,
             updated_at: record.updated_at,
@@ -120,10 +137,16 @@ impl ResourceTemplateView {
 /// [`TEMPLATES_PER_ORG_MAX`] bounds only the row count: a shelf of drafts at
 /// [`DRAFT_MAX_BYTES`] would make every picker open serialise several
 /// megabytes. The console fetches the one the seller chose from [`get`].
+///
+/// The note and the scope do travel: they are one short string and one token,
+/// and they are what a picker row renders for the seller to choose between
+/// two templates without opening either.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceTemplateHead {
     pub id: Uuid,
     pub name: String,
+    pub description: Option<String>,
+    pub scope: Option<InventoryId>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -133,6 +156,8 @@ impl ResourceTemplateHead {
         Self {
             id: summary.id,
             name: summary.name,
+            description: summary.description,
+            scope: summary.scope,
             created_at: summary.created_at,
             updated_at: summary.updated_at,
         }
@@ -150,18 +175,76 @@ pub struct ResourceTemplatesView {
 #[derive(Debug, Deserialize)]
 pub struct CreateBody {
     pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub scope: Option<InventoryId>,
     pub draft: serde_json::Value,
 }
 
-/// What an edit replaces. Both fields optional, and both absent is refused:
-/// a request that changes nothing would still move `updated_at`, which is a
-/// lie about when the seller last touched the template.
+/// What an edit replaces. Every field optional, and all four absent is
+/// refused: a request that changes nothing would still move `updated_at`,
+/// which is a lie about when the seller last touched the template.
+///
+/// The two nullable fields are [`Given`], because absent and null mean
+/// different things on this route: absent leaves the stored value alone and an
+/// explicit null clears it. A plain `Option` cannot tell the two apart, which
+/// would make deleting a note inexpressible.
 #[derive(Debug, Default, Deserialize)]
 pub struct UpdateBody {
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
     pub draft: Option<serde_json::Value>,
+    #[serde(default, deserialize_with = "given")]
+    pub description: Given<String>,
+    #[serde(default, deserialize_with = "given")]
+    pub scope: Given<InventoryId>,
+}
+
+/// Reads a present-but-null field as `Given::Set(None)`, leaving
+/// `#[serde(default)]` to answer `Given::Kept` for an absent one — which is
+/// the distinction serde's own `Option` cannot make.
+pub(crate) fn given<'de, T, D>(deserializer: D) -> Result<Given<T>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Option::deserialize(deserializer).map(Given::Set)
+}
+
+/// The longest note the form accepts, counted in characters for
+/// [`NAME_MAX_CHARS`]'s reason and matching migration 0072's own CHECK.
+pub const DESCRIPTION_MAX_CHARS: usize = 1_000;
+
+/// The note as it will be stored: trimmed, bounded, and `None` where the
+/// seller wrote nothing.
+///
+/// A blank note stores as null rather than as an empty string, because two
+/// spellings of "the seller wrote no note" would make every reader check for
+/// each — which is also what migration 0072's CHECK refuses.
+///
+/// Line breaks are kept where the name refuses them: a note is a sentence or
+/// two about when to use the template and a paragraph break in one is
+/// ordinary, while a name is one row of a picker.
+fn validated_description(raw: Option<&str>) -> Result<Option<&str>, APIError> {
+    let Some(trimmed) = raw.map(str::trim).filter(|text| !text.is_empty()) else {
+        return Ok(None);
+    };
+    if trimmed.chars().count() > DESCRIPTION_MAX_CHARS {
+        return Err(validation(&format!(
+            "a template note is at most {DESCRIPTION_MAX_CHARS} characters"
+        )));
+    }
+    if trimmed
+        .chars()
+        .any(|character| character.is_control() && character != '\n' && character != '\r')
+    {
+        return Err(validation(
+            "a template note cannot contain control characters",
+        ));
+    }
+    Ok(Some(trimmed))
 }
 
 /// The name as it will be stored, or the refusal a seller can act on.
@@ -239,7 +322,7 @@ fn entry_of(refusal: &RefusalView) -> APIErrorEntry {
 /// [`selection_caps`], the refusals are `AuthoringError` values, and
 /// [`refusal_of`] renders them, so the message and the numbers cannot drift
 /// from the form's.
-fn refusals(draft: &DraftInput) -> Result<(), APIError> {
+pub(crate) fn refusals(draft: &DraftInput) -> Result<(), APIError> {
     let mut entries: Vec<APIErrorEntry> = Vec::new();
 
     // A blank title is a template waiting to be finished; a title that is
@@ -506,6 +589,7 @@ pub(crate) async fn create(
     Json(body): Json<CreateBody>,
 ) -> Result<(StatusCode, Json<ResourceTemplateView>), APIError> {
     let name = validated_name(&body.name)?;
+    let description = validated_description(body.description.as_deref())?;
     validated_draft(&body.draft)?;
     // The plan's allowance, checked before the store's own absolute ceiling:
     // one is what this seller bought and the other is what the listing can
@@ -530,6 +614,8 @@ pub(crate) async fn create(
             &NewResourceTemplate {
                 id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
                 name,
+                description,
+                scope: body.scope,
                 draft: &body.draft,
                 created_at: (state.wall)(),
             },
@@ -552,14 +638,18 @@ pub(crate) async fn create(
     }
 }
 
-/// Replaces a template's name, its draft, or both.
+/// Replaces any of a template's four parts.
 ///
-/// A part the request leaves out keeps the value it has. Both left out is
+/// A part the request leaves out keeps the value it has. All four left out is
 /// refused rather than accepted as a no-op, because the write would still move
 /// `updated_at` and misstate when the seller last touched the template. The
 /// draft is replaced whole rather than merged: the console renders every field
 /// and sends them all back, so a merge would make clearing one impossible to
 /// express.
+///
+/// The note and the scope distinguish absent from null: leaving one out keeps
+/// it and sending `null` clears it, which is the only way to express a seller
+/// deleting their note or unscoping a template.
 ///
 /// Every bound [`create`] applies holds here too, save the per-organisation
 /// ceiling, which an edit cannot cross because it adds no row. A name already
@@ -576,14 +666,18 @@ pub(crate) async fn update(
         Some(raw) => Some(validated_name(raw)?),
         None => None,
     };
+    let description = match &body.description {
+        Given::Kept => Given::Kept,
+        Given::Set(note) => Given::Set(validated_description(note.as_deref())?),
+    };
     if let Some(draft) = body.draft.as_ref() {
         validated_draft(draft)?;
     }
-    // The refusal is the type's, not a guard beside it: `TemplateEdit` has no
-    // empty inhabitant, so an edit naming neither part cannot be built and
-    // cannot reach a statement that would move `updated_at` for nothing.
-    let edit = TemplateEdit::of(name, body.draft.as_ref())
-        .ok_or_else(|| validation("an edit names a new name, a new draft, or both"))?;
+    // The refusal is the constructor's, not a guard beside it: a
+    // `TemplateEdit` naming no part cannot be built, and so cannot reach a
+    // statement that would move `updated_at` for nothing.
+    let edit = TemplateEdit::of(name, body.draft.as_ref(), description, body.scope)
+        .ok_or_else(|| validation("an edit names a new name, note, scope or draft"))?;
     let written = ResourceTemplateRepo::new(state.pool.clone())
         .update(context.org, id, &edit, (state.wall)())
         .await

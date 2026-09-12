@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO resource_template (org_id, id, name, draft, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5) RETURNING id, name, draft, created_at, updated_at",
+  "query": "INSERT INTO collection (org_id, id, name, description, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5) RETURNING id, name, description, created_at, updated_at",
   "describe": {
     "columns": [
       {
@@ -15,8 +15,8 @@
       },
       {
         "ordinal": 2,
-        "name": "draft",
-        "type_info": "Jsonb"
+        "name": "description",
+        "type_info": "Text"
       },
       {
         "ordinal": 3,
@@ -34,17 +34,17 @@
         "Uuid",
         "Uuid",
         "Text",
-        "Jsonb",
+        "Text",
         "Timestamptz"
       ]
     },
     "nullable": [
       false,
       false,
-      false,
+      true,
       false,
       false
     ]
   },
-  "hash": "cb36b33800c92533708b2d6736842f8db277aeabfb5c5db6421775d3763b7178"
+  "hash": "ace3b190eb583855b0ff6e0449c045e416f1dd7386901770b32a1c753fb4a849"
 }

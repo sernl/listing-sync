@@ -1,23 +1,36 @@
 <script lang="ts">
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { ApiFailure, api } from '$lib/api';
+	import { licenceGated, licenceOptions } from '$lib/authoring';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
-	import FacetPicker from '$lib/FacetPicker.svelte';
 	import { entitlementRead, limitOf } from '$lib/entitlement-read';
 	import Field from '$lib/Field.svelte';
+	import type { InventoryId } from '$lib/generated/vocab';
+	import { MARKETPLACE_OF } from '$lib/listings-view';
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
-	import Toggle from '$lib/Toggle.svelte';
 	import { queryKeys } from '$lib/query';
+	import { GRADE_LABELS_KEY, type GradeLabels, type TptDraft } from '$lib/tpt-form';
+	import CategoriesPanel from '$lib/pages/resources/panels/CategoriesPanel.svelte';
+	import DescriptionPanel from '$lib/pages/resources/panels/DescriptionPanel.svelte';
+	import DetailsPanel from '$lib/pages/resources/panels/DetailsPanel.svelte';
+	import MarketplacePanel from '$lib/pages/resources/panels/MarketplacePanel.svelte';
+	import PricePanel from '$lib/pages/resources/panels/PricePanel.svelte';
+	import StandardsPanel from '$lib/pages/resources/panels/StandardsPanel.svelte';
+	import StatusPanel from '$lib/pages/resources/panels/StatusPanel.svelte';
+	import '$lib/pages/resources/resources.css';
 	import { templateKeys, templates, type TemplateHead } from './api';
 	import {
+		DESCRIPTION_MAX,
+		SCOPE_CHOICES,
 		consumeBlankRequest,
 		emptyForm,
 		formOf,
 		isComplete,
 		refusalOf,
 		savedLine,
+		scopeLabel,
 		toInput
 	} from './resource-template';
 	import { EMPTY_BODY, EMPTY_HEADING } from './tabs';
@@ -78,6 +91,40 @@
 	 *  while watching the row go. */
 	const busy = $derived(opening !== null || removing !== null);
 
+	const held = $derived(vocabulary.data ?? null);
+	const scoped = $derived(form.scope === '' ? null : (form.scope as InventoryId));
+
+	/** What the scoped marketplace itself declares. Read only where a scope is
+	 *  chosen: a generic template shows no marketplace panel, so there is
+	 *  nothing for this to answer. */
+	const platform = createQuery(() => ({
+		queryKey: queryKeys.vocabulary(scoped ?? 'Tpt'),
+		queryFn: () => api.vocabulary(scoped ?? 'Tpt'),
+		staleTime: Infinity,
+		enabled: scoped !== null
+	}));
+
+	const known = $derived(
+		scoped === null || platform.data === undefined
+			? new Map()
+			: new Map([[scoped, platform.data]])
+	);
+	const gatesLicence = $derived(scoped !== null && licenceGated([scoped], known).length > 0);
+	const licences = $derived(
+		scoped === null ? [] : licenceOptions(platform.data, form.draft.free ? 'free' : 'paid')
+	);
+
+	/** Which words the grade grid is written in. The same browser-held answer
+	 *  the create form reads, so a seller who works in years works in years
+	 *  here too. */
+	let gradeLabels = $state<GradeLabels>('american');
+	$effect(() => {
+		const stored = localStorage.getItem(GRADE_LABELS_KEY);
+		if (stored === 'american' || stored === 'british') {
+			gradeLabels = stored;
+		}
+	});
+
 	$effect(() => {
 		const answer = consumeBlankRequest(blankRequested);
 		if (answer.open) {
@@ -85,6 +132,18 @@
 			blank();
 		}
 	});
+
+	function setGradeLabels(chosen: GradeLabels) {
+		gradeLabels = chosen;
+		localStorage.setItem(GRADE_LABELS_KEY, chosen);
+	}
+
+	/** One field of the draft the bands write into. The same signature the
+	 *  create form passes them, which is what lets the bands be the same
+	 *  components rather than two sets that drifted. */
+	function set<K extends keyof TptDraft>(field: K, value: TptDraft[K]) {
+		form = { ...form, draft: { ...form.draft, [field]: value } };
+	}
 
 	/** What a failed call says. The server's own words where it gave any: a
 	 *  refusal it decided, such as a name already taken or the ceiling on how
@@ -191,55 +250,85 @@
 			<Field label="Name" id="{base}-name" required hint="What you will pick it by.">
 				<input id="{base}-name" type="text" bind:value={form.name} />
 			</Field>
+
+			<Field
+				label="Written for"
+				id="{base}-scope"
+				hint="A template written for one marketplace also holds that marketplace's own questions."
+			>
+				<select id="{base}-scope" bind:value={form.scope}>
+					{#each SCOPE_CHOICES as choice (choice.label)}
+						<option
+							value={choice.value}
+							disabled={choice.reason !== null}
+							title={choice.reason ?? undefined}
+						>
+							{choice.label}{choice.reason === null ? '' : ` — ${choice.reason}`}
+						</option>
+					{/each}
+				</select>
+			</Field>
 		</div>
 
-		{#if vocabulary.data}
-			<div class="tpl-stack">
-				<FacetPicker
-					label="Subjects"
-					placeholder="Search your subjects"
-					facets={vocabulary.data.subject_areas}
-					chosen={form.subjects}
-					cap={vocabulary.data.caps.subject_areas ?? null}
-					onChange={(values) => (form.subjects = values)}
-				/>
-				<FacetPicker
-					label="Year levels"
-					placeholder="Search year levels"
-					facets={vocabulary.data.grades}
-					chosen={form.grades}
-					cap={vocabulary.data.caps.grades ?? null}
-					onChange={(values) => (form.grades = values)}
-				/>
-			</div>
+		<Field
+			label="Description"
+			id="{base}-description"
+			hint="A note to yourself about when to reach for this template. It is not the resource's own description, which is the band below."
+		>
+			<textarea id="{base}-description" rows="2" bind:value={form.description}></textarea>
+			<span class="tpl-count" class:over={form.description.length > DESCRIPTION_MAX}>
+				{form.description.length} of {DESCRIPTION_MAX} characters
+			</span>
+		</Field>
 
-			<div class="tpl-grid">
-				<Field label="Licence" id="{base}-licence" hint={vocabulary.data.copyright.preamble}>
-					<select id="{base}-licence" bind:value={form.licence}>
-						<option value="">Ask me each time</option>
-						{#each vocabulary.data.copyright.options as option (option.id)}
-							<option value={option.id}>{option.label}</option>
-						{/each}
-					</select>
-				</Field>
+		{#if held}
+			<!-- The whole new-resource form, band for band, over the same
+			     components the create form renders: a template is a partial
+			     `DraftInput`, so anything that form can answer this one can hold
+			     as a starting point. Four bands are absent and each for the same
+			     reason — the title, the files, the previews and the thumbnails
+			     are made per resource rather than chosen once, and the
+			     marketplace grid asks where a resource goes rather than what it
+			     says.
 
-				<Field
-					label="Price"
-					id="{base}-price"
-					hint="Dollars and cents, like 4.50 — leave it empty to be asked each time."
-				>
-					<input
-						id="{base}-price"
-						type="text"
-						inputmode="decimal"
-						placeholder="0.00"
-						disabled={form.free}
-						bind:value={form.price}
+			     No refusals are passed. Every field here is optional by
+			     construction: an unanswered one is left out of the draft and the
+			     create form asks for it as usual. -->
+			<!-- `resources.css` scopes every band rule under `.resources-page`, so
+			     the bands carry that hook wherever they are rendered. It is the
+			     form's scope rather than one page's: without it the same
+			     components would draw here with no hairlines, no gutters and no
+			     heading rhythm. -->
+			<div class="resources-page tpl-form">
+				<!-- `optional` on every band: the panel says "leave the rest empty
+				     and we will ask as usual", so a Required chip here would tell
+				     the seller the opposite of what the panel and the write both
+				     do. The create form leaves the prop alone and is unchanged. -->
+				<DescriptionPanel draft={form.draft} form={held} optional {set} />
+				<PricePanel draft={form.draft} form={held} optional {set} />
+				<CategoriesPanel
+					draft={form.draft}
+					form={held}
+					{gradeLabels}
+					onLabels={setGradeLabels}
+					optional
+					{set}
+				/>
+				<StandardsPanel draft={form.draft} form={held} {set} />
+				<DetailsPanel draft={form.draft} form={held} {set} />
+				{#if scoped !== null}
+					<MarketplacePanel
+						marketplace={MARKETPLACE_OF[scoped]}
+						draft={form.draft}
+						form={held}
+						{gatesLicence}
+						{licences}
+						optional
+						{set}
 					/>
-				</Field>
+				{/if}
+				<StatusPanel draft={form.draft} form={held} blank="Ask me each time" {set} />
 			</div>
-
-			<Toggle label="Free resource" bind:checked={form.free} />
 		{:else}
 			<p class="tpl-none">
 				{vocabulary.isError
@@ -283,7 +372,15 @@
 		{#each rows as head (head.id)}
 			<div class="tpl-row">
 				<span class="who">
-					<span class="t">{head.name}</span>
+					<span class="t">
+						{head.name}
+						<span class="tpl-chip" class:generic={head.scope === null}>
+							{scopeLabel(head.scope)}
+						</span>
+					</span>
+					{#if head.description !== null && head.description.length > 0}
+						<span class="tpl-said">{head.description}</span>
+					{/if}
 					<span class="meta">{savedLine(head, now)}</span>
 				</span>
 				<span class="tpl-row-acts">

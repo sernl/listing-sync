@@ -9,7 +9,15 @@
 // URL a teaching resource accumulates; the reconciliation verb is
 // revise-in-place (`docs/notes/design/seller-dashboard.md`).
 
-export type BulkVerb = 'cross_list' | 'move' | 'edit' | 'labels' | 'delete' | 'mark_listed';
+export type BulkVerb =
+	| 'cross_list'
+	| 'move'
+	| 'edit'
+	| 'apply_template'
+	| 'add_to_collection'
+	| 'labels'
+	| 'delete'
+	| 'mark_listed';
 
 export interface BulkAction {
 	verb: BulkVerb;
@@ -27,7 +35,13 @@ export interface BulkAction {
 const MISSING: Record<BulkVerb, string | null> = {
 	cross_list: null,
 	delete: null,
+	// Still missing, and `apply_template` is not it: a template names the
+	// fields it carries, so applying one chooses nothing across the selection.
+	// The screen that lets a seller say "set the price on these forty to £3" is
+	// what does not exist.
 	edit: 'No screen chooses which fields change across a selection. Editing one resource at a time works; the screen for editing several at once is what does not exist.',
+	apply_template: null,
+	add_to_collection: null,
 	labels: null,
 	mark_listed: null,
 	move: null
@@ -36,6 +50,8 @@ const MISSING: Record<BulkVerb, string | null> = {
 const LABEL: Record<BulkVerb, string> = {
 	cross_list: 'Cross-list',
 	edit: 'Edit',
+	apply_template: 'Apply a template',
+	add_to_collection: 'Add to collection',
 	labels: 'Labels',
 	delete: 'Delete',
 	mark_listed: 'Mark as listed',
@@ -49,6 +65,8 @@ export const BULK_VERBS: readonly BulkVerb[] = [
 	'mark_listed',
 	'move',
 	'labels',
+	'add_to_collection',
+	'apply_template',
 	'delete',
 	'edit'
 ];

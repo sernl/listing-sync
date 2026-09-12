@@ -236,6 +236,6 @@ Each phase's verification includes a 1280 and a 390 capture of every new page, a
 
 Every phase ends with a release, by founder rule of 2026-09-12: `docs/releases/<version>.md`, the version bump in both desktop files, `just release-check`, and the `v<version>` tag that runs `desktop-release.yml` to GitHub Releases and CrabNebula Cloud for Windows and Android; then the deployment branch is re-pinned and `teachouse-downloads-refresh` is seen to publish the new set.
 The app halves must be clean under `cargo clippy -p tam-desktop -- -D warnings`, `cargo nextest run -p tam-desktop` and the Windows cross-check, and anything the phase changed that the desktop or the phone must follow (a route move, a theme, a permission) lands in the same release rather than being left to the landing page or the browser.
-Phases 0 to 2 shipped together as 0.4.0; phase 3 with the console-start fix and the phone bar as 0.5.0; phase 4 as 0.6.0.
+Phases 0 to 2 shipped together as 0.4.0; phase 3 with the console-start fix and the phone bar as 0.5.0; phase 4 as 0.6.0; phase 5 as 0.7.0.
 
 Founder-supervised captures owed, none blocking phase 0 to 2: TPT own-file download, Tes edit-published, Tes unpublish, TPT preview slot (from 2026-09-11).

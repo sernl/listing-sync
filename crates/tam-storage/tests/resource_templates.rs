@@ -18,7 +18,7 @@
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Postgres, Transaction};
 use tam_storage::{
-    NewResourceTemplate, ResourceTemplateRepo, TemplateChange, TemplateEdit, TemplateWrite,
+    Given, NewResourceTemplate, ResourceTemplateRepo, TemplateChange, TemplateEdit, TemplateWrite,
     TEMPLATES_PER_ORG_MAX,
 };
 use tam_types::{OrgId, Timestamp, Uuid};
@@ -73,9 +73,30 @@ fn template<'a>(id: Uuid, name: &'a str, held: &'a serde_json::Value) -> NewReso
     NewResourceTemplate {
         id,
         name,
+        description: None,
+        scope: None,
         draft: held,
         created_at: MADE,
     }
+}
+
+/// A rename, which `TemplateEdit::of` answers as an option because an edit
+/// naming no part cannot be built. Unwrapped here because a literal name is
+/// always a part.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+fn rename(name: &str) -> TemplateEdit<'_> {
+    TemplateEdit::of(Some(name), None, Given::Kept, Given::Kept).expect("a name is an edit")
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+fn redraft(draft: &serde_json::Value) -> TemplateEdit<'_> {
+    TemplateEdit::of(None, Some(draft), Given::Kept, Given::Kept).expect("a draft is an edit")
 }
 
 const TEMPLATE_A: Uuid = Uuid([0x0A; 16]);
@@ -127,7 +148,7 @@ async fn each_tenant_keeps_its_own_templates_and_neither_reaches_the_other(pool:
          identifier is the one thing a caller could guess"
     );
     assert_eq!(
-        repo.update(ORG_A, TEMPLATE_B, &TemplateEdit::Rename("stolen"), EDITED,)
+        repo.update(ORG_A, TEMPLATE_B, &rename("stolen"), EDITED,)
             .await
             .expect("the edit runs"),
         TemplateChange::Missing,
@@ -292,7 +313,7 @@ async fn one_template_per_folded_name_per_organisation(pool: PgPool) {
         "a second name lands"
     );
     assert_eq!(
-        repo.update(ORG_A, second, &TemplateEdit::Rename("AUTUMN UNIT"), EDITED,)
+        repo.update(ORG_A, second, &rename("AUTUMN UNIT"), EDITED,)
             .await
             .expect("the rename runs"),
         TemplateChange::NameTaken,
@@ -310,12 +331,7 @@ async fn an_edit_replaces_only_the_part_it_names(pool: PgPool) {
         .expect("the template saves");
 
     let renamed = repo
-        .update(
-            ORG_A,
-            TEMPLATE_A,
-            &TemplateEdit::Rename("Phonics, revised"),
-            EDITED,
-        )
+        .update(ORG_A, TEMPLATE_A, &rename("Phonics, revised"), EDITED)
         .await
         .expect("the rename runs");
     let TemplateChange::Saved(record) = renamed else {
@@ -334,7 +350,7 @@ async fn an_edit_replaces_only_the_part_it_names(pool: PgPool) {
 
     let second = draft("Phonics pack, second edition");
     let replaced = repo
-        .update(ORG_A, TEMPLATE_A, &TemplateEdit::Redraft(&second), EDITED)
+        .update(ORG_A, TEMPLATE_A, &redraft(&second), EDITED)
         .await
         .expect("the draft replacement runs");
     let TemplateChange::Saved(record) = replaced else {
@@ -424,12 +440,7 @@ async fn a_template_may_be_renamed_into_another_casing_of_its_own_name(pool: PgP
         .expect("the template saves");
 
     let renamed = repo
-        .update(
-            ORG_A,
-            TEMPLATE_A,
-            &TemplateEdit::Rename("AUTUMN UNIT"),
-            EDITED,
-        )
+        .update(ORG_A, TEMPLATE_A, &rename("AUTUMN UNIT"), EDITED)
         .await
         .expect("the rename runs");
     let TemplateChange::Saved(record) = renamed else {
@@ -456,12 +467,7 @@ async fn an_edit_stamped_before_the_row_was_made_is_clamped_rather_than_refused(
 
     let stepped_back = Timestamp(MADE.0 - 60_000);
     let edited = repo
-        .update(
-            ORG_A,
-            TEMPLATE_A,
-            &TemplateEdit::Rename("Phonics II"),
-            stepped_back,
-        )
+        .update(ORG_A, TEMPLATE_A, &rename("Phonics II"), stepped_back)
         .await
         .expect("the rename runs rather than raising the CHECK as a fault");
     let TemplateChange::Saved(record) = edited else {

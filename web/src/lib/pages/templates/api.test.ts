@@ -66,7 +66,7 @@ describe('reading templates', () => {
 });
 
 describe('writing templates', () => {
-	const input = { name: 'One', draft: { free: true } };
+	const input = { name: 'One', description: null, scope: null, draft: { free: true } };
 
 	it('creates with POST, JSON content type, and the draft wrapped', async () => {
 		answering(201, { id: 'a', name: 'One', created_at: 1, updated_at: 1, draft: {} });
@@ -75,7 +75,7 @@ describe('writing templates', () => {
 			url: '/v1/templates',
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
-			body: { name: 'One', draft: { free: true } }
+			body: { name: 'One', description: null, scope: null, draft: { free: true } }
 		});
 	});
 
@@ -99,9 +99,9 @@ describe('a refusal', () => {
 			status: 422,
 			errors: [{ message: 'a template of that name already exists', kind: 'validation' }]
 		});
-		await expect(templates.create({ name: 'One', draft: {} })).rejects.toThrow(
-			'a template of that name already exists'
-		);
+		await expect(
+			templates.create({ name: 'One', description: null, scope: null, draft: {} })
+		).rejects.toThrow('a template of that name already exists');
 	});
 
 	it('carries the status, so a caller can tell a missing template from a refusal', async () => {

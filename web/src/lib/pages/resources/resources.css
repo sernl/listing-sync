@@ -3,6 +3,10 @@
  * cards. Everything scoped under `.resources-page`, because every page-level
  * sheet in this console is loaded globally and a class named here must not be
  * able to reach another page's markup.
+ *
+ * The hook is the form's rather than one page's, and the Template Manager
+ * carries it too: the bands under `panels/` are rendered there over the same
+ * draft, and a second copy of their rules is a second copy to keep in step.
  */
 
 /* --- the filter card ----------------------------------------------------- */
@@ -392,6 +396,29 @@
    around it that no component covers. */
 .resources-page .res-form {
 	display: block;
+}
+
+/* The template strip above the form's card. Its own surface rather than a
+   band inside the card, because a template is where the form starts and the
+   card is the form: putting it inside would make it look like one more thing
+   the seller has to answer. */
+.resources-page .res-start {
+	background: var(--surface);
+	border-radius: var(--r-card);
+	box-shadow: var(--sh-2);
+	margin-top: 24px;
+	padding: 16px 20px;
+	min-width: 0;
+}
+
+.resources-page .res-start-said {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	margin: 8px 0 0;
+	font-size: 13px;
+	color: var(--muted);
 }
 
 /* One surface holding every section, rather than one card per section. Nine

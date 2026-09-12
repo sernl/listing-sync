@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT source_inventory, target_inventory FROM auto_publish_rule WHERE org_id = $1 ORDER BY source_inventory, target_inventory",
+  "query": "SELECT source_inventory, target_inventory, template_id FROM auto_publish_rule WHERE org_id = $1 ORDER BY source_inventory, target_inventory",
   "describe": {
     "columns": [
       {
@@ -12,6 +12,11 @@
         "ordinal": 1,
         "name": "target_inventory",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "template_id",
+        "type_info": "Uuid"
       }
     ],
     "parameters": {
@@ -21,8 +26,9 @@
     },
     "nullable": [
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "de510911a8348f7279e7d1a308d1723bd7f34ac7bb4c02d3499451dc0ecd2c94"
+  "hash": "abf685e02ab6cbbbeae4f6206bf6b68d08fe2929ffed6918d7ba051990b6a0bd"
 }

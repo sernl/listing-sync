@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT cm.collection_id, m.inventory FROM collection_member cm JOIN product p ON p.org_id = cm.org_id AND p.id = cm.product_id JOIN mapping m ON m.org_id = cm.org_id AND m.product_id = cm.product_id WHERE cm.org_id = $1 AND p.deleted_at IS NULL AND m.binding_state = 'bound' ORDER BY cm.collection_id, m.inventory",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "collection_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "inventory",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "c7fcd15fb6c1eb9c3c7a5fc81ae255cfc924787756a61b6c4d5375c0cbbe06c5"
+}

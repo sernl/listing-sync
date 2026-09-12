@@ -1354,8 +1354,11 @@ function pathSlug(path: PathView): string {
  *  render the code and remove by this key, which works, and a seller who finds
  *  the same standard again in the search adds a second pick rather than seeing
  *  the stored one already ticked. Storing the mirror's guid would fix that and
- *  is a migration, so it is stated here rather than papered over. */
-function storedPick(alignment: {
+ *  is a migration, so it is stated here rather than papered over.
+ *
+ *  Exported because a saved template's draft carries the same three fields
+ *  the sidecar does, so reading one back into the form is this conversion. */
+export function storedPick(alignment: {
 	framework: number;
 	code: string;
 	tpt_node_id: number | null;

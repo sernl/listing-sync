@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, name, draft, created_at, updated_at FROM resource_template WHERE org_id = $1 AND id = $2",
+  "query": "SELECT id, name, description, created_at, updated_at FROM collection WHERE org_id = $1 AND id = $2",
   "describe": {
     "columns": [
       {
@@ -15,8 +15,8 @@
       },
       {
         "ordinal": 2,
-        "name": "draft",
-        "type_info": "Jsonb"
+        "name": "description",
+        "type_info": "Text"
       },
       {
         "ordinal": 3,
@@ -38,10 +38,10 @@
     "nullable": [
       false,
       false,
-      false,
+      true,
       false,
       false
     ]
   },
-  "hash": "d10c0c9f3d5cd594bcef5eb5f00212f1a3b5bdd12f8afeb0df1db36acc6f0597"
+  "hash": "f4cd4f3b623f5c98c99e2020b7ba4ae02f4ac1a6a51a326eee2f0b93acad459e"
 }

@@ -353,6 +353,8 @@ impl EntitlementRepo {
                    WHERE org_id = $1)                                 AS "templates!",
                  (SELECT count(*) FROM label
                    WHERE org_id = $1)                                 AS "labels!",
+                 (SELECT count(*) FROM collection
+                   WHERE org_id = $1)                                 AS "collections!",
                  (SELECT count(*) FROM device
                    WHERE org_id = $1 AND revoked_at IS NULL)          AS "devices!""#,
             uuid_to_db(org.0),
@@ -368,6 +370,7 @@ impl EntitlementRepo {
             migrations_reset_at: resets,
             templates: row.templates,
             labels: row.labels,
+            collections: row.collections,
             devices: row.devices,
         })
     }
@@ -414,6 +417,7 @@ pub struct Usage {
     pub migrations_reset_at: Timestamp,
     pub templates: i64,
     pub labels: i64,
+    pub collections: i64,
     pub devices: i64,
 }
 

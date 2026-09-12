@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO collection_member (org_id, collection_id, product_id, position, added_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (org_id, collection_id, product_id) DO UPDATE SET position = excluded.position",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Int4",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e3786f5505d523f881be42df3d21b12d2b2281e0e73239c015a180bc6ef78b93"
+}

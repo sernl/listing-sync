@@ -3,6 +3,8 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { allPages, api, type MappingHead } from '$lib/api';
+	import AddToCollectionDialog from '$lib/AddToCollectionDialog.svelte';
+	import ApplyTemplateDialog from '$lib/ApplyTemplateDialog.svelte';
 	import Banner from '$lib/Banner.svelte';
 	import BulkDeleteDialog from '$lib/BulkDeleteDialog.svelte';
 	import { BULK_ACTIONS, unavailable, type BulkVerb } from '$lib/bulk-verbs';
@@ -31,6 +33,7 @@
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
 	import { platformTitle } from '$lib/platforms';
+	import { COLLECTIONS_KEY } from '$lib/pages/collections/collections';
 	import { queryKeys } from '$lib/query';
 	import RowCard from '$lib/RowCard.svelte';
 	import { MIGRATION_HREF } from '$lib/sync-request';
@@ -333,8 +336,10 @@
 	let markingListed = $state(false);
 	let labelling = $state(false);
 	let deleting = $state(false);
+	let collecting = $state(false);
+	let templating = $state(false);
 
-	/** Only the five built verbs do anything; Edit is disabled at the control
+	/** Every built verb does something; Edit alone is disabled at the control
 	 *  with its recorded reason, so this is exhaustive over what can be run.
 	 *
 	 *  Copy-or-move leaves this page rather than opening a dialog: the seller
@@ -349,6 +354,10 @@
 			markingListed = true;
 		} else if (chosenVerb === 'labels') {
 			labelling = true;
+		} else if (chosenVerb === 'add_to_collection') {
+			collecting = true;
+		} else if (chosenVerb === 'apply_template') {
+			templating = true;
 		} else if (chosenVerb === 'delete') {
 			deleting = true;
 		} else if (chosenVerb === 'move') {
@@ -358,6 +367,31 @@
 			const products = chosen.map((row) => encodeURIComponent(row.product.id)).join(',');
 			void goto(`${MIGRATION_HREF}?products=${products}`);
 		}
+	}
+
+	/** The collection the selection went into, named rather than counted: a
+	 *  seller who has four collections needs to know which one grew. */
+	async function collected(into: string, count: number) {
+		collecting = false;
+		cancelBulk();
+		toast(
+			'info',
+			count === 0
+				? `${into} already held every one of those resources.`
+				: `${count} ${count === 1 ? 'resource' : 'resources'} added to ${into}.`
+		);
+		await queryClient.invalidateQueries({ queryKey: COLLECTIONS_KEY });
+	}
+
+	/** A template landed on the selection. The dialog says what it changed, so
+	 *  this only refreshes what the writes touched and stands the board down. */
+	async function templated() {
+		templating = false;
+		cancelBulk();
+		await Promise.all([
+			queryClient.invalidateQueries({ queryKey: queryKeys.products }),
+			queryClient.invalidateQueries({ queryKey: queryKeys.mappings })
+		]);
 	}
 
 	function started(runs: { inventory: InventoryId; job: string }[]) {
@@ -809,4 +843,21 @@
 	mappings={removing === null ? [] : [...removing.mapped.values()]}
 	onClose={() => (removing = null)}
 	onDeleted={deletedOne}
+/>
+
+<AddToCollectionDialog
+	open={collecting}
+	rows={chosen}
+	onClose={() => (collecting = false)}
+	onAdded={collected}
+/>
+
+<!-- The template's own dialog, shared with the Collections page and the
+     Template Manager: it reads the template list itself, so the selection is
+     all this board has to hand it. -->
+<ApplyTemplateDialog
+	open={templating}
+	products={chosen.map((row) => row.product.id)}
+	onClose={() => (templating = false)}
+	onDone={templated}
 />

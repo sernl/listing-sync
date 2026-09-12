@@ -14,6 +14,8 @@ import { agoLabel } from '$lib/elapsed';
 import type { InventoryId, Marketplace } from '$lib/generated/vocab';
 import { INVENTORY_ORDER, MARKETPLACE_OF } from '$lib/listings-view';
 import { MARKETPLACE_WORD } from '$lib/platforms';
+import type { TemplateHead } from '$lib/pages/templates/api';
+import { scopeRefusal } from '$lib/pages/templates/resource-template';
 
 export interface RunRow {
 	job: string;
@@ -178,12 +180,46 @@ export function lastPullLine(at: number | null, now: number): string {
 	return at === null ? 'Never pulled' : agoLabel(at, now);
 }
 
-/** What a newly pulled resource is published with. Templates carry the
- *  marketplace-specific words and are the next release's work, so the rule
- *  says what it does today rather than what it will do. */
+/** What a newly pulled resource is published with, and what the template on
+ *  the rule adds to it.
+ *
+ *  A freshly pulled resource is bound on its source alone, so the fields the
+ *  source did not carry — the copyright, the tax code, the formats, the
+ *  details the other marketplace asks for — are empty. The template answers
+ *  those and nothing else: it fills, it does not overwrite. */
 export const PUBLISHED_WITH_CATALOGUE_WORDS =
-	'A new pull is published with your catalogue’s own title and description. Per-marketplace ' +
-	'wording from a template arrives in the next release.';
+	'A new pull is published with your catalogue’s own title and description.';
+
+/** The sentence the pull card says under its template picker. */
+export const FILLS_WHAT_THE_PULL_LEFT_EMPTY = 'The template fills what the pull left empty.';
+
+/** One template a pull rule may fill from, and why it cannot be chosen.
+ *
+ *  Offered and disabled rather than filtered out: a seller who wrote a
+ *  template for TPT and then looks for it under a rule that publishes to Tes
+ *  is answered, where a shorter list would leave them hunting a screen. */
+export interface TemplateChoice {
+	id: string;
+	label: string;
+	reason: string | null;
+}
+
+/** The templates this rule may fill from, in the order they are listed.
+ *
+ *  A generic template suits any rule. A scoped one suits a rule that publishes
+ *  to its marketplace, which is the same rule the server holds — it answers
+ *  422 otherwise — so the console states it on the option rather than letting
+ *  the seller learn it from the Save. */
+export function templateChoices(
+	heads: readonly TemplateHead[],
+	publishTo: readonly InventoryId[]
+): TemplateChoice[] {
+	return heads.map((head) => ({
+		id: head.id,
+		label: head.scope === null ? head.name : `${head.name} — ${MARKETPLACE_WORD[head.scope]}`,
+		reason: scopeRefusal(head.scope, publishTo)
+	}));
+}
 
 // ------------------------------------------------------- log and multi-list
 

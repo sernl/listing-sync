@@ -1,0 +1,316 @@
+/* The Collections pages' own rules. Scoped under `.collections-page` so a
+ * class these pages name cannot reach another page's markup: these rules load
+ * globally, as every page-level stylesheet in this console does.
+ */
+
+/* --- the list ------------------------------------------------------------ */
+
+.collections-page .coll-toolbar {
+	display: flex;
+	align-items: flex-end;
+	justify-content: space-between;
+	gap: 14px;
+	flex-wrap: wrap;
+	margin: 4px 0 14px;
+}
+
+.collections-page .coll-search {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	border: 1px solid var(--line);
+	background: var(--surface);
+	border-radius: var(--r-field);
+	padding-left: 11px;
+	min-height: var(--control-h);
+	color: var(--muted);
+	min-width: 0;
+}
+
+.collections-page .coll-search:focus-within {
+	border-color: var(--accent);
+}
+
+.collections-page .coll-search input[type='search'] {
+	border: 0;
+	background: none;
+	padding-block: 8px;
+	padding-left: 0;
+	min-width: 0;
+	color: var(--ink);
+}
+
+.collections-page .coll-total {
+	color: var(--muted);
+	font-size: 13px;
+}
+
+.collections-page .coll-marks {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+}
+
+/* A menu item that navigates is an anchor, so it keeps middle-click and
+   open-in-new-tab; the shared menu styles its buttons only. Named under this
+   page rather than shared with the Resources sheet, which names its own, so
+   two pages cannot come to colour one component from two rules. */
+.collections-page .coll-menu-link {
+	display: block;
+	border-radius: 6px;
+	padding: 9px 10px;
+	font-size: 14px;
+	color: var(--text);
+	min-height: 38px;
+}
+
+.collections-page .coll-menu-link:hover {
+	background: var(--hover);
+}
+
+.collections-page .coll-danger {
+	color: var(--bad-ink);
+}
+
+/* --- the form the New collection control opens --------------------------- */
+
+.collections-page .coll-form {
+	display: grid;
+	gap: 12px;
+}
+
+/* Two columns above the phone, because a name and a description are one
+   decision and a description typed a screen below its name reads as a second
+   form. */
+@media (min-width: 700px) {
+	.collections-page .coll-form {
+		grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+		align-items: start;
+	}
+}
+
+.collections-page .coll-form-foot {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+
+/* --- the detail page's header and members -------------------------------- */
+
+/* The two-column page the phase-3 and phase-4 screens established: what is
+   being acted on on the left, the verbs and their previews on the right. One
+   column below 960px, where two would be two narrow ones. */
+.collections-page .coll-body {
+	display: grid;
+	gap: 16px;
+}
+
+@media (min-width: 960px) {
+	.collections-page .coll-body {
+		grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+		align-items: start;
+	}
+}
+
+.collections-page .coll-right {
+	display: grid;
+	gap: 16px;
+	min-width: 0;
+}
+
+.collections-page .coll-member {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 10px;
+	padding: 9px 0;
+	border-bottom: 1px solid var(--line);
+	min-width: 0;
+}
+
+.collections-page .coll-member:last-of-type {
+	border-bottom: 0;
+}
+
+.collections-page .coll-pos {
+	color: var(--muted);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+	min-width: 2ch;
+	text-align: right;
+}
+
+.collections-page .coll-member-title {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.collections-page .coll-member-title a {
+	color: inherit;
+}
+
+.collections-page .coll-member-marks {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	margin-left: 8px;
+}
+
+.collections-page .coll-member-acts {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+}
+
+/* Below 700px the three controls and a title cannot share a line: the title
+   column collapses and a resource name wraps one character per row. The
+   controls drop under the title instead, still beside its number. */
+@media (max-width: 700px) {
+	.collections-page .coll-member {
+		grid-template-columns: auto minmax(0, 1fr);
+	}
+
+	.collections-page .coll-member-acts {
+		grid-column: 2;
+		justify-content: flex-start;
+	}
+}
+
+/* The labels field sits under the template control in the same panel, and two
+   controls with no gap between them read as one. */
+.collections-page .coll-right .field {
+	margin-top: 14px;
+}
+
+/* --- the pick list, the migration page's own checklist shape ------------- */
+
+.collections-page .pick-head {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	flex-wrap: wrap;
+	margin-bottom: 10px;
+}
+
+.collections-page .pick-head input[type='search'] {
+	flex: 1 1 200px;
+	min-width: 0;
+}
+
+.collections-page .pick-all {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--muted);
+	font-size: 13px;
+	cursor: pointer;
+}
+
+.collections-page .pick-list {
+	display: grid;
+	gap: 2px;
+	max-height: 320px;
+	overflow-y: auto;
+	padding-right: 4px;
+}
+
+.collections-page .pick-row,
+.coll-dialog .pick-row {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 10px;
+	padding: 6px 2px;
+	cursor: pointer;
+}
+
+.collections-page .pick-title,
+.coll-dialog .pick-title {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.collections-page .pick-count {
+	color: var(--muted);
+	font-size: 13px;
+}
+
+/* --- the preview rows, worded and toned as the migration plan's ---------- */
+
+.collections-page .plan-rows {
+	display: grid;
+	gap: 8px;
+	margin-top: 10px;
+}
+
+.collections-page .plan-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 8px 12px;
+	padding-bottom: 8px;
+	border-bottom: 1px solid var(--line);
+}
+
+.collections-page .plan-title {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.collections-page .plan-why {
+	grid-column: 1 / -1;
+	color: var(--muted);
+	font-size: 13px;
+}
+
+.collections-page .plan-why .block {
+	display: block;
+}
+
+.collections-page .coll-verb-foot {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	margin-top: 12px;
+}
+
+/* --- the marketplace tiles the publish dialog offers --------------------- */
+
+.coll-dialog .mk-tiles {
+	display: grid;
+	gap: 8px;
+	margin: 10px 0;
+}
+
+.coll-dialog .mk-tile {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr);
+	align-items: center;
+	gap: 10px;
+	border: 1px solid var(--line);
+	border-radius: var(--r-field);
+	padding: 10px 12px;
+	background: var(--surface);
+	color: var(--ink);
+	text-align: left;
+	cursor: pointer;
+}
+
+.coll-dialog .mk-tile.on {
+	border-color: var(--accent);
+}
+
+.coll-dialog .mk-tile:disabled {
+	cursor: not-allowed;
+	color: var(--muted);
+}
+
+.coll-dialog .mk-tile-why {
+	display: block;
+	color: var(--muted);
+	font-size: 12px;
+}

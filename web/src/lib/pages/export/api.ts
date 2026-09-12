@@ -10,9 +10,39 @@ import { ApiFailure, type APIErrorBody } from '$lib/api';
 import { filenameFrom, type CsvDocument } from './download';
 
 /** The catalogue export. Same origin and same session cookie as every other
- *  call; the route takes no parameters and answers the caller's own
- *  organisation (`crates/tam-api/src/lib.rs`). */
+ *  call; a bare path answers the caller's own whole catalogue, and the two
+ *  parameters below narrow it (`crates/tam-api/src/export.rs`). */
 export const EXPORT_PATH = '/v1/products/export';
+
+/** What the seller asked for: the whole catalogue, one collection, or the
+ *  resources they ticked.
+ *
+ *  Three shapes rather than two nullable fields, so "all of it" cannot arrive
+ *  alongside a selection that contradicts it -- the same reason
+ *  `MigrationSelection` is a sum. */
+export type ExportSelection = null | { collection: string } | { products: readonly string[] };
+
+/** The route and the selection, as one address.
+ *
+ *  The collection is a single identifier and the products are comma-joined,
+ *  because the separator is part of the address's own grammar: each identifier
+ *  is escaped and the commas are left as commas, which is what the Resources
+ *  board's own migration link does. An empty product list asks for the whole
+ *  catalogue rather than for nothing -- a selection of no resources is not a
+ *  request the server has an answer for. */
+export function exportPath(selection: ExportSelection): string {
+	if (selection === null) {
+		return EXPORT_PATH;
+	}
+	if ('collection' in selection) {
+		return `${EXPORT_PATH}?collection=${encodeURIComponent(selection.collection)}`;
+	}
+	if (selection.products.length === 0) {
+		return EXPORT_PATH;
+	}
+	const products = selection.products.map((id) => encodeURIComponent(id)).join(',');
+	return `${EXPORT_PATH}?products=${products}`;
+}
 
 /** The cache entry answering only "does the catalogue hold anything at all".
  *
@@ -30,8 +60,11 @@ export const EMPTINESS_KEY = ['products', 'export-emptiness'] as const;
 /** Fetch the catalogue as one CSV document, named the way the server named it.
  *
  * `fetchImpl` is an argument so the page tests without a network. */
-export async function fetchCatalogueCsv(fetchImpl: typeof fetch = fetch): Promise<CsvDocument> {
-	const response = await fetchImpl(EXPORT_PATH, { headers: { accept: 'text/csv' } });
+export async function fetchCatalogueCsv(
+	fetchImpl: typeof fetch = fetch,
+	selection: ExportSelection = null
+): Promise<CsvDocument> {
+	const response = await fetchImpl(exportPath(selection), { headers: { accept: 'text/csv' } });
 	if (!response.ok) {
 		let body: APIErrorBody | null = null;
 		try {

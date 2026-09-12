@@ -686,6 +686,13 @@ export interface MarketplaceSyncSettingView {
 	last_pull_at: number | null;
 	/** The marketplaces a newly pulled resource is published onward to. */
 	publish_to: InventoryId[];
+	/** The template a newly pulled resource is filled from, or null. Fill the
+	 *  empty fields only: a pull carries what the source marketplace holds,
+	 *  and the template answers what it did not — the copyright, the tax code,
+	 *  the formats and the rest of the questions the other marketplace asks.
+	 *  Generic, or scoped to one of `publish_to`; the server refuses anything
+	 *  else with a 422. */
+	template_id: string | null;
 }
 
 export interface SyncSettingsView {
@@ -699,6 +706,7 @@ export interface SyncSettingBody {
 	enabled: boolean;
 	interval_secs: number;
 	publish_to: InventoryId[];
+	template_id: string | null;
 }
 
 /** One line of the activity log, composed by the server.
@@ -875,6 +883,7 @@ export interface EntitlementUsage {
 	 *  the next UTC month. */
 	migrations_reset_at: number;
 	templates: number;
+	collections: number;
 	labels: number;
 	devices: number;
 }
@@ -2544,3 +2553,143 @@ export async function allPages<Row, Page extends { next_cursor: string | null }>
 		cursor = page.next_cursor;
 	}
 }
+
+// ---------------------------------------------------------------- collections
+//
+// A collection is an ordered set of resources the seller names, and the three
+// verbs that act on one: publish it to a marketplace, apply a template and
+// labels across it, and export it as a spreadsheet. The calls sit in their own
+// object rather than inside `api` above so that this block is a block: the
+// file is shared, and an object literal two agents both add keys to is the one
+// shape that cannot be appended to.
+
+/** One collection as the list reads it. Draft-less in the same sense a
+ *  template head is: the members are a second read, because the list draws
+ *  forty names and none of their contents. */
+export interface CollectionHead {
+	id: string;
+	name: string;
+	description: string | null;
+	count: number;
+	/** The marketplaces this collection's members are on, without repeats, in
+	 *  the stored inventory order. Aggregated by the list read rather than
+	 *  walked here: a mark per row from the client would be one detail read per
+	 *  collection, and the mappings alone carry no membership to join on. */
+	inventories: InventoryId[];
+	updated_at: number;
+}
+
+export interface CollectionsView {
+	collections: CollectionHead[];
+}
+
+/** One member, in the order the collection holds it. `inventories` is the
+ *  marketplaces that member is bound on, served beside it so the detail page
+ *  draws its marks without walking every mapping. */
+export interface CollectionMemberView {
+	product: string;
+	title: string;
+	position: number;
+	inventories: InventoryId[];
+}
+
+export interface CollectionView {
+	id: string;
+	name: string;
+	description: string | null;
+	count: number;
+	members: CollectionMemberView[];
+}
+
+/** A create and an edit take the same body: a name, and a description or the
+ *  absence of one. `null` clears the description, which is a different request
+ *  from leaving it as it stands, and the route reads it as the whole value. */
+export interface CollectionBody {
+	name: string;
+	description: string | null;
+}
+
+/** The publish plan and its submit, which take the same body for the reason
+ *  the migration pair does: the submit is the plan the seller read, confirmed,
+ *  and the server re-derives it rather than trusting this copy. */
+export interface CollectionPublishBody {
+	inventory: InventoryId;
+	intent: PublishIntent;
+}
+
+/** One member, as the preview reads it. The same verdict vocabulary the
+ *  migration preview uses, because the question is the same one: would this
+ *  resource be created on that marketplace, is it already there, or is it
+ *  refused and why. */
+export interface CollectionPublishRow {
+	product: string;
+	title: string;
+	verdict: MigrationVerdict;
+	/** The listing already on the marketplace, where there is one. */
+	remote: string | null;
+	reason: string | null;
+}
+
+export interface CollectionPublishPlanView {
+	inventory: InventoryId;
+	intent: PublishIntent;
+	rows: CollectionPublishRow[];
+	counts: MigrationCounts;
+}
+
+/** What the submit queued. `job` is null where nothing was: every member was
+ *  already there or blocked, so no run was minted and there is none to open. */
+export interface CollectionPublishAck {
+	job: string | null;
+	queued: number;
+	skipped: number;
+}
+
+/** What the label verb added, and to how many members. The names are the
+ *  server's own reading of them, so a page renders what was stored rather than
+ *  what it sent. */
+export interface CollectionLabelsAck {
+	added: string[];
+	members: number;
+}
+
+function collectionPath(id: string): string {
+	return `/v1/collections/${encodeURIComponent(id)}`;
+}
+
+export const collectionsApi = {
+	/** Every collection, unpaged: a seller's own filing is a menu, and a menu
+	 *  that arrives in pages is not a menu. */
+	list: () => request<CollectionsView>('/v1/collections'),
+	/** Which collections one resource is in. The reverse read, because the
+	 *  heads above carry a count and not their members: a resource page asking
+	 *  the list would have to read every collection in full to answer a panel
+	 *  of three names. */
+	forProduct: (product: string) =>
+		request<CollectionsView>(`/v1/products/${encodeURIComponent(product)}/collections`),
+	get: (id: string) => request<CollectionView>(collectionPath(id)),
+	create: (body: CollectionBody) => post<CollectionHead>('/v1/collections', body),
+	update: (id: string, body: CollectionBody) => put<CollectionHead>(collectionPath(id), body),
+	remove: (id: string) => request<void>(collectionPath(id), { method: 'DELETE' }),
+
+	/** The whole ordered set, replaced. A position is the index in this list,
+	 *  so a reorder and a removal are the same call and there is no second way
+	 *  to say what order the members are in. */
+	setMembers: (id: string, products: readonly string[]) =>
+		put<CollectionView>(`${collectionPath(id)}/members`, { products: [...products] }),
+
+	publishPlan: (id: string, body: CollectionPublishBody) =>
+		post<CollectionPublishPlanView>(`${collectionPath(id)}/publish/plan`, body),
+	/** The key is the run's own identity, so it is minted by the caller when the
+	 *  seller confirms and held across a failed submit's retry. */
+	publish: (id: string, body: CollectionPublishBody, key: string) =>
+		post<CollectionPublishAck>(`${collectionPath(id)}/publish`, body, {
+			'idempotency-key': key
+		}),
+
+	/** Adds labels to every member, the server looping rather than this client:
+	 *  the cap is checked once against the whole set, and a fan-out from here
+	 *  would spend it a member at a time. */
+	addLabels: (id: string, add: readonly string[]) =>
+		put<CollectionLabelsAck>(`${collectionPath(id)}/labels`, { add: [...add] })
+};

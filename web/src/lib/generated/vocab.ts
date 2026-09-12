@@ -372,6 +372,7 @@ export type QuotaKind =
   | "migrations_per_month"
   | "templates_max"
   | "labels_max"
+  | "collections_max"
   | "devices_max"
   | "plan_feature";
 
@@ -382,6 +383,7 @@ export const QUOTA_KINDS: readonly QuotaKind[] = [
   "migrations_per_month",
   "templates_max",
   "labels_max",
+  "collections_max",
   "devices_max",
   "plan_feature",
 ];
@@ -643,6 +645,17 @@ export type MigrationVerdict =
 export const MIGRATION_VERDICTS: readonly MigrationVerdict[] = [
   "will_create",
   "already_there",
+  "blocked",
+];
+
+export type TemplateApplyVerdict =
+  | "will_change"
+  | "unchanged"
+  | "blocked";
+
+export const TEMPLATE_APPLY_VERDICTS: readonly TemplateApplyVerdict[] = [
+  "will_change",
+  "unchanged",
   "blocked",
 ];
 

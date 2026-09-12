@@ -1451,7 +1451,7 @@ pub struct PatchedProductView {
 /// Tes listing that is already live cannot be edited through us today. The
 /// refusal happens here rather than at enqueue so the seller is told before
 /// the edit is written, not after an item settles.
-fn uncaptured_edits(mappings: &[MappingRecord]) -> Vec<(InventoryId, &'static str)> {
+pub(crate) fn uncaptured_edits(mappings: &[MappingRecord]) -> Vec<(InventoryId, &'static str)> {
     mappings
         .iter()
         .filter_map(|record| {
@@ -1468,6 +1468,34 @@ fn uncaptured_edits(mappings: &[MappingRecord]) -> Vec<(InventoryId, &'static st
             .map(|capability| (record.mapping.inventory, capability))
         })
         .collect()
+}
+
+/// What a seller is told when an edit cannot be attempted at all.
+///
+/// One sentence and one detail shape, because two surfaces report it: the edit
+/// route refuses the whole request, and a template applied over a selection
+/// blocks the one row and carries the same sentence as its reason. A second
+/// wording would have the two screens disagree about the same fact.
+pub(crate) const UNCAPTURED_EDIT: &str =
+    "this listing is live on a platform whose edit-published transition is uncaptured, so the \
+     edit cannot be attempted";
+
+pub(crate) fn uncaptured_refusal(refused: &[(InventoryId, &'static str)]) -> APIError {
+    APIError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        APIErrorEntry::new(UNCAPTURED_EDIT)
+            .code(APIErrorCode::UncapturedTransition)
+            .kind(APIErrorKind::Validation)
+            .detail(serde_json::json!({
+                "blocked": refused
+                    .iter()
+                    .map(|(inventory, capability)| serde_json::json!({
+                        "inventory": inventory,
+                        "capability": capability,
+                    }))
+                    .collect::<Vec<_>>(),
+            })),
+    )
 }
 
 /// The product this edit will leave behind, as the sidecar's rules read it.
@@ -1546,7 +1574,7 @@ fn grade_slug_of(path: &PathInput) -> String {
         .unwrap_or_default()
 }
 
-fn stored_grade_slug(path: &VocabularyPath) -> String {
+pub(crate) fn stored_grade_slug(path: &VocabularyPath) -> String {
     path.native_id
         .clone()
         .or_else(|| path.segments.first().cloned())
@@ -1565,45 +1593,116 @@ pub(crate) fn hash_hex(hash: ContentHash) -> String {
     hex
 }
 
-pub(crate) async fn patch_product(
-    State(state): State<AppState>,
-    context: OrgContext,
-    Path((_version, product)): Path<(String, String)>,
-    Json(body): Json<PatchProductBody>,
-) -> Result<Json<PatchedProductView>, APIError> {
-    let product = parse_product_id(&product)?;
+/// How strictly an edit's sidecar is held.
+///
+/// Two questions, and they are genuinely different. `Submitted` is a whole
+/// form the seller sent: the create's own rules apply, absences included, so
+/// an edit cannot write a sidecar a create would have refused. `Filled` is a
+/// template applied to a resource the seller has not finished: every value the
+/// create form would refuse is still refused, and a field the resource has not
+/// answered is not, because a fill left it more complete than it found it and
+/// refusing the fill for an absence that predates it would make the feature
+/// useless on exactly the catalogue it exists for.
+///
+/// The leniency is bounded rather than blanket: [`prepare_edit`] promotes a
+/// `Filled` edit to `Submitted` where the resource already satisfied the form,
+/// so a fill can never take a submittable resource below the bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EditBar {
+    Submitted,
+    Filled,
+}
+
+/// Whether the product as stored already satisfies the create form's rules.
+///
+/// A product with no sidecar row was authored through a path that never filled
+/// this form, and the create leaves such a product alone rather than refusing
+/// it for controls it never had; so this answers false for one, which is what
+/// leaves a fill lenient on it.
+async fn stored_is_submittable(
+    state: &AppState,
+    org: OrgId,
+    product: ProductId,
+    head: DraftHead,
+) -> Result<bool, APIError> {
+    let Some(stored) = TptBaseRepo::new(state.pool.clone())
+        .get(org, product)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+    else {
+        return Ok(false);
+    };
+    Ok(verdict(&tpt_base_input(&stored).into_draft(head)).submittable)
+}
+
+/// One edit, validated against the product it will land on and not yet
+/// written.
+///
+/// The pair [`prepare_edit`] and [`commit_edit`] exist because two surfaces
+/// perform the same edit and one of them has to describe it first: applying a
+/// template over a selection previews per resource whether anything will
+/// change and why not, then writes exactly the rows it previewed. A second
+/// implementation of the merge and its refusals would be a second answer to
+/// "what will this edit do", and the preview's whole value is that it is the
+/// same answer.
+pub(crate) struct PreparedEdit {
+    edit: ProductEdit,
+    record: Option<tam_storage::TptBaseRecord>,
+}
+
+/// Everything an edit is refused by, answered before anything is written.
+///
+/// The order is the order the refusals matter in: the wire's own rule, then
+/// the values' smart constructors, then the create form's rules over the
+/// product this edit leaves behind, then the digests the sidecar claims.
+/// Nothing here writes, so a refused edit leaves the product exactly as it
+/// stood — including its stored thumbnails.
+///
+/// `stored` is the caller's read rather than this function's, because both
+/// callers already hold it: the route read it to answer not-found and the
+/// template apply read it to compute the merge.
+///
+/// `bar` is which of two questions the sidecar is held to; see [`EditBar`].
+#[expect(
+    clippy::too_many_arguments,
+    reason = "an edit is validated against the tenant, the resource, the product as stored, the \
+              body, the mappings it reaches and the bar it is held to; a struct over those six \
+              would be this signature with a name"
+)]
+pub(crate) async fn prepare_edit(
+    state: &AppState,
+    org: OrgId,
+    product: ProductId,
+    stored: &CanonicalProduct,
+    body: &PatchProductBody,
+    mappings: &[MappingRecord],
+    bar: EditBar,
+) -> Result<PreparedEdit, APIError> {
+    // A fill is held to the submission bar only where the resource already
+    // met it. Read before anything is validated, because it decides which
+    // question the rest of this function asks.
+    let bar = match bar {
+        EditBar::Submitted => EditBar::Submitted,
+        EditBar::Filled => {
+            if stored_is_submittable(
+                state,
+                org,
+                product,
+                edited_head(stored, &PatchProductBody::default(), None, mappings),
+            )
+            .await?
+            {
+                EditBar::Submitted
+            } else {
+                EditBar::Filled
+            }
+        }
+    };
     if body.body.is_none() && body.body_format.is_some() {
         return Err(validation(
             "a body format is given with the body it describes, never on its own",
         ));
     }
-    let now = (state.wall)();
-    let mappings = MappingRepo::new(state.pool.clone())
-        .list_for_product(context.org, product)
-        .await
-        .map_err(|error| storage_fault(&state, &error))?;
-    let refused = uncaptured_edits(&mappings);
-    if !refused.is_empty() {
-        return Err(APIError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            APIErrorEntry::new(
-                "this listing is live on a platform whose edit-published transition is \
-                 uncaptured, so the edit cannot be attempted",
-            )
-            .code(APIErrorCode::UncapturedTransition)
-            .kind(APIErrorKind::Validation)
-            .detail(serde_json::json!({
-                "blocked": refused
-                    .iter()
-                    .map(|(inventory, capability)| serde_json::json!({
-                        "inventory": inventory,
-                        "capability": capability,
-                    }))
-                    .collect::<Vec<_>>(),
-            })),
-        ));
-    }
-
     let price = body.price.map(checked_price).transpose()?;
     let grades = match &body.grades {
         None => None,
@@ -1655,12 +1754,6 @@ pub(crate) async fn patch_product(
     // `for_marketplace: false`, which made every marketplace-facing rule
     // vacuous on this route and left the browser as the last word on them: an
     // edit could write a sidecar a create would have refused. Q2.
-    let stored = products
-        .get(context.org, product)
-        .await
-        .map_err(|error| storage_fault(&state, &error))?
-        .ok_or_else(|| missing("no such product"))?
-        .product;
     let record = match body.tpt_base.clone() {
         // A sidecar the edit does not send is a sidecar the edit does not
         // change, but the fields the rules read live on the product and this
@@ -1670,23 +1763,29 @@ pub(crate) async fn patch_product(
         // product stored free could be made paid with no tax code, the exact
         // pair the create refuses.
         None => {
-            if touches_rules(&body) {
+            if touches_rules(body) && matches!(bar, EditBar::Submitted) {
                 refuse_stored_unsubmittable(
-                    &state,
-                    context.org,
+                    state,
+                    org,
                     product,
-                    edited_head(&stored, &body, price, &mappings),
+                    edited_head(stored, body, price, mappings),
                 )
                 .await?;
             }
             None
         }
         Some(base) => {
-            let draft = base.into_draft(edited_head(&stored, &body, price, &mappings));
+            let draft = base.into_draft(edited_head(stored, body, price, mappings));
             // Refused before anything is written, as the create refuses it, so
             // a rejected edit leaves the product as it stood rather than
             // half-applied.
-            refuse_unsubmittable(&draft)?;
+            match bar {
+                EditBar::Submitted => refuse_unsubmittable(&draft)?,
+                // Every value the create form would refuse, and no absence:
+                // the template surface's own validator, which exists for
+                // exactly this question.
+                EditBar::Filled => crate::resource_templates::refusals(&draft)?,
+            }
             Some(record_of(&draft)?)
         }
     };
@@ -1700,42 +1799,93 @@ pub(crate) async fn patch_product(
         let pictures = picture_slots(None, &base.thumbnail_hashes)?;
         let claimed: Vec<ContentHash> = pictures.iter().map(|(hash, _)| *hash).collect();
         let lengths: std::collections::HashMap<ContentHash, i64> = products
-            .stored_hashes(context.org, &claimed)
+            .stored_hashes(org, &claimed)
             .await
-            .map_err(|error| storage_fault(&state, &error))?
+            .map_err(|error| storage_fault(state, &error))?
             .into_iter()
             .collect();
         refuse_unheld(&claimed, &lengths)?;
-        image_bytes_only(&state, context.org, &pictures, &lengths).await?;
+        image_bytes_only(state, org, &pictures, &lengths).await?;
     }
 
-    let edit = ProductEdit {
-        title,
-        body: body.body.as_ref().map(|text| ListingCopy {
-            body: text.clone(),
-            format: body.body_format.unwrap_or(CopyFormat::Markdown),
-        }),
-        price,
-        subjects: body.subjects.clone(),
-        grades,
-        rights,
-    };
-    let touched = products
-        .update(context.org, product, &edit, now)
+    Ok(PreparedEdit {
+        edit: ProductEdit {
+            title,
+            body: body.body.as_ref().map(|text| ListingCopy {
+                body: text.clone(),
+                format: body.body_format.unwrap_or(CopyFormat::Markdown),
+            }),
+            price,
+            subjects: body.subjects.clone(),
+            grades,
+            rights,
+        },
+        record,
+    })
+}
+
+/// Writes a prepared edit, answering whether there was a product to write it
+/// to.
+///
+/// The sidecar is written after the product update rather than before, so an
+/// edit refused as a missing product leaves no orphaned row behind.
+pub(crate) async fn commit_edit(
+    state: &AppState,
+    org: OrgId,
+    product: ProductId,
+    prepared: &PreparedEdit,
+    now: Timestamp,
+) -> Result<bool, APIError> {
+    let touched = ProductRepo::new(state.pool.clone())
+        .update(org, product, &prepared.edit, now)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    if !touched {
+        return Ok(false);
+    }
+    if let Some(record) = &prepared.record {
+        TptBaseRepo::new(state.pool.clone())
+            .upsert(org, product, record, now)
+            .await
+            .map_err(|error| storage_fault(state, &error))?;
+    }
+    Ok(true)
+}
+
+pub(crate) async fn patch_product(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, product)): Path<(String, String)>,
+    Json(body): Json<PatchProductBody>,
+) -> Result<Json<PatchedProductView>, APIError> {
+    let product = parse_product_id(&product)?;
+    let now = (state.wall)();
+    let mappings = MappingRepo::new(state.pool.clone())
+        .list_for_product(context.org, product)
         .await
         .map_err(|error| storage_fault(&state, &error))?;
-    if !touched {
-        return Err(missing("no such product"));
+    let refused = uncaptured_edits(&mappings);
+    if !refused.is_empty() {
+        return Err(uncaptured_refusal(&refused));
     }
-
-    // The sidecar is replaced whole where the edit carries one. It is written
-    // after the product update rather than before, so an edit refused as a
-    // missing product leaves no orphaned row behind.
-    if let Some(record) = record {
-        TptBaseRepo::new(state.pool.clone())
-            .upsert(context.org, product, &record, now)
-            .await
-            .map_err(|error| storage_fault(&state, &error))?;
+    let stored = ProductRepo::new(state.pool.clone())
+        .get(context.org, product)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+        .ok_or_else(|| missing("no such product"))?
+        .product;
+    let prepared = prepare_edit(
+        &state,
+        context.org,
+        product,
+        &stored,
+        &body,
+        &mappings,
+        EditBar::Submitted,
+    )
+    .await?;
+    if !commit_edit(&state, context.org, product, &prepared, now).await? {
+        return Err(missing("no such product"));
     }
     Ok(Json(PatchedProductView {
         product,

@@ -18,8 +18,25 @@ const css = readFileSync(`${HERE}resources.css`, 'utf8');
 const read = (file: string) => readFileSync(`${HERE}${file}`, 'utf8');
 
 const FORM_SECTION = readFileSync(`${LIB}FormSection.svelte`, 'utf8');
-const RESOURCE_FORM = read('ResourceForm.svelte');
 const MARKETPLACE_PICKER = read('MarketplacePicker.svelte');
+
+/** Every `.svelte` file the form is made of, this directory's and the bands'.
+ *
+ *  The bands are components under `panels/` because the Template Manager
+ *  renders the same ones over the same draft, and a second copy of eleven
+ *  bands is eleven bands to keep in step. Every fact below is about the form
+ *  as a whole, so every one of them reads the whole of it. */
+const PANELS = `${HERE}panels/`;
+const FORM_FILES = [
+	...readdirSync(HERE)
+		.filter((name) => name.endsWith('.svelte'))
+		.map((name) => `${HERE}${name}`),
+	...readdirSync(PANELS)
+		.filter((name) => name.endsWith('.svelte'))
+		.map((name) => `${PANELS}${name}`)
+];
+/** The form's own markup, every band of it, as one string to read facts off. */
+const RESOURCE_FORM = FORM_FILES.map((path) => readFileSync(path, 'utf8')).join('\n');
 
 /** Every class beginning `res-` a file writes, whether in a literal `class`
  *  attribute, inside a string in an expression one, or as `class:name`. */
@@ -73,8 +90,8 @@ describe('the resource form is one surface of bands', () => {
 
 	it('declares every res- class its pages write, and writes every one it declares', () => {
 		const written = new Set<string>();
-		for (const file of readdirSync(HERE).filter((name) => name.endsWith('.svelte'))) {
-			for (const name of classesIn(read(file))) {
+		for (const path of FORM_FILES) {
+			for (const name of classesIn(readFileSync(path, 'utf8'))) {
 				written.add(name);
 			}
 		}

@@ -7,8 +7,10 @@ import {
 	lastPullLine,
 	openQuestionsLabel,
 	runRows,
-	syncCards
+	syncCards,
+	templateChoices
 } from './sync';
+import type { TemplateHead } from '$lib/pages/templates/api';
 import { connection, job } from './fixtures.test-support';
 
 const HOUR = 3_600_000;
@@ -26,6 +28,7 @@ function setting(
 		minimum_secs: SIX_HOURS,
 		last_pull_at: null,
 		publish_to: [],
+		template_id: null,
 		...over
 	};
 }
@@ -172,5 +175,48 @@ describe('the open-questions control', () => {
 
 	it('drops the figure rather than claiming zero where it could not be read', () => {
 		expect(openQuestionsLabel(null)).toBe('Open questions');
+	});
+});
+
+describe('the templates a pull rule may fill from', () => {
+	const head = (over: Partial<TemplateHead> = {}): TemplateHead => ({
+		id: 'tpl-1',
+		name: 'Worksheets',
+		description: null,
+		scope: null,
+		created_at: 0,
+		updated_at: 0,
+		...over
+	});
+
+	it('offers a generic template under any rule, named as it was saved', () => {
+		expect(templateChoices([head()], [])).toEqual([
+			{ id: 'tpl-1', label: 'Worksheets', reason: null }
+		]);
+	});
+
+	it('names the marketplace a scoped template was written for', () => {
+		const [choice] = templateChoices([head({ scope: 'Tpt' })], ['Tpt']);
+		expect(choice.label).toBe('Worksheets — TPT');
+		expect(choice.reason).toBeNull();
+	});
+
+	it('offers a template the rule does not publish to, with the reason, rather than hiding it', () => {
+		// The server answers 422 for this pair, so the option is disabled and
+		// says why: a seller hunting a template they know they saved is worse
+		// served by a shorter list than by a reason.
+		const [choice] = templateChoices([head({ scope: 'Tpt' })], ['Tes']);
+		expect(choice.reason).toMatch(/does not publish to/);
+	});
+
+	it('re-decides every option when the ticked targets change', () => {
+		const heads = [head({ scope: 'Tpt' }), head({ id: 'tpl-2', scope: 'Tes' })];
+		expect(templateChoices(heads, ['Tpt']).map((choice) => choice.reason === null)).toEqual([
+			true,
+			false
+		]);
+		expect(templateChoices(heads, ['Tpt', 'Tes']).every((choice) => choice.reason === null)).toBe(
+			true
+		);
 	});
 });

@@ -16,10 +16,13 @@
 //! connection.
 
 use sqlx::PgPool;
-use tam_types::{OrgId, Timestamp, Uuid};
+use tam_types::{InventoryId, OrgId, Timestamp, Uuid};
 
-use crate::codec::{timestamp_from_db, timestamp_to_db, uuid_from_db, uuid_to_db};
-use crate::{pin_org, StorageError};
+use crate::codec::{
+    inventory_from_db, inventory_to_db, timestamp_from_db, timestamp_to_db, uuid_from_db,
+    uuid_to_db,
+};
+use crate::{pin_org, Given, StorageError};
 
 /// How many templates one organisation may keep.
 ///
@@ -42,6 +45,12 @@ const ONE_PER_NAME: &str = "resource_template_one_per_name";
 pub struct ResourceTemplateRecord {
     pub id: Uuid,
     pub name: String,
+    /// The seller's own note about when to reach for this template, which is
+    /// not the resource description the draft carries.
+    pub description: Option<String>,
+    /// The marketplace this template is written for, or `None` for one that
+    /// is written for none.
+    pub scope: Option<InventoryId>,
     /// The partial `DraftInput` this template prefills a form with, verbatim.
     pub draft: serde_json::Value,
     pub created_at: Timestamp,
@@ -57,10 +66,16 @@ pub struct ResourceTemplateRecord {
 /// [`TEMPLATES_PER_ORG_MAX`]: a tenant that filled its shelf with drafts at the
 /// API's own byte cap would make every picker open serialise several megabytes,
 /// which is a hundred writes buying an unbounded number of expensive reads.
+///
+/// The note and the scope do travel, unlike the draft: they are one short
+/// string and one token, and they are what a picker row has to render for the
+/// seller to choose between two templates without opening either.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceTemplateSummary {
     pub id: Uuid,
     pub name: String,
+    pub description: Option<String>,
+    pub scope: Option<InventoryId>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -72,53 +87,52 @@ pub struct ResourceTemplateSummary {
 pub struct NewResourceTemplate<'a> {
     pub id: Uuid,
     pub name: &'a str,
+    pub description: Option<&'a str>,
+    pub scope: Option<InventoryId>,
     pub draft: &'a serde_json::Value,
     pub created_at: Timestamp,
 }
 
-/// Which of a template's two parts an edit replaces.
+/// Which of a template's four parts an edit replaces.
 ///
-/// A sum with no empty inhabitant rather than a pair of options, because an
-/// edit naming neither part still writes `updated_at` and would misstate when
-/// the seller last touched the template. Expressed in the type so that the
-/// invariant is discharged by construction rather than by every future caller
-/// reading a sentence about it; the route's own guard is then the
-/// deserialisation of a request body, not a second check.
+/// A struct with a private constructor rather than the sum this was while a
+/// template had two parts: four parts make fifteen non-empty combinations, and
+/// a sum over them is a type nobody can read. What the sum bought is kept by
+/// [`TemplateEdit::of`] answering `None` for an edit that names nothing —
+/// which still has to be impossible to write, because it would move
+/// `updated_at` and misstate when the seller last touched the template.
+///
+/// The two nullable parts are [`Given`], and that is the whole point: `Kept`
+/// leaves the stored value alone and `Set(None)` clears it. A plain option
+/// would make "the seller deleted their note" inexpressible, which is the same
+/// mistake as merging a draft.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TemplateEdit<'a> {
-    Rename(&'a str),
-    Redraft(&'a serde_json::Value),
-    Both {
-        name: &'a str,
-        draft: &'a serde_json::Value,
-    },
+pub struct TemplateEdit<'a> {
+    name: Option<&'a str>,
+    draft: Option<&'a serde_json::Value>,
+    description: Given<&'a str>,
+    scope: Given<InventoryId>,
 }
 
 impl<'a> TemplateEdit<'a> {
-    /// The edit these two optional parts describe, or `None` where they
+    /// The edit these four optional parts describe, or `None` where they
     /// describe no edit at all.
     #[must_use]
-    pub const fn of(name: Option<&'a str>, draft: Option<&'a serde_json::Value>) -> Option<Self> {
-        match (name, draft) {
-            (Some(name), Some(draft)) => Some(Self::Both { name, draft }),
-            (Some(name), None) => Some(Self::Rename(name)),
-            (None, Some(draft)) => Some(Self::Redraft(draft)),
-            (None, None) => None,
+    pub const fn of(
+        name: Option<&'a str>,
+        draft: Option<&'a serde_json::Value>,
+        description: Given<&'a str>,
+        scope: Given<InventoryId>,
+    ) -> Option<Self> {
+        if name.is_none() && draft.is_none() && !description.named() && !scope.named() {
+            return None;
         }
-    }
-
-    const fn name(self) -> Option<&'a str> {
-        match self {
-            Self::Rename(name) | Self::Both { name, .. } => Some(name),
-            Self::Redraft(_) => None,
-        }
-    }
-
-    const fn draft(self) -> Option<&'a serde_json::Value> {
-        match self {
-            Self::Redraft(draft) | Self::Both { draft, .. } => Some(draft),
-            Self::Rename(_) => None,
-        }
+        Some(Self {
+            name,
+            draft,
+            description,
+            scope,
+        })
     }
 }
 
@@ -168,22 +182,25 @@ impl ResourceTemplateRepo {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let rows = sqlx::query!(
-            "SELECT id, name, created_at, updated_at FROM resource_template \
+            "SELECT id, name, description, scope, created_at, updated_at FROM resource_template \
              WHERE org_id = $1 ORDER BY lower(name)",
             uuid_to_db(org.0),
         )
         .fetch_all(&mut *tx)
         .await?;
         tx.commit().await?;
-        Ok(rows
-            .into_iter()
-            .map(|row| ResourceTemplateSummary {
-                id: uuid_from_db(row.id),
-                name: row.name,
-                created_at: timestamp_from_db(row.created_at),
-                updated_at: timestamp_from_db(row.updated_at),
+        rows.into_iter()
+            .map(|row| {
+                Ok(ResourceTemplateSummary {
+                    id: uuid_from_db(row.id),
+                    name: row.name,
+                    description: row.description,
+                    scope: row.scope.as_deref().map(inventory_from_db).transpose()?,
+                    created_at: timestamp_from_db(row.created_at),
+                    updated_at: timestamp_from_db(row.updated_at),
+                })
             })
-            .collect())
+            .collect()
     }
 
     /// One template by identifier, or `None` where this organisation has no
@@ -197,17 +214,22 @@ impl ResourceTemplateRepo {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let row = sqlx::query!(
-            "SELECT id, name, draft, created_at, updated_at FROM resource_template \
-             WHERE org_id = $1 AND id = $2",
+            "SELECT id, name, description, scope, draft, created_at, updated_at \
+             FROM resource_template WHERE org_id = $1 AND id = $2",
             uuid_to_db(org.0),
             uuid_to_db(id),
         )
         .fetch_optional(&mut *tx)
         .await?;
         tx.commit().await?;
-        Ok(row.map(|row| ResourceTemplateRecord {
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        Ok(Some(ResourceTemplateRecord {
             id: uuid_from_db(row.id),
             name: row.name,
+            description: row.description,
+            scope: row.scope.as_deref().map(inventory_from_db).transpose()?,
             draft: row.draft,
             created_at: timestamp_from_db(row.created_at),
             updated_at: timestamp_from_db(row.updated_at),
@@ -254,12 +276,14 @@ impl ResourceTemplateRepo {
         // that write land.
         let written = sqlx::query!(
             "INSERT INTO resource_template \
-             (org_id, id, name, draft, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $5) \
-             RETURNING id, name, draft, created_at, updated_at",
+             (org_id, id, name, description, scope, draft, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $7) \
+             RETURNING id, name, description, scope, draft, created_at, updated_at",
             uuid_to_db(org.0),
             uuid_to_db(template.id),
             template.name,
+            template.description,
+            template.scope.map(inventory_to_db),
             template.draft,
             at,
         )
@@ -281,18 +305,23 @@ impl ResourceTemplateRepo {
         Ok(TemplateWrite::Saved(ResourceTemplateRecord {
             id: uuid_from_db(row.id),
             name: row.name,
+            description: row.description,
+            scope: row.scope.as_deref().map(inventory_from_db).transpose()?,
             draft: row.draft,
             created_at: timestamp_from_db(row.created_at),
             updated_at: timestamp_from_db(row.updated_at),
         }))
     }
 
-    /// Replaces a template's name, its draft, or both.
+    /// Replaces any of a template's four parts.
     ///
-    /// A part the caller leaves absent keeps the value it has, expressed as
-    /// `COALESCE` in one statement rather than as a read followed by a write:
-    /// two edits arriving together then interleave at the row rather than each
+    /// A part the caller leaves absent keeps the value it has, expressed in
+    /// one statement rather than as a read followed by a write: two edits
+    /// arriving together then interleave at the row rather than each
     /// overwriting the other's whole record with a copy it read beforehand.
+    /// `COALESCE` serves the two parts that cannot be cleared and a `CASE` on
+    /// a given-flag serves the two that can, because `COALESCE` cannot tell a
+    /// null meaning "leave it" from a null meaning "clear it".
     ///
     /// The draft is replaced whole rather than merged, because the console
     /// renders every field and sends them all back: a merge would make
@@ -318,13 +347,19 @@ impl ResourceTemplateRepo {
             "UPDATE resource_template \
                 SET name = COALESCE($3::text, name), \
                     draft = COALESCE($4::jsonb, draft), \
-                    updated_at = GREATEST($5, created_at) \
+                    description = CASE WHEN $5 THEN $6::text ELSE description END, \
+                    scope = CASE WHEN $7 THEN $8::text ELSE scope END, \
+                    updated_at = GREATEST($9, created_at) \
               WHERE org_id = $1 AND id = $2 \
-             RETURNING id, name, draft, created_at, updated_at",
+             RETURNING id, name, description, scope, draft, created_at, updated_at",
             uuid_to_db(org.0),
             uuid_to_db(id),
-            edit.name(),
-            edit.draft(),
+            edit.name,
+            edit.draft,
+            edit.description.named(),
+            edit.description.value(),
+            edit.scope.named(),
+            edit.scope.value().map(inventory_to_db),
             at,
         )
         .fetch_optional(&mut *tx)
@@ -343,6 +378,8 @@ impl ResourceTemplateRepo {
         Ok(TemplateChange::Saved(ResourceTemplateRecord {
             id: uuid_from_db(row.id),
             name: row.name,
+            description: row.description,
+            scope: row.scope.as_deref().map(inventory_from_db).transpose()?,
             draft: row.draft,
             created_at: timestamp_from_db(row.created_at),
             updated_at: timestamp_from_db(row.updated_at),

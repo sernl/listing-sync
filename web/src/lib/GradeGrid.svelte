@@ -14,6 +14,7 @@
 		vocabulary,
 		chosen,
 		labels,
+		required = true,
 		onChange,
 		onLabels
 	}: {
@@ -23,6 +24,10 @@
 		 *  way: the slug a teacher ticks is the same slug whichever system it
 		 *  was shown to them in. */
 		labels: GradeLabels;
+		/** Whether a resource has to answer this. True on the create form,
+		 *  which is what a resource is held to; false in a template, where
+		 *  every field is a starting point the seller may leave unanswered. */
+		required?: boolean;
 		onChange: (grades: string[]) => void;
 		onLabels: (labels: GradeLabels) => void;
 	} = $props();
@@ -44,7 +49,7 @@
      re-shapes the grid rather than overflowing one column. -->
 <div class="field">
 	<span id="grades-label">
-		Grade Level<span class="req">Required</span>
+		Grade Level{#if required}<span class="req">Required</span>{/if}
 		<span class="gg-count" class:over={counter.over}>{counter.text}</span>
 	</span>
 	<span class="hint">

@@ -150,6 +150,53 @@
 	margin: 0;
 }
 
+/* The whole new-resource form inside the template panel. The bands bring
+   their own rule from `resources.css`; this only gives them the air a panel's
+   own padding would otherwise not, since they were written to sit inside the
+   create form's card rather than inside a panel. */
+.tpl-form {
+	margin-top: 4px;
+}
+
+.tpl-form .res-sec:first-child {
+	border-top: 1px solid var(--line);
+}
+
+/* What a template is written for, beside its name. A generic one says so in
+   the quiet treatment: "any marketplace" is the ordinary case and a coloured
+   chip on every row would make the exception invisible. */
+.tpl-chip {
+	display: inline-block;
+	margin-left: 8px;
+	padding: 1px 8px;
+	border: 1px solid var(--line);
+	border-radius: 999px;
+	font-size: 12px;
+	font-weight: 500;
+	vertical-align: middle;
+	background: var(--soon-soft);
+}
+
+.tpl-chip.generic {
+	background: none;
+	color: var(--muted);
+}
+
+/* The seller's own note about the template, under its name. */
+.tpl-said {
+	font-size: 13px;
+	overflow-wrap: anywhere;
+}
+
+.tpl-count {
+	font-size: 12px;
+	color: var(--muted);
+}
+
+.tpl-count.over {
+	color: var(--bad-ink);
+}
+
 /* A phone shows this console too, so the row's two trailing controls become a
    full-width action row rather than two targets squeezed beside the title. */
 @media (max-width: 720px) {

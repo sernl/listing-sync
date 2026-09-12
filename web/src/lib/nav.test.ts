@@ -87,6 +87,7 @@ describe('the navigation model', () => {
 		expect(pagesOf('crosslist')).toEqual([
 			'/resources',
 			'/labels',
+			'/collections',
 			'/analytics',
 			'/templates',
 			'/export'

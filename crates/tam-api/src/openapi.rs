@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 116] = [
+pub const ROUTES: [Route; 128] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -233,7 +233,8 @@ pub const ROUTES: [Route; 116] = [
     Route {
         method: "get",
         path: "/{version}/products/export",
-        summary: "The whole catalogue as CSV, with its per-marketplace state",
+        summary: "The catalogue as CSV, with its per-marketplace state; a collection or a tick \
+                  list narrows it",
     },
     Route {
         method: "get",
@@ -393,12 +394,73 @@ pub const ROUTES: [Route; 116] = [
     Route {
         method: "patch",
         path: "/{version}/templates/{template}",
-        summary: "Rename a template, replace its draft, or both",
+        summary: "Rename a template, replace its note, scope or draft",
     },
     Route {
         method: "delete",
         path: "/{version}/templates/{template}",
         summary: "Remove a template",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/templates/{template}/apply/plan",
+        summary: "Per resource, which fields applying this template would fill; writes nothing",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/templates/{template}/apply",
+        summary: "Fill the empty fields of a selection from a template",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/collections",
+        summary: "The seller's named sets of resources, with counts and marketplace marks",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/collections",
+        summary: "Make a named collection",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/collections/{collection}",
+        summary: "One collection with its members in the seller's own order",
+    },
+    Route {
+        method: "put",
+        path: "/{version}/collections/{collection}",
+        summary: "Rename a collection, replace its note, or both",
+    },
+    Route {
+        method: "delete",
+        path: "/{version}/collections/{collection}",
+        summary: "Remove a collection; no resource is touched",
+    },
+    Route {
+        method: "put",
+        path: "/{version}/collections/{collection}/members",
+        summary: "Replace the whole membership, in the order given",
+    },
+    Route {
+        method: "put",
+        path: "/{version}/collections/{collection}/labels",
+        summary: "Add labels to every member, under the plan's vocabulary allowance",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/collections/{collection}/publish/plan",
+        summary: "Per member, whether publishing to a marketplace will create, is already \
+                  there, or is blocked",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/collections/{collection}/publish",
+        summary: "Queue a collection's members on one job for a marketplace",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/products/{product}/collections",
+        summary: "Which collections hold one resource",
     },
     Route {
         method: "get",

@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n                 (SELECT count(*) FROM product\n                   WHERE org_id = $1 AND deleted_at IS NULL)          AS \"resources!\",\n                 (SELECT count(DISTINCT marketplace) FROM connection\n                   WHERE org_id = $1 AND state = 'linked')            AS \"marketplaces!\",\n                 (SELECT count(*) FROM sync_request_resource r\n                    JOIN sync_request s\n                      ON s.org_id = r.org_id AND s.id = r.request_id\n                   WHERE r.org_id = $1\n                     AND s.disposition IN ('sync', 'migrate')\n                     AND s.requested_at >= $2)                        AS \"migrations!\",\n                 (SELECT count(*) FROM resource_template\n                   WHERE org_id = $1)                                 AS \"templates!\",\n                 (SELECT count(*) FROM label\n                   WHERE org_id = $1)                                 AS \"labels!\",\n                 (SELECT count(*) FROM collection\n                   WHERE org_id = $1)                                 AS \"collections!\",\n                 (SELECT count(*) FROM device\n                   WHERE org_id = $1 AND revoked_at IS NULL)          AS \"devices!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "resources!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "marketplaces!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "migrations!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "templates!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "labels!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "collections!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "devices!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "0dcad883e153ae0fe0a2eba543fec4ed9f77aea51d287b8c2f8ea136de2ae18d"
+}

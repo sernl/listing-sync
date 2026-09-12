@@ -15,6 +15,7 @@ pub mod backoffice;
 pub mod billing;
 pub mod blobs;
 mod codec;
+pub mod collections;
 pub mod connections;
 pub mod device;
 pub mod duplicates;
@@ -53,6 +54,10 @@ pub use backoffice::{
 pub use billing::{BillingRepo, SubscriptionState};
 pub use blobs::{
     describe_files, BlobError, BlobRepo, PipelineFileSource, StoredFile, TenantBlobSink,
+};
+pub use collections::{
+    CollectionChange, CollectionEdit, CollectionMemberRow, CollectionRecord, CollectionSummary,
+    CollectionWrite, NewCollection, ResourceCollectionRepo, COLLECTIONS_PER_ORG_MAX,
 };
 pub use connections::{
     record_connection_event, ConnectionAudit, ConnectionAuditRow, ConnectionEventRecord,
@@ -148,6 +153,45 @@ pub use sync_requests::{
 pub use taxonomy::{
     DrainStats, NoCounterpartReport, OpenItem, RaiseReport, RaiseScope, SeedReport, TaxonomyRepo,
 };
+
+/// Whether a write leaves a nullable field alone, or gives it a new value.
+///
+/// Three states in two constructors rather than a nested option, which the
+/// workspace denies and rightly: a reader of `Option<Option<T>>` has to decide
+/// every time which layer means "the request did not name this field" and
+/// which means "the request cleared it". Here `Kept` is the first and
+/// `Set(None)` is the second, and they read as what they are.
+///
+/// Shared by every edit over a nullable column — a template's note and scope,
+/// a collection's note — and by the request bodies that build them, so the
+/// wire's own absent-versus-null distinction is the same distinction all the
+/// way down to the statement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Given<T> {
+    #[default]
+    Kept,
+    Set(Option<T>),
+}
+
+impl<T> Given<T> {
+    /// Whether the write names this field at all, which is what the `CASE` in
+    /// a statement turns on.
+    #[must_use]
+    pub const fn named(&self) -> bool {
+        matches!(self, Self::Set(_))
+    }
+
+    /// The value to write. `None` for a field the write does not name is the
+    /// same shape as `None` for one it clears, which is safe because
+    /// [`Self::named`] is what decides whether the statement reads it.
+    #[must_use]
+    pub fn value(self) -> Option<T> {
+        match self {
+            Self::Kept => None,
+            Self::Set(value) => value,
+        }
+    }
+}
 
 use sqlx::{Postgres, Transaction};
 use tam_types::OrgId;

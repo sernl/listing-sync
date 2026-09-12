@@ -96,6 +96,11 @@ export const SECTIONS: readonly NavSection[] = [
 		items: [
 			{ href: '/resources', label: 'Resources', icon: 'layout-list' },
 			{ href: '/labels', label: 'Labels', icon: 'tag' },
+			// Between Labels and Analytics because a collection is the other
+			// selection dimension a seller files by: a label is a word on a
+			// resource, a collection is an ordered set of them. `/collections/<id>`
+			// needs no `owns` entry -- it falls under this href by prefix.
+			{ href: '/collections', label: 'Collections', icon: 'layers' },
 			{ href: '/analytics', label: 'Analytics', icon: 'chart-line' },
 			{ href: '/templates', label: 'Template Manager', icon: 'layout-template' },
 			{ href: '/export', label: 'Export', icon: 'file-down' }

@@ -82,6 +82,7 @@ function read(over: Partial<EntitlementView> = {}): EntitlementRead {
 				migrations_this_month: 0,
 				migrations_reset_at: 1_759_276_800_000,
 				templates: 1,
+				collections: 0,
 				labels: 3,
 				devices: 1
 			},

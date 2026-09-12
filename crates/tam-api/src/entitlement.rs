@@ -81,6 +81,7 @@ pub enum QuotaKind {
     MigrationsPerMonth,
     Templates,
     Labels,
+    Collections,
     Devices,
     /// The plan does not include the capability at all, rather than having
     /// run out of it. `detail.feature` names which one.
@@ -88,13 +89,14 @@ pub enum QuotaKind {
 }
 
 impl QuotaKind {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Listings,
         Self::StorageBytes,
         Self::Marketplaces,
         Self::MigrationsPerMonth,
         Self::Templates,
         Self::Labels,
+        Self::Collections,
         Self::Devices,
         Self::PlanFeature,
     ];
@@ -108,6 +110,7 @@ impl QuotaKind {
             Self::MigrationsPerMonth => "migrations_per_month",
             Self::Templates => "templates_max",
             Self::Labels => "labels_max",
+            Self::Collections => "collections_max",
             Self::Devices => "devices_max",
             Self::PlanFeature => "plan_feature",
         }
@@ -156,6 +159,15 @@ impl QuotaKind {
                 "Your plan does not include labels. Upgrade to use them.".to_owned()
             }
             Self::Labels => format!("Your plan includes {limit} labels. Upgrade to add more."),
+            Self::Collections if limit == 0 => {
+                "Your plan does not include collections. Upgrade to use them.".to_owned()
+            }
+            Self::Collections if limit == 1 => {
+                "Your plan includes one collection. Upgrade to make more.".to_owned()
+            }
+            Self::Collections => {
+                format!("Your plan includes {limit} collections. Upgrade to make more.")
+            }
             Self::Devices if limit == 1 => {
                 "Your plan covers one computer. Upgrade to add another.".to_owned()
             }
@@ -358,6 +370,7 @@ pub struct UsageView {
     pub migrations_reset_at: Timestamp,
     pub templates: i64,
     pub labels: i64,
+    pub collections: i64,
     pub devices: i64,
 }
 
@@ -370,6 +383,7 @@ impl UsageView {
             migrations_reset_at: usage.migrations_reset_at,
             templates: usage.templates,
             labels: usage.labels,
+            collections: usage.collections,
             devices: usage.devices,
         }
     }
@@ -429,6 +443,7 @@ mod tests {
                 | QuotaKind::MigrationsPerMonth
                 | QuotaKind::Templates
                 | QuotaKind::Labels
+                | QuotaKind::Collections
                 | QuotaKind::Devices
                 | QuotaKind::PlanFeature => {}
             }

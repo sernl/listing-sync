@@ -115,7 +115,13 @@ export function featureReason(caps: Capabilities, feature: Feature): string | nu
 // -------------------------------------------------------------------- limits
 
 /** The counted allowances, named as the console asks about them. */
-export type Limit = 'resources' | 'marketplaces' | 'templates' | 'labels' | 'devices';
+export type Limit =
+	| 'resources'
+	| 'marketplaces'
+	| 'templates'
+	| 'collections'
+	| 'labels'
+	| 'devices';
 
 /** What each counted allowance is called, and what adding to it is called.
  *
@@ -126,6 +132,7 @@ const LIMITS: Record<Limit, { one: string; many: string; verb: string }> = {
 	resources: { one: 'resource', many: 'resources', verb: 'add more' },
 	marketplaces: { one: 'marketplace', many: 'marketplaces', verb: 'connect more' },
 	templates: { one: 'template', many: 'templates', verb: 'add more' },
+	collections: { one: 'collection', many: 'collections', verb: 'add more' },
 	labels: { one: 'label', many: 'labels', verb: 'add more' },
 	devices: { one: 'device', many: 'devices', verb: 'sign in on more' }
 };
@@ -138,6 +145,8 @@ function maxOf(caps: Capabilities, limit: Limit): number {
 			return caps.marketplaces_max;
 		case 'templates':
 			return caps.templates_max;
+		case 'collections':
+			return caps.collections_max;
 		case 'labels':
 			return caps.labels_max;
 		case 'devices':
@@ -153,6 +162,8 @@ function usedOf(usage: EntitlementUsage, limit: Limit): number {
 			return usage.marketplaces;
 		case 'templates':
 			return usage.templates;
+		case 'collections':
+			return usage.collections;
 		case 'labels':
 			return usage.labels;
 		case 'devices':
@@ -208,7 +219,14 @@ export interface UsageRow {
 
 /** Every counted allowance, in the order the Account page lists them. */
 export function usageLines(usage: EntitlementUsage, caps: Capabilities): UsageRow[] {
-	const order: Limit[] = ['resources', 'marketplaces', 'templates', 'labels', 'devices'];
+	const order: Limit[] = [
+		'resources',
+		'marketplaces',
+		'templates',
+		'collections',
+		'labels',
+		'devices'
+	];
 	return order.map((limit) => ({
 		limit,
 		line: usageLine(usedOf(usage, limit), maxOf(caps, limit), limit),

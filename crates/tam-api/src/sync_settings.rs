@@ -15,12 +15,13 @@
 use axum::extract::{Path, State};
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use tam_storage::{SyncSettingRecord, SyncSettingRepo};
-use tam_types::{InventoryId, Timestamp, TransportClass};
+use tam_storage::{ResourceTemplateRepo, SyncSettingRecord, SyncSettingRepo};
+use tam_types::{InventoryId, Timestamp, TransportClass, Uuid};
 
 use crate::entitlement::feature_refusal;
 use crate::error::APIError;
 use crate::jobs::{storage_fault, validation};
+use crate::migrations::name_of;
 use crate::vocabulary::parse_inventory;
 use crate::{AppState, OrgContext};
 
@@ -60,6 +61,14 @@ pub struct SyncSettingView {
     pub minimum_secs: Option<u32>,
     pub last_pull_at: Option<Timestamp>,
     pub publish_to: Vec<InventoryId>,
+    /// The template a rule fills a pulled resource from, or `null` where the
+    /// seller has named none.
+    ///
+    /// A pull carries what the source marketplace held, which is never the
+    /// whole form: the copyright attestation, the tax code, the formats and
+    /// the details are ours to ask for and no shop answers them. The template
+    /// is what fills those, and only where the pull left them empty.
+    pub template_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,6 +82,11 @@ pub struct SyncSettingBody {
     pub interval_secs: u32,
     #[serde(default)]
     pub publish_to: Vec<InventoryId>,
+    /// The template a rule fills from. Absent and null are the same answer
+    /// here, unlike on the template routes: the picker has a "no template"
+    /// option and sends it.
+    #[serde(default)]
+    pub template_id: Option<Uuid>,
 }
 
 // ---------------------------------------------------------------- handlers
@@ -107,6 +121,7 @@ pub(crate) async fn list_settings(
                         minimum_secs: minimum,
                         last_pull_at: None,
                         publish_to: Vec::new(),
+                        template_id: None,
                     },
                     |row| view_of(row, minimum),
                 )
@@ -150,6 +165,33 @@ pub(crate) async fn update_setting(
              different one",
         ));
     }
+    // A template the rule cannot honestly apply is refused rather than
+    // silently ignored. A generic template fills catalogue fields and suits
+    // any target; a scoped one is written for one marketplace's panel, and
+    // naming it on a rule that publishes somewhere else would fill a
+    // resource from a form the seller wrote for a different shop.
+    if let Some(template) = body.template_id {
+        if !caps.auto_publish_rules {
+            return Err(feature_refusal("auto_publish_rules", NO_RULES));
+        }
+        let held = ResourceTemplateRepo::new(state.pool.clone())
+            .get(context.org, template)
+            .await
+            .map_err(|error| storage_fault(&state, &error))?
+            .ok_or_else(|| validation("that template is not one of yours"))?;
+        if body.publish_to.is_empty() {
+            return Err(validation(
+                "a template fills what a rule publishes; add a marketplace to publish to first",
+            ));
+        }
+        if let Some(scope) = held.scope.filter(|scope| !body.publish_to.contains(scope)) {
+            return Err(validation(&format!(
+                "\"{}\" is written for {}, which this shop does not publish to",
+                held.name,
+                name_of(scope),
+            )));
+        }
+    }
     let now = (state.wall)();
     // Only switching it on needs the connection. Switching it off with a
     // connection since revoked has to stay possible, or a seller who
@@ -176,6 +218,7 @@ pub(crate) async fn update_setting(
         body.enabled,
         interval_secs,
         &body.publish_to,
+        body.template_id,
     )
     .await
     .map_err(|error| storage_fault(&state, &error))?;
@@ -197,5 +240,6 @@ fn view_of(record: &SyncSettingRecord, minimum: Option<u32>) -> SyncSettingView 
         minimum_secs: minimum,
         last_pull_at: record.last_pull_at,
         publish_to: record.publish_to.clone(),
+        template_id: record.template,
     }
 }
