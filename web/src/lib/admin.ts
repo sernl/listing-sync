@@ -3,7 +3,8 @@
 // becomes a bar list, and whether the app is currently being driven under
 // somebody else's identity. Pure, so it tests without a component.
 
-import { ApiFailure, type DayCount, type SignupsView } from '$lib/api';
+import { ApiFailure, type AdminUserView, type DayCount, type SignupsView } from '$lib/api';
+import type { IdentityUser } from '$lib/auth-client';
 
 /** What the operator probe has established so far.
  *
@@ -181,4 +182,102 @@ export type IdentityAdminRefusal = 'not-identity-admin' | 'unreadable';
  */
 export function identityAdminRefusal(status: number | undefined): IdentityAdminRefusal {
 	return status === 401 || status === 403 ? 'not-identity-admin' : 'unreadable';
+}
+
+// ------------------------------- the two planes' user lists, joined
+
+/**
+ * One row of the Identity users page: an identity account, and the platform
+ * user that account provisioned if there is one.
+ *
+ * The identity account is the spine because it is the list that can be
+ * searched and bounded — the platform read answers every app user at once.
+ * `platform` being null is an ordinary state, not a fault: an identity account
+ * that never reached the session exchange has no `app_user` row at all.
+ */
+export interface AdminUserRow {
+	identity: IdentityUser;
+	platform: AdminUserView | null;
+}
+
+export interface MergedUsers {
+	rows: AdminUserRow[];
+	/**
+	 * App users this listing cannot show: ones carrying no `auth_subject`, and
+	 * ones whose subject is not on the identity page in front of the operator.
+	 *
+	 * Counted rather than dropped silently, because `auth_subject` is nullable
+	 * and a provisioned user with no identity subject is exactly the row that
+	 * would otherwise vanish between the two planes with nothing saying so.
+	 */
+	unlinked: number;
+}
+
+/**
+ * Join the identity plane's accounts to the platform's own user rows.
+ *
+ * The key is `app_user.auth_subject`, which the operator surface omits where
+ * there is none: a row carrying no subject can never name an identity
+ * account, so it is never matched — not even to an identity account whose own
+ * id happens to be missing. The guard is "is this a string" rather than a
+ * comparison against one absent value, so neither an omitted key nor an
+ * explicit null can become a map key. A subject claimed by two app users
+ * would be a broken unique index rather than a case to resolve, so the first
+ * row wins and the second is counted as unlinked.
+ */
+export function mergeUsers(
+	identity: readonly IdentityUser[],
+	platform: readonly AdminUserView[]
+): MergedUsers {
+	const bySubject = new Map<string, AdminUserView>();
+	let unlinked = 0;
+	for (const user of platform) {
+		const subject = user.auth_subject;
+		if (typeof subject !== 'string' || bySubject.has(subject)) {
+			unlinked += 1;
+			continue;
+		}
+		bySubject.set(subject, user);
+	}
+	const rows = identity.map((account) => ({
+		identity: account,
+		platform: bySubject.get(account.id) ?? null
+	}));
+	// Every app user whose subject no listed account claims: the listing is
+	// search-narrowed, so this is usually "the rest of the platform" rather
+	// than anything wrong.
+	const matched = rows.filter((row) => row.platform !== null).length;
+	return { rows, unlinked: unlinked + (bySubject.size - matched) };
+}
+
+/**
+ * The sign-ins column, in words.
+ *
+ * `null` is "not read yet" rather than zero: the identity service lists
+ * sessions one account at a time, so a fifty-row page would be fifty requests
+ * and the count arrives only for the account an operator opened. Zero is its
+ * own answer — an account with no live session cannot be signed out of
+ * anything.
+ */
+export function sessionWords(count: number | null): string {
+	if (count === null) {
+		return 'not read';
+	}
+	if (count === 0) {
+		return 'none';
+	}
+	return count === 1 ? '1 sign-in' : `${count} sign-ins`;
+}
+
+/**
+ * Whether the identity trail is visible from the database the API reads.
+ *
+ * `last_sign_in_at` is absent both for an account that has never signed in
+ * and for a deployment whose `auth` schema this database cannot see, and no
+ * single row can tell those apart. A page of rows can: if not one of them
+ * carries a sign-in, the trail is the likelier explanation, and the page says
+ * so once instead of printing "never" against every account.
+ */
+export function signInTrailVisible(users: readonly AdminUserView[]): boolean {
+	return users.some((user) => user.last_sign_in_at !== undefined);
 }

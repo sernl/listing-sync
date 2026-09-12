@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT user_id AS \"subject!\", max(at) AS \"at!\" FROM auth.auth_event WHERE event = 'user_signed_in' AND user_id IS NOT NULL GROUP BY 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "subject!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "at!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true,
+      null
+    ]
+  },
+  "hash": "cdd2a2fdf157bc57197bc1f21aed8665b21d38d0c127707f8c7537522c64cedf"
+}

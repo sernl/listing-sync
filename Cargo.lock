@@ -5296,6 +5296,7 @@ dependencies = [
  "hmac",
  "http-body-util",
  "jsonwebtoken",
+ "pulldown-cmark",
  "ring",
  "rust_xlsxwriter",
  "serde",

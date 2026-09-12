@@ -1,0 +1,302 @@
+/* The guides: the prose a seller reads, and the editor an operator writes it
+ * in.
+ *
+ * `.guide-body` is the only place in this console where markup it did not
+ * write is rendered, so the rules below are written to contain it: every
+ * element a guide can produce is given a size and a rhythm here, and anything
+ * wider than the column — a picture, a table, a long code line — is capped
+ * rather than allowed to widen the page. The renderer escapes raw HTML, so the
+ * set of elements is exactly what Markdown can produce.
+ */
+
+/* --- the reader ----------------------------------------------------------- */
+
+.guide-list {
+	display: grid;
+	gap: 10px;
+}
+
+.guide-list a {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 12px;
+	flex-wrap: wrap;
+	padding: 13px 15px;
+	border: 1px solid var(--line);
+	border-radius: var(--r-panel);
+	background: var(--surface);
+	text-decoration: none;
+	color: var(--text);
+}
+
+.guide-list a:hover {
+	background: var(--hover);
+}
+
+.guide-list .t {
+	font-weight: 600;
+}
+
+.guide-list .when {
+	font-size: 12px;
+	color: var(--muted);
+}
+
+/* The prose column. 72ch is the measure the display face reads at; the guide
+   sits at the panel's left rather than centred, because every other page of
+   this console starts at the same edge. */
+.guide-body {
+	max-width: 72ch;
+	font-size: 15px;
+	line-height: 1.62;
+	color: var(--text);
+}
+
+.guide-body > :first-child {
+	margin-top: 0;
+}
+
+.guide-body > :last-child {
+	margin-bottom: 0;
+}
+
+.guide-body h1,
+.guide-body h2,
+.guide-body h3,
+.guide-body h4 {
+	font-family: var(--display);
+	line-height: 1.25;
+	margin: 1.6em 0 0.5em;
+}
+
+.guide-body h1 {
+	font-size: 22px;
+}
+
+.guide-body h2 {
+	font-size: 18px;
+}
+
+.guide-body h3,
+.guide-body h4 {
+	font-size: 15.5px;
+}
+
+.guide-body p,
+.guide-body ul,
+.guide-body ol,
+.guide-body blockquote,
+.guide-body pre,
+.guide-body table {
+	margin: 0 0 1em;
+}
+
+/* The markers are set back on explicitly: the console's reset takes them off
+   every list, which is right for a nav rail and wrong for prose — a guide's
+   numbered steps rendered as unnumbered lines. */
+.guide-body ul,
+.guide-body ol {
+	padding-left: 1.4em;
+	list-style-position: outside;
+}
+
+.guide-body ul {
+	list-style-type: disc;
+}
+
+.guide-body ul ul {
+	list-style-type: circle;
+}
+
+.guide-body ol {
+	list-style-type: decimal;
+}
+
+.guide-body li + li {
+	margin-top: 0.3em;
+}
+
+.guide-body a {
+	/* The console's own link ink, which the contrast pairs measure on both
+	   grounds; `--accent-ink` is the landing's and is measured nowhere here. */
+	color: var(--primary);
+	text-decoration: underline;
+}
+
+.guide-body strong {
+	font-weight: 600;
+}
+
+.guide-body blockquote {
+	border-left: 3px solid var(--line);
+	padding: 2px 0 2px 14px;
+	color: var(--muted);
+}
+
+.guide-body code {
+	font-family: ui-monospace, 'SFMono-Regular', 'Menlo', monospace;
+	font-size: 0.88em;
+	background: var(--soon-soft);
+	border-radius: 5px;
+	padding: 1px 5px;
+}
+
+.guide-body pre {
+	background: var(--soon-soft);
+	border: 1px solid var(--line);
+	border-radius: var(--r-panel);
+	padding: 12px 14px;
+	overflow-x: auto;
+}
+
+.guide-body pre code {
+	background: none;
+	padding: 0;
+}
+
+/* A picture is capped at the column rather than scaled to it, so a small
+   illustration is not blown up into a blur. */
+.guide-body img {
+	max-width: 100%;
+	height: auto;
+	border-radius: var(--r-panel);
+	display: block;
+}
+
+.guide-body hr {
+	border: 0;
+	border-top: 1px solid var(--line);
+	margin: 1.8em 0;
+}
+
+.guide-body table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 13.5px;
+	display: block;
+	overflow-x: auto;
+}
+
+.guide-body th,
+.guide-body td {
+	border: 1px solid var(--line);
+	padding: 7px 10px;
+	text-align: left;
+	vertical-align: top;
+}
+
+.guide-body th {
+	background: var(--soon-soft);
+	font-weight: 600;
+}
+
+/* --- the editor ----------------------------------------------------------- */
+
+/* Writing on the left, the last saved rendering on the right. One column below
+   980px: side by side in half a phone's width, neither half is readable. */
+.gd-split {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	gap: 16px;
+	align-items: start;
+}
+
+.gd-head {
+	display: flex;
+	align-items: flex-end;
+	gap: 12px;
+	flex-wrap: wrap;
+}
+
+.gd-head .grow {
+	flex: 1 1 240px;
+	min-width: 0;
+}
+
+.gd-md {
+	display: flex;
+	gap: 4px;
+	flex-wrap: wrap;
+	margin-bottom: 6px;
+}
+
+.gd-md-b {
+	min-width: 32px;
+	min-height: var(--control-h-sm);
+	border: 1px solid var(--line);
+	border-radius: var(--r-field);
+	background: var(--surface);
+	color: var(--text);
+	font: inherit;
+	font-size: 13px;
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 5px;
+	padding-inline: 8px;
+}
+
+.gd-md-b:hover:not(:disabled) {
+	background: var(--hover);
+}
+
+.gd-md-b:disabled {
+	opacity: 0.55;
+	cursor: default;
+}
+
+.gd-body {
+	width: 100%;
+	min-height: 420px;
+	resize: vertical;
+	border: 1px solid var(--line);
+	border-radius: var(--r-field);
+	background: var(--surface);
+	color: var(--text);
+	padding: 11px 12px;
+	font-family: ui-monospace, 'SFMono-Regular', 'Menlo', monospace;
+	font-size: 13px;
+	line-height: 1.6;
+}
+
+.gd-bar {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	margin-top: 12px;
+}
+
+.gd-bar .spacer {
+	flex: 1;
+}
+
+.gd-state {
+	font-size: 12px;
+	color: var(--muted);
+}
+
+.gd-preview {
+	border: 1px solid var(--line);
+	border-radius: var(--r-panel);
+	background: var(--surface);
+	padding: 14px 16px;
+	max-height: 70vh;
+	overflow: auto;
+}
+
+@media (max-width: 980px) {
+	.gd-split {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.gd-preview {
+		max-height: none;
+	}
+
+	.gd-body {
+		min-height: 300px;
+	}
+}

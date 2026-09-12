@@ -27,6 +27,7 @@ pub mod duplicates;
 pub mod entitlement;
 pub mod error;
 pub mod export;
+pub mod guides;
 pub mod import;
 pub mod import_batch;
 pub mod import_runs;
@@ -626,6 +627,18 @@ pub fn router(state: AppState) -> Router {
                 .put(profile::set_avatar)
                 .delete(profile::clear_avatar),
         )
+        // The help corpus, read by every seller through the session gate.
+        // `/{version}/guides/images/{handle}` is listed before
+        // `/{version}/guides/{slug}` because `images` is a literal segment
+        // and a slug is a parameter: no guide is called "images", and the
+        // order is what makes that true of the router rather than only of the
+        // vocabulary.
+        .route("/{version}/guides", get(guides::published_guides))
+        .route(
+            "/{version}/guides/images/{handle}",
+            get(guides::guide_image),
+        )
+        .route("/{version}/guides/{slug}", get(guides::published_guide))
         .route("/{version}/admin/signups", get(admin::signups))
         .route("/{version}/admin/orgs", get(admin::list_orgs))
         .route("/{version}/admin/orgs/{org}", get(admin::org_detail))
@@ -650,6 +663,26 @@ pub fn router(state: AppState) -> Router {
             "/{version}/admin/marketplace-requests",
             get(marketplace_requests::list_all),
         )
+        // The operator's half of the same corpus: the listing and the create,
+        // then one guide, then the pictures a guide body points at. The
+        // picture upload carries its own body ceiling, as the seller's upload
+        // does, because a route that accepts bytes without one accepts any
+        // number of them.
+        .route(
+            "/{version}/admin/guides",
+            get(guides::list_guides).post(guides::create_guide),
+        )
+        .route(
+            "/{version}/admin/guides/images",
+            post(guides::upload_guide_image).layer(guides::image_body_limit()),
+        )
+        .route(
+            "/{version}/admin/guides/{slug}",
+            get(guides::guide_detail)
+                .put(guides::update_guide)
+                .delete(guides::delete_guide),
+        )
+        .route("/{version}/admin/users", get(admin::list_users))
         .route("/{version}/openapi.json", get(openapi::serve_document))
         .with_state(state)
 }

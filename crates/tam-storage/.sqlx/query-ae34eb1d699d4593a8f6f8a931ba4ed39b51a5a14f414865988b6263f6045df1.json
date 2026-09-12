@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT u.id, u.email, u.auth_subject, u.created_at, o.id AS \"org_id\", o.name AS \"org_name\", o.slug AS \"org_slug\" FROM app_user u JOIN organisation o ON o.id = u.org_id ORDER BY u.created_at DESC, u.id LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "email",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "auth_subject",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "org_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "org_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "org_slug",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "ae34eb1d699d4593a8f6f8a931ba4ed39b51a5a14f414865988b6263f6045df1"
+}

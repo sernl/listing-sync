@@ -24,6 +24,8 @@
 //! the visible cost: the organisation is read through the backoffice pool
 //! before the write, so a grant cannot conjure a tenant by naming one.
 
+use std::collections::HashMap;
+
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
@@ -34,7 +36,7 @@ use tam_storage::{
     BackofficeRepo, DailyCount, EntitlementRepo, Grant, GrantRecord, GrantedBy, IdentityAuditRepo,
     ItemCounts, NewGrant, SignupsRepo,
 };
-use tam_types::{FailureCode, InventoryId, MappingId, Marketplace, OrgId, Timestamp, Uuid};
+use tam_types::{FailureCode, InventoryId, MappingId, Marketplace, OrgId, Timestamp, UserId, Uuid};
 
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::resources::ConnectionView;
@@ -481,6 +483,111 @@ fn validation(message: &str) -> APIError {
         StatusCode::UNPROCESSABLE_ENTITY,
         APIErrorEntry::new(message).kind(APIErrorKind::Validation),
     )
+}
+
+// --------------------------------------------------------------------- users
+
+/// The organisation a user belongs to, as the user listing names it.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UserOrgView {
+    pub org: OrgId,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
+}
+
+/// One user of the platform.
+///
+/// Three facts about the app plane and one about the identity plane, joined
+/// on `auth_subject`: which tenant they are in, what that tenant holds, when
+/// they last signed in, and the subject the console's own identity listing
+/// keys on.
+///
+/// `auth_subject` and `last_sign_in_at` are both nullable, and separately.
+/// A user provisioned before the identity plane existed carries no subject
+/// and so appears here and not in the identity listing; a user who carries
+/// one but has not signed in since the audit trail began carries no instant.
+/// Neither is an error and neither is a zero: an operator reading this page
+/// to find a dormant account needs "never seen" told apart from "seen at the
+/// epoch".
+///
+/// No display name, because `app_user` has none. The name beside the address
+/// is the identity plane's, and the console holds that list already.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PlatformUserView {
+    pub user: UserId,
+    pub email: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_subject: Option<Uuid>,
+    pub organisation: UserOrgView,
+    pub plan: Plan,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_sign_in_at: Option<Timestamp>,
+    pub created_at: Timestamp,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UsersView {
+    pub users: Vec<PlatformUserView>,
+}
+
+/// Every user of the platform, newest first.
+///
+/// Two pools, and the split is migration 0037's boundary rather than a
+/// convenience: the organisation, the plan and the user row come through the
+/// backoffice pool, which is granted exactly those three tables, and the last
+/// sign-in comes through the application pool, because `auth.auth_event` is
+/// the one object in the identity schema `tam_app` can read and
+/// `tam_backoffice` holds not even USAGE there.
+///
+/// A database with no identity schema answers the listing whole with every
+/// `last_sign_in_at` absent, rather than refusing. The two DDL sets are
+/// applied by separate commands, so a deployment legitimately holds one and
+/// not the other, and a user list that failed for it would take the
+/// organisation and plan down with a column that is decoration beside them.
+///
+/// Active sessions are not here and cannot be: nothing grants any API role a
+/// single column of `auth."session"`, which is where the session rows live,
+/// and the console reads them from better-auth's own admin endpoints and
+/// merges on `auth_subject`. The boundary `db/auth/0002_audit_event.sql`
+/// states — the application reads the audit trail and nothing else in that
+/// schema — is left standing.
+pub(crate) async fn list_users(
+    State(state): State<AppState>,
+    _operator: OperatorContext,
+) -> Result<Json<UsersView>, APIError> {
+    let now = (state.wall)();
+    let users = BackofficeRepo::new(backoffice(&state)?)
+        .users(now)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    let seen: HashMap<Uuid, Timestamp> = IdentityAuditRepo::new(state.pool.clone())
+        .last_sign_in()
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    Ok(Json(UsersView {
+        users: users
+            .into_iter()
+            .map(|user| PlatformUserView {
+                last_sign_in_at: user
+                    .auth_subject
+                    .and_then(|subject| seen.get(&subject).copied()),
+                user: user.user,
+                email: user.email,
+                auth_subject: user.auth_subject,
+                organisation: UserOrgView {
+                    org: user.org,
+                    name: user.org_name,
+                    slug: user.org_slug,
+                },
+                plan: user.plan,
+                created_at: user.created_at,
+            })
+            .collect(),
+    }))
 }
 
 // --------------------------------------------------------------- sync health

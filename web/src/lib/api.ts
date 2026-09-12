@@ -1103,6 +1103,83 @@ export interface ImpersonationsView {
 	impersonations?: ImpersonationView[];
 }
 
+/** One app user as the operator surface answers it: the platform's own row,
+ *  its organisation, the plan that organisation holds, and when the identity
+ *  trail last saw them sign in.
+ *
+ *  Absent rather than null throughout, which is how the whole operator surface
+ *  serializes an unknown: the key is simply missing.
+ *
+ *  `auth_subject` is the only key that joins this row to the identity plane's
+ *  account, and it is optional: a user provisioned without an identity subject
+ *  exists, so a merge on it has to tolerate a row that can never match.
+ *  `last_sign_in_at` is absent both for somebody who has never signed in and
+ *  for a deployment whose identity schema this database cannot see — the two
+ *  are indistinguishable per row, which is why the page states the second
+ *  possibility once rather than per user. */
+export interface AdminUserView {
+	user: string;
+	email: string;
+	auth_subject?: string;
+	organisation: { org: string; name: string; slug?: string };
+	plan: Plan;
+	last_sign_in_at?: number;
+	created_at: number;
+}
+
+export interface AdminUsersView {
+	users: AdminUserView[];
+}
+
+// -------------------------------------------------------------------- guides
+
+/** Whether a guide is readable by sellers. A `draft` is invisible on the
+ *  reader routes — they 404 it rather than serving it unpublished — so this is
+ *  the whole of a guide's publication state. */
+export type GuideStatus = 'draft' | 'published';
+
+/** One guide on a listing. No body: a list draws titles, and a body is up to
+ *  200 KiB of Markdown nobody is reading there.
+ *
+ *  One shape for both listings. The reader's route answers published guides
+ *  only, so `status` is always `published` there; it is carried rather than
+ *  dropped because one shape serving both is one shape to keep in step. */
+export interface GuideHeadView {
+	slug: string;
+	title: string;
+	status: GuideStatus;
+	updated_at: number;
+	updated_by?: string;
+}
+
+export interface GuidesView {
+	guides: GuideHeadView[];
+}
+
+/** One guide as the editor reads it: `body` is the Markdown the operator
+ *  types, `html` is what the server rendered from the body it last stored.
+ *  Both, because the editor writes the first and previews the second — and
+ *  the rendering is the same function the published page goes through, so the
+ *  preview cannot disagree with what a seller sees. */
+export interface GuideDetailView {
+	slug: string;
+	title: string;
+	body: string;
+	html: string;
+	status: GuideStatus;
+	updated_at: number;
+	updated_by?: string;
+}
+
+/** A published guide as a seller reads it: rendered, with no Markdown source
+ *  and no draft ever served. */
+export interface GuidePageView {
+	slug: string;
+	title: string;
+	html: string;
+	updated_at: number;
+}
+
 // ---------------------------------------------------------------- authoring
 
 /** Where the seller asked a publish to leave the listing. The server's own
@@ -2530,6 +2607,12 @@ export const api = {
 	adminImportDrain: () => request<ImportDrainView>('/v1/admin/import-drain'),
 	adminDeadLetters: () => request<DeadLettersView>('/v1/admin/dead-letters'),
 	adminImpersonations: () => request<ImpersonationsView>('/v1/admin/impersonations'),
+	/** Every app user, with their organisation, its plan, and the identity
+	 *  trail's last sign-in. The platform's half of the Identity users page:
+	 *  the identity plane's own accounts come from better-auth's admin plugin,
+	 *  and the two are joined on `auth_subject` in the browser because no one
+	 *  role can read both. */
+	adminUsers: () => request<AdminUsersView>('/v1/admin/users'),
 
 	/** Writes an operator grant on one organisation, and answers the org
 	 *  detail so the panel redraws from the server's own record rather than
@@ -2543,7 +2626,44 @@ export const api = {
 	 *  grant, which for most organisations is nothing at all and therefore
 	 *  `free`. */
 	revokeGrant: (org: string, grant: string) =>
-		post<OrgDetailView>(`/v1/admin/orgs/${org}/plan/${grant}/revoke`, {})
+		post<OrgDetailView>(`/v1/admin/orgs/${org}/plan/${grant}/revoke`, {}),
+
+	// Guides. The operator writes them and every signed-in seller reads the
+	// published ones; there is no anonymous reader, because `/guides` sits
+	// behind the session gate like every other console route.
+	adminGuides: () => request<GuidesView>('/v1/admin/guides'),
+	adminGuide: (slug: string) =>
+		request<GuideDetailView>(`/v1/admin/guides/${encodeURIComponent(slug)}`),
+	/** Creates a guide. A POST rather than a PUT on a fresh slug, because the
+	 *  update is update-only and 404s a slug nothing holds: that way a typo in
+	 *  the address bar cannot conjure a guide. */
+	createGuide: (body: { slug: string; title: string; body: string; status: GuideStatus }) =>
+		post<GuideDetailView>('/v1/admin/guides', body),
+	saveGuide: (slug: string, body: { title: string; body: string; status: GuideStatus }) =>
+		put<GuideDetailView>(`/v1/admin/guides/${encodeURIComponent(slug)}`, body),
+	deleteGuide: (slug: string) =>
+		request<void>(`/v1/admin/guides/${encodeURIComponent(slug)}`, { method: 'DELETE' }),
+	/** Bytes for a guide's illustration, stored against the platform's own
+	 *  organisation so every seller can read them back — a guide image kept
+	 *  under the operator's tenant would 404 for everybody else.
+	 *
+	 *  The raw `File` as the body, not a multipart part, exactly as
+	 *  `POST /v1/uploads` takes it: the handler reads the whole body as bytes,
+	 *  so a multipart wrapper would be prefix noise it ingested as the
+	 *  picture. No progress reporting, because an illustration is small
+	 *  enough that `fetch` is the simpler call. */
+	uploadGuideImage: (file: File) =>
+		request<{ handle: string }>('/v1/admin/guides/images', {
+			method: 'POST',
+			headers: { accept: 'application/json', 'content-type': file.type },
+			body: file
+		}),
+
+	/** The published guides, newest first. */
+	guides: () => request<GuidesView>('/v1/guides'),
+	/** One published guide, rendered. A draft is a 404 here rather than a
+	 *  refusal: an unpublished guide is not a guide a seller has. */
+	guide: (slug: string) => request<GuidePageView>(`/v1/guides/${encodeURIComponent(slug)}`)
 };
 
 /** Walks every page of a cursor-paginated endpoint, accumulating rows. */

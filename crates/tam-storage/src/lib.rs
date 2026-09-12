@@ -22,6 +22,7 @@ pub mod duplicates;
 pub mod entitlement;
 pub mod file_source;
 pub mod fingerprints;
+pub mod guide;
 pub mod import_batches;
 pub mod import_runs;
 pub mod job_reads;
@@ -48,8 +49,8 @@ pub use analytics::{AnalyticsRepo, LatestMetric, MetricSnapshot};
 pub use authorship::{AuthorshipRecord, ConnectionFactsRepo};
 pub use backoffice::{
     BackofficeRepo, DailyCount, DeadLetterTopic, FailedWrite, HaltRecord, IdentityAuditRepo,
-    ImpersonationEvent, ImportDrainPage, ImportDrainRun, OrgDetail, OrgSummary, SignupsRepo,
-    SubscriptionRecord, SyncHealth,
+    ImpersonationEvent, ImportDrainPage, ImportDrainRun, OrgDetail, OrgSummary, PlatformUser,
+    SignupsRepo, SubscriptionRecord, SyncHealth,
 };
 pub use billing::{BillingRepo, SubscriptionState};
 pub use blobs::{
@@ -76,6 +77,10 @@ pub use file_source::ProductFileSourceRepo;
 pub use fingerprints::{
     CandidateSketch, FingerprintRepo, FingerprintWrite, PayloadDigest, ProductMeta,
     TextSketchColumns,
+};
+pub use guide::{
+    ensure_platform_org, platform_org, GuideEdit, GuideHead, GuideRecord, GuideRepo, GuideStatus,
+    GuideWrite, NewGuide, PLATFORM_ORG_SLUG,
 };
 pub use import_batches::{
     AttachCounts, BatchState, BatchWrite, BindOutcome, BoundRow, ClaimedRow, CommitCounts,

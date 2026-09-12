@@ -866,3 +866,8 @@ Applying one to a selection is a server-side plan and submit: template fields fi
 The sync rule's template is applied fill-empty to each pulled resource before it is published, which completes the fields the source marketplace never carried; no per-mapping copy table exists and none was needed for that.
 A collection is an ordered reference list beside labels, capped by the plan, with publish (the migration preview's shape), apply-template-and-labels, and export of the members alone; deleting one touches no resource.
 `collections` joins the reserved organisation slugs on both sides.
+
+## Backoffice: users and guides, 2026-09-12
+
+The identity plane stays closed to the application roles: `/admin/users` merges an API row (organisation, plan, last sign-in from the audit trail) into better-auth's own admin listing on the console, and sessions and sign-out-everywhere come from better-auth's admin plugin, which needs the identity admin marking granted by hand (`docs/notes/runbooks/operator-markings.md`).
+Guides are a global table rendered server-side with raw HTML escaped, so a guide body can never carry markup the console did not write; their images live under a lazily created platform organisation (`guides`) so the tenant-count invariants stay exact until a guide image exists.

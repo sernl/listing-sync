@@ -12,6 +12,7 @@ import { adminClient, jwtClient } from 'better-auth/client/plugins';
 import { createAuthClient } from 'better-auth/svelte';
 import { api, type Whoami } from '$lib/api';
 import type { CaptchaOptions } from '$lib/captcha';
+import type { BrowserSession } from '$lib/device-merge';
 import type { SocialProvider } from '$lib/social-providers';
 
 /** Where the identity service is reached. Same-origin is a requirement rather
@@ -369,6 +370,45 @@ export async function setIdentityRole(userId: string, role: IdentityRole): Promi
 	const { error } = await authClient.admin.setRole({ userId, role });
 	if (error) {
 		throw refused(error, 'The role was not changed.');
+	}
+}
+
+/**
+ * Every live sign-in on one account, as the admin plugin lists them.
+ *
+ * The API cannot answer this. `tam_app` holds `SELECT` on `auth.auth_event`
+ * and nothing else in that schema — no user, no session, no account, written
+ * down as a boundary in `db/auth/0002_audit_event.sql` — so the session rows
+ * come from the identity service itself and are joined to the platform's own
+ * user rows in the browser, on `auth_subject`. The alternative was a grant on
+ * `auth."session"`, which would have reversed that line for a column an
+ * operator page reads once.
+ *
+ * Listed per account rather than in bulk, because that is the shape of the
+ * plugin's endpoint: `GET /admin/list-user-sessions` takes one `userId`.
+ */
+export async function listUserSessions(userId: string): Promise<BrowserSession[]> {
+	const { data, error } = await authClient.admin.listUserSessions({ userId });
+	if (error) {
+		throw refused(error, "That account's sign-ins could not be listed.");
+	}
+	return (data?.sessions ?? []) as BrowserSession[];
+}
+
+/**
+ * End every sign-in on one account.
+ *
+ * Immediate, because the session cookie cache is off (`auth/src/auth.ts`): with
+ * it on, a revoked session would keep working for up to five minutes, and a
+ * sign-out-everywhere that does not sign anybody out for five minutes is worse
+ * than none. Revoking all rather than one row at a time is the whole control
+ * an operator wants here — a single stolen session is the account's own
+ * concern on Settings.
+ */
+export async function revokeUserSessions(userId: string): Promise<void> {
+	const { error } = await authClient.admin.revokeUserSessions({ userId });
+	if (error) {
+		throw refused(error, "That account's sign-ins were not ended.");
 	}
 }
 

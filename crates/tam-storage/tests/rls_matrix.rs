@@ -79,13 +79,16 @@ const TENANT_TABLES: [&str; 58] = [
 /// marking is a platform fact about a human rather than a row any tenant
 /// owns. standards_node is the mirrored standards catalogue: public data
 /// shared by every tenant, carrying no organisation column, per
-/// docs/notes/design/standards-ingestion.md. The rest are genuinely global:
+/// docs/notes/design/standards-ingestion.md. guide is the help corpus, which
+/// is the same kind of fact in the other direction: one document set the
+/// platform writes and every tenant reads. The rest are genuinely global:
 /// reference data, the canonical taxonomy, the fleet kill switch, and sqlx's
 /// migration bookkeeping.
-const GLOBAL_TABLES: [&str; 11] = [
+const GLOBAL_TABLES: [&str; 12] = [
     "_sqlx_migrations",
     "app_user",
     "canonical_term",
+    "guide",
     "inventory_halt",
     "marketplace_inventory",
     "organisation",

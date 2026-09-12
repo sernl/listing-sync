@@ -119,5 +119,22 @@ export const queryKeys = {
 	adminDeadLetters: ['admin-dead-letters'] as const,
 	adminImpersonations: ['admin-impersonations'] as const,
 	/** The identity plane's user list, keyed by the search that produced it. */
-	identityUsers: (search: string) => ['identity-users', search] as const
+	identityUsers: (search: string) => ['identity-users', search] as const,
+	/** One account's live sign-ins, as better-auth's admin plugin lists them.
+	 *  Keyed by the account, because the identity service lists sessions one
+	 *  account at a time and the page reads them only for the row an operator
+	 *  opened. */
+	identityUserSessions: (userId: string) => ['identity-user-sessions', userId] as const,
+	/** The platform's half of the users page: app users with their
+	 *  organisation, plan and last sign-in. A key of its own rather than a
+	 *  shape under `identityUsers`, which the search narrows and this does
+	 *  not. */
+	adminUsers: ['admin-users'] as const,
+	adminGuides: ['admin-guides'] as const,
+	/** One guide as its editor reads it — body and rendered html. Distinct
+	 *  from `guide` below, which carries no Markdown source. */
+	adminGuide: (slug: string) => ['admin-guide', slug] as const,
+	/** The published guides a seller can read, and one of them. */
+	guides: ['guides'] as const,
+	guide: (slug: string) => ['guide', slug] as const
 };

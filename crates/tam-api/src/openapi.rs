@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 129] = [
+pub const ROUTES: [Route; 139] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -667,6 +667,56 @@ pub const ROUTES: [Route; 129] = [
         method: "get",
         path: "/{version}/admin/marketplace-requests",
         summary: "Operator: the marketplaces sellers have asked for, newest first",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/admin/users",
+        summary: "Operator: every user with their organisation, its plan and their last sign-in",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/admin/guides",
+        summary: "Operator: every help guide, drafts included",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/guides",
+        summary: "Operator: write a new guide at a slug nothing else holds",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/guides/images",
+        summary: "Operator: store a picture a guide body points at, under the platform org",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/admin/guides/{slug}",
+        summary: "Operator: one guide, its Markdown and that Markdown rendered",
+    },
+    Route {
+        method: "put",
+        path: "/{version}/admin/guides/{slug}",
+        summary: "Operator: rewrite one guide's title, body and status",
+    },
+    Route {
+        method: "delete",
+        path: "/{version}/admin/guides/{slug}",
+        summary: "Operator: delete one guide",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/guides",
+        summary: "The published help guides, newest edit first",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/guides/images/{handle}",
+        summary: "The bytes of one guide picture, readable by every seller",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/guides/{slug}",
+        summary: "One published guide, rendered; a draft answers as no such guide",
     },
     Route {
         method: "get",

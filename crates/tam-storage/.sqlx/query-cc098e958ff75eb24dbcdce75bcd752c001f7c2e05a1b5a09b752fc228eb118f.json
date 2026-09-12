@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE guide SET title = $2, body = $3, status = $4, updated_by = $5, updated_at = $6 WHERE slug = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cc098e958ff75eb24dbcdce75bcd752c001f7c2e05a1b5a09b752fc228eb118f"
+}

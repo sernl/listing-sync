@@ -29,6 +29,7 @@
 		sectionFor
 	} from '$lib/nav';
 	import { accountTileState } from '$lib/account-tile.svelte';
+	import { pageTitle } from '$lib/page-title.svelte';
 	import { palette } from '$lib/palette.svelte';
 	import { queryKeys } from '$lib/query';
 	import SearchPalette from '$lib/SearchPalette.svelte';
@@ -182,7 +183,9 @@
 	}
 
 	const pathname = $derived(page.url.pathname);
-	const crumb = $derived(breadcrumbFor(pathname));
+	// The nav destination's label, unless the page on screen knows a better
+	// name than its destination does — a guide's own title is the case.
+	const crumb = $derived(pageTitle.override ?? breadcrumbFor(pathname));
 	const orgName = $derived(organisation.data?.name);
 	// The seller's own picture, read here because this shell is the one
 	// component that renders only under a session; the preferences screen

@@ -18,6 +18,13 @@ calamine = { workspace = true }
 futures-util = { version = "0.3", default-features = false }
 hmac = { workspace = true }
 jsonwebtoken = { version = "9.3", default-features = false }
+# The guide renderer, and the same workspace edge `tam-marketplace-tpt`
+# already holds: `default-features = false` with `html` alone, so the parser
+# and the HTML writer arrive and nothing else does. No package joins the lock
+# for it. What this crate does with it differs from that one — `guides::render`
+# escapes raw HTML rather than passing it through — and the difference is
+# stated there rather than assumed from the shared dependency.
+pulldown-cmark = { workspace = true }
 # The checked PKCS#8 parse, which is what derives the public half an operator
 # compares against the fleet's repository variable. `jsonwebtoken` signs through
 # `from_pkcs8_maybe_unchecked` and so cannot answer that question. Promoted from

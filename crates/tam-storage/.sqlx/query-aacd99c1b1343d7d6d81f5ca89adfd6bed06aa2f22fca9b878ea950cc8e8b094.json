@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO organisation (id, name, slug, slug_deferred, created_at) VALUES ($1, $2, $3, false, $4) ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "aacd99c1b1343d7d6d81f5ca89adfd6bed06aa2f22fca9b878ea950cc8e8b094"
+}

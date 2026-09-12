@@ -111,6 +111,46 @@
 	justify-content: flex-end;
 }
 
+/* The users table is the widest one here: six columns, two of them a name
+   over an identifier and two carrying a control. Its cells are held to 22ch
+   rather than the 34ch the others take, because at 34ch the Actions column
+   fell off the right edge of the band at 1280px — behind an inner scrollbar,
+   with nothing on screen saying it was there. */
+.op-users .op-cell .t,
+.op-users .op-cell .s,
+.op-users .s {
+	max-width: 22ch;
+}
+
+.op-users td {
+	padding-inline: 8px;
+}
+
+/* The plan and the control that changes it, under the organisation they
+   belong to. Stacked: side by side they are a pill and a button on one line,
+   and the column is twice the width it needs. */
+.op-plan {
+	display: grid;
+	gap: 6px;
+	justify-items: start;
+	margin-top: 6px;
+}
+
+/* Its controls stack rather than wrapping across a row: three buttons side by
+   side is the widest cell in the table, and stacked they are the narrowest. */
+.op-users .op-acts {
+	flex-direction: column;
+	align-items: stretch;
+}
+
+/* The grant form, which two screens host: the organisation page inside a
+   panel and the users page inside a dialog. The gap lives here rather than on
+   either host, so the fields are not stacked edge to edge in one of them. */
+.op-grant {
+	display: grid;
+	gap: 12px;
+}
+
 .op-table select {
 	border: 1px solid var(--line);
 	background: var(--surface);
@@ -346,6 +386,21 @@
 		max-width: none;
 		white-space: normal;
 		overflow-wrap: anywhere;
+	}
+
+	/* The narrow cap is a desktop column measure; on a card each cell has the
+	   whole width and wraps. */
+	.op-users .op-cell .t,
+	.op-users .op-cell .s,
+	.op-users .s {
+		max-width: none;
+	}
+
+	/* A card has the width the column did not, so the controls go back to a
+	   row and the buttons stop being a full-width stack. */
+	.op-users .op-acts {
+		flex-direction: row;
+		align-items: center;
 	}
 
 	.op-acts {

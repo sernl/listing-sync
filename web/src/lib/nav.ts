@@ -156,7 +156,7 @@ export const SECTIONS: readonly NavSection[] = [
 			{ href: '/settings/subscription', label: 'Subscription', icon: 'credit-card' },
 			{ href: '/notifications', label: 'Notifications', icon: 'bell' },
 			{ href: '/status', label: 'Status', icon: 'activity' },
-			{ href: '/guides', label: 'Help and guides', icon: 'book-open', soon: true }
+			{ href: '/guides', label: 'Help and guides', icon: 'book-open' }
 		]
 	}
 ];
@@ -206,6 +206,7 @@ export const ADMIN_SECTION: NavSection = {
 		{ href: '/admin/failures', label: 'Failed writes', icon: 'circle-x' },
 		{ href: '/admin/import-drain', label: 'Import drain', icon: 'chart-line' },
 		{ href: '/admin/users', label: 'Identity users', icon: 'users' },
+		{ href: '/admin/guides', label: 'Guides', icon: 'book-open' },
 		{ href: '/admin/impersonations', label: 'Impersonations', icon: 'copy' }
 	]
 };

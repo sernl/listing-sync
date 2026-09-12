@@ -88,9 +88,16 @@ describe('the soon flag against the routes it describes', () => {
 		expect(silent.map((item) => item.href)).toEqual([]);
 	});
 
+	// Guides was the last placeholder destination, so a `toContain('placeholder')`
+	// canary would now fail for the right reason and have to be deleted anyway.
+	// `/app` is the redirect the reader has always classified, and a fabricated
+	// path is the one verdict no route can accidentally satisfy — together they
+	// show the sweep is reading the filesystem rather than answering `built`
+	// to everything.
 	it('reads real routes, so an empty sweep cannot pass silently', () => {
 		const verdicts = ALL_DESTINATIONS.map((item) => verdictFor(item.href));
 		expect(verdicts.filter((v) => v === 'built').length).toBeGreaterThan(8);
-		expect(verdicts).toContain('placeholder');
+		expect(verdicts).toContain('redirect');
+		expect(verdictFor('/no-such-route')).toBe('missing');
 	});
 });

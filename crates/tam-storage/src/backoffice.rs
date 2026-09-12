@@ -13,15 +13,19 @@
 //! `auth.auth_event` is the one object in the identity schema `tam_app` holds
 //! SELECT on.
 
+use std::collections::HashMap;
+
 use sqlx::PgPool;
 use tam_domain::JobItemId;
+use tam_limits::Plan;
 use tam_types::{
     connection_status, ConnectionHealth, ConnectionId, ConnectionState, FailureCode, InventoryId,
-    MappingId, OrgId, Timestamp, Uuid,
+    MappingId, OrgId, Timestamp, UserId, Uuid,
 };
 
 use crate::codec::{
-    failure_code_from_db, inventory_from_db, timestamp_from_db, uuid_from_db, uuid_to_db,
+    failure_code_from_db, inventory_from_db, timestamp_from_db, timestamp_to_db, uuid_from_db,
+    uuid_to_db,
 };
 use crate::connections::{marketplace_from_db, ConnectionRow};
 use crate::job_reads::add_item_group;
@@ -188,6 +192,41 @@ impl IdentityAuditRepo {
                 .collect(),
         ))
     }
+
+    /// When each identity subject last signed in, or `None` where the
+    /// identity schema is not present in this database.
+    ///
+    /// Keyed by the identity-plane subject, which is what `app_user
+    /// .auth_subject` joins to; the app plane's own user ids are not in this
+    /// table. A subject who has never signed in since the audit trail existed
+    /// is simply absent, and the caller renders that as "not known" rather
+    /// than as an instant.
+    ///
+    /// `user_signed_in` and no other event: an impersonation is somebody else
+    /// reaching the account, and counting it as the owner signing in would
+    /// make the one column an operator reads to find a dormant account lie in
+    /// exactly the case it is being consulted about.
+    pub async fn last_sign_in(&self) -> Result<Option<Vec<(Uuid, Timestamp)>>, StorageError> {
+        let present =
+            sqlx::query!("SELECT to_regclass('auth.auth_event') IS NOT NULL AS \"present!\"",)
+                .fetch_one(&self.pool)
+                .await?
+                .present;
+        if !present {
+            return Ok(None);
+        }
+        let rows = sqlx::query!(
+            "SELECT user_id AS \"subject!\", max(at) AS \"at!\" FROM auth.auth_event \
+             WHERE event = 'user_signed_in' AND user_id IS NOT NULL GROUP BY 1",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(Some(
+            rows.into_iter()
+                .map(|row| (uuid_from_db(row.subject), timestamp_from_db(row.at)))
+                .collect(),
+        ))
+    }
 }
 
 /// One organisation and what it holds.
@@ -204,6 +243,30 @@ pub struct OrgSummary {
     pub mappings: i64,
     pub connections: i64,
     pub users: i64,
+}
+
+/// One user of the platform, with the organisation they belong to and the
+/// plan that organisation holds.
+///
+/// `auth_subject` is nullable and stays nullable all the way out. A user
+/// provisioned before the identity plane existed, or by a development mint,
+/// has none; the console joins its own identity listing on this column, and a
+/// row carrying `None` is one that appears on this list and not on that one,
+/// which is a fact worth seeing rather than a row to drop.
+///
+/// The plan is the organisation's rather than the user's, because that is
+/// what an entitlement is. Two users in one tenant read the same plan, and
+/// they should.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlatformUser {
+    pub user: UserId,
+    pub email: String,
+    pub auth_subject: Option<Uuid>,
+    pub org: OrgId,
+    pub org_name: String,
+    pub org_slug: Option<String>,
+    pub plan: Plan,
+    pub created_at: Timestamp,
 }
 
 /// A tenant-wide halt as recorded.
@@ -339,6 +402,72 @@ impl BackofficeRepo {
                 mappings: row.mappings,
                 connections: row.connections,
                 users: row.users,
+            })
+            .collect())
+    }
+
+    /// Every user of the platform with their organisation and its plan,
+    /// newest first.
+    ///
+    /// Two statements rather than one join, and the second is the reason:
+    /// which grant an organisation holds is decided by `Plan::strength` in
+    /// Rust (see [`crate::EntitlementRepo::current`]), and a `CASE` in SQL
+    /// restating that precedence would be a second copy of the one ordering
+    /// this platform has. So the live grants come back unranked and are
+    /// folded here, through the same comparison the per-organisation read
+    /// uses.
+    ///
+    /// All three tables are already this role's to read -- `app_user` and
+    /// `organisation` by migration 0037's grant, `entitlement_grant` by
+    /// migration 0069's grant and policy -- so this listing reaches nothing
+    /// new; it asks the questions the organisation panel already asks, once
+    /// for the whole platform instead of once per tenant.
+    pub async fn users(&self, now: Timestamp) -> Result<Vec<PlatformUser>, StorageError> {
+        let grants = sqlx::query!(
+            "SELECT org_id, plan, granted_at FROM entitlement_grant \
+              WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > $1)",
+            timestamp_to_db(now)?,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        // The strongest live grant per organisation, ties broken by the later
+        // one, which is exactly the comparison `EntitlementRepo::current`
+        // makes for a single tenant.
+        let mut held: HashMap<Uuid, (Plan, (u8, Timestamp))> = HashMap::new();
+        for row in grants {
+            let plan = Plan::parse(&row.plan).ok_or_else(|| StorageError::CorruptRow {
+                reason: format!("entitlement_grant.plan holds the unknown plan {}", row.plan),
+            })?;
+            let rank = (plan.strength(), timestamp_from_db(row.granted_at));
+            let org = uuid_from_db(row.org_id);
+            if held.get(&org).is_none_or(|&(_, best)| rank > best) {
+                held.insert(org, (plan, rank));
+            }
+        }
+
+        let rows = sqlx::query!(
+            "SELECT u.id, u.email, u.auth_subject, u.created_at, \
+                    o.id AS \"org_id\", o.name AS \"org_name\", o.slug AS \"org_slug\" \
+             FROM app_user u JOIN organisation o ON o.id = u.org_id \
+             ORDER BY u.created_at DESC, u.id LIMIT $1",
+            MAX_ROWS,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let org = uuid_from_db(row.org_id);
+                PlatformUser {
+                    user: UserId(uuid_from_db(row.id)),
+                    email: row.email,
+                    auth_subject: row.auth_subject.map(uuid_from_db),
+                    org: OrgId(org),
+                    org_name: row.org_name,
+                    org_slug: row.org_slug,
+                    plan: held.get(&org).map_or(Plan::Free, |&(plan, _)| plan),
+                    created_at: timestamp_from_db(row.created_at),
+                }
             })
             .collect())
     }

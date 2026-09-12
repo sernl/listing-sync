@@ -38,7 +38,7 @@ const NOW: Timestamp = Timestamp(5_000);
 /// Every operator route, with the organisation path already concrete. Used
 /// whole by the refusal tests, so a route added to the router and forgotten
 /// here is a gap a reviewer can see rather than one the suite hides.
-const ADMIN_PATHS: [&str; 8] = [
+const ADMIN_PATHS: [&str; 9] = [
     "/v1/admin/signups",
     "/v1/admin/orgs",
     "/v1/admin/orgs/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -47,6 +47,7 @@ const ADMIN_PATHS: [&str; 8] = [
     "/v1/admin/import-drain",
     "/v1/admin/dead-letters",
     "/v1/admin/impersonations",
+    "/v1/admin/users",
 ];
 
 /// The mounted operator route `ADMIN_PATHS` does not carry, named rather than
@@ -61,10 +62,20 @@ const ADMIN_PATHS: [&str; 8] = [
 /// that list drives GET refusal loops, and a POST route answered by those
 /// loops would be testing method routing rather than the operator fence.
 /// Their own refusal is asserted by `a_seller_cannot_grant_themselves_a_plan`.
-const ADMIN_PATHS_UNCOVERED: [&str; 3] = [
+const ADMIN_PATHS_UNCOVERED: [&str; 6] = [
     "/{version}/admin/marketplace-requests",
     "/{version}/admin/orgs/{org}/plan",
     "/{version}/admin/orgs/{org}/plan/{grant}/revoke",
+    // The guide corpus is global and lives on the application pool, so these
+    // three are the operator routes that keep serving when no backoffice
+    // database is configured -- which is exactly what the second loop below
+    // asserts does not happen, and it is right about every route that reads
+    // across the tenant fence. They are not those routes. Their refusal for a
+    // caller who is not an operator is asserted in `guides_flow`, against the
+    // same blank 401 this file demands everywhere else.
+    "/{version}/admin/guides",
+    "/{version}/admin/guides/images",
+    "/{version}/admin/guides/{slug}",
 ];
 
 #[expect(

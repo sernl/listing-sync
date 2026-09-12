@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { ApiFailure } from './api';
+import { ApiFailure, type AdminUserView } from './api';
+import type { IdentityUser } from './auth-client';
 import {
 	barWidth,
 	dayLabel,
 	identityAdminRefusal,
 	impersonationState,
+	mergeUsers,
 	operatorVerdict,
 	outsiderReason,
+	sessionWords,
+	signInTrailVisible,
 	signupPeak,
 	signupSeries
 } from './admin';
@@ -170,5 +174,113 @@ describe('a refusal from the identity plane', () => {
 	it('claims nothing about any other status', () => {
 		expect(identityAdminRefusal(500)).toBe('unreadable');
 		expect(identityAdminRefusal(undefined)).toBe('unreadable');
+	});
+});
+
+describe('the two planes joined on auth_subject', () => {
+	const account = (id: string, email: string): IdentityUser => ({
+		id,
+		email,
+		name: email,
+		emailVerified: true
+	});
+
+	const appUser = (user: string, subject?: string): AdminUserView => ({
+		user,
+		email: `${user}@example.test`,
+		...(subject === undefined ? {} : { auth_subject: subject }),
+		organisation: { org: `org-${user}`, name: `Org ${user}`, slug: user },
+		plan: 'free',
+		created_at: 0
+	});
+
+	it('attaches each app user to the account whose subject it carries', () => {
+		const merged = mergeUsers(
+			[account('s1', 'ada@example.test'), account('s2', 'bea@example.test')],
+			[appUser('b', 's2'), appUser('a', 's1')]
+		);
+		expect(merged.rows.map((row) => [row.identity.id, row.platform?.user])).toEqual([
+			['s1', 'a'],
+			['s2', 'b']
+		]);
+		expect(merged.unlinked).toBe(0);
+	});
+
+	it('never matches an app user carrying no subject', () => {
+		// The key is absent on that row, which is a user provisioned without an
+		// identity subject. Matching it to whichever account came next would
+		// put somebody else's organisation and plan on that row.
+		const merged = mergeUsers([account('s1', 'ada@example.test')], [appUser('a')]);
+		expect(merged.rows[0]?.platform).toBeNull();
+		expect(merged.unlinked).toBe(1);
+	});
+
+	it('never matches a subject the server sent as an explicit null either', () => {
+		// Belt and braces on the guard rather than on the schema: a null here
+		// would become a map key and match an account whose id is missing, and
+		// that row would be somebody else's organisation.
+		const nulled = { ...appUser('a', 's1'), auth_subject: null } as unknown as AdminUserView;
+		const merged = mergeUsers([account('s1', 'ada@example.test')], [nulled]);
+		expect(merged.rows[0]?.platform).toBeNull();
+		expect(merged.unlinked).toBe(1);
+	});
+
+	it('leaves an account with no app user of its own unattached', () => {
+		const merged = mergeUsers([account('s1', 'ada@example.test')], []);
+		expect(merged.rows).toEqual([{ identity: account('s1', 'ada@example.test'), platform: null }]);
+		expect(merged.unlinked).toBe(0);
+	});
+
+	it('counts app users the listing does not show, which a narrowed search is full of', () => {
+		const merged = mergeUsers(
+			[account('s1', 'ada@example.test')],
+			[appUser('a', 's1'), appUser('b', 's2'), appUser('c')]
+		);
+		expect(merged.rows[0]?.platform?.user).toBe('a');
+		expect(merged.unlinked).toBe(2);
+	});
+
+	it('keeps the first of two app users claiming one subject', () => {
+		// A broken unique index rather than a case to resolve, so the row is
+		// drawn from one of them and the other is reported rather than merged
+		// over the top.
+		const merged = mergeUsers(
+			[account('s1', 'ada@example.test')],
+			[appUser('a', 's1'), appUser('b', 's1')]
+		);
+		expect(merged.rows[0]?.platform?.user).toBe('a');
+		expect(merged.unlinked).toBe(1);
+	});
+});
+
+describe('the sign-ins column', () => {
+	it('says a count has not been read, which is not the same as none', () => {
+		expect(sessionWords(null)).toBe('not read');
+		expect(sessionWords(0)).toBe('none');
+	});
+
+	it('counts in words that agree with the figure', () => {
+		expect(sessionWords(1)).toBe('1 sign-in');
+		expect(sessionWords(4)).toBe('4 sign-ins');
+	});
+});
+
+describe('the sign-in trail', () => {
+	const user = (at?: number): AdminUserView => ({
+		user: 'a',
+		email: 'a@example.test',
+		organisation: { org: 'o', name: 'O' },
+		plan: 'free',
+		...(at === undefined ? {} : { last_sign_in_at: at }),
+		created_at: 0
+	});
+
+	it('is visible as soon as one row carries a sign-in', () => {
+		expect(signInTrailVisible([user(), user(1)])).toBe(true);
+	});
+
+	it('is not claimed visible by a page with no sign-in on it, which is what an unreadable schema looks like', () => {
+		expect(signInTrailVisible([user(), user()])).toBe(false);
+		expect(signInTrailVisible([])).toBe(false);
 	});
 });

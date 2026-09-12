@@ -292,6 +292,11 @@ async fn the_backoffice_role_sees_only_the_tables_it_was_granted(app: PgPool) {
         // operator route reads one, and cross-tenant reach over every tenant's
         // private drafting is not granted against a need nobody has stated.
         "resource_template",
+        // Migration 0073's decision, asserted for the reason above: a guide
+        // is written and read on the application pool, so the role that
+        // exists to cross the tenant fence has no business with a table that
+        // sits on neither side of it.
+        "guide",
     ] {
         let denied = sqlx::query(&format!("SELECT count(*) FROM {table}"))
             .fetch_one(&backoffice)
