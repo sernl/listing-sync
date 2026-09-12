@@ -337,7 +337,7 @@ impl Landing {
         if none_match(if_none_match, &asset.etag) {
             return not_modified(&asset.etag, asset.cache_control);
         }
-        (
+        let mut response = (
             [
                 (axum::http::header::CONTENT_TYPE, asset.content_type),
                 (axum::http::header::CACHE_CONTROL, asset.cache_control),
@@ -351,7 +351,20 @@ impl Landing {
             // public root's fonts, requested by every first-time visitor.
             asset.bytes.clone(),
         )
-            .into_response()
+            .into_response();
+        // A page carries a nonce and an asset does not: the edge injects into
+        // HTML alone, and a header built per response is one allocation this
+        // origin has no reason to spend on a font.
+        if asset.content_type.starts_with("text/html") {
+            if let Ok(value) =
+                axum::http::HeaderValue::from_str(&with_nonce(&self.policy, &fresh_nonce()))
+            {
+                response
+                    .headers_mut()
+                    .insert(axum::http::header::CONTENT_SECURITY_POLICY, value);
+            }
+        }
+        response
     }
 }
 
@@ -456,6 +469,50 @@ fn inline_script_hashes_across(
         hashes.extend(inline_script_hashes(text));
     }
     Ok(hashes.into_iter().collect())
+}
+
+/// A script nonce for the one inline script this origin does not write.
+///
+/// The edge in front of this origin injects one: Cloudflare's JavaScript
+/// Detections, an inline block that runs on every HTML page a browser loads
+/// and issues the `cf_clearance` cookie its bot scoring reads. The block is
+/// different on every response, so no hash can admit it, and a policy that
+/// admits inline scripts by hash alone refuses it — which is what every page
+/// of this origin did, silently, in every browser's console. A browser that
+/// never runs it never earns the cookie, and a client the scoring already
+/// distrusts, which is what an Android WebView or WebView2 is to it, is then
+/// challenged on its next fetch and shown a page the console reads as a
+/// failure. The vendor documents the way out: a policy carrying a nonce, which
+/// its edge parses out of the header and stamps on the block it injects.
+///
+/// Fresh per response, sixteen random bytes: a nonce reused across responses
+/// is a hash with extra steps, and one a page could predict admits any script
+/// an attacker can get into the page. The hashes stay beside it, because the
+/// shell's own boot block is ours and is admitted by what it is rather than by
+/// what the header says this once.
+pub(crate) fn fresh_nonce() -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(uuid::Uuid::new_v4().as_bytes())
+}
+
+/// `policy` with `'nonce-{nonce}'` on its script directive.
+///
+/// Inserted after the directive's name rather than appended to the policy,
+/// because a source expression belongs to one directive and `script-src` is
+/// the one the injected block is judged by.
+pub(crate) fn with_nonce(policy: &str, nonce: &str) -> String {
+    match policy.split_once("script-src") {
+        Some((before, after)) => {
+            let mut out = String::with_capacity(policy.len() + nonce.len() + 20);
+            out.push_str(before);
+            out.push_str("script-src 'nonce-");
+            out.push_str(nonce);
+            out.push('\'');
+            out.push_str(after);
+            out
+        }
+        None => policy.to_owned(),
+    }
 }
 
 /// The landing page's content-security policy, which is not the console's.
@@ -946,6 +1003,38 @@ mod tests {
             !policy.contains("'unsafe-inline' 'sha256")
                 && !policy.contains("script-src 'self' 'unsafe-inline'"),
             "an inline block is admitted by hash, never by 'unsafe-inline': {policy}"
+        );
+    }
+
+    /// A page's policy carries a nonce on its script directive, an asset's
+    /// does not, and two pages never carry the same one.
+    ///
+    /// The nonce is what lets the edge's injected detection script run; a
+    /// reused one would admit any script that learned it.
+    #[test]
+    fn a_page_carries_a_fresh_nonce_and_an_asset_carries_none() {
+        let policy = super::landing_policy(&["'sha256-abc'".to_owned()]);
+        let one = super::with_nonce(&policy, &super::fresh_nonce());
+        let two = super::with_nonce(&policy, &super::fresh_nonce());
+        let script = |p: &str| {
+            p.split(';')
+                .find(|part| part.trim_start().starts_with("script-src"))
+                .expect("script-src is in the policy")
+                .to_owned()
+        };
+        assert!(
+            script(&one).contains("'nonce-") && script(&one).contains("'sha256-abc'"),
+            "the nonce sits on script-src beside the hashes: {one}"
+        );
+        assert_ne!(one, two, "a nonce is fresh per response");
+        assert!(
+            axum::http::HeaderValue::from_str(&one).is_ok(),
+            "the nonced policy is a sendable header: {one}"
+        );
+        assert_eq!(
+            super::with_nonce("default-src 'self'", "x"),
+            "default-src 'self'",
+            "a policy with no script directive is left alone"
         );
     }
 

@@ -1114,7 +1114,19 @@ async fn console_security_headers(
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     let mut response = next.run(request).await;
-    if let Ok(value) = axum::http::HeaderValue::from_str(&policy) {
+    // A page carries a fresh nonce beside the hashes and an asset carries the
+    // policy as built; see `serving::fresh_nonce` for the script it admits.
+    let is_page = response
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("text/html"));
+    let header = if is_page {
+        axum::http::HeaderValue::from_str(&serving::with_nonce(&policy, &serving::fresh_nonce()))
+    } else {
+        axum::http::HeaderValue::from_str(&policy)
+    };
+    if let Ok(value) = header {
         response
             .headers_mut()
             .insert(axum::http::header::CONTENT_SECURITY_POLICY, value);

@@ -10,6 +10,9 @@ axum = "0.8"
 # actually boots; both are the versions the rest of the workspace pins.
 base64 = "0.22"
 sha2 = { workspace = true }
+# The per-response script nonce: sixteen random bytes, the same v4 source
+# tam-api already links for its identifiers.
+uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 # The outbox payload is a `serde_json::Value` and the relay's request body is
 # one too, so this crate names what it already links: `serde_json` is a

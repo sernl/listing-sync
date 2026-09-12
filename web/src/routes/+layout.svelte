@@ -33,7 +33,7 @@
 	// a frame, against a session that is not there.
 	const signedOut = $derived(signedOutView(page.url.pathname));
 	$effect(() => {
-		if (!data.session && signedOut === 'redirecting') {
+		if (!data.session && !data.unreachable && signedOut === 'redirecting') {
 			goto('/login');
 		}
 	});
@@ -171,7 +171,23 @@
 </script>
 
 <QueryClientProvider client={queryClient}>
-	{#if data.session && verdict === 'claim-screen'}
+	{#if data.unreachable}
+		<!-- The first request got no Teachouse answer. Ahead of every other
+		     branch, because nothing below can be trusted: there is no session
+		     to render and no proof there is none. The sentence names what
+		     actually came back, which is the one thing the old
+		     `error.html` fallback could not say. -->
+		<div class="auth">
+			<div class="wordmark">
+				<img src="/brand/logo.svg" alt="Teachouse" width="220" />
+			</div>
+			<div class="auth-card">
+				<h1>Teachouse could not be reached</h1>
+				<p>{data.unreachable.sentence}</p>
+				<Button tier="primary" onclick={() => location.reload()}>Try again</Button>
+			</div>
+		</div>
+	{:else if data.session && verdict === 'claim-screen'}
 		<div class="auth">
 			<div class="wordmark">
 				<img src="/brand/logo.svg" alt="Teachouse" width="220" />
