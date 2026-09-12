@@ -148,6 +148,7 @@ Per marketplace, one setting: **pull new resources** with a cadence (every 6 hou
 The device enumerates the shop on the cadence (a `catalogue_check` request the scheduler mints), the server diffs against `mapping`, unmapped listings enter import with the duplicate review, and each new resource is labelled with its source and, where the rule says so, published onward.
 The page shows every resource that is live on more than one marketplace, and an activity log in seller words: *"Fractions Pack" pulled from TPT 2 hours ago · Maths, Year 5 · published to Tes*.
 Existing sync-request coverage and the ledger stream carry the state.
+Built 2026-09-12 (phase 4): the pass lives in `tam-server`, schedules produce jobs, the pull is a scheduled import run the device serves at check-in, and templates for the rule wait on phase 5; see `../../design/decisions.md` under that date.
 
 ## 6. Status
 
@@ -235,6 +236,6 @@ Each phase's verification includes a 1280 and a 390 capture of every new page, a
 
 Every phase ends with a release, by founder rule of 2026-09-12: `docs/releases/<version>.md`, the version bump in both desktop files, `just release-check`, and the `v<version>` tag that runs `desktop-release.yml` to GitHub Releases and CrabNebula Cloud for Windows and Android; then the deployment branch is re-pinned and `teachouse-downloads-refresh` is seen to publish the new set.
 The app halves must be clean under `cargo clippy -p tam-desktop -- -D warnings`, `cargo nextest run -p tam-desktop` and the Windows cross-check, and anything the phase changed that the desktop or the phone must follow (a route move, a theme, a permission) lands in the same release rather than being left to the landing page or the browser.
-Phases 0 to 2 shipped together as 0.4.0; phase 3 with the console-start fix and the phone bar as 0.5.0.
+Phases 0 to 2 shipped together as 0.4.0; phase 3 with the console-start fix and the phone bar as 0.5.0; phase 4 as 0.6.0.
 
 Founder-supervised captures owed, none blocking phase 0 to 2: TPT own-file download, Tes edit-published, Tes unpublish, TPT preview slot (from 2026-09-11).

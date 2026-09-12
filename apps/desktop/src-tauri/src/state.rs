@@ -13,6 +13,7 @@ use tokio::sync::Mutex;
 use crate::device::{DeviceId, DeviceIdentity};
 use crate::entitlement::{EntitlementGate, EMBEDDED_PUBLIC_KEYS, PUBLIC_KEY_BYTES};
 use crate::heartbeat::{ControlPlane, Offline};
+use crate::import::ScheduledStep;
 use crate::notify::{Notifier, Silent};
 use crate::session::SessionStore;
 
@@ -142,6 +143,15 @@ pub struct DesktopState {
     /// Which imports are running, so a second start for one request is
     /// refused rather than walking the seller's shop twice at once.
     imports: Mutex<std::collections::HashSet<tam_types::Uuid>>,
+    /// Which halves of which open runs this process has already served without
+    /// the console asking, so the check-in poll walks a shop once rather than
+    /// once an hour.
+    ///
+    /// Per process rather than persisted, and that is the honest bound: the
+    /// run's own `listed` and `selected` flags are the durable record, and
+    /// this only covers the window between a pass finishing and the server
+    /// answering the next poll with the flag it set.
+    scheduled: Mutex<std::collections::HashSet<(tam_types::Uuid, ScheduledStep)>>,
     /// What tells the seller, on this device's own screen, what a cycle
     /// settled. [`Silent`] by default, because a state built without a
     /// surface to show one on has nothing to raise it on.
@@ -171,6 +181,7 @@ impl DesktopState {
             activity: Mutex::new(VecDeque::new()),
             ledger: None,
             imports: Mutex::new(std::collections::HashSet::new()),
+            scheduled: Mutex::new(std::collections::HashSet::new()),
             notifier: Arc::new(Silent),
         }
     }
@@ -226,6 +237,20 @@ impl DesktopState {
 
     pub async fn release_import(&self, request: tam_types::Uuid) {
         self.imports.lock().await.remove(&request);
+    }
+
+    /// Whether this process has already served that half of that run.
+    ///
+    /// Read and marked as two steps rather than claimed as one, because the
+    /// mark belongs after the pass succeeded: a cycle that could not reach the
+    /// marketplace must be retried at the next one, and a claim taken up front
+    /// would refuse it until the application restarted.
+    pub async fn scheduled_step_done(&self, run: tam_types::Uuid, step: ScheduledStep) -> bool {
+        self.scheduled.lock().await.contains(&(run, step))
+    }
+
+    pub async fn mark_scheduled_step(&self, run: tam_types::Uuid, step: ScheduledStep) {
+        self.scheduled.lock().await.insert((run, step));
     }
 
     /// A state whose entitlement verifier is a key set the test generated.

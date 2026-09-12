@@ -14,6 +14,7 @@ import ArrowRightLeft from '@lucide/svelte/icons/arrow-right-left';
 import Bell from '@lucide/svelte/icons/bell';
 import BookOpen from '@lucide/svelte/icons/book-open';
 import Building2 from '@lucide/svelte/icons/building-2';
+import CalendarClock from '@lucide/svelte/icons/calendar-clock';
 import ChartLine from '@lucide/svelte/icons/chart-line';
 import Check from '@lucide/svelte/icons/check';
 import ChevronDown from '@lucide/svelte/icons/chevron-down';
@@ -65,6 +66,7 @@ export const ICONS = {
 	bell: Bell,
 	'book-open': BookOpen,
 	'building-2': Building2,
+	'calendar-clock': CalendarClock,
 	'chart-line': ChartLine,
 	check: Check,
 	'chevron-down': ChevronDown,

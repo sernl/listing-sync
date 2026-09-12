@@ -112,10 +112,10 @@ export const SECTIONS: readonly NavSection[] = [
 		// items below.
 		href: '/automations',
 		items: [
-			// Flagged although the page is built: the schedule it saves cannot run
-			// until the device release ships. `nav-routes.test.ts` carries the
-			// reason and refuses a flag that no longer earns its exception.
-			{ href: '/automations/sharing', label: 'Marketplace Sharing', icon: 'share-2', soon: true },
+			// The path is unchanged although the word is: `/automations/sharing`
+			// is where the page has always been, and moving it would break every
+			// link a seller has kept.
+			{ href: '/automations/sharing', label: 'Scheduling', icon: 'calendar-clock' },
 			{
 				href: '/automations/migration',
 				label: 'Migrations',

@@ -22,7 +22,7 @@ export interface CardState {
 	tone: CardTone;
 }
 
-export type AutomationId = 'sharing' | 'migration' | 'sync';
+export type AutomationId = 'scheduling' | 'migration' | 'sync';
 
 export interface AutomationCard {
 	id: AutomationId;
@@ -45,8 +45,9 @@ export interface AutomationFacts {
 	openQuestions: number | null;
 }
 
-const SHARING_WHAT =
-	'Publish one resource to every marketplace you are connected to, in one scheduled action.';
+const SCHEDULING_WHAT =
+	'Publish a set of resources to the marketplaces you choose, at a time you choose, without ' +
+	'being at your computer.';
 
 const MIGRATION_WHAT =
 	'Move a whole shop from one marketplace to another, once. Everything arrives as a draft ' +
@@ -72,11 +73,15 @@ function plural(count: number, one: string, many: string): string {
 	return count === 1 ? `1 ${one}` : `${count} ${many}`;
 }
 
-/** Sharing has no foundation at all: no share, bump or relist concept exists
- *  anywhere behind this console, so its state is a constant rather than a
- *  reading. */
-export function sharingState(): CardState {
-	return { label: 'Coming soon', tone: 'soon' };
+/** Scheduling acts on a marketplace, so the one thing that stops it before
+ *  the seller has written anything is having none connected. The schedules
+ *  themselves are not read here: this card links to the page that lists them,
+ *  and a count on the card would be a second read of the same list. */
+export function schedulingState(facts: AutomationFacts): CardState {
+	if (!anyConnectionStands(facts.connections)) {
+		return { label: 'No marketplace connected', tone: 'warn' };
+	}
+	return { label: 'Ready', tone: 'ok' };
 }
 
 export function migrationState(facts: AutomationFacts): CardState {
@@ -130,12 +135,12 @@ export function migrations(requests: readonly SyncRequestHead[]): SyncRequestHea
 export function cards(facts: AutomationFacts): AutomationCard[] {
 	return [
 		{
-			id: 'sharing',
+			id: 'scheduling',
 			href: '/automations/sharing',
-			title: 'Marketplace Sharing',
-			icon: 'share-2',
-			what: SHARING_WHAT,
-			state: sharingState()
+			title: 'Scheduling',
+			icon: 'calendar-clock',
+			what: SCHEDULING_WHAT,
+			state: schedulingState(facts)
 		},
 		{
 			id: 'migration',

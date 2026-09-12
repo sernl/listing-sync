@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AutomationFacts } from './landing';
-import { cards, migrationState, sharingState, syncState } from './landing';
+import { cards, migrationState, schedulingState, syncState } from './landing';
 import { DECLARED, connection, request } from './fixtures.test-support';
 
 function facts(over: Partial<AutomationFacts> = {}): AutomationFacts {
@@ -15,7 +15,7 @@ const READY = facts({
 
 describe('the landing cards', () => {
 	it('offers the three automations, in the order the navigation lists them', () => {
-		expect(cards(facts()).map((card) => card.id)).toEqual(['sharing', 'migration', 'sync']);
+		expect(cards(facts()).map((card) => card.id)).toEqual(['scheduling', 'migration', 'sync']);
 	});
 
 	it('sends Marketplace Sync to the list that already exists rather than to a new path', () => {
@@ -33,9 +33,16 @@ describe('the landing cards', () => {
 	});
 });
 
-describe('the sharing card', () => {
-	it('reports the same thing whatever the seller has connected, because none of it is built', () => {
-		expect(sharingState()).toEqual({ label: 'Coming soon', tone: 'soon' });
+describe('the scheduling card', () => {
+	it('names the missing marketplace rather than reading as ready with nowhere to send', () => {
+		expect(schedulingState(facts())).toEqual({
+			label: 'No marketplace connected',
+			tone: 'warn'
+		});
+	});
+
+	it('reads as ready once there is somewhere to send to', () => {
+		expect(schedulingState(READY)).toEqual({ label: 'Ready', tone: 'ok' });
 	});
 });
 

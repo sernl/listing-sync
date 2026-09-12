@@ -642,6 +642,7 @@
    draws is listed; a new one joins this list or reads as a smudge on dark. */
 [data-theme='dark'] .mpmark img,
 [data-theme='dark'] .res-tile-mark,
+[data-theme='dark'] .mk-tile-mark,
 [data-theme='dark'] .mp-mark img,
 [data-theme='dark'] .mk img,
 [data-theme='dark'] img.mark {

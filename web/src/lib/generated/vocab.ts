@@ -646,6 +646,17 @@ export const MIGRATION_VERDICTS: readonly MigrationVerdict[] = [
   "blocked",
 ];
 
+export type ScheduleRepeat =
+  | "once"
+  | "daily"
+  | "weekly";
+
+export const SCHEDULE_REPEATS: readonly ScheduleRepeat[] = [
+  "once",
+  "daily",
+  "weekly",
+];
+
 export type Plan =
   | "free"
   | "migration_only"

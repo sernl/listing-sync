@@ -34,6 +34,7 @@ import type {
 	MatchLayer,
 	MigrationVerdict,
 	Plan,
+	ScheduleRepeat,
 	SlugPrompt,
 	StandardsState,
 	TermKind
@@ -604,6 +605,131 @@ export interface MigrationAck {
 	request: string;
 	queued: number;
 	skipped: number;
+}
+
+/** What a schedule sends, and the two instants the server works out from it.
+ *
+ *  The selection is a sum rather than two nullable fields, because a schedule
+ *  names one of the two and a shape that could name both would have a state
+ *  nothing means. Collections join it in the next phase. */
+export type ScheduleSelection = { label: string } | { products: string[] };
+
+// `ScheduleRepeat` is the generated union, re-exported rather than restated:
+// a repeat added in Rust must stop this client type-checking rather than be
+// silently unhandled.
+export type { ScheduleRepeat };
+
+/** What a schedule is, as the server stores and answers it.
+ *
+ *  The time is a minute of the day beside an IANA zone rather than an
+ *  instant: a seller who says nine in the morning means nine in the morning
+ *  after the clocks change too, and only the zone can say that. */
+export interface ScheduleView {
+	id: string;
+	name: string;
+	selection: ScheduleSelection;
+	inventories: InventoryId[];
+	intent: PublishIntent;
+	at_minute_of_day: number;
+	timezone: string;
+	repeat: ScheduleRepeat;
+	/** 0 is Sunday, as `Date.getDay` counts. Null on every repeat but weekly. */
+	weekday: number | null;
+	republish_on_update: boolean;
+	enabled: boolean;
+	next_run_at: number | null;
+	last_run_at: number | null;
+}
+
+/** What a create or an edit names: the schedule minus the three fields the
+ *  server owns. */
+export type ScheduleBody = Omit<ScheduleView, 'id' | 'next_run_at' | 'last_run_at'>;
+
+export interface SchedulesView {
+	schedules: ScheduleView[];
+}
+
+/** A member the tick resolved but did not send, with the sentence saying why.
+ *  A refusal skips the resource rather than failing the tick: one listing a
+ *  marketplace cannot revise is not a reason to drop the other nine. */
+export interface ScheduleSkip {
+	product: string;
+	title: string;
+	reason: string;
+}
+
+/** One marketplace's share of one tick. `job` is null where the tick resolved
+ *  members but minted nothing, which is what every member being skipped looks
+ *  like. */
+export interface ScheduleRunView {
+	tick: number;
+	inventory: InventoryId;
+	job: string | null;
+	sent: number;
+	skipped: ScheduleSkip[];
+}
+
+export interface ScheduleRunsView {
+	runs: ScheduleRunView[];
+}
+
+/** One marketplace's pull setting.
+ *
+ *  `minimum_secs` is the plan's floor rather than a validation error waiting
+ *  to happen: the console disables the cadences below it and names the figure,
+ *  and null means the plan pulls at no cadence at all. */
+export interface MarketplaceSyncSettingView {
+	inventory: InventoryId;
+	enabled: boolean;
+	interval_secs: number;
+	minimum_secs: number | null;
+	last_pull_at: number | null;
+	/** The marketplaces a newly pulled resource is published onward to. */
+	publish_to: InventoryId[];
+}
+
+export interface SyncSettingsView {
+	marketplaces: MarketplaceSyncSettingView[];
+}
+
+/** What a settings write names. The marketplace is the path segment, so it is
+ *  deliberately absent here: a body that could name a second one would have a
+ *  disagreement to resolve. */
+export interface SyncSettingBody {
+	enabled: boolean;
+	interval_secs: number;
+	publish_to: InventoryId[];
+}
+
+/** One line of the activity log, composed by the server.
+ *
+ *  The sentence arrives written rather than assembled here: a line joins a
+ *  run, a job and a resource's title, and a client that composed it would be
+ *  a second place the seller's words are decided. */
+export interface ActivityLine {
+	at: number;
+	line: string;
+	href: string | null;
+}
+
+/** One page of the log. `cursor` is the `at` of the oldest line on it and is
+ *  absent at the end, which is the shape `GET /v1/sync/activity` answers —
+ *  an instant rather than the opaque token the other lists page by, because
+ *  the log is ordered by the clock and nothing else. */
+export interface ActivityPage {
+	activity: ActivityLine[];
+	cursor: number | null;
+}
+
+/** One resource that reaches more than one marketplace. */
+export interface MultiListedRow {
+	product: string;
+	title: string;
+	inventories: InventoryId[];
+}
+
+export interface MultiListedView {
+	multi: MultiListedRow[];
 }
 
 /** What a surface knows about the seller's declaration for one marketplace.
@@ -2155,6 +2281,41 @@ export const api = {
 	 *  while it is pending, so until it does there is nothing else in the
 	 *  console that names it. */
 	syncRequests: () => request<SyncRequestsView>('/v1/sync'),
+
+	/** Every schedule this organisation holds, with the next and last tick the
+	 *  server worked out. The two instants are read rather than computed here:
+	 *  the zone, the repeat and the clock change are the scheduler's arithmetic
+	 *  and a second implementation in the browser would disagree with it twice
+	 *  a year. */
+	schedules: () => request<SchedulesView>('/v1/schedules'),
+	createSchedule: (body: ScheduleBody) => post<ScheduleView>('/v1/schedules', body),
+	/** The whole schedule, not a delta: a schedule with no marketplaces and one
+	 *  with its marketplaces left alone would otherwise be the same body. */
+	updateSchedule: (id: string, body: ScheduleBody) =>
+		put<ScheduleView>(`/v1/schedules/${encodeURIComponent(id)}`, body),
+	deleteSchedule: (id: string) =>
+		request<void>(`/v1/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+	/** What one schedule's ticks did, newest first: one row per marketplace per
+	 *  tick, with the members it could not send and the sentence for each. */
+	scheduleRuns: (id: string) =>
+		request<ScheduleRunsView>(`/v1/schedules/${encodeURIComponent(id)}/runs`),
+
+	/** The pull setting for every marketplace, including the ones switched
+	 *  off: the page draws a card per connection and the row is what it fills
+	 *  the card from. */
+	syncSettings: () => request<SyncSettingsView>('/v1/sync/settings'),
+	setSyncSetting: (inventory: InventoryId, body: SyncSettingBody) =>
+		put<MarketplaceSyncSettingView>(`/v1/sync/settings/${inventory}`, body),
+	/** The activity log, newest first and a page at a time. The server clamps
+	 *  `limit`, so the console asks for none and takes the default. */
+	syncActivity: (cursor?: number | null) =>
+		request<ActivityPage>(
+			`/v1/sync/activity${cursor === undefined || cursor === null ? '' : `?cursor=${cursor}`}`
+		),
+	/** Every resource that reaches more than one marketplace. Bounded by the
+	 *  server and deliberately not paged: it is a list the seller scans, and a
+	 *  cursor on it would be a second paging idiom for no gain. */
+	multiListed: () => request<MultiListedView>('/v1/sync/multi'),
 
 	/** What a migration would do, per resource, before anything is written.
 	 *  Asked again on every change of selection, which is safe because the

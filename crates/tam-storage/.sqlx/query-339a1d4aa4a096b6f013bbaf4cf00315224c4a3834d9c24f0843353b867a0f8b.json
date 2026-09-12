@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT p.id, p.title, p.updated_at FROM product p JOIN schedule_product sp ON sp.org_id = p.org_id AND sp.product_id = p.id WHERE p.org_id = $1 AND sp.schedule_id = $2 AND p.deleted_at IS NULL ORDER BY p.created_at, p.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "339a1d4aa4a096b6f013bbaf4cf00315224c4a3834d9c24f0843353b867a0f8b"
+}

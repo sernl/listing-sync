@@ -41,8 +41,12 @@ pub mod product;
 pub mod profile;
 pub mod resource_templates;
 pub mod resources;
+pub mod scheduler;
+pub mod schedules;
 pub mod session;
 pub mod stream;
+pub mod sync_activity;
+pub mod sync_settings;
 pub mod taxonomy;
 pub mod text;
 pub mod version;
@@ -214,7 +218,36 @@ pub fn router(state: AppState) -> Router {
             "/{version}/sync",
             post(jobs::create_sync_request).get(jobs::list_sync_requests),
         )
+        // The seller's own two clocks. Both literal segments are listed
+        // before `/{version}/sync/{request}`, because `settings`, `activity`
+        // and `multi` are words and a request identifier is a parameter: a
+        // sync request is never called "settings", and the order is what
+        // makes that true of the router rather than only of the vocabulary.
+        .route(
+            "/{version}/sync/settings",
+            get(sync_settings::list_settings),
+        )
+        .route(
+            "/{version}/sync/settings/{inventory}",
+            put(sync_settings::update_setting),
+        )
+        .route("/{version}/sync/activity", get(sync_activity::activity))
+        .route("/{version}/sync/multi", get(sync_activity::multi_listed))
         .route("/{version}/sync/{request}", get(jobs::sync_request_view))
+        // Publishing on a timetable. A schedule is a row these routes write
+        // and `scheduler::pass` reads; nothing here fires one.
+        .route(
+            "/{version}/schedules",
+            get(schedules::list_schedules).post(schedules::create_schedule),
+        )
+        .route(
+            "/{version}/schedules/{schedule}",
+            put(schedules::update_schedule).delete(schedules::delete_schedule),
+        )
+        .route(
+            "/{version}/schedules/{schedule}/runs",
+            get(schedules::schedule_runs),
+        )
         // Copying and moving between two marketplaces. The plan is a read
         // that writes nothing and is listed before the collection so the
         // literal segment matches ahead of any identifier the route family
@@ -422,6 +455,14 @@ pub fn router(state: AppState) -> Router {
         // What the seller ticked, for the device to describe. A read rather
         // than a field on the work claim, because an import is started by the
         // console and the device asks what it is for.
+        // What is open for this device to read, asked at every check-in.
+        // Listed before the selection read because `open` is a literal
+        // segment and a run identifier is a parameter: a run is never called
+        // "open".
+        .route(
+            "/{version}/devices/{device}/import/open",
+            get(import_runs::device_open_run),
+        )
         .route(
             "/{version}/devices/{device}/import/{run}/selection",
             get(import_runs::device_selection),

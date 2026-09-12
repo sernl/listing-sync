@@ -21,11 +21,11 @@ const ROUTES = new URL('../routes', import.meta.url).pathname;
  * is no page yet" and is sometimes not: a page can be finished and still unable
  * to do its job, because the thing it drives has not shipped. Each entry states
  * why in one sentence, and the assertions below refuse an entry that has stopped
- * being true, so the list cannot quietly outlive its reason. */
-const BUILT_BUT_NOT_USABLE: Record<string, string> = {
-	'/automations/sharing':
-		'The page is built and saves a schedule that nothing can run until the device release ships.'
-};
+ * being true, so the list cannot quietly outlive its reason.
+ *
+ * Empty since Scheduling landed: its page now saves a schedule a tick actually
+ * runs, which is the one exception this list ever held. */
+const BUILT_BUT_NOT_USABLE: Record<string, string> = {};
 
 type Verdict = 'built' | 'placeholder' | 'redirect' | 'missing';
 

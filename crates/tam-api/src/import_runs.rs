@@ -353,6 +353,9 @@ pub(crate) async fn create_run(
                 target: None,
                 anchor_job: anchor,
                 created_at: now,
+                // A seller pressed Import. Only the pass sets this; see
+                // migration 0071.
+                scheduled: false,
             },
         )
         .await
@@ -444,6 +447,66 @@ pub(crate) async fn device_selection(
     Ok(Json(RunSelectionView { locators }))
 }
 
+/// The one import this organisation has open, for a device to pick up.
+///
+/// The device asks at every check-in and acts on the answer: a run whose list
+/// has not landed is enumerated, a run whose list has landed and been
+/// selected is described, and a run in neither state is left alone. Two bools
+/// rather than the run's state, because the device's two decisions are
+/// exactly those two questions and the run's own state vocabulary is the
+/// console's.
+///
+/// `null` rather than a 404 for "nothing open": absent work is the ordinary
+/// answer at almost every check-in, and a device that had to read a not-found
+/// as success could not tell it from a route it is talking to wrongly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenRunView {
+    pub run: Uuid,
+    pub source: InventoryId,
+    /// Whether the shop's own list has already been posted. False means run
+    /// the enumeration; true means never list twice.
+    pub listed: bool,
+    /// Whether the seller -- or, on a scheduled run, the server -- has ticked
+    /// what to describe.
+    pub selected: bool,
+}
+
+pub(crate) async fn device_open_run(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, device)): Path<(String, String)>,
+) -> Result<Json<Option<OpenRunView>>, APIError> {
+    crate::import::admissible_device(&state, context.org, &device).await?;
+    let repo = ImportRunRepo::new(state.pool.clone());
+    let Some(head) = repo
+        .open(context.org)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+    else {
+        return Ok(Json(None));
+    };
+    // A run past `reading` is a review or a commit, and neither is device
+    // work; a spreadsheet run names no shop to read. Both answer as nothing
+    // open rather than as a run the device would not know what to do with.
+    let (RunState::Reading, Some(source)) = (head.state, head.source) else {
+        return Ok(Json(None));
+    };
+    let counts = repo
+        .counts(context.org, head.id)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    Ok(Json(Some(OpenRunView {
+        run: head.id,
+        source,
+        // `read_total` is written by the list and by nothing else, so its
+        // presence is the question "has the shop been enumerated" answered
+        // exactly. A row count would read a shop that holds nothing as
+        // un-enumerated and list it again at every check-in.
+        listed: head.read_total.is_some(),
+        selected: counts.selected > 0,
+    })))
+}
+
 /// Creates the next chunk of a run's matched items.
 pub(crate) async fn commit(
     State(state): State<AppState>,
@@ -457,19 +520,59 @@ pub(crate) async fn commit(
             "this import has settled and creates nothing more",
         ));
     }
+    let chunk = commit_chunk(&state, context.org, &head).await?;
+    let outstanding = chunk.counts.outstanding();
+    Ok(Json(RunCommitAck {
+        applied: chunk.applied,
+        skipped: chunk.counts.skipped,
+        failed: chunk.failed,
+        total: chunk
+            .counts
+            .imported
+            .saturating_add(chunk.counts.matched)
+            .saturating_add(chunk.counts.review)
+            .saturating_add(chunk.counts.read),
+        remaining: outstanding,
+        complete: outstanding == 0,
+        run_state: state_view(chunk.run_state),
+    }))
+}
+
+/// What one chunk of a commit did, and where the run stands after it.
+pub(crate) struct ChunkReport {
+    pub applied: u32,
+    pub failed: u32,
+    pub counts: RunCounts,
+    pub run_state: RunState,
+}
+
+/// One chunk of a commit: up to [`ITEMS_PER_CHUNK`] matched items created,
+/// the run moved, and the progress event emitted.
+///
+/// Extracted from the handler rather than restated, because the scheduler's
+/// pass commits a scheduled run with no seller pressing anything and the two
+/// must create resources identically -- the same chunk size, the same
+/// per-item refusal rule, the same settle. A second loop would be a second
+/// definition of what a commit is.
+pub(crate) async fn commit_chunk(
+    state: &AppState,
+    org: OrgId,
+    head: &ImportRunHead,
+) -> Result<ChunkReport, APIError> {
+    let run = head.id;
     let repo = ImportRunRepo::new(state.pool.clone());
-    repo.set_state(context.org, run, RunState::Committing, None, (state.wall)())
+    repo.set_state(org, run, RunState::Committing, None, (state.wall)())
         .await
-        .map_err(|error| storage_fault(&state, &error))?;
+        .map_err(|error| storage_fault(state, &error))?;
 
     let page = repo
-        .commit_page(context.org, run, ITEMS_PER_CHUNK)
+        .commit_page(org, run, ITEMS_PER_CHUNK)
         .await
-        .map_err(|error| storage_fault(&state, &error))?;
+        .map_err(|error| storage_fault(state, &error))?;
     let mut applied = 0_u32;
     let mut failed = 0_u32;
     for item in &page {
-        match commit_one(&state, context.org, &head, item).await {
+        match commit_one(state, org, head, item).await {
             Ok(()) => applied = applied.saturating_add(1),
             Err(refusal) => {
                 // A refusal the seller can act on is recorded against the item
@@ -483,47 +586,69 @@ pub(crate) async fn commit(
                     return Err(refusal);
                 }
                 repo.record_failed(
-                    context.org,
+                    org,
                     run,
                     item.locator.as_str(),
                     &reason_of(&refusal),
                     (state.wall)(),
                 )
                 .await
-                .map_err(|error| storage_fault(&state, &error))?;
+                .map_err(|error| storage_fault(state, &error))?;
                 failed = failed.saturating_add(1);
             }
         }
     }
 
     let counts = repo
-        .counts(context.org, run)
+        .counts(org, run)
         .await
-        .map_err(|error| storage_fault(&state, &error))?;
+        .map_err(|error| storage_fault(state, &error))?;
     let outstanding = counts.outstanding();
     let run_state = if outstanding == 0 {
-        repo.set_state(context.org, run, RunState::Complete, None, (state.wall)())
+        repo.set_state(org, run, RunState::Complete, None, (state.wall)())
             .await
-            .map_err(|error| storage_fault(&state, &error))?;
-        settled_event(&state, context.org, &head, RunState::Complete).await?;
+            .map_err(|error| storage_fault(state, &error))?;
+        settled_event(state, org, head, RunState::Complete).await?;
         RunState::Complete
     } else {
         RunState::Committing
     };
-    progress_event(&state, context.org, &head, counts).await?;
-    Ok(Json(RunCommitAck {
+    progress_event(state, org, head, counts).await?;
+    Ok(ChunkReport {
         applied,
-        skipped: counts.skipped,
         failed,
-        total: counts
-            .imported
-            .saturating_add(counts.matched)
-            .saturating_add(counts.review)
-            .saturating_add(counts.read),
-        remaining: outstanding,
-        complete: outstanding == 0,
-        run_state: state_view(run_state),
-    }))
+        counts,
+        run_state,
+    })
+}
+
+/// Commits a run the pass opened, to the end.
+///
+/// The seller's commit is chunked because a browser is holding it open and a
+/// closed tab should lose only the chunk in flight. The pass has no tab, so
+/// it runs the chunks itself -- but still as chunks, because the pacing is
+/// what keeps one tenant's five-hundred-resource shop from holding a
+/// transaction for a minute. It stops when nothing is left to commit or when
+/// a chunk made no progress, which is a run whose remaining rows are all
+/// under review: those wait for the seller and the run stays `committing`.
+pub(crate) async fn commit_scheduled(
+    state: &AppState,
+    org: OrgId,
+    head: &ImportRunHead,
+) -> Result<u32, APIError> {
+    let mut created = 0_u32;
+    let mut standing = head.clone();
+    loop {
+        let chunk = commit_chunk(state, org, &standing).await?;
+        created = created.saturating_add(chunk.applied);
+        if chunk.applied == 0 && chunk.failed == 0 {
+            return Ok(created);
+        }
+        if chunk.run_state == RunState::Complete {
+            return Ok(created);
+        }
+        standing.state = chunk.run_state;
+    }
 }
 
 /// Settles an open run at the seller's own request.
@@ -782,6 +907,16 @@ pub(crate) async fn run_page(
                 .await
                 .map_err(|error| storage_fault(state, &error))?;
             }
+        }
+        // A scheduled run has no seller at the keyboard, so the server ticks
+        // the list itself: everything still listed, which is everything the
+        // rule above did not already skip as held. `Selection::All` is the
+        // same write the seller's own "select everything" makes, so a
+        // scheduled run and a ticked one reach the describe step identically.
+        if head.scheduled {
+            repo.select(context.org, page.run, Selection::All, now)
+                .await
+                .map_err(|error| storage_fault(state, &error))?;
         }
         let counts = repo
             .counts(context.org, page.run)
@@ -1114,6 +1249,7 @@ pub(crate) async fn run_for_batch(
                 target: None,
                 anchor_job: anchor,
                 created_at: now,
+                scheduled: false,
             },
         )
         .await

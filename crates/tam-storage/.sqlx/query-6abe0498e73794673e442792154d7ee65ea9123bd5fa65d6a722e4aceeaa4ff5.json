@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM schedule_marketplace WHERE org_id = $1 AND schedule_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6abe0498e73794673e442792154d7ee65ea9123bd5fa65d6a722e4aceeaa4ff5"
+}

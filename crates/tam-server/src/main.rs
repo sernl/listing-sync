@@ -368,6 +368,57 @@ fn spawn_import_batch_sweep(batches: ImportBatchRepo, cancel: CancellationToken)
     });
 }
 
+/// How often the scheduler's pass runs.
+///
+/// A minute, because a schedule's finest granularity is a minute: the seller
+/// picks a time of day and nothing finer, so a pass any more often would find
+/// the same nothing to do and a pass any less often would fire "nine o'clock"
+/// at nine past. The pass itself is idempotent on the scheduled instant
+/// rather than on its own, so a late pass lands on the right tick.
+const SCHEDULER_INTERVAL_SECS: u64 = 60;
+
+/// The scheduler's pass, on the application pool.
+///
+/// Beside the import sweep and deliberately not in `tam-worker`: that process
+/// connects as `tam_engine`, which holds no grant on the tables a tick writes
+/// -- migration 0025's rule, restated by 0071 -- and carries no `AppState`,
+/// so it could neither see a tenant's schedules nor reuse the commit the pull
+/// finishes with. This loop takes the whole router state for that reason: a
+/// scheduled commit is the same code a seller's commit runs.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the scheduler loop is owned by the serving process and stopped by its cancellation token, not a fire-and-forget spawn"
+)]
+fn spawn_scheduler_pass(state: AppState, cancel: CancellationToken) {
+    let period = core::time::Duration::from_secs(SCHEDULER_INTERVAL_SECS);
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                () = cancel.cancelled() => break,
+                () = tokio::time::sleep(period) => {}
+            }
+            match tam_api::scheduler::pass(&state, wall_now()).await {
+                Ok(report) if report.eventful() => {
+                    eprintln!(
+                        "tam-server scheduler fired {} schedule ticks, minted {} jobs, opened {} \
+                         marketplace reads and committed {} resources across {} tenants",
+                        report.ticks, report.jobs, report.pulls, report.committed, report.tenants
+                    );
+                    // Per tenant, because that is the scope the pass isolates
+                    // to: one seller's revoked connection or unparseable zone
+                    // must be visible without hiding the rest of the fleet's
+                    // work behind one failed pass.
+                    for failure in &report.failures {
+                        eprintln!("tam-server scheduler skipped a tenant: {failure}");
+                    }
+                }
+                Ok(_) => {}
+                Err(error) => eprintln!("tam-server: scheduler pass failed: {error}"),
+            }
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut invocation = parse_invocation()?;
@@ -529,6 +580,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         spawn_event_pruner(PruneRepo::new(engine.clone()), loops.clone());
         spawn_import_batch_sweep(ImportBatchRepo::new(engine), loops.clone());
     }
+    // Unconditional, unlike the three above: those cross tenants and so need
+    // the engine role, and this one pins one tenant at a time and runs on the
+    // application pool every deployment already has. A server started without
+    // an engine url still owes its sellers their Friday drop.
+    eprintln!("tam-server hosting the scheduler pass every {SCHEDULER_INTERVAL_SECS}s");
+    spawn_scheduler_pass(state.clone(), loops.clone());
 
     let console = match &invocation.ui_dir {
         Some(dir) => {

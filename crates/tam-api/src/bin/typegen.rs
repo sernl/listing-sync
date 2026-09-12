@@ -22,6 +22,7 @@ use tam_api::migrations::MigrationVerdict;
 use tam_api::org::SlugPrompt;
 use tam_api::product::StandardsState;
 use tam_api::resources::{kind_str, role_str};
+use tam_api::schedules::ScheduleRepeatView;
 use tam_api::vocabulary::{
     BodyWire, CardinalityKind, DelegationKind, DirectionView, NonDelegableReason, PayloadFileRule,
     VocabularyKind,
@@ -380,6 +381,18 @@ fn vocab() -> String {
         "MigrationVerdict",
         "MIGRATION_VERDICTS",
         &MigrationVerdict::ALL,
+        serde_name,
+    ));
+    out.push('\n');
+    // How often a schedule fires. Emitted because the console's repeat
+    // control is a radio group over exactly these three and the runs list
+    // words each one differently, so a fourth added in Rust without a member
+    // here would reach a seller as an unlabelled option rather than failing
+    // the web lane.
+    out.push_str(&closed(
+        "ScheduleRepeat",
+        "SCHEDULE_REPEATS",
+        &ScheduleRepeatView::ALL,
         serde_name,
     ));
     out.push('\n');

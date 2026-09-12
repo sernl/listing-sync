@@ -595,6 +595,30 @@ impl ControlPlane for HttpControlPlane {
         })
     }
 
+    fn open_import_run<'a>(
+        &'a self,
+        device: &'a DeviceId,
+    ) -> PlaneFuture<'a, Option<crate::import::OpenImportRun>> {
+        Box::pin(async move {
+            let reply = self.read(&crate::import::open_import_path(device)).await?;
+            match reply.status {
+                // Two spellings of "nothing to do", and neither is a fault: a
+                // `null` body from a server that has no run open, and a
+                // not-found from one a version behind that does not serve this
+                // route at all. A device asks this at every check-in, so an
+                // ordinary answer that travelled as an error would be an
+                // hourly failure in the seller's activity saying nothing.
+                200 => serde_json::from_slice(&reply.body)
+                    .map_err(|why| ControlPlaneError::Refused(why.to_string())),
+                404 => Ok(None),
+                status => Err(ControlPlaneError::Refused(format!(
+                    "{status}: {}",
+                    excerpt(&String::from_utf8_lossy(&reply.body))
+                ))),
+            }
+        })
+    }
+
     fn register<'a>(&'a self, device: &'a DeviceIdentity, facts: HostFacts) -> PlaneFuture<'a, ()> {
         Box::pin(async move {
             let body = serde_json::to_string(&RegisterBody {

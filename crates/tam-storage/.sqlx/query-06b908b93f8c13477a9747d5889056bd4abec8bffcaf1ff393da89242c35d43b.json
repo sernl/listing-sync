@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE schedule SET name = $3, selection_kind = $4, selection_label = $5, intent = $6, at_minute_of_day = $7, timezone = $8, repeat = $9, weekday = $10, republish_on_update = $11, enabled = $12 WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Text",
+        "Text",
+        "Int2",
+        "Bool",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "06b908b93f8c13477a9747d5889056bd4abec8bffcaf1ff393da89242c35d43b"
+}

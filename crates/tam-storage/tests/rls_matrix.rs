@@ -10,7 +10,9 @@ use std::collections::BTreeSet;
 
 use sqlx::PgPool;
 
-const TENANT_TABLES: [&str; 49] = [
+const TENANT_TABLES: [&str; 56] = [
+    "auto_publish_rule",
+    "auto_publish_run",
     "billing_subscription",
     "binding_candidate",
     "blob",
@@ -40,6 +42,7 @@ const TENANT_TABLES: [&str; 49] = [
     "mapping",
     "mapping_loss",
     "marketplace_request",
+    "marketplace_sync_setting",
     "native_residue",
     "notification",
     "org_event_counter",
@@ -57,6 +60,10 @@ const TENANT_TABLES: [&str; 49] = [
     "rate_budget",
     "reconciliation_item",
     "resource_template",
+    "schedule",
+    "schedule_marketplace",
+    "schedule_product",
+    "schedule_run",
     "sync_request",
     "sync_request_resource",
     "write_attempt",

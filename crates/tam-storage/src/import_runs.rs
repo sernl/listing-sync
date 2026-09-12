@@ -153,6 +153,13 @@ pub struct NewImportRun {
     pub target: Option<InventoryId>,
     pub anchor_job: JobId,
     pub created_at: Timestamp,
+    /// Whether the scheduler's pass opened this run rather than a seller.
+    ///
+    /// It decides who finishes the run: a scheduled one selects every listed
+    /// row itself and is committed by the pass, and a seller's waits for the
+    /// seller. See migration 0071 for why that is one bit rather than a
+    /// second `kind`.
+    pub scheduled: bool,
 }
 
 /// What opening a run answered.
@@ -179,6 +186,8 @@ pub struct ImportRunHead {
     pub created_at: Timestamp,
     pub settled_at: Option<Timestamp>,
     pub failure_detail: Option<String>,
+    /// See [`NewImportRun::scheduled`].
+    pub scheduled: bool,
 }
 
 /// One run with its rows.
@@ -307,8 +316,9 @@ impl ImportRunRepo {
         pin_org(&mut tx, org).await?;
         let inserted = sqlx::query!(
             "INSERT INTO import_run \
-               (org_id, id, kind, source, batch_id, target, state, anchor_job, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, 'reading', $7, $8)",
+               (org_id, id, kind, source, batch_id, target, state, anchor_job, created_at, \
+                scheduled) \
+             VALUES ($1, $2, $3, $4, $5, $6, 'reading', $7, $8, $9)",
             uuid_to_db(org.0),
             uuid_to_db(new.id),
             new.kind.as_str(),
@@ -317,6 +327,7 @@ impl ImportRunRepo {
             new.target.map(inventory_to_db),
             uuid_to_db(new.anchor_job.0),
             timestamp_to_db(new.created_at)?,
+            new.scheduled,
         )
         .execute(&mut *tx)
         .await;
@@ -345,7 +356,7 @@ impl ImportRunRepo {
         pin_org(&mut tx, org).await?;
         let row = sqlx::query!(
             "SELECT id, kind, source, batch_id, target, state, anchor_job, read_total, \
-                    created_at, settled_at, failure_detail \
+                    created_at, settled_at, failure_detail, scheduled \
                FROM import_run \
               WHERE org_id = $1 AND state IN ('reading', 'reviewing', 'committing')",
             uuid_to_db(org.0),
@@ -366,6 +377,7 @@ impl ImportRunRepo {
                 row.created_at,
                 row.settled_at,
                 row.failure_detail,
+                row.scheduled,
             )
         })
         .transpose()
@@ -381,7 +393,7 @@ impl ImportRunRepo {
         pin_org(&mut tx, org).await?;
         let row = sqlx::query!(
             "SELECT id, kind, source, batch_id, target, state, anchor_job, read_total, \
-                    created_at, settled_at, failure_detail \
+                    created_at, settled_at, failure_detail, scheduled \
                FROM import_run \
               WHERE org_id = $1 AND batch_id = $2 \
               ORDER BY created_at DESC LIMIT 1",
@@ -404,6 +416,7 @@ impl ImportRunRepo {
                 row.created_at,
                 row.settled_at,
                 row.failure_detail,
+                row.scheduled,
             )
         })
         .transpose()
@@ -415,7 +428,7 @@ impl ImportRunRepo {
         pin_org(&mut tx, org).await?;
         let rows = sqlx::query!(
             "SELECT id, kind, source, batch_id, target, state, anchor_job, read_total, \
-                    created_at, settled_at, failure_detail \
+                    created_at, settled_at, failure_detail, scheduled \
                FROM import_run WHERE org_id = $1 \
               ORDER BY created_at DESC, id DESC LIMIT $2",
             uuid_to_db(org.0),
@@ -438,6 +451,7 @@ impl ImportRunRepo {
                     row.created_at,
                     row.settled_at,
                     row.failure_detail,
+                    row.scheduled,
                 )
             })
             .collect()
@@ -453,7 +467,7 @@ impl ImportRunRepo {
         pin_org(&mut tx, org).await?;
         let row = sqlx::query!(
             "SELECT id, kind, source, batch_id, target, state, anchor_job, read_total, \
-                    created_at, settled_at, failure_detail \
+                    created_at, settled_at, failure_detail, scheduled \
                FROM import_run WHERE org_id = $1 AND id = $2",
             uuid_to_db(org.0),
             uuid_to_db(run),
@@ -476,6 +490,7 @@ impl ImportRunRepo {
             row.created_at,
             row.settled_at,
             row.failure_detail,
+            row.scheduled,
         )?;
         let items = sqlx::query!(
             "SELECT locator, ordinal, state, product_id, observed, title, price_minor, \
@@ -1035,6 +1050,37 @@ impl ImportRunRepo {
         tx.commit().await?;
         Ok(())
     }
+
+    /// The resources this run created, in read order.
+    ///
+    /// What an auto-publish rule acts on. `imported` only: a skipped row
+    /// created nothing to publish, and a row still under review has not been
+    /// decided, so publishing either would send a resource the seller has not
+    /// got.
+    pub async fn imported_products(
+        &self,
+        org: OrgId,
+        run: Uuid,
+    ) -> Result<Vec<tam_types::ProductId>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let rows = sqlx::query!(
+            "SELECT product_id FROM import_run_item \
+              WHERE org_id = $1 AND run_id = $2 AND state = 'imported' \
+                AND product_id IS NOT NULL \
+              ORDER BY ordinal",
+            uuid_to_db(org.0),
+            uuid_to_db(run),
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| row.product_id)
+            .map(|id| tam_types::ProductId(uuid_from_db(id)))
+            .collect())
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1050,6 +1096,7 @@ fn head_of(
     created_at: chrono::DateTime<chrono::Utc>,
     settled_at: Option<chrono::DateTime<chrono::Utc>>,
     failure_detail: Option<String>,
+    scheduled: bool,
 ) -> Result<ImportRunHead, StorageError> {
     Ok(ImportRunHead {
         id: uuid_from_db(id),
@@ -1063,6 +1110,7 @@ fn head_of(
         created_at: timestamp_from_db(created_at),
         settled_at: settled_at.map(timestamp_from_db),
         failure_detail,
+        scheduled,
     })
 }
 

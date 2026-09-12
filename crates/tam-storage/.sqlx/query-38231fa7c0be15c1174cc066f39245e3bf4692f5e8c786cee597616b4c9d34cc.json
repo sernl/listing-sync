@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO import_run (org_id, id, kind, source, batch_id, target, state, anchor_job, created_at, scheduled) VALUES ($1, $2, $3, $4, $5, $6, 'reading', $7, $8, $9)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Timestamptz",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "38231fa7c0be15c1174cc066f39245e3bf4692f5e8c786cee597616b4c9d34cc"
+}

@@ -325,7 +325,7 @@ pub(crate) async fn create_migration(
 /// `mapping_one_per_inventory` is what decides: two submits under the same key
 /// both found no mapping on the target, and the loser's insert would otherwise
 /// turn the double-click this endpoint absorbs into a fault.
-async fn mint(
+pub(crate) async fn mint(
     state: &AppState,
     mappings: &MappingRepo,
     minted: &Mapping,

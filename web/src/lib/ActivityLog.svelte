@@ -5,6 +5,9 @@
 		what: string;
 		/** When, already formatted: this component does no clock arithmetic. */
 		at: string;
+		/** Where the line's subject is, where the log's source composed one.
+		 *  Absent on a log whose lines name nothing openable. */
+		href?: string;
 	}
 </script>
 
@@ -42,7 +45,11 @@
 {:else}
 	{#each shown as entry (entry.id)}
 		<div class="log-row">
-			<span class="what">{entry.what}</span>
+			{#if entry.href}
+				<a class="what" href={entry.href}>{entry.what}</a>
+			{:else}
+				<span class="what">{entry.what}</span>
+			{/if}
 			<span class="at">{entry.at}</span>
 		</div>
 	{/each}

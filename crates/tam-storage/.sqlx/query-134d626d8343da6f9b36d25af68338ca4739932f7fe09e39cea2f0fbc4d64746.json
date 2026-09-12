@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE marketplace_sync_setting SET last_pull_at = $3 WHERE org_id = $1 AND inventory = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "134d626d8343da6f9b36d25af68338ca4739932f7fe09e39cea2f0fbc4d64746"
+}

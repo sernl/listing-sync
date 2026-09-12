@@ -773,42 +773,110 @@ pub(crate) async fn create_job(
     // against the mapping's own binding, reading no marketplace to do it.
     let mut items: Vec<NewJobItem> = Vec::new();
     for seed in &seeds {
-        for operation in lower(intent, body.inventory, seed)? {
-            items.push(NewJobItem {
-                item: JobItemId(fresh_uuid()),
-                mapping: seed.mapping,
-                idempotency_key: derive_idempotency_key(
-                    context.org,
-                    body.inventory,
-                    seed.product,
-                    INTENT_VERSION,
-                    intent_digest(&operation, job, &seed.payload_hashes, seed.sever_generation),
-                ),
-                requires_bound_on: tam_storage::requires_bound_on(&operation, body.inventory),
-                operation,
-            });
-        }
+        items.extend(new_items(
+            context.org,
+            body.inventory,
+            job,
+            seed,
+            lower(intent, body.inventory, seed)?,
+        ));
     }
-    let new = NewJob {
+    let created = mint_job(
+        &state,
+        context.org,
         job,
-        inventory: body.inventory,
+        body.inventory,
         // The one write path with a seller genuinely behind it: the session
         // extractor already resolved who, and the repository boundary
         // discarded it until now.
-        stamp: Stamp {
-            at: now,
-            actor: Actor::Person(context.user),
-        },
+        Actor::Person(context.user),
+        now,
+        key.0,
+        &items,
+    )
+    .await?;
+    let status = if created.replay {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
     };
-    let created = JobRepo::new(state.pool.clone())
+    Ok((
+        status,
+        Json(CreatedJobBody {
+            job: created.job,
+            replay: created.replay,
+        }),
+    )
+        .into_response())
+}
+
+/// The items one mapping's lowered operations become.
+///
+/// Extracted from `create_job` rather than restated, because the scheduler
+/// mints jobs from the same lowering and a second copy of the idempotency
+/// derivation is a second answer to "is this the same write": the key mixes
+/// the organisation, the inventory, the product, the intent version and the
+/// operation's own digest, and a caller that assembled four of those five
+/// would mint items that never dedupe against the seller's own.
+pub(crate) fn new_items(
+    org: OrgId,
+    inventory: InventoryId,
+    job: JobId,
+    seed: &MappingSeed,
+    operations: Vec<ItemOperation>,
+) -> Vec<NewJobItem> {
+    operations
+        .into_iter()
+        .map(|operation| NewJobItem {
+            item: JobItemId(fresh_uuid()),
+            mapping: seed.mapping,
+            idempotency_key: derive_idempotency_key(
+                org,
+                inventory,
+                seed.product,
+                INTENT_VERSION,
+                intent_digest(&operation, job, &seed.payload_hashes, seed.sever_generation),
+            ),
+            requires_bound_on: tam_storage::requires_bound_on(&operation, inventory),
+            operation,
+        })
+        .collect()
+}
+
+/// One job under a request key, with the duplicate-item conflict rendered as
+/// the validation answer it is.
+///
+/// The actor is the caller's, because the two callers differ in exactly that:
+/// a seller pressed Publish, or the scheduler's pass reached a minute nobody
+/// was present for.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one job is its identity, its marketplace, its author, its instant, its request \
+              key and its items; a struct over those would be this signature with a name"
+)]
+pub(crate) async fn mint_job(
+    state: &AppState,
+    org: OrgId,
+    job: JobId,
+    inventory: InventoryId,
+    actor: Actor,
+    now: Timestamp,
+    request_key: Uuid,
+    items: &[NewJobItem],
+) -> Result<tam_storage::CreatedJob, APIError> {
+    JobRepo::new(state.pool.clone())
         .create_with_request_key(
-            context.org,
+            org,
             JobOrigin {
-                request_key: key.0,
+                request_key,
                 run: None,
             },
-            &new,
-            &items,
+            &NewJob {
+                job,
+                inventory,
+                stamp: Stamp { at: now, actor },
+            },
+            items,
         )
         .await
         .map_err(|error| {
@@ -823,22 +891,9 @@ pub(crate) async fn create_job(
                     .kind(APIErrorKind::Validation),
                 )
             } else {
-                storage_fault(&state, &error)
+                storage_fault(state, &error)
             }
-        })?;
-    let status = if created.replay {
-        StatusCode::OK
-    } else {
-        StatusCode::CREATED
-    };
-    Ok((
-        status,
-        Json(CreatedJobBody {
-            job: created.job,
-            replay: created.replay,
-        }),
-    )
-        .into_response())
+        })
 }
 
 /// The one place the API mints row identity; v4 via the generator the

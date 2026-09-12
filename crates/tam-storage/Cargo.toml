@@ -9,6 +9,19 @@ pg-tests = []
 
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+# The zone database, compiled in. A schedule stores the seller's wall time and
+# the zone they read it in, so turning "nine on Friday in Europe/London" into
+# an instant needs the rules -- and nothing already in this tree has them:
+# `iana-time-zone` answers which zone this machine is in and not what any zone
+# does, and `jiff` reaches its database through `/usr/share/zoneinfo` and the
+# `TZDIR` environment variable, which is an ambient read the lint table bans
+# outside the one crate that will own them and a file a minimal container does
+# not have. This crate's copy is a table linked into the binary: the same
+# answer on every host, and a wrong answer is a build to redeploy rather than
+# a filesystem to inspect. `default-features = false` drops the crate's
+# regex-filtered build script and its `serde` impls, neither of which a parse
+# needs.
+chrono-tz = { version = "0.10", default-features = false }
 sqlx = { version = "0.8", default-features = false, features = [
   "runtime-tokio",
   "tls-rustls",

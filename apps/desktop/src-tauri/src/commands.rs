@@ -653,59 +653,58 @@ pub struct ImportContinued {
 /// discover. The pass re-checks the entitlement and the revocation itself,
 /// between resources, which is a different guarantee: this stops a run that
 /// should not start, and that stops a run that should not continue.
-struct ImportReady<P: crate::ledger::LedgerTransport + ?Sized> {
-    pass: crate::import::ImportPass<Box<dyn crate::import::CatalogueSource>, P>,
-    marketplace: Marketplace,
-    now: tam_types::Timestamp,
+pub(crate) struct ImportReady<P: crate::ledger::LedgerTransport + ?Sized> {
+    pub(crate) pass: crate::import::ImportPass<Box<dyn crate::import::CatalogueSource>, P>,
+    pub(crate) marketplace: Marketplace,
+    pub(crate) now: tam_types::Timestamp,
 }
 
-/// Resolves the run's source, checks every gate, claims the single flight,
-/// and builds the pass.
+/// The catalogue reader for a shop, chosen by which marketplace it is.
+///
+/// Named here rather than discovered as an adapter error mid-pass, the same
+/// way `SellerFiles::fetch` names it for a download. A marketplace with an
+/// official API is read on our own servers under a sanctioned token, so it is
+/// not a shop this device enumerates.
+pub(crate) fn catalogue_for(
+    state: &DesktopState,
+    source: tam_types::InventoryId,
+) -> Result<Box<dyn crate::import::CatalogueSource>, String> {
+    match source.marketplace() {
+        Marketplace::Tes => Ok(Box::new(crate::work::SellerCatalogue::new(
+            state.store_handle(),
+            source,
+        ))),
+        Marketplace::Tpt => Ok(Box::new(crate::work::TptSellerCatalogue::new(
+            state.store_handle(),
+            source,
+        ))),
+        other @ Marketplace::Etsy => Err(format!(
+            "this device cannot read a {other:?} catalogue: a marketplace with an official API is read on our own servers rather than here"
+        )),
+    }
+}
+
+/// Checks every gate, claims the single flight, and builds the pass.
 ///
 /// Shared by both halves of the flow because both make marketplace requests
 /// under the same rules: a seller whose subscription lapsed between ticking
 /// and continuing must be refused at the second press as firmly as at the
-/// first.
-async fn ready_to_import<R: tauri::Runtime>(
-    app: &AppHandle<R>,
+/// first. Shared with [`crate::import::serve_open_run`] for the same reason,
+/// which is also why the single-flight claim is taken here rather than by each
+/// caller: a scheduled pass and a console press must not walk one shop twice.
+///
+/// `source` is the run's own inventory, read from the run by every caller
+/// rather than taken from the console: a console that named the shop could
+/// otherwise ask this device to enumerate one the run does not name.
+pub(crate) async fn ready_to_import(
+    state: &DesktopState,
     run: tam_types::Uuid,
+    source: tam_types::InventoryId,
+    catalogue: crate::import::CatalogueFactory<'_>,
 ) -> Result<ImportReady<dyn crate::ledger::LedgerTransport>, CommandError> {
-    let state = app.state::<DesktopState>();
-    let Some(ledger) = state.ledger() else {
-        return Err(CommandError(
-            "this build has no way to reach the server, so an import would have nowhere to post what it read".to_owned(),
-        ));
-    };
-    // Which shop, read from the run itself. The console asks by run id alone,
-    // so a console that named the inventory could ask this device to
-    // enumerate a shop the run does not name; and the server answers this
-    // under the organisation's own session, so another tenant's run is absent
-    // here rather than readable.
-    let source = state
-        .control_plane()
-        .import_run_source(run)
-        .await
-        .map_err(|why| CommandError(why.to_string()))?;
+    let ledger = require_ledger(state)?;
     let marketplace = source.marketplace();
-    // Named here rather than discovered as an adapter error mid-pass, the
-    // same way `SellerFiles::fetch` names it for a download. A marketplace
-    // with an official API is read on our own servers under a sanctioned
-    // token, so it is not a shop this device enumerates.
-    let catalogue: Box<dyn crate::import::CatalogueSource> = match marketplace {
-        Marketplace::Tes => Box::new(crate::work::SellerCatalogue::new(
-            state.store_handle(),
-            source,
-        )),
-        Marketplace::Tpt => Box::new(crate::work::TptSellerCatalogue::new(
-            state.store_handle(),
-            source,
-        )),
-        other @ Marketplace::Etsy => {
-            return Err(CommandError(format!(
-                "this device cannot read a {other:?} catalogue: a marketplace with an official API is read on our own servers rather than here"
-            )))
-        }
-    };
+    let catalogue = catalogue(state, source).map_err(CommandError)?;
     if state.store().get(marketplace).await?.is_none() {
         return Err(CommandError(format!(
             "this device is not signed in to {marketplace:?}, so it cannot read your shop. Connect it on this device and start the import again"
@@ -739,6 +738,40 @@ async fn ready_to_import<R: tauri::Runtime>(
     })
 }
 
+/// The transport an import posts its pages over, or the refusal a build with
+/// none owes the seller.
+fn require_ledger(
+    state: &DesktopState,
+) -> Result<std::sync::Arc<dyn crate::ledger::LedgerTransport>, CommandError> {
+    state.ledger().ok_or_else(|| {
+        CommandError(
+            "this build has no way to reach the server, so an import would have nowhere to post what it read".to_owned(),
+        )
+    })
+}
+
+/// The run's source inventory, read from the run itself.
+///
+/// The console asks by run id alone, so a console that named the inventory
+/// could ask this device to enumerate a shop the run does not name; and the
+/// server answers this under the organisation's own session, so another
+/// tenant's run is absent here rather than readable.
+async fn source_of(
+    state: &DesktopState,
+    run: tam_types::Uuid,
+) -> Result<tam_types::InventoryId, CommandError> {
+    // Before the run is read rather than after it, so a build that could post
+    // nothing says that rather than reporting the transport failure its own
+    // absence produced. The order the seller reads the refusals in is the
+    // order they can act on them.
+    require_ledger(state)?;
+    state
+        .control_plane()
+        .import_run_source(run)
+        .await
+        .map_err(|why| CommandError(why.to_string()))
+}
+
 /// Reads the seller's shop and posts what is in it, so they can choose.
 ///
 /// Awaited rather than backgrounded, and that is the difference from the pass
@@ -753,8 +786,9 @@ pub async fn start_import<R: tauri::Runtime>(
     app: AppHandle<R>,
     run: tam_types::Uuid,
 ) -> Result<ImportStarted, CommandError> {
-    let ready = ready_to_import(&app, run).await?;
     let state = app.state::<DesktopState>();
+    let source = source_of(state.inner(), run).await?;
+    let ready = ready_to_import(state.inner(), run, source, &catalogue_for).await?;
     let listed = match ready.pass.enumerate(ready.now).await {
         Ok(listed) => listed,
         Err(why) => {
@@ -802,10 +836,11 @@ pub async fn continue_import<R: tauri::Runtime>(
     app: AppHandle<R>,
     run: tam_types::Uuid,
 ) -> Result<ImportContinued, CommandError> {
-    let ready = ready_to_import(&app, run).await?;
+    let state = app.state::<DesktopState>();
+    let source = source_of(state.inner(), run).await?;
+    let ready = ready_to_import(state.inner(), run, source, &catalogue_for).await?;
     let marketplace = ready.marketplace;
     let pass = ready.pass;
-    let state = app.state::<DesktopState>();
     // The run's own record of what was ticked, not a list the browser carried
     // over: a seller who chose, closed the window and came back continues the
     // import they chose.
@@ -1128,6 +1163,13 @@ mod session_command_tests {
             _run: tam_types::Uuid,
         ) -> PlaneFuture<'a, Vec<String>> {
             Box::pin(core::future::ready(Ok(Vec::new())))
+        }
+
+        fn open_import_run<'a>(
+            &'a self,
+            _device: &'a crate::device::DeviceId,
+        ) -> PlaneFuture<'a, Option<crate::import::OpenImportRun>> {
+            Box::pin(core::future::ready(Ok(None)))
         }
 
         fn register<'a>(

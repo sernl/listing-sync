@@ -851,3 +851,10 @@ The zone runs Cloudflare's Bot Fight Mode, whose detection script is injected in
 The console's root layout no longer throws on a non-401 first answer: it renders one screen naming what came back, with the status and a retry, in place of `error.html`'s "Internal Error (500)".
 Bot Fight Mode cannot be exempted by rule on the free plan; if a WebView is still refused, the founder's remaining choice is the zone toggle, not code.
 Full reasoning: `../notes/design/console-serving.md`.
+
+## Scheduling and sync run inside the server, and produce jobs, 2026-09-12
+
+The scheduler pass runs in `tam-server` every minute beside the import sweep, with the application's own pool and state: the engine role cannot write tenant sync rows and a second binary holding a second pool would be a second place to keep the entitlement.
+A schedule materialises into ordinary jobs, one per marketplace per tick, keyed on the schedule, the tick and the marketplace, with every member recorded as sent or skipped with its reason under the tick; a member with a write already queued is skipped as on its way rather than refused by the ledger, and a live Tes listing is skipped until its edit is captured.
+A sync pull is a scheduled import run the server opens when the cadence is due; the device asks at every check-in what run is open and lists or describes it, never starting one itself; the server selects every listing the catalogue does not already hold, commits the run on the next tick when no review is owed, and publishes each new resource live to the marketplaces the seller's rule names, with the catalogue's own words until templates arrive.
+The cadence a seller may choose is floored at the plan's interval.

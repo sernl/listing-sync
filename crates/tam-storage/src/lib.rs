@@ -37,7 +37,9 @@ mod product;
 pub mod profile;
 pub mod pruning;
 pub mod resource_templates;
+pub mod schedules;
 pub mod sessions;
+pub mod sync_settings;
 pub mod taxonomy;
 pub mod tpt_base;
 
@@ -124,7 +126,16 @@ pub use resource_templates::{
     NewResourceTemplate, ResourceTemplateRecord, ResourceTemplateRepo, ResourceTemplateSummary,
     TemplateChange, TemplateEdit, TemplateWrite, TEMPLATES_PER_ORG_MAX,
 };
+pub use schedules::{
+    due_tick, next_tick, timezone_of, ScheduleMember, ScheduleOutcome, ScheduleRecord,
+    ScheduleRepeat, ScheduleRepo, ScheduleRunRow, ScheduleRunWrite, ScheduleSelection,
+    ScheduleWrite, UnknownTimezone, SCHEDULE_RUNS_LISTED_MAX,
+};
 pub use sessions::{NewTenant, SessionIdentity, SessionRepo, SessionToken};
+pub use sync_settings::{
+    ActivityKind, ActivityRow, MultiListedRow, SyncSettingRecord, SyncSettingRepo,
+    ACTIVITY_LISTED_MAX,
+};
 pub use tpt_base::{TptBaseRecord, TptBaseRepo};
 pub mod elections;
 pub mod sync_requests;

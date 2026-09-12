@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO marketplace_sync_setting (org_id, inventory, enabled, interval_secs) VALUES ($1, $2, $3, $4) ON CONFLICT (org_id, inventory) DO UPDATE SET enabled = $3, interval_secs = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Bool",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1378979902d910849d24c4758ac791f1e22157eb723b1c78486d6a2cf8cc864e"
+}

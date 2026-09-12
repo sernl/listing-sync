@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE schedule SET last_run_at = $3 WHERE org_id = $1 AND id = $2 AND (last_run_at IS NULL OR last_run_at < $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2639771bd8c44ec62efdee42520812534542588ee843cbca77b7ba712cd7dfc1"
+}

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, kind, source, batch_id, target, state, anchor_job, read_total, created_at, settled_at, failure_detail FROM import_run WHERE org_id = $1 AND id = $2",
+  "query": "SELECT id, kind, source, batch_id, target, state, anchor_job, read_total, created_at, settled_at, failure_detail, scheduled FROM import_run WHERE org_id = $1 AND id = $2",
   "describe": {
     "columns": [
       {
@@ -57,6 +57,11 @@
         "ordinal": 10,
         "name": "failure_detail",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "scheduled",
+        "type_info": "Bool"
       }
     ],
     "parameters": {
@@ -76,8 +81,9 @@
       true,
       false,
       true,
-      true
+      true,
+      false
     ]
   },
-  "hash": "bb974041275c33b8fe96647a649d4128f27228d70c836cba6405a3b0e19e5d16"
+  "hash": "68cd5966116d80d99e76ebda63eaf782404ed410805f1b3f0d4af9473086acbc"
 }

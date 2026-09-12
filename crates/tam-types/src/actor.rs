@@ -34,16 +34,25 @@ pub enum SystemComponent {
     /// would attribute a seller's machine to our own engine, which is the
     /// audit trail having a hole in it rather than a shorter enum.
     Device,
+    /// The scheduler's pass, inside the serving process.
+    ///
+    /// Its own variant rather than `Worker` for `Device`'s reason: a
+    /// scheduled publish is a write nobody was present for, and the useful
+    /// question about one is which clock reached it. `Worker` names the lease
+    /// scan, which writes no listings, so attributing a Friday drop to it
+    /// would leave nothing able to say a job came from a timetable.
+    Scheduler,
 }
 
 impl SystemComponent {
     /// The closed set, in a stable order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Engine,
         Self::Broker,
         Self::Worker,
         Self::Import,
         Self::Device,
+        Self::Scheduler,
     ];
 
     /// The stored spelling, identical to the serde rename.
@@ -55,6 +64,7 @@ impl SystemComponent {
             Self::Worker => "worker",
             Self::Import => "import",
             Self::Device => "device",
+            Self::Scheduler => "scheduler",
         }
     }
 }

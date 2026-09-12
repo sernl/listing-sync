@@ -216,6 +216,19 @@ pub trait ControlPlane: Send + Sync {
         device: &'a DeviceId,
         run: tam_types::Uuid,
     ) -> PlaneFuture<'a, Vec<String>>;
+
+    /// The one import run the organisation has open, and how far it has got.
+    ///
+    /// Asked at every check-in rather than pushed, because a server that told
+    /// a device to read a shop now would be the causation D1 keeps on this
+    /// side of the wire: the seller's cadence mints a run on the server, and
+    /// the run then waits here until a device asks. `None` is the ordinary
+    /// answer — most cycles have no run open — and is a value rather than an
+    /// error for that reason.
+    fn open_import_run<'a>(
+        &'a self,
+        device: &'a DeviceId,
+    ) -> PlaneFuture<'a, Option<crate::import::OpenImportRun>>;
 }
 
 /// The control plane a build with no configured transport gets: one that
@@ -248,6 +261,13 @@ impl ControlPlane for Offline {
         _device: &'a DeviceId,
         _run: tam_types::Uuid,
     ) -> PlaneFuture<'a, Vec<String>> {
+        Box::pin(core::future::ready(Err(ControlPlaneError::NotConfigured)))
+    }
+
+    fn open_import_run<'a>(
+        &'a self,
+        _device: &'a DeviceId,
+    ) -> PlaneFuture<'a, Option<crate::import::OpenImportRun>> {
         Box::pin(core::future::ready(Err(ControlPlaneError::NotConfigured)))
     }
 
@@ -448,8 +468,8 @@ async fn check_in_or_register(
     }
 }
 
-/// One scheduled cycle: check in, then pull whatever work the gate still
-/// allows.
+/// One scheduled cycle: check in, serve whatever import run is open, then pull
+/// whatever work the gate still allows.
 ///
 /// The check-in comes first because it is what learns of a revocation, and a
 /// cycle that pulled first would spend a round of work under sessions it was
@@ -471,6 +491,13 @@ pub async fn cycle<W: WorkSource + ?Sized>(
     now: Timestamp,
 ) -> TickReport {
     check_in_or_register(state, plane).await.ok();
+    // After the check-in and before the work pull, in that order for the same
+    // reason the check-in comes first: the poll makes marketplace requests, so
+    // a revocation that has just arrived must have closed the gate before it
+    // runs. It is the device's half of the seller's sync cadence — the server
+    // mints the run and waits — and it answers nothing on the ordinary cycle
+    // where no run is open.
+    crate::import::serve_open_run(state, plane, now, &crate::commands::catalogue_for).await;
     let gate = state.gate().await;
     let report = scheduler
         .tick(
@@ -613,6 +640,11 @@ mod tests {
         registrations: AtomicUsize,
         beats: AtomicUsize,
         last: tokio::sync::Mutex<Vec<SessionReport>>,
+        /// How many times a cycle asked for the organisation's open import
+        /// run. The count is the assertion: the poll has to sit on the
+        /// scheduled path or a scheduled pull waits on a console nobody
+        /// opened.
+        opens: AtomicUsize,
     }
 
     impl Fake {
@@ -623,6 +655,7 @@ mod tests {
                 registrations: AtomicUsize::new(0),
                 beats: AtomicUsize::new(0),
                 last: tokio::sync::Mutex::new(Vec::new()),
+                opens: AtomicUsize::new(0),
             }
         }
 
@@ -664,6 +697,14 @@ mod tests {
             _run: tam_types::Uuid,
         ) -> PlaneFuture<'a, Vec<String>> {
             Box::pin(core::future::ready(Ok(Vec::new())))
+        }
+
+        fn open_import_run<'a>(
+            &'a self,
+            _device: &'a DeviceId,
+        ) -> PlaneFuture<'a, Option<crate::import::OpenImportRun>> {
+            self.opens.fetch_add(1, Ordering::SeqCst);
+            Box::pin(core::future::ready(Ok(None)))
         }
 
         fn register<'a>(
@@ -924,6 +965,13 @@ mod tests {
             Box::pin(core::future::ready(Ok(Vec::new())))
         }
 
+        fn open_import_run<'a>(
+            &'a self,
+            _device: &'a DeviceId,
+        ) -> PlaneFuture<'a, Option<crate::import::OpenImportRun>> {
+            Box::pin(core::future::ready(Ok(None)))
+        }
+
         fn register<'a>(
             &'a self,
             _device: &'a DeviceIdentity,
@@ -990,6 +1038,15 @@ mod tests {
             _device: &'a crate::device::DeviceId,
             _run: tam_types::Uuid,
         ) -> PlaneFuture<'a, Vec<String>> {
+            Box::pin(core::future::ready(Err(ControlPlaneError::Refused(
+                "502".to_owned(),
+            ))))
+        }
+
+        fn open_import_run<'a>(
+            &'a self,
+            _device: &'a DeviceId,
+        ) -> PlaneFuture<'a, Option<crate::import::OpenImportRun>> {
             Box::pin(core::future::ready(Err(ControlPlaneError::Refused(
                 "502".to_owned(),
             ))))
@@ -1081,6 +1138,34 @@ mod tests {
             "the ordinary tick costs one request, not two"
         );
         assert_eq!(plane.beats.load(Ordering::SeqCst), 1);
+    }
+
+    /// Where the scheduled pull is actually triggered from.
+    ///
+    /// A run the seller's cadence minted sits in `reading` state until a
+    /// device asks for it, so a cycle that did not ask would leave every
+    /// scheduled pull waiting on a console press the seller was told they no
+    /// longer had to make.
+    #[tokio::test]
+    async fn a_cycle_asks_the_server_what_import_run_is_open() {
+        let state = state_with(Arc::new(MemorySessionStore::new()));
+        let plane = Fake::new(false);
+        let (scheduler, source) = idle_cycle_parts();
+
+        super::cycle(
+            &state,
+            &plane,
+            &scheduler,
+            &source,
+            Timestamp(1_756_000_000_000),
+        )
+        .await;
+
+        assert_eq!(
+            plane.opens.load(Ordering::SeqCst),
+            1,
+            "once per cycle, beside the check-in rather than instead of it"
+        );
     }
 
     #[tokio::test]

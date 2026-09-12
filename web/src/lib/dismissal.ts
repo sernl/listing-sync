@@ -18,8 +18,6 @@
 export type DismissKey =
 	| 'labels.what-are-labels'
 	| 'templates.licence-is-yours'
-	| 'sync.schedule-is-fixed'
-	| 'sharing.not-built'
 	| 'analytics.tpt-reports-only';
 
 /** Where each dismissal is written.
@@ -30,8 +28,6 @@ export type DismissKey =
 export const DISMISS_KEYS: Record<DismissKey, string> = {
 	'labels.what-are-labels': 'labels.what-are-labels.dismissed',
 	'templates.licence-is-yours': 'templates.licence-is-yours.dismissed',
-	'sync.schedule-is-fixed': 'sync.schedule-is-fixed.dismissed',
-	'sharing.not-built': 'sharing.not-built.dismissed',
 	'analytics.tpt-reports-only': 'analytics.tpt-reports-only.dismissed'
 };
 

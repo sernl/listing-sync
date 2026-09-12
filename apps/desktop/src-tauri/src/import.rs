@@ -44,6 +44,7 @@ pub use tam_engine_driver::import::{
 use crate::entitlement::EntitlementGate;
 use crate::heartbeat::ControlPlaneError;
 use crate::ledger::LedgerTransport;
+use crate::state::DesktopState;
 
 /// The control-plane path one page of the catalogue is posted to.
 ///
@@ -64,6 +65,50 @@ pub fn selection_path(device: &crate::device::DeviceId, run: tam_types::Uuid) ->
         "/v1/devices/{device}/import/{}/selection",
         uuid::Uuid::from_bytes(run.0).as_hyphenated()
     )
+}
+
+/// The control-plane path the device asks for the organisation's open import
+/// run on, at every check-in.
+///
+/// A free function beside the two above for the same reason, and one the
+/// device reads rather than one the server pushes: D1 keeps "do it now" off
+/// the wire, so a scheduled pull the seller configured on the console becomes
+/// a run sitting in `reading` state until the device next asks.
+#[must_use]
+pub fn open_import_path(device: &crate::device::DeviceId) -> String {
+    format!("/v1/devices/{device}/import/open")
+}
+
+/// The organisation's one open import run, as the device reads it.
+///
+/// `listed` and `selected` are what the run already holds rather than what
+/// the device remembers doing, so a run listed by another device — or by this
+/// one before it restarted — is not walked again. The device decides only
+/// which half it owes from these two facts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+pub struct OpenImportRun {
+    pub run: tam_types::Uuid,
+    /// Which shop, read from the run rather than chosen here, exactly as
+    /// [`crate::heartbeat::ControlPlane::import_run_source`] is for a run the
+    /// console opened.
+    pub source: tam_types::InventoryId,
+    /// Whether the shop has already been enumerated into this run.
+    pub listed: bool,
+    /// Whether a selection has been recorded for it, by the seller on the
+    /// console or by the server on a scheduled run.
+    pub selected: bool,
+}
+
+/// Which half of an import an unattended cycle is doing.
+///
+/// The per-process memory is keyed on the pair rather than on the run, because
+/// the two halves happen at different cycles: a run is listed at one and
+/// described at a later one, and a single "served" mark would refuse the
+/// second.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ScheduledStep {
+    List,
+    Describe,
 }
 
 /// The name the console invokes and the application registers.
@@ -708,6 +753,128 @@ impl<S: CatalogueSource, P: LedgerTransport + ?Sized> ImportPass<S, P> {
     }
 }
 
+/// How an unattended pass reaches the seller's shop.
+///
+/// A parameter rather than a direct call into [`crate::commands`], for the
+/// reason every other seam in this module is one: the production factory
+/// builds a marketplace client over the seller's stored session, so a test
+/// that had to go through it could not drive this without a marketplace.
+pub(crate) type CatalogueFactory<'a> = &'a (dyn Fn(&DesktopState, tam_types::InventoryId) -> Result<Box<dyn CatalogueSource>, String>
+         + Send
+         + Sync);
+
+/// Does whatever the organisation's open import run is owed by this device,
+/// once per check-in.
+///
+/// This is the half of the scheduled pull that cannot be server-side. The
+/// server mints the run when the seller's cadence comes due and then waits;
+/// nothing else starts it, because a server that told a device to read a shop
+/// now would be the causation D1 keeps on this side of the wire. So the device
+/// asks at every check-in, and a run it finds is exactly the console flow with
+/// the console's press removed: enumerate and post the listing while the run
+/// holds none, then describe what the selection names.
+///
+/// Every refusal here is silent, and that is deliberate rather than lax. No
+/// open run is the ordinary answer to this question and would otherwise be an
+/// hourly log line saying nothing; a shop this device holds no session for, a
+/// lapsed entitlement, and a console import already running are all states the
+/// seller resolves on the console, where they are already shown. What is not
+/// silent is a pass that started and failed: that one is reported to the run
+/// itself, because the run's own page is where the seller reads it.
+pub(crate) async fn serve_open_run(
+    state: &DesktopState,
+    plane: &dyn crate::heartbeat::ControlPlane,
+    now: Timestamp,
+    catalogue: CatalogueFactory<'_>,
+) {
+    let Ok(Some(open)) = plane.open_import_run(&state.device().id).await else {
+        return;
+    };
+    // A run that is listed but whose selection nobody has recorded yet is the
+    // seller still choosing. There is nothing owed until they have.
+    let step = if open.listed {
+        if !open.selected {
+            return;
+        }
+        ScheduledStep::Describe
+    } else {
+        ScheduledStep::List
+    };
+    if state.scheduled_step_done(open.run, step).await {
+        return;
+    }
+    // The console's own single-flight guard rather than a second one beside
+    // it: a seller who pressed Start while this cycle was polling must not
+    // have their shop walked twice at once, and which of the two claimed it
+    // first does not matter.
+    let Ok(ready) = crate::commands::ready_to_import(state, open.run, open.source, catalogue).await
+    else {
+        return;
+    };
+    let outcome = match step {
+        ScheduledStep::List => Some(list_open_run(&ready).await),
+        ScheduledStep::Describe => describe_open_run(state, plane, &ready, open.run).await,
+    };
+    state.release_import(open.run).await;
+    match outcome {
+        // Marked on success rather than on the attempt, so a cycle that could
+        // not reach the marketplace is retried at the next one instead of
+        // leaving the run waiting until the application restarts.
+        Some(Ok(())) => state.mark_scheduled_step(open.run, step).await,
+        Some(Err(why)) => {
+            ready.pass.report_failure(&why).await;
+            state
+                .record(
+                    ready.marketplace,
+                    now,
+                    crate::state::WorkEvent::Abandoned {
+                        item: uuid::Uuid::from_bytes(open.run.0)
+                            .as_hyphenated()
+                            .to_string(),
+                        reason: why.to_string(),
+                    },
+                )
+                .await;
+        }
+        // The selection could not be read, so nothing was attempted and there
+        // is nothing to report to the run. The next cycle asks again.
+        None => {}
+    }
+}
+
+/// The first half: read the shop and post it as the run's listing.
+async fn list_open_run(
+    ready: &crate::commands::ImportReady<dyn LedgerTransport>,
+) -> Result<(), PassError> {
+    let listed = ready.pass.enumerate(ready.now).await?;
+    ready.pass.post_listing(listed).await
+}
+
+/// The second half: describe what the run's own selection names.
+///
+/// `None` where the selection could not be read at all, which is a
+/// control-plane failure rather than a pass that went wrong, and is the one
+/// ending the run is told nothing about.
+async fn describe_open_run(
+    state: &DesktopState,
+    plane: &dyn crate::heartbeat::ControlPlane,
+    ready: &crate::commands::ImportReady<dyn LedgerTransport>,
+    run: tam_types::Uuid,
+) -> Option<Result<(), PassError>> {
+    let selection = plane.import_selection(&state.device().id, run).await.ok()?;
+    let chosen: Vec<i64> = selection
+        .iter()
+        .filter_map(|locator| locator.parse().ok())
+        .collect();
+    Some(
+        ready
+            .pass
+            .describe_all(chosen, crate::run::wall_now, |_progress| {})
+            .await
+            .map(|_report| ()),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -719,7 +886,8 @@ mod tests {
     use crate::heartbeat::{ControlPlaneError, PlaneFuture};
     use crate::import::{SourceError, SourceFuture};
     use crate::ledger::LedgerTransport;
-    use core::sync::atomic::AtomicBool;
+    use crate::state::DesktopState;
+    use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
     use tam_marketplace::{ImportedListing, ListingState, RemoteListingId};
     use tam_types::{CopyFormat, FileKind, ImportedPrice, Marketplace, ScanOutcome, Timestamp};
@@ -1494,5 +1662,269 @@ mod tests {
             import_path(&DeviceId::from_raw(DEVICE)),
             format!("/v1/devices/{DEVICE}/import")
         );
+    }
+
+    #[test]
+    fn the_open_run_path_names_the_device() {
+        assert_eq!(
+            super::open_import_path(&DeviceId::from_raw(DEVICE)),
+            format!("/v1/devices/{DEVICE}/import/open")
+        );
+    }
+
+    /// The wire shape, as the server answers it.
+    ///
+    /// The only thing binding this device to that route is the deserialiser,
+    /// and every other test here builds the value in Rust and never crosses
+    /// it. A renamed field or a wrapped `null` would otherwise be found by a
+    /// seller whose scheduled pull quietly stopped happening.
+    #[test]
+    fn the_open_run_answer_is_read_from_the_shape_the_server_sends() {
+        let absent: Option<super::OpenImportRun> =
+            serde_json::from_str("null").expect("no open run is a value, not a failure");
+        assert_eq!(absent, None);
+
+        let open: Option<super::OpenImportRun> = serde_json::from_str(
+            r#"{"run":"71717171-7171-7171-7171-717171717171","source":"Tes","listed":true,"selected":false}"#,
+        )
+        .expect("the open run reads");
+        assert_eq!(open, Some(open_run(true, false)));
+    }
+
+    /// A control plane holding one answer to the open-run question, counting
+    /// how often it was asked.
+    ///
+    /// The count is an assertion of its own: the poll is cheap and the guard
+    /// is over the work, so a cycle must go on asking even after it has served
+    /// a run — or a run the seller ticks an hour later is never described.
+    struct OpenRuns {
+        answer: Option<super::OpenImportRun>,
+        selection: Vec<String>,
+        asked: AtomicUsize,
+    }
+
+    impl OpenRuns {
+        fn answering(answer: Option<super::OpenImportRun>) -> Self {
+            Self {
+                answer,
+                selection: Vec::new(),
+                asked: AtomicUsize::new(0),
+            }
+        }
+
+        fn chosen(answer: super::OpenImportRun, selection: &[&str]) -> Self {
+            Self {
+                selection: selection.iter().map(|one| (*one).to_owned()).collect(),
+                ..Self::answering(Some(answer))
+            }
+        }
+    }
+
+    impl crate::heartbeat::ControlPlane for OpenRuns {
+        fn reachable(&self) -> PlaneFuture<'_, ()> {
+            Box::pin(core::future::ready(Ok(())))
+        }
+
+        fn sync_request_source(
+            &self,
+            _request: tam_types::Uuid,
+        ) -> PlaneFuture<'_, tam_types::InventoryId> {
+            Box::pin(core::future::ready(Ok(tam_types::InventoryId::Tes)))
+        }
+
+        fn import_run_source(
+            &self,
+            _run: tam_types::Uuid,
+        ) -> PlaneFuture<'_, tam_types::InventoryId> {
+            Box::pin(core::future::ready(Ok(tam_types::InventoryId::Tes)))
+        }
+
+        fn import_selection<'a>(
+            &'a self,
+            _device: &'a DeviceId,
+            _run: tam_types::Uuid,
+        ) -> PlaneFuture<'a, Vec<String>> {
+            let selection = self.selection.clone();
+            Box::pin(core::future::ready(Ok(selection)))
+        }
+
+        fn open_import_run<'a>(
+            &'a self,
+            _device: &'a DeviceId,
+        ) -> PlaneFuture<'a, Option<super::OpenImportRun>> {
+            self.asked.fetch_add(1, Ordering::SeqCst);
+            Box::pin(core::future::ready(Ok(self.answer)))
+        }
+
+        fn register<'a>(
+            &'a self,
+            _device: &'a crate::device::DeviceIdentity,
+            _facts: crate::heartbeat::HostFacts,
+        ) -> PlaneFuture<'a, ()> {
+            Box::pin(core::future::ready(Ok(())))
+        }
+
+        fn heartbeat<'a>(
+            &'a self,
+            _device: &'a DeviceId,
+            _sessions: &'a [crate::heartbeat::SessionReport],
+        ) -> PlaneFuture<'a, crate::heartbeat::CheckIn> {
+            Box::pin(core::future::ready(Ok(crate::heartbeat::CheckIn {
+                revoked: false,
+                entitlement: None,
+            })))
+        }
+    }
+
+    fn open_run(listed: bool, selected: bool) -> super::OpenImportRun {
+        super::OpenImportRun {
+            run: RUN,
+            source: tam_types::InventoryId::Tes,
+            listed,
+            selected,
+        }
+    }
+
+    /// A device signed in to Tes, entitled, and able to post pages.
+    ///
+    /// The entitlement is minted against the wall clock rather than [`NOW`],
+    /// because the gate this path reads is the one `ready_to_import` consults
+    /// at the instant the pass starts, and a claim that expired last year
+    /// would refuse every cycle here.
+    async fn device_serving(ledger: &Arc<FakePlane>) -> DesktopState {
+        let store = Arc::new(crate::session::memory::MemorySessionStore::new());
+        crate::session::SessionStore::put(
+            store.as_ref(),
+            &crate::session::SessionRecord {
+                marketplace: Marketplace::Tes,
+                account_label: None,
+                captured_at: crate::run::wall_now(),
+                device_id: DeviceId::from_raw(DEVICE),
+                jar: crate::session::CookieJar::new(vec![crate::session::Cookie {
+                    name: "TESSession".to_owned(),
+                    value: "value".to_owned(),
+                }]),
+            },
+        )
+        .await
+        .expect("the fixture store accepts");
+        // The claims are JWT deadlines, which are seconds, and the instant is
+        // this device's own reading in milliseconds.
+        let seconds = crate::run::wall_now().0.saturating_div(1_000);
+        let held: Arc<FakePlane> = Arc::clone(ledger);
+        let transport: Arc<dyn LedgerTransport> = held;
+        let state = DesktopState::new(
+            crate::device::DeviceIdentity {
+                id: DeviceId::from_raw(DEVICE),
+                label: "founder-pc".to_owned(),
+            },
+            store,
+        )
+        .with_ledger(transport);
+        state
+            .set_gate(EntitlementGate::holding(Entitlement::from_verified_claims(
+                Claims {
+                    sub: "org-1".to_owned(),
+                    aud: crate::entitlement::AUDIENCE.to_owned(),
+                    iss: crate::entitlement::ISSUER.to_owned(),
+                    device: DEVICE.to_owned(),
+                    marketplaces: vec![Marketplace::Tes],
+                    plan: crate::entitlement::Plan::Subscriber,
+                    exp: seconds + 3_600,
+                    grace: seconds + 3_600 + 86_400,
+                },
+            )))
+            .await;
+        state
+    }
+
+    /// A shop of two, for a cycle nobody pressed a button to start.
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "the shape is the factory seam's, whose production side refuses a \
+                  marketplace this device cannot enumerate"
+    )]
+    fn two_resources(
+        _state: &DesktopState,
+        _source: tam_types::InventoryId,
+    ) -> Result<Box<dyn CatalogueSource>, String> {
+        Ok(Box::new(Scripted::of(2, PDF.to_vec())))
+    }
+
+    /// The scheduled pull's first half, and the guard that makes it safe to
+    /// ask at every check-in.
+    ///
+    /// Two cycles rather than one, because the server's own `listed` flag is
+    /// what would otherwise stop the second — and this device must not depend
+    /// on having observed it before the next hour comes round.
+    #[tokio::test]
+    async fn an_open_run_nobody_listed_is_walked_once_however_many_cycles_pass() {
+        let ledger = Arc::new(FakePlane::default());
+        let state = device_serving(&ledger).await;
+        let plane = OpenRuns::answering(Some(open_run(false, false)));
+
+        for _ in 0..2 {
+            super::serve_open_run(&state, &plane, NOW, &two_resources).await;
+        }
+
+        let posted = ledger.posted.lock().await.clone();
+        assert_eq!(
+            posted.len(),
+            1,
+            "a shop enumerated twice is two rounds of marketplace requests for one run"
+        );
+        assert!(
+            posted[0].listed.is_some() && !posted[0].complete,
+            "the first half posts the listing the seller chooses from and completes nothing"
+        );
+        assert_eq!(
+            plane.asked.load(Ordering::SeqCst),
+            2,
+            "the guard is over the work, not over the question: a run the seller ticks an \
+             hour later has to be found by a later cycle"
+        );
+    }
+
+    /// The second half, driven by the run's own selection rather than by a
+    /// list the console carried over.
+    #[tokio::test]
+    async fn a_listed_run_the_seller_has_chosen_from_is_described_once() {
+        let ledger = Arc::new(FakePlane::default());
+        let state = device_serving(&ledger).await;
+        let plane = OpenRuns::chosen(open_run(true, true), &["1", "2"]);
+
+        for _ in 0..2 {
+            super::serve_open_run(&state, &plane, NOW, &two_resources).await;
+        }
+
+        let posted = ledger.posted.lock().await.clone();
+        assert_eq!(posted.len(), 1, "the selection is described once");
+        assert_eq!(
+            posted[0].resources.len(),
+            2,
+            "both resources the run names are described"
+        );
+        assert!(
+            posted[0].complete,
+            "the last page completes the run, or the server never mints the jobs"
+        );
+    }
+
+    /// The ordinary cycle, and the one before the seller has ticked anything.
+    #[tokio::test]
+    async fn a_cycle_with_nothing_owed_makes_no_marketplace_request() {
+        for answer in [None, Some(open_run(true, false))] {
+            let ledger = Arc::new(FakePlane::default());
+            let state = device_serving(&ledger).await;
+            let plane = OpenRuns::answering(answer);
+
+            super::serve_open_run(&state, &plane, NOW, &two_resources).await;
+
+            assert!(
+                ledger.posted.lock().await.is_empty(),
+                "no open run, and a run whose seller is still choosing, both owe this \
+                 device nothing: {answer:?}"
+            );
+        }
     }
 }

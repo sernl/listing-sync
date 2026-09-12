@@ -52,14 +52,14 @@ describe('a remembered dismissal', () => {
 	});
 
 	it('reads false rather than throwing when storage refuses to be read', () => {
-		expect(remembered('sync.schedule-is-fixed', refusing)).toBe(false);
+		expect(remembered('templates.licence-is-yours', refusing)).toBe(false);
 	});
 
 	it('writes nothing and throws nothing when storage refuses the write', () => {
 		// The caller's own visit-scoped dismissal is what stands in this case,
 		// which is what every one of these pages had before it remembered
 		// anything.
-		expect(() => remember('sync.schedule-is-fixed', refusing)).not.toThrow();
+		expect(() => remember('templates.licence-is-yours', refusing)).not.toThrow();
 	});
 });
 

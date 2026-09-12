@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, name, selection_kind, selection_label, intent, at_minute_of_day, timezone, repeat, weekday, republish_on_update, enabled, last_run_at FROM schedule WHERE org_id = $1 ORDER BY created_at, id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "selection_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "selection_label",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "intent",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "at_minute_of_day",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "timezone",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "repeat",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "weekday",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 9,
+        "name": "republish_on_update",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 10,
+        "name": "enabled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 11,
+        "name": "last_run_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "4d05773e3b660d247d8a80b911cb53661eb19b675690b5dfc78538cff848902d"
+}

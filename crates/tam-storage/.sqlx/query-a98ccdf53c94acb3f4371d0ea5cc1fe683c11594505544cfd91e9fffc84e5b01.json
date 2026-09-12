@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, title, updated_at FROM product WHERE org_id = $1 AND deleted_at IS NULL AND EXISTS ( SELECT 1 FROM product_label pl JOIN label l ON l.org_id = pl.org_id AND l.id = pl.label_id WHERE pl.org_id = product.org_id AND pl.product_id = product.id AND lower(l.name) = lower($2)) ORDER BY created_at, id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "a98ccdf53c94acb3f4371d0ea5cc1fe683c11594505544cfd91e9fffc84e5b01"
+}

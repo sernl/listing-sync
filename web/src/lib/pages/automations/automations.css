@@ -531,18 +531,293 @@
 	display: block;
 }
 
-.rule-row {
+/* The marketplace tiles a schedule sends to, and a pull publishes onward to.
+
+   The create form's own tiles are scoped under `.resources-page`, so they do
+   not reach here; these are the same treatment at the size a settings card
+   has room for — the mark is what a teacher recognises the place by, the full
+   name is on hover and read out, and the tick sits in its own corner rather
+   than beside the mark, which would halve it. */
+
+.mk-tiles {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, 72px);
+	gap: 12px;
+	margin-top: 12px;
+}
+
+.mk-tile {
+	position: relative;
 	display: flex;
 	align-items: center;
-	justify-content: space-between;
+	justify-content: center;
+	width: 72px;
+	height: 72px;
+	border: 1px solid var(--line);
+	border-radius: var(--r-card);
+	background: var(--surface);
+	cursor: pointer;
+}
+
+.mk-tile:hover {
+	border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+}
+
+.mk-tile input {
+	position: absolute;
+	top: 6px;
+	left: 6px;
+	margin: 0;
+}
+
+.mk-tile:has(input:checked) {
+	border-color: var(--accent);
+	background: var(--accent-soft);
+}
+
+.mk-tile:has(input:focus-visible) {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.mk-tile:has(input:disabled) {
+	opacity: 0.45;
+	cursor: not-allowed;
+}
+
+.mk-tile-mark {
+	width: 36px;
+	height: 36px;
+	object-fit: contain;
+}
+
+/* A choice card that cannot be taken. The shared sheets style a disabled
+   button and the toggle track and stop there, so a disabled choice rendered
+   identically to a live one and a seller clicked it. */
+
+.disp:disabled {
+	opacity: 0.55;
+	cursor: not-allowed;
+}
+
+/* One schedule, as the list draws it: what it is, where it goes, when, and
+   the four controls that act on it.
+
+   The controls take a line of their own rather than a fourth column. At the
+   width this column actually has, four columns left the when three words a
+   line — "Weekly on Friday / at 09:00 / Pacific/Auckland" — which is the one
+   thing a seller scans the list for. */
+
+.sched-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.1fr);
+	align-items: center;
 	gap: 12px;
-	padding: 12px 16px;
+	padding: 12px 14px;
+	border: 1px solid var(--line);
+	border-radius: var(--r-card);
+	background: var(--surface);
+}
+
+.sched-row + .sched-row {
+	margin-top: 10px;
+}
+
+/* A schedule switched off is still the seller's and still listed; it is dimmed
+   rather than hidden, because a list that drops what is off cannot be switched
+   back on from itself. */
+
+.sched-row.off {
+	opacity: 0.62;
+}
+
+.sched-name,
+.sched-when {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.sched-name .t,
+.sched-when .t {
+	font-weight: 600;
+	font-size: 14px;
+	color: var(--text);
+}
+
+.sched-name .meta,
+.sched-when .meta {
+	font-size: 12px;
+	color: var(--muted);
+}
+
+.sched-marks {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.sched-acts {
+	grid-column: 1 / -1;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	padding-top: 10px;
+	border-top: 1px solid var(--line);
+}
+
+.sched-confirm {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	margin-top: 8px;
+	padding: 10px 14px;
 	border: 1px solid var(--line);
 	border-radius: var(--r-field);
 	background: var(--ground);
-	font-size: 14px;
+	font-size: 13px;
+	color: var(--text);
+}
+
+.sched-runs {
+	margin-top: 8px;
+	padding: 10px 14px;
+	border: 1px solid var(--line);
+	border-radius: var(--r-field);
+	background: var(--ground);
+}
+
+.run-tick {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 8px 0;
+	border-bottom: 1px solid var(--line);
+}
+
+.run-tick:last-child {
+	border-bottom: 0;
+}
+
+.run-tick .t {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 13px;
 	font-weight: 600;
+	color: var(--text);
+}
+
+.run-tick .meta {
+	font-size: 12px;
 	color: var(--muted);
+}
+
+/* A member the tick resolved and did not send, with the sentence saying why.
+   Indented under its run rather than listed beside it: the reason belongs to
+   that tick and reads as a separate failure anywhere else. */
+
+.run-tick .skip {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	padding-left: 22px;
+	font-size: 12px;
+}
+
+.run-tick .skip-title {
+	font-weight: 600;
+	color: var(--text);
+}
+
+.run-tick .skip-why {
+	color: var(--muted);
+}
+
+/* One marketplace's pull settings */
+
+.pull-card {
+	padding: 14px;
+	border: 1px solid var(--line);
+	border-radius: var(--r-card);
+	background: var(--surface);
+}
+
+.pull-card + .pull-card {
+	margin-top: 12px;
+}
+
+.pull-card.off {
+	opacity: 0.72;
+}
+
+.pull-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.pull-head .t {
+	font-weight: 600;
+	font-size: 14px;
+	color: var(--text);
+}
+
+/* Pushed to the far end rather than following the name, so the ages line up
+   down the column and can be compared without reading each name first. */
+
+.pull-head .meta {
+	margin-left: auto;
+	font-size: 12px;
+	color: var(--muted);
+}
+
+.pull-label {
+	margin: 14px 0 0;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text);
+}
+
+/* A resource that reaches more than one marketplace */
+
+.multi-row {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 10px 14px;
+	border: 1px solid var(--line);
+	border-radius: var(--r-card);
+	background: var(--surface);
+	text-decoration: none;
+}
+
+.multi-row + .multi-row {
+	margin-top: 8px;
+}
+
+.multi-row:hover {
+	border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+}
+
+.multi-row .t {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 14px;
+	color: var(--text);
+}
+
+.multi-marks {
+	display: flex;
+	align-items: center;
+	gap: 6px;
 }
 
 /* The run page's own shapes, which the retired sheet held under names the
@@ -745,5 +1020,53 @@
 
 	.plan-row {
 		grid-template-columns: minmax(0, 1fr);
+	}
+
+	/* A schedule stacks: name, marks, when, controls, each on its own line.
+	   Four columns on a thumb's width put the when under the name at two
+	   words a line, which is unreadable and taller than the stack. */
+	.sched-row {
+		grid-template-columns: minmax(0, 1fr);
+		align-items: flex-start;
+	}
+
+	.sched-acts {
+		justify-content: flex-start;
+	}
+
+	/* The tiles wrap rather than scrolling sideways: three marks fit a phone
+	   at this size, and a row that scrolled would hide the third. */
+	.mk-tiles {
+		grid-template-columns: repeat(auto-fill, 64px);
+		gap: 10px;
+	}
+
+	.mk-tile {
+		width: 64px;
+		height: 64px;
+	}
+
+	.mk-tile-mark {
+		width: 32px;
+		height: 32px;
+	}
+
+	/* The age moves under the name rather than being squeezed against it. */
+	.pull-head {
+		flex-wrap: wrap;
+	}
+
+	.pull-head .meta {
+		margin-left: 0;
+		flex-basis: 100%;
+	}
+
+	.multi-row {
+		flex-wrap: wrap;
+	}
+
+	.multi-row .t {
+		flex-basis: 100%;
+		white-space: normal;
 	}
 }

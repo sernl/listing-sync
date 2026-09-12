@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM auto_publish_rule WHERE org_id = $1 AND source_inventory = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "599402e0ce82b758dfeacf6e86fdea6e1efd28ee6ccc6adc2c38ea0761ea0173"
+}
