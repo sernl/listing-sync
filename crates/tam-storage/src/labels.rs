@@ -8,7 +8,7 @@
 //! The client never learns a label identifier and never has to.
 
 use sqlx::PgPool;
-use tam_types::{OrgId, ProductId, Timestamp, Uuid};
+use tam_types::{Marketplace, OrgId, ProductId, Timestamp, Uuid};
 
 use crate::codec::{timestamp_to_db, uuid_to_db};
 use crate::{pin_org, StorageError};
@@ -18,6 +18,13 @@ use crate::{pin_org, StorageError};
 pub struct LabelRecord {
     pub name: String,
     pub colour: Colour,
+    /// Whether the organisation owns this label or we do.
+    ///
+    /// A system label is the marketplace's own: the import writes it, the
+    /// seller cannot remove it, it sits outside the per-product twenty and the
+    /// plan's vocabulary allowance because they did not spend it, and its
+    /// colour is fixed per marketplace rather than derived from its name.
+    pub system: bool,
 }
 
 /// The closed palette migration 0046 constrains the column to.
@@ -87,6 +94,23 @@ impl Colour {
         let index = (sum % 8) as usize;
         Self::ALL[index]
     }
+
+    /// The colour one marketplace's own label always has.
+    ///
+    /// Fixed rather than derived, which is the one place [`Self::of_name`] is
+    /// deliberately bypassed. A seller reads these chips as marketplace
+    /// identity across the whole board, so a hash of four characters would
+    /// give the identity a colour nobody chose and a rename of the
+    /// marketplace would move it. Closed by exhaustive match, so a fourth
+    /// marketplace cannot ship without its colour being decided.
+    #[must_use]
+    pub const fn of_marketplace(marketplace: Marketplace) -> Self {
+        match marketplace {
+            Marketplace::Tpt => Self::Green,
+            Marketplace::Tes => Self::Blue,
+            Marketplace::Etsy => Self::Amber,
+        }
+    }
 }
 
 /// How a label's text is compared and stored.
@@ -98,6 +122,20 @@ impl Colour {
 #[must_use]
 pub fn normalise(name: &str) -> String {
     name.trim().to_owned()
+}
+
+/// The label one marketplace's imports carry.
+///
+/// The marketplace as a seller writes it, because the chip is what they read:
+/// "TPT" is what the shop calls itself and "Tpt" is what our enum calls it.
+/// Exhaustive, so a fourth marketplace cannot ship without a word.
+#[must_use]
+pub const fn system_label_name(marketplace: Marketplace) -> &'static str {
+    match marketplace {
+        Marketplace::Tpt => "TPT",
+        Marketplace::Tes => "Tes",
+        Marketplace::Etsy => "Etsy",
+    }
 }
 
 pub struct LabelRepo {
@@ -115,14 +153,14 @@ impl LabelRepo {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let rows = sqlx::query!(
-            "SELECT name, colour FROM label WHERE org_id = $1 ORDER BY lower(name)",
+            "SELECT name, colour, system FROM label WHERE org_id = $1 ORDER BY lower(name)",
             uuid_to_db(org.0),
         )
         .fetch_all(&mut *tx)
         .await?;
         tx.commit().await?;
         rows.into_iter()
-            .map(|row| decode(row.name, &row.colour))
+            .map(|row| decode(row.name, &row.colour, row.system))
             .collect()
     }
 
@@ -135,7 +173,7 @@ impl LabelRepo {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let rows = sqlx::query!(
-            "SELECT l.name, l.colour FROM product_label pl \
+            "SELECT l.name, l.colour, l.system FROM product_label pl \
              JOIN label l ON l.org_id = pl.org_id AND l.id = pl.label_id \
              WHERE pl.org_id = $1 AND pl.product_id = $2 \
              ORDER BY lower(l.name)",
@@ -146,17 +184,23 @@ impl LabelRepo {
         .await?;
         tx.commit().await?;
         rows.into_iter()
-            .map(|row| decode(row.name, &row.colour))
+            .map(|row| decode(row.name, &row.colour, row.system))
             .collect()
     }
 
-    /// Replaces the labels one item carries, minting any the organisation has
-    /// not used before.
+    /// Replaces the seller's own labels on one item, minting any the
+    /// organisation has not used before.
     ///
     /// Replace rather than merge, because the console renders the whole set and
     /// sends it back: a merge would make removing the last label impossible to
     /// express. The whole thing is one transaction, so an item is never seen
     /// carrying half of an edit.
+    ///
+    /// The replace is scoped to the labels the seller owns, and that scope is
+    /// what makes the marketplace label survive. Without it the first manual
+    /// label edit on an imported resource would detach the `TPT` chip and the
+    /// sweep below would delete the label outright, so the auto-label would
+    /// last exactly until the seller used the feature it was there to help.
     pub async fn set_for_product(
         &self,
         org: OrgId,
@@ -172,8 +216,11 @@ impl LabelRepo {
         pin_org(&mut tx, org).await?;
 
         let detached = sqlx::query_scalar!(
-            "DELETE FROM product_label WHERE org_id = $1 AND product_id = $2 \
-             RETURNING label_id",
+            "DELETE FROM product_label pl \
+              USING label l \
+              WHERE l.org_id = pl.org_id AND l.id = pl.label_id \
+                AND pl.org_id = $1 AND pl.product_id = $2 AND l.system = false \
+             RETURNING pl.label_id",
             org_db,
             product_db,
         )
@@ -214,7 +261,7 @@ impl LabelRepo {
         sweep_abandoned(&mut tx, org, &detached).await?;
 
         let rows = sqlx::query!(
-            "SELECT l.name, l.colour FROM product_label pl \
+            "SELECT l.name, l.colour, l.system FROM product_label pl \
              JOIN label l ON l.org_id = pl.org_id AND l.id = pl.label_id \
              WHERE pl.org_id = $1 AND pl.product_id = $2 \
              ORDER BY lower(l.name)",
@@ -225,8 +272,68 @@ impl LabelRepo {
         .await?;
         tx.commit().await?;
         rows.into_iter()
-            .map(|row| decode(row.name, &row.colour))
+            .map(|row| decode(row.name, &row.colour, row.system))
             .collect()
+    }
+
+    /// Attaches one marketplace's own label to a product, minting the label
+    /// the first time this organisation imports from that shop.
+    ///
+    /// Not a special case of [`Self::set_for_product`], and it must not be
+    /// one: that call is a replace over the seller's set, and passing a
+    /// marketplace name through it would make the chip a word the seller could
+    /// then rename, remove, or spend against their allowance.
+    ///
+    /// The colour is [`Colour::of_marketplace`] rather than
+    /// [`Colour::of_name`], and the `system` flag is what a later rename
+    /// cannot take off: the conflict clause here converges an existing row of
+    /// that name onto the marketplace's colour and flag, so an organisation
+    /// that had typed "TPT" by hand before their first import ends with one
+    /// label rather than two that differ only in case.
+    pub async fn attach_system_label(
+        &self,
+        org: OrgId,
+        product: ProductId,
+        marketplace: Marketplace,
+        at: Timestamp,
+    ) -> Result<LabelRecord, StorageError> {
+        let org_db = uuid_to_db(org.0);
+        let at_db = timestamp_to_db(at)?;
+        let name = system_label_name(marketplace);
+        let colour = Colour::of_marketplace(marketplace);
+
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let label = sqlx::query!(
+            "INSERT INTO label (org_id, id, name, colour, created_at, system) \
+             VALUES ($1, $2, $3, $4, $5, true) \
+             ON CONFLICT (org_id, lower(name)) DO UPDATE SET \
+               name = EXCLUDED.name, colour = EXCLUDED.colour, system = true \
+             RETURNING id",
+            org_db,
+            uuid_to_db(Uuid(*uuid::Uuid::new_v4().as_bytes())),
+            name,
+            colour.as_str(),
+            at_db,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        sqlx::query!(
+            "INSERT INTO product_label (org_id, product_id, label_id, applied_at) \
+             VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+            org_db,
+            uuid_to_db(product.0),
+            label.id,
+            at_db,
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(LabelRecord {
+            name: name.to_owned(),
+            colour,
+            system: true,
+        })
     }
 
     /// Gives one label a new name, keeping every item that carries it.
@@ -243,6 +350,12 @@ impl LabelRepo {
     ///
     /// The refusal is the unique index's rather than a read before the write,
     /// so two renames racing onto one name cannot both be told it is free.
+    ///
+    /// A system label is not renameable and reads as missing, which is the
+    /// same answer a name nobody holds gets: the marketplace chip is ours, the
+    /// seller has no control that offers this, and a route that let them
+    /// rename it would leave an import writing a second label beside the one
+    /// they renamed.
     pub async fn rename(
         &self,
         org: OrgId,
@@ -253,8 +366,8 @@ impl LabelRepo {
         pin_org(&mut tx, org).await?;
         let renamed = sqlx::query!(
             "UPDATE label SET name = $3, colour = $4 \
-              WHERE org_id = $1 AND lower(name) = lower($2) \
-             RETURNING name, colour",
+              WHERE org_id = $1 AND lower(name) = lower($2) AND system = false \
+             RETURNING name, colour, system",
             uuid_to_db(org.0),
             from,
             to,
@@ -272,7 +385,7 @@ impl LabelRepo {
         let Some(row) = row else {
             return Ok(LabelRename::Missing);
         };
-        let record = decode(row.name, &row.colour)?;
+        let record = decode(row.name, &row.colour, row.system)?;
         tx.commit().await?;
         Ok(LabelRename::Renamed(record))
     }
@@ -286,12 +399,14 @@ impl LabelRepo {
     ///
     /// Answers whether a label of that name was there to remove, so a client
     /// that asks twice is told the second time rather than shown a success
-    /// that did nothing.
+    /// that did nothing. A system label is not one of them, for
+    /// [`Self::rename`]'s reason.
     pub async fn delete(&self, org: OrgId, name: &str) -> Result<bool, StorageError> {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let removed = sqlx::query!(
-            "DELETE FROM label WHERE org_id = $1 AND lower(name) = lower($2) RETURNING id",
+            "DELETE FROM label WHERE org_id = $1 AND lower(name) = lower($2) \
+               AND system = false RETURNING id",
             uuid_to_db(org.0),
             name,
         )
@@ -334,6 +449,11 @@ pub enum LabelRename {
 /// leaving a dangling row. The cost of that race is a label a seller retypes;
 /// the cost of taking a lock wide enough to prevent it is every label write
 /// serialising behind every other.
+///
+/// System labels are skipped outright. They are attached by an import rather
+/// than by a seller, so "no item carries this" is an ordinary state for one —
+/// a seller who deletes every resource they imported from TPT still has the
+/// `TPT` label, and the next import attaches it rather than minting a second.
 pub(crate) async fn sweep_abandoned(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     org: OrgId,
@@ -343,7 +463,7 @@ pub(crate) async fn sweep_abandoned(
         return Ok(());
     }
     sqlx::query!(
-        "DELETE FROM label WHERE org_id = $1 AND id = ANY($2) \
+        "DELETE FROM label WHERE org_id = $1 AND id = ANY($2) AND system = false \
          AND NOT EXISTS (SELECT 1 FROM product_label pl \
                          WHERE pl.org_id = label.org_id AND pl.label_id = label.id)",
         uuid_to_db(org.0),
@@ -356,11 +476,12 @@ pub(crate) async fn sweep_abandoned(
 
 /// One stored row as the console renders it, refusing a colour outside the
 /// closed set rather than rendering an unstyled chip.
-fn decode(name: String, colour: &str) -> Result<LabelRecord, StorageError> {
+fn decode(name: String, colour: &str, system: bool) -> Result<LabelRecord, StorageError> {
     Ok(LabelRecord {
         name,
         colour: Colour::from_column(colour).ok_or(StorageError::CorruptRow {
             reason: format!("label colour {colour:?} is not one of the closed set"),
         })?,
+        system,
     })
 }

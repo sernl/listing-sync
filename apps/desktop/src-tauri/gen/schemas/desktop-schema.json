@@ -351,6 +351,12 @@
           "markdownDescription": "Enables the connect_marketplace command without any pre-configured scope."
         },
         {
+          "description": "Enables the continue_import command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-continue-import",
+          "markdownDescription": "Enables the continue_import command without any pre-configured scope."
+        },
+        {
           "description": "Enables the device_activity command without any pre-configured scope.",
           "type": "string",
           "const": "allow-device-activity",
@@ -397,6 +403,12 @@
           "type": "string",
           "const": "deny-connect-marketplace",
           "markdownDescription": "Denies the connect_marketplace command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the continue_import command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-continue-import",
+          "markdownDescription": "Denies the continue_import command without any pre-configured scope."
         },
         {
           "description": "Denies the device_activity command without any pre-configured scope.",

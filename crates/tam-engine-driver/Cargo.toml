@@ -15,6 +15,12 @@ tam-limits = { path = "../tam-limits" }
 # tam-desktop already carry, so it resolves to one build.
 blake3 = { version = "1", features = ["pure"] }
 tam-marketplace = { path = "../tam-marketplace" }
+# The sketch a device asserts, carried on the import page. `default-features
+# = false` deliberately: the readers that produce one (a PDF text extractor,
+# a PDF object parser, a perceptual hasher) are behind that crate's `compute`
+# feature, and this crate is checked for wasm32 in `just check-portable`.
+# What crosses here is the vocabulary, which is serde and arithmetic.
+tam-fingerprint = { path = "../tam-fingerprint", default-features = false }
 tam-types = { path = "../tam-types" }
 
 [features]

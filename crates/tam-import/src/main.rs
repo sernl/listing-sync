@@ -196,9 +196,10 @@ where
     }
     Ok(AppliedResource {
         resource: row.resource,
+        product: tam_types::ProductId(tam_types::Uuid(*uuid::Uuid::new_v4().as_bytes())),
         listing,
         payload,
-        cover,
+        cover: Some(cover),
     })
 }
 
@@ -324,7 +325,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pool,
         org,
         source,
-        target,
+        target: Some(target),
         now: wall_now()?,
     };
     drain_manifest(&run, &adapter, &blobs, &manifest.rows).await

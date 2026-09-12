@@ -115,6 +115,12 @@ pub(crate) async fn commit(
         CommitOpening::Awaiting { count, rows } => return Err(awaiting_files(count, &rows)),
     }
 
+    // The run this batch is reviewed through, opened on the first chunk. The
+    // duplicate review is one thing for both sources -- one pair table, one
+    // verdict, one card -- so a batch reaches it by having a run rather than
+    // by growing a second review of its own.
+    let run = crate::import_runs::run_for_batch(&state, context.org, batch).await?;
+
     let claimed = batches
         .claim_page(context.org, batch, ROWS_PER_CHUNK, (state.wall)())
         .await
@@ -127,6 +133,45 @@ pub(crate) async fn commit(
             sheet: &row.sheet,
             ordinal: row.ordinal,
         };
+        // The matcher, before the create. A row whose duplicate the seller has
+        // not decided stays claimed and is retried by the next chunk, which is
+        // what "a parked pair never blocks the import" means for a row: it
+        // blocks that row and nothing else.
+        let locator = crate::import_runs::row_locator(&row.sheet, row.ordinal);
+        let verdict = crate::import_runs::match_spreadsheet_row(
+            &state,
+            context.org,
+            &run,
+            &locator,
+            row,
+            context.entitlement.caps.duplicate_review,
+        )
+        .await?;
+        match verdict {
+            // Left claimed on purpose: `claim_page` re-claims a `creating`
+            // row, so the next chunk after the seller answers picks it up
+            // without the batch having to remember anything.
+            tam_storage::RunItemState::Review => continue,
+            // The seller answered that another resource already stands for
+            // this row, so creating it is exactly what they said not to do.
+            tam_storage::RunItemState::Skipped => {
+                batches
+                    .record_row_skipped(context.org, batch, at)
+                    .await
+                    .map_err(|error| storage_fault(&state, &error))?;
+                skipped = skipped.saturating_add(1);
+                continue;
+            }
+            // Every other state is one the create is the next step for. Named
+            // rather than wildcarded, so a state added to the run's own
+            // vocabulary fails here rather than falling silently into a create.
+            tam_storage::RunItemState::Listed
+            | tam_storage::RunItemState::Selected
+            | tam_storage::RunItemState::Read
+            | tam_storage::RunItemState::Matched
+            | tam_storage::RunItemState::Imported
+            | tam_storage::RunItemState::Failed => {}
+        }
         match create_row(&state, context.org, context.entitlement.caps, row).await {
             Ok(true) => {
                 batches
@@ -175,10 +220,13 @@ pub(crate) async fn commit(
         .await
         .map_err(|error| storage_fault(&state, &error))?;
     let batch_state = if counts.outstanding == 0 {
-        batches
+        let settled = batches
             .settle(context.org, batch, (state.wall)())
             .await
-            .map_err(|error| storage_fault(&state, &error))?
+            .map_err(|error| storage_fault(&state, &error))?;
+        crate::import_runs::settle_run(&state, context.org, &run, tam_storage::RunState::Complete)
+            .await?;
+        settled
     } else {
         BatchState::Importing
     };

@@ -17,9 +17,12 @@ pub mod blobs;
 mod codec;
 pub mod connections;
 pub mod device;
+pub mod duplicates;
 pub mod entitlement;
 pub mod file_source;
+pub mod fingerprints;
 pub mod import_batches;
+pub mod import_runs;
 pub mod job_reads;
 pub mod jobs;
 pub mod labels;
@@ -57,13 +60,25 @@ pub use device::{
     DeviceHeartbeat, DeviceRecord, DeviceRegistration, DeviceRepo, DeviceSessionRecord,
     DeviceSessionReport, DeviceSessionStatus,
 };
+pub use duplicates::{
+    ordered as ordered_pair, DecidedBy, DuplicateRepo, Evidence, EvidenceUnit, MatchLayer,
+    NewVerdict, Polarity, Verdict, VerdictRecord, REVERSIBLE_MS,
+};
 pub use entitlement::{EntitlementRepo, Grant, GrantRecord, GrantedBy, NewGrant, Usage};
 pub use file_source::ProductFileSourceRepo;
+pub use fingerprints::{
+    CandidateSketch, FingerprintRepo, FingerprintWrite, PayloadDigest, ProductMeta,
+    TextSketchColumns,
+};
 pub use import_batches::{
     AttachCounts, BatchState, BatchWrite, BindOutcome, BoundRow, ClaimedRow, CommitCounts,
     CommitOpening, ImportBatchDraftRecord, ImportBatchRecord, ImportBatchRepo,
     ImportBatchRowRecord, NewImportBatch, NewImportBatchRow, RowAddress, RowFile, RowFiles,
     RowIntent, RowRef, RowState, StaleReport, SweepReport, UnbindOutcome, BATCHES_LISTED_MAX,
+};
+pub use import_runs::{
+    ImportRunHead, ImportRunItemRecord, ImportRunRecord, ImportRunRepo, ListedRow, NewImportRun,
+    ReadItem, RunCounts, RunItemState, RunKind, RunOpening, RunState, Selection, RUNS_LISTED_MAX,
 };
 pub use job_reads::{
     intent_digest, payload_digest, EventRow, ItemCounts, ItemRow, ItemStateKind, ItemsPageParams,
@@ -79,7 +94,7 @@ pub use jobs::{
     AWAITING_COUNTERPART, AWAITING_MARKETPLACE_ANSWER, AWAITING_SELLER_SIGNIN, ELECTION,
     REAUTH_REQUIRED, REVIVABLE_GATES,
 };
-pub use labels::{Colour, LabelRecord, LabelRename, LabelRepo};
+pub use labels::{system_label_name, Colour, LabelRecord, LabelRename, LabelRepo};
 pub use lowering::{
     lower, requires_bound_on, uncaptured_source, uncaptured_transition, LoweringRefusal,
 };

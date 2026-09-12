@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM product_label pl USING label l WHERE l.org_id = pl.org_id AND l.id = pl.label_id AND pl.org_id = $1 AND pl.product_id = $2 AND l.system = false RETURNING pl.label_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "label_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5703d90095d026044c56c3c31a1653da25d1f36d6c67c4ad8f624b0470ee97ac"
+}

@@ -1,23 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import {
-	IMPORT_IS_A_MIGRATION,
-	MIGRATION_HREF,
-	connectionUnknown,
-	pillTone,
-	deviceLine,
-	handoffBlocked,
-	importCards,
-	importRows,
+	NEEDS_THE_APP,
 	NOTHING_CONNECTED,
+	connectionUnknown,
+	deviceLine,
+	importBlocked,
+	importCards,
+	importLabel,
+	importRows,
+	importSitesOn,
 	notConnected,
+	pillTone,
 	standingBadge,
 	startRefusal,
 	type ImportCard
 } from './import-view';
 import { APP_TOO_OLD } from '$lib/desktop';
-import { MIGRATE_SOURCES, sourcesOn } from '$lib/sync-request';
 import { TRANSPORT_OF } from '$lib/inventory';
-import type { ConnectionView, SyncRequestHead } from '$lib/api';
+import { AUTHORABLE_PLATFORMS } from '$lib/platforms';
+import type { ConnectionView, ImportRunCounts, ImportRunHead } from '$lib/api';
 import type { Marketplace } from '$lib/generated/vocab';
 
 function connection(partial: Partial<ConnectionView> = {}): ConnectionView {
@@ -32,25 +33,36 @@ function connection(partial: Partial<ConnectionView> = {}): ConnectionView {
 	};
 }
 
-function head(partial: Partial<SyncRequestHead> = {}): SyncRequestHead {
+function counts(partial: Partial<ImportRunCounts> = {}): ImportRunCounts {
 	return {
-		request: 'r-1',
-		source: 'Tes',
-		target: 'Tpt',
-		disposition: 'migrate',
-		intent: 'draft',
-		state: 'enqueued',
-		created_at: 1,
-		resources_total: 3,
-		resources_failed: 0,
+		listed: 0,
+		selected: 0,
+		read: 0,
+		matched: 0,
+		review: 0,
+		imported: 0,
+		skipped: 0,
+		failed: 0,
 		...partial
 	};
 }
 
-function cardFor(
-	marketplace: Marketplace,
-	connections: ConnectionView[] | null = []
-): ImportCard {
+function run(partial: Partial<ImportRunHead> = {}): ImportRunHead {
+	return {
+		id: 'run-1',
+		kind: 'marketplace',
+		source: 'Tes',
+		batch_id: null,
+		state: 'complete',
+		read_total: 4,
+		counts: counts({ imported: 4 }),
+		created_at: 2,
+		settled_at: 3,
+		...partial
+	};
+}
+
+function cardFor(marketplace: Marketplace, connections: ConnectionView[] | null = []): ImportCard {
 	const card = importCards(connections).find((entry) => entry.marketplace === marketplace);
 	if (card === undefined) {
 		throw new Error(`${marketplace} is not on the import screen`);
@@ -68,23 +80,29 @@ describe('importCards', () => {
 		}
 	});
 
-	it('puts the marketplace a shop can be read from first', () => {
-		const cards = importCards([]);
-		expect(cards[0]?.marketplace).toBe('Tes');
-		expect(cards[0]?.unreadable).toBeNull();
-		expect(cards.at(-1)?.unreadable).not.toBeNull();
+	// An import reads what describes a listing rather than downloading its
+	// file, so it is not gated on the file-download capture a migration needs:
+	// both shops the app can sign into are readable, and a TPT card that still
+	// said "nothing here reads a TPT shop" would be refusing a thing that now
+	// works.
+	it('offers both shops the app can sign into', () => {
+		for (const marketplace of ['Tes', 'Tpt'] as const) {
+			const card = cardFor(marketplace);
+			expect(card.unreadable, marketplace).toBeNull();
+			expect(card.sites, marketplace).toEqual(importSitesOn(marketplace));
+			expect(card.sites.length, marketplace).toBeGreaterThan(0);
+		}
 	});
 
-	it('offers every source the server admits', () => {
-		const tes = cardFor('Tes');
-		expect(tes.sites).toEqual(sourcesOn('Tes'));
-		expect(tes.sites).toEqual(MIGRATE_SOURCES);
+	it('reads a shop from every site this console can author on', () => {
+		const offered = importCards([]).flatMap((card) => card.sites);
+		expect([...offered].sort()).toEqual([...AUTHORABLE_PLATFORMS].sort());
 	});
 
 	// A card with no site and no sentence would render as a marketplace that
 	// silently does nothing, which is the one outcome this screen must not
-	// have. The type cannot hold this, because `Tes` legitimately carries no
-	// reason, so the test does.
+	// have. The type cannot hold this, because a readable marketplace
+	// legitimately carries no reason, so the test does.
 	it('gives every marketplace it cannot read a stated reason', () => {
 		for (const card of importCards([])) {
 			if (card.sites.length === 0) {
@@ -129,26 +147,34 @@ describe('importCards', () => {
 	});
 });
 
-describe('handoffBlocked', () => {
-	it('lets a connected, readable marketplace hand off', () => {
-		expect(handoffBlocked(cardFor('Tes', [connection()]))).toBeNull();
+describe('importBlocked', () => {
+	it('lets a connected, readable marketplace be imported from', () => {
+		expect(importBlocked(cardFor('Tes', [connection()]), null)).toBeNull();
 	});
 
 	it('refuses a marketplace nothing reads before anything else', () => {
-		const tpt = cardFor('Tpt', [connection({ marketplace: 'Tpt' })]);
-		expect(handoffBlocked(tpt)).toBe(tpt.unreadable);
+		const etsy = importCards([]).find((card) => card.unreadable !== null);
+		expect(etsy).toBeUndefined();
+	});
+
+	// The plan's own refusal outranks the connection: a seller whose plan does
+	// not cover reading a shop is told that rather than being sent to connect
+	// one they would still not be able to read.
+	it('states the plan’s refusal ahead of an absent connection', () => {
+		const refused = 'Your plan does not cover reading a shop.';
+		expect(importBlocked(cardFor('Tes'), refused)).toBe(refused);
 	});
 
 	it('names the absent connection', () => {
 		const tes = cardFor('Tes');
-		expect(handoffBlocked(tes)).toBe(notConnected(tes));
+		expect(importBlocked(tes, null)).toBe(notConnected(tes));
 	});
 
 	// An unread list is not a seller with no marketplace, and the card must not
 	// send them to repair a connection that may be perfectly healthy.
 	it('says it does not know rather than that the shop is disconnected', () => {
 		const tes = cardFor('Tes', null);
-		const blocked = handoffBlocked(tes);
+		const blocked = importBlocked(tes, null);
 		expect(blocked).toBe(connectionUnknown(tes));
 		expect(blocked).not.toBe(notConnected(tes));
 	});
@@ -159,38 +185,37 @@ describe('handoffBlocked', () => {
 		expect(said).not.toContain('is not connected');
 	});
 
-	// D8 gates the declaration where the request is raised, so nothing here
-	// asks about it: a connected, readable marketplace hands off whether or not
-	// this console holds a declaration for the target.
+	// The declaration is asked once at connect time, on Marketplaces, so
+	// nothing here gates on it.
 	it('does not gate on the authorship declaration', () => {
-		expect(handoffBlocked(cardFor('Tes', [connection({ authorship: undefined })]))).toBeNull();
-	});
-});
-
-describe('the handoff destination', () => {
-	it('points at the screen that owns raising the request', () => {
-		expect(MIGRATION_HREF).toBe('/automations/migration');
+		expect(
+			importBlocked(cardFor('Tes', [connection({ authorship: undefined })]), null)
+		).toBeNull();
 	});
 });
 
 describe('the card’s own sentences', () => {
-	it('names the marketplace in both permanent lines', () => {
+	it('names the marketplace in the control and in both permanent lines', () => {
 		const tes = cardFor('Tes');
+		expect(importLabel(tes)).toBe('Import from TES');
 		expect(notConnected(tes)).toContain('TES');
 		expect(deviceLine(tes)).toContain('TES');
-		expect(deviceLine(tes)).toContain('checks in');
 	});
 
-	it('says what a migration does with the listings it finds', () => {
-		expect(IMPORT_IS_A_MIGRATION).toContain('TPT draft');
-		expect(IMPORT_IS_A_MIGRATION).toContain('coming');
+	// The reading happens under a login held on one machine, so the line has
+	// to say the app must be open: a seller who presses Import in a browser
+	// and closes the tab otherwise has no way to know why nothing happened.
+	it('says where the reading happens and what has to be open', () => {
+		expect(deviceLine(cardFor('Tes'))).toContain('Teachouse app');
+		expect(deviceLine(cardFor('Tes'))).toContain('open');
+		expect(NEEDS_THE_APP).toContain('Teachouse app');
+		expect(NEEDS_THE_APP).toContain('login');
 	});
 
 	// The founder's own reading of this screen: "I can't see any option to
 	// connect to the TPT/TES, how is that supposed to work?" Naming the screen
 	// alone was what produced it, because that screen sent them back to the
-	// downloads. Both sentences now name the app and say the login stays on the
-	// machine, which is the fact that makes the app the only place it happens.
+	// downloads.
 	it('says where a connection is actually made, not only which screen to open', () => {
 		for (const sentence of [notConnected(cardFor('Tes')), NOTHING_CONNECTED]) {
 			expect(sentence).toContain('Teachouse app');
@@ -207,7 +232,7 @@ describe('startRefusal', () => {
 	});
 
 	// A browser was never going to run the pass, so there is no failure to
-	// report: the request exists and its own page says where the work happens.
+	// report: the run exists and the page says where the work happens.
 	it('says nothing in a browser', () => {
 		expect(startRefusal({ kind: 'unavailable' })).toBeNull();
 	});
@@ -236,68 +261,59 @@ describe('pillTone', () => {
 });
 
 describe('importRows', () => {
-	it('keeps imports and drops the syncs the same endpoint serves', () => {
-		const rows = importRows([head(), head({ request: 'r-2', disposition: 'sync' })]);
-		expect(rows.map((row) => row.request)).toEqual(['r-1']);
+	// One list for both ways in. A seller who read a shop on Monday and a
+	// spreadsheet on Tuesday has made two imports, not one of each: the two
+	// tables behind them are ours rather than theirs.
+	it('lists both kinds of import in the endpoint’s own order', () => {
+		const rows = importRows([
+			run({ id: 'shop' }),
+			run({ id: 'sheet', kind: 'spreadsheet', source: null, batch_id: 'b-9' })
+		]);
+		expect(rows.map((row) => row.id)).toEqual(['shop', 'sheet']);
 	});
 
-	it('keeps the endpoint’s own order, which is newest first', () => {
-		const rows = importRows(
-			[head({ request: 'new', created_at: 2 }), head({ request: 'old', created_at: 1 })]);
-		expect(rows.map((row) => row.request)).toEqual(['new', 'old']);
+	// A spreadsheet run is read on its batch's own page, which holds the
+	// report its rows came from; a second screen for it would show the review
+	// without the rows it is about.
+	it('sends a spreadsheet run to its batch and a shop run to its own page', () => {
+		const [shop, sheet] = importRows([
+			run({ id: 'shop' }),
+			run({ id: 'sheet', kind: 'spreadsheet', source: null, batch_id: 'b-9' })
+		]);
+		expect(shop?.href).toBe('/imports/runs/shop');
+		expect(sheet?.href).toBe('/imports/b-9');
 	});
 
-	it('names both ends of the move', () => {
-		expect(importRows([head()])[0]).toMatchObject({ source: 'Tes', target: 'Tpt' });
+	it('names a shop run by its shop and the other by the way it came in', () => {
+		const [shop, sheet] = importRows([
+			run(),
+			run({ kind: 'spreadsheet', source: null, batch_id: 'b-9' })
+		]);
+		expect(shop?.source).toBe('Tes');
+		expect(sheet?.source).toBeNull();
+		expect(sheet?.name).toBe('Spreadsheet');
 	});
 
-	it('carries the stage’s own word and tone', () => {
-		const row = importRows([head({ state: 'draining', resources_total: 2 })])[0];
-		expect(row?.label).toBe('Importing');
-		expect(row?.tone).toBe('run');
+	it('carries the run state’s own word and tone', () => {
+		const row = importRows([run({ state: 'reviewing', counts: counts({ review: 2 }) })])[0];
+		expect(row?.label).toBe('Needs you');
+		expect(row?.tone).toBe('warn');
 	});
 
-	// The one tone the badge spells differently from the stage model: a stage
-	// that is nothing to act on is grey, and the badge calls that grey `soon`.
-	it('renders a waiting import in the badge’s grey', () => {
-		const row = importRows([head({ state: 'pending', resources_total: 0 })])[0];
-		expect(row?.tone).toBe('soon');
-		expect(row?.line).toContain('Waiting for your device');
+	it('counts what the run did', () => {
+		const row = importRows([
+			run({
+				read_total: 9,
+				counts: counts({ imported: 6, skipped: 2, failed: 1 })
+			})
+		])[0];
+		expect(row?.line).toBe('9 found · 6 imported · 2 left out · 1 with problems');
 	});
 
-	// The row reads the headline alone, so the count has to be in the headline:
-	// carried in the detail it would never reach a list row. Amber rather than
-	// red, because a wholly skipped import is a request that completed and
-	// achieved nothing rather than one that broke.
-	it('reads a wholly skipped import as nothing imported, with the count', () => {
-		const row = importRows(
-			[head({ state: 'enqueued', resources_total: 3, resources_failed: 3 })])[0];
-		expect(row?.label).toBe('Nothing imported');
-		expect(row?.line).toBe('Nothing was imported: 3 listings skipped.');
-		expect(row?.tone).toBe('run');
-		expect(row?.line).toContain('skipped');
-	});
-
-	// One skipped listing is the commonest real shape of the case above, and
-	// the count is composed rather than interpolated, so the singular is worth
-	// pinning from the side that reads it.
-	it('counts one skipped listing in the singular', () => {
-		const row = importRows(
-			[head({ state: 'enqueued', resources_total: 1, resources_failed: 1 })])[0];
-		expect(row?.line).toBe('Nothing was imported: 1 listing skipped.');
-	});
-
-	it('counts a partly skipped import by what arrived', () => {
-		const row = importRows(
-			[head({ state: 'enqueued', resources_total: 5, resources_failed: 2 })])[0];
-		expect(row?.line).toBe('3 listings imported.');
-		expect(row?.tone).toBe('run');
-	});
-
-	it('says a completed import differently from an empty shop', () => {
-		const done = importRows([head({ state: 'enqueued', resources_total: 3 })])[0];
-		const empty = importRows([head({ state: 'enqueued', resources_total: 0 })])[0];
-		expect(done?.label).toBe('Imported');
-		expect(empty?.label).toBe('Nothing to import');
+	// A run whose enumeration has not landed has no denominator, and a zero
+	// there would read as a shop with nothing in it.
+	it('says a shop is being read rather than inventing a total', () => {
+		const row = importRows([run({ state: 'reading', read_total: null, counts: counts() })])[0];
+		expect(row?.line).toBe('Reading what is in your shop.');
 	});
 });

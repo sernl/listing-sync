@@ -626,22 +626,26 @@ fn read_jar<R: tauri::Runtime>(
 /// What starting an import answered.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ImportStarted {
-    /// Echoed so the console can match the answer to the request it asked
-    /// about, rather than assuming the only start in flight is its own.
-    pub request: String,
+    /// Echoed so the console can match the answer to the run it asked about,
+    /// rather than assuming the only start in flight is its own.
+    pub run: String,
     /// How many resources the seller's shop holds, known because the
-    /// enumeration happens before this answer rather than after it. The console
-    /// can show a total from the first moment instead of a count with no
-    /// denominator.
-    pub described: u32,
+    /// enumeration happens before this answer rather than after it. The
+    /// console can show a total from the first moment instead of a count with
+    /// no denominator.
+    pub listed: u32,
 }
 
-/// Starts the catalogue import for one request, in the background.
-///
-/// Background rather than awaited, because a shop of several hundred resources
-/// is minutes of work and the seller navigates away: the command answers as
-/// soon as the pass is running, and the console watches the request's own view
-/// for progress. The task therefore outlives this call by design.
+/// What continuing an import answered.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ImportContinued {
+    pub run: String,
+    /// How many resources the seller ticked, read back from the run rather
+    /// than counted by the console.
+    pub selected: u32,
+}
+
+/// Everything a pass needs, checked before one is built.
 ///
 /// Every refusal is named, and each is checked here rather than left to the
 /// pass, because a refusal the seller sees immediately is one they can act on
@@ -649,50 +653,59 @@ pub struct ImportStarted {
 /// discover. The pass re-checks the entitlement and the revocation itself,
 /// between resources, which is a different guarantee: this stops a run that
 /// should not start, and that stops a run that should not continue.
+struct ImportReady<P: crate::ledger::LedgerTransport + ?Sized> {
+    pass: crate::import::ImportPass<Box<dyn crate::import::CatalogueSource>, P>,
+    marketplace: Marketplace,
+    now: tam_types::Timestamp,
+}
+
+/// Resolves the run's source, checks every gate, claims the single flight,
+/// and builds the pass.
 ///
-/// One consequence of holding the running set in memory, stated rather than
-/// removed: a device that restarts mid-pass forgets what was running, so a
-/// second start re-enumerates the shop. That is survivable rather than
-/// wasteful in the way it looks — the route's breadcrumb identity is the
-/// marketplace resource id within the request, so every resource an earlier
-/// pass posted is recognised and becomes a no-op, and only what had not been
-/// described is described again.
-///
-/// Generic over the runtime where its neighbours are not, so the mock runtime
-/// can invoke it by name. That is the only assertion that this command is
-/// registered at all — the console's own test can compare its constant to a
-/// copy of itself and nothing more — and it is worth one type parameter.
-#[tauri::command]
-pub async fn start_import<R: tauri::Runtime>(
-    app: AppHandle<R>,
-    request: tam_types::Uuid,
-) -> Result<ImportStarted, CommandError> {
+/// Shared by both halves of the flow because both make marketplace requests
+/// under the same rules: a seller whose subscription lapsed between ticking
+/// and continuing must be refused at the second press as firmly as at the
+/// first.
+async fn ready_to_import<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    run: tam_types::Uuid,
+) -> Result<ImportReady<dyn crate::ledger::LedgerTransport>, CommandError> {
     let state = app.state::<DesktopState>();
     let Some(ledger) = state.ledger() else {
         return Err(CommandError(
             "this build has no way to reach the server, so an import would have nowhere to post what it read".to_owned(),
         ));
     };
-    // Which shop, read from the request itself. The console asks by request id
-    // alone, so a console that named the inventory could ask this device to
-    // enumerate a shop the request does not name; and the server answers this
-    // under the organisation's own session, so another tenant's request is
-    // absent here rather than readable.
+    // Which shop, read from the run itself. The console asks by run id alone,
+    // so a console that named the inventory could ask this device to
+    // enumerate a shop the run does not name; and the server answers this
+    // under the organisation's own session, so another tenant's run is absent
+    // here rather than readable.
     let source = state
         .control_plane()
-        .sync_request_source(request)
+        .import_run_source(run)
         .await
         .map_err(|why| CommandError(why.to_string()))?;
     let marketplace = source.marketplace();
-    // Named here rather than discovered as an adapter error mid-pass, the same
-    // way `SellerFiles::fetch` names it for a download. Tpt's own-catalogue
-    // read is uncaptured and Etsy's automation is server-side under a
-    // sanctioned token, so neither is a shop this device enumerates.
-    if marketplace != Marketplace::Tes {
-        return Err(CommandError(format!(
-            "this device cannot read a {marketplace:?} catalogue: no capture exists for it, and a marketplace with an official API is read on our own servers rather than here"
-        )));
-    }
+    // Named here rather than discovered as an adapter error mid-pass, the
+    // same way `SellerFiles::fetch` names it for a download. A marketplace
+    // with an official API is read on our own servers under a sanctioned
+    // token, so it is not a shop this device enumerates.
+    let catalogue: Box<dyn crate::import::CatalogueSource> = match marketplace {
+        Marketplace::Tes => Box::new(crate::work::SellerCatalogue::new(
+            state.store_handle(),
+            source,
+        )),
+        Marketplace::Tpt => Box::new(crate::work::TptSellerCatalogue::new(
+            state.store_handle(),
+            source,
+        )),
+        other @ Marketplace::Etsy => {
+            return Err(CommandError(format!(
+                "this device cannot read a {other:?} catalogue: a marketplace with an official API is read on our own servers rather than here"
+            )))
+        }
+    };
     if state.store().get(marketplace).await?.is_none() {
         return Err(CommandError(format!(
             "this device is not signed in to {marketplace:?}, so it cannot read your shop. Connect it on this device and start the import again"
@@ -704,88 +717,159 @@ pub async fn start_import<R: tauri::Runtime>(
             "your subscription does not currently allow work to run on this device, so the import was not started".to_owned(),
         ));
     }
-    if !state.claim_import(request).await {
+    if !state.claim_import(run).await {
         return Err(CommandError(
-            "an import for this request is already running on this device".to_owned(),
+            "an import for this run is already running on this device".to_owned(),
         ));
     }
+    Ok(ImportReady {
+        pass: crate::import::ImportPass::new(
+            state.device().id.clone(),
+            catalogue,
+            ledger,
+            run,
+            crate::import::SourcePermission {
+                marketplace,
+                gate: state.gate_handle(),
+                stopper: state.stopper(),
+            },
+        ),
+        marketplace,
+        now,
+    })
+}
 
-    let pass = crate::import::ImportPass::new(
-        state.device().id.clone(),
-        crate::work::SellerCatalogue::new(state.store_handle(), source),
-        ledger,
-        request,
-        crate::import::SourcePermission {
-            marketplace,
-            gate: state.gate_handle(),
-            stopper: state.stopper(),
-        },
-    );
-    // Enumerated here, while the seller is still looking. Everything that can
-    // fail before a single page is posted fails in this call — the entitlement,
-    // a revocation, and the catalogue read itself — and each is a sentence the
-    // seller can act on. Answering "started" and enumerating in the background
-    // would leave those failures with nowhere to go: the request's own view
-    // holds nothing until a page lands, so the console would sit on its
-    // pre-start state indefinitely with the seller told nothing at all.
-    let catalogue = match pass.enumerate(now).await {
-        Ok(catalogue) => catalogue,
+/// Reads the seller's shop and posts what is in it, so they can choose.
+///
+/// Awaited rather than backgrounded, and that is the difference from the pass
+/// that follows: enumerating is one walk the seller is watching, everything
+/// that can fail before a page lands fails in this call, and the answer is
+/// what makes the selection step renderable at all. Answering "started" and
+/// enumerating in the background would leave those failures with nowhere to
+/// go — the run's own view holds nothing until a page lands, so the console
+/// would sit on its pre-start state with the seller told nothing.
+#[tauri::command]
+pub async fn start_import<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    run: tam_types::Uuid,
+) -> Result<ImportStarted, CommandError> {
+    let ready = ready_to_import(&app, run).await?;
+    let state = app.state::<DesktopState>();
+    let listed = match ready.pass.enumerate(ready.now).await {
+        Ok(listed) => listed,
         Err(why) => {
-            state.release_import(request).await;
+            state.release_import(run).await;
             return Err(CommandError(why.to_string()));
         }
     };
-    let described = u32::try_from(catalogue.len()).unwrap_or(u32::MAX);
+    let counted = u32::try_from(listed.len()).unwrap_or(u32::MAX);
+    if let Err(why) = ready.pass.post_listing(listed).await {
+        state.release_import(run).await;
+        return Err(CommandError(why.to_string()));
+    }
+    // Released here rather than held across the seller's decision: the
+    // describe pass claims it again, and holding it through a step that may
+    // take the seller a week would refuse every retry until the application
+    // restarted.
+    state.release_import(run).await;
+    Ok(ImportStarted {
+        run: uuid::Uuid::from_bytes(run.0).as_hyphenated().to_string(),
+        listed: counted,
+    })
+}
+
+/// Describes what the seller ticked, in the background.
+///
+/// Background rather than awaited, because a shop of several hundred
+/// resources is minutes of work and the seller navigates away: the command
+/// answers as soon as the pass is running, and the console watches the run's
+/// own view for progress. The task therefore outlives this call by design.
+///
+/// One consequence of holding the running set in memory, stated rather than
+/// removed: a device that restarts mid-pass forgets what was running, so a
+/// second continue re-describes the selection. That is survivable rather than
+/// wasteful in the way it looks — the route's breadcrumb identity is the
+/// marketplace resource id within the run, so every resource an earlier pass
+/// posted is recognised and becomes a no-op, and only what had not been
+/// described is described again.
+///
+/// Generic over the runtime where its neighbours are not, so the mock runtime
+/// can invoke it by name. That is the only assertion that this command is
+/// registered at all — the console's own test can compare its constant to a
+/// copy of itself and nothing more — and it is worth one type parameter.
+#[tauri::command]
+pub async fn continue_import<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    run: tam_types::Uuid,
+) -> Result<ImportContinued, CommandError> {
+    let ready = ready_to_import(&app, run).await?;
+    let marketplace = ready.marketplace;
+    let pass = ready.pass;
+    let state = app.state::<DesktopState>();
+    // The run's own record of what was ticked, not a list the browser carried
+    // over: a seller who chose, closed the window and came back continues the
+    // import they chose.
+    let selection = match state
+        .control_plane()
+        .import_selection(&state.device().id, run)
+        .await
+    {
+        Ok(selection) => selection,
+        Err(why) => {
+            state.release_import(run).await;
+            return Err(CommandError(why.to_string()));
+        }
+    };
+    let chosen: Vec<i64> = selection
+        .iter()
+        .filter_map(|locator| locator.parse().ok())
+        .collect();
+    let counted = u32::try_from(chosen.len()).unwrap_or(u32::MAX);
 
     let handle = app.app_handle().clone();
     tauri::async_runtime::spawn(async move {
-        // What the pass posts is the request's, and the console reads it from
-        // the request's own view; a second copy of that here would drift. What
-        // is NOT the request's is a terminal failure that posted nothing — a
-        // first page that could not be sent, a sign-out mid-pass — and in
-        // exactly those cases the request's view holds nothing until the
-        // report below puts the reason in it.
-        let outcome = pass.describe_all(catalogue, wall_now, |_progress| {}).await;
+        // What the pass posts is the run's, and the console reads it from the
+        // run's own view; a second copy of that here would drift. What is NOT
+        // the run's is a terminal failure that posted nothing — a first page
+        // that could not be sent, a sign-out mid-pass — and in exactly those
+        // cases the run's view holds nothing until the report below puts the
+        // reason in it.
+        let outcome = pass.describe_all(chosen, wall_now, |_progress| {}).await;
         let state = handle.state::<DesktopState>();
         if let Err(why) = outcome {
-            // To the REQUEST, because that is the page the seller is looking
-            // at: a terminal failure that posted nothing leaves the request
-            // holding exactly nothing, so without this the console watches a
-            // state that never changes.
+            // To the RUN, because that is the page the seller is looking at:
+            // a terminal failure that posted nothing leaves the run holding
+            // exactly nothing, so without this the console watches a state
+            // that never changes.
             //
-            // The activity record beside it is read by nothing today, and that
-            // is stated rather than implied: `record` appends to an in-memory
-            // ring buffer, `device_activity` returns it, and no console screen
-            // calls that command — `settings/devices` is a redirect stub. It is
-            // kept because a devices screen is the place a seller looks when
-            // they do not know WHICH request went wrong, and the record has to
-            // exist before that screen can read it. Until it does, the request
-            // page above is the only place this failure is visible.
+            // The activity record beside it is read by nothing today, and
+            // that is stated rather than implied: `record` appends to an
+            // in-memory ring buffer, `device_activity` returns it, and no
+            // console screen calls that command — `settings/devices` is a
+            // redirect stub. It is kept because a devices screen is the place
+            // a seller looks when they do not know WHICH import went wrong,
+            // and the record has to exist before that screen can read it.
             pass.report_failure(&why).await;
             state
                 .record(
                     marketplace,
                     wall_now(),
                     WorkEvent::Abandoned {
-                        item: uuid::Uuid::from_bytes(request.0)
-                            .as_hyphenated()
-                            .to_string(),
+                        item: uuid::Uuid::from_bytes(run.0).as_hyphenated().to_string(),
                         reason: why.to_string(),
                     },
                 )
                 .await;
         }
-        // Released on both endings. A pass that ended by an error and left its
-        // claim standing would refuse every later attempt for this request
+        // Released on both endings. A pass that ended by an error and left
+        // its claim standing would refuse every later attempt for this run
         // until the application restarted, which is a worse failure than the
         // one that caused it.
-        state.release_import(request).await;
+        state.release_import(run).await;
     });
-    Ok(ImportStarted {
-        request: uuid::Uuid::from_bytes(request.0)
-            .as_hyphenated()
-            .to_string(),
-        described,
+    Ok(ImportContinued {
+        run: uuid::Uuid::from_bytes(run.0).as_hyphenated().to_string(),
+        selected: counted,
     })
 }
 
@@ -844,7 +928,10 @@ mod import_command_tests {
             reason = "the generated context's own expansion, not a call this test makes"
         )]
         let app = mock_builder()
-            .invoke_handler(tauri::generate_handler![super::start_import])
+            .invoke_handler(tauri::generate_handler![
+                super::start_import,
+                super::continue_import
+            ])
             .build(tauri::generate_context!())
             .expect("the application builds");
         // Managed, so a dispatched command answers rather than panicking on
@@ -873,7 +960,7 @@ mod import_command_tests {
                     error: tauri::ipc::CallbackFn(1),
                     url: origin.clone(),
                     body: serde_json::json!({
-                        "request": "71717171-7171-7171-7171-717171717171"
+                        "run": "71717171-7171-7171-7171-717171717171"
                     })
                     .into(),
                     headers: tauri::http::HeaderMap::default(),
@@ -888,6 +975,13 @@ mod import_command_tests {
             "the console's string must reach the handler and come back with the handler's own \
              refusal: neither unregistered nor ungranted at the origin the console runs at. \
              Got: {mine}"
+        );
+
+        let second = format!("{:?}", ask(crate::import::CONTINUE_IMPORT_COMMAND).err());
+        assert!(
+            second.contains("no way to reach the server"),
+            "and so must the second half of the same flow, which is a second command name the \
+             manifest and the capability both have to carry. Got: {second}"
         );
 
         let bogus = format!("{:?}", ask("a_command_nothing_registers").err());
@@ -1019,6 +1113,21 @@ mod session_command_tests {
             _request: tam_types::Uuid,
         ) -> PlaneFuture<'_, tam_types::InventoryId> {
             Box::pin(core::future::ready(Ok(tam_types::InventoryId::Tes)))
+        }
+
+        fn import_run_source(
+            &self,
+            _run: tam_types::Uuid,
+        ) -> PlaneFuture<'_, tam_types::InventoryId> {
+            Box::pin(core::future::ready(Ok(tam_types::InventoryId::Tes)))
+        }
+
+        fn import_selection<'a>(
+            &'a self,
+            _device: &'a crate::device::DeviceId,
+            _run: tam_types::Uuid,
+        ) -> PlaneFuture<'a, Vec<String>> {
+            Box::pin(core::future::ready(Ok(Vec::new())))
         }
 
         fn register<'a>(

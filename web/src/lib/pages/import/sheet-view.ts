@@ -180,6 +180,7 @@ export function attachedRows(rows: readonly ImportRowView[]): ImportRowView[] {
 export type SheetStage =
 	| { kind: 'parsed'; tally: RowTally; preview: Preview; awaiting: number }
 	| { kind: 'attaching'; tally: RowTally; preview: Preview; awaiting: number }
+	| { kind: 'review'; tally: RowTally; pairs: number }
 	| { kind: 'importing'; tally: RowTally }
 	| { kind: 'imported'; tally: RowTally }
 	| { kind: 'failed'; tally: RowTally; detail: string | null }
@@ -187,11 +188,22 @@ export type SheetStage =
 	| { kind: 'unrecognised'; state: string };
 
 export function stageOf(detail: ImportBatchDetailView): SheetStage {
-	return stageFrom(detail.state, detail.failure_detail, detail.rows);
+	return stageFrom(
+		detail.state,
+		detail.failure_detail,
+		detail.rows,
+		detail.run?.review_pairs.length ?? 0
+	);
 }
 
-/** The stage from the two facts that decide it: the state the server holds,
- *  and where its rows stand.
+/** The stage from the three facts that decide it: the state the server holds,
+ *  where its rows stand, and how many pairs the matcher parked on the seller.
+ *
+ * A parked pair outranks the commit, whatever the batch state says. The
+ * matcher runs inside the commit, so a batch that is `importing` with pairs
+ * open is a commit that has stopped and is waiting for an answer — rendering
+ * it as "creating your resources" would be a page claiming work that is not
+ * happening.
  *
  * `state` is a bare string rather than `BatchStateView` on purpose. The value
  * arrives off the wire, and typing the parameter as the closed union would
@@ -200,9 +212,13 @@ export function stageOf(detail: ImportBatchDetailView): SheetStage {
 export function stageFrom(
 	state: string,
 	failureDetail: string | null,
-	rows: readonly ImportRowView[]
+	rows: readonly ImportRowView[],
+	parkedPairs = 0
 ): SheetStage {
 	const tally = tallyRows(rows);
+	if (parkedPairs > 0 && (state === 'parsed' || state === 'attaching' || state === 'importing')) {
+		return { kind: 'review', tally, pairs: parkedPairs };
+	}
 	switch (state) {
 		case 'parsed':
 			return {
@@ -276,6 +292,12 @@ export function presentStage(stage: SheetStage): StageCopy {
 					stage.awaiting === 0
 						? 'Every row that names a marketplace has its file. You can import now.'
 						: `${stage.awaiting} ${stage.awaiting === 1 ? 'row is' : 'rows are'} still waiting for a file.`
+			};
+		case 'review':
+			return {
+				tone: 'warn',
+				label: 'Needs you',
+				line: `${stage.pairs} ${stage.pairs === 1 ? 'of these looks' : 'of these look'} like resources you already have. Answer each one below and the rest carry on.`
 			};
 		case 'importing':
 			return {

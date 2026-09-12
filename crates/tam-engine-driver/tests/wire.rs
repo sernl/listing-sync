@@ -9,8 +9,8 @@
 use tam_domain::{ItemOperation, ItemOutcome, JobItemId, StepBudget};
 use tam_engine_driver::driver::VerifyPolicy;
 use tam_engine_driver::import::{
-    ContentType, Cover, FileName, ImportPage, Locator, ObservedFile, ObservedResource, Reason,
-    SkippedResource,
+    ContentType, Cover, FileName, Fingerprint, ImportPage, ListedResource, Locator, ObservedFile,
+    ObservedResource, Reason, SkippedResource,
 };
 use tam_engine_driver::vocabulary::{
     AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant, ClaimView, Committed,
@@ -785,7 +785,8 @@ fn observed(entry: Option<&str>) -> ObservedFile {
     }
 }
 
-/// A page survives the round trip over both file arms and a skipped resource.
+/// A page survives the round trip over both file arms, a fileless resource
+/// and a skipped resource.
 ///
 /// The device serialises this and `tam-api` deserialises it, and since C4a
 /// they are one definition rather than two that agree today. A field that
@@ -794,19 +795,33 @@ fn observed(entry: Option<&str>) -> ObservedFile {
 #[test]
 fn an_import_page_round_trips_over_both_file_arms_and_a_skip() {
     let page = ImportPage {
-        request: Uuid([0x71; 16]),
+        run: Uuid([0x71; 16]),
+        request: None,
+        listed: None,
         resources: vec![
             ObservedResource {
                 locator: Locator::from_resource_id(13_549_794),
                 listing: listing(),
-                file: observed(None),
-                cover_png: cover(),
+                file: Some(observed(None)),
+                cover_png: Some(cover()),
+                fingerprint: Some(Fingerprint::of_title("Fractions on a number line | TPT")),
             },
             ObservedResource {
                 locator: Locator::from_resource_id(13_549_795),
                 listing: listing(),
-                file: observed(Some("worksheet.pdf")),
-                cover_png: cover(),
+                file: Some(observed(Some("worksheet.pdf"))),
+                cover_png: Some(cover()),
+                fingerprint: None,
+            },
+            // The TPT arm: a listing read whose file this device could not
+            // fetch, which must be representable or a TPT import cannot be
+            // posted at all.
+            ObservedResource {
+                locator: Locator::from_resource_id(13_549_797),
+                listing: listing(),
+                file: None,
+                cover_png: None,
+                fingerprint: Some(Fingerprint::of_title("A poster")),
             },
         ],
         skipped: vec![SkippedResource {
@@ -821,13 +836,44 @@ fn an_import_page_round_trips_over_both_file_arms_and_a_skip() {
     let decoded: ImportPage = serde_json::from_str(&wire).expect("and reads back");
     assert_eq!(decoded, page);
     assert_eq!(
-        decoded.resources[0].file.entry, None,
+        decoded.resources[0]
+            .file
+            .as_ref()
+            .and_then(|file| file.entry.as_ref()),
+        None,
         "the bundle-whole arm keeps its absent entry, which is what says no unwrap happened"
     );
     assert!(
-        decoded.resources[1].file.entry.is_some(),
+        decoded.resources[1]
+            .file
+            .as_ref()
+            .is_some_and(|file| file.entry.is_some()),
         "and the unwrapped arm keeps its entry, which is what says one did"
     );
+}
+
+/// The selection step's page: the shop as the enumeration saw it, and not one
+/// resource read.
+#[test]
+fn a_listed_page_round_trips() {
+    let page = ImportPage {
+        run: Uuid([0x71; 16]),
+        request: None,
+        listed: Some(vec![ListedResource {
+            locator: Locator::from_resource_id(13_549_794),
+            title: "Fractions on a number line".to_owned(),
+            price_minor: Some(450),
+            currency: Some("GBP".to_owned()),
+            state: Some(ListingState::Live),
+        }]),
+        resources: Vec::new(),
+        skipped: Vec::new(),
+        complete: false,
+        failed: None,
+    };
+    let wire = serde_json::to_string(&page).expect("a page serialises");
+    let decoded: ImportPage = serde_json::from_str(&wire).expect("and reads back");
+    assert_eq!(decoded, page);
 }
 
 /// The page's guarantees are re-checked on the way in, not just on the way out.
@@ -899,7 +945,9 @@ fn a_page_field_that_carries_a_payload_is_refused_on_the_way_in() {
 #[test]
 fn a_page_decodes_across_a_version_skew_in_both_directions() {
     let page = ImportPage {
-        request: Uuid([0x71; 16]),
+        run: Uuid([0x71; 16]),
+        request: None,
+        listed: None,
         resources: Vec::new(),
         skipped: Vec::new(),
         complete: true,

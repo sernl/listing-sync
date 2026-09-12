@@ -251,6 +251,7 @@ pub fn run() {
             commands::device_check_in,
             commands::device_activity,
             commands::start_import,
+            commands::continue_import,
             commands::retry_console,
             commands::set_theme,
         ])

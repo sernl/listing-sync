@@ -1008,12 +1008,61 @@ pub enum JobEventPayload {
         described: u32,
         skipped: u32,
     },
+    /// A device posted the list of what one shop holds.
+    ///
+    /// The first thing a seller sees of an import, and the only event that
+    /// carries a total: `read_total` is unknown until the enumeration ends, so
+    /// a progress bar has no denominator before this lands. Separate from
+    /// [`Self::ImportRunProgress`] rather than a first instance of it, because
+    /// what changed is not a count but the run's own shape — it now holds rows.
+    ImportRunListed {
+        run: Uuid,
+        listed: u32,
+    },
+    /// One page of an import run landed, and these are the run's counts after
+    /// it.
+    ///
+    /// The counts rather than a percentage, for the same reason
+    /// [`Self::ImportPageApplied`] carries them: the console draws
+    /// "n of m read, k need you, j imported" and every one of those numbers is
+    /// a state a row is in rather than a fraction of a whole.
+    ImportRunProgress {
+        run: Uuid,
+        listed: u32,
+        read: u32,
+        matched: u32,
+        review: u32,
+        imported: u32,
+        skipped: u32,
+        failed: u32,
+    },
+    /// One resource of a run reached a state it will not leave.
+    ///
+    /// Named by the locator the source addresses it with rather than by a row
+    /// identifier, because that is the handle the console already renders and
+    /// the only one a device knows.
+    ImportRunItemSettled {
+        run: Uuid,
+        locator: String,
+        state: String,
+    },
+    /// A run stopped, and this is how.
+    ///
+    /// Distinct from the progress event for [`Self::ImportCompleted`]'s
+    /// reason: one is progress and this is the terminal transition. The state
+    /// travels because a run can settle four ways — complete, failed,
+    /// abandoned, or committing with nothing left — and a client that had to
+    /// refetch to learn which would render a spinner over a settled import.
+    ImportRunSettled {
+        run: Uuid,
+        state: String,
+    },
 }
 
 impl JobEventPayload {
     /// Every kind name, in a stable order, for the vocabulary generator and
     /// the client's stream subscriptions.
-    pub const ALL_KINDS: [&'static str; 17] = [
+    pub const ALL_KINDS: [&'static str; 21] = [
         "JobQueued",
         "JobStarted",
         "ItemQueued",
@@ -1031,6 +1080,10 @@ impl JobEventPayload {
         "ItemBindAnomaly",
         "ImportPageApplied",
         "ImportCompleted",
+        "ImportRunListed",
+        "ImportRunProgress",
+        "ImportRunItemSettled",
+        "ImportRunSettled",
     ];
 
     /// The serde tag, which is the `job_event.kind` column value. Total, so
@@ -1055,6 +1108,10 @@ impl JobEventPayload {
             Self::ItemBindAnomaly { .. } => "ItemBindAnomaly",
             Self::ImportPageApplied { .. } => "ImportPageApplied",
             Self::ImportCompleted { .. } => "ImportCompleted",
+            Self::ImportRunListed { .. } => "ImportRunListed",
+            Self::ImportRunProgress { .. } => "ImportRunProgress",
+            Self::ImportRunItemSettled { .. } => "ImportRunItemSettled",
+            Self::ImportRunSettled { .. } => "ImportRunSettled",
         }
     }
 }
@@ -1157,8 +1214,9 @@ mod tests {
         );
     }
 
-    /// The fourteen serde tags and the fourteen kind strings are one set; the
-    /// wildcard-free construction plus this agreement loop is the tripwire.
+    /// Every serde tag and every kind string are one set, counted against the
+    /// vocabulary rather than a literal; the wildcard-free construction plus
+    /// this agreement loop is the tripwire.
     #[test]
     fn every_job_event_tag_is_its_kind_string() {
         let samples = [
@@ -1227,6 +1285,29 @@ mod tests {
                 create_job: Some(super::JobId(super::Uuid([0x72; 16]))),
                 described: 120,
                 skipped: 3,
+            },
+            super::JobEventPayload::ImportRunListed {
+                run: super::Uuid([0x73; 16]),
+                listed: 764,
+            },
+            super::JobEventPayload::ImportRunProgress {
+                run: super::Uuid([0x73; 16]),
+                listed: 700,
+                read: 60,
+                matched: 55,
+                review: 3,
+                imported: 0,
+                skipped: 2,
+                failed: 0,
+            },
+            super::JobEventPayload::ImportRunItemSettled {
+                run: super::Uuid([0x73; 16]),
+                locator: "https://www.tes.com/teaching-resource/-12345".to_owned(),
+                state: "imported".to_owned(),
+            },
+            super::JobEventPayload::ImportRunSettled {
+                run: super::Uuid([0x73; 16]),
+                state: "complete".to_owned(),
             },
         ];
         assert_eq!(

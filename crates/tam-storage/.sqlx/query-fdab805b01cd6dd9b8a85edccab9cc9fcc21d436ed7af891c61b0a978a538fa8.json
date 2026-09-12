@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(f.observed_hash, f.hash) AS digest, count(DISTINCT f.product_id)::bigint AS held FROM product_file f JOIN product p ON p.org_id = f.org_id AND p.id = f.product_id WHERE f.org_id = $1 AND f.role = 'payload' AND f.deleted_at IS NULL AND p.deleted_at IS NULL AND COALESCE(f.observed_hash, f.hash) = ANY($2) GROUP BY 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "digest",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 1,
+        "name": "held",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "ByteaArray"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "fdab805b01cd6dd9b8a85edccab9cc9fcc21d436ed7af891c61b0a978a538fa8"
+}

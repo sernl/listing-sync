@@ -395,6 +395,29 @@ impl HttpControlPlane {
             .await
             .map_err(ControlPlaneError::Refused)
     }
+
+    /// One org-scoped read, as the JSON the server answered with.
+    ///
+    /// `absent` is the sentence a 404 becomes, and it is a parameter because
+    /// the reason differs by route while the shape does not: the server
+    /// scopes every one of these to the organisation the session names, so
+    /// another tenant's row is missing here rather than forbidden — which is
+    /// also what an id the seller mistyped looks like.
+    async fn view(&self, path: &str, absent: &str) -> Result<serde_json::Value, ControlPlaneError> {
+        let reply = self.read(path).await?;
+        match reply.status {
+            200 => {}
+            404 => return Err(ControlPlaneError::Refused(absent.to_owned())),
+            status => {
+                return Err(ControlPlaneError::Refused(format!(
+                    "{status}: {}",
+                    excerpt(&String::from_utf8_lossy(&reply.body))
+                )))
+            }
+        }
+        serde_json::from_slice(&reply.body)
+            .map_err(|why| ControlPlaneError::Refused(why.to_string()))
+    }
 }
 
 impl crate::ledger::LedgerTransport for HttpControlPlane {
@@ -466,6 +489,15 @@ pub fn sync_request_path(request: tam_types::Uuid) -> String {
     )
 }
 
+/// The path the device reads an import run from.
+#[must_use]
+pub fn import_run_path(run: tam_types::Uuid) -> String {
+    format!(
+        "/v1/imports/runs/{}",
+        uuid::Uuid::from_bytes(run.0).as_hyphenated()
+    )
+}
+
 impl ControlPlane for HttpControlPlane {
     fn reachable(&self) -> PlaneFuture<'_, ()> {
         Box::pin(async move {
@@ -523,6 +555,42 @@ impl ControlPlane for HttpControlPlane {
             // a bare string, so a changed wire shape would be reported as "no
             // source inventory" rather than as what it actually was.
             serde_json::from_value(source)
+                .map_err(|why| ControlPlaneError::Refused(why.to_string()))
+        })
+    }
+
+    fn import_run_source(&self, run: tam_types::Uuid) -> PlaneFuture<'_, tam_types::InventoryId> {
+        Box::pin(async move {
+            let view = self
+                .view(&import_run_path(run), "this sign-in has no such import")
+                .await?;
+            let source = view.get("source").cloned().ok_or_else(|| {
+                ControlPlaneError::Refused("the import names no source inventory".to_owned())
+            })?;
+            serde_json::from_value(source)
+                .map_err(|why| ControlPlaneError::Refused(why.to_string()))
+        })
+    }
+
+    fn import_selection<'a>(
+        &'a self,
+        device: &'a DeviceId,
+        run: tam_types::Uuid,
+    ) -> PlaneFuture<'a, Vec<String>> {
+        Box::pin(async move {
+            let view = self
+                .view(
+                    &crate::import::selection_path(device, run),
+                    "this sign-in has no such import",
+                )
+                .await?;
+            let locators = view.get("locators").cloned().ok_or_else(|| {
+                ControlPlaneError::Refused("the import names no selection".to_owned())
+            })?;
+            // An empty selection is a value rather than an error: the seller
+            // may have unticked everything, and the run settles with every
+            // item skipped rather than the device refusing to continue.
+            serde_json::from_value(locators)
                 .map_err(|why| ControlPlaneError::Refused(why.to_string()))
         })
     }

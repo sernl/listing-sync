@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE import_batch_row SET state = 'skipped', product_id = NULL, mapping_id = NULL WHERE org_id = $1 AND batch_id = $2 AND sheet = $3 AND ordinal = $4 AND state = 'creating'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ff0bf4bb61299ec80186ce655d0d13209f3aac115d14b29b2a8f79dc08064e02"
+}

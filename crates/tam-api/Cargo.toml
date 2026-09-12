@@ -52,6 +52,11 @@ tam-import = { path = "../tam-import", default-features = false }
 # The envelope and the settle carry the interpreter's own vocabulary rather
 # than restating it, so the wire has exactly one definition.
 tam-engine-driver = { path = "../tam-engine-driver" }
+# The sketch format and its pure comparisons. The device computes the
+# fingerprints and the server blocks, scores and persists them, so both halves
+# have to agree on one definition of a shingle, a band and a Jaccard; two
+# copies of that is how a matcher silently stops matching.
+tam-fingerprint = { path = "../tam-fingerprint" }
 tam-limits = { path = "../tam-limits" }
 tam-marketplace = { path = "../tam-marketplace" }
 tam-pipeline = { path = "../tam-pipeline" }

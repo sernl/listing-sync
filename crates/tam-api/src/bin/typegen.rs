@@ -14,7 +14,9 @@
 
 #![forbid(unsafe_code)]
 
+use tam_api::duplicates::DuplicateVerdictView;
 use tam_api::entitlement::QuotaKind;
+use tam_api::import_runs::{ImportRunItemState, ImportRunKind, ImportRunState, MatchLayerView};
 use tam_api::jobs::{outcome_str, JobPhase, ALL_OUTCOMES};
 use tam_api::org::SlugPrompt;
 use tam_api::product::StandardsState;
@@ -327,6 +329,45 @@ fn vocab() -> String {
         "JOB_EVENT_KINDS",
         &JobEventPayload::ALL_KINDS,
         |kind| format!("\"{kind}\""),
+    ));
+    out.push('\n');
+    // The import run's own vocabulary. Emitted because the console renders a
+    // pill per state and a card per layer, and a state added in Rust without a
+    // member here would reach a seller as an unstyled pill rather than failing
+    // the web lane.
+    out.push_str(&closed(
+        "ImportRunKind",
+        "IMPORT_RUN_KINDS",
+        &ImportRunKind::ALL,
+        serde_name,
+    ));
+    out.push('\n');
+    out.push_str(&closed(
+        "ImportRunState",
+        "IMPORT_RUN_STATES",
+        &ImportRunState::ALL,
+        serde_name,
+    ));
+    out.push('\n');
+    out.push_str(&closed(
+        "ImportRunItemState",
+        "IMPORT_RUN_ITEM_STATES",
+        &ImportRunItemState::ALL,
+        serde_name,
+    ));
+    out.push('\n');
+    out.push_str(&closed(
+        "DuplicateVerdict",
+        "DUPLICATE_VERDICTS",
+        &DuplicateVerdictView::ALL,
+        serde_name,
+    ));
+    out.push('\n');
+    out.push_str(&closed(
+        "MatchLayer",
+        "MATCH_LAYERS",
+        &MatchLayerView::ALL,
+        serde_name,
     ));
     out.push('\n');
     out.push_str(&closed("Plan", "PLAN_IDS", &Plan::ALL, serde_name));

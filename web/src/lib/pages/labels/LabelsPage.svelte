@@ -326,22 +326,30 @@
 							meta={countLine(row.count, counting)}
 						>
 							{#snippet menu(close)}
-								<button
-									type="button"
-									role="menuitem"
-									onclick={() => {
-										close();
-										startRename(row.name);
-									}}>Rename</button
-								>
-								<button
-									type="button"
-									role="menuitem"
-									onclick={() => {
-										close();
-										startDelete(row.name);
-									}}>Delete</button
-								>
+								<!-- A system label is an import's own mark: the seller neither
+								     made it nor can rename or delete it, and both routes answer
+								     404 for one — the same answer a name nobody holds gets.
+								     Hidden rather than disabled, because there is no reason to
+								     offer a control whose refusal would say the label is not
+								     there. -->
+								{#if !row.system}
+									<button
+										type="button"
+										role="menuitem"
+										onclick={() => {
+											close();
+											startRename(row.name);
+										}}>Rename</button
+									>
+									<button
+										type="button"
+										role="menuitem"
+										onclick={() => {
+											close();
+											startDelete(row.name);
+										}}>Delete</button
+									>
+								{/if}
 							{/snippet}
 						</RowCard>
 

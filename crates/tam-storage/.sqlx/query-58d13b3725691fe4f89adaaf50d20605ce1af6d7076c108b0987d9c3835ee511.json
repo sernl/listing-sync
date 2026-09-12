@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT e.product_lo, e.product_hi, e.layer, e.polarity, e.measure, e.unit, e.observed_in FROM duplicate_evidence e JOIN duplicate_verdict v ON v.org_id = e.org_id AND v.product_lo = e.product_lo AND v.product_hi = e.product_hi WHERE e.org_id = $1 AND v.verdict = 'parked' AND ($2::uuid IS NULL OR v.run_id = $2) ORDER BY e.position",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "product_lo",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "product_hi",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "layer",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "polarity",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "measure",
+        "type_info": "Float4"
+      },
+      {
+        "ordinal": 5,
+        "name": "unit",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "observed_in",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "58d13b3725691fe4f89adaaf50d20605ce1af6d7076c108b0987d9c3835ee511"
+}

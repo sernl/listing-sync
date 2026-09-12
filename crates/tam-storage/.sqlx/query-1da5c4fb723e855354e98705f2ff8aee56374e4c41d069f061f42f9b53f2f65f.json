@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT product_lo, product_hi, verdict FROM duplicate_verdict WHERE org_id = $1 AND (product_lo, product_hi) IN (SELECT * FROM unnest($2::uuid[], $3::uuid[]))",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "product_lo",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "product_hi",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "verdict",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "1da5c4fb723e855354e98705f2ff8aee56374e4c41d069f061f42f9b53f2f65f"
+}

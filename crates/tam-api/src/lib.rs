@@ -22,13 +22,16 @@ pub mod billing;
 pub mod blocking;
 pub mod catalogue;
 pub mod devices;
+pub mod duplicates;
 pub mod entitlement;
 pub mod error;
 pub mod export;
 pub mod import;
 pub mod import_batch;
+pub mod import_runs;
 pub mod jobs;
 pub mod marketplace_requests;
+pub mod matcher;
 pub mod notifications;
 pub mod openapi;
 pub mod org;
@@ -236,6 +239,47 @@ pub fn router(state: AppState) -> Router {
         // upload's body ceiling is its own rather than the resource upload's,
         // because an xlsx is a zip parsed into cells and not a payload.
         .route("/{version}/imports/template", get(import_batch::template))
+        // The marketplace import, as a run. Listed before `/imports/{batch}`
+        // in the file and matched before it by the router, because `runs` is a
+        // literal segment and a batch identifier is a parameter: a run is
+        // never a batch, and the one-letter-apart paths are why the nav claims
+        // `/imports` by name.
+        .route(
+            "/{version}/imports/runs",
+            post(import_runs::create_run).get(import_runs::list_runs),
+        )
+        .route("/{version}/imports/runs/{run}", get(import_runs::run_view))
+        .route(
+            "/{version}/imports/runs/{run}/select",
+            post(import_runs::select),
+        )
+        // The commit takes no body and creates a page of items per call, for
+        // the spreadsheet commit's own reason: the chunking is the server's,
+        // and a client asks for the next page by asking again.
+        .route(
+            "/{version}/imports/runs/{run}/commit",
+            post(import_runs::commit),
+        )
+        .route(
+            "/{version}/imports/runs/{run}/abandon",
+            post(import_runs::abandon),
+        )
+        // The cover a read produced, before any product exists to address it
+        // through. Keyed on the ordinal rather than the locator, because a
+        // locator is a URL and a path segment is not where one goes.
+        .route(
+            "/{version}/imports/runs/{run}/items/{ordinal}/cover",
+            get(import_runs::item_cover),
+        )
+        // The duplicate review. Addressed by the pair rather than by a
+        // question identifier, because the pair *is* the identity: one pair is
+        // one row, and "have we asked already" is a primary-key lookup.
+        .route("/{version}/duplicates", get(duplicates::list_duplicates))
+        .route("/{version}/duplicates/{lo}/{hi}", post(duplicates::decide))
+        .route(
+            "/{version}/duplicates/{lo}/{hi}/undo",
+            post(duplicates::undo),
+        )
         // The body ceiling is applied before the listing is added, because
         // `MethodRouter::layer` reaches the handlers already on the router and
         // not the ones added after it: the upload gets the larger limit and
@@ -364,6 +408,13 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/{version}/devices/{device}/import",
             post(import::import_page).layer(catalogue::upload_body_limit()),
+        )
+        // What the seller ticked, for the device to describe. A read rather
+        // than a field on the work claim, because an import is started by the
+        // console and the device asks what it is for.
+        .route(
+            "/{version}/devices/{device}/import/{run}/selection",
+            get(import_runs::device_selection),
         )
         .route(
             "/{version}/devices/{device}/payload/{file}",

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE import_run_item SET state = 'selected' WHERE org_id = $1 AND run_id = $2 AND state = 'listed' AND ($3 OR locator = ANY($4))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bool",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a83a90192fca627b170856981ab9ccc2af0f1dd5faecf1571da3dd70f9557e02"
+}

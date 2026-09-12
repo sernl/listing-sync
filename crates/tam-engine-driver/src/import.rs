@@ -51,8 +51,12 @@
 //! finish; `LedgerCall` chooses the opposite because a ledger call it cannot
 //! fully understand is one it must not act on, and a page is not that.
 
-use tam_marketplace::ImportedListing;
+use tam_marketplace::{ImportedListing, ListingState};
 use tam_types::{ContentHash, FileKind, ScanOutcome, Uuid};
+
+/// The sketch a device asserts, re-exported so a consumer of the page has one
+/// path to it rather than a second dependency edge for one type.
+pub use tam_fingerprint::{Fingerprint, TextSketch};
 
 /// The longest name this vocabulary will carry for a file, in bytes.
 ///
@@ -499,18 +503,81 @@ pub struct ObservedResource {
     /// are free text by design; the route bounds them against the catalogue's
     /// own limits, which is where those limits are known.
     pub listing: ImportedListing,
-    pub file: ObservedFile,
+    /// The file, where this device could fetch one.
+    ///
+    /// `None` is a source whose own-file download is uncaptured, which is
+    /// TPT's measured state: the device read the listing and never held a
+    /// byte of the resource. An absence rather than a zero-length file,
+    /// because the two say different things to the duplicate matcher — no
+    /// digest at all cannot fire L1, and a digest of nothing would fire it on
+    /// every such resource at once.
+    #[serde(default)]
+    pub file: Option<ObservedFile>,
     /// The derived cover, checked to be one, riding in the page rather than
     /// going through the upload route.
-    pub cover_png: Cover,
+    ///
+    /// Absent exactly when `file` is: the cover is rendered from the payload,
+    /// so a resource with no payload has no cover to render.
+    #[serde(default)]
+    pub cover_png: Option<Cover>,
+    /// What this device measured of the file, for the duplicate matcher.
+    ///
+    /// Fixed-width and lossy by construction — see `tam-fingerprint` — so it
+    /// describes the seller's document without carrying any of it, which is
+    /// the same promise every other field of this type keeps. `None` is a
+    /// device too old to measure one.
+    #[serde(default)]
+    pub fingerprint: Option<tam_fingerprint::Fingerprint>,
+}
+
+/// One resource as the enumeration saw it, before anything was read.
+///
+/// The selection step's whole content: the seller ticks from this list, and
+/// only what they ticked is fetched. It is therefore deliberately cheap —
+/// what a catalogue listing row already carries and nothing that needs a
+/// second request per resource — because the alternative is walking the whole
+/// shop twice to let the seller decline most of it.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ListedResource {
+    pub locator: Locator,
+    /// The seller's own title, free text for the reason
+    /// [`ObservedResource::listing`]'s is.
+    pub title: String,
+    /// The price in the smallest unit of `currency`, where the row carried
+    /// one. Absent is "the enumeration did not say", never "free".
+    pub price_minor: Option<i64>,
+    pub currency: Option<String>,
+    /// Whether the source calls it a draft, where the row said. A draft has
+    /// no published file, so the selection step can grey it out rather than
+    /// letting the seller pick something that will skip.
+    pub state: Option<ListingState>,
 }
 
 /// One page of the catalogue, as a device posts it.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ImportPage {
-    /// Which import this belongs to, so a resumed pass is the same request
+    /// Which import run this belongs to, so a resumed pass is the same run
     /// rather than a second one.
-    pub request: Uuid,
+    ///
+    /// Every import page names one. The `request` beside it is the older
+    /// anchor and is the migration path's alone.
+    pub run: Uuid,
+    /// The sync request this page belongs to, for the device-enumerated
+    /// migrate branch of `POST /v1/sync`.
+    ///
+    /// `serde(default)` and absent on every import page: an import is a run,
+    /// and a page names one or the other.
+    #[serde(default)]
+    pub request: Option<Uuid>,
+    /// The shop as the enumeration saw it, on the one page that carries it.
+    ///
+    /// The first page of a run and no other. It is what the selection step
+    /// renders, and its length is the run's `read_total` — which is why it is
+    /// `Option` rather than an empty vector: a shop that holds nothing and an
+    /// ordinary resources page must not read alike, or a run would report a
+    /// total of nothing and settle before the seller saw it.
+    #[serde(default)]
+    pub listed: Option<Vec<ListedResource>>,
     pub resources: Vec<ObservedResource>,
     /// What this page could not describe, and why.
     ///
@@ -528,16 +595,16 @@ pub struct ImportPage {
     pub complete: bool,
     /// The import stopped, and this is why.
     ///
-    /// The seller's own request page is the record they read, so a failure that
+    /// The seller's own run page is the record they read, so a failure that
     /// posted nothing has to reach it or it reaches nobody: a first page that
-    /// could not be sent, or a sign-out mid-pass, leaves the request holding
+    /// could not be sent, or a sign-out mid-pass, leaves the run holding
     /// exactly nothing and the console watching a state that never changes. A
-    /// page carrying this settles the request failed with this sentence in its
-    /// `failure_detail`, which the request page already renders.
+    /// page carrying this settles the run failed with this sentence in its
+    /// `failure_detail`, which the run page already renders.
     ///
     /// Completion is implied rather than stated. A stopped import is over,
     /// and a page that said `failed` and `complete: false` would be asking the
-    /// server to hold a request open for work that has ended.
+    /// server to hold a run open for work that has ended.
     ///
     /// `serde(default)` because it was added after the first shipped desktop,
     /// which is the convention this module's documentation states: a device
@@ -779,6 +846,68 @@ mod tests {
         assert!(
             ContentType::new(&"a".repeat(CONTENT_TYPE_MAX + 1)).is_err(),
             "and the bound holds before the shape is even considered"
+        );
+    }
+
+    /// The compatibility rule this module's documentation states, exercised
+    /// on every field added since the first shipped desktop. A page that
+    /// names a run, its resources and nothing else must decode.
+    #[test]
+    fn a_page_without_any_of_the_added_fields_still_decodes() {
+        let minimal = r#"{
+            "run": "00000000-0000-0000-0000-000000000001",
+            "resources": [],
+            "skipped": [],
+            "complete": false
+        }"#;
+        let page: super::ImportPage =
+            serde_json::from_str(minimal).expect("a minimal page decodes");
+        assert_eq!(page.request, None);
+        assert_eq!(page.listed, None);
+        assert_eq!(page.failed, None);
+        assert!(page.resources.is_empty());
+    }
+
+    /// And the same for the resource: a source that could fetch no file
+    /// names none, rather than being unrepresentable.
+    #[test]
+    fn a_resource_with_no_file_decodes_as_one() {
+        let fileless = r#"{
+            "locator": "12345",
+            "listing": {
+                "remote": {"tpt": {"product_id": 12345}},
+                "title": "Fractions on a number line",
+                "body": "",
+                "body_format": "Markdown",
+                "native": [],
+                "rights": null,
+                "price": {"paid": {"minor_units": 450, "denomination": "USD"}},
+                "state": "live"
+            }
+        }"#;
+        let observed: super::ObservedResource =
+            serde_json::from_str(fileless).expect("a fileless resource decodes");
+        assert_eq!(observed.file, None);
+        assert_eq!(observed.cover_png, None);
+        assert_eq!(observed.fingerprint, None);
+    }
+
+    /// An empty shop and a page that simply carries no listing are different
+    /// facts, and the wire keeps them apart.
+    #[test]
+    fn an_empty_enumeration_is_not_an_absent_one() {
+        let empty = r#"{
+            "run": "00000000-0000-0000-0000-000000000001",
+            "listed": [],
+            "resources": [],
+            "skipped": [],
+            "complete": true
+        }"#;
+        let page: super::ImportPage = serde_json::from_str(empty).expect("an empty shop decodes");
+        assert_eq!(
+            page.listed,
+            Some(Vec::new()),
+            "a shop that holds nothing said so"
         );
     }
 }

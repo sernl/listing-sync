@@ -345,6 +345,13 @@ pub struct ImportBatchDetailView {
     pub batch: ImportBatchView,
     pub rows: Vec<ImportRowView>,
     pub warnings: Vec<Warning>,
+    /// The run this batch is reviewed through, once a commit has opened one.
+    ///
+    /// `null` before the first commit, which is the honest state: nothing has
+    /// been matched, so there is nothing to review. The page reads
+    /// `run.review_pairs` for its review stage, which is the same field the
+    /// marketplace run's page reads -- one review, drawn one way.
+    pub run: Option<crate::import_runs::ImportRunView>,
 }
 
 /// What an upload answered.
@@ -643,10 +650,19 @@ async fn detail_of(
         .map_err(|error| storage_fault(state, &error))?;
     rows.sort_by_key(|row| (tab_position(&row.sheet), row.ordinal));
     let warnings = warnings_of(state, org, &rows).await?;
+    let run = match tam_storage::ImportRunRepo::new(state.pool.clone())
+        .by_batch(org, batch)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+    {
+        Some(head) => Some(crate::import_runs::view_of(state, org, head.id).await?),
+        None => None,
+    };
     Ok(ImportBatchDetailView {
         batch: ImportBatchView::of(record),
         rows: rows.into_iter().map(ImportRowView::of).collect(),
         warnings,
+        run,
     })
 }
 

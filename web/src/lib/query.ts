@@ -44,6 +44,10 @@ export const queryKeys = {
 	overrides: ['overrides'] as const,
 	/** One product's aggregate, keyed by its identifier. */
 	product: (id: string) => ['product', id] as const,
+	/** The labels on one item, which is a different read from the
+	 *  organisation's whole vocabulary above: this one carries the marks an
+	 *  import wrote on that item. */
+	productLabels: (id: string) => ['product', id, 'labels'] as const,
 	/** One marketplace's authoring vocabulary, keyed by inventory: the create
 	 *  form reads several at once and each is a separate cache entry, so
 	 *  selecting a second platform fetches only the one it added. */

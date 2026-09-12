@@ -37,11 +37,22 @@ export function desktopInvoker(): Invoke | null {
 	return typeof invoke === 'function' ? (invoke as Invoke) : null;
 }
 
-/** The desktop command that runs one import on this computer.
+/** The desktop command that reads one shop and posts the list of what is in
+ *  it. Answers once the enumeration has landed, so a refusal — no session,
+ *  no entitlement, a shop that would not open — is this command's own error
+ *  rather than a run that sits in `reading` for ever.
  *
  * Named here rather than written at the call site so the string the console
  * sends and the string the application registers are compared in one place. */
 export const START_IMPORT = 'start_import';
+
+/** The desktop command that reads the resources the seller ticked.
+ *
+ * Answers as soon as the describe pass is running, not when it finishes: the
+ * pass posts pages for as long as it takes and the ledger is what says how
+ * far it has got. A console that waited for this to resolve would show
+ * nothing for the length of a shop. */
+export const CONTINUE_IMPORT = 'continue_import';
 
 /** The desktop command that opens one marketplace's own login page on this
  *  computer and files the session in the platform keychain.
@@ -192,24 +203,46 @@ export const APP_TOO_OLD =
  * ours to fix and not theirs, or the window is holding a development server. */
 export const ORIGIN_NOT_GRANTED = 'This page is not one the Teachouse app accepts commands from.';
 
-/** Ask this computer to run one import.
+/** Ask this computer to read the shop one run names.
  *
  * `unavailable` where there is no invoker, which is every browser: the caller
  * shows the seller how to run it on the machine that holds the session rather
- * than reporting a failure, because nothing failed. */
-export async function startImportHere(
+ * than reporting a failure, because nothing failed.
+ *
+ * The run rather than a request: an import is an import, and the run is the
+ * row the console, the server and this computer all address it by. */
+export async function startImportHere(invoke: Invoke | null, run: string): Promise<StartOutcome> {
+	return ranOnRun(invoke, START_IMPORT, run);
+}
+
+/** Ask this computer to read the resources the seller ticked.
+ *
+ * The second half of one import, and a separate command because the seller
+ * stands between them: the first posts what is in the shop, the seller says
+ * which of it to bring, and this one reads those. */
+export async function continueImportHere(
 	invoke: Invoke | null,
-	request: string
+	run: string
+): Promise<StartOutcome> {
+	return ranOnRun(invoke, CONTINUE_IMPORT, run);
+}
+
+/** Both halves' shared body. One classification of a rejection, so a start and
+ * a continue cannot come to read this computer's refusals differently. */
+async function ranOnRun(
+	invoke: Invoke | null,
+	command: string,
+	run: string
 ): Promise<StartOutcome> {
 	if (invoke === null) {
 		return { kind: 'unavailable' };
 	}
 	try {
-		await invoke(START_IMPORT, { request });
+		await invoke(command, { run });
 		return { kind: 'started' };
 	} catch (caught) {
 		const detail = refusalText(caught, IMPORT_REFUSED_SILENTLY);
-		if (originNotGranted(detail, START_IMPORT)) {
+		if (originNotGranted(detail, command)) {
 			return { kind: 'refused', detail: ORIGIN_NOT_GRANTED };
 		}
 		return unknownCommand(detail) ? { kind: 'unsupported' } : { kind: 'refused', detail };
@@ -345,7 +378,10 @@ export async function openExternal(invoke: Invoke | null, url: string): Promise<
 		await invoke(OPEN_URL, { url });
 		return { kind: 'opened' };
 	} catch (caught) {
-		return { kind: 'refused', detail: refusalText(caught, OPEN_REFUSED_SILENTLY) };
+		return {
+			kind: 'refused',
+			detail: refusalText(caught, OPEN_REFUSED_SILENTLY)
+		};
 	}
 }
 

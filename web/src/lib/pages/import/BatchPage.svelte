@@ -5,6 +5,7 @@
 		api,
 		type BatchStateView,
 		type CommitAck,
+		type DuplicateDecision,
 		type ImportBatchDetailView,
 		type ImportRowView
 	} from '$lib/api';
@@ -15,6 +16,7 @@
 	import Panel from '$lib/Panel.svelte';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import AttachPanel from './AttachPanel.svelte';
+	import ReviewCards from './ReviewCards.svelte';
 	import {
 		AWAITING_TITLE,
 		BATCH_UNREAD,
@@ -230,6 +232,21 @@
 			await refetch();
 		}
 	}
+
+	/** Answer one pair the matcher parked.
+	 *
+	 *  The batch is re-read rather than patched in place: a verdict can free
+	 *  the commit, merge two resources or skip a row, and which of those it
+	 *  did is the server's to say. */
+	async function decide(lo: string, hi: string, decision: DuplicateDecision) {
+		try {
+			await api.decideDuplicate(lo, hi, decision);
+			refusal = null;
+		} catch (failure) {
+			refusal = refusalOf(failure);
+		}
+		await refetch();
+	}
 </script>
 
 <!-- Both actions are declared here and handed to the banner as a prop, so a
@@ -430,6 +447,36 @@
 			<p class="sh-note">
 				An import left unfinished is cleared on {expiryDay}, along with the files added to it.
 			</p>
+		{:else if stage.kind === 'review'}
+			<!-- The matcher runs inside the commit, so a batch with pairs open is
+			     a commit that has stopped and is waiting: the cards come first
+			     and the control below states why it cannot carry on. -->
+			<ReviewCards
+				pairs={detail.run?.review_pairs ?? []}
+				onsame={(lo, hi, keep, fields) =>
+					void decide(lo, hi, { verdict: 'same', keep, fields })}
+				ondifferent={(lo, hi) => void decide(lo, hi, { verdict: 'different' })}
+				onlater={(lo, hi) => void decide(lo, hi, { verdict: 'parked' })}
+			/>
+			<div class="sh-acts">
+				<Button
+					tier="primary"
+					icon="circle-check"
+					disabled
+					reason={`${stage.pairs} ${stage.pairs === 1 ? 'pair is' : 'pairs are'} waiting on your answer above.`}
+				>
+					Carry on importing
+				</Button>
+				<Button
+					danger
+					disabled={settling}
+					reason={settling ? 'Giving this import up.' : undefined}
+					onclick={() => void abandon()}
+				>
+					Give this import up
+				</Button>
+			</div>
+			<p class="sh-note">{NOTHING_SENT}</p>
 		{:else if stage.kind === 'importing'}
 			<Panel title="Creating your resources">
 				<div

@@ -157,6 +157,35 @@ The activity ring is an interface convenience and not a journal.
 It is bounded, it is stamped with the tick's instant rather than each event's own, and it is lost when the application exits.
 The record of what happened to an item is the ledger on the server, and it is the one an operator reads.
 
+## Amended 2026-09-12: the import is two commands, and the device asserts a fingerprint
+
+An import used to be one press.
+`start_import` enumerated the shop and described every resource in it, and the seller's only choice was whether to start.
+It is now two, because the seller chooses what crosses: `start_import(run)` reads the shop under the entitlement and revocation gates, posts one page carrying the enumeration and nothing read, and returns; the console renders that as a tick list; `continue_import(run)` reads back the selection the run recorded and describes only what was ticked.
+Both commands take a run rather than a sync request, and every page they post names `ImportPage.run`; `ImportPage.request` stays on the type, unset by this device, for the phase-3 device-enumerated migrate branch of `POST /v1/sync`.
+
+The selection is read from the server rather than passed through the console, and that is the point rather than a detour.
+A seller who ticks, closes the window and comes back continues the import they chose, because the choice is a row on the run and not a value the browser was holding.
+
+The single-flight claim is taken and released by each command separately.
+Holding it across the seller's decision would mean a run that could never be retried until the application restarted, for a step that may take them a week.
+
+The Tes-only refusal is gone.
+A TPT catalogue is now read by a second `CatalogueSource` binding over `TptAdapter::{list_own_resources, fetch_for_import}`, and `CatalogueSource::bundle` answers `Option<Vec<u8>>` so that binding can say the honest thing: `tpt.download_resource_bundle` is uncaptured, so this device holds no way to obtain the seller's TPT file at all.
+That is `Ok(None)` and not `Err`, and the difference is what the seller reads.
+A fetch that was attempted and failed is a skip with a sentence; a source that has no file download is a resource that still crosses, carrying its listing with `ObservedResource.file` and `cover_png` both absent.
+Both fields are therefore `Option` on the wire, with `serde(default)`.
+
+What `describe` now measures is a `Fingerprint`, from `tam-fingerprint`, and the device asserts it in the voice `0052_product_file_source.sql` reserves for a claim about bytes the server never held.
+It is a 64-bit SimHash and a 128-hash MinHash over 5-word shingles of the extracted PDF text, the page count from the PDF page tree, a perceptual hash of the cover for an image payload only, and the normalised title.
+Roughly 880 bytes of JSON for a full one and about a hundred for a title-only one, fixed-width whatever the document weighs, and lossy by construction: no part of it can be read back into the seller's words, which is what lets it cross a wire the payload may not.
+The cover hash is computed for `FileKind::Image` and no other kind, because `tam_pipeline::render::cover` draws a flat kind-coloured card for a PDF, a PPTX, a DOCX and a ZIP — a hash over one of those compares constants, and a layer that fires on every pair is worse than a layer that does not fire.
+
+`tam-fingerprint` is split by a `compute` feature for a dependency reason worth stating.
+`tam-engine-driver` carries `Fingerprint` on the wire and is compiled for wasm32 in `just check-portable`; `pdf-extract` and `lopdf` reach `getrandom`, which refuses that target outright.
+So the readers sit behind `compute`, the driver takes the crate with `default-features = false`, and the desktop crate — the one that actually holds the bytes — takes it whole.
+The text read runs on its own thread under a sixty-second budget with an unwind guard, because neither reader can be interrupted and a PDF supplied by a marketplace is exactly where a parser panics; the cost of one is that resource's text layer rather than the seller's import.
+
 ## Sources
 
 - `docs/notes/design/engine-driver-split.md`, sections 3 to 5.

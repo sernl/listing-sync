@@ -20,6 +20,7 @@
 		type StandingFilter,
 		type WorkItem
 	} from '$lib/inventory';
+	import LabelChip from '$lib/LabelChip.svelte';
 	import LabelsDialog from '$lib/LabelsDialog.svelte';
 	import { normaliseQuery } from '$lib/listings-view';
 	import MarketplaceChips from '$lib/MarketplaceChips.svelte';
@@ -509,13 +510,16 @@
 							<p class="none">Your labels could not be read, so none can be chosen here.</p>
 						{:else}
 							{#each labels.data ?? [] as one (one.name)}
+								<!-- Every label the organisation holds, the marks an import
+								     wrote among them: a seller looking for what they just
+								     imported filters by the shop's own chip. -->
 								<label>
 									<input
 										type="checkbox"
 										checked={chosenLabels.includes(one.name)}
 										onchange={() => toggleLabel(one.name)}
 									/>
-									{one.name}
+									<LabelChip name={one.name} colour={one.colour} system={one.system} />
 								</label>
 							{:else}
 								<p class="none">No resource carries a label yet.</p>

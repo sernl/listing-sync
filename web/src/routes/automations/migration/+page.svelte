@@ -11,7 +11,6 @@
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
 	import { anyConnectionStands } from '$lib/connection-standing';
-	import { APP_TOO_OLD, desktopInvoker, startImportHere } from '$lib/desktop';
 	import { dayMonth, migrationsLine } from '$lib/entitlement';
 	import { entitlementRead } from '$lib/entitlement-read';
 	import Field from '$lib/Field.svelte';
@@ -60,15 +59,7 @@
 	let held = $state<Marketplace | null>(null);
 	let starting = $state(false);
 	let refusal = $state<string | null>(null);
-	// Set only when the request was created and this computer then declined to
-	// run it. The request exists and must stay reachable, so the card offers it
-	// rather than leaving the seller on a refusal with nowhere to go.
-	let created = $state<string | null>(null);
 	let logQuery = $state('');
-
-	// Read once: whether this console runs inside the desktop application does
-	// not change while the page is open.
-	const invoke = desktopInvoker();
 
 	// One key per source, minted once: the server takes the idempotency key as
 	// the request's own identity, so a retry after a failed submit reaches the
@@ -166,25 +157,17 @@
 		const key = (keys[source] ??= crypto.randomUUID());
 		starting = true;
 		refusal = null;
-		created = null;
 		try {
 			const ack = await api.createSyncRequest(migrateBody(source), key);
-			// Inside the application the seller asked for the import with one
-			// click, so the request is created and this computer is asked to run
-			// it without a second one. In a browser there is nothing here to ask,
-			// and the request's own page says where the work happens.
-			if (invoke !== null) {
-				const outcome = await startImportHere(invoke, ack.request);
-				if (outcome.kind === 'refused' || outcome.kind === 'unsupported') {
-					created = ack.request;
-					refusal = outcome.kind === 'unsupported' ? APP_TOO_OLD : outcome.detail;
-					return;
-				}
-			}
+			// The request is raised here and run nowhere yet: the Teachouse app
+			// reads a shop into Resources, which is what Import does, and has no
+			// command for moving one onto a second marketplace. The request's own
+			// page says so and keeps the request reachable, which is where this
+			// goes rather than asking a computer that would refuse.
 			await goto(`/sync/requests/${ack.request}`);
 		} catch (caught) {
 			refusal =
-				caught instanceof ApiFailure ? caught.message : 'The import could not be started.';
+				caught instanceof ApiFailure ? caught.message : 'The migration could not be raised.';
 		} finally {
 			starting = false;
 		}
@@ -306,11 +289,6 @@
 
 					{#if refusal !== null}
 						<Banner tone="bad">{refusal}</Banner>
-					{/if}
-					{#if created !== null}
-						<div class="set-foot">
-							<Button href={`/sync/requests/${created}`} tier="outline">Open the import</Button>
-						</div>
 					{/if}
 				</Panel>
 			{/if}

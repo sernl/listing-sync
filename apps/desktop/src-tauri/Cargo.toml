@@ -136,6 +136,10 @@ tam-secrets = { path = "../../../crates/tam-secrets" }
 # `SellerEvent` and `JobItemId` in its own signatures.
 tam-domain          = { path = "../../../crates/tam-domain" }
 tam-engine-driver   = { path = "../../../crates/tam-engine-driver" }
+# The sketch this device measures of each file, default features on: this is
+# the crate that holds the seller's bytes, so it is the one that needs the
+# readers behind `compute`.
+tam-fingerprint     = { path = "../../../crates/tam-fingerprint" }
 tam-marketplace     = { path = "../../../crates/tam-marketplace" }
 tam-marketplace-tes = { path = "../../../crates/tam-marketplace-tes" }
 tam-marketplace-tpt = { path = "../../../crates/tam-marketplace-tpt" }

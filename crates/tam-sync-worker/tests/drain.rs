@@ -172,7 +172,7 @@ async fn a_resumed_migrate_removes_every_source_it_canonicalised(pool: PgPool) {
         pool: pool.clone(),
         org: ORG,
         source: SOURCE,
-        target: TARGET,
+        target: Some(TARGET),
         now: NOW,
     };
     let report = drain_request(&requests, &run, REQUEST)
@@ -275,7 +275,7 @@ async fn a_live_sync_enqueues_the_create_and_the_publish_it_gates(pool: PgPool) 
         pool: pool.clone(),
         org: ORG,
         source: SOURCE,
-        target: TARGET,
+        target: Some(TARGET),
         now: NOW,
     };
     let report = drain_request(&requests, &run, REQUEST)

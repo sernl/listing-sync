@@ -1424,6 +1424,44 @@ impl ImportBatchRepo {
         Ok(written.rows_affected() == 1)
     }
 
+    /// Records that this row created nothing because another resource already
+    /// stands for it.
+    ///
+    /// The duplicate review's own outcome, and `skipped` rather than `failed`
+    /// because nothing went wrong: the seller was asked and answered that the
+    /// two are one resource. The reason lives on the run item's `skip_reason`,
+    /// which is where the review's record belongs -- `import_batch_row` admits
+    /// a `failure_detail` only on a failed row, and putting a merge's sentence
+    /// in a failure column would make the report say a row was refused.
+    ///
+    /// The reserved identifiers go with it, for [`Self::record_row_failed`]'s
+    /// reason: nothing was created under them.
+    pub async fn record_row_skipped(
+        &self,
+        org: OrgId,
+        batch: Uuid,
+        at: RowAddress<'_>,
+    ) -> Result<bool, StorageError> {
+        let RowAddress { sheet, ordinal } = at;
+        let ordinal = ordinal_to_db(ordinal)?;
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let written = sqlx::query!(
+            "UPDATE import_batch_row \
+                SET state = 'skipped', product_id = NULL, mapping_id = NULL \
+              WHERE org_id = $1 AND batch_id = $2 AND sheet = $3 AND ordinal = $4 \
+                AND state = 'creating'",
+            uuid_to_db(org.0),
+            uuid_to_db(batch),
+            sheet,
+            ordinal,
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(written.rows_affected() == 1)
+    }
+
     /// Records that this row's create was refused, in the words the seller
     /// reads on the report.
     ///

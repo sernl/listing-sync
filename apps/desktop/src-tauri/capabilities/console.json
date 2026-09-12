@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "console",
-  "description": "The application's own commands, granted to the one origin the console is served from and to nothing else. Tauri denies every application command to remote content unless a capability names its origin (tauri 2.11.5, src/webview/mod.rs:1819-1850), so without this the seller would press a button and read a permission error. The url here must equal control_plane::DEFAULT_BASE_URL; the_capability_grants_the_origin_this_build_uses asserts it, because a cutover that moved the constant and the content-security policy and forgot this file would build clean, ship, and refuse every command at run time. These seven are granted LOCALLY as well as remotely, because `local` defaults to true and this file does not set it false. That is deliberate rather than an oversight: with TAM_CONTROL_PLANE pointing at the vite dev server the window is local content, `is_local_url` answers true, and without the local grant every command would be refused in development while working in production \u2014 the worst way round. Nothing in the marketplace login windows is granted, here or anywhere: their window label is not main.",
+  "description": "The application's own commands, granted to the one origin the console is served from and to nothing else. Tauri denies every application command to remote content unless a capability names its origin (tauri 2.11.5, src/webview/mod.rs:1819-1850), so without this the seller would press a button and read a permission error. The url here must equal control_plane::DEFAULT_BASE_URL; the_capability_grants_the_origin_this_build_uses asserts it, because a cutover that moved the constant and the content-security policy and forgot this file would build clean, ship, and refuse every command at run time. These eight are granted LOCALLY as well as remotely, because `local` defaults to true and this file does not set it false. That is deliberate rather than an oversight: with TAM_CONTROL_PLANE pointing at the vite dev server the window is local content, `is_local_url` answers true, and without the local grant every command would be refused in development while working in production \u2014 the worst way round. Nothing in the marketplace login windows is granted, here or anywhere: their window label is not main.",
   "windows": [
     "main"
   ],
@@ -17,6 +17,7 @@
     "allow-device-check-in",
     "allow-device-activity",
     "allow-start-import",
+    "allow-continue-import",
     "allow-set-theme"
   ]
 }

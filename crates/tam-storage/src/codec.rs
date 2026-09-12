@@ -60,6 +60,27 @@ pub(crate) const PRICE_KIND_PAID: &str = "paid";
 const CURRENCY_GBP: &str = "gbp";
 const CURRENCY_USD: &str = "usd";
 
+/// The column rendering of a denomination, for the columns that hold a
+/// currency beside an amount without a `price_kind` to go with it: an import
+/// run item's price is what a read said, and a read that said nothing is an
+/// absent amount rather than a `free` kind.
+pub(crate) const fn currency_to_db(currency: Currency) -> &'static str {
+    match currency {
+        Currency::Gbp => CURRENCY_GBP,
+        Currency::Usd => CURRENCY_USD,
+    }
+}
+
+pub(crate) fn currency_from_db(raw: &str) -> Result<Currency, StorageError> {
+    match raw {
+        c if c == CURRENCY_GBP => Ok(Currency::Gbp),
+        c if c == CURRENCY_USD => Ok(Currency::Usd),
+        other => Err(StorageError::CorruptRow {
+            reason: format!("unknown currency {other:?}"),
+        }),
+    }
+}
+
 pub(crate) struct PriceColumns {
     pub(crate) kind: &'static str,
     pub(crate) minor_units: Option<i64>,

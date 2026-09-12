@@ -257,7 +257,7 @@ fn run_for_org(pool: PgPool, org: OrgId) -> ImportRun {
         pool,
         org,
         source: InventoryId::Tes,
-        target: InventoryId::Tpt,
+        target: Some(InventoryId::Tpt),
         now: NOW,
     }
 }
@@ -385,6 +385,10 @@ struct Fixture<'a> {
     org: OrgId,
 }
 
+fn fresh_product() -> tam_types::ProductId {
+    tam_types::ProductId(Uuid(*uuid::Uuid::new_v4().as_bytes()))
+}
+
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
@@ -431,6 +435,7 @@ async fn applied_fixture(fixture: Fixture<'_>) -> AppliedResource {
     .expect("the fixture ingests");
     AppliedResource {
         resource,
+        product: fresh_product(),
         listing,
         payload: ingested
             .payload
@@ -444,12 +449,12 @@ async fn applied_fixture(fixture: Fixture<'_>) -> AppliedResource {
                 },
             })
             .collect(),
-        cover: HeldFile {
+        cover: Some(HeldFile {
             kind: FileKind::Image,
             hash: ingested.cover.hash,
             byte_len: ingested.cover.byte_len,
             scan: ScanOutcome::Clean { at: NOW },
-        },
+        }),
     }
 }
 
@@ -894,6 +899,7 @@ async fn a_sourced_payload_imports_and_stores_no_bytes_of_it(pool: PgPool) {
 
     let applied = AppliedResource {
         resource: 13_549_794,
+        product: fresh_product(),
         listing: held.listing.clone(),
         payload: vec![ImportedFile {
             kind: FileKind::Pdf,
@@ -1058,7 +1064,7 @@ async fn the_coverage_number_counts_terms_and_not_the_projections_blocker(pool: 
         pool: pool.clone(),
         org: ORG,
         source: InventoryId::Tes,
-        target: InventoryId::Etsy,
+        target: Some(InventoryId::Etsy),
         now: NOW,
     };
 

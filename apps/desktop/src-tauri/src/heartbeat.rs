@@ -196,6 +196,26 @@ pub trait ControlPlane: Send + Sync {
         &self,
         request: tam_types::Uuid,
     ) -> PlaneFuture<'_, tam_types::InventoryId>;
+
+    /// Which inventory an import run names as its source.
+    ///
+    /// The run's own row rather than an argument, for the reason
+    /// [`Self::sync_request_source`] gives: the console asks this device to
+    /// start an import by run id alone, so a console that named the shop
+    /// could ask a device to enumerate one the run does not name.
+    fn import_run_source(&self, run: tam_types::Uuid) -> PlaneFuture<'_, tam_types::InventoryId>;
+
+    /// Which resources of that run the seller ticked.
+    ///
+    /// Read back from the server rather than passed through the console,
+    /// because the selection is a decision the run records: a seller who
+    /// ticked, closed the window and came back must continue the import they
+    /// chose rather than a list the browser happened to still hold.
+    fn import_selection<'a>(
+        &'a self,
+        device: &'a DeviceId,
+        run: tam_types::Uuid,
+    ) -> PlaneFuture<'a, Vec<String>>;
 }
 
 /// The control plane a build with no configured transport gets: one that
@@ -216,6 +236,18 @@ impl ControlPlane for Offline {
         &self,
         _request: tam_types::Uuid,
     ) -> PlaneFuture<'_, tam_types::InventoryId> {
+        Box::pin(core::future::ready(Err(ControlPlaneError::NotConfigured)))
+    }
+
+    fn import_run_source(&self, _run: tam_types::Uuid) -> PlaneFuture<'_, tam_types::InventoryId> {
+        Box::pin(core::future::ready(Err(ControlPlaneError::NotConfigured)))
+    }
+
+    fn import_selection<'a>(
+        &'a self,
+        _device: &'a DeviceId,
+        _run: tam_types::Uuid,
+    ) -> PlaneFuture<'a, Vec<String>> {
         Box::pin(core::future::ready(Err(ControlPlaneError::NotConfigured)))
     }
 
@@ -619,6 +651,21 @@ mod tests {
             Box::pin(core::future::ready(Ok(tam_types::InventoryId::Tes)))
         }
 
+        fn import_run_source(
+            &self,
+            _run: tam_types::Uuid,
+        ) -> PlaneFuture<'_, tam_types::InventoryId> {
+            Box::pin(core::future::ready(Ok(tam_types::InventoryId::Tes)))
+        }
+
+        fn import_selection<'a>(
+            &'a self,
+            _device: &'a crate::device::DeviceId,
+            _run: tam_types::Uuid,
+        ) -> PlaneFuture<'a, Vec<String>> {
+            Box::pin(core::future::ready(Ok(Vec::new())))
+        }
+
         fn register<'a>(
             &'a self,
             _device: &'a DeviceIdentity,
@@ -862,6 +909,21 @@ mod tests {
             Box::pin(core::future::ready(Ok(tam_types::InventoryId::Tes)))
         }
 
+        fn import_run_source(
+            &self,
+            _run: tam_types::Uuid,
+        ) -> PlaneFuture<'_, tam_types::InventoryId> {
+            Box::pin(core::future::ready(Ok(tam_types::InventoryId::Tes)))
+        }
+
+        fn import_selection<'a>(
+            &'a self,
+            _device: &'a crate::device::DeviceId,
+            _run: tam_types::Uuid,
+        ) -> PlaneFuture<'a, Vec<String>> {
+            Box::pin(core::future::ready(Ok(Vec::new())))
+        }
+
         fn register<'a>(
             &'a self,
             _device: &'a DeviceIdentity,
@@ -909,6 +971,25 @@ mod tests {
             &self,
             _request: tam_types::Uuid,
         ) -> PlaneFuture<'_, tam_types::InventoryId> {
+            Box::pin(core::future::ready(Err(ControlPlaneError::Refused(
+                "502".to_owned(),
+            ))))
+        }
+
+        fn import_run_source(
+            &self,
+            _run: tam_types::Uuid,
+        ) -> PlaneFuture<'_, tam_types::InventoryId> {
+            Box::pin(core::future::ready(Err(ControlPlaneError::Refused(
+                "502".to_owned(),
+            ))))
+        }
+
+        fn import_selection<'a>(
+            &'a self,
+            _device: &'a crate::device::DeviceId,
+            _run: tam_types::Uuid,
+        ) -> PlaneFuture<'a, Vec<String>> {
             Box::pin(core::future::ready(Err(ControlPlaneError::Refused(
                 "502".to_owned(),
             ))))

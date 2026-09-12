@@ -1429,6 +1429,14 @@ pub(crate) async fn withdraw_override(
 pub struct LabelView {
     pub name: String,
     pub colour: String,
+    /// Whether this label is the marketplace's own rather than the seller's.
+    ///
+    /// The console renders a system chip with no remove control and leaves it
+    /// out of the set it sends back, and the two label counts below leave it
+    /// out of the allowance. Carried rather than inferred from the name,
+    /// because a seller may legitimately have typed "TPT" themselves and the
+    /// difference is a column, not a spelling.
+    pub system: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1506,6 +1514,7 @@ fn labels_view(records: Vec<tam_storage::LabelRecord>) -> Json<LabelsView> {
             .map(|record| LabelView {
                 name: record.name,
                 colour: record.colour.as_str().to_owned(),
+                system: record.system,
             })
             .collect(),
     })
@@ -1562,11 +1571,30 @@ pub(crate) async fn set_product_labels(
     // catalogue is a different quantity from twenty on one resource. Only
     // names this organisation does not already hold count against it, so
     // re-labelling an item with labels it already has is never refused.
+    //
+    // The marketplace's own labels are not on that shelf. The seller did not
+    // type them and cannot remove them, so spending their allowance on them
+    // would charge them for having imported, and a seller at the ceiling would
+    // find their next manual label refused by a chip they never asked for.
     let labels = LabelRepo::new(state.pool.clone());
-    let held = labels
+    let every = labels
         .list(context.org)
         .await
         .map_err(|error| storage_fault(&state, &error))?;
+    // A system label's name is ours, so naming one here is refused rather than
+    // quietly dropped: the console never sends it, and a client that does is
+    // asking for a label whose colour and flag this route would not write.
+    if let Some(claimed) = names.iter().find(|name| {
+        every
+            .iter()
+            .any(|record| record.system && record.name.eq_ignore_ascii_case(name))
+    }) {
+        return Err(validation(&format!(
+            "{claimed} is the label of a marketplace you imported from; it is set for you and              cannot be typed or removed"
+        )));
+    }
+    let held: Vec<&tam_storage::LabelRecord> =
+        every.iter().filter(|record| !record.system).collect();
     let fresh = names
         .iter()
         .filter(|name| {
@@ -1637,6 +1665,7 @@ pub(crate) async fn rename_label(
         LabelRename::Renamed(record) => Ok(Json(LabelView {
             name: record.name,
             colour: record.colour.as_str().to_owned(),
+            system: record.system,
         })),
         LabelRename::Missing => Err(missing("no label of that name")),
         // A refusal rather than a merge. Folding the two labels together

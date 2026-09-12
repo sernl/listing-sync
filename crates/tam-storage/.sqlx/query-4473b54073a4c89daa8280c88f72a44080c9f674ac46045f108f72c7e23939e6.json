@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*)::bigint FROM product_fingerprint f JOIN product p ON p.org_id = f.org_id AND p.id = f.product_id WHERE f.org_id = $1 AND f.fingerprint_version = $2 AND p.deleted_at IS NULL AND f.title_norm = $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int2",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4473b54073a4c89daa8280c88f72a44080c9f674ac46045f108f72c7e23939e6"
+}

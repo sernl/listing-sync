@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT name, colour FROM label WHERE org_id = $1 ORDER BY lower(name)",
+  "query": "SELECT name, colour, system FROM label WHERE org_id = $1 ORDER BY lower(name)",
   "describe": {
     "columns": [
       {
@@ -12,6 +12,11 @@
         "ordinal": 1,
         "name": "colour",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "system",
+        "type_info": "Bool"
       }
     ],
     "parameters": {
@@ -21,8 +26,9 @@
     },
     "nullable": [
       false,
+      false,
       false
     ]
   },
-  "hash": "64579f04c598cf9e8ffc6da21d95b5262a563be6d508f8e0f56d84a1df7b6e0b"
+  "hash": "3f2cde4eea415c7da2c65a830713218afac648bd823c69f0d67f99c46081a438"
 }

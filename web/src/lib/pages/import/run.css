@@ -1,0 +1,235 @@
+/* One import run: the tick list, the live bar and the review cards.
+ *
+ * Only what the component catalogue does not already carry. The run's item
+ * list reuses `.import-listing` from `import.css`, because a resource an
+ * import reached reads the same whichever machinery reached it. Every colour
+ * is a token.
+ */
+
+/* The one line the whole page is watched for, so it is set as a figure
+   rather than as prose. Tabular numerals because it changes while it is
+   being read, and digits that shift width make a still page look busy. */
+.run-bar {
+	margin: 10px 0 0;
+	font-size: 14px;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+
+/* --- the tick list ------------------------------------------------------- */
+
+.run-picks {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	margin: 10px 0 14px;
+}
+
+.run-chosen {
+	font-size: 12.5px;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+	margin-left: auto;
+}
+
+.run-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	/* A shop of two hundred listings is a scroll of its own rather than a
+	   page that never ends: the Continue control below has to stay reachable
+	   without reading the whole shop first. */
+	max-height: 520px;
+	overflow-y: auto;
+	border: 1px solid var(--line);
+	border-radius: var(--r-panel);
+}
+
+.run-list li + li {
+	border-top: 1px solid var(--line);
+}
+
+/* The whole row is the control, so the tick target is the row rather than a
+   13px square beside it — which is the difference between ticking forty
+   resources comfortably and forty misses. */
+.run-pick {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 10px 14px;
+	cursor: pointer;
+	min-width: 0;
+}
+
+.run-pick:hover {
+	background: var(--hover);
+}
+
+.run-pick input {
+	flex: none;
+}
+
+.run-pick .t {
+	flex: 1;
+	min-width: 0;
+	font-size: 13.5px;
+	overflow-wrap: anywhere;
+}
+
+.run-pick .p {
+	flex: none;
+	font-size: 13px;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+}
+
+/* --- the item list ------------------------------------------------------- */
+
+.import-listing .t {
+	overflow-wrap: anywhere;
+}
+
+.run-price {
+	flex: none;
+	font-size: 12.5px;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+}
+
+.run-open {
+	flex: none;
+	font-size: 12.5px;
+}
+
+/* --- the review cards ---------------------------------------------------- */
+
+.rv-card {
+	border: 1px solid var(--line);
+	border-radius: var(--r-card);
+	padding: 16px;
+	margin-top: 14px;
+	background: var(--surface);
+}
+
+/* The one sentence of evidence. Never a score: a seller shown a percentage
+   argues with the percentage instead of looking at the two listings. */
+.rv-say {
+	margin: 0 0 12px;
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.rv-sides {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 14px;
+}
+
+.rv-side {
+	border: 1px solid var(--line);
+	border-radius: var(--r-panel);
+	padding: 12px;
+	min-width: 0;
+}
+
+/* The side that would survive, marked while the seller is choosing. The
+   border rather than a fill, so the two covers stay comparable. */
+.rv-side.win {
+	border-color: var(--accent);
+	box-shadow: 0 0 0 1px var(--accent);
+}
+
+.rv-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin-bottom: 10px;
+}
+
+.rv-cover {
+	display: block;
+	width: 100%;
+	height: auto;
+	aspect-ratio: 4 / 3;
+	object-fit: cover;
+	border-radius: var(--r-panel);
+	border: 1px solid var(--line);
+	background: var(--hover);
+}
+
+/* A side with no cover keeps the same box rather than collapsing, so the two
+   listings stay side by side and comparable. */
+.rv-none {
+	height: auto;
+}
+
+.rv-title {
+	margin: 10px 0 0;
+	font-size: 13.5px;
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+.rv-facts {
+	margin: 4px 0 0;
+	display: flex;
+	gap: 10px;
+	flex-wrap: wrap;
+	font-size: 12.5px;
+	color: var(--muted);
+}
+
+.rv-merge {
+	margin-top: 14px;
+	padding-top: 14px;
+	border-top: 1px solid var(--line);
+}
+
+.rv-field {
+	border: 0;
+	padding: 0;
+	margin: 0 0 10px;
+	display: flex;
+	gap: 8px 16px;
+	flex-wrap: wrap;
+	align-items: baseline;
+}
+
+.rv-field legend {
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--muted);
+	padding: 0;
+	margin-bottom: 4px;
+}
+
+.rv-field label {
+	display: flex;
+	align-items: baseline;
+	gap: 6px;
+	font-size: 13px;
+	min-width: 0;
+	overflow-wrap: anywhere;
+	cursor: pointer;
+}
+
+/* On a phone the two listings stack, as section 13 requires: side by side in
+   a 390px viewport puts each title in a column a few characters wide, which
+   is exactly the comparison the card exists to make possible. */
+@media (max-width: 620px) {
+	.rv-sides {
+		grid-template-columns: 1fr;
+	}
+
+	.run-chosen {
+		margin-left: 0;
+		flex: 1 1 100%;
+	}
+
+	.run-list {
+		max-height: none;
+	}
+}

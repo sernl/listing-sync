@@ -61,9 +61,14 @@
 		}
 	});
 
+	// The seller's own labels alone, and none they have already typed. An
+	// import's mark is not a label they can put on anything: the route refuses
+	// a set that names one, so offering it here would offer a refusal.
 	const suggestions = $derived(
 		known.filter(
-			(label) => !adding.some((held) => held.toLowerCase() === label.name.toLowerCase())
+			(label) =>
+				!label.system &&
+				!adding.some((held) => held.toLowerCase() === label.name.toLowerCase())
 		)
 	);
 
@@ -96,7 +101,13 @@
 		try {
 			for (const row of rows) {
 				const held = await api.productLabels(row.product.id);
-				const merged = [...held.labels.map((label) => label.name)];
+				// The seller's own labels alone. A system label is an import's
+				// mark: the server preserves the membership through this
+				// replace and refuses a set that names one, so sending it back
+				// would refuse a relabel that changes nothing about it.
+				const merged = held.labels
+					.filter((label) => !label.system)
+					.map((label) => label.name);
 				for (const name of adding) {
 					if (!merged.some((one) => one.toLowerCase() === name.toLowerCase())) {
 						merged.push(name);

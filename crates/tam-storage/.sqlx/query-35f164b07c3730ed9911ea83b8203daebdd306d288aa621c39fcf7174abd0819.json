@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE label SET name = $3, colour = $4 WHERE org_id = $1 AND lower(name) = lower($2) RETURNING name, colour",
+  "query": "UPDATE label SET name = $3, colour = $4 WHERE org_id = $1 AND lower(name) = lower($2) AND system = false RETURNING name, colour, system",
   "describe": {
     "columns": [
       {
@@ -12,6 +12,11 @@
         "ordinal": 1,
         "name": "colour",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "system",
+        "type_info": "Bool"
       }
     ],
     "parameters": {
@@ -24,8 +29,9 @@
     },
     "nullable": [
       false,
+      false,
       false
     ]
   },
-  "hash": "a6a1b6681b9dd51ecbd227736f2e10f81273f614dcdfddfa152aa142a387398d"
+  "hash": "35f164b07c3730ed9911ea83b8203daebdd306d288aa621c39fcf7174abd0819"
 }

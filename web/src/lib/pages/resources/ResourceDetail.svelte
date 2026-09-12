@@ -28,6 +28,7 @@
 		type WorkItem
 	} from '$lib/inventory';
 	import { formatPrice, rowStatus } from '$lib/listings-view';
+	import LabelChip from '$lib/LabelChip.svelte';
 	import Field from '$lib/Field.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
@@ -51,6 +52,14 @@
 	const product = createQuery(() => ({
 		queryKey: queryKeys.product(id),
 		queryFn: () => api.product(id),
+		enabled: id.length > 0
+	}));
+	// What this resource is filed under, including the mark an import wrote on
+	// it. Its own read rather than a field of the product: the labels route is
+	// what carries `system`, and the aggregate does not.
+	const labels = createQuery(() => ({
+		queryKey: queryKeys.productLabels(id),
+		queryFn: () => api.productLabels(id).then((view) => view.labels),
 		enabled: id.length > 0
 	}));
 	const allMappings = createQuery(() => ({
@@ -523,6 +532,19 @@
 					Only the newest runs are read, so a send older than that window is not listed here.
 					Sync holds every run.
 				</p>
+			</Panel>
+		{/if}
+
+		{#if (labels.data ?? []).length > 0}
+			<Panel
+				title="Labels"
+				description="What this resource is filed under. A mark an import wrote says which shop it came from and is not one you can take off."
+			>
+				<div class="res-chips">
+					{#each labels.data ?? [] as label (label.name)}
+						<LabelChip name={label.name} colour={label.colour} system={label.system} />
+					{/each}
+				</div>
 			</Panel>
 		{/if}
 

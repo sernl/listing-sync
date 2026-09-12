@@ -1233,8 +1233,25 @@ async fn mappings_held(pool: &PgPool, org: OrgId) -> i64 {
 /// Jobs this organisation holds, which is the D1 assertion of this slice: the
 /// commit creates resources and enqueues nothing, so a live row reaches
 /// `created` and publishing happens later, on the seller's own device.
+/// Jobs that would publish something, which is the quantity D1 bounds.
+///
+/// Counted by their items rather than by their rows, because an itemless job
+/// is not a publish and there is now one of those per commit: the import run
+/// a batch is reviewed through anchors its ledger events to a job carrying no
+/// items, exactly as `ImportDrainMeasured` does. A `queued` item is what the
+/// worker's lease scan claims, so a job with none cannot become a marketplace
+/// write however it was minted -- and counting rows would make this assertion
+/// fail the day the ledger gained an anchor while still passing the day a real
+/// publish was minted with a request key it recognised.
 async fn jobs_held(pool: &PgPool, org: OrgId) -> i64 {
-    counted(pool, org, "SELECT count(*) FROM job WHERE org_id = $1").await
+    counted(
+        pool,
+        org,
+        "SELECT count(*) FROM job j WHERE j.org_id = $1 \
+           AND EXISTS (SELECT 1 FROM job_item i \
+                       WHERE i.org_id = j.org_id AND i.job_id = j.id)",
+    )
+    .await
 }
 
 /// The whole report, so a test can read one row's outcome and its product.
@@ -1424,7 +1441,21 @@ async fn a_commit_creates_one_resource_per_passing_row_with_its_labels(pool: PgP
         "and no job: a live row is created here and published from the seller's own device"
     );
 
-    let rows = report(&pool, &TOKEN_A, batch).await.rows;
+    // The commit routes through an import run, which is what puts the
+    // spreadsheet source and the marketplace source behind one duplicate
+    // review rather than two.
+    let detail = report(&pool, &TOKEN_A, batch).await;
+    let Some(run) = detail.run.as_ref() else {
+        panic!("a committed batch names the run it was reviewed through");
+    };
+    assert_eq!(run.kind, tam_api::import_runs::ImportRunKind::Spreadsheet);
+    assert_eq!(run.batch_id, Some(batch));
+    assert!(
+        run.review_pairs.is_empty(),
+        "a batch with nothing to ask about asks nothing"
+    );
+
+    let rows = detail.rows;
     let Some(created) = rows.iter().find(|row| row.ordinal == 4) else {
         panic!("the report holds the created row");
     };

@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 104] = [
+pub const ROUTES: [Route; 114] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -263,6 +263,56 @@ pub const ROUTES: [Route; 104] = [
         method: "post",
         path: "/{version}/imports/{batch}/commit",
         summary: "Create the next chunk of an import's resources; enqueues nothing",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/imports/runs",
+        summary: "Open a marketplace import run for the seller's device to read",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/imports/runs",
+        summary: "This organisation's import runs, newest first",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/imports/runs/{run}",
+        summary: "One run with its items, its counts and its open duplicate questions",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/imports/runs/{run}/select",
+        summary: "Choose every listed resource or a named few; the rest are skipped",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/imports/runs/{run}/commit",
+        summary: "Create the next chunk of a run's matched resources; drafts nothing",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/imports/runs/{run}/abandon",
+        summary: "Settle an open run the seller has given up on",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/imports/runs/{run}/items/{ordinal}/cover",
+        summary: "The cover one read produced, before any product exists to hold it",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/duplicates",
+        summary: "The duplicate questions still waiting on the seller",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/duplicates/{lo}/{hi}",
+        summary: "Answer one pair: the same resource, different resources, or later",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/duplicates/{lo}/{hi}/undo",
+        summary: "Reverse a merge, inside the thirty days the seller was told",
     },
     Route {
         method: "get",

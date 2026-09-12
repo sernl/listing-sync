@@ -189,6 +189,50 @@ describe('the stage a batch is in', () => {
 		const line = presentStage(stageFrom('imported', null, [row({ state: 'created' })])).line;
 		expect(line).toContain('Nothing has been sent to a marketplace');
 	});
+	// The matcher runs inside the commit, so a batch that is importing with a
+	// pair open is a commit that has stopped and is waiting for an answer.
+	// Rendering it as "creating your resources" would claim work that is not
+	// happening, and it is what leaves a seller watching a bar that never
+	// moves.
+	it('reads a parked pair as a question rather than as a commit in progress', () => {
+		const stage = stageFrom('importing', null, [row({ state: 'attached' })], 2);
+		expect(stage.kind).toBe('review');
+		const shown = presentStage(stage);
+		expect(shown.label).toBe('Needs you');
+		expect(shown.tone).toBe('warn');
+		expect(shown.line).toContain('2 of these look');
+	});
+
+	// A pair parked before the commit is the same question: the spreadsheet
+	// commit creates the run, so the pairs can be open at any of the three
+	// pre-settled states.
+	it('asks the question at every state a commit can be paused in', () => {
+		for (const state of ['parsed', 'attaching', 'importing']) {
+			expect(stageFrom(state, null, [row()], 1).kind, state).toBe('review');
+		}
+	});
+
+	it('counts one pair in the singular', () => {
+		expect(presentStage(stageFrom('importing', null, [row()], 1)).line).toContain(
+			'1 of these looks'
+		);
+	});
+
+	// A settled batch is not asking anything, whatever is still parked: a
+	// parked pair never blocks an import, and a finished one has nothing left
+	// to block.
+	it('does not reopen a settled batch to ask about a pair', () => {
+		expect(stageFrom('imported', null, [row({ state: 'created' })], 3).kind).toBe('imported');
+	});
+
+	// The commit is the only thing a parked pair holds up, so the stage the
+	// page renders without one must be unchanged: nothing about the ordinary
+	// path moves when the matcher finds nothing.
+	it('leaves every stage alone when nothing is parked', () => {
+		for (const state of BATCH_STATES) {
+			expect(stageFrom(state, null, [row()], 0)).toEqual(stageFrom(state, null, [row()]));
+		}
+	});
 
 	it('counts every row state under exactly one figure', () => {
 		const rows = ROW_STATES.map((state: RowStateView) => row({ state }));

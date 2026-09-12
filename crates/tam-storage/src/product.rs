@@ -954,6 +954,41 @@ impl ProductRepo {
         Ok(deleted == 1)
     }
 
+    /// Brings back a product a merge tombstoned, inside the reversal window.
+    ///
+    /// The mirror of [`Self::soft_delete`] and deliberately not its exact
+    /// inverse: the delete also detached this product's labels, because a
+    /// catalogue no longer showing an item must not keep a label alive that
+    /// nothing visible carries. Those attachments are gone and this does not
+    /// invent them. What a reversal owes the seller is the resource, and the
+    /// caller re-attaches the marketplace label it knows about; a seller's own
+    /// labels on a merged-away product are the cost of the merge, and the
+    /// thirty-day window is what makes that cost bounded rather than hidden.
+    ///
+    /// `false` means the tenant has no deleted product of that identifier,
+    /// which makes a repeated undo a no-op rather than a fault.
+    pub async fn restore(
+        &self,
+        org: OrgId,
+        id: ProductId,
+        at: Timestamp,
+    ) -> Result<bool, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let restored = sqlx::query!(
+            "UPDATE product SET deleted_at = NULL, updated_at = $3 \
+             WHERE org_id = $1 AND id = $2 AND deleted_at IS NOT NULL",
+            uuid_to_db(org.0),
+            uuid_to_db(id.0),
+            timestamp_to_db(at)?,
+        )
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        tx.commit().await?;
+        Ok(restored == 1)
+    }
+
     /// How many live products this tenant holds, which is what
     /// `TierQuota::listings_max` bounds.
     pub async fn live_count(&self, org: OrgId) -> Result<i64, StorageError> {

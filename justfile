@@ -83,7 +83,14 @@ portable_crates := "-p tam-types -p tam-marketplace -p tam-domain -p tam-authori
 # assertion lets tam-limits compile for wasm32, which is how tam-engine-driver
 # reaches it above — and listing them on the wasm leg directly is a separate
 # call rather than a consequence of that one.
-portable_crates_64 := "-p tam-limits -p tam-pipeline"
+#
+# tam-fingerprint joined on 2026-09-12. Under --no-default-features its
+# `compute` feature is off, so what this leg compiles is the sketch
+# vocabulary and the arithmetic over it, which is what the wasm leg also gets
+# through tam-engine-driver's `default-features = false` edge. The three
+# readers behind `compute` — pdf-extract, lopdf, image_hasher — are compiled
+# by the desktop crate alone and are not on any leg here.
+portable_crates_64 := "-p tam-limits -p tam-pipeline -p tam-fingerprint"
 
 # Prove every client target still compiles. The standard libraries come from
 # rust-toolchain.toml's `targets`, so this needs the devshell rather than a

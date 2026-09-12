@@ -63,6 +63,7 @@ const COMMANDS: &[&str] = &[
     "device_check_in",
     "device_activity",
     "start_import",
+    "continue_import",
     "retry_console",
     "set_theme",
 ];

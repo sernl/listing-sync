@@ -1,0 +1,89 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT product_lo, product_hi, verdict, decided_by, winning_layer, log_odds, fingerprint_version, run_id, kept_product, raised_at, decided_at, reversible_until FROM duplicate_verdict WHERE org_id = $1 AND verdict = 'parked' AND ($2::uuid IS NULL OR run_id = $2) ORDER BY raised_at, product_lo, product_hi",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "product_lo",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "product_hi",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "verdict",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "decided_by",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "winning_layer",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "log_odds",
+        "type_info": "Float4"
+      },
+      {
+        "ordinal": 6,
+        "name": "fingerprint_version",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 7,
+        "name": "run_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 8,
+        "name": "kept_product",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 9,
+        "name": "raised_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "decided_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 11,
+        "name": "reversible_until",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "708704ef25a7dd0783051824b2af5f4c3deea74bb395d4131edd7aaf29e1f1fb"
+}

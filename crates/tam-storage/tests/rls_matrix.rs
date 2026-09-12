@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 
 use sqlx::PgPool;
 
-const TENANT_TABLES: [&str; 44] = [
+const TENANT_TABLES: [&str; 49] = [
     "billing_subscription",
     "binding_candidate",
     "blob",
@@ -19,6 +19,8 @@ const TENANT_TABLES: [&str; 44] = [
     "connection_secret",
     "device",
     "device_marketplace_session",
+    "duplicate_evidence",
+    "duplicate_verdict",
     "election_item",
     "election_rule",
     "entitlement_grant",
@@ -28,6 +30,8 @@ const TENANT_TABLES: [&str; 44] = [
     "grade_declaration_path",
     "import_batch",
     "import_batch_row",
+    "import_run",
+    "import_run_item",
     "job",
     "job_event",
     "job_item",
@@ -45,6 +49,7 @@ const TENANT_TABLES: [&str; 44] = [
     "product",
     "product_file",
     "product_file_observation",
+    "product_fingerprint",
     "product_label",
     "product_term",
     "product_tpt_base",
@@ -95,10 +100,16 @@ const GLOBAL_TABLES: [&str; 11] = [
 /// and has no business with the rest of a tenant's ledger; migration 0067 opens
 /// exactly the dead letters, because those are the rows nothing else reads.
 /// That asymmetry is the point of listing quals here rather than table names.
-const BACKOFFICE_READABLE: [(&str, &str); 13] = [
+/// `import_run` is whole and its four child tables are absent, which is the
+/// same asymmetry stated as a choice of table rather than of qual: whether a
+/// seller's import finished is a support question, and the resources it
+/// described, the sketches of their files and the duplicate questions they
+/// were asked are not.
+const BACKOFFICE_READABLE: [(&str, &str); 14] = [
     ("billing_subscription", "true"),
     ("connection", "true"),
     ("entitlement_grant", "true"),
+    ("import_run", "true"),
     ("job", "true"),
     ("job_event", "(kind = 'ImportDrainMeasured'::text)"),
     ("job_item", "true"),

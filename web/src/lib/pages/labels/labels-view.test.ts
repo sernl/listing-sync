@@ -81,23 +81,37 @@ describe('the rows', () => {
 	it('carries the count when one is known and null when it is not', () => {
 		const built = rows(
 			[
-				{ name: 'Bundles', colour: 'teal' },
-				{ name: 'Phonics', colour: 'pink' }
+				{ name: 'Bundles', colour: 'teal', system: false },
+				{ name: 'Phonics', colour: 'pink', system: false }
 			],
 			new Map([['Bundles', 12]])
 		);
 		expect(built).toEqual([
-			{ name: 'Bundles', colour: 'teal', count: 12 },
-			{ name: 'Phonics', colour: 'pink', count: null }
+			{ name: 'Bundles', colour: 'teal', count: 12, system: false },
+			{ name: 'Phonics', colour: 'pink', count: null, system: false }
 		]);
+	});
+
+	// The row is what the page reads to decide whether to offer a rename or a
+	// delete at all: both routes answer 404 for an import's own mark, so a
+	// row that lost the flag would offer two controls whose refusal says the
+	// label is not there.
+	it('keeps an import’s own mark marked as one', () => {
+		const built = rows([{ name: 'TPT', colour: 'green', system: true }], new Map());
+		expect(built[0]).toEqual({
+			name: 'TPT',
+			colour: 'green',
+			count: null,
+			system: true
+		});
 	});
 });
 
 describe('the search', () => {
 	const all = rows(
 		[
-			{ name: 'Autumn term', colour: 'amber' },
-			{ name: 'Bundles', colour: 'teal' }
+			{ name: 'Autumn term', colour: 'amber', system: false },
+			{ name: 'Bundles', colour: 'teal', system: false }
 		],
 		new Map()
 	);
@@ -203,7 +217,10 @@ describe('counting every label', () => {
 	});
 
 	it('answers an empty pass for an empty vocabulary', async () => {
-		expect(await countAll([], async () => 1)).toEqual({ counts: new Map(), failed: [] });
+		expect(await countAll([], async () => 1)).toEqual({
+			counts: new Map(),
+			failed: []
+		});
 	});
 
 	// One flaky walk costs its own label a figure and nothing else. Rejecting the

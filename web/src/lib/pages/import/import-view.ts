@@ -1,25 +1,22 @@
-// The import screen as a model: which marketplaces a shop can be brought
-// across from, what stands in the way of each, and how a request already made
-// reads on the list. Pure, so it tests without a component.
+// The import screen as a model: which marketplaces a shop can be read from,
+// what stands in the way of each, and how an import already run reads on the
+// list. Pure, so it tests without a component.
 //
-// What a request itself says — its stage, its coverage, its listings — stays
-// in `$lib/sync-request`, which the migration screen reads too. Only what is
-// true of this screen lives here: the per-marketplace card, and the wording of
-// a refusal from the machine the seller is standing at.
+// What one run itself says — its stage, its bar, its review cards — stays in
+// `run-view`, which the run page and the spreadsheet batch page both read.
+// Only what is true of this screen lives here: the per-marketplace card, the
+// wording of a refusal from the machine the seller is standing at, and the
+// row one run draws in the list of them.
 
-import type { ConnectionView, SyncRequestHead } from '$lib/api';
+import type { ConnectionView, ImportRunHead } from '$lib/api';
 import { standingMarketplaces } from '$lib/connection-standing';
 import { APP_TOO_OLD, type StartOutcome } from '$lib/desktop';
 import { TRANSPORT_OF } from '$lib/inventory';
 import { MARKETPLACE_OF, INVENTORY_ORDER } from '$lib/listings-view';
-import {
-	headStage,
-	listRowLine,
-	presentStage,
-	sourcesOn,
-	type StageTone
-} from '$lib/sync-request';
+import { AUTHORABLE_PLATFORMS } from '$lib/platforms';
+import type { StageTone } from '$lib/sync-request';
 import type { InventoryId, Marketplace } from '$lib/generated/vocab';
+import { countsLine, runBadge, runHref, runName } from './run-view';
 
 /** The tones `StatusPill` renders, named here rather than imported from the
  *  component so this module stays a plain module a node-environment test can
@@ -60,14 +57,17 @@ const ACRONYM: Record<Marketplace, string> = {
  *
  * A total map over the generated union, so a marketplace added in Rust is
  * given a sentence here or fails the web lane. Read only where the
- * marketplace offers no source at all — `sourcesOn` is what decides that, and
- * it mirrors `tam_storage::uncaptured_source`, which admits Tes and refuses
- * the rest — so `Tes` carries null and the invariant
- * that every other entry is a sentence is held by a test rather than by the
- * type. */
+ * marketplace offers no site to read at all — `importSitesOn` is what decides
+ * that, and it mirrors which marketplaces this console can author on, because
+ * an import reads a listing rather than downloading its file and needs no
+ * file-download capture to do it.
+ *
+ * Both shops the app can sign into are readable, so both carry null and the
+ * invariant that every other entry is a sentence is held by a test rather
+ * than by the type. */
 const UNREADABLE: Record<Marketplace, string | null> = {
 	Tes: null,
-	Tpt: 'Nothing here reads a TPT shop yet. TPT is where a shop brought across arrives.',
+	Tpt: null,
 	Etsy: 'Etsy is not built yet, so nothing here can read a shop on it.'
 };
 
@@ -118,7 +118,7 @@ export interface ImportCard {
 export function importCards(connections: readonly ConnectionView[] | null): ImportCard[] {
 	const held = connections === null ? null : standingMarketplaces(connections);
 	const cards = onDeviceBranch().map((marketplace) => {
-		const sites = sourcesOn(marketplace);
+		const sites = importSitesOn(marketplace);
 		return {
 			marketplace,
 			name: ACRONYM[marketplace],
@@ -155,21 +155,38 @@ function onDeviceBranch(): Marketplace[] {
 	return [...seen];
 }
 
-/** Why this card cannot hand off to Marketplace Migration, or null where it
- *  can.
+/** The sites an import can read on one marketplace, in the console's own
+ *  platform order.
  *
- * Two answers rather than three: under D8 the request is raised on Marketplace
- * Migration, so the authorship declaration is gated where it is raised and is
- * no longer this page's to ask about. What remains is whether a shop can be
- * read at all and whether this console knows the seller has one.
+ * The authorable ones, which is a wider set than a migration's: a migration
+ * has to download the listing's file and `tam_storage::uncaptured_source`
+ * refuses TPT for that, while an import reads what describes a listing and
+ * needs no file at all. A TPT import therefore carries a title, a price and
+ * grades and no digest, which is exactly what the duplicate review is told
+ * about it. */
+export function importSitesOn(marketplace: Marketplace): InventoryId[] {
+	return AUTHORABLE_PLATFORMS.filter((inventory) => MARKETPLACE_OF[inventory] === marketplace);
+}
+
+/** Why a shop cannot be read from this card, or null where it can.
+ *
+ * Three answers rather than four: the TPT copyright declaration is asked once
+ * at connect time, on the Marketplaces screen, so it is no longer this page's
+ * to gate on. What remains is whether a shop can be read at all, whether this
+ * console knows the seller has one, and whether the plan covers reading one —
+ * which the page supplies, because it is a fact about the account rather than
+ * about the card.
  *
  * Tested in the order a seller can act on the answers: a marketplace nothing
  * reads is not theirs to fix, and an absent connection is fixed on their own
  * machine. A disabled control states its reason, which is what `Button`
  * requires of every caller. */
-export function handoffBlocked(card: ImportCard): string | null {
+export function importBlocked(card: ImportCard, planRefusal: string | null): string | null {
 	if (card.unreadable !== null) {
 		return card.unreadable;
+	}
+	if (planRefusal !== null) {
+		return planRefusal;
 	}
 	if (card.standing === 'unread') {
 		return connectionUnknown(card);
@@ -180,23 +197,21 @@ export function handoffBlocked(card: ImportCard): string | null {
 	return null;
 }
 
-/** The screen that owns raising the request (D8). */
-export const MIGRATION_HREF = '/automations/migration';
+/** What the card's own control says. Names the shop, because a page offering
+ *  two of them needs each button to say which one it reads. */
+export function importLabel(card: ImportCard): string {
+	return `Import from ${card.name}`;
+}
 
-/** What the handoff control says. Names the destination, because pressing it
- *  leaves this page rather than starting anything here. */
-export const HANDOFF_LABEL = 'Continue on Marketplace Migration';
-
-/** What importing is today, said once and plainly.
+/** What a seller is told when the card is pressed in an ordinary browser.
  *
- * D8: the request both screens raised is a migration — it drafts every listing
- * on TPT — and the backend has no catalogue-only import kind, so this page
- * describes and routes rather than pretending to a verb that does not exist
- * yet. Saying the coming feature outright is what keeps the page honest about
- * why it is a description and not an action. */
-export const IMPORT_IS_A_MIGRATION =
-	'For now, every listing we find is saved as a TPT draft for you to check. Importing ' +
-	'without drafting anywhere is coming.';
+ * Not a refusal and not a fault: the shop is read under the login held on the
+ * seller's own machine, and no server of ours holds one. The run is created
+ * either way, so the sentence names where to carry on rather than telling
+ * them nothing happened. */
+export const NEEDS_THE_APP =
+	'Your shop is read by the Teachouse app on your own computer, where your marketplace login ' +
+	'is kept. Open this page in the app to start the reading.';
 
 /** What the card says while this console could not read the connections list.
  *
@@ -220,7 +235,10 @@ const STANDING_BADGE: Record<ConnectionStanding, { tone: PillTone; label: string
 	unread: { tone: 'soon', label: 'Not known' }
 };
 
-export function standingBadge(card: ImportCard): { tone: PillTone; label: string } {
+export function standingBadge(card: ImportCard): {
+	tone: PillTone;
+	label: string;
+} {
 	return STANDING_BADGE[card.standing];
 }
 
@@ -240,9 +258,12 @@ export function notConnected(card: ImportCard): string {
 }
 
 /** The permanent line under the site choice, which says where the work runs
- *  and therefore when it starts. */
+ *  and therefore what has to be open for it to run at all. */
 export function deviceLine(card: ImportCard): string {
-	return `${card.name} runs on your own computer, so the import starts the next time that computer checks in.`;
+	return (
+		`${card.name} is read by the Teachouse app on your own computer, under the login kept ` +
+		'there. The app has to be open while it reads.'
+	);
 }
 
 /** What an import is, said before anything is chosen.
@@ -303,40 +324,44 @@ export function startRefusal(outcome: StartOutcome): string | null {
 	}
 }
 
-/** One import as the list shows it. */
+/** One import as the list shows it, whichever way it came in. */
 export interface ImportRow {
-	request: string;
-	/** Where the shop was read and where it arrived, each drawn by its mark. */
-	source: InventoryId;
-	target: InventoryId;
-	/** The one line the row says about where the request stands. */
+	id: string;
+	/** Where it is read: its own page for a shop, the batch's report for a
+	 *  sheet. */
+	href: string;
+	/** What it is called: the shop, or the word for the other way in. */
+	name: string;
+	/** The shop it read, where it read one. The row draws the mark from it
+	 *  and a spreadsheet row draws none. */
+	source: InventoryId | null;
+	/** The one line the row says about what the run did. */
 	line: string;
 	label: string;
 	tone: PillTone;
 	created_at: number;
 }
 
-/** Every import this seller has made, newest first.
+/** Every import this seller has run, newest first.
  *
- * Filtered to the migrate disposition, because a sync is not an import and
- * belongs to the Automations screens; the endpoint serves both. The order is
- * the endpoint's own, which is newest first, so nothing is re-sorted here. */
-export function importRows(heads: readonly SyncRequestHead[]): ImportRow[] {
-	return heads
-		.filter((head) => head.disposition === 'migrate')
-		.map((head) => {
-			const stage = headStage(head);
-			const shown = presentStage(stage);
-			return {
-				request: head.request,
-				source: head.source,
-				target: head.target,
-				line: listRowLine(stage),
-				label: shown.label,
-				tone: PILL_TONE[shown.tone],
-				created_at: head.created_at
-			};
-		});
+ * Both kinds in one list, because a seller who imported a shop on Monday and
+ * a spreadsheet on Tuesday has made two imports and not one of each: the two
+ * tables behind them are ours, not theirs. The order is the endpoint's own,
+ * which is newest first, so nothing is re-sorted here. */
+export function importRows(runs: readonly ImportRunHead[]): ImportRow[] {
+	return runs.map((run) => {
+		const badge = runBadge(run.state);
+		return {
+			id: run.id,
+			href: runHref(run),
+			name: runName(run),
+			source: run.source,
+			line: countsLine(run.counts, run.read_total),
+			label: badge.label,
+			tone: badge.tone,
+			created_at: run.created_at
+		};
+	});
 }
 
 /** What the list says while it holds nothing, which is not the same as what it

@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO import_run_item (org_id, run_id, locator, ordinal, state, product_id, observed, title, price_minor, price_currency, cover_hash, observed_by_device, observed_at, read_at) VALUES ($1, $2, $3, $4, 'read', $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT (org_id, run_id, locator) DO UPDATE SET state = 'read', observed = EXCLUDED.observed, title = EXCLUDED.title, price_minor = EXCLUDED.price_minor, price_currency = EXCLUDED.price_currency, cover_hash = EXCLUDED.cover_hash, observed_by_device = EXCLUDED.observed_by_device, observed_at = EXCLUDED.observed_at, read_at = EXCLUDED.read_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Int4",
+        "Uuid",
+        "Jsonb",
+        "Text",
+        "Int8",
+        "Text",
+        "Bytea",
+        "Text",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "95bc60dd7fb6159cdc4a304182fae313f62b1d3b39c1d6d2f0dc6c1dc53ff5fc"
+}

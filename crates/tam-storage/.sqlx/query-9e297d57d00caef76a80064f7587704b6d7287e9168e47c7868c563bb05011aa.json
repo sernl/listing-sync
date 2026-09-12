@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE import_run_item SET state = 'skipped', skip_reason = 'not chosen', settled_at = $3 WHERE org_id = $1 AND run_id = $2 AND state = 'listed'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9e297d57d00caef76a80064f7587704b6d7287e9168e47c7868c563bb05011aa"
+}

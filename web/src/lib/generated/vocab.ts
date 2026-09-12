@@ -58,6 +58,8 @@ export type APIErrorCode =
   | "mapping_not_bindable"
   | "listing_already_claimed"
   | "org_slug_taken"
+  | "import_run_open"
+  | "duplicate_pair_settled"
   | "internal";
 
 export const API_ERROR_CODES: readonly APIErrorCode[] = [
@@ -83,6 +85,8 @@ export const API_ERROR_CODES: readonly APIErrorCode[] = [
   "mapping_not_bindable",
   "listing_already_claimed",
   "org_slug_taken",
+  "import_run_open",
+  "duplicate_pair_settled",
   "internal",
 ];
 
@@ -526,7 +530,11 @@ export type JobEventKind =
   | "ImportDrainMeasured"
   | "ItemBindAnomaly"
   | "ImportPageApplied"
-  | "ImportCompleted";
+  | "ImportCompleted"
+  | "ImportRunListed"
+  | "ImportRunProgress"
+  | "ImportRunItemSettled"
+  | "ImportRunSettled";
 
 export const JOB_EVENT_KINDS: readonly JobEventKind[] = [
   "JobQueued",
@@ -546,6 +554,85 @@ export const JOB_EVENT_KINDS: readonly JobEventKind[] = [
   "ItemBindAnomaly",
   "ImportPageApplied",
   "ImportCompleted",
+  "ImportRunListed",
+  "ImportRunProgress",
+  "ImportRunItemSettled",
+  "ImportRunSettled",
+];
+
+export type ImportRunKind =
+  | "marketplace"
+  | "spreadsheet";
+
+export const IMPORT_RUN_KINDS: readonly ImportRunKind[] = [
+  "marketplace",
+  "spreadsheet",
+];
+
+export type ImportRunState =
+  | "reading"
+  | "reviewing"
+  | "committing"
+  | "complete"
+  | "failed"
+  | "abandoned";
+
+export const IMPORT_RUN_STATES: readonly ImportRunState[] = [
+  "reading",
+  "reviewing",
+  "committing",
+  "complete",
+  "failed",
+  "abandoned",
+];
+
+export type ImportRunItemState =
+  | "listed"
+  | "selected"
+  | "read"
+  | "matched"
+  | "review"
+  | "imported"
+  | "skipped"
+  | "failed";
+
+export const IMPORT_RUN_ITEM_STATES: readonly ImportRunItemState[] = [
+  "listed",
+  "selected",
+  "read",
+  "matched",
+  "review",
+  "imported",
+  "skipped",
+  "failed",
+];
+
+export type DuplicateVerdict =
+  | "same"
+  | "different"
+  | "parked";
+
+export const DUPLICATE_VERDICTS: readonly DuplicateVerdict[] = [
+  "same",
+  "different",
+  "parked",
+];
+
+export type MatchLayer =
+  | "l1"
+  | "l1b"
+  | "l2"
+  | "l3"
+  | "l4"
+  | "l5";
+
+export const MATCH_LAYERS: readonly MatchLayer[] = [
+  "l1",
+  "l1b",
+  "l2",
+  "l3",
+  "l4",
+  "l5",
 ];
 
 export type Plan =

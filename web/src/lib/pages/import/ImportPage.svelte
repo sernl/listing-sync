@@ -1,22 +1,17 @@
 <script lang="ts">
 	import { createQuery } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
-	import {
-		ApiFailure,
-		api,
-		type ConnectionView,
-		type ImportBatchView,
-		type SyncRequestHead
-	} from '$lib/api';
+	import { ApiFailure, api, type ConnectionView, type ImportRunHead } from '$lib/api';
+	import type { InventoryId } from '$lib/generated/vocab';
 	import Banner from '$lib/Banner.svelte';
 	import { anyConnectionStands } from '$lib/connection-standing';
 	import Button from '$lib/Button.svelte';
+	import { desktopInvoker, startImportHere } from '$lib/desktop';
 	import { agoLabel } from '$lib/elapsed';
 	import { entitlementRead, featureOf } from '$lib/entitlement-read';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
-	import { readState } from '$lib/pages/automations/read-state';
 	import { saveDocument } from '$lib/pages/export/download';
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
 	import StatusPill from '$lib/StatusPill.svelte';
@@ -25,22 +20,22 @@
 		CONNECTIONS_UNREAD,
 		CONNECT_HREF,
 		CONNECT_LABEL,
-		HANDOFF_LABEL,
 		IMPORTS_UNREAD,
-		IMPORT_IS_A_MIGRATION,
+		NEEDS_THE_APP,
 		NOTHING_CONNECTED,
-		MIGRATION_HREF,
 		NO_IMPORT_YET,
 		WHAT_AN_IMPORT_IS,
 		deviceLine,
-		handoffBlocked,
+		importBlocked,
 		importCards,
+		importLabel,
 		importRows,
 		notConnected,
-		standingBadge
+		standingBadge,
+		startRefusal
 	} from './import-view';
 	import { fetchTemplate, openBatchFrom, uploadSheet } from './api';
-	import { IMPORT_ALREADY_OPEN, batchHref, batchRows, listCopy } from './sheet-view';
+	import { IMPORT_ALREADY_OPEN, batchHref } from './sheet-view';
 	import './import.css';
 	import './sheet.css';
 
@@ -49,26 +44,39 @@
 	let connections = $state<ConnectionView[] | null>(null);
 	let connectionsUnread = $state(false);
 
-	let requests = $state<SyncRequestHead[]>([]);
-	let requestsLoaded = $state(false);
-	let requestsUnread = $state(false);
+	// Both ways in, in one list. A seller who read a shop on Monday and a
+	// spreadsheet on Tuesday has made two imports, not one of each: the two
+	// tables behind them are ours rather than theirs.
+	let runs = $state<ImportRunHead[]>([]);
+	let runsLoaded = $state(false);
+	let runsUnread = $state(false);
 
-	// The spreadsheet import, which is a second way in rather than a second
-	// view of the same thing: these batches and the migrate requests below
-	// address different identifier spaces and settle in different words.
-	let batches = $state<ImportBatchView[]>([]);
-	let batchesLoaded = $state(false);
-	let batchesUnread = $state(false);
-	// Null until the listing has been read. `open` is the server's own answer
-	// rather than a search of the list, so the card's reason and the index's
-	// predicate stay one thing.
+	// The open batch, so the spreadsheet card's upload control states why it
+	// is unavailable rather than losing its button. The server's own answer
+	// rather than a search of a list.
 	let openBatch = $state<string | null>(null);
 	let sheetRefusal = $state<string | null>(null);
 	let sending = $state(false);
 	let downloading = $state(false);
 
+	// Which marketplace is being started, so one card's spinner never claims
+	// the other's. Null while nothing is starting.
+	let starting = $state<string | null>(null);
+	// The application's own words when it declines, kept apart from the read
+	// failures above: one is this page failing to read something, the other is
+	// this computer declining to run something, and they are different facts.
+	let declined = $state<string | null>(null);
+	// Set when the run was created and the reading could not be started from
+	// here — in a browser, or by an application that refused. The run exists
+	// and must stay reachable, so the page offers it.
+	let raised = $state<string | null>(null);
+
 	const base = $props.id();
 	const sheetInputId = `${base}-sheet`;
+
+	// Read once: whether this console is running inside the desktop
+	// application does not change while the page is open.
+	const invoke = desktopInvoker();
 
 	const cards = $derived(importCards(connections));
 
@@ -78,14 +86,12 @@
 	// both.
 	const plan = createQuery(() => entitlementRead);
 	const uploadRefusal = $derived(featureOf(plan.data, 'import_spreadsheet'));
-	const handoffRefusal = $derived(featureOf(plan.data, 'import_marketplace'));
+	const shopRefusal = $derived(featureOf(plan.data, 'import_marketplace'));
 
 	/** Whether the seller has no marketplace connected at all.
 	 *
 	 *  Over every connection rather than over this screen's own cards, because
-	 *  the sentence claims about all of them. The cards are the device branch
-	 *  alone, so a seller connected only on the server branch would be told
-	 *  they have nothing, which is false.
+	 *  the sentence claims about all of them.
 	 *
 	 *  Only once the list has been read: a null list is not a seller with no
 	 *  shop, and raising this on it would tell them there is nothing when all
@@ -93,9 +99,7 @@
 	const nothingHeld = $derived(
 		!connectionsUnread && connections !== null && !anyConnectionStands(connections)
 	);
-	const rows = $derived(importRows(requests));
-	const sheets = $derived(readState(batchesLoaded, batchesUnread, batchRows(batches)));
-	const sheetsSay = $derived(listCopy(sheets));
+	const rows = $derived(importRows(runs));
 
 	$effect(() => {
 		void api
@@ -108,33 +112,27 @@
 				connections = null;
 				connectionsUnread = true;
 			});
-		void loadRequests();
-		void loadBatches();
+		void loadRuns();
+		void loadOpenBatch();
 	});
 
-	async function loadRequests() {
+	async function loadRuns() {
 		try {
-			requests = (await api.syncRequests()).requests;
-			requestsUnread = false;
+			runs = (await api.importRuns()).runs;
+			runsUnread = false;
 		} catch {
-			requests = [];
-			requestsUnread = true;
+			runs = [];
+			runsUnread = true;
 		}
-		requestsLoaded = true;
+		runsLoaded = true;
 	}
 
-	async function loadBatches() {
+	async function loadOpenBatch() {
 		try {
-			const held = await api.imports();
-			batches = held.imports;
-			openBatch = held.open;
-			batchesUnread = false;
+			openBatch = (await api.imports()).open;
 		} catch {
-			batches = [];
 			openBatch = null;
-			batchesUnread = true;
 		}
-		batchesLoaded = true;
 	}
 
 	function sheetRefusalOf(failure: unknown): string {
@@ -181,7 +179,46 @@
 			sheetRefusal = sheetRefusalOf(failure);
 		} finally {
 			sending = false;
-			await loadBatches();
+			await loadOpenBatch();
+		}
+	}
+
+	/** Raise a run, then ask this computer to read the shop into it.
+	 *
+	 *  Two acts in one press, in that order: the run is the row the server,
+	 *  this page and the application all address, so it exists before anyone
+	 *  is asked to fill it. A computer that then declines leaves a run the
+	 *  seller can open and carry on from, which is why the identifier is kept
+	 *  rather than discarded with the refusal. */
+	async function startImport(inventory: InventoryId) {
+		if (starting !== null) {
+			return;
+		}
+		starting = inventory;
+		declined = null;
+		raised = null;
+		try {
+			const run = await api.createImportRun(inventory);
+			raised = run.id;
+			const outcome = await startImportHere(invoke, run.id);
+			const refused = startRefusal(outcome);
+			if (refused !== null) {
+				declined = refused;
+				return;
+			}
+			if (outcome.kind === 'unavailable') {
+				declined = NEEDS_THE_APP;
+				return;
+			}
+			await goto(`/imports/runs/${run.id}`);
+		} catch (failure) {
+			declined =
+				failure instanceof ApiFailure
+					? failure.message
+					: 'That did not reach us. No import was started.';
+		} finally {
+			starting = null;
+			await loadRuns();
 		}
 	}
 </script>
@@ -194,7 +231,6 @@
 	/>
 
 	<p class="import-lead">{WHAT_AN_IMPORT_IS}</p>
-	<p class="import-lead">{IMPORT_IS_A_MIGRATION}</p>
 
 	{#if connectionsUnread}
 		<Banner tone="bad" title="We could not read your marketplaces">{CONNECTIONS_UNREAD}</Banner>
@@ -255,9 +291,23 @@
 		</div>
 	</section>
 
+	{#if declined !== null}
+		<Banner tone="bad" title="The reading did not start">
+			{declined}
+			{#snippet action()}
+				{#if raised !== null}
+					<Button tier="outline" small href={`/imports/runs/${raised}`}>
+						Open the import
+					</Button>
+				{/if}
+			{/snippet}
+		</Banner>
+	{/if}
+
 	<div class="import-cards">
 		{#each cards as card (card.marketplace)}
-			{@const blocked = handoffRefusal ?? handoffBlocked(card)}
+			{@const site = card.sites[0]}
+			{@const blocked = importBlocked(card, shopRefusal)}
 			<section class="import-card">
 				<div class="head">
 					<h2><MarketplaceMark marketplace={card.marketplace} size={22} /></h2>
@@ -284,21 +334,26 @@
 						</Banner>
 					{/if}
 
+					{#if invoke === null}
+						<p class="why">{NEEDS_THE_APP}</p>
+					{/if}
+
 					<div class="actions">
-						{#if blocked === null}
-							<Button tier="primary" icon="arrow-right-left" href={MIGRATION_HREF}>
-								{HANDOFF_LABEL}
+						{#if blocked === null && site !== undefined}
+							<Button
+								tier="primary"
+								icon="download"
+								disabled={starting !== null}
+								reason={starting !== null ? 'An import is starting.' : undefined}
+								onclick={() => void startImport(site)}
+							>
+								{starting === site ? 'Starting…' : importLabel(card)}
 							</Button>
 						{:else}
 							<!-- Disabled rather than absent, so the card still shows what
 							     the seller would do here and says what stands in the way. -->
-							<Button
-								tier="primary"
-								icon="arrow-right-left"
-								disabled
-								reason={blocked ?? undefined}
-							>
-								{HANDOFF_LABEL}
+							<Button tier="primary" icon="download" disabled reason={blocked ?? undefined}>
+								{importLabel(card)}
 							</Button>
 						{/if}
 					</div>
@@ -309,60 +364,32 @@
 
 	<p class="foot-note">{FILES_STAY_ON_YOUR_COMPUTER}</p>
 
-	<Panel
-		title="Spreadsheet imports"
-		description="Every sheet you have uploaded, newest first."
-	>
-		{#if sheetsSay !== null}
-			<p class="quiet">{sheetsSay.title}</p>
-			{#if sheetsSay.body !== ''}<p class="quiet">{sheetsSay.body}</p>{/if}
-		{:else if sheets.kind === 'rows'}
-			{#each sheets.rows as sheet (sheet.id)}
-				<!-- The badge and the line stay inside one link, for the reason the
-				     migrate list beside this one states: two of the labels are told
-				     apart by the sentence that follows them. -->
-				<a class="sh-listed" href={sheet.href}>
-					<span class="mark"><StatusPill tone={sheet.tone} label={sheet.label} /></span>
-					<span class="who">
-						<span class="t">{sheet.name}</span>
-						<span class="w">{sheet.line}</span>
-					</span>
-					<span class="at">{agoLabel(sheet.createdAt, Date.now())}</span>
-				</a>
-			{/each}
-		{/if}
-	</Panel>
-
-	<Panel
-		title="Your imports"
-		description="Every import you have run, newest first."
-	>
-		{#if requestsUnread}
+	<Panel title="Your imports" description="Every import you have run, newest first.">
+		{#if runsUnread}
 			<p class="quiet">{IMPORTS_UNREAD}</p>
-		{:else if !requestsLoaded}
+		{:else if !runsLoaded}
 			<p class="quiet">Loading…</p>
 		{:else if rows.length === 0}
 			<Placeholder
 				icon="download"
 				headline={NO_IMPORT_YET}
-				body="Choose a marketplace above to start one."
+				body="Upload a spreadsheet or choose a marketplace above to start one."
 			/>
 		{:else}
-			{#each rows as row (row.request)}
-				<!-- The badge and the line must stay inside one link. Two of the stage
-				     labels are "Nothing to import" and "Nothing imported", which a
-				     reader who gets no colour tells apart only by the sentence that
-				     follows; announced as one link, the pairing resolves for them as
-				     the tone resolves it for everyone else. Splitting the badge out of
-				     this anchor, or showing the label without its line anywhere, makes
-				     those two labels indistinguishable and needs different words
-				     upstream rather than a change here. -->
-				<a class="import-row" href={`/sync/requests/${row.request}`}>
+			{#each rows as row (row.id)}
+				<!-- The badge and the line stay inside one link. Two of the labels
+				     are told apart by the sentence that follows them, and announced
+				     as one link the pairing resolves for a reader who gets no
+				     colour as the tone resolves it for everyone else. -->
+				<a class="import-row" href={row.href}>
 					<span class="mark"><StatusPill tone={row.tone} label={row.label} /></span>
 					<span class="who">
 						<span class="t">
-							<MarketplaceMark inventory={row.source} /> →
-							<MarketplaceMark inventory={row.target} />
+							{#if row.source !== null}
+								<MarketplaceMark inventory={row.source} />
+							{:else}
+								{row.name}
+							{/if}
 						</span>
 						<span class="w">{row.line}</span>
 					</span>

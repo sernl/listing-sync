@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE import_run SET read_total = (SELECT count(*)::int FROM import_run_item WHERE org_id = $1 AND run_id = $2) WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ca371e7897b332f1ae71db3c4a401e2ac269f2926cc73e487f227f950c396c63"
+}

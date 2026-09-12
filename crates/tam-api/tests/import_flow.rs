@@ -251,7 +251,8 @@ fn observed(resource: i64, digest: u8) -> ObservedResource {
             price: ImportedPrice::Free,
             state: Some(ListingState::Live),
         },
-        file: ObservedFile {
+        fingerprint: None,
+        file: Some(ObservedFile {
             payload_file_name: FileName::new("worksheet.pdf").expect("a plain name"),
             payload_content_type: ContentType::new("application/pdf").expect("a media type"),
             kind: FileKind::Pdf,
@@ -259,8 +260,8 @@ fn observed(resource: i64, digest: u8) -> ObservedResource {
             byte_len: 4_096,
             scan: ScanOutcome::Clean { at: NOW },
             entry: None,
-        },
-        cover_png: cover(),
+        }),
+        cover_png: Some(cover()),
     }
 }
 
@@ -416,7 +417,12 @@ async fn a_page_applies_its_resources_and_keeps_only_their_covers(pool: PgPool) 
     let request = open_request(&app, &TOKEN_A, Uuid([0x51; 16])).await;
 
     let page = ImportPage {
-        request,
+        // The migrate leg names a request; `run` is the field a phase 2 import
+        // names instead, and a page names one or the other. This one is the
+        // request's, and the run identifier it carries is never read.
+        run: tam_types::Uuid([0; 16]),
+        request: Some(request),
+        listed: None,
         resources: vec![observed(13_549_794, 0x5A), observed(13_549_795, 0x5B)],
         skipped: Vec::new(),
         complete: false,
@@ -491,7 +497,12 @@ async fn the_same_page_twice_describes_each_resource_once(pool: PgPool) {
     let request = open_request(&app, &TOKEN_A, Uuid([0x52; 16])).await;
 
     let page = ImportPage {
-        request,
+        // The migrate leg names a request; `run` is the field a phase 2 import
+        // names instead, and a page names one or the other. This one is the
+        // request's, and the run identifier it carries is never read.
+        run: tam_types::Uuid([0; 16]),
+        request: Some(request),
+        listed: None,
         resources: vec![observed(13_549_794, 0x5A)],
         skipped: Vec::new(),
         complete: false,
@@ -534,7 +545,12 @@ async fn a_completing_page_mints_the_create_job_once(pool: PgPool) {
     let request = open_request(&app, &TOKEN_A, Uuid([0x53; 16])).await;
 
     let page = ImportPage {
-        request,
+        // The migrate leg names a request; `run` is the field a phase 2 import
+        // names instead, and a page names one or the other. This one is the
+        // request's, and the run identifier it carries is never read.
+        run: tam_types::Uuid([0; 16]),
+        request: Some(request),
+        listed: None,
         resources: vec![observed(13_549_794, 0x5A), observed(13_549_795, 0x5B)],
         skipped: Vec::new(),
         complete: true,
@@ -577,7 +593,12 @@ async fn an_empty_catalogue_completes_rather_than_failing(pool: PgPool) {
     let request = open_request(&app, &TOKEN_A, Uuid([0x54; 16])).await;
 
     let page = ImportPage {
-        request,
+        // The migrate leg names a request; `run` is the field a phase 2 import
+        // names instead, and a page names one or the other. This one is the
+        // request's, and the run identifier it carries is never read.
+        run: tam_types::Uuid([0; 16]),
+        request: Some(request),
+        listed: None,
         resources: Vec::new(),
         skipped: vec![SkippedResource {
             locator: Locator::from_resource_id(13_549_796),
@@ -639,7 +660,12 @@ async fn a_page_is_refused_across_a_tenant_and_for_a_revoked_device(pool: PgPool
     let request = open_request(&app, &TOKEN_A, Uuid([0x55; 16])).await;
 
     let page = ImportPage {
-        request,
+        // The migrate leg names a request; `run` is the field a phase 2 import
+        // names instead, and a page names one or the other. This one is the
+        // request's, and the run identifier it carries is never read.
+        run: tam_types::Uuid([0; 16]),
+        request: Some(request),
+        listed: None,
         resources: vec![observed(13_549_794, 0x5A)],
         skipped: Vec::new(),
         complete: false,
@@ -774,7 +800,12 @@ async fn the_serialized_view_is_what_the_console_receives(pool: PgPool) {
     let request = open_request(&app, &TOKEN_A, Uuid([0x57; 16])).await;
 
     let page = ImportPage {
-        request,
+        // The migrate leg names a request; `run` is the field a phase 2 import
+        // names instead, and a page names one or the other. This one is the
+        // request's, and the run identifier it carries is never read.
+        run: tam_types::Uuid([0; 16]),
+        request: Some(request),
+        listed: None,
         resources: vec![observed(13_549_794, 0x5A)],
         skipped: vec![SkippedResource {
             locator: Locator::from_resource_id(13_549_796),
@@ -835,7 +866,12 @@ async fn a_field_that_carries_a_payload_is_refused_at_the_wire(pool: PgPool) {
     // A media type carrying an encoded payload, posted as raw json so the
     // client-side constructor cannot refuse it first.
     let mut body = serde_json::to_value(&ImportPage {
-        request,
+        // The migrate leg names a request; `run` is the field a phase 2 import
+        // names instead, and a page names one or the other. This one is the
+        // request's, and the run identifier it carries is never read.
+        run: tam_types::Uuid([0; 16]),
+        request: Some(request),
+        listed: None,
         resources: vec![observed(13_549_794, 0x5A)],
         skipped: Vec::new(),
         complete: false,
@@ -896,7 +932,9 @@ async fn the_sync_list_reaches_a_request_that_minted_no_job(pool: PgPool) {
     let second = open_request(&app, &TOKEN_A, Uuid([0x62; 16])).await;
     // One page against the second, with a skip, so the counts differ.
     let page = ImportPage {
-        request: second,
+        run: tam_types::Uuid([0; 16]),
+        request: Some(second),
+        listed: None,
         resources: vec![observed(13_549_794, 0x5A)],
         skipped: vec![SkippedResource {
             locator: Locator::from_resource_id(13_549_796),
@@ -1002,7 +1040,12 @@ async fn a_device_that_stopped_settles_the_request_with_its_reason(pool: PgPool)
     let request = open_request(&app, &TOKEN_A, Uuid([0x71; 16])).await;
 
     let stopped = ImportPage {
-        request,
+        // The migrate leg names a request; `run` is the field a phase 2 import
+        // names instead, and a page names one or the other. This one is the
+        // request's, and the run identifier it carries is never read.
+        run: tam_types::Uuid([0; 16]),
+        request: Some(request),
+        listed: None,
         resources: Vec::new(),
         skipped: Vec::new(),
         complete: true,
@@ -1027,7 +1070,12 @@ async fn a_device_that_stopped_settles_the_request_with_its_reason(pool: PgPool)
     // A late second report does not overwrite the first reason, and does not
     // reopen anything.
     let again = ImportPage {
-        request,
+        // The migrate leg names a request; `run` is the field a phase 2 import
+        // names instead, and a page names one or the other. This one is the
+        // request's, and the run identifier it carries is never read.
+        run: tam_types::Uuid([0; 16]),
+        request: Some(request),
+        listed: None,
         resources: Vec::new(),
         skipped: Vec::new(),
         complete: true,

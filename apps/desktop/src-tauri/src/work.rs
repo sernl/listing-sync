@@ -33,7 +33,7 @@ use tokio::sync::Mutex;
 
 use crate::device::DeviceId;
 use crate::entitlement::EntitlementGate;
-use crate::import::{SourceError, SourceFuture};
+use crate::import::{ListedResource, Locator, SourceError, SourceFuture};
 use crate::ledger::{HttpLedger, LedgerTransport};
 use crate::marketplace::{LiveTransport, SessionTransport, TesLive, TptLive};
 use crate::payload::{DevicePayloads, MarketplaceFiles, PayloadTransport};
@@ -362,7 +362,7 @@ impl<B: LiveTransport + Clone> crate::import::CatalogueSource for SellerCatalogu
     /// seller can read, and a filter here would instead make a draft vanish
     /// from the migration silently — which is the outcome
     /// `ImportPage::skipped` exists to prevent, one step earlier.
-    fn list(&self) -> SourceFuture<'_, Vec<i64>> {
+    fn list(&self) -> SourceFuture<'_, Vec<ListedResource>> {
         Box::pin(async move {
             let adapter = self.adapter()?;
             let entries = adapter
@@ -371,7 +371,23 @@ impl<B: LiveTransport + Clone> crate::import::CatalogueSource for SellerCatalogu
                 })
                 .await
                 .map_err(|why| self.answered(&why))?;
-            Ok(entries.into_iter().map(|entry| entry.id).collect())
+            Ok(entries
+                .into_iter()
+                .map(|entry| ListedResource {
+                    locator: Locator::from_resource_id(entry.id),
+                    title: entry.title,
+                    price_minor: entry.price_pence,
+                    // The unit the field names. Tes prices in pence and this
+                    // is the code those pence are, stated rather than left
+                    // for the console to assume from the marketplace.
+                    currency: entry.price_pence.map(|_| "GBP".to_owned()),
+                    state: Some(if entry.published {
+                        ListingState::Live
+                    } else {
+                        ListingState::Draft
+                    }),
+                })
+                .collect())
         })
     }
 
@@ -390,7 +406,7 @@ impl<B: LiveTransport + Clone> crate::import::CatalogueSource for SellerCatalogu
         })
     }
 
-    fn bundle(&self, resource: i64) -> SourceFuture<'_, Vec<u8>> {
+    fn bundle(&self, resource: i64) -> SourceFuture<'_, Option<Vec<u8>>> {
         Box::pin(async move {
             let adapter = self.adapter()?;
             adapter
@@ -401,8 +417,123 @@ impl<B: LiveTransport + Clone> crate::import::CatalogueSource for SellerCatalogu
                     tam_marketplace_tes::DraftId(resource),
                 )
                 .await
+                .map(Some)
                 .map_err(|why| self.answered(&why))
         })
+    }
+}
+
+/// The seller's own TPT shop, as this device can read it.
+///
+/// A second binding rather than a parameter of [`SellerCatalogue`]: the two
+/// adapters name a resource with different types — `DraftId` against
+/// `ProductId` — and erasing that difference behind a trait would buy one
+/// struct at the cost of the thing that makes each binding checkable, which
+/// is that it names its own marketplace's vocabulary.
+///
+/// It reads and it does not fetch. `tpt.download_resource_bundle` is
+/// uncaptured, so this device holds no way to obtain the seller's TPT file,
+/// and `bundle` says so by answering `None` rather than by failing: a TPT
+/// import brings across the listing, and the file layers of the duplicate
+/// matcher are simply unavailable for it.
+pub struct TptSellerCatalogue<B: LiveTransport = TptLive> {
+    sessions: Arc<dyn SessionStore>,
+    inventory: InventoryId,
+    live: B,
+}
+
+impl TptSellerCatalogue<TptLive> {
+    #[must_use]
+    pub const fn new(sessions: Arc<dyn SessionStore>, inventory: InventoryId) -> Self {
+        Self {
+            sessions,
+            inventory,
+            live: TptLive,
+        }
+    }
+}
+
+impl<B: LiveTransport + Clone> TptSellerCatalogue<B> {
+    /// The same, over a stated transport builder, for the tests.
+    #[must_use]
+    pub const fn over(sessions: Arc<dyn SessionStore>, inventory: InventoryId, live: B) -> Self {
+        Self {
+            sessions,
+            inventory,
+            live,
+        }
+    }
+
+    /// `NoUploads` and no attestation: a catalogue read writes nothing, and
+    /// the authorship declaration is the seller's statement made at connect
+    /// time rather than a constant a read may assert.
+    fn adapter(
+        &self,
+    ) -> Result<TptAdapter<SessionTransport<B>, NoUploads, SleepingPause>, SourceError> {
+        let transport = SessionTransport::new(self.live.clone(), Arc::clone(&self.sessions))
+            .map_err(|why| SourceError::NoClient(why.to_string()))?;
+        Ok(TptAdapter::new(transport, NoUploads, SleepingPause))
+    }
+
+    fn answered(&self, error: &AdapterError) -> SourceError {
+        SourceError::Marketplace {
+            marketplace: self.inventory.marketplace(),
+            why: marketplace_sentence(error),
+        }
+    }
+}
+
+impl<B: LiveTransport + Clone> crate::import::CatalogueSource for TptSellerCatalogue<B> {
+    fn list(&self) -> SourceFuture<'_, Vec<ListedResource>> {
+        Box::pin(async move {
+            let adapter = self.adapter()?;
+            let entries = adapter
+                .list_own_resources(&FetchReason::FirstPartyExport {
+                    inventory: self.inventory,
+                })
+                .await
+                .map_err(|why| self.answered(&why))?;
+            Ok(entries
+                .into_iter()
+                .map(|entry| ListedResource {
+                    locator: Locator::from_resource_id(
+                        i64::try_from(entry.id.0).unwrap_or(i64::MAX),
+                    ),
+                    title: entry.name,
+                    price_minor: Some(entry.price.minor_units),
+                    // TPT states a symbol rather than a currency code, and
+                    // this field carries what the source said: inferring USD
+                    // from a dollar sign would be this device deciding a fact
+                    // the marketplace did not state.
+                    currency: Some(entry.price.symbol),
+                    state: entry.status.as_deref().and_then(listing_state_from_status),
+                })
+                .collect())
+        })
+    }
+
+    fn read(&self, resource: i64) -> SourceFuture<'_, tam_marketplace::ImportedListing> {
+        Box::pin(async move {
+            let adapter = self.adapter()?;
+            adapter
+                .fetch_for_import(
+                    &FetchReason::FirstPartyExport {
+                        inventory: self.inventory,
+                    },
+                    tam_marketplace_tpt::read_model::ProductId(
+                        u64::try_from(resource).unwrap_or(0),
+                    ),
+                )
+                .await
+                .map_err(|why| self.answered(&why))
+        })
+    }
+
+    /// No capture exists for TPT's own-file download, so there is no file to
+    /// hand over — an absence this device knows in advance rather than a
+    /// fetch it attempts and fails.
+    fn bundle(&self, _resource: i64) -> SourceFuture<'_, Option<Vec<u8>>> {
+        Box::pin(core::future::ready(Ok(None)))
     }
 }
 
@@ -2135,12 +2266,20 @@ mod tests {
         );
 
         let listed = catalogue.list().await.expect("the catalogue walks");
+        let located: Vec<&str> = listed.iter().map(|row| row.locator.as_str()).collect();
         assert!(
-            listed.contains(&13_549_795),
+            located.contains(&"13549795"),
             "a draft is listed rather than filtered out, so its download failure becomes a skip \
              the seller reads instead of a resource that vanished: {listed:?}"
         );
-        assert!(listed.contains(&13_549_794), "and so is the published one");
+        assert!(located.contains(&"13549794"), "and so is the published one");
+        assert!(
+            listed
+                .iter()
+                .any(|row| row.state == Some(tam_marketplace::ListingState::Draft)),
+            "and the selection step is told which one is the draft, or the seller ticks a \
+             resource that will skip: {listed:?}"
+        );
 
         let refused = tam_marketplace::FileSource::fetch(
             &super::NoUploads,

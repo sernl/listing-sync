@@ -84,13 +84,17 @@ export interface LabelRow {
 	name: string;
 	colour: string;
 	count: number | null;
+	/** Whether an import owns this label rather than the seller. A system
+	 *  label has no rename and no delete: both routes answer 404 for one. */
+	system: boolean;
 }
 
 export function rows(labels: readonly LabelView[], counts: ReadonlyMap<string, number>): LabelRow[] {
 	return labels.map((label) => ({
 		name: label.name,
 		colour: label.colour,
-		count: counts.get(label.name) ?? null
+		count: counts.get(label.name) ?? null,
+		system: label.system
 	}));
 }
 

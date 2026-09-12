@@ -106,9 +106,44 @@ pub(crate) async fn import_page(
         bounded_copy(resource)?;
     }
 
+    // Which import this page belongs to, and the two are not interchangeable.
+    // A page naming a `run` is phase 2's own: it is reviewed before anything
+    // is created, and it drafts nowhere. A page naming a `request` is the
+    // migrate leg, which creates as it goes and mints a create job on its
+    // completing page. A device posts one or the other; naming neither is a
+    // page with no import to belong to.
+    if let Some(request) = page.request {
+        return legacy_page(state, context, device, page, blobs, request, now).await;
+    }
+    crate::import_runs::run_page(&state, &context, &device, &page, now).await
+}
+
+/// The migrate leg's own page handling, unchanged.
+///
+/// Kept whole rather than folded into the run path, and the reason is phase 3:
+/// a migration creates on the target as it reads, so its pages apply
+/// immediately and its completing page mints the create job. Nothing about
+/// that is a special case of a catalogue-only run, and making one shape serve
+/// both would put a review in front of a migration that has no use for one.
+#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the page, its device, its request and the two things the common gates already \
+              resolved; a struct over them would name this call's argument list and nothing \
+              else, and the split exists precisely so the migrate leg stays one function"
+)]
+async fn legacy_page(
+    state: AppState,
+    context: OrgContext,
+    device: String,
+    page: ImportPage,
+    blobs: crate::BlobStore,
+    request: Uuid,
+    now: Timestamp,
+) -> Result<(StatusCode, Json<ImportAck>), APIError> {
     let requests = SyncRequestRepo::new(state.pool.clone());
     let record = requests
-        .get(context.org, page.request)
+        .get(context.org, request)
         .await
         .map_err(|error| storage_fault(&state, &error))?
         // Another organisation's request is missing rather than forbidden: the
@@ -140,11 +175,11 @@ pub(crate) async fn import_page(
             return Ok((StatusCode::OK, Json(ack(&record, 0, 0, true))));
         }
         requests
-            .record_failure(context.org, page.request, why.as_str(), now)
+            .record_failure(context.org, request, why.as_str(), now)
             .await
             .map_err(|error| storage_fault(&state, &error))?;
         let settled = requests
-            .get(context.org, page.request)
+            .get(context.org, request)
             .await
             .map_err(|error| storage_fault(&state, &error))?
             .ok_or_else(|| missing("no such sync request"))?;
@@ -185,7 +220,7 @@ pub(crate) async fn import_page(
     }
 
     requests
-        .mark_draining_if_pending(context.org, page.request)
+        .mark_draining_if_pending(context.org, request)
         .await
         .map_err(|error| storage_fault(&state, &error))?;
     let anchor = anchor_job(&state, &record, now).await?;
@@ -194,7 +229,7 @@ pub(crate) async fn import_page(
         pool: state.pool.clone(),
         org: context.org,
         source: record.source,
-        target: record.target,
+        target: Some(record.target),
         now,
     };
     let repo = BlobRepo::new(
@@ -206,7 +241,7 @@ pub(crate) async fn import_page(
     let applying = Applying {
         run: &run,
         repo: &repo,
-        request: page.request,
+        request,
         device: &device,
     };
     let mut applied = 0u32;
@@ -226,7 +261,7 @@ pub(crate) async fn import_page(
         if requests
             .append_skipped(
                 context.org,
-                page.request,
+                request,
                 skip.locator.as_str(),
                 skip.why.as_str(),
             )
@@ -245,7 +280,7 @@ pub(crate) async fn import_page(
                 item: None,
             },
             &JobEventPayload::ImportPageApplied {
-                request: page.request,
+                request,
                 described: applied,
                 skipped,
             },
@@ -256,13 +291,13 @@ pub(crate) async fn import_page(
 
     if !page.complete {
         let after = requests
-            .get(context.org, page.request)
+            .get(context.org, request)
             .await
             .map_err(|error| storage_fault(&state, &error))?
             .ok_or_else(|| missing("no such sync request"))?;
         return Ok((StatusCode::OK, Json(ack(&after, applied, skipped, false))));
     }
-    complete(&state, &run, page.request, anchor).await
+    complete(&state, &run, request, anchor).await
 }
 
 /// Settles the request and mints its create job, in one transaction.
@@ -300,7 +335,8 @@ async fn complete(
                 // exist because the error type is wider than this call.
                 impossible @ (tam_import::ImportError::NoPayload
                 | tam_import::ImportError::Price(_)
-                | tam_import::ImportError::CurrencyUnknown { .. }) => {
+                | tam_import::ImportError::CurrencyUnknown { .. }
+                | tam_import::ImportError::NoTarget) => {
                     state.internal(&format!("the create items answered {impossible}"))
                 }
             })?
@@ -405,44 +441,55 @@ async fn apply_one(
     resource: &ObservedResource,
 ) -> Result<(), APIError> {
     let run = applying.run;
-    let connection = source_connection(state, run).await?;
+    // A migration moves a file to another marketplace, so a read that named
+    // none has nothing to migrate. Refused per resource rather than per page:
+    // one unreadable resource in a shop of hundreds costs that resource.
+    let (Some(file), Some(cover_png)) = (resource.file.as_ref(), resource.cover_png.as_ref())
+    else {
+        return Err(validation(
+            "this resource carries no file, so there is nothing to move to another \
+             marketplace; import it to your catalogue instead",
+        ));
+    };
+    let connection = source_connection(state, run.org, run.source, run.now).await?;
     let hash = applying
         .repo
-        .put(run.org, resource.cover_png.bytes(), run.now)
+        .put(run.org, cover_png.bytes(), run.now)
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
-    let cover_len = u64::try_from(resource.cover_png.bytes().len()).unwrap_or(u64::MAX);
+    let cover_len = u64::try_from(cover_png.bytes().len()).unwrap_or(u64::MAX);
 
     let applied = AppliedResource {
         // The row report's own handle on the resource. A locator is not
         // inherently numeric — a Tes resource is a URL — so an unparseable one
         // reports zero rather than refusing an import over a display value.
         resource: resource.locator.as_str().parse().unwrap_or(0),
+        product: tam_types::ProductId(fresh_uuid()),
         listing: resource.listing.clone(),
         payload: vec![ImportedFile {
-            kind: resource.file.kind,
+            kind: file.kind,
             bytes: FileBytes::Sourced {
                 marketplace: run.source.marketplace(),
                 connection,
                 resource: resource.locator.as_str().to_owned(),
-                entry: resource.file.entry.as_ref().map(|e| e.as_str().to_owned()),
-                payload_file_name: resource.file.payload_file_name.as_str().to_owned(),
-                payload_content_type: resource.file.payload_content_type.as_str().to_owned(),
+                entry: file.entry.as_ref().map(|e| e.as_str().to_owned()),
+                payload_file_name: file.payload_file_name.as_str().to_owned(),
+                payload_content_type: file.payload_content_type.as_str().to_owned(),
                 observed: Observation {
                     device: applying.device.to_owned(),
-                    hash: resource.file.hash,
-                    byte_len: resource.file.byte_len,
-                    scan: resource.file.scan.clone(),
+                    hash: file.hash,
+                    byte_len: file.byte_len,
+                    scan: file.scan.clone(),
                     observed_at: run.now,
                 },
             },
         }],
-        cover: HeldFile {
+        cover: Some(HeldFile {
             kind: FileKind::Image,
             hash,
             byte_len: cover_len,
             scan: ScanOutcome::Clean { at: run.now },
-        },
+        }),
     };
     let report = import_one(run, &applied)
         .await
@@ -456,7 +503,8 @@ async fn apply_one(
             | tam_import::ImportError::Price(_)
             | tam_import::ImportError::CurrencyUnknown { .. }) => validation(&refused.to_string()),
             // `import_one` mints a product and never lowers an intent.
-            impossible @ tam_import::ImportError::Lowering(_) => {
+            impossible @ (tam_import::ImportError::Lowering(_)
+            | tam_import::ImportError::NoTarget) => {
                 state.internal(&format!("the import answered {impossible}"))
             }
         })?;
@@ -467,7 +515,9 @@ async fn apply_one(
             &Observed {
                 locator: resource.locator.as_str(),
                 product: report.product,
-                mapping: report.mapping,
+                mapping: report.mapping.ok_or_else(|| {
+                    state.internal("a migrate import minted no mapping for its target")
+                })?,
                 source: &report.source,
                 source_state: report.source_state,
                 coverage: ResourceCoverage {
@@ -485,13 +535,15 @@ async fn apply_one(
 }
 
 /// Which of the seller's connections can fetch this resource's bytes.
-async fn source_connection(
+pub(crate) async fn source_connection(
     state: &AppState,
-    run: &ImportRun,
+    org: OrgId,
+    source: tam_types::InventoryId,
+    now: Timestamp,
 ) -> Result<tam_types::ConnectionId, APIError> {
-    let marketplace = run.source.marketplace();
+    let marketplace = source.marketplace();
     tam_storage::ConnectionRepo::new(state.pool.clone())
-        .list(run.org, run.now)
+        .list(org, now)
         .await
         .map_err(|error| storage_fault(state, &error))?
         .into_iter()
@@ -538,7 +590,11 @@ async fn anchor_job(
 }
 
 /// The device must be this organisation's and must not be revoked.
-async fn admissible_device(state: &AppState, org: OrgId, device: &str) -> Result<(), APIError> {
+pub(crate) async fn admissible_device(
+    state: &AppState,
+    org: OrgId,
+    device: &str,
+) -> Result<(), APIError> {
     let devices = DeviceRepo::new(state.pool.clone())
         .list(org)
         .await
@@ -565,7 +621,8 @@ fn bounded_copy(resource: &ObservedResource) -> Result<(), APIError> {
              carries one beyond that bound",
         ));
     }
-    if let ScanOutcome::Infected { signature } = &resource.file.scan {
+    if let Some(ScanOutcome::Infected { signature }) = resource.file.as_ref().map(|file| &file.scan)
+    {
         if signature.len() > SIGNATURE_MAX {
             return Err(validation(
                 "a scan signature is a signature and this one is longer than any",

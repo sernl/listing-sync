@@ -406,6 +406,7 @@ async fn a_rename_keeps_every_carrier_and_takes_the_new_names_colour(pool: PgPoo
         LabelRename::Renamed(LabelRecord {
             name: "Term one".to_owned(),
             colour: Colour::of_name("Term one"),
+            system: false,
         }),
         "the label is addressed by name the way the unique index folds it, and \
          the stored colour is the one the new name earns"
@@ -484,6 +485,7 @@ async fn a_rename_onto_a_name_in_use_is_refused_and_an_unknown_one_is_reported(p
         LabelRename::Renamed(LabelRecord {
             name: "AUTUMN TERM".to_owned(),
             colour: Colour::of_name("AUTUMN TERM"),
+            system: false,
         }),
         "a label may be renamed to its own name in another case: the row it \
          would collide with is itself"

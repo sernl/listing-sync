@@ -231,7 +231,8 @@ async fn enqueue_create(
             // locator failure, which is what a wildcard arm did here before.
             impossible @ (tam_import::ImportError::NoPayload
             | tam_import::ImportError::Price(_)
-            | tam_import::ImportError::CurrencyUnknown { .. }) => {
+            | tam_import::ImportError::CurrencyUnknown { .. }
+            | tam_import::ImportError::NoTarget) => {
                 DrainError::Storage(StorageError::Inconsistent {
                     reason: format!("the create items answered {impossible}"),
                 })

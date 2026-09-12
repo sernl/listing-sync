@@ -11,6 +11,12 @@ The founder's statement of the problem is the shortest one: migration between ma
 TeachBuySell in Australia ships the manual version — a CSV of public details, and the seller drags the files in — and its own help text says the one thing it cannot do is transfer the files.
 That is the gap this note closes.
 
+Amended 2026-09-12 by phase 2 of `2026-09-12-one-marketplace-per-site-and-the-seller-workflows.md`: the marketplace import described below is no longer one pass that creates as it reads.
+It is a two-step run — the device posts the shop's list, the seller ticks a selection, and the device describes only what was ticked — and every resource it describes pauses at a duplicate review before anything is created.
+It also drafts nothing: an import run names no target inventory, so `import_one` mints no mapping and runs no outbound projection, and where a resource goes is a decision the seller takes afterwards.
+What this note still describes exactly is the migration: `POST /v1/sync` with `disposition: "migrate"`, whose device pages name a `request` rather than a `run`, still creates on the target as it reads and still mints the create job on its completing page.
+The two are different verbs sharing one device route, and which field a page names is what tells them apart.
+
 ## 1. Whether Tes lets a logged-in seller download their own files
 
 Yes, and it is proven live rather than inferred.

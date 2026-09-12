@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT product_id, derived_low_years, derived_high_years FROM grade_declaration WHERE org_id = $1 AND product_id = ANY($2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "derived_low_years",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 2,
+        "name": "derived_high_years",
+        "type_info": "Int2"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "d84ef7b3370183302127a94cf10a72ce08f416d6e0ee738895a9045c09dba8fe"
+}

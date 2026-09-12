@@ -1,0 +1,122 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT f.product_id, p.title, p.price_kind, p.price_minor_units, p.price_currency, f.text_simhash, f.text_minhash, f.shingle_count, f.extracted_chars, f.simhash_band_0, f.simhash_band_1, f.simhash_band_2, f.simhash_band_3, f.page_count, f.cover_phash, f.title_norm, similarity(f.title_norm, $4) AS title_similarity FROM product_fingerprint f JOIN product p ON p.org_id = f.org_id AND p.id = f.product_id WHERE f.org_id = $1 AND f.fingerprint_version = $2 AND p.deleted_at IS NULL AND ( ($3::smallint[] IS NOT NULL AND (f.simhash_band_0 = ($3::smallint[])[1] OR f.simhash_band_1 = ($3::smallint[])[2] OR f.simhash_band_2 = ($3::smallint[])[3] OR f.simhash_band_3 = ($3::smallint[])[4])) OR f.title_norm = $4 OR similarity(f.title_norm, $4) >= 0.5 OR f.product_id = ANY($5) )",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "price_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "price_minor_units",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "price_currency",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "text_simhash",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "text_minhash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 7,
+        "name": "shingle_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "extracted_chars",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "simhash_band_0",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 10,
+        "name": "simhash_band_1",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 11,
+        "name": "simhash_band_2",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 12,
+        "name": "simhash_band_3",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 13,
+        "name": "page_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 14,
+        "name": "cover_phash",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 15,
+        "name": "title_norm",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 16,
+        "name": "title_similarity",
+        "type_info": "Float4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int2",
+        "Int2Array",
+        "Text",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      null
+    ]
+  },
+  "hash": "6de95a15caf6203630000f7d6ccc23b9e5b3e90644bc89fdbf43c412adcef2fb"
+}

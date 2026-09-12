@@ -36,9 +36,9 @@ use tokio::sync::Mutex;
 // merely imported so this module's surface is unchanged by where the
 // definitions now live.
 pub use tam_engine_driver::import::{
-    base64, ContentType, Cover, FileName, ImportPage, Locator, NotReportable, ObservedFile,
-    ObservedResource, Reason, SkippedResource, CONTENT_TYPE_MAX, COVER_BYTES_MAX, LOCATOR_MAX,
-    NAME_MAX, PNG_MAGIC, REASON_MAX,
+    base64, ContentType, Cover, FileName, Fingerprint, ImportPage, ListedResource, Locator,
+    NotReportable, ObservedFile, ObservedResource, Reason, SkippedResource, CONTENT_TYPE_MAX,
+    COVER_BYTES_MAX, LOCATOR_MAX, NAME_MAX, PNG_MAGIC, REASON_MAX,
 };
 
 use crate::entitlement::EntitlementGate;
@@ -54,11 +54,37 @@ pub fn import_path(device: &crate::device::DeviceId) -> String {
     format!("/v1/devices/{device}/import")
 }
 
+/// The control-plane path the device reads its selection from.
+///
+/// A free function beside [`import_path`] for the same reason: the wire test
+/// names this expression rather than a second spelling of it.
+#[must_use]
+pub fn selection_path(device: &crate::device::DeviceId, run: tam_types::Uuid) -> String {
+    format!(
+        "/v1/devices/{device}/import/{}/selection",
+        uuid::Uuid::from_bytes(run.0).as_hyphenated()
+    )
+}
+
 /// The name the console invokes and the application registers.
 ///
 /// One constant on this side too, so the registration test names the same
 /// string the console's own constant does rather than a third spelling.
 pub const START_IMPORT_COMMAND: &str = "start_import";
+
+/// The second half of the same flow, invoked once the seller has ticked.
+pub const CONTINUE_IMPORT_COMMAND: &str = "continue_import";
+
+/// A listed row's marketplace resource id.
+///
+/// Both marketplaces address a resource by a number, and the page carries it
+/// as the string the locator is; a row whose locator is not one is dropped
+/// rather than guessed at, because a resource this device cannot address is
+/// one it cannot read either.
+#[must_use]
+pub fn resource_id(listed: &ListedResource) -> Option<i64> {
+    listed.locator.as_str().parse().ok()
+}
 
 /// How long the catalogue walk may take before it is refused.
 ///
@@ -120,17 +146,52 @@ pub type SourceFuture<'a, T> =
 /// a catalogue row and addresses a resource — stay at the one edge that knows
 /// them.
 pub trait CatalogueSource: Send + Sync {
-    /// Every resource the seller has, whole. A walk that cannot reach its end
-    /// refuses rather than returning a truncation, which is the contract
-    /// `list_own_resources` already keeps: a short catalogue read as complete
-    /// would silently migrate part of a shop.
-    fn list(&self) -> SourceFuture<'_, Vec<i64>>;
+    /// Every resource the seller has, whole, as the enumeration saw it.
+    ///
+    /// A walk that cannot reach its end refuses rather than returning a
+    /// truncation, which is the contract `list_own_resources` already keeps:
+    /// a short catalogue read as complete would silently migrate part of a
+    /// shop.
+    ///
+    /// Rows rather than bare ids, because the seller picks from this: the
+    /// selection step shows a title and a price, and both are already on the
+    /// catalogue row. Asking for them a second time would be a request per
+    /// resource before the seller has chosen anything.
+    fn list(&self) -> SourceFuture<'_, Vec<ListedResource>>;
 
     /// One listing, verbatim, for canonicalisation.
     fn read(&self, resource: i64) -> SourceFuture<'_, ImportedListing>;
 
-    /// The bytes of one resource's bundle.
-    fn bundle(&self, resource: i64) -> SourceFuture<'_, Vec<u8>>;
+    /// The bytes of one resource's bundle, where this source hands them over
+    /// at all.
+    ///
+    /// `Ok(None)` is a source whose own-file download this device has no
+    /// capture for, which is TPT's measured state — distinct from `Err`,
+    /// which is a fetch that was attempted and failed. The difference is what
+    /// the seller reads: a resource whose file could not be fetched is
+    /// skipped and named, and a resource from a source that has no file
+    /// download at all still crosses, carrying its listing and no file.
+    fn bundle(&self, resource: i64) -> SourceFuture<'_, Option<Vec<u8>>>;
+}
+
+/// So a command that picked its source at run time can hold one.
+///
+/// Two marketplaces are two bindings with two concrete types, and the pass is
+/// generic over the seam rather than over the marketplace; boxing is what lets
+/// one call site choose between them without the pass learning which
+/// marketplaces exist.
+impl CatalogueSource for Box<dyn CatalogueSource> {
+    fn list(&self) -> SourceFuture<'_, Vec<ListedResource>> {
+        (**self).list()
+    }
+
+    fn read(&self, resource: i64) -> SourceFuture<'_, ImportedListing> {
+        (**self).read(resource)
+    }
+
+    fn bundle(&self, resource: i64) -> SourceFuture<'_, Option<Vec<u8>>> {
+        (**self).bundle(resource)
+    }
 }
 
 /// What one pass did.
@@ -271,7 +332,7 @@ pub struct ImportPass<S: CatalogueSource, P: LedgerTransport + ?Sized> {
     device: crate::device::DeviceId,
     source: S,
     plane: Arc<P>,
-    request: tam_types::Uuid,
+    run: tam_types::Uuid,
     permission: SourcePermission,
 }
 
@@ -296,14 +357,14 @@ impl<S: CatalogueSource, P: LedgerTransport + ?Sized> ImportPass<S, P> {
         device: crate::device::DeviceId,
         source: S,
         plane: Arc<P>,
-        request: tam_types::Uuid,
+        run: tam_types::Uuid,
         permission: SourcePermission,
     ) -> Self {
         Self {
             device,
             source,
             plane,
-            request,
+            run,
             permission,
         }
     }
@@ -325,7 +386,14 @@ impl<S: CatalogueSource, P: LedgerTransport + ?Sized> ImportPass<S, P> {
         None
     }
 
-    /// Reads the whole catalogue, describing each resource and posting pages.
+    /// Reads the whole catalogue, posts the listing, then describes every
+    /// resource in it.
+    ///
+    /// The two-step flow the seller actually drives is `enumerate` +
+    /// `post_listing`, then `describe_all` over what they ticked; this is
+    /// that flow with "all of it" as the selection, and it is what the tests
+    /// drive because the selection is the console's decision rather than the
+    /// pass's.
     ///
     /// `now` is passed in rather than read, because this crate holds no clock:
     /// the scan instant it records is the caller's reading, exactly as every
@@ -336,7 +404,9 @@ impl<S: CatalogueSource, P: LedgerTransport + ?Sized> ImportPass<S, P> {
         progress: impl FnMut(ImportProgress) + Send,
     ) -> Result<PassReport, PassError> {
         let catalogue = self.enumerate(now).await?;
-        self.describe_all(catalogue, || now, progress).await
+        self.post_listing(catalogue.clone()).await?;
+        let selection = catalogue.iter().filter_map(resource_id).collect();
+        self.describe_all(selection, || now, progress).await
     }
 
     /// Reads the seller's catalogue and stops.
@@ -346,9 +416,9 @@ impl<S: CatalogueSource, P: LedgerTransport + ?Sized> ImportPass<S, P> {
     /// here — the entitlement, the revocation, and the catalogue read itself —
     /// and each of those is a refusal the seller can act on. A caller that ran
     /// the whole pass in the background would answer "started" and then have
-    /// nowhere to put the failure, because the request's own view holds nothing
+    /// nowhere to put the failure, because the run's own view holds nothing
     /// until a page lands.
-    pub async fn enumerate(&self, now: Timestamp) -> Result<Vec<i64>, PassError> {
+    pub async fn enumerate(&self, now: Timestamp) -> Result<Vec<ListedResource>, PassError> {
         // Before the enumeration, which is itself a marketplace request.
         if let Some(refusal) = self.refusal(now).await {
             return Err(refusal);
@@ -368,6 +438,27 @@ impl<S: CatalogueSource, P: LedgerTransport + ?Sized> ImportPass<S, P> {
                     .to_owned(),
             )),
         }
+    }
+
+    /// Posts the shop as the enumeration saw it, and nothing else.
+    ///
+    /// The page the selection step renders. It is not complete and carries no
+    /// resource: the run holds items in `listed`, the seller ticks, and the
+    /// second command describes only what was ticked. Posting this before the
+    /// seller chooses is what makes the choice possible at all — the console
+    /// reads the run rather than holding a list the device sent it directly,
+    /// so closing the window between the two steps loses nothing.
+    pub async fn post_listing(&self, listed: Vec<ListedResource>) -> Result<(), PassError> {
+        self.send(ImportPage {
+            run: self.run,
+            request: None,
+            listed: Some(listed),
+            resources: Vec::new(),
+            skipped: Vec::new(),
+            complete: false,
+            failed: None,
+        })
+        .await
     }
 
     /// Describes an already-enumerated catalogue, posting pages as it goes.
@@ -482,11 +573,25 @@ impl<S: CatalogueSource, P: LedgerTransport + ?Sized> ImportPass<S, P> {
                 self.permission.marketplace
             ));
         }
-        let bundle = self
+        let Some(bundle) = self
             .source
             .bundle(locator)
             .await
-            .map_err(|why| format!("its file could not be fetched: {why}"))?;
+            .map_err(|why| format!("its file could not be fetched: {why}"))?
+        else {
+            // A source this device holds no file capture for. The listing
+            // still crosses — the seller's title, body, price and taxonomy
+            // are the bulk of what an import is for — and the four absences
+            // are what confine the matcher to L4 and L5 for it, which is
+            // exactly the state §2 of the design describes for TPT.
+            return Ok(ObservedResource {
+                locator: Locator::from_resource_id(locator),
+                fingerprint: Some(Fingerprint::of_title(&listing.title)),
+                listing,
+                file: None,
+                cover_png: None,
+            });
+        };
 
         let (payload, name, entry) = payload_of(bundle, &format!("{locator}-bundle.zip"));
         let kind = tam_pipeline::probe::probe_kind(&payload)
@@ -507,11 +612,17 @@ impl<S: CatalogueSource, P: LedgerTransport + ?Sized> ImportPass<S, P> {
         let cover = tam_pipeline::render::cover(kind, &payload)
             .map_err(|why| format!("no cover could be made from its file: {why}"))?;
 
+        // Measured here, where the bytes are, and nowhere else. The sketch is
+        // fixed-width and cannot be read back into the document, which is what
+        // lets it cross a wire the payload may not: see `tam-fingerprint`.
+        let fingerprint =
+            tam_fingerprint::fingerprint(kind, &payload, &listing.title, Some(&cover.png));
+
         let hash = blake3::hash(&payload);
         let observed = ObservedResource {
             locator: Locator::from_resource_id(locator),
             listing,
-            file: ObservedFile {
+            file: Some(ObservedFile {
                 payload_file_name: FileName::new(&name)
                     .map_err(|why| format!("its file name is not one we will report: {why}"))?,
                 payload_content_type: ContentType::new(content_type_for(kind, &payload))
@@ -524,9 +635,12 @@ impl<S: CatalogueSource, P: LedgerTransport + ?Sized> ImportPass<S, P> {
                     .map(|path| FileName::new(&path))
                     .transpose()
                     .map_err(|why| format!("its entry name is not one we will report: {why}"))?,
-            },
-            cover_png: Cover::encode(&cover.png)
-                .map_err(|why| format!("the cover made from its file is not one: {why}"))?,
+            }),
+            cover_png: Some(
+                Cover::encode(&cover.png)
+                    .map_err(|why| format!("the cover made from its file is not one: {why}"))?,
+            ),
+            fingerprint: Some(fingerprint),
         };
         // The seller's bytes end here. Every field of the value above is
         // bounded or fixed-width — a digest, a validated name, a number, a
@@ -546,7 +660,9 @@ impl<S: CatalogueSource, P: LedgerTransport + ?Sized> ImportPass<S, P> {
         complete: bool,
     ) -> Result<(), PassError> {
         self.send(ImportPage {
-            request: self.request,
+            run: self.run,
+            request: None,
+            listed: None,
             resources,
             skipped,
             complete,
@@ -557,15 +673,17 @@ impl<S: CatalogueSource, P: LedgerTransport + ?Sized> ImportPass<S, P> {
 
     /// Tells the server the import stopped, and why.
     ///
-    /// The seller reads the request's own page, so a failure that posted
+    /// The seller reads the run's own page, so a failure that posted
     /// nothing has to arrive there or it arrives nowhere: the console would
-    /// otherwise watch a request that never changes state. Best effort by
+    /// otherwise watch a run that never changes state. Best effort by
     /// construction — the thing that failed may be the very transport this
     /// needs — so a failure to report a failure is swallowed rather than
     /// replacing the original reason with a second one.
     pub async fn report_failure(&self, why: &PassError) {
         let page = ImportPage {
-            request: self.request,
+            run: self.run,
+            request: None,
+            listed: None,
             resources: Vec::new(),
             skipped: Vec::new(),
             complete: true,
@@ -594,7 +712,7 @@ impl<S: CatalogueSource, P: LedgerTransport + ?Sized> ImportPass<S, P> {
 mod tests {
     use super::{
         base64, content_type_for, import_path, payload_of, CatalogueSource, ImportPage, ImportPass,
-        Locator, PassError, Reason, SourcePermission, PAGE_SIZE, PNG_MAGIC,
+        ListedResource, Locator, PassError, Reason, SourcePermission, PAGE_SIZE, PNG_MAGIC,
     };
     use crate::device::DeviceId;
     use crate::entitlement::{Claims, Entitlement, EntitlementGate};
@@ -610,7 +728,7 @@ mod tests {
     const DEVICE: &str = "11112222333344445555666677778888";
     /// The import this pass belongs to. One value, so a resumed pass posting
     /// the same id is the assertion rather than a coincidence of spelling.
-    const REQUEST: tam_types::Uuid = tam_types::Uuid([0x71; 16]);
+    const RUN: tam_types::Uuid = tam_types::Uuid([0x71; 16]);
     const NOW_SECONDS: i64 = 1_756_000_000;
     const NOW: Timestamp = Timestamp(NOW_SECONDS * 1_000);
     const PDF: &[u8] = b"%PDF-1.7 the seller's own worksheet";
@@ -647,6 +765,8 @@ mod tests {
         /// Resources the marketplace holds as drafts, whose bundle the pass
         /// must never ask for.
         drafts: Vec<i64>,
+        /// A source that hands this device no file at all, which is TPT.
+        fileless: bool,
     }
 
     impl Scripted {
@@ -656,13 +776,30 @@ mod tests {
                 bundle,
                 unfetchable: Vec::new(),
                 drafts: Vec::new(),
+                fileless: false,
             }
         }
     }
 
     impl CatalogueSource for Scripted {
-        fn list(&self) -> SourceFuture<'_, Vec<i64>> {
-            Box::pin(async move { self.catalogue.clone().map_err(|why| tes_answered(&why)) })
+        fn list(&self) -> SourceFuture<'_, Vec<ListedResource>> {
+            Box::pin(async move {
+                let ids = self.catalogue.clone().map_err(|why| tes_answered(&why))?;
+                Ok(ids
+                    .into_iter()
+                    .map(|id| ListedResource {
+                        locator: Locator::from_resource_id(id),
+                        title: format!("Resource {id}"),
+                        price_minor: Some(450),
+                        currency: Some("GBP".to_owned()),
+                        state: Some(if self.drafts.contains(&id) {
+                            ListingState::Draft
+                        } else {
+                            ListingState::Live
+                        }),
+                    })
+                    .collect())
+            })
         }
 
         fn read(&self, resource: i64) -> SourceFuture<'_, ImportedListing> {
@@ -676,15 +813,18 @@ mod tests {
             })
         }
 
-        fn bundle(&self, resource: i64) -> SourceFuture<'_, Vec<u8>> {
+        fn bundle(&self, resource: i64) -> SourceFuture<'_, Option<Vec<u8>>> {
             Box::pin(async move {
+                if self.fileless {
+                    return Ok(None);
+                }
                 if self.drafts.contains(&resource) {
                     return Err(tes_answered("a draft's bundle was asked for"));
                 }
                 if self.unfetchable.contains(&resource) {
                     return Err(tes_answered("the session expired"));
                 }
-                Ok(self.bundle.clone())
+                Ok(Some(self.bundle.clone()))
             })
         }
     }
@@ -745,7 +885,7 @@ mod tests {
             DeviceId::from_raw(DEVICE),
             source,
             Arc::clone(plane),
-            REQUEST,
+            RUN,
             SourcePermission {
                 marketplace: Marketplace::Tes,
                 gate,
@@ -772,26 +912,52 @@ mod tests {
         assert!(report.skipped.is_empty());
 
         let posted = plane.posted.lock().await.clone();
-        let [page] = posted.as_slice() else {
-            panic!("three resources are one page, and got {}", posted.len());
+        let [listed, page] = posted.as_slice() else {
+            panic!(
+                "one listing and one page of three resources, and got {}",
+                posted.len()
+            );
         };
+        assert_eq!(
+            listed.listed.as_ref().map(Vec::len),
+            Some(3),
+            "the shop is posted before anything is read"
+        );
         assert!(page.complete, "the last page says so, or nothing is minted");
         assert_eq!(page.resources.len(), 3);
 
         let first = &page.resources[0];
-        assert_eq!(first.file.kind, FileKind::Pdf, "probed, not declared");
-        assert_eq!(first.file.byte_len, PDF.len() as u64);
+        let Some(file) = first.file.as_ref() else {
+            panic!("a Tes resource names its file");
+        };
+        assert_eq!(file.kind, FileKind::Pdf, "probed, not declared");
+        assert_eq!(file.byte_len, PDF.len() as u64);
         assert_eq!(
-            first.file.payload_content_type.as_str(),
+            file.payload_content_type.as_str(),
             content_type_for(FileKind::Pdf, PDF)
         );
         assert!(
-            matches!(first.file.scan, ScanOutcome::Clean { .. }),
+            matches!(file.scan, ScanOutcome::Clean { .. }),
             "the device's own scan, recorded as the device's"
         );
         assert!(
-            first.cover_png.bytes().starts_with(PNG_MAGIC),
+            first
+                .cover_png
+                .as_ref()
+                .is_some_and(|cover| cover.bytes().starts_with(PNG_MAGIC)),
             "a cover is derived, kept, and is the PNG the type promises"
+        );
+        // A sketch is measured and travels; the text layer is absent here
+        // because the fixture is a PDF header and not a PDF, which is the
+        // honest outcome and the one `tam-fingerprint`'s own tests pin over
+        // real documents.
+        assert_eq!(
+            first
+                .fingerprint
+                .as_ref()
+                .map(|print| print.title_norm.as_str()),
+            Some("resource 1"),
+            "the sketch the matcher reads is measured where the bytes are"
         );
 
         let wire = serde_json::to_string(&*posted).expect("the pages serialise");
@@ -1003,8 +1169,8 @@ mod tests {
             .expect("the pass completes");
 
         let posted = plane.posted.lock().await.clone();
-        let [page] = posted.as_slice() else {
-            panic!("one page, and got {}", posted.len());
+        let [_listed, page] = posted.as_slice() else {
+            panic!("one listing and one page, and got {}", posted.len());
         };
         assert_eq!(page.resources.len(), 2);
         let [skipped] = page.skipped.as_slice() else {
@@ -1039,6 +1205,46 @@ mod tests {
             "the seller is told what happened to it: {}",
             skipped.why
         );
+    }
+
+    /// A source this device holds no file capture for still crosses, and its
+    /// four absences are absences rather than failures.
+    ///
+    /// TPT's own-file download is uncaptured. Before the `Option` arm a
+    /// resource from it could not be described at all — every one would have
+    /// become a skip, so a TPT import would have reported a shop of nothing
+    /// but refusals, and the listing, price and taxonomy the seller actually
+    /// wanted brought across would have stayed behind.
+    #[tokio::test]
+    async fn a_source_with_no_file_download_still_describes_its_listings() {
+        let plane = Arc::new(FakePlane::default());
+        let mut source = Scripted::of(2, Vec::new());
+        source.fileless = true;
+        let report = pass(source, &plane)
+            .run(NOW, |_| {})
+            .await
+            .expect("a shop with no downloadable files is still a shop");
+
+        assert_eq!(report.described, 2, "both listings crossed");
+        assert!(report.skipped.is_empty(), "and neither was a refusal");
+
+        let posted = plane.posted.lock().await.clone();
+        let [_listing, page] = posted.as_slice() else {
+            panic!("one listing and one page, and got {}", posted.len());
+        };
+        let first = &page.resources[0];
+        assert_eq!(
+            first.file, None,
+            "no bytes were held, so no file is claimed"
+        );
+        assert_eq!(first.cover_png, None, "and no cover was rendered from them");
+        let Some(print) = first.fingerprint.as_ref() else {
+            panic!("a title is still something the matcher can read");
+        };
+        assert_eq!(print.title_norm, "resource 1");
+        assert_eq!(print.text, None, "L2 is unavailable and says so");
+        assert_eq!(print.page_count, None);
+        assert_eq!(print.cover_phash, None);
     }
 
     /// A draft is skipped by its state, with the sentence that names what
@@ -1114,9 +1320,17 @@ mod tests {
 
         assert_eq!(report.described, 0);
         let posted = plane.posted.lock().await.clone();
-        let [page] = posted.as_slice() else {
-            panic!("one completing page, and got {}", posted.len());
+        let [listing, page] = posted.as_slice() else {
+            panic!(
+                "one listing and one completing page, and got {}",
+                posted.len()
+            );
         };
+        assert_eq!(
+            listing.listed,
+            Some(Vec::new()),
+            "an empty shop says so, rather than saying nothing"
+        );
         assert!(page.resources.is_empty());
         assert!(page.complete, "or the server never mints anything");
     }
@@ -1165,6 +1379,7 @@ mod tests {
             bundle: PDF.to_vec(),
             unfetchable: Vec::new(),
             drafts: Vec::new(),
+            fileless: false,
         };
         let why = pass(source, &plane)
             .run(NOW, |_| {})
@@ -1190,15 +1405,24 @@ mod tests {
             .expect("the pass completes");
 
         assert_eq!(report.pages_posted, 2);
-        let posted = plane.posted.lock().await.clone();
+        let all = plane.posted.lock().await.clone();
+        assert_eq!(
+            all.first()
+                .and_then(|page| page.listed.as_ref())
+                .map(Vec::len),
+            Some(usize::try_from(count).expect("the count fits")),
+            "the first page is the shop as the enumeration saw it, and nothing read"
+        );
+        let posted: Vec<&ImportPage> = all.iter().filter(|page| page.listed.is_none()).collect();
         assert_eq!(posted.len(), 2);
         assert!(!posted[0].complete, "only the last page completes");
         assert!(posted[1].complete);
         assert_eq!(posted[0].resources.len(), PAGE_SIZE);
         assert_eq!(posted[1].resources.len(), 3);
         assert!(
-            posted.iter().all(|page| page.request == REQUEST),
-            "every page names the same request, or a resumed pass becomes a second import"
+            all.iter()
+                .all(|page| page.run == RUN && page.request.is_none()),
+            "every page names the same run, or a resumed pass becomes a second import"
         );
     }
 

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM label WHERE org_id = $1 AND id = ANY($2) AND system = false AND NOT EXISTS (SELECT 1 FROM product_label pl WHERE pl.org_id = label.org_id AND pl.label_id = label.id)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "93f76346fa6069c12a5d7bbe12036521c44abd4f9a2913797194ee0255b66516"
+}

@@ -28,6 +28,10 @@ import type {
 	NotificationKind,
 	PayloadFileRule,
 	FormGroup,
+	ImportRunItemState,
+	ImportRunKind,
+	ImportRunState,
+	MatchLayer,
 	Plan,
 	SlugPrompt,
 	StandardsState,
@@ -197,11 +201,18 @@ export interface ProductsPage {
 	next_cursor: string | null;
 }
 
-/** One seller-defined label. The colour is the server's, derived from the
- *  name, so one label looks the same everywhere it appears. */
+/** One label. The colour is the server's, derived from the name, so one label
+ *  looks the same everywhere it appears.
+ *
+ *  `system` marks a label this console's own machinery owns — the mark of the
+ *  marketplace an import came from. A seller neither makes nor removes one,
+ *  it sits outside their twenty, and `PUT /v1/products/{p}/labels` refuses a
+ *  set that names one. Every surface that offers a label to edit has to read
+ *  this flag rather than the name. */
 export interface LabelView {
 	name: string;
 	colour: string;
+	system: boolean;
 }
 
 export interface LabelsView {
@@ -1638,6 +1649,12 @@ export interface ImportsView {
 export interface ImportBatchDetailView extends ImportBatchView {
 	rows: ImportRowView[];
 	warnings: ImportWarning[];
+	/** The run that reviews this batch, once the commit has created one.
+	 *
+	 *  Null before the first commit: a parsed batch has been read and nothing
+	 *  has been matched against the catalogue yet, which is not the same as a
+	 *  run that found no duplicate. */
+	run: ImportRunView | null;
 }
 
 /** What an upload answered. */
@@ -1681,6 +1698,160 @@ export interface CommitAck {
 	remaining: number;
 	complete: boolean;
 	batch_state: BatchStateView;
+}
+
+// ---------------------------------------------------------------- import runs
+
+// The three closed sets a run is described by are the generated ones: they
+// are the server's own vocabulary, and a copy written out here would be a
+// second answer that a state added in Rust could not fail.
+export type { ImportRunKind, ImportRunState, ImportRunItemState };
+
+/** Every item of a run, counted once per state. Served rather than summed
+ *  from `items`, because the list serves counts without items at all. */
+export interface ImportRunCounts {
+	listed: number;
+	selected: number;
+	read: number;
+	matched: number;
+	review: number;
+	imported: number;
+	skipped: number;
+	failed: number;
+}
+
+/** What a marketplace said one listing costs, in the denomination it said it
+ *  in. Structured rather than formatted: the console renders it through the
+ *  same formatter every other price on the board goes through. */
+export interface ObservedPrice {
+	minor_units: number;
+	currency: string;
+}
+
+/** One resource of a run, in the order the source listed it. */
+export interface ImportRunItemView {
+	state: ImportRunItemState;
+	/** How the source addresses it. A URL for a marketplace run; `sheet#row`
+	 *  for a spreadsheet one. */
+	locator: string;
+	ordinal: number;
+	/** Null before the read: an enumeration that named only locators has no
+	 *  title to show, and an invented one would be a claim. */
+	title: string | null;
+	price: ObservedPrice | null;
+	/** Where the cover the device sent is fetched from, or null where the read
+	 *  produced none. The server names the path so this client composes no
+	 *  route of its own. */
+	cover_url: string | null;
+	product_id: string | null;
+	skip_reason: string | null;
+	failure_detail: string | null;
+}
+
+/** Which layer of the matcher carried a pair. The generated union: the
+ *  seller reads the sentence and never the layer, so this exists to key a
+ *  card and to stay honest about what the server can send. */
+export type { MatchLayer };
+
+/** One side of a review card.
+ *
+ *  A side is either a resource already in the catalogue (`product_id`) or an
+ *  item of this run that has not been imported yet (`run_locator`). Exactly
+ *  one of the two is named, and `title` is always there. */
+export interface ReviewSideView {
+	product_id: string | null;
+	run_locator: string | null;
+	marketplace: Marketplace | null;
+	title: string;
+	price: ObservedPrice | null;
+	grades: string[];
+	cover_url: string | null;
+}
+
+/** One pair the matcher parked for the seller.
+ *
+ *  `sentence` is the server's own one line of evidence, generated from the
+ *  stored layer rather than re-scored here; there is no score on the wire and
+ *  none is shown. `product_lo`/`product_hi` address the pair in the verdict
+ *  route verbatim, whichever side is still an unimported item. */
+export interface ReviewPairView {
+	product_lo: string;
+	product_hi: string;
+	sentence: string;
+	layer: MatchLayer;
+	lo: ReviewSideView;
+	hi: ReviewSideView;
+}
+
+/** One run as the list serves it: enough to name it, place it in time, link to
+ *  it and say how far it got. No items and no pairs, for the reason
+ *  `SyncRequestHead` carries counts rather than rows. */
+export interface ImportRunHead {
+	id: string;
+	kind: ImportRunKind;
+	/** The shop this read, on a marketplace run. Null on a spreadsheet one. */
+	source: InventoryId | null;
+	/** The spreadsheet batch this run reviews, on a spreadsheet run. */
+	batch_id: string | null;
+	state: ImportRunState;
+	/** How many the enumeration found. Null before it has run, which is not
+	 *  the same as a shop with nothing in it. */
+	read_total: number | null;
+	counts: ImportRunCounts;
+	created_at: number;
+	settled_at: number | null;
+}
+
+/** One run with its items and whatever pairs are still parked on it. */
+export interface ImportRunView extends ImportRunHead {
+	items: ImportRunItemView[];
+	review_pairs: ReviewPairView[];
+}
+
+/** Newest first, at most fifty. Bounded rather than paginated, as the sync
+ *  request listing is. */
+export interface ImportRunsView {
+	runs: ImportRunHead[];
+}
+
+/** Which resources of a listed run the seller ticked. `{ all: true }` is its
+ *  own arm rather than every locator sent back, because a shop that grew
+ *  between the enumeration and the tick is still "all of it". */
+export type RunSelection = { all: true } | { locators: string[] };
+
+/** Which side of a pair a field is taken from on a merge. */
+export type PairSide = 'lo' | 'hi';
+
+/** Which of a merged pair's fields the seller chose a side for. */
+export type PairFieldChoice = Partial<Record<'title' | 'description' | 'price', PairSide>>;
+
+/** The seller's answer to one review card.
+ *
+ *  `keep` names the survivor and `fields` says, per field, which side's words
+ *  it keeps; a field left unnamed keeps the survivor's own. `parked` is
+ *  "decide later" and is stored, so the pair is not re-raised as a fresh
+ *  question on the next read. */
+export type DuplicateDecision =
+	| { verdict: 'same'; keep: string; fields?: PairFieldChoice }
+	| { verdict: 'different' }
+	| { verdict: 'parked' };
+
+/** Every pair still waiting on the seller. */
+export interface DuplicatesView {
+	pairs: ReviewPairView[];
+}
+
+/** What one chunk of a run's commit applied. `CommitAck`'s shape with the
+ *  run's state in place of the batch's, so a caller cannot hold one where it
+ *  means the other. */
+export interface RunCommitAck {
+	applied: number;
+	skipped: number;
+	failed: number;
+	total: number;
+	remaining: number;
+	complete: boolean;
+	run_state: ImportRunState;
 }
 
 /** One row's file, addressed by the sheet name and the seller's own row
@@ -1934,6 +2105,53 @@ export const api = {
 	 *  payload nothing reads. */
 	commitImport: (batch: string) =>
 		request<CommitAck>(`/v1/imports/${encodeURIComponent(batch)}/commit`, { method: 'POST' }),
+
+	/** Start a marketplace import: one run, in `reading`, with nothing read
+	 *  yet. The device does the reading, so this call only creates the row the
+	 *  device and the console then both address.
+	 *
+	 *  No idempotency key. One open run per organisation is the server's own
+	 *  invariant, and a second press is refused with the open run named, which
+	 *  is a better answer than a silent replay of a run the seller may have
+	 *  meant to abandon. */
+	createImportRun: (source: InventoryId) => post<ImportRunView>('/v1/imports/runs', { source }),
+	/** Every import run this organisation has made, newest first and bounded
+	 *  by the server. Heads only: the list draws a counts line and a pill. */
+	importRuns: () => request<ImportRunsView>('/v1/imports/runs'),
+	/** One run with its items and whatever pairs are parked on it. This is
+	 *  what the run page re-reads whenever the ledger moves. */
+	importRun: (run: string) =>
+		request<ImportRunView>(`/v1/imports/runs/${encodeURIComponent(run)}`),
+	/** Tick the resources to read. Answers the run as it now stands, so the
+	 *  page needs no follow-up read; everything left unticked is skipped. */
+	selectImportRun: (run: string, selection: RunSelection) =>
+		post<ImportRunView>(`/v1/imports/runs/${encodeURIComponent(run)}/select`, selection),
+	/** Commit the next chunk of a run, in the shape the spreadsheet commit
+	 *  established: bodiless, no key, resumable by the item breadcrumb. Items
+	 *  still in review are passed over until their pair is decided. */
+	commitImportRun: (run: string) =>
+		request<RunCommitAck>(`/v1/imports/runs/${encodeURIComponent(run)}/commit`, {
+			method: 'POST'
+		}),
+	/** Give up on a run. Answers the run as it now stands. */
+	abandonImportRun: (run: string) =>
+		post<ImportRunView>(`/v1/imports/runs/${encodeURIComponent(run)}/abandon`, {}),
+
+	/** The pairs still waiting on the seller, for one run or for the whole
+	 *  organisation where none is named. */
+	duplicates: (run?: string) =>
+		request<DuplicatesView>(
+			`/v1/duplicates${run === undefined ? '' : `?run=${encodeURIComponent(run)}`}`
+		),
+	/** Answer one pair. The two identifiers are the view's own `product_lo`
+	 *  and `product_hi`, sent verbatim: one side may still be an unimported
+	 *  item, and the view is what knows how that side is addressed. */
+	decideDuplicate: (lo: string, hi: string, decision: DuplicateDecision) =>
+		post<void>(`/v1/duplicates/${encodeURIComponent(lo)}/${encodeURIComponent(hi)}`, decision),
+	/** Undo a merge inside its thirty days. 404 once the window has closed,
+	 *  which is the server saying the deadline it told the seller. */
+	undoDuplicate: (lo: string, hi: string) =>
+		post<void>(`/v1/duplicates/${encodeURIComponent(lo)}/${encodeURIComponent(hi)}/undo`, {}),
 
 	/** The seller's own machines. Registration and heartbeat are the desktop
 	 *  client's calls, not the console's, so they are deliberately absent

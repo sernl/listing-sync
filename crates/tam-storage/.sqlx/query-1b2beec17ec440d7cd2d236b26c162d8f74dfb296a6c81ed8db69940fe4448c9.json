@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE import_run_item SET state = 'imported', product_id = $4, settled_at = $5 WHERE org_id = $1 AND run_id = $2 AND locator = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1b2beec17ec440d7cd2d236b26c162d8f74dfb296a6c81ed8db69940fe4448c9"
+}

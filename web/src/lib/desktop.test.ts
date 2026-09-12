@@ -6,6 +6,7 @@ import {
 	APP_CANNOT_FORGET,
 	APP_TOO_OLD,
 	CONNECT_MARKETPLACE,
+	CONTINUE_IMPORT,
 	DEVICE_CHECK_IN,
 	FORGET_SESSION,
 	OPEN_URL,
@@ -13,6 +14,7 @@ import {
 	START_IMPORT,
 	checkInHere,
 	connectHere,
+	continueImportHere,
 	desktopInvoker,
 	forgetHere,
 	openExternal,
@@ -136,15 +138,24 @@ describe('reading why a check-in did not reach us', () => {
 });
 
 describe('asking this computer to run an import', () => {
-	it('invokes the command with the request id', async () => {
+	it('invokes each half of an import with the run it addresses', async () => {
 		const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
 		const invoke: Invoke = async (command, args) => {
 			calls.push({ command, args });
 			return null;
 		};
-		const outcome = await startImportHere(invoke, 'r-7');
-		expect(outcome).toEqual({ kind: 'started' });
-		expect(calls).toEqual([{ command: START_IMPORT, args: { request: 'r-7' } }]);
+		expect(await startImportHere(invoke, 'r-7')).toEqual({ kind: 'started' });
+		expect(await continueImportHere(invoke, 'r-7')).toEqual({
+			kind: 'started'
+		});
+		// The argument key is what Tauri matches a parameter by, so the two
+		// halves send the run under the name the commands declare and nothing
+		// else. A page that still sent `request` would be answered by an
+		// application that saw no run at all.
+		expect(calls).toEqual([
+			{ command: START_IMPORT, args: { run: 'r-7' } },
+			{ command: CONTINUE_IMPORT, args: { run: 'r-7' } }
+		]);
 	});
 
 	// Replaces an assertion that compared START_IMPORT to a second copy of the

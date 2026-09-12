@@ -3,7 +3,6 @@
 	import { ApiFailure, api, type SyncRequestView } from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
-	import { desktopInvoker, startImportHere } from '$lib/desktop';
 	import { createLedger, type Ledger } from '$lib/ledger';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
@@ -12,6 +11,8 @@
 	import StatusPill from '$lib/StatusPill.svelte';
 	import {
 		FILES_STAY_ON_YOUR_COMPUTER,
+		MIGRATION_HREF,
+		MIGRATION_NOT_ON_THIS_COMPUTER_YET,
 		NOT_AN_IMPORT,
 		TERM_COVERAGE_LEGEND,
 		canStartHere,
@@ -25,7 +26,7 @@
 		stageOf,
 		termCoverageStrip
 	} from '$lib/sync-request';
-	import { MIGRATION_HREF, pillTone, startRefusal } from './import-view';
+	import { pillTone } from './import-view';
 	import './import.css';
 
 	const requestId = $derived(page.params.id ?? '');
@@ -37,32 +38,11 @@
 	let live = $state(false);
 	let ledger: Ledger | null = null;
 
-	// Read once: whether this console is running inside the desktop application
-	// does not change while the page is open.
-	const invoke = desktopInvoker();
-	let starting = $state(false);
-	// The application's own words when it refuses, kept apart from `refusal`
-	// above: one is this page failing to read the request, the other is this
-	// computer declining to run it, and they are different facts.
-	let declined = $state<string | null>(null);
-
-	async function startHere() {
-		if (invoke === null) {
-			return;
-		}
-		starting = true;
-		declined = null;
-		const outcome = await startImportHere(invoke, requestId);
-		starting = false;
-		declined = startRefusal(outcome);
-		if (declined !== null) {
-			return;
-		}
-		// Started: the request moves to draining on the server, and the ledger
-		// will say so, but a read now means the page does not sit on the old
-		// state waiting for the first page to land.
-		await refetch();
-	}
+	// Nothing here asks a computer to run the work any more. The Teachouse app
+	// reads a shop into Resources, which the Import screen owns; moving one
+	// onto a second marketplace has no command in this version of the app, so
+	// the control below states that rather than offering a press whose only
+	// possible answer is a refusal.
 
 	async function refetch() {
 		if (!requestId) {
@@ -104,9 +84,9 @@
 		{@const rows = resourceRows(request)}
 		{@const anyCoverage = rows.some((row) => row.coverage !== null)}
 		<PageHead
-			icon="download"
+			icon="arrow-right-left"
 			back={{ href: MIGRATION_HREF, label: 'Back to Marketplace Migration' }}
-			title={`${isDeviceImport(request) ? 'Import' : 'Request'} ${request.request.slice(0, 8)}…`}
+			title={`${isDeviceImport(request) ? 'Move' : 'Request'} ${request.request.slice(0, 8)}…`}
 			description={`${platformTitle(request.source)} → ${platformTitle(request.target)}`}
 		>
 			{#snippet aside()}
@@ -120,36 +100,34 @@
 		{/if}
 
 		{#if refusal !== null}
-			<Banner tone="bad" title="We could not read this import just now">
+			<Banner tone="bad" title="We could not read this just now">
 				{refusal} Below is the last state we read.
 			</Banner>
 		{/if}
 
 		{#if !isDeviceImport(request)}
-			<Panel title="Not an import">
+			<Panel title="Not a move we follow here">
 				<p class="quiet">{NOT_AN_IMPORT}</p>
 			</Panel>
 		{:else}
-			<Panel title="Where this import stands">
+			<Panel title="Where this move stands">
 				<p class="import-stage">{shown.headline}</p>
 				{#if shown.detail !== ''}
 					<p class="quiet">{shown.detail}</p>
 				{/if}
-				{#if canStartHere(request) && invoke !== null}
+				{#if canStartHere(request)}
 					<div class="actions">
+						<!-- Disabled rather than absent, so the page still shows what
+						     would happen here and says what stands in the way. -->
 						<Button
 							tier="primary"
-							icon="download"
-							disabled={starting}
-							reason={starting ? 'This computer is starting the import.' : undefined}
-							onclick={() => void startHere()}
+							icon="arrow-right-left"
+							disabled
+							reason={MIGRATION_NOT_ON_THIS_COMPUTER_YET}
 						>
-							{starting ? 'Starting…' : 'Start the import on this computer'}
+							Run this move on this computer
 						</Button>
 					</div>
-				{/if}
-				{#if declined !== null}
-					<Banner tone="bad" title="This computer did not start the import">{declined}</Banner>
 				{/if}
 				{#if request.create_job !== null || request.remove_job !== null}
 					<div class="actions">
@@ -209,19 +187,19 @@
 		{/if}
 	{:else if refusal !== null}
 		<PageHead
-			icon="download"
+			icon="arrow-right-left"
 			back={{ href: MIGRATION_HREF, label: 'Back to Marketplace Migration' }}
-			title="Import"
-			description="We could not read this import."
+			title="Migration"
+			description="We could not read this migration."
 		/>
 		<Panel>
-			<Placeholder icon="download" headline="We could not read this import" body={refusal}>
+			<Placeholder icon="arrow-right-left" headline="We could not read this migration" body={refusal}>
 				{#snippet actions()}
 					<Button href={MIGRATION_HREF}>Back to Marketplace Migration</Button>
 				{/snippet}
 			</Placeholder>
 		</Panel>
 	{:else}
-		<p class="quiet">Loading the import…</p>
+		<p class="quiet">Loading…</p>
 	{/if}
 </div>

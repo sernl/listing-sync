@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT locator FROM import_run_item WHERE org_id = $1 AND run_id = $2 AND state = 'selected' ORDER BY ordinal",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "locator",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c3c1ffe4f9268dca38a7992cdd20d1e09035e5eae200cf198f70fcb6b7a71bf3"
+}

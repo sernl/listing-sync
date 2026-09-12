@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE import_run_item SET state = $4 WHERE org_id = $1 AND run_id = $2 AND locator = $3 AND state IN ('read', 'matched', 'review')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4aba1a7641a24f32bff7627c4fc2998089e37b4f3e35ed6da52c4fcf0e20bdac"
+}

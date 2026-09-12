@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO import_run_item (org_id, run_id, locator, ordinal, state, product_id, title, price_minor, price_currency, read_at) VALUES ($1, $2, $3, $4, 'listed', $5, $6, $7, $8, $9) ON CONFLICT (org_id, run_id, locator) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Int4",
+        "Uuid",
+        "Text",
+        "Int8",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "89aa11c6201f441bdff7281d2ebf33103fe1089a57f7754d47b693e31ea0dfba"
+}

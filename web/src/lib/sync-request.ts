@@ -197,6 +197,17 @@ export function canStartHere(view: SyncRequestView): boolean {
 	return stageOf(view).kind === 'waiting_for_device' && deviceUpdateNotice(view) === null;
 }
 
+/** Why a request that is waiting for a computer cannot be handed to one yet.
+ *
+ * The Teachouse app reads a shop into Resources, which is what Import does;
+ * moving a shop onto a second marketplace is a different pass and this
+ * version of the app has no command for it. Said as a thing not built rather
+ * than a thing refused, because nothing about this seller or this request is
+ * what stands in the way. */
+export const MIGRATION_NOT_ON_THIS_COMPUTER_YET =
+	'Moving a shop to another marketplace is not something the Teachouse app can run yet. ' +
+	'Bringing a shop into Resources is, on the Import screen.';
+
 export interface StagePresentation {
 	/** The pill's word. */
 	label: string;
@@ -596,6 +607,11 @@ export const AUTHORSHIP_FIRST =
 /** Where the declaration is made: the marketplaces screen, which carries the
  *  per-marketplace declaration form. */
 export const AUTHORSHIP_HREF = '/marketplaces';
+
+/** The screen that owns raising a migration, and the one a request's own page
+ *  goes back to. Lived on the import screen's model while an import was a
+ *  migration; it is a migration concept and sits with the rest of them now. */
+export const MIGRATION_HREF = '/automations/migration';
 
 // ------------------------------------------- what the import screen must say
 

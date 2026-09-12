@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT layer, polarity, measure, unit, observed_in FROM duplicate_evidence WHERE org_id = $1 AND product_lo = $2 AND product_hi = $3 ORDER BY position",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "layer",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "polarity",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "measure",
+        "type_info": "Float4"
+      },
+      {
+        "ordinal": 3,
+        "name": "unit",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "observed_in",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "0c80d7f5afaec7cc79b010c86a656a101beb4969c0bff2eec4cd18c9376b87b6"
+}

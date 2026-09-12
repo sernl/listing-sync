@@ -1,0 +1,38 @@
+[package]
+name    = "tam-fingerprint"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# The sketch types and the comparisons over them are always here; reading a
+# file to produce one is not. `tam-engine-driver` carries `Fingerprint` on the
+# wire and is checked for wasm32 in `just check-portable`, so a PDF text
+# extractor and an image decoder behind the default feature would reach the
+# browser's copy of the core, which has no file to fingerprint. The split is
+# the adapters' `live` feature by another name: --no-default-features leaves
+# the vocabulary and the maths, and drops the three readers.
+[features]
+default = ["compute"]
+compute = ["dep:image", "dep:image_hasher", "dep:lopdf", "dep:pdf-extract"]
+
+[dependencies]
+# The wire form of a 128-hash MinHash is 512 bytes, which is the one thing
+# this crate encodes. `tam-engine-driver` hand-rolls its own for the same job
+# and cannot be borrowed from: it depends on this crate, not the reverse.
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
+# `pure` for the reason tam-pipeline gives: no C toolchain on any client
+# target. Both sketches are blake3 over the same shingles.
+blake3 = { version = "1", features = ["pure"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"], optional = true }
+image_hasher = { version = "3", optional = true }
+lopdf = { version = "0.36", default-features = false, optional = true }
+pdf-extract = { version = "0.9", optional = true }
+serde = { version = "1", features = ["derive"] }
+tam-types = { path = "../tam-types" }
+
+[dev-dependencies]
+lopdf = { version = "0.36", default-features = false }
+serde_json = "1"
+
+[lints]
+workspace = true

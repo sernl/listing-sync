@@ -141,7 +141,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pool: PgPool::connect(db_url).await?,
         org,
         source,
-        target,
+        target: Some(target),
         now: wall_now()?,
     };
     seed(&mut run, count, barren_first).await?;

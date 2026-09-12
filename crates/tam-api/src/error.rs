@@ -126,13 +126,22 @@ pub enum APIErrorCode {
     /// identified the holder would turn the uniqueness constraint into a
     /// directory of every seller on the platform.
     OrgSlugTaken,
+    /// This organisation already has an import in progress. `detail.run`
+    /// names it, because the console's next move is to show that import
+    /// rather than to make the seller find it in a list -- which is what a
+    /// double press of the button means.
+    ImportRunOpen,
+    /// The duplicate pair this verdict addresses is not one the seller was
+    /// asked about, or has been answered already. Named apart from a bare
+    /// not-found because the remedy differs: re-read the run's open pairs.
+    DuplicatePairSettled,
     Internal,
 }
 
 impl APIErrorCode {
     /// The closed set, in a stable order; the closed-set test and the
     /// vocabulary generator read this single source.
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 25] = [
         Self::UnsupportedApiVersion,
         Self::VersionParameterMissing,
         Self::VersionParameterUnreadable,
@@ -155,6 +164,8 @@ impl APIErrorCode {
         Self::MappingNotBindable,
         Self::ListingAlreadyClaimed,
         Self::OrgSlugTaken,
+        Self::ImportRunOpen,
+        Self::DuplicatePairSettled,
         Self::Internal,
     ];
 
@@ -183,6 +194,8 @@ impl APIErrorCode {
             Self::MappingNotBindable => "mapping_not_bindable",
             Self::ListingAlreadyClaimed => "listing_already_claimed",
             Self::OrgSlugTaken => "org_slug_taken",
+            Self::ImportRunOpen => "import_run_open",
+            Self::DuplicatePairSettled => "duplicate_pair_settled",
             Self::Internal => "internal",
         }
     }
@@ -412,6 +425,8 @@ mod tests {
                 | APIErrorCode::MappingNotBindable
                 | APIErrorCode::ListingAlreadyClaimed
                 | APIErrorCode::OrgSlugTaken
+                | APIErrorCode::ImportRunOpen
+                | APIErrorCode::DuplicatePairSettled
                 | APIErrorCode::Internal => {}
             }
             let encoded = serde_json::to_string(&code).expect("an error code serialises");
