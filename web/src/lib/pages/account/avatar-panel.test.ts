@@ -1,7 +1,7 @@
 // The picture panel and the shell's two tiles, read as source: the places a
 // picture is chosen or drawn, pinned so a restyle cannot quietly drop the
-// control, bypass the slot-bound upload, or let the strip and the phone bar
-// decide the tile differently.
+// control, bypass the slot-bound upload, or let the top strip and the page
+// header decide the tile differently.
 
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
@@ -11,6 +11,8 @@ const SETTINGS = readFileSync(
 	'utf8'
 );
 const CONSOLE = readFileSync(new URL('../../Console.svelte', import.meta.url), 'utf8');
+const PAGE_HEAD = readFileSync(new URL('../../PageHead.svelte', import.meta.url), 'utf8');
+const STORE = readFileSync(new URL('../../account-tile.svelte.ts', import.meta.url), 'utf8');
 
 describe('the profile picture control', () => {
 	it('is the resource form’s own drop panel, accepting pictures only', () => {
@@ -37,13 +39,22 @@ describe('the profile picture control', () => {
 });
 
 describe('the shell’s account tiles', () => {
-	it('are both decided by accountTile, so the strip and the phone bar cannot disagree', () => {
-		expect(CONSOLE).toContain('accountTile(');
-		expect(CONSOLE.match(/tile\.kind === 'picture'/g)?.length).toBe(2);
-		expect(CONSOLE).not.toContain('initialsOf');
+	// Two components now: the top strip above 620px and the page header's phone
+	// avatar below it. Both read the one store, so neither can decide the tile
+	// for itself.
+	it('are both decided by the shared store rather than by either component', () => {
+		expect(STORE).toContain('accountTile(');
+		for (const source of [CONSOLE, PAGE_HEAD]) {
+			expect(source).toContain('accountTileState.tile');
+			expect(source).not.toContain('accountTile(');
+			expect(source).not.toContain('initialsOf');
+		}
 	});
 
 	it('fall back to the initials when the picture will not draw', () => {
-		expect(CONSOLE.match(/onerror=\{\(\) => \(unshowable = picture\)\}/g)?.length).toBe(2);
+		for (const source of [CONSOLE, PAGE_HEAD]) {
+			expect(source).toContain('accountTileState.unusable()');
+		}
+		expect(STORE).toContain('unshowable = picture');
 	});
 });

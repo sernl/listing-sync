@@ -27,6 +27,7 @@
 	import MarkListedDialog from '$lib/MarkListedDialog.svelte';
 	import Menu from '$lib/Menu.svelte';
 	import PageHead from '$lib/PageHead.svelte';
+	import { palette } from '$lib/palette.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
 	import { platformTitle } from '$lib/platforms';
@@ -414,6 +415,7 @@
 		icon="layout-list"
 		title="Resources"
 		description="Every resource you have, and where each one is listed."
+		search={() => palette.show()}
 	>
 		{#snippet aside()}
 			<Menu bind:open={bulkMenu} label="Bulk actions">

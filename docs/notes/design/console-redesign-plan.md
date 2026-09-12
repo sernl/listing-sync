@@ -101,3 +101,17 @@ Apple builds stay out, by the surface order and by Apple's licence forbidding ma
 A GitHub read-only token, so the Android download resolves to a real file rather than to a link that 404s.
 The TES and TPT logo files, since neither marketplace publishes a mark we may take without asking.
 Until both arrive the Android button ships disabled with its reason in the tooltip, and the two live tiles carry wordmarks set in our own typeface.
+
+## Amendment of 2026-09-12 — the phone bottom bar
+
+The founder read the seven-cell phone bar this wave shipped and rejected it: too many icons, and the new-resource action has to sit dead centre rather than beside a fixed account column that was never symmetric.
+The bar is now five cells on five equal tracks — Import, Catalogue, New, Automate, Markets — where New is the third of five and is therefore on the viewport's own centre line at any width.
+Catalogue, Automate and Markets are bar-only wording for the Crosslist, Automations and Marketplaces sections: the rail's names are unchanged, and each cell keeps the section's full name as its accessible name.
+
+Search left the bar for a control in the Resources page head, because search is a task rather than a destination; it opens the same Ctrl-K palette, which is unchanged.
+Account left the bar for a phone-only avatar button in the top right of every main page head, which opens the Account section at `/settings`; above 620px the rail and the top strip already carry it, so the button is drawn only below that width.
+
+The geometry: 80px of bar content with the safe-area bottom inset spent beneath it, `repeat(5, minmax(0, 1fr))` tracks, 24px glyphs, 12px/16px Inter labels at weight 500 and 600 when active, a 64 by 32 lavender pill behind the active glyph, and an inline flat 48px indigo disc with a white plus for New — no elevation, no overlap, and no selected state, since creating a resource is never the page you are on.
+Page content reserves 80px plus the inset plus 16px beneath itself.
+Measured in headless Chromium against the built stylesheet and the shipped Inter: at 360px the cells are 72px and New's centre is at 180px; at 390px they are 78px and it is at 195px; the longest label, "Catalogue", is 59px inside 64px of content box at 360px, so nothing truncates.
+The page header also becomes two rows below 620px — glyph and controls above, title and sentence below — because three 44px controls and a 28px title do not share a 360px row.

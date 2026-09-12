@@ -387,6 +387,14 @@ button {
 	color: var(--text);
 }
 
+/* The header band's phone-only controls: this page's search, where it has one,
+   and the account avatar. Hidden by default rather than shown by default,
+   because every viewport above the phone breakpoint reaches both from the
+   shell's own top strip and would otherwise draw each of them twice. */
+.head-phone {
+	display: none;
+}
+
 .cards {
 	display: grid;
 	grid-template-columns: repeat(4, 1fr);
@@ -945,6 +953,65 @@ input:focus-visible {
 	.page-help {
 		width: 44px;
 		height: 44px;
+	}
+
+	/* The band becomes two rows: the glyph and the controls across the top, the
+	   title and its sentence beneath them. Three 44px circles and a 28px title
+	   do not share a 360px row -- measured, "Resources" wrapped mid-word into
+	   "Resou/rces" -- and shrinking either the title or the thumb targets to
+	   make them fit spends the thing being read to keep a layout that a phone
+	   does not need. It is also the pattern a phone application already uses: a
+	   control row above a large title.
+
+	   The fourth track is declared here rather than in the 900px block so a
+	   tablet does not carry the column gap of a track nothing occupies. */
+	.page-head {
+		grid-template-columns: auto minmax(0, 1fr) auto auto;
+	}
+
+	.head-titles {
+		grid-column: 1 / -1;
+		grid-row: 2;
+	}
+
+	.head-phone {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		grid-column: 4;
+		grid-row: 1;
+		align-self: center;
+	}
+
+	/* The page's own actions move down a row, below the title they act on. */
+	.head-aside {
+		grid-row: 3;
+	}
+
+	/* Both controls draw as the help control beside them: 44px for a thumb,
+	   a circle, and the band's own hairline. The avatar is the exception it
+	   has to be -- it is a filled tile wherever the seller set a picture or
+	   the organisation has a name -- so it takes the strip avatar's own fill
+	   and clips whatever it holds to the circle. */
+	.head-tool {
+		width: 44px;
+		height: 44px;
+		border-radius: 50%;
+		border: 1px solid var(--line);
+		background: none;
+		display: grid;
+		place-items: center;
+		color: var(--muted);
+		flex: none;
+		padding: 0;
+		cursor: pointer;
+	}
+
+	.head-tool.head-account {
+		background: var(--accent-soft);
+		color: var(--primary);
+		font: 600 13px var(--sans);
+		overflow: hidden;
 	}
 
 	/* An item's per-marketplace actions stack to the full width under the row

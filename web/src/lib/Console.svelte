@@ -22,11 +22,12 @@
 		HOME_ITEM,
 		PHONE_BAR,
 		SECTIONS,
-		accountTile,
 		breadcrumbFor,
 		currentDestination,
 		sectionFor
 	} from '$lib/nav';
+	import { accountTileState } from '$lib/account-tile.svelte';
+	import { palette } from '$lib/palette.svelte';
 	import { queryKeys } from '$lib/query';
 	import SearchPalette from '$lib/SearchPalette.svelte';
 	import { opensPalette } from '$lib/search-palette';
@@ -133,17 +134,22 @@
 	const pathname = $derived(page.url.pathname);
 	const crumb = $derived(breadcrumbFor(pathname));
 	const orgName = $derived(organisation.data?.name);
-	// The seller's own picture, read here because this shell draws it twice;
-	// the preferences screen writes it and sets this same key.
+	// The seller's own picture, read here because this shell is the one
+	// component that renders only under a session; the preferences screen
+	// writes it and sets this same key.
 	const profile = createQuery(() => ({
 		queryKey: queryKeys.profile,
 		queryFn: () => api.profile()
 	}));
-	// The picture whose bytes would not draw, held as its address so a later
-	// picture clears it by being a different address.
-	let unshowable = $state<string | null>(null);
 	const picture = $derived(avatarSrc(profile.data));
-	const tile = $derived(accountTile(picture === unshowable ? null : picture, orgName));
+	// The strip's tile and the page header's avatar button are one derivation in
+	// `account-tile.svelte.ts`, fed from here: this component holds both reads,
+	// and a header that read them itself would fire them on the public pages
+	// too.
+	$effect(() => {
+		accountTileState.observe({ picture, orgName });
+	});
+	const tile = $derived(accountTileState.tile);
 	const links = $derived(connections.data ?? []);
 
 	// Which section the rail lights and whose pages the card lists. The
@@ -214,13 +220,13 @@
 	// The palette is the console's search now: it floats over whichever page
 	// the seller is on and opens the resource itself, rather than sending them
 	// to the board filtered down to it. The board keeps its own search field
-	// for narrowing what it is already showing.
-	let searching = $state(false);
-
+	// for narrowing what it is already showing. The flag is a module store
+	// because the Resources page header opens it too, on a phone, where the
+	// bar no longer has a search cell.
 	function shortcut(event: KeyboardEvent) {
 		if (opensPalette(event)) {
 			event.preventDefault();
-			searching = true;
+			palette.show();
 		}
 	}
 </script>
@@ -351,7 +357,7 @@
 				{/each}
 			</span>
 			<span class="grow"></span>
-			<button class="search search-open" type="button" onclick={() => (searching = true)}>
+			<button class="search search-open" type="button" onclick={() => palette.show()}>
 				<Icon name="search" size={15} />
 				<span class="search-said">Search resources…</span>
 				<kbd>ctrl K</kbd>
@@ -369,7 +375,12 @@
 			<a class="account" href="/settings" aria-label={accountSection?.label ?? 'Account'}>
 				<span class="avatar" aria-hidden="true">
 					{#if tile.kind === 'picture'}
-						<img class="avatar-pic" src={tile.src} alt="" onerror={() => (unshowable = picture)} />
+						<img
+							class="avatar-pic"
+							src={tile.src}
+							alt=""
+							onerror={() => accountTileState.unusable()}
+						/>
 					{:else if tile.kind === 'initials'}
 						{tile.text}
 					{/if}
@@ -446,45 +457,20 @@
 	</main>
 
 	<nav class="tabbar" aria-label="Sections">
-		<!-- Keyed by label rather than href: the search cell opens the palette in
-		     place and so carries no destination at all. -->
+		<!-- Keyed by label rather than href: the create cell's href is the
+		     Crosslist section's create route, not a destination the bar
+		     navigates to, and keying by it would tie the key to a path that is
+		     allowed to change. -->
 		{#each PHONE_BAR as tab (tab.label)}
-			{#if tab.search}
-				<button class="tab-item" type="button" onclick={() => (searching = true)}>
-					<span class="ico"><Icon name={tab.icon} size={19} /></span>
-					<span>{tab.label}</span>
-				</button>
-			{:else if tab.create}
-				<a class="tab-create" href={tab.href}>
-					<span class="ring"><Icon name={tab.icon} size={18} /></span>
-					<span>{tab.label}</span>
-				</a>
-			{:else if tab.account}
-				<!-- The account tile in place of a glyph: the seller's own picture
-				     where they set one, the initials otherwise. The tile is the
-				     thing the founder asked to move off the top strip, and this
-				     cell is where it went. The section's own glyph stands in while
-				     `accountTile` knows neither, which is every frame before the
-				     reads land: an empty accent tile would read as a loading state
-				     that never resolves, and the glyph reads as Account, which is
-				     true in every state. -->
-				<a
-					class="tab-item"
-					href={tab.href}
-					aria-current={tab.href === section?.href ? 'page' : undefined}
-				>
-					<span class="ico">
-						{#if tile.kind === 'picture'}
-							<span class="tab-avatar" aria-hidden="true">
-								<img class="avatar-pic" src={tile.src} alt="" onerror={() => (unshowable = picture)} />
-							</span>
-						{:else if tile.kind === 'initials'}
-							<span class="tab-avatar" aria-hidden="true">{tile.text}</span>
-						{:else}
-							<Icon name={tab.icon} size={19} />
-						{/if}
-					</span>
-					<span>{tab.label}</span>
+			{#if tab.create}
+				<!-- The full label as the accessible name and the short word on
+				     screen: "New" under a 48px disc is what fits, and "New
+				     resource" is what the control does. No `aria-current` in any
+				     state -- creating a resource is never the page you are on --
+				     which is also why the disc carries no selected pill. -->
+				<a class="tab-create" href={tab.href} aria-label={tab.label}>
+					<span class="ring"><Icon name={tab.icon} size={24} /></span>
+					<span>{tab.short ?? tab.label}</span>
 				</a>
 			{:else}
 				<a
@@ -492,29 +478,17 @@
 					href={tab.href}
 					aria-current={tab.href === section?.href ? 'page' : undefined}
 				>
-					<span class="ico"><Icon name={tab.icon} size={19} /></span>
-					<span>{tab.label}</span>
+					<span class="ico"><Icon name={tab.icon} size={24} /></span>
+					<span>{tab.short ?? tab.label}</span>
 				</a>
 			{/if}
 		{/each}
 	</nav>
 
-	<SearchPalette bind:open={searching} />
+	<SearchPalette bind:open={palette.open} />
 </div>
 
 <style>
-	/* The seller's own picture inside the shell's two tiles, which `shell.css`
-	   sizes. Cropped to the tile here and nowhere else: no upload is ever
-	   resized, so this is the whole of how a large picture becomes a small
-	   face. */
-	.avatar-pic {
-		display: block;
-		width: 100%;
-		height: 100%;
-		object-fit: cover;
-		border-radius: inherit;
-	}
-
 	/* The wordmark above the section name, and the section's one sentence
 	   beneath it. Only what these two elements need: `shell.css` owns the card
 	   and stacks `.nav-top`, including hiding the whole header at the tablet

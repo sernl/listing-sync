@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-	ACCOUNT_TAB,
+	ACCOUNT_DESTINATION,
 	ADMIN_SECTION,
 	ALL_DESTINATIONS,
 	CREATE_TAB,
@@ -9,7 +9,6 @@ import {
 	OPEN_QUESTIONS_ITEM,
 	PHONE_BAR,
 	PUBLIC_ROUTES,
-	SEARCH_TAB,
 	SECTION_TABS,
 	SECTIONS,
 	accountTile,
@@ -146,8 +145,8 @@ describe('the navigation model', () => {
 });
 
 // The rail's sections rendered as tabs, which is the navigating half of the
-// phone bar rather than the bar itself: `PHONE_BAR` below reorders these so
-// Account is last, and adds the create and search cells.
+// phone bar rather than the bar itself: `PHONE_BAR` below drops Account and
+// puts the create action in the middle of what is left.
 describe('the section tabs', () => {
 	it('mirrors the rail rather than choosing its own destinations', () => {
 		expect(SECTION_TABS.map((tab) => tab.href)).toEqual(SECTIONS.map((section) => section.href));
@@ -191,65 +190,73 @@ describe('the section tabs', () => {
 });
 
 describe('the phone bar', () => {
-	it('carries seven cells, with the create action third and Account last', () => {
-		expect(PHONE_BAR.map((tab) => tab.label)).toEqual([
+	it('carries five cells, with the create action in the middle', () => {
+		expect(PHONE_BAR.map((tab) => tab.short ?? tab.label)).toEqual([
 			'Import',
-			'Crosslist',
-			'New resource',
-			'Automations',
-			'Marketplaces',
-			'Search',
-			'Account'
+			'Catalogue',
+			'New',
+			'Automate',
+			'Markets'
 		]);
+	});
+
+	// The centring is the whole point of the redesign, so it is asserted as
+	// arithmetic rather than as the index 2: an added cell has to fail here.
+	it('puts the create cell at the centre of an odd number of cells', () => {
+		expect(PHONE_BAR.length % 2).toBe(1);
+		expect(PHONE_BAR[(PHONE_BAR.length - 1) / 2]).toBe(CREATE_TAB);
 	});
 
 	it('names the create action exactly as the navigation card names it', () => {
 		const primary = SECTIONS.find((section) => section.id === 'crosslist')?.primary;
 		expect(CREATE_TAB.label).toBe(primary?.label);
 		expect(CREATE_TAB.label).toBe('New resource');
+		// The word on screen is shorter than the accessible name, because the
+		// cell is 72px wide at 360px and the disc above the word is 48px.
+		expect(CREATE_TAB.short).toBe('New');
 	});
 
-	it('marks exactly one cell as create, one as search and one as account', () => {
+	it('marks exactly one cell as create and gives the others a destination', () => {
 		expect(PHONE_BAR.filter((tab) => tab.create === true)).toEqual([CREATE_TAB]);
-		expect(PHONE_BAR.filter((tab) => tab.search === true)).toEqual([SEARCH_TAB]);
-		expect(PHONE_BAR.filter((tab) => tab.account === true)).toEqual([ACCOUNT_TAB]);
-		expect(PHONE_BAR[2]).toBe(CREATE_TAB);
-		expect(PHONE_BAR.at(-1)).toBe(ACCOUNT_TAB);
+		for (const tab of PHONE_BAR.filter((tab) => tab.create !== true)) {
+			expect(tab.href).toBeDefined();
+		}
 	});
 
-	it('navigates to every section the rail states, and never twice', () => {
-		const going = PHONE_BAR.filter((tab) => tab.create !== true && tab.search !== true);
-		// Every section, none dropped: Account is moved to the end rather than
-		// filtered out, so a section added to the rail reaches the bar too.
-		expect(going).toEqual([
-			...SECTION_TABS.filter((tab) => tab.href !== ACCOUNT_TAB.href),
-			ACCOUNT_TAB
-		]);
+	it('navigates to every section the rail states but Account, and never twice', () => {
+		const going = PHONE_BAR.filter((tab) => tab.create !== true);
+		expect(going.map((tab) => tab.href)).toEqual(
+			SECTION_TABS.filter((tab) => tab.href !== ACCOUNT_DESTINATION.href).map((tab) => tab.href)
+		);
+		// The rail's own words survive as the accessible name even where the bar
+		// draws a shorter one, so a cell cannot come to name a destination the
+		// rail does not.
+		expect(going.map((tab) => tab.label)).toEqual(
+			SECTION_TABS.filter((tab) => tab.href !== ACCOUNT_DESTINATION.href).map((tab) => tab.label)
+		);
 		const hrefs = PHONE_BAR.map((tab) => tab.href).filter((href) => href !== undefined);
 		expect(new Set(hrefs).size).toBe(hrefs.length);
 	});
 
-	// Reversed on 2026-09-06, and pinned in the new direction. Wave 3 kept
-	// Account off this bar deliberately and reached it by the avatar in the top
-	// strip; the founder asked for the opposite -- "The placing of the
-	// organization at the top right on the mobile takes up a lot of screen,
-	// maybe add it to the bar? I'm not sure where to put it, but right now it's
-	// not user friendly and takes up a lot of space." The strip is now not drawn
-	// below the phone breakpoint at all, which is what makes this severe rather
-	// than cosmetic: without this cell a phone build has no route to Settings
-	// and no way to log out.
-	it('carries Account on the bar, built from the section the rail states', () => {
+	// Reversed twice, and pinned in the third direction. Wave 3 kept Account
+	// off the bar and reached it by the top strip's avatar; the founder asked
+	// for a cell on 2026-09-06; on 2026-09-12, looking at the seven-cell bar
+	// that produced, they asked for fewer icons and the create action dead
+	// centre. Account is now a phone-only avatar button in every page header,
+	// which is severe rather than cosmetic: the strip is not drawn below 620px
+	// at all, so that button is a phone build's only route to Settings and to
+	// logging out.
+	it('leaves Account off the bar, reached from the page header instead', () => {
 		const account = SECTIONS.find((section) => section.id === 'account');
 		expect(account).toBeDefined();
-		expect(PHONE_BAR.some((tab) => tab.href === '/settings')).toBe(true);
-		expect(ACCOUNT_TAB.href).toBe(account?.href);
-		expect(ACCOUNT_TAB.label).toBe(account?.label);
-		expect(ACCOUNT_TAB.icon).toBe(account?.icon);
+		expect(PHONE_BAR.some((tab) => tab.href === '/settings')).toBe(false);
+		expect(ACCOUNT_DESTINATION.href).toBe(account?.href);
+		expect(ACCOUNT_DESTINATION.label).toBe(account?.label);
+		expect(ACCOUNT_DESTINATION.icon).toBe(account?.icon);
 	});
 
-	it('gives the search cell no destination, so it lights nothing', () => {
-		expect(SEARCH_TAB.href).toBeUndefined();
-		expect(SECTION_TABS.some((tab) => tab.label === SEARCH_TAB.label)).toBe(false);
+	it('leaves search off the bar, so no cell is an action without a place', () => {
+		expect(PHONE_BAR.some((tab) => tab.icon === 'search')).toBe(false);
 	});
 
 	it('opens the same screen the section-primary button opens', () => {

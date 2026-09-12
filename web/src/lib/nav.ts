@@ -301,22 +301,18 @@ export const SECTION_TABS: readonly NavItem[] = SECTIONS.map((section) => ({
 }));
 
 export interface PhoneTab extends Omit<NavItem, 'href'> {
-	/** Where the cell goes. Absent on the cell that opens the palette: it is an
-	 *  action rather than a destination, so it has no path to carry and no
-	 *  `aria-current` to take. */
+	/** Where the cell goes. Absent on a cell that is an action rather than a
+	 *  destination, so it has no path to carry and no `aria-current` to take. */
 	href?: string;
-	/** The create action. Drawn as a filled button rather than as a tab,
+	/** The word the bar draws, where the section's own name is too long for a
+	 *  cell. The rail keeps `label`: a 72px cell at 12px holds about nine
+	 *  characters and "Marketplaces" is twelve, so the bar needs its own
+	 *  wording rather than the sections needing renaming. `label` stays the
+	 *  accessible name, so the two never disagree about where a cell goes. */
+	short?: string;
+	/** The create action. Drawn as a filled disc rather than as a tab,
 	 *  because it is the one thing on the bar that is not a place to go. */
 	create?: true;
-	/** The search action. Opens the command palette in place, which on a phone
-	 *  is a sheet placed against the band the keyboard has left rather than a
-	 *  control competing for the top strip. */
-	search?: true;
-	/** The account cell. Drawn as the organisation's initials tile rather than
-	 *  as a glyph, because the tile is the thing the founder asked to move off
-	 *  the top strip. It navigates and takes `aria-current` exactly as the
-	 *  section tabs beside it do. */
-	account?: true;
 }
 
 /** The create action the phone bar carries, taken from the Crosslist section's
@@ -327,72 +323,97 @@ if (createAction === undefined) {
 	throw new Error('the phone bar carries the Crosslist create action, which that section has none of');
 }
 
-/** `href` narrowed back to a definite string: only the search cell is allowed
- *  to lack one, and the top strip's own create link reads this href directly. */
+/** `href` narrowed back to a definite string: the top strip's own create link
+ *  reads this href directly. */
 export const CREATE_TAB: PhoneTab & { href: string } = {
 	href: createAction.href,
 	// The section-primary's own words, so the three create controls — the
-	// navigation card, the top strip and this — cannot come to read differently.
+	// navigation card, the top strip and this — cannot come to read
+	// differently. The bar draws `short` and announces `label`, because the
+	// centre cell carries a 48px disc above its word and has no room for two
+	// of them.
 	label: createAction.label,
+	short: 'New',
 	// A bare plus rather than the card's `circle-plus`: the button is already a
 	// filled circle, and a ring inside a disc reads as a mistake.
 	icon: 'plus',
 	create: true
 };
 
-/** The search action the phone bar carries, in the fifth cell. A cell rather
- *  than the top strip's pill, because on a phone the strip is not drawn. */
-export const SEARCH_TAB: PhoneTab = {
-	label: 'Search',
-	icon: 'search',
-	search: true
-};
-
 const accountSection = SECTIONS.find((section) => section.id === 'account');
 if (accountSection === undefined) {
-	throw new Error('the phone bar carries the Account section, which the rail has none of');
+	throw new Error('the shell reaches Account from the page header, which the rail has none of');
 }
 
-/** The account cell, last on the bar, where a phone application puts a profile.
+/** Account, as the one destination the page header's avatar button opens.
  *
- * Built from the Account section's own href, label and icon rather than written
- * again, so a renamed section renames the cell.
- *
- * Account was deliberately kept off this bar in wave 3 and reached by the
- * avatar in the top strip instead. The founder reversed that on 2026-09-06:
- * "The placing of the organization at the top right on the mobile takes up a
- * lot of screen, maybe add it to the bar? I'm not sure where to put it, but
- * right now it's not user friendly and takes up a lot of space." So the strip
- * is not drawn on a phone at all, and this cell is the only route to Settings
- * and to logging out. `nav.test.ts` pins the reversal. */
-export const ACCOUNT_TAB: PhoneTab & { href: string } = {
+ * Taken from the section rather than written again, so a renamed section
+ * renames the button. It is not a phone-bar cell: the founder's 2026-09-12
+ * review of the seven-cell bar -- too many icons, and the new-resource action
+ * has to sit in the middle -- took Account off it, and a top-right avatar on
+ * every page header is where a phone application puts secondary
+ * administration. `PageHead.svelte` draws it below 620px only; above that the
+ * rail and the top strip already carry it. */
+export const ACCOUNT_DESTINATION: NavItem = {
 	href: accountSection.href,
 	label: accountSection.label,
-	icon: accountSection.icon,
-	account: true
+	icon: accountSection.icon
 };
 
-/** The section tabs drawn before Search, which is every section but Account --
- *  Account is drawn after it, last. Selected by href rather than by position,
- *  so a section added to the rail reaches the bar instead of being dropped by
- *  a slice that no test would notice. */
-const LEADING_SECTION_TABS: readonly NavItem[] = SECTION_TABS.filter(
-	(tab) => tab.href !== ACCOUNT_TAB.href
+/** What a section is called and drawn as on the phone bar.
+ *
+ * Three of the four navigating sections need bar-only wording and two need a
+ * bar-only glyph: `package` and `waves-horizontal` are the rail's marks for
+ * Crosslist and Automations, and at 24px over a nine-character word they read
+ * as a box and a river rather than as a catalogue and a workflow. Keyed by
+ * section id, so a section that gains a cell is a line here rather than a
+ * second list of destinations. */
+const BAR_CELLS: Partial<Record<SectionId, { short: string; icon: IconName }>> = {
+	crosslist: { short: 'Catalogue', icon: 'library-big' },
+	automations: { short: 'Automate', icon: 'workflow' },
+	marketplaces: { short: 'Markets', icon: 'store' }
+};
+
+/** The bar's navigating cells: every section but Account, in rail order.
+ *
+ * Derived from `SECTIONS` rather than listed again, so a section added to the
+ * rail reaches the bar instead of being dropped by a slice no test would
+ * notice. */
+const NAVIGATING: readonly PhoneTab[] = SECTIONS.filter((section) => section.id !== 'account').map(
+	(section) => {
+		const cell = BAR_CELLS[section.id];
+		return {
+			href: section.href,
+			label: section.label,
+			icon: cell?.icon ?? section.icon,
+			...(cell === undefined ? {} : { short: cell.short })
+		};
+	}
 );
 
-/** The phone bar: the four navigating sections with the create action after the
- * second, search next to last, and the account cell last.
+/** The middle of the bar, computed rather than written as 2: an even number of
+ *  navigating cells is exactly what lets the create action sit on the bar's own
+ *  centre line, so a fifth navigating section has to break loudly here instead
+ *  of quietly moving the disc off centre on a phone. */
+const CENTRE = NAVIGATING.length / 2;
+if (!Number.isInteger(CENTRE)) {
+	throw new Error(
+		`the phone bar centres the create action, which ${NAVIGATING.length} navigating cells cannot do`
+	);
+}
+
+/** The phone bar: four navigating sections with the create action in the exact
+ * middle of them.
  *
- * Composed from `SECTION_TABS` rather than listed again, so the navigating tabs
- * stay exactly what the rail says they are and only their spacing changes. Six
- * labelled cells at about 55px on a 390px screen, beside the fixed 56px column
- * `shell.css` gives the account cell. */
+ * Five cells on five equal tracks, which is the whole of what the founder
+ * asked for on 2026-09-12. Search and Account left the bar to make room:
+ * `ACCOUNT_DESTINATION` above records where Account went, and the Resources
+ * page header carries the search control that opens the same palette Ctrl-K
+ * does. */
 export const PHONE_BAR: readonly PhoneTab[] = [
-	...LEADING_SECTION_TABS.slice(0, 2),
+	...NAVIGATING.slice(0, CENTRE),
 	CREATE_TAB,
-	...LEADING_SECTION_TABS.slice(2),
-	SEARCH_TAB,
-	ACCOUNT_TAB
+	...NAVIGATING.slice(CENTRE)
 ];
 
 /** Whether a nav destination is the one the browser is on.

@@ -8,7 +8,8 @@
  *
  * This sheet is also the phone layout for the Android build, which shows this
  * same console: below the phone breakpoint the rail and the card give way to a
- * four-tab bar mirroring the rail, and every target is at least 44px.
+ * five-cell bottom bar -- the rail's four navigating sections with the create
+ * action in the middle of them -- and every target is at least 44px.
  */
 
 .app {
@@ -334,6 +335,20 @@
 	flex: none;
 }
 
+/* The seller's own picture inside a tile, wherever the shell draws one: the
+   strip's avatar above the phone breakpoint and the page header's avatar
+   button below it. Here rather than in either component, because no upload is
+   ever resized and this crop is the whole of how a large picture becomes a
+   small face -- a second copy in the second component is how one of the two
+   comes to draw a stretched one. */
+.avatar-pic {
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	border-radius: inherit;
+}
+
 .account .who {
 	display: flex;
 	flex-direction: column;
@@ -371,9 +386,9 @@
 /* --- the phone tab bar --------------------------------------------------- */
 
 /* Rendered on every viewport and shown only below the phone breakpoint, where
-   it is the whole navigation. Four tabs mirroring the rail exactly, composed in
-   `$lib/nav` from the same section list, with the create action between the
-   second and third so it sits in the middle. */
+   it is the whole navigation. Five cells composed in `$lib/nav` from the same
+   section list the rail reads: the four navigating sections, with the create
+   action in the middle of them. */
 .tabbar {
 	display: none;
 }
@@ -503,142 +518,124 @@
 	}
 
 	/* The strip goes, rather than being emptied and kept. Every control on it
-	   has somewhere better to be: the dots read on the Marketplaces tab, the
-	   search and the create action are cells on the tab bar, and the account
-	   tile is the last cell on it. What was left once the rest was hidden was
-	   10px, a tile, 10px and a rule -- about sixty-five pixels of screen, most
-	   of it empty, spent before the page began, which is what the founder was
-	   looking at. The page's own `PageHead` names the page, so nothing here is
-	   lost by removing the band above it. */
+	   has somewhere better to be: the dots read on the Marketplaces cell, the
+	   create action is the middle of the tab bar, and the search box and the
+	   account tile are both controls in the page header below. What was left
+	   once the rest was hidden was 10px, a tile, 10px and a rule -- about
+	   sixty-five pixels of screen, most of it empty, spent before the page
+	   began, which is what the founder was looking at. The page's own
+	   `PageHead` names the page, so nothing here is lost by removing the band
+	   above it. */
 	.top {
 		display: none;
 	}
 
-	/* The foot clears the fixed tab bar rather than sitting under it. */
+	/* The foot clears the fixed tab bar rather than sitting under it: the bar's
+	   80px, the inset it spends beneath itself, and 16px so the last control on
+	   a page is not flush against the bar's own edge. */
 	.page {
-		padding: 18px 14px 96px;
+		padding: 18px 14px calc(96px + env(safe-area-inset-bottom, 0px));
 	}
 
-	/* Six equal cells and a seventh fixed one. Account is the narrowest thing
-	   on the bar -- a 26px tile over the shortest of the labels -- so an equal
-	   column would take a seventh of the width from the six cells carrying
-	   longer words. 56px takes about nine pixels from each of them instead,
-	   leaving 55.7px at 390px and 50.7px at 360px. The sixth section costs the
-	   bar the headroom it had: at 360px the longest labels no longer fit the
-	   9px below and ellipse, which is the trade for a phone having a route to
-	   Import at all. */
+	/* Five equal cells, which is the geometry the whole bar exists for: the
+	   create action is the third of five identical tracks, so its disc sits on
+	   the viewport's own centre line -- 180px at 360px wide, 195px at 390px --
+	   and stays there at any width without a rule of its own. The seven-cell
+	   bar this replaces could not: it carried a fixed 56px account column, so
+	   the tracks either side of the create cell were unequal and the disc was
+	   never actually centred (founder, 2026-09-12).
+
+	   `height` is the 80px of content, and the inset is spent below it, so the
+	   total the bar occupies is 80px plus whatever the platform reserves and
+	   the cells never move up into a gesture area. This sheet sets no global
+	   `box-sizing`, so the padding adds to the height rather than eating it.
+	   Measured on the Android 16 emulator the bottom inset reports zero under
+	   gesture navigation, which is a platform-side WindowInsets matter rather
+	   than anything this rule can fix; `env(..., 0px)` means a browser that
+	   reports nothing is the same case as that one. */
 	.tabbar {
 		display: grid;
-		grid-template-columns: repeat(6, 1fr) 56px;
+		grid-template-columns: repeat(5, minmax(0, 1fr));
+		height: 80px;
 		position: fixed;
 		inset: auto 0 0;
 		z-index: 20;
 		background: color-mix(in srgb, var(--ground) 94%, var(--surface));
 		border-top: 1px solid var(--line);
-		padding-bottom: env(safe-area-inset-bottom);
+		padding-bottom: env(safe-area-inset-bottom, 0px);
 	}
 
-	/* 9px, and a hair of negative tracking, sized against 360px rather than
-	   390px: 360 is a common Android width, and raising Display size a step
-	   takes a handset below whatever it reports at its own default density.
-	   There a labelled cell is 60.8px around a 58.8px content box, and at 9.5px
-	   "New resource" and "Marketplaces" both overflow it and draw ellipsed.
-	   Shrinking the label is the smaller loss than ellipsing it, so the gate is
-	   a 360 render with no label ellipsed; 320 is not clean at this size, and
-	   clearing it would take the account column down as well. */
-	.tab-item {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: center;
-		gap: 3px;
-		padding: 8px 1px 7px;
-		min-height: 52px;
-		font-size: 9px;
-		font-weight: 600;
-		letter-spacing: -0.01em;
-		color: var(--muted);
-		overflow: hidden;
-	}
+	/* Every cell, the create one included, is a 48px glyph slot over a 16px
+	   label line with 4px between them: 68px of content centred in 80px. Both
+	   kinds of cell are laid out identically, which is what makes the glyph
+	   centres and the label baselines line up across the bar -- the create
+	   disc fills its slot and a section's pill sits 8px inside it.
 
-	/* One cell of the five is a button, because search opens the palette rather
-	   than going anywhere. It has to draw as the four anchors beside it do. */
-	button.tab-item {
-		border: 0;
-		background: none;
-		font-family: inherit;
-		cursor: pointer;
-	}
-
-	.tab-item .ico {
-		display: grid;
-		line-height: 1;
-	}
-
-	.tab-item span {
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		max-width: 100%;
-	}
-
-	.tab-item[aria-current='page'] {
-		color: var(--primary);
-	}
-
-	/* The organisation's initials, in the cell the founder asked to have them
-	   moved to. The same tile the top strip draws above 620px, at the size a
-	   bar cell has room for. The 44px a thumb needs is the cell around it --
-	   56 by at least 52 -- rather than the tile, which is what is seen; the
-	   same split `.tab-create` below records for its disc. */
-	.tab-avatar {
-		width: 26px;
-		height: 26px;
-		border-radius: 8px;
-		background: var(--accent-soft);
-		color: var(--primary);
-		display: grid;
-		place-items: center;
-		font: 600 10.5px var(--sans);
-	}
-
-	/* The create action, in the middle. It is the one item on the bar that goes
-	   nowhere in the navigation, so it is drawn as a filled disc rather than a
-	   glyph: the fill is what separates it from the five cells beside it, which
-	   carry no fill in any state. It takes no `aria-current`, because it is
-	   never "the page you are on". The cell is the target, 66.8 by 59.1 at
-	   390px, so the 30px disc is what is seen rather than what is pressed. */
+	   12px labels rather than the 9px the seven-cell bar was squeezed to. A
+	   cell is 72px at 360px and 78px at 390px, leaving 64px and 70px for the
+	   word, and the longest the bar carries is "Catalogue" at nine characters.
+	   That is why three of the sections are shortened in `$lib/nav` rather
+	   than shrunk here: the type size is the thing the founder was reading. */
+	.tab-item,
 	.tab-create {
 		display: flex;
 		flex-direction: column;
 		align-items: center;
 		justify-content: center;
-		gap: 3px;
-		padding: 6px 1px 7px;
-		min-height: 52px;
-		font-size: 9px;
-		font-weight: 600;
-		letter-spacing: -0.01em;
+		gap: 4px;
+		padding: 6px 4px;
+		min-width: 0;
+		font-family: inherit;
+		font-size: 12px;
+		line-height: 16px;
+		font-weight: 500;
 		color: var(--primary);
-		overflow: hidden;
+		white-space: nowrap;
 	}
 
+	/* The active indicator: a 64 by 32 pill behind the glyph, and the label in
+	   the same indigo at 600. The pill is the kit's lavender surface rather
+	   than `--lavender` itself, which is one flat value in both colour blocks
+	   while `--primary` becomes that same lavender in the dark one -- a
+	   `--lavender` pill would vanish under a lavender glyph. `--additive-soft`
+	   is defined either side of that line and reads as lavender on the light
+	   ground the founder is looking at. */
+	.tab-item .ico {
+		width: 64px;
+		height: 32px;
+		margin: 8px 0;
+		border-radius: 16px;
+		display: grid;
+		place-items: center;
+		line-height: 1;
+	}
+
+	.tab-item[aria-current='page'] {
+		font-weight: 600;
+	}
+
+	.tab-item[aria-current='page'] .ico {
+		background: var(--additive-soft);
+	}
+
+	/* The create action, in the middle. It is the one item on the bar that goes
+	   nowhere in the navigation, so it is drawn as a filled disc: the fill is
+	   what separates it from the four cells beside it, which carry no fill in
+	   any state. It takes no `aria-current` and no pill, because it is never
+	   "the page you are on". Inline and flat rather than raised and
+	   overlapping: a floating button would cover the top of whatever the bar
+	   sits over, and the whole cell -- 72 by 80 at the narrowest -- is the
+	   touch target, so the 48px disc is what is seen rather than what is
+	   pressed. */
 	.tab-create .ring {
-		width: 30px;
-		height: 30px;
+		width: 48px;
+		height: 48px;
 		border-radius: 50%;
-		background: var(--accent);
+		background: var(--primary);
 		color: var(--on-fill);
 		display: grid;
 		place-items: center;
 		flex: none;
-	}
-
-	.tab-create span:last-child {
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		max-width: 100%;
 	}
 }
 

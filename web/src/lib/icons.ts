@@ -36,6 +36,7 @@ import Laptop from '@lucide/svelte/icons/laptop';
 import LayoutDashboard from '@lucide/svelte/icons/layout-dashboard';
 import LayoutList from '@lucide/svelte/icons/layout-list';
 import LayoutTemplate from '@lucide/svelte/icons/layout-template';
+import LibraryBig from '@lucide/svelte/icons/library-big';
 import LogOut from '@lucide/svelte/icons/log-out';
 import Minus from '@lucide/svelte/icons/minus';
 import Monitor from '@lucide/svelte/icons/monitor';
@@ -54,6 +55,7 @@ import Tag from '@lucide/svelte/icons/tag';
 import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 import Users from '@lucide/svelte/icons/users';
 import WavesHorizontal from '@lucide/svelte/icons/waves-horizontal';
+import Workflow from '@lucide/svelte/icons/workflow';
 import X from '@lucide/svelte/icons/x';
 
 export const ICONS = {
@@ -85,6 +87,7 @@ export const ICONS = {
 	'layout-dashboard': LayoutDashboard,
 	'layout-list': LayoutList,
 	'layout-template': LayoutTemplate,
+	'library-big': LibraryBig,
 	'log-out': LogOut,
 	minus: Minus,
 	monitor: Monitor,
@@ -103,6 +106,7 @@ export const ICONS = {
 	'triangle-alert': TriangleAlert,
 	users: Users,
 	'waves-horizontal': WavesHorizontal,
+	workflow: Workflow,
 	x: X
 } as const satisfies Record<string, LucideIcon>;
 
