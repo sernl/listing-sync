@@ -1,5 +1,76 @@
 import { describe, expect, it } from 'vitest';
-import { checkInControl, checkInNote } from './machines';
+import type { DeviceView } from '$lib/api';
+import { CONNECTED_WITHIN_MS, checkInControl, checkInNote, machineWords } from './machines';
+
+const NOW = 1_770_000_000_000;
+const MINUTE = 60_000;
+
+function machine(over: Partial<DeviceView> = {}): DeviceView {
+	return {
+		id: 'dev_1',
+		name: 'SM-N975F',
+		os: 'android',
+		arch: 'arm64',
+		app_version: '0.7.0',
+		first_seen_at: NOW - 40 * 24 * 60 * MINUTE,
+		last_seen_at: NOW - MINUTE,
+		revoked_at: null,
+		wipe_outstanding: false,
+		sessions: [],
+		...over
+	};
+}
+
+describe('what one machine is doing', () => {
+	// The defect, stated as an ordering. The heartbeat stamps `last_seen_at`
+	// on a revoked device — that check-in is how we learn it has wiped its
+	// logins — so a machine signed out from the console goes on looking as
+	// fresh as any other. The founder read "available just now" beside a
+	// machine he had signed out that morning and concluded the app was
+	// broken.
+	it('says a machine was signed out before it says anything about freshness', () => {
+		const said = machineWords(
+			machine({ revoked_at: NOW - 3 * 60 * MINUTE, last_seen_at: NOW - MINUTE }),
+			NOW
+		);
+		expect(said).toBe('Signed out from the console 3 h ago');
+		expect(said).not.toContain('Connected');
+		expect(said).not.toContain('just now');
+	});
+
+	it('calls a machine connected while its last check-in is inside the window', () => {
+		expect(machineWords(machine({ last_seen_at: NOW - MINUTE }), NOW)).toBe(
+			'Connected · checked in 1 min ago'
+		);
+		expect(machineWords(machine({ last_seen_at: NOW - CONNECTED_WITHIN_MS }), NOW)).toContain(
+			'Connected'
+		);
+	});
+
+	// Past the window it states the age and claims nothing about now. A laptop
+	// that shut its lid is not connected, and the list saying it is turns the
+	// one honest signal on this page into noise.
+	it('states the age alone once the window has passed', () => {
+		const said = machineWords(machine({ last_seen_at: NOW - CONNECTED_WITHIN_MS - 1 }), NOW);
+		expect(said).toBe('Last seen 15 min ago');
+		expect(said).not.toContain('Connected');
+	});
+
+	// A machine that is both revoked and stale still leads with the
+	// revocation: "last seen 3 days ago" is true and answers a question the
+	// seller did not ask.
+	it('leads with the revocation even where the machine is also quiet', () => {
+		expect(
+			machineWords(
+				machine({
+					revoked_at: NOW - 2 * 24 * 60 * MINUTE,
+					last_seen_at: NOW - 2 * 24 * 60 * MINUTE
+				}),
+				NOW
+			)
+		).toBe('Signed out from the console 2 days ago');
+	});
+});
 
 describe('what the panel says about a check-in it asked for', () => {
 	it('says nothing at all when the machine reached us', () => {

@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 128] = [
+pub const ROUTES: [Route; 129] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -521,6 +521,11 @@ pub const ROUTES: [Route; 128] = [
         method: "post",
         path: "/{version}/devices/{device}/revoke",
         summary: "Sign one device out; it wipes its marketplace sessions on next contact",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/devices/{device}/restore",
+        summary: "Sign one device back in, from a session on that device",
     },
     Route {
         method: "post",

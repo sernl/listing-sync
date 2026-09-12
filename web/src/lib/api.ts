@@ -2420,6 +2420,15 @@ export const api = {
 	 *  next check-in; one that never reconnects keeps them until the
 	 *  marketplace expires them, which the page states. */
 	revokeDevice: (device: string) => post<DeviceView>(`/v1/devices/${device}/revoke`, {}),
+	/** Sign one machine back in, from a seller standing at it.
+	 *
+	 *  The other half of `revokeDevice`, and the only way a revoked device
+	 *  returns: the heartbeat deliberately never clears the mark, so a machine
+	 *  the seller signed out from here would otherwise wipe its marketplace
+	 *  logins on every check-in for ever, whoever signed in on it afterwards.
+	 *  422 where the seller is already at the machine cap, which is the same
+	 *  refusal registering a new one gets. */
+	restoreDevice: (device: string) => post<DeviceView>(`/v1/devices/${device}/restore`, {}),
 
 	/** Every marketplace connection this organisation holds. The envelope the
 	 *  route answers with is opened here, so no caller can hold a second

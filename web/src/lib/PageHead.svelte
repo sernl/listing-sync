@@ -4,6 +4,8 @@
 	import Icon from '$lib/Icon.svelte';
 	import type { IconName } from '$lib/icons';
 	import { ACCOUNT_DESTINATION } from '$lib/nav';
+	import { whereYouAre } from '$lib/machine-here';
+	import { machineHere } from '$lib/machine.svelte';
 
 	let {
 		icon,
@@ -75,10 +77,16 @@
 			     name -- every frame before the reads land -- because an empty
 			     tile reads as a loading state that never resolves and the glyph
 			     reads as Account, which is true in every state. -->
+			<!-- The title says which machine the seller is at and whether they are
+			     in the app, which on a phone is the only place the strip's own
+			     line could go: the top strip is not drawn below 620px at all. It
+			     is a supplement to the label rather than a replacement, so the
+			     control still announces as Account. -->
 			<a
 				class="head-tool head-account"
 				href={ACCOUNT_DESTINATION.href}
 				aria-label={ACCOUNT_DESTINATION.label}
+				title={whereYouAre(machineHere.where)}
 			>
 				{#if tile.kind === 'picture'}
 					<img

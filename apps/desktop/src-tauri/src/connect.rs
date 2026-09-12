@@ -141,18 +141,30 @@ pub enum ConnectVerdict {
     /// signed out was told the sign-in could not be opened, which is the
     /// opposite of what happened and names nothing they can act on.
     NotKept,
+    /// This machine had been signed out from the console, so no login was
+    /// opened — or the one in flight was not kept, because the check-in that
+    /// follows a capture wiped the store under it.
+    ///
+    /// Split from [`Self::NotKept`] because the remedy is a different one and
+    /// the seller can only act on the remedy: `NotKept` says the sign-in was
+    /// not saved and leaves them to press Connect again, which on a signed-out
+    /// machine fails again every time. This says the machine itself is signed
+    /// out, which is undone once, on the Machines page, and then the sign-in
+    /// holds.
+    SignedOut,
 }
 
 impl ConnectVerdict {
     /// Every verdict, beside the variants rather than in a test, so a new one
     /// is listed where it is declared. `Marketplace::ALL` is the same shape and
     /// is the reason this is a constant and not an iterator.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Captured,
         Self::Deadline,
         Self::Abandoned,
         Self::Refused,
         Self::NotKept,
+        Self::SignedOut,
     ];
 
     /// The word this verdict travels as.
@@ -164,6 +176,7 @@ impl ConnectVerdict {
             Self::Abandoned => "abandoned",
             Self::Refused => "refused",
             Self::NotKept => "notkept",
+            Self::SignedOut => "signed_out",
         }
     }
 }

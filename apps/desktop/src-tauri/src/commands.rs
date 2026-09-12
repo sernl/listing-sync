@@ -14,7 +14,7 @@ use tam_types::Marketplace;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::connect::{login_target, return_url, ConnectVerdict, LoginTarget};
-use crate::heartbeat::{check_in, first_run, CheckInError};
+use crate::heartbeat::{check_in, first_run, CheckIn, CheckInError};
 use crate::run::wall_now;
 use crate::session::{Cookie, CookieJar, SessionRecord, SessionStatus};
 use crate::state::{DesktopState, DeviceActivity, WorkEvent};
@@ -99,6 +99,17 @@ pub struct DeviceState {
     /// signed in here. Carried rather than discarded because a phone has no
     /// other channel — its log is private storage and its stdout needs a cable.
     pub detail: Option<String>,
+    /// Which machine this is, as the registry knows it.
+    ///
+    /// Carried so the console can say which of the seller's machines it is
+    /// running on, which it could not do at all before: it lists the
+    /// organisation's devices and had no way to tell which row was the one the
+    /// page was drawn on, so a seller reading "signed out" in the list could
+    /// not tell whether it meant this machine or another one.
+    pub device_id: String,
+    /// The name that machine is listed under, so a sentence can name it
+    /// instead of printing the id.
+    pub device_name: String,
 }
 
 /// What a connect did, which is not the same question on the two surfaces.
@@ -108,9 +119,12 @@ pub struct DeviceState {
 /// about to become the marketplace's own page, so the page that asked is gone
 /// before there is anything to answer: this call says only that the sign-in is
 /// opening, and the verdict comes back in the address the console is resumed
-/// at. Two variants rather than an optional field, because "no session yet"
-/// and "no session" are different facts and a nullable one would collapse
-/// them.
+/// at. The third variant is the one answer both surfaces give without opening
+/// anything: a machine the seller signed out from the console cannot hold a
+/// marketplace login, and it is told before a password is typed rather than
+/// after. Variants rather than an optional field, because "no session yet",
+/// "no session" and "not on this machine" are three different facts and a
+/// nullable one would collapse them.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum ConnectOutcome {
@@ -119,6 +133,11 @@ pub enum ConnectOutcome {
     /// The sign-in is replacing this page. Nothing is filed yet, and the
     /// verdict arrives as `crate::connect::RETURN_PARAM` on the way back.
     Opening,
+    /// This machine was signed out from the console, so nothing was opened
+    /// and nothing was filed. The same word
+    /// [`crate::connect::ConnectVerdict::SignedOut`] travels as, so the
+    /// console words one sentence for the two channels.
+    SignedOut,
 }
 
 /// Which shape a login takes here, decided by the surface rather than by the
@@ -189,17 +208,45 @@ async fn connect_on<R: tauri::Runtime>(
 /// not export: the two real ones are marketplace sign-in pages, and a test
 /// that reached one would be making the request D1 says only a seller's own
 /// device makes, on a machine that is not a seller's.
+///
+/// The check-in comes first, and that is what the founder's 0.7.0 was missing:
+/// a machine signed out from the console still opened the marketplace's login,
+/// took the seller through it, and only then discovered — in
+/// [`file_session`]'s own check-in — that the capture could not be kept. The
+/// seller typed a password for nothing, once per attempt, forever. Asking
+/// before opening turns that into one sentence naming the one remedy.
 pub(crate) async fn connect_on_target<R: tauri::Runtime>(
     app: AppHandle<R>,
     target: LoginTarget,
     surface: ConnectSurface,
 ) -> Result<ConnectOutcome, CommandError> {
+    if signed_out_here(&app).await {
+        return Ok(ConnectOutcome::SignedOut);
+    }
     match surface {
-        ConnectSurface::SecondWindow => in_a_second_window(app, target)
-            .await
-            .map(|session| ConnectOutcome::Captured { session }),
+        ConnectSurface::SecondWindow => in_a_second_window(app, target).await,
         ConnectSurface::OneWindow => in_this_window(&app, target).map(|()| ConnectOutcome::Opening),
     }
+}
+
+/// Whether this machine may hold a marketplace login at all, asked of the
+/// server rather than remembered.
+///
+/// The answer is read off the state rather than off the check-in, because the
+/// two failures differ: a check-in that reached the server has just written
+/// the standing it was told, and one that could not reach it leaves the last
+/// standing we know of in place. A revoked device that is offline is still
+/// refused — its store was wiped when it learned of the revocation, and every
+/// cycle since has closed its gate — and a device that has never reached the
+/// server is not refused, because nothing said it was signed out.
+async fn signed_out_here<R: tauri::Runtime>(app: &AppHandle<R>) -> bool {
+    let state = app.state::<DesktopState>();
+    // Discarded rather than raised, the judgement `forget_session` makes for
+    // the same call: an unreachable server is not evidence of revocation, and
+    // refusing the sign-in over an outage would strand a seller whose machine
+    // is in good standing.
+    check_in(&state, state.control_plane()).await.ok();
+    state.revoked()
 }
 
 /// The marketplace's name as a seller writes it, for a window a seller reads.
@@ -234,7 +281,7 @@ mod display_name_tests {
 async fn in_a_second_window<R: tauri::Runtime>(
     app: AppHandle<R>,
     target: LoginTarget,
-) -> Result<SessionStatus, CommandError> {
+) -> Result<ConnectOutcome, CommandError> {
     let marketplace = target.marketplace;
     let label = format!("login-{marketplace:?}");
 
@@ -280,7 +327,14 @@ async fn in_a_second_window<R: tauri::Runtime>(
     };
 
     window.destroy().ok();
-    file_session(&app, marketplace, jar).await
+    match file_session(&app, marketplace, jar).await {
+        Ok(session) => Ok(ConnectOutcome::Captured { session }),
+        // Not a failure to report as one: the seller signed in and nothing
+        // went wrong with the sign-in. What cannot happen is keeping it here,
+        // and that is one sentence with one remedy rather than a diagnostic.
+        Err(NotFiled::SignedOut) => Ok(ConnectOutcome::SignedOut),
+        Err(NotFiled::Failed(why)) => Err(why),
+    }
 }
 
 /// The phone's login: the console's own window, navigated away and navigated
@@ -363,18 +417,20 @@ async fn capture_in_place<R: tauri::Runtime>(
             .is_ok_and(|at| at.origin() == console.origin())
     };
     match await_session(target, capture, gone).await {
-        Ok(jar) => {
-            if file_session(app, target.marketplace, jar).await.is_ok() {
-                ConnectVerdict::Captured
-            } else {
-                // Not `Refused`: the sign-in opened and the seller finished it.
-                // The cause the seller can act on is a device signed out from
-                // the console, which `file_session`'s own check-in learns of
-                // and which wipes the store — and telling them the sign-in
-                // could not be opened would name the one thing that did happen.
-                ConnectVerdict::NotKept
-            }
-        }
+        Ok(jar) => match file_session(app, target.marketplace, jar).await {
+            Ok(_) => ConnectVerdict::Captured,
+            // The revocation reached this device between the Connect press
+            // and the sign-in finishing — the pre-flight check-in in
+            // `connect_on_target` caught every earlier one — and the wipe it
+            // triggered took the capture with it. Named as itself rather than
+            // as `NotKept`, because the remedy is signing this machine back in
+            // and pressing Connect again does nothing for it.
+            Err(NotFiled::SignedOut) => ConnectVerdict::SignedOut,
+            // Not `Refused`: the sign-in opened and the seller finished it.
+            // The keychain or the store refused it, and the diagnostic has
+            // nowhere to go on this surface.
+            Err(NotFiled::Failed(_)) => ConnectVerdict::NotKept,
+        },
         Err(Waited::Left) => ConnectVerdict::Abandoned,
         Err(Waited::Deadline) => ConnectVerdict::Deadline,
         // The diagnostic has nowhere to go on this surface: there is no caller
@@ -492,12 +548,35 @@ enum Waited {
     Unreadable(CommandError),
 }
 
+/// Why a captured jar was not kept.
+///
+/// Two arms rather than one string, because the two are a different sentence
+/// and a different remedy on both surfaces: a machine signed out from the
+/// console is signed back in once and then every sign-in holds, while a store
+/// that refused is a fault the seller can only retry. A single error type
+/// collapsed them, and what the founder read for the first was the prose of
+/// the second.
+enum NotFiled {
+    /// The check-in that follows the capture answered that this machine was
+    /// signed out from the console, and the wipe it ran took the capture with
+    /// it.
+    SignedOut,
+    /// The store refused, with its own diagnostic.
+    Failed(CommandError),
+}
+
+impl From<crate::session::StoreError> for NotFiled {
+    fn from(why: crate::session::StoreError) -> Self {
+        Self::Failed(why.into())
+    }
+}
+
 /// File a captured jar, and tell the server before calling it a success.
 async fn file_session<R: tauri::Runtime>(
     app: &AppHandle<R>,
     marketplace: Marketplace,
     jar: CookieJar,
-) -> Result<SessionStatus, CommandError> {
+) -> Result<SessionStatus, NotFiled> {
     let state = app.state::<DesktopState>();
     let record = SessionRecord {
         marketplace,
@@ -517,11 +596,7 @@ async fn file_session<R: tauri::Runtime>(
     // server is not evidence of revocation and leaves the capture standing.
     if let Ok(answer) = check_in(&state, state.control_plane()).await {
         if answer.revoked {
-            return Err(CommandError(
-                "this device has been signed out from the console, so the marketplace \
-                 session was not kept"
-                    .to_owned(),
-            ));
+            return Err(NotFiled::SignedOut);
         }
     }
     Ok(SessionStatus::of(&record))
@@ -535,18 +610,42 @@ async fn file_session<R: tauri::Runtime>(
 #[tauri::command]
 pub async fn device_check_in(app: AppHandle) -> Result<DeviceState, CommandError> {
     let state = app.state::<DesktopState>();
-    match first_run(&state, state.control_plane()).await {
+    let answer = first_run(&state, state.control_plane()).await;
+    device_state(&state, answer)
+}
+
+/// What the console is told a check-in found, this machine's identity
+/// included.
+///
+/// Split from the command because the command takes the concrete runtime
+/// Tauri hands it and a host test cannot build one: everything the console
+/// actually reads is decided here, where it can be asked what it says.
+fn device_state(
+    state: &DesktopState,
+    answer: Result<CheckIn, CheckInError>,
+) -> Result<DeviceState, CommandError> {
+    // Named on every answer, including the ones that reached nothing: which
+    // machine this is, is a fact about the machine and not about the call, and
+    // a console that lost the name on an outage could not say "this machine"
+    // in the one list where it matters most.
+    let device_id = state.device().id.as_str().to_owned();
+    let device_name = state.device().label.clone();
+    match answer {
         Ok(answer) => Ok(DeviceState {
             revoked: answer.revoked,
             reached_server: true,
             signed_in: true,
             detail: None,
+            device_id,
+            device_name,
         }),
         Err(CheckInError::Plane(why)) => Ok(DeviceState {
             revoked: state.revoked(),
             reached_server: false,
             signed_in: state.signed_in(),
             detail: Some(why.to_string()),
+            device_id,
+            device_name,
         }),
         Err(why) => Err(CommandError::from(why)),
     }
@@ -1579,9 +1678,14 @@ mod session_command_tests {
         .await
         .expect_err("a device signed out from the console does not keep what it just captured");
         assert!(
-            refusal.0.contains("signed out from the console"),
-            "and the seller is told which of the two things went wrong. Got: {}",
-            refusal.0
+            matches!(refusal, super::NotFiled::SignedOut),
+            "and it is named as a machine signed out from the console rather than as a store \
+             that refused, because those are two sentences and two remedies. Got: \
+             {}",
+            match refusal {
+                super::NotFiled::SignedOut => "signed out".to_owned(),
+                super::NotFiled::Failed(why) => why.0,
+            }
         );
         assert_eq!(
             plane.beats().await.len(),
@@ -1598,6 +1702,117 @@ mod session_command_tests {
             "and the wipe the revocation triggers took the capture with it"
         );
         drop(app);
+    }
+
+    /// The defect the founder met in 0.7.0, caught at the press instead of
+    /// after it.
+    ///
+    /// Both of his machines had been signed out from the console, and every
+    /// Connect took him through a whole marketplace sign-in — page, e-mail,
+    /// password, second factor — before the check-in behind the capture said
+    /// the session had not been saved. Nothing in the two surfaces asked
+    /// beforehand, and both of them now do: the answer is an outcome the
+    /// console can word, and the sign-in is not opened at all.
+    ///
+    /// Both surfaces in one loop, because the failure was one and the answer
+    /// has to be one: a phone that returned `Opening` here would navigate to
+    /// the marketplace anyway, and a computer that returned `Captured` would
+    /// claim a session the next cycle wipes.
+    #[tokio::test]
+    async fn a_connect_on_a_machine_signed_out_from_the_console_opens_nothing() {
+        for surface in [
+            super::ConnectSurface::OneWindow,
+            super::ConnectSurface::SecondWindow,
+        ] {
+            let store = Arc::new(MemorySessionStore::new());
+            let plane = Recorder::answering(Ok(CheckIn {
+                revoked: true,
+                entitlement: None,
+            }));
+            let app = app_holding(Arc::clone(&store), Arc::clone(&plane));
+            let window = a_console_window(&app);
+
+            let answer = super::connect_on_target(app.handle().clone(), a_stub_target(), surface)
+                .await
+                .expect("a machine signed out from the console is an answer, not a failure");
+            assert_eq!(
+                serde_json::to_value(&answer).expect("an outcome serialises"),
+                serde_json::json!({ "outcome": "signed_out" }),
+                "the console reads the outcome word and words one sentence for it, so this is \
+                 the whole channel between the refusal and what the seller is told. On \
+                 {surface:?}"
+            );
+            assert_eq!(
+                plane.beats().await.len(),
+                1,
+                "and the standing was asked of the server at the press rather than remembered \
+                 from the last cycle, which is what makes the refusal current. On {surface:?}"
+            );
+
+            // Longer than `CONSOLE_HANDOVER`, so a navigation that was going
+            // to happen has happened by now. Without the wait this would pass
+            // for the phone's arm reading the answer and navigating anyway.
+            tokio::time::sleep(core::time::Duration::from_millis(600)).await;
+            assert_eq!(
+                window.url().expect("the window has a url").as_str(),
+                "https://teachouse.stowiq.io/",
+                "the one window never left the console, so the seller was never shown a login \
+                 they cannot keep. On {surface:?}"
+            );
+            assert!(
+                app.get_webview_window("login-Tpt").is_none(),
+                "and no second window was built either. On {surface:?}"
+            );
+            drop(app);
+        }
+    }
+
+    /// The check-in answer names which machine it came from, on both endings.
+    ///
+    /// The console's only channel for it: it lists the organisation's devices
+    /// from the server and had no way to tell which row was the machine the
+    /// page was drawn on, so the founder read "signed out" in a list of two
+    /// and could not tell which of them it meant. Asserted as the whole
+    /// document because these are field names a browser reads by spelling, and
+    /// on both endings because a name dropped when the server is unreachable
+    /// is a name missing exactly when the seller needs the sentence.
+    #[test]
+    fn the_check_in_answer_names_this_machine_on_both_endings() {
+        let state = DesktopState::new(identity(), Arc::new(MemorySessionStore::default()));
+
+        let reached = super::device_state(
+            &state,
+            Ok(CheckIn {
+                revoked: true,
+                entitlement: None,
+            }),
+        )
+        .expect("an answer from the server is a state, revoked or not");
+        assert_eq!(
+            serde_json::to_value(&reached).expect("a device state serialises"),
+            serde_json::json!({
+                "revoked": true,
+                "reached_server": true,
+                "signed_in": true,
+                "detail": null,
+                "device_id": "11112222333344445555666677778888",
+                "device_name": "founder-pc",
+            }),
+        );
+
+        let unreached = super::device_state(
+            &state,
+            Err(crate::heartbeat::CheckInError::Plane(
+                ControlPlaneError::NotConfigured,
+            )),
+        )
+        .expect("a check-in that reached nothing is still a state");
+        assert_eq!(unreached.device_id, "11112222333344445555666677778888");
+        assert_eq!(
+            unreached.device_name, "founder-pc",
+            "the machine is the same machine whether or not the server answered"
+        );
+        assert!(!unreached.reached_server);
     }
 
     /// The application answers `connect_marketplace` at the origin the console

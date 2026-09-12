@@ -1,4 +1,5 @@
-//! The device registry over the wire: register, heartbeat, list and sign out.
+//! The device registry over the wire: register, heartbeat, list, sign out and
+//! sign back in.
 //!
 //! Decision D14 in `docs/notes/design/vendoo-for-teachers-rethink.md` asks for
 //! a "Your devices" page with per-device sign-out. Half of what such a page
@@ -20,6 +21,12 @@
 //! that could do better — the sessions are on the seller's machine by design,
 //! and D1 forbids the server from holding or reaching them — so the page says
 //! so rather than implying an immediate wipe.
+//!
+//! And what reverses it: [`restore_device`], reached from a session on the
+//! machine itself. Nothing the device does alone lifts a sign-out, so without
+//! this route a machine the seller signed out could never work again -- it
+//! would keep its identity, keep being answered `revoked`, and keep wiping the
+//! marketplace logins the seller had just made on it.
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -580,6 +587,65 @@ pub(crate) async fn revoke_device(
         .map_err(|error| state.internal(&error.to_string()))?
         .into_iter()
         .find(|record| record.id == device)
+        .ok_or_else(missing)?;
+    Ok(Json(device_view(record)))
+}
+
+/// Signs one device back in, undoing a sign-out the seller made from the
+/// console.
+///
+/// The route exists because without it a signed-out machine was finished:
+/// registration deliberately never clears the mark and the client only
+/// re-registers when the server has forgotten it, so the app kept its
+/// identity, kept being told `revoked`, and kept wiping its marketplace
+/// sessions every cycle. Every connect attempt on that machine then failed
+/// after the seller had typed a password.
+///
+/// Reversing it is the seller's act rather than the machine's, which is why
+/// this is a session-authed route and not something the heartbeat does: a
+/// revocation a machine lifted by restarting would not be the seller's
+/// decision any more.
+///
+/// The device allowance is re-applied here, for the reason [`register`]
+/// applies it: a restore adds a machine to the live fleet, so a seller on a
+/// one-computer plan who signed out an old laptop and registered a new one
+/// cannot have both back by restoring. The device being restored is excluded
+/// from the count it is measured against, so restoring one that is not
+/// signed out at all is never refused.
+///
+/// Not-found comes first deliberately: an unknown id is a different fact from
+/// a full fleet, and answering the quota for it would tell the caller a
+/// machine exists.
+pub(crate) async fn restore_device(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, device)): Path<(String, String)>,
+) -> Result<Json<DeviceView>, APIError> {
+    let device = bounded("a device id", &device, ID_MAX_CHARS)?;
+    let devices = DeviceRepo::new(state.pool.clone());
+    let held = devices
+        .list(context.org)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?;
+    if !held.iter().any(|record| record.id == device) {
+        return Err(missing());
+    }
+    let live = held
+        .iter()
+        .filter(|record| record.revoked_at.is_none() && record.id != device)
+        .count();
+    let caps = context.entitlement.caps;
+    if live >= usize::try_from(caps.devices_max).unwrap_or(usize::MAX) {
+        return Err(quota_refusal(
+            QuotaKind::Devices,
+            i64::try_from(live).unwrap_or(i64::MAX),
+            u64::from(caps.devices_max),
+        ));
+    }
+    let record = devices
+        .restore(context.org, device, (state.wall)())
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?
         .ok_or_else(missing)?;
     Ok(Json(device_view(record)))
 }

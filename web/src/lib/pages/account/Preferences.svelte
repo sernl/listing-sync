@@ -12,6 +12,8 @@
      not happening. -->
 <script lang="ts">
 	import Panel from '$lib/Panel.svelte';
+	import { whereYouAre } from '$lib/machine-here';
+	import { machineHere } from '$lib/machine.svelte';
 	import { DARK_QUERY, commitThemeChoice, themeChoice, type ThemeChoice } from '$lib/theme';
 
 	const OPTIONS: ReadonlyArray<{ id: ThemeChoice; label: string }> = [
@@ -42,6 +44,15 @@
 	title="Appearance"
 	description="Which palette this console is drawn in. Kept on this device; it does not follow you to another computer yet."
 >
+	<!-- Which machine "this device" is, said in plain sight rather than left to
+	     a tooltip. The console is one build served to a browser and to the app
+	     window around it, and until this line nothing on any screen told the
+	     two apart: the founder's 0.7.0 review asked for it on every platform,
+	     and this is the screen a seller reaches when they want to know what
+	     this copy of Teachouse is. The panel above it says a choice is kept on
+	     this device, which is the sentence this one finishes. -->
+	<p class="whereabouts">{whereYouAre(machineHere.where)}</p>
+
 	<fieldset class="appearance">
 		<legend>Theme</legend>
 		<div class="seg" role="radiogroup" aria-label="Theme">
@@ -60,6 +71,15 @@
 </Panel>
 
 <style>
+	/* The machine line above the control, set as a statement rather than as a
+	   label: it is not part of the theme choice and must not read as its
+	   description. */
+	.whereabouts {
+		margin: 0 0 14px;
+		color: var(--muted);
+		font-size: 13px;
+	}
+
 	/* The segmented control is three buttons in one track, which is what the
 	   console already draws for a tab bar; it is not `.tab-bar` because that
 	   one is an underline on a rule and this one is a switch with a body. */

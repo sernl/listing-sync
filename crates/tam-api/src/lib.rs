@@ -483,6 +483,13 @@ pub fn router(state: AppState) -> Router {
             "/{version}/devices/{device}/revoke",
             post(devices::revoke_device),
         )
+        // The way back from that one, and a route rather than something the
+        // heartbeat does: a machine returns to the fleet because a seller
+        // signed in at it asked, not because it restarted.
+        .route(
+            "/{version}/devices/{device}/restore",
+            post(devices::restore_device),
+        )
         // Beside the device routes because it is what makes them able to
         // write, and keyed on the marketplace rather than on a device because
         // the declaration outlives every machine that carries it.

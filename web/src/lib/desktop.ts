@@ -72,43 +72,57 @@ export const FORGET_SESSION = 'forget_session';
  * the string the application registers are compared in one place. */
 export const DEVICE_CHECK_IN = 'device_check_in';
 
-/** Register this machine with the server, from the console running inside it.
+/** What one check-in answered.
  *
- * The application registers itself on its own scheduled cycle as well, and this
- * is the half that makes it prompt. That cycle runs at start-up, which is before
- * the seller has signed in and therefore has no session to register under, and
- * then hourly on a computer or on the next resume on a phone — so without this
- * call a seller who has just signed in looks at an empty machine list and has no
- * way to tell a slow registration from a broken one.
+ * `reached` is whether the registry may now have gained a row, which is the
+ * caller's cue to read it again. False in every browser, where there is no
+ * application to register and nothing failed. False also when the application
+ * could not reach the server: the command reports that as an ordinary answer
+ * rather than a rejection, and a list refetched over the same dead connection
+ * would only fail twice.
  *
- * Answers whether the registry may now have gained a row, which is the caller's
- * cue to read it again. False in every browser, where there is no application to
- * register and nothing failed. False also when the application could not reach
- * the server: the command reports that as an ordinary answer rather than a
- * rejection, and a list refetched over the same dead connection would only fail
- * twice. */
-export async function registerThisMachine(invoke: Invoke | null): Promise<boolean> {
-	return (await checkInHere(invoke)).reached;
-}
-
-/** What one check-in answered, for a caller that asked for it.
+ * `detail` is the application's own sentence for why the check-in did not
+ * reach us, and is null on every other path: a success, a browser, and an
+ * application too old to carry the field.
  *
- * `reached` is what `registerThisMachine` returns and is the only fact a
- * caller who did not ask needs. `detail` is the application's own sentence for
- * why the check-in did not reach us, and is null on every other path: a
- * success, a browser, and an application too old to carry the field. */
+ * `revoked` is the machine's own copy of what the heartbeat was told: the
+ * seller signed this machine out from the console, and it has wiped its
+ * marketplace logins. It is what lets the console say so on the machine it
+ * happened to, rather than only in a list of every machine.
+ *
+ * `device` is which machine this is, by the identifier and the name the
+ * registry holds. Null in a browser, which is no machine at all, and null from
+ * an application too old to send the two fields — an absent name has to read
+ * as "not known" rather than as a machine called nothing. */
 export interface CheckInHere {
 	reached: boolean;
 	detail: string | null;
+	revoked: boolean;
+	device: { id: string; name: string } | null;
 }
 
-/** Ask this machine to register itself and check in, and read why if it could
- *  not.
+/** What a check-in that never happened answers: a browser, and a rejection.
  *
- * The same command `registerThisMachine` sends, with the answer's reason kept
- * rather than flattened. It exists for the one caller who pressed a button:
- * they asked, so they are owed the reason, whereas the console's own load-time
- * registration did not and is not.
+ * `revoked: false` is not a claim that the machine stands — nothing was asked
+ * — and no caller reads it as one, because every one of them tests `reached`
+ * first. */
+const NOTHING_CHECKED_IN: CheckInHere = {
+	reached: false,
+	detail: null,
+	revoked: false,
+	device: null
+};
+
+/** Ask this machine to register itself and check in, and read what it said.
+ *
+ * The application registers itself on its own scheduled cycle as well, and
+ * this is the half that makes it prompt. That cycle runs at start-up, which is
+ * before the seller has signed in and therefore has no session to register
+ * under, and then hourly on a computer or on the next resume on a phone — so
+ * without this call a seller who has just signed in looks at an empty machine
+ * list and has no way to tell a slow registration from a broken one. It is
+ * also the one call that learns, under a session, that this machine was signed
+ * out from the console.
  *
  * A rejection is `reached: false` with no detail. The three causes — an
  * application too old to know the command, a page it takes no commands from,
@@ -116,43 +130,53 @@ export interface CheckInHere {
  * added, and none of them is worded for a seller. */
 export async function checkInHere(invoke: Invoke | null): Promise<CheckInHere> {
 	if (invoke === null) {
-		return { reached: false, detail: null };
+		return NOTHING_CHECKED_IN;
 	}
 	try {
-		const answer = await invoke(DEVICE_CHECK_IN, {});
-		return { reached: reachedServer(answer), detail: checkInDetail(answer) };
+		return deviceState(await invoke(DEVICE_CHECK_IN, {}));
 	} catch {
-		return { reached: false, detail: null };
+		return NOTHING_CHECKED_IN;
 	}
 }
 
-/** Whether a check-in answer says the application reached the server.
+/** The application's `DeviceState`, read field by field.
  *
- * `reached_server` is one field of the application's `DeviceState`, and the only
- * one `registerThisMachine` reads: `revoked` and `signed_in` are shown by the
- * machine list itself, out of the registry, which is the copy the seller can
- * act on. */
-function reachedServer(answer: unknown): boolean {
-	return (
-		typeof answer === 'object' &&
-		answer !== null &&
-		(answer as { reached_server?: unknown }).reached_server === true
-	);
-}
-
-/** The application's own sentence for why a check-in did not reach us, or null.
+ * One reader rather than one per field, because every field has the same
+ * boundary problem and the same answer to it: the console is served from the
+ * control plane and updates when we deploy, while the application updates
+ * when the seller takes an update, so this console is routinely the newer of
+ * the two and every field here may simply be absent. Absent reads as "not
+ * said" in each case, never as a value.
  *
- * Null rather than a substituted phrase when the field is missing, because an
- * application older than the field is the case that must not read as a named
- * cause: it says nothing, and a caller shows its own words instead. The four
- * sentences the field does carry are `ControlPlaneError`'s, which name no
- * credential, no jar and no host but our own control plane. */
-function checkInDetail(answer: unknown): string | null {
+ * `revoked` is believed only beside a check-in that reached us: an application
+ * that could not reach the control plane learnt nothing about whether the
+ * seller signed this machine out, and a banner raised over a dropped
+ * connection would accuse them of an act they did not perform.
+ *
+ * The device is both fields or neither. A name with no identifier cannot be
+ * acted on — the restore route addresses a device by id — and an identifier
+ * with no name cannot be shown.
+ *
+ * `detail` is `ControlPlaneError`'s own sentence: four of them, each already
+ * worded for a person, naming no credential, no jar and no host but our own
+ * control plane. */
+function deviceState(answer: unknown): CheckInHere {
 	if (typeof answer !== 'object' || answer === null) {
-		return null;
+		return NOTHING_CHECKED_IN;
 	}
-	const detail = (answer as { detail?: unknown }).detail;
-	return typeof detail === 'string' && detail.length > 0 ? detail : null;
+	const reached = 'reached_server' in answer && answer.reached_server === true;
+	const revoked = reached && 'revoked' in answer && answer.revoked === true;
+	const detail = 'detail' in answer ? answer.detail : undefined;
+	const id = 'device_id' in answer ? answer.device_id : undefined;
+	const name = 'device_name' in answer ? answer.device_name : undefined;
+	const named =
+		typeof id === 'string' && id.length > 0 && typeof name === 'string' && name.length > 0;
+	return {
+		reached,
+		detail: typeof detail === 'string' && detail.length > 0 ? detail : null,
+		revoked,
+		device: named ? { id, name } : null
+	};
 }
 
 /** What asking this computer to run an import produced.
@@ -252,7 +276,7 @@ async function ranOnRun(
 /** What asking this computer to connect or forget one marketplace produced.
  *
  * The same four answers `StartOutcome` carries, with `done` where that one has
- * `started`, plus one a phone alone can give.
+ * `started`, plus two the connect alone can give.
  *
  * `opening` is the sign-in replacing this very page, which is what a connect
  * does where the application has one window: there is no second window for the
@@ -262,11 +286,19 @@ async function ranOnRun(
  * `$lib/pages/marketplaces/view`. A caller seeing `opening` says nothing and
  * leaves the card busy, because the page it would say it on is about to unload.
  *
+ * `signedOut` is the machine having been signed out from the console. The
+ * application checks in before it opens anything, so the sign-in never starts:
+ * a machine the server calls revoked wipes every marketplace session it is
+ * handed, and before this arm existed the seller typed a marketplace password
+ * into a window whose capture was then thrown away. Refusing in front of the
+ * password is the whole point of it.
+ *
  * `unavailable` is the ordinary browser answer and is not a failure. The
  * caller shows the seller where the act can be performed instead. */
 export type SessionOutcome =
 	| { kind: 'done' }
 	| { kind: 'opening' }
+	| { kind: 'signedOut' }
 	| { kind: 'refused'; detail: string }
 	| { kind: 'unsupported' }
 	| { kind: 'unavailable' };
@@ -307,25 +339,33 @@ export async function connectHere(
 		return { kind: 'unavailable' };
 	}
 	try {
-		return opening(await invoke(CONNECT_MARKETPLACE, { marketplace }));
+		return connectOutcome(await invoke(CONNECT_MARKETPLACE, { marketplace }));
 	} catch (caught) {
 		return refusal(caught, CONNECT_MARKETPLACE, CONNECT_REFUSED_SILENTLY);
 	}
 }
 
-/** Whether the application said the sign-in is replacing this page.
+/** What the application said a connect did, out of its `ConnectOutcome`.
  *
  * `done` on anything else, and that default is what keeps an older application
  * working: before `ConnectOutcome` existed the command answered a bare session
  * status, which carries no `outcome` at all and meant a completed capture. So
  * an unrecognised answer reads as the success it used to be rather than as a
- * state this console would then wait forever in. */
-function opening(answer: unknown): SessionOutcome {
+ * state this console would then wait forever in.
+ *
+ * The two named arms are both "nothing was captured and the page must not
+ * claim otherwise": `opening` because the answer is coming back through the
+ * address instead, `signed_out` because the application refused to open the
+ * sign-in at all. */
+function connectOutcome(answer: unknown): SessionOutcome {
 	const said =
-		typeof answer === 'object' && answer !== null
-			? (answer as { outcome?: unknown }).outcome
+		typeof answer === 'object' && answer !== null && 'outcome' in answer
+			? answer.outcome
 			: undefined;
-	return said === 'opening' ? { kind: 'opening' } : { kind: 'done' };
+	if (said === 'opening') {
+		return { kind: 'opening' };
+	}
+	return said === 'signed_out' ? { kind: 'signedOut' } : { kind: 'done' };
 }
 
 /** Ask this computer to forget the session it holds for one marketplace.

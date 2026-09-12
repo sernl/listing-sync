@@ -18,7 +18,6 @@ import {
 	desktopInvoker,
 	forgetHere,
 	openExternal,
-	registerThisMachine,
 	startImportHere
 } from './desktop';
 import type { Invoke } from './desktop';
@@ -47,13 +46,20 @@ describe('reaching the desktop application', () => {
 });
 
 describe('putting this machine in the registry', () => {
+	const MACHINE = { device_id: 'dev_9', device_name: 'Studio laptop' };
+
 	it('invokes the check-in and says the registry may have gained a row', async () => {
 		const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
 		const invoke: Invoke = async (command, args) => {
 			calls.push({ command, args });
-			return { revoked: false, reached_server: true, signed_in: true };
+			return { revoked: false, reached_server: true, signed_in: true, ...MACHINE };
 		};
-		expect(await registerThisMachine(invoke)).toBe(true);
+		expect(await checkInHere(invoke)).toEqual({
+			reached: true,
+			detail: null,
+			revoked: false,
+			device: { id: 'dev_9', name: 'Studio laptop' }
+		});
 		expect(calls).toEqual([{ command: DEVICE_CHECK_IN, args: {} }]);
 	});
 
@@ -66,18 +72,76 @@ describe('putting this machine in the registry', () => {
 			reached_server: false,
 			signed_in: false
 		});
-		expect(await registerThisMachine(invoke)).toBe(false);
+		expect((await checkInHere(invoke)).reached).toBe(false);
 	});
 
 	it('says no row was gained when the application rejects the command', async () => {
 		const invoke: Invoke = async (command) => {
 			throw `${command} not allowed. Command not found`;
 		};
-		expect(await registerThisMachine(invoke)).toBe(false);
+		expect((await checkInHere(invoke)).reached).toBe(false);
 	});
 
 	it('does nothing at all in a browser, which is not a failure', async () => {
-		expect(await registerThisMachine(null)).toBe(false);
+		expect(await checkInHere(null)).toEqual({
+			reached: false,
+			detail: null,
+			revoked: false,
+			device: null
+		});
+	});
+});
+
+describe('reading which machine the console is on', () => {
+	// The founder's own ask: every platform must say which machine the seller
+	// is at. The console is one build served to a browser and to the app
+	// window around it, so this answer is the only thing that can tell them
+	// apart.
+	it('carries the identifier and the name the application sent', async () => {
+		const invoke: Invoke = async () => ({
+			reached_server: true,
+			device_id: 'dev_1',
+			device_name: 'SM-N975F'
+		});
+		expect((await checkInHere(invoke)).device).toEqual({ id: 'dev_1', name: 'SM-N975F' });
+	});
+
+	// An application older than the two fields, a half-populated answer, and a
+	// browser all mean the same thing: this console cannot name the machine.
+	// Naming half of one is worse — the restore route addresses a device by
+	// id, so a name with no id is a button that cannot be pressed.
+	it('names no machine unless both halves arrived', async () => {
+		for (const answer of [
+			{ reached_server: true },
+			{ reached_server: true, device_id: 'dev_1' },
+			{ reached_server: true, device_name: 'SM-N975F' },
+			{ reached_server: true, device_id: '', device_name: 'SM-N975F' },
+			{ reached_server: true, device_id: 'dev_1', device_name: '' },
+			{ reached_server: true, device_id: 7, device_name: 'SM-N975F' }
+		]) {
+			expect((await checkInHere(async () => answer)).device, JSON.stringify(answer)).toBeNull();
+		}
+	});
+});
+
+describe('reading whether this machine was signed out from the console', () => {
+	it('reports the revocation the heartbeat was told about', async () => {
+		const invoke: Invoke = async () => ({ reached_server: true, revoked: true });
+		expect((await checkInHere(invoke)).revoked).toBe(true);
+	});
+
+	// The fact the banner is raised on, so it may never be a guess. A machine
+	// that could not reach the control plane learnt nothing about whether the
+	// seller signed it out, and a banner raised over a dropped connection
+	// would accuse them of an act they did not perform.
+	it('claims no revocation from a check-in that never reached us', async () => {
+		const invoke: Invoke = async () => ({ reached_server: false, revoked: true });
+		expect((await checkInHere(invoke)).revoked).toBe(false);
+	});
+
+	it('reads an application too old to send the flag as not revoked', async () => {
+		const invoke: Invoke = async () => ({ reached_server: true });
+		expect((await checkInHere(invoke)).revoked).toBe(false);
 	});
 });
 
@@ -89,7 +153,12 @@ describe('reading why a check-in did not reach us', () => {
 			signed_in: true,
 			detail: null
 		});
-		expect(await checkInHere(invoke)).toEqual({ reached: true, detail: null });
+		expect(await checkInHere(invoke)).toEqual({
+			reached: true,
+			detail: null,
+			revoked: false,
+			device: null
+		});
 	});
 
 	it("carries the application's own sentence when it did not", async () => {
@@ -99,10 +168,7 @@ describe('reading why a check-in did not reach us', () => {
 			signed_in: false,
 			detail: 'this device is not registered'
 		});
-		expect(await checkInHere(invoke)).toEqual({
-			reached: false,
-			detail: 'this device is not registered'
-		});
+		expect((await checkInHere(invoke)).detail).toBe('this device is not registered');
 	});
 
 	it('carries no reason from an application too old to send one', async () => {
@@ -115,17 +181,17 @@ describe('reading why a check-in did not reach us', () => {
 			reached_server: false,
 			signed_in: false
 		});
-		expect(await checkInHere(invoke)).toEqual({ reached: false, detail: null });
+		expect((await checkInHere(invoke)).detail).toBeNull();
 	});
 
 	it('carries no reason when the application rejects the command', async () => {
 		const invoke: Invoke = async (command) => {
 			throw `${command} not allowed. Command not found`;
 		};
-		expect(await checkInHere(invoke)).toEqual({ reached: false, detail: null });
+		expect((await checkInHere(invoke)).detail).toBeNull();
 	});
 
-	it('sends the same command registerThisMachine does, and nothing in a browser', async () => {
+	it('sends one command and nothing at all in a browser', async () => {
 		const calls: string[] = [];
 		const invoke: Invoke = async (command) => {
 			calls.push(command);
@@ -133,7 +199,7 @@ describe('reading why a check-in did not reach us', () => {
 		};
 		await checkInHere(invoke);
 		expect(calls).toEqual([DEVICE_CHECK_IN]);
-		expect(await checkInHere(null)).toEqual({ reached: false, detail: null });
+		expect((await checkInHere(null)).reached).toBe(false);
 	});
 });
 
@@ -575,6 +641,17 @@ describe('reading what a connect answered', () => {
 			session: { marketplace: 'Tpt', connected: true }
 		});
 		expect(await connectHere(invoke, 'Tpt')).toEqual({ kind: 'done' });
+	});
+
+	// The refusal in front of the password, on both surfaces. The application
+	// checks in before it opens anything and answers this instead where the
+	// machine has been signed out from the console — a capture it took would
+	// be wiped by the same check-in, which is exactly what the founder met on
+	// 0.7.0: he typed a TES password on a machine whose session was thrown
+	// away, three times.
+	it('reads the signed-out answer as its own outcome rather than as done', async () => {
+		const invoke = vi.fn().mockResolvedValue({ outcome: 'signed_out' });
+		expect(await connectHere(invoke, 'Tes')).toEqual({ kind: 'signedOut' });
 	});
 
 	// The compatibility arm, and it is the one that must not be an oversight:

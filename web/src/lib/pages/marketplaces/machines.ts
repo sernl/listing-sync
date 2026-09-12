@@ -3,6 +3,7 @@
 
 import type { DeviceSessionView, DeviceView } from '$lib/api';
 import type { CheckInHere } from '$lib/desktop';
+import { agoLabel } from '$lib/elapsed';
 import type { Tone } from '$lib/StatusPill.svelte';
 import type { DeviceSessionStatus } from '$lib/generated/vocab';
 
@@ -72,6 +73,41 @@ export function sessionWords(session: DeviceSessionView): string {
 	}
 }
 
+/** How recently a machine must have checked in for the list to call it
+ *  connected.
+ *
+ *  Far shorter than `QUIET_AFTER_MS`, which is two hourly cadences and is the
+ *  point at which silence means a machine is off. This is a different claim:
+ *  "connected" beside a row is read as right now, and a machine last heard
+ *  from fifty minutes ago is not something to say that about. Fifteen minutes
+ *  is longer than any check-in the application makes on a resume, so a phone
+ *  the seller has just picked up reads as connected and a laptop that shut its
+ *  lid does not. */
+export const CONNECTED_WITHIN_MS = 15 * 60 * 1000;
+
+/**
+ * What one machine is doing, in the order the seller needs to hear it.
+ *
+ * Revocation first, and the whole defect this precedence exists for is that
+ * it was not. A machine signed out from the console keeps checking in — the
+ * heartbeat stamps `last_seen_at` on a revoked device, which is how we learn
+ * it has wiped its logins — so freshness is the one thing that stays true
+ * about a machine that can no longer hold a marketplace login. The founder
+ * read "available just now" beside a machine that had been signed out that
+ * morning and concluded the app was broken; it was doing exactly what he had
+ * told it to.
+ *
+ * The age of the revocation rather than the instant, because the act is the
+ * seller's own and recent enough to recall.
+ */
+export function machineWords(device: DeviceView, now: number): string {
+	if (device.revoked_at !== null) {
+		return `Signed out from the console ${agoLabel(device.revoked_at, now)}`;
+	}
+	return now - device.last_seen_at <= CONNECTED_WITHIN_MS
+		? `Connected · checked in ${agoLabel(device.last_seen_at, now)}`
+		: `Last seen ${agoLabel(device.last_seen_at, now)}`;
+}
 
 /** What the panel says about a check-in that did not reach us, or null where
  *  there is nothing to say.
@@ -90,7 +126,7 @@ export function sessionWords(session: DeviceSessionView): string {
  *  An application too old to carry the field says nothing rather than a
  *  substituted cause, because a named cause that was never reported would be
  *  worse than none. */
-export function checkInNote(answer: CheckInHere): string | null {
+export function checkInNote(answer: Pick<CheckInHere, 'reached' | 'detail'>): string | null {
 	if (answer.reached) {
 		return null;
 	}

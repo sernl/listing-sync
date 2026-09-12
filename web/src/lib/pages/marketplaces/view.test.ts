@@ -681,7 +681,10 @@ describe('the address the application and this page share', () => {
 	// nobody will read. `ConnectVerdict::code` is an exhaustive match, so this
 	// reads the whole set rather than a sample of it.
 	it('words exactly the verdicts the application can send', () => {
-		const sent = [...connectRs.matchAll(/Self::[A-Za-z]+ => "([a-z]+)"/g)].map(([, code]) => code);
+		// `[a-z_]+`, not `[a-z]+`: `signed_out` is two words on the wire, and a
+		// class that stopped at the underscore matched nothing on that arm —
+		// which would have read as the application never sending the code.
+		const sent = [...connectRs.matchAll(/Self::[A-Za-z]+ => "([a-z_]+)"/g)].map(([, code]) => code);
 		expect(sent.length).toBeGreaterThan(0);
 		expect([...sent].sort()).toEqual([...CONNECT_VERDICT_CODES].sort());
 		for (const code of sent) {

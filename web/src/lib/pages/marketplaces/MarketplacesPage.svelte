@@ -38,6 +38,7 @@
 		TRANSPORT_BADGE,
 		busyAt,
 		connectReturn,
+		connectSignedOut,
 		deviceBranchInTileOrder,
 		disconnectAsk,
 		disconnectLabel,
@@ -168,6 +169,12 @@
 			}
 			if (outcome.kind === 'done') {
 				toast('info', `${name} is connected on this machine.`);
+			} else if (outcome.kind === 'signedOut') {
+				// The application refused before opening anything, because this
+				// machine was signed out from the console. The same sentence the
+				// phone's return leg carries, so the two surfaces say one thing
+				// about one state.
+				toast('error', connectSignedOut(marketplace).message);
 			} else if (outcome.kind === 'unsupported') {
 				toast('error', APP_CANNOT_CONNECT);
 			} else if (outcome.kind === 'refused') {

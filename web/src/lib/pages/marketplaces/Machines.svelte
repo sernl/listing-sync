@@ -13,8 +13,14 @@
 	import StatusPill from '$lib/StatusPill.svelte';
 	import { toast } from '$lib/toast';
 	import {
+		signBackInRefusal,
+		SIGN_BACK_IN
+	} from '$lib/machine-here';
+	import { machineHere } from '$lib/machine.svelte';
+	import {
 		checkInControl,
 		checkInNote,
+		machineWords,
 		osLabel,
 		sessionLabel,
 		sessionTone,
@@ -135,7 +141,8 @@
 			`Sign "${device.name}" out?\n\n` +
 				'It stops syncing and forgets its marketplace logins the next time it reaches ' +
 				'us. Until then it still holds them, because they are on that machine and ' +
-				'never on our servers. Signing in again there restores it.'
+				'never on our servers. To bring it back, sign it back in from that machine: ' +
+				'signing in to Teachouse there is not enough on its own.'
 		);
 		if (sure) {
 			signingOut.mutate({ device, session });
@@ -145,6 +152,32 @@
 	function busy(device: DeviceView): boolean {
 		return signingOut.isPending && signingOut.variables?.device.id === device.id;
 	}
+
+	/** Sign this machine back in, from its own row.
+	 *
+	 *  The act the founder had no way to perform. Signing a machine out marks
+	 *  it revoked and nothing ever clears that mark: the machine keeps its
+	 *  identity, keeps checking in, and wipes its marketplace logins on every
+	 *  cycle, so every Connect on it fails after the password has been typed.
+	 *  Signing in to Teachouse again on that machine did not help, because the
+	 *  app only re-registers when the server has forgotten it entirely.
+	 *
+	 *  Offered on this machine's row alone: the restore is the seller's
+	 *  explicit act at the machine, which is what keeps a sign-out a decision
+	 *  rather than a delay. */
+	const signingBackIn = createMutation(() => ({
+		mutationFn: () => machineHere.signBackIn(),
+		onSuccess: async () => {
+			toast('info', 'This machine is signed back in. Connect your marketplaces again on it.');
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: queryKeys.devices }),
+				queryClient.invalidateQueries({ queryKey: queryKeys.connections })
+			]);
+		},
+		onError: (failure: unknown) => {
+			toast('error', signBackInRefusal(failure));
+		}
+	}));
 </script>
 
 <section id="machines">
@@ -188,9 +221,18 @@
 	{:else}
 		<div class="mp-card">
 			{#each joined.rows as row (row.device.id)}
+				{@const here = row.device.id === machineHere.where.device?.id}
 				<div class="mp-machine">
 					<div class="who">
 						<span class="t">{row.device.name}</span>
+						<!-- Which row is the machine the seller is reading this on.
+						     Distinct from "This browser", which the merge decides from
+						     the browser session: a seller in the app is in both, and a
+						     seller in a browser on a machine that also runs the app is
+						     in the second alone. Without it the founder's own list gave
+						     him no way to tell which of two signed-out machines was the
+						     one in his hands. -->
+						{#if here}<StatusPill tone="ok" label="This machine" />{/if}
 						{#if row.isCurrent}<StatusPill tone="ok" label="This browser" />{/if}
 						{#if row.device.revoked_at !== null}
 							<StatusPill tone="bad" label="Signed out" />
@@ -208,11 +250,29 @@
 									{busy(row.device) ? 'Signing out…' : 'Sign out'}
 								</Button>
 							</span>
+						{:else if here}
+							<!-- The one place the act can be performed: the restore
+							     route clears the mark for the machine the seller is
+							     standing at, and the check-in behind it re-registers
+							     what this machine holds. A row for some other machine
+							     offers nothing, because signing that one back in is
+							     something only somebody at it can do. -->
+							<span class="act">
+								<Button
+									tier="outline"
+									small
+									disabled={machineHere.restoring}
+									reason={machineHere.restoring ? 'The sign-in is running.' : undefined}
+									onclick={() => signingBackIn.mutate()}
+								>
+									{machineHere.restoring ? 'Signing in…' : SIGN_BACK_IN}
+								</Button>
+							</span>
 						{/if}
 					</div>
 					<p class="spec">
-						{osLabel(row.device)} · {row.device.arch} · app {row.device.app_version} · last
-						seen {agoLabel(row.device.last_seen_at, now)}
+						{osLabel(row.device)} · {row.device.arch} · app {row.device.app_version} ·
+						{machineWords(row.device, now)}
 					</p>
 					<p class="spec">{matchNote(row.confidence)}</p>
 

@@ -34,9 +34,12 @@ const DESKTOP: &str = "99998888777766665555444433332222";
 /// The seller's phone, for the one fact that is about a machine which is not a
 /// computer.
 const PHONE: &str = "44443333222211110000ffffeeeedddd";
+/// A fourth machine, which exists only to fill a Studio plan's three-computer
+/// allowance so the restore route has something to refuse.
+const TABLET: &str = "ccccbbbbaaaa999988887777666655554";
 const NOW: Timestamp = Timestamp(1_756_000_000_000);
 
-/// Three fixed instants, one per call that needs to be distinguishable from
+/// Five fixed instants, one per call that needs to be distinguishable from
 /// the one before it. Separate functions rather than one mutable clock because
 /// `wall` is a function pointer and cannot capture, and a static holding the
 /// step would be state shared between tests.
@@ -50,6 +53,14 @@ fn t1() -> Timestamp {
 
 fn t2() -> Timestamp {
     Timestamp(NOW.0 + 120_000)
+}
+
+fn t3() -> Timestamp {
+    Timestamp(NOW.0 + 180_000)
+}
+
+fn t4() -> Timestamp {
+    Timestamp(NOW.0 + 240_000)
 }
 
 fn state(pool: PgPool, wall: WallClock) -> AppState {
@@ -250,6 +261,20 @@ async fn revoke(pool: &PgPool, token: &SessionToken, id: &str, wall: WallClock) 
         Call {
             method: Method::POST,
             path: &format!("/v1/devices/{id}/revoke"),
+            token,
+            body: None,
+            wall,
+        },
+    )
+    .await
+}
+
+async fn restore(pool: &PgPool, token: &SessionToken, id: &str, wall: WallClock) -> Answer {
+    call(
+        pool.clone(),
+        Call {
+            method: Method::POST,
+            path: &format!("/v1/devices/{id}/restore"),
             token,
             body: None,
             wall,
@@ -585,6 +610,127 @@ async fn registering_again_does_not_undo_a_sign_out(pool: PgPool) {
         devices(&pool, &TOKEN_A).await[0].revoked_at,
         Some(t1()),
         "and the seller's list still shows it signed out"
+    );
+}
+
+/// A signed-out machine signs back in, and its next check-in is answered as a
+/// live device's.
+///
+/// The defect this closes was terminal for the machine it happened to. A
+/// device the seller signed out keeps its registration, so it never
+/// re-registers, and registration would not clear the mark even if it did:
+/// the app was told `revoked` on every check-in, wiped the marketplace logins
+/// the seller had just made, and failed every connect afterwards. Nothing in
+/// the product could undo a sign-out, so this asserts the whole way back --
+/// revoked, told so, restored, and told otherwise.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn signing_a_device_back_in_lets_it_hold_marketplace_logins_again(pool: PgPool) {
+    provision(&pool).await;
+    register(&pool, &TOKEN_A, LAPTOP, "founder-pc").await;
+    beat(&pool, &TOKEN_A, LAPTOP, holding("Tpt", "connected"), t0).await;
+
+    assert_eq!(
+        revoke(&pool, &TOKEN_A, LAPTOP, t1).await.status,
+        StatusCode::OK
+    );
+    let told = beat(&pool, &TOKEN_A, LAPTOP, holding("Tpt", "wiped"), t2).await;
+    assert!(
+        told.json::<HeartbeatView>().revoked,
+        "the sign-out has to have reached the device, or the restore below undoes nothing"
+    );
+
+    let back = restore(&pool, &TOKEN_A, LAPTOP, t3).await;
+    assert_eq!(back.status, StatusCode::OK);
+    let view: DeviceView = back.json();
+    assert_eq!(view.revoked_at, None, "the sign-out is lifted");
+    assert_eq!(
+        view.last_seen_at,
+        t3(),
+        "the restore is contact, so the console's freshness word is not measured \
+         against an instant before the sign-out"
+    );
+    assert!(
+        !view.wipe_outstanding,
+        "there is no outstanding wipe once the device is signed back in"
+    );
+
+    let answered = beat(&pool, &TOKEN_A, LAPTOP, holding("Tpt", "connected"), t4).await;
+    assert_eq!(answered.status, StatusCode::OK);
+    let answer: HeartbeatView = answered.json();
+    assert!(
+        !answer.revoked,
+        "the next check-in is answered as a live device's, so the app stops wiping"
+    );
+    assert_eq!(answer.revoked_at, None);
+    assert_eq!(
+        devices(&pool, &TOKEN_A).await[0].revoked_at,
+        None,
+        "and the seller's list shows it connected rather than signed out"
+    );
+}
+
+/// The restore route refuses an id it does not know, and refuses one it does
+/// know when the live fleet is already at the plan's allowance.
+///
+/// Both refusals matter and their order matters. A restore adds a machine to
+/// the fleet, so it has to pass the same gate registration does -- otherwise
+/// a seller signs out an old laptop, registers its replacement, and restores
+/// the laptop for a machine the plan does not cover. And the fleet here is
+/// full when the unknown id is tried, so answering it 404 rather than the
+/// quota is the ordering being asserted: a quota sentence for an id that does
+/// not exist would tell the caller a machine of that name is theirs.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_restore_is_refused_for_an_unknown_device_and_over_the_allowance(pool: PgPool) {
+    provision(&pool).await;
+    register(&pool, &TOKEN_A, LAPTOP, "founder-pc").await;
+    assert_eq!(
+        revoke(&pool, &TOKEN_A, LAPTOP, t1).await.status,
+        StatusCode::OK
+    );
+    // The Studio plan the fixture grants covers three computers, and the
+    // signed-out laptop is not one of them, so three more register freely.
+    for (id, name) in [
+        (DESKTOP, "studio-pc"),
+        (PHONE, "founder-phone"),
+        (TABLET, "founder-tablet"),
+    ] {
+        assert_eq!(
+            register(&pool, &TOKEN_A, id, name).await.status,
+            StatusCode::OK,
+            "{name} is within the allowance while the laptop is signed out"
+        );
+    }
+
+    let unknown = restore(&pool, &TOKEN_A, "not-a-device", t3).await;
+    assert_eq!(
+        unknown.status,
+        StatusCode::NOT_FOUND,
+        "an unknown id is not-found even with the fleet full, because it is a \
+         different fact from a full fleet"
+    );
+
+    let refused = restore(&pool, &TOKEN_A, LAPTOP, t3).await;
+    assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let error: APIError = refused.json();
+    assert_eq!(error.errors[0].code, Some(APIErrorCode::QuotaExceeded));
+    assert_eq!(
+        error.errors[0]
+            .detail
+            .as_ref()
+            .and_then(|detail| detail["quota"].as_str()),
+        Some("devices_max"),
+        "the refusal names the bound the seller has to act on"
+    );
+
+    let listed = devices(&pool, &TOKEN_A).await;
+    let laptop = listed
+        .iter()
+        .find(|record| record.id == LAPTOP)
+        .unwrap_or_else(|| panic!("the signed-out laptop is still listed"));
+    assert_eq!(
+        laptop.revoked_at,
+        Some(t1()),
+        "the refused restore left the sign-out standing"
     );
 }
 

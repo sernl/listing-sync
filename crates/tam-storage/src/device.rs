@@ -19,6 +19,13 @@
 //! until the marketplace itself expires them. That limit is D14's and is
 //! stated rather than engineered away.
 //!
+//! Coming back is a decision too, and a separate one. Nothing a device does by
+//! itself lifts a sign-out -- not registering again, not checking in -- so a
+//! seller who signs a machine out from the console and then wants it back
+//! reaches [`DeviceRepo::restore`] from a session on that machine. Without
+//! that route a signed-out machine could never work again, which is the
+//! defect it exists for.
+//!
 //! The heartbeat is also where a connection becomes linked, which is why a
 //! module about devices writes a `connection` row. D1 puts every no-API
 //! marketplace session on the seller's own machine, so a device saying so is
@@ -168,7 +175,13 @@ impl DeviceRepo {
     /// `revoked_at` is deliberately not cleared. A revoked device
     /// re-registering is the exact case the mark exists for, and a
     /// registration that lifted it would let any device undo its own
-    /// revocation by restarting.
+    /// revocation by restarting -- which is what a client does on its own
+    /// whenever a check-in finds the server no longer knows it.
+    ///
+    /// [`Self::restore`] is the only way back, and it is a route of its own
+    /// for that reason: a machine returns to the fleet because a signed-in
+    /// seller asked for it at that machine, not because the machine asked for
+    /// itself.
     pub async fn register(
         &self,
         org: OrgId,
@@ -423,6 +436,55 @@ impl DeviceRepo {
         .await?;
         tx.commit().await?;
         Ok(row.map(|row| timestamp_from_db(row.revoked_at)))
+    }
+
+    /// Signs one device back in, clearing the seller's sign-out and stamping
+    /// it seen.
+    ///
+    /// The deliberate counterpart to [`Self::revoke`], and deliberately not
+    /// something [`Self::register`] or [`Self::heartbeat`] does: both of those
+    /// are the device speaking for itself, and a revocation a machine could
+    /// lift by restarting would not be the seller's decision any more. This
+    /// one is reached only through a session, which is a seller signed in at
+    /// that machine saying so.
+    ///
+    /// `last_seen_at` moves because the restore is contact: the console's
+    /// freshness word would otherwise read "last seen" against an instant
+    /// before the sign-out. `Ok(None)` is no such device for this tenant, and
+    /// restoring a device that was never signed out answers the record as it
+    /// stands.
+    pub async fn restore(
+        &self,
+        org: OrgId,
+        device: &str,
+        at: Timestamp,
+    ) -> Result<Option<DeviceRecord>, StorageError> {
+        let seen = timestamp_to_db(at)?;
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let restored = sqlx::query!(
+            "UPDATE device SET revoked_at = NULL, last_seen_at = $3 \
+             WHERE org_id = $1 AND id = $2 \
+             RETURNING id",
+            uuid_to_db(org.0),
+            device,
+            seen,
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        if restored.is_none() {
+            tx.commit().await?;
+            return Ok(None);
+        }
+        let records = load(&mut tx, org, Some(device)).await?;
+        tx.commit().await?;
+        records
+            .into_iter()
+            .next()
+            .map(Some)
+            .ok_or_else(|| StorageError::Inconsistent {
+                reason: "the device just restored does not read back".to_owned(),
+            })
     }
 }
 

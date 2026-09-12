@@ -351,7 +351,8 @@ export const CONNECT_VERDICT_CODES = [
 	'deadline',
 	'abandoned',
 	'refused',
-	'notkept'
+	'notkept',
+	'signed_out'
 ] as const;
 
 export type ConnectVerdictCode = (typeof CONNECT_VERDICT_CODES)[number];
@@ -370,6 +371,13 @@ export type ConnectVerdictCode = (typeof CONNECT_VERDICT_CODES)[number];
  * opposite of what happened and names nothing they can act on. `refused` is now
  * only the page never appearing, and `notkept` is a sign-in that got no further
  * than this device.
+ *
+ * `signed_out` is the machine having been signed out from the console before
+ * the seller pressed Connect. The application checks in first now and refuses
+ * in front of the password rather than capturing a session it is about to
+ * wipe, so this sentence names the act that ended the sign-in and the act
+ * that undoes it. `notkept` remains the case where the revocation arrived
+ * mid-sign-in, which no check-in beforehand can prevent.
  *
  * Only `captured` is good news, and it is deliberately not the one that decides
  * the card. Whether a marketplace is connected is read from the server's own
@@ -394,6 +402,10 @@ const CONNECT_SAID: Record<ConnectVerdictCode, (name: string) => ConnectReturn> 
 	notkept: (name) => ({
 		tone: 'error',
 		message: `The ${name} sign-in could not be saved on this device. If this device was signed out of Teachouse, sign in again here and then press Connect ${name}.`
+	}),
+	signed_out: (name) => ({
+		tone: 'error',
+		message: `This machine was signed out from the console, so the ${name} sign-in was not opened and nothing was saved. Sign this machine back in under Your machines, then press Connect ${name}.`
 	})
 };
 
@@ -427,6 +439,11 @@ const CONNECT_SAID_UNNAMED: Record<ConnectVerdictCode, ConnectReturn> = {
 		tone: 'error',
 		message:
 			'Your marketplace sign-in could not be saved on this device. If this device was signed out of Teachouse, sign in again here and then press Connect on the card.'
+	},
+	signed_out: {
+		tone: 'error',
+		message:
+			'This machine was signed out from the console, so your marketplace sign-in was not opened and nothing was saved. Sign this machine back in under Your machines, then press Connect on the card.'
 	}
 };
 
@@ -449,6 +466,20 @@ export function connectReturn(params: URLSearchParams): ConnectReturn | null {
 	return Object.hasOwn(CARD_NAME, named)
 		? CONNECT_SAID[code](CARD_NAME[named as Marketplace])
 		: CONNECT_SAID_UNNAMED[code];
+}
+
+/**
+ * The same sentence, for a connect that answered on this page rather than
+ * through the address.
+ *
+ * A computer's Connect never leaves the console, so its refusal arrives in the
+ * promise and not in a query parameter — but it is the same refusal, and a
+ * seller who met it on a phone and then on a laptop must not be given two
+ * accounts of one state. Read out of the verdict table rather than written a
+ * second time, so there is one sentence to change.
+ */
+export function connectSignedOut(marketplace: Marketplace): ConnectReturn {
+	return CONNECT_SAID.signed_out(CARD_NAME[marketplace]);
 }
 
 /** Whether a string off the address is one of the verdicts we word.

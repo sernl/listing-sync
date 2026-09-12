@@ -14,11 +14,20 @@
  * "undefined" for the case a reader most needs to describe.
  */
 export function renderFailureReport(error: unknown, route: string): string {
-	return `the page at ${route} could not be drawn: ${causeOf(error)}`;
+	return `the page at ${route} could not be drawn: ${renderFailureCause(error)}`;
 }
 
-/** What was thrown, in as many words as it actually carries. */
-function causeOf(error: unknown): string {
+/**
+ * What was thrown, in as many words as it actually carries.
+ *
+ * Shown to the seller as well as recorded, in small type under the boundary's
+ * own sentence. The founder met a blank region on his phone after signing in
+ * and could tell us nothing about it: the console's log lives in a browser he
+ * cannot open a devtools pane on, and the sentence on screen named no cause at
+ * all. A line he can read out is the difference between a bug we can find and
+ * one we cannot.
+ */
+export function renderFailureCause(error: unknown): string {
 	if (error instanceof Error && error.message.trim().length > 0) {
 		return error.message;
 	}

@@ -1,14 +1,16 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { page } from '$app/state';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { impersonationState, operatorVerdict } from '$lib/admin';
 	import { api, avatarSrc } from '$lib/api';
 	import { impersonatedSession, stopImpersonatingAndRestore } from '$lib/auth-client';
 	import { present, type StatusPresentation } from '$lib/connection-status';
-	import { desktopInvoker, registerThisMachine } from '$lib/desktop';
-	import { renderFailureReport } from '$lib/render-failure';
+	import { checkInHere, desktopInvoker } from '$lib/desktop';
+	import { signBackInRefusal, signedOutHere, SIGN_BACK_IN, whereYouAre } from '$lib/machine-here';
+	import { machineHere } from '$lib/machine.svelte';
+	import { renderFailureCause, renderFailureReport } from '$lib/render-failure';
 	import { sectionAllowed, sectionReason } from '$lib/entitlement';
 	import { entitlementRead, limitOf } from '$lib/entitlement-read';
 	import Placeholder from '$lib/Placeholder.svelte';
@@ -30,6 +32,7 @@
 	import { palette } from '$lib/palette.svelte';
 	import { queryKeys } from '$lib/query';
 	import SearchPalette from '$lib/SearchPalette.svelte';
+	import { toast } from '$lib/toast';
 	import { opensPalette } from '$lib/search-palette';
 
 	let { children, onLogout }: { children: Snippet; onLogout: () => void } = $props();
@@ -71,7 +74,8 @@
 
 	const queryClient = useQueryClient();
 
-	// The console registers the machine it is running on, once per load.
+	// The console registers the machine it is running on, once per load, and
+	// keeps what it answered.
 	//
 	// Here rather than on the machines page because this shell is what every
 	// signed-in page renders inside, and a machine that only registered when
@@ -82,12 +86,21 @@
 	// that runs before the sign-in, and then not again for an hour on a
 	// computer or until the next resume on a phone.
 	//
+	// The answer is kept in `machineHere` rather than discarded, because it
+	// carries the two facts every surface below now states: which machine this
+	// is, and whether it was signed out from the console. The second is the
+	// 0.7.0 defect -- a signed-out machine keeps its identity and wipes its
+	// marketplace logins on every check-in, so the seller has to be told here,
+	// on the machine it is happening to, rather than left to read a list.
+	//
 	// Once, not on every render: an `$effect` whose body reads nothing reactive
 	// runs on mount alone. In a browser there is no invoker, the call answers
-	// false, and nothing is refetched.
+	// that nothing was reached, and nothing is refetched.
 	$effect(() => {
-		void registerThisMachine(desktopInvoker()).then((registered) => {
-			if (registered) {
+		const invoke = desktopInvoker();
+		void checkInHere(invoke).then((answer) => {
+			machineHere.observe(answer, { inApp: invoke !== null });
+			if (answer.reached) {
 				// Only the device list, and only when a row may have appeared: the
 				// machines page refreshes if it is open, and nothing else is
 				// disturbed.
@@ -95,6 +108,43 @@
 			}
 		});
 	});
+
+	// When this machine was signed out, for the banner's own sentence. Read
+	// only once the check-in has said this machine is revoked, so an ordinary
+	// session on an ordinary machine issues no list of the seller's machines
+	// from the shell. The date comes out of the registry rather than the
+	// heartbeat because the heartbeat answers a flag and the seller's question
+	// is which day they did this.
+	const registry = createQuery(() => ({
+		queryKey: queryKeys.devices,
+		queryFn: () => api.devices(),
+		enabled: machineHere.revoked
+	}));
+	const signedOutAt = $derived(
+		registry.data?.devices.find((device) => device.id === machineHere.where.device?.id)
+			?.revoked_at ?? null
+	);
+
+	/** Signing this machine back in from wherever the seller is standing.
+	 *
+	 *  The same act the Machines list offers on this machine's own row, and
+	 *  here as well because the banner is what a seller who has just signed in
+	 *  actually meets: every page carries it, and asking them to find a list
+	 *  first is asking them to walk past the sentence explaining why their
+	 *  marketplace logins keep disappearing. */
+	const signingBackIn = createMutation(() => ({
+		mutationFn: () => machineHere.signBackIn(),
+		onSuccess: async () => {
+			toast('info', 'This machine is signed back in. Connect your marketplaces again on it.');
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: queryKeys.devices }),
+				queryClient.invalidateQueries({ queryKey: queryKeys.connections })
+			]);
+		},
+		onError: (failure: unknown) => {
+			toast('error', signBackInRefusal(failure));
+		}
+	}));
 
 	let stopping = $state(false);
 	let stopRefusal = $state<string | null>(null);
@@ -245,6 +295,27 @@
 		/>
 	{/if}
 
+	<!-- This machine was signed out from the console, and is on every page
+	     rather than on the Machines list alone: until it is signed back in the
+	     app wipes its marketplace logins on every check-in, so a seller who
+	     never opens Marketplaces would only see the consequence -- a Connect
+	     that fails after they have typed a password -- and never the cause.
+	     Raised only in the app: a browser is not a machine and can do nothing
+	     about one. -->
+	{#if machineHere.revoked}
+		<div class="machine-out" role="alert">
+			<span class="mark"><Icon name="laptop" size={14} /></span>
+			<span class="said">{signedOutHere(signedOutAt)}</span>
+			<button
+				type="button"
+				onclick={() => signingBackIn.mutate()}
+				disabled={machineHere.restoring}
+			>
+				{machineHere.restoring ? 'Signing in…' : SIGN_BACK_IN}
+			</button>
+		</div>
+	{/if}
+
 	<nav class="rail" aria-label="Sections">
 		<!-- The house alone, not the tiled mark: the rail's own ground is the
 		     kit's indigo, and the mark is that same indigo with the house on it,
@@ -371,8 +442,20 @@
 			     because the initials are decoration, so without this label the link
 			     announces as the organisation's name rather than as Account. It
 			     claims no `aria-current` -- the rail entry beside it already claims
-			     the section, and this strip is not drawn on a phone at all. -->
-			<a class="account" href="/settings" aria-label={accountSection?.label ?? 'Account'}>
+			     the section, and this strip is not drawn on a phone at all.
+
+			     The title says which machine the seller is at and whether they are
+			     in the app, which is the founder's own ask: the console is one
+			     build served to both hosts, so nothing on this strip distinguished
+			     a browser tab from the app window around it. The Preferences head
+			     carries the same sentence in plain sight; this is where somebody
+			     already reaching for Account will find it. -->
+			<a
+				class="account"
+				href="/settings"
+				aria-label={accountSection?.label ?? 'Account'}
+				title={whereYouAre(machineHere.where)}
+			>
 				<span class="avatar" aria-hidden="true">
 					{#if tile.kind === 'picture'}
 						<img
@@ -446,9 +529,17 @@
 					{@render children()}
 				{/if}
 
-				{#snippet failed()}
+				<!-- The error's own message under the sentence, in small muted type.
+				     A seller who meets this on a phone has no other way to tell us
+				     what happened: the console's log is behind a devtools pane they
+				     cannot open, so the only line that can reach us is one they can
+				     read off the screen. It is deliberately not styled as the
+				     sentence above -- it is for us, and it says so by looking
+				     like it. -->
+				{#snippet failed(error)}
 					<div class="page">
 						<p>This page could not be drawn. Reload to try again.</p>
+						<p class="drew-why">{renderFailureCause(error)}</p>
 						<button class="btn" type="button" onclick={() => location.reload()}>Reload</button>
 					</div>
 				{/snippet}
@@ -520,5 +611,82 @@
 
 	.conn-link:hover {
 		text-decoration: underline;
+	}
+
+	/* The signed-out machine's banner. The impersonation banner's own shape --
+	   a full-width strip at the top of the grid -- because it is the same kind
+	   of statement: a condition the whole console is being read under, which
+	   no page can restate for itself. Its colour is the warning rather than
+	   the danger one: nothing is broken and no data is at risk, but every
+	   marketplace login on this machine is being wiped until the seller acts.
+	   Local rather than in `app.css` because this shell is the only place it
+	   is drawn. */
+	.machine-out {
+		grid-column: 1 / -1;
+		position: sticky;
+		top: 0;
+		z-index: 19;
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		flex-wrap: wrap;
+		padding: 10px 20px;
+		background: var(--warn-soft);
+		color: var(--text);
+		border-bottom: 1px solid var(--warn);
+		font-size: 13px;
+	}
+
+	.machine-out .mark {
+		display: inline-flex;
+		align-items: center;
+		/* The ink pair the contrast test measures on the soft ground, not the
+		   raw accent, which is a fill and a line colour. */
+		color: var(--warn-ink);
+	}
+
+	.machine-out .said {
+		min-width: 0;
+	}
+
+	.machine-out button {
+		margin-left: auto;
+		min-height: var(--control-h-sm);
+		padding: 5px 14px;
+		border: 1px solid var(--warn);
+		border-radius: var(--r-pill);
+		background: var(--card);
+		color: var(--text);
+		font: inherit;
+		font-size: 12.5px;
+		font-weight: 600;
+		cursor: pointer;
+	}
+
+	.machine-out button:disabled {
+		opacity: 0.65;
+		cursor: default;
+	}
+
+	/* Below the phone breakpoint the shell's grid is two columns and the first
+	   row is the header band, which is where the impersonation banner puts
+	   itself too. */
+	@media (max-width: 620px) {
+		.machine-out {
+			grid-column: 1 / span 2;
+			align-self: start;
+		}
+	}
+
+	/* What the page threw, for a seller to read back to us. Muted and small,
+	   because it is a diagnostic rather than an instruction, and `break-word`
+	   because the one thing it must not do is push a phone's layout sideways
+	   on a long message. */
+	.drew-why {
+		margin: 0 0 12px;
+		color: var(--muted);
+		font-size: 12px;
+		line-height: 1.5;
+		overflow-wrap: break-word;
 	}
 </style>
