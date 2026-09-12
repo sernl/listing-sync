@@ -1170,6 +1170,7 @@ async fn console_security_headers(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
+    let immutable = request.uri().path().starts_with("/_app/immutable/");
     let mut response = next.run(request).await;
     // A page carries a fresh nonce beside the hashes and an asset carries the
     // policy as built; see `serving::fresh_nonce` for the script it admits.
@@ -1178,6 +1179,25 @@ async fn console_security_headers(
         .get(axum::http::header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value.starts_with("text/html"));
+    // The shell must be revalidated on every load and the bundle under it may
+    // be kept for a year: the shell names its chunks by content hash, so a
+    // shell a browser kept past a deploy asks for chunks the new build no
+    // longer serves, and the console fails to start until the shell is fetched
+    // again — which is what the Android app showed after a deploy, and what
+    // closing and reopening it cleared. `no-cache` is a revalidation, not a
+    // refusal to cache, so a reload costs one conditional request.
+    let freshness = if is_page {
+        Some("no-cache")
+    } else if immutable {
+        Some("public, max-age=31536000, immutable")
+    } else {
+        None
+    };
+    if let Some(value) = freshness.and_then(|value| axum::http::HeaderValue::from_str(value).ok()) {
+        response
+            .headers_mut()
+            .insert(axum::http::header::CACHE_CONTROL, value);
+    }
     let header = if is_page {
         axum::http::HeaderValue::from_str(&serving::with_nonce(&policy, &serving::fresh_nonce()))
     } else {
@@ -1419,7 +1439,16 @@ mod composition {
     fn fixtures() -> &'static Fixtures {
         static WRITTEN: std::sync::OnceLock<Fixtures> = std::sync::OnceLock::new();
         WRITTEN.get_or_init(|| Fixtures {
-            console: tree("console", &[("index.html", CONSOLE_SHELL)]),
+            console: tree(
+                "console",
+                &[
+                    ("index.html", CONSOLE_SHELL),
+                    (
+                        "_app/immutable/entry/start.abc123.js",
+                        "// the console bundle",
+                    ),
+                ],
+            ),
             landing: tree("landing", &GREEDY_LANDING),
             downloads: tree("downloads", &DOWNLOADS),
         })
@@ -1607,6 +1636,19 @@ mod composition {
                 .contains("'wasm-unsafe-eval'"),
             "the console keeps its own policy: {}",
             console.header(header::CONTENT_SECURITY_POLICY)
+        );
+        assert_eq!(
+            console.header(header::CACHE_CONTROL),
+            "no-cache",
+            "the shell names its chunks by hash, so a shell kept past a deploy asks for a bundle \
+             that is gone: it is revalidated on every load"
+        );
+        assert_eq!(
+            get("/_app/immutable/entry/start.abc123.js")
+                .await
+                .header(header::CACHE_CONTROL),
+            "public, max-age=31536000, immutable",
+            "the console's own content-addressed bundle is held for a year"
         );
     }
 
