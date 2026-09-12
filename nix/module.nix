@@ -286,12 +286,17 @@ let
       # same directory, and therefore no evidence at all about the file at hand.
       # sha256sum writes `HASH  NAME` in text mode and `HASH *NAME` in binary
       # mode; the name starts at column 67 either way, so both are read here and
-      # a sums file written with -b does not silently skip the check.
+      # a sums file written with -b does not silently skip the check. The name
+      # is the path sha256sum was given, so a file summed as `./NAME` — which
+      # is how every release from v0.1.1 to v0.4.0 wrote it — is read as NAME:
+      # the leading `./` names the same file and carries no information, and
+      # refusing it left the manifest stuck on the last release that matched.
       expected_digest() {
           gawk -v want="$2" '
               length($0) >= 67 && !found {
                   name = substr($0, 67)
                   sub(/^\*/, "", name)
+                  sub(/^\.\//, "", name)
                   if (name == want) { print substr($0, 1, 64); found = 1 }
               }
               END { exit(found ? 0 : 1) }

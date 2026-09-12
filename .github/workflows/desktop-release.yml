@@ -326,7 +326,7 @@ jobs:
             exit 1
           fi
           cp "$apk" "android-artifacts/Teachouse_${VERSION}_arm64.apk"
-          ( cd android-artifacts && sha256sum ./*.apk > SHA256SUMS-android.txt )
+          ( cd android-artifacts && sha256sum -- *.apk > SHA256SUMS-android.txt )
           ls -l android-artifacts
           cat android-artifacts/SHA256SUMS-android.txt
 
@@ -492,7 +492,7 @@ jobs:
             \( -name '*.exe' -o -name '*.msi' -o -name '*.sig' \) -exec cp {} "$out/" \;
           ls -l "$out"
 
-          ( cd "$out" && sha256sum ./*.exe ./*.msi > SHA256SUMS.txt )
+          ( cd "$out" && sha256sum -- *.exe *.msi > SHA256SUMS.txt )
           cat "$out/SHA256SUMS.txt"
 
           # The NSIS installer is the update payload: it is the one Tauri's
