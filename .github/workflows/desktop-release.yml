@@ -666,8 +666,13 @@ jobs:
   # A draft nobody published serves no update, so this is the step that makes
   # the release real. A failed run leaves the draft unpublished on purpose;
   # `cn release purge` removes it.
+  # After the Android job as well as the Windows one, whatever the Android
+  # job's result: a published release is sealed, and the APK upload that
+  # arrived after the publish was refused with "already published" on the
+  # one run where the Android build outlasted the Windows one. The desktop
+  # release still goes out when Android fails; it just waits to be sure.
   publish:
-    needs: [verify, windows]
+    needs: [verify, windows, android]
     if: >-
       ${{ !cancelled() && !github.event.repository.fork
       && needs.windows.result == 'success' }}
