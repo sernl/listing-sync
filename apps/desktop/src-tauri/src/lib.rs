@@ -417,12 +417,12 @@ pub(crate) fn replacing(url: &str) -> String {
     )
 }
 
-/// The console's home on `origin`.
+/// The console's canonical home on `origin`.
 ///
-/// `/app` rather than the origin itself: the origin answers with the landing
-/// page where a deployment serves one, and the landing's redirect script would
-/// only then send the window on, which is a marketing page load and — on a
-/// phone — a history entry the seller's back press finds. The path is joined
+/// `/resources` rather than `/app`: `/app` is a client-side redirect, so using
+/// it makes a cold Android WebView download and start the console only to
+/// navigate again. Going straight to the catalogue leaves one document load
+/// between the bundled connection page and usable UI. The path is joined
 /// rather than written so an override with a trailing slash and one without
 /// both resolve to the same address.
 pub(crate) fn console_home(origin: &str) -> Result<tauri::Url, String> {
@@ -430,7 +430,7 @@ pub(crate) fn console_home(origin: &str) -> Result<tauri::Url, String> {
     if !url.path().ends_with('/') {
         url.set_path(&format!("{}/", url.path()));
     }
-    url.join("app").map_err(|why| why.to_string())
+    url.join("resources").map_err(|why| why.to_string())
 }
 
 /// Put the window on `url`, leaving the page it was showing in history or not.
@@ -572,10 +572,11 @@ mod start_up_tests {
         );
     }
 
-    /// The window opens on the console's home, not on the origin.
+    /// The window opens on the console's canonical home, not on the origin or
+    /// its client-side redirect.
     ///
-    /// The origin is where the landing page answers, and a client that lands
-    /// there depends on the landing's redirect script to reach the console.
+    /// The origin is where the landing page answers; `/app` would load the
+    /// console once merely to redirect to `/resources`.
     #[test]
     fn the_window_opens_on_the_console_home() {
         for origin in [
@@ -584,7 +585,7 @@ mod start_up_tests {
             "http://127.0.0.1:8080",
         ] {
             let home = console_home(origin).expect("the origin is a url");
-            assert_eq!(home.path(), "/app", "{origin}");
+            assert_eq!(home.path(), "/resources", "{origin}");
             assert_eq!(
                 home.host_str(),
                 tauri::Url::parse(origin).unwrap().host_str()

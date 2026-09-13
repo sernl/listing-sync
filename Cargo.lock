@@ -5364,7 +5364,7 @@ dependencies = [
 
 [[package]]
 name = "tam-desktop"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "blake3",
  "jsonwebtoken",
