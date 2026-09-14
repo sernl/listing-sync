@@ -179,14 +179,31 @@ impl EncryptedSessionStore {
         self.store(&filed).await
     }
 
+    /// One marketplace's session, or `None` where there is none to have.
+    ///
+    /// An envelope the device key does not open is `None` too, and logged. The
+    /// device key is the only key there is, so an envelope it cannot
+    /// authenticate is a session nothing will ever open again: one sealed
+    /// before a key reset — a reinstall that dropped the Keystore alias — or a
+    /// tampered file, and the two are indistinguishable by design. Answering it
+    /// as an error would leave the marketplace showing a fault the seller
+    /// cannot act on; answering "no session" lets them sign in again, and the
+    /// next write replaces what nothing could have read. That is unlike a
+    /// file that fails to parse, which [`Self::load`] keeps as an error
+    /// because the bytes may still be recoverable.
     async fn read(&self, marketplace: Marketplace) -> Result<Option<SessionRecord>, StoreError> {
         let filed = self.load().await?;
         let Some(envelope) = filed.get(entry_key(marketplace)).cloned() else {
             return Ok(None);
         };
         let kek = self.keys.obtain()?;
-        let plaintext = open_bytes(&kek, Self::aad(marketplace), &envelope.into())
-            .map_err(|why| StoreError::Backend(why.to_string()))?;
+        let Ok(plaintext) = open_bytes(&kek, Self::aad(marketplace), &envelope.into()) else {
+            eprintln!(
+                "the {} session on this device was sealed under a key this device no longer holds; it is treated as signed out",
+                entry_key(marketplace)
+            );
+            return Ok(None);
+        };
         serde_json::from_slice(&plaintext)
             .map(Some)
             .map_err(|why| StoreError::Codec(why.to_string()))
@@ -305,9 +322,10 @@ mod tests {
             .expect("the write");
 
         let intruder = a_store(&dir, 2);
-        assert!(
-            intruder.get(Marketplace::Tpt).await.is_err(),
-            "the device key is the whole of the secrecy; another key must not open the file"
+        assert_eq!(
+            intruder.get(Marketplace::Tpt).await,
+            Ok(None),
+            "the device key is the whole of the secrecy; under another key the file holds no session"
         );
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -329,8 +347,9 @@ mod tests {
         let swapped = raw.replace("session.tpt", "session.tes");
         std::fs::write(&path, swapped).expect("the swap");
 
-        assert!(
-            store.get(Marketplace::Tes).await.is_err(),
+        assert_eq!(
+            store.get(Marketplace::Tes).await,
+            Ok(None),
             "an envelope bound to one marketplace must not open under another's key"
         );
         std::fs::remove_dir_all(&dir).ok();

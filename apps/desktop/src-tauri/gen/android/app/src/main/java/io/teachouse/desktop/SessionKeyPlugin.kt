@@ -48,11 +48,27 @@ class SessionKeyPlugin(private val activity: Activity) : Plugin(activity) {
     private val blob: File
         get() = File(activity.filesDir, BLOB)
 
-    /** The secret, generated on first call and unwrapped on every call after. */
+    /**
+     * The secret, generated on first call and unwrapped on every call after.
+     *
+     * A blob on disk whose Keystore entry no longer exists is unopenable by
+     * anything, forever: the key that could unwrap it is gone. Some
+     * reinstalls drop the alias and keep the file, and refusing here would
+     * leave the app unable to hold any session until an uninstall. Starting
+     * over is the only reading that recovers, and it forfeits nothing that
+     * was still readable.
+     */
     @Command
     fun obtain(invoke: Invoke) {
         try {
-            val secret = if (blob.exists()) unwrap(blob.readBytes()) else create()
+            val secret = when {
+                !blob.exists() -> create()
+                wrappingEntry() == null -> {
+                    blob.delete()
+                    create()
+                }
+                else -> unwrap(blob.readBytes())
+            }
             val bytes = JSArray()
             for (byte in secret) {
                 bytes.put(byte.toInt() and 0xFF)
@@ -140,9 +156,12 @@ class SessionKeyPlugin(private val activity: Activity) : Plugin(activity) {
         return secret
     }
 
+    private fun wrappingEntry(): SecretKey? =
+        (keystore().getEntry(ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey
+
     private fun unwrap(stored: ByteArray): ByteArray {
         require(stored.size > IV_BYTES) { "the wrapped session key is truncated" }
-        val key = (keystore().getEntry(ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey
+        val key = wrappingEntry()
             ?: throw IllegalStateException("the session key's Keystore entry is gone")
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(
@@ -154,7 +173,7 @@ class SessionKeyPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     private fun wrappingKey(): SecretKey {
-        (keystore().getEntry(ALIAS, null) as? KeyStore.SecretKeyEntry)?.let { return it.secretKey }
+        wrappingEntry()?.let { return it }
 
         // StrongBox is a separate security chip and most devices have none, so
         // it is requested and not required. The fallback key is still held by
