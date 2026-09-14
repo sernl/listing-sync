@@ -24,8 +24,11 @@
 	import { queryKeys } from '$lib/query';
 	import { toast } from '$lib/toast';
 	import Authorship from './Authorship.svelte';
+	import ConsentDialog from './ConsentDialog.svelte';
+	import { blockedBanner, needsConsent, standingFor } from './consent';
 	import Downloads from './Downloads.svelte';
 	import Machines from './Machines.svelte';
+	import Library from './Library.svelte';
 	import MarketplaceCard from './MarketplaceCard.svelte';
 	import RequestCard from './RequestCard.svelte';
 	import { fetchManifest } from './api';
@@ -40,6 +43,7 @@
 		TRANSPORT_BADGE,
 		busyAt,
 		connectReturn,
+		connectConsentRequired,
 		connectSignedOut,
 		deviceBranchInTileOrder,
 		disconnectAsk,
@@ -76,6 +80,13 @@
 	const releases = createQuery(() => ({
 		queryKey: queryKeys.downloadsManifest,
 		queryFn: () => fetchManifest()
+	}));
+	// The seller-device consent record. Read here rather than off the device,
+	// because the grant is per organisation and the card's Connect follows it:
+	// a marketplace with no standing grant opens the notice instead.
+	const consentRead = createQuery(() => ({
+		queryKey: queryKeys.consents,
+		queryFn: () => api.consents()
 	}));
 
 	// Read once when the page renders rather than per row, so every age on it is
@@ -247,6 +258,10 @@
 				toast('error', APP_CANNOT_CONNECT);
 			} else if (outcome.kind === 'refused') {
 				toast('error', outcome.detail);
+			} else if (outcome.kind === 'consentRequired') {
+				// The application read the record itself and refused in front of
+				// the password: the grant was withdrawn since this page read it.
+				toast('error', connectConsentRequired(marketplace).message);
 			} else {
 				// Unreachable from this page, which offers the command only where
 				// there is an invoker. Said rather than swallowed, because a
@@ -376,10 +391,46 @@
 		});
 	});
 
+	/** The marketplace whose notice is open, or null. */
+	let consentFor = $state<Marketplace | null>(null);
+
 	function connect(marketplace: Marketplace) {
+		// The notice first, where no grant stands. The card's action is
+		// withheld while the read is pending, so this branch never runs on an
+		// unknown answer.
+		if (needsConsent(marketplace) && standingFor(consentRead.data, marketplace) !== 'granted') {
+			consentFor = marketplace;
+			return;
+		}
 		busy = withBusy(busy, marketplace, 'action');
 		connecting.mutate(marketplace);
 	}
+
+	/** The grant landed: the marketplace the notice was for is now connected
+	 *  the ordinary way, without the seller pressing the card again. */
+	function agreed() {
+		const marketplace = consentFor;
+		consentFor = null;
+		if (marketplace === null) {
+			return;
+		}
+		busy = withBusy(busy, marketplace, 'action');
+		connecting.mutate(marketplace);
+	}
+
+	/** Why one card's Connect is withheld on the consent read alone, or null. */
+	function consentRefusal(marketplace: Marketplace): string | null {
+		if (!needsConsent(marketplace)) {
+			return null;
+		}
+		return standingFor(consentRead.data, marketplace) === 'unknown'
+			? 'Checking your permissions…'
+			: null;
+	}
+
+	/** The linked seller-device marketplace whose work has stopped for want of
+	 *  a standing grant, or null. */
+	const blocked = $derived(read === 'read' ? blockedBanner(rows, consentRead.data) : null);
 
 	function disconnect(marketplace: Marketplace) {
 		if (!confirm(disconnectAsk(marketplace, connectionFor(marketplace)))) {
@@ -476,6 +527,13 @@
 		</Banner>
 	{/if}
 
+	{#if blocked !== null}
+		<Banner tone="warn" title={blocked.title} action={toPermissions}>
+			Nothing new is started on {CARD_NAME[blocked.marketplace]} on any of your machines until
+			you grant it. Logins already on your machines are untouched.
+		</Banner>
+	{/if}
+
 	<div class="mp-grid">
 		{#each liveCards as card (card.tile.marketplace)}
 			<MarketplaceCard
@@ -505,7 +563,9 @@
 						}
 					: undefined}
 				running={busyAt(busy, card.tile.marketplace)}
-				refusal={connectionFor(card.tile.marketplace) === undefined ? connectRefusal : null}
+				refusal={connectionFor(card.tile.marketplace) === undefined
+					? (connectRefusal ?? consentRefusal(card.tile.marketplace))
+					: consentRefusal(card.tile.marketplace)}
 				onrun={connect}
 				ondisconnect={disconnect}
 				onsignout={signOutOfHere}
@@ -591,6 +651,10 @@
 	</div>
 
 	<div class="mp-part">
+		<Library />
+	</div>
+
+	<div class="mp-part">
 		<Authorship rows={declarable} {now} {read} />
 	</div>
 
@@ -603,6 +667,19 @@
 	{/each}
 </div>
 
+{#if consentFor !== null}
+	<ConsentDialog
+		open={consentFor !== null}
+		marketplace={consentFor}
+		onAgreed={agreed}
+		onClose={() => (consentFor = null)}
+	/>
+{/if}
+
 {#snippet toCopyright()}
 	<Button tier="outline" small href="#copyright">Declare it</Button>
+{/snippet}
+
+{#snippet toPermissions()}
+	<Button tier="outline" small href="/settings#permissions">Grant it</Button>
 {/snippet}

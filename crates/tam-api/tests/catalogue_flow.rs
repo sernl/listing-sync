@@ -99,6 +99,7 @@ async fn provision(pool: &PgPool, org: OrgId, user: UserId, token: &SessionToken
         .execute(pool)
         .await
         .expect("the org seeds");
+    consented(pool, org).await;
     let sessions = SessionRepo::new(pool.clone());
     sessions
         .create_user(org, user, &format!("{name}@example.test"), Timestamp(1_000))
@@ -108,6 +109,31 @@ async fn provision(pool: &PgPool, org: OrgId, user: UserId, token: &SessionToken
         .mint(token, user, Timestamp(100_000), Timestamp(1_000))
         .await
         .expect("the session mints");
+}
+
+/// The seller-device consent, granted for every marketplace that needs it,
+/// so the mints under test are answered by the machinery rather than by the
+/// consent gate; `consent_flow.rs` is where that gate is exercised.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn consented(pool: &PgPool, org: OrgId) {
+    let consents = tam_storage::ConsentRepo::new(pool.clone());
+    for marketplace in tam_types::Marketplace::ALL {
+        if marketplace.transport_class() == tam_types::TransportClass::SellerDevice {
+            consents
+                .grant(
+                    org,
+                    marketplace,
+                    tam_types::CONSENT_NOTICE_VERSION,
+                    Uuid([0xC0; 16]),
+                    Timestamp(1_000),
+                )
+                .await
+                .expect("the fixture consent grants");
+        }
+    }
 }
 
 /// One request, bundled because the workspace argument limit is five and a

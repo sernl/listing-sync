@@ -139,6 +139,12 @@ pub enum ConnectOutcome {
     /// [`crate::connect::ConnectVerdict::SignedOut`] travels as, so the
     /// console words one sentence for the two channels.
     SignedOut,
+    /// The organisation has not granted the seller-device consent for this
+    /// marketplace on the current notice, so nothing was opened and nothing
+    /// was filed. The same word
+    /// [`crate::connect::ConnectVerdict::ConsentRequired`] travels as, so the
+    /// console words one sentence for the two channels.
+    ConsentRequired,
 }
 
 /// Which shape a login takes here, decided by the surface rather than by the
@@ -224,10 +230,34 @@ pub(crate) async fn connect_on_target<R: tauri::Runtime>(
     if signed_out_here(&app).await {
         return Ok(ConnectOutcome::SignedOut);
     }
+    if !consent_stands_here(&app, target.marketplace).await? {
+        return Ok(ConnectOutcome::ConsentRequired);
+    }
     match surface {
         ConnectSurface::SecondWindow => in_a_second_window(app, target).await,
         ConnectSurface::OneWindow => in_this_window(&app, target).map(|()| ConnectOutcome::Opening),
     }
+}
+
+/// Whether the seller has agreed to the seller-device notice for this
+/// marketplace, asked of the server at the moment of the press.
+///
+/// Not fail-open, and that is the difference from [`signed_out_here`]: an
+/// unreachable server there leaves the last standing in place, because a
+/// revocation is a rare event and an outage must not strand a machine in
+/// good standing. A grant is the opposite — the ordinary state before the
+/// seller has agreed is "no" — so a read that could not be made is an error
+/// the seller sees, not a sign-in that opens on the assumption they agreed.
+async fn consent_stands_here<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    marketplace: Marketplace,
+) -> Result<bool, CommandError> {
+    let state = app.state::<DesktopState>();
+    state
+        .control_plane()
+        .consent_stands(marketplace)
+        .await
+        .map_err(|why| CommandError(format!("your permissions could not be read: {why}")))
 }
 
 /// Whether this machine may hold a marketplace login at all, asked of the
@@ -426,6 +456,17 @@ async fn capture_in_place<R: tauri::Runtime>(
             .is_ok_and(|at| at.origin() == console.origin())
     };
     match await_session(target, capture, gone).await {
+        // Asked again before filing, because the sign-in took as long as the
+        // seller took: a grant withdrawn on the Account page while the
+        // password was being typed must not be answered by a session filed
+        // under it. The jar is dropped unfiled either way.
+        Ok(_)
+            if !consent_stands_here(app, target.marketplace)
+                .await
+                .is_ok_and(|stands| stands) =>
+        {
+            ConnectVerdict::ConsentRequired
+        }
         Ok(jar) => match file_session(app, target.marketplace, jar).await {
             Ok(_) => ConnectVerdict::Captured,
             // The revocation reached this device between the Connect press
@@ -736,6 +777,171 @@ fn device_state(
 #[tauri::command]
 pub async fn device_activity(app: AppHandle) -> Result<Vec<DeviceActivity>, CommandError> {
     Ok(app.state::<DesktopState>().activity().await)
+}
+
+// ----------------------------------------------------------------- library
+
+/// The sentence a console reads when this build keeps no library.
+const NO_LIBRARY: &str = "this machine is not keeping files";
+
+fn library_of(app: &AppHandle) -> Result<Arc<crate::library::Library>, CommandError> {
+    app.state::<DesktopState>()
+        .library()
+        .ok_or_else(|| CommandError(NO_LIBRARY.to_owned()))
+}
+
+fn hash_of(hex: &str) -> Result<tam_types::ContentHash, CommandError> {
+    if hex.len() != 64 {
+        return Err(CommandError(
+            "a file is named by its 64-hex digest".to_owned(),
+        ));
+    }
+    let mut bytes = [0u8; 32];
+    for (index, pair) in hex.as_bytes().chunks_exact(2).enumerate() {
+        let pair = core::str::from_utf8(pair)
+            .map_err(|_| CommandError("a file is named by its hex digest".to_owned()))?;
+        bytes[index] = u8::from_str_radix(pair, 16)
+            .map_err(|_| CommandError("a file is named by its hex digest".to_owned()))?;
+    }
+    Ok(tam_types::ContentHash(bytes))
+}
+
+/// One kept file, as the console lists it: the digest as hex rather than
+/// as the byte array `ContentHash` serialises to.
+#[derive(Debug, Clone, Serialize)]
+pub struct LibraryEntryView {
+    pub hash: String,
+    pub file_name: String,
+    pub content_type: String,
+    pub byte_len: u64,
+    pub marketplace: Marketplace,
+    pub resource: String,
+    pub kept_at: tam_types::Timestamp,
+    pub pinned: bool,
+}
+
+impl From<crate::library::LibraryEntry> for LibraryEntryView {
+    fn from(entry: crate::library::LibraryEntry) -> Self {
+        Self {
+            hash: tam_secrets::hex_encode(&entry.hash.0),
+            file_name: entry.file_name,
+            content_type: entry.content_type,
+            byte_len: entry.byte_len,
+            marketplace: entry.marketplace,
+            resource: entry.resource,
+            kept_at: entry.kept_at,
+            pinned: entry.pinned,
+        }
+    }
+}
+
+/// Every file kept on this machine, newest first.
+#[tauri::command]
+pub async fn library_entries(app: AppHandle) -> Result<Vec<LibraryEntryView>, CommandError> {
+    let library = library_of(&app)?;
+    Ok(library
+        .entries()
+        .await
+        .into_iter()
+        .map(LibraryEntryView::from)
+        .collect())
+}
+
+/// The bytes kept on this machine, as the seller would count them.
+#[tauri::command]
+pub async fn library_usage(app: AppHandle) -> Result<u64, CommandError> {
+    Ok(library_of(&app)?.usage().await)
+}
+
+/// One kept file's bytes, in the clear, for a preview or a viewer in the
+/// console's own window. Raw rather than JSON, so a thirty-megabyte PDF is
+/// not base64 in a string.
+#[tauri::command]
+pub async fn library_read(
+    app: AppHandle,
+    hash: String,
+) -> Result<tauri::ipc::Response, CommandError> {
+    let library = library_of(&app)?;
+    let bytes = library
+        .read(hash_of(&hash)?)
+        .await
+        .map_err(|why| CommandError(why.to_string()))?
+        .ok_or_else(|| CommandError("that file is not kept on this machine".to_owned()))?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// Removes one kept file from this machine. The listing and the marketplace
+/// copy are untouched, as the console's confirmation says.
+#[tauri::command]
+pub async fn library_remove(app: AppHandle, hash: String) -> Result<(), CommandError> {
+    library_of(&app)?
+        .remove(hash_of(&hash)?)
+        .await
+        .map_err(|why| CommandError(why.to_string()))
+}
+
+#[tauri::command]
+pub async fn library_settings(
+    app: AppHandle,
+) -> Result<crate::library::LibrarySettings, CommandError> {
+    Ok(library_of(&app)?.settings().await)
+}
+
+#[tauri::command]
+pub async fn set_library_settings(
+    app: AppHandle,
+    keep_originals: bool,
+) -> Result<crate::library::LibrarySettings, CommandError> {
+    library_of(&app)?
+        .set_keep_originals(keep_originals)
+        .await
+        .map_err(|why| CommandError(why.to_string()))
+}
+
+/// Hands one kept file to whatever application this machine opens that
+/// type with.
+///
+/// The plaintext is written under the application's own cache directory —
+/// on Android the `cache-path` the manifest's FileProvider exports — and the
+/// platform opener is asked to open it. The seller asked for exactly this,
+/// so the copy is theirs to have; the sealed library is untouched. Where the
+/// opener refuses, the refusal is the answer and there is no other route.
+#[tauri::command]
+pub async fn library_open_external(app: AppHandle, hash: String) -> Result<(), CommandError> {
+    use tauri_plugin_opener::OpenerExt as _;
+    let library = library_of(&app)?;
+    let digest = hash_of(&hash)?;
+    let entry = library
+        .entries()
+        .await
+        .into_iter()
+        .find(|entry| entry.hash == digest)
+        .ok_or_else(|| CommandError("that file is not kept on this machine".to_owned()))?;
+    let bytes = library
+        .read(digest)
+        .await
+        .map_err(|why| CommandError(why.to_string()))?
+        .ok_or_else(|| CommandError("that file is not kept on this machine".to_owned()))?;
+    let extension = std::path::Path::new(&entry.file_name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .filter(|extension| extension.chars().all(|c| c.is_ascii_alphanumeric()))
+        .unwrap_or("bin");
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|why| CommandError(why.to_string()))?
+        .join("open");
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|why| CommandError(why.to_string()))?;
+    let path = dir.join(format!("{hash}.{extension}"));
+    tokio::fs::write(&path, &bytes)
+        .await
+        .map_err(|why| CommandError(why.to_string()))?;
+    app.opener()
+        .open_path(path.to_string_lossy().into_owned(), None::<&str>)
+        .map_err(|why| CommandError(why.to_string()))
 }
 
 /// Whether this device holds a session for a marketplace, and nothing about
@@ -1257,6 +1463,13 @@ mod import_command_tests {
             Box::pin(core::future::ready(Ok(())))
         }
 
+        fn consent_stands(
+            &self,
+            _marketplace: tam_types::Marketplace,
+        ) -> crate::heartbeat::PlaneFuture<'_, bool> {
+            Box::pin(core::future::ready(Ok(true)))
+        }
+
         fn sync_request_source(
             &self,
             _request: tam_types::Uuid,
@@ -1568,6 +1781,10 @@ mod import_early_failure_tests {
             Box::pin(core::future::ready(Ok(())))
         }
 
+        fn consent_stands(&self, _marketplace: Marketplace) -> PlaneFuture<'_, bool> {
+            Box::pin(core::future::ready(Ok(true)))
+        }
+
         fn sync_request_source(
             &self,
             _request: tam_types::Uuid,
@@ -1821,6 +2038,10 @@ mod session_command_tests {
     impl ControlPlane for Recorder {
         fn reachable(&self) -> PlaneFuture<'_, ()> {
             Box::pin(core::future::ready(Ok(())))
+        }
+
+        fn consent_stands(&self, _marketplace: Marketplace) -> PlaneFuture<'_, bool> {
+            Box::pin(core::future::ready(Ok(true)))
         }
 
         fn sync_request_source(

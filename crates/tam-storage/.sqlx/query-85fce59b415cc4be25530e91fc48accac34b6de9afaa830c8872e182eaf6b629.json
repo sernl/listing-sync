@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO marketplace_consent (org_id, marketplace, notice_version, granted_by, granted_at) VALUES ($1, $2, $3, $4, $5) RETURNING marketplace, notice_version, granted_by, granted_at, withdrawn_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "marketplace",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "notice_version",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "granted_by",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "granted_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "withdrawn_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "85fce59b415cc4be25530e91fc48accac34b6de9afaa830c8872e182eaf6b629"
+}

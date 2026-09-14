@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT marketplace, notice_version, granted_by, granted_at, withdrawn_at FROM marketplace_consent WHERE org_id = $1 AND marketplace = $2 AND notice_version = $3 AND withdrawn_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "marketplace",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "notice_version",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "granted_by",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "granted_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "withdrawn_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "83021df6be0d8eed06e0aaa48caffaa4e9f4fd03212861cdd1a2a157d1a1f683"
+}

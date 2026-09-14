@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 153] = [
+pub const ROUTES: [Route; 161] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -571,6 +571,46 @@ pub const ROUTES: [Route; 153] = [
         method: "get",
         path: "/{version}/connections",
         summary: "The marketplace connections and their link states",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/consents",
+        summary: "The seller-device consent record and the notice version a grant must carry",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/consents/{marketplace}",
+        summary: "Record the seller's explicit agreement to the seller-device notice",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/consents/{marketplace}/withdraw",
+        summary: "Withdraw the standing seller-device consent for a marketplace",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/library",
+        summary: "The seller's files on the seller's machines: who holds what, and who asked",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/devices/{device}/library/want",
+        summary: "Ask one machine to fetch one file directly from another that holds it",
+    },
+    Route {
+        method: "delete",
+        path: "/{version}/devices/{device}/library/want",
+        summary: "Cancel that ask",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/devices/{device}/library/wants",
+        summary: "What one machine has been asked to fetch",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/devices/{device}/library/peers",
+        summary: "Where the online holders of one file can be reached directly",
     },
     Route {
         method: "post",

@@ -19,6 +19,13 @@
     "allow-start-import",
     "allow-continue-import",
     "allow-stop-import",
-    "allow-set-theme"
+    "allow-set-theme",
+    "allow-library-entries",
+    "allow-library-usage",
+    "allow-library-read",
+    "allow-library-remove",
+    "allow-library-settings",
+    "allow-set-library-settings",
+    "allow-library-open-external"
   ]
 }

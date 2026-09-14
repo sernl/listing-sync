@@ -359,6 +359,7 @@ async fn complete(
                 }
             })?
     };
+    crate::consent::require_grant(state, run.org, record.target.marketplace()).await?;
     let new = NewJob {
         job,
         inventory: record.target,
@@ -584,6 +585,7 @@ async fn anchor_job(
     record: &SyncRequestRecord,
     now: Timestamp,
 ) -> Result<JobId, APIError> {
+    crate::consent::require_grant(state, record.org, record.source.marketplace()).await?;
     let created = JobRepo::new(state.pool.clone())
         .create_with_request_key(
             record.org,

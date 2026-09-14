@@ -384,6 +384,9 @@ export function signOutHereSay(marketplace: Marketplace, forgotten: SessionOutco
 					`This machine was signed out from the console, which already removed its ${name} ` +
 					'login. Sign the machine back in under Your machines.'
 			};
+		// A forget never asks for consent; the arm exists because the type is
+		// shared with connect, and it is worded as the impossibility it is.
+		case 'consentRequired':
 		case 'opening':
 		case 'unavailable':
 			return {
@@ -421,7 +424,8 @@ export const CONNECT_VERDICT_CODES = [
 	'abandoned',
 	'refused',
 	'notkept',
-	'signed_out'
+	'signed_out',
+	'consent'
 ] as const;
 
 export type ConnectVerdictCode = (typeof CONNECT_VERDICT_CODES)[number];
@@ -478,6 +482,14 @@ const CONNECT_SAID: Record<ConnectVerdictCode, (name: string) => ConnectReturn> 
 	signed_out: (name) => ({
 		tone: 'error',
 		message: `This machine was signed out from the console, so the ${name} sign-in was not opened and nothing was saved. Sign this machine back in under Your machines, then press Connect ${name}.`
+	}),
+	// The seller has not agreed to the seller-device notice for this
+	// marketplace, so the application refused in front of the password.
+	// Worded once here; the desktop's direct answer and the phone's return
+	// leg both read it through `connectConsentRequired`.
+	consent: (name) => ({
+		tone: 'error',
+		message: `${name} needs your permission first, so the sign-in was not opened and nothing was saved. Grant it under Account > Permissions, then press Connect ${name}.`
 	})
 };
 
@@ -519,6 +531,11 @@ const CONNECT_SAID_UNNAMED: Record<ConnectVerdictCode, ConnectReturn> = {
 		tone: 'error',
 		message:
 			'This machine was signed out from the console, so your marketplace sign-in was not opened and nothing was saved. Sign this machine back in under Your machines, then press Connect on the card.'
+	},
+	consent: {
+		tone: 'error',
+		message:
+			'That marketplace needs your permission first, so your marketplace sign-in was not opened and nothing was saved. Grant it under Account > Permissions, then press Connect on the card.'
 	}
 };
 
@@ -555,6 +572,13 @@ export function connectReturn(params: URLSearchParams): ConnectReturn | null {
  */
 export function connectSignedOut(marketplace: Marketplace): ConnectReturn {
 	return CONNECT_SAID.signed_out(CARD_NAME[marketplace]);
+}
+
+/** The consent refusal, for a computer's Connect that answered on this page.
+ *  The same sentence the phone's return leg carries, for the reason
+ *  `connectSignedOut` gives. */
+export function connectConsentRequired(marketplace: Marketplace): ConnectReturn {
+	return CONNECT_SAID.consent(CARD_NAME[marketplace]);
 }
 
 /** Whether a string off the address is one of the verdicts we word.

@@ -68,8 +68,16 @@ pub const DEFAULT_BASE_URL: &str = "https://teachouse.stowiq.io";
 /// origin.
 pub const BASE_URL_ENV: &str = "TAM_CONTROL_PLANE";
 
-/// The control plane's origin: the override if the environment sets one, and
-/// the compiled-in default otherwise.
+/// The control plane's origin: the override if the environment sets one, the
+/// one baked in at compile time otherwise, and the compiled-in default
+/// failing both.
+///
+/// The compile-time arm exists for a phone. A process on Android has no
+/// environment a developer can set, so `cargo tauri android dev` run with
+/// `TAM_CONTROL_PLANE` exported bakes the vite origin in and the debug build
+/// reaches a local server through `adb reverse`; every release build is made
+/// without the variable and carries the default. Runtime still wins, so a
+/// desktop developer's shell keeps behaving as before.
 #[must_use]
 #[expect(
     clippy::disallowed_methods,
@@ -79,6 +87,7 @@ pub const BASE_URL_ENV: &str = "TAM_CONTROL_PLANE";
 pub fn base_url() -> String {
     std::env::var(BASE_URL_ENV)
         .ok()
+        .or_else(|| option_env!("TAM_CONTROL_PLANE").map(str::to_owned))
         .map(|raw| raw.trim().to_owned())
         .filter(|raw| !raw.is_empty())
         .unwrap_or_else(|| DEFAULT_BASE_URL.to_owned())
@@ -150,6 +159,19 @@ pub trait Transport: Send + Sync {
     /// silently relied on: a server that ever content-negotiated would break
     /// those two reads with nothing to explain why.
     fn fetch<'a>(&'a self, path: &'a str, session: &'a str) -> BytesFuture<'a>;
+
+    /// Deletes one of our own paths, under the same per-call session, with
+    /// a JSON body naming what to delete. One caller: cancelling a library
+    /// want. Defaulted to a refusal so the test doubles, which never cancel
+    /// one, need no arm for it.
+    fn delete<'a>(
+        &'a self,
+        _path: &'a str,
+        _session: &'a str,
+        _body: String,
+    ) -> TransportFuture<'a> {
+        Box::pin(async { Err("this transport cannot delete".to_owned()) })
+    }
 }
 
 /// The socket-opening [`Transport`].
@@ -275,6 +297,24 @@ impl Transport for HttpTransport {
         })
     }
 
+    fn delete<'a>(&'a self, path: &'a str, session: &'a str, body: String) -> TransportFuture<'a> {
+        Box::pin(async move {
+            let response = self
+                .client
+                .delete(format!("{}{path}", self.base))
+                .header("content-type", "application/json")
+                .header("accept", "application/json")
+                .header("cookie", format!("{SESSION_COOKIE}={session}"))
+                .body(body)
+                .send()
+                .await
+                .map_err(|why| why.to_string())?;
+            let status = response.status().as_u16();
+            let body = response.text().await.map_err(|why| why.to_string())?;
+            Ok(Reply { status, body })
+        })
+    }
+
     fn fetch<'a>(&'a self, path: &'a str, session: &'a str) -> BytesFuture<'a> {
         Box::pin(async move {
             let response = self
@@ -314,9 +354,28 @@ struct SessionLine<'a> {
     status: &'static str,
 }
 
+/// One file this device holds, as the heartbeat advertises it. A digest and
+/// a length: nothing a byte of the file could travel in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HoldingLine {
+    pub hash: String,
+    pub byte_len: u64,
+}
+
+/// Where this device's transfer endpoint listens and what its library
+/// holds, sent with every heartbeat once the endpoint is up.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LibraryAdvert {
+    pub node_id: String,
+    pub direct_addrs: Vec<String>,
+    pub holdings: Vec<HoldingLine>,
+}
+
 #[derive(Debug, Serialize)]
 struct HeartbeatBody<'a> {
     sessions: Vec<SessionLine<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    library: Option<LibraryAdvert>,
 }
 
 /// The two fields this client reads off a heartbeat answer. Deliberately not
@@ -341,6 +400,11 @@ struct HeartbeatReply {
 pub struct HttpControlPlane {
     transport: Arc<dyn Transport>,
     sessions: Arc<dyn SessionSource>,
+    /// What the next heartbeat says about this device's library, set by
+    /// the transfer loop before each cycle. `None` until the endpoint is
+    /// up, and a heartbeat then says nothing about the library, which the
+    /// server reads as "unchanged".
+    advert: tokio::sync::Mutex<Option<LibraryAdvert>>,
 }
 
 impl HttpControlPlane {
@@ -349,9 +413,88 @@ impl HttpControlPlane {
         Self {
             transport,
             sessions,
+            advert: tokio::sync::Mutex::new(None),
         }
     }
 
+    /// Sets what the next heartbeat advertises about this device's library.
+    pub async fn advertise(&self, advert: Option<LibraryAdvert>) {
+        *self.advert.lock().await = advert;
+    }
+
+    /// The files this device has been asked to fetch, by digest hex.
+    pub async fn library_wants(&self, device: &DeviceId) -> Result<Vec<String>, ControlPlaneError> {
+        let view = self
+            .view(
+                &format!("/v1/devices/{device}/library/wants"),
+                "this device is not registered",
+            )
+            .await?;
+        serde_json::from_value(view.get("hashes").cloned().unwrap_or_default())
+            .map_err(|why| ControlPlaneError::Refused(why.to_string()))
+    }
+
+    /// Where the online holders of one file can be reached, and every node
+    /// id of the organisation's live devices.
+    pub async fn library_peers(
+        &self,
+        device: &DeviceId,
+        hash: &str,
+    ) -> Result<LibraryPeers, ControlPlaneError> {
+        let view = self
+            .view(
+                &format!("/v1/devices/{device}/library/peers?hash={hash}"),
+                "this device is not registered",
+            )
+            .await?;
+        serde_json::from_value(view).map_err(|why| ControlPlaneError::Refused(why.to_string()))
+    }
+
+    /// Cancels a want this device has satisfied or cannot satisfy.
+    pub async fn library_unwant(
+        &self,
+        device: &DeviceId,
+        hash: &str,
+    ) -> Result<(), ControlPlaneError> {
+        let session = self
+            .sessions
+            .session()
+            .await
+            .map_err(|why| ControlPlaneError::Refused(why.to_string()))?
+            .ok_or(ControlPlaneError::NoSession)?;
+        let body = serde_json::json!({ "hash": hash }).to_string();
+        let reply = self
+            .transport
+            .delete(
+                &format!("/v1/devices/{device}/library/want"),
+                &session,
+                body,
+            )
+            .await
+            .map_err(ControlPlaneError::Refused)?;
+        if reply.status == 204 || reply.status == 200 {
+            Ok(())
+        } else {
+            Err(refusal(&reply))
+        }
+    }
+}
+
+/// The answer to the peers read.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct LibraryPeers {
+    pub peers: Vec<LibraryPeer>,
+    pub trusted: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct LibraryPeer {
+    pub device: String,
+    pub node_id: String,
+    pub direct_addrs: Vec<String>,
+}
+
+impl HttpControlPlane {
     /// The ordinary construction: a real socket against our own base URL,
     /// speaking under whatever session the source resolves at the time.
     pub fn against(
@@ -480,6 +623,12 @@ pub fn heartbeat_path(device: &DeviceId) -> String {
     format!("/v1/devices/{device}/heartbeat")
 }
 
+/// The path the consent record is read from.
+#[must_use]
+pub fn consents_path() -> String {
+    "/v1/consents".to_owned()
+}
+
 /// The registration path.
 pub const REGISTER_PATH: &str = "/v1/devices";
 
@@ -575,6 +724,28 @@ impl ControlPlane for HttpControlPlane {
                     reply.status
                 )))
             }
+        })
+    }
+
+    fn consent_stands(&self, marketplace: tam_types::Marketplace) -> PlaneFuture<'_, bool> {
+        Box::pin(async move {
+            let view = self
+                .view(&consents_path(), "this sign-in has no consent record")
+                .await?;
+            let rows = view
+                .get("consents")
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| {
+                    ControlPlaneError::Refused("the consent record lists no rows".to_owned())
+                })?;
+            // Deserialised from the value the server sent, as the other reads
+            // do, so the marketplace spelling is the wire's and not a copy.
+            Ok(rows.iter().any(|row| {
+                row.get("standing").and_then(serde_json::Value::as_bool) == Some(true)
+                    && row.get("marketplace").cloned().and_then(|value| {
+                        serde_json::from_value::<tam_types::Marketplace>(value).ok()
+                    }) == Some(marketplace)
+            }))
         })
     }
 
@@ -737,6 +908,7 @@ impl ControlPlane for HttpControlPlane {
                         status: session.status.as_str(),
                     })
                     .collect(),
+                library: self.advert.lock().await.clone(),
             })
             .map_err(|why| ControlPlaneError::Refused(why.to_string()))?;
 

@@ -606,6 +606,9 @@ pub(crate) async fn create_run(
              infrastructure rather than by a run started here",
         ));
     }
+    // The seller's explicit permission, read before anything is minted: a
+    // run is seller-device work from its first page.
+    crate::consent::require_grant(&state, context.org, body.source.marketplace()).await?;
     let now = (state.wall)();
     let runs = ImportRunRepo::new(state.pool.clone());
 
@@ -805,7 +808,12 @@ fn run_history_filter(params: &RunPageParams) -> Result<RunHistoryFilter, APIErr
 }
 
 fn item_window(params: &ItemPageParams) -> Result<ItemWindow, APIError> {
-    let (offset, limit) = window(params.offset, params.limit, ITEMS_PER_PAGE, ITEMS_LISTED_MAX);
+    let (offset, limit) = window(
+        params.offset,
+        params.limit,
+        ITEMS_PER_PAGE,
+        ITEMS_LISTED_MAX,
+    );
     let state = match params.state.as_deref().filter(|raw| !raw.is_empty()) {
         None => None,
         Some("listed") => Some(RunItemState::Listed),
@@ -2132,8 +2140,7 @@ async fn already_held(
         .filter_map(|row| {
             let (_, product) = bound.iter().find(|(locator, _)| *locator == row.locator)?;
             let pictured = covers.iter().any(|cover| {
-                cover.product == *product
-                    && !tam_pipeline::render::is_generated_card(cover.hash)
+                cover.product == *product && !tam_pipeline::render::is_generated_card(cover.hash)
             });
             if !pictured {
                 return None;
@@ -3238,7 +3245,10 @@ async fn commit_one(
             &mut tx,
             org,
             holder,
-            applied.cover.as_ref().map(|held| (held.hash, held.byte_len)),
+            applied
+                .cover
+                .as_ref()
+                .map(|held| (held.hash, held.byte_len)),
             now,
         )
         .await
@@ -3645,6 +3655,7 @@ pub(crate) async fn anchor_job(
     source: InventoryId,
     now: Timestamp,
 ) -> Result<JobId, APIError> {
+    crate::consent::require_grant(state, org, source.marketplace()).await?;
     let created = JobRepo::new(state.pool.clone())
         .create_with_request_key(
             org,

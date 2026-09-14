@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT hash FROM device_library_want WHERE org_id = $1 AND device_id = $2 ORDER BY requested_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "hash",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3bc12f470a9ce621c2528f17faafa07029c1b921eb2211bfc5acb5acf238734a"
+}

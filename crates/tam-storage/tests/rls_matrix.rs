@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 
 use sqlx::PgPool;
 
-const TENANT_TABLES: [&str; 60] = [
+const TENANT_TABLES: [&str; 64] = [
     "auto_publish_rule",
     "auto_publish_run",
     "billing_subscription",
@@ -23,6 +23,9 @@ const TENANT_TABLES: [&str; 60] = [
     "connection_secret",
     "device",
     "device_marketplace_session",
+    "device_library_holding",
+    "device_library_want",
+    "device_node_addr",
     "duplicate_evidence",
     "duplicate_verdict",
     "election_item",
@@ -45,6 +48,7 @@ const TENANT_TABLES: [&str; 60] = [
     "listing_metric_snapshot",
     "mapping",
     "mapping_loss",
+    "marketplace_consent",
     "marketplace_request",
     "marketplace_sync_setting",
     "native_residue",

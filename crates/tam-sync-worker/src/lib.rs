@@ -25,11 +25,14 @@ use tam_import::ImportRun;
 use tam_marketplace::idempotency::derive_idempotency_key;
 use tam_marketplace::{ListingState, RemoteLifecycle, RemoteListingId};
 use tam_storage::{
-    job_request_key, Disposition, Enqueued, JobOrigin, JobRepo, LoweringRefusal, MappingRepo,
-    NewJob, NewJobItem, StorageError, SyncRequestRecord, SyncRequestRepo, SyncResourceRecord,
-    CREATE_LEG, REMOVE_LEG,
+    job_request_key, ConsentRepo, Disposition, Enqueued, JobOrigin, JobRepo, LoweringRefusal,
+    MappingRepo, NewJob, NewJobItem, StorageError, SyncRequestRecord, SyncRequestRepo,
+    SyncResourceRecord, CREATE_LEG, REMOVE_LEG,
 };
-use tam_types::{Actor, JobId, MappingId, OrgId, Stamp, SystemComponent, Uuid};
+use tam_types::{
+    Actor, JobId, MappingId, OrgId, Stamp, SystemComponent, TransportClass, Uuid,
+    CONSENT_NOTICE_VERSION,
+};
 
 /// What one request's drain produced, so a caller reports it rather than
 /// reading it back out of the row it just wrote.
@@ -140,6 +143,23 @@ pub async fn drain_request(
             .await?;
         return Ok(report);
     }
+    // The seller's explicit permission for a no-API marketplace, read here
+    // as well as at the route, because this is the mint: a grant withdrawn
+    // between the request and its drain must leave no job behind.
+    if let Some(marketplace) = ungranted(run, record.source, record.target).await? {
+        requests
+            .record_failure(
+                run.org,
+                request,
+                &format!(
+                    "{marketplace:?} needs the seller's permission before Teachouse can work \
+                     with it; nothing was queued"
+                ),
+                run.now,
+            )
+            .await?;
+        return Ok(report);
+    }
     let create_job = enqueue_create(run, &record, &mappings).await?;
     report.create_job = Some(create_job);
     // A migrate is two jobs, forced: `job.inventory` is single-valued, so the
@@ -164,6 +184,29 @@ pub async fn drain_request(
         )
         .await?;
     Ok(report)
+}
+
+/// The first of the two legs' marketplaces that publishes no official API and
+/// has no standing grant, else `None`.
+async fn ungranted(
+    run: &ImportRun,
+    source: tam_types::InventoryId,
+    target: tam_types::InventoryId,
+) -> Result<Option<tam_types::Marketplace>, StorageError> {
+    let consents = ConsentRepo::new(run.pool.clone());
+    for marketplace in [source.marketplace(), target.marketplace()] {
+        if marketplace.transport_class() != TransportClass::SellerDevice {
+            continue;
+        }
+        if consents
+            .standing(run.org, marketplace, CONSENT_NOTICE_VERSION)
+            .await?
+            .is_none()
+        {
+            return Ok(Some(marketplace));
+        }
+    }
+    Ok(None)
 }
 
 /// A resource an earlier pass canonicalised, read back off its breadcrumb.

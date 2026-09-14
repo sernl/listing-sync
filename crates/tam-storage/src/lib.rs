@@ -17,7 +17,9 @@ pub mod blobs;
 mod codec;
 pub mod collections;
 pub mod connections;
+pub mod consent;
 pub mod device;
+pub mod device_library;
 pub mod duplicates;
 pub mod entitlement;
 pub mod file_source;
@@ -64,9 +66,13 @@ pub use connections::{
     record_connection_event, ConnectionAudit, ConnectionAuditRow, ConnectionEventRecord,
     ConnectionRepo, ConnectionRow,
 };
+pub use consent::{ConsentRecord, ConsentRepo};
 pub use device::{
     DeviceHeartbeat, DeviceRecord, DeviceRegistration, DeviceRepo, DeviceSessionRecord,
     DeviceSessionReport, DeviceSessionStatus,
+};
+pub use device_library::{
+    DeviceLibraryRepo, Holder, HoldingReport, LibraryFile, LibraryReport, Peer,
 };
 pub use duplicates::{
     answered_pairs, decide_verdict, ordered as ordered_pair, pair_verdict, raise_verdict,
@@ -143,10 +149,10 @@ pub use operators::{OperatorRecord, OperatorRepo};
 pub use org::{OrgRecord, OrgRepo, OrgWrite};
 pub use overrides::OverrideRepo;
 pub use product::{
-    insert_product, offer_cover, restore_product, soft_delete_product, title_of,
-    update_product, CoverOffer, ExportedListing, ExportedResource, FileRefusal, FileReplacement,
-    FileSwap, FileTarget, ProductCreationFacts, ProductEdit, ProductFiles, ProductRecord,
-    ProductRepo, ProductSummary, ReplacedFiles, StoredCover, ThumbnailChange,
+    insert_product, offer_cover, restore_product, soft_delete_product, title_of, update_product,
+    CoverOffer, ExportedListing, ExportedResource, FileRefusal, FileReplacement, FileSwap,
+    FileTarget, ProductCreationFacts, ProductEdit, ProductFiles, ProductRecord, ProductRepo,
+    ProductSummary, ReplacedFiles, StoredCover, ThumbnailChange,
 };
 pub use profile::{AvatarWrite, ProfileRepo};
 pub use pruning::{PruneRepo, PruneReport};

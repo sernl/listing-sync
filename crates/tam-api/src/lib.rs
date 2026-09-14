@@ -22,6 +22,7 @@ pub mod billing;
 pub mod blocking;
 pub mod catalogue;
 pub mod collections;
+pub mod consent;
 pub mod devices;
 pub mod duplicates;
 pub mod entitlement;
@@ -32,6 +33,7 @@ pub mod import;
 pub mod import_batch;
 pub mod import_runs;
 pub mod jobs;
+pub mod library;
 pub mod marketplace_requests;
 pub mod matcher;
 pub mod migrations;
@@ -545,6 +547,34 @@ pub fn router(state: AppState) -> Router {
             get(work::payload),
         )
         .route("/{version}/connections", get(resources::list_connections))
+        // The seller's explicit permission for a no-API marketplace, per
+        // organisation: read by every device, granted at Connect or on the
+        // Account page, and what every mint of seller-device work checks.
+        .route("/{version}/consents", get(consent::list_consents))
+        .route(
+            "/{version}/consents/{marketplace}",
+            post(consent::grant_consent),
+        )
+        .route(
+            "/{version}/consents/{marketplace}/withdraw",
+            post(consent::withdraw_consent),
+        )
+        // The seller's own files, on the seller's own machines: who holds
+        // what, and where one machine can reach another. Coordination only;
+        // no route here carries a byte of a file.
+        .route("/{version}/library", get(library::list_library))
+        .route(
+            "/{version}/devices/{device}/library/want",
+            post(library::want).delete(library::unwant),
+        )
+        .route(
+            "/{version}/devices/{device}/library/wants",
+            get(library::wants),
+        )
+        .route(
+            "/{version}/devices/{device}/library/peers",
+            get(library::peers),
+        )
         .route(
             "/{version}/connections/{connection}/revoke",
             post(resources::revoke_connection),

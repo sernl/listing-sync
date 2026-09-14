@@ -114,6 +114,100 @@ fn tes(resource: i64) -> RemoteListingId {
     }
 }
 
+/// The seller-device consent, granted for both legs, so the drain under test
+/// is answered by the machinery rather than by the consent gate.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn consented(pool: &PgPool) {
+    let consents = tam_storage::ConsentRepo::new(pool.clone());
+    for marketplace in tam_types::Marketplace::ALL {
+        if marketplace.transport_class() == tam_types::TransportClass::SellerDevice {
+            consents
+                .grant(
+                    ORG,
+                    marketplace,
+                    tam_types::CONSENT_NOTICE_VERSION,
+                    Uuid([0xC0; 16]),
+                    NOW,
+                )
+                .await
+                .expect("the fixture consent grants");
+        }
+    }
+}
+
+/// Without a standing grant the drain mints nothing and records why, so a
+/// grant withdrawn between the request and its drain leaves no job behind.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_drain_without_consent_mints_nothing_and_says_so(pool: PgPool) {
+    sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, 'org-a', now())")
+        .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+        .execute(&pool)
+        .await
+        .expect("the org seeds");
+    let requests = SyncRequestRepo::new(pool.clone());
+    requests
+        .create(
+            ORG,
+            &NewSyncRequest {
+                id: REQUEST,
+                source: SOURCE,
+                target: TARGET,
+                disposition: Disposition::Sync,
+                intent: SyncIntent::Draft,
+                requested_at: NOW,
+                locators: vec!["101".to_owned()],
+            },
+        )
+        .await
+        .expect("the request writes");
+    let (product, mapping) = seed(&pool, 0x01).await;
+    requests
+        .record_canonicalised(
+            ORG,
+            &Canonicalised {
+                request: REQUEST,
+                ordinal: 0,
+                product,
+                mapping,
+                source: tes(101),
+                source_state: Some(ListingState::Live),
+            },
+        )
+        .await
+        .expect("the breadcrumb writes");
+    let run = tam_import::ImportRun {
+        pool: pool.clone(),
+        org: ORG,
+        source: SOURCE,
+        target: Some(TARGET),
+        now: NOW,
+    };
+    let report = drain_request(&requests, &run, REQUEST)
+        .await
+        .expect("the drain answers rather than faulting");
+    assert_eq!(
+        (report.create_job, report.remove_job),
+        (None, None),
+        "no job is minted without the seller's permission"
+    );
+    let record = requests
+        .get(ORG, REQUEST)
+        .await
+        .expect("the request reads")
+        .expect("the request is there");
+    assert!(
+        record
+            .failure_detail
+            .as_deref()
+            .is_some_and(|why| why.contains("permission")),
+        "the request records why nothing was queued: {:?}",
+        record.failure_detail
+    );
+}
+
 /// A migrate resumed after its canonicalisation finished still removes every
 /// source.
 ///
@@ -131,6 +225,7 @@ async fn a_resumed_migrate_removes_every_source_it_canonicalised(pool: PgPool) {
         .execute(&pool)
         .await
         .expect("the org seeds");
+    consented(&pool).await;
     let requests = SyncRequestRepo::new(pool.clone());
     requests
         .create(
@@ -239,6 +334,7 @@ async fn a_live_sync_enqueues_the_create_and_the_publish_it_gates(pool: PgPool) 
         .execute(&pool)
         .await
         .expect("the org seeds");
+    consented(&pool).await;
     let requests = SyncRequestRepo::new(pool.clone());
     requests
         .create(

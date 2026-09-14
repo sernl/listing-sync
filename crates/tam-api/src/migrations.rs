@@ -195,6 +195,11 @@ pub(crate) async fn create_migration(
     if let Some(reason) = plan.view.pair.reason.filter(|_| !plan.view.pair.allowed) {
         return Err(validation(&reason));
     }
+    // The seller's explicit permission for each seller-device leg, before a
+    // mapping or a request row is written: the drain below mints the jobs
+    // and must find nothing half-made if it is refused.
+    crate::consent::require_grant(&state, context.org, body.source.marketplace()).await?;
+    crate::consent::require_grant(&state, context.org, body.target.marketplace()).await?;
     let queued = plan.view.counts.will_create;
     let skipped = plan
         .view

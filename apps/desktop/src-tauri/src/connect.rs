@@ -149,19 +149,24 @@ pub enum ConnectVerdict {
     /// out, which is undone once, on the Machines page, and then the sign-in
     /// holds.
     SignedOut,
+    /// The organisation has not agreed to the seller-device notice for this
+    /// marketplace, so no login was opened. The remedy is on the Account
+    /// page's permissions panel, on any machine, and then the sign-in holds.
+    ConsentRequired,
 }
 
 impl ConnectVerdict {
     /// Every verdict, beside the variants rather than in a test, so a new one
     /// is listed where it is declared. `Marketplace::ALL` is the same shape and
     /// is the reason this is a constant and not an iterator.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Captured,
         Self::Deadline,
         Self::Abandoned,
         Self::Refused,
         Self::NotKept,
         Self::SignedOut,
+        Self::ConsentRequired,
     ];
 
     /// The word this verdict travels as.
@@ -174,6 +179,7 @@ impl ConnectVerdict {
             Self::Refused => "refused",
             Self::NotKept => "notkept",
             Self::SignedOut => "signed_out",
+            Self::ConsentRequired => "consent",
         }
     }
 }

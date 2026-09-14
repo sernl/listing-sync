@@ -815,6 +815,46 @@ export interface ConnectionsView {
 	connections: ConnectionView[];
 }
 
+/** One seller-device consent grant, standing or withdrawn, as
+ *  `GET /v1/consents` serves it. `standing` is the gate's own answer: not
+ *  withdrawn, and on the current notice. */
+export interface ConsentView {
+	marketplace: Marketplace;
+	notice_version: string;
+	granted_at: number;
+	withdrawn_at: number | null;
+	standing: boolean;
+}
+
+/** The whole consent record, newest grant first, and the notice version a
+ *  new grant must carry. */
+export interface ConsentsView {
+	notice_version: string;
+	consents: ConsentView[];
+}
+
+/** One of the seller's files as the server coordinates it: who holds it
+ *  and who asked for it. The server carries no byte of the file; the
+ *  digest is the whole of what it knows. */
+export interface LibraryHolderView {
+	device: string;
+	name: string;
+	/** Checked in within the last ten minutes. */
+	online: boolean;
+}
+
+export interface LibraryFileView {
+	hash: string;
+	file_name: string | null;
+	byte_len: number;
+	holders: LibraryHolderView[];
+	wanted_by: string[];
+}
+
+export interface LibraryView {
+	files: LibraryFileView[];
+}
+
 /** The list out of the envelope, which is the only shape this module lets out.
  *
  *  The envelope escaping here is what blanked the Resources board: two query
@@ -2856,6 +2896,40 @@ export const api = {
 			{ name }
 		),
 
+	/** The seller-device consent record, newest grant first, with the notice
+	 *  version a new grant must carry. */
+	consents: () => request<ConsentsView>('/v1/consents'),
+	/** Record the seller's explicit agreement to the seller-device notice for
+	 *  one marketplace. Sent only from the dialog's "I agree" with the box
+	 *  ticked; the server refuses anything else as not an agreement. */
+	grantConsent: (marketplace: Marketplace, noticeVersion: string) =>
+		post<ConsentView>(`/v1/consents/${marketplace}`, {
+			notice_version: noticeVersion,
+			agreed: true
+		}),
+	/** Withdraw the standing grant. Idempotent: with none standing, the
+	 *  answer still says nothing stands. */
+	withdrawConsent: (marketplace: Marketplace) =>
+		post<ConsentView>(`/v1/consents/${marketplace}/withdraw`, {}),
+
+
+	/** The seller's files across their machines: who holds what and who
+	 *  asked. Coordination only; the bytes never pass through the server. */
+	library: () => request<LibraryView>('/v1/library'),
+	/** Ask one machine to fetch one file directly from another that holds
+	 *  it. 404 where no other machine of the seller's holds it. */
+	wantFile: (device: string, hash: string) =>
+		request<void>(`/v1/devices/${device}/library/want`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ hash })
+		}),
+	cancelWantFile: (device: string, hash: string) =>
+		request<void>(`/v1/devices/${device}/library/want`, {
+			method: 'DELETE',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ hash })
+		}),
 	/** Terminal, and nothing undoes it. The device check-in lifts a connection
 	 *  to `linked` only from `unlinked`, `linking` or `needs_reauth`, so a
 	 *  revoked marketplace stays revoked for that tenant however many live

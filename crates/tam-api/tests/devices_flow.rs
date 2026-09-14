@@ -74,6 +74,31 @@ fn state(pool: PgPool, wall: WallClock) -> AppState {
     }
 }
 
+/// The seller-device consent, granted for every marketplace that needs it,
+/// so the mints under test are answered by the machinery rather than by the
+/// consent gate; `consent_flow.rs` is where that gate is exercised.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn consented(pool: &PgPool, org: OrgId) {
+    let consents = tam_storage::ConsentRepo::new(pool.clone());
+    for marketplace in tam_types::Marketplace::ALL {
+        if marketplace.transport_class() == tam_types::TransportClass::SellerDevice {
+            consents
+                .grant(
+                    org,
+                    marketplace,
+                    tam_types::CONSENT_NOTICE_VERSION,
+                    Uuid([0xC0; 16]),
+                    Timestamp(1_000),
+                )
+                .await
+                .expect("the fixture consent grants");
+        }
+    }
+}
+
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
@@ -86,6 +111,7 @@ async fn provision(pool: &PgPool) {
             .execute(pool)
             .await
             .expect("the org seeds");
+        consented(pool, org).await;
         // Several devices and several marketplaces per tenant here, so the
         // fixture holds the plan that allows them: the free allowance is one
         // of each, and these tests are about the device surface rather than
@@ -645,9 +671,10 @@ async fn signing_a_device_back_in_lets_it_hold_marketplace_logins_again(pool: Pg
     assert_eq!(view.revoked_at, None, "the sign-out is lifted");
     assert_eq!(
         view.last_seen_at,
-        t3(),
-        "the restore is contact, so the console's freshness word is not measured \
-         against an instant before the sign-out"
+        t2(),
+        "a restore is permission and not contact: the freshness word keeps measuring from \
+         the machine's last check-in, which is how the seller tells a machine that came \
+         back from one that has not been switched on"
     );
     assert!(
         !view.wipe_outstanding,

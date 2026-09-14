@@ -46,6 +46,9 @@
 	import { NOT_REMOVED, avatarRefusal, pictureRefusal } from '$lib/pages/account/avatar';
 	import Preferences from '$lib/pages/account/Preferences.svelte';
 	import { STORAGE_NOT_RECLAIMED } from '$lib/pages/resources/files';
+	import { historyLines, permissionRows, withdrawPrompt } from '$lib/pages/account/permissions';
+	import ConsentDialog from '$lib/pages/marketplaces/ConsentDialog.svelte';
+	import type { Marketplace } from '$lib/generated/vocab';
 	import '$lib/pages/account/account.css';
 
 	const queryClient = useQueryClient();
@@ -463,6 +466,40 @@
 			endingSignIn.mutate(session.token);
 		}
 	}
+
+	// --------------------------------------------- marketplace permissions
+
+	// The seller-device consent record, granted and withdrawn here once per
+	// organisation. The Marketplaces page asks for the same grant at Connect;
+	// this panel is where a seller reads the record and takes it back.
+	const consents = createQuery(() => ({
+		queryKey: queryKeys.consents,
+		queryFn: () => api.consents()
+	}));
+	const permissions = $derived(permissionRows(consents.data));
+	const record = $derived(historyLines(consents.data?.consents ?? []));
+	let grantingFor = $state<Marketplace | null>(null);
+
+	const withdrawing = createMutation(() => ({
+		mutationFn: (marketplace: Marketplace) => api.withdrawConsent(marketplace),
+		onSuccess: async () => {
+			toast('info', 'Permission withdrawn.');
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: queryKeys.consents }),
+				queryClient.invalidateQueries({ queryKey: queryKeys.connections })
+			]);
+		},
+		onError: (failure: Error) => {
+			toast('error', failure instanceof ApiFailure ? failure.message : 'The permission was not withdrawn.');
+		}
+	}));
+
+	function withdraw(marketplace: Marketplace, name: string) {
+		if (!confirm(withdrawPrompt(name))) {
+			return;
+		}
+		withdrawing.mutate(marketplace);
+	}
 </script>
 
 <div class="page">
@@ -823,6 +860,55 @@
 			{/if}
 		</p>
 	</Panel>
+
+	<Panel
+		id="permissions"
+		title="Marketplace permissions"
+		description="Marketplaces with no official API are connected through your own sign-in on your own machines. Each needs your permission, once, for every machine you use."
+	>
+		{#if consents.isError}
+			<p class="quiet">We could not read your permissions.</p>
+		{/if}
+		{#each permissions as row (row.marketplace)}
+			<div class="acct-state-row">
+				<span class="who">
+					<span class="t">{row.name}</span>
+					<span class="why"><StatusPill tone={row.pill.tone} label={row.pill.label} /></span>
+				</span>
+				{#if row.action === 'grant'}
+					<Button tier="outline" small onclick={() => (grantingFor = row.marketplace)}>Grant</Button>
+				{:else if row.action === 'withdraw'}
+					<Button
+						tier="outline"
+						danger
+						small
+						disabled={withdrawing.isPending && withdrawing.variables === row.marketplace}
+						onclick={() => withdraw(row.marketplace, row.name)}
+					>
+						{withdrawing.isPending && withdrawing.variables === row.marketplace
+							? 'Withdrawing…'
+							: 'Withdraw'}
+					</Button>
+				{/if}
+			</div>
+		{/each}
+		{#if record.length > 0}
+			<ul class="quiet acct-record">
+				{#each record as line (line.key)}
+					<li>{line.text}</li>
+				{/each}
+			</ul>
+		{/if}
+	</Panel>
+
+	{#if grantingFor !== null}
+		<ConsentDialog
+			open={grantingFor !== null}
+			marketplace={grantingFor}
+			onAgreed={() => (grantingFor = null)}
+			onClose={() => (grantingFor = null)}
+		/>
+	{/if}
 
 	<Preferences />
 </div>

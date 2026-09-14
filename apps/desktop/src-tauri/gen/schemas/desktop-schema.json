@@ -375,6 +375,42 @@
           "markdownDescription": "Enables the forget_session command without any pre-configured scope."
         },
         {
+          "description": "Enables the library_entries command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-library-entries",
+          "markdownDescription": "Enables the library_entries command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the library_open_external command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-library-open-external",
+          "markdownDescription": "Enables the library_open_external command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the library_read command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-library-read",
+          "markdownDescription": "Enables the library_read command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the library_remove command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-library-remove",
+          "markdownDescription": "Enables the library_remove command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the library_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-library-settings",
+          "markdownDescription": "Enables the library_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the library_usage command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-library-usage",
+          "markdownDescription": "Enables the library_usage command without any pre-configured scope."
+        },
+        {
           "description": "Enables the retry_console command without any pre-configured scope.",
           "type": "string",
           "const": "allow-retry-console",
@@ -385,6 +421,12 @@
           "type": "string",
           "const": "allow-session-status",
           "markdownDescription": "Enables the session_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_library_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-library-settings",
+          "markdownDescription": "Enables the set_library_settings command without any pre-configured scope."
         },
         {
           "description": "Enables the set_theme command without any pre-configured scope.",
@@ -435,6 +477,42 @@
           "markdownDescription": "Denies the forget_session command without any pre-configured scope."
         },
         {
+          "description": "Denies the library_entries command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-library-entries",
+          "markdownDescription": "Denies the library_entries command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the library_open_external command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-library-open-external",
+          "markdownDescription": "Denies the library_open_external command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the library_read command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-library-read",
+          "markdownDescription": "Denies the library_read command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the library_remove command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-library-remove",
+          "markdownDescription": "Denies the library_remove command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the library_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-library-settings",
+          "markdownDescription": "Denies the library_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the library_usage command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-library-usage",
+          "markdownDescription": "Denies the library_usage command without any pre-configured scope."
+        },
+        {
           "description": "Denies the retry_console command without any pre-configured scope.",
           "type": "string",
           "const": "deny-retry-console",
@@ -445,6 +523,12 @@
           "type": "string",
           "const": "deny-session-status",
           "markdownDescription": "Denies the session_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_library_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-library-settings",
+          "markdownDescription": "Denies the set_library_settings command without any pre-configured scope."
         },
         {
           "description": "Denies the set_theme command without any pre-configured scope.",

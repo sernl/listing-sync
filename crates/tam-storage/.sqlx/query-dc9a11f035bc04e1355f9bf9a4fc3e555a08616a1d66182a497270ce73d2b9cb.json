@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO device_node_addr (org_id, device_id, node_id, direct_addrs, reported_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (org_id, device_id) DO UPDATE SET node_id = EXCLUDED.node_id, direct_addrs = EXCLUDED.direct_addrs, reported_at = EXCLUDED.reported_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Jsonb",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "dc9a11f035bc04e1355f9bf9a4fc3e555a08616a1d66182a497270ce73d2b9cb"
+}

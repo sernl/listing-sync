@@ -152,13 +152,18 @@ pub enum APIErrorCode {
     /// asked about, or has been answered already. Named apart from a bare
     /// not-found because the remedy differs: re-read the run's open pairs.
     DuplicatePairSettled,
+    /// The marketplace publishes no official API and the organisation has
+    /// not granted the seller-device consent the current notice asks for.
+    /// `detail.marketplace` names it, `detail.notice_version` names the
+    /// version a grant must carry.
+    ConsentRequired,
     Internal,
 }
 
 impl APIErrorCode {
     /// The closed set, in a stable order; the closed-set test and the
     /// vocabulary generator read this single source.
-    pub const ALL: [Self; 30] = [
+    pub const ALL: [Self; 31] = [
         Self::UnsupportedApiVersion,
         Self::VersionParameterMissing,
         Self::VersionParameterUnreadable,
@@ -188,6 +193,7 @@ impl APIErrorCode {
         Self::ImportReceiptConflict,
         Self::ImportStartKeySpent,
         Self::DuplicatePairSettled,
+        Self::ConsentRequired,
         Self::Internal,
     ];
 
@@ -223,6 +229,7 @@ impl APIErrorCode {
             Self::ImportReceiptConflict => "import_receipt_conflict",
             Self::ImportStartKeySpent => "import_start_key_spent",
             Self::DuplicatePairSettled => "duplicate_pair_settled",
+            Self::ConsentRequired => "consent_required",
             Self::Internal => "internal",
         }
     }
@@ -459,6 +466,7 @@ mod tests {
                 | APIErrorCode::ImportReceiptConflict
                 | APIErrorCode::ImportStartKeySpent
                 | APIErrorCode::DuplicatePairSettled
+                | APIErrorCode::ConsentRequired
                 | APIErrorCode::Internal => {}
             }
             let encoded = serde_json::to_string(&code).expect("an error code serialises");

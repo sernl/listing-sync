@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM device_library_want w WHERE w.org_id = $1 AND w.device_id = $2 AND EXISTS (SELECT 1 FROM device_library_holding h WHERE h.org_id = w.org_id AND h.device_id = w.device_id AND h.hash = w.hash)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2038ff7be070fa7f0f730da31b5d49ffbad4ee067740542156022d7e26395e22"
+}

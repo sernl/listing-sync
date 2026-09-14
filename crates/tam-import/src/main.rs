@@ -269,7 +269,6 @@ async fn record_and_report(
     run: &ImportRun,
     totals: DrainTotals,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let job = record_drain_report(run, totals).await?;
     eprintln!(
         "imported {} row(s); drain: {} new item(s), {} already open, {} covered, \
          over {} term use(s) of which {} unmapped",
@@ -280,6 +279,25 @@ async fn record_and_report(
         totals.terms_seen,
         totals.terms_unmapped,
     );
+    // The job is a row in the seller's ledger for a no-API marketplace, so it
+    // is minted only under the seller's standing permission; the measurement
+    // above has already been printed either way.
+    let granted = tam_storage::ConsentRepo::new(run.pool.clone())
+        .standing(
+            run.org,
+            run.source.marketplace(),
+            tam_types::CONSENT_NOTICE_VERSION,
+        )
+        .await?
+        .is_some();
+    if !granted {
+        eprintln!(
+            "drain report not recorded: {:?} needs the seller's permission first",
+            run.source.marketplace()
+        );
+        return Ok(());
+    }
+    let job = record_drain_report(run, totals).await?;
     eprintln!("drain report recorded as job {}", job.0.to_hyphenated());
     Ok(())
 }

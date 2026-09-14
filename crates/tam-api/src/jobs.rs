@@ -661,7 +661,10 @@ pub(crate) async fn list_sync_requests(
             Some((cursor.created_at, cursor.id))
         }
     };
-    let limit = params.limit.unwrap_or(SYNC_LIST_MAX).clamp(1, SYNC_LIST_MAX);
+    let limit = params
+        .limit
+        .unwrap_or(SYNC_LIST_MAX)
+        .clamp(1, SYNC_LIST_MAX);
     let page = SyncRequestPage {
         after,
         limit,
@@ -753,17 +756,20 @@ pub(crate) async fn sync_request_view(
     // taxonomy, so counting it as a row of zeros would enter it into the
     // founder's average as perfect coverage. It is a sum over the whole
     // request rather than over the page, which is the same reason the state
-    // counts are.
-    let coverage = measured
-        .then_some(detail.coverage)
-        .flatten()
-        .map(|total| CoverageView {
+    // counts are. Storage answers `None` for "no row measured"; on a request
+    // that does measure, that is a measurement whose answer is zero rows, so
+    // it is rendered as zeros here — the distinction `None` carries on this
+    // view is "never measured", which is the other branch.
+    let coverage = measured.then(|| {
+        let total = detail.coverage.unwrap_or_default();
+        CoverageView {
             rows: total.rows,
             terms_seen: total.terms_seen,
             terms_mapped: total.terms_mapped,
             terms_unmapped: total.terms_unmapped,
             terms_uncovered: total.terms_uncovered,
-        });
+        }
+    });
     let waiting_for_device_version = if measured {
         waiting_for_a_device(&state, context.org).await?
     } else {
@@ -992,6 +998,7 @@ pub(crate) async fn mint_job(
     request_key: Uuid,
     items: &[NewJobItem],
 ) -> Result<tam_storage::CreatedJob, APIError> {
+    crate::consent::require_grant(state, org, inventory.marketplace()).await?;
     JobRepo::new(state.pool.clone())
         .create_with_request_key(
             org,

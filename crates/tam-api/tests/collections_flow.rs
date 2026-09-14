@@ -172,6 +172,31 @@ async fn grant(pool: &PgPool, org: OrgId, plan: tam_limits::Plan) {
         .expect("the fixture grant seeds");
 }
 
+/// The seller-device consent, granted for every marketplace that needs it,
+/// so the mints under test are answered by the machinery rather than by the
+/// consent gate; `consent_flow.rs` is where that gate is exercised.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn consented(pool: &PgPool, org: OrgId) {
+    let consents = tam_storage::ConsentRepo::new(pool.clone());
+    for marketplace in tam_types::Marketplace::ALL {
+        if marketplace.transport_class() == tam_types::TransportClass::SellerDevice {
+            consents
+                .grant(
+                    org,
+                    marketplace,
+                    tam_types::CONSENT_NOTICE_VERSION,
+                    tam_types::Uuid([0xC0; 16]),
+                    Timestamp(1_000),
+                )
+                .await
+                .expect("the fixture consent grants");
+        }
+    }
+}
+
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
@@ -184,6 +209,7 @@ async fn provision(pool: &PgPool) {
             .execute(pool)
             .await
             .expect("the org seeds");
+        consented(pool, org).await;
     }
     grant(pool, ORG, tam_limits::Plan::Studio).await;
     // Free includes no collections at all, which is the refusal the second

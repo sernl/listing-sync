@@ -184,6 +184,23 @@ pub struct HeartbeatSession {
     pub status: String,
 }
 
+/// One file a device holds in its library, by digest hex.
+#[derive(Debug, Deserialize)]
+pub struct HeartbeatHolding {
+    pub hash: String,
+    pub byte_len: u64,
+}
+
+/// Where a device's library can be reached and what it holds. Optional on
+/// the body so an application from before the library existed still checks
+/// in; absent, nothing about the library changes.
+#[derive(Debug, Deserialize)]
+pub struct HeartbeatLibrary {
+    pub node_id: String,
+    pub direct_addrs: Vec<String>,
+    pub holdings: Vec<HeartbeatHolding>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct HeartbeatBody {
     /// Everything this device holds, not a delta. A marketplace absent here is
@@ -191,6 +208,8 @@ pub struct HeartbeatBody {
     /// holds now and a delta would leave a stale row standing after a
     /// disconnect performed offline.
     pub sessions: Vec<HeartbeatSession>,
+    #[serde(default)]
+    pub library: Option<HeartbeatLibrary>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -502,6 +521,9 @@ pub(crate) async fn heartbeat(
         .await
         .map_err(|error| state.internal(&error.to_string()))?
         .ok_or_else(missing)?;
+    if let Some(library) = &body.library {
+        crate::library::record_report(&state, context.org, device, library, now).await?;
+    }
     // A signed-out device is granted nothing, so a client that ignored
     // `revoked` still gets no entitlement out of the same answer.
     let entitlement = if beat.revoked() {

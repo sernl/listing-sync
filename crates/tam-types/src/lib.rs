@@ -175,6 +175,14 @@ impl TransportClass {
     pub const ALL: [Self; 2] = [Self::OfficialApi, Self::SellerDevice];
 }
 
+/// The version of the seller-device consent notice a grant must carry to
+/// stand. Dated rather than numbered because the notice is prose the seller
+/// reads; a material change to that prose is a new date, and every grant on
+/// an older date stops standing until the seller reads and agrees to the new
+/// one. The console holds the same literal in
+/// `web/src/lib/pages/marketplaces/consent.ts`.
+pub const CONSENT_NOTICE_VERSION: &str = "2026-09-14";
+
 /// The inventory a listing is actually created in, which is the unit the model
 /// keys on. Tes is one inventory: the founder decided on 2026-09-12 that a Tes
 /// region is a site and not a catalogue, because one author account reaches one

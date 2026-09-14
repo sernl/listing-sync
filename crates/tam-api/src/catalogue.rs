@@ -2313,6 +2313,7 @@ pub(crate) async fn delete_product(
             requires_bound_on: None,
             operation,
         };
+        crate::consent::require_grant(&state, context.org, inventory.marketplace()).await?;
         let created = jobs
             .create_with_request_key(
                 context.org,

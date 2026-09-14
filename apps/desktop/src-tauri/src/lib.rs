@@ -49,6 +49,8 @@ pub mod entitlement;
 pub mod heartbeat;
 pub mod import;
 pub mod ledger;
+pub mod library;
+pub mod library_sync;
 pub mod marketplace;
 pub mod notify;
 pub mod payload;
@@ -57,6 +59,7 @@ pub mod scheduler;
 pub mod session;
 pub mod startup;
 pub mod state;
+pub mod transfer;
 #[cfg(desktop)]
 pub mod updater;
 pub mod webview_session;
@@ -167,17 +170,47 @@ pub fn run() {
             let notifier: Arc<dyn crate::notify::Notifier> = Arc::new(DeviceNotifier::new(
                 PluginSurface::new(app.handle().clone()),
             ));
-            let state = DesktopState::with_control_plane(device.clone(), sessions, registry)
+            // The library key, from the same custody the session has on this
+            // platform, under its own entry. A library that cannot open is
+            // logged and left absent rather than failing start-up: the
+            // seller can still connect and import, and the console says the
+            // files are not being kept.
+            #[cfg(not(target_os = "android"))]
+            let library_key = library::keychain_library_key(session::keychain::SERVICE);
+            #[cfg(target_os = "android")]
+            let library_key = tauri::async_runtime::block_on(library::sealed_library_key(
+                &data_dir,
+                app.state::<Arc<dyn DeviceKeySource>>().inner().as_ref(),
+            ));
+            let library = match library_key.and_then(|key| library::Library::open(&data_dir, key)) {
+                Ok(library) => Some(Arc::new(library)),
+                Err(why) => {
+                    eprintln!("the library on this machine could not be opened: {why}");
+                    None
+                }
+            };
+            let mut state = DesktopState::with_control_plane(device.clone(), sessions, registry)
                 .with_ledger(ledger)
                 .with_journal(Arc::new(crate::import::FileJournal::in_data_dir(&data_dir)))
                 .with_notifier(notifier);
+            if let Some(library) = &library {
+                state = state.with_library(Arc::clone(library));
+            }
+            // The parts the schedule needs to keep this machine's library in
+            // step with the seller's others: the endpoint is bound inside the
+            // schedule's own task, because binding is asynchronous and this
+            // closure is not.
+            let syncing = library
+                .as_ref()
+                .map(|library| (device.id.clone(), Arc::clone(&plane), Arc::clone(library)));
             let work = DeviceWork::new(
                 device.id.clone(),
                 plane,
                 LiveMarketplaces::new(store, state.gate_handle()),
                 &data_dir,
                 state.stopper(),
-            );
+            )
+            .reading(library);
             app.manage(state);
             // The handle the commands reach the coordinator through. Managed
             // rather than passed, because a command is handed an `AppHandle`
@@ -223,7 +256,7 @@ pub fn run() {
                 let wake = Arc::clone(&on_start);
                 tauri::async_runtime::spawn(async move {
                     updater::check_at_startup(&handle).await;
-                    run_schedule(handle, work, wake).await;
+                    run_schedule(handle, work, wake, syncing).await;
                 });
             }
             #[cfg(mobile)]
@@ -231,6 +264,7 @@ pub fn run() {
                 app.handle().clone(),
                 work,
                 Arc::clone(&on_start),
+                syncing,
             ));
             Ok(())
         })
@@ -245,6 +279,13 @@ pub fn run() {
             commands::stop_import,
             commands::retry_console,
             commands::set_theme,
+            commands::library_entries,
+            commands::library_usage,
+            commands::library_read,
+            commands::library_remove,
+            commands::library_settings,
+            commands::set_library_settings,
+            commands::library_open_external,
         ])
         .build(tauri::generate_context!());
 
@@ -429,15 +470,37 @@ async fn run_work<W: scheduler::WorkSource>(
 /// What each activity costs is in [`heartbeat::work_pending`] and
 /// [`crate::import::serve_open_runs`]; how the three are timed is in
 /// [`scheduler::Coordination`].
-#[expect(
-    clippy::infinite_loop,
-    reason = "a supervisor loop for the life of the process; the application exits by exiting"
-)]
 async fn run_schedule<W: scheduler::WorkSource + 'static>(
     app: AppHandle,
     work: W,
     wake: Arc<Wake>,
+    syncing: Option<(
+        crate::device::DeviceId,
+        Arc<HttpControlPlane>,
+        Arc<library::Library>,
+    )>,
 ) {
+    // The transfer endpoint, bound once for the life of the process. A
+    // library whose endpoint cannot bind is still a library: imports keep
+    // their originals and the console lists them; only the direct copy to
+    // another machine is off, and the log says so.
+    let mut library_sync = None;
+    if let Some((device, plane, library)) = syncing {
+        match library.node_secret().await {
+            Ok(secret) => match transfer::Transfer::start(Arc::clone(&library), secret).await {
+                Ok(transfer) => {
+                    library_sync = Some(library_sync::LibrarySync {
+                        device,
+                        plane,
+                        library,
+                        transfer: Arc::new(transfer),
+                    });
+                }
+                Err(why) => eprintln!("this machine's transfer endpoint did not start: {why}"),
+            },
+            Err(why) => eprintln!("this machine's node key could not be read: {why}"),
+        }
+    }
     let scheduler = Scheduler::hourly_over_seller_device_marketplaces();
     // Shared with the supervised task rather than moved into it, so the next
     // pass uses the same source and the same claim identity.
@@ -467,11 +530,19 @@ async fn run_schedule<W: scheduler::WorkSource + 'static>(
             plan.swept(reading(started));
         }
         if due.sweep || due.check_in {
+            if let Some(sync) = &library_sync {
+                sync.advertise().await;
+            }
             let revoked = run_check_in(&app).await;
             if !due.sweep {
                 plan.checked_in(reading(started));
             }
             plan.observed_revoked(revoked);
+            // The wants after the check-in, and only while this machine is
+            // in good standing: a signed-out machine fetches nothing.
+            if let (Some(sync), false) = (&library_sync, revoked) {
+                sync.serve_wants().await;
+            }
         }
         // Re-read after the check-in rather than the plan re-asked. The
         // revocation may have just arrived, in which case the gate is closed

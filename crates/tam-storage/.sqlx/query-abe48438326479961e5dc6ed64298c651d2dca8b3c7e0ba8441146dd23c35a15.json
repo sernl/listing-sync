@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT a.node_id FROM device_node_addr a JOIN device d ON d.org_id = a.org_id AND d.id = a.device_id WHERE a.org_id = $1 AND d.revoked_at IS NULL ORDER BY a.node_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "node_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "abe48438326479961e5dc6ed64298c651d2dca8b3c7e0ba8441146dd23c35a15"
+}

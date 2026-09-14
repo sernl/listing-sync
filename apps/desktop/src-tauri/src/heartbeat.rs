@@ -287,6 +287,16 @@ pub trait ControlPlane: Send + Sync {
         &'a self,
         device: &'a DeviceId,
     ) -> PlaneFuture<'a, Vec<crate::import::OpenImportRun>>;
+
+    /// Whether the organisation's seller-device consent stands for one
+    /// marketplace, on the current notice.
+    ///
+    /// Asked of the server at every Connect rather than remembered here,
+    /// because the grant is the organisation's and not this device's: a
+    /// grant withdrawn on the Account page must refuse the next sign-in on
+    /// every machine, and a device holding a private "yes" is the party the
+    /// record exists to stop being the only evidence.
+    fn consent_stands(&self, marketplace: tam_types::Marketplace) -> PlaneFuture<'_, bool>;
 }
 
 /// The control plane a build with no configured transport gets: one that
@@ -326,6 +336,10 @@ impl ControlPlane for Offline {
         &'a self,
         _device: &'a DeviceId,
     ) -> PlaneFuture<'a, Vec<crate::import::OpenImportRun>> {
+        Box::pin(core::future::ready(Err(ControlPlaneError::NotConfigured)))
+    }
+
+    fn consent_stands(&self, _marketplace: tam_types::Marketplace) -> PlaneFuture<'_, bool> {
         Box::pin(core::future::ready(Err(ControlPlaneError::NotConfigured)))
     }
 
@@ -704,6 +718,10 @@ mod tests {
             Box::pin(core::future::ready(Ok(())))
         }
 
+        fn consent_stands(&self, _marketplace: tam_types::Marketplace) -> PlaneFuture<'_, bool> {
+            Box::pin(core::future::ready(Ok(true)))
+        }
+
         fn sync_request_source(
             &self,
             _request: tam_types::Uuid,
@@ -975,6 +993,10 @@ mod tests {
             Box::pin(core::future::ready(Ok(())))
         }
 
+        fn consent_stands(&self, _marketplace: tam_types::Marketplace) -> PlaneFuture<'_, bool> {
+            Box::pin(core::future::ready(Ok(true)))
+        }
+
         fn sync_request_source(
             &self,
             _request: tam_types::Uuid,
@@ -1048,6 +1070,12 @@ mod tests {
 
     impl ControlPlane for Unreachable {
         fn reachable(&self) -> PlaneFuture<'_, ()> {
+            Box::pin(core::future::ready(Err(ControlPlaneError::Refused(
+                "502".to_owned(),
+            ))))
+        }
+
+        fn consent_stands(&self, _marketplace: tam_types::Marketplace) -> PlaneFuture<'_, bool> {
             Box::pin(core::future::ready(Err(ControlPlaneError::Refused(
                 "502".to_owned(),
             ))))

@@ -28,6 +28,14 @@ export function createQueryClient(): QueryClient {
 /** The cache keys, named once so an invalidation and its query cannot drift. */
 export const queryKeys = {
 	connections: ['connections'] as const,
+	/** The seller-device consent record. Read by the Marketplaces page's
+	 *  Connect gate and the Account page's permissions panel; a grant or a
+	 *  withdrawal on either invalidates it. */
+	consents: ['consents'] as const,
+	/** The seller's files across their machines, as the server coordinates
+	 *  them. Read by the library section and the machines list; a want
+	 *  placed or cancelled invalidates it. */
+	library: ['library'] as const,
 	analytics: ['analytics'] as const,
 	products: ['products'] as const,
 	/** The catalogue narrowed to one label. Its own key, because the label is

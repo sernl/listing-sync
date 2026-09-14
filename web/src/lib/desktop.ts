@@ -444,12 +444,19 @@ async function ranOnRun(
  * into a window whose capture was then thrown away. Refusing in front of the
  * password is the whole point of it.
  *
+ * `consentRequired` is the same refusal in front of the password for a
+ * different reason: the organisation has no standing grant of the
+ * seller-device consent for that marketplace. The application reads the
+ * record from the server itself rather than trusting the page, so a grant
+ * withdrawn between the page's read and the press is still refused.
+ *
  * `unavailable` is the ordinary browser answer and is not a failure. The
  * caller shows the seller where the act can be performed instead. */
 export type SessionOutcome =
 	| { kind: 'done' }
 	| { kind: 'opening' }
 	| { kind: 'signedOut' }
+	| { kind: 'consentRequired' }
 	| { kind: 'refused'; detail: string }
 	| { kind: 'unsupported' }
 	| { kind: 'unavailable' };
@@ -504,10 +511,10 @@ export async function connectHere(
  * an unrecognised answer reads as the success it used to be rather than as a
  * state this console would then wait forever in.
  *
- * The two named arms are both "nothing was captured and the page must not
- * claim otherwise": `opening` because the answer is coming back through the
- * address instead, `signed_out` because the application refused to open the
- * sign-in at all. */
+ * The named arms are all "nothing was captured and the page must not claim
+ * otherwise": `opening` because the answer is coming back through the
+ * address instead, `signed_out` and `consent_required` because the
+ * application refused to open the sign-in at all. */
 function connectOutcome(answer: unknown): SessionOutcome {
 	const said =
 		typeof answer === 'object' && answer !== null && 'outcome' in answer
@@ -515,6 +522,9 @@ function connectOutcome(answer: unknown): SessionOutcome {
 			: undefined;
 	if (said === 'opening') {
 		return { kind: 'opening' };
+	}
+	if (said === 'consent_required') {
+		return { kind: 'consentRequired' };
 	}
 	return said === 'signed_out' ? { kind: 'signedOut' } : { kind: 'done' };
 }
@@ -541,6 +551,117 @@ export async function forgetHere(
  * sends and the grant the application carries are compared in one place, by
  * `desktop.test.ts` against `capabilities/opener.json`. */
 export const OPEN_URL = 'plugin:opener|open_url';
+
+/** The desktop commands over the machine's library of imported originals.
+ *
+ * Every one answers `{ kind: 'unavailable' }` in a browser, where there is
+ * no machine keeping files, and `{ kind: 'notKeeping' }` where the
+ * application runs but opened no library; the section words both. The bytes
+ * a `library_read` answers with stay in the page: they are drawn, or handed
+ * to the preview maker, and never sent anywhere by this module. */
+export const LIBRARY_ENTRIES = 'library_entries';
+export const LIBRARY_USAGE = 'library_usage';
+export const LIBRARY_READ = 'library_read';
+export const LIBRARY_REMOVE = 'library_remove';
+export const LIBRARY_SETTINGS = 'library_settings';
+export const SET_LIBRARY_SETTINGS = 'set_library_settings';
+export const LIBRARY_OPEN_EXTERNAL = 'library_open_external';
+
+/** One kept file, as the application lists it. The hash is hex. */
+export interface LibraryEntry {
+	hash: string;
+	file_name: string;
+	content_type: string;
+	byte_len: number;
+	marketplace: Marketplace;
+	resource: string;
+	kept_at: number;
+	pinned: boolean;
+}
+
+export interface LibrarySettings {
+	keep_originals: boolean;
+	pinned: string[];
+}
+
+export type LibraryOutcome<T> =
+	| { kind: 'ok'; value: T }
+	| { kind: 'notKeeping' }
+	| { kind: 'refused'; detail: string }
+	| { kind: 'unavailable' };
+
+const NOT_KEEPING = 'this machine is not keeping files';
+const LIBRARY_REFUSED_SILENTLY = 'This computer could not read its files and gave no reason.';
+
+async function libraryCall<T>(
+	invoke: Invoke | null,
+	command: string,
+	args: Record<string, unknown>
+): Promise<LibraryOutcome<T>> {
+	if (invoke === null) {
+		return { kind: 'unavailable' };
+	}
+	try {
+		return { kind: 'ok', value: (await invoke(command, args)) as T };
+	} catch (caught) {
+		const detail = refusalText(caught, LIBRARY_REFUSED_SILENTLY);
+		if (detail.trim() === NOT_KEEPING || unknownCommand(detail)) {
+			return { kind: 'notKeeping' };
+		}
+		return { kind: 'refused', detail };
+	}
+}
+
+export function libraryEntries(invoke: Invoke | null): Promise<LibraryOutcome<LibraryEntry[]>> {
+	return libraryCall(invoke, LIBRARY_ENTRIES, {});
+}
+
+export function libraryUsage(invoke: Invoke | null): Promise<LibraryOutcome<number>> {
+	return libraryCall(invoke, LIBRARY_USAGE, {});
+}
+
+/** The file's bytes, or `null` where this machine does not keep it. */
+export async function libraryRead(
+	invoke: Invoke | null,
+	hash: string
+): Promise<ArrayBuffer | null> {
+	const answer = await libraryCall<ArrayBuffer | Uint8Array>(invoke, LIBRARY_READ, { hash });
+	if (answer.kind !== 'ok') {
+		return null;
+	}
+	const value = answer.value;
+	if (value instanceof Uint8Array) {
+		const copy = new ArrayBuffer(value.byteLength);
+		new Uint8Array(copy).set(value);
+		return copy;
+	}
+	return value;
+}
+
+export function libraryRemove(invoke: Invoke | null, hash: string): Promise<LibraryOutcome<null>> {
+	return libraryCall(invoke, LIBRARY_REMOVE, { hash });
+}
+
+export function librarySettings(invoke: Invoke | null): Promise<LibraryOutcome<LibrarySettings>> {
+	return libraryCall(invoke, LIBRARY_SETTINGS, {});
+}
+
+export function setLibrarySettings(
+	invoke: Invoke | null,
+	keepOriginals: boolean
+): Promise<LibraryOutcome<LibrarySettings>> {
+	return libraryCall(invoke, SET_LIBRARY_SETTINGS, { keepOriginals });
+}
+
+/** Hand one kept file to another application on this machine. A phone whose
+ *  opener refuses answers `refused` with the platform's own sentence, which
+ *  the caller replaces with one a seller can read; there is no other route. */
+export function libraryOpenExternal(
+	invoke: Invoke | null,
+	hash: string
+): Promise<LibraryOutcome<null>> {
+	return libraryCall(invoke, LIBRARY_OPEN_EXTERNAL, { hash });
+}
 
 /** What asking this computer to open an address produced.
  *

@@ -80,6 +80,31 @@ fn configured(pool: PgPool, root: &std::path::Path) -> AppState {
     }
 }
 
+/// The seller-device consent, granted for every marketplace that needs it,
+/// so the mints under test are answered by the machinery rather than by the
+/// consent gate; `consent_flow.rs` is where that gate is exercised.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn consented(pool: &PgPool, org: OrgId) {
+    let consents = tam_storage::ConsentRepo::new(pool.clone());
+    for marketplace in tam_types::Marketplace::ALL {
+        if marketplace.transport_class() == tam_types::TransportClass::SellerDevice {
+            consents
+                .grant(
+                    org,
+                    marketplace,
+                    tam_types::CONSENT_NOTICE_VERSION,
+                    Uuid([0xC0; 16]),
+                    Timestamp(1_000),
+                )
+                .await
+                .expect("the fixture consent grants");
+        }
+    }
+}
+
 /// One tenant, its session, its device, its linked Tes connection and the
 /// crosswalk `import_one` projects over.
 #[expect(
@@ -93,6 +118,7 @@ async fn provision(pool: &PgPool, org: OrgId, user: UserId, token: &SessionToken
         .execute(pool)
         .await
         .expect("the org seeds");
+    consented(pool, org).await;
     // Reading a shop is a paid capability, so the fixture tenant subscribes:
     // without a grant every page in this file would be answered by the plan
     // gate rather than by the import machinery it is written to exercise.

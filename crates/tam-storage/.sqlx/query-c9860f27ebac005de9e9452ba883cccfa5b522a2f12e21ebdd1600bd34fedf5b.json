@@ -1,0 +1,49 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE marketplace_consent SET withdrawn_by = $3, withdrawn_at = $4 WHERE org_id = $1 AND marketplace = $2 AND withdrawn_at IS NULL RETURNING marketplace, notice_version, granted_by, granted_at, withdrawn_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "marketplace",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "notice_version",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "granted_by",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "granted_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "withdrawn_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "c9860f27ebac005de9e9452ba883cccfa5b522a2f12e21ebdd1600bd34fedf5b"
+}

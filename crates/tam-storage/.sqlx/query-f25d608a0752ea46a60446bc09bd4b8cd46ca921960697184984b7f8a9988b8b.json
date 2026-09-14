@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM device_library_want WHERE org_id = $1 AND device_id = $2 AND hash = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f25d608a0752ea46a60446bc09bd4b8cd46ca921960697184984b7f8a9988b8b"
+}
