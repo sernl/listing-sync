@@ -1,0 +1,55 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT a.product_id, a.target_inventory, a.job_id, COALESCE(p.title, '') AS \"title!\", MAX(i.settled_at) AS \"settled_at!\", 'published:' || a.job_id::text || ':' || a.product_id::text || ':' || a.target_inventory AS \"key!\" FROM auto_publish_run a JOIN job_item i ON i.org_id = a.org_id AND i.job_id = a.job_id LEFT JOIN product p ON p.org_id = a.org_id AND p.id = a.product_id WHERE a.org_id = $1 GROUP BY a.product_id, a.target_inventory, a.job_id, p.title HAVING COUNT(*) FILTER (WHERE i.settled_at IS NULL) = 0 AND ($2::timestamptz IS NULL OR MAX(i.settled_at) < $2 OR (MAX(i.settled_at) = $2 AND 'published:' || a.job_id::text || ':' || a.product_id::text || ':' || a.target_inventory > $4)) ORDER BY MAX(i.settled_at) DESC, 'published:' || a.job_id::text || ':' || a.product_id::text || ':' || a.target_inventory LIMIT $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "target_inventory",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "job_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "title!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "settled_at!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "key!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "558993cea1ad90204bbf0523daf351c2ef3b790b907f594c44e685c028202423"
+}

@@ -4,17 +4,20 @@
 	let {
 		title,
 		description,
+		id,
 		more,
 		children
 	}: {
 		title?: string;
 		description?: string;
+		/** An anchor, for a link that lands on this panel. */
+		id?: string;
 		more?: Snippet;
 		children: Snippet;
 	} = $props();
 </script>
 
-<section class="panel">
+<section class="panel" {id}>
 	{#if title || more}
 		<div class="head-row">
 			<div>

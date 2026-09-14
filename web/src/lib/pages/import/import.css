@@ -253,6 +253,39 @@
 	font-variant-numeric: tabular-nums;
 }
 
+/* --- the filter row ------------------------------------------------------ */
+
+/* One row of controls above every list on this surface: a search that grows,
+   dropdowns that do not, and a quiet way back to the unfiltered list. Shared
+   by the history on the landing screen and the resource lists on a run, so a
+   seller who learns one learns both. The controls share a baseline, so the
+   row reads as one control rather than as three that landed near each
+   other. */
+.import-filters {
+	display: flex;
+	align-items: flex-end;
+	gap: 12px;
+	flex-wrap: wrap;
+	margin-bottom: 14px;
+}
+
+.import-filters .field {
+	min-width: 0;
+}
+
+/* The search, where a list has one, is the control that grows. Its own
+   wrapper rather than a class on `Field`, which takes none. */
+.import-filters .wide {
+	flex: 1 1 240px;
+	min-width: 0;
+}
+
+.import-filters input[type='search'],
+.import-filters select {
+	width: 100%;
+	min-height: 38px;
+}
+
 @media (max-width: 620px) {
 	.import-cards {
 		grid-template-columns: 1fr;
@@ -281,5 +314,20 @@
 	.import-row .who {
 		order: 2;
 		flex: 1 1 100%;
+	}
+}
+
+@media (max-width: 620px) {
+	/* Search first and full width, then each dropdown under it: at 390px a
+	   row of three controls puts every label on two lines and every select
+	   under a thumb's width. */
+	.import-filters {
+		flex-direction: column;
+		align-items: stretch;
+	}
+
+	.import-filters .field,
+	.import-filters .wide {
+		flex: 1 1 auto;
 	}
 }

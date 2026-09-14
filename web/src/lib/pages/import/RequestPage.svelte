@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { page } from '$app/state';
 	import { ApiFailure, api, type SyncRequestView } from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
@@ -6,6 +7,7 @@
 	import { createLedger, type Ledger } from '$lib/ledger';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
+	import Pagination from '$lib/Pagination.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
 	import { platformTitle } from '$lib/platforms';
 	import StatusPill from '$lib/StatusPill.svelte';
@@ -32,12 +34,27 @@
 	const requestId = $derived(page.params.id ?? '');
 
 	let view = $state<SyncRequestView | null>(null);
+	let listingPage = $state(1);
+	// The ordinal each page starts after. Index `n` reaches page `n + 1`; the
+	// request's ordinals are the order the seller submitted, so they are
+	// already a total order and there is no token to carry.
+	let listingAfter = $state<(number | null)[]>([null]);
+	let listingsBusy = $state(false);
+	// The page a read asked for and did not get, held apart from the page on
+	// screen: that one read successfully and has nothing to retry.
+	let listingAttempt = $state<{ after: number | null; page: number } | null>(null);
 	// Kept apart from `view` deliberately: a read that failed is not a request
 	// with nothing in it, and this page exists to hold those two apart.
 	let refusal = $state<string | null>(null);
 	let live = $state(false);
 	let ledger: Ledger | null = null;
 	let generation = 0;
+	// Which read the seller asked for, if one is in flight, and whether the
+	// ledger wanted a refresh while it was. Plain variables: they arbitrate
+	// reads and nothing renders them. The generation rather than a flag, so a
+	// second Next pressed over the first leaves one navigation in charge.
+	let navigatingFor = 0;
+	let refreshWanted = false;
 
 	// Nothing here asks a computer to run the work any more. The Teachouse app
 	// reads a shop into Resources, which the Import screen owns; moving one
@@ -45,22 +62,88 @@
 	// the control below states that rather than offering a press whose only
 	// possible answer is a refusal.
 
-	async function refetch() {
+	// One page of listings, with the request's own figures beside them. The
+	// figures — the stage, the tally, the coverage — are the server's over the
+	// whole request, never counted from the page: this request names every
+	// listing of a shop, which is why the rows are paged at all, and a
+	// headline drawn from twenty-five of five hundred rows would tell a seller
+	// their finished migration had barely started.
+	//
+	// `asked` is the seller's own navigation, and it wins. An Import event
+	// arriving while page two was in flight used to call this with page one's
+	// ordinal, bump the generation and discard the page-two answer, so
+	// pressing Next during a live import left the seller on page one with
+	// nothing to show that it had not worked. A refresh now stands aside and
+	// is coalesced into one read once the navigation lands.
+	async function read(after: number | null, wanted: number, asked: boolean) {
 		if (!requestId) {
 			return;
 		}
 		const id = requestId;
 		const current = ++generation;
+		if (asked) {
+			navigatingFor = current;
+		}
+		listingsBusy = true;
 		try {
-			const next = await api.syncRequest(id);
+			const next = await api.syncRequest(id, after);
 			if (current !== generation || id !== requestId) return;
 			view = next;
+			listingPage = wanted;
+			listingAfter = [...listingAfter.slice(0, wanted), next.resources_next];
 			refusal = null;
+			listingAttempt = null;
 		} catch (caught) {
 			if (current !== generation || id !== requestId) return;
+			// The page already on screen stays: this is the same distinction
+			// the `refusal`/`view` split has always held, extended to a page.
 			refusal =
 				caught instanceof ApiFailure ? caught.message : 'This import could not be read.';
+			listingAttempt = { after, page: wanted };
+		} finally {
+			// Only the newest read owns the busy flag; a superseded one
+			// clearing it would unlock the pager mid-navigation.
+			if (current === generation) {
+				listingsBusy = false;
+			}
+			// Only the navigation still in charge hands the pending refresh
+			// on; one superseded by a later Next must not release it early.
+			if (asked && navigatingFor === current) {
+				navigatingFor = 0;
+				if (refreshWanted) {
+					refreshWanted = false;
+					void refetch();
+				}
+			}
 		}
+	}
+
+	function goListings(after: number | null, wanted: number) {
+		void read(after, wanted, true);
+	}
+
+	function retryListingPage() {
+		const attempt = listingAttempt;
+		if (attempt !== null) {
+			void read(attempt.after, attempt.page, true);
+		}
+	}
+
+	// The page the seller is on, read again. The ledger fires on every listing
+	// the device describes, and re-reading page one would walk them off the
+	// page they were reading each time the import made progress. The reads are
+	// untracked because this is called from an effect that would otherwise
+	// depend on state the read itself writes.
+	async function refetch() {
+		if (navigatingFor !== 0) {
+			refreshWanted = true;
+			return;
+		}
+		await read(
+			untrack(() => listingAfter[listingPage - 1] ?? null),
+			untrack(() => listingPage),
+			false
+		);
 	}
 
 	// The same liveness the run page beside this one uses: one event stream per
@@ -170,8 +253,21 @@
 				title="Listings"
 				description="Each listing the import has reached, in order, with the reason given for any it skipped."
 			>
+				{#if refusal !== null}
+					<!-- The page below is the last one that read. The request's own
+					     figures above it are from that read too, so nothing on
+					     screen is a mixture of two. -->
+					<Banner tone="bad" action={retryListings}>
+						That page of listings could not be read, so the ones below are the last that
+						did. {refusal}
+					</Banner>
+				{/if}
 				{#if rows.length === 0}
-					<p class="quiet">{emptyListingsLine(stageOf(request))}</p>
+					<p class="quiet">
+						{listingPage > 1
+							? 'There are no listings on this page. Go back for the ones before it.'
+							: emptyListingsLine(stageOf(request))}
+					</p>
 				{:else if anyCoverage}
 					<p class="foot-note">Figures below read: {TERM_COVERAGE_LEGEND}.</p>
 				{/if}
@@ -192,6 +288,18 @@
 						<span class="ord">#{row.ordinal}</span>
 					</div>
 				{/each}
+				{#if rows.length > 0 || listingPage > 1}
+					<Pagination
+						page={listingPage}
+						hasNext={request.resources_next !== null}
+						busy={listingsBusy}
+						label="Listings"
+						summary={`${rows.length} listings on this page`}
+						onprevious={() =>
+							goListings(listingAfter[listingPage - 2] ?? null, listingPage - 1)}
+						onnext={() => goListings(request.resources_next, listingPage + 1)}
+					/>
+				{/if}
 				<p class="foot-note">{FILES_STAY_ON_YOUR_COMPUTER}</p>
 			</Panel>
 		{/if}
@@ -213,3 +321,18 @@
 		<p class="quiet">Loading…</p>
 	{/if}
 </div>
+
+<!-- Retries the page that failed rather than the page on screen: that one
+     read successfully, and re-reading it would clear the failure without ever
+     fetching what the seller asked for. -->
+{#snippet retryListings()}
+	<Button
+		tier="outline"
+		small
+		disabled={listingsBusy}
+		reason={listingsBusy ? 'A page is being read.' : undefined}
+		onclick={retryListingPage}
+	>
+		Retry
+	</Button>
+{/snippet}

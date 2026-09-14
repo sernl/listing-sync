@@ -68,7 +68,6 @@ use tauri::{AppHandle, Manager};
 
 use crate::control_plane::{base_url, install_crypto_provider, HttpControlPlane};
 use crate::device::DeviceIdentity;
-use crate::heartbeat::cycle;
 use crate::notify::{DeviceNotifier, PluginSurface};
 use crate::run::wall_now;
 use crate::scheduler::Scheduler;
@@ -106,18 +105,17 @@ pub fn run() {
     // one while preparing the window, which Tauri does before it calls
     // `setup`. Its own documentation states why that is fatal without this.
     install_crypto_provider();
-    // What replaces the timer on a phone. The activity is resumed whenever the
-    // seller brings the application forward, and that is the only moment a
-    // device which was signed out elsewhere can learn it, because D3 leaves it
-    // no background schedule to learn it in.
+    // Every trigger reaches the one coordinator through this: start-up, the
+    // console's own commands, and — on a phone — the resume, which is the
+    // only moment D3 leaves a handset to act in, because Doze stops
+    // `JobScheduler` and the exemption that would evade it is barred by Play
+    // policy.
+    let wake = Arc::new(Wake::default());
     #[cfg(mobile)]
-    let resumed = Arc::new(tokio::sync::Notify::new());
-    #[cfg(mobile)]
-    let on_resume = Arc::clone(&resumed);
+    let on_resume = Arc::clone(&wake);
     // A second clone, moved into `setup` rather than borrowed by it: the
     // closure outlives this function.
-    #[cfg(mobile)]
-    let on_start = Arc::clone(&resumed);
+    let on_start = Arc::clone(&wake);
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_opener::init())
@@ -181,6 +179,10 @@ pub fn run() {
                 state.stopper(),
             );
             app.manage(state);
+            // The handle the commands reach the coordinator through. Managed
+            // rather than passed, because a command is handed an `AppHandle`
+            // and nothing else.
+            app.manage(Arc::clone(&on_start));
 
             // The bootstrap can invoke as soon as its document loads.
             // Expose the window only after its command state exists.
@@ -218,9 +220,10 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 let handle = app.handle().clone();
+                let wake = Arc::clone(&on_start);
                 tauri::async_runtime::spawn(async move {
                     updater::check_at_startup(&handle).await;
-                    run_schedule(handle, work).await;
+                    run_schedule(handle, work, wake).await;
                 });
             }
             #[cfg(mobile)]
@@ -283,7 +286,7 @@ pub fn run() {
     #[cfg(mobile)]
     app.run(move |_, event| {
         if matches!(event, tauri::RunEvent::Resumed) {
-            on_resume.notify_one();
+            on_resume.now();
         }
     });
 }
@@ -327,52 +330,259 @@ fn session_key_bridge<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
                 session::android_key::PLUGIN_IDENTIFIER,
                 session::android_key::PLUGIN_CLASS,
             )?;
-            // One Kotlin class answers both commands, so one handle serves
-            // both bindings and the second is a clone rather than a second
-            // registration.
-            let names: Arc<dyn DeviceNameSource> =
-                Arc::new(android_name::PhoneName::new(handle.clone()));
+            // One Kotlin class answers every command, so one handle serves
+            // all three bindings and the later ones are clones rather than
+            // second registrations.
+            let phone = Arc::new(android_name::PhoneName::new(handle.clone()));
+            let names: Arc<dyn DeviceNameSource> = phone.clone();
+            // The same object again, as the other trait it implements: the
+            // coordinator asks it whether the seller is looking at the
+            // application before every pass.
+            let here: Arc<dyn android_name::ForegroundSource> = phone;
             let keys: Arc<dyn DeviceKeySource> =
                 Arc::new(session::android_key::KeystoreKey::new(handle));
             app.manage(names);
+            app.manage(here);
             app.manage(keys);
             Ok(())
         })
         .build()
 }
 
-/// One cycle: check in, then pull whatever work the entitlement gate still
-/// allows.
+/// One check-in, and what it learned about this device's standing.
 ///
-/// The check-in is the half that matters today, because it is how a device the
-/// seller signed out from the console learns to wipe between console loads.
+/// Inline in the loop, because it is one request under a bounded timeout: the
+/// whole point of the split is that nothing slow shares a thread with it.
 ///
-/// Nothing here can panic: `cycle` swallows a failed check-in on purpose — an
-/// offline period is not a revocation — and returns a report rather than
-/// raising. That is what makes the dropped join handles below safe, which is
-/// the property the workspace's ban on bare `tokio::spawn` protects.
-async fn run_cycle<W: scheduler::WorkSource>(app: &AppHandle, scheduler: &Scheduler, work: &W) {
+/// The standing is read back off the state rather than off the answer,
+/// because only a check-in that reached the server moves it: an unreachable
+/// server says nothing about whether the seller signed this machine out, and
+/// a coordinator that read an outage as a revocation would stop discovering
+/// for the length of the outage.
+async fn run_check_in(app: &AppHandle) -> bool {
     let state = app.state::<DesktopState>();
-    cycle(&state, state.control_plane(), scheduler, work, wall_now()).await;
+    heartbeat::check_in_or_register(&state, state.control_plane())
+        .await
+        .ok();
+    state.revoked()
 }
 
-/// The local timer, running for the life of the process.
-#[cfg(desktop)]
+/// The cheap pass: ask which import runs this device owes work on.
+///
+/// Inline as well. It makes one request and dispatches whatever it finds into
+/// the import supervisor's own tracked tasks, so it returns in the time of
+/// that request however long the imports it started go on for.
+async fn run_open_runs(app: &AppHandle) -> scheduler::Discovery {
+    let state = app.state::<DesktopState>();
+    crate::import::serve_open_runs(&state, state.control_plane()).await
+}
+
+/// The heavy pass: claim whatever the queue holds and run it to a verdict.
+///
+/// Spawned rather than awaited in the loop, and supervised one at a time. One
+/// claimed job may legitimately take half an hour — an upload, a
+/// reconciliation walk — and before this split that job held the five-minute
+/// check-in and the ten-second import poll behind it for its whole duration.
+/// One at a time is also what keeps the claim honest: a second concurrent pass
+/// would ask for work while the first still held an item, which is how the
+/// same item gets claimed twice.
+///
+/// Nothing here can panic: `work_pending` returns a report rather than
+/// raising, which is the property the workspace's ban on bare `tokio::spawn`
+/// protects.
+async fn run_work<W: scheduler::WorkSource>(
+    app: &AppHandle,
+    scheduler: &Scheduler,
+    work: &W,
+) -> scheduler::Discovery {
+    let state = app.state::<DesktopState>();
+    heartbeat::work_pending(&state, scheduler, work, wall_now())
+        .await
+        .discovery()
+}
+
+/// The one coordinator this installation runs, for the life of the process.
+///
+/// One loop, not three: the cadences differ but the activities share a device,
+/// a control plane and an import supervisor, and separate loops would be
+/// separate chances to run two of them at once. Every trigger — start-up, a
+/// resume, a seller pressing a button in the console — is one notification on
+/// [`Wake`], which coalesces by construction: `Notify` holds one permit, so
+/// twenty triggers between two passes produce one pass.
+///
+/// On a phone every pass is gated on the seller actually having the
+/// application in front of them, read immediately before the pass is decided
+/// from the process-lifetime count of started activities
+/// ([`android_name::ForegroundSource`]).
+/// That read is local and free; it is not a clock, and it is not a
+/// window opened by a resume — such a window stops discovering while the
+/// seller is still working and goes on polling after they have left, which
+/// are the two failures this gate exists to have neither of.
+///
+/// Three activities, two of which are inline and one supervised. The check-in
+/// and the open-runs poll are one request each and run in the loop; the work
+/// pull may claim a job with a thirty-minute budget, so it runs as a single
+/// supervised task and the loop goes on serving the other two while it does.
+/// One such task at a time, which is also what stops an item being claimed
+/// twice.
+///
+/// What each activity costs is in [`heartbeat::work_pending`] and
+/// [`crate::import::serve_open_runs`]; how the three are timed is in
+/// [`scheduler::Coordination`].
 #[expect(
     clippy::infinite_loop,
     reason = "a supervisor loop for the life of the process; the application exits by exiting"
 )]
-async fn run_schedule<W: scheduler::WorkSource>(app: AppHandle, work: W) {
+async fn run_schedule<W: scheduler::WorkSource + 'static>(
+    app: AppHandle,
+    work: W,
+    wake: Arc<Wake>,
+) {
     let scheduler = Scheduler::hourly_over_seller_device_marketplaces();
-    // The first tick of an interval completes immediately, so there is a
-    // check-in at start-up as well as one per cadence. That one races the
-    // console window's creation on purpose and loses harmlessly: with no
-    // window there is no session, which is `NoSession` — no request, no wipe,
-    // and the state simply says nobody is signed in yet.
-    let mut ticks = tokio::time::interval(scheduler.cadence());
+    // Shared with the supervised task rather than moved into it, so the next
+    // pass uses the same source and the same claim identity.
+    let work = Arc::new(work);
+    #[cfg(desktop)]
+    let mut plan = scheduler::Coordination::running(scheduler.cadence());
+    #[cfg(mobile)]
+    let mut plan = scheduler::Coordination::on_a_phone(scheduler.cadence());
+    // Monotonic, and read once: every fast cadence is measured against this
+    // rather than against the wall clock, so a clock correction cannot stop a
+    // running device checking in or discovering.
+    let started = tokio::time::Instant::now();
+    // Start-up is a trigger, so the first pass is immediate: a check-in
+    // before anything else, which races the console window's creation on
+    // purpose and loses harmlessly — with no window there is no session,
+    // which is `NoSession`, so no request is made and the state simply says
+    // nobody is signed in yet.
+    plan.triggered();
+    let mut running: Option<tauri::async_runtime::JoinHandle<scheduler::Discovery>> = None;
     loop {
-        ticks.tick().await;
-        run_cycle(&app, &scheduler, &work).await;
+        #[cfg(mobile)]
+        plan.observed_foreground(in_the_foreground(&app));
+        let due = plan.due(reading(started));
+        // A sweep is the whole cycle, so its stamps are taken first and its
+        // two halves are then performed by the same code the fast passes use.
+        if due.sweep {
+            plan.swept(reading(started));
+        }
+        if due.sweep || due.check_in {
+            let revoked = run_check_in(&app).await;
+            if !due.sweep {
+                plan.checked_in(reading(started));
+            }
+            plan.observed_revoked(revoked);
+        }
+        // Re-read after the check-in rather than the plan re-asked. The
+        // revocation may have just arrived, in which case the gate is closed
+        // and nothing may be claimed; and on a phone the seller may have left
+        // while that request was in flight, which must stop the pass here
+        // rather than after it. Asking the plan again instead would drop the
+        // seller's own trigger, because serving the check-in is what clears
+        // it.
+        let standing = !app.state::<DesktopState>().revoked();
+        #[cfg(mobile)]
+        let standing = standing && in_the_foreground(&app);
+        if (due.sweep || due.discover) && standing {
+            let found = run_open_runs(&app).await;
+            plan.discovered(found);
+            // The heavy half, at most one in flight. A pass skipped because
+            // the last one is still working is not a pass lost: its stamp was
+            // taken when it started, so the next one comes due on the ordinary
+            // gap after it finishes.
+            if running.is_none() {
+                if !due.sweep {
+                    plan.discovering(reading(started));
+                }
+                let handle = app.clone();
+                let timer = scheduler.clone();
+                let source = Arc::clone(&work);
+                running = Some(tauri::async_runtime::spawn(async move {
+                    run_work(&handle, &timer, source.as_ref()).await
+                }));
+            }
+        }
+        let nap = plan.sleep(reading(started));
+        // While a job is running the loop still wakes on its own cadences, and
+        // a floor keeps that from becoming a spin: a discovery that is due but
+        // cannot be served — because the one supervised task holds it — would
+        // otherwise answer zero for as long as the job lasted.
+        let nap = if running.is_some() {
+            nap.max(core::time::Duration::from_secs(1))
+        } else {
+            nap
+        };
+        let mut finished = None;
+        tokio::select! {
+            () = tokio::time::sleep(nap) => {}
+            () = wake.notified() => plan.triggered(),
+            found = settled(&mut running) => finished = Some(found),
+        }
+        if let Some(found) = finished {
+            running = None;
+            plan.discovered(found);
+            plan.observed_revoked(app.state::<DesktopState>().revoked());
+        }
+    }
+}
+
+/// Both clock readings, taken together so one pass is decided against one
+/// instant.
+fn reading(started: tokio::time::Instant) -> scheduler::Clocks {
+    scheduler::Clocks {
+        wall: wall_now(),
+        since_start: started.elapsed(),
+    }
+}
+
+/// The supervised job's outcome, or never where there is no job.
+///
+/// `pending` rather than an immediate answer, so the branch simply does not
+/// fire when nothing is running: a future that returned at once would turn the
+/// select into a spin. A task that panicked answers `Failed`, which puts the
+/// next pass on the ladder rather than repeating it immediately.
+async fn settled(
+    running: &mut Option<tauri::async_runtime::JoinHandle<scheduler::Discovery>>,
+) -> scheduler::Discovery {
+    match running.as_mut() {
+        Some(handle) => handle.await.unwrap_or(scheduler::Discovery::Failed),
+        None => core::future::pending().await,
+    }
+}
+
+/// Whether the seller is looking at this application, asked of the platform.
+///
+/// The bridge is registered by [`session_key_bridge`] on Android. Where it is
+/// absent — an iOS build, which registers no such plugin — the answer is true,
+/// and the platform is what enforces the property there instead: iOS suspends
+/// a backgrounded process, so its timers do not run and there is nothing to
+/// gate. Android is the one surface where a loop can keep ticking behind the
+/// seller's back, and that is the surface the bridge covers.
+#[cfg(mobile)]
+fn in_the_foreground(app: &AppHandle) -> bool {
+    app.try_state::<Arc<dyn android_name::ForegroundSource>>()
+        .is_none_or(|here| here.foreground())
+}
+
+/// The one handle every trigger reaches the coordinator through.
+///
+/// Managed state rather than a field on [`DesktopState`], because the
+/// coordinator belongs to the running application and not to the device: the
+/// host tests build a state without a loop behind it, and a command that
+/// notified a coordinator that does not exist would be a command that only
+/// works in the shipped build.
+#[derive(Debug, Default)]
+pub struct Wake(tokio::sync::Notify);
+
+impl Wake {
+    /// Ask for an immediate pass. Fire-and-forget and idempotent: several
+    /// calls between two passes produce one.
+    pub fn now(&self) {
+        self.0.notify_one();
+    }
+
+    async fn notified(&self) {
+        self.0.notified().await;
     }
 }
 
@@ -464,59 +674,6 @@ pub(crate) async fn retry_console_from<R: tauri::Runtime>(
         .map_err(|why| why.to_string())?;
     let url = console_home(&origin)?;
     show_console(&window, url, start_up_nav())
-}
-
-/// The same cycle on a phone, with no timer behind it.
-///
-/// D3 limits a phone to work the seller starts, and the platform is why:
-/// Android's Doze stops `JobScheduler` and therefore `WorkManager`, and the
-/// battery-optimisation exemption that would evade it is barred by Play
-/// policy. A cadence here would be a promise the platform breaks, so there is
-/// none. What replaces the timer is the seller: one cycle at start-up, one on
-/// every resume, and the console's own commands in between.
-///
-/// A resume is not one cycle, though, and that is the correction. The seller
-/// produces resumes at their own rate — twenty an hour is an ordinary phone —
-/// and a full cycle for each is twenty work claims posted to the control plane
-/// and twenty rounds of marketplace requests from a handset. So the two halves
-/// of a cycle are split by [`heartbeat::resume`]: the check-in runs on every
-/// resume, because it is the only channel by which a phone learns it was
-/// signed out, and the work pull runs at most once per
-/// [`Scheduler::DEFAULT_CADENCE`] — the hour the desktop timer already keeps,
-/// read from the scheduler this constructs rather than written down again.
-#[cfg(mobile)]
-#[expect(
-    clippy::infinite_loop,
-    reason = "a supervisor loop for the life of the process; the application exits by exiting"
-)]
-async fn run_schedule<W: scheduler::WorkSource>(
-    app: AppHandle,
-    work: W,
-    resumed: Arc<tokio::sync::Notify>,
-) {
-    let scheduler = Scheduler::hourly_over_seller_device_marketplaces();
-    // Stamped before the cycle rather than after it, so a cycle that takes
-    // minutes does not push the next one an extra hour out. Erring towards
-    // working sooner is the safe direction of the two.
-    let mut last_tick = Some(wall_now());
-    run_cycle(&app, &scheduler, &work).await;
-    loop {
-        resumed.notified().await;
-        let now = wall_now();
-        let state = app.state::<DesktopState>();
-        if heartbeat::resume(
-            &state,
-            state.control_plane(),
-            &scheduler,
-            &work,
-            heartbeat::ResumeAt { last_tick, now },
-        )
-        .await
-        .is_some()
-        {
-            last_tick = Some(now);
-        }
-    }
 }
 
 #[cfg(test)]

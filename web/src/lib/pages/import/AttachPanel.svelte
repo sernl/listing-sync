@@ -9,6 +9,7 @@
 	import { quotaSentence } from '$lib/authoring';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
+	import Pagination from '$lib/Pagination.svelte';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import {
 		attachedRows,
@@ -19,6 +20,7 @@
 		rowLabel,
 		type WaitingRow
 	} from './sheet-view';
+	import { pageCount, pageSummary } from './run-view';
 
 	let {
 		batch,
@@ -51,6 +53,43 @@
 	const held = $derived(attachedRows(rows));
 	const headroom = $derived(headroomLine(uploaded));
 	const busy = $derived(sending !== null);
+
+	/** How many rows of each list are drawn at once.
+	 *
+	 *  `waiting` and `held` themselves stay whole: the filename matcher below
+	 *  places a dropped file against every row still waiting for one, and the
+	 *  picker for a file that matched nothing must be able to name any of
+	 *  them. A file whose row is on page three would otherwise come back as
+	 *  "no row named this file", which is the defect paging must not
+	 *  introduce. Only the drawing is paged. */
+	const PER_PAGE = 25;
+
+	let waitingPage = $state(1);
+	let heldPage = $state(1);
+
+	const waitingPages = $derived(pageCount(waiting.length, PER_PAGE));
+	const heldPages = $derived(pageCount(held.length, PER_PAGE));
+	// Binding a file moves a row from one list to the other, so both lists
+	// shrink and grow under the seller: a page index past the end is clamped
+	// rather than left showing nothing.
+	const waitingAt = $derived(Math.min(waitingPage, waitingPages));
+	const heldAt = $derived(Math.min(heldPage, heldPages));
+	const waitingShown = $derived(
+		waiting.slice((waitingAt - 1) * PER_PAGE, waitingAt * PER_PAGE)
+	);
+
+	// The strip of files that matched no row, or more than one. Each entry
+	// carries a picker naming every row still waiting, so the strip is the
+	// most expensive list on this panel to draw — and the one a bulk drop of
+	// two hundred files fills. Paged for that reason; the picker's options
+	// stay whole, because the row a file belongs to may be any of them.
+	let unplacedPage = $state(1);
+	const unplacedPages = $derived(pageCount(unplaced.length, PER_PAGE));
+	const unplacedAt = $derived(Math.min(unplacedPage, unplacedPages));
+	const unplacedShown = $derived(
+		unplaced.slice((unplacedAt - 1) * PER_PAGE, unplacedAt * PER_PAGE)
+	);
+	const heldShown = $derived(held.slice((heldAt - 1) * PER_PAGE, heldAt * PER_PAGE));
 
 	/** An archive that unpacked into several files, which one row cannot hold.
 	 *
@@ -231,7 +270,7 @@
 
 {#if unplaced.length > 0}
 	<div class="sh-strip">
-		{#each unplaced as entry (entry.id)}
+		{#each unplacedShown as entry (entry.id)}
 			<div class="sh-unplaced">
 				<span class="n">{entry.file.name}</span>
 				<span class="why">{entry.reason}</span>
@@ -267,9 +306,19 @@
 			</div>
 		{/each}
 	</div>
+	{#if unplaced.length > PER_PAGE}
+		<Pagination
+			page={unplacedAt}
+			hasNext={unplacedAt < unplacedPages}
+			label="Files waiting to be placed"
+			summary={`${pageSummary((unplacedAt - 1) * PER_PAGE, unplacedShown.length, unplaced.length, 'files to place')} · Page ${unplacedAt} of ${unplacedPages}`}
+			onprevious={() => (unplacedPage = unplacedAt - 1)}
+			onnext={() => (unplacedPage = unplacedAt + 1)}
+		/>
+	{/if}
 {/if}
 
-{#each held as row (rowValue(row))}
+{#each heldShown as row (rowValue(row))}
 	<div class="sh-row">
 		<span class="sh-who">
 			<span class="t">{row.title ?? row.file_name ?? rowLabel(row)}</span>
@@ -290,7 +339,18 @@
 	</div>
 {/each}
 
-{#each waiting as row (rowValue(row))}
+{#if held.length > PER_PAGE}
+	<Pagination
+		page={heldAt}
+		hasNext={heldAt < heldPages}
+		label="Rows with a file"
+		summary={`${pageSummary((heldAt - 1) * PER_PAGE, heldShown.length, held.length, 'rows with a file')} · Page ${heldAt} of ${heldPages}`}
+		onprevious={() => (heldPage = heldAt - 1)}
+		onnext={() => (heldPage = heldAt + 1)}
+	/>
+{/if}
+
+{#each waitingShown as row (rowValue(row))}
 	<div class="sh-row">
 		<span class="sh-who">
 			<span class="t">{row.title ?? row.file_name ?? rowLabel(row)}</span>
@@ -303,3 +363,14 @@
 		<span class="sh-at"><StatusPill tone="warn" label="Waiting for a file" /></span>
 	</div>
 {/each}
+
+{#if waiting.length > PER_PAGE}
+	<Pagination
+		page={waitingAt}
+		hasNext={waitingAt < waitingPages}
+		label="Rows waiting for a file"
+		summary={`${pageSummary((waitingAt - 1) * PER_PAGE, waitingShown.length, waiting.length, 'rows waiting')} · Page ${waitingAt} of ${waitingPages}`}
+		onprevious={() => (waitingPage = waitingAt - 1)}
+		onnext={() => (waitingPage = waitingAt + 1)}
+	/>
+{/if}

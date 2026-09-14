@@ -28,6 +28,10 @@ use crate::device::android_label;
 /// the same hazard recorded for `obtain` and `forget`.
 pub const COMMAND: &str = "deviceName";
 
+/// The `@Command` that answers whether the seller is looking at the
+/// application. Matched by name at run time, like the one above it.
+pub const FOREGROUND_COMMAND: &str = "foreground";
+
 /// Two Java fields, each of which Kotlin may find null and sends as an empty
 /// string. The formatter takes an empty field as "the phone said nothing"
 /// rather than rendering it.
@@ -79,6 +83,51 @@ impl<R: Runtime> DeviceNameSource for PhoneName<R> {
                 // is what tells a developer the Kotlin command was renamed.
                 eprintln!("the phone's own name could not be read: {why}");
                 None
+            }
+        }
+    }
+}
+
+/// One boolean: whether the activity's lifecycle is at least `STARTED`.
+#[derive(Deserialize)]
+struct Standing {
+    foreground: bool,
+}
+
+/// Whether the seller has this application in front of them, asked of the
+/// platform rather than inferred.
+///
+/// A trait for the reason [`DeviceNameSource`] is one: it erases the handle's
+/// runtime parameter at the managed-state boundary. What it answers is a fact
+/// about the activity and never a clock reading — a window opened by a resume
+/// and closed by a timer is wrong in both directions, stopping discovery while
+/// the seller is still working and continuing it after they have gone.
+pub trait ForegroundSource: Send + Sync {
+    /// True while the activity is started or resumed.
+    ///
+    /// False on every other state and on a bridge that did not answer. The
+    /// direction is deliberate: what this gates is whether the client keeps
+    /// asking the network on its own, so a phone whose state could not be read
+    /// is a phone nothing polls from. A resume still arrives as a trigger and
+    /// is still served, so a seller bringing the application forward never
+    /// waits on this answer.
+    fn foreground(&self) -> bool;
+}
+
+impl<R: Runtime> ForegroundSource for PhoneName<R> {
+    fn foreground(&self) -> bool {
+        match self
+            .handle
+            .run_mobile_plugin::<Standing>(FOREGROUND_COMMAND, ())
+        {
+            Ok(standing) => standing.foreground,
+            Err(why) => {
+                // Logged rather than swallowed, and not fatal: resumes and the
+                // hourly deadline go on being served, and only the continuous
+                // discovery between them stops. The line is what tells a
+                // developer the Kotlin command was renamed.
+                eprintln!("this phone could not say whether it is in the foreground: {why}");
+                false
             }
         }
     }

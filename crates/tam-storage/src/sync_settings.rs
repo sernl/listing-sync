@@ -99,7 +99,30 @@ pub enum ActivityKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActivityRow {
     pub at: Timestamp,
+    /// This line's own identity, minted by the read that produced it and
+    /// stable across pages.
+    ///
+    /// The log merges three sources by clock, and two lines can share an
+    /// instant. Without a second ordering column the page boundary is
+    /// ambiguous: a cursor of "strictly older than this instant" drops every
+    /// other line of that instant, and one of "this instant or older" repeats
+    /// the whole instant forever. The key is the tie-break in the `ORDER BY`
+    /// of all three reads and the second half of the cursor, so the order is
+    /// total and a page boundary can fall inside one instant without losing a
+    /// row. It is also what the console keys its rendered list by, which is
+    /// why it is a value the row carries rather than a position in it.
+    pub key: String,
     pub kind: ActivityKind,
+}
+
+/// Where one page of the log ends: the instant and the key of its last line.
+///
+/// Both halves, because the instant alone does not order the log. Read back
+/// as "older than this instant, or of this instant and after this key".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivityCursor {
+    pub at: Timestamp,
+    pub key: String,
 }
 
 /// One resource that is live on more than one marketplace.
@@ -326,69 +349,112 @@ impl SyncSettingRepo {
         Ok(found.unwrap_or(false))
     }
 
-    /// One page of the activity log, newest first, strictly older than the
-    /// cursor.
+    /// One page of the activity log, newest first, after the cursor.
     ///
     /// Three reads merged in memory rather than one `UNION ALL`: each of the
     /// three has its own join and its own instant column, and a union would
     /// have to cast all three into one row shape and then be decoded back
     /// out. Each read takes the same limit, so the merge has at least `limit`
     /// candidates from every source and the truncation is correct.
+    ///
+    /// Every read orders by `(instant DESC, key ASC)` and is filtered by the
+    /// same pair, so the three merge under one total order. The instant alone
+    /// was not one: two lines of the same millisecond are ordinary — a pull
+    /// settles a batch of resources, a rule publishes them — and a cursor of
+    /// "strictly older than the last instant" silently dropped every line of
+    /// that instant it had not already handed over.
     pub async fn activity(
         &self,
         org: OrgId,
-        cursor: Option<Timestamp>,
+        cursor: Option<ActivityCursor>,
         limit: i64,
     ) -> Result<Vec<ActivityRow>, StorageError> {
         let org_db = uuid_to_db(org.0);
-        let before = cursor.map(timestamp_to_db).transpose()?;
+        let (before, after_key) = match cursor {
+            Some(cursor) => (Some(timestamp_to_db(cursor.at)?), Some(cursor.key)),
+            None => (None, None),
+        };
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
+        // The key is composed in SQL and read back verbatim rather than
+        // rebuilt here: the `ORDER BY`, the cursor comparison and the value
+        // the console keys its list by then cannot disagree, which two
+        // spellings of one identity eventually would.
         let pulled = sqlx::query!(
             "SELECT i.run_id, i.product_id, i.settled_at, r.source, \
-                    COALESCE(p.title, '') AS \"title!\" \
+                    COALESCE(p.title, '') AS \"title!\", \
+                    'pulled:' || i.run_id::text || ':' || i.product_id::text AS \"key!\" \
              FROM import_run_item i \
              JOIN import_run r ON r.org_id = i.org_id AND r.id = i.run_id \
              LEFT JOIN product p ON p.org_id = i.org_id AND p.id = i.product_id \
              WHERE i.org_id = $1 AND i.state = 'imported' AND i.settled_at IS NOT NULL \
                AND i.product_id IS NOT NULL AND r.source IS NOT NULL \
-               AND ($2::timestamptz IS NULL OR i.settled_at < $2) \
-             ORDER BY i.settled_at DESC LIMIT $3",
+               AND ($2::timestamptz IS NULL OR i.settled_at < $2 OR (i.settled_at = $2 \
+                    AND 'pulled:' || i.run_id::text || ':' || i.product_id::text > $4)) \
+             ORDER BY i.settled_at DESC, \
+                      'pulled:' || i.run_id::text || ':' || i.product_id::text \
+             LIMIT $3",
             org_db,
             before,
             limit,
+            after_key,
         )
         .fetch_all(&mut *tx)
         .await?;
         let published = sqlx::query!(
             "SELECT a.product_id, a.target_inventory, a.job_id, \
                     COALESCE(p.title, '') AS \"title!\", \
-                    MAX(i.settled_at) AS \"settled_at!\" \
+                    MAX(i.settled_at) AS \"settled_at!\", \
+                    'published:' || a.job_id::text || ':' || a.product_id::text || ':' \
+                        || a.target_inventory AS \"key!\" \
              FROM auto_publish_run a \
              JOIN job_item i ON i.org_id = a.org_id AND i.job_id = a.job_id \
              LEFT JOIN product p ON p.org_id = a.org_id AND p.id = a.product_id \
              WHERE a.org_id = $1 \
              GROUP BY a.product_id, a.target_inventory, a.job_id, p.title \
              HAVING COUNT(*) FILTER (WHERE i.settled_at IS NULL) = 0 \
-                AND ($2::timestamptz IS NULL OR MAX(i.settled_at) < $2) \
-             ORDER BY MAX(i.settled_at) DESC LIMIT $3",
+                AND ($2::timestamptz IS NULL OR MAX(i.settled_at) < $2 \
+                     OR (MAX(i.settled_at) = $2 \
+                         AND 'published:' || a.job_id::text || ':' || a.product_id::text || ':' \
+                             || a.target_inventory > $4)) \
+             ORDER BY MAX(i.settled_at) DESC, \
+                      'published:' || a.job_id::text || ':' || a.product_id::text || ':' \
+                          || a.target_inventory \
+             LIMIT $3",
             org_db,
             before,
             limit,
+            after_key,
         )
         .fetch_all(&mut *tx)
         .await?;
+        // The tick is part of the identity, not only part of the grouping. A
+        // daily schedule sends to the same marketplace every day, so
+        // `tick:<schedule>:<inventory>` named every one of those runs the
+        // same thing — two of them on one page are two rows under one key,
+        // which is a duplicate-key error in the rendered list. The instant is
+        // spelled as epoch milliseconds because that is the one rendering of
+        // a `timestamptz` that does not move with the session's time zone.
         let ticks = sqlx::query!(
             "SELECT r.schedule_id, r.tick, r.inventory, s.name, \
-                    COUNT(*) FILTER (WHERE r.state = 'sent') AS \"sent!\" \
+                    COUNT(*) FILTER (WHERE r.state = 'sent') AS \"sent!\", \
+                    'tick:' || (extract(epoch from r.tick) * 1000)::bigint::text || ':' \
+                        || r.schedule_id::text || ':' || r.inventory AS \"key!\" \
              FROM schedule_run r \
              JOIN schedule s ON s.org_id = r.org_id AND s.id = r.schedule_id \
-             WHERE r.org_id = $1 AND ($2::timestamptz IS NULL OR r.tick < $2) \
+             WHERE r.org_id = $1 \
+               AND ($2::timestamptz IS NULL OR r.tick < $2 OR (r.tick = $2 \
+                    AND 'tick:' || (extract(epoch from r.tick) * 1000)::bigint::text || ':' \
+                        || r.schedule_id::text || ':' || r.inventory > $4)) \
              GROUP BY r.schedule_id, r.tick, r.inventory, s.name \
-             ORDER BY r.tick DESC LIMIT $3",
+             ORDER BY r.tick DESC, \
+                      'tick:' || (extract(epoch from r.tick) * 1000)::bigint::text || ':' \
+                          || r.schedule_id::text || ':' || r.inventory \
+             LIMIT $3",
             org_db,
             before,
             limit,
+            after_key,
         )
         .fetch_all(&mut *tx)
         .await?;
@@ -403,6 +469,7 @@ impl SyncSettingRepo {
             };
             lines.push(ActivityRow {
                 at: timestamp_from_db(at),
+                key: row.key,
                 kind: ActivityKind::Pulled {
                     run: uuid_from_db(row.run_id),
                     product: ProductId(uuid_from_db(product)),
@@ -414,6 +481,7 @@ impl SyncSettingRepo {
         for row in published {
             lines.push(ActivityRow {
                 at: timestamp_from_db(row.settled_at),
+                key: row.key,
                 kind: ActivityKind::Published {
                     job: JobId(uuid_from_db(row.job_id)),
                     product: ProductId(uuid_from_db(row.product_id)),
@@ -425,6 +493,7 @@ impl SyncSettingRepo {
         for row in ticks {
             lines.push(ActivityRow {
                 at: timestamp_from_db(row.tick),
+                key: row.key,
                 kind: ActivityKind::ScheduleTick {
                     schedule: uuid_from_db(row.schedule_id),
                     name: row.name,
@@ -433,7 +502,15 @@ impl SyncSettingRepo {
                 },
             });
         }
-        lines.sort_unstable_by_key(|line| core::cmp::Reverse(line.at.0));
+        // The merge order is the reads' own: newest instant first, and within
+        // one instant the key ascending, which is what the cursor pages by.
+        lines.sort_unstable_by(|left, right| {
+            right
+                .at
+                .0
+                .cmp(&left.at.0)
+                .then_with(|| left.key.cmp(&right.key))
+        });
         lines.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
         Ok(lines)
     }

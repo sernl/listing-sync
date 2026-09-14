@@ -29,6 +29,7 @@ function device(
 		last_seen_at: last_used_at,
 		revoked_at: null,
 		wipe_outstanding: false,
+		runs_sourced_payloads: true,
 		sessions: [
 			{ marketplace, account_label: null, linked_at: 0, last_used_at, status: 'connected' }
 		],

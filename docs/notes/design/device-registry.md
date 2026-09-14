@@ -3,7 +3,7 @@
 Decision D14's server-side half: which of the seller's own machines exist, what each one holds, and how the seller signs one out.
 
 - date: 2026-09-03
-- status: built and green under `just db-test`, `just web-check` and the desktop crate's own tests; the desktop client is wired end to end, reading the console's own session from its window and checking in on a timer
+- status: implemented; the 2026-09-13 coordination repair passed the targeted checks recorded in `docs/design/plans/2026-09-13-device-coordination-and-bounded-ui.md`. Full-suite and physical-device end-to-end checks were not run for that repair.
 - decisions it implements: D14 (per-surface marketplace login, the device registry, the "Your devices" page with per-device sign-out), D1 (the two-branch automation rule the registry's contents obey), D10 and D11 (the entitlement the check-in closes on revocation), D30 (the wording the page uses about where a login lives)
 
 ## Why a registry of our own
@@ -20,10 +20,11 @@ The page joins the two halves in the browser instead, and the join is a heuristi
 
 Migration 0042 adds two tenant tables, both under enabled and forced row-level security with a policy keyed on `app.current_org`, and both listed in the RLS matrix.
 
-`device` holds one row per machine: `org_id`, `id`, `name`, `os`, `arch`, `app_version`, `first_seen_at`, `last_seen_at`, `revoked_at`.
+`device` holds one row per installation: `org_id`, `id`, `name`, `os`, `arch`, `app_version`, `first_seen_at`, `last_seen_at`, `revoked_at`.
 The identifier is `text` rather than `uuid` because the device mints it itself — D14 records that `machine-uid` covers neither Android nor iOS — and it is bounded to 64 characters so a client cannot register an arbitrarily long key.
 It is scoped by organisation, so a collision is only ever between one seller's own machines.
 `name`, `os`, `arch` and `app_version` are bounded too, and the API refuses an overrun as a validation error rather than letting a constraint violation surface as a fault.
+The native client persists that identity in `device.json`; an update or display-name change keeps it, while cleared app data produces a new installation. Matching model names are not evidence that records should be merged.
 
 `device_marketplace_session` holds one row per marketplace a device reports holding: `org_id`, `device_id`, `marketplace`, `account_label`, `linked_at`, `last_used_at`, `status`, with the device as a cascading foreign key.
 
@@ -40,7 +41,7 @@ The engine has no reason to read the registry, the broker holds no session for a
 
 ## The endpoints
 
-Four operations under `/v1/devices`, every one org-scoped through `OrgContext`, so the request carries no organisation identifier a caller could substitute and a device id names a row only within the tenant the session speaks for.
+Five operations under `/v1/devices`, every one org-scoped through `OrgContext`, so the request carries no organisation identifier a caller could substitute and a device id names a row only within the tenant the session speaks for.
 
 `POST /v1/devices` registers a device or refreshes what a known one says about itself.
 It is an upsert that never clears `revoked_at`: a revoked device re-registering is the exact case the mark exists for, and a registration that lifted it would let any device undo its own revocation by restarting.
@@ -57,8 +58,11 @@ A report naming a marketplace with an official API is refused outright, because 
 `POST /v1/devices/{device}/revoke` signs one machine out.
 Revoking twice keeps the first instant rather than restamping, because the first is when the seller decided and the wipe is measured against it.
 
-The view adds one derived field, `wipe_outstanding`: the device was signed out and has not been heard from since, so it may still hold the marketplace logins listed beside it.
+`POST /v1/devices/{device}/restore` explicitly clears revocation. It does not refresh `last_seen_at`: permission to reconnect is not evidence that the machine has connected.
+
+The view derives `wipe_outstanding`: the device was signed out and has not been heard from since, so it may still hold the marketplace logins listed beside it.
 It is derived rather than stored because it is a statement about what we know, not a fact anybody wrote down, and it is computed in Rust rather than in SQL so it can be tested without a row.
+It also reports `runs_sourced_payloads`, which indicates version support for publishing or refetching marketplace-sourced files. That flag does not itself determine catalogue-import or own-upload eligibility.
 
 ## Wipe on next contact, and its honest limit
 
@@ -116,8 +120,7 @@ A revoked answer forgets every marketplace session through the existing `Session
 It forgets every marketplace rather than only the seller-device ones, because this is the removal and skipping a key on the strength of what we believe about its transport class would leave a stored session behind on the one path whose job is leaving none.
 A check-in that could not reach the server is not evidence of revocation: it wipes nothing, which is what stops every offline period becoming a disconnect.
 
-`cycle` is the scheduled path: check in, then pull work.
-The check-in comes first because it is what learns of a revocation, and a cycle that pulled first would spend a round of work under sessions it was about to forget.
+`lib.rs::run_schedule` coordinates check-in, queued-work discovery and the existing hourly marketplace sweep. Check-in precedes work so a device learns of revocation before using its sessions.
 `first_run` registers and then checks in, and is reached from the `device_check_in` command the console calls when it loads.
 `connect_marketplace` checks in after a capture and refuses to report success if the answer says this device has been signed out.
 
@@ -154,18 +157,19 @@ Not being signed in is its own state, distinct from both revocation and an unrea
 It wipes nothing and revokes nothing; it records only that nobody is signed in, which `DesktopState::signed_in` holds and the `device_check_in` command reports beside `revoked` and `reached_server`.
 A cookie store that cannot be read is a refusal rather than an absence, because a fault is not a sign-out.
 
-The schedule runs.
-`run_schedule` ticks at the scheduler's cadence for the life of the process and calls `heartbeat::cycle`, which checks in and then pulls work.
-The check-in is the half that matters today: it is how a device the seller signed out learns to wipe between console loads, and the work pull reaches `NoWork` until the engine driver split lands a real source.
-The first tick of an interval completes immediately, so there is a check-in at start-up too; it races the window's creation and loses harmlessly, because no window means no session, which is exactly `NoSession`.
+The coordinator separates cheap control-plane work from the heavy hourly sweep. An idle installation discovers queued work every 10 seconds; a marketplace held by another device uses a 30-second interval. Failed discovery backs off through 10, 20, 40 and 60 seconds. Routine check-in is every five minutes; a revoked installation only probes for an explicit restore, once a minute.
+
+Fast deadlines use a monotonic clock, so a wall-clock correction cannot strand remotely queued work. The existing hourly sweep keeps its wall-clock cadence. One supervised heavy task can run while check-in and import discovery remain responsive; another claim task is not started concurrently.
+
+Android reads the actual activity lifecycle through `MainActivity.isOnScreen()`: discovery continues while the app is open and stops when it leaves the foreground. A resume-time grace window is not used as a substitute for visibility.
 
 ## What is verified
 
 `crates/tam-storage/tests/device.rs` drives the repository against a real database: the register-and-refresh upsert, the heartbeat replacing rather than merging what a device holds, revocation standing across a re-registration and reaching the next heartbeat, and a two-tenant case where one seller can neither list, heartbeat as, nor sign out another seller's machine.
 `crates/tam-storage/tests/rls_matrix.rs` carries both tables, so neither could have been added without a tenancy decision.
-`crates/tam-api/tests/devices_flow.rs` drives the four endpoints over the wire, including the two-tenant case at the surface, the refusals, and the unauthenticated case.
-`web/src/routes/settings/devices/merge.test.ts` covers the join, including the two agent strings that would fool a naive platform reader and every case where the join declines to guess.
-The desktop crate's own tests cover the report, the wipe, the cycle ordering, the no-transport case, and the wire client: the paths and body keys it sends, the status mapping, the revoked answer reaching the session store, an unparseable answer refusing rather than guessing, and that no captured cookie reaches the bytes it would send.
+`crates/tam-api/tests/devices_flow.rs` drives the registry endpoints over the wire, including the two-tenant case at the surface, the refusals, and the unauthenticated case.
+`web/src/lib/device-merge.test.ts` covers the browser-session join, including ambiguous matches; the machine-view tests separately cover current identity, recent contact, saved login and sourced-file compatibility.
+The desktop tests cover monotonic deadlines, discovery backoff, foreground transitions, revocation, restore recovery and control-plane failures. They also cover the metadata-only report and session wipe; imported-page renewal, submission and outbox replay stop when the server reports device revocation.
 
 ## Sources
 

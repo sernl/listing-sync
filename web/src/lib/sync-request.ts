@@ -11,6 +11,7 @@
 
 import type {
 	ConnectionView,
+	ResourceStateCount,
 	SyncRequestHead,
 	SyncCoverageView,
 	SyncRequestView,
@@ -60,7 +61,14 @@ const TALLY_BUCKET: Record<SyncResourceState, keyof Omit<ResourceTally, 'total'>
 	pending: 'unsettled'
 };
 
-export function tally(resources: readonly SyncResourceView[]): ResourceTally {
+/** The whole request's figures, from the counts the server grouped in SQL.
+ *
+ * It used to count the `resources` array, which was right only while that
+ * array was every resource of the request. The listing list is a page now, so
+ * a tally over it would have said "nothing imported" to a seller looking at
+ * page two of a finished migration, and the headline above the list is about
+ * the request rather than about the rows under it. */
+export function tally(counts: readonly ResourceStateCount[]): ResourceTally {
 	const counted: ResourceTally = {
 		imported: 0,
 		skipped: 0,
@@ -68,9 +76,9 @@ export function tally(resources: readonly SyncResourceView[]): ResourceTally {
 		unrecognised: 0,
 		total: 0
 	};
-	for (const resource of resources) {
-		counted[TALLY_BUCKET[resource.state] ?? 'unrecognised'] += 1;
-		counted.total += 1;
+	for (const row of counts) {
+		counted[TALLY_BUCKET[row.state as SyncResourceState] ?? 'unrecognised'] += row.count;
+		counted.total += row.count;
 	}
 	return counted;
 }
@@ -101,7 +109,7 @@ export type SyncStage =
  * it is a completed import rather than a failure — the whole reason this
  * function exists rather than a template reading `state` directly. */
 export function stageOf(view: SyncRequestView): SyncStage {
-	return stageFrom(view.state, view.failure_detail, tally(view.resources));
+	return stageFrom(view.state, view.failure_detail, tally(view.resource_counts));
 }
 
 /** The stage of one row of the request list, which carries counts rather than

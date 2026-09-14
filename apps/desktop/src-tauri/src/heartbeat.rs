@@ -157,6 +157,19 @@ pub enum ControlPlaneError {
     /// valid one, so what was owed is dropped rather than kept in the outbox
     /// for a connection that will refuse it identically.
     Denied(String),
+    /// The server refused because the seller signed *this device* out.
+    ///
+    /// Its own variant rather than a [`Self::Denied`] carrying a body, and the
+    /// distinction is the seller's: a denied console session is something that
+    /// resolves by signing in to Teachouse again, while this one resolves only
+    /// by the explicit restore on the Machines screen. Classifying every 403
+    /// as a revocation would tell a seller their machine was signed out
+    /// whenever a request was forbidden for any other reason, which is worse
+    /// than saying nothing.
+    ///
+    /// Never retried, and never registered around: a revoked device that
+    /// re-registered would be a device lifting its own revocation.
+    Revoked,
 }
 
 impl core::fmt::Display for ControlPlaneError {
@@ -168,11 +181,25 @@ impl core::fmt::Display for ControlPlaneError {
             Self::NoSession => f.write_str("nobody is signed in to the console on this device"),
             Self::Fenced(why) => write!(f, "this device no longer holds that import: {why}"),
             Self::Denied(why) => write!(f, "the server refused this device's sign-in: {why}"),
+            Self::Revoked => f.write_str(SIGNED_OUT_HERE),
         }
     }
 }
 
 impl core::error::Error for ControlPlaneError {}
+
+/// What a seller is told when this machine was signed out of their account.
+///
+/// Written once, here, because three surfaces say it: this error's own
+/// display, the commands that refuse an import on a revoked device, and — as
+/// the same sentence, so a console can compare against it —
+/// `DEVICE_SIGNED_OUT` in `web/src/lib/desktop.ts`. It names the act, the
+/// consequence and the remedy, and it names no UUID, no status code and no
+/// attempt count: those belong in a disclosure, not in the sentence a seller
+/// reads first.
+pub const SIGNED_OUT_HERE: &str =
+    "This machine was signed out of your Teachouse account, so it cannot run imports. Sign it \
+     back in from Marketplaces, then try again.";
 
 /// One control-plane call, boxed so the trait stays object-safe. The same
 /// shape [`crate::scheduler::PullFuture`] and `tam-api`'s `JwksSource` use.
@@ -480,10 +507,10 @@ pub async fn first_run(
 /// upsert does not touch it, and a revoked device is a row that exists, so it
 /// answers a heartbeat rather than a not-found and never reaches this arm.
 ///
-/// Two call sites, both on the scheduled path and both in this module:
-/// [`cycle`], and [`resume`]'s branch for a phone brought forward before its
-/// work is due. Neither is the console's, which reaches [`first_run`] instead.
-async fn check_in_or_register(
+/// Two call sites, both on the scheduled path: [`cycle`]'s hourly deadline and
+/// the coordinator's own five-minute check-in. Neither is the console's, which
+/// reaches [`first_run`] instead.
+pub(crate) async fn check_in_or_register(
     state: &DesktopState,
     plane: &dyn ControlPlane,
 ) -> Result<CheckIn, CheckInError> {
@@ -499,40 +526,33 @@ async fn check_in_or_register(
     }
 }
 
-/// One scheduled cycle: check in, serve whatever import run is open, then pull
-/// whatever work the gate still allows.
+/// The other half: claim whatever the work queue holds for this device and run
+/// it to a verdict.
 ///
-/// The check-in comes first because it is what learns of a revocation, and a
-/// cycle that pulled first would spend a round of work under sessions it was
-/// about to forget. A check-in that could not reach the server does not stop
-/// the cycle — an offline period is not a revocation, and D11's grace window
-/// exists precisely so a device keeps working through one — while a revoked
-/// one stops it without a second decision, because the gate it just closed
-/// refuses every marketplace.
+/// Cheap when the queue is empty — one claim per marketplace, and no
+/// marketplace is touched unless the control plane answered with an item — and
+/// as expensive as the item when it is not: the interpreter allows a
+/// thirty-minute budget for one job, an upload or a reconciliation catalogue
+/// walk included. That asymmetry is why the supervisor loop runs this as one
+/// supervised task rather than awaiting it in line: a claimed job must not
+/// hold up the five-minute check-in or the ten-second import poll, and one
+/// task at a time is what stops the same item being claimed twice.
 ///
-/// One notification per cycle that settled anything, and never one per item:
+/// Every refusal is still decided before the work source is reached, inside
+/// [`Scheduler::tick`]: a revoked device, a console nobody is signed in to, a
+/// lapsed entitlement and an absent marketplace login each stop the pass
+/// before a request goes out.
+///
+/// One notification per pass that settled anything, and never one per item:
 /// the summary is taken over the whole report once it is recorded, so a
 /// fifty-item run raises one. A notification the platform would not show is
 /// logged and nothing more, because by then the work is done and recorded.
-pub async fn cycle<W: WorkSource + ?Sized>(
+pub(crate) async fn work_pending<W: WorkSource + ?Sized>(
     state: &DesktopState,
-    plane: &dyn ControlPlane,
     scheduler: &Scheduler,
     source: &W,
     now: Timestamp,
 ) -> TickReport {
-    check_in_or_register(state, plane).await.ok();
-    // After the check-in and before the work pull, in that order for the same
-    // reason the check-in comes first: the poll makes marketplace requests, so
-    // a revocation that has just arrived must have closed the gate before it
-    // runs. It is the device's half of the seller's sync cadence — the server
-    // mints the run and waits — and it answers nothing on the ordinary cycle
-    // where no run is open.
-    // Runs found here are accepted and worked in the background rather than
-    // awaited: a cycle that walked a shop inline would hold the check-in
-    // behind a marketplace, which is what made a stalled source stop
-    // everything else this device had to do.
-    crate::import::serve_open_runs(state, plane).await;
     let gate = state.gate().await;
     let report = scheduler
         .tick(
@@ -546,7 +566,7 @@ pub async fn cycle<W: WorkSource + ?Sized>(
             now,
         )
         .await;
-    // Stamped with the tick's instant rather than each event's own: this is
+    // Stamped with the pass's instant rather than each event's own: this is
     // the interface's record of what the device did, and the ledger on the
     // server is the record of what happened to an item.
     for (marketplace, event) in &report.events {
@@ -560,66 +580,14 @@ pub async fn cycle<W: WorkSource + ?Sized>(
     report
 }
 
-/// One resume's worth of a phone: always a check-in, and a scheduler tick only
-/// when the last one was longer ago than the cadence.
-///
-/// A phone has no timer — Android's Doze stops `JobScheduler` and the
-/// battery-optimisation exemption that would evade it is barred by Play
-/// policy — so a resume is the only moment it can act, and until this split
-/// every resume ran a full [`cycle`]. A phone brought forward twenty times an
-/// hour therefore posted twenty work claims and made twenty rounds of
-/// marketplace requests, which is the D3 deviation
-/// `docs/notes/design/android-client.md` describes rather than the behaviour
-/// it describes.
-///
-/// The check-in is not gated. It is the only channel by which a phone learns
-/// the seller signed it out, and gating it would make a revocation wait for
-/// the hour rather than for the next time the seller looks.
-///
-/// Answers the tick's report where it ticked and `None` where it only checked
-/// in, so the caller stamps its instant on the branch that actually worked
-/// rather than on every resume — which would hold the gate closed forever.
-#[cfg(any(mobile, test))]
-pub(crate) async fn resume<W: WorkSource + ?Sized>(
-    state: &DesktopState,
-    plane: &dyn ControlPlane,
-    scheduler: &Scheduler,
-    source: &W,
-    at: ResumeAt,
-) -> Option<TickReport> {
-    if crate::scheduler::work_is_due(at.last_tick, at.now, scheduler.cadence()) {
-        return Some(cycle(state, plane, scheduler, source, at.now).await);
-    }
-    check_in_or_register(state, plane).await.ok();
-    // Imports are asked about on every resume rather than on the cadence, and
-    // that is not the work pull this function exists to rate-limit. A phone
-    // has no background schedule, so a resume is the only moment an import
-    // this device was working can be picked up again; it costs one read, the
-    // supervisor's own handle stops a run in flight being taken twice, and a
-    // seller who brings the application forward to get on with their import
-    // is not made to wait out the hour.
-    crate::import::serve_open_runs(state, plane).await;
-    None
-}
-
-/// When the last scheduler tick ran, and when this resume is.
-///
-/// A struct rather than two arguments of the same type, which are one careless
-/// swap from a phone that works on every resume or never works at all.
-#[cfg(any(mobile, test))]
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct ResumeAt {
-    /// `None` before anything has ticked on this run, which is due by
-    /// definition: nothing else sets the stamp.
-    ///
-    /// No caller reaches that branch today. The mobile loop in `lib.rs` seeds
-    /// the stamp with `Some(wall_now())` before its first resume, so `None`
-    /// arrives only from a test; it is kept because the seeding is the loop's
-    /// choice rather than this type's, and a caller that did not seed would
-    /// otherwise have no way to say it had never ticked.
-    pub(crate) last_tick: Option<Timestamp>,
-    pub(crate) now: Timestamp,
-}
+// A phone gets the same three activities, gated on the seller actually having
+// the application in front of them: the supervisor loop reads the activity's
+// own lifecycle state before every pass and hands it to
+// `crate::scheduler::Coordination::observed_foreground`, so discovery
+// continues for as long as the seller is there and stops when they leave. A
+// resume is a trigger on that same value rather than a function of its own.
+// The check-in still runs on every resume, because it is the only channel by
+// which a phone learns the seller signed it out.
 
 /// Forgets every marketplace session on this device and closes the gate.
 ///
@@ -656,6 +624,28 @@ mod tests {
             id: DeviceId::from_raw("11112222333344445555666677778888"),
             label: "founder-pc".to_owned(),
         }
+    }
+
+    /// The hourly deadline, assembled here rather than in the client.
+    ///
+    /// Test-only on purpose. The supervisor loop performs the deadline as its
+    /// three entry points in this order — a check-in, the open-runs poll, then
+    /// the work pull — and it does so with the work pull in a supervised task
+    /// so a long job cannot hold the other two up. A production function that
+    /// awaited all three in line would be a path nothing takes, kept only to
+    /// hold these tests; this is the same three calls in the same order, and
+    /// naming it here says plainly that the sequencing is what is being
+    /// asserted rather than a wrapper's existence.
+    async fn hourly<W: super::WorkSource + ?Sized>(
+        state: &DesktopState,
+        plane: &dyn ControlPlane,
+        scheduler: &crate::scheduler::Scheduler,
+        source: &W,
+        now: Timestamp,
+    ) -> crate::scheduler::TickReport {
+        super::check_in_or_register(state, plane).await.ok();
+        crate::import::serve_open_runs(state, plane).await;
+        super::work_pending(state, scheduler, source, now).await
     }
 
     fn a_record(marketplace: Marketplace, label: Option<&str>) -> SessionRecord {
@@ -910,7 +900,7 @@ mod tests {
             vec![Marketplace::Tpt, Marketplace::Tes],
         );
 
-        let report = super::cycle(
+        let report = hourly(
             &state,
             &Fake::new(true),
             &scheduler,
@@ -1137,7 +1127,7 @@ mod tests {
         let plane = Registry::empty();
         let (scheduler, source) = idle_cycle_parts();
 
-        super::cycle(
+        hourly(
             &state,
             &plane,
             &scheduler,
@@ -1171,7 +1161,7 @@ mod tests {
         let plane = Registry::holding_this_device();
         let (scheduler, source) = idle_cycle_parts();
 
-        super::cycle(
+        hourly(
             &state,
             &plane,
             &scheduler,
@@ -1196,7 +1186,7 @@ mod tests {
         };
         let (scheduler, source) = idle_cycle_parts();
 
-        super::cycle(
+        hourly(
             &state,
             &plane,
             &scheduler,
@@ -1224,7 +1214,7 @@ mod tests {
         let plane = Fake::new(true);
         let (scheduler, source) = idle_cycle_parts();
 
-        super::cycle(
+        hourly(
             &state,
             &plane,
             &scheduler,
@@ -1278,25 +1268,18 @@ mod tests {
         );
     }
 
-    /// A phone brought forward again a minute later checks in and works
-    /// nothing.
+    /// A discovery pass pulls work and checks in nothing.
     ///
-    /// Both halves are asserted against the same run, because either alone
-    /// passes for an implementation that is wrong in the other direction: a
-    /// resume that pulled nothing AND checked in nothing would be a phone that
-    /// never learns it was signed out, and a resume that did both would be the
-    /// deviation this split closes. The first resume in the pair is what makes
-    /// the second severe — it proves the gate, the session and the entitlement
-    /// are all open, so the second resume's zero is the cadence refusing rather
-    /// than a readiness check that would have refused anyway.
+    /// This is the separation the coordinator rests on. Discovery runs every
+    /// ten seconds; if it carried a check-in with it, a running device would
+    /// report its session list three hundred and sixty times an hour instead
+    /// of twelve. And a cycle must still do both, or the hourly deadline would
+    /// stop being the thing that delivers a revocation.
     ///
-    /// What this does not cover is the mobile loop itself, which is
-    /// `#[cfg(mobile)]` and unreachable from a host test. It holds the
-    /// `Option<Timestamp>` this takes as an argument and stamps it on the
-    /// `Some` branch; that wiring is three lines and is proved by the Android
-    /// target's own compile, not by this.
+    /// Both counts come off the same run, because either alone passes an
+    /// implementation that is wrong in the other direction.
     #[tokio::test]
-    async fn a_resume_before_its_work_is_due_checks_in_and_pulls_nothing() {
+    async fn a_discovery_pass_pulls_work_without_checking_in_and_a_cycle_does_both() {
         use crate::scheduler::{PullFuture, Scheduler, WorkSource};
 
         #[derive(Debug, Default)]
@@ -1320,57 +1303,39 @@ mod tests {
         let scheduler = Scheduler::new(Scheduler::DEFAULT_CADENCE, vec![Marketplace::Tpt]);
         let source = CountingSource::default();
 
-        let started = super::resume(
-            &state,
-            &plane,
-            &scheduler,
-            &source,
-            super::ResumeAt {
-                last_tick: None,
-                now: at(NOW),
-            },
-        )
-        .await;
+        // One cycle first: it is what opens the gate, so the pass below is
+        // measured against a device that really could have worked.
+        let cycled = hourly(&state, &plane, &scheduler, &source, at(NOW)).await;
+        assert_eq!(
+            cycled.blocked(),
+            vec![],
+            "the cycle's own readiness is open, or the counts below would measure a closed gate"
+        );
+        assert_eq!(source.0.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            plane.beats.load(Ordering::SeqCst),
+            1,
+            "a cycle checks in: it is the hourly deadline, and the check-in is how a revocation \
+         arrives"
+        );
 
-        assert!(
-            started.is_some(),
-            "a phone with no previous tick works on the first resume, or it never works at all"
+        let found = super::work_pending(&state, &scheduler, &source, at(NOW + 10)).await;
+        assert_eq!(
+            found.discovery(),
+            crate::scheduler::Discovery::Quiet,
+            "an empty queue is a quiet pass, which is what keeps the next one on the idle gap"
         );
         assert_eq!(
             source.0.load(Ordering::SeqCst),
-            1,
-            "and the work source really was reached, which is what makes the count below mean \
-             the cadence rather than a closed gate"
-        );
-        assert_eq!(plane.beats.load(Ordering::SeqCst), 1);
-
-        let again = super::resume(
-            &state,
-            &plane,
-            &scheduler,
-            &source,
-            super::ResumeAt {
-                last_tick: Some(at(NOW)),
-                now: at(NOW + 60),
-            },
-        )
-        .await;
-
-        assert!(
-            again.is_none(),
-            "a resume a minute later is not a tick, and answering Some would stamp an instant \
-             that never worked"
-        );
-        assert_eq!(
-            source.0.load(Ordering::SeqCst),
-            1,
-            "a phone brought forward twenty times an hour claims work once, not twenty times"
+            2,
+            "the pass asked the control plane what is due"
         );
         assert_eq!(
             plane.beats.load(Ordering::SeqCst),
-            2,
-            "but it checks in every time, because that is the only channel by which it learns \
-             the seller signed it out"
+            1,
+            "and reported no session list of its own: the check-in keeps its own five-minute \
+         cadence, so a device discovering every ten seconds does not heartbeat every ten \
+         seconds"
         );
     }
 
@@ -1409,7 +1374,7 @@ mod tests {
         assert!(
             !gate.may_work(Marketplace::Tes, at(NOW)),
             "a marketplace the token does not name stays refused, which is how one \
-             marketplace is revoked across the installed fleet without an update"
+         marketplace is revoked across the installed fleet without an update"
         );
     }
 
@@ -1428,7 +1393,7 @@ mod tests {
         assert!(
             !gate.may_work(Marketplace::Tpt, at(NOW + VALIDITY + GRACE + 1)),
             "past it the gate fails closed, which is the kill-switch latency the founder \
-             commits to publicly"
+         commits to publicly"
         );
     }
 
@@ -1484,8 +1449,8 @@ mod tests {
             state.gate().await,
             EntitlementGate::closed(),
             "a withheld token must replace the one being held: leaving it standing would run \
-             the grace window from the last good token and turn a lapsed plan into \
-             twenty-five further hours of work rather than one"
+         the grace window from the last good token and turn a lapsed plan into \
+         twenty-five further hours of work rather than one"
         );
     }
 
@@ -1504,7 +1469,7 @@ mod tests {
         assert!(
             state.gate().await.may_work(Marketplace::Tpt, at(NOW)),
             "an offline period is not a lapse, and D11's grace window exists precisely so a \
-             seller keeps working through one"
+         seller keeps working through one"
         );
     }
 
@@ -1589,7 +1554,7 @@ mod tests {
         let (state, plane, recorder) = notifying_state(&key).await;
         let scheduler = Scheduler::new(Scheduler::DEFAULT_CADENCE, vec![Marketplace::Tpt]);
 
-        let report = super::cycle(&state, &plane, &scheduler, &SettlingSource, at(NOW)).await;
+        let report = hourly(&state, &plane, &scheduler, &SettlingSource, at(NOW)).await;
 
         assert_eq!(
             report
@@ -1599,7 +1564,7 @@ mod tests {
                 .count(),
             2,
             "the gate, the session and the entitlement are all open, so two items settled; \
-             without this the single notice below would prove nothing"
+         without this the single notice below would prove nothing"
         );
         let notices = recorder.notices().await;
         assert_eq!(
@@ -1624,7 +1589,7 @@ mod tests {
         let (state, plane, recorder) = notifying_state(&key).await;
         let scheduler = Scheduler::new(Scheduler::DEFAULT_CADENCE, vec![Marketplace::Tpt]);
 
-        super::cycle(
+        hourly(
             &state,
             &plane,
             &scheduler,
@@ -1644,7 +1609,7 @@ mod tests {
             "a cycle with nothing due says nothing"
         );
 
-        super::cycle(
+        hourly(
             &state,
             &Fake::new(true),
             &scheduler,

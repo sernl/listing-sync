@@ -115,14 +115,15 @@ const NOTHING_CHECKED_IN: CheckInHere = {
 
 /** Ask this machine to register itself and check in, and read what it said.
  *
- * The application registers itself on its own scheduled cycle as well, and
- * this is the half that makes it prompt. That cycle runs at start-up, which is
- * before the seller has signed in and therefore has no session to register
- * under, and then hourly on a computer or on the next resume on a phone — so
- * without this call a seller who has just signed in looks at an empty machine
- * list and has no way to tell a slow registration from a broken one. It is
- * also the one call that learns, under a session, that this machine was signed
- * out from the console.
+ * The application registers itself on its own coordinator as well, and this is
+ * the half that makes it prompt. That coordinator's first pass runs at
+ * start-up, which is before the seller has signed in and therefore has no
+ * session to register under; after it, the check-in runs every five minutes on
+ * a computer and on each resume on a phone — so without this call a seller who
+ * has just signed in waits minutes in front of an empty machine list with no
+ * way to tell a slow registration from a broken one. It is also the one call
+ * that learns, under a session, that this machine was signed out from the
+ * console.
  *
  * A rejection is `reached: false` with no detail. The three causes — an
  * application too old to know the command, a page it takes no commands from,
@@ -326,6 +327,9 @@ export async function stopImportHere(invoke: Invoke | null, run: string): Promis
 		if (originNotGranted(detail, STOP_IMPORT)) {
 			return { kind: 'refused', detail: ORIGIN_NOT_GRANTED };
 		}
+		if (signedOut(detail)) {
+			return { kind: 'refused', detail: DEVICE_SIGNED_OUT };
+		}
 		return unknownCommand(detail) ? { kind: 'unsupported' } : { kind: 'refused', detail };
 	}
 }
@@ -412,6 +416,9 @@ async function ranOnRun(
 		const detail = refusalText(caught, IMPORT_REFUSED_SILENTLY);
 		if (originNotGranted(detail, command)) {
 			return { kind: 'refused', detail: ORIGIN_NOT_GRANTED };
+		}
+		if (signedOut(detail)) {
+			return { kind: 'refused', detail: DEVICE_SIGNED_OUT };
 		}
 		return unknownCommand(detail) ? { kind: 'unsupported' } : { kind: 'refused', detail };
 	}
@@ -601,6 +608,45 @@ function refusal(caught: unknown, command: string, fallback: string): SessionOut
 		return { kind: 'refused', detail: ORIGIN_NOT_GRANTED };
 	}
 	return unknownCommand(detail) ? { kind: 'unsupported' } : { kind: 'refused', detail };
+}
+
+/** What a seller is told when this machine was signed out of their account.
+ *
+ * The same sentence `SIGNED_OUT_HERE` carries in
+ * `apps/desktop/src-tauri/src/heartbeat.rs`, and the one a caller compares
+ * against: a page that wants to stop offering an action a signed-out machine
+ * cannot perform tests `detail === DEVICE_SIGNED_OUT` rather than reading a
+ * message.
+ *
+ * The pre-press fact is `machineHere.revoked`, which is what a page should
+ * gate a control on; this is the answer for the window between a sign-out and
+ * this console's next check-in, and for a press that raced one. */
+export const DEVICE_SIGNED_OUT =
+	'This machine was signed out of your Teachouse account, so it cannot run imports. Sign it ' +
+	'back in from Marketplaces, then try again.';
+
+/** Whether a refusal is this machine having been signed out, rather than any
+ *  other refusal the application or the server can give.
+ *
+ * Three spellings reach here and they are all the same fact. The application
+ * refuses locally with `SIGNED_OUT_HERE`, which is `DEVICE_SIGNED_OUT`
+ * verbatim. A press that raced the sign-out reaches the server, whose import
+ * routes refuse with "this device is revoked and may not report a catalogue";
+ * the desktop client turns that into its own typed answer, and this catches
+ * the phrase for a client older than that change — which on Android was the
+ * reported defect, a raw `403` body with JSON in it rendered to a teacher.
+ *
+ * Narrow on purpose. Nothing here matches a bare 403 or the word "forbidden",
+ * because an ordinary refusal must keep saying what it said: telling a seller
+ * their machine was signed out whenever a request was refused would be a false
+ * accusation carrying the wrong remedy. */
+function signedOut(detail: string): boolean {
+	const said = detail.toLowerCase();
+	return (
+		said.includes('signed out of your teachouse account') ||
+		said.includes('device is revoked') ||
+		said.includes('device revoked')
+	);
 }
 
 /** Whether the application rejected the call because it registers no such

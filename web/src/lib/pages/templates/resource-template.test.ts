@@ -2,18 +2,20 @@ import { describe, expect, it } from 'vitest';
 import { emptyTptDraft, storedPick, type TptDraft } from '$lib/tpt-form';
 import {
 	DESCRIPTION_MAX,
+	EXAMPLES,
 	NAME_MAX,
 	blankTemplateDraft,
 	consumeBlankRequest,
 	emptyForm,
 	fieldWordsOf,
-	filledLine,
 	formOf,
 	isComplete,
+	isUntouched,
 	mergeIntoEmpty,
 	refusalOf,
 	savedLine,
 	scopeRefusal,
+	startFromExample,
 	toInput,
 	type TemplateForm
 } from './resource-template';
@@ -53,6 +55,67 @@ function head(patch: Partial<TemplateHead> = {}): TemplateHead {
 		...patch
 	};
 }
+
+describe('the two examples a template can start from', () => {
+	const [tes, tpt] = EXAMPLES;
+
+	it('offers one written for each marketplace a template may be scoped to', () => {
+		expect(EXAMPLES.map((one) => one.scope)).toEqual(['Tes', 'Tpt']);
+	});
+
+	it('fills a blank form and saves through the ordinary write with that scope', () => {
+		const started = startFromExample(emptyForm(), tpt);
+		expect(isComplete(started.form)).toBe(true);
+		const input = toInput(started.form);
+		expect(input.scope).toBe('Tpt');
+		expect(input.name).toBe(tpt.name);
+		expect(input.draft.description).toBe(tpt.body);
+	});
+
+	it('answers nothing that is the seller’s own to answer', () => {
+		// A status, a localisation tick, a price, a licence or a copyright
+		// declaration filled by an example would be a decision made for the
+		// seller and saved under their name. The vocabulary-backed fields are
+		// left out for a second reason: no identifier here is one the server
+		// serves.
+		for (const example of EXAMPLES) {
+			expect(toInput(startFromExample(emptyForm(), example).form).draft).toEqual({
+				description: example.body
+			});
+		}
+	});
+
+	it('leaves what the seller has already written alone when they try the other one', () => {
+		const mine = form({
+			name: 'My own name',
+			draft: { ...blankTemplateDraft(), description: 'Mine.' }
+		});
+		const started = startFromExample(startFromExample(mine, tes).form, tpt);
+		expect(started.form.name).toBe('My own name');
+		expect(started.form.draft.description).toBe('Mine.');
+		// The first example still answered the scope and the note, so the
+		// second finds nothing left to fill and says so.
+		expect(started.filled).toEqual([]);
+	});
+});
+
+describe('whether the editor holds anything worth an undo', () => {
+	it('reads a blank form as untouched, so clearing it warns about nothing', () => {
+		expect(isUntouched(emptyForm())).toBe(true);
+	});
+
+	it('reads a typed name, a chosen scope or a filled band as touched', () => {
+		expect(isUntouched(form())).toBe(false);
+		expect(isUntouched({ ...emptyForm(), scope: 'Tes' })).toBe(false);
+		expect(isUntouched({ ...emptyForm(), draft: draftWith({ subjectAreas: ['maths'] }) })).toBe(
+			false
+		);
+	});
+
+	it('reads a form an example filled as touched, which is what Undo is for', () => {
+		expect(isUntouched(startFromExample(emptyForm(), EXAMPLES[0]).form)).toBe(false);
+	});
+});
 
 describe('what a template may be saved with', () => {
 	it('refuses a template with no name, because a list of them needs telling apart', () => {
@@ -253,11 +316,6 @@ describe('starting a new resource from a template', () => {
 		expect(merged.before).toBe(typed);
 		expect(merged.before.subjectAreas).toEqual([]);
 	});
-
-	it('says so plainly when a template had nothing this draft was missing', () => {
-		expect(filledLine('Worksheets', [])).toMatch(/filled nothing/);
-		expect(filledLine('Worksheets', ['subjects', 'price'])).toMatch(/subjects, price/);
-	});
 });
 
 describe('which template a pull rule may fill from', () => {
@@ -306,14 +364,14 @@ describe('the line a listed template shows', () => {
 	});
 });
 
-describe('a request for a blank form', () => {
-	it('is answered when one is pending, which is the state a mount can arrive in', () => {
-		// The page raises it from the mapping tab, where this component does not
-		// exist; it is answered when the component appears, not before.
+describe('a request to clear the editor', () => {
+	it('is answered when one is pending, which is what the header press leaves', () => {
+		// The page raises it, including from the mapping tab; the tab answers it
+		// on the next effect run rather than the page clearing the form itself.
 		expect(consumeBlankRequest(true)).toEqual({ open: true, pending: false });
 	});
 
-	it('opens nothing when none is pending, so arriving on the tab opens no form', () => {
+	it('clears nothing when none is pending, so arriving keeps what was typed', () => {
 		expect(consumeBlankRequest(false)).toEqual({ open: false, pending: false });
 	});
 

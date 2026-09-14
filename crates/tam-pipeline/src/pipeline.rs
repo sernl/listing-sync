@@ -147,7 +147,7 @@ pub async fn ingest(
     let (cover_bytes, cover_kind) = files.first().ok_or(IngestError::EmptyPayload)?;
     let rendered = cover(*cover_kind, cover_bytes)
         .map_err(|error: RenderError| IngestError::Cover(error.to_string()))?;
-    let cover_file = store_render(sink, &rendered, FileRole::Cover, ctx.now).await?;
+    let cover_file = store_render(sink, &rendered.image, FileRole::Cover, ctx.now).await?;
 
     Ok(Ingested {
         payload,

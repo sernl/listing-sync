@@ -210,6 +210,8 @@ export interface DeviceView {
 	last_seen_at: number;
 	revoked_at: number | null;
 	wipe_outstanding: boolean;
+	/** Server-derived protocol eligibility, not presence or saved-login state. */
+	runs_sourced_payloads: boolean;
 	sessions: DeviceSessionView[];
 }
 
@@ -367,7 +369,10 @@ export interface EventView {
 	created_at: number;
 }
 
-export type ItemDetail = ItemView & { events: EventView[] };
+export type ItemDetail = ItemView & {
+	events: EventView[];
+	events_next: number | null;
+};
 
 /** What one finished run did, counted by settled outcome.
  *
@@ -491,6 +496,11 @@ export interface SyncResourceView {
 	coverage?: SyncTermCoverage | null;
 }
 
+export interface ResourceStateCount {
+	state: string;
+	count: number;
+}
+
 /** A sync or migrate request as it fills.
  *
  *  `create_job` is null while nothing has been enqueued, and stays null when
@@ -511,6 +521,8 @@ export interface SyncRequestView {
 	create_job: string | null;
 	remove_job: string | null;
 	resources: SyncResourceView[];
+	resource_counts: ResourceStateCount[];
+	resources_next: number | null;
 	coverage?: SyncCoverageView | null;
 	waiting_for_device_version?: string | null;
 }
@@ -533,11 +545,10 @@ export interface SyncRequestHead {
 	resources_failed: number;
 }
 
-/** Newest first, at most fifty. No cursor: the endpoint is bounded rather than
- *  paginated, so a seller with more than fifty requests sees the newest fifty
- *  and this client invents no way to ask for the rest. */
+/** One keyset page of sync and migration requests, newest first. */
 export interface SyncRequestsView {
 	requests: SyncRequestHead[];
+	next_cursor: string | null;
 }
 
 /** What the server answers a submit with: the request's identity, which is
@@ -744,18 +755,16 @@ export interface SyncSettingBody {
  *  run, a job and a resource's title, and a client that composed it would be
  *  a second place the seller's words are decided. */
 export interface ActivityLine {
+	key: string;
 	at: number;
 	line: string;
 	href: string | null;
 }
 
-/** One page of the log. `cursor` is the `at` of the oldest line on it and is
- *  absent at the end, which is the shape `GET /v1/sync/activity` answers —
- *  an instant rather than the opaque token the other lists page by, because
- *  the log is ordered by the clock and nothing else. */
+/** One log page; its opaque cursor orders tied instants by stable row identity. */
 export interface ActivityPage {
 	activity: ActivityLine[];
-	cursor: number | null;
+	cursor: string | null;
 }
 
 /** One resource that reaches more than one marketplace. */
@@ -1211,10 +1220,14 @@ export interface GuideExpectation {
 	expected_revision: number;
 }
 
+export type GuideSort = 'title' | 'newest';
+
 export interface GuideFilters {
 	q?: string;
 	topic?: string;
 	tags?: string[];
+	sort?: GuideSort;
+	page?: number;
 }
 
 /** One guide on a listing. No body: a list draws titles, and a body is up to
@@ -1248,6 +1261,10 @@ export interface GuideHeadView {
 export interface GuidesView {
 	guides: GuideHeadView[];
 	total: number;
+	page: number;
+	page_size: number;
+	has_next: boolean;
+	sort: GuideSort;
 }
 
 /** One guide as the editor reads it: `body` is the Markdown the operator
@@ -2341,12 +2358,43 @@ export interface ImportRunHead {
 export interface ImportRunView extends ImportRunHead {
 	items: ImportRunItemView[];
 	review_pairs: ReviewPairView[];
+	items_total: number;
+	items_offset: number;
+	items_limit: number;
 }
 
-/** Newest first, at most fifty. Bounded rather than paginated, as the sync
- *  request listing is. */
+/** One bounded page of the organisation's import history. */
 export interface ImportRunsView {
 	runs: ImportRunHead[];
+	total: number;
+	offset: number;
+	limit: number;
+}
+
+export type ImportRunFilterState =
+	| 'open'
+	| 'reading'
+	| 'reviewing'
+	| 'committing'
+	| 'complete'
+	| 'failed'
+	| 'abandoned';
+export type ImportRunOrder = 'newest' | 'oldest';
+export interface ImportRunsQuery {
+	offset?: number;
+	limit?: number;
+	state?: ImportRunFilterState | null;
+	source?: string | null;
+	order?: ImportRunOrder | null;
+}
+
+export type ImportRunItemOrder = 'title' | 'listed';
+export interface ImportRunItemsQuery {
+	offset?: number;
+	limit?: number;
+	q?: string | null;
+	state?: ImportRunItemView['state'] | null;
+	order?: ImportRunItemOrder | null;
 }
 
 /** Which resources of a listed run the seller ticked. `{ all: true }` is its
@@ -2460,7 +2508,7 @@ export const api = {
 	/** One keyset page of the catalogue, optionally narrowed to the items
 	 *  carrying one label. The label narrows the query rather than the page, so
 	 *  paging a filtered catalogue is the same walk as paging the whole one. */
-	products: (cursor?: string | null, label?: string | null) => {
+	products: (cursor?: string | null, label?: string | null, limit?: number) => {
 		const query = new URLSearchParams();
 		if (cursor) {
 			query.set('cursor', cursor);
@@ -2468,6 +2516,7 @@ export const api = {
 		if (label) {
 			query.set('label', label);
 		}
+		if (limit !== undefined) query.set('limit', String(limit));
 		const suffix = query.size === 0 ? '' : `?${query.toString()}`;
 		return request<ProductsPage>(`/v1/products${suffix}`);
 	},
@@ -2582,14 +2631,28 @@ export const api = {
 			{ inventory, mappings, intent },
 			{ 'idempotency-key': idempotencyKey }
 		),
-	jobs: (cursor?: string | null) =>
-		request<JobsPage>(`/v1/jobs${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`),
+	jobs: (cursor?: string | null, limit?: number) => {
+		const query = new URLSearchParams();
+		if (cursor) query.set('cursor', cursor);
+		if (limit !== undefined) query.set('limit', String(limit));
+		const suffix = query.size === 0 ? '' : `?${query}`;
+		return request<JobsPage>(`/v1/jobs${suffix}`);
+	},
 	job: (id: string) => request<JobView>(`/v1/jobs/${id}`),
-	items: (job: string, cursor?: string | null) =>
-		request<ItemsPage>(
-			`/v1/jobs/${job}/items${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`
-		),
-	item: (job: string, item: string) => request<ItemDetail>(`/v1/jobs/${job}/items/${item}`),
+	items: (job: string, cursor?: string | null, limit?: number) => {
+		const query = new URLSearchParams();
+		if (cursor) query.set('cursor', cursor);
+		if (limit !== undefined) query.set('limit', String(limit));
+		const suffix = query.size === 0 ? '' : `?${query}`;
+		return request<ItemsPage>(`/v1/jobs/${job}/items${suffix}`);
+	},
+	item: (job: string, item: string, after?: number | null, limit?: number) => {
+		const query = new URLSearchParams();
+		if (after !== undefined && after !== null) query.set('after', String(after));
+		if (limit !== undefined) query.set('limit', String(limit));
+		const suffix = query.size === 0 ? '' : `?${query}`;
+		return request<ItemDetail>(`/v1/jobs/${job}/items/${item}${suffix}`);
+	},
 
 	/** Ask for a sync or a migrate. The key is the request's own identity on the
 	 *  server rather than a deduplication token beside it, so a retried submit is
@@ -2598,13 +2661,30 @@ export const api = {
 		post<SyncRequestAck>('/v1/sync', body, { 'idempotency-key': idempotencyKey }),
 	/** One request as it fills. This is what the console watches between the
 	 *  submit and the ledger having a run to show. */
-	syncRequest: (id: string) => request<SyncRequestView>(`/v1/sync/${id}`),
-	/** Every request this organisation has made, newest first and bounded by
-	 *  the server. It is what makes a request created on one machine reachable
-	 *  from another and after a restart: a device-branch migrate mints no job
-	 *  while it is pending, so until it does there is nothing else in the
-	 *  console that names it. */
-	syncRequests: () => request<SyncRequestsView>('/v1/sync'),
+	syncRequest: (id: string, after?: number | null, limit?: number) => {
+		const query = new URLSearchParams();
+		if (after !== undefined && after !== null) query.set('after', String(after));
+		if (limit !== undefined) query.set('limit', String(limit));
+		const suffix = query.size === 0 ? '' : `?${query}`;
+		return request<SyncRequestView>(`/v1/sync/${id}${suffix}`);
+	},
+	/** Filtered request history, including pending requests that have not created a job. */
+	syncRequests: (
+		params: {
+			cursor?: string | null;
+			limit?: number;
+			disposition?: 'sync' | 'migrate';
+			state?: string;
+		} = {}
+	) => {
+		const query = new URLSearchParams();
+		if (params.cursor) query.set('cursor', params.cursor);
+		if (params.limit !== undefined) query.set('limit', String(params.limit));
+		if (params.disposition) query.set('disposition', params.disposition);
+		if (params.state) query.set('state', params.state);
+		const suffix = query.size === 0 ? '' : `?${query}`;
+		return request<SyncRequestsView>(`/v1/sync${suffix}`);
+	},
 
 	/** Every schedule this organisation holds, with the next and last tick the
 	 *  server worked out. The two instants are read rather than computed here:
@@ -2630,12 +2710,14 @@ export const api = {
 	syncSettings: () => request<SyncSettingsView>('/v1/sync/settings'),
 	setSyncSetting: (inventory: InventoryId, body: SyncSettingBody) =>
 		put<MarketplaceSyncSettingView>(`/v1/sync/settings/${inventory}`, body),
-	/** The activity log, newest first and a page at a time. The server clamps
-	 *  `limit`, so the console asks for none and takes the default. */
-	syncActivity: (cursor?: number | null) =>
-		request<ActivityPage>(
-			`/v1/sync/activity${cursor === undefined || cursor === null ? '' : `?cursor=${cursor}`}`
-		),
+	/** One page of activity ordered by instant and stable row identity. */
+	syncActivity: (cursor?: string | null, limit?: number) => {
+		const query = new URLSearchParams();
+		if (cursor) query.set('cursor', cursor);
+		if (limit !== undefined) query.set('limit', String(limit));
+		const suffix = query.size === 0 ? '' : `?${query}`;
+		return request<ActivityPage>(`/v1/sync/activity${suffix}`);
+	},
 	/** Every resource that reaches more than one marketplace. Bounded by the
 	 *  server and deliberately not paged: it is a list the seller scans, and a
 	 *  cursor on it would be a second paging idiom for no gain. */
@@ -2683,13 +2765,30 @@ export const api = {
 	/** One retained key per explicit start intent, including retries after a lost reply. */
 	createImportRun: (source: InventoryId, startKey: string, retryOf: string | null = null) =>
 		post<ImportRunView>('/v1/imports/runs', { source, start_key: startKey, retry_of: retryOf }),
-	/** Every import run this organisation has made, newest first and bounded
-	 *  by the server. Heads only: the list draws a counts line and a pill. */
-	importRuns: () => request<ImportRunsView>('/v1/imports/runs'),
-	/** One run with its items and whatever pairs are parked on it. This is
-	 *  what the run page re-reads whenever the ledger moves. */
-	importRun: (run: string) =>
-		request<ImportRunView>(`/v1/imports/runs/${encodeURIComponent(run)}`),
+	/** A filtered page of import history, newest first unless requested otherwise. */
+	importRuns: (query: ImportRunsQuery = {}) => {
+		const params = new URLSearchParams();
+		if (query.offset !== undefined) params.set('offset', String(query.offset));
+		if (query.limit !== undefined) params.set('limit', String(query.limit));
+		if (query.state) params.set('state', query.state);
+		if (query.source) params.set('source', query.source);
+		if (query.order) params.set('order', query.order);
+		const suffix = params.toString();
+		return request<ImportRunsView>(`/v1/imports/runs${suffix ? `?${suffix}` : ''}`);
+	},
+	/** Whole-run progress with one filtered page of items and the pending review pairs. */
+	importRun: (run: string, query: ImportRunItemsQuery = {}) => {
+		const params = new URLSearchParams();
+		if (query.offset !== undefined) params.set('offset', String(query.offset));
+		if (query.limit !== undefined) params.set('limit', String(query.limit));
+		if (query.q) params.set('q', query.q);
+		if (query.state) params.set('state', query.state);
+		if (query.order) params.set('order', query.order);
+		const suffix = params.toString();
+		return request<ImportRunView>(
+			`/v1/imports/runs/${encodeURIComponent(run)}${suffix ? `?${suffix}` : ''}`
+		);
+	},
 	/** Tick the resources to read. Answers the run as it now stands, so the
 	 *  page needs no follow-up read; everything left unticked is skipped. */
 	selectImportRun: (run: string, selection: RunSelection) =>
@@ -2929,12 +3028,16 @@ export const api = {
 			body: file
 		}),
 
-	/** The published guides, newest first. */
+	/** A filtered page of published guides, Title A–Z unless another order is requested. */
 	guides: (filters: GuideFilters = {}) => {
 		const query = new URLSearchParams();
 		if (filters.q) query.set('q', filters.q);
 		if (filters.topic) query.set('topic', filters.topic);
 		if (filters.tags?.length) query.set('tags', filters.tags.join(','));
+		if (filters.sort) query.set('sort', filters.sort);
+		if (filters.page !== undefined && filters.page > 1) {
+			query.set('page', String(filters.page));
+		}
 		const suffix = query.toString();
 		return request<GuidesView>(`/v1/guides${suffix ? `?${suffix}` : ''}`);
 	},

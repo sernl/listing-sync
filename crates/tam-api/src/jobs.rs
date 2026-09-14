@@ -15,7 +15,7 @@ use tam_marketplace::ListingState;
 use tam_storage::{
     intent_digest, Disposition, EntitlementRepo, EventRow, ItemCounts, ItemRow, ItemsPageParams,
     JobOrigin, JobReadRepo, JobRepo, LedgerCursor, MappingSeed, NewJob, NewJobItem, NewSyncRequest,
-    StorageError, SyncIntent, SyncRequestRepo,
+    StorageError, SyncIntent, SyncRequestPage, SyncRequestRepo,
 };
 use tam_types::{Actor, FailureCode, InventoryId, JobId, MappingId, OrgId, Stamp, Timestamp, Uuid};
 
@@ -321,7 +321,11 @@ impl ItemView {
 pub struct ItemDetail {
     #[serde(flatten)]
     pub item: ItemView,
+    /// One page of the item's steps, oldest first.
     pub events: Vec<EventView>,
+    /// The `org_seq` to ask after for the next page of steps, or nothing
+    /// where this page is the last.
+    pub events_next: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -504,7 +508,22 @@ pub struct SyncRequestView {
     /// it stops being true the moment a seller updates one. `None` means
     /// nothing is waiting on a version.
     pub waiting_for_device_version: Option<String>,
+    /// How many of the request's resources stand in each state, over the
+    /// whole request.
+    ///
+    /// Here rather than counted from `resources`, because `resources` is one
+    /// page. Every sentence this page leads with — what the request is doing,
+    /// how many listings arrived, how many the device skipped — is about the
+    /// request and not about the rows on screen, and a tally taken from page
+    /// two of a finished migration would say nothing had been imported.
+    pub resource_counts: Vec<ResourceStateCountView>,
+    /// One page of the request's resources, by ordinal.
     pub resources: Vec<SyncResourceView>,
+    /// The ordinal to ask after for the next page of resources, or nothing
+    /// where this page is the last. A plain ordinal rather than an opaque
+    /// token: the order is the request's own ordinal, which the seller's
+    /// submitted list already fixed, and there is nothing for a token to hide.
+    pub resources_next: Option<i32>,
 }
 
 /// The coverage of one request, summed over the resources that carry it.
@@ -517,6 +536,18 @@ pub struct CoverageView {
     pub terms_mapped: u32,
     pub terms_unmapped: u32,
     pub terms_uncovered: u32,
+}
+
+/// How many of a request's resources stand in one state.
+///
+/// The state is the stored word rather than a closed enum, for the same
+/// reason `SyncResourceView::state` is: the console already renders a state
+/// it does not know by saying so, and a view that refused to carry one would
+/// blank the page instead.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceStateCountView {
+    pub state: String,
+    pub count: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -543,7 +574,7 @@ pub struct ResourceCoverageView {
     pub terms_uncovered: u32,
 }
 
-/// The organisation's sync requests, newest first.
+/// One page of the organisation's sync requests, newest first.
 ///
 /// The console's only way back to a request it created and navigated away
 /// from. A device-branch migrate mints no job until its completing page, so
@@ -552,6 +583,12 @@ pub struct ResourceCoverageView {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncRequestListView {
     pub requests: Vec<SyncRequestSummaryView>,
+    /// The token for the next page, or nothing when this page is the end.
+    ///
+    /// Opaque, and the same codec the ledger's own lists use, because it is
+    /// the same kind of cursor: the keyset `(requested_at, id)` this list is
+    /// ordered by.
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -567,23 +604,86 @@ pub struct SyncRequestSummaryView {
     pub resources_failed: u32,
 }
 
-/// How many requests one page carries.
+/// How many requests one page carries at most, and by default.
 ///
-/// A ceiling rather than a cursor, deliberately: a seller has a handful of
-/// migrations, not a feed, and a pagination surface nobody needs is a surface
-/// to keep working. If a tenant ever passes this, the answer is a cursor and
-/// not a larger number.
+/// It was a ceiling with no cursor, on the reasoning that a seller has a
+/// handful of migrations rather than a feed. A seller who migrates a shop a
+/// week reaches it inside a year, and past it the fifty-first migration was
+/// not merely unpaged but unreachable — so the answer the comment named is
+/// now the answer: a cursor. The figure stays as the ceiling on one page,
+/// and as the default so that a caller which asks for no page size keeps the
+/// answer it has always had.
 const SYNC_LIST_MAX: i64 = 50;
+
+/// What narrows the request list, and where the last page ended.
+#[derive(Debug, Default, Deserialize)]
+pub struct SyncListParams {
+    pub cursor: Option<String>,
+    pub limit: Option<i64>,
+    /// `sync` or `migrate`. A sync and a migration are one record under two
+    /// dispositions and the two screens that read this list each own one, so
+    /// the narrowing is the server's `WHERE` clause rather than a filter the
+    /// console applies to a page it was handed — which would answer "the
+    /// migrations among the newest ten requests" and show a seller whose last
+    /// ten requests were syncs no migrations at all.
+    pub disposition: Option<String>,
+    /// One request state, as the wire spells it elsewhere on this surface.
+    pub state: Option<String>,
+}
+
+/// The dispositions a request can carry, for refusing anything else.
+///
+/// Refused rather than ignored, exactly as `parse_page` refuses an unknown
+/// outcome: a filter that is silently dropped answers a well-formed page of
+/// everything to a caller that believes it asked for one half.
+fn parse_disposition(raw: Option<&str>) -> Result<Option<Disposition>, APIError> {
+    match raw {
+        None | Some("") => Ok(None),
+        Some("sync") => Ok(Some(Disposition::Sync)),
+        Some("migrate") => Ok(Some(Disposition::Migrate)),
+        Some(_other) => Err(validation(
+            "a request is either a sync or a migrate, and that is neither",
+        )),
+    }
+}
 
 pub(crate) async fn list_sync_requests(
     State(state): State<AppState>,
     context: OrgContext,
     Path(_version): Path<String>,
+    Query(params): Query<SyncListParams>,
 ) -> Result<Json<SyncRequestListView>, APIError> {
+    let after = match params.cursor.as_deref() {
+        None | Some("") => None,
+        Some(raw) => {
+            let cursor = decode_cursor(raw)
+                .ok_or_else(|| validation("the cursor is not one this server issued"))?;
+            Some((cursor.created_at, cursor.id))
+        }
+    };
+    let limit = params.limit.unwrap_or(SYNC_LIST_MAX).clamp(1, SYNC_LIST_MAX);
+    let page = SyncRequestPage {
+        after,
+        limit,
+        disposition: parse_disposition(params.disposition.as_deref())?,
+        state: params.state.filter(|state| !state.is_empty()),
+    };
     let rows = SyncRequestRepo::new(state.pool.clone())
-        .list(context.org, SYNC_LIST_MAX)
+        .list(context.org, &page)
         .await
         .map_err(|error| storage_fault(&state, &error))?;
+    // A full page may have more behind it and a short one cannot, which is
+    // the rule every other list on this surface pages by.
+    let next_cursor = (i64::try_from(rows.len()).unwrap_or(i64::MAX) == limit)
+        .then(|| {
+            rows.last().map(|last| {
+                encode_cursor(&LedgerCursor {
+                    created_at: last.requested_at,
+                    id: last.id,
+                })
+            })
+        })
+        .flatten();
     Ok(Json(SyncRequestListView {
         requests: rows
             .into_iter()
@@ -599,7 +699,28 @@ pub(crate) async fn list_sync_requests(
                 resources_failed: row.resources_failed,
             })
             .collect(),
+        next_cursor,
     }))
+}
+
+/// How many resources one page of a request's listing list carries.
+///
+/// A migration of a whole shop names every listing in it, and this page used
+/// to answer all of them: five hundred rows on the wire and five hundred in
+/// the document, for a screen that shows twenty-five. The figures beside the
+/// list are the whole request's and are counted in SQL, so bounding the rows
+/// costs the seller no fact.
+const RESOURCE_PAGE_DEFAULT: i64 = 25;
+const RESOURCE_PAGE_MAX: i64 = 100;
+
+/// Where a page of the listing list starts, and how long it is.
+#[derive(Debug, Default, Deserialize)]
+pub struct ResourcePageParams {
+    /// The ordinal of the last row already held. The request's ordinals are
+    /// the order the seller submitted, so they are a total order already and
+    /// there is nothing an opaque token would add.
+    pub after: Option<i32>,
+    pub limit: Option<i64>,
 }
 
 /// What the client polls between asking for a sync and the ledger having
@@ -608,61 +729,67 @@ pub(crate) async fn sync_request_view(
     State(state): State<AppState>,
     context: OrgContext,
     Path((_version, request)): Path<(String, String)>,
+    Query(params): Query<ResourcePageParams>,
 ) -> Result<Json<SyncRequestView>, APIError> {
     let request = parse_id(&request)?;
-    let record = SyncRequestRepo::new(state.pool.clone())
-        .get(context.org, request)
+    let limit = params
+        .limit
+        .unwrap_or(RESOURCE_PAGE_DEFAULT)
+        .clamp(1, RESOURCE_PAGE_MAX);
+    let detail = SyncRequestRepo::new(state.pool.clone())
+        .detail(context.org, request, params.after, limit)
         .await
         .map_err(|error| storage_fault(&state, &error))?
         .ok_or_else(|| missing("no such sync request"))?;
+    let head = detail.head;
     // Coverage is measured only where a device enumerated the catalogue, and
     // the source's transport class is what says so — the same predicate the
     // submit validated against, read here rather than restated.
-    let measured = record.source.marketplace().transport_class()
+    let measured = head.source.marketplace().transport_class()
         == tam_types::TransportClass::SellerDevice
-        && record.disposition == Disposition::Migrate;
-    // A SUM over the breadcrumbs that carry a measurement, and only those. A
-    // skipped resource never reached the taxonomy, so counting it as a row of
-    // zeros would enter it into the founder's average as perfect coverage —
-    // which is exactly what the nullable columns exist to prevent, and this
-    // filter is the read-side half of that.
-    let coverage = measured.then(|| {
-        record.resources.iter().filter_map(|row| row.coverage).fold(
-            CoverageView {
-                rows: 0,
-                terms_seen: 0,
-                terms_mapped: 0,
-                terms_unmapped: 0,
-                terms_uncovered: 0,
-            },
-            |mut total, row| {
-                total.rows = total.rows.saturating_add(1);
-                total.terms_seen = total.terms_seen.saturating_add(row.terms_seen);
-                total.terms_mapped = total.terms_mapped.saturating_add(row.terms_mapped);
-                total.terms_unmapped = total.terms_unmapped.saturating_add(row.terms_unmapped);
-                total.terms_uncovered = total.terms_uncovered.saturating_add(row.terms_uncovered);
-                total
-            },
-        )
-    });
+        && head.disposition == Disposition::Migrate;
+    // The sum is the storage layer's, over the breadcrumbs that carry a
+    // measurement and only those: a skipped resource never reached the
+    // taxonomy, so counting it as a row of zeros would enter it into the
+    // founder's average as perfect coverage. It is a sum over the whole
+    // request rather than over the page, which is the same reason the state
+    // counts are.
+    let coverage = measured
+        .then_some(detail.coverage)
+        .flatten()
+        .map(|total| CoverageView {
+            rows: total.rows,
+            terms_seen: total.terms_seen,
+            terms_mapped: total.terms_mapped,
+            terms_unmapped: total.terms_unmapped,
+            terms_uncovered: total.terms_uncovered,
+        });
     let waiting_for_device_version = if measured {
         waiting_for_a_device(&state, context.org).await?
     } else {
         None
     };
     Ok(Json(SyncRequestView {
-        request: record.id,
-        source: record.source,
-        target: record.target,
-        disposition: record.disposition.as_str().to_owned(),
-        intent: record.intent.as_str().to_owned(),
-        state: record.state,
-        failure_detail: record.failure_detail,
-        create_job: record.create_job,
-        remove_job: record.remove_job,
+        request: head.id,
+        source: head.source,
+        target: head.target,
+        disposition: head.disposition.as_str().to_owned(),
+        intent: head.intent.as_str().to_owned(),
+        state: head.state,
+        failure_detail: head.failure_detail,
+        create_job: head.create_job,
+        remove_job: head.remove_job,
         coverage,
         waiting_for_device_version,
-        resources: record
+        resource_counts: detail
+            .counts
+            .into_iter()
+            .map(|row| ResourceStateCountView {
+                state: row.state,
+                count: row.count,
+            })
+            .collect(),
+        resources: detail
             .resources
             .into_iter()
             .map(|row| SyncResourceView {
@@ -678,6 +805,7 @@ pub(crate) async fn sync_request_view(
                 }),
             })
             .collect(),
+        resources_next: detail.next_ordinal,
     }))
 }
 
@@ -1020,37 +1148,55 @@ pub(crate) async fn job_items(
     }))
 }
 
+/// How many steps one page of an item's timeline carries.
+///
+/// A retried item records an event per step per attempt, so the timeline is
+/// the largest thing on an item's disclosure. Twenty-five is what the panel
+/// shows; the cursor is `org_seq`, which is the total order the stream
+/// already pages by.
+const EVENT_PAGE_DEFAULT: i64 = 25;
+const EVENT_PAGE_MAX: i64 = 200;
+
+/// Where a page of one item's timeline starts.
+#[derive(Debug, Default, Deserialize)]
+pub struct EventPageParams {
+    /// The `org_seq` of the last step already held.
+    pub after: Option<i64>,
+    pub limit: Option<i64>,
+}
+
 pub(crate) async fn item_detail(
     State(state): State<AppState>,
     context: OrgContext,
     Path((_version, job, item)): Path<(String, String, String)>,
+    Query(params): Query<EventPageParams>,
 ) -> Result<Json<ItemDetail>, APIError> {
     let job = JobId(parse_id(&job)?);
     let item = JobItemId(parse_id(&item)?);
+    let limit = params
+        .limit
+        .unwrap_or(EVENT_PAGE_DEFAULT)
+        .clamp(1, EVENT_PAGE_MAX);
     let reads = JobReadRepo::new(state.pool.clone());
-    let rows = reads
-        .items_page(
-            context.org,
-            job,
-            ItemsPageParams {
-                cursor: None,
-                limit: i64::from(i32::MAX),
-                outcome: None,
-            },
-        )
+    // The one item, read as one row. This used to page every item of the job
+    // with a limit of `i32::MAX` and then search the result in memory, so
+    // opening one item of a five-hundred-item bulk read the whole bulk.
+    let row = reads
+        .item(context.org, job, item)
         .await
-        .map_err(|error| storage_fault(&state, &error))?;
-    let row = rows
-        .into_iter()
-        .find(|row| row.item == item)
+        .map_err(|error| storage_fault(&state, &error))?
         .ok_or_else(|| missing("no such item"))?;
     let events = reads
-        .item_events(context.org, item)
+        .item_events(context.org, item, params.after, limit)
         .await
         .map_err(|error| storage_fault(&state, &error))?;
+    let events_next = (i64::try_from(events.len()).unwrap_or(i64::MAX) == limit)
+        .then(|| events.last().map(|last| last.org_seq))
+        .flatten();
     Ok(Json(ItemDetail {
         item: ItemView::from_row(row),
         events: events.into_iter().map(EventView::from_row).collect(),
+        events_next,
     }))
 }
 

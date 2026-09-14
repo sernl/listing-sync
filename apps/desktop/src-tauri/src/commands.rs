@@ -15,7 +15,7 @@ use tam_types::Marketplace;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::connect::{login_target, return_url, ConnectVerdict, LoginTarget};
-use crate::heartbeat::{check_in, first_run, CheckIn, CheckInError};
+use crate::heartbeat::{check_in, first_run, CheckIn, CheckInError, SIGNED_OUT_HERE};
 use crate::run::wall_now;
 use crate::session::{Cookie, CookieJar, SessionRecord, SessionStatus};
 use crate::state::{DesktopState, DeviceActivity};
@@ -655,11 +655,40 @@ async fn file_session<R: tauri::Runtime>(
 /// The console calls it when it loads, which is what first run means for a
 /// client whose interface is the console. Registration is idempotent on the
 /// server, so calling it again is a refresh rather than a second machine.
+///
+/// A device already known to be signed out checks in and does not register,
+/// and that is the invariant rather than an optimisation: registration cannot
+/// clear a revocation — `revoked_at` is its own column and the upsert does not
+/// touch it — but a client that attempted one on every press would be a client
+/// whose recovery path was a registration, which is the shape the seller's
+/// explicit restore exists to be the only instance of. What this press does
+/// while revoked is observe: a restore performed in the console lands here as
+/// an answer that is no longer revoked.
+///
+/// The coordinator is woken either way, so work the seller queued in the
+/// browser is picked up now rather than at the next cadence.
 #[tauri::command]
 pub async fn device_check_in(app: AppHandle) -> Result<DeviceState, CommandError> {
     let state = app.state::<DesktopState>();
-    let answer = first_run(&state, state.control_plane()).await;
+    let answer = if state.revoked() {
+        check_in(&state, state.control_plane()).await
+    } else {
+        first_run(&state, state.control_plane()).await
+    };
+    wake(&app);
     device_state(&state, answer)
+}
+
+/// Ask the coordinator for an immediate pass, where one is running.
+///
+/// Absent in a host test, which builds a state and no loop, so this is a read
+/// of managed state that tolerates its absence rather than an `expect`: a
+/// command that panicked without a coordinator would be a command only the
+/// shipped build could answer.
+fn wake<R: tauri::Runtime>(app: &AppHandle<R>) {
+    if let Some(wake) = app.try_state::<Arc<crate::Wake>>() {
+        wake.now();
+    }
 }
 
 /// What the console is told a check-in found, this machine's identity
@@ -890,6 +919,48 @@ fn pressed(
     }
 }
 
+/// Whether this device may take work, decided against the server rather than
+/// against a cached mark.
+///
+/// The cached mark alone was a bug with a seam in it. The seller's recovery is
+/// two calls the console makes in order — the restore route, then a check-in —
+/// and the second may fail on its own: a restore that succeeded while its
+/// check-in dropped leaves the console showing a machine that is signed back
+/// in and this process still holding `revoked`. Every explicit start then
+/// refused locally, naming an act the server had already undone, until the
+/// next scheduled check-in came round.
+///
+/// So a cached revocation is a reason to *ask*, never a reason to refuse. One
+/// check-in, which is the call that learns the current answer and installs the
+/// gate that goes with it:
+///
+/// - revoked still, as the server says now — refuse, in the seller's words.
+/// - not revoked any more — go ahead; `check_in` has already cleared the mark
+///   and installed the entitlement this run will be worked under.
+/// - unreachable — go ahead. An outage is not a revocation and must never be
+///   rendered as one; the claim is the authorisation boundary and the server
+///   refuses there if the machine really is signed out, now as
+///   [`crate::heartbeat::ControlPlaneError::Revoked`] carrying the same
+///   sentence rather than as a response body.
+///
+/// [`check_in`] rather than [`first_run`], deliberately and by the same rule
+/// the whole repair follows: nothing here registers, and nothing here
+/// restores. A revoked device that re-registered would be a device lifting its
+/// own revocation, and the only thing that clears the mark is the seller's
+/// explicit restore.
+///
+/// The cost is one request on the press after a sign-out, and none at all on
+/// every other press: an unrevoked device does not reach the check-in.
+async fn refuse_if_signed_out(state: &DesktopState) -> Result<(), CommandError> {
+    if !state.revoked() {
+        return Ok(());
+    }
+    match check_in(state, state.control_plane()).await {
+        Ok(answer) if answer.revoked => Err(CommandError(SIGNED_OUT_HERE.to_owned())),
+        Ok(_) | Err(_) => Ok(()),
+    }
+}
+
 /// Asks this device to read the shop one run names.
 ///
 /// Answers once the run is durably this device's rather than once the shop
@@ -913,6 +984,7 @@ pub async fn start_import<R: tauri::Runtime>(
     takeover: Option<bool>,
 ) -> Result<ImportStarted, CommandError> {
     let state = app.state::<DesktopState>();
+    refuse_if_signed_out(state.inner()).await?;
     let ctx = require_ledger(state.inner())?;
     let accepted = ctx
         .supervisor
@@ -944,6 +1016,7 @@ pub async fn continue_import<R: tauri::Runtime>(
     takeover: Option<bool>,
 ) -> Result<ImportContinued, CommandError> {
     let state = app.state::<DesktopState>();
+    refuse_if_signed_out(state.inner()).await?;
     let ctx = require_ledger(state.inner())?;
     let accepted = ctx
         .supervisor
@@ -1147,6 +1220,246 @@ mod import_command_tests {
             "the refusal names what is missing rather than failing in the background, because a \
              seller can act on the first and can only discover the second. Got: {}",
             refusal.0
+        );
+        drop(app);
+    }
+
+    /// A control plane that answers one standing, and counts what it was
+    /// asked. Registrations are counted because the number that matters is
+    /// zero: a revoked device must never register its way back in.
+    struct Standing {
+        revoked: bool,
+        reachable: bool,
+        beats: core::sync::atomic::AtomicUsize,
+        registrations: core::sync::atomic::AtomicUsize,
+    }
+
+    impl Standing {
+        fn saying(revoked: bool) -> Self {
+            Self {
+                revoked,
+                reachable: true,
+                beats: core::sync::atomic::AtomicUsize::new(0),
+                registrations: core::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+
+        fn unreachable() -> Self {
+            Self {
+                reachable: false,
+                ..Self::saying(true)
+            }
+        }
+    }
+
+    impl crate::heartbeat::ControlPlane for Standing {
+        fn reachable(&self) -> crate::heartbeat::PlaneFuture<'_, ()> {
+            Box::pin(core::future::ready(Ok(())))
+        }
+
+        fn sync_request_source(
+            &self,
+            _request: tam_types::Uuid,
+        ) -> crate::heartbeat::PlaneFuture<'_, tam_types::InventoryId> {
+            Box::pin(core::future::ready(Ok(tam_types::InventoryId::Tes)))
+        }
+
+        fn import_run_facts(
+            &self,
+            _run: tam_types::Uuid,
+        ) -> crate::heartbeat::PlaneFuture<'_, crate::import::RunFacts> {
+            Box::pin(core::future::ready(Err(
+                crate::heartbeat::ControlPlaneError::NotConfigured,
+            )))
+        }
+
+        fn import_selection<'a>(
+            &'a self,
+            _device: &'a DeviceId,
+            _run: tam_types::Uuid,
+        ) -> crate::heartbeat::PlaneFuture<'a, Vec<String>> {
+            Box::pin(core::future::ready(Ok(Vec::new())))
+        }
+
+        fn open_import_runs<'a>(
+            &'a self,
+            _device: &'a DeviceId,
+        ) -> crate::heartbeat::PlaneFuture<'a, Vec<crate::import::OpenImportRun>> {
+            Box::pin(core::future::ready(Ok(Vec::new())))
+        }
+
+        fn register<'a>(
+            &'a self,
+            _device: &'a DeviceIdentity,
+            _facts: crate::heartbeat::HostFacts,
+        ) -> crate::heartbeat::PlaneFuture<'a, ()> {
+            self.registrations
+                .fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+            Box::pin(core::future::ready(Ok(())))
+        }
+
+        fn heartbeat<'a>(
+            &'a self,
+            _device: &'a DeviceId,
+            _sessions: &'a [crate::heartbeat::SessionReport],
+        ) -> crate::heartbeat::PlaneFuture<'a, crate::heartbeat::CheckIn> {
+            self.beats
+                .fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+            if !self.reachable {
+                return Box::pin(core::future::ready(Err(
+                    crate::heartbeat::ControlPlaneError::Refused("no route".to_owned()),
+                )));
+            }
+            let revoked = self.revoked;
+            Box::pin(core::future::ready(Ok(crate::heartbeat::CheckIn {
+                revoked,
+                entitlement: None,
+            })))
+        }
+    }
+
+    fn signed_out_state(plane: Arc<Standing>) -> DesktopState {
+        let state = DesktopState::with_control_plane(
+            DeviceIdentity {
+                id: DeviceId::from_raw("11112222333344445555666677778888"),
+                label: "a test machine".to_owned(),
+            },
+            Arc::new(MemorySessionStore::default()),
+            plane,
+        );
+        // What a device holds after a check-in that reported a sign-out.
+        state.set_revoked(true);
+        state
+    }
+
+    /// A machine the seller signed out refuses the import in words a teacher
+    /// can read, and refuses it on what the server says now rather than on
+    /// what this process last heard.
+    ///
+    /// Both halves are the property. The sentence is compared against
+    /// `SIGNED_OUT_HERE` itself, which is the string the console exports as
+    /// `DEVICE_SIGNED_OUT` and compares against to stop offering Resume at
+    /// all — so a seller reads the act they performed and its remedy, never
+    /// the server's forbidden body, which is what the founder met on Android.
+    /// And the check-in is what decides it, so a stale mark cannot refuse a
+    /// machine the server has already restored.
+    ///
+    /// Measured against a build that would otherwise refuse for a different
+    /// reason — no ledger transport — so what this pins is that the sign-out
+    /// is decided first rather than that any refusal happens.
+    #[tokio::test]
+    async fn a_machine_the_server_still_calls_signed_out_refuses_an_import_in_a_sentence() {
+        let app = mock_builder()
+            .invoke_handler(tauri::generate_handler![super::start_import])
+            .build(mock_context(noop_assets()))
+            .expect("the mock application builds");
+        let plane = Arc::new(Standing::saying(true));
+        app.manage(signed_out_state(Arc::clone(&plane)));
+
+        let refusal = super::start_import(app.handle().clone(), tam_types::Uuid([0x71; 16]), None)
+            .await
+            .expect_err("a signed-out machine may not run an import");
+        assert_eq!(
+            refusal.0,
+            crate::heartbeat::SIGNED_OUT_HERE,
+            "the seller reads the sign-out and its remedy, not the transport's own complaint"
+        );
+        assert!(
+            !refusal.0.contains('{') && !refusal.0.contains("403"),
+            "and nothing off the wire reaches them: {}",
+            refusal.0
+        );
+
+        let continued =
+            super::continue_import(app.handle().clone(), tam_types::Uuid([0x71; 16]), None)
+                .await
+                .expect_err("nor may it continue one");
+        assert_eq!(
+            continued.0,
+            crate::heartbeat::SIGNED_OUT_HERE,
+            "both halves of the flow refuse the same way, or one of them would be the way in"
+        );
+        assert_eq!(
+            plane
+                .registrations
+                .load(core::sync::atomic::Ordering::SeqCst),
+            0,
+            "and it asked without registering: a revoked device that registered its way back \
+             would be lifting its own revocation"
+        );
+        drop(app);
+    }
+
+    /// A restore the console performed is honoured on the next press, even
+    /// though the check-in that should have cleared the mark never landed.
+    ///
+    /// This is the seam. Signing a machine back in is two calls — the restore
+    /// route, then a check-in — and the second can fail on its own. The
+    /// console then shows a machine that is signed back in while this process
+    /// still holds `revoked`, and a guard that trusted that mark refused every
+    /// press until the next scheduled check-in came round, naming an act the
+    /// server had already undone.
+    #[tokio::test]
+    async fn a_press_after_a_restore_asks_the_server_rather_than_trusting_a_stale_mark() {
+        let app = mock_builder()
+            .invoke_handler(tauri::generate_handler![super::start_import])
+            .build(mock_context(noop_assets()))
+            .expect("the mock application builds");
+        // The restore landed on the server; this process never heard about it.
+        let plane = Arc::new(Standing::saying(false));
+        app.manage(signed_out_state(Arc::clone(&plane)));
+
+        let answer = super::start_import(app.handle().clone(), tam_types::Uuid([0x71; 16]), None)
+            .await
+            .expect_err("this build still has no ledger transport");
+        assert!(
+            answer.0.contains("no way to reach the server"),
+            "the press got past the sign-out and failed on what is actually missing, rather \
+             than being refused for a revocation the server had already lifted. Got: {}",
+            answer.0
+        );
+        assert_eq!(
+            plane.beats.load(core::sync::atomic::Ordering::SeqCst),
+            1,
+            "one check-in, which is the call that learns the standing and installs the gate"
+        );
+        assert!(
+            !app.state::<DesktopState>().revoked(),
+            "and the mark is cleared by that check-in rather than by the press: nothing here \
+             restores, and only the server's answer moves it"
+        );
+        drop(app);
+    }
+
+    /// An outage on that check-in is not a sign-out.
+    ///
+    /// The direction matters more than the outcome. A dropped connection says
+    /// nothing about the seller's decision, so rendering it as "this machine
+    /// was signed out" would accuse them of an act they did not perform and
+    /// send them to a restore they do not need. The claim is the authorisation
+    /// boundary, and the server refuses there if the machine really is signed
+    /// out — as `ControlPlaneError::Revoked`, carrying this same sentence.
+    #[tokio::test]
+    async fn a_check_in_that_could_not_reach_us_is_not_read_as_a_sign_out() {
+        let app = mock_builder()
+            .invoke_handler(tauri::generate_handler![super::start_import])
+            .build(mock_context(noop_assets()))
+            .expect("the mock application builds");
+        let plane = Arc::new(Standing::unreachable());
+        app.manage(signed_out_state(Arc::clone(&plane)));
+
+        let answer = super::start_import(app.handle().clone(), tam_types::Uuid([0x71; 16]), None)
+            .await
+            .expect_err("this build still has no ledger transport");
+        assert_ne!(
+            answer.0,
+            crate::heartbeat::SIGNED_OUT_HERE,
+            "an outage must not be rendered as the seller's own sign-out"
+        );
+        assert!(
+            app.state::<DesktopState>().revoked(),
+            "and it clears nothing either: a server we could not reach said nothing about the \
+             mark, so it still stands"
         );
         drop(app);
     }

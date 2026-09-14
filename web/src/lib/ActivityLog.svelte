@@ -24,24 +24,45 @@
 		empty?: string;
 	} = $props();
 
+	const needle = $derived(query.trim().toLowerCase());
 	const shown = $derived(
-		query.trim() === ''
-			? entries
-			: entries.filter((entry) => entry.what.toLowerCase().includes(query.trim().toLowerCase()))
+		needle === '' ? entries : entries.filter((entry) => entry.what.toLowerCase().includes(needle))
 	);
 </script>
 
 <div class="log-head">
 	<span class="log-search">
 		<Icon name="search" size={15} />
-		<label class="sr-only" for="log-search">Search this log</label>
-		<input id="log-search" type="search" placeholder="Search this log…" bind:value={query} />
+		<label class="sr-only" for="log-search">Filter the lines on this page</label>
+		<!-- "on this page" in the label and the placeholder, and not by
+		     accident. The lines are worded by the server from three different
+		     event kinds, so a search the server could answer would have to
+		     match structured rows rather than the sentences the seller is
+		     reading — and the log is paged. A box that said "Search this log"
+		     would answer about the page in hand while looking like it had
+		     searched the history, which is the one thing a history must not
+		     do. Older lines are reached with Previous and Next. -->
+		<input
+			id="log-search"
+			type="search"
+			placeholder="Filter the lines on this page…"
+			bind:value={query}
+		/>
 	</span>
-	<span class="log-count">Viewing ({shown.length})</span>
+	<!-- The page's own figure, said as the page's: no total is claimed,
+	     because the page length is not one and a count drawn from it would be
+	     a history's size invented from a screenful. -->
+	<span class="log-count" role="status" aria-live="polite">
+		{needle === ''
+			? `${entries.length} on this page`
+			: `${shown.length} of ${entries.length} on this page`}
+	</span>
 </div>
 
 {#if shown.length === 0}
-	<p class="quiet">{empty}</p>
+	<p class="quiet">
+		{entries.length === 0 ? empty : 'No line on this page matches that. Clear the filter, or try Previous and Next for older lines.'}
+	</p>
 {:else}
 	{#each shown as entry (entry.id)}
 		<div class="log-row">

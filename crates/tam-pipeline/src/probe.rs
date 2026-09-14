@@ -24,17 +24,30 @@ pub fn probe_kind(bytes: &[u8]) -> Option<FileKind> {
     if bytes.starts_with(PDF_MAGIC) {
         return Some(FileKind::Pdf);
     }
-    if bytes.starts_with(PNG_MAGIC)
-        || bytes.starts_with(JPEG_MAGIC)
-        || bytes.starts_with(GIF87A_MAGIC)
-        || bytes.starts_with(GIF89A_MAGIC)
-    {
+    if is_image(bytes) {
         return Some(FileKind::Image);
     }
     if bytes.starts_with(ZIP_MAGIC) {
         return probe_zip_container(bytes);
     }
     None
+}
+
+/// Whether these are the leading bytes of one of the three pictures this
+/// workspace admits.
+///
+/// The signature check alone, with no archive read behind it, which is what
+/// makes it safe to ask of bytes that came out of an archive: [`probe_kind`]
+/// would fall through to the OOXML content-types part for anything beginning
+/// `PK`, and inflating a member of an entry that was itself just inflated is
+/// expansion nobody budgeted for. A caller that only wants to know "is this a
+/// picture" asks this instead.
+#[must_use]
+pub fn is_image(bytes: &[u8]) -> bool {
+    bytes.starts_with(PNG_MAGIC)
+        || bytes.starts_with(JPEG_MAGIC)
+        || bytes.starts_with(GIF87A_MAGIC)
+        || bytes.starts_with(GIF89A_MAGIC)
 }
 
 /// A ZIP container is a plain ZIP unless it carries an OOXML content-types

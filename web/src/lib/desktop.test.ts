@@ -8,6 +8,7 @@ import {
 	CONNECT_MARKETPLACE,
 	CONTINUE_IMPORT,
 	DEVICE_CHECK_IN,
+	DEVICE_SIGNED_OUT,
 	FORGET_SESSION,
 	OPEN_URL,
 	ORIGIN_NOT_GRANTED,
@@ -308,6 +309,50 @@ describe('asking this computer to run an import', () => {
 			throw '   something_else not allowed. Command not found   ';
 		};
 		expect(await startImportHere(ending, 'r-7')).toEqual({ kind: 'unsupported' });
+	});
+
+	// The Android defect, as a contract. A device the seller signed out was
+	// refused by the server, and the forbidden answer's JSON body was rendered
+	// to a teacher verbatim. Every spelling of that one fact now becomes the
+	// same sentence, and a caller can compare against it to stop offering an
+	// action the machine cannot perform.
+	it('turns every spelling of a signed-out machine into one teacher-facing sentence', async () => {
+		for (const raw of [
+			DEVICE_SIGNED_OUT,
+			'This machine was signed out of your Teachouse account, so it cannot run imports. Sign it back in from Marketplaces, then try again.',
+			'the control plane refused: 403: {"errors":[{"message":"this device is revoked and may not report a catalogue","kind":"validation"}]}',
+			'403 device revoked'
+		]) {
+			const invoke: Invoke = async () => {
+				throw raw;
+			};
+			const outcome = await startImportHere(invoke, 'r-7');
+			expect(outcome).toEqual({ kind: 'refused', detail: DEVICE_SIGNED_OUT });
+			const detail = outcome.kind === 'refused' ? outcome.detail : '';
+			expect(detail).not.toContain('{');
+			expect(detail).not.toContain('403');
+			expect(detail).toContain('Sign it back in');
+		}
+	});
+
+	// And nothing else becomes it. A forbidden answer about a lease, a plan or
+	// a bare status is a different fact with a different remedy; reading one as
+	// a sign-out would accuse the seller of an act they did not perform and
+	// send them to a restore they do not need.
+	it('leaves every other refusal, forbidden ones included, exactly as it was', async () => {
+		for (const sentence of [
+			'the server refused this device\'s sign-in: 403: {"errors":[{"message":"this device holds no live lease on an item whose projection names that file"}]}',
+			'the control plane refused: 403: Forbidden',
+			'your subscription does not cover imports'
+		]) {
+			const invoke: Invoke = async () => {
+				throw sentence;
+			};
+			expect(await startImportHere(invoke, 'r-7')).toEqual({
+				kind: 'refused',
+				detail: sentence
+			});
+		}
 	});
 
 	// Measured from a console served somewhere the capability does not name: the

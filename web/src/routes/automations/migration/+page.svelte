@@ -5,7 +5,6 @@
 	import ActivityLog from '$lib/ActivityLog.svelte';
 	import {
 		ApiFailure,
-		allPages,
 		api,
 		type ConnectionView,
 		type Disposition,
@@ -37,6 +36,7 @@
 		pairReason,
 		productsFromUrl
 	} from '$lib/migration-plan';
+	import Pagination from '$lib/Pagination.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import { SHORT_NAME } from '$lib/platforms';
@@ -55,18 +55,41 @@
 	import {
 		NO_MIGRATION_YET,
 		WHAT_A_MIGRATION_IS,
-		migrationCounts,
 		migrationLog,
-		migrationRows
+		migrationRows,
+		pageSelection
 	} from '$lib/pages/automations/migration';
 	import '$lib/pages/automations/automations.css';
 
+	// How many migrations one page shows. Ten, because a past migration is a
+	// heading a seller scans for the one they are looking for.
+	const PER_PAGE = 10;
+	// How many resources the tick list shows at once.
+	const PICK_PER_PAGE = 25;
+
+	/** A page a read asked for and did not get: what Retry asks for again.
+	 *  Held apart from the displayed page, which stays on the last page that
+	 *  actually read. */
+	interface Attempt {
+		cursor: string | null;
+		page: number;
+	}
+
 	let requests = $state<SyncRequestHead[]>([]);
+	let requestPage = $state(1);
+	// One cursor per page reached, index `n` reaching page `n + 1`. The server
+	// mints them; Previous steps back through the ones it issued rather than
+	// re-walking from the newest migration.
+	let requestCursors = $state<(string | null)[]>([null]);
+	let requestNext = $state<string | null>(null);
+	let requestsBusy = $state(false);
 	let requestsLoaded = $state(false);
 	// A migration list that could not be read is not a seller who has brought
 	// no shop across. Told the second when the first is true, they start the
-	// migration again.
+	// migration again. A page that fails therefore leaves the last page that
+	// read on screen rather than emptying the list.
 	let requestsUnread = $state(false);
+	let requestAttempt = $state<Attempt | null>(null);
 
 	// A marketplace list that could not be read is not a seller with no
 	// marketplace: the card says which of the two it is looking at rather than
@@ -106,20 +129,26 @@
 	const sources = migrationSources();
 	const targets = migrationTargets();
 
-	const catalogue = createQuery(() => ({
-		queryKey: queryKeys.catalogue(null),
-		queryFn: () =>
-			allPages(
-				(cursor) => api.products(cursor, null),
-				(view) => view.products
-			)
-	}));
+	// The catalogue a page at a time, by the cursor the products endpoint
+	// already mints. It used to be `allPages`, which walked every page of the
+	// shop before the tick list drew anything: a five-hundred-resource seller
+	// waited for five hundred rows to arrive and then scrolled five hundred
+	// checkboxes. Selection is held by resource id and the whole-shop choice
+	// is its own explicit option, so neither depends on which page is loaded.
+	let products = $state<ProductHead[]>([]);
+	let pickPage = $state(1);
+	let pickCursors = $state<(string | null)[]>([null]);
+	let pickNext = $state<string | null>(null);
+	let pickBusy = $state(false);
+	let pickLoaded = $state(false);
+	let pickUnread = $state(false);
+	let pickAttempt = $state<Attempt | null>(null);
+
 	const mappings = createQuery(() => ({
 		queryKey: queryKeys.mappings,
 		queryFn: () => api.mappings().then((view) => view.mappings)
 	}));
 
-	const products = $derived<ProductHead[]>(catalogue.data ?? []);
 	const marksOf = $derived.by(() => {
 		const index = new Map<string, InventoryId[]>();
 		for (const mapping of mappings.data ?? []) {
@@ -128,6 +157,11 @@
 		return index;
 	});
 	const query = $derived(normaliseQuery(box).toLocaleLowerCase());
+	// This narrows the page in hand and says so where the seller reads it.
+	// The products endpoint takes a cursor and a label and no text, so a box
+	// that claimed to search the shop would be searching twenty-five rows of
+	// it — and a seller who found nothing would conclude the resource is not
+	// there. The whole-shop option above is what covers the shop.
 	const shown = $derived(
 		query.length === 0
 			? products
@@ -135,6 +169,12 @@
 	);
 	const allShownTicked = $derived(
 		shown.length > 0 && shown.every((product) => ticked.has(product.id))
+	);
+	// How many of the seller's ticks are not on the page they are looking at.
+	// Said plainly, because a count of ticks that only matched the visible
+	// rows would make a selection look lost the moment the page turned.
+	const tickedOffPage = $derived(
+		[...ticked].filter((id) => !products.some((product) => product.id === id)).length
 	);
 
 	const nothingConnected = $derived(!connectionsUnread && !anyConnectionStands(connections));
@@ -149,7 +189,11 @@
 	// listing on the target twice, and the seller would have no way to tell the
 	// two runs apart afterwards.
 
-	const rows = $derived(marketplaceRows(connections, migrationCounts(requests)));
+	// No count badge on this column. The figure used to be drawn from the
+	// whole request list, which was one bounded read; it is a page now, so a
+	// count taken from it would mean "migrations on the page you are looking
+	// at" and would read as a per-marketplace total.
+	const rows = $derived(marketplaceRows(connections));
 	// The resolved selection rather than the raw click, so the highlighted row
 	// and the card beside it cannot name different marketplaces.
 	const selected = $derived(heldSelection(rows, held));
@@ -200,20 +244,78 @@
 		key = null;
 	});
 
-	async function load() {
+	// The migrate half of the request list, narrowed by the server rather than
+	// by this page. A sync and a migration are one record under two
+	// dispositions, and filtering a page of ten mixed requests down to the
+	// migrations among them would answer nothing at all to a seller whose last
+	// ten requests were syncs.
+	async function readRequests(cursor: string | null, page: number) {
+		requestsBusy = true;
 		try {
-			const view = await api.syncRequests();
+			const view = await api.syncRequests({
+				cursor,
+				limit: PER_PAGE,
+				disposition: 'migrate'
+			});
 			requests = view.requests;
+			requestNext = view.next_cursor;
+			requestPage = page;
+			requestCursors = [...requestCursors.slice(0, page), view.next_cursor];
 			requestsUnread = false;
+			requestAttempt = null;
 		} catch {
-			requests = [];
+			// The page on screen and the page number both stay, and the page
+			// that failed is remembered apart from them: an emptied list would
+			// read as "you have never migrated a shop", and a Retry that asked
+			// for the page still on screen would clear the failure without
+			// ever fetching the page the seller pressed Next for.
 			requestsUnread = true;
+			requestAttempt = { cursor, page };
+		} finally {
+			requestsBusy = false;
+			requestsLoaded = true;
 		}
-		requestsLoaded = true;
+	}
+
+	function retryRequestPage() {
+		const attempt = requestAttempt;
+		if (attempt !== null) {
+			void readRequests(attempt.cursor, attempt.page);
+		}
+	}
+
+	async function readProducts(cursor: string | null, page: number) {
+		pickBusy = true;
+		try {
+			const view = await api.products(cursor, null, PICK_PER_PAGE);
+			products = view.products;
+			pickNext = view.next_cursor;
+			pickPage = page;
+			pickCursors = [...pickCursors.slice(0, page), view.next_cursor];
+			pickUnread = false;
+			pickAttempt = null;
+		} catch {
+			pickUnread = true;
+			pickAttempt = { cursor, page };
+		} finally {
+			pickBusy = false;
+			pickLoaded = true;
+		}
+	}
+
+	function retryPickPage() {
+		const attempt = pickAttempt;
+		if (attempt !== null) {
+			void readProducts(attempt.cursor, attempt.page);
+		}
 	}
 
 	$effect(() => {
-		void load();
+		// The first page by a null cursor rather than through the cursor
+		// ledger: reading that ledger here would make this effect depend on
+		// state the read writes, and it would re-run forever.
+		void readRequests(null, 1);
+		void readProducts(null, 1);
 		void api
 			.connections()
 			.then((held) => {
@@ -236,8 +338,17 @@
 		ticked = next;
 	}
 
+	// Only the rows on screen move; the rule is `pageSelection`, which is
+	// tested apart from this component because a migration's contents depend
+	// on it. It used to replace the selection with the visible ids, which was
+	// the same thing while the tick list was the whole catalogue and is silent
+	// data loss now that it is a page.
 	function toggleAllShown() {
-		ticked = allShownTicked ? new Set() : new Set(shown.map((product) => product.id));
+		ticked = pageSelection(
+			ticked,
+			shown.map((product) => product.id),
+			allShownTicked
+		);
 	}
 
 	async function preview() {
@@ -391,24 +502,35 @@
 					</div>
 
 					{#if !all}
-						{#if catalogue.isPending}
+						{#if !pickLoaded}
 							<p class="quiet">Loading your resources…</p>
-						{:else if catalogue.isError}
-							<p class="quiet">
-								Your resources could not be read, so there is nothing to tick. Moving all of
-								{SHORT_NAME[source]} does not need this list and still works.
-							</p>
-						{:else if products.length === 0}
+						{:else if pickUnread && products.length === 0}
+							<Banner tone="bad" action={retryPicks}>
+								Your resources could not be read, so there is nothing to tick. Moving all
+								of {SHORT_NAME[source]} does not need this list and still works.
+							</Banner>
+						{:else if products.length === 0 && pickPage === 1}
 							<p class="quiet">
 								You have no resources yet, so there is nothing to tick. Import brings your
 								existing shop across first.
 							</p>
 						{:else}
+							{#if pickUnread}
+								<Banner tone="bad" action={retryPicks}>
+									That page of your resources could not be read, so the rows below are
+									the last ones that did. Nothing you have ticked has been lost.
+								</Banner>
+							{/if}
 							<div class="pick-head">
+								<!-- "on this page", because that is what it does. The
+								     resources endpoint takes a cursor and a label and no
+								     text, so a box labelled "Search resources" would
+								     search twenty-five rows and answer "nothing" about a
+								     resource sitting on page four. -->
 								<input
 									type="search"
-									aria-label="Search your resources"
-									placeholder="Search resources"
+									aria-label="Filter the resources on this page"
+									placeholder="Filter this page"
 									bind:value={box}
 								/>
 								<label class="pick-all">
@@ -417,13 +539,24 @@
 										checked={allShownTicked}
 										onchange={toggleAllShown}
 									/>
-									Select the {shown.length} shown
+									Select these {shown.length}
 								</label>
-								<span class="pick-count">{ticked.size} chosen</span>
+								<!-- The ticks that are not on this page are counted and
+								     said, because a selection that looks smaller after a
+								     page turn reads as a selection that was dropped. -->
+								<span class="pick-count" role="status" aria-live="polite">
+									{ticked.size} chosen{tickedOffPage > 0
+										? `, including ${tickedOffPage} not on this page`
+										: ''}
+								</span>
 							</div>
 
 							{#if shown.length === 0}
-								<p class="quiet">Nothing matches that search.</p>
+								<p class="quiet">
+									{products.length === 0
+										? 'There are no resources on this page. Go back for the ones before it.'
+										: 'Nothing on this page matches that. Clear the filter, or try Next for more resources.'}
+								</p>
 							{:else}
 								<div class="pick-list">
 									{#each shown as product (product.id)}
@@ -445,6 +578,20 @@
 									{/each}
 								</div>
 							{/if}
+							<!-- Turning the page changes nothing about the selection:
+							     `ticked` is keyed by resource id and the whole-shop
+							     choice is the separate option above, so neither is
+							     derived from the rows in hand. -->
+							<Pagination
+								page={pickPage}
+								hasNext={pickNext !== null}
+								busy={pickBusy}
+								label="Your resources"
+								summary={`${products.length} resources on this page`}
+								onprevious={() =>
+									void readProducts(pickCursors[pickPage - 2] ?? null, pickPage - 1)}
+								onnext={() => void readProducts(pickNext, pickPage + 1)}
+							/>
 						{/if}
 					{/if}
 				</Panel>
@@ -550,40 +697,73 @@
 				</Panel>
 			{/if}
 
+			<!-- The list and the log are one page of the same read: the log is
+			     this page's migrations said as lines, so the two cannot
+			     disagree about what the seller is looking at, and turning the
+			     page turns both. -->
 			<Panel
 				title="Your migrations"
 				description="Every shop you have brought across, newest first."
 			>
-				{#if requestsUnread}
-					<p class="quiet">
+				{#if !requestsLoaded}
+					<p class="quiet">Loading…</p>
+				{:else if requestsUnread && requests.length === 0}
+					<Banner tone="bad" action={retryRequests}>
 						Your migrations could not be read, so this page cannot list them. Any migration
 						already running is unaffected.
-					</p>
-				{:else if !requestsLoaded}
-					<p class="quiet">Loading…</p>
-				{:else if past.length === 0}
-					<p class="quiet">{NO_MIGRATION_YET}</p>
+					</Banner>
 				{:else}
-					{#each past as row (row.request)}
-						<a class="auto-row" href={row.href}>
-							<StatusPill tone={row.tone} label={row.label} />
-							<span class="who">
-								<span class="t">
-									<MarketplaceMark inventory={row.source} /> →
-									<MarketplaceMark inventory={row.target} />
+					{#if requestsUnread}
+						<Banner tone="bad" action={retryRequests}>
+							That page could not be read, so the migrations below are the last ones that
+							did.
+						</Banner>
+					{/if}
+					{#if past.length === 0}
+						<p class="quiet">
+							{requestPage > 1
+								? 'There are no migrations on this page. Go back for the ones before it.'
+								: NO_MIGRATION_YET}
+						</p>
+					{:else}
+						{#each past as row (row.request)}
+							<a class="auto-row" href={row.href}>
+								<StatusPill tone={row.tone} label={row.label} />
+								<span class="who">
+									<span class="t">
+										<MarketplaceMark inventory={row.source} /> →
+										<MarketplaceMark inventory={row.target} />
+									</span>
+									<span class="meta">{row.meta}</span>
 								</span>
-								<span class="meta">{row.meta}</span>
-							</span>
-						</a>
-					{/each}
+							</a>
+						{/each}
+					{/if}
+					{#if past.length > 0 || requestPage > 1}
+						<Pagination
+							page={requestPage}
+							hasNext={requestNext !== null}
+							busy={requestsBusy}
+							label="Your migrations"
+							summary={`${past.length} migrations on this page`}
+							onprevious={() =>
+								void readRequests(requestCursors[requestPage - 2] ?? null, requestPage - 1)}
+							onnext={() => void readRequests(requestNext, requestPage + 1)}
+						/>
+					{/if}
 				{/if}
 			</Panel>
 
-			<Panel title="Activity log" description="What each migration did, newest first.">
+			<Panel
+				title="Activity log"
+				description="What each migration on this page did, newest first."
+			>
 				<ActivityLog
 					entries={log}
 					bind:query={logQuery}
-					empty="No migration has run yet, so there is nothing to log."
+					empty={requestPage > 1
+						? 'There is nothing to log on this page. Go back for the migrations before it.'
+						: 'No migration has run yet, so there is nothing to log.'}
 				/>
 			</Panel>
 		</div>
@@ -592,4 +772,31 @@
 
 {#snippet toDownloads()}
 	<Button tier="outline" small href="/marketplaces">Connect on Marketplaces</Button>
+{/snippet}
+
+<!-- Each retries the page that failed, which the read remembers apart from
+     the page on screen. Retrying the displayed page instead would clear the
+     failure without ever fetching what the seller pressed Next for. -->
+{#snippet retryRequests()}
+	<Button
+		tier="outline"
+		small
+		disabled={requestsBusy}
+		reason={requestsBusy ? 'A page is being read.' : undefined}
+		onclick={retryRequestPage}
+	>
+		Retry
+	</Button>
+{/snippet}
+
+{#snippet retryPicks()}
+	<Button
+		tier="outline"
+		small
+		disabled={pickBusy}
+		reason={pickBusy ? 'A page is being read.' : undefined}
+		onclick={retryPickPage}
+	>
+		Retry
+	</Button>
 {/snippet}

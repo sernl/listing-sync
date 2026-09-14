@@ -20,6 +20,14 @@
 		/** Whether this band asks rather than requires. A template's fields are
 		 *  starting points, so the Required words are off there. */
 		optional = false,
+		/** The category typed but not yet entered.
+		 *
+		 *  Held here by default, which is what the create form wants: the form
+		 *  is unmounted when it is done with, so the half-typed word goes with
+		 *  it. The Template Manager keeps this band mounted for a whole visit
+		 *  and binds this instead, because there it is the editor that decides
+		 *  when a template is finished with and so when this word is too. */
+		pending = $bindable(''),
 		onLabels,
 		set
 	}: {
@@ -28,6 +36,7 @@
 		refusals?: readonly Refusal[];
 		gradeLabels: GradeLabels;
 		optional?: boolean;
+		pending?: string;
 		onLabels: (chosen: GradeLabels) => void;
 		set: <K extends keyof TptDraft>(field: K, value: TptDraft[K]) => void;
 	} = $props();
@@ -82,14 +91,15 @@
 				id="draft-custom-category"
 				type="text"
 				placeholder="Add a category and press Enter"
+				bind:value={pending}
 				onkeydown={(event) => {
 					if (event.key === 'Enter') {
 						event.preventDefault();
-						const typed = event.currentTarget.value.trim();
+						const typed = pending.trim();
 						if (typed.length > 0 && !draft.customCategories.includes(typed)) {
 							set('customCategories', [...draft.customCategories, typed]);
 						}
-						event.currentTarget.value = '';
+						pending = '';
 					}
 				}}
 			/>

@@ -453,6 +453,198 @@ export function filledLine(name: string, filled: readonly string[]): string {
 	return `“${name}” filled ${filled.join(', ')}. Anything you had already answered was left alone.`;
 }
 
+// ------------------------------------------------------- the two examples
+
+/** One worked example a seller can start a template from.
+ *
+ *  Held as data rather than as markup so the same two cards can be rendered,
+ *  merged and tested without a component, and so what an example states is
+ *  reviewable in one place.
+ *
+ *  What an example states is one field of the draft — the resource's own
+ *  description — beside the three answers about the template itself. That
+ *  restraint is the point. Every other field the form holds is either chosen
+ *  from a served vocabulary (the year levels, the subjects, the formats, the
+ *  teaching duration, the answer key), or an answer that is the seller's alone
+ *  to make (the price, the licence, the copyright declaration, the status, the
+ *  localisation tick). An example that filled one of those would either carry
+ *  an identifier no vocabulary serves or decide something on the seller's
+ *  behalf, and a template's whole job is to be a starting point rather than a
+ *  decision. The status and the localisation tick stay unanswered here for
+ *  exactly the reason [`blankTemplateDraft`] leaves them unanswered.
+ *
+ *  The body is Markdown, which is what a blank draft's `bodyFormat` already
+ *  declares and what every adapter renders; it holds no substitution of any
+ *  kind, because the renderer supports none. */
+export interface TemplateExample {
+	/** Which example this is, and the key its card is rendered under. */
+	id: 'tes' | 'tpt';
+	/** What its control says, and the name the filled-fields note uses. */
+	label: string;
+	/** One line under the label, saying what this example suits. */
+	summary: string;
+	/** The name the template starts with. The seller renames it; nothing here
+	 *  is saved until they press Save. */
+	name: string;
+	/** The template's own note — when to reach for it — which is a different
+	 *  field from the resource description below. */
+	note: string;
+	scope: InventoryId;
+	/** The resource description, in the words a teacher reads. */
+	body: string;
+}
+
+const TES_BODY = `**What this resource is for**
+Pupils practise one skill in short guided steps and then apply it on their own. Say here which skill it is and which year group it suits.
+
+**What is included**
+- A teaching page to work through together
+- Two pages of independent practice
+- An answer sheet for marking
+
+**How to use it in class**
+1. Work the first example through together on the board.
+2. Set the practice pages for independent or paired work.
+3. Mark from the answer sheet and pick up the misconceptions it shows.
+
+**Also useful for** homework, cover lessons and small intervention groups.`;
+
+const TPT_BODY = `**What students will learn**
+Students practise one skill in short guided steps and then apply it independently. Name the skill and the grade level it fits.
+
+**What's included**
+- A teaching page to work through together
+- Two independent practice pages
+- An answer key
+
+**How to use it in your classroom**
+1. Work the first example together as a warm-up.
+2. Assign the practice pages for independent or partner work.
+3. Review with the answer key and reteach what it surfaces.
+
+**Also works for** homework, sub plans and small-group intervention.`;
+
+export const EXAMPLES: readonly TemplateExample[] = [
+	{
+		id: 'tes',
+		label: 'Tes example',
+		summary: 'Written for Tes, in British wording: pupils, year groups, marking.',
+		name: 'Tes lesson starter',
+		note: 'A starting point for a Tes resource: what it is for, what is included, and how to use it in class.',
+		scope: 'Tes',
+		body: TES_BODY
+	},
+	{
+		id: 'tpt',
+		label: 'TPT example',
+		summary: 'Written for TPT, in American wording: students, grade levels, answer keys.',
+		name: 'TPT lesson starter',
+		note: "A starting point for a TPT resource: what students will learn, what's included, and how to use it.",
+		scope: 'Tpt',
+		body: TPT_BODY
+	}
+];
+
+/** What starting from an example changed: the form to hold, the fields it
+ *  filled, and the form as it was.
+ *
+ *  The form before the start travels for the reason [`Merged`] carries the
+ *  draft before a merge — Undo puts back exactly what the seller had, so
+ *  trying an example is never a way to lose typing. */
+export interface Started {
+	form: TemplateForm;
+	filled: string[];
+	before: TemplateForm;
+}
+
+/** An example started from, filling only what the form has not answered.
+ *
+ *  The draft half is [`mergeIntoEmpty`], which is the same fill-the-empty-ones
+ *  rule the create form's template picker and the apply route both follow, so
+ *  there is one merge here rather than a second one written for examples. The
+ *  three answers about the template itself are filled on the same rule: a name
+ *  the seller has typed, a note they have written and a marketplace they have
+ *  chosen are all left alone.
+ *
+ *  Nothing is written anywhere. An example is an unsaved form until the seller
+ *  presses Save, so opening this page or pressing a card costs no template and
+ *  no allowance. */
+export function startFromExample(form: TemplateForm, example: TemplateExample): Started {
+	const merged = mergeIntoEmpty(form.draft, { description: example.body });
+	const next: TemplateForm = { ...form, draft: merged.draft };
+	const filled: string[] = [];
+	if (form.name.trim() === '') {
+		next.name = example.name;
+		filled.push('name');
+	}
+	filled.push(...merged.filled);
+	if (form.description.trim() === '') {
+		next.description = example.note;
+		filled.push('note');
+	}
+	if (form.scope === '') {
+		next.scope = example.scope;
+		filled.push('written for');
+	}
+	return { form: next, filled, before: form };
+}
+
+/** Whether this form still holds exactly what a blank one starts with, which
+ *  is what decides whether clearing it is something to offer an Undo for.
+ *  Compared field by field against a blank rather than by a dirty flag, so a
+ *  seller who typed a word and deleted it again is not warned about nothing. */
+export function isUntouched(form: TemplateForm): boolean {
+	if (form.name !== '' || form.description !== '' || form.scope !== '') {
+		return false;
+	}
+	const blank = blankTemplateDraft();
+	// `overrides` is the one field a blank draft starts as an object, and two
+	// empty objects are never the same reference, so it is compared by its
+	// entries and every other field by the reading `same` already holds.
+	if (Object.keys(form.draft.overrides).length > 0) {
+		return false;
+	}
+	return (Object.keys(blank) as (keyof TptDraft)[]).every(
+		(field) => field === 'overrides' || same(form.draft[field], blank[field])
+	);
+}
+
+/** Whether two forms read the same, field by field.
+ *
+ *  What Undo asks before it acts: an example or a clear travels with the form
+ *  it produced, and a form that no longer reads that way is one the seller has
+ *  written in since. Compared by value rather than by reference because every
+ *  write to the form makes a new object, so two forms holding the same answers
+ *  are never the same one.
+ *
+ *  `overrides` is compared by its entries for the reason [`isUntouched`]
+ *  gives: it is the one field a draft holds as an object. */
+export function sameForm(held: TemplateForm, taken: TemplateForm): boolean {
+	if (
+		held.name !== taken.name ||
+		held.description !== taken.description ||
+		held.scope !== taken.scope
+	) {
+		return false;
+	}
+	const keys = Object.keys(held.draft.overrides);
+	if (
+		keys.length !== Object.keys(taken.draft.overrides).length ||
+		!keys.every((key) => held.draft.overrides[key] === taken.draft.overrides[key])
+	) {
+		return false;
+	}
+	return (Object.keys(blankTemplateDraft()) as (keyof TptDraft)[]).every(
+		(field) => field === 'overrides' || same(held.draft[field], taken.draft[field])
+	);
+}
+
+/** The line the editor says after it was cleared with something in it. Its own
+ *  sentence rather than [`filledLine`]'s empty case, which reports a template
+ *  that filled nothing — the opposite fact. */
+export const CLEARED_LINE =
+	'The editor was cleared. Undo puts back what you had, exactly as you had it.';
+
 /** The one meta line a listed template shows.
  *
  *  Built from the two instants because they are the only facts the list has:
@@ -466,19 +658,18 @@ export function savedLine(head: TemplateHead, now: number): string {
 		: `Changed ${agoLabel(head.updated_at, now)}`;
 }
 
-/** Whether a request for a blank form is owed, and what is left after
+/** Whether a request to clear the editor is owed, and what is left after
  *  answering it.
  *
- *  The request lives on the page rather than in the tab because the tab is
- *  destroyed when the seller is on the other one, and the page's own action
- *  can raise a request from there — the landing path, and the first press a
- *  seller makes. A count passed as a prop cannot express it: the tab mounts
- *  with the count already raised and has no mark to compare it against, so a
- *  mount and a raised request look identical.
+ *  The request lives on the page because the page's own header action raises
+ *  it, including from the mapping tab, while the form it clears is the tab's
+ *  own state. A count passed as a prop cannot express it: one already-raised
+ *  count is indistinguishable from the next, so the tab would have no mark to
+ *  compare against.
  *
  *  Answering exactly once is the property worth holding. The tab reads this
  *  from an effect that re-runs whenever anything it touches changes, and a
- *  request that stayed pending would blank the form again under whatever the
+ *  request that stayed pending would clear the form again under whatever the
  *  seller had begun typing. */
 export function consumeBlankRequest(pending: boolean): { open: boolean; pending: boolean } {
 	return pending ? { open: true, pending: false } : { open: false, pending: false };

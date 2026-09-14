@@ -33,10 +33,15 @@
 //!   marketplace read carries it.
 //! - `cover_phash` → L3, and only for a payload that is itself an image.
 //!   `tam_pipeline::render::cover` draws a flat kind-coloured card for a PDF,
-//!   a PPTX, a DOCX and a ZIP, so a pHash over one of those compares
-//!   constants: every PDF in the org would hash identically and L3 would fire
-//!   on every pair. Computing it only for `FileKind::Image` is what stops a
-//!   layer that measures nothing from voting.
+//!   a PPTX, a DOCX or a ZIP it found no picture in, so a pHash over one of
+//!   those compares constants: every PDF in the org would hash identically and
+//!   L3 would fire on every pair. A container it did find a picture in — a
+//!   bundle's preview image, a document's stored thumbnail — carries real
+//!   pixels, and hashing those is still deliberately not done here: it would
+//!   mean a sketch whose meaning depends on where the cover came from, which
+//!   is a new field and a version bump rather than a quiet widening of this
+//!   one. Computing it only for `FileKind::Image` is what stops a layer that
+//!   measures nothing from voting.
 //! - `title_norm` → L4, and the trigram blocking index.
 //!
 //! # Versioning

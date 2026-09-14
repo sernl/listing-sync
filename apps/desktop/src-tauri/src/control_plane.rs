@@ -408,6 +408,7 @@ impl HttpControlPlane {
         match reply.status {
             200 => {}
             404 => return Err(ControlPlaneError::Refused(absent.to_owned())),
+            403 => return Err(forbidden(&String::from_utf8_lossy(&reply.body))),
             status => {
                 return Err(ControlPlaneError::Refused(format!(
                     "{status}: {}",
@@ -440,7 +441,7 @@ impl crate::ledger::LedgerTransport for HttpControlPlane {
                 // have the device replay a stop the server had accepted
                 // forever.
                 200 | 202 | 204 => Ok(reply.body),
-                401 | 403 => Err(ControlPlaneError::Denied(excerpt(&reply.body))),
+                401 | 403 => Err(forbidden(&reply.body)),
                 404 => Err(ControlPlaneError::Unregistered),
                 // The whole body rather than an excerpt: the caller reads the
                 // structured `code` off it to tell a settled run from a
@@ -461,6 +462,7 @@ impl crate::payload::PayloadTransport for HttpControlPlane {
             let reply = self.read(path).await?;
             match reply.status {
                 200 => Ok(reply.body),
+                403 => Err(forbidden(&String::from_utf8_lossy(&reply.body))),
                 404 => Err(ControlPlaneError::Unregistered),
                 status => Err(ControlPlaneError::Refused(format!(
                     "{status}: {}",
@@ -490,11 +492,32 @@ fn excerpt(body: &str) -> String {
 ///
 /// Four-hundred-and-four is only ever "this device is not registered" on these
 /// two paths, and the caller re-registers rather than retrying; everything else
-/// is a refusal carrying what the server said.
+/// is a refusal carrying what the server said, except the one forbidden answer
+/// that is about this device rather than about the request.
 fn refusal(reply: &Reply) -> ControlPlaneError {
     match reply.status {
         404 => ControlPlaneError::Unregistered,
+        403 => forbidden(&reply.body),
         status => ControlPlaneError::Refused(format!("{status}: {}", excerpt(&reply.body))),
+    }
+}
+
+/// Which forbidden answer this is: the seller having signed this device out,
+/// or the console session being refused for any other reason.
+///
+/// Read off the body because the server states it there and nowhere else: the
+/// registry's own refusal is `admissible_device` in `tam-api`'s import routes,
+/// and the phrase is matched rather than a code because the error body carries
+/// no machine-readable one. Narrow on purpose — an ordinary forbidden answer
+/// must stay [`ControlPlaneError::Denied`], because telling a seller their
+/// machine was signed out whenever a request was refused would be a false
+/// accusation with a remedy attached.
+fn forbidden(body: &str) -> ControlPlaneError {
+    let said = body.to_lowercase();
+    if said.contains("device is revoked") || said.contains("device revoked") {
+        ControlPlaneError::Revoked
+    } else {
+        ControlPlaneError::Denied(excerpt(body))
     }
 }
 
@@ -1096,6 +1119,52 @@ mod tests {
             assert!(
                 why.starts_with(&status.to_string()),
                 "the refusal names the status: {why}"
+            );
+        }
+    }
+
+    /// The registry's own forbidden answer becomes the typed revocation, and
+    /// every other forbidden answer does not.
+    ///
+    /// Both halves in one test, because the failure mode is a classifier that
+    /// is right about one and wrong about the other, and either mistake is
+    /// bad: a revocation read as an ordinary refusal puts the server's JSON in
+    /// front of a teacher, which is the reported Android defect, and an
+    /// ordinary refusal read as a revocation tells a seller their machine was
+    /// signed out when it was not — and offers them a restore for a machine
+    /// that never lost its standing.
+    #[tokio::test]
+    async fn a_revoked_answer_is_typed_and_other_forbidden_answers_are_not() {
+        let revoked = r#"{"errors":[{"message":"this device is revoked and may not report a catalogue","kind":"validation"}]}"#;
+        let refused = plane(Arc::new(Fake::answering(403, revoked)))
+            .heartbeat(&identity().id, &[])
+            .await
+            .expect_err("a forbidden answer is not a check-in");
+        assert_eq!(
+            refused,
+            ControlPlaneError::Revoked,
+            "the registry's phrase is the one fact a seller has a remedy for"
+        );
+        // And the sentence a seller reads carries no JSON, no status and no id.
+        let said = refused.to_string();
+        assert!(
+            !said.contains('{') && !said.contains("403"),
+            "a revoked refusal reads as prose, not as a response body: {said}"
+        );
+
+        for body in [
+            r#"{"errors":[{"message":"this device holds no live lease on an item whose projection names that file"}]}"#,
+            r#"{"errors":[{"message":"your plan does not include that marketplace"}]}"#,
+            "Forbidden",
+        ] {
+            let refused = plane(Arc::new(Fake::answering(403, body)))
+                .heartbeat(&identity().id, &[])
+                .await
+                .expect_err("a forbidden answer is not a check-in");
+            assert_ne!(
+                refused,
+                ControlPlaneError::Revoked,
+                "an ordinary forbidden answer must not be read as a sign-out: {body}"
             );
         }
     }

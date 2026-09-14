@@ -16,6 +16,50 @@
 	font-variant-numeric: tabular-nums;
 }
 
+/* --- covers and diagnostics ---------------------------------------------- */
+
+/* The filter row itself is `.import-filters` in `import.css`: the landing
+   screen's history and this page's resource lists are the same control, so
+   they are one rule rather than two that drift.
+ */
+
+/* The thumbnail slot. Always the same size, whether a cover was read, none
+   was, or one failed to load: a row that changes height when an image
+   arrives makes a list jump while it is being read. A failed load is hidden
+   rather than removed, so the slot it leaves is the same empty frame a
+   resource with no cover shows — and neither claims the marketplace supplied
+   nothing. */
+.run-cover {
+	flex: none;
+	display: block;
+	width: 64px;
+	height: 48px;
+	object-fit: cover;
+	border-radius: var(--r-panel);
+	border: 1px solid var(--line);
+	background: var(--hover);
+}
+
+.run-cover.gone {
+	visibility: hidden;
+}
+
+/* Identifiers, attempts and instants: true, and not what the page is for. */
+.run-tech {
+	margin-top: 10px;
+	font-size: 13px;
+}
+
+.run-tech summary {
+	cursor: pointer;
+	color: var(--muted);
+	font-size: 12.5px;
+}
+
+.run-tech p {
+	margin: 6px 0 0;
+}
+
 /* --- the tick list ------------------------------------------------------- */
 
 .run-picks {
@@ -37,11 +81,10 @@
 	list-style: none;
 	margin: 0;
 	padding: 0;
-	/* A shop of two hundred listings is a scroll of its own rather than a
-	   page that never ends: the Continue control below has to stay reachable
-	   without reading the whole shop first. */
-	max-height: 520px;
-	overflow-y: auto;
+	/* No inner scroll. The list is a page of twenty-five the server cut, so
+	   the Continue control below is reachable by scrolling the page itself —
+	   and a scroll region inside a scrolling page is the thing that traps a
+	   thumb on a phone. */
 	border: 1px solid var(--line);
 	border-radius: var(--r-panel);
 }
@@ -229,7 +272,16 @@
 		flex: 1 1 100%;
 	}
 
-	.run-list {
-		max-height: none;
+	/* A tick row on a phone is a thumb target before it is a layout: the
+	   cover and the tick stay on the first line and the title wraps under
+	   them rather than squeezing into what is left. */
+	.run-pick {
+		flex-wrap: wrap;
+		padding: 12px 14px;
+	}
+
+	.run-pick .t {
+		flex: 1 1 100%;
+		order: 3;
 	}
 }

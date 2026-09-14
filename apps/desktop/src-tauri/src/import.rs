@@ -1538,9 +1538,22 @@ impl RunLedger {
                 self.delivered(&owed).await;
                 Ok(())
             }
-            Err(ControlPlaneError::Denied(why)) => {
+            // A refused sign-in, and a machine the seller signed out. Neither
+            // was applied and neither will be by repeating it, so the report
+            // is abandoned rather than left at the head of the outbox where
+            // every post behind it would wait on a refusal that never lifts.
+            // Revocation additionally stops the work: `lose_fence` is the
+            // handle the walk between resources reads, and a device that went
+            // on reading a shop after being signed out is the defect this
+            // whole path exists to prevent.
+            Err(why @ ControlPlaneError::Denied(_)) => {
                 self.abandoned(&owed).await;
-                Err(PassError::Page(why))
+                Err(PassError::Page(why.to_string()))
+            }
+            Err(ControlPlaneError::Revoked) => {
+                self.stop.lose_fence();
+                self.abandoned(&owed).await;
+                Err(PassError::Page(ControlPlaneError::Revoked.to_string()))
             }
             Err(ControlPlaneError::Fenced(_)) => {
                 self.stop.lose_fence();
@@ -1623,13 +1636,25 @@ impl RunLedger {
                     ))
                 }
                 Ok(_) => self.delivered(&post).await,
-                // Refused sign-in: not owed again, and not credited either.
-                // The server applied nothing, so recording its resources as
-                // acknowledged would make a resumed run skip exactly what
-                // nobody has.
-                Err(ControlPlaneError::Denied(why)) => {
+                // Refused sign-in, or this machine signed out: not owed
+                // again, and not credited either. The server applied nothing,
+                // so recording its resources as acknowledged would make a
+                // resumed run skip exactly what nobody has, and leaving the
+                // post owed would stall every post behind it on a refusal
+                // that repeating cannot lift. The shop is re-read by the run
+                // that comes after the seller signs the machine back in, which
+                // is the only copy that was ever authoritative.
+                Err(why @ ControlPlaneError::Denied(_)) => {
                     self.abandoned(&post).await;
-                    return Err(PassError::Page(why));
+                    return Err(PassError::Page(why.to_string()));
+                }
+                Err(ControlPlaneError::Revoked) => {
+                    // And the walk ends here rather than at the next page: a
+                    // signed-out device may make no further marketplace
+                    // request for this run.
+                    self.stop.lose_fence();
+                    self.abandoned(&post).await;
+                    return Err(PassError::Page(ControlPlaneError::Revoked.to_string()));
                 }
                 Err(ControlPlaneError::Fenced(why)) => {
                     // The fence rather than the transport: this attempt has
@@ -2234,8 +2259,17 @@ impl<S: CatalogueSource> ImportPass<S> {
             ));
         }
 
-        let cover = tam_pipeline::render::cover(kind, &payload)
+        // The cover, from the resource's own bytes: the seller's preview
+        // picture inside the bundle, or the document's stored thumbnail,
+        // where either exists, and the kind's generated card where neither
+        // does. Whichever it is, it is derived here, on this device, from
+        // bytes this pass already holds -- no second marketplace request is
+        // made for a picture, and the provenance travels no further than this
+        // function because the wire carries the cover and not a claim about
+        // it.
+        let drawn = tam_pipeline::render::cover(kind, &payload)
             .map_err(|why| format!("no cover could be made from its file: {why}"))?;
+        let cover = drawn.image;
 
         // Measured here, where the bytes are, and nowhere else. The sketch is
         // fixed-width and cannot be read back into the document, which is what
@@ -3234,13 +3268,22 @@ fn spawn_keeper(ctx: &ImportContext, run: tam_types::Uuid, claimed: &ClaimedRun)
 /// One renewal. An outage is not a lost fence: the lease lapsing server-side
 /// is what makes the run truthfully interrupted, and a device that stopped
 /// reading on one failed renewal would abandon work it could still finish.
+///
+/// A sign-out is not an outage, and this is the fastest path that learns of
+/// one: the keeper renews every fifteen seconds, so reading a revocation here
+/// as a lost fence is what stops the shop being read within one renewal of
+/// the seller signing this machine out. Treating it as transient would leave
+/// the keeper renewing a lease the server refuses while the walk went on
+/// making marketplace requests for a device that may make none.
 async fn renew(ctx: &ImportContext, run: tam_types::Uuid, attempt: u64) -> Result<(), PassError> {
     let body = serde_json::json!({ "attempt": attempt }).to_string();
     match ctx.ledger.post(&renew_path(&ctx.device, run), body).await {
         Ok(_) => Ok(()),
-        Err(ControlPlaneError::Fenced(_) | ControlPlaneError::Denied(_)) => {
-            Err(PassError::FenceLost)
-        }
+        Err(
+            ControlPlaneError::Fenced(_)
+            | ControlPlaneError::Denied(_)
+            | ControlPlaneError::Revoked,
+        ) => Err(PassError::FenceLost),
         Err(why) => Err(PassError::Page(why.to_string())),
     }
 }
@@ -3342,25 +3385,33 @@ async fn finish(
 /// now would be the causation D1 keeps on this side of the wire. So the
 /// device asks, and a run it finds enters the same supervisor a press enters.
 ///
-/// Every refusal here is silent, and that is deliberate rather than lax: no
-/// open run is the ordinary answer, and a shop this device holds no session
-/// for is somebody else's run to work rather than this device's to fail.
+/// Every refusal here is silent to the seller, and that is deliberate rather
+/// than lax: no open run is the ordinary answer, and a shop this device holds
+/// no session for is somebody else's run to work rather than this device's to
+/// fail. What it is not silent about is the coordinator's timing question —
+/// whether this pass reached the control plane at all — because a pass that
+/// could not read the open runs must back off rather than report the same
+/// quiet it would report with an empty list.
 pub(crate) async fn serve_open_runs(
     state: &DesktopState,
     plane: &dyn crate::heartbeat::ControlPlane,
-) {
+) -> crate::scheduler::Discovery {
     let Some(ctx) = ImportContext::of(state) else {
-        return;
+        // A build with no ledger transport, which is a fact about the build
+        // and not an outage: there is nothing to retry sooner.
+        return crate::scheduler::Discovery::Quiet;
     };
     let Ok(open) = plane.open_import_runs(&state.device().id).await else {
-        return;
+        return crate::scheduler::Discovery::Failed;
     };
     // Outbox entries which need no new claim are delivered first. The returned
     // stop snapshot also guards this cycle's stale open-run answer: a stop
     // accepted below settled the run after that answer was read, so the same
     // row must not be reclaimed in this pass.
     let Some(stopped) = drain_unclaimed_outbox(&ctx, &open).await else {
-        return;
+        // The drain stopped at a post it could not deliver, so the connection
+        // is the thing at fault and the next pass waits on the ladder.
+        return crate::scheduler::Discovery::Failed;
     };
     reconcile_stops(&ctx, &open).await;
     for run in &open {
@@ -3368,6 +3419,7 @@ pub(crate) async fn serve_open_runs(
             consider(&ctx, run).await;
         }
     }
+    crate::scheduler::Discovery::Quiet
 }
 
 /// Offers outbox entries which do not need a new claim.
@@ -3404,15 +3456,24 @@ async fn drain_unclaimed_outbox(
             {
                 JournalChange::Delivered(owed.id)
             }
-            // Neither a fence nor a refused sign-in was applied, so neither
-            // credits the run: a post recorded as acknowledged would tell a
-            // later resume that the server holds resources nobody wrote. The
-            // post is dropped, because it will never be accepted, and any
-            // tombstone stands, so this device still will not pick the run up
-            // by itself.
-            Err(ControlPlaneError::Fenced(_) | ControlPlaneError::Denied(_)) => {
-                JournalChange::Abandoned(owed.id)
-            }
+            // Neither a fence, nor a refused sign-in, nor a machine the seller
+            // signed out was applied, so none of them credits the run: a post
+            // recorded as acknowledged would tell a later resume that the
+            // server holds resources nobody wrote. The post is dropped,
+            // because it will never be accepted, and any tombstone stands, so
+            // this device still will not pick the run up by itself.
+            //
+            // Revocation belongs here rather than with the outage below, and
+            // the queue is why: the drain stops at the first transient failure
+            // to keep order, so one post refused for a sign-out would hold
+            // every post behind it — for other runs included — until the
+            // seller signed this machine back in. Dropping it costs nothing
+            // the server ever had.
+            Err(
+                ControlPlaneError::Fenced(_)
+                | ControlPlaneError::Denied(_)
+                | ControlPlaneError::Revoked,
+            ) => JournalChange::Abandoned(owed.id),
             // Still offline. Everything after this would fail the same way,
             // and order matters, so it waits for the next cycle.
             Err(_) => return Some(stopped),
@@ -3643,6 +3704,10 @@ mod tests {
         /// Everything is answered as a lost fence, which is what a device
         /// whose attempt has been superseded meets.
         fenced: bool,
+        /// Everything but the claim is answered as this machine having been
+        /// signed out of the seller's account, which is the registry's own
+        /// forbidden answer classified by `control_plane::forbidden`.
+        signed_out: bool,
         /// Pages are answered with a two-hundred carrying something this
         /// device cannot read, which is what a proxy or a captive portal
         /// does.
@@ -3663,6 +3728,13 @@ mod tests {
         fn fenced_out() -> Self {
             Self {
                 fenced: true,
+                ..Self::default()
+            }
+        }
+
+        fn signing_out() -> Self {
+            Self {
+                signed_out: true,
                 ..Self::default()
             }
         }
@@ -3709,6 +3781,9 @@ mod tests {
             }
             if self.refuse {
                 return Err(ControlPlaneError::Refused("no".to_owned()));
+            }
+            if self.signed_out {
+                return Err(ControlPlaneError::Revoked);
             }
             if path.ends_with("/renew") {
                 return Ok(serde_json::json!({
@@ -5303,6 +5378,72 @@ mod tests {
                 .outbox
                 .is_empty(),
             "and the acknowledgement clears it, so it is not offered a third time"
+        );
+    }
+
+    /// A page refused because this machine was signed out is not owed again,
+    /// and the walk ends rather than carrying on.
+    ///
+    /// The counterpart of the test above, and the distinction is the whole
+    /// point of the two: an outage keeps the page, because the connection will
+    /// come back and the page is the only copy of what was read. A sign-out is
+    /// not an outage. Repeating the post cannot make the server accept it, so
+    /// keeping it at the head of the outbox would stall every post behind it —
+    /// for other runs included, because the drain stops at the first transient
+    /// failure to preserve order — until the seller signed the machine back
+    /// in. Nothing is lost by dropping it: the server never recorded it, so
+    /// the resources stay undescribed and a later run re-reads them.
+    ///
+    /// The fence is surrendered in the same step, which is what stops the
+    /// shop: `StopSignal` is the handle the walk reads between resources, so a
+    /// revoked device makes no further marketplace request for this run.
+    #[tokio::test]
+    async fn a_page_refused_because_this_machine_was_signed_out_is_dropped_and_ends_the_walk() {
+        let journal = Arc::new(MemoryJournal::default());
+        let kept: Arc<dyn ImportJournal> = Arc::<MemoryJournal>::clone(&journal);
+        let revoked = Arc::new(FakePlane::signing_out());
+        let stop = StopSignal::never();
+        let why = ImportPass::new(
+            Scripted::of(1, PDF.to_vec()),
+            ledger_keeping(
+                &revoked,
+                RunPhase::Describe,
+                stop.clone(),
+                Arc::clone(&kept),
+            ),
+            SourcePermission {
+                source: tam_types::InventoryId::Tes,
+                gate: gate_for(vec![Marketplace::Tes]),
+                stop: stop.clone(),
+            },
+        )
+        .describe_all(vec![1], || NOW, |_| {})
+        .await
+        .expect_err("a signed-out machine's page is not accepted work");
+
+        let PassError::Page(said) = &why else {
+            panic!("a sign-out is reported to the run as a page failure, and got {why:?}");
+        };
+        assert_eq!(
+            said, crate::heartbeat::SIGNED_OUT_HERE,
+            "and it is reported in the sentence a seller reads, not as a status or a body"
+        );
+        assert!(
+            journal
+                .read()
+                .await
+                .expect("the journal reads")
+                .outbox
+                .is_empty(),
+            "the page is dropped rather than kept owed: repeating it cannot make the server \
+             accept it, and keeping it would hold every later post behind a refusal that only \
+             an explicit restore lifts"
+        );
+        assert!(
+            stop.why().is_some(),
+            "and the run stops rather than reading on: the walk checks this handle between \
+             resources, and a device the seller signed out may make no further marketplace \
+             request for the run"
         );
     }
 

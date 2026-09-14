@@ -13,16 +13,22 @@ import { present } from '$lib/connection-status';
 import { TRANSPORT_OF } from '$lib/inventory';
 import type { ConnectionStatus, Marketplace, TransportClass } from '$lib/generated/vocab';
 
-/** How often the desktop client checks in, matching
- *  `Scheduler::DEFAULT_CADENCE` in `apps/desktop`. */
-export const CHECK_IN_CADENCE_MS = 60 * 60 * 1000;
+/** How often a running installation checks in, matching `CHECK_IN_EVERY` in
+ *  `apps/desktop/src-tauri/src/scheduler.rs`.
+ *
+ * Five minutes, not the hour: the check-in and the hourly marketplace sweep
+ * are separate activities on separate cadences since the coordinator split
+ * them, and this is the one that says "this machine is there". Reading the
+ * sweep's hour here is what made the page call a laptop current two hours
+ * after it was shut. */
+export const CHECK_IN_CADENCE_MS = 5 * 60 * 1000;
 
 /** How long a device may be silent before the page stops calling it current.
  *
- * Two cadences, so one missed check-in is not reported as a machine being off:
- * a laptop that slept through a tick is the ordinary case, and two misses is
- * the first point at which silence carries information. */
-export const QUIET_AFTER_MS = 2 * CHECK_IN_CADENCE_MS;
+ * Six cadences, so a machine that missed a few check-ins — a laptop asleep
+ * for twenty minutes, a phone in a tunnel — is not reported as off, while
+ * silence long enough to carry information is. */
+export const QUIET_AFTER_MS = 6 * CHECK_IN_CADENCE_MS;
 
 export type DeviceStanding = 'checking_in' | 'quiet' | 'signed_out';
 
@@ -32,8 +38,24 @@ export interface DeviceRow {
 	/** Signed out and not heard from since, so it may still hold the logins
 	 *  listed against it. */
 	wipeOutstanding: boolean;
-	/** The marketplaces this machine reports holding a login for right now. */
+	/** The marketplaces this machine reports holding a login for right now.
+	 *
+	 *  A saved login, and nothing more. It is not evidence that the machine is
+	 *  there, that the login still works, or that anything is running on it:
+	 *  those are `standing`, a validated check, and the run's own owner. */
 	holding: Marketplace[];
+	/** Whether this installation is new enough for work whose payload comes
+	 *  from a marketplace — publishing or refetching a marketplace-sourced
+	 *  file.
+	 *
+	 *  Narrow, and named narrowly on purpose. It is *not* permission to
+	 *  import: `import_runs::claim` admits any registered, unrevoked device
+	 *  without a version check, and the floor applies only to an item whose
+	 *  payload is marketplace-sourced. An older installation still imports a
+	 *  catalogue and still runs ordinary uploaded-file work, so it is neither
+	 *  hidden nor counted as idle — the one thing it cannot do is named where
+	 *  it matters and nowhere else. */
+	runsSourcedFiles: boolean;
 }
 
 export function deviceStanding(device: DeviceView, now: number): DeviceStanding {
@@ -54,7 +76,8 @@ export function deviceRows(devices: readonly DeviceView[], now: number): DeviceR
 		device,
 		standing: deviceStanding(device, now),
 		wipeOutstanding: device.wipe_outstanding,
-		holding: held(device.sessions)
+		holding: held(device.sessions),
+		runsSourcedFiles: device.runs_sourced_payloads
 	}));
 }
 
@@ -72,6 +95,22 @@ export interface DeviceSummary {
 	/** Machines signed out that have not been heard from since, so their
 	 *  marketplace logins may still be on them. */
 	wipesOutstanding: number;
+	/** Machines the list shows as current: the ones that are not signed out.
+	 *
+	 *  Counted because it is what the page displays. The old figure counted
+	 *  every row the registry held, including installations replaced years of
+	 *  reinstalls ago, so a seller with one working laptop read "1 of 4
+	 *  machines have checked in" and could see only one.
+	 *
+	 *  The sourced-file floor is deliberately not part of it. An installation
+	 *  below that floor still imports a catalogue and still runs ordinary
+	 *  uploaded-file work, so counting it as not current would say something
+	 *  false about a machine that is working. */
+	current: number;
+	/** Machines that are current but too old for marketplace-sourced files, so
+	 *  the one thing they cannot do has an update as its remedy. Its own
+	 *  figure because it is its own, narrow fact. */
+	needingUpdateForSourcedFiles: number;
 }
 
 export function deviceSummary(rows: readonly DeviceRow[]): DeviceSummary {
@@ -80,7 +119,9 @@ export function deviceSummary(rows: readonly DeviceRow[]): DeviceSummary {
 		checkingIn: 0,
 		quiet: 0,
 		signedOut: 0,
-		wipesOutstanding: 0
+		wipesOutstanding: 0,
+		current: 0,
+		needingUpdateForSourcedFiles: 0
 	};
 	for (const row of rows) {
 		if (row.standing === 'checking_in') {
@@ -94,6 +135,12 @@ export function deviceSummary(rows: readonly DeviceRow[]): DeviceSummary {
 		}
 		if (row.wipeOutstanding) {
 			summary.wipesOutstanding += 1;
+		}
+		if (row.standing !== 'signed_out') {
+			summary.current += 1;
+			if (!row.runsSourcedFiles) {
+				summary.needingUpdateForSourcedFiles += 1;
+			}
 		}
 	}
 	return summary;
@@ -389,7 +436,17 @@ export function needingDeviceSignIn(
  *
  * False where every marketplace on the device branch is waiting on a machine
  * that is not checking in, which is the fact a seller most needs stated
- * plainly and the one Vendoo buries in a support article. */
+ * plainly and the one Vendoo buries in a support article.
+ *
+ * Two facts, both required and neither standing in for the other: the machine
+ * has been heard from, and it holds a marketplace login. A held login on a
+ * machine that is off is the case this exists to stop reading as "running".
+ *
+ * The sourced-file floor is deliberately absent. It is not permission to work:
+ * an older installation runs a catalogue import and ordinary uploaded-file
+ * work, and only an item whose payload comes from a marketplace is withheld
+ * from it. Gating this on that flag said "nothing scheduled is running" about
+ * a machine that was running most of it. */
 export function schedulesRunning(rows: readonly DeviceRow[]): boolean {
 	return rows.some((row) => row.standing === 'checking_in' && row.holding.length > 0);
 }
@@ -435,7 +492,7 @@ export function bandNotice(summary: DeviceSummary, running: boolean): BandNotice
 			kind: 'nothing_checking_in',
 			tone: 'attn',
 			headline: 'Nothing scheduled is running',
-			body: 'No machine of yours has checked in for over two hours, and a machine checks in every hour. Queued work waits until one does; nothing is lost.'
+			body: 'No machine of yours has checked in for half an hour, and a machine that is running checks in every few minutes. Queued work waits until one does; nothing is lost.'
 		};
 	}
 	return {
@@ -498,12 +555,28 @@ export function deviceFootnote(summary: DeviceSummary): string {
 	const signedOut =
 		summary.signedOut === 0
 			? ''
-			: ` ${summary.signedOut} ${count(summary.signedOut, 'other is', 'others are')} signed out.`;
+			: ` ${summary.signedOut} ${count(
+					summary.signedOut,
+					'other is',
+					'others are'
+				)} signed out and kept in history.`;
+	const stale =
+		summary.needingUpdateForSourcedFiles === 0
+			? ''
+			: ` ${summary.needingUpdateForSourcedFiles} ${count(
+					summary.needingUpdateForSourcedFiles,
+					'machine needs',
+					'machines need'
+				)} a newer Teachouse app before ${count(
+					summary.needingUpdateForSourcedFiles,
+					'it',
+					'they'
+				)} can publish or refetch a file from a marketplace. Everything else runs there as normal.`;
 	return (
 		`${summary.checkingIn} of ${live} ${count(
 			live,
 			'machine has',
 			'machines have'
-		)} checked in within the last two hours.${signedOut}${wipes}`
+		)} checked in in the last half hour.${stale}${signedOut}${wipes}`
 	);
 }

@@ -1,19 +1,31 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { page } from '$app/state';
 	import {
 		ApiFailure,
 		api,
 		type DuplicateDecision,
+		type ImportRunItemOrder,
+		type ImportRunItemView,
 		type ImportRunView,
 		type PairFieldChoice,
 		type PairSide
 	} from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
-	import { continueImportHere, desktopInvoker, startImportHere, stopImportHere } from '$lib/desktop';
+	import {
+		DEVICE_SIGNED_OUT,
+		continueImportHere,
+		desktopInvoker,
+		startImportHere,
+		stopImportHere
+	} from '$lib/desktop';
+	import Field from '$lib/Field.svelte';
 	import { createLedger, type Ledger } from '$lib/ledger';
-	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
+	import { machineHere } from '$lib/machine.svelte';
+	import { SIGN_BACK_IN, signedOutHere } from '$lib/machine-here';
 	import PageHead from '$lib/PageHead.svelte';
+	import Pagination from '$lib/Pagination.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
 	import StatusPill from '$lib/StatusPill.svelte';
@@ -21,15 +33,20 @@
 	import { NEEDS_THE_APP, startRefusal } from './import-view';
 	import ReviewCards from './ReviewCards.svelte';
 	import {
+		NO_ITEM_MATCHES,
 		READING_HAPPENS_ON_YOUR_COMPUTER,
 		RUN_UNREAD,
+		countsLine,
 		emptyItemsLine,
 		importedHref,
 		itemRows,
+		pageCount,
+		pageSummary,
+		reasonLine,
 		runBadge,
 		runName,
-		selectionRows,
 		selectionBlocked,
+		selectionRows,
 		settledLine,
 		stageCopy,
 		stageFrom
@@ -58,70 +75,221 @@
 
 	// The tick list's own state, keyed by locator. Held here rather than
 	// derived from the items, because a seller half-way through ticking must
-	// not have their choices rewritten by a refetch the ledger triggered.
+	// not have their choices rewritten by a refetch the ledger triggered —
+	// and because the items are now one page of the run, so a selection
+	// derived from them would lose every resource the seller ticked on a page
+	// they have since left.
 	let chosen = $state<Set<string>>(new Set());
+	// The seller's separate, explicit "every resource in this import". The
+	// only thing that sends `{ all: true }`. It is never inferred from a
+	// ticked page: with twenty-five rows on screen, "I ticked all of these"
+	// and "I want the whole shop" are different sentences, and reading the
+	// first as the second imported shops nobody asked for.
+	let wholeRun = $state(false);
 	let sending = $state(false);
 	let declined = $state<string | null>(null);
+	// Latched when this computer answers that it has been signed out, so the
+	// impossible action is withdrawn rather than offered again. The pre-press
+	// fact is `machineHere.revoked`; this covers the window between a
+	// revocation and this console's next check-in.
+	let signedOut = $state(false);
 
 	let committing = $state(false);
 	let commitRefusal = $state<string | null>(null);
 	let stopPending = $state(false);
 
+	/** How many resources one page of the list holds. The server's own
+	 *  default, restated so the pager can count pages without a round trip. */
+	const PER_PAGE = 25;
+
+	// The window on the run's resources, in two parts, and the split is the
+	// point. `itemPage` and the filters are what the seller has *asked* for
+	// and what the controls show; `shownPage` is the window the rows on
+	// screen actually came from. A read that failed leaves the old rows up,
+	// and they must not be labelled with a page they are not from.
+	let itemPage = $state(1);
+	let search = $state('');
+	let searching = $state('');
+	let itemState = $state<ImportRunItemView['state'] | ''>('');
+	let itemOrder = $state<ImportRunItemOrder>('title');
+	let itemsBusy = $state(false);
+	let shownPage = $state(1);
+	// The window a failed read was for, so Retry asks for that one again
+	// rather than for whatever the controls have drifted to.
+	let failedFor = $state<string | null>(null);
+	let debounce: ReturnType<typeof setTimeout> | null = null;
+
+	function cancelDebounce() {
+		if (debounce !== null) {
+			clearTimeout(debounce);
+			debounce = null;
+		}
+	}
+
 	const stage = $derived(view === null ? null : stageFrom(view));
-	const rows = $derived(view === null ? [] : itemRows(view));
-	const offered = $derived(view === null ? [] : selectionRows(view));
-	const chosenCount = $derived(offered.filter((item) => chosen.has(item.locator)).length);
+	const rows = $derived(view === null ? [] : itemRows(view.items));
+	// The resources on this page that are still a choice. Not the whole run:
+	// the run's own figure is `counts.listed`, which is what the summary and
+	// the whole-run control speak for.
+	const offeredHere = $derived(view === null ? [] : selectionRows(view.items));
+	const chosenHere = $derived(offeredHere.filter((item) => chosen.has(item.locator)).length);
+	const listedTotal = $derived(view?.counts.listed ?? 0);
+	const elsewhere = $derived(chosen.size - chosenHere);
+	const itemsTotal = $derived(view?.items_total ?? 0);
+	const pages = $derived(pageCount(itemsTotal, PER_PAGE));
+	const filtered = $derived(searching !== '' || itemState !== '');
 
 	async function refetch() {
 		if (!runId) {
 			return;
 		}
 		const id = runId;
+		const asked = { page: itemPage, q: searching, state: itemState, order: itemOrder };
 		const current = ++generation;
+		itemsBusy = true;
 		try {
-			const next = await api.importRun(id);
+			const next = await api.importRun(id, {
+				offset: (asked.page - 1) * PER_PAGE,
+				limit: PER_PAGE,
+				q: asked.q === '' ? null : asked.q,
+				state: asked.state === '' ? null : asked.state,
+				order: asked.order
+			});
 			if (current !== generation || id !== runId) return;
 			view = next;
+			shownPage = asked.page;
 			refusal = null;
+			failedFor = null;
 		} catch (caught) {
 			if (current !== generation || id !== runId) return;
+			// The rows already in hand stay, and `shownPage` stays with them:
+			// a read that failed must not blank a list the seller is choosing
+			// from, and must not relabel it as a page it never held.
 			refusal = caught instanceof ApiFailure ? caught.message : RUN_UNREAD;
+			failedFor = asked.q === '' ? `page ${asked.page}` : `page ${asked.page} of “${asked.q}”`;
+		} finally {
+			if (current === generation) itemsBusy = false;
 		}
+	}
+
+	/** Move to a page, or change what the pages are cut from.
+	 *
+	 *  A narrowing resets to the first page, because page four of one search
+	 *  is not page four of another. Nothing here touches `chosen`: the
+	 *  selection is held by locator and survives every page, search and
+	 *  filter, which is the whole point of holding it by locator. */
+	function show(next: number) {
+		itemPage = Math.min(Math.max(1, next), pages);
+		void refetch();
+	}
+
+	function narrow() {
+		itemPage = 1;
+		void refetch();
+	}
+
+	function typed(value: string) {
+		search = value;
+		cancelDebounce();
+		// Fenced on the run: a timer that fires after the seller has left, or
+		// after they cleared the search, must not put a stale term back or
+		// throw the list to page one behind them.
+		const epoch = runEpoch;
+		const asked = value;
+		debounce = setTimeout(() => {
+			debounce = null;
+			if (epoch !== runEpoch || asked !== search) return;
+			searching = search.trim();
+			narrow();
+		}, 250);
+	}
+
+	function clearFilters() {
+		cancelDebounce();
+		search = '';
+		searching = '';
+		itemState = '';
+		itemOrder = 'title';
+		narrow();
 	}
 
 	// The same liveness the request page beside this one uses: one event
 	// stream per tab, and a refetch when the ledger moves or resyncs. The
 	// payloads are never read — the snapshot is what the page renders, so a
 	// projection here would be a second copy of the server's own counting.
+	//
+	// Everything below the first line runs untracked, and that is load-bearing:
+	// `refetch` reads the page, the search and the filters, so a tracked body
+	// would make this effect a dependent of them — and then changing a page
+	// would re-run the initialisation that clears the selection and resets to
+	// page one. The run is the only thing this effect is about.
 	$effect(() => {
 		const id = runId;
-		void id;
-		runEpoch += 1;
-		view = null;
-		refusal = null;
-		chosen = new Set();
-		sending = false;
-		committing = false;
-		declined = null;
-		commitRefusal = null;
-		stopPending = false;
-		ledger = createLedger((cursor) => new EventSource(`/v1/events/stream?cursor=${cursor}`));
-		void refetch();
-		let revision = 0;
-		const unsubscribe = ledger.subscribe((state) => {
-			live = state.connected;
-			if (state.revision === revision) return;
-			revision = state.revision;
-			if ([...state.kinds].some((kind) => kind === 'resync' || kind.startsWith('ImportRun'))) {
-				void refetch();
-			}
-		});
-		return () => {
+		return untrack(() => {
+			void id;
 			runEpoch += 1;
-			generation += 1;
-			unsubscribe();
-			ledger?.close();
-		};
+			view = null;
+			refusal = null;
+			chosen = new Set();
+			wholeRun = false;
+			sending = false;
+			committing = false;
+			declined = null;
+			signedOut = false;
+			commitRefusal = null;
+			stopPending = false;
+			// A different run is a different list: its pages, its search and its
+			// filters all start again. This is the only place the selection is
+			// cleared, which is what lets it survive every page change below.
+			cancelDebounce();
+			itemPage = 1;
+			shownPage = 1;
+			failedFor = null;
+			search = '';
+			searching = '';
+			itemState = '';
+			itemOrder = 'title';
+			ledger = createLedger((cursor) => new EventSource(`/v1/events/stream?cursor=${cursor}`));
+			void refetch();
+			let revision = 0;
+			const unsubscribe = ledger.subscribe((state) => {
+				live = state.connected;
+				if (state.revision === revision) return;
+				revision = state.revision;
+				if ([...state.kinds].some((kind) => kind === 'resync' || kind.startsWith('ImportRun'))) {
+					// Re-reads the page the seller is on, under the filters they set,
+					// and keeps their ticks. A background refresh that jumped to page
+					// one or appended a fresh page would move the list out from under
+					// someone in the middle of choosing.
+					void refetch();
+				}
+			});
+			return () => {
+				runEpoch += 1;
+				generation += 1;
+				cancelDebounce();
+				unsubscribe();
+				ledger?.close();
+			};
+		});
+	});
+
+	// The latch is cleared by a restoration, never by the absence of one.
+	//
+	// `machineHere.revoked` is only ever true when a check-in reached the
+	// server, so the edge from true to false is an authoritative "this
+	// machine is signed back in" — the seller's own explicit act on the
+	// Machines row. Reading the flag as false on its own would clear the
+	// latch every time this effect ran, including in the window between a
+	// revocation and the next check-in, which is exactly the window the latch
+	// exists to cover.
+	let wasRevoked = false;
+	$effect(() => {
+		const revoked = machineHere.revoked;
+		untrack(() => {
+			if (wasRevoked && !revoked) signedOut = false;
+			wasRevoked = revoked;
+		});
 	});
 
 	function toggle(locator: string) {
@@ -134,24 +302,46 @@
 		chosen = next;
 	}
 
-	function selectAll() {
-		chosen = new Set(offered.map((item) => item.locator));
+	/** Add this page's remaining choices to the selection.
+	 *
+	 *  Adds; never replaces. The seller has ticked things on other pages and
+	 *  this control is about the rows in front of them. */
+	function selectPage() {
+		const next = new Set(chosen);
+		for (const item of offeredHere) {
+			next.add(item.locator);
+		}
+		chosen = next;
 	}
 
-	/** The server freezes the selected rows before the device begins reading. */
+	function clearSelection() {
+		chosen = new Set();
+		wholeRun = false;
+	}
+
+	/** The server freezes the selected rows before the device begins reading.
+	 *
+	 *  Two spellings, and the page never guesses which one the seller meant:
+	 *  `{ all: true }` goes only when they pressed the whole-import control,
+	 *  and every other press sends the locators they actually ticked. The
+	 *  shortcut this replaced — "as many ticked as offered, so send all" —
+	 *  was reading a full page as a full shop. */
 	async function continueHere() {
-		if (sending || chosenCount === 0) return;
+		if (sending || (!wholeRun && chosen.size === 0)) return;
 		const target = { id: runId, epoch: runEpoch };
-		const selection = chosenCount === offered.length
-			? { all: true as const } : { locators: [...chosen] };
+		const selection = wholeRun ? { all: true as const } : { locators: [...chosen] };
 		sending = true;
 		declined = null;
 		try {
-			const selected = await api.selectImportRun(target.id, selection);
-			if (current(target)) view = selected;
+			await api.selectImportRun(target.id, selection);
+			// The answer carries the run with its own first page of items, which
+			// is not the page or the filter the seller is standing on. The
+			// refetch below reads their window instead, so the list they are
+			// looking at never jumps under them.
 			const outcome = await continueImportHere(invoke, target.id);
 			if (current(target)) {
 				declined = startRefusal(outcome) ?? (outcome.kind === 'unavailable' ? NEEDS_THE_APP : null);
+				if (declined === DEVICE_SIGNED_OUT) signedOut = true;
 			}
 		} catch (caught) {
 			if (current(target)) {
@@ -173,8 +363,7 @@
 		committing = true;
 		commitRefusal = null;
 		try {
-			const confirmed = await api.confirmImportRun(target.id);
-			if (current(target)) view = confirmed.run;
+			await api.confirmImportRun(target.id);
 		} catch (caught) {
 			if (current(target)) {
 				commitRefusal = caught instanceof ApiFailure
@@ -213,7 +402,13 @@
 				? await continueImportHere(invoke, target.id, true)
 				: await startImportHere(invoke, target.id, true);
 			if (current(target)) {
-				if (outcome.kind === 'refused') declined = outcome.detail;
+				if (outcome.kind === 'refused') {
+					declined = outcome.detail;
+					// A computer that has been signed out cannot run this import,
+					// and pressing again cannot change that. The control is
+					// withdrawn rather than left to fail a second time.
+					if (outcome.detail === DEVICE_SIGNED_OUT) signedOut = true;
+				}
 				if (outcome.kind === 'unavailable') declined = NEEDS_THE_APP;
 			}
 		} finally {
@@ -282,7 +477,15 @@
 
 		{#if refusal !== null}
 			<Banner tone="bad" title="We could not read this import just now">
-				{refusal} Below is the last state we read.
+				{refusal}
+				{failedFor === null
+					? 'Below is the last state we read.'
+					: `Below are the resources we last read; ${failedFor} did not arrive.`}
+				{#snippet action()}
+					<Button tier="outline" small disabled={itemsBusy} reason={itemsBusy ? 'Reading.' : undefined} onclick={() => void refetch()}>
+						Try again
+					</Button>
+				{/snippet}
 			</Banner>
 		{/if}
 		{#if declined !== null}
@@ -293,21 +496,39 @@
 			<p class="import-stage">{copy.headline}</p>
 			<p class="quiet">{copy.detail}</p>
 
-			<p class="quiet">
-				{run.execution.discovered} resources found.
-				{#if run.execution.selected_total !== null}{run.execution.selected_total} selected.{/if}
-			</p>
-			{#if run.execution.reason !== null}
-				<p class="run-bar">{run.execution.reason}</p>
+			<p class="quiet">{countsLine(run.counts, run.read_total)}</p>
+			{@const why = run.state === 'complete' ? null : reasonLine(run.execution.reason_code, run.execution.reason)}
+			{#if why !== null}
+				<p class="run-bar">{why}</p>
 			{/if}
-			{#if run.execution.owner_device !== null}
-				<p class="quiet">Reading device: {run.execution.owner_device} · attempt {run.execution.attempt}.</p>
+			{#if machineHere.revoked}
+				<Banner tone="warn" title="This computer is signed out">
+					{signedOutHere(null)}
+					{#snippet action()}
+						<Button tier="outline" small href="/marketplaces">{SIGN_BACK_IN}</Button>
+					{/snippet}
+				</Banner>
 			{/if}
-			{#if run.execution.last_contact_at !== null}
-				<p class="quiet">Last device contact: {new Date(run.execution.last_contact_at).toLocaleString('en-GB')}.</p>
-			{/if}
-			{#if run.execution.last_progress_at !== null}
-				<p class="quiet">Last progress: {new Date(run.execution.last_progress_at).toLocaleString('en-GB')}.</p>
+
+			<!-- Identifiers, attempts and timestamps are diagnostics, not the
+			     answer to "what is happening": they sit behind a disclosure so
+			     the sentences above are what the page says. -->
+			{#if run.execution.owner_device !== null || run.execution.last_contact_at !== null || run.execution.last_progress_at !== null || run.execution.reason_code !== null}
+				<details class="run-tech">
+					<summary>Technical details</summary>
+					{#if run.state === 'complete' && run.execution.reason_code !== null}
+						<p class="quiet">Earlier device condition: {run.execution.reason_code}.</p>
+					{/if}
+					{#if run.execution.owner_device !== null}
+						<p class="quiet">Reading device: {run.execution.owner_device} · attempt {run.execution.attempt}.</p>
+					{/if}
+					{#if run.execution.last_contact_at !== null}
+						<p class="quiet">Last device contact: {new Date(run.execution.last_contact_at).toLocaleString('en-GB')}.</p>
+					{/if}
+					{#if run.execution.last_progress_at !== null}
+						<p class="quiet">Last progress: {new Date(run.execution.last_progress_at).toLocaleString('en-GB')}.</p>
+					{/if}
+				</details>
 			{/if}
 			{#if (stage === 'reading' || stage === 'committing') && run.execution.selected_total !== null && run.execution.selected_total > 0}
 				{@const total = run.execution.selected_total}
@@ -331,7 +552,11 @@
 				</div>
 			{:else}
 				<div class="actions">
-					{#if (stage === 'waiting' || stage === 'interrupted') && invoke !== null}
+					<!-- Resume is offered only where it could work. A computer the
+					     seller signed out cannot take this run, so the control is
+					     absent rather than disabled-with-an-excuse or, worse,
+					     offered and refused on press. -->
+					{#if (stage === 'waiting' || stage === 'interrupted') && invoke !== null && !machineHere.revoked && !signedOut}
 						<Button tier="primary" disabled={sending} onclick={() => void resume()}>Resume on this device</Button>
 					{/if}
 					<Button
@@ -351,23 +576,59 @@
 				title="Choose what to bring across"
 				description="Only what you tick is opened and read. Everything else is left where it is."
 			>
-				<div class="run-picks">
-					<Button small onclick={selectAll} disabled={offered.length === 0} reason={offered.length === 0 ? 'Nothing has been listed yet.' : undefined}>
-						Select all
-					</Button>
-					<Button small tier="quiet" onclick={() => (chosen = new Set())}>Clear</Button>
-					<span class="run-chosen">{chosenCount} of {offered.length} chosen</span>
-				</div>
+				{@render filterRow('Search resources')}
 
+				{#if wholeRun}
+					<Banner tone="info" title="Every resource in this import">
+						All {listedTotal} resources found in this shop will be brought across.
+						{#snippet action()}
+							<Button tier="outline" small onclick={() => (wholeRun = false)}>
+								Choose individually instead
+							</Button>
+						{/snippet}
+					</Banner>
+				{:else}
+					<div class="run-picks">
+						<Button
+							small
+							onclick={selectPage}
+							disabled={offeredHere.length === 0}
+							reason={offeredHere.length === 0 ? 'Nothing on this page can be chosen.' : undefined}
+						>
+							Select this page
+						</Button>
+						<Button
+							small
+							tier="quiet"
+							onclick={() => (wholeRun = true)}
+							disabled={listedTotal === 0}
+							reason={listedTotal === 0 ? 'Nothing has been listed yet.' : undefined}
+						>
+							Select every resource in this import
+						</Button>
+						<Button small tier="quiet" onclick={clearSelection} disabled={chosen.size === 0} reason={chosen.size === 0 ? 'Nothing is chosen yet.' : undefined}>
+							Clear selection
+						</Button>
+						<span class="run-chosen" role="status" aria-live="polite">
+							{chosen.size} selected{elsewhere > 0 ? `, including ${elsewhere} outside this view` : ''}
+						</span>
+					</div>
+				{/if}
+
+				{#if rows.length === 0}
+					<p class="quiet">{filtered ? NO_ITEM_MATCHES : emptyItemsLine(stage)}</p>
+				{/if}
 				<ul class="run-list">
-					{#each offered as item (item.locator)}
+					{#each rows as item (item.locator)}
 						<li>
 							<label class="run-pick">
 								<input
 									type="checkbox"
-									checked={chosen.has(item.locator)}
+									checked={wholeRun || chosen.has(item.locator)}
+									disabled={wholeRun || item.state !== 'listed'}
 									onchange={() => toggle(item.locator)}
 								/>
+								{@render cover(item.coverUrl, item.name)}
 								<span class="t">{item.name}</span>
 								<span class="p">{item.price ?? '—'}</span>
 								<StatusPill tone={item.tone} label={item.label} />
@@ -376,7 +637,11 @@
 					{/each}
 				</ul>
 
-				{@const blocked = selectionBlocked(chosenCount, sending)}
+				{@render pager('Resources to choose from')}
+
+				{@const blocked = wholeRun
+					? sending ? 'Your choice is being sent.' : null
+					: selectionBlocked(chosen.size, sending)}
 				<div class="actions">
 					<Button
 						tier="primary"
@@ -385,7 +650,11 @@
 						reason={blocked ?? undefined}
 						onclick={() => void continueHere()}
 					>
-						{sending ? 'Sending your choice…' : 'Continue'}
+						{sending
+							? 'Sending your choice…'
+							: wholeRun
+								? `Import all ${listedTotal} resources`
+								: `Import ${chosen.size} ${chosen.size === 1 ? 'resource' : 'resources'}`}
 					</Button>
 				</div>
 				<p class="foot-note">{READING_HAPPENS_ON_YOUR_COMPUTER}</p>
@@ -427,33 +696,41 @@
 			</Panel>
 		{/if}
 
-		<Panel
-			title="Resources"
-			description="Each resource this import reached, in the order your shop listed them."
-		>
-			{#if rows.length === 0}
-				<p class="quiet">{emptyItemsLine(stage)}</p>
-			{/if}
-			{#each rows as row (row.locator)}
-				<div class="import-listing">
-					<span class="mark"><StatusPill tone={row.tone} label={row.label} /></span>
-					<span class="what">
-						<span class="t">{row.name}</span>
-						{#if row.reason !== ''}
-							<span class="w">{row.reason}</span>
+		<!-- While the seller is choosing, the tick list above is this list:
+		     every resource is still listed, so drawing it twice would be two
+		     pagers over one set of rows. -->
+		{#if stage !== 'selecting'}
+			<Panel
+				title="Resources"
+				description="Each resource this import reached. Search covers the whole import, not this page."
+			>
+				{@render filterRow('Search resources')}
+				{#if rows.length === 0}
+					<p class="quiet">{filtered ? NO_ITEM_MATCHES : emptyItemsLine(stage)}</p>
+				{/if}
+				{#each rows as row (row.locator)}
+					<div class="import-listing">
+						<span class="mark"><StatusPill tone={row.tone} label={row.label} /></span>
+						{@render cover(row.coverUrl, row.name)}
+						<span class="what">
+							<span class="t">{row.name}</span>
+							{#if row.reason !== ''}
+								<span class="w">{row.reason}</span>
+							{/if}
+						</span>
+						{#if row.price !== null}
+							<span class="run-price">{row.price}</span>
 						{/if}
-					</span>
-					{#if row.price !== null}
-						<span class="run-price">{row.price}</span>
-					{/if}
-					{#if row.product !== null}
-						<a class="run-open" href={`/resources/${row.product}`}>Open</a>
-					{/if}
-					<span class="ord">#{row.ordinal}</span>
-				</div>
-			{/each}
-			<p class="foot-note">{FILES_STAY_ON_YOUR_COMPUTER}</p>
-		</Panel>
+						{#if row.product !== null}
+							<a class="run-open" href={`/resources/${row.product}`}>Open</a>
+						{/if}
+						<span class="ord">#{row.ordinal}</span>
+					</div>
+				{/each}
+				{@render pager('Resources')}
+				<p class="foot-note">{FILES_STAY_ON_YOUR_COMPUTER}</p>
+			</Panel>
+		{/if}
 	{:else if refusal !== null}
 		<PageHead
 			icon="download"
@@ -472,3 +749,75 @@
 		<p class="quiet">Loading the import…</p>
 	{/if}
 </div>
+
+<!-- One filter row and one pager, rendered by both lists, so the tick list
+     and the resource list are the same list with the same controls. -->
+{#snippet filterRow(label: string)}
+	<div class="import-filters">
+		<div class="wide">
+			<Field label={label} id="run-search" hint="Title, or the address it was read from.">
+				<input
+					id="run-search"
+					type="search"
+					value={search}
+					placeholder="Search by title"
+					oninput={(event) => typed(event.currentTarget.value)}
+				/>
+			</Field>
+		</div>
+		<Field label="Status" id="run-state">
+			<select id="run-state" bind:value={itemState} onchange={narrow}>
+				<option value="">Any status</option>
+				<option value="listed">Found</option>
+				<option value="selected">Chosen</option>
+				<option value="read">Read</option>
+				<option value="matched">Ready</option>
+				<option value="review">Needs you</option>
+				<option value="imported">In Resources</option>
+				<option value="skipped">Left out</option>
+				<option value="failed">Problem</option>
+			</select>
+		</Field>
+		<Field label="Order by" id="run-order">
+			<select id="run-order" bind:value={itemOrder} onchange={narrow}>
+				<option value="title">Title A–Z</option>
+				<option value="listed">As your shop listed them</option>
+			</select>
+		</Field>
+		{#if filtered || itemOrder !== 'title'}
+			<Button small tier="quiet" onclick={clearFilters}>Clear filters</Button>
+		{/if}
+	</div>
+{/snippet}
+
+{#snippet pager(label: string)}
+	<Pagination
+		page={shownPage}
+		hasNext={shownPage < pages}
+		busy={itemsBusy}
+		label={label}
+		summary={`${pageSummary(view?.items_offset ?? 0, rows.length, itemsTotal, 'resources')} · Page ${shownPage} of ${pages}`}
+		onprevious={() => show(shownPage - 1)}
+		onnext={() => show(shownPage + 1)}
+	/>
+{/snippet}
+
+<!-- A real cover where the read produced one, and a neutral slot where it
+     did not. The slot is also what a broken image collapses to, so a cover
+     that fails to load is an empty frame rather than a torn icon — and never
+     a claim that the marketplace supplied nothing. -->
+{#snippet cover(url: string | null, name: string)}
+	{#if url !== null}
+		<img
+			class="run-cover"
+			src={url}
+			alt={`Cover of ${name}`}
+			width="64"
+			height="48"
+			loading="lazy"
+			onerror={(event) => event.currentTarget.classList.add('gone')}
+		/>
+	{:else}
+		<span class="run-cover none" aria-hidden="true"></span>
+	{/if}
+{/snippet}

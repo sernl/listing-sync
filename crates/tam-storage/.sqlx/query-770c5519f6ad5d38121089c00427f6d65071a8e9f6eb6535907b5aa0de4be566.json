@@ -1,0 +1,55 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT i.run_id, i.product_id, i.settled_at, r.source, COALESCE(p.title, '') AS \"title!\", 'pulled:' || i.run_id::text || ':' || i.product_id::text AS \"key!\" FROM import_run_item i JOIN import_run r ON r.org_id = i.org_id AND r.id = i.run_id LEFT JOIN product p ON p.org_id = i.org_id AND p.id = i.product_id WHERE i.org_id = $1 AND i.state = 'imported' AND i.settled_at IS NOT NULL AND i.product_id IS NOT NULL AND r.source IS NOT NULL AND ($2::timestamptz IS NULL OR i.settled_at < $2 OR (i.settled_at = $2 AND 'pulled:' || i.run_id::text || ':' || i.product_id::text > $4)) ORDER BY i.settled_at DESC, 'pulled:' || i.run_id::text || ':' || i.product_id::text LIMIT $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "run_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "settled_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "source",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "title!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "key!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "770c5519f6ad5d38121089c00427f6d65071a8e9f6eb6535907b5aa0de4be566"
+}

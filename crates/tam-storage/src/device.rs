@@ -438,8 +438,7 @@ impl DeviceRepo {
         Ok(row.map(|row| timestamp_from_db(row.revoked_at)))
     }
 
-    /// Signs one device back in, clearing the seller's sign-out and stamping
-    /// it seen.
+    /// Signs one device back in, clearing the seller's sign-out.
     ///
     /// The deliberate counterpart to [`Self::revoke`], and deliberately not
     /// something [`Self::register`] or [`Self::heartbeat`] does: both of those
@@ -448,27 +447,32 @@ impl DeviceRepo {
     /// one is reached only through a session, which is a seller signed in at
     /// that machine saying so.
     ///
-    /// `last_seen_at` moves because the restore is contact: the console's
-    /// freshness word would otherwise read "last seen" against an instant
-    /// before the sign-out. `Ok(None)` is no such device for this tenant, and
-    /// restoring a device that was never signed out answers the record as it
-    /// stands.
+    /// `last_seen_at` is deliberately untouched. A restore changes what this
+    /// device is *allowed* to do and says nothing about where it is: the
+    /// machine may be a laptop in a bag, and stamping it seen made the console
+    /// report "checked in just now" for a device that had not spoken since
+    /// before the sign-out. Only contact — [`Self::register`] or
+    /// [`Self::heartbeat`] — advances presence. The console's freshness word
+    /// therefore reads "last seen" against an instant before the sign-out
+    /// until the device actually checks in, which is the true statement and
+    /// the one the seller needs: it is how they can tell a machine that came
+    /// back from one that has not been switched on.
+    ///
+    /// `Ok(None)` is no such device for this tenant, and restoring a device
+    /// that was never signed out answers the record as it stands.
     pub async fn restore(
         &self,
         org: OrgId,
         device: &str,
-        at: Timestamp,
     ) -> Result<Option<DeviceRecord>, StorageError> {
-        let seen = timestamp_to_db(at)?;
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let restored = sqlx::query!(
-            "UPDATE device SET revoked_at = NULL, last_seen_at = $3 \
+            "UPDATE device SET revoked_at = NULL \
              WHERE org_id = $1 AND id = $2 \
              RETURNING id",
             uuid_to_db(org.0),
             device,
-            seen,
         )
         .fetch_optional(&mut *tx)
         .await?;

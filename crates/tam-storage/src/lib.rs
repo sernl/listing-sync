@@ -81,10 +81,11 @@ pub use fingerprints::{
     PayloadDigest, ProductMeta, TextSketchColumns,
 };
 pub use guide::{
-    ensure_platform_org, escape_like, platform_org, GuideDelete, GuideEdit, GuideHead,
+    ensure_platform_org, escape_like, platform_org, GuideDelete, GuideEdit, GuideHead, GuideOrder,
     GuidePublication, GuidePublishedHead, GuidePublishedPage, GuideRecord, GuideRepo,
     GuideRevisionWrite, GuideSearch, GuideStatus, GuideTaxon, GuideTaxonKind, GuideTaxonWrite,
-    GuideTaxonomy, GuideWrite, NewGuide, PLATFORM_ORG_SLUG,
+    GuideTaxonomy, GuideWrite, NewGuide, PLATFORM_ORG_SLUG, PUBLISHED_PAGE_MAX,
+    PUBLISHED_PAGE_ROWS,
 };
 pub use import_batches::{
     record_row_created, record_row_skipped_in, AttachCounts, BatchState, BatchWrite, BindOutcome,
@@ -99,10 +100,11 @@ pub use import_runs::{
     record_failed, record_imported, record_read, record_skipped, record_verdict, reopen_skipped,
     reserved_product, reserved_state, select_items, set_run_state, store_receipt, ClaimOutcome,
     FenceOutcome, ImportLease, ImportReasonCode, ImportRunHead, ImportRunItemRecord,
-    ImportRunRecord, ImportRunRepo, ImportStage, ItemAddress, ListedRow, NewImportRun,
-    ProgressReport, ReadItem, ReceiptAck, ReceiptOutcome, RunCounts, RunExecution, RunGuard,
-    RunItemState, RunKind, RunOpening, RunState, Selection, SelectionOutcome, StartKeyBinding,
-    StopOutcome, StoredReceipt, LEASE_SECS, MANUAL_ACTIVATION_SECS, RENEWAL_SECS, RUNS_LISTED_MAX,
+    ImportRunRecord, ImportRunRepo, ImportStage, ItemAddress, ItemOrder, ItemPage, ItemPageFilter,
+    ListedRow, NewImportRun, ProgressReport, ReadItem, ReceiptAck, ReceiptOutcome, RunCounts,
+    RunExecution, RunGuard, RunHistoryFilter, RunHistoryPage, RunItemState, RunKind, RunOpening,
+    RunState, Selection, SelectionOutcome, StartKeyBinding, StopOutcome, StoredReceipt,
+    ITEMS_LISTED_MAX, LEASE_SECS, MANUAL_ACTIVATION_SECS, RENEWAL_SECS, RUNS_LISTED_MAX,
 };
 pub use job_reads::{
     intent_digest, payload_digest, EventRow, ItemCounts, ItemRow, ItemStateKind, ItemsPageParams,
@@ -141,10 +143,10 @@ pub use operators::{OperatorRecord, OperatorRepo};
 pub use org::{OrgRecord, OrgRepo, OrgWrite};
 pub use overrides::OverrideRepo;
 pub use product::{
-    insert_product, restore_product, soft_delete_product, title_of, update_product,
-    ExportedListing, ExportedResource, FileRefusal, FileReplacement, FileSwap, FileTarget,
-    ProductCreationFacts, ProductEdit, ProductFiles, ProductRecord, ProductRepo, ProductSummary,
-    ReplacedFiles, StoredCover, ThumbnailChange,
+    insert_product, offer_cover, restore_product, soft_delete_product, title_of,
+    update_product, CoverOffer, ExportedListing, ExportedResource, FileRefusal, FileReplacement,
+    FileSwap, FileTarget, ProductCreationFacts, ProductEdit, ProductFiles, ProductRecord,
+    ProductRepo, ProductSummary, ReplacedFiles, StoredCover, ThumbnailChange,
 };
 pub use profile::{AvatarWrite, ProfileRepo};
 pub use pruning::{PruneRepo, PruneReport};
@@ -159,7 +161,7 @@ pub use schedules::{
 };
 pub use sessions::{NewTenant, SessionIdentity, SessionRepo, SessionToken};
 pub use sync_settings::{
-    ActivityKind, ActivityRow, MultiListedRow, SyncSettingRecord, SyncSettingRepo,
+    ActivityCursor, ActivityKind, ActivityRow, MultiListedRow, SyncSettingRecord, SyncSettingRepo,
     ACTIVITY_LISTED_MAX,
 };
 pub use tpt_base::{upsert_tpt_base, TptBaseRecord, TptBaseRepo};
@@ -170,8 +172,10 @@ pub use elections::{
 };
 pub use sync_requests::{
     job_request_key, CanonicalResource, Canonicalised, Completion, Disposition, Enqueued, Mint,
-    NewMigration, NewSyncRequest, Observed, ResourceCoverage, SyncIntent, SyncRequestRecord,
-    SyncRequestRepo, SyncRequestSummary, SyncResourceRecord, CREATE_LEG, IMPORT_LEG, REMOVE_LEG,
+    NewMigration, NewSyncRequest, Observed, ResourceCoverage, SyncCoverageTotals, SyncIntent,
+    SyncRequestDetail, SyncRequestHead, SyncRequestPage, SyncRequestRecord, SyncRequestRepo,
+    SyncRequestSummary, SyncResourceRecord, SyncResourceStateCount, CREATE_LEG, IMPORT_LEG,
+    REMOVE_LEG,
 };
 pub use taxonomy::{
     DrainStats, NoCounterpartReport, OpenItem, RaiseReport, RaiseScope, SeedReport, TaxonomyRepo,

@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { DeviceView } from '$lib/api';
-import { CONNECTED_WITHIN_MS, checkInControl, checkInNote, machineWords } from './machines';
+import {
+	CONNECTED_WITHIN_MS,
+	checkInControl,
+	checkInNote,
+	inListOrder,
+	loginWords,
+	machineWords,
+	sourcedFileWords
+} from './machines';
 
 const NOW = 1_770_000_000_000;
 const MINUTE = 60_000;
@@ -11,7 +19,8 @@ function machine(over: Partial<DeviceView> = {}): DeviceView {
 		name: 'SM-N975F',
 		os: 'android',
 		arch: 'arm64',
-		app_version: '0.7.0',
+		app_version: '0.9.0',
+		runs_sourced_payloads: true,
 		first_seen_at: NOW - 40 * 24 * 60 * MINUTE,
 		last_seen_at: NOW - MINUTE,
 		revoked_at: null,
@@ -38,12 +47,15 @@ describe('what one machine is doing', () => {
 		expect(said).not.toContain('just now');
 	});
 
-	it('calls a machine connected while its last check-in is inside the window', () => {
-		expect(machineWords(machine({ last_seen_at: NOW - MINUTE }), NOW)).toBe(
-			'Connected · checked in 1 min ago'
-		);
+	it('states the check-in and never asserts more than contact', () => {
+		const fresh = machineWords(machine({ last_seen_at: NOW - MINUTE }), NOW);
+		expect(fresh).toBe('Checked in 1 min ago');
+		// "Connected" was the word this replaces, and it asserted a live
+		// connection we do not hold: the device checks in and goes quiet again,
+		// so the honest claim is when it last spoke.
+		expect(fresh).not.toContain('Connected');
 		expect(machineWords(machine({ last_seen_at: NOW - CONNECTED_WITHIN_MS }), NOW)).toContain(
-			'Connected'
+			'Checked in'
 		);
 	});
 
@@ -52,8 +64,8 @@ describe('what one machine is doing', () => {
 	// one honest signal on this page into noise.
 	it('states the age alone once the window has passed', () => {
 		const said = machineWords(machine({ last_seen_at: NOW - CONNECTED_WITHIN_MS - 1 }), NOW);
-		expect(said).toBe('Last seen 15 min ago');
-		expect(said).not.toContain('Connected');
+		expect(said).toBe('Last seen 10 min ago');
+		expect(said).not.toContain('Checked in');
 	});
 
 	// A machine that is both revoked and stale still leads with the
@@ -69,6 +81,90 @@ describe('what one machine is doing', () => {
 				NOW
 			)
 		).toBe('Signed out from the console 2 days ago');
+	});
+});
+
+describe('the facts about a machine, kept apart', () => {
+	// The founder's complaint, as three sentences that must not merge. A saved
+	// login is a credential on a machine; it is not evidence the machine is
+	// there, nor that the credential still works.
+	it('never lets a saved login speak about presence', () => {
+		const stale = machine({
+			last_seen_at: NOW - 3 * 60 * MINUTE,
+			sessions: [
+				{
+					marketplace: 'Tpt',
+					account_label: 'Miss Cooper',
+					linked_at: NOW - 10 * 24 * 60 * MINUTE,
+					last_used_at: NOW - 10 * 24 * 60 * MINUTE,
+					status: 'connected'
+				}
+			]
+		});
+		expect(machineWords(stale, NOW)).toBe('Last seen 3 h ago');
+		const login = loginWords(stale);
+		expect(login).toContain('1 saved marketplace login');
+		expect(login).toContain('not proof it still works');
+		expect(login).not.toContain('Checked in');
+		expect(login).not.toContain('Ready');
+	});
+
+	it('says plainly when no login is saved', () => {
+		expect(loginWords(machine())).toBe('No marketplace login saved on this machine.');
+	});
+
+	// Eligibility is narrow and its wording must be too. The server's version
+	// floor applies only to marketplace-sourced payloads; the import claim
+	// itself never looks at a version. So an older installation is told what
+	// it cannot do and nothing more, and one at the floor is told nothing.
+	it('names only the sourced-file limitation and never calls a machine unable to import', () => {
+		expect(sourcedFileWords(machine({ runs_sourced_payloads: true }))).toBeNull();
+		const older = sourcedFileWords(machine({ app_version: '0.8.0', runs_sourced_payloads: false }));
+		expect(older).toContain('publish or refetch a file from a marketplace');
+		expect(older).toContain('importing your catalogue');
+		// The sentence the server does not support, in either direction.
+		expect(older).not.toContain('cannot run imports');
+		expect(older).not.toContain('too old to run imports');
+	});
+});
+
+describe('the order the list puts machines in', () => {
+	function row(over: Partial<DeviceView>) {
+		return { device: machine(over) };
+	}
+
+	it('puts this installation first and never matches on the display name', () => {
+		const rows = [
+			row({ id: 'other-fresh', name: 'SM-N975F', last_seen_at: NOW - MINUTE }),
+			row({ id: 'here', name: 'SM-N975F', last_seen_at: NOW - 60 * MINUTE })
+		];
+		const { current } = inListOrder(rows, 'here');
+		expect(current.map((one) => one.device.id)).toEqual(['here', 'other-fresh']);
+		// Two machines of one name are two machines: the one the seller is at
+		// is decided by installation id, and nothing about the name moves it.
+		const { current: byName } = inListOrder(rows, 'absent-id');
+		expect(byName.map((one) => one.device.id)).toEqual(['other-fresh', 'here']);
+	});
+
+	it('keeps signed-out records in history rather than in the list or the bin', () => {
+		const rows = [
+			row({ id: 'live' }),
+			row({ id: 'old-1', revoked_at: NOW - 2 * 24 * 60 * MINUTE }),
+			row({ id: 'old-2', revoked_at: NOW - 60 * MINUTE })
+		];
+		const { current, history } = inListOrder(rows, null);
+		expect(current.map((one) => one.device.id)).toEqual(['live']);
+		// Newest sign-out first, and both kept: a sign-out is the seller's own
+		// decision and the record is the evidence of it.
+		expect(history.map((one) => one.device.id)).toEqual(['old-2', 'old-1']);
+	});
+
+	it('does not hide an older installation for being older', () => {
+		const { current } = inListOrder(
+			[row({ id: 'old-app', app_version: '0.8.0', runs_sourced_payloads: false })],
+			null
+		);
+		expect(current.map((one) => one.device.id)).toEqual(['old-app']);
 	});
 });
 

@@ -15,7 +15,7 @@
 //! catalogue says where it already is, and the seller decides afterwards
 //! where else it goes.
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{header, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -26,10 +26,10 @@ use tam_engine_driver::import::{
 use tam_import::{AppliedResource, HeldFile, ImportRun, ImportedFile};
 use tam_storage::{
     job_request_key, BlobRepo, ClaimOutcome, EventScope, FenceOutcome, FingerprintWrite,
-    ImportReasonCode, ImportRunHead, ImportRunItemRecord, ImportRunRepo, ImportStage, JobOrigin,
-    JobRepo, MatchLayer, NewImportRun, NewJob, NewVerdict, ProgressReport, ReceiptOutcome,
-    RunCounts, RunItemState, RunKind, RunOpening, RunState, Selection, TextSketchColumns,
-    IMPORT_LEG,
+    ImportReasonCode, ImportRunHead, ImportRunItemRecord, ImportRunRepo, ImportStage, ItemOrder,
+    ItemPageFilter, JobOrigin, JobRepo, MatchLayer, NewImportRun, NewJob, NewVerdict,
+    ProgressReport, ReceiptOutcome, RunCounts, RunHistoryFilter, RunItemState, RunKind, RunOpening,
+    RunState, Selection, TextSketchColumns, IMPORT_LEG, ITEMS_LISTED_MAX, RUNS_LISTED_MAX,
 };
 use tam_types::{
     Actor, ContentHash, FileBytes, FileKind, InventoryId, JobEventPayload, JobId, Marketplace,
@@ -503,7 +503,14 @@ pub struct ImportRunView {
     pub state: ImportRunState,
     pub read_total: Option<u32>,
     pub counts: RunCountsView,
+    /// One page of the run's resources, under whatever filter and order was
+    /// asked for. `counts`, `read_total` and `execution` above stay whole-run
+    /// facts: a page narrows what is listed and never what is counted.
     pub items: Vec<ImportRunItemView>,
+    /// How many resources the item filter matches across the whole run.
+    pub items_total: u32,
+    pub items_offset: u32,
+    pub items_limit: u32,
     pub review_pairs: Vec<ReviewPairView>,
     pub created_at: Timestamp,
     pub settled_at: Option<Timestamp>,
@@ -511,9 +518,15 @@ pub struct ImportRunView {
     pub execution: ImportExecutionView,
 }
 
+/// One page of the run history.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportRunsView {
     pub runs: Vec<ImportRunHeadView>,
+    /// How many runs the filter matches across the whole history, which is
+    /// what the pager states. Never inferred from the page's own length.
+    pub total: u32,
+    pub offset: u32,
+    pub limit: u32,
 }
 
 /// What confirming a run answered.
@@ -695,17 +708,148 @@ async fn retryable(
     Ok(())
 }
 
+/// How many runs the history answers when the caller names no size.
+///
+/// Ten, which is what the console shows: a seller reads their history to find
+/// one import, and a page they can take in at a glance beats a page that
+/// holds everything they have ever done.
+const RUNS_PER_PAGE: i64 = 10;
+
+/// How many resources of one run a page answers when the caller names no
+/// size.
+const ITEMS_PER_PAGE: i64 = 25;
+
+/// Which page of the history, under which filter, in which direction.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct RunPageParams {
+    #[serde(default)]
+    pub offset: Option<i64>,
+    #[serde(default)]
+    pub limit: Option<i64>,
+    /// One run state, or `open` for every run still expecting work.
+    #[serde(default)]
+    pub state: Option<String>,
+    /// One inventory, or `spreadsheet` for the runs that name no shop.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// `newest` (the default) or `oldest`.
+    #[serde(default)]
+    pub order: Option<String>,
+}
+
+/// Which page of one run's resources, under which filter, in which order.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ItemPageParams {
+    #[serde(default)]
+    pub offset: Option<i64>,
+    #[serde(default)]
+    pub limit: Option<i64>,
+    /// A plain substring of the title, matched over the whole run.
+    #[serde(default)]
+    pub q: Option<String>,
+    /// One item state.
+    #[serde(default)]
+    pub state: Option<String>,
+    /// `title` (the default) or `listed`.
+    #[serde(default)]
+    pub order: Option<String>,
+}
+
+/// What a page of a list is, once the request's own words have been read.
+///
+/// An unrecognised filter is refused rather than ignored, which is the rule
+/// `jobs::parse_page` already states: a value we silently drop answers the
+/// whole list, and a seller who asked for their failed imports and got all of
+/// them has been told something untrue about what they are looking at.
+fn window(offset: Option<i64>, limit: Option<i64>, fallback: i64, ceiling: i64) -> (i64, i64) {
+    let offset = offset.unwrap_or(0).max(0);
+    let limit = limit.unwrap_or(fallback).clamp(1, ceiling);
+    (offset, limit)
+}
+
+fn run_history_filter(params: &RunPageParams) -> Result<RunHistoryFilter, APIError> {
+    let (offset, limit) = window(params.offset, params.limit, RUNS_PER_PAGE, RUNS_LISTED_MAX);
+    let mut filter = RunHistoryFilter {
+        offset,
+        limit,
+        ..RunHistoryFilter::default()
+    };
+    if let Some(raw) = params.state.as_deref().filter(|raw| !raw.is_empty()) {
+        match raw {
+            "open" => filter.open_only = true,
+            "reading" => filter.state = Some(RunState::Reading),
+            "reviewing" => filter.state = Some(RunState::Reviewing),
+            "committing" => filter.state = Some(RunState::Committing),
+            "complete" => filter.state = Some(RunState::Complete),
+            "failed" => filter.state = Some(RunState::Failed),
+            "abandoned" => filter.state = Some(RunState::Abandoned),
+            _ => return Err(validation("no such import state to filter by")),
+        }
+    }
+    if let Some(raw) = params.source.as_deref().filter(|raw| !raw.is_empty()) {
+        if raw == "spreadsheet" {
+            filter.spreadsheet_only = true;
+        } else {
+            filter.source = Some(
+                crate::vocabulary::parse_inventory(raw)
+                    .ok_or_else(|| validation("no such inventory to filter by"))?,
+            );
+        }
+    }
+    match params.order.as_deref().filter(|raw| !raw.is_empty()) {
+        None | Some("newest") => {}
+        Some("oldest") => filter.oldest = true,
+        Some(_) => return Err(validation("imports are ordered newest or oldest")),
+    }
+    Ok(filter)
+}
+
+fn item_window(params: &ItemPageParams) -> Result<ItemWindow, APIError> {
+    let (offset, limit) = window(params.offset, params.limit, ITEMS_PER_PAGE, ITEMS_LISTED_MAX);
+    let state = match params.state.as_deref().filter(|raw| !raw.is_empty()) {
+        None => None,
+        Some("listed") => Some(RunItemState::Listed),
+        Some("selected") => Some(RunItemState::Selected),
+        Some("read") => Some(RunItemState::Read),
+        Some("matched") => Some(RunItemState::Matched),
+        Some("review") => Some(RunItemState::Review),
+        Some("imported") => Some(RunItemState::Imported),
+        Some("skipped") => Some(RunItemState::Skipped),
+        Some("failed") => Some(RunItemState::Failed),
+        Some(_) => return Err(validation("no such resource state to filter by")),
+    };
+    let order = match params.order.as_deref().filter(|raw| !raw.is_empty()) {
+        None | Some("title") => ItemOrder::Title,
+        Some("listed") => ItemOrder::Listed,
+        Some(_) => return Err(validation("resources are ordered by title or as listed")),
+    };
+    Ok(ItemWindow {
+        state,
+        search: params
+            .q
+            .as_deref()
+            .map(str::trim)
+            .filter(|term| !term.is_empty())
+            .map(ToOwned::to_owned),
+        order,
+        offset,
+        limit,
+    })
+}
+
 pub(crate) async fn list_runs(
     State(state): State<AppState>,
     context: OrgContext,
+    Query(params): Query<RunPageParams>,
 ) -> Result<Json<ImportRunsView>, APIError> {
+    let filter = run_history_filter(&params)?;
     let repo = ImportRunRepo::new(state.pool.clone());
-    let heads = repo
-        .list(context.org)
+    let page = repo
+        .history(context.org, &filter)
         .await
         .map_err(|error| storage_fault(&state, &error))?;
-    let mut runs = Vec::with_capacity(heads.len());
-    for head in heads {
+    let mut runs = Vec::with_capacity(page.runs.len());
+    for head in page.runs {
         let counts = repo
             .counts(context.org, head.id)
             .await
@@ -716,16 +860,25 @@ pub(crate) async fn list_runs(
             .map_err(|error| storage_fault(&state, &error))?;
         runs.push(head_view(&head, counts, described));
     }
-    Ok(Json(ImportRunsView { runs }))
+    Ok(Json(ImportRunsView {
+        runs,
+        total: u32::try_from(page.total).unwrap_or(u32::MAX),
+        offset: u32::try_from(filter.offset).unwrap_or(u32::MAX),
+        limit: u32::try_from(filter.limit).unwrap_or(u32::MAX),
+    }))
 }
 
 pub(crate) async fn run_view(
     State(state): State<AppState>,
     context: OrgContext,
     Path((_version, run)): Path<(String, String)>,
+    Query(params): Query<ItemPageParams>,
 ) -> Result<Json<ImportRunView>, APIError> {
     let run = parse_id(&run)?;
-    Ok(Json(view_of(&state, context.org, run).await?))
+    let window = item_window(&params)?;
+    Ok(Json(
+        view_of_windowed(&state, context.org, run, &window).await?,
+    ))
 }
 
 /// Records the seller's tick list.
@@ -1354,18 +1507,86 @@ pub(crate) async fn head_or_missing(
         .ok_or_else(|| missing("no such import"))
 }
 
-/// One run, whole.
+/// Which resources one run view carries with it.
+///
+/// The read is windowed rather than whole because a run of five hundred
+/// resources used to arrive in full on every read, and the embedded copy on a
+/// batch's own page arrived in full for a list that page never draws.
+#[derive(Debug, Clone)]
+pub(crate) struct ItemWindow {
+    pub state: Option<RunItemState>,
+    pub search: Option<String>,
+    pub order: ItemOrder,
+    pub offset: i64,
+    pub limit: i64,
+}
+
+impl Default for ItemWindow {
+    fn default() -> Self {
+        Self {
+            state: None,
+            search: None,
+            order: ItemOrder::Title,
+            offset: 0,
+            limit: ITEMS_PER_PAGE,
+        }
+    }
+}
+
+impl ItemWindow {
+    /// The run's head and its open questions, and none of its resources.
+    ///
+    /// What a spreadsheet batch embeds: that page renders the review pairs and
+    /// nothing else off the run, and its own report is the list of rows.
+    /// `items_total` still states how many there are, so the absence reads as
+    /// a window rather than as an empty run.
+    pub(crate) const fn none() -> Self {
+        Self {
+            state: None,
+            search: None,
+            order: ItemOrder::Listed,
+            offset: 0,
+            limit: 0,
+        }
+    }
+}
+
+/// One run, with the first page of its resources.
 pub(crate) async fn view_of(
     state: &AppState,
     org: OrgId,
     run: Uuid,
 ) -> Result<ImportRunView, APIError> {
+    view_of_windowed(state, org, run, &ItemWindow::default()).await
+}
+
+/// One run, with the page of resources the caller asked for.
+pub(crate) async fn view_of_windowed(
+    state: &AppState,
+    org: OrgId,
+    run: Uuid,
+    window: &ItemWindow,
+) -> Result<ImportRunView, APIError> {
     let repo = ImportRunRepo::new(state.pool.clone());
-    let record = repo
-        .get(org, run)
+    let head = repo
+        .head(org, run)
         .await
         .map_err(|error| storage_fault(state, &error))?
         .ok_or_else(|| missing("no such import"))?;
+    let page = repo
+        .items_page(
+            org,
+            run,
+            &ItemPageFilter {
+                state: window.state,
+                search: window.search.as_deref(),
+                order: window.order,
+                offset: window.offset,
+                limit: window.limit,
+            },
+        )
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
     let counts = repo
         .counts(org, run)
         .await
@@ -1374,7 +1595,7 @@ pub(crate) async fn view_of(
         .described(org, run)
         .await
         .map_err(|error| storage_fault(state, &error))?;
-    let head = head_view(&record.head, counts, described);
+    let head = head_view(&head, counts, described);
     let pairs = crate::duplicates::pairs_of(state, org, Some(run)).await?;
     Ok(ImportRunView {
         id: head.id,
@@ -1384,11 +1605,10 @@ pub(crate) async fn view_of(
         state: head.state,
         read_total: head.read_total,
         counts: head.counts,
-        items: record
-            .items
-            .iter()
-            .map(|item| item_view(run, item))
-            .collect(),
+        items: page.items.iter().map(|item| item_view(run, item)).collect(),
+        items_total: u32::try_from(page.total).unwrap_or(u32::MAX),
+        items_offset: u32::try_from(window.offset).unwrap_or(u32::MAX),
+        items_limit: u32::try_from(window.limit).unwrap_or(u32::MAX),
         review_pairs: pairs,
         created_at: head.created_at,
         settled_at: head.settled_at,
@@ -1852,11 +2072,25 @@ fn sql_fault(state: &AppState, error: &sqlx::Error) -> APIError {
 }
 
 /// Of the listed rows, those whose listing a product of this org is already
-/// bound to on `source`, with that product's title.
+/// bound to on `source` *and* which that product holds a real picture for,
+/// with the product's title.
 ///
-/// One read of the tenant's mapping heads and one of its product summaries,
-/// on the page that carries the list — which is the first page of a run and
-/// no other — rather than a lookup per row.
+/// One read of the tenant's mapping heads, one of its product summaries and
+/// one of their covers, on the page that carries the list — which is the
+/// first page of a run and no other — rather than a lookup per row.
+///
+/// Why the thumbnail decides. This skip is a saving: the resource is already
+/// in the catalogue, so reading its file again buys nothing. That stops being
+/// true for a resource whose thumbnail is missing, or is the generated card
+/// that stood in for one — `tam_pipeline::render::is_generated_card` tells
+/// the two apart by digest. The only place a picture can come from is the
+/// resource's own bytes on the seller's device, the device reads those bytes
+/// only for a row this rule did not skip, and nothing after the commit ever
+/// redraws a cover — so skipping those rows is what made a historical
+/// import's missing thumbnail permanent. Letting exactly them through costs
+/// one bundle read each, once: the commit binds the listing onto the resource
+/// the catalogue already holds rather than creating a second one, offers the
+/// picture it now has, and the next run skips the row for good.
 async fn already_held(
     state: &AppState,
     org: OrgId,
@@ -1879,14 +2113,31 @@ async fn already_held(
     if bound.is_empty() {
         return Ok(Vec::new());
     }
-    let products = tam_storage::ProductRepo::new(state.pool.clone())
+    let repo = tam_storage::ProductRepo::new(state.pool.clone());
+    let products = repo
         .list(org)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    let held: Vec<ProductId> = bound.iter().map(|(_, product)| *product).collect();
+    // Only a cover whose bytes this deployment holds counts, which is what
+    // `covers` answers: a row naming a marketplace resource is a thumbnail no
+    // console can draw, and treating it as one would leave the resource
+    // unrepairable for exactly the reason above.
+    let covers = repo
+        .covers(org, &held)
         .await
         .map_err(|error| storage_fault(state, &error))?;
     Ok(rows
         .iter()
         .filter_map(|row| {
             let (_, product) = bound.iter().find(|(locator, _)| *locator == row.locator)?;
+            let pictured = covers.iter().any(|cover| {
+                cover.product == *product
+                    && !tam_pipeline::render::is_generated_card(cover.hash)
+            });
+            if !pictured {
+                return None;
+            }
             let title = products
                 .iter()
                 .find(|summary| summary.id == *product)
@@ -1954,6 +2205,13 @@ pub(crate) struct MatchedRead {
     title: String,
     price: Option<Money>,
     cover_hash: Option<ContentHash>,
+    /// How long those cover bytes are, measured where they were stored.
+    ///
+    /// Carried rather than read back, because the one branch that needs it
+    /// runs under the run's lock and no file read happens there: a
+    /// `product_file` row states its own length, and the only honest place to
+    /// take it is beside the `put` that wrote the blob.
+    cover_byte_len: Option<u64>,
     /// The identifier this resource's product will take: the row's reserved
     /// one where the run already listed it, and a fresh one otherwise. The
     /// matcher is asked about this identifier, because a question answered
@@ -1994,10 +2252,17 @@ pub(crate) async fn prepare_match(
     let now = (state.wall)();
 
     // The cover, stored as a held blob directly rather than through the ingest
-    // pipeline, which would derive a cover from the cover.
-    let cover_hash = match resource.cover_png.as_ref() {
-        Some(cover) => Some(store_cover(state, org, cover.bytes(), now).await?),
-        None => None,
+    // pipeline, which would derive a cover from the cover. Its length is taken
+    // here, where the bytes are, so no later branch has to read them back.
+    let (cover_hash, cover_byte_len) = match resource.cover_png.as_ref() {
+        Some(cover) => {
+            let bytes = cover.bytes();
+            (
+                Some(store_cover(state, org, bytes, now).await?),
+                Some(u64::try_from(bytes.len()).unwrap_or(u64::MAX)),
+            )
+        }
+        None => (None, None),
     };
 
     // The description as posted, minus the cover bytes: those are a blob named
@@ -2036,6 +2301,7 @@ pub(crate) async fn prepare_match(
         title: resource.listing.title.clone(),
         price,
         cover_hash,
+        cover_byte_len,
         product,
         subject,
         bands,
@@ -2222,7 +2488,16 @@ pub(crate) async fn apply_matched(
     // product with no Tes listing, and the next import of that shop could not
     // recognise the listing as one it already held and read it again.
     if let Some((product, title)) = survivor {
-        tam_storage::bind_listing(
+        // Which product ends up holding this listing, which is not always the
+        // one the matcher named: another product of this organisation may
+        // already bind it, and `bind_listing` leaves that claim standing and
+        // answers with its owner. The label, the thumbnail and the sentence
+        // all have to be about that product — offering them to the matcher's
+        // choice instead would put this shop's chip and this read's picture
+        // on a resource whose listing is somewhere else, which is the exact
+        // mismatch the binding exists to prevent. `commit_one` reads the
+        // holder the same way, through `bind_onto`.
+        let holder = tam_storage::bind_listing(
             tx,
             org,
             &tam_import::source_binding(
@@ -2238,10 +2513,36 @@ pub(crate) async fn apply_matched(
         )
         .await
         .map_err(|error| storage_fault_tx(org, &error))?;
-        tam_storage::attach_system_label(tx, org, product, matched.source.marketplace(), now)
+        tam_storage::attach_system_label(tx, org, holder, matched.source.marketplace(), now)
             .await
             .map_err(|error| storage_fault_tx(org, &error))?;
-        tam_storage::record_skipped(tx, org, at, &format!("same as {title}"), now)
+        // The thumbnail this read carried, offered to the resource that was
+        // kept. A merge decided against a second product, not against the
+        // picture: the survivor may be a metadata-only read from a source
+        // that carries none, and dropping this one would leave a resource
+        // with no thumbnail that nothing would ever redraw.
+        let repaired = repair_cover(
+            tx,
+            org,
+            holder,
+            cover_offer(matched.cover_hash, matched.cover_byte_len),
+            now,
+        )
+        .await
+        .map_err(|error| storage_fault_tx(org, &error))?;
+        // The title of the product the listing is actually on, for the same
+        // reason: a sentence naming the matcher's choice would send the
+        // seller to a resource this read did not touch. Read back rather than
+        // reused where the holder is not the matcher's product.
+        let named = if holder == product {
+            title
+        } else {
+            tam_storage::title_of(tx, org, holder)
+                .await
+                .map_err(|error| storage_fault_tx(org, &error))?
+                .unwrap_or(title)
+        };
+        tam_storage::record_skipped(tx, org, at, &skip_sentence(&named, repaired), now)
             .await
             .map_err(|error| storage_fault_tx(org, &error))?;
         return Ok(RunItemState::Skipped);
@@ -2926,7 +3227,23 @@ async fn commit_one(
             .await
             .map_err(|error| storage_fault(state, &error))?
             .unwrap_or_else(|| "a resource you already have".to_owned());
-        tam_storage::record_skipped(&mut tx, org, at, &format!("same as {title}"), now)
+        // The repair for every resource imported before a cover could be
+        // derived: this read carried a thumbnail drawn on the seller's own
+        // device from the resource's own bytes, and the catalogue's copy of
+        // that resource has none. It is offered here and refused where one
+        // already lives, so a thumbnail the seller chose by hand outlives
+        // every re-import. Nothing else about the kept resource moves: not
+        // its payload, not its title, not who read it.
+        let repaired = repair_cover(
+            &mut tx,
+            org,
+            holder,
+            applied.cover.as_ref().map(|held| (held.hash, held.byte_len)),
+            now,
+        )
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+        tam_storage::record_skipped(&mut tx, org, at, &skip_sentence(&title, repaired), now)
             .await
             .map_err(|error| storage_fault(state, &error))?;
         let settled = settle_if_done(state, &mut tx, org, head.id, now).await?;
@@ -3179,6 +3496,98 @@ fn listed_price(resource: &ObservedResource, source: InventoryId) -> Option<Mone
         return None;
     }
     Money::new(*minor_units, currency).ok()
+}
+
+/// The cover a read carried, as the pair a write needs: its digest and its
+/// length. `None` unless both are known, because a `product_file` row states
+/// its own length and half an answer is not one.
+const fn cover_offer(
+    hash: Option<ContentHash>,
+    byte_len: Option<u64>,
+) -> Option<(ContentHash, u64)> {
+    match (hash, byte_len) {
+        (Some(hash), Some(byte_len)) => Some((hash, byte_len)),
+        _ => None,
+    }
+}
+
+/// Offers a thumbnail to the resource the catalogue kept, and answers whether
+/// one arrived.
+///
+/// Both skip branches meet here, which is the point: a read the matcher
+/// merged away and a read the commit found already bound are the same
+/// situation for a thumbnail — this resource's picture was derived on the
+/// seller's device, and the catalogue's copy of the resource either has no
+/// thumbnail or has the generated card that stood in for one.
+///
+/// What may be replaced is the renderer's answer, not this function's:
+/// `tam_pipeline::render::is_generated_card` recognises a card by the digest
+/// it is stored under, so a card gives way to a picture and a picture — the
+/// seller's own upload, or an earlier read's genuine preview — never gives
+/// way to anything. The predicate rather than a flag, because the digests
+/// belong to the renderer that draws them and a copy of them here would be a
+/// second list to keep in step.
+///
+/// The bytes are already in this tenant's blob store: the page that carried
+/// them stored them there. Nothing here reads a file, and nothing here
+/// reaches a marketplace.
+async fn repair_cover(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    product: ProductId,
+    cover: Option<(ContentHash, u64)>,
+    now: Timestamp,
+) -> Result<bool, tam_storage::StorageError> {
+    let Some((hash, byte_len)) = cover else {
+        return Ok(false);
+    };
+    // A read that found no picture either carries a card or carries nothing,
+    // and the two are the same answer to a repair: there is nothing to
+    // supply. Refused here rather than offered, so a resource with no
+    // thumbnail is never given a card by this path and a resource whose
+    // thumbnail is a card never has it exchanged for another one — and, in
+    // both cases, the seller is not told a thumbnail arrived when none did.
+    if tam_pipeline::render::is_generated_card(hash) {
+        return Ok(false);
+    }
+    let file = tam_types::ProductFile {
+        id: tam_types::FileId(fresh_uuid()),
+        role: tam_types::FileRole::Cover,
+        kind: FileKind::Image,
+        bytes: FileBytes::Held {
+            hash,
+            byte_len,
+            // Rendered by the device from bytes it scanned there, which is the
+            // same verdict the create path records for this cover.
+            scan: ScanOutcome::Clean { at: now },
+        },
+    };
+    let offered = tam_storage::offer_cover(
+        tx,
+        org,
+        product,
+        &file,
+        tam_pipeline::render::is_generated_card,
+        now,
+    )
+    .await?;
+    Ok(matches!(
+        offered,
+        tam_storage::CoverOffer::Written | tam_storage::CoverOffer::Replaced
+    ))
+}
+
+/// What the seller reads on a skipped row.
+///
+/// The repair is said out loud. A row that reads only "same as Fractions
+/// pack" after a re-import the seller ran to fix a missing thumbnail would
+/// hide the one thing that changed.
+fn skip_sentence(title: &str, repaired: bool) -> String {
+    if repaired {
+        format!("same as {title}, whose thumbnail this read supplied")
+    } else {
+        format!("same as {title}")
+    }
 }
 
 async fn store_cover(

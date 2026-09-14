@@ -12,6 +12,7 @@
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
+	import Pagination from '$lib/Pagination.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import type { PairFieldChoice, PairSide, ReviewPairView } from '$lib/api';
@@ -22,6 +23,8 @@
 		REVIEW_LATER,
 		REVIEW_SAME,
 		WHICH_SIDE_WINS,
+		pageCount,
+		pageSummary,
 		reviewCard
 	} from './run-view';
 
@@ -39,7 +42,21 @@
 		onlater: (lo: string, hi: string) => void;
 	} = $props();
 
-	const cards = $derived(pairs.map(reviewCard));
+	/** How many questions are put at once.
+	 *
+	 *  Each card is two listings, two covers and three answers, so a page of
+	 *  them is a page of real reading. Ten is what a seller can work through
+	 *  before the list stops being a queue and starts being a wall. */
+	const PER_PAGE = 10;
+
+	let page = $state(1);
+
+	const all = $derived(pairs.map(reviewCard));
+	const pages = $derived(pageCount(all.length, PER_PAGE));
+	// Answering a card removes it from the list the server sends, so a page
+	// that empties itself would strand the seller on a page past the end.
+	const at = $derived(Math.min(page, pages));
+	const cards = $derived(all.slice((at - 1) * PER_PAGE, at * PER_PAGE));
 
 	// Which card is in its which-side-wins step, by pair key. A card is one
 	// question at a time: answering "same" opens the field choices under that
@@ -166,4 +183,14 @@
 			{/if}
 		</article>
 	{/each}
+	{#if all.length > PER_PAGE}
+		<Pagination
+			page={at}
+			hasNext={at < pages}
+			label="Duplicate questions"
+			summary={`${pageSummary((at - 1) * PER_PAGE, cards.length, all.length, 'questions')} · Page ${at} of ${pages}`}
+			onprevious={() => (page = at - 1)}
+			onnext={() => (page = at + 1)}
+		/>
+	{/if}
 </Panel>

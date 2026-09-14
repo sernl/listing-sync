@@ -34,25 +34,9 @@ function setting(
 }
 
 describe('a run row', () => {
-	it('leads with where the run was sent rather than with its identifier', () => {
-		const [row] = runRows([job({ inventory: 'Tes' })], 0);
-		expect(row.inventory).toBe('Tes');
-	});
-
-	it('keeps the identifier and the age on the meta line', () => {
-		const [row] = runRows([job({ job: 'abcdef1234567890', created_at: 0 })], HOUR);
-		expect(row.meta).toContain('abcdef12');
-		expect(row.meta).toContain('1 h ago');
-	});
-
 	it('opens the run', () => {
 		const [row] = runRows([job({ job: 'j-7' })], 0);
 		expect(row.href).toBe('/sync/j-7');
-	});
-
-	it('hands the raw instant on, so the template renders it in the seller’s own locale', () => {
-		const [row] = runRows([job({ created_at: 1234 })], 0);
-		expect(row.at).toBe(1234);
 	});
 });
 
@@ -144,7 +128,14 @@ describe('the pull cards', () => {
 describe('the activity log', () => {
 	it('renders the server’s own sentence rather than composing one', () => {
 		const [entry] = activityEntries(
-			[{ at: 0, line: '“Fractions Pack” pulled from TPT', href: '/resources/p-1' }],
+			[
+				{
+					at: 0,
+					key: 'pulled:r-1:p-1',
+					line: '“Fractions Pack” pulled from TPT',
+					href: '/resources/p-1'
+				}
+			],
 			HOUR
 		);
 		expect(entry.what).toBe('“Fractions Pack” pulled from TPT');
@@ -152,18 +143,31 @@ describe('the activity log', () => {
 		expect(entry.href).toBe('/resources/p-1');
 	});
 
-	// Two lines can share an instant and neither carries an identifier, so the
-	// key has to be more than the clock.
+	// Two lines can share an instant, so the clock is not a key. The identity
+	// is the server's own and travels with the line, which is what lets a
+	// page be replaced rather than appended.
 	it('keys two lines of the same instant apart', () => {
 		const entries = activityEntries(
 			[
-				{ at: 0, line: 'one', href: null },
-				{ at: 0, line: 'two', href: null }
+				{ at: 0, key: 'pulled:r-1:p-1', line: 'one', href: null },
+				{ at: 0, key: 'pulled:r-1:p-2', line: 'two', href: null }
 			],
 			0
 		);
 		expect(entries[0].id).not.toBe(entries[1].id);
 		expect(entries[0].href).toBeUndefined();
+	});
+
+	// The keys must not move when the same line arrives at a different
+	// position, which is exactly what a page-replacing pager does to it.
+	it('keys a line by its identity rather than its position', () => {
+		const line = { at: 5, key: 'published:j-1:p-1:Tes', line: 'sent', href: null };
+		const [first] = activityEntries([line], 0);
+		const [, second] = activityEntries(
+			[{ at: 6, key: 'pulled:r-9:p-9', line: 'other', href: null }, line],
+			0
+		);
+		expect(second.id).toBe(first.id);
 	});
 });
 

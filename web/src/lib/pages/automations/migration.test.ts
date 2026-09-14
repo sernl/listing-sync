@@ -1,22 +1,29 @@
 import { describe, expect, it } from 'vitest';
-import {
-	migrationCounts,
-	migrationLog,
-	migrationRows,
-	migrations,
-	pillTone
-} from './migration';
+import { migrationLog, migrationRows, pageSelection, pillTone } from './migration';
 import { request } from './fixtures.test-support';
 
 const HOUR = 3_600_000;
 
-describe('which requests this page owns', () => {
-	it('keeps the migrate half and drops the sync half', () => {
-		const rows = migrations([
-			request({ request: 'a' }),
-			request({ request: 'b', disposition: 'sync' })
-		]);
-		expect(rows.map((row) => row.request)).toEqual(['a']);
+// The bug this guards is silent and expensive: the seller ticks four
+// resources, turns the page, presses the page-wide tick, and the four are
+// gone from the migration without anything on screen saying so.
+describe('ticking a whole page of resources', () => {
+	it('keeps resources chosen on other pages', () => {
+		const held = new Set(['a', 'b']);
+		const next = pageSelection(held, ['c', 'd'], false);
+		expect([...next].sort()).toEqual(['a', 'b', 'c', 'd']);
+	});
+
+	it('unticks only the page, never the rest of the selection', () => {
+		const held = new Set(['a', 'b', 'c']);
+		const next = pageSelection(held, ['b', 'c'], true);
+		expect([...next]).toEqual(['a']);
+	});
+
+	it('leaves the selection it was given alone', () => {
+		const held = new Set(['a']);
+		pageSelection(held, ['b'], false);
+		expect([...held]).toEqual(['a']);
 	});
 });
 
@@ -59,20 +66,6 @@ describe('the activity log', () => {
 	it('states the outcome in the line rather than only in a colour', () => {
 		const [entry] = migrationLog([request({ state: 'failed' })], 0);
 		expect(entry.what).toContain('Failed');
-	});
-});
-
-describe('the per-source count', () => {
-	it('sums every migration from one marketplace under it', () => {
-		const counts = migrationCounts([
-			request({ request: 'a', source: 'Tes' }),
-			request({ request: 'b', source: 'Tes' })
-		]);
-		expect(counts).toEqual({ Tes: 2 });
-	});
-
-	it('counts no sync request', () => {
-		expect(migrationCounts([request({ disposition: 'sync' })])).toEqual({});
 	});
 });
 

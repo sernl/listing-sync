@@ -1,8 +1,16 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { createQuery } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ApiFailure, api, type ConnectionView, type ImportRunHead } from '$lib/api';
+	import {
+		ApiFailure,
+		api,
+		type ConnectionView,
+		type ImportRunFilterState,
+		type ImportRunHead,
+		type ImportRunOrder
+	} from '$lib/api';
 	import type { InventoryId, Marketplace } from '$lib/generated/vocab';
 	import Banner from '$lib/Banner.svelte';
 	import { anyConnectionStands } from '$lib/connection-standing';
@@ -10,7 +18,9 @@
 	import { desktopInvoker, sessionStatusHere, startImportHere, type LocalSessionOutcome } from '$lib/desktop';
 	import { agoLabel } from '$lib/elapsed';
 	import { entitlementRead, featureOf } from '$lib/entitlement-read';
+	import Field from '$lib/Field.svelte';
 	import PageHead from '$lib/PageHead.svelte';
+	import Pagination from '$lib/Pagination.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
 	import { saveDocument } from '$lib/pages/export/download';
@@ -36,6 +46,7 @@
 	} from './import-view';
 	import { fetchTemplate, openBatchFrom, uploadSheet } from './api';
 	import { IMPORT_ALREADY_OPEN, batchHref } from './sheet-view';
+	import { pageCount, pageSummary } from './run-view';
 	import './import.css';
 	import './sheet.css';
 
@@ -47,11 +58,40 @@
 	// Both ways in, in one list. A seller who read a shop on Monday and a
 	// spreadsheet on Tuesday has made two imports, not one of each: the two
 	// tables behind them are ours rather than theirs.
+	//
+	// One page of that list, cut by the server. `runsTotal` is the whole
+	// history under the filter in force, which is what the pager states.
 	let runs = $state<ImportRunHead[]>([]);
-	let runsLoaded = $state(false);
+	let runsTotal = $state(0);
+	// What the seller asked for, and what the rows on screen came from. A
+	// failed read leaves the old rows up, and they must carry the page they
+	// are actually from.
+	let runPage = $state(1);
+	let shownRunPage = $state(1);
+	let runsFailedFor = $state<number | null>(null);
 	let runsUnread = $state(false);
+	let runsBusy = $state(false);
+	let runsLoaded = $state(false);
+
+	/** How many imports one page of the history holds. The server's own
+	 *  default, restated so the pager can count pages without a round trip. */
+	const RUNS_PER_PAGE = 10;
+
+	let runState = $state<ImportRunFilterState | ''>('');
+	let runSource = $state('');
+	let runOrder = $state<ImportRunOrder>('newest');
+
+	// The runs still expecting work, read apart from the history page.
+	//
+	// A card offers "Open this import" for the shop's own open run, and a run
+	// that had scrolled off page one used to be invisible to that lookup —
+	// which would offer a seller a second import of a shop they are already
+	// importing. This asks the server for open runs rather than searching
+	// whatever page happens to be on screen.
+	let openRuns = $state<ImportRunHead[]>([]);
 
 	let runsRead = 0;
+	let openRead = 0;
 	let connectionRead = 0;
 	let localRead = 0;
 	let localSessions = $state<Map<Marketplace, LocalSessionOutcome>>(new Map());
@@ -103,28 +143,42 @@
 		!connectionsUnread && connections !== null && !anyConnectionStands(connections)
 	);
 	const rows = $derived(importRows(runs));
+	const runPages = $derived(pageCount(runsTotal, RUNS_PER_PAGE));
+	const runsFiltered = $derived(runState !== '' || runSource !== '' || runOrder !== 'newest');
 	let startEpoch = 0;
 
+	// Mount-time work, untracked on purpose. `loadRuns` reads the page and the
+	// filters, so a tracked body would make this effect a dependent of them:
+	// turning a page would then tear the listeners down, bump `startEpoch` and
+	// invalidate a start that was in flight. This effect is about the page
+	// being open, and nothing else.
 	$effect(() => {
-		startEpoch += 1;
-		const refresh = () => {
-			void loadConnections();
-			void loadLocalSessions();
-			void loadRuns();
-		};
-		const visible = () => { if (document.visibilityState === 'visible') refresh(); };
-		refresh();
-		void loadOpenBatch();
-		window.addEventListener('focus', refresh);
-		document.addEventListener('visibilitychange', visible);
-		return () => {
+		return untrack(() => {
 			startEpoch += 1;
-			runsRead += 1;
-			connectionRead += 1;
-			localRead += 1;
-			window.removeEventListener('focus', refresh);
-			document.removeEventListener('visibilitychange', visible);
-		};
+			const refresh = () => {
+				void loadConnections();
+				void loadLocalSessions();
+				// The page the seller is on, under the filters they set. A
+				// background refresh that reset to page one would move the history
+				// out from under someone reading it.
+				void loadRuns();
+				void loadOpenRuns();
+			};
+			const visible = () => { if (document.visibilityState === 'visible') refresh(); };
+			refresh();
+			void loadOpenBatch();
+			window.addEventListener('focus', refresh);
+			document.addEventListener('visibilitychange', visible);
+			return () => {
+				startEpoch += 1;
+				runsRead += 1;
+				openRead += 1;
+				connectionRead += 1;
+				localRead += 1;
+				window.removeEventListener('focus', refresh);
+				document.removeEventListener('visibilitychange', visible);
+			};
+		});
 	});
 
 	async function loadConnections() {
@@ -152,16 +206,66 @@
 
 	async function loadRuns() {
 		const current = ++runsRead;
+		const asked = runPage;
+		runsBusy = true;
 		try {
-			const answer = await api.importRuns();
+			const answer = await api.importRuns({
+				offset: (asked - 1) * RUNS_PER_PAGE,
+				limit: RUNS_PER_PAGE,
+				state: runState === '' ? null : runState,
+				source: runSource === '' ? null : runSource,
+				order: runOrder
+			});
 			if (current !== runsRead) return;
 			runs = answer.runs;
+			runsTotal = answer.total;
+			shownRunPage = asked;
 			runsUnread = false;
+			runsFailedFor = null;
 		} catch {
 			if (current !== runsRead) return;
+			// The page already drawn stays, and so does the page number under
+			// it: a failed read is not an empty history, and rows from page
+			// one must not be labelled page two because page two was asked
+			// for and never arrived.
 			runsUnread = true;
+			runsFailedFor = asked;
+		} finally {
+			if (current === runsRead) runsBusy = false;
 		}
 		runsLoaded = true;
+	}
+
+	/** The runs still expecting work, whatever page of the history they are
+	 *  on. Read apart so a card's "Open this import" finds the shop's open
+	 *  run rather than only the ten most recent. */
+	async function loadOpenRuns() {
+		const current = ++openRead;
+		try {
+			const answer = await api.importRuns({ state: 'open', limit: 50 });
+			if (current !== openRead) return;
+			openRuns = answer.runs;
+		} catch {
+			// Left as it was: a failed read must not turn an open import into
+			// an offer to start a second one.
+		}
+	}
+
+	function showRuns(next: number) {
+		runPage = Math.min(Math.max(1, next), runPages);
+		void loadRuns();
+	}
+
+	function narrowRuns() {
+		runPage = 1;
+		void loadRuns();
+	}
+
+	function clearRunFilters() {
+		runState = '';
+		runSource = '';
+		runOrder = 'newest';
+		narrowRuns();
 	}
 
 	async function loadOpenBatch() {
@@ -365,7 +469,9 @@
 			{@const site = card.sites[0]}
 			{@const local = localSessions.get(card.marketplace)}
 			{@const blocked = importBlocked(card, shopRefusal, local, inApp)}
-			{@const open = runs.find((run) => run.source === site && !['complete', 'failed', 'abandoned'].includes(run.state))}
+			<!-- From the open-run read rather than from the history page: an
+			     open import that has scrolled off page one is still open. -->
+			{@const open = openRuns.find((run) => run.source === site)}
 			<section class="import-card">
 				<div class="head">
 					<h2><MarketplaceMark marketplace={card.marketplace} size={22} /></h2>
@@ -427,17 +533,80 @@
 
 	<p class="foot-note">{FILES_STAY_ON_YOUR_COMPUTER}</p>
 
-	<Panel title="Your imports" description="Every import you have run, newest first.">
+	<Panel
+		title="Your imports"
+		description="Every import you have run. Filters and ordering cover all of them, not just this page."
+	>
+		<div class="import-filters">
+			<Field label="Where from" id="imports-source">
+				<select id="imports-source" bind:value={runSource} onchange={narrowRuns}>
+					<option value="">Anywhere</option>
+					<option value="spreadsheet">Spreadsheet</option>
+					{#each cards as card (card.marketplace)}
+						{#each card.sites as site (site)}
+							<option value={site}>{card.name}</option>
+						{/each}
+					{/each}
+				</select>
+			</Field>
+			<Field label="Status" id="imports-state">
+				<select id="imports-state" bind:value={runState} onchange={narrowRuns}>
+					<option value="">Any status</option>
+					<option value="open">Still running</option>
+					<option value="reviewing">Waiting on you</option>
+					<option value="complete">Finished</option>
+					<option value="failed">Stopped with a problem</option>
+					<option value="abandoned">Given up</option>
+				</select>
+			</Field>
+			<Field label="Order by" id="imports-order">
+				<select id="imports-order" bind:value={runOrder} onchange={narrowRuns}>
+					<option value="newest">Newest first</option>
+					<option value="oldest">Oldest first</option>
+				</select>
+			</Field>
+			{#if runsFiltered}
+				<Button small tier="quiet" onclick={clearRunFilters}>Clear filters</Button>
+			{/if}
+		</div>
+
+		<!-- A failed read is a banner over the history, not instead of it: the
+		     rows already read are still true, and replacing them with a
+		     sentence would take away what the seller came for. -->
 		{#if runsUnread}
-			<p class="quiet">{IMPORTS_UNREAD}</p>
-		{:else if !runsLoaded}
+			<Banner tone="bad" title="We could not read your imports">
+				{IMPORTS_UNREAD}
+				{runsFailedFor === null
+					? ''
+					: `Page ${runsFailedFor} did not arrive; below is the page we last read.`}
+				{#snippet action()}
+					<Button
+						tier="outline"
+						small
+						disabled={runsBusy}
+						reason={runsBusy ? 'Reading your imports.' : undefined}
+						onclick={() => void loadRuns()}
+					>
+						Try again
+					</Button>
+				{/snippet}
+			</Banner>
+		{/if}
+		{#if !runsLoaded}
 			<p class="quiet">Loading…</p>
 		{:else if rows.length === 0}
-			<Placeholder
-				icon="download"
-				headline={NO_IMPORT_YET}
-				body="Upload a spreadsheet or choose a marketplace above to start one."
-			/>
+			<!-- "Nothing matches what you asked for" and "you have never run an
+			     import" are different facts, and a seller who filtered must not
+			     be told they have no imports. -->
+			{#if runsFiltered}
+				<p class="quiet">No import matches these filters. Clear them to see the rest.</p>
+			{:else}
+				<Placeholder
+					icon="download"
+					headline={NO_IMPORT_YET}
+					body="Upload a spreadsheet or choose a marketplace above to start one."
+				/>
+			{/if}
 		{:else}
 			{#each rows as row (row.id)}
 				<!-- The badge and the line stay inside one link. Two of the labels
@@ -450,15 +619,26 @@
 						<span class="t">
 							{#if row.source !== null}
 								<MarketplaceMark inventory={row.source} />
-							{:else}
-								{row.name}
 							{/if}
+							{row.name}
 						</span>
 						<span class="w">{row.line}</span>
 					</span>
 					<span class="at">{agoLabel(row.created_at, Date.now())}</span>
 				</a>
 			{/each}
+		{/if}
+
+		{#if runsLoaded && (runsTotal > 0 || shownRunPage > 1)}
+			<Pagination
+				page={shownRunPage}
+				hasNext={shownRunPage < runPages}
+				busy={runsBusy}
+				label="Your imports"
+				summary={`${pageSummary((shownRunPage - 1) * RUNS_PER_PAGE, rows.length, runsTotal, 'imports')} · Page ${shownRunPage} of ${runPages}`}
+				onprevious={() => showRuns(shownRunPage - 1)}
+				onnext={() => showRuns(shownRunPage + 1)}
+			/>
 		{/if}
 	</Panel>
 </div>

@@ -18,7 +18,7 @@
 
 use sqlx::PgPool;
 use tam_storage::{
-    escape_like, GuideDelete, GuideEdit, GuidePublishedHead, GuideRecord, GuideRepo,
+    escape_like, GuideDelete, GuideEdit, GuideOrder, GuidePublishedHead, GuideRecord, GuideRepo,
     GuideRevisionWrite, GuideSearch, GuideStatus, GuideTaxon, GuideTaxonKind, GuideTaxonWrite,
     GuideWrite, NewGuide,
 };
@@ -879,6 +879,7 @@ async fn a_search_is_literal_and_the_three_filters_narrow_together(pool: PgPool)
             text: Some(&escape_like("Take")),
             topic: Some(pricing.id),
             tags: &[etsy.id],
+            ..GuideSearch::default()
         })
         .await
         .expect("the search reads");
@@ -894,6 +895,7 @@ async fn a_search_is_literal_and_the_three_filters_narrow_together(pool: PgPool)
             text: Some(&escape_like("Take")),
             topic: Some(pricing.id),
             tags: &[tpt.id, etsy.id],
+            ..GuideSearch::default()
         })
         .await
         .expect("the search reads");
@@ -1283,4 +1285,252 @@ async fn a_guide_written_again_at_a_freed_slug_refuses_the_old_guides_writes(poo
         vec![second],
         "and the reader's row names the same guide"
     );
+}
+
+/// A published guide at a slug of its own, filed under the fixture's words.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a test-local fixture helper; every call site reads the six labels in place"
+)]
+async fn published(
+    repo: &GuideRepo,
+    slug: &str,
+    title: &str,
+    body: &str,
+    filing: (Uuid, Uuid),
+    at: Timestamp,
+) {
+    let guide = draft(repo, slug, title, body, filing).await;
+    landed(
+        repo.publish(slug, guide, 1, OPERATOR, at)
+            .await
+            .expect("the publish lands"),
+    );
+}
+
+/// The reader's listing is a window on the whole narrowing, not a list with
+/// its tail cut off in the console.
+///
+/// Two properties, and the second is the one that makes paging worth having:
+/// the rows come back a page at a time, and the count that goes with them is a
+/// count of the corpus the filters name rather than of the rows that were
+/// sent. A page length reported as a total is how a reader is told there are
+/// twenty-five guides when there are two hundred, and it is also how a search
+/// that would have matched something on page six comes back empty.
+#[sqlx::test(migrations = "./migrations")]
+async fn the_reader_reads_one_page_of_the_whole_published_corpus(pool: PgPool) {
+    provision_operator(&pool)
+        .await
+        .expect("the operator provisions");
+    let repo = GuideRepo::new(pool.clone());
+    let selling = taxon(&repo, GuideTaxonKind::Topic, "selling", "Selling").await;
+    let tpt = taxon(&repo, GuideTaxonKind::Tag, "tpt", "TPT").await;
+
+    // Five guides whose alphabet runs the opposite way to their publication
+    // order, so an answer in one order cannot pass for the other.
+    for (index, title) in ["Apples", "Bananas", "Cherries", "Damsons", "Elderberries"]
+        .into_iter()
+        .enumerate()
+    {
+        let step = i64::try_from(index).unwrap_or(0);
+        published(
+            &repo,
+            &title.to_lowercase(),
+            title,
+            "A published paragraph about fruit.",
+            (selling.id, tpt.id),
+            Timestamp(5_000 + step * 100),
+        )
+        .await;
+    }
+    // And one that is only ever a draft, whose prose says "fruit" too.
+    draft(
+        &repo,
+        "figs",
+        "Figs",
+        "An unpublished paragraph about fruit.",
+        (selling.id, tpt.id),
+    )
+    .await;
+
+    let alphabet = GuideSearch {
+        order: GuideOrder::Title,
+        take: 2,
+        ..GuideSearch::default()
+    };
+    let first = repo
+        .published(&alphabet)
+        .await
+        .expect("the first page reads");
+    assert_eq!(
+        listed(&first),
+        vec!["apples", "bananas"],
+        "the first page is the first two of the alphabet and not the first two \
+         of anything else"
+    );
+    let second = repo
+        .published(&GuideSearch {
+            skip: 2,
+            ..alphabet
+        })
+        .await
+        .expect("the second page reads");
+    let last = repo
+        .published(&GuideSearch {
+            skip: 4,
+            ..alphabet
+        })
+        .await
+        .expect("the last page reads");
+    assert_eq!(
+        listed(&second),
+        vec!["cherries", "damsons"],
+        "the second page continues where the first stopped"
+    );
+    assert_eq!(
+        listed(&last),
+        vec!["elderberries"],
+        "and the last page is the remainder, so every published guide is on \
+         exactly one page"
+    );
+
+    assert_eq!(
+        repo.published_count(&alphabet)
+            .await
+            .expect("the count reads"),
+        5,
+        "the count is the corpus the filters name, not the two rows a page \
+         holds and not the six guides the table holds"
+    );
+    assert_eq!(
+        repo.published_count(&GuideSearch {
+            skip: 4,
+            ..alphabet
+        })
+        .await
+        .expect("the count reads"),
+        5,
+        "and it is the same count whichever page is being read"
+    );
+
+    let newest = repo
+        .published(&GuideSearch {
+            order: GuideOrder::Newest,
+            take: 2,
+            ..GuideSearch::default()
+        })
+        .await
+        .expect("the newest page reads");
+    assert_eq!(
+        listed(&newest),
+        vec!["elderberries", "damsons"],
+        "the other order is the other order, and it is the publication time it \
+         is ordered by rather than the slug or the save"
+    );
+
+    // The filters are the database's, applied before the window: a search
+    // matching more than a page's worth still reports what it matched and
+    // still has its remainder on the next page.
+    let fruit = escape_like("fruit");
+    let searched = GuideSearch {
+        text: Some(&fruit),
+        order: GuideOrder::Title,
+        take: 2,
+        ..GuideSearch::default()
+    };
+    assert_eq!(
+        repo.published_count(&searched)
+            .await
+            .expect("the search counts"),
+        5,
+        "the search is counted over every published guide it matches, and the \
+         draft that says the same word is not one of them"
+    );
+    assert_eq!(
+        listed(&repo.published(&searched).await.expect("the search reads")),
+        vec!["apples", "bananas"],
+        "while the rows are one page of that match"
+    );
+    assert_eq!(
+        listed(
+            &repo
+                .published(&GuideSearch {
+                    skip: 4,
+                    ..searched
+                })
+                .await
+                .expect("the search's last page reads")
+        ),
+        vec!["elderberries"],
+        "whose remainder is reachable rather than cut off"
+    );
+
+    // An ordinal past the end is an empty page beside a real count, which is
+    // the truth about it: the guides exist and the reader has walked too far.
+    let past = GuideSearch {
+        skip: 40,
+        ..alphabet
+    };
+    assert!(
+        repo.published(&past)
+            .await
+            .expect("the page past the end reads")
+            .is_empty(),
+        "there are no rows out there"
+    );
+    assert_eq!(
+        repo.published_count(&past).await.expect("the count reads"),
+        5,
+        "and the count does not go to zero with them"
+    );
+}
+
+/// A page boundary falls in the same place twice.
+///
+/// Two guides published in the same instant under the same title tie on every
+/// ordering key but the slug, which is unique per guide. Without that last key
+/// the database may answer them in either order, and a row that changes sides
+/// of a boundary between two reads is a row shown on both pages or on neither.
+#[sqlx::test(migrations = "./migrations")]
+async fn two_guides_that_tie_still_fall_on_one_side_of_a_page_boundary(pool: PgPool) {
+    provision_operator(&pool)
+        .await
+        .expect("the operator provisions");
+    let repo = GuideRepo::new(pool.clone());
+    let selling = taxon(&repo, GuideTaxonKind::Topic, "selling", "Selling").await;
+    let tpt = taxon(&repo, GuideTaxonKind::Tag, "tpt", "TPT").await;
+    for slug in ["twin-b", "twin-a"] {
+        published(
+            &repo,
+            slug,
+            "Twins",
+            "One of two guides with one title.",
+            (selling.id, tpt.id),
+            NOW,
+        )
+        .await;
+    }
+
+    for order in [GuideOrder::Title, GuideOrder::Newest] {
+        let page = GuideSearch {
+            order,
+            take: 1,
+            ..GuideSearch::default()
+        };
+        let first = repo.published(&page).await.expect("the first page reads");
+        let second = repo
+            .published(&GuideSearch { skip: 1, ..page })
+            .await
+            .expect("the second page reads");
+        assert_eq!(
+            (listed(&first), listed(&second)),
+            (vec!["twin-a"], vec!["twin-b"]),
+            "the slug breaks the tie, so each of the two is on exactly one \
+             page in {order:?} order"
+        );
+    }
 }

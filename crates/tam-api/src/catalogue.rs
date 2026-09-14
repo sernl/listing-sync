@@ -2672,7 +2672,8 @@ async fn redraw_cover(
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
     let rendered = tam_pipeline::render::cover(file.kind, &bytes)
-        .map_err(|error| state.internal(&format!("the thumbnail could not be drawn: {error}")))?;
+        .map_err(|error| state.internal(&format!("the thumbnail could not be drawn: {error}")))?
+        .image;
     let sink = TenantBlobSink {
         repo: &repo,
         org,

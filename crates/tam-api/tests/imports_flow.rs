@@ -55,6 +55,31 @@ fn state(pool: PgPool) -> AppState {
     }
 }
 
+/// The seller-device consent, granted for every marketplace that needs it,
+/// so the mints under test are answered by the machinery rather than by the
+/// consent gate; `consent_flow.rs` is where that gate is exercised.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn consented(pool: &PgPool, org: OrgId) {
+    let consents = tam_storage::ConsentRepo::new(pool.clone());
+    for marketplace in tam_types::Marketplace::ALL {
+        if marketplace.transport_class() == tam_types::TransportClass::SellerDevice {
+            consents
+                .grant(
+                    org,
+                    marketplace,
+                    tam_types::CONSENT_NOTICE_VERSION,
+                    Uuid([0xC0; 16]),
+                    Timestamp(1_000),
+                )
+                .await
+                .expect("the fixture consent grants");
+        }
+    }
+}
+
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
@@ -67,6 +92,7 @@ async fn provision(pool: &PgPool) {
             .execute(pool)
             .await
             .expect("the org seeds");
+        consented(pool, org).await;
         // A spreadsheet import is a paid capability, and one batch here runs
         // past the free catalogue allowance: the fixture tenant subscribes,
         // so these tests measure the import machinery rather than the plan
@@ -1453,6 +1479,10 @@ async fn a_commit_creates_one_resource_per_passing_row_with_its_labels(pool: PgP
     assert!(
         run.review_pairs.is_empty(),
         "a batch with nothing to ask about asks nothing"
+    );
+    assert!(
+        run.items.is_empty() && run.items_total > 0,
+        "the batch embeds the run's head and its questions, never a second copy of its rows"
     );
 
     let rows = detail.rows;

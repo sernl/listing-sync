@@ -84,6 +84,28 @@ class SessionKeyPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     /**
+     * Whether the seller is looking at this application right now.
+     *
+     * Read from `MainActivity`'s process-lifetime started count rather than
+     * from the Activity this plugin was constructed with. Tauri keeps its
+     * plugin instances across an Activity recreation (its PluginManager
+     * returns early from `onActivityCreate` after the first initialisation,
+     * tauri 2.11.5), so the captured Activity outlives its own window: after a
+     * configuration change this manifest does not handle — fontScale,
+     * density — it sits at DESTROYED while a replacement is on screen, and
+     * asking it would answer "not here" for the rest of the session.
+     *
+     * The count is incremented in `onStart` and decremented in `onStop`, so a
+     * split-screen or partly covered window still counts: a seller working in
+     * one is as present as a seller with it full-screen. Zero is a phone in a
+     * pocket, and the client asks the network for nothing there.
+     */
+    @Command
+    fun foreground(invoke: Invoke) {
+        invoke.resolve(JSObject().put("foreground", MainActivity.isOnScreen()))
+    }
+
+    /**
      * Destroys the key and the wrapped secret.
      *
      * Deleting the Keystore entry is what makes this a wipe rather than a

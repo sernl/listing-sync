@@ -1094,6 +1094,35 @@ async fn live_cover(
     .await?)
 }
 
+/// The product's live cover and the digest it names, where it has one.
+///
+/// The digest is `None` for a cover row naming a marketplace resource rather
+/// than a blob — a thumbnail nothing here can serve. Read beside the
+/// identifier because a caller deciding whether a cover may be replaced needs
+/// both: the digest says what the picture is, and the identifier is the row it
+/// would retire.
+async fn live_cover_digest(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org_db: uuid::Uuid,
+    product_db: uuid::Uuid,
+) -> Result<Option<(uuid::Uuid, Option<tam_types::ContentHash>)>, StorageError> {
+    let row = sqlx::query!(
+        "SELECT id, hash FROM product_file \
+         WHERE org_id = $1 AND product_id = $2 AND role = 'cover' AND deleted_at IS NULL",
+        org_db,
+        product_db,
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    match row {
+        Some(row) => {
+            let hash = row.hash.as_deref().map(hash_from_db).transpose()?;
+            Ok(Some((row.id, hash)))
+        }
+        None => Ok(None),
+    }
+}
+
 /// The payload file a cover would have been drawn from: the live one with the
 /// lowest position, which is the order every read of the product returns them
 /// in and the order `ingest` wrote them in.
@@ -2231,6 +2260,129 @@ pub async fn title_of(
     .fetch_optional(&mut **tx)
     .await?;
     Ok(row.map(|row| row.title))
+}
+
+/// What became of a thumbnail a caller offered a product that may already
+/// have one.
+///
+/// Four answers rather than a boolean, because a caller reports each of them
+/// differently to the seller: a resource that had none, a resource whose
+/// generated card was exchanged for a picture, a resource whose own thumbnail
+/// was left alone, and an identifier that names no resource.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoverOffer {
+    /// The product held no thumbnail and now holds this one.
+    Written,
+    /// The product held a thumbnail the caller said was replaceable — a
+    /// generated card, not a picture of anything — which is retired and
+    /// replaced by this one.
+    Replaced,
+    /// The product holds a live thumbnail that is not replaceable, or is
+    /// already these exact bytes. Left exactly as it was.
+    AlreadyHeld,
+    /// This tenant holds no live product of that identifier.
+    NoProduct,
+}
+
+/// Offers a product a thumbnail, inside a transaction the caller owns.
+///
+/// The repair for a resource imported before a picture of it could be
+/// derived: the device describes the listing again, the page stores the cover
+/// it drew from the resource's own bytes, and the commit finds the resource
+/// already in the catalogue. Without this the run binds the listing onto the
+/// survivor and drops the picture, which is why a historical import could
+/// never gain one.
+///
+/// `replaceable` decides the one hard case: a resource that already holds a
+/// thumbnail. The predicate is the caller's because what counts as a
+/// replaceable picture is a rendering question, not a storage one — the
+/// renderer knows the digests of the cards it generates, and a card is the
+/// only thing an automatic write may exchange for a real preview. Anything
+/// else — the seller's own upload, an earlier read's genuine preview, or a
+/// cover row naming bytes this deployment does not hold — answers
+/// [`CoverOffer::AlreadyHeld`] and is left untouched. Offering the same bytes
+/// twice is `AlreadyHeld` too, so a replayed repair writes nothing.
+///
+/// What it deliberately does not do: it touches no payload row, no mapping,
+/// no title and no authorship. The resource's own bytes and who read them are
+/// not this write's business. The old cover row is retired before the new one
+/// is written, because `product_file_one_cover` is an immediate partial
+/// unique index and the two cannot both be live even for the length of a
+/// statement; the product's row is locked first, so the read that classifies
+/// the existing cover and the write that replaces it are one step.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the transaction, the tenant, the product, the cover offered, the caller's \
+              replaceability predicate and the instant; a struct over those six would name \
+              the call"
+)]
+pub async fn offer_cover(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    product: ProductId,
+    cover: &ProductFile,
+    replaceable: impl Fn(tam_types::ContentHash) -> bool,
+    at: Timestamp,
+) -> Result<CoverOffer, StorageError> {
+    if cover.role != FileRole::Cover {
+        return Err(StorageError::Inconsistent {
+            reason: format!(
+                "file {:?} carries role {:?} and was offered as a thumbnail",
+                cover.id, cover.role
+            ),
+        });
+    }
+    // A cover is always bytes we hold. A sourced one would be a thumbnail the
+    // console cannot serve and the publish gate cannot see, which is the
+    // guarantee `tam_import::HeldFile` makes at the type level on the other
+    // path into this slot.
+    let tam_types::FileBytes::Held { hash: offered, .. } = &cover.bytes else {
+        return Err(StorageError::Inconsistent {
+            reason: "a thumbnail must be bytes this deployment holds".to_owned(),
+        });
+    };
+    let offered = *offered;
+    let org_db = uuid_to_db(org.0);
+    let product_db = uuid_to_db(product.0);
+    let at_db = timestamp_to_db(at)?;
+    if !lock_product(tx, org_db, product_db).await? {
+        return Ok(CoverOffer::NoProduct);
+    }
+    let mut outcome = CoverOffer::Written;
+    if let Some((existing, held)) = live_cover_digest(tx, org_db, product_db).await? {
+        let Some(held) = held else {
+            // A cover naming a marketplace resource: nothing here can classify
+            // bytes this deployment has never seen, and replacing a row a
+            // seller may be relying on over that ignorance is not this
+            // write's call.
+            return Ok(CoverOffer::AlreadyHeld);
+        };
+        if held == offered || !replaceable(held) {
+            return Ok(CoverOffer::AlreadyHeld);
+        }
+        retire(tx, org_db, product_db, existing, at_db).await?;
+        outcome = CoverOffer::Replaced;
+    }
+    let position = next_position(tx, org_db, product_db).await?;
+    insert_file(
+        tx,
+        &FileWrite {
+            org: org_db,
+            product: product_db,
+            at: at_db,
+        },
+        NewFile {
+            position,
+            slot: FileRole::Cover,
+            file: cover,
+            // Nobody chooses a generated picture, which is the same reason
+            // `add_file` withholds a name in this slot.
+            name: None,
+        },
+    )
+    .await?;
+    touch(tx, org_db, product_db, at_db).await?;
+    Ok(outcome)
 }
 
 /// Edits one product inside a transaction the caller owns.

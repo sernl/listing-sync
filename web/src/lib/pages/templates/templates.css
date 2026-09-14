@@ -1,11 +1,71 @@
 /* Template Manager's own layout. Colour, type and shape come from the tokens
    alone, so this file has no value the palette does not already name. */
 
+/* The wrapper that keeps the editor mounted while another tab is shown. It
+   must not become a box: `.page > .panel + .panel` is a child rule, so a real
+   element between the page and this tab's panels would take their spacing with
+   it. `display: contents` leaves the panels as the page's own children, and
+   because that also overrides the `hidden` attribute's own display, hiding is
+   restated for it. */
+.tpl-pane {
+	display: contents;
+}
+
+.tpl-pane[hidden] {
+	display: none;
+}
+
+/* The two controls line up along their top edge, so their labels and inputs
+   share one baseline. Bottom-aligning them instead equalised the whole
+   group's height and pushed the shorter hint's label and input down by the
+   difference between the two hints — which is the misalignment the row is
+   here to avoid. The hints below are free to differ in height. */
 .tpl-grid {
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+	align-items: start;
 	gap: 16px;
 	margin-bottom: 16px;
+}
+
+/* The two example starters, above the fields they fill. One column on a phone
+   and as many as fit on a desktop, from the same auto-fit idiom the field row
+   above uses rather than a second breakpoint. */
+.tpl-examples {
+	margin-bottom: 16px;
+}
+
+.tpl-examples-said {
+	color: var(--muted);
+	font-size: 13px;
+	margin: 0 0 10px;
+}
+
+.tpl-example-cards {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+	gap: 12px;
+}
+
+.tpl-example {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 6px;
+	padding: 12px 14px;
+	border: 1px solid var(--line);
+	border-radius: var(--r-field);
+	background: var(--ground);
+}
+
+.tpl-example .t {
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.tpl-example .tpl-said {
+	color: var(--muted);
+	margin-bottom: 2px;
 }
 
 .tpl-stack {

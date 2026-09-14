@@ -265,12 +265,51 @@ pub struct NewGuide<'a> {
     pub edit: GuideEdit<'a>,
 }
 
-/// Which published guides a reader's filters name.
+/// The order a reader's listing is answered in.
+///
+/// Two orders and no third, because the corpus is help the platform writes:
+/// what a reader wants is the alphabet when they are looking for a title they
+/// half remember, and the newest first when they are looking for what
+/// changed. Every order ends at the slug, which is unique, so a page boundary
+/// falls in the same place twice and no row can be shown on two pages or on
+/// none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GuideOrder {
+    /// Newest publication first. The order this listing has always answered
+    /// in, and the one a reader asking "what is new" wants.
+    #[default]
+    Newest,
+    /// Title A-Z, compared case-insensitively so `Etsy` and `etsy` sort
+    /// together rather than in two alphabets.
+    Title,
+}
+
+/// How many published guides one page holds where a caller names no size.
+pub const PUBLISHED_PAGE_ROWS: u32 = 25;
+
+/// The most rows one read of the published listing will answer, whatever is
+/// asked for.
+///
+/// A ceiling rather than a suggestion: the listing is a `LIKE` scan over every
+/// published body, and one request is not a licence to run the whole corpus
+/// through it. A caller wanting more asks for the next page.
+pub const PUBLISHED_PAGE_MAX: u32 = 100;
+
+/// Which published guides a reader's filters name, in which order, and which
+/// page of them.
 ///
 /// Three conditions, all over the snapshot: the text, one topic, and any of a
 /// set of tags. Absent text and an empty tag set are no condition at all
 /// rather than a condition nothing satisfies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// The window is part of the question rather than something the caller trims
+/// off the answer: the filters narrow the whole published corpus and the
+/// window takes one page out of the narrowing, so a reader on page four is
+/// reading rows the database chose and not rows a console scrolled past.
+/// [`Default`] is the first page in the order this listing has always used,
+/// which is why it is written out rather than derived — a derived zero `take`
+/// would be a default that answers nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GuideSearch<'a> {
     /// Literal text, already escaped by [`escape_like`], matched
     /// case-insensitively against the snapshot's title, prose and the names of
@@ -278,6 +317,24 @@ pub struct GuideSearch<'a> {
     pub text: Option<&'a str>,
     pub topic: Option<Uuid>,
     pub tags: &'a [Uuid],
+    pub order: GuideOrder,
+    /// Rows of the narrowing to step over before the page starts.
+    pub skip: u32,
+    /// Rows the page holds at most, clamped to [`PUBLISHED_PAGE_MAX`].
+    pub take: u32,
+}
+
+impl Default for GuideSearch<'_> {
+    fn default() -> Self {
+        Self {
+            text: None,
+            topic: None,
+            tags: &[],
+            order: GuideOrder::Newest,
+            skip: 0,
+            take: PUBLISHED_PAGE_ROWS,
+        }
+    }
 }
 
 /// What a create settled on.
@@ -632,7 +689,8 @@ impl GuideRepo {
             .collect()
     }
 
-    /// The published guides a reader's filters name, newest publication first.
+    /// One page of the published guides a reader's filters name, in the order
+    /// the search asks for.
     ///
     /// Every column is a snapshot column, including the time and the filing,
     /// so an unpublished edit cannot change this listing's order, its text or
@@ -641,11 +699,29 @@ impl GuideRepo {
     /// which is one query rather than a search service: the corpus is the help
     /// the platform writes, so `ILIKE` over it is a scan of a few hundred
     /// rows and an index nobody can use is not worth the write cost.
+    ///
+    /// Always bounded, and the bound is the database's: the filters are
+    /// applied before `LIMIT`, so page two of a search is the search's second
+    /// page and not the second page of everything filtered afterwards. Every
+    /// order ends at `g.slug`, which is unique per guide, so two rows can
+    /// never tie and a page boundary cannot drop or repeat one. How many rows
+    /// the whole narrowing holds is [`Self::published_count`]: a page length
+    /// is a page length and is not a count of the corpus.
+    ///
+    /// The order is chosen by a bound flag rather than by two statements,
+    /// because the alternative is two copies of a twenty-line predicate that
+    /// have to be kept identical: a filter fixed in one and not the other is a
+    /// listing that answers a different set depending on how it is sorted.
+    /// The unused key is `NULL` for every row of the answer, which no order
+    /// can be made out of, so it contributes nothing.
     pub async fn published(
         &self,
         search: &GuideSearch<'_>,
     ) -> Result<Vec<GuidePublishedHead>, StorageError> {
         let tags: Vec<uuid::Uuid> = search.tags.iter().map(|id| uuid_to_db(*id)).collect();
+        let by_title = matches!(search.order, GuideOrder::Title);
+        let take = i64::from(search.take.min(PUBLISHED_PAGE_MAX));
+        let skip = i64::from(search.skip);
         let rows = sqlx::query!(
             "SELECT g.id, g.slug, g.published_title AS \"title!\", \
                     g.published_revision AS \"source_revision!\", \
@@ -680,10 +756,17 @@ impl GuideRepo {
                          SELECT 1 FROM guide_tag_assignment a \
                           WHERE a.guide_id = g.id AND a.scope = 'published' \
                             AND a.taxon_id = ANY($3))) \
-             ORDER BY g.published_at DESC, g.slug",
+             ORDER BY CASE WHEN $4::bool THEN lower(g.published_title) END ASC, \
+                      CASE WHEN $4::bool THEN NULL::timestamptz \
+                           ELSE g.published_at END DESC, \
+                      g.slug ASC \
+             LIMIT $5 OFFSET $6",
             search.text,
             search.topic.map(uuid_to_db),
             &tags[..],
+            by_title,
+            take,
+            skip,
         )
         .fetch_all(&self.pool)
         .await?;
@@ -710,6 +793,46 @@ impl GuideRepo {
                 })
             })
             .collect()
+    }
+
+    /// How many published guides the same filters name, whatever page is being
+    /// read.
+    ///
+    /// The same three conditions as [`Self::published`] and deliberately no
+    /// window: this is the number a reader is shown beside "page two of six",
+    /// and it is a fact about the narrowing rather than about the rows that
+    /// happened to be sent. The order and the window are the only things the
+    /// two statements differ by — a count that filtered differently from the
+    /// page would put a total beside rows it does not describe.
+    pub async fn published_count(&self, search: &GuideSearch<'_>) -> Result<u64, StorageError> {
+        let tags: Vec<uuid::Uuid> = search.tags.iter().map(|id| uuid_to_db(*id)).collect();
+        let row = sqlx::query!(
+            "SELECT count(*) AS \"total!\" \
+             FROM guide g \
+             LEFT JOIN guide_taxon t ON t.id = g.published_topic_id \
+             WHERE g.published_at IS NOT NULL \
+               AND ($1::text IS NULL \
+                    OR g.published_title ILIKE '%' || $1 || '%' ESCAPE '\\' \
+                    OR g.published_body ILIKE '%' || $1 || '%' ESCAPE '\\' \
+                    OR t.name ILIKE '%' || $1 || '%' ESCAPE '\\' \
+                    OR EXISTS ( \
+                         SELECT 1 FROM guide_tag_assignment a \
+                          JOIN guide_taxon x ON x.id = a.taxon_id \
+                          WHERE a.guide_id = g.id AND a.scope = 'published' \
+                            AND x.name ILIKE '%' || $1 || '%' ESCAPE '\\')) \
+               AND ($2::uuid IS NULL OR g.published_topic_id = $2) \
+               AND (cardinality($3::uuid[]) = 0 \
+                    OR EXISTS ( \
+                         SELECT 1 FROM guide_tag_assignment a \
+                          WHERE a.guide_id = g.id AND a.scope = 'published' \
+                            AND a.taxon_id = ANY($3)))",
+            search.text,
+            search.topic.map(uuid_to_db),
+            &tags[..],
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(u64::try_from(row.total).unwrap_or(0))
     }
 
     /// One guide's working copy and whatever is published of it, whatever its

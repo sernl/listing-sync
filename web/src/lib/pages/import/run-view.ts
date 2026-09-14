@@ -12,12 +12,11 @@ import type {
 	ImportRunCounts,
 	ImportRunHead,
 	ImportRunItemView,
-	ImportRunView,
 	ObservedPrice,
 	ReviewPairView,
 	ReviewSideView
 } from '$lib/api';
-import type { InventoryId, Marketplace } from '$lib/generated/vocab';
+import type { ImportReasonCode, InventoryId, Marketplace } from '$lib/generated/vocab';
 import { MARKETPLACE_OF, formatPrice } from '$lib/listings-view';
 import { platformTitle } from '$lib/platforms';
 import { SYSTEM_LABEL } from '$lib/system-labels';
@@ -191,6 +190,10 @@ const ITEM_BADGE: Record<ImportRunItemView['state'], StageBadge> = {
 export interface ItemRow {
 	locator: string;
 	ordinal: number;
+	/** Where the resource stands. Carried rather than read back off the
+	 *  badge, because the tick list decides what can be chosen from it and a
+	 *  comparison against a label would break the moment the wording did. */
+	state: ImportRunItemView['state'];
 	/** What to call it. The title where one was read, and the locator where
 	 *  the enumeration named nothing else: an invented name would be a claim
 	 *  about a listing nobody has opened. */
@@ -210,6 +213,7 @@ function rowOf(item: ImportRunItemView): ItemRow {
 	return {
 		locator: item.locator,
 		ordinal: item.ordinal,
+		state: item.state,
 		name: item.title ?? item.locator,
 		price: item.price === null ? null : formatPrice({ Paid: item.price }),
 		coverUrl: item.cover_url,
@@ -220,15 +224,23 @@ function rowOf(item: ImportRunItemView): ItemRow {
 	};
 }
 
-export function itemRows(run: ImportRunView): ItemRow[] {
-	return run.items.map(rowOf);
+/** The rows one page of a run's resources draws.
+ *
+ * An item array rather than the whole run, because the items are now a page
+ * the server cut and the whole run is what `counts` and `read_total` still
+ * speak for. A model that took the run would quietly invite a caller to
+ * count the page and call it the run. */
+export function itemRows(items: readonly ImportRunItemView[]): ItemRow[] {
+	return items.map(rowOf);
 }
 
-/** The resources the seller is being asked to tick, in the order the shop
- *  listed them. The same rows the list below draws, so one resource reads
- *  the same in both places. */
-export function selectionRows(run: ImportRunView): ItemRow[] {
-	return run.items.filter((item) => item.state === 'listed').map(rowOf);
+/** The resources on this page the seller is being asked to tick.
+ *
+ * Only the listed ones: a resource already read, skipped or imported is not
+ * a choice. The tick list itself is held by locator on the page, so a
+ * resource ticked here stays ticked on page four. */
+export function selectionRows(items: readonly ImportRunItemView[]): ItemRow[] {
+	return items.filter((item) => item.state === 'listed').map(rowOf);
 }
 
 /** Why the Continue control cannot be pressed, or null where it can.
@@ -388,6 +400,79 @@ export function emptyItemsLine(stage: RunStage): string {
 		case 'failed':
 			return 'Nothing was recorded before this import stopped.';
 	}
+}
+
+/** What the page says when a filter is on and nothing matched.
+ *
+ * Distinct from [`emptyItemsLine`], which answers "this run holds nothing":
+ * a seller who searched and found nothing has narrowed a list that still has
+ * things in it, and telling them the import is empty would be false. */
+export const NO_ITEM_MATCHES =
+	'No resource here matches what you searched for. Clear the search to see the rest.';
+
+/** Why an import stopped, in words that name what the seller does next.
+ *
+ * The server sends a code and, sometimes, a sentence of its own. The code is
+ * what this reads: a transport diagnostic like `lease_expired` is true and
+ * unreadable, and a seller shown it learns nothing they can act on. The
+ * server's own sentence is kept only where there is no code to read, so
+ * nothing is lost where the machinery said something this table cannot. */
+export function reasonLine(code: ImportReasonCode | null, reason: string | null): string | null {
+	switch (code) {
+		case 'missing_session':
+			return 'This computer is not signed in to that marketplace, so it could not read your shop. Sign in from Marketplaces and start the import again.';
+		case 'not_permitted':
+			return 'Your plan does not cover reading this marketplace. Nothing was changed.';
+		case 'unsupported_source':
+			return 'We cannot read this marketplace yet. Nothing was changed.';
+		case 'enumeration_failed':
+			return 'Your shop could not be listed. This is usually the marketplace being slow or signing you out; try again from Import.';
+		case 'description_failed':
+			return 'Some resources could not be opened and read. What was read is below; the rest can be brought across in a new import.';
+		case 'submission_failed':
+			return 'What this computer read did not reach us. Nothing was created; start the import again.';
+		case 'activation_expired':
+			return 'Nothing picked this import up in time, so it was not started. Start it again from Import.';
+		case 'lease_expired':
+			return 'The computer running this import stopped reporting — usually a closed app or a sleeping machine. Resume it here, or start a new import.';
+		case 'stopped':
+			// Never "nothing was created": a stop during the commit leaves the
+			// resources already added standing, and telling a seller otherwise
+			// would send them looking for a catalogue they do have. The summary
+			// beside this line is what says how many.
+			return 'You stopped this import. Anything already added to your catalogue stays; nothing further was brought across.';
+		case 'client_update_required':
+			return 'The Teachouse app on this computer is too old to run this import. Update it, then start the import again.';
+		case null:
+			return reason;
+	}
+}
+
+/** How many pages a list of this size is cut into, at this page size.
+ *
+ * At least one, so a list with nothing in it reads as "Page 1 of 1" rather
+ * than as a pager that has lost its place. */
+export function pageCount(total: number, size: number): number {
+	return Math.max(1, Math.ceil(total / Math.max(1, size)));
+}
+
+/** What the pager says above its controls: which slice of what.
+ *
+ * Counts the whole filtered list rather than the page in hand, which is the
+ * figure the seller is deciding against — "1–25 of 143" tells them there is
+ * more, and "25 resources" does not. */
+export function pageSummary(
+	offset: number,
+	shown: number,
+	total: number,
+	noun: string
+): string {
+	if (total === 0) {
+		return `No ${noun}`;
+	}
+	const first = offset + 1;
+	const last = offset + shown;
+	return `${first}–${last} of ${total} ${noun}`;
 }
 
 /** What a run that could not be read says. A read that failed is not a run

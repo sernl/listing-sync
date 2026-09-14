@@ -3,6 +3,9 @@ import {
 	emptyItemsLine,
 	importedHref,
 	itemRows,
+	pageCount,
+	pageSummary,
+	reasonLine,
 	reviewCard,
 	runBadge,
 	runHref,
@@ -16,7 +19,6 @@ import type {
 	ImportRunCounts,
 	ImportRunHead,
 	ImportRunItemView,
-	ImportRunView,
 	ReviewPairView,
 	ReviewSideView
 } from '$lib/api';
@@ -70,10 +72,6 @@ function item(partial: Partial<ImportRunItemView> = {}): ImportRunItemView {
 		failure_detail: null,
 		...partial
 	};
-}
-
-function view(items: ImportRunItemView[], partial: Partial<ImportRunHead> = {}): ImportRunView {
-	return { ...head(partial), items, review_pairs: [] };
 }
 
 function side(partial: Partial<ReviewSideView> = {}): ReviewSideView {
@@ -158,49 +156,44 @@ describe('where a run is read', () => {
 
 describe('itemRows', () => {
 	it('names a resource by its title, and by its locator where none was read', () => {
-		const [named, bare] = itemRows(
-			view([item(), item({ locator: 'https://shop/2', ordinal: 2, title: null })])
-		);
+		const [named, bare] = itemRows([
+			item(),
+			item({ locator: 'https://shop/2', ordinal: 2, title: null })
+		]);
 		expect(named?.name).toBe('Fractions pack');
 		expect(bare?.name).toBe('https://shop/2');
 	});
 
 	it('renders a price the marketplace gave and an em dash for one it did not', () => {
-		const [priced, bare] = itemRows(
-			view([item(), item({ locator: 'b', ordinal: 2, price: null })])
-		);
+		const [priced, bare] = itemRows([item(), item({ locator: 'b', ordinal: 2, price: null })]);
 		expect(priced?.price).toBe('£4.50');
 		expect(bare?.price).toBeNull();
 	});
 
 	it('carries the reason a resource was left out or went wrong', () => {
-		const rows = itemRows(
-			view([
-				item({ state: 'skipped', skip_reason: 'not chosen' }),
-				item({
-					locator: 'b',
-					ordinal: 2,
-					state: 'failed',
-					failure_detail: 'the shop timed out'
-				})
-			])
-		);
+		const rows = itemRows([
+			item({ state: 'skipped', skip_reason: 'not chosen' }),
+			item({
+				locator: 'b',
+				ordinal: 2,
+				state: 'failed',
+				failure_detail: 'the shop timed out'
+			})
+		]);
 		expect(rows[0]?.reason).toBe('not chosen');
 		expect(rows[1]?.reason).toBe('the shop timed out');
 	});
 
 	it('offers only what has not been answered for', () => {
-		const rows = selectionRows(
-			view([
-				item(),
-				item({
-					locator: 'b',
-					ordinal: 2,
-					state: 'imported',
-					product_id: 'p-2'
-				})
-			])
-		);
+		const rows = selectionRows([
+			item(),
+			item({
+				locator: 'b',
+				ordinal: 2,
+				state: 'imported',
+				product_id: 'p-2'
+			})
+		]);
 		expect(rows.map((row) => row.locator)).toEqual(['https://shop/1']);
 	});
 });
@@ -273,5 +266,42 @@ describe('the settled summary', () => {
 		expect(emptyItemsLine('reading')).toBe('Nothing has arrived yet.');
 		expect(emptyItemsLine('done')).toBe('Your shop had nothing in it to bring across.');
 		expect(emptyItemsLine('failed')).toContain('before this import stopped');
+	});
+});
+
+describe('why an import stopped', () => {
+	// The codes are transport diagnostics. A seller shown "lease_expired"
+	// learns nothing they can do, which is the whole reason this table exists.
+	it('says what the seller does next, never the code', () => {
+		const lease = reasonLine('lease_expired', null);
+		expect(lease).toContain('Resume');
+		expect(lease).not.toContain('lease');
+		expect(reasonLine('missing_session', null)).toContain('Sign in');
+		expect(reasonLine('client_update_required', null)).toContain('Update');
+	});
+
+	// The server's own sentence is not thrown away: where there is no code to
+	// read, it is the only account of what happened.
+	it('keeps the server’s own words where it sent no code', () => {
+		expect(reasonLine(null, 'The shop answered nothing for ten minutes.')).toBe(
+			'The shop answered nothing for ten minutes.'
+		);
+		expect(reasonLine(null, null)).toBeNull();
+	});
+});
+
+describe('the pager', () => {
+	// A list with nothing in it is still on page one: zero pages would leave
+	// the pager reading "Page 1 of 0".
+	it('counts at least one page, and one more for a partial page', () => {
+		expect(pageCount(0, 25)).toBe(1);
+		expect(pageCount(25, 25)).toBe(1);
+		expect(pageCount(26, 25)).toBe(2);
+	});
+
+	it('states the slice against the whole filtered list, not the page', () => {
+		expect(pageSummary(25, 1, 26, 'resources')).toBe('26–26 of 26 resources');
+		expect(pageSummary(0, 10, 143, 'imports')).toBe('1–10 of 143 imports');
+		expect(pageSummary(0, 0, 0, 'imports')).toBe('No imports');
 	});
 });

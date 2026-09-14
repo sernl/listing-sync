@@ -9,8 +9,7 @@
 import type { SyncRequestHead } from '$lib/api';
 import type { LogEntry } from '$lib/ActivityLog.svelte';
 import { agoLabel } from '$lib/elapsed';
-import type { InventoryId, Marketplace } from '$lib/generated/vocab';
-import { MARKETPLACE_OF } from '$lib/listings-view';
+import type { InventoryId } from '$lib/generated/vocab';
 import { platformTitle } from '$lib/platforms';
 import {
 	headStage,
@@ -18,7 +17,6 @@ import {
 	presentStage,
 	type StageTone
 } from '$lib/sync-request';
-import type { Counts } from './marketplace-list';
 
 export type RowTone = 'ok' | 'warn' | 'bad' | 'run' | 'soon';
 
@@ -42,17 +40,18 @@ export interface MigrationRow {
 	tone: RowTone;
 }
 
-/** Only the migrate half of the request list. A sync request and a migration
- *  are the same record under two dispositions, and this page owns one. */
-export function migrations(requests: readonly SyncRequestHead[]): SyncRequestHead[] {
-	return requests.filter((row) => row.disposition === 'migrate');
-}
+// The rows arrive already narrowed to migrations: `/v1/sync` takes the
+// disposition as a query filter, applied before its limit. This module used
+// to filter the list itself, which was correct only while the list was a
+// single bounded read of everything — against a page of ten requests it would
+// answer "the migrations among the newest ten", so a seller whose last ten
+// requests were syncs saw an empty migration history.
 
 export function migrationRows(
 	requests: readonly SyncRequestHead[],
 	now: number
 ): MigrationRow[] {
-	return migrations(requests).map((row) => {
+	return requests.map((row) => {
 		const stage = headStage(row);
 		const shown = presentStage(stage);
 		return {
@@ -71,7 +70,7 @@ export function migrationRows(
  *  a second list of the same cards: it says what happened and when, in one
  *  line, and the cards above it carry the state that is still live. */
 export function migrationLog(requests: readonly SyncRequestHead[], now: number): LogEntry[] {
-	return migrations(requests).map((row) => {
+	return requests.map((row) => {
 		const shown = presentStage(headStage(row));
 		return {
 			id: row.request,
@@ -81,16 +80,37 @@ export function migrationLog(requests: readonly SyncRequestHead[], now: number):
 	});
 }
 
-/** How many shops have come across from each marketplace, for the left
- *  column's count badge. Keyed by marketplace rather than by inventory,
- *  because a seller holds one login for Tes and not three. */
-export function migrationCounts(requests: readonly SyncRequestHead[]): Counts {
-	const counts: Partial<Record<Marketplace, number>> = {};
-	for (const row of migrations(requests)) {
-		const marketplace = MARKETPLACE_OF[row.source];
-		counts[marketplace] = (counts[marketplace] ?? 0) + 1;
+// There is no per-marketplace count here any more. It fed the left column's
+// badge and was summed over the whole request list, which was one bounded
+// read; the list is a page now, so the same sum would mean "migrations from
+// this marketplace on the page you are looking at" while reading as a total.
+// The server answers no total for this list and the console invents none.
+
+/** The selection after the seller ticks or unticks the whole page.
+ *
+ * Only the rows on screen move; everything else the seller has chosen stays
+ * chosen. The control used to replace the selection with the visible ids,
+ * which was the same thing while the tick list was the whole catalogue and is
+ * silent data loss now the list is a page: four resources chosen on page one
+ * vanished the moment the seller pressed it on page two, and unticking it
+ * emptied the selection outright.
+ *
+ * Pure and here rather than inline in the page, because it is the rule a
+ * migration's contents depend on and it is worth a test of its own. */
+export function pageSelection(
+	ticked: ReadonlySet<string>,
+	shown: readonly string[],
+	untick: boolean
+): Set<string> {
+	const next = new Set(ticked);
+	for (const id of shown) {
+		if (untick) {
+			next.delete(id);
+		} else {
+			next.add(id);
+		}
 	}
-	return counts;
+	return next;
 }
 
 export const NO_MIGRATION_YET = 'No migration has run yet.';

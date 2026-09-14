@@ -11,7 +11,7 @@ use sqlx::PgPool;
 use tam_marketplace::{ListingState, RemoteListingId};
 use tam_storage::{
     job_request_key, Canonicalised, Disposition, Enqueued, NewSyncRequest, SyncIntent,
-    SyncRequestRepo, CREATE_LEG, REMOVE_LEG,
+    SyncRequestPage, SyncRequestRepo, CREATE_LEG, REMOVE_LEG,
 };
 use tam_types::{InventoryId, MappingId, OrgId, ProductId, Timestamp, Uuid};
 
@@ -368,5 +368,98 @@ async fn a_second_submit_under_one_key_replays_rather_than_faulting(pool: PgPool
         record.resources.len(),
         2,
         "the replay writes no second copy of the seller's locators"
+    );
+}
+
+/// The migration list's page boundary, which is where this list can lose a
+/// row.
+///
+/// Every request a seller raises in one submit carries the same
+/// `requested_at`, so a page of the list ends inside a tie. The keyset is
+/// `(requested_at, id)` — the pair the `ORDER BY` sorts by — and this walk is
+/// the record of it: a cursor on the instant alone would hand over one of the
+/// three and leave the other two unreachable.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_walk_of_the_list_loses_no_request_that_shares_an_instant(pool: PgPool) {
+    seed_org_a(&pool).await.expect("the org seeds");
+    let repo = SyncRequestRepo::new(pool);
+    for byte in [0x90u8, 0x91, 0x92] {
+        repo.create(ORG_A, &request_for(Uuid([byte; 16]), &["101"]))
+            .await
+            .expect("the request writes");
+    }
+
+    let mut seen: Vec<Uuid> = Vec::new();
+    let mut after: Option<(Timestamp, Uuid)> = None;
+    for _turn in 0..5 {
+        let page = repo
+            .list(
+                ORG_A,
+                &SyncRequestPage {
+                    after,
+                    limit: 1,
+                    disposition: None,
+                    state: None,
+                },
+            )
+            .await
+            .expect("the page reads");
+        let Some(row) = page.first() else {
+            after = None;
+            break;
+        };
+        seen.push(row.id);
+        after = Some((row.requested_at, row.id));
+    }
+
+    seen.sort_unstable_by_key(|id| id.0);
+    seen.dedup_by_key(|id| id.0);
+    assert_eq!(
+        seen.len(),
+        3,
+        "all three requests of the shared instant are reachable, each once"
+    );
+    assert!(
+        after.is_none(),
+        "the walk reaches the end and stops rather than looping"
+    );
+}
+
+/// The narrowing is applied before the limit.
+///
+/// A page filtered after the limit answers "the migrations among the newest
+/// one request", which is empty for a seller whose newest request was a sync
+/// — and the migration screen would show them no history at all.
+#[sqlx::test(migrations = "./migrations")]
+async fn the_disposition_narrows_before_the_limit(pool: PgPool) {
+    seed_org_a(&pool).await.expect("the org seeds");
+    let repo = SyncRequestRepo::new(pool);
+    let migrated = Uuid([0x95; 16]);
+    let mut migration = request_for(migrated, &["101"]);
+    migration.disposition = Disposition::Migrate;
+    repo.create(ORG_A, &migration)
+        .await
+        .expect("the migration writes");
+    // Newer than the migration, so an unfiltered page of one holds only this.
+    let mut newer = request_for(Uuid([0x96; 16]), &["202"]);
+    newer.requested_at = Timestamp(2_000);
+    repo.create(ORG_A, &newer).await.expect("the sync writes");
+
+    let page = repo
+        .list(
+            ORG_A,
+            &SyncRequestPage {
+                after: None,
+                limit: 1,
+                disposition: Some(Disposition::Migrate),
+                state: None,
+            },
+        )
+        .await
+        .expect("the page reads");
+    assert_eq!(
+        page.iter().map(|row| row.id).collect::<Vec<_>>(),
+        vec![migrated],
+        "the one migration is on the first page even though a newer sync exists"
     );
 }

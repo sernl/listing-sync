@@ -77,6 +77,31 @@ fn configured(pool: PgPool, root: &std::path::Path) -> AppState {
     }
 }
 
+/// The seller-device consent, granted for every marketplace that needs it,
+/// so the mints under test are answered by the machinery rather than by the
+/// consent gate; `consent_flow.rs` is where that gate is exercised.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn consented(pool: &PgPool, org: OrgId) {
+    let consents = tam_storage::ConsentRepo::new(pool.clone());
+    for marketplace in tam_types::Marketplace::ALL {
+        if marketplace.transport_class() == tam_types::TransportClass::SellerDevice {
+            consents
+                .grant(
+                    org,
+                    marketplace,
+                    tam_types::CONSENT_NOTICE_VERSION,
+                    Uuid([0xC0; 16]),
+                    Timestamp(1_000),
+                )
+                .await
+                .expect("the fixture consent grants");
+        }
+    }
+}
+
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
@@ -88,6 +113,7 @@ async fn provision(pool: &PgPool) {
         .execute(pool)
         .await
         .expect("the org seeds");
+    consented(pool, ORG_A).await;
     // Reading a shop and reviewing duplicates are both paid capabilities, so
     // the fixture subscribes: without a grant every page here would be
     // answered by the plan gate rather than by the machinery under test.
@@ -1249,9 +1275,9 @@ async fn one_import_per_shop_and_a_start_key_is_one_import(pool: PgPool) {
         .await
         .json();
     assert_eq!(
-        runs.runs.len(),
-        3,
-        "the listing holds them all, past and present"
+        (runs.runs.len(), runs.total),
+        (3, 3),
+        "the first page holds these three, past and present, and says so is all there is"
     );
     let stopped = runs
         .runs
@@ -2038,6 +2064,247 @@ async fn a_device_stop_is_fenced_idempotent_and_answered(pool: PgPool) {
         0,
         "and a stop creates nothing, counted rather than trusted"
     );
+}
+
+/// The history is a page of ten, and the eleventh import is reachable.
+///
+/// The listing used to answer up to fifty runs with no cursor, no filter and
+/// no total, which made a seller's older imports reachable only by scrolling
+/// and their fifty-first not at all. The property under test is that the
+/// page is a window on the whole history rather than a truncation of it: the
+/// total counts every match, the offset reaches past the first page, and a
+/// state filter is applied in SQL rather than to the page.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_history_pages_past_the_tenth_run_and_filters_the_whole_of_it(pool: PgPool) {
+    provision(&pool).await;
+    let state = configured(pool.clone(), &store_root("history"));
+    let app = router(state.clone());
+
+    // Eleven imports, each settled before the next opens: one run per shop is
+    // the fence, so a history of eleven is eleven abandoned runs.
+    //
+    // Every run is aged to a distinct minute afterwards. The harness clock is
+    // a constant, so without this all eleven share one `created_at` and the
+    // order falls to the tie-break over identifiers nobody chose — which
+    // would make "the oldest import" a claim about random UUIDs rather than
+    // about the order the seller made them in.
+    let mut opened = Vec::new();
+    for minute in 0..11 {
+        let answer = open_run(&app).await;
+        assert_eq!(answer.status, StatusCode::CREATED, "{}", answer.body);
+        let run: ImportRunView = answer.json();
+        opened.push(run.id);
+        let abandoned = call(
+            &app,
+            Method::POST,
+            &format!("/v1/imports/runs/{}/abandon", uuid_text(run.id)),
+            None,
+        )
+        .await;
+        assert_eq!(abandoned.status, StatusCode::NO_CONTENT);
+        // The first import opened is the furthest back, so "newest first"
+        // ends at it and "oldest first" begins there.
+        aged(&pool, run.id, 11 - minute).await;
+    }
+
+    let first: ImportRunsView = call(&app, Method::GET, "/v1/imports/runs", None)
+        .await
+        .json();
+    assert_eq!(first.runs.len(), 10, "the page is ten");
+    assert_eq!(
+        first.total, 11,
+        "and it says how many there are, rather than how many it sent"
+    );
+
+    let second: ImportRunsView = call(&app, Method::GET, "/v1/imports/runs?offset=10", None)
+        .await
+        .json();
+    assert_eq!(
+        second.runs.len(),
+        1,
+        "the eleventh run is reachable: {:?}",
+        second.runs.len()
+    );
+    assert_eq!(
+        second.runs[0].id, opened[0],
+        "newest first, so the oldest import is the one past the first page"
+    );
+
+    let oldest: ImportRunsView = call(&app, Method::GET, "/v1/imports/runs?order=oldest", None)
+        .await
+        .json();
+    assert_eq!(
+        oldest.runs[0].id, opened[0],
+        "oldest first turns the history round rather than filtering it"
+    );
+    assert_eq!(oldest.total, 11, "and counts the same history");
+
+    let settled: ImportRunsView = call(
+        &app,
+        Method::GET,
+        "/v1/imports/runs?state=abandoned&limit=50",
+        None,
+    )
+    .await
+    .json();
+    assert_eq!(
+        (settled.runs.len(), settled.total),
+        (11, 11),
+        "the filter matches over the whole history, not over one page"
+    );
+
+    let open: ImportRunsView = call(&app, Method::GET, "/v1/imports/runs?state=open", None)
+        .await
+        .json();
+    assert_eq!(
+        (open.runs.len(), open.total),
+        (0, 0),
+        "and nothing is open once every run has been given up"
+    );
+
+    let refused = call(&app, Method::GET, "/v1/imports/runs?state=nonsense", None).await;
+    assert_eq!(
+        refused.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "an unrecognised filter is refused rather than ignored: {}",
+        refused.body
+    );
+}
+
+/// A run's resources page at twenty-five, search covers the whole run, and a
+/// selection made across two pages imports exactly what was ticked.
+///
+/// The last of those is the defect this paging could have shipped: the
+/// console used to send `{all: true}` whenever the ticked count equalled the
+/// listed count, which with a page of twenty-five would have turned "these
+/// two" into "the whole shop". The wire asserts it here — two locators in,
+/// two selected, the rest skipped — so the shortcut cannot come back without
+/// this failing.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn items_page_search_the_whole_run_and_a_selection_spans_pages(pool: PgPool) {
+    provision(&pool).await;
+    let state = configured(pool.clone(), &store_root("itempages"));
+    let app = router(state.clone());
+    let run = started_run(&app).await;
+
+    let rows: Vec<_> = (1..=26)
+        .map(|n| listed(&format!("res-{n:02}"), &format!("Resource {n:02}")))
+        .collect();
+    assert_eq!(
+        post_page(&app, &listing_page(run, rows)).await.status,
+        StatusCode::OK
+    );
+
+    let first = run_view(&app, run).await;
+    assert_eq!(first.items.len(), 25, "a page of twenty-five");
+    assert_eq!(
+        (first.items_total, first.items_limit, first.items_offset),
+        (26, 25, 0),
+        "and the window says what it is a window on"
+    );
+    assert_eq!(
+        first.read_total,
+        Some(26),
+        "the whole-run total is unaffected by the page"
+    );
+    assert_eq!(
+        first.items[0].title.as_deref(),
+        Some("Resource 01"),
+        "title A-Z by default"
+    );
+
+    let second: ImportRunView = call(
+        &app,
+        Method::GET,
+        &format!("/v1/imports/runs/{}?offset=25", uuid_text(run)),
+        None,
+    )
+    .await
+    .json();
+    assert_eq!(
+        second.items.len(),
+        1,
+        "the twenty-sixth resource is reachable"
+    );
+    assert_eq!(second.items[0].title.as_deref(), Some("Resource 26"));
+
+    let found: ImportRunView = call(
+        &app,
+        Method::GET,
+        &format!("/v1/imports/runs/{}?q=resource%2026", uuid_text(run)),
+        None,
+    )
+    .await
+    .json();
+    assert_eq!(
+        (found.items.len(), found.items_total),
+        (1, 1),
+        "the search reads the whole run, not the page in hand"
+    );
+    assert_eq!(found.items[0].locator.as_str(), "res-26");
+
+    // One from the first page and one from the second: exactly what a seller
+    // who paged and ticked sends.
+    let selected = call(
+        &app,
+        Method::POST,
+        &format!("/v1/imports/runs/{}/select", uuid_text(run)),
+        Some(serde_json::json!({ "locators": ["res-02", "res-26"] })),
+    )
+    .await;
+    assert_eq!(selected.status, StatusCode::OK, "{}", selected.body);
+    let view: ImportRunView = selected.json();
+    assert_eq!(
+        (view.counts.selected, view.counts.skipped),
+        (2, 24),
+        "exactly the two ticked, and the shop is not imported wholesale"
+    );
+
+    let selection: serde_json::Value = call(
+        &app,
+        Method::GET,
+        &format!("/v1/devices/{DEVICE_A}/import/{}/selection", uuid_text(run)),
+        None,
+    )
+    .await
+    .body;
+    assert_eq!(
+        selection["locators"],
+        serde_json::json!(["res-02", "res-26"]),
+        "and the device is handed those two, in the shop's own order"
+    );
+}
+
+// ----------------------------------------------------------- fixture clock
+
+/// Moves one run's `created_at` back by whole minutes, so a fixture of runs
+/// made inside one constant-clock test has a real order to be listed in.
+///
+/// Written directly rather than through a route, because no route exists to
+/// backdate a run and none should: this is the fixture's own clock, not a
+/// capability of the product.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn aged(pool: &PgPool, run: Uuid, minutes: i32) {
+    let mut tx = pool.begin().await.expect("the transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pin sets");
+    sqlx::query(
+        "UPDATE import_run SET created_at = created_at - make_interval(mins => $1) \
+          WHERE org_id = $2 AND id = $3",
+    )
+    .bind(minutes)
+    .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+    .bind(uuid::Uuid::from_bytes(run.0))
+    .execute(&mut *tx)
+    .await
+    .expect("the backdate runs");
+    tx.commit().await.expect("the backdate commits");
 }
 
 // ------------------------------------------------------------------ counted

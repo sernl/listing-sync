@@ -20,11 +20,14 @@
 	import {
 		checkInControl,
 		checkInNote,
+		inListOrder,
+		loginWords,
 		machineWords,
 		osLabel,
 		sessionLabel,
 		sessionTone,
-		sessionWords
+		sessionWords,
+		sourcedFileWords
 	} from './machines';
 
 	let {
@@ -44,6 +47,13 @@
 	const queryClient = useQueryClient();
 	const summary = $derived(deviceSummary(deviceRows(devices, now)));
 
+	/** The current installations first, the signed-out records in history.
+	 *
+	 *  Identified by installation id: `machineHere.where.device` is what this
+	 *  console's own check-in reported, and a display-name match would put one
+	 *  machine's actions on another's row. */
+	const split = $derived(inListOrder(joined.rows, machineHere.where.device?.id ?? null));
+
 	// Read once: whether this console is running inside the application does not
 	// change while the page is open.
 	const invoke = desktopInvoker();
@@ -56,17 +66,17 @@
 	 *  did ask. */
 	let asked = $state<CheckInHere | null>(null);
 
-	/** A machine has no other way to make the seller's list current.
+	/** A machine has no other way to make the seller's list current right now.
 	 *
-	 *  On a computer the application checks in hourly, so after signing a
-	 *  machine out from here an hour is the honest wait. On a phone there is no
-	 *  timer at all — Android's Doze stops one — so between resumes the list
-	 *  cannot become current by waiting. The command already exists, is already
-	 *  granted, and is already what the console calls on load; this is the same
-	 *  call with a seller behind it.
+	 *  The application checks in every five minutes and discovers work within
+	 *  seconds of it appearing, so this is a refresh rather than the only way
+	 *  anything moves — which is what it was when the only cadence was hourly.
+	 *  On a phone there is still no background timer at all: Android's Doze
+	 *  stops one, so between resumes the list cannot become current by
+	 *  waiting.
 	 *
-	 *  Idempotent on the server's own upsert, so pressing it twice is a refresh
-	 *  rather than a second machine. */
+	 *  Idempotent on the server's own upsert, so pressing it twice is a
+	 *  refresh rather than a second machine. */
 	const checkingIn = createMutation(() => ({
 		mutationFn: () => checkInHere(invoke),
 		onSuccess: async (answer: CheckInHere) => {
@@ -220,7 +230,7 @@
 		</div>
 	{:else}
 		<div class="mp-card">
-			{#each joined.rows as row (row.device.id)}
+			{#each split.current as row (row.device.id)}
 				{@const here = row.device.id === machineHere.where.device?.id}
 				<div class="mp-machine">
 					<div class="who">
@@ -234,60 +244,34 @@
 						     one in his hands. -->
 						{#if here}<StatusPill tone="ok" label="This machine" />{/if}
 						{#if row.isCurrent}<StatusPill tone="ok" label="This browser" />{/if}
-						{#if row.device.revoked_at !== null}
-							<StatusPill tone="bad" label="Signed out" />
-						{/if}
-						{#if row.device.revoked_at === null}
-							<span class="act">
-								<Button
-									tier="outline"
-									danger
-									small
-									disabled={busy(row.device)}
-									reason={busy(row.device) ? 'The sign-out is running.' : undefined}
-									onclick={() => signOut(row.device, row.session)}
-								>
-									{busy(row.device) ? 'Signing out…' : 'Sign out'}
-								</Button>
-							</span>
-						{:else if here}
-							<!-- The one place the act can be performed: the restore
-							     route clears the mark for the machine the seller is
-							     standing at, and the check-in behind it re-registers
-							     what this machine holds. A row for some other machine
-							     offers nothing, because signing that one back in is
-							     something only somebody at it can do. -->
-							<span class="act">
-								<Button
-									tier="outline"
-									small
-									disabled={machineHere.restoring}
-									reason={machineHere.restoring ? 'The sign-in is running.' : undefined}
-									onclick={() => signingBackIn.mutate()}
-								>
-									{machineHere.restoring ? 'Signing in…' : SIGN_BACK_IN}
-								</Button>
-							</span>
-						{/if}
+						<span class="act">
+							<Button
+								tier="outline"
+								danger
+								small
+								disabled={busy(row.device)}
+								reason={busy(row.device) ? 'The sign-out is running.' : undefined}
+								onclick={() => signOut(row.device, row.session)}
+							>
+								{busy(row.device) ? 'Signing out…' : 'Sign out'}
+							</Button>
+						</span>
 					</div>
-					<p class="spec">
-						{osLabel(row.device)} · {row.device.arch} · app {row.device.app_version} ·
-						{machineWords(row.device, now)}
-					</p>
+					<!-- Three separate facts, each on its own line and none standing
+					     in for another: when we last heard from this machine, what
+					     logins are saved on it, and which browser session we matched
+					     it to. The defect being repaired is one line that read as all
+					     of them at once. A fourth line appears only where this
+					     installation's version actually withholds something, and it
+					     names that one thing rather than calling the machine old. -->
+					<p class="spec">{machineWords(row.device, now)}</p>
+					<p class="spec">{loginWords(row.device)}</p>
+					{#if sourcedFileWords(row.device) !== null}
+						<p class="mp-warned">{sourcedFileWords(row.device)}</p>
+					{/if}
 					<p class="spec">{matchNote(row.confidence)}</p>
 
-					{#if row.device.wipe_outstanding}
-						<p class="mp-warned">
-							Signed out {agoLabel(row.device.revoked_at ?? now, now)}, and this machine has
-							not checked in since, so it still holds the logins below. If it never checks
-							in again, they stay there until each marketplace expires them — we cannot
-							remove them, because we have never held them.
-						</p>
-					{/if}
-
-					{#if row.device.sessions.length === 0}
-						<p class="spec">No marketplace login on this machine.</p>
-					{:else}
+					{#if row.device.sessions.length > 0}
 						<div class="mp-held">
 							{#each row.device.sessions as session (session.marketplace)}
 								<div class="one">
@@ -302,10 +286,94 @@
 							{/each}
 						</div>
 					{/if}
+
+					<!-- The technical identity, in a disclosure. A seller reads the
+					     name and the sentences above; support and the seller
+					     comparing two reinstalls need the installation id, and it is
+					     the only thing that tells two machines of one name apart. -->
+					<details class="spec">
+						<summary>Details</summary>
+						<p class="spec">
+							{osLabel(row.device)} · {row.device.arch} · app {row.device.app_version}
+						</p>
+						<p class="spec">Installation {row.device.id}</p>
+						<p class="spec">First seen {agoLabel(row.device.first_seen_at, now)}</p>
+					</details>
 				</div>
 			{/each}
 			<p class="mp-body">{deviceFootnote(summary)}</p>
 		</div>
+
+		{#if split.history.length > 0}
+			<!-- Signed-out records, kept rather than deleted or merged. A
+			     reinstall mints a new identity, so a seller who has reinstalled
+			     keeps a record per installation; grouping them here is
+			     presentation and never a claim that they are one machine. The
+			     sign-back-in act is offered on the record for the machine the
+			     seller is standing at, because only somebody at it can perform
+			     it. -->
+			<details class="mp-card">
+				<summary>Earlier installations and sign-outs ({split.history.length})</summary>
+				{#each split.history as row (row.device.id)}
+					{@const here = row.device.id === machineHere.where.device?.id}
+					<div class="mp-machine">
+						<div class="who">
+							<span class="t">{row.device.name}</span>
+							{#if here}<StatusPill tone="ok" label="This machine" />{/if}
+							<StatusPill tone="bad" label="Signed out" />
+							{#if here}
+								<span class="act">
+									<Button
+										tier="outline"
+										small
+										disabled={machineHere.restoring}
+										reason={machineHere.restoring ? 'The sign-in is running.' : undefined}
+										onclick={() => signingBackIn.mutate()}
+									>
+										{machineHere.restoring ? 'Signing in…' : SIGN_BACK_IN}
+									</Button>
+								</span>
+							{/if}
+						</div>
+						<p class="spec">{machineWords(row.device, now)}</p>
+
+						{#if row.device.wipe_outstanding}
+							<p class="mp-warned">
+								Signed out {agoLabel(row.device.revoked_at ?? now, now)}, and this machine has
+								not checked in since, so it still holds the logins below. If it never checks
+								in again, they stay there until each marketplace expires them — we cannot
+								remove them, because we have never held them.
+							</p>
+						{/if}
+
+						{#if row.device.sessions.length > 0}
+							<div class="mp-held">
+								{#each row.device.sessions as session (session.marketplace)}
+									<div class="one">
+										<MarketplaceMark marketplace={session.marketplace} size={18} />
+										<StatusPill
+										tone={sessionTone(session.status)}
+										label={sessionLabel(session.status)}
+									/>
+										<span>{sessionWords(session)}</span>
+										<span class="when">linked {agoLabel(session.linked_at, now)}</span>
+									</div>
+								{/each}
+							</div>
+						{/if}
+
+						<details class="spec">
+							<summary>Details</summary>
+							<p class="spec">
+								{osLabel(row.device)} · {row.device.arch} · app {row.device.app_version}
+							</p>
+							<p class="spec">Installation {row.device.id}</p>
+							<p class="spec">First seen {agoLabel(row.device.first_seen_at, now)}</p>
+						</details>
+					</div>
+				{/each}
+			</details>
+		{/if}
 	{/if}
 </section>
 
@@ -320,5 +388,13 @@
 		justify-content: space-between;
 		gap: 12px;
 		flex-wrap: wrap;
+	}
+
+	/* The two disclosures: the per-machine Details and the history list. A
+	   summary that did not read as a control was pressed by nobody in the
+	   founder's own walkthrough. */
+	summary {
+		cursor: pointer;
+		font-weight: 600;
 	}
 </style>

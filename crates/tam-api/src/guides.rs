@@ -73,9 +73,9 @@ use serde::{Deserialize, Serialize};
 use tam_pipeline::store::LocalObjectStore;
 use tam_storage::{
     ensure_platform_org, escape_like, platform_org, BlobError, BlobRepo, GuideDelete, GuideEdit,
-    GuideHead, GuidePublication, GuidePublishedHead, GuidePublishedPage, GuideRecord, GuideRepo,
-    GuideRevisionWrite, GuideSearch, GuideTaxon, GuideTaxonKind, GuideTaxonWrite, GuideTaxonomy,
-    GuideWrite, NewGuide,
+    GuideHead, GuideOrder, GuidePublication, GuidePublishedHead, GuidePublishedPage, GuideRecord,
+    GuideRepo, GuideRevisionWrite, GuideSearch, GuideTaxon, GuideTaxonKind, GuideTaxonWrite,
+    GuideTaxonomy, GuideWrite, NewGuide, PUBLISHED_PAGE_ROWS,
 };
 use tam_types::{Timestamp, UserId, Uuid};
 
@@ -126,6 +126,28 @@ const TAGS_MAX: usize = 20;
 /// A phrase, not a document: this is matched with `ILIKE` against every
 /// published body, and a caller who sends a kilobyte is not searching.
 const SEARCH_MAX_CHARS: usize = 120;
+
+/// How many published guides one page of the reader's listing holds.
+///
+/// Twenty-five, which is what every other listing in this console pages at.
+/// The storage layer holds the same number and its own ceiling; this is the
+/// size the route asks for rather than a second opinion about the maximum.
+const GUIDE_PAGE_ROWS: u32 = PUBLISHED_PAGE_ROWS;
+
+/// The highest page ordinal this listing will read.
+///
+/// A bound on the `OFFSET` rather than on the corpus: an address asking for
+/// page nine million is asking the database to count nine million rows it is
+/// then going to throw away. Past this the answer is an empty page, which is
+/// the truth about it.
+const GUIDE_PAGE_MAX: u32 = 10_000;
+
+/// Title A-Z: the order a reader looking for a title they half remember wants,
+/// and the listing's default.
+const GUIDE_SORT_TITLE: &str = "title";
+
+/// Newest publication first.
+const GUIDE_SORT_NEWEST: &str = "newest";
 
 /// One topic or tag as any surface renders it.
 #[derive(Debug, Serialize, Deserialize)]
@@ -238,17 +260,62 @@ impl GuideHeadView {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GuidesView {
     pub guides: Vec<GuideHeadView>,
-    /// How many rows the listing holds, answered beside them so a reader's
-    /// result count is the server's count rather than the client's arithmetic
-    /// over what it happened to receive.
+    /// How many guides the question names, which is not how many rows this
+    /// answer carries.
+    ///
+    /// On the reader's listing this is a count over the whole published corpus
+    /// under the same filters, taken by its own statement: a page length
+    /// reported as a total is how "25 guides match" comes to be printed over a
+    /// corpus of two hundred. On the operator's listing the answer is the whole
+    /// set, so the two numbers coincide there — and the field still means the
+    /// same thing.
     pub total: usize,
+    /// Which page this is, counting from one, echoed back so a console can
+    /// tell a page past the end from the first page.
+    pub page: u32,
+    /// How many rows a full page of this listing holds.
+    pub page_size: u32,
+    /// Whether asking for the next page would answer any rows. Derived from
+    /// the total rather than from the page being full, so the last page of an
+    /// exact multiple is not followed by an empty one.
+    pub has_next: bool,
+    /// The order this answer is in, out of the two this listing sorts by: a
+    /// request that named no order is answered in the default one and says so
+    /// here, and a request naming a word this listing does not sort by is
+    /// refused rather than answered in some other order.
+    pub sort: String,
 }
 
 impl GuidesView {
+    /// The whole set as one page: the operator's listing, which is unpaged.
     fn of(guides: Vec<GuideHeadView>) -> Self {
+        let rows = u32::try_from(guides.len()).unwrap_or(u32::MAX);
         Self {
             total: guides.len(),
+            page: 1,
+            page_size: rows,
+            has_next: false,
+            sort: GUIDE_SORT_NEWEST.to_owned(),
             guides,
+        }
+    }
+
+    /// One page of a larger set: the reader's listing.
+    ///
+    /// `has_next` is arithmetic over the total and the window rather than a
+    /// look at whether the page came back full, because a full last page is
+    /// indistinguishable from a full middle one.
+    fn page(guides: Vec<GuideHeadView>, total: u64, page: u32, page_size: u32, sort: &str) -> Self {
+        let seen = u64::from(page.saturating_sub(1))
+            .saturating_mul(u64::from(page_size))
+            .saturating_add(u64::try_from(guides.len()).unwrap_or(u64::MAX));
+        Self {
+            guides,
+            total: usize::try_from(total).unwrap_or(usize::MAX),
+            page,
+            page_size,
+            has_next: seen < total,
+            sort: sort.to_owned(),
         }
     }
 }
@@ -422,11 +489,21 @@ pub struct GuideTaxonBody {
     pub retired: bool,
 }
 
-/// What a reader is asking the published listing for.
+/// What a reader is asking the published listing for: the narrowing, the
+/// order, and which page of it.
 ///
 /// `tags` is comma-separated identifiers rather than a repeated parameter,
 /// because the console mirrors these three into the URL and the query-cache
 /// key and one string per filter is one thing to compare.
+///
+/// Every field is a string because every one of them is text a reader can
+/// hand-edit into the address, and each one is refused or defaulted according
+/// to whether it names something. A topic or tag that is not an identifier is
+/// a refusal, and so is a `sort` outside the two words this listing sorts by:
+/// both name a thing, and answering a different question than the one asked
+/// is worse than saying no. `page` is not a name but a position, and a
+/// position that cannot be read is the first one — which is also what an
+/// absent `page` and an absent `sort` ask for.
 #[derive(Debug, Default, Deserialize)]
 pub struct GuideFilters {
     #[serde(default)]
@@ -435,6 +512,10 @@ pub struct GuideFilters {
     pub topic: Option<String>,
     #[serde(default)]
     pub tags: Option<String>,
+    #[serde(default)]
+    pub page: Option<String>,
+    #[serde(default)]
+    pub sort: Option<String>,
 }
 
 // ------------------------------------------------------------------ render
@@ -1389,7 +1470,7 @@ pub(crate) fn image_body_limit() -> DefaultBodyLimit {
 
 // -------------------------------------------------------------------- reader
 
-/// The published guides a seller's filters name.
+/// One page of the published guides a seller's filters name.
 ///
 /// Search AND topic AND any-of-tags, which is the one contract this listing
 /// has: three conditions narrowing one set, so adding a tag never widens a
@@ -1398,6 +1479,13 @@ pub(crate) fn image_body_limit() -> DefaultBodyLimit {
 /// the published title, the published prose and the names of the words the
 /// guide is published under. A phrase that exists only in somebody's unsaved
 /// edit matches nothing, because none of those columns is the working copy.
+///
+/// The narrowing happens in the database and so does the window: the filters
+/// are applied to the whole published corpus and one page is taken out of the
+/// result, so a search finds a guide on page six that a console paging through
+/// twenty-five rows at a time would never have loaded. `total` beside the rows
+/// is a count over the same narrowing, which is what lets a reader be told
+/// "26–50 of 143" rather than the length of what they were sent.
 pub(crate) async fn published_guides(
     State(state): State<AppState>,
     _context: OrgContext,
@@ -1442,20 +1530,72 @@ pub(crate) async fn published_guides(
     .await?;
     check_taxa(&state, GuideTaxonKind::Tag, &tags, "a tag filter").await?;
 
-    let guides = GuideRepo::new(state.pool.clone())
-        .published(&GuideSearch {
-            text: pattern.as_deref(),
-            topic,
-            tags: &tags,
-        })
+    let (order, sort) = asked_order(filters.sort.as_deref())?;
+    let page = asked_page(filters.page.as_deref());
+    let search = GuideSearch {
+        text: pattern.as_deref(),
+        topic,
+        tags: &tags,
+        order,
+        skip: page.saturating_sub(1).saturating_mul(GUIDE_PAGE_ROWS),
+        take: GUIDE_PAGE_ROWS,
+    };
+    let repo = GuideRepo::new(state.pool.clone());
+    let guides = repo
+        .published(&search)
         .await
         .map_err(|error| storage_fault(&state, &error))?;
-    Ok(Json(GuidesView::of(
+    // Counted separately rather than windowed out of the rows, because a page
+    // past the end carries no rows at all and a total taken from them would
+    // report an empty corpus to a reader who has simply walked too far.
+    let total = repo
+        .published_count(&search)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    Ok(Json(GuidesView::page(
         guides
             .into_iter()
             .map(GuideHeadView::of_published)
             .collect(),
+        total,
+        page,
+        GUIDE_PAGE_ROWS,
+        sort,
     )))
+}
+
+/// The order a `sort` word names, and the word for the order that was applied.
+///
+/// A closed vocabulary of two words, and a third word is a refusal rather than
+/// a quiet fall back to the default: it is the rule the rest of this API's
+/// query parameters follow — a cursor this server did not issue and an
+/// identifier no taxon holds are both refused — and for the same reason.
+/// Answering a different order than the one asked for is an answer to a
+/// different question, and the caller cannot tell it happened except by
+/// reading a field back. Absent is not unknown: a request that names no order
+/// is asking for the listing's own, which is the alphabet.
+fn asked_order(sort: Option<&str>) -> Result<(GuideOrder, &'static str), APIError> {
+    match sort.map(str::trim).filter(|sort| !sort.is_empty()) {
+        None | Some(GUIDE_SORT_TITLE) => Ok((GuideOrder::Title, GUIDE_SORT_TITLE)),
+        Some(GUIDE_SORT_NEWEST) => Ok((GuideOrder::Newest, GUIDE_SORT_NEWEST)),
+        Some(_) => Err(validation("a listing is ordered by title or by newest")),
+    }
+}
+
+/// The page a `page` word names, counting from one.
+///
+/// Anything that is not a page ordinal — a word, nothing, a zero, a negative
+/// number — is the first page, and an ordinal past [`GUIDE_PAGE_MAX`] is held
+/// there: a page is a position in an answer rather than a name for anything,
+/// so there is nothing for a reader to have got wrong and nothing to refuse.
+/// A page beyond the last one answers no rows beside the real total, which is
+/// what is true about it.
+fn asked_page(page: Option<&str>) -> u32 {
+    page.map(str::trim)
+        .and_then(|page| page.parse::<u32>().ok())
+        .filter(|page| *page >= 1)
+        .unwrap_or(1)
+        .min(GUIDE_PAGE_MAX)
 }
 
 /// The words published guides are filed under: the reader's whole filter

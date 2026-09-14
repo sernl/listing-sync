@@ -175,6 +175,8 @@
 	border-bottom: 1px solid var(--line);
 	margin-bottom: 14px;
 	overflow-x: auto;
+	overflow-y: hidden;
+	scrollbar-width: thin;
 }
 
 .tab-bar button {

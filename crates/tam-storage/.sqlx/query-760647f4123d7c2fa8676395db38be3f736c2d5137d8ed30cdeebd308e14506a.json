@@ -1,0 +1,103 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT ordinal, locator, state, product_id, mapping_id, source_kind, source_url, source_numeric_id, source_state, failure_detail, terms_seen, terms_mapped, terms_unmapped, terms_uncovered FROM sync_request_resource WHERE org_id = $1 AND request_id = $2 AND ($3::integer IS NULL OR ordinal > $3) ORDER BY ordinal LIMIT $4",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ordinal",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "locator",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "mapping_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "source_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "source_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "source_numeric_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 8,
+        "name": "source_state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "failure_detail",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "terms_seen",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 11,
+        "name": "terms_mapped",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "terms_unmapped",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 13,
+        "name": "terms_uncovered",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "760647f4123d7c2fa8676395db38be3f736c2d5137d8ed30cdeebd308e14506a"
+}

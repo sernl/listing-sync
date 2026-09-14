@@ -279,3 +279,94 @@ async fn one_tenant_can_neither_see_nor_sign_out_another_tenants_device(
     );
     Ok(())
 }
+
+/// A restore changes what a device may do and says nothing about where it is.
+///
+/// The founder's report turns on this. He signed a machine out from his
+/// phone's browser, signed it back in later, and the console said "checked in
+/// just now" about a laptop that was shut in a bag — so he could not tell the
+/// machine that had come back from the one that had not been switched on since.
+/// `restore` stamped `last_seen_at = now`, which made authorisation look like
+/// contact.
+///
+/// Both halves are asserted against one run: the restore leaves the instant
+/// alone, and the check-in after it moves it. Either alone passes an
+/// implementation that is wrong in the other direction — a restore that
+/// stamped, or a heartbeat that had stopped stamping.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_restore_clears_the_sign_out_without_claiming_the_device_is_present(
+    pool: PgPool,
+) -> Result<(), StorageError> {
+    provision(&pool).await;
+    let repo = DeviceRepo::new(pool);
+    repo.register(ORG_A, &laptop(), T0).await?;
+    repo.revoke(ORG_A, LAPTOP, T1).await?;
+
+    let restored = repo
+        .restore(ORG_A, LAPTOP)
+        .await?
+        .expect("the device is this tenant's");
+    assert_eq!(
+        restored.revoked_at, None,
+        "the explicit restore is the one act that clears the mark"
+    );
+    assert_eq!(
+        restored.last_seen_at, T0,
+        "and it leaves presence at the last instant the device actually spoke, which is before \
+         the sign-out"
+    );
+
+    let beat = repo
+        .heartbeat(ORG_A, LAPTOP, &[], T2)
+        .await?
+        .expect("the restored device is heartbeatable");
+    assert_eq!(
+        beat.revoked_at, None,
+        "a restored device is answered as standing"
+    );
+    assert_eq!(
+        repo.list(ORG_A).await?[0].last_seen_at,
+        T2,
+        "only contact advances presence, and this is the contact"
+    );
+    Ok(())
+}
+
+/// A revoked installation that re-registers stays revoked.
+///
+/// The upgrade path runs through `register`: a new build reports a new
+/// `app_version` under the same installation id every launch. So this is both
+/// the "an upgrade updates the same row" property and the "nothing but the
+/// explicit restore lifts a sign-out" property, and they are the same SQL.
+#[sqlx::test(migrations = "./migrations")]
+async fn an_upgrade_updates_the_same_row_and_never_lifts_a_sign_out(
+    pool: PgPool,
+) -> Result<(), StorageError> {
+    provision(&pool).await;
+    let repo = DeviceRepo::new(pool);
+    repo.register(ORG_A, &laptop(), T0).await?;
+    repo.revoke(ORG_A, LAPTOP, T1).await?;
+
+    let upgraded = DeviceRegistration {
+        app_version: "0.9.1",
+        ..laptop()
+    };
+    let after = repo.register(ORG_A, &upgraded, T2).await?;
+    assert_eq!(
+        repo.list(ORG_A).await?.len(),
+        1,
+        "an upgrade is the same installation, so it updates its row rather than adding one"
+    );
+    assert_eq!(after.app_version, "0.9.1", "and the row learns the version");
+    assert_eq!(
+        after.revoked_at,
+        Some(T1),
+        "while the sign-out stands: a device that could lift its own revocation by \
+         reinstalling would make the seller's decision a delay"
+    );
+    assert_eq!(
+        after.first_seen_at, T0,
+        "and the installation's own history is kept"
+    );
+    Ok(())
+}

@@ -449,23 +449,120 @@ a.gd-tax:hover {
 
 /* --- the reader's filters ------------------------------------------------- */
 
+/* The filter row: four labelled controls that sit on one line.
+
+   Top-aligned, and deliberately not the editor's `.gd-head` idiom. That rule
+   makes every cell the full height of the row and pushes its control to the
+   bottom, which lines the controls up only while every cell has the same
+   amount above it: the template board showed what happens otherwise — one
+   field carrying a hint put its input fifteen pixels below its neighbour's,
+   because the hint sat inside the cell and the bottom edge moved up to make
+   room for it.
+
+   Here the row is aligned from the top instead, on two facts rather than on
+   an assumption about what is in each cell: every label occupies exactly one
+   line, and every control is the console's control height. Nothing inside a
+   cell can then move the control in it. A hint has nowhere to push from
+   because it does not live in the cell at all — it goes under the whole row,
+   in `.gd-filter-hint`, which is the one place a sentence about the row can be
+   without putting one control out of step with the next.
+
+   `auto-fit` at 190px is also the phone layout: below about 400px of column
+   there is one track, so the row stacks into a single column with no second
+   rule to keep in step. */
 .gd-filters {
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
 	gap: 12px;
-	align-items: stretch;
+	align-items: start;
 }
 
 .gd-filters > * {
 	display: flex;
 	flex-direction: column;
-	justify-content: flex-end;
-	gap: 6px;
+	justify-content: flex-start;
+	gap: 5px;
 	min-width: 0;
 }
 
-.gd-group {
+/* One line of label above every control, whether the label is a `Field`'s or
+   the tag group's own: the line is reserved rather than measured, and a word
+   too long for the column is cut rather than wrapped into a second line that
+   would push one control below the others. */
+.gd-filters > * > label,
+.gd-filters .gd-group-label {
+	font-size: 12.5px;
+	font-weight: 600;
+	color: var(--ink);
+	line-height: 1.35;
+	min-height: calc(12.5px * 1.35);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* The four controls are one height. The checkbox exclusion is the tag menu's:
+   its rows are inside this row's markup, and they are not controls of it. The
+   search exclusion is `.gd-search` below: there the wrapper is the control and
+   the input inside it is bare, so giving the input the metric as well would
+   put a second box inside the first. */
+.gd-filters input:not([type='checkbox']):not([type='search']),
+.gd-filters select,
+.gd-filters button {
+	min-height: var(--control-h);
+}
+
+/* The search box, decorated the way every other labelled field in this row is.
+   `app.css` leaves `type=search` out of the `.field` rules on purpose — every
+   search in this console is a bare input inside a wrapper that carries the
+   shape — so the wrapper has to say it here, or the one control a reader is
+   meant to find first is the only one in the row with no edge. Follows the
+   resources board's `.res-search`: the magnifier is inside the control, so the
+   cells keep one height between them. */
+.gd-search {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	border: 1px solid var(--line);
+	background: var(--card);
+	border-radius: var(--r-field);
+	padding: 0 11px;
+	min-height: var(--control-h);
+	color: var(--muted);
+}
+
+.gd-search:focus-within {
+	border-color: var(--primary);
+}
+
+.gd-search input[type='search'] {
+	flex: 1;
+	min-width: 0;
+	border: 0;
+	background: none;
+	padding: 0;
+	font: inherit;
+	font-weight: 400;
+	color: var(--ink);
+}
+
+.gd-search input[type='search']:focus-visible {
+	outline: none;
+}
+
+/* The tag menu's trigger is a button and keeps its own width rather than
+   stretching across the cell. */
+.gd-filters-group {
 	align-items: flex-start;
+}
+
+/* A sentence about the row, under the row. Never inside a cell: a hint in one
+   cell and none in the next is exactly what puts two controls out of line. */
+.gd-filter-hint {
+	grid-column: 1 / -1;
+	margin: 2px 0 0;
+	font-size: 12px;
+	color: var(--muted);
 }
 
 .gd-filter-foot {

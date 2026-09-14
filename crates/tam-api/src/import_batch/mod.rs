@@ -659,7 +659,19 @@ async fn detail_of(
         .await
         .map_err(|error| storage_fault(state, &error))?
     {
-        Some(head) => Some(crate::import_runs::view_of(state, org, head.id).await?),
+        // The head and the open questions, and none of the run's own rows.
+        // The batch page draws its report from `rows` above and reads nothing
+        // else off the run but `review_pairs`, so the five hundred items this
+        // used to carry were a second unbounded payload nobody rendered.
+        Some(head) => Some(
+            crate::import_runs::view_of_windowed(
+                state,
+                org,
+                head.id,
+                &crate::import_runs::ItemWindow::none(),
+            )
+            .await?,
+        ),
         None => None,
     };
     Ok(ImportBatchDetailView {

@@ -27,6 +27,7 @@ import {
 import type {
 	AuthorshipView,
 	ConnectionView,
+	ResourceStateCount,
 	SyncCoverageView,
 	SyncRequestHead,
 	SyncRequestView,
@@ -45,7 +46,22 @@ function resource(partial: Partial<SyncResourceView> = {}): SyncResourceView {
 	};
 }
 
+// The server groups the whole request's states in SQL and answers the page of
+// rows beside them. A fixture whose page *is* the whole request therefore
+// derives the counts from its own resources, so a test that names resources
+// does not have to state the same fact twice — and a test that wants the two
+// to disagree, which is what a second page looks like, passes
+// `resource_counts` explicitly.
+function countsOf(resources: readonly SyncResourceView[]): ResourceStateCount[] {
+	const counts: Record<string, number> = {};
+	for (const row of resources) {
+		counts[row.state] = (counts[row.state] ?? 0) + 1;
+	}
+	return Object.entries(counts).map(([state, count]) => ({ state, count }));
+}
+
 function request(partial: Partial<SyncRequestView> = {}): SyncRequestView {
+	const resources = partial.resources ?? [];
 	return {
 		request: 'r-1',
 		source: 'Tes',
@@ -56,7 +72,9 @@ function request(partial: Partial<SyncRequestView> = {}): SyncRequestView {
 		failure_detail: null,
 		create_job: null,
 		remove_job: null,
-		resources: [],
+		resource_counts: countsOf(resources),
+		resources,
+		resources_next: null,
 		...partial
 	};
 }
@@ -156,11 +174,11 @@ describe('the states that carry resources', () => {
 		expect(shown.detail).toContain('1 listing skipped');
 	});
 
-	it('the tally partitions the resources, so the three sum to the total', () => {
+	it('the tally partitions the request, so the three sum to the total', () => {
 		const counted = tally([
-			resource({ ordinal: 0 }),
-			resource({ ordinal: 1, state: 'failed' }),
-			resource({ ordinal: 2, state: 'pending' })
+			{ state: 'canonicalised', count: 1 },
+			{ state: 'failed', count: 1 },
+			{ state: 'pending', count: 1 }
 		]);
 		expect(counted).toEqual({
 			imported: 1,
@@ -172,6 +190,22 @@ describe('the states that carry resources', () => {
 		expect(counted.imported + counted.skipped + counted.unsettled + counted.unrecognised).toBe(
 			counted.total
 		);
+	});
+
+	// The figures are the request's and the rows are one page of it, which is
+	// the whole reason they are two different reads: a seller on page two of a
+	// finished migration must still be told the migration finished.
+	it('counts the whole request rather than the page of rows on screen', () => {
+		const stage = stageOf(
+			request({
+				state: 'enqueued',
+				resource_counts: [{ state: 'canonicalised', count: 40 }],
+				resources: [resource({ ordinal: 25 })],
+				resources_next: null
+			})
+		);
+		expect(stage.kind).toBe('imported');
+		expect(stage.kind === 'imported' && stage.tally.total).toBe(40);
 	});
 
 	it("a skipped resource shows the device's own words, unaltered", () => {
@@ -416,11 +450,10 @@ describe('a state this console does not know', () => {
 	});
 
 	it('counts an unknown resource state rather than dropping it off the arithmetic', () => {
-		const odd = {
-			...resource(),
-			state: 'quarantined' as unknown as SyncResourceView['state']
-		};
-		const counted = tally([resource(), odd]);
+		const counted = tally([
+			{ state: 'canonicalised', count: 1 },
+			{ state: 'quarantined', count: 1 }
+		]);
 		expect(counted.unrecognised).toBe(1);
 		expect(counted.imported + counted.skipped + counted.unsettled + counted.unrecognised).toBe(
 			counted.total

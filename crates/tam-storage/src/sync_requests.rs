@@ -60,6 +60,14 @@ fn count_from_db(raw: i32) -> Result<u32, StorageError> {
     })
 }
 
+/// A SQL `sum` of per-resource counts. Postgres widens the sum to `bigint`,
+/// and a total past `u32` is a catalogue no seller has, so it saturates for
+/// the same reason [`count_to_db`] does rather than failing a page that has
+/// otherwise been read.
+fn sum_from_db(raw: i64) -> u32 {
+    u32::try_from(raw).unwrap_or(u32::MAX)
+}
+
 /// The same in the other direction. A count beyond `i32` is a catalogue no
 /// seller has, and saturating is the honest failure: the alternative is a
 /// wrapped negative the CHECK would refuse at the far end of a page that
@@ -241,6 +249,90 @@ pub struct SyncRequestSummary {
     /// resources is a different thing to a seller than one that crossed all
     /// forty it had.
     pub resources_failed: u32,
+}
+
+/// One page of the request list: what to narrow it to, where the last page
+/// ended, and how many rows this one carries.
+///
+/// A struct rather than four arguments, because every caller has to state all
+/// four and a positional `Option<Timestamp>` beside an `Option<String>` is a
+/// pair of arguments nobody can read at the call site.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncRequestPage {
+    /// The keyset the previous page ended on, as `(requested_at, id)`: the
+    /// same pair the `ORDER BY` sorts by, so the walk cannot repeat or skip a
+    /// request that shares an instant with the page boundary.
+    pub after: Option<(Timestamp, Uuid)>,
+    pub limit: i64,
+    /// Which half of the list to answer, or both. A sync and a migration are
+    /// one record under two dispositions, and the two screens that read this
+    /// list each own one of them.
+    pub disposition: Option<Disposition>,
+    /// One request state, spelled as the column stores it. Held as a string
+    /// rather than an enum because the state vocabulary is the drain's and
+    /// this repo does not own it.
+    pub state: Option<String>,
+}
+
+/// How many resources of a request stand in each state.
+///
+/// The whole request, counted in SQL, so a page of breadcrumbs never has to
+/// be summed to say what the request as a whole is doing. A page-derived
+/// tally would say "nothing imported" to a seller looking at page two of a
+/// finished migration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncResourceStateCount {
+    pub state: String,
+    pub count: u32,
+}
+
+/// One request, its whole-request figures, and one page of its breadcrumbs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncRequestDetail {
+    pub head: SyncRequestHead,
+    /// Every state the request's resources stand in, with how many stand in
+    /// it. Over the whole request, never over `resources`.
+    pub counts: Vec<SyncResourceStateCount>,
+    /// The coverage summed over the resources that carry a measurement, and
+    /// `None` where no resource of the request carries one.
+    ///
+    /// Summed in SQL for the same reason the counts are, and over the
+    /// measured rows only: a skipped resource never reached the taxonomy, and
+    /// entering it as a row of zeros would put it into the founder's average
+    /// as perfect coverage.
+    pub coverage: Option<SyncCoverageTotals>,
+    /// One page of breadcrumbs, by ordinal.
+    pub resources: Vec<SyncResourceRecord>,
+    /// The ordinal to ask after for the next page, or `None` at the end.
+    pub next_ordinal: Option<i32>,
+}
+
+/// The request's own head, without its breadcrumbs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncRequestHead {
+    pub id: Uuid,
+    pub org: OrgId,
+    pub source: InventoryId,
+    pub target: InventoryId,
+    pub disposition: Disposition,
+    pub intent: SyncIntent,
+    pub state: String,
+    pub create_job: Option<Uuid>,
+    pub remove_job: Option<Uuid>,
+    pub failure_detail: Option<String>,
+    pub requested_at: Timestamp,
+}
+
+/// The coverage of a whole request, and how many resources it is summed over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SyncCoverageTotals {
+    /// How many measured resources the sum is over, which is what makes the
+    /// figures readable as an average rather than only as a total.
+    pub rows: u32,
+    pub terms_seen: u32,
+    pub terms_mapped: u32,
+    pub terms_unmapped: u32,
+    pub terms_uncovered: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -456,7 +548,7 @@ impl SyncRequestRepo {
         Ok(true)
     }
 
-    /// The organisation's sync requests, newest first.
+    /// One page of the organisation's sync requests, newest first.
     ///
     /// The console's only way to reach a request it created and navigated away
     /// from. A device-branch migrate mints no job until its completing page, so
@@ -465,15 +557,26 @@ impl SyncRequestRepo {
     /// not link to.
     ///
     /// The two counts are computed here rather than by loading every
-    /// breadcrumb, because a list of fifty requests over a five-hundred-resource
-    /// shop is twenty-five thousand rows to answer a question about two numbers.
+    /// breadcrumb, because a page of requests over a five-hundred-resource
+    /// shop is thousands of rows to answer a question about two numbers.
+    ///
+    /// The narrowing is a `WHERE` clause and the keyset is applied with it,
+    /// before the `LIMIT`. A page filtered after the limit answers "the
+    /// migrations among the newest ten requests", which is empty for a seller
+    /// whose last ten requests were syncs — and reads as "you have never
+    /// migrated anything".
     pub async fn list(
         &self,
         org: OrgId,
-        limit: i64,
+        page: &SyncRequestPage,
     ) -> Result<Vec<SyncRequestSummary>, StorageError> {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
+        let (cursor_at, cursor_id) = match page.after {
+            Some((at, id)) => (Some(timestamp_to_db(at)?), Some(uuid_to_db(id))),
+            None => (None, None),
+        };
+        let disposition = page.disposition.map(Disposition::as_str);
         let rows = sqlx::query!(
             r#"SELECT r.id, r.source, r.target, r.disposition, r.intent, r.state, r.requested_at,
                       (SELECT count(*) FROM sync_request_resource s
@@ -483,10 +586,17 @@ impl SyncRequestRepo {
                           AND s.state = 'failed') AS "failed!"
                FROM sync_request r
                WHERE r.org_id = $1
+                 AND ($3::timestamptz IS NULL OR (r.requested_at, r.id) < ($3, $4))
+                 AND ($5::text IS NULL OR r.disposition = $5)
+                 AND ($6::text IS NULL OR r.state = $6)
                ORDER BY r.requested_at DESC, r.id DESC
                LIMIT $2"#,
             uuid_to_db(org.0),
-            limit,
+            page.limit,
+            cursor_at,
+            cursor_id,
+            disposition,
+            page.state.as_deref(),
         )
         .fetch_all(&mut *tx)
         .await?;
@@ -581,6 +691,151 @@ impl SyncRequestRepo {
                     })
                 })
                 .collect::<Result<Vec<_>, StorageError>>()?,
+        }))
+    }
+
+    /// One request's head, its whole-request figures, and one page of its
+    /// breadcrumbs.
+    ///
+    /// Separate from [`SyncRequestRepo::get`] rather than a limit on it,
+    /// because the two reads answer different questions. The drain and the
+    /// device-apply route need every breadcrumb — a redrain that saw a page
+    /// would canonicalise a resource twice — while the console needs a
+    /// request's state, its coverage and the twenty-five rows on screen. The
+    /// figures are counted in SQL over the whole request for exactly that
+    /// reason: the page they are shown beside is not what they are about.
+    pub async fn detail(
+        &self,
+        org: OrgId,
+        request: Uuid,
+        after_ordinal: Option<i32>,
+        limit: i64,
+    ) -> Result<Option<SyncRequestDetail>, StorageError> {
+        let org_db = uuid_to_db(org.0);
+        let request_db = uuid_to_db(request);
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let head = sqlx::query!(
+            "SELECT source, target, disposition, intent, state, create_job_id, remove_job_id, \
+                    failure_detail, requested_at \
+             FROM sync_request WHERE org_id = $1 AND id = $2",
+            org_db,
+            request_db,
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(head) = head else {
+            tx.commit().await?;
+            return Ok(None);
+        };
+        let counted = sqlx::query!(
+            "SELECT state, count(*) AS \"count!\" FROM sync_request_resource \
+             WHERE org_id = $1 AND request_id = $2 GROUP BY state",
+            org_db,
+            request_db,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        // The measured rows only, and `rows` counts them rather than every
+        // breadcrumb: the four sums are null when nothing measured, which is
+        // what tells "never measured" from "measured, and the answer was
+        // zero".
+        let summed = sqlx::query!(
+            "SELECT count(*) FILTER (WHERE terms_seen IS NOT NULL) AS \"rows!\", \
+                    COALESCE(sum(terms_seen), 0) AS \"seen!\", \
+                    COALESCE(sum(terms_mapped), 0) AS \"mapped!\", \
+                    COALESCE(sum(terms_unmapped), 0) AS \"unmapped!\", \
+                    COALESCE(sum(terms_uncovered), 0) AS \"uncovered!\" \
+             FROM sync_request_resource WHERE org_id = $1 AND request_id = $2",
+            org_db,
+            request_db,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        // One row more than the page, so a page that filled exactly is told
+        // apart from one that ended there. `next_ordinal` minted from a full
+        // page alone would offer an empty page at every exact boundary.
+        let rows = sqlx::query!(
+            "SELECT ordinal, locator, state, product_id, mapping_id, \
+                    source_kind, source_url, source_numeric_id, source_state, failure_detail, \
+                    terms_seen, terms_mapped, terms_unmapped, terms_uncovered \
+             FROM sync_request_resource \
+             WHERE org_id = $1 AND request_id = $2 \
+               AND ($3::integer IS NULL OR ordinal > $3) \
+             ORDER BY ordinal LIMIT $4",
+            org_db,
+            request_db,
+            after_ordinal,
+            limit.saturating_add(1),
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+
+        let wanted = usize::try_from(limit).unwrap_or(usize::MAX);
+        let more = rows.len() > wanted;
+        let mut resources = Vec::with_capacity(rows.len().min(wanted));
+        for row in rows.into_iter().take(wanted) {
+            resources.push(SyncResourceRecord {
+                ordinal: row.ordinal,
+                locator: row.locator,
+                state: row.state,
+                coverage: coverage_from_db(
+                    row.terms_seen,
+                    row.terms_mapped,
+                    row.terms_unmapped,
+                    row.terms_uncovered,
+                )?,
+                product: row.product_id.map(|id| ProductId(uuid_from_db(id))),
+                mapping: row.mapping_id.map(|id| MappingId(uuid_from_db(id))),
+                source: row
+                    .source_kind
+                    .map(|kind| remote_id_from_db(&kind, row.source_url, row.source_numeric_id))
+                    .transpose()?,
+                source_state: row
+                    .source_state
+                    .as_deref()
+                    .map(listing_state_from_db)
+                    .transpose()?,
+                failure_detail: row.failure_detail,
+            });
+        }
+        let next_ordinal = more
+            .then(|| resources.last().map(|last| last.ordinal))
+            .flatten();
+        let measured_rows = count_from_db(i32::try_from(summed.rows).unwrap_or(i32::MAX))?;
+        Ok(Some(SyncRequestDetail {
+            head: SyncRequestHead {
+                id: request,
+                org,
+                source: inventory_from_db(&head.source)?,
+                target: inventory_from_db(&head.target)?,
+                disposition: disposition_from_db(&head.disposition)?,
+                intent: intent_from_db(&head.intent)?,
+                state: head.state,
+                create_job: head.create_job_id.map(uuid_from_db),
+                remove_job: head.remove_job_id.map(uuid_from_db),
+                failure_detail: head.failure_detail,
+                requested_at: timestamp_from_db(head.requested_at),
+            },
+            counts: counted
+                .into_iter()
+                .map(|row| {
+                    Ok(SyncResourceStateCount {
+                        state: row.state,
+                        count: count_from_db(i32::try_from(row.count).unwrap_or(i32::MAX))?,
+                    })
+                })
+                .collect::<Result<Vec<_>, StorageError>>()?,
+            coverage: (measured_rows > 0).then(|| SyncCoverageTotals {
+                rows: measured_rows,
+                terms_seen: sum_from_db(summed.seen),
+                terms_mapped: sum_from_db(summed.mapped),
+                terms_unmapped: sum_from_db(summed.unmapped),
+                terms_uncovered: sum_from_db(summed.uncovered),
+            }),
+            resources,
+            next_ordinal,
         }))
     }
 

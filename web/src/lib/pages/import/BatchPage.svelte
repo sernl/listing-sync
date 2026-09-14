@@ -7,12 +7,15 @@
 		type CommitAck,
 		type DuplicateDecision,
 		type ImportBatchDetailView,
-		type ImportRowView
+		type ImportRowView,
+		type RowStateView
 	} from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
 	import { utcInstant } from '$lib/elapsed';
+	import Field from '$lib/Field.svelte';
 	import PageHead from '$lib/PageHead.svelte';
+	import Pagination from '$lib/Pagination.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import AttachPanel from './AttachPanel.svelte';
@@ -36,6 +39,8 @@
 		tallyRows,
 		warningLine
 	} from './sheet-view';
+	import { pageCount, pageSummary } from './run-view';
+	import './import.css';
 	import './sheet.css';
 
 	const batchId = $derived(page.params.batch ?? '');
@@ -69,6 +74,41 @@
 	const report = $derived(reportRows(rows));
 	const tally = $derived(tallyRows(rows));
 	const progress = $derived(progressFrom(ack));
+
+	/** How many report rows are drawn at once.
+	 *
+	 *  The snapshot itself stays whole, and deliberately: `tallyRows`,
+	 *  `previewOf`, `awaitingRows` and the filename matcher are all partitions
+	 *  over every row of the batch, and fed a page they would state a figure
+	 *  about the seller's catalogue that is not true. So this pages what is
+	 *  drawn and nothing else — the counts above the list still speak for all
+	 *  five hundred rows a sheet may carry. */
+	const PER_PAGE = 25;
+
+	let reportPage = $state(1);
+	let reportSearch = $state('');
+	let reportState = $state<RowStateView | ''>('');
+
+	const matching = $derived(
+		report.filter((entry) => {
+			if (reportState !== '' && entry.state !== reportState) {
+				return false;
+			}
+			const term = reportSearch.trim().toLowerCase();
+			if (term === '') {
+				return true;
+			}
+			return [entry.name, entry.fileName, entry.label].some(
+				(field) => field !== null && field.toLowerCase().includes(term)
+			);
+		})
+	);
+	const reportPages = $derived(pageCount(matching.length, PER_PAGE));
+	const reportAt = $derived(Math.min(reportPage, reportPages));
+	const reportSlice = $derived(
+		matching.slice((reportAt - 1) * PER_PAGE, reportAt * PER_PAGE)
+	);
+	const reportFiltered = $derived(reportSearch.trim() !== '' || reportState !== '');
 
 	/** The day an unfinished import is swept, in UTC, because that is the clock
 	 *  the server computed it on. The whole instant would be precision this
@@ -304,6 +344,70 @@
 	{/each}
 {/snippet}
 
+<!-- The controls above the report. They narrow and page what is drawn; the
+     figures above them, the preview sentence and the file matcher all still
+     read every row of the batch. -->
+{#snippet reportControls()}
+	<div class="import-filters">
+		<div class="wide">
+			<Field label="Search rows" id="sheet-search" hint="Title, filename, or the tab and row number.">
+				<input
+					id="sheet-search"
+					type="search"
+					bind:value={reportSearch}
+					placeholder="Search your sheet"
+					oninput={() => (reportPage = 1)}
+				/>
+			</Field>
+		</div>
+		<Field label="Status" id="sheet-state">
+			<select id="sheet-state" bind:value={reportState} onchange={() => (reportPage = 1)}>
+				<option value="">Any status</option>
+				<option value="parsed">Ready</option>
+				<option value="attached">File added</option>
+				<option value="creating">Creating</option>
+				<option value="created">Created</option>
+				<option value="published">Published</option>
+				<option value="failed">Refused</option>
+				<option value="skipped">Left out</option>
+			</select>
+		</Field>
+		{#if reportFiltered}
+			<Button
+				small
+				tier="quiet"
+				onclick={() => {
+					reportSearch = '';
+					reportState = '';
+					reportPage = 1;
+				}}
+			>
+				Clear filters
+			</Button>
+		{/if}
+	</div>
+	{#if matching.length === 0}
+		<p class="sh-note">
+			{reportFiltered
+				? 'No row matches what you asked for. Clear the filters to see the rest of your sheet.'
+				: 'This import holds no rows.'}
+		</p>
+	{/if}
+{/snippet}
+
+{#snippet reportPager()}
+	{#if matching.length > 0}
+		<Pagination
+			page={reportAt}
+			hasNext={reportAt < reportPages}
+			label="Sheet rows"
+			summary={`${pageSummary((reportAt - 1) * PER_PAGE, reportSlice.length, matching.length, 'rows')} · Page ${reportAt} of ${reportPages}`}
+			onprevious={() => (reportPage = reportAt - 1)}
+			onnext={() => (reportPage = reportAt + 1)}
+		/>
+	{/if}
+{/snippet}
+
 <div class="page">
 	{#if detail !== null && shown !== null && stage !== null}
 		<PageHead
@@ -355,8 +459,13 @@
 		{/each}
 
 		{#if stage.kind === 'parsed' && !adding}
-			<Panel title="What your sheet said" description="Every row, in the order you filled them.">
-				{@render reportList(report)}
+			<Panel
+				title="What your sheet said"
+				description="Your rows, in the order you filled them. Searching and the counts above cover the whole sheet."
+			>
+				{@render reportControls()}
+				{@render reportList(reportSlice)}
+				{@render reportPager()}
 			</Panel>
 
 			{#if confirming}
@@ -509,8 +618,13 @@
 				<p class="sh-note">{shown.line}</p>
 			</Panel>
 		{:else}
-			<Panel title="What was created" description="Every row, and where it ended up.">
-				{@render reportList(report)}
+			<Panel
+				title="What was created"
+				description="Your rows and where each ended up. Searching and the counts above cover the whole sheet."
+			>
+				{@render reportControls()}
+				{@render reportList(reportSlice)}
+				{@render reportPager()}
 			</Panel>
 			<p class="sh-note">{NOTHING_SENT}</p>
 		{/if}

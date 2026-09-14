@@ -217,6 +217,20 @@ pub struct DeviceView {
     /// instants rather than stored, because it is a statement about what we
     /// know rather than a fact anybody wrote down.
     pub wipe_outstanding: bool,
+    /// Whether this installation is new enough to run a sourced-payload item.
+    ///
+    /// Derived here rather than in the console, because the floor
+    /// (`tam_domain::SOURCED_PAYLOAD_MIN_VERSION`) is the same figure the
+    /// claim gates on: a browser comparing version strings for itself would be
+    /// a second implementation of the gate, and the two would disagree the
+    /// first time the floor moved.
+    ///
+    /// It is eligibility and nothing else. It says nothing about whether this
+    /// device has been heard from, holds a marketplace login, or is working
+    /// anything now; those are `last_seen_at`, `sessions` and the run's own
+    /// owner. An older installation that is eligible stays eligible — a
+    /// version difference on its own is not a reason to hide a machine.
+    pub runs_sourced_payloads: bool,
     pub sessions: Vec<DeviceSessionView>,
 }
 
@@ -265,6 +279,7 @@ fn session_view(record: DeviceSessionRecord) -> DeviceSessionView {
 fn device_view(record: DeviceRecord) -> DeviceView {
     DeviceView {
         wipe_outstanding: wipe_outstanding(record.revoked_at, record.last_seen_at),
+        runs_sourced_payloads: tam_domain::runs_sourced_payloads(&record.app_version),
         id: record.id,
         name: record.name,
         os: record.os,
@@ -613,6 +628,13 @@ pub(crate) async fn revoke_device(
 /// from the count it is measured against, so restoring one that is not
 /// signed out at all is never refused.
 ///
+/// A restore is authorisation and not contact, so the record it answers with
+/// carries the `last_seen_at` the device last actually spoke at: the console
+/// says "last seen" against an instant before the sign-out until this machine
+/// checks in, which it does on its next cadence or the moment the seller
+/// presses Check in now. Stamping it here read as "checked in just now" for a
+/// machine that had said nothing.
+///
 /// Not-found comes first deliberately: an unknown id is a different fact from
 /// a full fleet, and answering the quota for it would tell the caller a
 /// machine exists.
@@ -643,7 +665,7 @@ pub(crate) async fn restore_device(
         ));
     }
     let record = devices
-        .restore(context.org, device, (state.wall)())
+        .restore(context.org, device)
         .await
         .map_err(|error| state.internal(&error.to_string()))?
         .ok_or_else(missing)?;

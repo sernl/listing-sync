@@ -21,8 +21,70 @@ use crate::codec::{
 };
 use crate::{pin_org, StorageError};
 
-/// How many runs one listing answers.
+/// How many runs one page of the history may answer at most.
+///
+/// The ceiling on what a caller may ask for, not the size a page normally
+/// is: the console asks for ten, and this is what stops a hand-written query
+/// string asking for the whole history back.
 pub const RUNS_LISTED_MAX: i64 = 50;
+
+/// How many resources of one run a page may answer at most. The console asks
+/// for twenty-five.
+pub const ITEMS_LISTED_MAX: i64 = 200;
+
+/// Which runs one page of the history is about, and which end of it.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RunHistoryFilter {
+    /// One shop. `None` is every shop rather than none.
+    pub source: Option<InventoryId>,
+    /// Only the runs that name no shop, which is the spreadsheet way in.
+    pub spreadsheet_only: bool,
+    pub state: Option<RunState>,
+    /// Every run still expecting work, whichever of the three open states it
+    /// stands in.
+    pub open_only: bool,
+    pub oldest: bool,
+    pub offset: i64,
+    pub limit: i64,
+}
+
+/// One page of run history, and the size of the history it was cut from.
+pub struct RunHistoryPage {
+    pub runs: Vec<ImportRunHead>,
+    /// How many runs the filter matches altogether. The figure the pager
+    /// states, and never an inference from the page's own length.
+    pub total: i64,
+}
+
+/// The order one run's resources are read in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ItemOrder {
+    /// Title A–Z, with the read order as the tie-break, so a page boundary
+    /// falls in the same place on every read.
+    #[default]
+    Title,
+    /// The order the shop listed them in.
+    Listed,
+}
+
+/// Which resources of one run a page is about.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ItemPageFilter<'a> {
+    pub state: Option<RunItemState>,
+    /// A plain substring of the title, or of the locator where the
+    /// enumeration named no title. Matched over the whole run, never over the
+    /// page.
+    pub search: Option<&'a str>,
+    pub order: ItemOrder,
+    pub offset: i64,
+    pub limit: i64,
+}
+
+/// One page of a run's resources, and how many the filter matched.
+pub struct ItemPage {
+    pub items: Vec<ImportRunItemRecord>,
+    pub total: i64,
+}
 
 /// Which machinery produced a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -605,8 +667,17 @@ const ONE_OPEN_PER_BATCH: &str = "import_run_one_open_per_batch";
 struct HeadFilter {
     run: Option<Uuid>,
     source: Option<InventoryId>,
+    /// Only the runs that name no shop, which is the spreadsheet way in.
+    /// Distinct from `source: None`, which means "any shop": one is a filter
+    /// the seller asked for and the other is the absence of one.
+    spreadsheet_only: bool,
     batch: Option<Uuid>,
+    state: Option<RunState>,
     open_only: bool,
+    /// Oldest first rather than newest first. The history's own default is
+    /// newest, and this is the seller asking for the other end of it.
+    oldest: bool,
+    offset: i64,
     limit: i64,
 }
 
@@ -750,7 +821,7 @@ impl ImportRunRepo {
                     batch: new.batch_id,
                     open_only: true,
                     limit: 1,
-                    run: None,
+                    ..HeadFilter::default()
                 },
             )
             .await?;
@@ -777,7 +848,15 @@ impl ImportRunRepo {
         })
     }
 
-    /// Every run matching one filter, newest first.
+    /// Every run matching one filter, newest first unless the filter asks
+    /// otherwise.
+    ///
+    /// The order is expressed as a pair of `CASE`s over one boolean rather
+    /// than as two statements, because two statements would be two copies of
+    /// the twenty-seven column list this function exists to have one of. It
+    /// costs the `import_run_by_age` index on the oldest-first read, which an
+    /// organisation's own run history — bounded at `RUNS_LISTED_MAX` a page
+    /// and some hundreds in total — sorts in memory without noticing.
     async fn heads(
         &self,
         org: OrgId,
@@ -798,20 +877,57 @@ impl ImportRunRepo {
               WHERE org_id = $1 \
                 AND ($2::uuid IS NULL OR id = $2) \
                 AND ($3::text IS NULL OR source = $3) \
-                AND ($4::uuid IS NULL OR batch_id = $4) \
-                AND (NOT $5 OR state IN ('reading', 'reviewing', 'committing')) \
-              ORDER BY created_at DESC, id DESC LIMIT $6",
+                AND (NOT $4 OR source IS NULL) \
+                AND ($5::uuid IS NULL OR batch_id = $5) \
+                AND ($6::text IS NULL OR state = $6) \
+                AND (NOT $7 OR state IN ('reading', 'reviewing', 'committing')) \
+              ORDER BY CASE WHEN $8 THEN created_at END ASC, \
+                       CASE WHEN NOT $8 THEN created_at END DESC, \
+                       id DESC \
+              LIMIT $9 OFFSET $10",
             uuid_to_db(org.0),
             filter.run.map(uuid_to_db),
             filter.source.map(inventory_to_db),
+            filter.spreadsheet_only,
             filter.batch.map(uuid_to_db),
+            filter.state.map(RunState::as_str),
             filter.open_only,
+            filter.oldest,
             filter.limit,
+            filter.offset,
         )
         .fetch_all(&mut *tx)
         .await?;
         tx.commit().await?;
         rows.iter().map(head_of).collect()
+    }
+
+    /// How many runs one filter matches, across the whole history rather than
+    /// one page of it.
+    ///
+    /// Read beside the page rather than inferred from it, because a pager that
+    /// guessed at a total would be inventing the one figure the seller uses to
+    /// decide whether the run they are looking for is further back.
+    async fn head_total(&self, org: OrgId, filter: &HeadFilter) -> Result<i64, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let total = sqlx::query_scalar!(
+            "SELECT count(*) AS \"total!\" FROM import_run \
+              WHERE org_id = $1 \
+                AND ($2::text IS NULL OR source = $2) \
+                AND (NOT $3 OR source IS NULL) \
+                AND ($4::text IS NULL OR state = $4) \
+                AND (NOT $5 OR state IN ('reading', 'reviewing', 'committing'))",
+            uuid_to_db(org.0),
+            filter.source.map(inventory_to_db),
+            filter.spreadsheet_only,
+            filter.state.map(RunState::as_str),
+            filter.open_only,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(total)
     }
 
     /// The runs still expecting work, one per source at most.
@@ -873,16 +989,108 @@ impl ImportRunRepo {
             .next())
     }
 
-    /// The organisation's runs, newest first.
-    pub async fn list(&self, org: OrgId) -> Result<Vec<ImportRunHead>, StorageError> {
-        self.heads(
-            org,
-            &HeadFilter {
-                limit: RUNS_LISTED_MAX,
-                ..HeadFilter::default()
-            },
+    /// One page of the organisation's run history, and how many runs the
+    /// filter matches in total.
+    ///
+    /// Replaces the whole-history read this used to be. Fifty runs was a
+    /// bound on the query rather than on the page: a seller's eleventh import
+    /// was reachable only by scrolling, and their five-hundredth not at all.
+    pub async fn history(
+        &self,
+        org: OrgId,
+        filter: &RunHistoryFilter,
+    ) -> Result<RunHistoryPage, StorageError> {
+        let heads = HeadFilter {
+            source: filter.source,
+            spreadsheet_only: filter.spreadsheet_only,
+            state: filter.state,
+            open_only: filter.open_only,
+            oldest: filter.oldest,
+            offset: filter.offset.max(0),
+            limit: filter.limit.clamp(0, RUNS_LISTED_MAX),
+            ..HeadFilter::default()
+        };
+        Ok(RunHistoryPage {
+            runs: self.heads(org, &heads).await?,
+            total: self.head_total(org, &heads).await?,
+        })
+    }
+
+    /// One page of a run's resources, and how many the filter matches.
+    ///
+    /// The search is a plain substring over the title, falling back to the
+    /// locator where the enumeration named nothing else — which is exactly
+    /// what the list renders, so a seller searching for what they can see
+    /// finds it. `position` rather than `ILIKE` because a title holding a
+    /// percent sign is a title, not a wildcard.
+    pub async fn items_page(
+        &self,
+        org: OrgId,
+        run: Uuid,
+        filter: &ItemPageFilter<'_>,
+    ) -> Result<ItemPage, StorageError> {
+        let state = filter.state.map(RunItemState::as_str);
+        let search = filter.search.filter(|term| !term.trim().is_empty());
+        let by_title = filter.order == ItemOrder::Title;
+        let limit = filter.limit.clamp(0, ITEMS_LISTED_MAX);
+        let offset = filter.offset.max(0);
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let rows = sqlx::query!(
+            "SELECT locator, ordinal, state, product_id, observed, title, price_minor, \
+                    price_currency, cover_hash, observed_by_device, failure_detail, \
+                    skip_reason \
+               FROM import_run_item \
+              WHERE org_id = $1 AND run_id = $2 \
+                AND ($3::text IS NULL OR state = $3) \
+                AND ($4::text IS NULL \
+                     OR position(lower($4) in lower(COALESCE(title, locator))) > 0) \
+              ORDER BY CASE WHEN $5 THEN lower(COALESCE(title, locator)) END ASC, ordinal ASC \
+              LIMIT $6 OFFSET $7",
+            uuid_to_db(org.0),
+            uuid_to_db(run),
+            state,
+            search,
+            by_title,
+            limit,
+            offset,
         )
-        .await
+        .fetch_all(&mut *tx)
+        .await?;
+        let total = sqlx::query_scalar!(
+            "SELECT count(*) AS \"total!\" FROM import_run_item \
+              WHERE org_id = $1 AND run_id = $2 \
+                AND ($3::text IS NULL OR state = $3) \
+                AND ($4::text IS NULL \
+                     OR position(lower($4) in lower(COALESCE(title, locator))) > 0)",
+            uuid_to_db(org.0),
+            uuid_to_db(run),
+            state,
+            search,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        let items = rows
+            .into_iter()
+            .map(|row| {
+                item_of(
+                    row.locator,
+                    row.ordinal,
+                    &row.state,
+                    row.product_id,
+                    row.observed,
+                    row.title,
+                    row.price_minor,
+                    row.price_currency.as_deref(),
+                    row.cover_hash.as_deref(),
+                    row.observed_by_device,
+                    row.failure_detail,
+                    row.skip_reason,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ItemPage { items, total })
     }
 
     /// The run's head alone, without its rows.

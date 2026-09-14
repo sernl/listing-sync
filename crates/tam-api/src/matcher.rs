@@ -77,9 +77,10 @@ pub struct Side {
     pub text: Option<TextFacts>,
     pub page_count: Option<u32>,
     /// Present only for an image payload, which is where the producer computes
-    /// it: `render::cover` gives every non-image payload a flat placeholder
-    /// card, so a pHash over a PDF's cover compares constants. The absence is
-    /// what keeps L3 from firing on them.
+    /// it. A document's cover is either a preview found inside it or a flat
+    /// kind-coloured card, and `tam_fingerprint` computes no pHash for either:
+    /// a card compares constants, and a preview would be a new sketch field
+    /// rather than this one. The absence is what keeps L3 from firing on them.
     pub cover_phash: Option<u64>,
     pub subjects: Vec<uuid::Uuid>,
     pub grade_low: Option<i16>,

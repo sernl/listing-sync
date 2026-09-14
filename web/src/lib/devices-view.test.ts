@@ -41,7 +41,8 @@ function device(partial: Partial<DeviceView> = {}): DeviceView {
 		name: 'staffroom-laptop',
 		os: 'windows',
 		arch: 'x86_64',
-		app_version: '0.1.0',
+		app_version: '0.9.0',
+		runs_sourced_payloads: true,
 		first_seen_at: NOW - 100_000,
 		last_seen_at: NOW - 1_000,
 		revoked_at: null,
@@ -108,7 +109,12 @@ describe('the summary', () => {
 			checkingIn: 1,
 			quiet: 1,
 			signedOut: 1,
-			wipesOutstanding: 1
+			wipesOutstanding: 1,
+			// The quiet machine is still a current one: it is not signed out, so
+			// it is a machine waiting to be heard from rather than one to leave
+			// out of the count.
+			current: 2,
+			needingUpdateForSourcedFiles: 0
 		});
 	});
 
@@ -276,7 +282,7 @@ describe('what the band says when nothing is running', () => {
 		]);
 		const notice = bandNotice(summary, running);
 		expect(notice?.kind).toBe('nothing_checking_in');
-		expect(notice?.body).toContain('checked in for over two hours');
+		expect(notice?.body).toContain('checked in for half an hour');
 	});
 
 	it('says a current machine has nothing to run when it holds no login', () => {
@@ -312,7 +318,7 @@ describe('the footnote under the marketplace rows', () => {
 			])
 		);
 		expect(line).toContain('1 of 1 machine has checked in');
-		expect(line).toContain('1 other is signed out.');
+		expect(line).toContain('1 other is signed out and kept in history.');
 	});
 
 	it('never divides by a registry that is entirely signed out', () => {
@@ -328,7 +334,7 @@ describe('the footnote under the marketplace rows', () => {
 				device({ id: 'b', last_seen_at: NOW - QUIET_AFTER_MS - 1 })
 			])
 		);
-		expect(line).toBe('1 of 2 machines have checked in within the last two hours.');
+		expect(line).toBe('1 of 2 machines have checked in in the last half hour.');
 	});
 
 	it('carries the outstanding wipe wherever it lands', () => {
@@ -491,5 +497,69 @@ describe('the marketplaces the screen puts at the top', () => {
 			NOW
 		);
 		expect(needingAttention(rows)).toEqual([]);
+	});
+});
+
+describe('readiness, as facts that are kept apart', () => {
+	// The constraint the founder's report turns on: a credential saved on a
+	// machine is not the machine being there. A machine holding a TPT login
+	// that has been off for hours runs nothing, and the page must not imply
+	// otherwise.
+	it('never infers presence from a saved marketplace login', () => {
+		const rows = deviceRows(
+			[device({ last_seen_at: NOW - QUIET_AFTER_MS - 1, sessions: [session('Tpt')] })],
+			NOW
+		);
+		expect(rows[0].standing).toBe('quiet');
+		expect(rows[0].holding).toEqual(['Tpt']);
+		expect(schedulesRunning(rows)).toBe(false);
+	});
+
+	// And the version floor is not permission to work. The import claim admits
+	// any registered, unrevoked device without looking at a version, and the
+	// floor applies only to an item whose payload comes from a marketplace. So
+	// an older installation that is here and holds a login is running the
+	// schedule, and saying otherwise would report a working fleet as stalled.
+	it('does not treat the sourced-file floor as permission to work', () => {
+		const rows = deviceRows(
+			[device({ app_version: '0.8.0', runs_sourced_payloads: false, sessions: [session('Tpt')] })],
+			NOW
+		);
+		expect(rows[0].standing).toBe('checking_in');
+		expect(rows[0].runsSourcedFiles).toBe(false);
+		expect(schedulesRunning(rows)).toBe(true);
+		const summary = deviceSummary(rows);
+		expect(summary.current).toBe(1);
+		expect(summary.needingUpdateForSourcedFiles).toBe(1);
+		// Nothing is claimed to be stalled, and the narrow limitation is named
+		// as narrow.
+		expect(bandNotice(summary, schedulesRunning(rows))).toBeNull();
+		const line = deviceFootnote(summary);
+		expect(line).toContain('publish or refetch a file from a marketplace');
+		expect(line).toContain('Everything else runs there as normal');
+	});
+
+	it('counts a current machine and runs the schedule on it', () => {
+		const rows = deviceRows([device({ sessions: [session('Tpt')] })], NOW);
+		expect(deviceSummary(rows).current).toBe(1);
+		expect(schedulesRunning(rows)).toBe(true);
+	});
+
+	// Counts are about what the page shows. A seller with one working laptop
+	// and three replaced installations read "1 of 4" and could see one row.
+	it('counts the current machines and keeps signed-out records out of the total it divides by', () => {
+		const rows = deviceRows(
+			[
+				device({ id: 'live', sessions: [session('Tpt')] }),
+				device({ id: 'old-1', revoked_at: NOW - 5 }),
+				device({ id: 'old-2', revoked_at: NOW - 6 }),
+				device({ id: 'old-3', revoked_at: NOW - 7 })
+			],
+			NOW
+		);
+		const summary = deviceSummary(rows);
+		expect(summary.current).toBe(1);
+		expect(summary.signedOut).toBe(3);
+		expect(deviceFootnote(summary)).toContain('1 of 1 machine has checked in');
 	});
 });

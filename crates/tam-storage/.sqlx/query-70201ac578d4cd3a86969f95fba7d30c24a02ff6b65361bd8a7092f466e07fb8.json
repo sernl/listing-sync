@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, kind, source, batch_id, target, state, anchor_job, read_total, created_at, settled_at, failure_detail, scheduled, retry_of, owner_device, attempt, lease_expires_at, last_contact_at, last_progress_at, reported_stage, reason_code, reason, discovered, processed, enumeration_complete, selected_total, commit_authorised_at, commit_authorised_by, COALESCE(lease_expires_at > now(), false) AS \"lease_live!\" FROM import_run WHERE org_id = $1 AND ($2::uuid IS NULL OR id = $2) AND ($3::text IS NULL OR source = $3) AND ($4::uuid IS NULL OR batch_id = $4) AND (NOT $5 OR state IN ('reading', 'reviewing', 'committing')) ORDER BY created_at DESC, id DESC LIMIT $6",
+  "query": "SELECT id, kind, source, batch_id, target, state, anchor_job, read_total, created_at, settled_at, failure_detail, scheduled, retry_of, owner_device, attempt, lease_expires_at, last_contact_at, last_progress_at, reported_stage, reason_code, reason, discovered, processed, enumeration_complete, selected_total, commit_authorised_at, commit_authorised_by, COALESCE(lease_expires_at > now(), false) AS \"lease_live!\" FROM import_run WHERE org_id = $1 AND ($2::uuid IS NULL OR id = $2) AND ($3::text IS NULL OR source = $3) AND (NOT $4 OR source IS NULL) AND ($5::uuid IS NULL OR batch_id = $5) AND ($6::text IS NULL OR state = $6) AND (NOT $7 OR state IN ('reading', 'reviewing', 'committing')) ORDER BY CASE WHEN $8 THEN created_at END ASC, CASE WHEN NOT $8 THEN created_at END DESC, id DESC LIMIT $9 OFFSET $10",
   "describe": {
     "columns": [
       {
@@ -149,8 +149,12 @@
         "Uuid",
         "Uuid",
         "Text",
-        "Uuid",
         "Bool",
+        "Uuid",
+        "Text",
+        "Bool",
+        "Bool",
+        "Int8",
         "Int8"
       ]
     },
@@ -185,5 +189,5 @@
       null
     ]
   },
-  "hash": "82b98ef152cf193a223c71e7847ce7c3a5e44c24be545ac4c1fa3f7b8b4d0791"
+  "hash": "70201ac578d4cd3a86969f95fba7d30c24a02ff6b65361bd8a7092f466e07fb8"
 }

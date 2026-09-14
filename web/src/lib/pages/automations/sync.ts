@@ -20,9 +20,7 @@ import { scopeRefusal } from '$lib/pages/templates/resource-template';
 export interface RunRow {
 	job: string;
 	href: string;
-	/** Where the run was sent, drawn by the marketplace's own mark, which is
-	 *  what tells one run from another at a glance; the identifier follows it
-	 *  in the meta line. */
+	/** The marketplace associated with this run. */
 	inventory: InventoryId;
 	meta: string;
 	/** The instant the run was created, so the template can render the absolute
@@ -36,7 +34,7 @@ export function runRows(jobs: readonly JobHead[], now: number): RunRow[] {
 		job: job.job,
 		href: `/sync/${job.job}`,
 		inventory: job.inventory,
-		meta: `Run ${job.job.slice(0, 8)}… · started ${agoLabel(job.created_at, now)}`,
+		meta: `${MARKETPLACE_WORD[MARKETPLACE_OF[job.inventory]]} · started ${agoLabel(job.created_at, now)}`,
 		at: job.created_at
 	}));
 }
@@ -227,11 +225,17 @@ export function templateChoices(
  *
  * The line arrives written: it joins a run, a job and a resource's title, and
  * a client that composed it would be a second place the seller's words are
- * decided. The key is the instant and the position, because two lines can
- * share an instant and neither carries an identifier. */
+ * decided.
+ *
+ * The key is the line's own, minted by the read that produced it. It used to
+ * be the instant and the position in the loaded array, which was stable only
+ * because pages were appended and never replaced: a page-replacing pager
+ * reissues index 0 to a different line on every turn, so every row in the
+ * `{#each}` would be re-keyed onto a neighbour's DOM. Two lines can share an
+ * instant, so the instant alone was never enough either. */
 export function activityEntries(lines: readonly ActivityLine[], now: number): LogEntry[] {
-	return lines.map((line, index) => ({
-		id: `${line.at}-${index}`,
+	return lines.map((line) => ({
+		id: line.key,
 		what: line.line,
 		at: agoLabel(line.at, now),
 		href: line.href ?? undefined

@@ -70,6 +70,7 @@ function device(partial: Partial<DeviceView> = {}): DeviceView {
 		last_seen_at: NOW - 1_000,
 		revoked_at: null,
 		wipe_outstanding: false,
+		runs_sourced_payloads: false,
 		sessions: [],
 		...partial
 	};

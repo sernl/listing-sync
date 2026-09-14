@@ -351,20 +351,85 @@ impl JobReadRepo {
             .collect()
     }
 
-    /// One item's event timeline, oldest first: the downloadable per-item
-    /// result and the client's step view.
+    /// One item of one job, or `None` where this tenant's job does not hold
+    /// it.
+    ///
+    /// A read of its own rather than a scan of the job's items for a matching
+    /// id: the detail route used to page every item of the job with a limit
+    /// of `i32::MAX` and then search the result in memory, so opening one
+    /// item of a five-hundred-item bulk read five hundred rows to answer with
+    /// one.
+    pub async fn item(
+        &self,
+        org: OrgId,
+        job: JobId,
+        item: JobItemId,
+    ) -> Result<Option<ItemRow>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let row = sqlx::query!(
+            "SELECT id, mapping_id, state, outcome, failure_code, failure_detail, \
+                    blocked_on, attempt_count, created_at, settled_at \
+             FROM job_item WHERE org_id = $1 AND job_id = $2 AND id = $3",
+            uuid_to_db(org.0),
+            uuid_to_db(job.0),
+            uuid_to_db(item.0),
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        row.map(|row| {
+            Ok(ItemRow {
+                item: JobItemId(uuid_from_db(row.id)),
+                mapping: MappingId(uuid_from_db(row.mapping_id)),
+                state: ItemStateKind::from_db(&row.state)?,
+                outcome: row
+                    .outcome
+                    .as_deref()
+                    .map(item_outcome_from_db)
+                    .transpose()?,
+                failure_code: row
+                    .failure_code
+                    .as_deref()
+                    .map(failure_code_from_db)
+                    .transpose()?,
+                failure_detail: row.failure_detail,
+                blocked_on: row.blocked_on,
+                attempt_count: row.attempt_count,
+                created_at: timestamp_from_db(row.created_at),
+                settled_at: row.settled_at.map(timestamp_from_db),
+            })
+        })
+        .transpose()
+    }
+
+    /// One page of one item's event timeline, oldest first and strictly after
+    /// the cursor: the downloadable per-item result and the client's step
+    /// view.
+    ///
+    /// Paged for the same reason the item list is. A retried item accumulates
+    /// an event per attempt per step, so the timeline of a long-running item
+    /// is the largest thing on that page — and `org_seq` is already the
+    /// total order the stream pages by, so the cursor is that and nothing
+    /// new.
     pub async fn item_events(
         &self,
         org: OrgId,
         item: JobItemId,
+        after: Option<i64>,
+        limit: i64,
     ) -> Result<Vec<EventRow>, StorageError> {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let rows = sqlx::query!(
             "SELECT org_seq, job_id, job_item_id, kind, payload, created_at \
-             FROM job_event WHERE org_id = $1 AND job_item_id = $2 ORDER BY org_seq",
+             FROM job_event WHERE org_id = $1 AND job_item_id = $2 \
+               AND ($3::bigint IS NULL OR org_seq > $3) \
+             ORDER BY org_seq LIMIT $4",
             uuid_to_db(org.0),
             uuid_to_db(item.0),
+            after,
+            limit,
         )
         .fetch_all(&mut *tx)
         .await?;

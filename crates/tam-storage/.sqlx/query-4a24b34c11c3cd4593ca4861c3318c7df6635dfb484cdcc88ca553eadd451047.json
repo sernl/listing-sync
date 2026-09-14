@@ -1,0 +1,55 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT r.schedule_id, r.tick, r.inventory, s.name, COUNT(*) FILTER (WHERE r.state = 'sent') AS \"sent!\", 'tick:' || (extract(epoch from r.tick) * 1000)::bigint::text || ':' || r.schedule_id::text || ':' || r.inventory AS \"key!\" FROM schedule_run r JOIN schedule s ON s.org_id = r.org_id AND s.id = r.schedule_id WHERE r.org_id = $1 AND ($2::timestamptz IS NULL OR r.tick < $2 OR (r.tick = $2 AND 'tick:' || (extract(epoch from r.tick) * 1000)::bigint::text || ':' || r.schedule_id::text || ':' || r.inventory > $4)) GROUP BY r.schedule_id, r.tick, r.inventory, s.name ORDER BY r.tick DESC, 'tick:' || (extract(epoch from r.tick) * 1000)::bigint::text || ':' || r.schedule_id::text || ':' || r.inventory LIMIT $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "schedule_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "tick",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 2,
+        "name": "inventory",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "sent!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "key!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "4a24b34c11c3cd4593ca4861c3318c7df6635dfb484cdcc88ca553eadd451047"
+}

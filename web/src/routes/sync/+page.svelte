@@ -17,10 +17,12 @@
 	import type { InventoryId, Marketplace } from '$lib/generated/vocab';
 	import { MARKETPLACE_OF } from '$lib/listings-view';
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
+	import Pagination from '$lib/Pagination.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
 	import { AUTHORABLE_PLATFORMS, MARK_SRC, platformTitle } from '$lib/platforms';
+	import TabBar from '$lib/TabBar.svelte';
 	import Toggle from '$lib/Toggle.svelte';
 	import MarketplaceList from '$lib/pages/automations/MarketplaceList.svelte';
 	import { heldSelection, marketplaceRows } from '$lib/pages/automations/marketplace-list';
@@ -45,12 +47,43 @@
 	import { templates, type TemplateHead } from '$lib/pages/templates/api';
 	import '$lib/pages/automations/automations.css';
 
+	// How many runs one page shows. Ten, because a run is a heading a seller
+	// scans for the one they are looking for, not a row they read.
+	const RUNS_PER_PAGE = 10;
+	// How many log lines one page shows.
+	const LINES_PER_PAGE = 25;
+
+	/** A page a read asked for and did not get: what Retry asks for again.
+	 *  Held apart from the displayed page, which stays on the last page that
+	 *  actually read. */
+	interface Attempt {
+		cursor: string | null;
+		page: number;
+	}
+
+	// The two histories, one tab each. Ids rather than bare strings at the
+	// call sites, because the tab bar and the panel body both name them.
+	const RUNS_TAB = 'runs';
+	const LOG_TAB = 'activity';
+	let historyTab = $state(RUNS_TAB);
+
 	let jobs = $state<JobHead[]>([]);
-	let nextCursor = $state<string | null>(null);
-	let loaded = $state(false);
+	let runPage = $state(1);
+	// One cursor per page reached: index `n` is the cursor that fetches page
+	// `n + 1`, so index 0 is null and Previous is a step back through this
+	// rather than a re-walk from the newest run. The cursors are the server's
+	// own opaque tokens; the console mints none of them.
+	let runCursors = $state<(string | null)[]>([null]);
+	let runNext = $state<string | null>(null);
+	let runAttempt = $state<Attempt | null>(null);
+	let runsBusy = $state(false);
+	let runsLoaded = $state(false);
 	// A run list that could not be read is not a seller who has never synced,
 	// exactly as an unread migration list is not a seller with no migration.
-	let jobsUnread = $state(false);
+	// A page that fails leaves the last page that worked on screen: the rows
+	// already read are still true, and blanking them turns one bad read into
+	// an empty history.
+	let runsUnread = $state(false);
 
 	let connections = $state<ConnectionView[]>([]);
 	let connectionsLoaded = $state(false);
@@ -63,10 +96,15 @@
 	let multiUnread = $state(false);
 
 	let activity = $state<ActivityLine[]>([]);
-	// The `at` of the oldest line loaded, which is how this log pages: it is
-	// ordered by the clock and nothing else, so an opaque token would carry
-	// no more than the instant does.
-	let activityCursor = $state<number | null>(null);
+	let logPage = $state(1);
+	let logAttempt = $state<Attempt | null>(null);
+	// The same page-cursor ledger the runs keep. The token is opaque and
+	// carries the last line's instant *and* its key, because the log merges
+	// three sources and two lines of one instant are ordinary: an instant on
+	// its own could not say which of them the page ended on.
+	let logCursors = $state<(string | null)[]>([null]);
+	let logNext = $state<string | null>(null);
+	let logBusy = $state(false);
 	let activityUnread = $state(false);
 
 	// The templates a rule may fill a new pull from. Heads only: the picker
@@ -110,10 +148,11 @@
 	// long as the request takes.
 	const planFloor = $derived(entitlement.data?.capabilities.sync_pull_interval_secs ?? null);
 
-	// No count badge on this column. `jobs` holds the pages loaded so far, so a
-	// figure drawn from it would mean "runs on the page you have loaded" and
-	// would visibly jump when the seller pressed Load more runs. Migration's
-	// column keeps its badge, because that list is a single bounded read.
+	// No count badge on this column, and none on either history. A figure
+	// drawn from `jobs` or `activity` would mean "rows on the page you are
+	// looking at" and would read as a total; the page number and the two
+	// directions say where the seller is without claiming a size the server
+	// never answered.
 	const rows = $derived(marketplaceRows(connections));
 	const read = $derived(readState(connectionsLoaded, connectionsFailed, rows));
 	// The resolved selection rather than the raw click, so the highlighted row
@@ -122,8 +161,15 @@
 	const cards = $derived(syncCards(connections, settings));
 	// `Date.now()` inside the derivation rather than captured at init, so a
 	// label recomputes with its list instead of freezing at mount.
+	// A history tab shows one of the two lists rather than both at once: the
+	// page is bounded by the server, and mounting the other list beside it
+	// doubles the document for a panel nobody is reading.
 	const runs = $derived(runRows(jobs, Date.now()));
 	const log = $derived(activityEntries(activity, Date.now()));
+	const historyTabs = $derived([
+		{ id: RUNS_TAB, label: 'Runs', count: null },
+		{ id: LOG_TAB, label: 'Activity', count: null }
+	]);
 
 	/** One card's editable state: what the seller has changed, or the stored
 	 *  row where they have changed nothing. */
@@ -143,29 +189,66 @@
 		edits = { ...edits, [inventory]: wanted };
 	}
 
-	async function loadPage(cursor?: string | null) {
+	// The cursor and the page number together, so a failed read can leave both
+	// where they were. The cursor is the server's token for the page being
+	// asked for; `page` is what that page will be called if it arrives.
+	async function readRuns(cursor: string | null, page: number) {
+		runsBusy = true;
 		try {
-			const view = await api.jobs(cursor);
-			jobs = [...jobs, ...view.jobs];
-			nextCursor = view.next_cursor;
-			jobsUnread = false;
+			const view = await api.jobs(cursor, RUNS_PER_PAGE);
+			jobs = view.jobs;
+			runNext = view.next_cursor;
+			runPage = page;
+			// Recorded against the page it reaches, so Previous steps back
+			// through cursors this server issued rather than re-deriving one.
+			runCursors = [...runCursors.slice(0, page), view.next_cursor];
+			runsUnread = false;
+			runAttempt = null;
 		} catch {
-			// The rows already held stay held: a page that failed to load its
-			// second page has still read its first, and throwing those away
-			// would turn one unreadable page into an empty history.
-			jobsUnread = true;
+			// The page on screen stays on screen, and so does the page number.
+			// What failed is remembered separately, because that is what Retry
+			// has to ask for: a Retry that re-read the page still displayed
+			// would clear the failure while never fetching the page the seller
+			// pressed Next for.
+			runsUnread = true;
+			runAttempt = { cursor, page };
+		} finally {
+			runsBusy = false;
+			runsLoaded = true;
 		}
-		loaded = true;
 	}
 
-	async function loadActivity(cursor?: number | null) {
+	async function readActivity(cursor: string | null, page: number) {
+		logBusy = true;
 		try {
-			const view = await api.syncActivity(cursor);
-			activity = [...activity, ...view.activity];
-			activityCursor = view.cursor;
+			const view = await api.syncActivity(cursor, LINES_PER_PAGE);
+			activity = view.activity;
+			logNext = view.cursor;
+			logPage = page;
+			logCursors = [...logCursors.slice(0, page), view.cursor];
 			activityUnread = false;
+			logAttempt = null;
 		} catch {
 			activityUnread = true;
+			logAttempt = { cursor, page };
+		} finally {
+			logBusy = false;
+		}
+	}
+
+	// The page that failed, asked for again. Not the page on screen: that one
+	// read successfully and has nothing to retry.
+	function retryRunPage() {
+		const attempt = runAttempt;
+		if (attempt !== null) {
+			void readRuns(attempt.cursor, attempt.page);
+		}
+	}
+
+	function retryLogPage() {
+		const attempt = logAttempt;
+		if (attempt !== null) {
+			void readActivity(attempt.cursor, attempt.page);
 		}
 	}
 
@@ -181,8 +264,12 @@
 	}
 
 	$effect(() => {
-		void loadPage();
-		void loadActivity();
+		// The first page by its cursor of `null` rather than through the
+		// cursor ledger: reading that ledger here would make this effect
+		// depend on state the read itself writes, and it would re-run
+		// forever.
+		void readRuns(null, 1);
+		void readActivity(null, 1);
 		void templates
 			.list()
 			.then((listed) => {
@@ -469,58 +556,101 @@
 				{/if}
 			</Panel>
 
+			<!-- One history panel with two tabs rather than two panels stacked.
+			     The runs and the log answer the same question — what has this
+			     account been doing — and a seller reading one is not reading
+			     the other, so only the tab in hand is mounted and the page
+			     carries one list's worth of rows instead of two. -->
 			<Panel
-				title="Runs"
-				description="Every update we have sent, with live progress while one is running."
+				title="History"
+				description="Every update we have sent, and what each pull and each send did."
 			>
-				{#if !loaded}
-					<p class="quiet">Loading…</p>
-				{:else if jobsUnread && jobs.length === 0}
-					<p class="quiet">
-						Your runs could not be read, so this page cannot list them. Anything already
-						running is unaffected.
-					</p>
-				{:else if runs.length === 0}
-					<Placeholder icon="refresh-cw" headline="No sync has run yet" body={NO_RUN_YET} />
-				{:else}
-					{#each runs as run (run.job)}
-						<a class="auto-row" href={run.href}>
-							<span class="who">
-								<span class="t"><MarketplaceMark inventory={run.inventory} /></span>
-								<span class="meta">{run.meta}</span>
-							</span>
-							<span class="when">{new Date(run.at).toLocaleString()}</span>
-						</a>
-					{/each}
-					{#if jobsUnread}
-						<p class="quiet">More runs could not be read. The ones above are what loaded.</p>
-					{/if}
-					{#if nextCursor}
-						<div class="set-foot">
-							<Button tier="outline" onclick={() => void loadPage(nextCursor)}>
-								Load more runs
-							</Button>
-						</div>
-					{/if}
-				{/if}
-			</Panel>
+				<TabBar tabs={historyTabs} bind:current={historyTab} />
 
-			<Panel title="Activity log" description="What each pull and each send did, newest first.">
-				{#if activityUnread && activity.length === 0}
-					<p class="quiet">
-						The activity log could not be read, so it is showing nothing rather than a guess.
-					</p>
-				{:else}
-					<ActivityLog entries={log} bind:query={logQuery} empty={NO_ACTIVITY_YET} />
-					{#if activityUnread}
-						<p class="quiet">More of the log could not be read. The lines above are what loaded.</p>
+				{#if historyTab === RUNS_TAB}
+					{#if !runsLoaded}
+						<p class="quiet">Loading…</p>
+					{:else if runsUnread && jobs.length === 0}
+						<Banner tone="bad" action={retryRuns}>
+							Your runs could not be read, so this page cannot list them. Anything already
+							running is unaffected.
+						</Banner>
+					{:else}
+						{#if runsUnread}
+							<!-- The page below is the last one that read. Said before the
+							     rows, because a seller who has not been told will take
+							     them for the page they asked for. -->
+							<Banner tone="bad" action={retryRuns}>
+								That page of runs could not be read, so the runs below are the last
+								ones that did.
+							</Banner>
+						{/if}
+						{#if runs.length === 0}
+							{#if runPage > 1}
+								<p class="quiet">
+									There are no runs on this page. Go back for the ones before it.
+								</p>
+							{:else}
+								<Placeholder
+									icon="refresh-cw"
+									headline="No sync has run yet"
+									body={NO_RUN_YET}
+								/>
+							{/if}
+						{:else}
+							{#each runs as run (run.job)}
+								<a class="auto-row" href={run.href}>
+									<span class="who">
+										<span class="t"><MarketplaceMark inventory={run.inventory} /></span>
+										<span class="meta">{run.meta}</span>
+									</span>
+									<span class="when">{new Date(run.at).toLocaleString()}</span>
+								</a>
+							{/each}
+						{/if}
+						{#if runs.length > 0 || runPage > 1}
+							<Pagination
+								page={runPage}
+								hasNext={runNext !== null}
+								busy={runsBusy}
+								label="Runs"
+								summary={`${runs.length} runs on this page`}
+								onprevious={() =>
+									void readRuns(runCursors[runPage - 2] ?? null, runPage - 1)}
+								onnext={() => void readRuns(runNext, runPage + 1)}
+							/>
+						{/if}
 					{/if}
-					{#if activityCursor}
-						<div class="set-foot">
-							<Button tier="outline" onclick={() => void loadActivity(activityCursor)}>
-								Load more
-							</Button>
-						</div>
+				{:else if activityUnread && activity.length === 0}
+					<Banner tone="bad" action={retryLog}>
+						The activity log could not be read, so it is showing nothing rather than a
+						guess.
+					</Banner>
+				{:else}
+					{#if activityUnread}
+						<Banner tone="bad" action={retryLog}>
+							That page of the log could not be read, so the lines below are the last
+							ones that did.
+						</Banner>
+					{/if}
+					<ActivityLog
+						entries={log}
+						bind:query={logQuery}
+						empty={logPage > 1
+							? 'There are no lines on this page. Go back for the ones before it.'
+							: NO_ACTIVITY_YET}
+					/>
+					{#if log.length > 0 || logPage > 1}
+						<Pagination
+							page={logPage}
+							hasNext={logNext !== null}
+							busy={logBusy}
+							label="Activity log"
+							summary={`${log.length} lines on this page`}
+							onprevious={() =>
+								void readActivity(logCursors[logPage - 2] ?? null, logPage - 1)}
+							onnext={() => void readActivity(logNext, logPage + 1)}
+						/>
 					{/if}
 				{/if}
 			</Panel>
@@ -530,4 +660,31 @@
 
 {#snippet toPlans()}
 	<Button tier="primary" small href="/settings/subscription">See plans</Button>
+{/snippet}
+
+<!-- Each retries the page that failed, which the read remembers apart from
+     the page on screen. Retrying the displayed page instead would clear the
+     failure without ever fetching what the seller pressed Next for. -->
+{#snippet retryRuns()}
+	<Button
+		tier="outline"
+		small
+		disabled={runsBusy}
+		reason={runsBusy ? 'A page is being read.' : undefined}
+		onclick={retryRunPage}
+	>
+		Retry
+	</Button>
+{/snippet}
+
+{#snippet retryLog()}
+	<Button
+		tier="outline"
+		small
+		disabled={logBusy}
+		reason={logBusy ? 'A page is being read.' : undefined}
+		onclick={retryLogPage}
+	>
+		Retry
+	</Button>
 {/snippet}
