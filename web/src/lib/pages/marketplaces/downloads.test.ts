@@ -13,6 +13,7 @@ import { PLATFORM_MARK, PLATFORM_NAME, PLATFORM_ORDER, downloadCards } from './d
 const PUBLISHED = readManifest({
 	version: '0.3.1',
 	windows: { file: 'teachouse-0.3.1-x64-setup.exe', sha256: 'aa'.repeat(32) },
+	linux: { file: 'Teachouse_0.9.1_amd64.AppImage', sha256: 'c'.repeat(64), version: '0.9.1' },
 	android: {
 		file: 'teachouse-0.2.0-arm64.apk',
 		sha256: 'bb'.repeat(32),
@@ -23,7 +24,7 @@ const PUBLISHED = readManifest({
 }) as DownloadsManifest;
 
 describe('the download cards', () => {
-	it('shows the three platforms in one order whatever the manifest holds', () => {
+	it('shows the four platforms in one order whatever the manifest holds', () => {
 		expect(downloadCards(null).map((card) => card.platform)).toEqual(PLATFORM_ORDER);
 		expect(downloadCards(PUBLISHED).map((card) => card.platform)).toEqual(PLATFORM_ORDER);
 	});
@@ -60,6 +61,7 @@ describe('the download cards', () => {
 			src: '/vendors/android-robot.svg'
 		});
 		expect(PLATFORM_MARK.windows.kind).toBe('glyph');
+		expect(PLATFORM_MARK.linux).toEqual({ kind: 'glyph', name: 'laptop' });
 		expect(PLATFORM_MARK.apple.kind).toBe('glyph');
 	});
 
@@ -115,6 +117,17 @@ describe('the download cards', () => {
 			version: '0.3.1',
 			sha256: 'aa'.repeat(32)
 		});
+	});
+
+	it('links the Linux card to the AppImage the manifest named', () => {
+		const linux = downloadCards(PUBLISHED).find((card) => card.platform === 'linux');
+		expect(linux?.offer).toEqual({
+			label: 'Download for Linux',
+			href: '/downloads/Teachouse_0.9.1_amd64.AppImage',
+			version: '0.9.1',
+			sha256: 'c'.repeat(64)
+		});
+		expect(linux?.body).toContain('.deb');
 	});
 
 	it('prints the release the file actually is, not the channel it was read beside', () => {

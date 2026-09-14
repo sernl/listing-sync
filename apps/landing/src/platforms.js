@@ -37,7 +37,14 @@ export const platforms = [
 ];
 
 /** Platforms the app can publish a build for and this row does not name. */
-export const omitted = [{ name: 'macOS', why: 'No macOS build is published.' }];
+export const omitted = [
+	{ name: 'macOS', why: 'No macOS build is published.' },
+	{
+		name: 'Linux',
+		file: null,
+		why: 'Tux is licensed for attribution-free use but the landing draws only marks with a vendor policy on file; the download card uses a glyph.'
+	}
+];
 
 /** The sentences the two licences require, printed under the row.
  *

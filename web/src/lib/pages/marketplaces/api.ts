@@ -117,6 +117,7 @@ export interface DownloadEntry {
 export interface DownloadsManifest {
 	version: string;
 	windows: DownloadEntry | null;
+	linux: DownloadEntry | null;
 	android: DownloadEntry | null;
 	apple: DownloadEntry | null;
 }
@@ -168,6 +169,7 @@ export function readManifest(document: unknown): DownloadsManifest | null {
 	return {
 		version: held.version,
 		windows: entry(held.windows),
+		linux: entry(held.linux),
 		android: entry(held.android),
 		apple: entry(held.apple)
 	};

@@ -352,6 +352,115 @@ jobs:
           api-key: ${{ secrets.CN_API_KEY }}
           working-directory: .
 
+  # The Linux desktop: an AppImage the download card links and a .deb the
+  # GitHub release carries beside it. Neither is an update payload — the
+  # updater is configured for Windows alone — so nothing here is signed with
+  # the updater key and no update platform is named. ubuntu-22.04 rather than
+  # latest because an AppImage links against the glibc of the machine that
+  # built it, and the older the runner the more machines it runs on.
+  linux:
+    needs: [verify, draft, console]
+    if: ${{ !github.event.repository.fork }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: console
+          path: web/build
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          cache: true
+      - name: install the webkit and bundling dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - name: install the Tauri CLI
+        env:
+          CLI_VERSION: ${{ env.TAURI_CLI_VERSION }}
+        run: npm install -g "@tauri-apps/cli@$CLI_VERSION"
+
+      # The same overlay the Windows job composes, minus signing: the updater
+      # endpoint is baked in so a Linux build asks the same channel, even
+      # though no Linux update payload is published yet.
+      - name: compose the release configuration overlay
+        env:
+          CN_APPLICATION: ${{ vars.CN_APPLICATION }}
+          CN_CHANNEL: ${{ vars.CN_CHANNEL }}
+        run: |
+          set -euo pipefail
+          endpoint="https://cdn.crabnebula.app/update/$CN_APPLICATION/{{target}}-{{arch}}/{{current_version}}"
+          if [ -n "${CN_CHANNEL:-}" ]; then
+            endpoint="$endpoint?channel=$CN_CHANNEL"
+          fi
+          jq -n --arg endpoint "$endpoint" \
+            '{plugins: {updater: {endpoints: [$endpoint]}}}' > release.conf.json
+          cat release.conf.json
+
+      - name: build the Linux bundles
+        working-directory: apps/desktop
+        env:
+          TAM_ENTITLEMENT_PUBLIC_KEY: ${{ vars.TAM_ENTITLEMENT_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          tauri build --bundles deb,appimage --config ../../release.conf.json
+
+      - name: collect the bundles and their checksums
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          bundles=target/release/bundle
+          mkdir -p linux-artifacts
+          appimage=$(find "$bundles/appimage" -type f -name '*.AppImage' | head -1)
+          deb=$(find "$bundles/deb" -type f -name '*.deb' | head -1)
+          if [ -z "$appimage" ] || [ -z "$deb" ]; then
+            echo "no AppImage or .deb under $bundles" >&2
+            find "$bundles" -type f >&2 || true
+            exit 1
+          fi
+          cp "$appimage" "linux-artifacts/Teachouse_${VERSION}_amd64.AppImage"
+          cp "$deb" "linux-artifacts/Teachouse_${VERSION}_amd64.deb"
+          ( cd linux-artifacts && sha256sum -- *.AppImage *.deb > SHA256SUMS-linux.txt )
+          ls -l linux-artifacts
+          cat linux-artifacts/SHA256SUMS-linux.txt
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-x86_64
+          path: linux-artifacts
+          if-no-files-found: error
+          retention-days: 30
+
+      # Public platforms only: the Cloud's download page and CDN serve these
+      # by slug, and neither is an update payload. The slugs are the Cloud's
+      # own for Linux, `appimage-$arch` and `deb-$arch`.
+      - name: upload the AppImage to CrabNebula Cloud
+        uses: crabnebula-dev/cloud-release@1a8803698ba41de6b23e42abc5dcc3721308233c # action-v0.2.6
+        with:
+          command: >-
+            release upload ${{ vars.CN_APPLICATION }} ${{ needs.verify.outputs.version }}
+            --file linux-artifacts/Teachouse_${{ needs.verify.outputs.version }}_amd64.AppImage
+            --public-platform appimage-x86_64
+            ${{ vars.CN_CHANNEL && format('--channel {0}', vars.CN_CHANNEL) || '' }}
+          api-key: ${{ secrets.CN_API_KEY }}
+          working-directory: .
+      - name: upload the .deb to CrabNebula Cloud
+        uses: crabnebula-dev/cloud-release@1a8803698ba41de6b23e42abc5dcc3721308233c # action-v0.2.6
+        with:
+          command: >-
+            release upload ${{ vars.CN_APPLICATION }} ${{ needs.verify.outputs.version }}
+            --file linux-artifacts/Teachouse_${{ needs.verify.outputs.version }}_amd64.deb
+            --public-platform deb-x86_64
+            ${{ vars.CN_CHANNEL && format('--channel {0}', vars.CN_CHANNEL) || '' }}
+          api-key: ${{ secrets.CN_API_KEY }}
+          working-directory: .
+
   windows:
     needs: [verify, draft, console]
     if: ${{ !github.event.repository.fork }}
@@ -596,12 +705,13 @@ jobs:
   # checksums and the notes the Cloud was given. `latest.json` goes too,
   # because it is the hosting escape hatch the design note describes and the
   # workflow artefact it otherwise lives in expires after thirty days.
-  # The APK is additive: this runs on a successful Windows build whatever
-  # Android did, and attaches the APK only if there is one. A skipped or failed
-  # `needs` would otherwise skip this job, which is why the condition uses a
-  # status function and then names the one result it actually requires.
+  # The APK and the Linux bundles are additive: this runs on a successful
+  # Windows build whatever Android and Linux did, and attaches each only if
+  # there is one. A skipped or failed `needs` would otherwise skip this job,
+  # which is why the condition uses a status function and then names the one
+  # result it actually requires.
   github-release:
-    needs: [verify, windows, android]
+    needs: [verify, windows, android, linux]
     if: >-
       ${{ !cancelled() && !github.event.repository.fork
       && needs.windows.result == 'success' }}
@@ -621,6 +731,11 @@ jobs:
         with:
           name: android-arm64
           path: android-artifacts
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: ${{ needs.linux.result == 'success' }}
+        with:
+          name: linux-x86_64
+          path: linux-artifacts
       - name: say whether the APK is in this release
         env:
           ANDROID_RESULT: ${{ needs.android.result }}
@@ -638,6 +753,17 @@ jobs:
               echo "::warning::no Android APK in this release: the android job finished as $ANDROID_RESULT"
               ;;
           esac
+      - name: say whether the Linux bundles are in this release
+        env:
+          LINUX_RESULT: ${{ needs.linux.result }}
+        run: |
+          set -euo pipefail
+          if [ "$LINUX_RESULT" = success ]; then
+            echo 'The Linux AppImage and .deb are attached to this release.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No Linux bundles in this release: the linux job finished as $LINUX_RESULT. The desktop release is unaffected." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::no Linux bundles in this release: the linux job finished as $LINUX_RESULT"
+          fi
 
       - name: create the GitHub release
         env:
@@ -656,6 +782,9 @@ jobs:
           if [ -d android-artifacts ]; then
             assets+=(android-artifacts/*)
           fi
+          if [ -d linux-artifacts ]; then
+            assets+=(linux-artifacts/*)
+          fi
           # A channelled release is a pre-release: a beta must not present
           # itself as the repository's latest release.
           flags=()
@@ -669,13 +798,14 @@ jobs:
   # A draft nobody published serves no update, so this is the step that makes
   # the release real. A failed run leaves the draft unpublished on purpose;
   # `cn release purge` removes it.
-  # After the Android job as well as the Windows one, whatever the Android
-  # job's result: a published release is sealed, and the APK upload that
+  # After the Android and Linux jobs as well as the Windows one, whatever
+  # their results: a published release is sealed, and the APK upload that
   # arrived after the publish was refused with "already published" on the
   # one run where the Android build outlasted the Windows one. The desktop
-  # release still goes out when Android fails; it just waits to be sure.
+  # release still goes out when Android or Linux fails; it just waits to be
+  # sure.
   publish:
-    needs: [verify, windows, android]
+    needs: [verify, windows, android, linux]
     if: >-
       ${{ !cancelled() && !github.event.repository.fork
       && needs.windows.result == 'success' }}

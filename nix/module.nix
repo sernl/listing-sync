@@ -269,6 +269,9 @@ let
       android_file="$(previous .android.file)"
       android_sum="$(previous .android.sha256)"
       android_version="$(previous .android.version)"
+      linux_file="$(previous .linux.file)"
+      linux_sum="$(previous .linux.sha256)"
+      linux_version="$(previous .linux.version)"
 
       degraded=0
       # Whether this run has anything new to say. `refreshed_at` is the time the
@@ -397,6 +400,36 @@ let
                          --output "$destination" \
                          -- "$url" || return 1
           done
+
+          # The Linux AppImage rides the same release. Absent on a release
+          # older than the Linux job, which is not a failure of the Android
+          # half: the Linux entry is simply not published from that release.
+          new_linux_file="$(printf '%s' "$release" | jq -r '
+              [ .assets[] | select(.name | endswith(".AppImage")) ] | first | .name // empty
+          ')"
+          if [ -z "$new_linux_file" ]; then
+              echo "release $release_tag carries no .AppImage asset; the Linux half is not published from it" >&2
+              return 0
+          fi
+          for asset in "$new_linux_file" SHA256SUMS-linux.txt; do
+              url="$(printf '%s' "$release" | jq -r --arg name "$asset" '
+                  [ .assets[] | select(.name == $name) ] | first | .url // empty
+              ')" || return 1
+              if [ -z "$url" ]; then
+                  echo "release $release_tag carries no asset named $asset; the Linux half is not published from it" >&2
+                  new_linux_file=""
+                  return 0
+              fi
+              if [ "$asset" = "$new_linux_file" ]; then
+                  destination="$staging/$asset"
+              else
+                  destination="$work/$asset"
+              fi
+              fetch_file --config "$work/curl.conf" \
+                         --header "Accept: application/octet-stream" \
+                         --output "$destination" \
+                         -- "$url" || { new_linux_file=""; return 0; }
+          done
       }
 
       windows_component() {
@@ -449,6 +482,18 @@ let
           changed=1
       }
 
+      linux_component() {
+          [ -n "''${new_linux_file:-}" ] || return 1
+          verify_staged "$work/SHA256SUMS-linux.txt" "$new_linux_file" || return 1
+          cp -f "$work/SHA256SUMS-linux.txt" "$staging/" || return 1
+          linux_file="$new_linux_file"
+          linux_version="''${release_tag#v}"
+          linux_sum="$(sha256sum "$staging/$new_linux_file" | cut -d' ' -f1)"
+          staged+=("$new_linux_file" SHA256SUMS-linux.txt)
+          changed=1
+      }
+
+      new_linux_file=""
       if [ -n "$token_file" ]; then
           if github_assets && android_component; then
               echo "android: $android_file from $release_tag"
@@ -456,14 +501,23 @@ let
               echo "the Android half did not refresh; the previous one keeps serving" >&2
               degraded=1
           fi
+          if linux_component; then
+              echo "linux: $linux_file from $release_tag"
+          else
+              echo "the Linux half did not refresh; the previous one keeps serving" >&2
+          fi
       else
           # Deliberately absent rather than degraded: no token is a
-          # configuration, and the previous Android entry goes with it.
-          echo "no GitHub token configured; the Android half is not published"
-          if [ -n "$android_file" ]; then changed=1; fi
+          # configuration, and the previous Android and Linux entries go
+          # with it.
+          echo "no GitHub token configured; the Android and Linux halves are not published"
+          if [ -n "$android_file" ] || [ -n "$linux_file" ]; then changed=1; fi
           android_file=""
           android_sum=""
           android_version=""
+          linux_file=""
+          linux_sum=""
+          linux_version=""
       fi
 
       if windows_component; then
@@ -488,6 +542,9 @@ let
          --arg version "$windows_version" \
          --arg windows_file "$windows_file" \
          --arg windows_sum "$windows_sum" \
+         --arg linux_file "$linux_file" \
+         --arg linux_sum "$linux_sum" \
+         --arg linux_version "$linux_version" \
          --arg android_file "$android_file" \
          --arg android_sum "$android_sum" \
          --arg android_version "$android_version" \
@@ -495,6 +552,8 @@ let
          '{
             version: $version,
             windows: { file: $windows_file, sha256: $windows_sum },
+            linux: (if $linux_file == "" then null
+                    else { file: $linux_file, sha256: $linux_sum, version: $linux_version } end),
             android: (if $android_file == "" then null
                       else { file: $android_file, sha256: $android_sum, version: $android_version } end),
             apple: null,
@@ -520,6 +579,9 @@ let
       keep=(downloads.json "$windows_file")
       if [ -n "$android_file" ]; then
           keep+=("$android_file" SHA256SUMS.txt SHA256SUMS-android.txt)
+      fi
+      if [ -n "$linux_file" ]; then
+          keep+=("$linux_file" SHA256SUMS-linux.txt)
       fi
       find "$target" -maxdepth 1 ! -type d -printf '%f\0' |
           while IFS= read -r -d "" existing; do

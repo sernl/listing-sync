@@ -4,9 +4,9 @@
 import { type DownloadsManifest, downloadHref } from './api';
 import type { Mark } from './catalogue';
 
-export type Platform = 'windows' | 'android' | 'apple';
+export type Platform = 'windows' | 'linux' | 'android' | 'apple';
 
-export const PLATFORM_ORDER: readonly Platform[] = ['windows', 'android', 'apple'];
+export const PLATFORM_ORDER: readonly Platform[] = ['windows', 'linux', 'android', 'apple'];
 
 /** What each card is headed.
  *
@@ -27,6 +27,7 @@ export const PLATFORM_ORDER: readonly Platform[] = ['windows', 'android', 'apple
  *  away. */
 export const PLATFORM_NAME: Record<Platform, string> = {
 	windows: 'Windows',
+	linux: 'Linux',
 	android: 'Android™',
 	apple: 'macOS'
 };
@@ -64,10 +65,15 @@ export const PLATFORM_NAME: Record<Platform, string> = {
  *  say "Don't use the standalone Apple logo", with no route to permission worth
  *  taking for a platform we publish no build for.
  *
+ *  Linux draws a glyph of ours too. Tux is licensed for attribution-free use,
+ *  but the landing draws only marks with a vendor policy on file and this
+ *  page follows it: a glyph says the same thing and asks nothing of anyone.
+ *
  *  Typed `Mark` throughout, so a mark arriving with permission is a change to
  *  this table and to nothing else. */
 export const PLATFORM_MARK: Record<Platform, Mark> = {
 	windows: { kind: 'glyph', name: 'monitor' },
+	linux: { kind: 'glyph', name: 'laptop' },
 	android: { kind: 'image', shape: 'icon', src: '/vendors/android-robot.svg' },
 	apple: { kind: 'glyph', name: 'laptop' }
 };
@@ -84,6 +90,7 @@ const NOTHING_YET = 'Not available yet.';
 const OFFERED: Record<Platform, string> = {
 	windows:
 		'The desktop app: it keeps your marketplace logins on your own computer and runs the schedule there.',
+	linux: 'AppImage for 64-bit Linux. A .deb package is on the same GitHub release.',
 	android:
 		'It holds marketplace logins on the phone itself and runs your queued work when you open it, with no schedule of its own.',
 	apple: 'The desktop app.'

@@ -52,12 +52,14 @@ describe('reading the download manifest', () => {
 		const held = readManifest({
 			version: '0.2.0',
 			windows: { file: 'teachouse-0.2.0.msi', sha256: 'abc' },
+			linux: { file: 'Teachouse_0.2.0_amd64.AppImage', sha256: 'def', version: '0.2.0' },
 			android: { file: 'teachouse-0.2.0.apk' },
 			apple: null
 		});
 		expect(held).toEqual({
 			version: '0.2.0',
 			windows: { file: 'teachouse-0.2.0.msi', sha256: 'abc' },
+			linux: { file: 'Teachouse_0.2.0_amd64.AppImage', sha256: 'def', version: '0.2.0' },
 			android: null,
 			apple: null
 		});

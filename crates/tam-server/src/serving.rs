@@ -641,11 +641,13 @@ pub(crate) fn content_type(file: &str) -> &'static str {
         "ttf" => "font/ttf",
         "pdf" => "application/pdf",
         "mp4" => "video/mp4",
-        // The two the downloads tier serves. Named rather than left to the
+        // The four the downloads tier serves. Named rather than left to the
         // octet-stream default so a browser's own download prompt says what
         // the file is.
         "exe" => "application/vnd.microsoft.portable-executable",
         "apk" => "application/vnd.android.package-archive",
+        "appimage" => "application/vnd.appimage",
+        "deb" => "application/vnd.debian.binary-package",
         _ => "application/octet-stream",
     }
 }
@@ -1230,6 +1232,14 @@ mod tests {
             ("favicon.svg", "image/svg+xml"),
             ("fonts/OFL-Fraunces.txt", "text/plain; charset=utf-8"),
             ("robots", "application/octet-stream"),
+            (
+                "downloads/Teachouse_0.9.1_amd64.AppImage",
+                "application/vnd.appimage",
+            ),
+            (
+                "downloads/Teachouse_0.9.1_amd64.deb",
+                "application/vnd.debian.binary-package",
+            ),
         ] {
             assert_eq!(
                 super::content_type(file),
