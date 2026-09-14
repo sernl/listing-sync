@@ -60,6 +60,18 @@ describe('buildPreview', () => {
 		expect(await drawn(plain)).not.toContain('Tj');
 	});
 
+	it('writes the name only across the pages chosen for it', async () => {
+		const bytes = await source();
+		const partly = await buildPreview(bytes, [1, 2, 3], 'Jane Teacher', [1, 3]);
+
+		expect((await drawn(partly)).match(shown('Jane Teacher'))).toHaveLength(2);
+		const made = await PDFDocument.load(partly);
+		expect(made.getPageCount()).toBe(3);
+		// A marked page not among the copied ones marks nothing.
+		const none = await buildPreview(bytes, [2], 'Jane Teacher', [1, 3]);
+		expect(await drawn(none)).not.toContain('Tj');
+	});
+
 	it('writes the name diagonally', async () => {
 		const marked = await buildPreview(await source(), [1], 'Jane Teacher');
 

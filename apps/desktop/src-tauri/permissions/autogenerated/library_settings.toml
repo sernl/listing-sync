@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-library-settings"
+description = "Enables the library_settings command without any pre-configured scope."
+commands.allow = ["library_settings"]
+
+[[permission]]
+identifier = "deny-library-settings"
+description = "Denies the library_settings command without any pre-configured scope."
+commands.deny = ["library_settings"]

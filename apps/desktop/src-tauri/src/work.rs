@@ -659,6 +659,9 @@ pub struct DeviceWork<P: DevicePlane, M: Marketplaces<P>> {
     /// which is how a revocation reaches the interpreter before its next
     /// marketplace request rather than after it.
     stopper: Arc<AtomicBool>,
+    /// This machine's library of imported originals, where the build has
+    /// one; a run whose bytes it holds reads them from it.
+    library: Option<Arc<crate::library::Library>>,
 }
 
 impl<P: DevicePlane, M: Marketplaces<P>> core::fmt::Debug for DeviceWork<P, M> {
@@ -685,7 +688,16 @@ impl<P: DevicePlane, M: Marketplaces<P>> DeviceWork<P, M> {
             marketplaces,
             data_dir: data_dir.to_path_buf(),
             stopper,
+            library: None,
         }
+    }
+
+    /// Attaches this machine's library. A separate step so the call sites
+    /// that build a work source without one read as before.
+    #[must_use]
+    pub fn reading(mut self, library: Option<Arc<crate::library::Library>>) -> Self {
+        self.library = library;
+        self
     }
 
     async fn ask(&self, marketplace: Marketplace) -> Result<ClaimView, WorkError> {
@@ -761,6 +773,10 @@ impl<P: DevicePlane, M: Marketplaces<P>> DeviceWork<P, M> {
         // point of routing a migration through the seller's own logins.
         let payloads = match self.marketplaces.files() {
             Some(files) => payloads.sourcing(files),
+            None => payloads,
+        };
+        let payloads = match &self.library {
+            Some(library) => payloads.reading(Arc::clone(library)),
             None => payloads,
         };
 

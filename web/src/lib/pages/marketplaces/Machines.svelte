@@ -29,6 +29,7 @@
 		sessionWords,
 		sourcedFileWords
 	} from './machines';
+	import { holdsSentence } from './library';
 
 	let {
 		devices,
@@ -57,6 +58,14 @@
 	// Read once: whether this console is running inside the application does not
 	// change while the page is open.
 	const invoke = desktopInvoker();
+
+	/** What each machine holds in its own library, as the server records
+	 *  it. One line per row where the count is not zero, so a machine that
+	 *  keeps nothing says nothing rather than "holds 0 files". */
+	const holdings = createQuery(() => ({
+		queryKey: queryKeys.library,
+		queryFn: () => api.library()
+	}));
 
 	/** The last check-in this panel asked for, or null before any was asked.
 	 *
@@ -270,6 +279,9 @@
 						<p class="mp-warned">{sourcedFileWords(row.device)}</p>
 					{/if}
 					<p class="spec">{matchNote(row.confidence)}</p>
+					{#if holdsSentence(row.device.id, holdings.data?.files ?? []) !== null}
+						<p class="spec">{holdsSentence(row.device.id, holdings.data?.files ?? [])}</p>
+					{/if}
 
 					{#if row.device.sessions.length > 0}
 						<div class="mp-held">

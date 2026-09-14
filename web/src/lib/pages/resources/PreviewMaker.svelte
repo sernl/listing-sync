@@ -6,13 +6,21 @@
 	let {
 		source,
 		sellerName,
+		uploadLabel = 'Make preview',
 		onmade,
 		oncancel
 	}: {
-		/** The PDF the teacher uploaded, whose pages this picks from. */
-		source: File;
+		/** The PDF whose pages this picks from: a name, and a way to get its
+		 *  bytes. A `File` the teacher just chose and a file kept on this
+		 *  machine's library both fit, and neither has to be read until the
+		 *  dialog opens. */
+		source: { name: string; bytes: () => Promise<ArrayBuffer> };
 		/** Prefills the watermark, which the teacher can then edit. */
 		sellerName: string;
+		/** What the confirming button says, because on one surface pressing
+		 *  it is what sends the derived file to Teachouse and the label has
+		 *  to say so. */
+		uploadLabel?: string;
 		onmade: (file: File) => void;
 		oncancel: () => void;
 	} = $props();
@@ -27,6 +35,9 @@
 	/** One data URL per page, in page order, null until that page is drawn. */
 	let thumbnails = $state<(string | null)[]>([]);
 	let chosen = $state<Set<number>>(new Set());
+	/** The pages the watermark is drawn on, among those chosen. Every page
+	 *  starts ticked, so leaving the set alone is the old behaviour. */
+	let marked = $state<Set<number>>(new Set());
 	let watermarked = $state(true);
 	// The prefill, not a binding: the teacher may write a pen name over it, and
 	// a later change to the account's name must not wipe what they typed.
@@ -49,9 +60,9 @@
 		void load(source);
 	});
 
-	async function load(file: File) {
+	async function load(file: { bytes: () => Promise<ArrayBuffer> }) {
 		try {
-			const whole = await file.arrayBuffer();
+			const whole = await file.bytes();
 			bytes = whole;
 			const pdfjs = await import('pdfjs-dist');
 			const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
@@ -59,6 +70,7 @@
 			const pdf = await pdfjs.getDocument({ data: whole.slice(0) }).promise;
 			pageCount = pdf.numPages;
 			thumbnails = Array.from({ length: pageCount }, () => null);
+			marked = new Set(Array.from({ length: pageCount }, (_, index) => index + 1));
 			// In page order, one at a time: the teacher reads the first pages
 			// first, and a document of a hundred pages should not render a
 			// hundred canvases at once.
@@ -95,6 +107,16 @@
 		chosen = next;
 	}
 
+	function toggleMark(page: number, on: boolean) {
+		const next = new Set(marked);
+		if (on) {
+			next.add(page);
+		} else {
+			next.delete(page);
+		}
+		marked = next;
+	}
+
 	function selectAll() {
 		chosen = new Set(Array.from({ length: pageCount }, (_, index) => index + 1));
 	}
@@ -112,7 +134,7 @@
 		try {
 			const pages = [...chosen].sort((one, other) => one - other);
 			const mark = watermarked && name.trim() !== '' ? name : null;
-			const made = await buildPreview(bytes.slice(0), pages, mark);
+			const made = await buildPreview(bytes.slice(0), pages, mark, [...marked]);
 			if (made.byteLength > CAP_BYTES) {
 				refusal = 'That preview is over 30 MB. Choose fewer pages.';
 				return;
@@ -167,6 +189,22 @@
 						{/if}
 					</span>
 					<span class="n">Page {page}</span>
+					{#if watermarked && chosen.has(page)}
+						<!-- A second tick, per page, so a cover or a sample page can
+						     go out clean while the rest carry the name. Stops the
+						     click reaching the page's own label, which would also
+						     untick the page. -->
+						<span class="mark-on">
+							<input
+								type="checkbox"
+								checked={marked.has(page)}
+								aria-label="Watermark page {page}"
+								onclick={(event) => event.stopPropagation()}
+								onchange={(event) => toggleMark(page, event.currentTarget.checked)}
+							/>
+							Mark
+						</span>
+					{/if}
 				</label>
 			{/each}
 		</div>
@@ -186,7 +224,7 @@
 			</span>
 			<button type="button" class="btn" onclick={oncancel} disabled={busy}>Cancel</button>
 			<button type="button" class="cta" onclick={make} disabled={busy || chosen.size === 0}>
-				{busy ? 'Making…' : 'Make preview'}
+				{busy ? 'Making…' : uploadLabel}
 			</button>
 		</div>
 	</div>
@@ -208,6 +246,14 @@
 		padding: 2px;
 	}
 
+
+	.mark-on {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		font-size: 11px;
+		color: var(--muted);
+	}
 	.page {
 		display: flex;
 		flex-direction: column;

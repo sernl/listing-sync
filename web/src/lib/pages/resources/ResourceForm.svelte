@@ -31,6 +31,8 @@
 	import FilesPanel from './FilesPanel.svelte';
 	import MarketplacePicker from './MarketplacePicker.svelte';
 	import PreviewField from './PreviewField.svelte';
+	import { desktopInvoker, libraryEntries } from '$lib/desktop';
+	import { keptPdfSource } from './file-viewer';
 	import ThumbnailSlots from './ThumbnailSlots.svelte';
 	import CategoriesPanel from './panels/CategoriesPanel.svelte';
 	import DescriptionPanel from './panels/DescriptionPanel.svelte';
@@ -195,9 +197,24 @@
 	 *  carries. The edit path has a sub-resource of its own and does not use
 	 *  this. */
 	let added = $state<StoredFile[]>([]);
-	/** The last PDF chosen in this session, and the only thing a preview can be
-	 *  cut out of: the maker reads the bytes in this browser. */
+	/** The last PDF chosen in this session, and one of the two things a
+	 *  preview can be cut out of: the maker reads the bytes in this browser. */
 	let sourcePdf = $state<File | null>(null);
+	/** The other: a stored payload the Teachouse app keeps on this machine.
+	 *  Read once, from the application, and empty in a browser. */
+	const invoke = desktopInvoker();
+	let kept = $state<Set<string>>(new Set());
+	$effect(() => {
+		void (async () => {
+			const answer = await libraryEntries(invoke);
+			if (answer.kind === 'ok') {
+				kept = new Set(answer.value.map((entry) => entry.hash));
+			}
+		})();
+	});
+	const keptSource = $derived(
+		editing === null ? null : keptPdfSource(invoke, editing.product.files, kept)
+	);
 	let keepWhole = $state(false);
 	let creating = $state(false);
 	// The marketplace being added in edit mode, so a second tick cannot start a
@@ -946,7 +963,10 @@
 						<PreviewField
 							{previews}
 							limits={form?.limits ?? null}
-							source={sourcePdf}
+							source={sourcePdf ?? keptSource}
+							uploadLabel={sourcePdf === null && keptSource !== null
+								? 'Upload preview to Teachouse'
+								: 'Make preview'}
 							sellerName={organisation.data?.name ?? ''}
 							onAdd={(handle) => void addPreview(handle)}
 							onRemove={(hash) => void dropPreview(hash)}

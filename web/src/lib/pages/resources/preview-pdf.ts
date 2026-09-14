@@ -12,13 +12,17 @@ const DIAGONAL_SPAN = 0.7;
 const WATERMARK_ANGLE = 45;
 
 /** The pages the teacher ticked, copied into a new document, optionally with
- *  the seller's name written diagonally across each one.
+ *  the seller's name written diagonally across the pages they chose to mark.
  *
- *  `pages` are 1-based, in the order the new document should carry them. */
+ *  `pages` are 1-based, in the order the new document should carry them.
+ *  `markedPages` are source page numbers too; a page in `pages` but not in
+ *  `markedPages` is copied clean, and one in `markedPages` but not in `pages`
+ *  is not copied at all. Omitted, every copied page is marked. */
 export async function buildPreview(
 	bytes: ArrayBuffer,
 	pages: number[],
-	watermark: string | null
+	watermark: string | null,
+	markedPages: number[] = pages
 ): Promise<Uint8Array> {
 	const source = await PDFDocument.load(bytes);
 	const preview = await PDFDocument.create();
@@ -36,7 +40,11 @@ export async function buildPreview(
 		const radians = (WATERMARK_ANGLE * Math.PI) / 180;
 		const along = Math.cos(radians);
 		const up = Math.sin(radians);
-		for (const page of preview.getPages()) {
+		const marked = new Set(markedPages);
+		for (const [index, page] of preview.getPages().entries()) {
+			if (!marked.has(pages[index])) {
+				continue;
+			}
 			const { width, height } = page.getSize();
 			const diagonal = Math.hypot(width, height);
 			// One unit of font size is one unit of the string's width at size 1,

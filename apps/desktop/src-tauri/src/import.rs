@@ -1862,6 +1862,9 @@ pub struct ImportPass<S: CatalogueSource> {
     source: S,
     ledger: Arc<RunLedger>,
     permission: SourcePermission,
+    /// Where an import's originals are kept on this machine, where the
+    /// build has one.
+    library: Option<Arc<crate::library::Library>>,
 }
 
 /// Whether this pass may go on reading the marketplace it is reading.
@@ -1897,7 +1900,17 @@ impl<S: CatalogueSource> ImportPass<S> {
             source,
             ledger,
             permission,
+            library: None,
         }
+    }
+
+    /// Attaches the machine's library, so each described original is kept
+    /// where the seller's setting says to. A builder rather than a fourth
+    /// argument, so the tests that build a pass without one read as before.
+    #[must_use]
+    pub fn keeping(mut self, library: Option<Arc<crate::library::Library>>) -> Self {
+        self.library = library;
+        self
     }
 
     #[must_use]
@@ -2301,14 +2314,37 @@ impl<S: CatalogueSource> ImportPass<S> {
             ),
             fingerprint: Some(fingerprint),
         };
-        // The seller's bytes end here. Every field of the value above is
-        // bounded or fixed-width — a digest, a validated name, a number, a
-        // closed set, a checked cover — so there is nowhere in it for a
-        // payload to be, and `payload` and `bundle` are dropped at this
-        // return. That claim is checked rather than asserted: see
-        // `the_page_is_the_same_size_whatever_the_payload_weighs`, which is
-        // the test an earlier version of this comment needed and did not
-        // have.
+        // The seller's bytes end here as far as the wire is concerned. Every
+        // field of the value above is bounded or fixed-width — a digest, a
+        // validated name, a number, a closed set, a checked cover — so there
+        // is nowhere in it for a payload to be. That claim is checked rather
+        // than asserted: see `the_page_is_the_same_size_whatever_the_payload_weighs`.
+        //
+        // What does keep the bytes is this machine's own library, sealed
+        // under this machine's own key, and only where the seller's setting
+        // says so. A failure to keep is logged and does not fail the import:
+        // the resource is described either way, and the library is a
+        // convenience for the seller rather than a step the read depends on.
+        if let Some(library) = &self.library {
+            let kept = library
+                .keep_original(
+                    crate::library::LibraryEntry {
+                        hash: ContentHash(*hash.as_bytes()),
+                        file_name: name.clone(),
+                        content_type: content_type_for(kind, &payload).to_owned(),
+                        byte_len: payload.len() as u64,
+                        marketplace: self.permission.marketplace(),
+                        resource: locator.to_string(),
+                        kept_at: now,
+                        pinned: false,
+                    },
+                    &payload,
+                )
+                .await;
+            if let Err(why) = kept {
+                eprintln!("the original of resource {locator} was not kept on this machine: {why}");
+            }
+        }
         Ok(observed)
     }
 }
@@ -2486,6 +2522,9 @@ pub struct ImportContext {
     pub journal: Arc<dyn ImportJournal>,
     pub supervisor: Arc<ImportSupervisor>,
     pub catalogue: CatalogueFactory,
+    /// Where an import keeps the originals it reads, where this build has
+    /// a library.
+    pub library: Option<Arc<crate::library::Library>>,
 }
 
 impl ImportContext {
@@ -2504,6 +2543,7 @@ impl ImportContext {
             journal: state.journal(),
             supervisor: state.supervisor(),
             catalogue: state.catalogue(),
+            library: state.library(),
         })
     }
 }
@@ -2908,7 +2948,8 @@ impl ImportSupervisor {
                 gate: Arc::clone(&ctx.gate),
                 stop: claimed.stop.clone(),
             },
-        );
+        )
+        .keeping(ctx.library.clone());
         // Nothing is started for an occupancy that no longer holds the slot:
         // a stop that arrived while the claim was in flight took the slot
         // away, and spawning under a handle nobody holds is work nothing can
@@ -3694,6 +3735,10 @@ mod tests {
     /// test assert that a failure reached the run rather than that something
     /// reached the server.
     #[derive(Default)]
+    #[expect(
+        clippy::struct_excessive_bools,
+        reason = "each flag is one failure the fake can be told to produce; a test sets one"
+    )]
     struct FakePlane {
         posted: Mutex<Vec<ImportPage>>,
         reports: Mutex<Vec<ImportProgressReport>>,
@@ -4824,6 +4869,10 @@ mod tests {
             Box::pin(core::future::ready(Ok(())))
         }
 
+        fn consent_stands(&self, _marketplace: tam_types::Marketplace) -> PlaneFuture<'_, bool> {
+            Box::pin(core::future::ready(Ok(true)))
+        }
+
         fn sync_request_source(
             &self,
             _request: tam_types::Uuid,
@@ -5425,7 +5474,8 @@ mod tests {
             panic!("a sign-out is reported to the run as a page failure, and got {why:?}");
         };
         assert_eq!(
-            said, crate::heartbeat::SIGNED_OUT_HERE,
+            said,
+            crate::heartbeat::SIGNED_OUT_HERE,
             "and it is reported in the sentence a seller reads, not as a status or a body"
         );
         assert!(

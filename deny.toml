@@ -50,6 +50,25 @@ allow = ["MPL-2.0"]
 crate = "option-ext"
 allow = ["MPL-2.0"]
 
+# Unlicense, and never built. These three reach the graph only through
+# iroh-relay's wasm32 arm — its browser websocket client — and no binary of
+# ours builds iroh for wasm32: `tam-core-wasm` does not depend on it, and the
+# desktop and Android builds resolve none of them. Measured 2026-09-14 with
+# `cargo tree -i ws_stream_wasm --target <triple>` for the linux, windows and
+# android triples, each of which prints nothing. Scoped to the three crates
+# so a fourth Unlicense crate still fails.
+[[licenses.exceptions]]
+crate = "ws_stream_wasm"
+allow = ["Unlicense"]
+
+[[licenses.exceptions]]
+crate = "pharos"
+allow = ["Unlicense"]
+
+[[licenses.exceptions]]
+crate = "async_io_stream"
+allow = ["Unlicense"]
+
 [licenses.private]
 ignore = true          # the workspace's own unpublished crates
 
@@ -98,6 +117,11 @@ ignore = [
   "RUSTSEC-2025-0081",
   "RUSTSEC-2025-0098",
   "RUSTSEC-2025-0100",
+  # `paste`, an unmaintained proc-macro, reached on Linux alone through
+  # netlink-packet-core under netwatch under iroh, which is how the transfer
+  # endpoint watches the interfaces it can be dialled on. A build-time
+  # macro that ships in no artefact; revisit when netwatch drops it.
+  "RUSTSEC-2024-0436",
 ]
 
 [sources]

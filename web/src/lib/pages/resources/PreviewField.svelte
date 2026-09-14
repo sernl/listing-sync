@@ -14,22 +14,28 @@
 	import StatusPill from '$lib/StatusPill.svelte';
 	import { sizeWords } from '$lib/tpt-form';
 	import PreviewMaker from './PreviewMaker.svelte';
+	import { type ByteSource, sourceOfFile } from './file-viewer';
 
 	let {
 		previews,
 		limits,
 		source,
 		sellerName,
+		uploadLabel = 'Make preview',
 		onAdd,
 		onRemove
 	}: {
 		/** The previews this listing already carries. */
 		previews: readonly FileHandle[];
 		limits: FormLimits | null;
-		/** The PDF chosen in this session, which is the only thing a preview
-		 *  can be cut out of: the bytes have to be in this browser, and a file
-		 *  uploaded on some earlier visit is not. */
-		source: File | null;
+		/** The PDF a preview can be cut out of: the one chosen in this session,
+		 *  or one the Teachouse app keeps on this machine. Either way the bytes
+		 *  are on this machine; a file uploaded on some earlier visit from
+		 *  another one is not. */
+		source: File | ByteSource | null;
+		/** What the confirming button says. On the kept-file path pressing it
+		 *  is what sends the derived file to Teachouse, so it says so. */
+		uploadLabel?: string;
 		/** Whose name is written across the pages, where the teacher asks for
 		 *  it. Their own shop name, never one composed here. */
 		sellerName: string;
@@ -139,8 +145,9 @@
 
 {#if making && source !== null}
 	<PreviewMaker
-		{source}
+		source={source instanceof File ? sourceOfFile(source) : source}
 		{sellerName}
+		{uploadLabel}
 		onmade={(file) => {
 			making = false;
 			void store(file);

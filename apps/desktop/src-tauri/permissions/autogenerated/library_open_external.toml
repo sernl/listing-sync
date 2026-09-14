@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-library-open-external"
+description = "Enables the library_open_external command without any pre-configured scope."
+commands.allow = ["library_open_external"]
+
+[[permission]]
+identifier = "deny-library-open-external"
+description = "Denies the library_open_external command without any pre-configured scope."
+commands.deny = ["library_open_external"]

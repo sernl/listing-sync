@@ -198,6 +198,10 @@ pub struct DevicePayloads<T: PayloadTransport> {
     /// The seller's own marketplace sessions, where this run has any. `None`
     /// is a run whose every file is ours, which needs no marketplace at all.
     marketplace: Option<std::sync::Arc<dyn MarketplaceFiles>>,
+    /// This machine's library of imported originals, where the build has
+    /// one: a file it holds under the manifest's digest is read from it
+    /// rather than fetched from anywhere.
+    library: Option<std::sync::Arc<crate::library::Library>>,
     manifests: HashMap<FileId, PayloadManifest>,
     directory: PathBuf,
 }
@@ -233,12 +237,22 @@ impl<T: PayloadTransport> DevicePayloads<T> {
             device,
             transport,
             marketplace: None,
+            library: None,
             manifests: manifests
                 .into_iter()
                 .map(|manifest| (manifest.file, manifest))
                 .collect(),
             directory,
         }
+    }
+
+    /// Attaches this machine's library, so a file it already holds is read
+    /// from it rather than transferred again. The same builder shape as
+    /// [`Self::sourcing`].
+    #[must_use]
+    pub fn reading(mut self, library: std::sync::Arc<crate::library::Library>) -> Self {
+        self.library = Some(library);
+        self
     }
 
     /// Attaches the seller's own marketplace sessions to this run.
@@ -288,6 +302,16 @@ impl<T: PayloadTransport> DevicePayloads<T> {
             Ok(bytes) => return checked(manifest, bytes),
             Err(why) if why.kind() == std::io::ErrorKind::NotFound => {}
             Err(why) => return Err(PayloadError::Cache(why.to_string())),
+        }
+        // Then this machine's own library, which holds the originals its
+        // imports read. A hit is the seller's file already on the seller's
+        // machine, so no marketplace is asked and nothing crosses a wire;
+        // it is verified against the commitment exactly as a transfer is,
+        // and a library that cannot answer falls through to the source.
+        if let (Some(library), Some(committed)) = (&self.library, manifest.committed()) {
+            if let Ok(Some(bytes)) = library.read(committed.hash).await {
+                return checked(manifest, bytes);
+            }
         }
 
         let bytes = match &manifest.source {

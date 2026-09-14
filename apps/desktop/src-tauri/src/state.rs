@@ -181,6 +181,10 @@ pub struct DesktopState {
     /// settled. [`Silent`] by default, because a state built without a
     /// surface to show one on has nothing to raise it on.
     notifier: Arc<dyn Notifier>,
+    /// The seller's own files, kept sealed on this machine. `None` in a
+    /// build with no data directory, which keeps nothing and answers the
+    /// console's library reads as unavailable.
+    library: Option<Arc<crate::library::Library>>,
 }
 
 impl DesktopState {
@@ -210,6 +214,7 @@ impl DesktopState {
             journal: Arc::new(MemoryJournal::default()),
             catalogue: crate::commands::live_catalogue(),
             notifier: Arc::new(Silent),
+            library: None,
         }
     }
 
@@ -280,6 +285,19 @@ impl DesktopState {
     #[must_use]
     pub fn notifier(&self) -> &dyn Notifier {
         self.notifier.as_ref()
+    }
+
+    /// The library of imported originals on this machine. A separate step
+    /// for the reason [`Self::with_ledger`] is one.
+    #[must_use]
+    pub fn with_library(mut self, library: Arc<crate::library::Library>) -> Self {
+        self.library = Some(library);
+        self
+    }
+
+    #[must_use]
+    pub fn library(&self) -> Option<Arc<crate::library::Library>> {
+        self.library.clone()
     }
 
     /// The session store, shared, for a run that outlives the call that

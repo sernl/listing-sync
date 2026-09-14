@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-library-entries"
+description = "Enables the library_entries command without any pre-configured scope."
+commands.allow = ["library_entries"]
+
+[[permission]]
+identifier = "deny-library-entries"
+description = "Denies the library_entries command without any pre-configured scope."
+commands.deny = ["library_entries"]

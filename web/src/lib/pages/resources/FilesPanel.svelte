@@ -12,6 +12,14 @@
 	import { toast } from '$lib/toast';
 	import type { InventoryId } from '$lib/generated/vocab';
 	import {
+		desktopInvoker,
+		libraryEntries,
+		libraryOpenExternal,
+		type LibraryEntry
+	} from '$lib/desktop';
+	import FileViewer from '$lib/FileViewer.svelte';
+	import { OPEN_UNAVAILABLE, sourceOfKept } from './file-viewer';
+	import {
 		IDLE,
 		advance,
 		busy,
@@ -58,6 +66,28 @@
 	let chosen: File | null = null;
 
 	const stored = $derived([...files]);
+
+	// Which stored files this machine keeps, so a row can offer to show
+	// them. Read once from the application; empty in a browser, where the
+	// bytes are not here and nothing is offered.
+	const invoke = desktopInvoker();
+	let kept = $state<Map<string, LibraryEntry>>(new Map());
+	$effect(() => {
+		void (async () => {
+			const answer = await libraryEntries(invoke);
+			if (answer.kind === 'ok') {
+				kept = new Map(answer.value.map((entry) => [entry.hash, entry]));
+			}
+		})();
+	});
+	let viewing = $state<FileView | null>(null);
+
+	async function openElsewhere(file: FileView) {
+		const answer = await libraryOpenExternal(invoke, file.hash);
+		if (answer.kind !== 'ok') {
+			toast('error', answer.kind === 'refused' ? answer.detail : OPEN_UNAVAILABLE);
+		}
+	}
 
 	function fileEvent(event: Parameters<typeof advance>[1]) {
 		fileAction = advance(fileAction, event);
@@ -193,6 +223,9 @@
 			</span>
 			<span class="res-line-at">{file.byte_len.toLocaleString('en-GB')} bytes</span>
 			<span class="res-file-acts">
+				{#if kept.has(file.hash)}
+					<Button small onclick={() => (viewing = file)}>View</Button>
+				{/if}
 				<Button
 					small
 					disabled={busy(fileAction) || !swappable.ok}
@@ -296,3 +329,15 @@
 		>
 	</p>
 </div>
+
+{#if viewing !== null}
+	{@const shown = viewing}
+	<FileViewer
+		open={viewing !== null}
+		name={fileName(shown)}
+		contentType={kept.get(shown.hash)?.content_type ?? 'application/octet-stream'}
+		bytes={sourceOfKept(invoke, fileName(shown), shown.hash).bytes}
+		onClose={() => (viewing = null)}
+		onOpenElsewhere={() => void openElsewhere(shown)}
+	/>
+{/if}
