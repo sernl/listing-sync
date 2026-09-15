@@ -3607,26 +3607,18 @@ async fn store_cover(
     now: Timestamp,
 ) -> Result<ContentHash, APIError> {
     let blobs = state.blobs.clone().ok_or_else(blob_store_unavailable)?;
-    BlobRepo::new(
-        state.pool.clone(),
-        tam_pipeline::store::LocalObjectStore::new(blobs.root.clone()),
-        blobs.kek.clone(),
-    )
-    .put(org, bytes, now)
-    .await
-    .map_err(|error| state.internal(&error.to_string()))
+    BlobRepo::new(state.pool.clone(), blobs.object_store(), blobs.kek.clone())
+        .put(org, bytes, now)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))
 }
 
 async fn cover_bytes(state: &AppState, org: OrgId, hash: ContentHash) -> Result<Vec<u8>, APIError> {
     let blobs = state.blobs.clone().ok_or_else(blob_store_unavailable)?;
-    BlobRepo::new(
-        state.pool.clone(),
-        tam_pipeline::store::LocalObjectStore::new(blobs.root.clone()),
-        blobs.kek.clone(),
-    )
-    .get(org, hash)
-    .await
-    .map_err(|error| state.internal(&error.to_string()))
+    BlobRepo::new(state.pool.clone(), blobs.object_store(), blobs.kek.clone())
+        .get(org, hash)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))
 }
 
 pub(crate) fn blob_store_unavailable() -> APIError {

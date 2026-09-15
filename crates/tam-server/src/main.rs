@@ -13,7 +13,7 @@
 //! Given an engine-role url it also hosts the two service loops the design
 //! puts in this process: the outbox drainer and the job-event pruner.
 //!
-//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--paddle-webhook-secret <secret>] [--paddle-price-map <path>] [--ui-dir <path>] [--landing-dir <path>] [--downloads-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> --blob-store-root <path>] [--entitlement-key-path <path>] [--entitlement-public-key <hex>] [--require-entitlement-key] [--resend-api-key-file <path> --email-from <address> --console-url <url> --auth-internal-url <url> --auth-internal-secret-file <path>] [--disclose-internals]
+//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--paddle-webhook-secret <secret>] [--paddle-price-map <path>] [--ui-dir <path>] [--landing-dir <path>] [--downloads-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> (--blob-store-root <path> | --blob-store-s3 <endpoint> --blob-store-bucket <name> --blob-store-credentials <path> [--blob-store-region <region>])] [--entitlement-key-path <path>] [--entitlement-public-key <hex>] [--require-entitlement-key] [--resend-api-key-file <path> --email-from <address> --console-url <url> --auth-internal-url <url> --auth-internal-secret-file <path>] [--disclose-internals]
 
 #![forbid(unsafe_code)]
 
@@ -28,6 +28,7 @@ use tam_api::{
     AppState, AuthBridge, BlobStore, Config, Disclosure, JwkSet, JwksFuture, JwksSource,
     JwksUnavailable, PriceMap, WebhookSecret,
 };
+use tam_blob_store::{BackendFlags, BlobBackend, STORE_ROOT_FLAG, STORE_S3_FLAG};
 use tam_engine::outbox::{drain, Deliverer, LoggingDeliverer};
 use tam_storage::{ImportBatchRepo, NotificationRepo, OutboxRepo, PruneRepo};
 use tam_types::Timestamp;
@@ -196,11 +197,16 @@ const AUTH_INTERNAL_SECRET_FLAG: &str = "--auth-internal-secret-file";
 /// before rejecting it, exactly as the entitlement key's own cap does.
 const SECRET_BYTES_MAX: u64 = 8 * 1024;
 
-/// The directory the sealed objects are written beneath, which is the same
-/// root the worker reads them back from. Paired with the key above for the
-/// reason the identity pair is paired: a key with nowhere to write would seal
-/// bytes into nothing, and a root with no key would have nothing to write.
-const BLOB_STORE_ROOT_FLAG: &str = "--blob-store-root";
+// Where the sealed objects go, which is the same store the worker reads them
+// back from: `--blob-store-root <dir>`, or the S3-compatible set
+// `--blob-store-s3 <endpoint> --blob-store-bucket <name>
+// --blob-store-credentials <file>` with an optional `--blob-store-region`.
+// Every spelling of those lives in `tam-blob-store`, so this binary and
+// `tam-pipeline-worker` cannot drift apart on them.
+//
+// The store is paired with the key above for the reason the identity pair is
+// paired: a key with nowhere to write would seal bytes into nothing, and a
+// store with no key would have nothing to write.
 
 /// The key set is small and the identity service is a neighbour, so these are
 /// short. They are named at all because the lint table refuses a client built
@@ -468,14 +474,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => None,
     };
     let blobs = match &invocation.blobs {
-        Some((kek_path, root)) => {
+        Some((kek_path, backend)) => {
             eprintln!(
                 "tam-server accepting resource uploads into {}",
-                root.display()
+                backend.describe()
             );
             Some(BlobStore {
                 kek: load_kek(kek_path)?,
-                root: root.clone(),
+                backend: backend.clone(),
             })
         }
         None => None,
@@ -644,9 +650,9 @@ struct Invocation {
     /// The issuer and the key-set url, which are meaningless apart and so are
     /// parsed as one value.
     identity: Option<(String, String)>,
-    /// The key-encryption key's path and the object-store root, which are
-    /// meaningless apart for the same reason.
-    blobs: Option<(String, std::path::PathBuf)>,
+    /// The key-encryption key's path and the store the sealed objects go
+    /// into, which are meaningless apart for the same reason.
+    blobs: Option<(String, BlobBackend)>,
     /// Where the entitlement signing key is, if this deployment mints tokens.
     entitlement_key_path: Option<String>,
     /// The public half that key is expected to have, if the operator stated one.
@@ -670,7 +676,7 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     let mut auth_issuer = None;
     let mut auth_jwks_url = None;
     let mut blob_kek_path = None;
-    let mut blob_store_root = None;
+    let mut blob_store = BackendFlags::default();
     let mut entitlement_key_path = None;
     let mut entitlement_public_key = None;
     let mut require_entitlement_key = false;
@@ -784,12 +790,9 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
                     .next()
                     .ok_or("--auth-internal-secret-file needs a path argument")?,
             );
-        } else if argument == BLOB_STORE_ROOT_FLAG {
-            blob_store_root = Some(std::path::PathBuf::from(
-                arguments
-                    .next()
-                    .ok_or("--blob-store-root needs a path argument")?,
-            ));
+        } else if blob_store.accept(&argument, &mut arguments)? {
+            // One of the object-store flags, whose spellings and pairing rule
+            // live in `tam-blob-store` so both binaries read the same set.
         } else {
             positional.push(argument);
         }
@@ -816,14 +819,15 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
         }
     };
     // Refused rather than half-configured, exactly as the identity pair is: a
-    // key with nowhere to write would seal bytes into nothing, and a root with
+    // key with nowhere to write would seal bytes into nothing, and a store with
     // no key would have nothing to write into it.
-    let blobs = match (blob_kek_path, blob_store_root) {
-        (Some(kek), Some(root)) => Some((kek, root)),
+    let blobs = match (blob_kek_path, blob_store.resolve()?) {
+        (Some(kek), Some(backend)) => Some((kek, backend)),
         (None, None) => None,
         _ => {
             return Err(format!(
-                "{BLOB_KEK_FLAG} and {BLOB_STORE_ROOT_FLAG} are given together or not at all"
+                "{BLOB_KEK_FLAG} and one of {STORE_ROOT_FLAG} or {STORE_S3_FLAG} are given \
+                 together or not at all"
             )
             .into())
         }

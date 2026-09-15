@@ -1,0 +1,21 @@
+[package]
+name    = "tam-blob-store"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# The date and day stamps SigV4 signs under. Already in the lock through
+# `tam-storage`, and the same feature set: `std` with no `clock`, because the
+# instant arrives as an argument rather than being read here.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+# The SigV4 chain: the workspace pins both for the reason the root manifest
+# gives, and a signer assembled from two crates that disagreed on a version
+# would be a signer whose output depends on which resolved first.
+hmac = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+sha2 = { workspace = true }
+tam-pipeline = { path = "../tam-pipeline" }
+
+[lints]
+workspace = true

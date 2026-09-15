@@ -69,9 +69,11 @@ fn state(pool: PgPool, root: Option<&std::path::Path>) -> AppState {
         // pool, so it serves a deployment that configures no operator
         // database at all.
         backoffice: None,
-        blobs: root.map(|root| BlobStore {
-            kek: tam_secrets::Kek::from_bytes(&[0x7Cu8; 32]).expect("a 32-byte key is a key"),
-            root: root.to_path_buf(),
+        blobs: root.map(|root| {
+            BlobStore::local(
+                tam_secrets::Kek::from_bytes(&[0x7Cu8; 32]).expect("a 32-byte key is a key"),
+                root.to_path_buf(),
+            )
         }),
     }
 }

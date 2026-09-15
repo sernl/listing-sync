@@ -149,13 +149,33 @@ pub struct AppState {
 }
 
 /// The two values an upload needs and no other route does: the key every
-/// tenant's blob DEK is wrapped under, and the root the sealed objects are
-/// written beneath. Held here rather than in [`Config`] because a key is not
-/// a value that belongs in a `Debug` render of the configuration.
+/// tenant's blob DEK is wrapped under, and the store the sealed objects are
+/// written into. Held here rather than in [`Config`] because a key is not a
+/// value that belongs in a `Debug` render of the configuration.
 #[derive(Clone)]
 pub struct BlobStore {
     pub kek: tam_secrets::Kek,
-    pub root: std::path::PathBuf,
+    pub backend: tam_blob_store::BlobBackend,
+}
+
+impl BlobStore {
+    /// The store one request writes through. Every handler reaches the object
+    /// store this way, so which backend a deployment took is decided once, at
+    /// start-up, and read nowhere else.
+    #[must_use]
+    pub fn object_store(&self) -> tam_blob_store::AnyObjectStore {
+        self.backend.object_store()
+    }
+
+    /// The local-directory form, which is what development, the tests and
+    /// every deployment that has not moved its objects use.
+    #[must_use]
+    pub fn local(kek: tam_secrets::Kek, root: std::path::PathBuf) -> Self {
+        Self {
+            kek,
+            backend: tam_blob_store::BlobBackend::Local(root),
+        }
+    }
 }
 
 impl AppState {

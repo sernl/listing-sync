@@ -1,7 +1,11 @@
-//! Object storage for blob bytes, behind a trait so the local filesystem
-//! stands where S3 will. The database owns the keys; this only moves bytes.
-//! Bytes are sealed per tenant by the caller before they arrive here, so the
-//! store itself never holds plaintext.
+//! Object storage for blob bytes, behind a trait so the local filesystem and
+//! an S3-compatible bucket stand in the same place. The database owns the
+//! keys; this only moves bytes. Bytes are sealed per tenant by the caller
+//! before they arrive here, so the store itself never holds plaintext.
+//!
+//! The S3 implementation is in `tam-blob-store` rather than here, because
+//! this crate is compiled for five client targets that carry no HTTP
+//! transport.
 
 use std::path::PathBuf;
 
@@ -24,6 +28,11 @@ pub enum StoreError {
     NotFound,
     /// A key that would escape the store root, refused rather than joined.
     UnsafeKey,
+    /// The store itself refused or could not be reached: a transport failure
+    /// or a status an object store answered with. Carried as text because the
+    /// backends have no error type in common and nothing above here branches
+    /// on which one it was.
+    Backend(String),
 }
 
 impl core::fmt::Display for StoreError {
@@ -32,6 +41,7 @@ impl core::fmt::Display for StoreError {
             Self::Io(error) => write!(f, "object store io: {error}"),
             Self::NotFound => f.write_str("object not found"),
             Self::UnsafeKey => f.write_str("object key escapes the store root"),
+            Self::Backend(why) => write!(f, "object store: {why}"),
         }
     }
 }
@@ -51,18 +61,25 @@ impl LocalObjectStore {
     }
 
     fn resolve(&self, key: &str) -> Result<PathBuf, StoreError> {
-        // A key is a flat identifier: hex digits and a couple of safe
-        // punctuation marks, no separators, so it cannot traverse.
-        let safe = !key.is_empty()
-            && key.len() <= 128
-            && key
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.');
-        if !safe || key.contains("..") {
-            return Err(StoreError::UnsafeKey);
-        }
+        ensure_flat_key(key)?;
         Ok(self.root.join(key))
     }
+}
+
+/// A key is a flat identifier: hex digits and a couple of safe punctuation
+/// marks, no separators, so it can neither traverse a directory nor address a
+/// second bucket. Shared by every backend, because a key one store accepts and
+/// another rewrites is two stores holding different objects under one name.
+pub fn ensure_flat_key(key: &str) -> Result<(), StoreError> {
+    let safe = !key.is_empty()
+        && key.len() <= 128
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.');
+    if !safe || key.contains("..") {
+        return Err(StoreError::UnsafeKey);
+    }
+    Ok(())
 }
 
 impl ObjectStore for LocalObjectStore {

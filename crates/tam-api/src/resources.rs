@@ -22,7 +22,6 @@ use tam_domain::{
     CanonicalProduct, CanonicalTerm, Decider, EdgeKind, ProjectionEdge, TermKind, VocabularyId,
     VocabularyPath,
 };
-use tam_pipeline::store::LocalObjectStore;
 use tam_storage::{
     BlobError, BlobRepo, ConnectionFactsRepo, ConnectionRepo, DrainStats, ElectionRepo,
     LabelRename, LabelRepo, LedgerCursor, MappingRepo, NewAnswer, OpenElection, OverrideRepo,
@@ -332,22 +331,18 @@ pub(crate) async fn uploaded_image(
                 .kind(APIErrorKind::Internal),
         ));
     };
-    let bytes = BlobRepo::new(
-        state.pool.clone(),
-        LocalObjectStore::new(blobs.root.clone()),
-        blobs.kek.clone(),
-    )
-    .get(context.org, hash)
-    .await
-    .map_err(|error| match error {
-        BlobError::Missing => missing("no such handle in this organisation"),
-        // Ours, not theirs: the row says these bytes exist and we could not
-        // produce them, which is a fault to be seen rather than a resource to
-        // be reported absent.
-        fault @ (BlobError::Storage(_) | BlobError::Store(_) | BlobError::Crypto(_)) => {
-            state.internal(&format!("{fault}"))
-        }
-    })?;
+    let bytes = BlobRepo::new(state.pool.clone(), blobs.object_store(), blobs.kek.clone())
+        .get(context.org, hash)
+        .await
+        .map_err(|error| match error {
+            BlobError::Missing => missing("no such handle in this organisation"),
+            // Ours, not theirs: the row says these bytes exist and we could not
+            // produce them, which is a fault to be seen rather than a resource to
+            // be reported absent.
+            fault @ (BlobError::Storage(_) | BlobError::Store(_) | BlobError::Crypto(_)) => {
+                state.internal(&format!("{fault}"))
+            }
+        })?;
     image_answer(bytes)
 }
 
@@ -390,22 +385,20 @@ pub(crate) async fn product_cover(
                 .kind(APIErrorKind::Internal),
         ));
     };
-    let bytes = BlobRepo::new(
-        state.pool.clone(),
-        LocalObjectStore::new(blobs.root.clone()),
-        blobs.kek.clone(),
-    )
-    .get(context.org, cover.hash)
-    .await
-    .map_err(|error| match error {
-        // The row named a blob the store does not have. That is ours, and a
-        // 404 here would say the resource has no cover when its own row says
-        // otherwise.
-        BlobError::Missing => state.internal("a cover row names a blob this store does not hold"),
-        fault @ (BlobError::Storage(_) | BlobError::Store(_) | BlobError::Crypto(_)) => {
-            state.internal(&format!("{fault}"))
-        }
-    })?;
+    let bytes = BlobRepo::new(state.pool.clone(), blobs.object_store(), blobs.kek.clone())
+        .get(context.org, cover.hash)
+        .await
+        .map_err(|error| match error {
+            // The row named a blob the store does not have. That is ours, and a
+            // 404 here would say the resource has no cover when its own row says
+            // otherwise.
+            BlobError::Missing => {
+                state.internal("a cover row names a blob this store does not hold")
+            }
+            fault @ (BlobError::Storage(_) | BlobError::Store(_) | BlobError::Crypto(_)) => {
+                state.internal(&format!("{fault}"))
+            }
+        })?;
     image_answer(bytes)
 }
 

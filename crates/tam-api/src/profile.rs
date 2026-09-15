@@ -13,7 +13,6 @@ use axum::extract::State;
 use axum::http::{header, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use tam_pipeline::store::LocalObjectStore;
 use tam_storage::{AvatarWrite, BlobError, BlobRepo, ProductRepo, ProfileRepo};
 use tam_types::{ContentHash, UserId};
 
@@ -172,20 +171,18 @@ pub(crate) async fn avatar(
                 .kind(APIErrorKind::Internal),
         ));
     };
-    let bytes = BlobRepo::new(
-        state.pool.clone(),
-        LocalObjectStore::new(blobs.root.clone()),
-        blobs.kek.clone(),
-    )
-    .get(context.org, hash)
-    .await
-    .map_err(|error| match error {
-        // The row is keyed to the blob by a foreign key, so a blob the store
-        // cannot produce is ours to see rather than a picture to report unset.
-        BlobError::Missing => state.internal("a profile row names a blob this store does not hold"),
-        fault @ (BlobError::Storage(_) | BlobError::Store(_) | BlobError::Crypto(_)) => {
-            state.internal(&format!("{fault}"))
-        }
-    })?;
+    let bytes = BlobRepo::new(state.pool.clone(), blobs.object_store(), blobs.kek.clone())
+        .get(context.org, hash)
+        .await
+        .map_err(|error| match error {
+            // The row is keyed to the blob by a foreign key, so a blob the store
+            // cannot produce is ours to see rather than a picture to report unset.
+            BlobError::Missing => {
+                state.internal("a profile row names a blob this store does not hold")
+            }
+            fault @ (BlobError::Storage(_) | BlobError::Store(_) | BlobError::Crypto(_)) => {
+                state.internal(&format!("{fault}"))
+            }
+        })?;
     image_answer(bytes)
 }

@@ -26,7 +26,6 @@ use tam_engine_driver::vocabulary::{
     LedgerError, PayloadManifest, PayloadSource, ReconcileSubject, SettleEnvelope, WorkFilter,
     WorkOrder,
 };
-use tam_pipeline::store::LocalObjectStore;
 use tam_storage::{
     describe_files, BlobRepo, Charged, ClaimPolicy, ConnectionFactsRepo, DeviceClaim, DeviceRef,
     LeaseRepo,
@@ -382,14 +381,10 @@ pub(crate) async fn payload(
             .kind(APIErrorKind::NotFound),
         ));
     };
-    let bytes = BlobRepo::new(
-        state.pool.clone(),
-        LocalObjectStore::new(blobs.root.clone()),
-        blobs.kek.clone(),
-    )
-    .get(context.org, hash)
-    .await
-    .map_err(|error| state.internal(&format!("{error:?}")))?;
+    let bytes = BlobRepo::new(state.pool.clone(), blobs.object_store(), blobs.kek.clone())
+        .get(context.org, hash)
+        .await
+        .map_err(|error| state.internal(&format!("{error:?}")))?;
     Ok(([(header::CONTENT_TYPE, "application/octet-stream")], bytes))
 }
 

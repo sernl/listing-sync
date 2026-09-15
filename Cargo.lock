@@ -6475,6 +6475,7 @@ dependencies = [
  "sqlx",
  "subtle",
  "tam-authoring",
+ "tam-blob-store",
  "tam-domain",
  "tam-engine",
  "tam-engine-driver",
@@ -6505,6 +6506,17 @@ dependencies = [
  "tam-domain",
  "tam-taxonomy",
  "tam-types",
+]
+
+[[package]]
+name = "tam-blob-store"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "hmac",
+ "reqwest 0.12.28",
+ "sha2 0.10.9",
+ "tam-pipeline",
 ]
 
 [[package]]
@@ -6748,6 +6760,7 @@ name = "tam-pipeline-worker"
 version = "0.0.0"
 dependencies = [
  "sqlx",
+ "tam-blob-store",
  "tam-limits",
  "tam-pipeline",
  "tam-secrets",
@@ -6779,6 +6792,7 @@ dependencies = [
  "sha2 0.10.9",
  "sqlx",
  "tam-api",
+ "tam-blob-store",
  "tam-engine",
  "tam-limits",
  "tam-secrets",

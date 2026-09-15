@@ -64,6 +64,72 @@ let
   # below hold the rest of the set to this one switch.
   mailEnabled = cfg.server.mail.resendApiKeyFile != null;
 
+  # The store both blob-holding binaries are pointed at, rendered once: the
+  # server and the ingest worker hold the same objects, so a unit that named
+  # one store and a unit that named another would be a worker reading a bucket
+  # the server never wrote to.
+  blobStoreArgs =
+    if cfg.server.blobStore.kind == "s3" then
+      [
+        "--blob-store-s3"
+        cfg.server.blobStore.endpoint
+        "--blob-store-bucket"
+        cfg.server.blobStore.bucket
+        "--blob-store-region"
+        cfg.server.blobStore.region
+        "--blob-store-credentials"
+        cfg.server.blobStore.credentialsFile
+      ]
+    else
+      [
+        "--blob-store-root"
+        cfg.server.blobStore.root
+      ];
+
+  # Where the objects are, in prose, for the warning that names it.
+  blobStoreWhere =
+    if cfg.server.blobStore.kind == "s3" then
+      "bucket ${toString cfg.server.blobStore.bucket} at ${toString cfg.server.blobStore.endpoint}"
+    else
+      cfg.server.blobStore.root;
+
+  # The endpoint's host as systemd's address filter would have to name it:
+  # scheme and path removed, port left on, because `IPAddressAllow` takes an
+  # address or a prefix and neither carries one.
+  blobStoreHost =
+    let
+      afterScheme = lib.last (lib.splitString "//" (toString cfg.server.blobStore.endpoint));
+      authority = lib.head (lib.splitString "/" afterScheme);
+    in
+    lib.head (lib.splitString ":" authority);
+
+  # An address the filter can name, as against a name it cannot: a host that
+  # resolves at run time is not expressible as a prefix, and a filter written
+  # around one would deny the store instead of allowing it.
+  blobStoreHostIsAddress = builtins.match "[0-9.]+|[0-9a-fA-F:]+" blobStoreHost != null;
+
+  # tam-server's egress. The deny stands unless something the binary must
+  # reach is off this machine: the completion mail's relay is one such thing,
+  # for the reason `loopbackOnly` states, and an object store in a bucket is
+  # the other. Where that endpoint is an address the filter names it rather
+  # than being dropped; where it is a hostname there is nothing to name, and
+  # the warning below says so.
+  serverEgress =
+    if mailEnabled then
+      { }
+    else if cfg.server.blobStore.kind != "s3" then
+      loopbackOnly
+    else if blobStoreHostIsAddress then
+      loopbackOnly
+      // {
+        IPAddressAllow = [
+          "localhost"
+          blobStoreHost
+        ];
+      }
+    else
+      { };
+
   serverArgs = [
     (dbUrl "tam_app")
     "${cfg.server.bindAddress}:${toString cfg.server.port}"
@@ -101,12 +167,13 @@ let
     cfg.server.entitlementPublicKey
   ]
   ++ lib.optional cfg.server.requireEntitlementKey "--require-entitlement-key"
-  ++ lib.optionals (cfg.server.blobKekFile != null) [
-    "--blob-kek-path"
-    cfg.server.blobKekFile
-    "--blob-store-root"
-    cfg.server.blobStoreRoot
-  ]
+  ++ lib.optionals (cfg.server.blobKekFile != null) (
+    [
+      "--blob-kek-path"
+      cfg.server.blobKekFile
+    ]
+    ++ blobStoreArgs
+  )
   ++ lib.optionals (cfg.server.paddleWebhookSecret != null) [
     "--paddle-webhook-secret"
     cfg.server.paddleWebhookSecret
@@ -179,16 +246,19 @@ let
     UMask = "0077";
   };
 
-  # tam-server and tam-worker reach nothing off this machine: `tam-api` carries
-  # no HTTP client at all, tam-server's outbound calls are the key-set fetch
-  # aimed at loopback above and the identity service's address route on the
-  # same loopback, and tam-worker reaches no marketplace by decision D1. So the
+  # tam-server and tam-worker reach nothing off this machine while their stores
+  # are here: tam-server's outbound calls are the key-set fetch aimed at
+  # loopback above and the identity service's address route on the same
+  # loopback, and tam-worker reaches no marketplace by decision D1. So the
   # charter's egress constraint is achievable on both as an actual deny rather
-  # than an aspiration. The one exception is stated where it is taken: with the
+  # than an aspiration. Two exceptions, each stated where it is taken: with the
   # completion mail configured, tam-server posts to the relay, which is off
   # this machine and resolves to no address a filter could name, so that unit
   # drops the filter and the constraint rests on the binary reaching nothing
-  # else — which is what `--resend-api-key-file`'s own header records.
+  # else — which is what `--resend-api-key-file`'s own header records. And with
+  # `blobStore.kind = "s3"` the blob bytes go to an object store rather than a
+  # directory, so `serverEgress` allows that endpoint's address beside
+  # loopback, or drops the filter where the endpoint is a name.
   loopbackOnly = {
     IPAddressDeny = "any";
     IPAddressAllow = "localhost";
@@ -929,7 +999,70 @@ in
       blobStoreRoot = lib.mkOption {
         type = lib.types.str;
         default = "/var/lib/teachouse/blobs";
-        description = "Directory sealed objects are written beneath.";
+        description = ''
+          Directory sealed objects are written beneath. The local form's root,
+          and what `blobStore.root` defaults to; ignored where
+          `blobStore.kind` is "s3".
+        '';
+      };
+      blobStore = lib.mkOption {
+        default = { };
+        description = ''
+          Which store the sealed objects live in. The default is the local
+          directory every deployment has had; "s3" points both units at an
+          S3-compatible bucket instead, which is a Garage or MinIO endpoint
+          here rather than AWS.
+
+          The binary takes the two forms as mutually exclusive sets and refuses
+          a partial one, and the assertions below say the same thing before a
+          unit is written.
+        '';
+        type = lib.types.submodule {
+          options = {
+            kind = lib.mkOption {
+              type = lib.types.enum [
+                "local"
+                "s3"
+              ];
+              default = "local";
+              description = "Whether objects go into a directory on this host or into a bucket.";
+            };
+            root = lib.mkOption {
+              type = lib.types.str;
+              default = cfg.server.blobStoreRoot;
+              defaultText = lib.literalExpression "config.services.teachouse.server.blobStoreRoot";
+              description = "The local form's directory.";
+            };
+            endpoint = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              example = "http://10.147.21.2:3900";
+              description = "The bucket's endpoint, carrying its scheme.";
+            };
+            bucket = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              example = "teachouse";
+              description = "The one bucket every object of this deployment is written into.";
+            };
+            region = lib.mkOption {
+              type = lib.types.str;
+              default = "garage";
+              description = "The signing region, which is part of a signature's scope on every S3-compatible endpoint.";
+            };
+            credentialsFile = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              example = "/run/safix/teachouse-api/teachouse-blob-s3-credentials";
+              description = ''
+                A file holding two lines, the access key then the secret key,
+                read once at start-up. A file rather than an inline value for
+                the reason blobKekFile is one: a secret in argv is in every
+                process listing on the host.
+              '';
+            };
+          };
+        };
       };
       paddleWebhookSecret = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
@@ -1243,6 +1376,35 @@ in
           deployment's database.
         '';
       }
+      {
+        assertion =
+          cfg.server.blobStore.kind == "s3"
+          -> (
+            cfg.server.blobStore.endpoint != null
+            && cfg.server.blobStore.bucket != null
+            && cfg.server.blobStore.credentialsFile != null
+          );
+        message = ''
+          services.teachouse.server.blobStore.kind is "s3" but one of endpoint,
+          bucket or credentialsFile is null. The binaries take those three
+          together or not at all, so this would refuse to start.
+        '';
+      }
+      {
+        assertion =
+          cfg.server.blobStore.kind == "local"
+          -> (
+            cfg.server.blobStore.endpoint == null
+            && cfg.server.blobStore.bucket == null
+            && cfg.server.blobStore.credentialsFile == null
+          );
+        message = ''
+          services.teachouse.server.blobStore.kind is "local" while an S3
+          endpoint, bucket or credentials file is also set. Two stores are not
+          a store: set kind = "s3" to write into the bucket, or clear those
+          values.
+        '';
+      }
     ];
 
     warnings =
@@ -1265,7 +1427,7 @@ in
             services.postgresqlBackup.databases does not name ${cfg.database.name}.
             Nothing on this host is backing up the listing catalogue, the job ledger
             or the billing state. Adding it to that list gives a nightly dump; the
-            object store under ${cfg.server.blobStoreRoot} is separately uncovered,
+            object store at ${blobStoreWhere} is separately uncovered,
             because backup.enable is refused in this mode.
           ''
       ++
@@ -1288,7 +1450,15 @@ in
             standing to veto its version. Rehearse the migration set against this
             version before the first deploy, or pin services.postgresql.package
             to 17 on the host.
-          '';
+          ''
+      ++ lib.optional (cfg.server.blobStore.kind == "s3" && !mailEnabled && !blobStoreHostIsAddress) ''
+        services.teachouse.server.blobStore.endpoint names the host
+        ${blobStoreHost} rather than an address, so tam-server's
+        IPAddressDeny is dropped entirely: systemd's filter takes addresses
+        and prefixes, and a name resolved at run time is neither. Give the
+        endpoint as an address to keep the deny, and the store's own
+        address allowed beside loopback.
+      '';
 
     users.groups.${group} = { };
     users.users =
@@ -1495,15 +1665,18 @@ in
         Group = group;
         Restart = "on-failure";
         RestartSec = "5s";
+        # The blob subdirectory only where the objects are local: in the bucket
+        # form an empty 0700 directory here would say the store is on this host
+        # when it is not.
         StateDirectory = [
           "teachouse"
-          "teachouse/blobs"
-        ];
+        ]
+        ++ lib.optional (cfg.server.blobStore.kind == "local") "teachouse/blobs";
         StateDirectoryMode = "0700";
         MemoryDenyWriteExecute = true;
       }
       // hardening
-      // lib.optionalAttrs (!mailEnabled) loopbackOnly;
+      // serverEgress;
     };
 
     systemd.services.tam-worker = lib.mkIf cfg.worker.enable {
@@ -1607,8 +1780,10 @@ in
           timerConfig
           checkOpts
           ;
-        paths = [
-          cfg.server.blobStoreRoot
+        # The local directory only. A bucket is the store's own to protect and
+        # restic cannot read it from here, so naming it would back up a path
+        # that does not exist.
+        paths = lib.optional (cfg.server.blobStore.kind == "local") cfg.server.blobStore.root ++ [
           cfg.backup.pgbackrest.repoPath
         ];
         pruneOpts = [

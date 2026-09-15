@@ -30,7 +30,6 @@ use tam_marketplace::{ListingState, RemoteLifecycle, RemoteListingId};
 use tam_pipeline::archive::ExtractBudget;
 use tam_pipeline::pipeline::{ingest, ArchiveMode, IngestContext, IngestError};
 use tam_pipeline::scan::EicarScanner;
-use tam_pipeline::store::LocalObjectStore;
 use tam_storage::{
     intent_digest, AnsweredElection, BlobRepo, JobRepo, MappingAdd, MappingRecord, MappingRepo,
     NewJob, NewJobItem, ProductEdit, ProductRepo, StorageError, TenantBlobSink, TptBaseRepo,
@@ -377,11 +376,7 @@ pub(crate) async fn upload(
         ));
     }
 
-    let repo = BlobRepo::new(
-        state.pool.clone(),
-        LocalObjectStore::new(blobs.root.clone()),
-        blobs.kek.clone(),
-    );
+    let repo = BlobRepo::new(state.pool.clone(), blobs.object_store(), blobs.kek.clone());
     let sink = TenantBlobSink {
         repo: &repo,
         org: context.org,
@@ -576,11 +571,7 @@ pub(crate) async fn image_bytes_only(
             .kind(APIErrorKind::Internal),
         )
     })?;
-    let repo = BlobRepo::new(
-        state.pool.clone(),
-        LocalObjectStore::new(blobs.root.clone()),
-        blobs.kek.clone(),
-    );
+    let repo = BlobRepo::new(state.pool.clone(), blobs.object_store(), blobs.kek.clone());
     for (hash, slot) in slots {
         // A hash the caller did not find held cannot reach here — `refuse_unheld`
         // runs first — and treating an absent length as unbounded refuses rather
@@ -2663,11 +2654,7 @@ async fn redraw_cover(
     let FileBytes::Held { hash, .. } = file.bytes else {
         return Err(state.internal("a replacement resolved to bytes this server does not hold"));
     };
-    let repo = BlobRepo::new(
-        state.pool.clone(),
-        LocalObjectStore::new(blobs.root.clone()),
-        blobs.kek.clone(),
-    );
+    let repo = BlobRepo::new(state.pool.clone(), blobs.object_store(), blobs.kek.clone());
     let bytes = repo
         .get(org, hash)
         .await

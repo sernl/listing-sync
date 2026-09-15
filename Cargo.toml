@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/tam-limits", "crates/ban-probe", "crates/tam-types", "crates/tam-marketplace", "crates/tam-marketplace-tes", "crates/tam-marketplace-tpt", "crates/tam-domain", "crates/tam-authoring", "crates/tam-core-wasm", "crates/tam-secrets", "crates/tam-pipeline", "crates/tam-storage", "crates/tam-taxonomy", "crates/tam-taxonomy-seed", "crates/tam-vocab-drift", "crates/tam-mint-session", "crates/tam-entitlement-key", "crates/tam-admin", "crates/tam-import",
+members = ["crates/tam-limits", "crates/ban-probe", "crates/tam-types", "crates/tam-marketplace", "crates/tam-marketplace-tes", "crates/tam-marketplace-tpt", "crates/tam-domain", "crates/tam-authoring", "crates/tam-core-wasm", "crates/tam-secrets", "crates/tam-pipeline", "crates/tam-blob-store", "crates/tam-storage", "crates/tam-taxonomy", "crates/tam-taxonomy-seed", "crates/tam-vocab-drift", "crates/tam-mint-session", "crates/tam-entitlement-key", "crates/tam-admin", "crates/tam-import",
     "crates/tam-engine",
     "crates/tam-engine-driver",
     "crates/tam-fingerprint",

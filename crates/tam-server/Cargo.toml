@@ -21,6 +21,10 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 serde_json = "1"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
 tam-api = { path = "../tam-api" }
+# The object-store flags and the backend they name. The spellings live there
+# rather than here so this binary and `tam-pipeline-worker` cannot drift apart
+# on them.
+tam-blob-store = { path = "../tam-blob-store" }
 tam-engine = { path = "../tam-engine" }
 tam-limits = { path = "../tam-limits" }
 tam-secrets = { path = "../tam-secrets" }

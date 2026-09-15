@@ -250,11 +250,7 @@ async fn legacy_page(
         target: Some(record.target),
         now,
     };
-    let repo = BlobRepo::new(
-        state.pool.clone(),
-        tam_pipeline::store::LocalObjectStore::new(blobs.root.clone()),
-        blobs.kek.clone(),
-    );
+    let repo = BlobRepo::new(state.pool.clone(), blobs.object_store(), blobs.kek.clone());
 
     let applying = Applying {
         run: &run,
@@ -441,7 +437,7 @@ async fn complete(
 /// Everything one page holds constant while its resources are applied.
 struct Applying<'a> {
     run: &'a ImportRun,
-    repo: &'a BlobRepo<tam_pipeline::store::LocalObjectStore>,
+    repo: &'a BlobRepo<tam_blob_store::AnyObjectStore>,
     request: Uuid,
     /// Which machine reported this, recorded as the device's own assertion
     /// beside our receipt rather than restated as something we verified.

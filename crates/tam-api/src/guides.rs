@@ -70,7 +70,6 @@ use axum::http::{header, StatusCode};
 use axum::Json;
 use pulldown_cmark::{html::push_html, CowStr, Event, Options, Parser, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
-use tam_pipeline::store::LocalObjectStore;
 use tam_storage::{
     ensure_platform_org, escape_like, platform_org, BlobError, BlobRepo, GuideDelete, GuideEdit,
     GuideHead, GuideOrder, GuidePublication, GuidePublishedHead, GuidePublishedPage, GuideRecord,
@@ -1377,14 +1376,10 @@ pub(crate) async fn upload_guide_image(
     let org = ensure_platform_org(&state.pool, now)
         .await
         .map_err(|error| storage_fault(&state, &error))?;
-    let hash = BlobRepo::new(
-        state.pool.clone(),
-        LocalObjectStore::new(blobs.root.clone()),
-        blobs.kek.clone(),
-    )
-    .put(org, &body, now)
-    .await
-    .map_err(|error| blob_fault(&state, &error))?;
+    let hash = BlobRepo::new(state.pool.clone(), blobs.object_store(), blobs.kek.clone())
+        .put(org, &body, now)
+        .await
+        .map_err(|error| blob_fault(&state, &error))?;
     Ok((
         StatusCode::CREATED,
         Json(GuideImageView {
@@ -1426,22 +1421,18 @@ pub(crate) async fn guide_image(
     else {
         return Err(missing("no such guide picture"));
     };
-    let bytes = BlobRepo::new(
-        state.pool.clone(),
-        LocalObjectStore::new(blobs.root.clone()),
-        blobs.kek.clone(),
-    )
-    .get(org, hash)
-    .await
-    .map_err(|error| match error {
-        BlobError::Missing => missing("no such guide picture"),
-        // Ours, not the reader's: the row says these bytes exist and we could
-        // not produce them, which is a fault to be seen rather than a picture
-        // to be reported absent.
-        fault @ (BlobError::Storage(_) | BlobError::Store(_) | BlobError::Crypto(_)) => {
-            blob_fault(&state, &fault)
-        }
-    })?;
+    let bytes = BlobRepo::new(state.pool.clone(), blobs.object_store(), blobs.kek.clone())
+        .get(org, hash)
+        .await
+        .map_err(|error| match error {
+            BlobError::Missing => missing("no such guide picture"),
+            // Ours, not the reader's: the row says these bytes exist and we could
+            // not produce them, which is a fault to be seen rather than a picture
+            // to be reported absent.
+            fault @ (BlobError::Storage(_) | BlobError::Store(_) | BlobError::Crypto(_)) => {
+                blob_fault(&state, &fault)
+            }
+        })?;
     image_answer(bytes)
 }
 

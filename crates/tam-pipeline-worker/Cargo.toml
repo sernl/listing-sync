@@ -6,6 +6,9 @@ publish = false
 
 [dependencies]
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
+# The object store this deployment writes into, and the flags that name it:
+# the same set `tam-server` reads, from the same crate.
+tam-blob-store = { path = "../tam-blob-store" }
 tam-limits = { path = "../tam-limits" }
 tam-pipeline = { path = "../tam-pipeline" }
 tam-secrets = { path = "../tam-secrets" }

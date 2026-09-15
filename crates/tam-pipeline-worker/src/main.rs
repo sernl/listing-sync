@@ -8,18 +8,24 @@
 //! design's unit and is exercisable end to end without unbuilt queue
 //! consumption.
 //!
-//! Usage: tam-pipeline-worker ingest <db-url> <object-store-root> <kek-path> \
-//!            <org-uuid-hex> <file-path>
+//! Usage: tam-pipeline-worker ingest <db-url> <kek-path> <org-uuid-hex> \
+//!            <file-path> \
+//!            (--blob-store-root <dir> | --blob-store-s3 <endpoint> \
+//!             --blob-store-bucket <name> --blob-store-credentials <path> \
+//!             [--blob-store-region <region>])
+//!
+//! The store flags are the ones `tam-server` takes, read through the same
+//! crate: the two processes hold the same objects, so a spelling that differed
+//! between them would be a worker reading a bucket the server never wrote to.
 
 #![forbid(unsafe_code)]
 
 use std::io::Read as _;
-use std::path::PathBuf;
 
+use tam_blob_store::BackendFlags;
 use tam_pipeline::archive::ExtractBudget;
 use tam_pipeline::pipeline::{ingest, IngestContext};
 use tam_pipeline::scan::EicarScanner;
-use tam_pipeline::store::LocalObjectStore;
 use tam_secrets::Kek;
 use tam_storage::{BlobRepo, TenantBlobSink};
 use tam_types::{OrgId, Timestamp, Uuid};
@@ -57,17 +63,33 @@ fn wall_now() -> Result<Timestamp, Box<dyn std::error::Error>> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let arguments: Vec<String> = std::env::args().skip(1).collect();
-    if arguments.first().map(String::as_str) != Some("ingest") {
-        return Err(
-            "usage: tam-pipeline-worker ingest <db-url> <root> <kek-path> <org-hex> <file>".into(),
-        );
+    const USAGE: &str = "usage: tam-pipeline-worker ingest <db-url> <kek-path> <org-hex> <file> \
+                         (--blob-store-root <dir> | --blob-store-s3 <endpoint> \
+                         --blob-store-bucket <name> --blob-store-credentials <path> \
+                         [--blob-store-region <region>])";
+    // Configuration is read from the command line rather than the
+    // environment, which the lint table bans outside the one crate that will
+    // own it.
+    // The store flags may appear anywhere among the positional arguments,
+    // which is what lets a unit file keep them in one block.
+    let mut arguments = std::env::args().skip(1);
+    let mut positional = Vec::new();
+    let mut blob_store = BackendFlags::default();
+    while let Some(argument) = arguments.next() {
+        if !blob_store.accept(&argument, &mut arguments)? {
+            positional.push(argument);
+        }
     }
-    let db_url = arguments.get(1).ok_or("missing db url")?;
-    let root = arguments.get(2).ok_or("missing object-store root")?;
-    let kek_path = arguments.get(3).ok_or("missing kek path")?;
-    let org = org_from_hex(arguments.get(4).ok_or("missing org hex")?)?;
-    let file_path = arguments.get(5).ok_or("missing file path")?;
+    if positional.first().map(String::as_str) != Some("ingest") {
+        return Err(USAGE.into());
+    }
+    let db_url = positional.get(1).ok_or(USAGE)?;
+    let kek_path = positional.get(2).ok_or(USAGE)?;
+    let org = org_from_hex(positional.get(3).ok_or(USAGE)?)?;
+    let file_path = positional.get(4).ok_or(USAGE)?;
+    let backend = blob_store
+        .resolve()?
+        .ok_or("the worker needs the store the server writes into")?;
 
     let mut upload = Vec::new();
     std::fs::File::open(file_path)?.read_to_end(&mut upload)?;
@@ -76,11 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .max_connections(2)
         .connect(db_url)
         .await?;
-    let repo = BlobRepo::new(
-        pool,
-        LocalObjectStore::new(PathBuf::from(root)),
-        load_kek(kek_path)?,
-    );
+    let repo = BlobRepo::new(pool, backend.object_store(), load_kek(kek_path)?);
     let now = wall_now()?;
     let sink = TenantBlobSink {
         repo: &repo,

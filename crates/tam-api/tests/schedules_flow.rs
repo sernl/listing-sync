@@ -92,10 +92,10 @@ fn configured(pool: PgPool, root: &std::path::Path) -> AppState {
         wall: || NOW,
         auth: None,
         backoffice: None,
-        blobs: Some(BlobStore {
-            kek: tam_secrets::Kek::from_bytes(&[0x7Cu8; 32]).expect("a 32-byte key is a key"),
-            root: root.to_path_buf(),
-        }),
+        blobs: Some(BlobStore::local(
+            tam_secrets::Kek::from_bytes(&[0x7Cu8; 32]).expect("a 32-byte key is a key"),
+            root.to_path_buf(),
+        )),
     }
 }
 
