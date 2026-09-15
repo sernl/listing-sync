@@ -372,9 +372,12 @@ jobs:
         with:
           name: console
           path: web/build
+      # The action defaults RUSTFLAGS to -D warnings, and an empty input reads as unset; the
+      # vendored wry is a path crate whose webkit2gtk deprecations cargo does not cap for us
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           cache: true
+          rustflags: "--cap-lints=warn"
       - name: install the webkit and bundling dependencies
         run: |
           set -euo pipefail
@@ -485,17 +488,9 @@ jobs:
         with:
           name: console
           path: web/build
-      # The action's default RUSTFLAGS is `-D warnings`. The vendored wry is a
-      # path crate, so cargo does not cap its lints the way it does a registry
-      # crate's, and webkit2gtk's `run_javascript` deprecation (since 2.40)
-      # reaches it as six errors on this job alone; Windows and Android never
-      # compile the WebKitGTK backend. The lint gate for our own crates is
-      # `just check`, which the verify job already ran.
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           cache: true
-          # An empty input reads as unset and the default returns; a harmless flag does not
-          rustflags: "--cap-lints=warn"
       - name: install the Tauri CLI
         env:
           CLI_VERSION: ${{ env.TAURI_CLI_VERSION }}
