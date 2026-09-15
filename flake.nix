@@ -32,6 +32,8 @@
       # so a consumer needs no overlay and cannot deploy a binary built from a
       # different tree than the module it read.
       flake.nixosModules.teachouse = import ./nix/module.nix { inherit (inputs) self; };
+      # The installer mirror alone, for a host that fronts a tam-server running elsewhere.
+      flake.nixosModules.teachouse-downloads = ./nix/module-downloads.nix;
 
       perSystem =
         { system, ... }:
