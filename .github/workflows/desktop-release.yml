@@ -494,7 +494,8 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           cache: true
-          rustflags: ""
+          # An empty input reads as unset and the default returns; a harmless flag does not
+          rustflags: "--cap-lints=warn"
       - name: install the Tauri CLI
         env:
           CLI_VERSION: ${{ env.TAURI_CLI_VERSION }}
