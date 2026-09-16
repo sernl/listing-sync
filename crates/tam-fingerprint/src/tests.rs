@@ -259,6 +259,49 @@ fn bytes_that_are_not_a_pdf_under_a_pdf_kind_report_an_absent_text_layer() {
     assert_eq!(print.page_count, None);
 }
 
+#[test]
+fn deeply_nested_pdf_preserves_the_import_process() {
+    // RUSTSEC-2026-0187: construct reader input without recursing through a PDF writer.
+    let mut bytes = b"%PDF-1.5\n".to_vec();
+    let catalog_offset = bytes.len();
+    bytes.extend_from_slice(
+        format!(
+            "1 0 obj\n<< /Type /Catalog /Pages 2 0 R /X {}0{} >>\nendobj\n",
+            "[".repeat(10_380),
+            "]".repeat(10_380),
+        )
+        .as_bytes(),
+    );
+    let pages_offset = bytes.len();
+    bytes.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n");
+    let xref_offset = bytes.len();
+    bytes.extend_from_slice(
+        format!(
+            "xref\n0 3\n0000000000 65535 f \n{catalog_offset:010} 00000 n \n\
+             {pages_offset:010} 00000 n \ntrailer\n<< /Size 3 /Root 1 0 R >>\n\
+             startxref\n{xref_offset}\n%%EOF\n"
+        )
+        .as_bytes(),
+    );
+
+    let rejected = fingerprint(FileKind::Pdf, &bytes, "Nested worksheet", None);
+    assert_eq!(
+        rejected.title_norm, "nested worksheet",
+        "an unreadable PDF must not discard the resource's metadata"
+    );
+    let next = fingerprint(
+        FileKind::Pdf,
+        &pdf_of(LESSON, false, "Ordinary worksheet"),
+        "Ordinary worksheet",
+        None,
+    );
+    assert_eq!(
+        next.page_count,
+        Some(1),
+        "the next resource must remain readable after rejecting the hostile PDF"
+    );
+}
+
 /// L3 fires for an image payload and for nothing else.
 #[test]
 fn an_image_payload_hashes_its_cover() {

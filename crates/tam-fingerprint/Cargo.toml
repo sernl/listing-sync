@@ -25,13 +25,13 @@ base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 blake3 = { version = "1", features = ["pure"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"], optional = true }
 image_hasher = { version = "3", optional = true }
-lopdf = { version = "0.36", default-features = false, optional = true }
-pdf-extract = { version = "0.9", optional = true }
+lopdf = { version = "0.42", default-features = false, optional = true }
+pdf-extract = { version = "0.12", optional = true }
 serde = { version = "1", features = ["derive"] }
 tam-types = { path = "../tam-types" }
 
 [dev-dependencies]
-lopdf = { version = "0.36", default-features = false }
+lopdf = { version = "0.42", default-features = false }
 serde_json = "1"
 
 [lints]
