@@ -1058,7 +1058,7 @@ pub struct RunFailures {
 pub struct ImportJournalState {
     #[serde(default)]
     pub runs: Vec<RunCheckpoint>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "restore_outbox")]
     pub outbox: Vec<PendingPost>,
     /// Runs the seller stopped on this device whose abandonment the server
     /// has not been seen to accept.
@@ -1081,6 +1081,29 @@ pub struct ImportJournalState {
     /// again, by a page being accepted, or by the run leaving the open list.
     #[serde(default)]
     pub failing: Vec<RunFailures>,
+}
+
+// Earlier clients stored terminal failures as ordinary reports. Normalize
+// their kind when restoring the journal so delivery cannot restart the run.
+fn restore_outbox<'de, D>(deserializer: D) -> Result<Vec<PendingPost>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(serde::Deserialize)]
+    struct ReportStage {
+        stage: ImportStage,
+    }
+
+    let mut posts = <Vec<PendingPost> as serde::Deserialize>::deserialize(deserializer)?;
+    for post in &mut posts {
+        if post.kind == PostKind::Report
+            && serde_json::from_str::<ReportStage>(&post.body)
+                .is_ok_and(|report| report.stage == ImportStage::Failed)
+        {
+            post.kind = PostKind::Ending;
+        }
+    }
+    Ok(posts)
 }
 
 impl ImportJournalState {
@@ -7176,6 +7199,9 @@ mod tests {
 
         async fn record(&self, path: &str, body: &str) -> Result<String, ControlPlaneError> {
             if path.ends_with("/claim") {
+                if self.settled.load(Ordering::SeqCst) {
+                    return Err(ControlPlaneError::Fenced("import_run_settled".to_owned()));
+                }
                 self.claims.fetch_add(1, Ordering::SeqCst);
                 let attempt = self.attempts.fetch_add(1, Ordering::SeqCst) + 1;
                 return Ok(serde_json::json!({
@@ -7669,6 +7695,48 @@ mod tests {
             plane.kept.lock().await.len(),
             1,
             "and no further page is built under it"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_upgrade_delivers_an_old_terminal_report_without_reading_the_shop() {
+        let saved = serde_json::from_str(
+            r#"{"outbox":[{
+                "id":"73737373-7373-7373-7373-737373737373",
+                "run":"71717171-7171-7171-7171-717171717171",
+                "path":"/v1/devices/11112222333344445555666677778888/import/71717171-7171-7171-7171-717171717171/progress",
+                "body":"{\"attempt\":1,\"stage\":\"failed\",\"discovered\":0,\"processed\":0,\"reason_code\":\"missing_session\",\"reason\":\"Sign in to Tes\"}",
+                "kind":"report"
+            }]}"#,
+        )
+        .expect("the journal written before terminal reports had their own kind");
+        let journal = Arc::new(MemoryJournal::holding(saved));
+        let plane = Arc::new(Refusing::default());
+        plane.claims.store(1, Ordering::SeqCst);
+        plane.attempts.store(1, Ordering::SeqCst);
+        let walks = Arc::new(AtomicUsize::new(0));
+        let state = device_serving(
+            &plane,
+            &plane,
+            counted_shop(OVER_ONE_PAGE, &walks),
+            &journal,
+        )
+        .await;
+
+        super::serve_open_runs(&state, plane.as_ref()).await;
+        settles(&state, RUN).await;
+
+        assert!(
+            plane.reports.lock().await.iter().any(|report| {
+                report.stage == ImportStage::Failed
+                    && report.reason_code == Some(ImportReasonCode::MissingSession)
+            }),
+            "the saved failure reaches the run after upgrading"
+        );
+        assert_eq!(
+            walks.load(Ordering::SeqCst),
+            0,
+            "delivering an old terminal report is not a new marketplace import"
         );
     }
 }
