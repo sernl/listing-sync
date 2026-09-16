@@ -302,9 +302,9 @@ mod tests {
     fn every_verdict_returns_to_the_marketplaces_page_naming_itself() {
         let mut seen: Vec<String> = Vec::new();
         for verdict in ConnectVerdict::ALL {
-            let url = return_url("https://teachouse.stowiq.io", Marketplace::Tpt, verdict);
+            let url = return_url("https://teachouse.io", Marketplace::Tpt, verdict);
             assert!(
-                url.starts_with("https://teachouse.stowiq.io/marketplaces?"),
+                url.starts_with("https://teachouse.io/marketplaces?"),
                 "the return leg lands on the page the seller pressed Connect on, or they come \
                  back somewhere they did not leave. Got: {url}"
             );

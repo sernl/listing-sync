@@ -32,7 +32,7 @@ A named struct holding one receiver is the only construct that can state the inv
 
 The JavaScript half is four hand-written files in `apps/extension/static`.
 `manifest.json` is Manifest V3 and carries both `background.service_worker` and `background.scripts` with `type: module`, which is decision 2's cheap way of keeping Firefox reachable without serving it.
-Its `content_security_policy.extension_pages` is `script-src 'self' 'wasm-unsafe-eval'; object-src 'self'`, it requests `alarms` and `storage` and nothing else, and its three host permissions are enumerated rather than wildcarded: `www.teacherspayteachers.com`, `www.tes.com` and `api.teachouse.io`, matching the `ORIGIN` constants in the two adapter crates and `DEFAULT_BASE_URL` in the desktop control plane.
+Its `content_security_policy.extension_pages` is `script-src 'self' 'wasm-unsafe-eval'; object-src 'self'`, it requests `alarms` and `storage` and nothing else, and its three host permissions are enumerated rather than wildcarded: `www.teacherspayteachers.com`, `www.tes.com` and `teachouse.io`, matching the `ORIGIN` constants in the two adapter crates and `DEFAULT_BASE_URL` in the desktop control plane.
 Enumeration rather than `<all_urls>` is what every incumbent cross-lister does, and it is also what keeps the single-purpose reading in section 6 defensible.
 
 `background.js` registers every listener synchronously at top level before any await, and instantiates the wasm afterwards.

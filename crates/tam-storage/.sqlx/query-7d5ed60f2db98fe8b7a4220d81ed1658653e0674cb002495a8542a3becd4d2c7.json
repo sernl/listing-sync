@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE import_run SET owner_device = $3, attempt = attempt + 1, lease_expires_at = now() + make_interval(secs => $4), last_contact_at = now() WHERE org_id = $1 AND id = $2 AND state IN ('reading', 'reviewing', 'committing') AND (owner_device IS NULL OR owner_device = $3 OR $5) RETURNING attempt, lease_expires_at AS \"lease_expires_at!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "attempt",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "lease_expires_at!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Float8",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "7d5ed60f2db98fe8b7a4220d81ed1658653e0674cb002495a8542a3becd4d2c7"
+}

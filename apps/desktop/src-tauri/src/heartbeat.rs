@@ -132,6 +132,17 @@ pub enum ControlPlaneError {
     NotConfigured,
     /// The server refused or could not be reached.
     Refused(String),
+    /// The server read the request and will not accept it: too large, or
+    /// carrying something this route refuses.
+    ///
+    /// Apart from [`Self::Refused`] because the remedy is the opposite one.
+    /// An outage resolves itself, so what is owed is kept and offered again;
+    /// this answer is a fact about the payload, so the identical bytes can
+    /// only be answered identically. Offering an import page again takes a
+    /// fresh fence and re-reads the seller's shop to build it, which is the
+    /// loop of 2026-09-16 — so this class is settled and reported rather
+    /// than queued.
+    Rejected(String),
     /// The device is not in the registry, so a heartbeat has nothing to stamp.
     /// The caller re-registers rather than retrying.
     Unregistered,
@@ -177,6 +188,7 @@ impl core::fmt::Display for ControlPlaneError {
         match self {
             Self::NotConfigured => f.write_str("this build has no control-plane transport"),
             Self::Refused(why) => write!(f, "the control plane refused: {why}"),
+            Self::Rejected(why) => write!(f, "the server will not accept this: {why}"),
             Self::Unregistered => f.write_str("this device is not registered"),
             Self::NoSession => f.write_str("nobody is signed in to the console on this device"),
             Self::Fenced(why) => write!(f, "this device no longer holds that import: {why}"),

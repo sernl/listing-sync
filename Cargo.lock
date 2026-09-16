@@ -6546,7 +6546,7 @@ dependencies = [
 
 [[package]]
 name = "tam-desktop"
-version = "0.10.2"
+version = "0.10.3"
 dependencies = [
  "blake3",
  "iroh",

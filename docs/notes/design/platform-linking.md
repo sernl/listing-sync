@@ -215,4 +215,4 @@ The disconnect prompt says so rather than leaving a seller to discover it by rec
 
 The fence changes character rather than weakening.
 On a computer the marketplace page sits in a window no capability names.
-On a phone it sits in window `main`, and what refuses it is the per-invoke remote-origin check against the single origin `capabilities/console.json` grants — which is why `control_plane::the_capability_grants_the_origin_this_build_uses` asserts that list holds exactly one entry equal to `DEFAULT_BASE_URL`, and why that test is now doing more work than it was written for.
+On a phone it sits in window `main`, and what refuses it is the per-invoke remote-origin check against the single origin `capabilities/console.json` grants. Keep that list restricted to exactly `DEFAULT_BASE_URL`; the shared window label does not provide isolation.

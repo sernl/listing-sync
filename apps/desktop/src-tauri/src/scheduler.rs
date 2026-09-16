@@ -172,25 +172,6 @@ pub enum Discovery {
     Failed,
 }
 
-impl Discovery {
-    /// The more cautious of two outcomes, for a pass made of more than one
-    /// call.
-    ///
-    /// A discovery pass asks two things — the open import runs and the work
-    /// queue — and the cadence must answer to the worse of them. Without this
-    /// an import endpoint failing while the queue is idle reported `Quiet`
-    /// every ten seconds for ever, repeating a failing request instead of
-    /// climbing the ladder.
-    #[must_use]
-    pub const fn worse(self, other: Self) -> Self {
-        match (self, other) {
-            (Self::Failed, _) | (_, Self::Failed) => Self::Failed,
-            (Self::Held, _) | (_, Self::Held) => Self::Held,
-            (Self::Quiet, Self::Quiet) => Self::Quiet,
-        }
-    }
-}
-
 /// How often this device looks for work the seller created somewhere else,
 /// with nothing held.
 ///
@@ -327,11 +308,6 @@ pub struct Clocks {
 /// [`Self::triggered`] on the same value, and what they produce is one
 /// immediate pass rather than three loops.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "the four flags are independent observations the loop hands in one at a time; \
-              a state machine over them would enumerate sixteen states nothing distinguishes"
-)]
 pub struct Coordination {
     cadence: Duration,
     presence: Presence,
@@ -350,11 +326,12 @@ pub struct Coordination {
     /// caught up again.
     last_check_in: Option<Duration>,
     last_discovery: Option<Duration>,
-    /// Consecutive failed discovery passes, saturating at the ladder's
-    /// length. A success resets it.
-    failures: usize,
-    /// The last pass found a marketplace held by another device.
-    held: bool,
+    /// Each half of the discovery pass's own memory of how it has been
+    /// going. Two rather than one, because they fail and recover
+    /// independently and one counter let either half's success delete the
+    /// other's outage.
+    imports: Cadence,
+    work: Cadence,
     /// The last check-in that reached the server said this device was signed
     /// out.
     revoked: bool,
@@ -396,8 +373,8 @@ impl Coordination {
             last_sweep: None,
             last_check_in: None,
             last_discovery: None,
-            failures: 0,
-            held: false,
+            imports: Cadence::NEW,
+            work: Cadence::NEW,
             revoked: false,
             present: matches!(presence, Presence::Running),
             immediate: true,
@@ -531,22 +508,59 @@ impl Coordination {
         self.revoked = revoked;
     }
 
-    /// A discovery pass has started.
-    ///
-    /// Stamped at the start rather than at the end, and the reason is the one
-    /// the mobile loop already recorded for its own stamp: a pass that claimed
-    /// an item and spent twenty minutes on it must not then be treated as
-    /// having begun twenty minutes late. It is also what stops a second pass
-    /// being started while the first is still in flight — the loop holds one
-    /// task, and this is the timer half of the same guarantee.
+    /// Stamps the start of every discovery poll, even while an earlier work
+    /// task remains in flight. Completion never restamps a long-running task.
     pub const fn discovering(&mut self, at: Clocks) {
         self.last_discovery = Some(at.since_start);
         self.immediate = false;
     }
 
-    /// What a finished pass found. Timing is not touched: the stamp belongs to
-    /// the moment the pass began.
+    /// Records the work queue's result without changing the discovery stamp.
     pub const fn discovered(&mut self, what: Discovery) {
+        self.work.record(what);
+    }
+
+    /// Records the import poll's result independently: an idle work queue
+    /// must not reset the import endpoint's retry delay.
+    pub const fn imports_discovered(&mut self, what: Discovery) {
+        self.imports.record(what);
+    }
+
+    /// The hourly deadline has started. It is a whole cycle, so it stamps the
+    /// two activities it contains as well as itself — which is what stops the
+    /// hour producing a sweep and then a second round of the same requests.
+    pub const fn swept(&mut self, at: Clocks) {
+        self.last_sweep = Some(at.wall);
+        self.checked_in(at);
+        self.discovering(at);
+    }
+
+    /// Both endpoints share a poll, so the healthy endpoint must not accelerate
+    /// retries against the failing one.
+    fn gap(&self) -> Duration {
+        self.imports.gap().max(self.work.gap())
+    }
+}
+
+/// Retry timing for one discovery source. Import and work results arrive
+/// independently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Cadence {
+    /// Consecutive failed passes on this half, saturating at the ladder's
+    /// length. A success on this half — and only on this half — resets it.
+    failures: usize,
+    /// This half last found a marketplace held by another device.
+    held: bool,
+}
+
+impl Cadence {
+    const NEW: Self = Self {
+        failures: 0,
+        held: false,
+    };
+
+    /// What this half's finished call came to.
+    const fn record(&mut self, what: Discovery) {
         match what {
             Discovery::Quiet => {
                 self.failures = 0;
@@ -566,19 +580,10 @@ impl Coordination {
         }
     }
 
-    /// The hourly deadline has started. It is a whole cycle, so it stamps the
-    /// two activities it contains as well as itself — which is what stops the
-    /// hour producing a sweep and then a second round of the same requests.
-    pub const fn swept(&mut self, at: Clocks) {
-        self.last_sweep = Some(at.wall);
-        self.checked_in(at);
-        self.discovering(at);
-    }
-
-    /// The gap before the next discovery pass: the ladder while failing, the
-    /// server's own held suggestion while another device holds a marketplace,
-    /// and its idle one otherwise.
-    fn gap(&self) -> Duration {
+    /// What this half asks the next pass to wait: the ladder while failing,
+    /// the server's own held suggestion while another device holds a
+    /// marketplace, and its idle one otherwise.
+    fn gap(self) -> Duration {
         match self.failures.checked_sub(1) {
             Some(rung) => DISCOVERY_BACKOFF[rung.min(DISCOVERY_BACKOFF.len() - 1)],
             None if self.held => DISCOVERY_HELD,
@@ -1066,6 +1071,16 @@ mod tests {
             plan.discovered(what);
         }
 
+        /// A whole discovery pass, both halves, in the order
+        /// `lib.rs::run_schedule` performs them: the pass is stamped as it
+        /// begins, the import poll answers inline, and the work queue's
+        /// answer lands afterwards from the supervised task.
+        fn served_both(plan: &mut Coordination, at: Clocks, imports: Discovery, work: Discovery) {
+            plan.discovering(at);
+            plan.imports_discovered(imports);
+            plan.discovered(work);
+        }
+
         /// The same for the hourly deadline.
         fn served_sweep(plan: &mut Coordination, at: Clocks, what: Discovery) {
             plan.swept(at);
@@ -1504,39 +1519,90 @@ mod tests {
             );
         }
 
-        /// An import endpoint failing while the work queue is idle backs off.
+        /// The import poll's outage survives the work queue's idle answer.
         ///
-        /// The pass asks two things and the cadence answers to the worse of
-        /// them. Before the outcomes were combined, a failing open-runs read
-        /// reported the queue's `Quiet` and repeated the failing request every
-        /// ten seconds for ever.
+        /// A discovery pass has two halves which fail and recover for
+        /// different reasons: the open-runs read, made inline, and the work
+        /// pull, made by the supervised task. Counting both on one ladder let
+        /// the healthy half delete the sick one's backoff — the import
+        /// endpoint answered `Failed`, the empty queue answered `Quiet` a
+        /// moment later and reset the counter, and every cycle went back to
+        /// the ten-second gap, which is the failing endpoint being hammered
+        /// for as long as it stays down rather than a ladder being climbed.
         #[test]
-        fn a_failing_import_poll_backs_off_even_while_the_queue_is_quiet() {
-            assert_eq!(
-                Discovery::Failed.worse(Discovery::Quiet),
-                Discovery::Failed,
-                "the import half failing is the pass failing"
-            );
-            assert_eq!(
-                Discovery::Quiet.worse(Discovery::Held),
-                Discovery::Held,
-                "and a held marketplace is worse than quiet, so the slower gap wins"
-            );
+        fn an_idle_work_result_cannot_erase_import_backoff() {
             let mut plan = settled();
-            served(
+            served_both(
                 &mut plan,
                 at(Duration::ZERO),
-                Discovery::Failed.worse(Discovery::Quiet),
+                Discovery::Failed,
+                Discovery::Quiet,
             );
             assert!(
-                !plan
-                    .due(at(
-                        DISCOVERY_BACKOFF[0].saturating_sub(Duration::from_millis(1))
-                    ))
-                    .discover,
-                "so the next pass waits the ladder's first rung rather than the idle gap"
+                plan.due(at(DISCOVERY_BACKOFF[0])).discover,
+                "one import failure is the ladder's first rung"
             );
-            assert!(plan.due(at(DISCOVERY_BACKOFF[0])).discover);
+            let second = DISCOVERY_BACKOFF[0];
+            served_both(&mut plan, at(second), Discovery::Failed, Discovery::Quiet);
+            assert!(
+                !plan.due(at(second + DISCOVERY_BACKOFF[0])).discover,
+                "a second import failure is on the second rung: the queue's quiet answer is not \
+                 news about the import endpoint and must not send this pass back to ten seconds"
+            );
+            assert_eq!(
+                plan.sleep(at(second + DISCOVERY_BACKOFF[0])),
+                Duration::from_secs(10),
+                "and the nap is the rest of that rung rather than zero"
+            );
+            assert!(
+                plan.due(at(second + DISCOVERY_BACKOFF[1])).discover,
+                "which is twenty seconds after the attempt that failed"
+            );
+            // The import endpoint comes back. The lane that recovered is the
+            // lane whose ladder clears.
+            let third = second + DISCOVERY_BACKOFF[1];
+            served_both(&mut plan, at(third), Discovery::Quiet, Discovery::Quiet);
+            assert!(
+                plan.due(at(third + DISCOVERY_IDLE)).discover,
+                "a recovered import half returns the pass to the idle gap"
+            );
+        }
+
+        /// The same property from the other side, which is a different
+        /// failure: the work queue's outage must survive the import poll's
+        /// quiet answer, and that answer arrives first — the import half is
+        /// inline and the work half is supervised, so a cycle always records
+        /// the imports before the work.
+        #[test]
+        fn an_idle_import_result_cannot_erase_work_backoff() {
+            let mut plan = settled();
+            served_both(
+                &mut plan,
+                at(Duration::ZERO),
+                Discovery::Quiet,
+                Discovery::Failed,
+            );
+            let second = DISCOVERY_BACKOFF[0];
+            served_both(&mut plan, at(second), Discovery::Quiet, Discovery::Failed);
+            assert!(
+                !plan.due(at(second + DISCOVERY_BACKOFF[0])).discover,
+                "the work queue's second failure is on the second rung however many quiet \
+                 open-runs reads landed in between"
+            );
+            assert!(plan.due(at(second + DISCOVERY_BACKOFF[1])).discover);
+            // One pass serves both halves, so its gap is whichever half asks
+            // for more: a recovered queue does not pull the pass forward onto
+            // a marketplace another device holds.
+            let third = second + DISCOVERY_BACKOFF[1];
+            served_both(&mut plan, at(third), Discovery::Held, Discovery::Quiet);
+            assert!(
+                !plan.due(at(third + DISCOVERY_IDLE)).discover,
+                "the held half is the slower half, and the pass answers to it"
+            );
+            assert!(
+                plan.due(at(third + DISCOVERY_HELD)).discover,
+                "at the held gap, with the work queue's ladder cleared by its own success"
+            );
         }
 
         /// The loop's nap: never past the earliest deadline, and never zero

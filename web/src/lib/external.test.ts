@@ -107,7 +107,7 @@ describe('a link out of the console', () => {
 		const invoke = vi.fn();
 		const open = vi.fn();
 		vi.stubGlobal('window', { open, __TAURI__: { core: { invoke } } });
-		const { node, listeners } = anchor('https://teachouse.stowiq.io/resources/x-1', '');
+		const { node, listeners } = anchor('https://teachouse.io/resources/x-1', '');
 		external(node);
 		const event = press();
 		listeners[0](event);

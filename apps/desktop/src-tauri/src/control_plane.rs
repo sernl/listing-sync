@@ -44,23 +44,32 @@ use crate::heartbeat::{
 /// as the one the console may reach, so the two cannot disagree without one of
 /// them being edited. The main window's origin is derived from this constant
 /// rather than configured, so it cannot drift from it and is not a third place
-/// to edit; the genuinely independent third is the capability below.
+/// to edit; the genuinely independent ones are the two capabilities below.
 ///
-/// One host carries the console, `/v1` and `/api/auth` for the interim period,
-/// because Cloudflare's free certificate covers one label under `stowiq.io`
-/// and `api.teachouse.stowiq.io` would be a second.
+/// One host carries the console, `/v1` and `/api/auth`. Under
+/// `teachouse.stowiq.io` that was forced rather than chosen: Cloudflare's free
+/// certificate covered one label under `stowiq.io`, so `api.teachouse` would
+/// have been a second. At the apex the constraint has lifted — Universal SSL
+/// covers `teachouse.io` and `*.teachouse.io` — and the single host is kept
+/// because splitting it would move the session cookie, which is a decision of
+/// its own rather than a consequence of this cutover.
 ///
-/// `teachouse.io` replaces this at cutover, in one commit touching THREE
-/// places, all of which must move together:
-/// this constant; the `connect-src` in `tauri.conf.json`; and the `remote.urls`
-/// entry in `capabilities/console.json`.
-/// The third is the one a cutover would miss and the build would not catch:
-/// the window would navigate to the new origin, `Origin::matches` would test it
-/// against the old pattern, and every application command would be refused with
-/// the console rendering "this page is not one the app accepts commands from"
-/// until a new build shipped. `the_capability_grants_the_origin_this_build_uses`
-/// is what makes that a failing test rather than a shipped defect.
-pub const DEFAULT_BASE_URL: &str = "https://teachouse.stowiq.io";
+/// Four places carry this origin and all of them must move together:
+/// this constant; the `connect-src` in `tauri.conf.json`; the `remote.urls`
+/// entry in `capabilities/console.json`; and the `remote.urls` entry in
+/// `capabilities/opener.json`.
+/// The console capability is the one a cutover would miss and the build would
+/// not catch: the window would navigate to the new origin, `Origin::matches`
+/// would test it against the old pattern, and every application command would
+/// be refused with the console rendering "this page is not one the app accepts
+/// commands from" until a new build shipped.
+/// Nothing here can catch that for them: the capability is read by Tauri from
+/// the file at run time, so the only honest check is the console refusing a
+/// command, which `a_marketplace_page_in_the_console_window_reaches_no_command`
+/// in `commands.rs` exercises. The opener capability is pinned to the
+/// console's by `remote('opener')` equalling `remote('console')` in
+/// `web/src/lib/desktop.test.ts`.
+pub const DEFAULT_BASE_URL: &str = "https://teachouse.io";
 
 /// The development override. `just web-dev` serves the console on the vite
 /// origin and proxies `/v1` from there to a local `tam-server`, so in
@@ -575,6 +584,15 @@ impl crate::ledger::LedgerTransport for HttpControlPlane {
     /// this request spoke under being refused, which no number of retries
     /// changes, so it is kept apart from an outage for the opposite reason:
     /// what is owed is dropped rather than offered again forever.
+    ///
+    /// A bad request, a body too large and an unprocessable body are the
+    /// third class: the server read this payload and will never accept it.
+    /// Left with the outages it would be offered for as long as the device
+    /// runs, and each offer of an import page re-reads the seller's shop and
+    /// supersedes the run's fence to build it. Everything else that is not a
+    /// success stays an outage — a timeout, a rate limit, a gateway — because
+    /// those resolve themselves and dropping what is owed would lose the only
+    /// copy of work the server never recorded.
     fn post<'a>(&'a self, path: &'a str, body: String) -> PlaneFuture<'a, String> {
         Box::pin(async move {
             let reply = self.dispatch(path, body).await?;
@@ -586,6 +604,11 @@ impl crate::ledger::LedgerTransport for HttpControlPlane {
                 200 | 202 | 204 => Ok(reply.body),
                 401 | 403 => Err(forbidden(&reply.body)),
                 404 => Err(ControlPlaneError::Unregistered),
+                400 | 413 | 422 => Err(ControlPlaneError::Rejected(format!(
+                    "{}: {}",
+                    reply.status,
+                    excerpt(&reply.body)
+                ))),
                 // The whole body rather than an excerpt: the caller reads the
                 // structured `code` off it to tell a settled run from a
                 // fenced one, and a truncated body is one it cannot parse.
@@ -944,6 +967,11 @@ mod tests {
         check_in, first_run, ControlPlane, ControlPlaneError, HostFacts, Offline, SessionReport,
         SessionState,
     };
+    use crate::import::{
+        ClaimedRun, ImportJournal, ImportPage, MemoryJournal, PendingPost, RunLedger, RunPhase,
+        RunProgress, StopSignal,
+    };
+    use crate::ledger::LedgerTransport;
     use crate::session::memory::MemorySessionStore;
     use crate::session::{Cookie, CookieJar, SessionRecord, SessionStore};
     use crate::state::DesktopState;
@@ -951,6 +979,9 @@ mod tests {
     use tam_types::{Marketplace, Timestamp};
 
     const DEVICE: &str = "11112222333344445555666677778888";
+
+    /// One run, for the ledger cases below.
+    const RUN: tam_types::Uuid = tam_types::Uuid([0x2a; 16]);
 
     fn identity() -> DeviceIdentity {
         DeviceIdentity {
@@ -1570,44 +1601,6 @@ mod tests {
         );
     }
 
-    /// The capability grants commands to the origin this build actually uses.
-    ///
-    /// M2's durable half. Three independent places name the control plane —
-    /// this constant, `tauri.conf.json`'s `connect-src`, and
-    /// `capabilities/console.json`'s `remote.urls` — and only the third fails
-    /// silently: a cutover that edits the first two builds clean and passes
-    /// every other test, then refuses all six commands at run time because
-    /// `Origin::matches` tests the new origin against the old pattern. The
-    /// console renders that as "this page is not one the app accepts commands
-    /// from", for every seller, until a new build ships.
-    ///
-    /// Reading the file rather than a generated constant is deliberate: the
-    /// generated schema is derived from this file, so asserting against the
-    /// derivation would compare the file to itself.
-    #[test]
-    fn the_capability_grants_the_origin_this_build_uses() {
-        // Embedded rather than read at run time: the file is then a compile
-        // dependency, so moving or renaming it fails the build instead of
-        // leaving a test that quietly stops checking anything.
-        let raw = include_str!("../capabilities/console.json");
-        let capability: serde_json::Value =
-            serde_json::from_str(raw).expect("the capability is json");
-        let urls = capability["remote"]["urls"]
-            .as_array()
-            .expect("the console capability names remote urls");
-        assert_eq!(
-            urls.len(),
-            1,
-            "one origin, so there is one thing to keep in step rather than a set to audit"
-        );
-        assert_eq!(
-            urls[0].as_str(),
-            Some(super::DEFAULT_BASE_URL),
-            "the capability's origin and the compiled default are the same origin, or the \
-             seller reaches a console whose every button is refused"
-        );
-    }
-
     /// The source inventory comes off the wire, from the path the request
     /// names.
     ///
@@ -1687,5 +1680,92 @@ mod tests {
                 .build()
                 .expect("the client builds"),
         );
+    }
+
+    /// One page offered to a server answering `status`, and what this device
+    /// still owes for the run once the answer has been read.
+    ///
+    /// The real transport and the real outbox, because the classes only mean
+    /// what they do: a class the outbox reads as an outage leaves the page
+    /// queued and offers it again under every later fence, and each offer of
+    /// an import page re-reads the seller's shop and supersedes the run's
+    /// fence to build it.
+    async fn still_owed(status: u16, body: &str) -> Vec<PendingPost> {
+        let transport: Arc<dyn LedgerTransport> =
+            Arc::new(plane(Arc::new(Fake::answering(status, body))));
+        let journal = Arc::new(MemoryJournal::default());
+        let kept: Arc<dyn ImportJournal> = Arc::<MemoryJournal>::clone(&journal);
+        let ledger = RunLedger::new(
+            identity().id,
+            &ClaimedRun {
+                run: RUN,
+                source: tam_types::InventoryId::Tes,
+                attempt: 1,
+                lease_expires_at: 0,
+                phase: RunPhase::Describe,
+                stop: StopSignal::never(),
+                progress: RunProgress::default(),
+            },
+            transport,
+            kept,
+        );
+        ledger
+            .post_page(a_page(), &RunProgress::default())
+            .await
+            .expect_err("a page the server did not accept is not a delivered page");
+        journal
+            .read()
+            .await
+            .expect("this device's journal reads")
+            .owed(RUN)
+    }
+
+    /// One page, with nothing in it but the shape: what it carries is not
+    /// what these statuses are about.
+    fn a_page() -> ImportPage {
+        ImportPage {
+            run: RUN,
+            attempt: None,
+            receipt: None,
+            request: None,
+            listed: None,
+            resources: Vec::new(),
+            skipped: Vec::new(),
+            enumeration_complete: false,
+            complete: false,
+            failed: None,
+        }
+    }
+
+    /// An outage is offered again and a refusal of the payload is not.
+    ///
+    /// Before this the classifier sent everything that was not a success, a
+    /// forbidden answer, a four-hundred-and-four or a conflict down one
+    /// branch, so a page the server will never accept — too large, or
+    /// carrying a field this version's route refuses — was queued and offered
+    /// for as long as the device ran. A permanent refusal is a fact about the
+    /// page rather than about the connection, so the device has to be able to
+    /// settle it and report it rather than retry it forever.
+    #[tokio::test]
+    async fn a_permanent_refusal_is_not_offered_again_as_though_it_were_an_outage() {
+        for status in [400_u16, 413, 422] {
+            let owed = still_owed(status, r#"{"errors":[]}"#).await;
+            assert!(
+                owed.is_empty(),
+                "{status} is a refusal of the page itself: offering it again cannot change the \
+                 answer, and the cycle that offers it re-reads the seller's shop and supersedes \
+                 the run's fence to do so — {owed:?} is still queued"
+            );
+        }
+
+        for status in [408_u16, 429, 500, 502, 503, 504] {
+            let owed = still_owed(status, "upstream unavailable").await;
+            assert_eq!(
+                owed.len(),
+                1,
+                "and {status} stays an outage, which resolves itself: dropping the page then \
+                 would lose the only copy of work the server never recorded"
+            );
+        }
     }
 }

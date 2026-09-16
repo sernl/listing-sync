@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE import_run SET last_contact_at = now(), last_progress_at = CASE WHEN $3 THEN now() ELSE last_progress_at END, reported_stage = CASE WHEN $3 THEN NULL ELSE reported_stage END, reason_code = CASE WHEN $3 THEN NULL ELSE reason_code END, reason = CASE WHEN $3 THEN NULL ELSE reason END WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "067fc29423a2bfd88598c9445ec65be0f973d40d52ea38ee3c922dce81260d12"
+}

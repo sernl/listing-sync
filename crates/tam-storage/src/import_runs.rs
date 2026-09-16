@@ -1639,10 +1639,7 @@ impl ImportRunRepo {
                 SET owner_device = $3, \
                     attempt = attempt + 1, \
                     lease_expires_at = now() + make_interval(secs => $4), \
-                    last_contact_at = now(), \
-                    reported_stage = NULL, \
-                    reason_code = NULL, \
-                    reason = NULL \
+                    last_contact_at = now() \
               WHERE org_id = $1 AND id = $2 \
                 AND state IN ('reading', 'reviewing', 'committing') \
                 AND (owner_device IS NULL OR owner_device = $3 OR $5) \
@@ -1744,15 +1741,22 @@ impl ImportRunRepo {
         pin_org(&mut tx, org).await?;
         let row = sqlx::query!(
             "UPDATE import_run \
-                SET reported_stage = $5, \
+                SET reported_stage = CASE \
+                        WHEN $8::text IS NULL AND reason_code IS NOT NULL \
+                            AND $6 <= discovered AND $7 <= processed AND NOT $10 \
+                        THEN reported_stage ELSE $5 END, \
                     discovered = GREATEST(discovered, $6), \
                     processed = GREATEST(processed, $7), \
                     last_contact_at = now(), \
                     last_progress_at = CASE \
                         WHEN $6 > discovered OR $7 > processed THEN now() \
                         ELSE last_progress_at END, \
-                    reason_code = COALESCE($8, reason_code), \
-                    reason = CASE WHEN $8 IS NULL THEN reason ELSE $9 END, \
+                    reason_code = CASE WHEN $8 IS NOT NULL THEN $8 \
+                        WHEN $6 > discovered OR $7 > processed THEN NULL \
+                        ELSE reason_code END, \
+                    reason = CASE WHEN $8 IS NOT NULL THEN $9 \
+                        WHEN $6 > discovered OR $7 > processed THEN NULL \
+                        ELSE reason END, \
                     state = CASE WHEN $10 THEN 'failed' ELSE state END, \
                     settled_at = CASE WHEN $10 THEN now() ELSE settled_at END, \
                     failure_detail = CASE WHEN $10 THEN $9 ELSE failure_detail END, \
@@ -2225,7 +2229,10 @@ pub async fn note_contact(
     sqlx::query!(
         "UPDATE import_run \
             SET last_contact_at = now(), \
-                last_progress_at = CASE WHEN $3 THEN now() ELSE last_progress_at END \
+                last_progress_at = CASE WHEN $3 THEN now() ELSE last_progress_at END, \
+                reported_stage = CASE WHEN $3 THEN NULL ELSE reported_stage END, \
+                reason_code = CASE WHEN $3 THEN NULL ELSE reason_code END, \
+                reason = CASE WHEN $3 THEN NULL ELSE reason END \
           WHERE org_id = $1 AND id = $2",
         uuid_to_db(org.0),
         uuid_to_db(run),

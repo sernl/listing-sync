@@ -13,7 +13,9 @@
 //! with the wrong import. The activation window: a manual run nobody claimed
 //! becomes an actionable failure, and a scheduled one waiting for a device
 //! does not. And the fence that replaced the organisation-wide one: two shops
-//! advance together, and one shop twice does not.
+//! advance together, and one shop twice does not. The narration: a reported
+//! refusal outlives the reclaim that resumes from it, and is retired by
+//! accepted work rather than by another attempt.
 
 #![cfg(feature = "pg-tests")]
 
@@ -1788,5 +1790,243 @@ async fn maintenance_keeps_the_work_the_selection_backfill_recovered(
         "and the abandoned start is still failed with the code the console renders a next action \
          from, so the exemption has not been widened into never expiring anything"
     );
+    Ok(())
+}
+
+/// A refusal the seller has not seen resolved survives the reclaim that
+/// follows it, and is cleared by work rather than by a retry.
+///
+/// The incident this closes: every description the phone sent was refused by
+/// the server, the device reported `interrupted` with `submission_failed`,
+/// and then claimed again ten seconds later to resume. The claim wrote
+/// `reported_stage`, `reason_code` and `reason` back to NULL unconditionally,
+/// so each refusal survived for one cycle and the run read as an ordinary
+/// resumed import. Four runs failed this way for twenty-four minutes with
+/// nothing on the page naming a server refusal. The reclaim raises the fence
+/// and must keep the narration; only accepted work retires it.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_reclaim_keeps_the_refusal_until_work_retires_it(
+    pool: PgPool,
+) -> Result<(), sqlx::Error> {
+    seed_org_a(&pool).await?;
+    seed_devices(&pool, ORG_A).await;
+    let runs = ImportRunRepo::new(pool.clone());
+    let job = anchor(&pool, ORG_A, RUN_A, InventoryId::Tes).await;
+    runs.create(ORG_A, &new_run(RUN_A, InventoryId::Tes, job))
+        .await
+        .expect("the run opens");
+    let ClaimOutcome::Granted(first) = runs
+        .claim(ORG_A, RUN_A, PHONE, false)
+        .await
+        .expect("the claim answers")
+    else {
+        panic!("an unclaimed run is claimable");
+    };
+
+    // The server refused the page. `interrupted` is not terminal: the run
+    // stays open and the device intends to resume.
+    assert_eq!(
+        runs.report_progress(
+            ORG_A,
+            RUN_A,
+            PHONE,
+            &ProgressReport {
+                attempt: first.attempt,
+                stage: ImportStage::Interrupted,
+                discovered: 13,
+                processed: 4,
+                reason_code: Some(tam_storage::ImportReasonCode::SubmissionFailed),
+                reason: Some("the server would not take the description"),
+            },
+        )
+        .await
+        .expect("the report answers"),
+        Some(RunState::Reading),
+        "a refused page interrupts the run without settling it"
+    );
+    let reported = runs
+        .head(ORG_A, RUN_A)
+        .await
+        .expect("the head reads")
+        .expect("the run stands");
+    assert_eq!(
+        (
+            reported.execution.reported_stage,
+            reported.execution.reason_code,
+            reported.execution.reason.as_deref(),
+            reported.execution.discovered,
+            reported.execution.processed,
+        ),
+        (
+            Some(ImportStage::Interrupted),
+            Some(tam_storage::ImportReasonCode::SubmissionFailed),
+            Some("the server would not take the description"),
+            13,
+            4,
+        ),
+        "the refusal is stored with the progress it stopped at"
+    );
+    let stopped_at = reported.execution.last_progress_at;
+
+    // The device resumes: same owner, raised fence. Nothing about the
+    // refusal has been resolved by asking for the run again.
+    let ClaimOutcome::Granted(second) = runs
+        .claim(ORG_A, RUN_A, PHONE, false)
+        .await
+        .expect("the claim answers")
+    else {
+        panic!("the owner may reclaim its own run");
+    };
+    assert!(
+        second.attempt > first.attempt,
+        "a reclaim is a new attempt, which is what retires the page still in flight"
+    );
+    let resumed = runs
+        .head(ORG_A, RUN_A)
+        .await
+        .expect("the head reads")
+        .expect("the run stands");
+    assert_eq!(
+        (
+            resumed.execution.reported_stage,
+            resumed.execution.reason_code,
+            resumed.execution.reason.as_deref(),
+            resumed.execution.discovered,
+            resumed.execution.processed,
+        ),
+        (
+            Some(ImportStage::Interrupted),
+            Some(tam_storage::ImportReasonCode::SubmissionFailed),
+            Some("the server would not take the description"),
+            13,
+            4,
+        ),
+        "the reclaim raises the fence and changes nothing the seller is told: a run refused every \
+         cycle must read as refused every cycle, not as a fresh resume"
+    );
+
+    // A renewal is a hold, not work. It may not retire the refusal, and it
+    // may not claim progress on the device's behalf.
+    assert!(
+        runs.renew(ORG_A, RUN_A, PHONE, second.attempt)
+            .await
+            .expect("the renewal answers")
+            .is_some(),
+        "the current owner renews its own live hold"
+    );
+    let renewed = runs
+        .head(ORG_A, RUN_A)
+        .await
+        .expect("the head reads")
+        .expect("the run stands");
+    assert_eq!(
+        (
+            renewed.execution.reported_stage,
+            renewed.execution.reason_code,
+            renewed.execution.last_progress_at,
+        ),
+        (
+            Some(ImportStage::Interrupted),
+            Some(tam_storage::ImportReasonCode::SubmissionFailed),
+            stopped_at,
+        ),
+        "holding the lease is not progress: the last thing that moved is still the page that was \
+         refused"
+    );
+
+    // Work lands. A report that carries no refusal and advances the count is
+    // what retires the narration -- and it must retire all of it, because a
+    // code left behind would make a working import read as broken.
+    assert_eq!(
+        runs.report_progress(
+            ORG_A,
+            RUN_A,
+            PHONE,
+            &ProgressReport {
+                attempt: second.attempt,
+                stage: ImportStage::Reading,
+                discovered: 13,
+                processed: 5,
+                reason_code: None,
+                reason: None,
+            },
+        )
+        .await
+        .expect("the report answers"),
+        Some(RunState::Reading),
+    );
+    let working = runs
+        .head(ORG_A, RUN_A)
+        .await
+        .expect("the head reads")
+        .expect("the run stands");
+    assert_eq!(
+        (
+            working.execution.reported_stage,
+            working.execution.reason_code,
+            working.execution.reason.as_deref(),
+            working.execution.processed,
+        ),
+        (Some(ImportStage::Reading), None, None, 5),
+        "accepted work clears the stale refusal, stage, code and sentence together"
+    );
+    assert_eq!(
+        working.state,
+        RunState::Reading,
+        "and the run was open throughout: nothing here settles it"
+    );
+
+    runs.report_progress(
+        ORG_A,
+        RUN_A,
+        PHONE,
+        &ProgressReport {
+            attempt: second.attempt,
+            stage: ImportStage::Interrupted,
+            discovered: 13,
+            processed: 5,
+            reason_code: Some(tam_storage::ImportReasonCode::SubmissionFailed),
+            reason: Some("the next page was not accepted"),
+        },
+    )
+    .await
+    .expect("the interruption is reported");
+
+    // A page can advance the run without changing the device's counters.
+    for (progressed, expected) in [
+        (
+            false,
+            (
+                Some(ImportStage::Interrupted),
+                Some(tam_storage::ImportReasonCode::SubmissionFailed),
+                Some("the next page was not accepted"),
+            ),
+        ),
+        (true, (None, None, None)),
+    ] {
+        let mut tx = pool.begin().await?;
+        sqlx::query("SELECT set_config('app.current_org', $1, true)")
+            .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
+            .execute(&mut *tx)
+            .await?;
+        tam_storage::note_contact(&mut tx, ORG_A, RUN_A, progressed)
+            .await
+            .expect("the page contact is recorded");
+        tx.commit().await?;
+        let head = runs
+            .head(ORG_A, RUN_A)
+            .await
+            .expect("the head reads")
+            .expect("the run stands");
+        assert_eq!(
+            (
+                head.execution.reported_stage,
+                head.execution.reason_code,
+                head.execution.reason.as_deref(),
+            ),
+            expected,
+            "contact alone preserves the interruption; accepted work retires it",
+        );
+    }
     Ok(())
 }

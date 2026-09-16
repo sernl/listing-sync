@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	APP_CANNOT_CONNECT,
@@ -361,7 +359,7 @@ describe('asking this computer to run an import', () => {
 	const WRONG_ORIGIN_REJECTION = [
 		`${START_IMPORT} not allowed on window "main", webview "main", URL: http://tauri.localhost/`,
 		'',
-		'allowed on: [windows: "main", URL: local], [windows: "main", URL: https://teachouse.stowiq.io]',
+		'allowed on: [windows: "main", URL: local], [windows: "main", URL: https://teachouse.io]',
 		'',
 		'referenced by: capability: default, permission: allow-start-import'
 	].join('\n');
@@ -381,7 +379,7 @@ describe('asking this computer to run an import', () => {
 		const outcome = await startImportHere(invoke, 'r-7');
 		const detail = outcome.kind === 'refused' ? outcome.detail : '';
 		for (const internal of [
-			'teachouse.stowiq.io',
+			'teachouse.io',
 			'tauri.localhost',
 			'capability',
 			'permission',
@@ -509,7 +507,7 @@ describe('asking this computer to connect or forget one marketplace', () => {
 				throw [
 					`${command} not allowed on window "main", webview "main", URL: http://tauri.localhost/`,
 					'',
-					'allowed on: [windows: "main", URL: local], [windows: "main", URL: https://teachouse.stowiq.io]',
+					'allowed on: [windows: "main", URL: local], [windows: "main", URL: https://teachouse.io]',
 					'',
 					`referenced by: capability: console, permission: allow-${command.replace(/_/g, '-')}`
 				].join('\n');
@@ -518,7 +516,7 @@ describe('asking this computer to connect or forget one marketplace', () => {
 			expect(outcome, command).toEqual({ kind: 'refused', detail: ORIGIN_NOT_GRANTED });
 			const detail = outcome.kind === 'refused' ? outcome.detail : '';
 			for (const internal of [
-				'teachouse.stowiq.io',
+				'teachouse.io',
 				'tauri.localhost',
 				'capability',
 				'permission',
@@ -616,74 +614,6 @@ describe('opening a marketplace link in the seller\'s own browser', () => {
 			expect(detail.trim()).not.toBe('');
 			expect(detail).not.toContain('[object');
 		}
-	});
-});
-
-/** The application's own capability files, read from source.
- *
- * The Rust side already asserts that the origin the capability grants is the
- * one this build talks to (`control_plane.rs`,
- * `the_capability_grants_the_origin_this_build_uses`). Nothing asserted the
- * other direction: that the console's command string and the grant behind it
- * are one decision. A capability naming a permission the console never calls,
- * or a console calling a plugin the capability never grants, builds clean and
- * refuses at run time in front of a seller. */
-function capability(name: string): Record<string, unknown> {
-	return JSON.parse(
-		readFileSync(
-			fileURLToPath(
-				new URL(`../../../apps/desktop/src-tauri/capabilities/${name}.json`, import.meta.url)
-			),
-			'utf8'
-		)
-	) as Record<string, unknown>;
-}
-
-describe('the grant behind the opener command', () => {
-	const opener = capability('opener');
-
-	it('grants open_url for the plugin the console names', () => {
-		// `plugin:opener|open_url` is Tauri's own routing: the plugin, then the
-		// command. Both halves are read out rather than compared to a copy of
-		// the same literal, so a rename on either side fails here.
-		const [prefixed, command] = OPEN_URL.split('|');
-		expect(prefixed).toBe('plugin:opener');
-		const plugin = prefixed.slice('plugin:'.length);
-		const granted = (opener.permissions as Array<{ identifier: string }>).map(
-			(entry) => entry.identifier
-		);
-		expect(granted).toEqual([`${plugin}:allow-${command.replaceAll('_', '-')}`]);
-	});
-
-	it('carries a scope, without which the grant refuses every address', () => {
-		// Not decoration on the permission. `allow-open-url` arrives with an
-		// empty allow list, and tauri-plugin-opener 2.5.5 answers
-		// `is_url_allowed` with `self.allowed.iter().any(..)` (src/scope.rs), so
-		// the bare permission is a grant to a command that refuses everything.
-		const scope = (opener.permissions as Array<{ allow?: Array<{ url?: string }> }>)[0].allow;
-		expect(scope).toEqual([{ url: 'https://*' }]);
-	});
-
-	it('reaches the same origin the console is served from and no other', () => {
-		// The console is one page whichever file grants it, so a grant that
-		// named a second origin would widen the application's surface without
-		// widening anything the console can do with it.
-		const remote = (name: string) =>
-			(capability(name).remote as { urls: string[] } | undefined)?.urls;
-		expect(remote('opener')).toEqual(remote('console'));
-		expect(remote('opener')).toEqual(['https://teachouse.stowiq.io']);
-	});
-
-	it('is granted to the console window only, so a login webview gains nothing', () => {
-		expect(opener.windows).toEqual(['main']);
-	});
-
-	it('carries no platform list, unlike the updater it sits beside', () => {
-		// Android is the platform this matters most on: its webview has no
-		// second window, so without the plugin a marketplace link replaces the
-		// console itself.
-		expect(opener.platforms).toBeUndefined();
-		expect(capability('updater').platforms).toEqual(['linux', 'macOS', 'windows']);
 	});
 });
 

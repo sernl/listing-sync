@@ -1,12 +1,5 @@
-# The Windows release of the desktop client (D2), built on a GitHub Windows
-# runner because that is where the MSI and signtool are native (D29), and
-# distributed through CrabNebula Cloud.
-#
-# The first tag, v0.1.0, ran as far as collecting the artefacts and then
-# failed uploading them, so the upload and publish steps have never succeeded.
-# What each step does and why, what that run got wrong, and what the founder
-# must supply before a tag can succeed, is
-# docs/notes/design/desktop-distribution.md.
+# Tagged Windows, Linux and Android releases, distributed through GitHub and
+# CrabNebula Cloud. Release prerequisites: docs/notes/design/desktop-distribution.md.
 name: desktop-release
 
 # A tag on this repository is the only trigger. There is no workflow_dispatch,

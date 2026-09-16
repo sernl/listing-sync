@@ -258,6 +258,22 @@ pub const FLUSH_AFTER: Duration = Duration::from_secs(15);
 /// because those are the two the console's next action depends on.
 pub const PROGRESS_EVERY: Duration = Duration::from_secs(2);
 
+/// How many consecutive page submissions this device offers a server that
+/// keeps failing them before it stops taking the run by itself.
+///
+/// Three, and the same shape [`RENEW_EVERY`] is chosen against: the offer
+/// itself and two more in case what failed was the connection rather than
+/// the server. Past that, offering the page again is evidence of nothing —
+/// and each offer is a fresh claim, which supersedes the run's fence and
+/// starts the selection again. The run of 2026-09-16 climbed from attempt
+/// twelve to attempt fifty-three in twenty-four minutes that way, with one
+/// of two resources described.
+///
+/// A bound on this device's own reclaims rather than on the run: the page
+/// stays queued, the reason stays on the run, and an explicit press resumes
+/// it.
+pub const OFFERS_BEFORE_PAUSE: u32 = 3;
+
 /// A listed row's marketplace resource id.
 ///
 /// Both marketplaces address a resource by a number, and the page carries it
@@ -432,6 +448,17 @@ pub enum PassError {
     Catalogue(String),
     /// A page could not be posted, so the work it described is not recorded.
     Page(String),
+    /// The server read one of this run's pages and will not keep it.
+    ///
+    /// Its own arm rather than a [`Self::Page`] with a different sentence,
+    /// because the two end the run differently: an outage lifts and the page
+    /// this device still holds is delivered by the next connection, while a
+    /// body the server has read and refused is the same body however many
+    /// times it is offered. Reported to the seller with the same code — the
+    /// remedy is ours either way — and settled rather than left open, which
+    /// is what stops the run being offered back to this device so it can
+    /// walk the seller's shop and rebuild the identical page.
+    RejectedPage(String),
     /// The seller signed this device out while the import was running.
     Revoked,
     /// The entitlement for the marketplace being read does not stand.
@@ -487,7 +514,7 @@ impl PassError {
             // that this attempt could not submit what it owed. The seller's
             // remedy is the same, and inventing narrower protocol codes would
             // make distinctions the server cannot act on.
-            Self::Page(_) | Self::Source(_) | Self::Journal(_) => {
+            Self::Page(_) | Self::RejectedPage(_) | Self::Source(_) | Self::Journal(_) => {
                 ImportReasonCode::SubmissionFailed
             }
             // A revocation and a lapsed grant are one class to the server —
@@ -518,7 +545,11 @@ impl PassError {
     /// What answers `Failed` is what will not come right by itself: no
     /// session on this device, a source no device can read, a lapsed
     /// entitlement, a signed-out device, a catalogue the marketplace refused,
-    /// and a selection where nothing could be read.
+    /// a selection where nothing could be read, and a page the server has
+    /// read and refused. That last one is the distinction this pair of arms
+    /// is for: an outage is a page the server has not seen, and a rejection
+    /// is an answer about the bytes, so leaving it open would offer the run
+    /// back to a device whose only move is to rebuild the identical page.
     #[must_use]
     pub const fn stage(&self) -> ImportStage {
         match self {
@@ -532,6 +563,7 @@ impl PassError {
             | Self::NoSession(_)
             | Self::UnsupportedSource(_)
             | Self::Catalogue(_)
+            | Self::RejectedPage(_)
             | Self::Descriptions(_) => ImportStage::Failed,
         }
     }
@@ -544,6 +576,11 @@ impl core::fmt::Display for PassError {
                 write!(f, "your catalogue could not be read: {why}")
             }
             Self::Page(why) => write!(f, "a page of the import could not be recorded: {why}"),
+            Self::RejectedPage(why) => write!(
+                f,
+                "your import could not be recorded: the server would not keep a page of it: \
+                 {why}"
+            ),
             Self::Revoked => f.write_str("this device was signed out while the import was running"),
             Self::NotEntitled(marketplace) => write!(
                 f,
@@ -905,6 +942,18 @@ impl PendingPost {
         matches!(self.kind, PostKind::Stop)
     }
 
+    /// Whether this post is the instruction that closes the run's record.
+    ///
+    /// A stop and a terminal ending both are, and both are therefore offered
+    /// while the server still lists the run as open: waiting for the row to
+    /// close would wait forever, because this post is what closes it. A page
+    /// and a progress line are not — they are work and commentary on a run
+    /// that is still going.
+    #[must_use]
+    pub const fn settles_run(&self) -> bool {
+        self.kind.settles_run()
+    }
+
     /// The same post under a later fence.
     ///
     /// The attempt is the one field a re-offer may change, and the protocol
@@ -951,6 +1000,13 @@ pub enum PostKind {
     /// The abandonment this device owes the server. Proved by the server
     /// saying the run is abandoned, and by nothing weaker.
     Stop,
+    /// The reason and the stage this run ended on.
+    ///
+    /// A progress line by route and by proof, and its own kind for one
+    /// reason: it is the post that closes the run's record, so the drain
+    /// offers it while the run is still listed open rather than waiting for
+    /// a row that this post is what closes.
+    Ending,
 }
 
 impl PostKind {
@@ -962,7 +1018,7 @@ impl PostKind {
     #[must_use]
     pub fn proved_by(self, body: &str) -> bool {
         match self {
-            Self::Report => true,
+            Self::Report | Self::Ending => true,
             Self::Page => serde_json::from_str::<PageAck>(body).is_ok(),
             // The route's own acknowledgement and nothing weaker. An empty
             // body, an empty object, a refusal object and a gateway's page
@@ -978,6 +1034,23 @@ impl PostKind {
     pub const fn settles_stop(self) -> bool {
         matches!(self, Self::Stop)
     }
+
+    /// Whether a post of this kind is the one that closes the run's record.
+    #[must_use]
+    pub const fn settles_run(self) -> bool {
+        matches!(self, Self::Stop | Self::Ending)
+    }
+}
+
+/// One run's consecutive unaccepted page offers.
+///
+/// A count rather than a flag, so the bound is explicit and one bad
+/// connection does not pause a run the next offer would have finished.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RunFailures {
+    pub run: tam_types::Uuid,
+    #[serde(default)]
+    pub offers: u32,
 }
 
 /// Everything this device remembers about imports across a restart.
@@ -996,6 +1069,18 @@ pub struct ImportJournalState {
     /// on reading the shop the seller had stopped.
     #[serde(default)]
     pub stopped: Vec<tam_types::Uuid>,
+    /// Runs whose pages the server keeps failing, and how many consecutive
+    /// offers of one have gone unaccepted.
+    ///
+    /// Durable for the same reason the stop marks are: the loop this bounds
+    /// spans attempts and processes, so a count that lived in a task would be
+    /// reset by the very reclaim it exists to stop. Kept apart from
+    /// [`Self::stopped`], because the two mean different things and are
+    /// cleared by different events — a seller's stop is settled by the
+    /// server accepting the abandonment, and a pause by the seller pressing
+    /// again, by a page being accepted, or by the run leaving the open list.
+    #[serde(default)]
+    pub failing: Vec<RunFailures>,
 }
 
 impl ImportJournalState {
@@ -1010,6 +1095,25 @@ impl ImportJournalState {
     #[must_use]
     pub fn was_stopped(&self, run: tam_types::Uuid) -> bool {
         self.stopped.contains(&run)
+    }
+
+    /// Whether this device has stopped offering that run's page by itself.
+    ///
+    /// Read where a discovery cycle would otherwise claim the run again. It
+    /// says nothing about the run being over: the page is still queued, the
+    /// reason is on the run, and a press resumes it.
+    #[must_use]
+    pub fn paused(&self, run: tam_types::Uuid) -> bool {
+        self.failures(run) >= OFFERS_BEFORE_PAUSE
+    }
+
+    /// How many consecutive offers of this run's page the server has failed.
+    #[must_use]
+    pub fn failures(&self, run: tam_types::Uuid) -> u32 {
+        self.failing
+            .iter()
+            .find(|failing| failing.run == run)
+            .map_or(0, |failing| failing.offers)
     }
 
     /// What this device still owes the server, oldest first.
@@ -1044,13 +1148,42 @@ pub enum JournalChange {
     /// This post will never be applied — a refused sign-in, a superseded
     /// fence — so it is dropped without crediting anything it described.
     Abandoned(tam_types::Uuid),
+    /// One more offer of this run's page went unaccepted, and the page is
+    /// still owed.
+    ///
+    /// Counted rather than acted on here: [`ImportJournalState::paused`] is
+    /// what a discovery cycle reads, so the bound lives in one place and the
+    /// count survives the attempt that recorded it.
+    Failed(tam_types::Uuid),
+    /// The server read this run's page and refused it, so this device stops
+    /// offering pages for the run by itself.
+    ///
+    /// The same mark [`Self::Failed`] reaches after [`OFFERS_BEFORE_PAUSE`]
+    /// offers, reached in one: a refusal of the bytes is not a connection
+    /// that might come back, so a second and a third offer would buy two
+    /// more walks of the seller's shop for an answer this device has already
+    /// had. Counting it instead would never bound anything, because a run
+    /// whose earlier page the server kept has its streak cleared by that
+    /// acceptance and starts again from one every cycle.
+    ///
+    /// Cleared by the same three events a streak is — an accepted page, an
+    /// explicit press, or the run leaving the open list — so recovery, a
+    /// resume and a takeover are unchanged.
+    Refused(tam_types::Uuid),
     /// Re-fences everything this run still owes to a later attempt.
     Refence { run: tam_types::Uuid, attempt: u64 },
     /// The seller stopped this run on this device.
     Stopped(tam_types::Uuid),
     /// The seller has explicitly asked for this run again, or the server has
-    /// settled it: clear the stop and retire any queued stop for the superseded
-    /// attempt, while preserving every other post the run still owes.
+    /// settled it: clear the stop and the outage pause, retire any queued stop
+    /// for the superseded attempt, and preserve every other post the run still
+    /// owes.
+    ///
+    /// The pause goes with the press because that is the seller answering the
+    /// question the pause asks. It does not go with an accepted stop: a
+    /// tombstone settled by the server retires the whole run through
+    /// [`Self::Forget`], and nothing about a stop being acknowledged says the
+    /// server has started keeping pages again.
     Resumed(tam_types::Uuid),
     /// Everything about this run is the server's record from here.
     Forget(tam_types::Uuid),
@@ -1119,8 +1252,18 @@ fn apply(state: &mut ImportJournalState, change: &JournalChange) {
             // attempt would be gone from the queue with the run's page count
             // still behind it, so the next description would reuse a receipt
             // the server had already answered.
+            let run = answered.run;
+            let was_page = matches!(answered.kind, PostKind::Page);
             if let Some(earned) = answered.earns {
                 advance(state, earned);
+            }
+            // A page the server kept is the progress the pause was waiting
+            // for, so the streak starts again from nothing. Only a page: a
+            // progress line is answered by every gateway and captive portal
+            // there is, and reading one as recovery is what would leave a run
+            // reclaiming itself through an outage that never lifted.
+            if was_page {
+                state.failing.retain(|failing| failing.run != run);
             }
             state.outbox.retain(|owed| owed.id != *id);
         }
@@ -1131,6 +1274,24 @@ fn apply(state: &mut ImportJournalState, change: &JournalChange) {
         // until the server is known to agree, no discovery cycle here picks
         // it up again.
         JournalChange::Abandoned(id) => state.outbox.retain(|owed| owed.id != *id),
+        // Retained and pushed rather than edited in place, which is the same
+        // shape `advance` uses for a checkpoint: one entry per run, and the
+        // count read before the entry is replaced.
+        JournalChange::Failed(run) => {
+            let offers = state.failures(*run).saturating_add(1);
+            state.failing.retain(|failing| failing.run != *run);
+            state.failing.push(RunFailures { run: *run, offers });
+        }
+        // The bound reached in one step. Written as the same mark rather than
+        // as a second flag, so `paused` stays the one question a discovery
+        // cycle asks and a press clears both by clearing one.
+        JournalChange::Refused(run) => {
+            state.failing.retain(|failing| failing.run != *run);
+            state.failing.push(RunFailures {
+                run: *run,
+                offers: OFFERS_BEFORE_PAUSE,
+            });
+        }
         JournalChange::Refence { run, attempt } => {
             for owed in &mut state.outbox {
                 if owed.run == *run {
@@ -1145,6 +1306,7 @@ fn apply(state: &mut ImportJournalState, change: &JournalChange) {
         }
         JournalChange::Resumed(run) => {
             state.stopped.retain(|kept| kept != run);
+            state.failing.retain(|failing| failing.run != *run);
             state
                 .outbox
                 .retain(|owed| owed.run != *run || !owed.settles_stop());
@@ -1153,6 +1315,7 @@ fn apply(state: &mut ImportJournalState, change: &JournalChange) {
             state.runs.retain(|kept| kept.run != *run);
             state.outbox.retain(|owed| owed.run != *run);
             state.stopped.retain(|kept| kept != run);
+            state.failing.retain(|failing| failing.run != *run);
         }
     }
 }
@@ -1490,6 +1653,36 @@ impl RunLedger {
         self.retire(&JournalChange::Abandoned(owed.id)).await;
     }
 
+    /// Counts one offer of this run's page that the server did not accept.
+    ///
+    /// Pages only. A progress line is answered by every gateway and captive
+    /// portal there is, and one that failed costs nothing, so counting it
+    /// would pause runs for the wrong reason.
+    ///
+    /// Logged rather than surfaced, like the retirements above: the caller is
+    /// already returning the submission failure, and a count that could not
+    /// be written costs one more reclaim rather than any work.
+    async fn unaccepted(&self, owed: &PendingPost) {
+        if !matches!(owed.kind, PostKind::Page) {
+            return;
+        }
+        if let Err(why) = self.journal.mutate(&JournalChange::Failed(self.run)).await {
+            eprintln!("a failed import page could not be counted on this device: {why}");
+        }
+    }
+
+    /// Records that the server has read this run's page and refused it, so
+    /// this device offers no further page for the run by itself.
+    ///
+    /// Logged rather than surfaced for the same reason the count above is:
+    /// the caller is already returning the failure, and a mark that could
+    /// not be written costs one more reclaim rather than any work.
+    async fn refused(&self) {
+        if let Err(why) = self.journal.mutate(&JournalChange::Refused(self.run)).await {
+            eprintln!("a refused import page could not be recorded on this device: {why}");
+        }
+    }
+
     async fn retire(&self, change: &JournalChange) {
         if let Err(why) = self.journal.mutate(change).await {
             eprintln!("an answered import post could not be retired locally: {why}");
@@ -1525,7 +1718,18 @@ impl RunLedger {
         }
         let body =
             serde_json::to_string(&report).map_err(|why| PassError::Page(why.to_string()))?;
-        let owed = PendingPost::new(self.run, &progress_path(&self.device, self.run), &body);
+        // A terminal report is kept apart from a progress line by kind, not
+        // by path: both go to the one route, and the difference that matters
+        // to a queue is that this one is the post which closes the run's
+        // record. A drain that waited for the row to close before offering
+        // it would wait on itself.
+        let kind = if matches!(report.stage, ImportStage::Failed) {
+            PostKind::Ending
+        } else {
+            PostKind::Report
+        };
+        let owed =
+            PendingPost::new(self.run, &progress_path(&self.device, self.run), &body).of_kind(kind);
         self.journal
             .mutate(&JournalChange::Enqueue(owed.clone()))
             .await
@@ -1538,15 +1742,13 @@ impl RunLedger {
                 self.delivered(&owed).await;
                 Ok(())
             }
-            // A refused sign-in, and a machine the seller signed out. Neither
-            // was applied and neither will be by repeating it, so the report
-            // is abandoned rather than left at the head of the outbox where
-            // every post behind it would wait on a refusal that never lifts.
-            // Revocation additionally stops the work: `lose_fence` is the
-            // handle the walk between resources reads, and a device that went
-            // on reading a shop after being signed out is the defect this
-            // whole path exists to prevent.
-            Err(why @ ControlPlaneError::Denied(_)) => {
+            // A refused sign-in, a machine the seller signed out, and a body
+            // the server read and will not take. One arm because the answer
+            // is the same for all three: none was applied, none will be by
+            // repeating it, so the report is dropped rather than left at the
+            // head of the outbox where every post behind it would wait on a
+            // refusal that never lifts.
+            Err(why @ (ControlPlaneError::Denied(_) | ControlPlaneError::Rejected(_))) => {
                 self.abandoned(&owed).await;
                 Err(PassError::Page(why.to_string()))
             }
@@ -1629,11 +1831,21 @@ impl RunLedger {
                 // leave this device believing the server had accepted a stop
                 // it never saw.
                 Ok(body) if !post.kind.proved_by(&body) => {
+                    self.unaccepted(&post).await;
                     return Err(PassError::Page(
                         "the server's answer was not one this device could read as an \
                          acknowledgement, so what it sent is still owed"
                             .to_owned(),
-                    ))
+                    ));
+                }
+                // The post that closes the run's record has landed, so this
+                // attempt holds a run the server has settled: it may do no
+                // further work on it, and a walk from here would post pages
+                // against a closed run.
+                Ok(_) if matches!(post.kind, PostKind::Ending) => {
+                    self.delivered(&post).await;
+                    self.stop.lose_fence();
+                    return Err(PassError::FenceLost);
                 }
                 Ok(_) => self.delivered(&post).await,
                 // Refused sign-in, or this machine signed out: not owed
@@ -1664,7 +1876,39 @@ impl RunLedger {
                     self.settle_fenced(&post, &why).await;
                     return Err(PassError::FenceLost);
                 }
-                Err(why) => return Err(PassError::Page(why.to_string())),
+                // The server read the body and will not take it. Kept out of
+                // the outage arm below deliberately: an outage lifts and the
+                // post is owed until it does, while this answer is a fact
+                // about the bytes — so the one copy is discarded here rather
+                // than offered under every future fence, and the failure is
+                // reported where the seller reads it.
+                //
+                // A page is also the end of the run rather than an
+                // interruption of it, and the disposition is recorded before
+                // the failure is returned. Counting the offer instead is what
+                // bounded nothing: a run whose earlier page the server kept
+                // has its streak cleared by that acceptance, so the next
+                // cycle reclaimed the run, re-walked the seller's shop and
+                // rebuilt the identical page for the identical answer. The
+                // mark says this device offers no further page for the run by
+                // itself, and it stands until the server accepts one, the
+                // seller presses, or the run leaves the open list.
+                //
+                // Anything else this device owes — a progress line, an
+                // abandonment — is dropped and reported as before: neither is
+                // the run's work, and neither says the run is over.
+                Err(why @ ControlPlaneError::Rejected(_)) => {
+                    self.abandoned(&post).await;
+                    if !matches!(post.kind, PostKind::Page) {
+                        return Err(PassError::Page(why.to_string()));
+                    }
+                    self.refused().await;
+                    return Err(PassError::RejectedPage(why.to_string()));
+                }
+                Err(why) => {
+                    self.unaccepted(&post).await;
+                    return Err(PassError::Page(why.to_string()));
+                }
             }
         }
         Ok(())
@@ -3099,7 +3343,14 @@ async fn deliver_owed(
         })
         .await
         .map_err(PassError::Journal)?;
-    ledger.flush_outbox().await
+    match ledger.flush_outbox().await {
+        Ok(()) => Ok(()),
+        // A terminal ending has to be reported here, because this call
+        // returns before any worker exists: the caller hands the failure back
+        // to whoever asked, and nothing else on this path tells the run.
+        Err(why) if matches!(why.stage(), ImportStage::Failed) => Err(refused(ledger, why).await),
+        Err(why) => Err(why),
+    }
 }
 
 /// Reports a refusal to the run, then hands it back for the window as well.
@@ -3455,10 +3706,19 @@ pub(crate) async fn serve_open_runs(
         return crate::scheduler::Discovery::Failed;
     };
     reconcile_stops(&ctx, &open).await;
+    // A run whose pages the server keeps failing is the one case where this
+    // pass has something to say about its own cadence: ten seconds is the
+    // right gap for finding new work and the wrong one for a server that
+    // cannot keep a page, so the existing ladder paces the retries rather
+    // than a timer of this module's own.
+    let mut failing = false;
     for run in &open {
         if !stopped.contains(&run.run) {
-            consider(&ctx, run).await;
+            failing |= consider(&ctx, run).await;
         }
+    }
+    if failing {
+        return crate::scheduler::Discovery::Failed;
     }
     crate::scheduler::Discovery::Quiet
 }
@@ -3466,9 +3726,12 @@ pub(crate) async fn serve_open_runs(
 /// Offers outbox entries which do not need a new claim.
 ///
 /// Every entry for a run no longer listed as open keeps the fence it already
-/// carries. A queued stop does too, but is offered while its run remains open:
-/// the tombstone prevents a new claim, and waiting for the row to close would
-/// wait forever because this post is the instruction that closes it.
+/// carries. A queued stop does too, and so does a queued terminal ending: both
+/// are offered while their run remains open, because each is the instruction
+/// that closes the row and waiting for the row to close would wait forever.
+/// The ending matters as much as the stop does — a run whose page the server
+/// refused is over, and until that reason reaches the server the row stays
+/// open and the device is offered work whose only outcome is the same refusal.
 ///
 /// Returns the stop snapshot read with the outbox. Those runs are skipped for
 /// the rest of this discovery pass even when their stop is accepted, because
@@ -3480,16 +3743,45 @@ async fn drain_unclaimed_outbox(
     let state = ctx.journal.read().await.ok()?;
     let stopped = state.stopped;
     for owed in state.outbox {
-        if open.iter().any(|run| run.run == owed.run) && !owed.settles_stop() {
+        let row = open.iter().find(|open| open.run == owed.run);
+        if row.is_some() && !owed.settles_run() {
             continue;
         }
-        let answered = ctx.ledger.post(&owed.path, owed.body.clone()).await;
+        let mut offer = owed.clone();
+        let mut answered = ctx.ledger.post(&offer.path, offer.body.clone()).await;
+        // A queued ending outlives the fence it was built under, and the
+        // server answers a stale fence with a conflict. Re-fenced and offered
+        // again rather than dropped: it is the only account of why the run
+        // ended, and the row stays open until the server has it.
+        if let (Err(ControlPlaneError::Fenced(why)), Some(row)) = (&answered, row) {
+            if matches!(owed.kind, PostKind::Ending) && !stop_is_spent(why) {
+                let Some(refenced) = refence_for_ending(ctx, &owed, row).await else {
+                    // Another owner holds the run, or this device is working
+                    // it: the ending waits for a later pass rather than being
+                    // dropped.
+                    continue;
+                };
+                offer = refenced;
+                answered = ctx.ledger.post(&offer.path, offer.body.clone()).await;
+            }
+        }
         let retire = match &answered {
             // Proved, not merely answered: the same rule the live path uses,
             // because a gateway answers a settled run's queue exactly as
             // happily as it answers an open one's.
-            Ok(body) if !owed.kind.proved_by(body) => return Some(stopped),
+            Ok(body) if !offer.kind.proved_by(body) => return Some(stopped),
             Ok(_) => JournalChange::Delivered(owed.id),
+            // An ending is retired only once the server has it or says the
+            // run is settled. Any other conflict is ambiguous, and dropping
+            // the reason on it is how a run is left open with nothing that
+            // will ever explain it.
+            Err(ControlPlaneError::Fenced(why)) if matches!(owed.kind, PostKind::Ending) => {
+                if stop_is_spent(why) {
+                    JournalChange::Delivered(owed.id)
+                } else {
+                    continue;
+                }
+            }
             // A conflict saying the run is already settled does spend a local
             // stop, because there is then nothing left to stop.
             Err(ControlPlaneError::Fenced(why))
@@ -3510,10 +3802,15 @@ async fn drain_unclaimed_outbox(
             // every post behind it — for other runs included — until the
             // seller signed this machine back in. Dropping it costs nothing
             // the server ever had.
+            // A page the server read and refused belongs here too, and for
+            // the same reason it does on the live path: the bytes are the
+            // thing it will not take, so offering them again is a queue this
+            // device can never empty.
             Err(
                 ControlPlaneError::Fenced(_)
                 | ControlPlaneError::Denied(_)
-                | ControlPlaneError::Revoked,
+                | ControlPlaneError::Revoked
+                | ControlPlaneError::Rejected(_),
             ) => JournalChange::Abandoned(owed.id),
             // Still offline. Everything after this would fail the same way,
             // and order matters, so it waits for the next cycle.
@@ -3526,51 +3823,111 @@ async fn drain_unclaimed_outbox(
     Some(stopped)
 }
 
-/// Drops the stop marks for runs the server has settled.
+/// Takes a fresh fence for one purpose: carrying a queued ending.
+///
+/// No worker and no walk. The claim carries no takeover, so it can never take
+/// a run another owner holds, and it is only made when the server still names
+/// this device as the owner and nothing here is working the run. The re-fence
+/// is written down before the post is offered, and the post is offered in the
+/// same pass: waiting for the next cycle would spend another lease.
+async fn refence_for_ending(
+    ctx: &ImportContext,
+    owed: &PendingPost,
+    open: &OpenImportRun,
+) -> Option<PendingPost> {
+    if open.owner_device.as_deref() != Some(ctx.device.as_str()) {
+        return None;
+    }
+    if ctx.supervisor.holds(owed.run).await {
+        return None;
+    }
+    let order = RunOrder {
+        run: owed.run,
+        source: Some(open.source),
+        phase: RunPhase::owed(open).unwrap_or(RunPhase::Discover),
+        intent: StartIntent::Found { nominated: true },
+    };
+    let claimed = claim(ctx, order, open.source, StopSignal::never(), false)
+        .await
+        .ok()?;
+    ctx.journal
+        .mutate(&JournalChange::Refence {
+            run: owed.run,
+            attempt: claimed.attempt,
+        })
+        .await
+        .ok()?;
+    Some(owed.under(claimed.attempt))
+}
+
+/// Drops the stop marks and the outage pauses for runs the server has
+/// settled.
 ///
 /// A run the seller stopped stays marked while the server still lists it as
 /// open, which is what stops a restart quietly reclaiming it. Once the server
 /// no longer offers it, the stop has been accepted and the mark has nothing
 /// left to protect.
+///
+/// A paused run is retired by the same fact: the row is gone, so there is no
+/// page left to offer and no reclaim left to bound. Leaving the count would
+/// have it decide the next run to carry that id, which is nothing this device
+/// has evidence about.
 async fn reconcile_stops(ctx: &ImportContext, open: &[OpenImportRun]) {
     let Ok(state) = ctx.journal.read().await else {
         return;
     };
-    for stopped in state.stopped {
-        if !open.iter().any(|run| run.run == stopped) {
-            if let Err(why) = ctx.journal.mutate(&JournalChange::Resumed(stopped)).await {
-                eprintln!("a settled stop could not be cleared locally: {why}");
+    let marked = state
+        .stopped
+        .iter()
+        .copied()
+        .chain(state.failing.iter().map(|failing| failing.run));
+    for run in marked {
+        if !open.iter().any(|row| row.run == run) {
+            if let Err(why) = ctx.journal.mutate(&JournalChange::Resumed(run)).await {
+                eprintln!("a settled import's local marks could not be cleared: {why}");
             }
         }
     }
 }
 
 /// One found run, taken if this device owes it anything.
-async fn consider(ctx: &ImportContext, open: &OpenImportRun) {
+///
+/// Answers whether this device is failing to submit that run's work, which is
+/// the one thing a discovery pass reports about its own cadence.
+async fn consider(ctx: &ImportContext, open: &OpenImportRun) -> bool {
     let Some(phase) = RunPhase::owed(open) else {
-        return;
+        return false;
     };
     if ctx.supervisor.holds(open.run).await {
-        return;
+        return false;
     }
+    let marks = ctx.journal.read().await.ok();
     // A run the seller stopped on this device is not picked up again by a
     // discovery cycle, however many times the server keeps offering it. Only
     // an explicit press resumes it, because the seller stopping something and
     // the device starting it again by itself is the same defect a volatile
     // handle produced across a restart.
-    if ctx
-        .journal
-        .read()
-        .await
-        .is_ok_and(|state| state.was_stopped(open.run))
+    if marks
+        .as_ref()
+        .is_some_and(|state| state.was_stopped(open.run))
     {
-        return;
+        return false;
+    }
+    // And a run whose page this server keeps failing is not picked up again
+    // either, for a neighbouring reason: each claim supersedes the last
+    // attempt's fence and starts the selection over, so a cycle that reclaims
+    // through an outage replaces the reason the seller is reading with a run
+    // that looks busy and describes nothing. The page stays queued, the
+    // reason stays on the run, and a press delivers it.
+    if marks.as_ref().is_some_and(|state| state.paused(open.run)) {
+        return true;
     }
     // The claim arbitrates rather than this device guessing from
     // `owner_device`: the server knows whether the lease it names is still
     // live, and a run whose owner has gone away must be resumable by the
     // phone the seller is holding.
-    ctx.supervisor
+    let taken = ctx
+        .supervisor
         .accept(
             ctx,
             RunOrder {
@@ -3582,8 +3939,15 @@ async fn consider(ctx: &ImportContext, open: &OpenImportRun) {
                 },
             },
         )
-        .await
-        .ok();
+        .await;
+    // A missing session or an unreadable shop is somebody else's run to work
+    // and says nothing about this device's cadence. A submission that failed
+    // does: it is this device and our own server, and the ladder is what
+    // paces the next try.
+    matches!(
+        &taken,
+        Err(NotAccepted::Refused(why)) if why.reason_code() == ImportReasonCode::SubmissionFailed
+    )
 }
 
 #[cfg(test)]
@@ -3757,6 +4121,18 @@ mod tests {
         /// device cannot read, which is what a proxy or a captive portal
         /// does.
         gibberish: bool,
+        /// Only the description page is refused, with the answer the live
+        /// incident produced: the claim, the renewal and the progress report
+        /// all succeed, so nothing this device reads tells it the failure is
+        /// its own and everything tells it to try again.
+        ///
+        /// Settable rather than fixed, because the recovery half of the
+        /// contract is what happens once the server comes back.
+        refuse_pages: AtomicBool,
+        /// How many times a page was offered, refused or not. The count the
+        /// hot loop is visible in: a bounded recovery offers a shop's page a
+        /// bounded number of times whatever the server keeps answering.
+        page_offers: AtomicUsize,
         /// The fence each claim answers with, so a second claim is a later
         /// attempt rather than the same one.
         attempts: AtomicUsize,
@@ -3789,6 +4165,29 @@ mod tests {
                 gibberish: true,
                 ..Self::default()
             }
+        }
+
+        /// The live incident's own shape: every route answers except the one
+        /// carrying the descriptions.
+        fn refusing_pages() -> Self {
+            Self {
+                refuse_pages: AtomicBool::new(true),
+                ..Self::default()
+            }
+        }
+
+        /// The server coming back, which is the other half of the contract:
+        /// a paused run has to be recoverable rather than merely quiet.
+        fn heals(&self) {
+            self.refuse_pages.store(false, Ordering::SeqCst);
+        }
+
+        async fn claims(&self) -> Vec<String> {
+            self.claims.lock().await.clone()
+        }
+
+        fn page_offers(&self) -> usize {
+            self.page_offers.load(Ordering::SeqCst)
         }
 
         async fn pages(&self) -> Vec<ImportPage> {
@@ -3847,6 +4246,16 @@ mod tests {
             if path.ends_with("/stop") {
                 self.stops.lock().await.push(body.to_owned());
                 return Ok(serde_json::json!({ "abandoned": true }).to_string());
+            }
+            self.page_offers.fetch_add(1, Ordering::SeqCst);
+            if self.refuse_pages.load(Ordering::SeqCst) {
+                // The bytes reached the server and the server could not keep
+                // them. A five-hundred rather than a refusal of this device:
+                // the page is still owed, the fence is still this attempt's,
+                // and nothing the device can read says how long it will last.
+                return Err(ControlPlaneError::Refused(
+                    "500: the page could not be stored".to_owned(),
+                ));
             }
             let page: ImportPage =
                 serde_json::from_str(body).expect("the page is well-formed json");
@@ -4563,6 +4972,16 @@ mod tests {
                 ImportStage::Interrupted,
                 ImportReasonCode::SubmissionFailed,
             ),
+            // And a page the server read and refused is the other side of
+            // that line, under the same class: the remedy is ours either
+            // way, but an outage lifts and this answer does not, so leaving
+            // the run open would offer it back to a device whose only move is
+            // to rebuild the identical page.
+            (
+                PassError::RejectedPage("422: the page names no run".to_owned()),
+                ImportStage::Failed,
+                ImportReasonCode::SubmissionFailed,
+            ),
             (
                 PassError::Source("502".to_owned()),
                 ImportStage::Interrupted,
@@ -4988,12 +5407,21 @@ mod tests {
     /// because the gate this path reads is the one the preflight consults at
     /// the instant the run is taken, and a claim that expired last year would
     /// refuse every cycle here.
-    async fn device_serving(
-        ledger: &Arc<FakePlane>,
-        plane: &Arc<OpenRuns>,
+    ///
+    /// Generic over the two seams rather than fixed to the two fixtures,
+    /// because one fake can be both: a server whose open-run answer depends
+    /// on what this device reported has to be the same object on both sides
+    /// of the wire, exactly as the real control plane is.
+    async fn device_serving<L, P>(
+        ledger: &Arc<L>,
+        plane: &Arc<P>,
         catalogue: super::CatalogueFactory,
         journal: &Arc<MemoryJournal>,
-    ) -> DesktopState {
+    ) -> DesktopState
+    where
+        L: LedgerTransport + 'static,
+        P: crate::heartbeat::ControlPlane + 'static,
+    {
         let store = Arc::new(crate::session::memory::MemorySessionStore::new());
         for marketplace in [Marketplace::Tes, Marketplace::Tpt] {
             crate::session::SessionStore::put(
@@ -5015,8 +5443,8 @@ mod tests {
         // The claims are JWT deadlines, which are seconds, and the instant is
         // this device's own reading in milliseconds.
         let seconds = crate::run::wall_now().0.saturating_div(1_000);
-        let transport: Arc<dyn LedgerTransport> = Arc::<FakePlane>::clone(ledger);
-        let registry: Arc<dyn crate::heartbeat::ControlPlane> = Arc::<OpenRuns>::clone(plane);
+        let transport: Arc<dyn LedgerTransport> = Arc::<L>::clone(ledger);
+        let registry: Arc<dyn crate::heartbeat::ControlPlane> = Arc::<P>::clone(plane);
         let kept: Arc<dyn ImportJournal> = Arc::<MemoryJournal>::clone(journal);
         let state = DesktopState::with_control_plane(
             crate::device::DeviceIdentity {
@@ -5089,23 +5517,34 @@ mod tests {
         plane.reported().await
     }
 
-    /// A found run is claimed, walked once, and not walked again.
-    ///
-    /// Two cycles rather than one, because the server's own `listed` flag is
-    /// what would otherwise stop the second — and this device must not depend
-    /// on having observed it before the next hour comes round. The supervisor
-    /// holding the run is what stops the second cycle, which is also what
-    /// stops a seller's press racing a check-in.
+    /// A second discovery pass must not reclaim work still reading the shop.
     #[tokio::test]
-    async fn a_found_run_is_claimed_and_walked_once_however_many_cycles_pass() {
+    async fn a_running_import_is_not_claimed_again_by_discovery() {
         let ledger = Arc::new(FakePlane::default());
         let plane = OpenRuns::answering(vec![open_run(false, false)]);
         let journal = Arc::new(MemoryJournal::default());
-        let state = device_serving(&ledger, &plane, two_resources(), &journal).await;
+        let pause = Arc::new(tokio::sync::Barrier::new(2));
+        let source_pause = Arc::clone(&pause);
+        let sources: super::CatalogueFactory = Arc::new(move |_ctx, _source| {
+            let mut source = Scripted::of(2, PDF.to_vec());
+            source.pause = Some(Arc::clone(&source_pause));
+            Ok(Box::new(source))
+        });
+        let state = device_serving(&ledger, &plane, sources, &journal).await;
 
-        for _ in 0..2 {
-            super::serve_open_runs(&state, plane.as_ref()).await;
-        }
+        super::serve_open_runs(&state, plane.as_ref()).await;
+        tokio::time::timeout(std::time::Duration::from_secs(5), pause.wait())
+            .await
+            .expect("the source begins reading");
+        super::serve_open_runs(&state, plane.as_ref()).await;
+        assert_eq!(
+            ledger.claims.lock().await.len(),
+            1,
+            "the running import retains its fence"
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(5), pause.wait())
+            .await
+            .expect("the source finishes reading");
         let posted = pages_reaching(&ledger, 1).await;
 
         assert_eq!(
@@ -5121,26 +5560,6 @@ mod tests {
             posted[0].enumeration_complete,
             "and says the discovery is closed, which is what the run needs to leave the \
              discovering stage"
-        );
-        assert_eq!(
-            posted[0].attempt,
-            Some(ATTEMPT),
-            "under the fence the claim answered, or the server refuses the page"
-        );
-        assert!(
-            posted[0].receipt.is_some(),
-            "and under a receipt it can replay"
-        );
-        assert_eq!(
-            ledger.claims.lock().await.len(),
-            1,
-            "claimed once: a second claim would be a second fence for work already in hand"
-        );
-        assert_eq!(
-            plane.asked.load(Ordering::SeqCst),
-            2,
-            "the guard is over the work, not over the question: a run the seller ticks an \
-             hour later has to be found by a later cycle"
         );
     }
 
@@ -5173,6 +5592,7 @@ mod tests {
             }],
             outbox: Vec::new(),
             stopped: Vec::new(),
+            failing: Vec::new(),
         }));
         let state = device_serving(&ledger, &plane, two_resources(), &journal).await;
 
@@ -5540,7 +5960,7 @@ mod tests {
         ledger_keeping(&online, RunPhase::Discover, StopSignal::never(), kept)
             .flush_outbox()
             .await
-            .expect("the kept refusal is delivered");
+            .expect_err("the delivered ending closes the run");
 
         let reported = online.reported().await;
         let [report] = reported.as_slice() else {
@@ -5905,6 +6325,7 @@ mod tests {
             runs: Vec::new(),
             outbox: vec![stop],
             stopped: vec![RUN],
+            failing: Vec::new(),
         }));
         let state = device_serving(&ledger, &runs, two_resources(), &journal).await;
 
@@ -6312,6 +6733,7 @@ mod tests {
             runs: Vec::new(),
             outbox: Vec::new(),
             stopped: Vec::new(),
+            failing: Vec::new(),
         }));
         let kept: Arc<dyn ImportJournal> = Arc::<MemoryJournal>::clone(&journal);
         let transport: Arc<dyn LedgerTransport> = Arc::<FakePlane>::clone(&plane);
@@ -6401,6 +6823,852 @@ mod tests {
         assert_eq!(
             lease.lease_expires_at, 1_756_000_060_000,
             "milliseconds since the epoch, which is the console's own convention"
+        );
+    }
+
+    /// How many times one device may offer the same page to a server that
+    /// keeps failing it.
+    ///
+    /// Three: the offer itself, and two more in case what failed was the
+    /// connection rather than the server. Past that the evidence is that
+    /// offering it again changes nothing, and it is the same shape
+    /// `RENEW_EVERY` is chosen against — three consecutive failures are
+    /// survivable and a fourth is a fact rather than a coincidence.
+    ///
+    /// A bound on this device's own re-reads rather than on the run: the
+    /// queued page is kept, and `scheduler::DISCOVERY_BACKOFF` is what paces
+    /// the retries once the pass reports the failure instead of hiding it in
+    /// a background task.
+    const BOUNDED_OFFERS: usize = 3;
+
+    /// Waits for the run's own task to put the run down.
+    ///
+    /// The work is deliberately in a task, so a cycle is only one cycle once
+    /// the supervisor has released the slot; without this a loop of cycles
+    /// would measure the supervisor's guard rather than the reclaim.
+    async fn settles(state: &DesktopState, run: tam_types::Uuid) {
+        for _ in 0..400_u32 {
+            if !state.supervisor().holds(run).await {
+                return;
+            }
+            tokio::time::sleep(core::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    /// The reported incident, in process: four minutes of discovery cycles
+    /// against a server that answers every route but the one carrying the
+    /// descriptions.
+    ///
+    /// The run of 2026-09-16 climbed from attempt twelve to attempt
+    /// fifty-three in twenty-four minutes with `processed` frozen at one of
+    /// two, because nothing here is bounded: the page is refused, the run
+    /// ends as an interruption, the server goes on listing it as open, and
+    /// the next cycle ten seconds later claims it again — taking a fresh
+    /// fence, restarting the shop, and replacing the reason the seller was
+    /// reading with a run that looks busy.
+    ///
+    /// Three properties, because the defect is all three: the device stops
+    /// reclaiming, it stops re-reading the seller's shop, and what it leaves
+    /// behind is a reason rather than silence.
+    #[tokio::test]
+    async fn a_page_the_server_keeps_failing_pauses_the_run_rather_than_reclaiming_it_every_cycle()
+    {
+        let plane = Arc::new(FakePlane::refusing_pages());
+        let runs = OpenRuns::chosen(open_run(true, true), &["1", "2"]);
+        let journal = Arc::new(MemoryJournal::default());
+        let state = device_serving(&plane, &runs, two_resources(), &journal).await;
+
+        // Six cycles is a minute of the live cadence, and four more than any
+        // bounded recovery should need.
+        for _ in 0..6_u32 {
+            super::serve_open_runs(&state, runs.as_ref()).await;
+            settles(&state, RUN).await;
+        }
+
+        let claims = plane.claims().await;
+        assert!(
+            claims.len() <= BOUNDED_OFFERS,
+            "six cycles over a server failing one page took {} claims; every claim supersedes \
+             the last attempt's fence and starts the selection again, which is the run that \
+             reached attempt fifty-three having described nothing",
+            claims.len()
+        );
+        assert!(
+            plane.page_offers() <= BOUNDED_OFFERS,
+            "and the seller's shop is read a bounded number of times rather than once every \
+             ten seconds for as long as the server is unwell: {} offers",
+            plane.page_offers()
+        );
+        let reported = plane.reported().await;
+        assert!(
+            reported.iter().any(|report| {
+                report.reason_code == Some(ImportReasonCode::SubmissionFailed)
+                    && report.reason.is_some()
+            }),
+            "and the run is left carrying why it stopped, which is what the seller reads: a \
+             reclaim that erases the reason leaves a run that looks like it is working: \
+             {reported:?}"
+        );
+    }
+
+    /// The other half of a pause: it has to be recoverable, and recovering
+    /// must not deliver the same catalogue several times over.
+    ///
+    /// A guard rather than an account of the incident: this passes on the
+    /// code as it stands, and the reason it does is worth writing down.
+    /// `deliver_owed` offers what the run already owes before any new work,
+    /// so the second cycle fails on the queued page and never reaches the
+    /// walk — one page is queued under one receipt however many times the
+    /// run is reclaimed. The re-reading the incident shows is therefore the
+    /// claim and the fence, which is test A's subject, not duplicate pages.
+    ///
+    /// What this holds is the recovery side of whatever bound test A forces:
+    /// a device that stops reclaiming must still deliver that page exactly
+    /// once when asked, under the receipt it was queued with, and the
+    /// selection must arrive. A pause that never recovers, or one that
+    /// re-describes the shop into a second receipt on the way out, would
+    /// fail here.
+    #[tokio::test]
+    async fn a_paused_run_delivers_its_queued_page_once_when_the_server_recovers() {
+        let plane = Arc::new(FakePlane::refusing_pages());
+        let runs = OpenRuns::chosen(open_run(true, true), &["1", "2"]);
+        let journal = Arc::new(MemoryJournal::default());
+        let state = device_serving(&plane, &runs, two_resources(), &journal).await;
+
+        for _ in 0..6_u32 {
+            super::serve_open_runs(&state, runs.as_ref()).await;
+            settles(&state, RUN).await;
+        }
+        plane.heals();
+
+        let ctx = super::ImportContext::of(&state).expect("the build can import");
+        state
+            .supervisor()
+            .accept(
+                &ctx,
+                super::RunOrder {
+                    run: RUN,
+                    source: None,
+                    phase: RunPhase::Describe,
+                    intent: super::StartIntent::Pressed { takeover: false },
+                },
+            )
+            .await
+            .expect("an explicit press resumes a run this device paused");
+        settles(&state, RUN).await;
+
+        let delivered = plane.pages().await;
+        let described: Vec<String> = delivered
+            .iter()
+            .flat_map(|page| page.resources.iter())
+            .map(|resource| resource.locator.as_str().to_owned())
+            .collect();
+        let mut once = described.clone();
+        once.sort();
+        once.dedup();
+        assert_eq!(
+            described.len(),
+            once.len(),
+            "recovery delivers each resource once; {} descriptions of {} resources is the \
+             shop arriving several times over, one page per failed cycle, each under its own \
+             receipt so the server reads them as distinct work rather than as replays",
+            described.len(),
+            once.len()
+        );
+        assert_eq!(
+            once.len(),
+            2,
+            "and the selection does arrive: a pause that never recovers is the outage made \
+             permanent"
+        );
+    }
+
+    /// A page the server kept starts the count again.
+    ///
+    /// The transition neither test above reaches, and the one that decides
+    /// whether the bound is a streak or a lifetime total: a run interrupted
+    /// twice by an outage this morning and twice more this afternoon would
+    /// stop being reclaimed at all, though the server had accepted a page
+    /// between them and nothing about the run was unwell.
+    ///
+    /// Read through the journal's own reader, because that is what a
+    /// discovery cycle asks before it claims.
+    #[tokio::test]
+    async fn an_accepted_page_starts_the_outage_count_again() {
+        let plane = Arc::new(FakePlane::refusing_pages());
+        let journal = Arc::new(MemoryJournal::default());
+        let kept: Arc<dyn ImportJournal> = Arc::<MemoryJournal>::clone(&journal);
+        let ledger = ledger_keeping(&plane, RunPhase::Describe, StopSignal::never(), kept);
+
+        ledger
+            .post_page(a_page(false), &super::RunProgress::default())
+            .await
+            .expect_err("a page the server would not store is not a delivered page");
+        assert_eq!(
+            journal
+                .read()
+                .await
+                .expect("the journal reads")
+                .failures(RUN),
+            1,
+            "the offer that failed is counted, or nothing bounds the reclaims"
+        );
+
+        plane.heals();
+        ledger
+            .flush_outbox()
+            .await
+            .expect("the queued page reaches a server that came back");
+
+        let state = journal.read().await.expect("the journal reads");
+        assert_eq!(
+            state.failures(RUN),
+            0,
+            "and the page the server kept clears what came before it: a count that only ever \
+             grew would pause a healthy run on the strength of two old outages"
+        );
+        assert!(!state.paused(RUN), "so the next cycle may take the run");
+    }
+
+    /// A shop one row over a page, so the walk posts two listing pages and
+    /// the second is the one the server reads and refuses.
+    const OVER_ONE_PAGE: i64 = 26;
+
+    /// A catalogue that counts how often the seller's shop was walked.
+    ///
+    /// The count is the seller's own cost of a page this device rebuilds: a
+    /// re-offer is a fresh enumeration of their shop against a marketplace
+    /// that rate-limits, for an answer the server has already given.
+    struct Counted {
+        shop: Scripted,
+        walks: Arc<AtomicUsize>,
+    }
+
+    impl CatalogueSource for Counted {
+        fn list<'a>(
+            &'a self,
+            found: &'a super::CatalogueProgress,
+        ) -> SourceFuture<'a, Vec<ListedResource>> {
+            self.walks.fetch_add(1, Ordering::SeqCst);
+            self.shop.list(found)
+        }
+
+        fn read(&self, resource: i64) -> SourceFuture<'_, ImportedListing> {
+            self.shop.read(resource)
+        }
+
+        fn bundle(&self, resource: i64) -> SourceFuture<'_, Option<Vec<u8>>> {
+            self.shop.bundle(resource)
+        }
+    }
+
+    fn counted_shop(count: i64, walks: &Arc<AtomicUsize>) -> super::CatalogueFactory {
+        let counting = Arc::clone(walks);
+        Arc::new(move |_ctx, _source| {
+            let shop: Box<dyn CatalogueSource> = Box::new(Counted {
+                shop: Scripted::of(count, PDF.to_vec()),
+                walks: Arc::clone(&counting),
+            });
+            Ok(shop)
+        })
+    }
+
+    /// The server as it answers a page it has read and will not take, and as
+    /// it answers everything after that.
+    ///
+    /// Both seams in one object, which is the point of it: an open-run list
+    /// that goes on offering a run whatever the device reports cannot tell a
+    /// device that settled the run from one that rebuilt the refused page six
+    /// times, because it answers both the same. This one closes the run's
+    /// record when the device reports a terminal stage for it, exactly as the
+    /// run's own record does, and keeps offering it while the device reports
+    /// an interruption.
+    #[derive(Default)]
+    struct Refusing {
+        /// How many times the last listing page — the one carrying
+        /// `enumeration_complete` — was offered and refused the way a
+        /// four-hundred, a four-one-three or a four-two-two is: the bytes
+        /// reached the server, which read them and will not keep them.
+        refusals: AtomicUsize,
+        /// The pages the server did keep, which is the work the seller must
+        /// not lose to the page that followed it.
+        kept: Mutex<Vec<ImportPage>>,
+        reports: Mutex<Vec<ImportProgressReport>>,
+        claims: AtomicUsize,
+        attempts: AtomicUsize,
+        /// Whether the run's record is closed, which is what a terminal
+        /// report from the device does to it.
+        settled: AtomicBool,
+        /// Whether the post that closes the run's record is lost on its way,
+        /// which is the case the ending has to survive: the page is refused,
+        /// the run is over, and the one post that says so cannot be
+        /// delivered yet.
+        ///
+        /// The terminal report only, rather than the whole route. A route
+        /// that was away for every progress line would hold the page queue
+        /// behind it — one queue, delivered in order — so the page would
+        /// never be offered and there would be no rejection to end the run
+        /// with. This isolates the post whose delivery is in question.
+        endings_away: AtomicBool,
+        /// The next page offer meets an outage, so the page is queued and
+        /// offered again by whatever attempt comes next.
+        outage_first: AtomicBool,
+        /// Every page is refused rather than only the last, which is what a
+        /// queued page meets when it is re-offered.
+        refuses_every_page: AtomicBool,
+        /// Whether a post carrying a superseded fence is answered as one.
+        ///
+        /// A real server always does; the other cases here never reach it,
+        /// so it is opt-in to keep them reading as the one thing they are
+        /// about.
+        fences_stale: AtomicBool,
+    }
+
+    impl Refusing {
+        /// The same server losing the post that closes a run's record, so a
+        /// terminal ending is queued rather than delivered.
+        fn losing_endings() -> Self {
+            Self {
+                endings_away: AtomicBool::new(true),
+                ..Self::default()
+            }
+        }
+
+        /// The reason's route carrying endings again.
+        fn carries_endings(&self) {
+            self.endings_away.store(false, Ordering::SeqCst);
+        }
+
+        /// A server that loses one page to an outage and then refuses it.
+        ///
+        /// The order the reported defect needs: the page is queued while the
+        /// server is unwell, and the attempt that offers it again is the one
+        /// that learns the server will not keep it at all.
+        fn refusing_after_an_outage() -> Self {
+            Self {
+                outage_first: AtomicBool::new(true),
+                refuses_every_page: AtomicBool::new(true),
+                ..Self::default()
+            }
+        }
+
+        /// The ending's route away, and every stale fence answered as one.
+        fn losing_endings_past_the_lease() -> Self {
+            Self {
+                endings_away: AtomicBool::new(true),
+                fences_stale: AtomicBool::new(true),
+                ..Self::default()
+            }
+        }
+
+        /// The lease this device holds running out while it owes an ending:
+        /// the server has moved the run's fence on, so the queued post names
+        /// an attempt that no longer holds it.
+        fn lease_lapses(&self) {
+            self.attempts.fetch_add(1, Ordering::SeqCst);
+        }
+
+        /// Whether a post under this attempt still holds the run.
+        fn fenced_out(&self, attempt: u64) -> bool {
+            let held = u64::try_from(self.attempts.load(Ordering::SeqCst)).unwrap_or(u64::MAX);
+            self.fences_stale.load(Ordering::SeqCst) && attempt < held
+        }
+
+        async fn record(&self, path: &str, body: &str) -> Result<String, ControlPlaneError> {
+            if path.ends_with("/claim") {
+                self.claims.fetch_add(1, Ordering::SeqCst);
+                let attempt = self.attempts.fetch_add(1, Ordering::SeqCst) + 1;
+                return Ok(serde_json::json!({
+                    "attempt": attempt,
+                    "lease_expires_at": NOW.0 + 60_000,
+                })
+                .to_string());
+            }
+            if path.ends_with("/renew") {
+                return Ok(serde_json::json!({
+                    "attempt": self.attempts.load(Ordering::SeqCst).max(1),
+                    "lease_expires_at": NOW.0 + 60_000,
+                })
+                .to_string());
+            }
+            if path.ends_with("/progress") {
+                let report: ImportProgressReport =
+                    serde_json::from_str(body).expect("the report is well-formed json");
+                // A post under a fence the run has moved on from, which is
+                // what a queued ending meets once the lease it was built
+                // under has run out.
+                if self.fenced_out(report.attempt) {
+                    return Err(ControlPlaneError::Fenced(
+                        r#"{"errors":[{"code":"import_run_fenced","kind":"validation","message":"another attempt holds this import"}]}"#
+                            .to_owned(),
+                    ));
+                }
+                if report.stage == ImportStage::Failed {
+                    if self.endings_away.load(Ordering::SeqCst) {
+                        // An outage rather than a refusal: the post is owed
+                        // until the route carries it, which is what the
+                        // outbox is for.
+                        return Err(ControlPlaneError::Refused(
+                            "503: the report could not be stored".to_owned(),
+                        ));
+                    }
+                    // The run's record closes on the device's own terminal
+                    // report, which is what makes the open-run answer below
+                    // evidence rather than a fixture.
+                    self.settled.store(true, Ordering::SeqCst);
+                }
+                self.reports.lock().await.push(report);
+                return Ok(String::new());
+            }
+            let page: ImportPage =
+                serde_json::from_str(body).expect("the page is well-formed json");
+            if self.outage_first.swap(false, Ordering::SeqCst) {
+                // The bytes never arrived, so the page is still owed and the
+                // next attempt offers the identical copy.
+                return Err(ControlPlaneError::Refused(
+                    "500: the page could not be stored".to_owned(),
+                ));
+            }
+            if page.enumeration_complete || self.refuses_every_page.load(Ordering::SeqCst) {
+                self.refusals.fetch_add(1, Ordering::SeqCst);
+                return Err(ControlPlaneError::Rejected(
+                    "422: the page named a resource this run does not hold".to_owned(),
+                ));
+            }
+            let rows = page.listed.as_ref().map_or(0, Vec::len);
+            let listed = u32::try_from(rows).unwrap_or(u32::MAX);
+            let described = u32::try_from(page.resources.len()).unwrap_or(u32::MAX);
+            let applied = listed.max(described);
+            self.kept.lock().await.push(page);
+            Ok(serde_json::json!({
+                "applied": applied,
+                "skipped": 0,
+                "described_total": applied,
+                "create_job": serde_json::Value::Null,
+                "complete": false,
+            })
+            .to_string())
+        }
+    }
+
+    impl LedgerTransport for Refusing {
+        fn post<'a>(&'a self, path: &'a str, body: String) -> PlaneFuture<'a, String> {
+            Box::pin(async move { self.record(path, &body).await })
+        }
+    }
+
+    impl crate::heartbeat::ControlPlane for Refusing {
+        fn reachable(&self) -> PlaneFuture<'_, ()> {
+            Box::pin(core::future::ready(Ok(())))
+        }
+
+        fn consent_stands(&self, _marketplace: Marketplace) -> PlaneFuture<'_, bool> {
+            Box::pin(core::future::ready(Ok(true)))
+        }
+
+        fn sync_request_source(
+            &self,
+            _request: tam_types::Uuid,
+        ) -> PlaneFuture<'_, tam_types::InventoryId> {
+            Box::pin(core::future::ready(Ok(tam_types::InventoryId::Tes)))
+        }
+
+        fn import_run_facts(
+            &self,
+            _run: tam_types::Uuid,
+        ) -> PlaneFuture<'_, crate::import::RunFacts> {
+            Box::pin(core::future::ready(Ok(crate::import::RunFacts {
+                source: tam_types::InventoryId::Tes,
+                discovered: 0,
+                processed: 0,
+                described: 0,
+                enumeration_complete: false,
+            })))
+        }
+
+        fn import_selection<'a>(
+            &'a self,
+            _device: &'a DeviceId,
+            _run: tam_types::Uuid,
+        ) -> PlaneFuture<'a, Vec<String>> {
+            Box::pin(core::future::ready(Ok(Vec::new())))
+        }
+
+        fn open_import_runs<'a>(
+            &'a self,
+            _device: &'a DeviceId,
+        ) -> PlaneFuture<'a, Vec<super::OpenImportRun>> {
+            let open = if self.settled.load(Ordering::SeqCst) {
+                Vec::new()
+            } else {
+                // A run this device has claimed is listed as owned by it,
+                // which is what a later pass reads before re-fencing.
+                let owner = (self.claims.load(Ordering::SeqCst) > 0).then(|| DEVICE.to_owned());
+                vec![super::OpenImportRun {
+                    owner_device: owner,
+                    ..open_run(false, false)
+                }]
+            };
+            Box::pin(core::future::ready(Ok(open)))
+        }
+
+        fn register<'a>(
+            &'a self,
+            _device: &'a crate::device::DeviceIdentity,
+            _facts: crate::heartbeat::HostFacts,
+        ) -> PlaneFuture<'a, ()> {
+            Box::pin(core::future::ready(Ok(())))
+        }
+
+        fn heartbeat<'a>(
+            &'a self,
+            _device: &'a DeviceId,
+            _sessions: &'a [crate::heartbeat::SessionReport],
+        ) -> PlaneFuture<'a, crate::heartbeat::CheckIn> {
+            Box::pin(core::future::ready(Ok(crate::heartbeat::CheckIn {
+                revoked: false,
+                entitlement: None,
+            })))
+        }
+    }
+
+    /// A page the server has read and refused ends the run, rather than being
+    /// built again every cycle for as long as the run stays open.
+    ///
+    /// The neighbouring defect to the outage this module's pause bounds, and
+    /// the reason that bound does not reach it: the first page of this shop is
+    /// accepted, which clears the streak, and the second is refused, which
+    /// starts it at one. The count never reaches the pause, the run is
+    /// reported as an interruption, the server goes on offering it, and every
+    /// cycle re-walks the seller's shop to rebuild the one page the server has
+    /// already said it will not keep.
+    ///
+    /// Four properties, because the defect is all four: the shop is walked
+    /// once, the refused page is offered once, the page the server did keep
+    /// stands, and what the seller is left reading is a failure with a reason
+    /// rather than a run that looks like it is still working.
+    #[tokio::test]
+    async fn a_permanent_second_page_rejection_settles_the_run() {
+        let plane = Arc::new(Refusing::default());
+        let journal = Arc::new(MemoryJournal::default());
+        let walks = Arc::new(AtomicUsize::new(0));
+        let state = device_serving(
+            &plane,
+            &plane,
+            counted_shop(OVER_ONE_PAGE, &walks),
+            &journal,
+        )
+        .await;
+
+        // Six cycles is a minute of the live cadence, and four more than any
+        // bounded ending should need.
+        for _ in 0..6_u32 {
+            super::serve_open_runs(&state, plane.as_ref()).await;
+            settles(&state, RUN).await;
+        }
+
+        let reported = plane.reports.lock().await.clone();
+        assert!(
+            reported.iter().any(|report| {
+                report.stage == ImportStage::Failed
+                    && report.reason_code == Some(ImportReasonCode::SubmissionFailed)
+                    && report.reason.is_some()
+            }),
+            "a page the server will not take leaves the seller a failure they can read and act \
+             on; reported as an interruption it is a run that looks busy for as long as nobody \
+             looks at it: {reported:?}"
+        );
+        assert_eq!(
+            plane.refusals.load(Ordering::SeqCst),
+            1,
+            "and the refused page is offered once: the server read those bytes and will not \
+             keep them, so every further offer is the same answer bought with another walk of \
+             the seller's shop"
+        );
+        assert_eq!(
+            walks.load(Ordering::SeqCst),
+            1,
+            "so the shop is enumerated once rather than once every cycle for as long as the \
+             run stays open"
+        );
+        let kept = plane.kept.lock().await.clone();
+        assert_eq!(
+            kept.len(),
+            1,
+            "the page the server did keep is not offered again either, under a second receipt \
+             the server would read as a second shop's worth of rows"
+        );
+        assert_eq!(
+            kept.first()
+                .and_then(|page| page.listed.as_ref())
+                .map_or(0, Vec::len),
+            PAGE_SIZE,
+            "and it still carries the rows it carried: a refusal of the page after it must not \
+             cost the seller the one the server accepted"
+        );
+        assert_eq!(
+            plane.claims.load(Ordering::SeqCst),
+            1,
+            "one claim rather than one per cycle, each of which supersedes the last attempt's \
+             fence and starts the shop again"
+        );
+    }
+
+    /// The other half of a terminal rejection: the reason has to reach the
+    /// server, and it has to reach it before the shop is walked again.
+    ///
+    /// The page is refused at the instant the route the reason travels on is
+    /// away, so the ending is queued rather than delivered and the run stays
+    /// listed open. Two things then have to hold together, and they pull
+    /// against each other: the queued reason must not be dropped, and the
+    /// still-open row must not be taken as an invitation to rebuild the page
+    /// the server has already refused. What resolves it is the disposition
+    /// this device recorded when the page was refused, plus the drain
+    /// offering the one post that closes the row while the row is still open
+    /// — the same rule a queued stop has always been offered under.
+    #[tokio::test]
+    async fn a_queued_terminal_ending_is_delivered_before_the_shop_is_walked_again() {
+        let plane = Arc::new(Refusing::losing_endings());
+        let journal = Arc::new(MemoryJournal::default());
+        let walks = Arc::new(AtomicUsize::new(0));
+        let state = device_serving(
+            &plane,
+            &plane,
+            counted_shop(OVER_ONE_PAGE, &walks),
+            &journal,
+        )
+        .await;
+
+        super::serve_open_runs(&state, plane.as_ref()).await;
+        settles(&state, RUN).await;
+        assert!(
+            journal
+                .read()
+                .await
+                .expect("the journal reads")
+                .owed(RUN)
+                .iter()
+                .any(|post| post.path.ends_with("/progress")),
+            "the reason the run ended is owed rather than lost when the route it travels on \
+             is away"
+        );
+        plane.carries_endings();
+
+        for _ in 0..5_u32 {
+            super::serve_open_runs(&state, plane.as_ref()).await;
+            settles(&state, RUN).await;
+        }
+
+        let reported = plane.reports.lock().await.clone();
+        assert!(
+            reported.iter().any(|report| {
+                report.stage == ImportStage::Failed
+                    && report.reason_code == Some(ImportReasonCode::SubmissionFailed)
+            }),
+            "the queued ending reaches the server on the first cycle that can carry it, or the \
+             seller is left reading a run that looks like it is still working: {reported:?}"
+        );
+        assert_eq!(
+            walks.load(Ordering::SeqCst),
+            1,
+            "and it reaches it without the shop being walked a second time: a row the server \
+             still lists as open is not an invitation to rebuild the page it refused"
+        );
+        assert_eq!(
+            plane.refusals.load(Ordering::SeqCst),
+            1,
+            "so the refused page is offered once, whatever the reason's route was doing at the \
+             time"
+        );
+        assert_eq!(
+            plane.claims.load(Ordering::SeqCst),
+            1,
+            "and the run is claimed once: a second claim would supersede the fence and start \
+             the selection again for the same answer"
+        );
+    }
+
+    /// A queued page refused on the way in, before any worker exists to
+    /// report it.
+    ///
+    /// The order is the whole of it: the page met an outage and was queued,
+    /// and the attempt that offers it again meets the refusal while it is
+    /// still delivering what the run owed — before the source is read, before
+    /// the shop is walked, before anything is spawned. That path returns the
+    /// failure to whoever asked, and nothing on it tells the run, so the
+    /// device stops offering the page and the seller is left with a run that
+    /// reads as though it were still going.
+    #[tokio::test]
+    async fn a_queued_page_rejected_before_the_worker_reports_its_failure() {
+        let plane = Arc::new(Refusing::refusing_after_an_outage());
+        let journal = Arc::new(MemoryJournal::default());
+        let walks = Arc::new(AtomicUsize::new(0));
+        let state = device_serving(
+            &plane,
+            &plane,
+            counted_shop(OVER_ONE_PAGE, &walks),
+            &journal,
+        )
+        .await;
+
+        for _ in 0..6_u32 {
+            super::serve_open_runs(&state, plane.as_ref()).await;
+            settles(&state, RUN).await;
+        }
+
+        let reported = plane.reports.lock().await.clone();
+        assert!(
+            reported.iter().any(|report| {
+                report.stage == ImportStage::Failed
+                    && report.reason_code == Some(ImportReasonCode::SubmissionFailed)
+                    && report.reason.is_some()
+            }),
+            "a page refused while the run's queue was being drained is still the end of the \
+             run, and the seller has to be able to read that: {reported:?}"
+        );
+        assert_eq!(
+            walks.load(Ordering::SeqCst),
+            1,
+            "and the shop is walked once: the attempt that met the refusal never got as far as \
+             reading it"
+        );
+        assert!(
+            plane.kept.lock().await.is_empty(),
+            "nothing was kept, which is what makes this a failure rather than a partial run"
+        );
+        assert_eq!(
+            plane.claims.load(Ordering::SeqCst),
+            2,
+            "two claims — the one that queued the page and the one that learned the answer — \
+             rather than one per cycle"
+        );
+    }
+
+    /// A press that delivers a run's own ending does not then read the shop.
+    ///
+    /// The ending was queued because its route was away, and the seller
+    /// presses once it is back. Delivering that post closes the run's record,
+    /// so the attempt holding it owns a run the server has settled: walking
+    /// the shop from there posts pages against a closed run and charges the
+    /// seller a second enumeration for them.
+    #[tokio::test]
+    async fn a_press_that_delivers_an_acknowledged_ending_does_not_read_the_shop_again() {
+        let plane = Arc::new(Refusing::losing_endings());
+        let journal = Arc::new(MemoryJournal::default());
+        let walks = Arc::new(AtomicUsize::new(0));
+        let state = device_serving(
+            &plane,
+            &plane,
+            counted_shop(OVER_ONE_PAGE, &walks),
+            &journal,
+        )
+        .await;
+
+        super::serve_open_runs(&state, plane.as_ref()).await;
+        settles(&state, RUN).await;
+        plane.carries_endings();
+
+        let ctx = super::ImportContext::of(&state).expect("the build can import");
+        let pressed = state
+            .supervisor()
+            .accept(
+                &ctx,
+                super::RunOrder {
+                    run: RUN,
+                    source: None,
+                    phase: RunPhase::Discover,
+                    intent: super::StartIntent::Pressed { takeover: false },
+                },
+            )
+            .await;
+        settles(&state, RUN).await;
+
+        assert!(
+            pressed.is_err(),
+            "the press carries the reason to the server and then stops, rather than being told \
+             work has started on a run the same post has just closed"
+        );
+        assert_eq!(
+            walks.load(Ordering::SeqCst),
+            1,
+            "so the shop is read once: the press delivered a settled run's ending, which is not \
+             an instruction to read the shop again"
+        );
+        assert_eq!(
+            plane.kept.lock().await.len(),
+            1,
+            "and no second page is posted against a run the server has closed"
+        );
+        let reported = plane.reports.lock().await.clone();
+        assert!(
+            reported
+                .iter()
+                .any(|report| report.stage == ImportStage::Failed),
+            "the queued reason does reach the server, which is what the press was for: \
+             {reported:?}"
+        );
+    }
+
+    /// A queued ending whose lease ran out while it waited.
+    ///
+    /// The outage outlasted the fence, so the post names an attempt the run
+    /// has moved on from and the server answers it as a conflict. Dropping it
+    /// there loses the only account of why the run ended, and the row stays
+    /// open with nothing left that would ever explain it. A fresh fence taken
+    /// for the report alone is what carries it: a claim with no takeover
+    /// never displaces another owner, and nothing else about the run starts.
+    #[tokio::test]
+    async fn a_queued_ending_past_its_lease_is_reported_without_reading_the_shop_again() {
+        let plane = Arc::new(Refusing::losing_endings_past_the_lease());
+        let journal = Arc::new(MemoryJournal::default());
+        let walks = Arc::new(AtomicUsize::new(0));
+        let state = device_serving(
+            &plane,
+            &plane,
+            counted_shop(OVER_ONE_PAGE, &walks),
+            &journal,
+        )
+        .await;
+
+        super::serve_open_runs(&state, plane.as_ref()).await;
+        settles(&state, RUN).await;
+        plane.carries_endings();
+        plane.lease_lapses();
+
+        for _ in 0..3_u32 {
+            super::serve_open_runs(&state, plane.as_ref()).await;
+            settles(&state, RUN).await;
+        }
+
+        let reported = plane.reports.lock().await.clone();
+        assert!(
+            reported.iter().any(|report| {
+                report.stage == ImportStage::Failed
+                    && report.reason_code == Some(ImportReasonCode::SubmissionFailed)
+            }),
+            "the reason survives a lease it outlived: dropped on the conflict, the run is left \
+             open with nothing that will ever say why it stopped: {reported:?}"
+        );
+        assert!(
+            journal
+                .read()
+                .await
+                .expect("the journal reads")
+                .owed(RUN)
+                .is_empty(),
+            "and it is retired once the server has it, rather than offered for the life of the \
+             process"
+        );
+        assert_eq!(
+            walks.load(Ordering::SeqCst),
+            1,
+            "the fresh fence is for the report and nothing else: no worker, and no second walk \
+             of the seller's shop"
+        );
+        assert_eq!(
+            plane.kept.lock().await.len(),
+            1,
+            "and no further page is built under it"
         );
     }
 }

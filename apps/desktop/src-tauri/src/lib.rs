@@ -555,16 +555,15 @@ async fn run_schedule<W: scheduler::WorkSource + 'static>(
         #[cfg(mobile)]
         let standing = standing && in_the_foreground(&app);
         if (due.sweep || due.discover) && standing {
+            // Stamp every import poll, even while a work task is running;
+            // otherwise discovery stays due and the one-second floor takes over.
+            if !due.sweep {
+                plan.discovering(reading(started));
+            }
             let found = run_open_runs(&app).await;
-            plan.discovered(found);
-            // The heavy half, at most one in flight. A pass skipped because
-            // the last one is still working is not a pass lost: its stamp was
-            // taken when it started, so the next one comes due on the ordinary
-            // gap after it finishes.
+            plan.imports_discovered(found);
+            // Work runs independently, with at most one task in flight.
             if running.is_none() {
-                if !due.sweep {
-                    plan.discovering(reading(started));
-                }
                 let handle = app.clone();
                 let timer = scheduler.clone();
                 let source = Arc::clone(&work);
@@ -574,10 +573,8 @@ async fn run_schedule<W: scheduler::WorkSource + 'static>(
             }
         }
         let nap = plan.sleep(reading(started));
-        // While a job is running the loop still wakes on its own cadences, and
-        // a floor keeps that from becoming a spin: a discovery that is due but
-        // cannot be served — because the one supervised task holds it — would
-        // otherwise answer zero for as long as the job lasted.
+        // Keep a sleep floor while work runs if a lifecycle change prevents
+        // a due poll from being served.
         let nap = if running.is_some() {
             nap.max(core::time::Duration::from_secs(1))
         } else {
@@ -779,8 +776,8 @@ mod start_up_tests {
     #[test]
     fn the_address_cannot_end_the_string_it_travels_in() {
         assert_eq!(
-            replacing("https://teachouse.stowiq.io"),
-            r#"location.replace("https://teachouse.stowiq.io")"#
+            replacing("https://teachouse.io"),
+            r#"location.replace("https://teachouse.io")"#
         );
         // Read back rather than pattern-matched: the property is that the
         // argument is one JSON string carrying exactly the address, which is
@@ -808,8 +805,8 @@ mod start_up_tests {
     #[test]
     fn the_window_opens_on_the_console_home() {
         for origin in [
-            "https://teachouse.stowiq.io",
-            "https://teachouse.stowiq.io/",
+            "https://teachouse.io",
+            "https://teachouse.io/",
             "http://127.0.0.1:8080",
         ] {
             let home = console_home(origin).expect("the origin is a url");
@@ -836,7 +833,7 @@ mod start_up_tests {
         let app = mock_builder()
             .build(mock_context(noop_assets()))
             .expect("the mock application builds");
-        let console: tauri::Url = "https://teachouse.stowiq.io/"
+        let console: tauri::Url = "https://teachouse.io/"
             .parse()
             .expect("the console origin is a url");
 

@@ -19,6 +19,6 @@
   "host_permissions": [
     "https://www.teacherspayteachers.com/*",
     "https://www.tes.com/*",
-    "https://api.teachouse.io/*"
+    "https://teachouse.io/*"
   ]
 }

@@ -239,8 +239,7 @@ The landing page's Content-Security-Policy is computed by `landing_policy` from 
 It admitted `'unsafe-inline'` and `https://fonts.googleapis.com` on `style-src` and `https://fonts.gstatic.com` on `font-src` until the console's fonts were bundled and those origins were dropped; every origin the policy names is now this one.
 The site carries no inline script, so no hash is emitted today.
 
-The `site` value in `apps/landing/astro.config.mjs` is `https://teachouse.stowiq.io`, the host actually serving the build, and it is what the canonical link and the Open Graph URL are built from.
-It moves to `https://teachouse.io` at the cutover, and that one value is the whole of the change.
+The `site` value in `apps/landing/astro.config.mjs` is `https://teachouse.io`; the canonical link and Open Graph URL are built from it.
 
 ## Open items, each a founder decision
 

@@ -9,7 +9,7 @@ const CSV = 'Resource ID,Title\r\n1,Fractions\r\n';
 function answering(response: Response): { fetch: typeof fetch; seen: Request[] } {
 	const seen: Request[] = [];
 	const impl = ((input: RequestInfo | URL, init?: RequestInit) => {
-		seen.push(new Request(new URL(String(input), 'https://teachouse.stowiq.io'), init));
+		seen.push(new Request(new URL(String(input), 'https://teachouse.io'), init));
 		return Promise.resolve(response);
 	}) as typeof fetch;
 	return { fetch: impl, seen };

@@ -12,14 +12,8 @@
 # docs/notes/design/android-client.md.
 name: android-build
 
-# Run by hand only. Neither a push to main nor a version tag starts this,
-# deliberately and for two separate reasons. An NDK-and-Rust build is twenty
-# minutes of a finite Actions budget and is the wrong default for every commit;
-# and the desktop `v*.*.*` tag must not also start an Android job that cannot
-# yet produce anything usable, because the Android session store is undecided
-# and no signing secret exists, so a red Android run would sit beside the
-# founder's first desktop release. The tag trigger returns when the Android
-# client reaches beta, as its own change.
+# Manual build and repair path; tagged releases use desktop-release.yml.
+# Without attach_to, the signed APK remains a workflow artefact only.
 on:
   workflow_dispatch:
     inputs:

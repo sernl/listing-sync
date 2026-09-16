@@ -265,7 +265,7 @@ Both letters stay below as drafted, each marked not sent by decision, so a later
 The Chrome tile keeps its `Google Chrome™` wordmark form and the Windows tiles keep a glyph of ours with the name in text, exactly as they stand; the decision is recorded in `../../design/decisions.md`.
 
 Each request is below as a covering note, saying where it goes and what it rests on, and then as a letter to send as it stands.
-The letters name the current public host, `teachouse.stowiq.io`; replace it with `teachouse.io` after the cutover recorded in `landing-page.md`.
+The unsent drafts retain the pre-cutover host, `teachouse.stowiq.io`; the configured canonical product origin is now `teachouse.io`.
 
 Request 1, to Google, for the Chrome product icon.
 Not sent, by the founder's decision of 2026-09-07.

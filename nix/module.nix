@@ -277,7 +277,7 @@ in
 
     domain = lib.mkOption {
       type = lib.types.str;
-      example = "teachouse.stowiq.io";
+      example = "teachouse.io";
       description = ''
         The single public origin. The API, the console and `/api/auth/*` all
         answer here, which is what `tam-server --ui-dir` exists for and what
@@ -580,7 +580,7 @@ in
           type = lib.types.nullOr lib.types.str;
           default = cfg.auth.emailFrom;
           defaultText = lib.literalMD "`auth.emailFrom`";
-          example = "Teachouse <no-reply@teachouse.stowiq.io>";
+          example = "Teachouse <no-reply@notify.teachouse.io>";
           description = ''
             The sender the completion mail carries, which the Resend account
             must own. Defaults to the identity service's own sender because
@@ -665,7 +665,7 @@ in
       emailFrom = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        example = "Teachouse <no-reply@teachouse.stowiq.io>";
+        example = "Teachouse <no-reply@notify.teachouse.io>";
         description = "The From address verification and reset mail is sent from. Required by the service whenever a Resend key is set.";
       };
       internalSecretFile = lib.mkOption {

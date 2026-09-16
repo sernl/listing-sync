@@ -2380,7 +2380,7 @@ mod session_command_tests {
         );
         assert_eq!(
             window.url().expect("the window has a url").as_str(),
-            "https://teachouse.stowiq.io/",
+            "https://teachouse.io/",
             "and it has not navigated yet, so the answer above is evaluated in the console's \
              own page rather than in the marketplace's"
         );
@@ -2444,7 +2444,7 @@ mod session_command_tests {
 
         let back = settles_at(&window, |at| at.contains("connect=")).await;
         assert_eq!(
-            back, "https://teachouse.stowiq.io/marketplaces?connect=abandoned&marketplace=Tpt",
+            back, "https://teachouse.io/marketplaces?connect=abandoned&marketplace=Tpt",
             "the seller is returned to the page they pressed Connect on, and it is told which \
              marketplace ended how"
         );
@@ -2563,7 +2563,7 @@ mod session_command_tests {
             tokio::time::sleep(core::time::Duration::from_millis(600)).await;
             assert_eq!(
                 window.url().expect("the window has a url").as_str(),
-                "https://teachouse.stowiq.io/",
+                "https://teachouse.io/",
                 "the one window never left the console, so the seller was never shown a login \
                  they cannot keep. On {surface:?}"
             );
@@ -2754,7 +2754,7 @@ mod session_command_tests {
 
         let back = settles_at(&window, |at| at.contains("connect=")).await;
         assert_eq!(
-            back, "https://teachouse.stowiq.io/marketplaces?connect=captured&marketplace=Tpt",
+            back, "https://teachouse.io/marketplaces?connect=captured&marketplace=Tpt",
             "a completed sign-in returns the console to the page it left, saying which \
              marketplace was connected"
         );
@@ -2811,7 +2811,7 @@ mod session_command_tests {
 
         let back = settles_at(&window, |at| at.contains("connect=")).await;
         assert_eq!(
-            back, "https://teachouse.stowiq.io/marketplaces?connect=deadline&marketplace=Tpt",
+            back, "https://teachouse.io/marketplaces?connect=deadline&marketplace=Tpt",
             "the seller is returned to the console and told the sign-in ran out of time, which \
              is a different thing from leaving it and a different thing from it never opening"
         );
@@ -2854,7 +2854,7 @@ mod session_command_tests {
         let back = settles_at(&window, |at| at.contains("connect=")).await;
         assert_eq!(
             back,
-            "https://teachouse.stowiq.io/marketplaces?connect=deadline&marketplace=Tes"
+            "https://teachouse.io/marketplaces?connect=deadline&marketplace=Tes"
         );
         assert!(store
             .get(Marketplace::Tes)
@@ -2894,7 +2894,7 @@ mod session_command_tests {
         let back = settles_at(&window, |at| at.contains("connect=")).await;
         assert_eq!(
             back,
-            "https://teachouse.stowiq.io/marketplaces?connect=captured&marketplace=Tes"
+            "https://teachouse.io/marketplaces?connect=captured&marketplace=Tes"
         );
         assert!(store
             .get(Marketplace::Tes)
@@ -2956,10 +2956,9 @@ mod session_command_tests {
     /// per-invoke remote-origin check against the one origin `console.json`
     /// grants.
     ///
-    /// Nothing tested that check. `the_capability_grants_the_origin_this_build_uses`
-    /// parses the JSON, and the two tests above invoke from the console's own
-    /// origin, so both pass unchanged if a second entry is added to
-    /// `remote.urls`, if the pattern is widened to a wildcard host, or if
+    /// Nothing tested that check. The two tests above invoke from the
+    /// console's own origin, so both pass unchanged if a second entry is added
+    /// to `remote.urls`, if the pattern is widened to a wildcard host, or if
     /// `default.json` gains a `remote` block. Any of those hands a marketplace
     /// page `start_import` and the seller's catalogue.
     ///
