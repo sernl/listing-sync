@@ -19,7 +19,7 @@ use crate::codec::{
     currency_from_db, currency_to_db, hash_from_db, hash_to_db, inventory_from_db, inventory_to_db,
     timestamp_from_db, timestamp_to_db, uuid_from_db, uuid_to_db,
 };
-use crate::{pin_org, StorageError};
+use crate::{pin_org, BoundClaim, StorageError};
 
 /// How many runs one page of the history may answer at most.
 ///
@@ -2335,35 +2335,55 @@ pub struct StoredReceipt<'a> {
     pub at: Timestamp,
 }
 
-/// The live product of this organisation already bound to this listing on
-/// this shop, if any.
+/// The product an earlier import of this shop created for this locator,
+/// whether or not it is still in the catalogue.
 ///
-/// The first half of the revalidation, and the one that stops a second import
-/// of the same shop creating everything twice — but read inside the decision
-/// transaction rather than at page time, so a product another source
-/// committed while this run sat in review is seen.
-pub async fn bound_product(
+/// The durable provenance every import leaves behind, and the only record of
+/// a metadata-only read's identity: migration 0061 admits no mapping onto a
+/// product with no live payload, so a resource whose bytes are still
+/// uncaptured has no claim on its listing for [`claimed_product_for`] to
+/// find. Without this, a second read of the same draft creates a second copy
+/// of it, and a re-import after a local delete can never find the first.
+///
+/// Keyed on the locator the item row holds, which is the address the device
+/// reads that shop by, and scoped to the shop through the item's own run: two
+/// shops that number their rows the same way are two identities.
+///
+/// The live one first, then the most recently settled, so a tombstone is
+/// answered only when nothing live carries the identity.
+///
+/// [`claimed_product_for`]: crate::claimed_product_for
+pub async fn imported_product_for(
     tx: &mut Transaction<'_, Postgres>,
     org: OrgId,
-    inventory: InventoryId,
+    source: InventoryId,
     locator: &str,
-) -> Result<Option<ProductId>, StorageError> {
-    let numeric: Option<i64> = locator.parse().ok();
+) -> Result<Option<BoundClaim>, StorageError> {
     let row = sqlx::query!(
-        "SELECT m.product_id FROM mapping m \
-           JOIN product p ON p.org_id = m.org_id AND p.id = m.product_id \
-          WHERE m.org_id = $1 AND m.inventory = $2 AND m.binding_state = 'bound' \
-            AND p.deleted_at IS NULL \
-            AND (m.remote_url = $3 OR ($4::bigint IS NOT NULL AND m.remote_numeric_id = $4)) \
+        "SELECT i.product_id, (p.deleted_at IS NULL) AS \"live!\" \
+           FROM import_run_item i \
+           JOIN import_run r ON r.org_id = i.org_id AND r.id = i.run_id \
+           JOIN product p ON p.org_id = i.org_id AND p.id = i.product_id \
+          WHERE i.org_id = $1 AND r.source = $2 AND i.locator = $3 \
+            AND i.state = 'imported' \
+          ORDER BY p.deleted_at NULLS FIRST, i.settled_at DESC \
           LIMIT 1",
         uuid_to_db(org.0),
-        inventory_to_db(inventory),
+        inventory_to_db(source),
         locator,
-        numeric,
     )
     .fetch_optional(&mut **tx)
     .await?;
-    Ok(row.map(|row| ProductId(uuid_from_db(row.product_id))))
+    row.map(|row| {
+        let product = row.product_id.ok_or_else(|| StorageError::CorruptRow {
+            reason: "an imported run item carries no product".to_owned(),
+        })?;
+        Ok(BoundClaim {
+            product: ProductId(uuid_from_db(product)),
+            live: row.live,
+        })
+    })
+    .transpose()
 }
 
 /// The survivor of a merge this product was decided into, if any.

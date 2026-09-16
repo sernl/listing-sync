@@ -2504,25 +2504,39 @@ pub(crate) async fn apply_matched(
         // on a resource whose listing is somewhere else, which is the exact
         // mismatch the binding exists to prevent. `commit_one` reads the
         // holder the same way, through `bind_onto`.
-        let holder = tam_storage::bind_listing(
-            tx,
-            org,
-            &tam_import::source_binding(
+        //
+        // A survivor with no live payload is left unbound and unlabelled, for
+        // the reason [`bind_onto`] states: 0061 refuses a claim on a resource
+        // whose bytes are uncaptured, and its trigger is deferred, so writing
+        // one would lose this whole page rather than this one row. The
+        // resource still keeps the merge and still gains the thumbnail below.
+        let holder = if tam_storage::has_live_payload(tx, org, product)
+            .await
+            .map_err(|error| storage_fault_tx(org, &error))?
+        {
+            let bound = tam_storage::bind_listing(
+                tx,
                 org,
-                product,
-                matched.source,
-                &matched.listing,
-                matched.price_intent,
+                &tam_import::source_binding(
+                    org,
+                    product,
+                    matched.source,
+                    &matched.listing,
+                    matched.price_intent,
+                    now,
+                ),
+                0,
                 now,
-            ),
-            0,
-            now,
-        )
-        .await
-        .map_err(|error| storage_fault_tx(org, &error))?;
-        tam_storage::attach_system_label(tx, org, holder, matched.source.marketplace(), now)
+            )
             .await
             .map_err(|error| storage_fault_tx(org, &error))?;
+            tam_storage::attach_system_label(tx, org, bound, matched.source.marketplace(), now)
+                .await
+                .map_err(|error| storage_fault_tx(org, &error))?;
+            bound
+        } else {
+            product
+        };
         // The thumbnail this read carried, offered to the resource that was
         // kept. A merge decided against a second product, not against the
         // picture: the survivor may be a metadata-only read from a source
@@ -2549,9 +2563,15 @@ pub(crate) async fn apply_matched(
                 .map_err(|error| storage_fault_tx(org, &error))?
                 .unwrap_or(title)
         };
-        tam_storage::record_skipped(tx, org, at, &skip_sentence(&named, repaired), now)
-            .await
-            .map_err(|error| storage_fault_tx(org, &error))?;
+        tam_storage::record_skipped(
+            tx,
+            org,
+            at,
+            &skip_sentence(&named, Supplied::thumbnail(repaired)),
+            now,
+        )
+        .await
+        .map_err(|error| storage_fault_tx(org, &error))?;
         return Ok(RunItemState::Skipped);
     }
 
@@ -2982,15 +3002,20 @@ impl ItemCommit {
 /// against what is committed *now* rather than against what the matcher saw
 /// when the page landed.
 ///
-/// Four things can be true under that lock, and each has one answer:
+/// Five things can be true under that lock, and each has one answer:
 /// a question is still parked, so the item waits; the seller merged this
-/// resource away, so it binds onto the survivor; the shop's own listing is
-/// already bound to a product, so it binds onto that; a decisive digest twin
-/// exists, so the two sources end as one product carrying both bindings.
-/// Only if none of them holds is a product created.
+/// resource away, so it binds onto the survivor; this organisation already
+/// has the resource this listing names — live, or deleted locally with the
+/// listing's claim still standing — so that resource is reconciled against
+/// what this read found rather than a second one being minted; that named
+/// resource is itself a resource the seller merged away, so the survivor
+/// standing for it answers the row and the tombstone is left where their
+/// decision put it; a decisive digest twin exists, so the two sources end as
+/// one product carrying both bindings. Only if none of them holds is a
+/// product created.
 #[expect(
     clippy::too_many_lines,
-    reason = "the four revalidation answers and the create are one decision taken under one lock; splitting them would put half of what the lock protects outside the function that takes it"
+    reason = "the five revalidation answers and the create are one decision taken under one lock; splitting them would put half of what the lock protects outside the function that takes it"
 )]
 async fn commit_one(
     state: &AppState,
@@ -3118,6 +3143,18 @@ async fn commit_one(
             .map_err(|error| sql_fault(state, &error))?;
         return Ok(ItemCommit::held());
     }
+    // Another commit page may have settled this item while we waited.
+    // Its imported row can be a fileless resource's only source identity.
+    if tam_storage::reserved_state(&mut tx, org, at)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+        != Some(RunItemState::Matched)
+    {
+        tx.rollback()
+            .await
+            .map_err(|error| sql_fault(state, &error))?;
+        return Ok(ItemCommit::held());
+    }
 
     // A question still owed about this resource. The item goes back to review
     // rather than being created behind the seller's answer.
@@ -3138,7 +3175,7 @@ async fn commit_one(
     // The revalidation, against the catalogue as it stands at this instant.
     //
     // Two answers that already exist are read first: a merge the seller
-    // decided, and this shop's own listing already bound to a product. Then
+    // decided, and the resource this shop's own listing already names. Then
     // the matcher itself is re-asked — the whole scorer, with every layer,
     // the cross-marketplace rule, the frequency weighting, the negative
     // evidence and the never-ask-twice exclusions — because a decision
@@ -3146,18 +3183,50 @@ async fn commit_one(
     // source has committed into it. A digest comparison standing in for the
     // scorer would miss exactly the pair the scorer exists to catch: matching
     // titles and text over different bytes.
-    let existing = match tam_storage::merged_into(&mut tx, org, item.product)
+    let merged = tam_storage::merged_into(&mut tx, org, item.product)
         .await
-        .map_err(|error| storage_fault(state, &error))?
-    {
-        Some(kept) => Some(kept),
-        None => tam_storage::bound_product(&mut tx, org, source, resource.locator.as_str())
-            .await
-            .map_err(|error| storage_fault(state, &error))?,
+        .map_err(|error| storage_fault(state, &error))?;
+
+    // The resource this read *is*, where this organisation already has one:
+    // the claim the shop's listing holds on a product, or — for a read that
+    // carried no file, which migration 0061 admits no claim for — the run
+    // item an earlier import of the same locator settled.
+    //
+    // Keyed on the listing's own identifier rather than on the row's locator.
+    // They are not the same string on a shop that numbers its rows, and it is
+    // the identifier the two partial unique indexes refuse a second claim on:
+    // keying on the locator left the claim unseen, so the commit minted a
+    // second product and the insert was refused with 23505 — a fault, which
+    // the chunk retries, so the row stayed `matched` and the run stayed
+    // `committing` for good.
+    //
+    // Tombstones included. A local delete leaves the claim standing, and a
+    // seller who imports a listing again after deleting their copy is asking
+    // for that resource rather than for a second one.
+    let identity = match merged {
+        Some(_) => None,
+        None => {
+            match tam_storage::claimed_product_for(&mut tx, org, source, &resource.listing.remote)
+                .await
+                .map_err(|error| storage_fault(state, &error))?
+            {
+                claimed @ Some(_) => claimed,
+                None => {
+                    tam_storage::imported_product_for(&mut tx, org, source, item.locator.as_str())
+                        .await
+                        .map_err(|error| storage_fault(state, &error))?
+                }
+            }
+        }
     };
 
-    let (twin, decided) = if let Some(bound) = existing {
-        (Some(bound), None)
+    let (twin, decided) = if let Some(kept) = merged {
+        (Some(kept), None)
+    } else if identity.is_some() {
+        // The resource this listing already names. No score could outrank an
+        // identity, so the matcher is not asked and no pair is raised about a
+        // resource being compared with itself.
+        (None, None)
     } else {
         let found = matcher::match_one_in(
             &mut tx,
@@ -3173,8 +3242,8 @@ async fn commit_one(
             },
         )
         .await?;
-        let merged = found.merged.first().map(|raised| raised.other);
-        (merged, Some(found))
+        let decided_merge = found.merged.first().map(|raised| raised.other);
+        (decided_merge, Some(found))
     };
 
     // Whatever the revalidation raised is written here, in this transaction:
@@ -3185,7 +3254,7 @@ async fn commit_one(
     if let Some(found) = decided.as_ref() {
         for raised in found.merged.iter().chain(found.asked.iter()) {
             let (lo, hi) = tam_storage::ordered_pair(item.product, raised.other);
-            let merged = matches!(raised.verdict, tam_storage::Verdict::Same);
+            let same = matches!(raised.verdict, tam_storage::Verdict::Same);
             tam_storage::raise_verdict(
                 &mut tx,
                 org,
@@ -3198,10 +3267,10 @@ async fn commit_one(
                     log_odds: raised.log_odds,
                     fingerprint_version: sketch_version(),
                     run: Some(head.id),
-                    kept: merged.then_some(raised.other),
+                    kept: same.then_some(raised.other),
                     raised_at: now,
-                    decided_at: merged.then_some(now),
-                    reversible_until: merged
+                    decided_at: same.then_some(now),
+                    reversible_until: same
                         .then_some(Timestamp(now.0.saturating_add(tam_storage::REVERSIBLE_MS))),
                     evidence: &raised.evidence,
                 },
@@ -3221,6 +3290,138 @@ async fn commit_one(
             item_settled_event(state, org, head, item.locator.as_str(), "review").await?;
             return Ok(ItemCommit::held());
         }
+    }
+
+    // The resource this listing already names, reconciled against what this
+    // read found. Before the twin branch below because it is a different
+    // question: there the catalogue holds a resource that *resembles* this
+    // one and nothing about it moves, here it holds the very resource this
+    // listing is, so this read's file is its file and a local delete of it
+    // is undone.
+    if let Some(held) = identity {
+        // A merged listing names the final survivor, not its tombstoned
+        // ancestor. Re-import may restore that survivor after a later local
+        // delete, but must not undo merges or overwrite the survivor's own
+        // metadata, files or listing claims.
+        let merged_away = if held.live {
+            None
+        } else {
+            survivor_of(state, &mut tx, org, held.product).await?
+        };
+        if let Some(survivor) = merged_away {
+            let restored = tam_storage::restore_product(&mut tx, org, survivor, now)
+                .await
+                .map_err(|error| storage_fault(state, &error))?;
+            let repaired = repair_cover(
+                &mut tx,
+                org,
+                survivor,
+                applied
+                    .cover
+                    .as_ref()
+                    .map(|cover| (cover.hash, cover.byte_len)),
+                now,
+            )
+            .await
+            .map_err(|error| storage_fault(state, &error))?;
+            let (settlement, effect) = if restored {
+                tam_storage::record_imported(&mut tx, org, at, survivor, now)
+                    .await
+                    .map_err(|error| storage_fault(state, &error))?;
+                ("imported", CommitEffect::Created)
+            } else {
+                let title = tam_storage::title_of(&mut tx, org, survivor)
+                    .await
+                    .map_err(|error| storage_fault(state, &error))?
+                    .ok_or_else(|| {
+                        validation("The resource this listing was merged into is unavailable.")
+                    })?;
+                tam_storage::record_skipped(
+                    &mut tx,
+                    org,
+                    at,
+                    &skip_sentence(&title, Supplied::thumbnail(repaired)),
+                    now,
+                )
+                .await
+                .map_err(|error| storage_fault(state, &error))?;
+                ("skipped", CommitEffect::Bound)
+            };
+            let settled = settle_if_done(state, &mut tx, org, head.id, now).await?;
+            tx.commit()
+                .await
+                .map_err(|error| sql_fault(state, &error))?;
+            item_settled_event(state, org, head, item.locator.as_str(), settlement).await?;
+            return Ok(ItemCommit { effect, settled });
+        }
+        let reconciled = reconcile_source(
+            state,
+            &mut tx,
+            org,
+            held,
+            &prepared,
+            applied
+                .cover
+                .as_ref()
+                .map(|cover| (cover.hash, cover.byte_len)),
+            now,
+        )
+        .await?;
+        let title = if reconciled.restored {
+            std::borrow::Cow::Borrowed(prepared.product.title.0.as_str())
+        } else {
+            std::borrow::Cow::Owned(
+                tam_storage::title_of(&mut tx, org, reconciled.product)
+                    .await
+                    .map_err(|error| storage_fault(state, &error))?
+                    .ok_or_else(|| validation("The imported resource is unavailable."))?,
+            )
+        };
+        // Pair the accepted file's sketch with the canonical title, not
+        // marketplace metadata this resource declined to adopt.
+        if let Some(fingerprint) = resource
+            .fingerprint
+            .as_ref()
+            .filter(|_| reconciled.describes_the_payload)
+        {
+            write_fingerprint(
+                &mut tx,
+                org,
+                reconciled.product,
+                fingerprint,
+                &title,
+                item.device.as_deref(),
+                now,
+            )
+            .await?;
+        }
+        // A restore is a creation from the seller's side: the catalogue gained
+        // a resource it did not have, and a row that said "skipped" would be
+        // telling them it had been there all along. Anything else settles as
+        // the skip it is, naming what this read supplied.
+        let (settlement, effect) = if reconciled.restored {
+            tam_storage::record_imported(&mut tx, org, at, reconciled.product, now)
+                .await
+                .map_err(|error| storage_fault(state, &error))?;
+            ("imported", CommitEffect::Created)
+        } else {
+            tam_storage::record_skipped(
+                &mut tx,
+                org,
+                at,
+                &skip_sentence(&title, reconciled.supplied),
+                now,
+            )
+            .await
+            .map_err(|error| storage_fault(state, &error))?;
+            ("skipped", CommitEffect::Bound)
+        };
+        let settled = settle_if_done(state, &mut tx, org, head.id, now).await?;
+        tx.commit()
+            .await
+            .map_err(|error| sql_fault(state, &error))?;
+        item_settled_event(state, org, head, item.locator.as_str(), settlement).await?;
+        return Ok(ItemCommit { effect, settled });
     }
 
     if let Some(twin) = twin {
@@ -3253,9 +3454,15 @@ async fn commit_one(
         )
         .await
         .map_err(|error| storage_fault(state, &error))?;
-        tam_storage::record_skipped(&mut tx, org, at, &skip_sentence(&title, repaired), now)
-            .await
-            .map_err(|error| storage_fault(state, &error))?;
+        tam_storage::record_skipped(
+            &mut tx,
+            org,
+            at,
+            &skip_sentence(&title, Supplied::thumbnail(repaired)),
+            now,
+        )
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
         let settled = settle_if_done(state, &mut tx, org, head.id, now).await?;
         tx.commit()
             .await
@@ -3286,6 +3493,7 @@ async fn commit_one(
             org,
             item.product,
             fingerprint,
+            &prepared.product.title.0,
             item.device.as_deref(),
             now,
         )
@@ -3305,6 +3513,227 @@ async fn commit_one(
     })
 }
 
+/// What a read supplied to the resource the catalogue already held.
+///
+/// Carried rather than inferred from the read, because what matters to the
+/// seller is what actually landed: a read carrying a file supplies nothing to
+/// a resource that already has one, and telling them otherwise would send
+/// them looking for a change nobody made.
+#[derive(Debug, Clone, Copy)]
+struct Supplied {
+    file: bool,
+    thumbnail: bool,
+}
+
+impl Supplied {
+    /// A thumbnail and nothing else, which is what a merge and a twin can
+    /// offer: neither moves the kept resource's bytes.
+    const fn thumbnail(repaired: bool) -> Self {
+        Self {
+            file: false,
+            thumbnail: repaired,
+        }
+    }
+}
+
+/// What reconciling a read against the resource its own listing names did to
+/// that resource.
+struct Reconciled {
+    /// The product the listing is on afterwards, which is what the sentence
+    /// and the row's provenance are about.
+    product: ProductId,
+    /// Whether this transaction brought the resource back from a local
+    /// delete. The one outcome that makes the row a creation: the catalogue
+    /// gained a resource it did not have.
+    restored: bool,
+    /// Whether this read's sketch describes the payload the resource is left
+    /// holding: its own capture was written, or the one payload it kept is
+    /// byte for byte this capture, or it holds no payload for a sketch to
+    /// disagree with. `false` where the resource kept other bytes — the
+    /// seller's own file, an earlier read's, a bundle from another entry —
+    /// and a sketch of what it declined would be a claim about a file it
+    /// does not have.
+    describes_the_payload: bool,
+    supplied: Supplied,
+}
+
+/// Reconciles one read against the resource its own listing already names:
+/// restores it where the seller had deleted it, offers the thumbnail and the
+/// file this read captured, and binds the listing where the payload makes a
+/// claim legal.
+///
+/// All of it in the caller's transaction, under the run's guard and this
+/// organisation's catalogue lock, because a restore that committed without
+/// the claim it needs — or a claim written onto a resource whose payload
+/// arrived in a later transaction — is exactly the half-state the deferred
+/// triggers and the partial unique indexes exist to refuse.
+///
+/// Why restore rather than mint a second product. The claim on the listing is
+/// the tombstoned resource's, and the two indexes admit one: a second product
+/// either loses to the index — the 23505 this repairs — or would have to
+/// sever a claim on a listing that is still live on the shop, which would
+/// tell the ledger a listing nobody removed is gone. Restoring keeps the
+/// remote identity where it already is.
+///
+/// Safe under two schedulers. The restore is `WHERE deleted_at IS NOT NULL`,
+/// the cover is offered only where the resource holds none, the payload
+/// offer locks the product and decides against what it finds, and the bind
+/// reads before it writes — so a pass that arrives second finds its work
+/// done and reports the same resource rather than a second one.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the transaction, the tenant and the instant bound the write; the claim, the \
+              prepared read and its thumbnail are what is being reconciled, and a parameter \
+              bag over them would only rename the call"
+)]
+async fn reconcile_source(
+    state: &AppState,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    held: tam_storage::BoundClaim,
+    prepared: &tam_import::PreparedResource,
+    cover: Option<(ContentHash, u64)>,
+    now: Timestamp,
+) -> Result<Reconciled, APIError> {
+    // Back from the delete first, because everything below writes onto a live
+    // resource: `update_product`, `offer_payload` and `offer_cover` all read
+    // `deleted_at`, and so does every trigger that judges them. `false` means
+    // another pass restored it between this transaction's read and its lock,
+    // which is the same resource by the same identity rather than a conflict.
+    let restoring = !held.live;
+    let restored = restoring
+        && tam_storage::restore_product(tx, org, held.product, now)
+            .await
+            .map_err(|error| storage_fault(state, &error))?;
+
+    // What the shop says about the resource, written back only where this is
+    // a resource coming back from a local delete.
+    //
+    // The product record owns the canonical fields, and drift on the shop is
+    // the seller's to adopt or overwrite rather than ours to apply behind
+    // them (`docs/notes/design/vendoo-for-teachers-rethink.md:75-77`). This
+    // path is reached by every ordinary repair — a thumbnail that could not
+    // be derived when the resource was created, a bundle captured by a later
+    // read — so refreshing it unconditionally meant confirming a repair
+    // destroyed the title and description the seller had written and then
+    // reported the row as a skip. A resource they had deleted has no
+    // authored copy left to protect, and what comes back is what the shop
+    // says now.
+    if restoring {
+        tam_storage::update_product(tx, org, held.product, &refresh_of(&prepared.product), now)
+            .await
+            .map_err(|error| storage_fault(state, &error))?;
+    }
+
+    let thumbnail = repair_cover(tx, org, held.product, cover, now)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+
+    // The file, where this read captured one and the resource has none: the
+    // ordinary life of a draft read for its metadata first and its bundle
+    // later. Offered before the bind and in this transaction, because the
+    // payload is what migration 0061 requires of a resource a claim names and
+    // the trigger judges what the transaction leaves behind.
+    //
+    // A restore offers more than that, and only a restore does. What a
+    // tombstoned import leaves behind is a locator and the digest of the
+    // bytes that shop served last time — not bytes this server keeps — so
+    // the manifest sends that old commitment and the device's verification
+    // rejects the file the shop serves now: the seller was told the restore
+    // worked and left holding a resource nothing can publish, on the very
+    // pass that had just captured usable bytes. `RestoreSource` refreshes
+    // exactly that file: the resource's sole payload, source-backed, the
+    // same source identity as this capture. An uploaded file, a file the
+    // seller added beside the import's, or a bundle from another entry is
+    // theirs and is kept.
+    let policy = if restoring {
+        tam_storage::PayloadOfferPolicy::RestoreSource
+    } else {
+        tam_storage::PayloadOfferPolicy::FillMissing
+    };
+    let offered = match prepared.product.payload_files().next() {
+        Some(captured) => Some(
+            tam_storage::offer_payload(tx, org, held.product, captured, None, policy, now)
+                .await
+                .map_err(|error| storage_fault(state, &error))?,
+        ),
+        None => None,
+    };
+    let file = matches!(offered, Some(tam_storage::PayloadOffer::Written));
+    // Whether this read's sketch is this resource's to store. A read that
+    // carried no bytes at all contradicts nothing where the resource holds
+    // none either, which is the metadata-only draft read again and again.
+    let describes_the_payload = match offered {
+        Some(tam_storage::PayloadOffer::Written | tam_storage::PayloadOffer::Unchanged) => true,
+        Some(tam_storage::PayloadOffer::AlreadyHeld | tam_storage::PayloadOffer::NoProduct) => {
+            false
+        }
+        None => !tam_storage::has_live_payload(tx, org, held.product)
+            .await
+            .map_err(|error| storage_fault(state, &error))?,
+    };
+
+    let product = bind_onto(state, tx, org, held.product, prepared, now).await?;
+    Ok(Reconciled {
+        product,
+        restored,
+        describes_the_payload,
+        supplied: Supplied { file, thumbnail },
+    })
+}
+
+/// The product the seller's merges left standing in place of this one, or
+/// `None` where this product is nobody's loser.
+///
+/// A survivor can lose a later merge, so follow the complete chain.
+/// Cycles are refused rather than returning an arbitrary intermediate product.
+///
+/// `None` is the ordinary tombstone a local delete leaves, which is the one
+/// the re-import restores.
+async fn survivor_of(
+    state: &AppState,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    product: ProductId,
+) -> Result<Option<ProductId>, APIError> {
+    let mut walked = std::collections::HashSet::new();
+    let mut standing = product;
+    while let Some(kept) = tam_storage::merged_into(tx, org, standing)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+    {
+        if !walked.insert(standing) {
+            return Err(validation(
+                "The saved merge history contains a cycle. This resource could not be imported.",
+            ));
+        }
+        standing = kept;
+    }
+    Ok((standing != product).then_some(standing))
+}
+
+/// What a re-read of one listing writes back to the resource it names.
+///
+/// The described fields, and only where the read actually carried them. A
+/// read states a title, a body and a price, so those are refreshed. Subjects,
+/// grades and a rights grant are absent from plenty of listings, and writing
+/// an absence over what the catalogue holds would let a re-import delete the
+/// seller's own taxonomy — so an empty one says nothing rather than saying
+/// "none".
+fn refresh_of(product: &tam_domain::CanonicalProduct) -> tam_storage::ProductEdit {
+    tam_storage::ProductEdit {
+        title: Some(product.title.clone()),
+        body: Some(product.body.clone()),
+        price: Some(product.price),
+        subjects: (!product.subjects.is_empty()).then(|| product.subjects.clone()),
+        grades: (!product.grades.raw.is_empty()).then(|| product.grades.clone()),
+        rights: match &product.rights {
+            tam_domain::RightsDeclaration::Unstated => None,
+            declared @ tam_domain::RightsDeclaration::Declared { .. } => Some(declared.clone()),
+        },
+    }
+}
+
 /// Binds the listing this run read onto a product the catalogue already
 /// holds, and gives that product this shop's label.
 ///
@@ -3316,6 +3745,18 @@ async fn commit_one(
 /// be silently discarded, and the item would be retried forever. A listing
 /// this organisation has already bound is an ordinary outcome of a
 /// re-imported shop, not a fault, so it must never reach the insert.
+///
+/// A resource with no live payload is left unbound, and unlabelled with it.
+/// Migration 0061 moved the payload requirement from the product to the
+/// mapping, so a claim on a resource whose bytes are still uncaptured raises
+/// `mapping % names a product with no live payload file` — and that trigger
+/// is deferred, so the whole transaction is lost at commit rather than the
+/// one row, and the item is retried for good. The same rule the create path
+/// follows: the claim and the shop's chip arrive with the file.
+///
+/// A permanent mapping conflict aborts this item's transaction.
+/// [`commit_chunk`] records its failure in a separate transaction, so no
+/// preflight query or partial catalogue write is needed to report it.
 ///
 /// Answers which product holds the listing afterwards, which is the product
 /// this shop's label belongs on: where another product already held it, that
@@ -3336,9 +3777,15 @@ async fn bind_onto(
     let mut binding = prepared.source_mapping.clone();
     binding.id = tam_types::MappingId(fresh_uuid());
     binding.product = product;
+    if !tam_storage::has_live_payload(tx, org, product)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+    {
+        return Ok(product);
+    }
     let held = tam_storage::bind_listing(tx, org, &binding, 0, now)
         .await
-        .map_err(|error| storage_fault(state, &error))?;
+        .map_err(|error| claim_refusal(state, &error))?;
     tam_storage::attach_system_label(tx, org, held, binding.inventory.marketplace(), now)
         .await
         .map_err(|error| storage_fault(state, &error))?;
@@ -3377,7 +3824,7 @@ async fn settle_if_done(
 /// listing; the rest are ours.
 fn import_refusal(state: &AppState, error: tam_import::ImportError) -> APIError {
     match error {
-        tam_import::ImportError::Storage(error) => storage_fault(state, &error),
+        tam_import::ImportError::Storage(error) => claim_refusal(state, &error),
         refused @ (tam_import::ImportError::NoPayload
         | tam_import::ImportError::Price(_)
         | tam_import::ImportError::CurrencyUnknown { .. }) => validation(&refused.to_string()),
@@ -3386,6 +3833,54 @@ fn import_refusal(state: &AppState, error: tam_import::ImportError) -> APIError 
         impossible @ (tam_import::ImportError::Lowering(_) | tam_import::ImportError::NoTarget) => {
             state.internal(&format!("the import answered {impossible}"))
         }
+    }
+}
+
+/// A claim this commit could not reconcile.
+///
+/// A conflict rather than a fault of ours, and the distinction decides
+/// whether the seller ever hears about it. Every claim this server can see is
+/// answered by a read before the write — the listing's own claim, tombstone
+/// included, and the provenance of a read that could carry none — so
+/// reaching the insert means a claim no lookup here addresses, or one another
+/// writer took between this transaction's read and its insert. Either way it
+/// is permanent for this item: [`commit_chunk`] retries a fault, so reporting
+/// this as one leaves the row `matched` and the run `committing` through
+/// every later drain, which is precisely the healthy-looking stall this
+/// repair exists to end. As a conflict the row settles `failed` carrying the
+/// reason, the run finishes, and the seller can act.
+///
+/// Three permanent ones, and the third is a different fact from the first
+/// two. `ListingAlreadyBound` and `MappingAlreadyBound` are about the
+/// listing: somebody else's claim stands on it. The marketplace slot is
+/// about the product: this resource already carries a mapping for this shop,
+/// which is the seller's own cross-listing of a resource an earlier
+/// metadata-only read created — `mapping_one_per_inventory` admits one, and
+/// no retry will ever admit a second. The slot they filled is theirs: it is
+/// not severed, not rebound and not taken to make this row land, because a
+/// conflicting slot is not permission to steal one. The row fails, naming it.
+///
+/// Every other storage error stays ours and stays retried. A database that
+/// was briefly unreachable, a deadlock, a serialisation failure: marking a
+/// resource permanently failed over a fault that has already passed would
+/// cost the seller the resource for nothing.
+fn claim_refusal(state: &AppState, error: &tam_storage::StorageError) -> APIError {
+    match error {
+        claimed @ (tam_storage::StorageError::ListingAlreadyBound
+        | tam_storage::StorageError::MappingAlreadyBound) => {
+            conflict(&claimed.to_string(), APIErrorCode::ListingAlreadyClaimed)
+        }
+        filled @ tam_storage::StorageError::InventoryMappingAlreadyExists => {
+            conflict(&filled.to_string(), APIErrorCode::MappingAlreadyExists)
+        }
+        fault @ (tam_storage::StorageError::Db(_)
+        | tam_storage::StorageError::TimestampOutOfRange { .. }
+        | tam_storage::StorageError::CorruptRow { .. }
+        | tam_storage::StorageError::OrgMismatch
+        | tam_storage::StorageError::Inconsistent { .. }
+        | tam_storage::StorageError::StaleLease
+        | tam_storage::StorageError::DuplicateIdempotencyKey { .. }
+        | tam_storage::StorageError::AttemptInFlight) => storage_fault(state, fault),
     }
 }
 
@@ -3403,6 +3898,7 @@ pub(crate) async fn write_fingerprint(
     org: OrgId,
     product: ProductId,
     fingerprint: &tam_fingerprint::Fingerprint,
+    title: &str,
     device: Option<&str>,
     now: Timestamp,
 ) -> Result<(), APIError> {
@@ -3427,7 +3923,7 @@ pub(crate) async fn write_fingerprint(
             cover_phash: fingerprint
                 .cover_phash
                 .map(|phash| i64::from_ne_bytes(phash.to_ne_bytes())),
-            title_norm: fingerprint.title_norm.as_str(),
+            title_norm: &tam_fingerprint::normalise_title(title),
             observed_by_device: device,
             observed_at: now,
         },
@@ -3589,14 +4085,18 @@ async fn repair_cover(
 
 /// What the seller reads on a skipped row.
 ///
-/// The repair is said out loud. A row that reads only "same as Fractions
-/// pack" after a re-import the seller ran to fix a missing thumbnail would
-/// hide the one thing that changed.
-fn skip_sentence(title: &str, repaired: bool) -> String {
-    if repaired {
-        format!("same as {title}, whose thumbnail this read supplied")
-    } else {
-        format!("same as {title}")
+/// What the read supplied is said out loud. A row that reads only "same as
+/// Fractions pack" after a re-import the seller ran to fix a missing
+/// thumbnail — or to fetch the file a metadata-only read could not carry —
+/// hides the one thing that changed, and the file is the change that decides
+/// whether the resource can reach a marketplace at all, so it is named
+/// first.
+fn skip_sentence(title: &str, supplied: Supplied) -> String {
+    match (supplied.file, supplied.thumbnail) {
+        (true, true) => format!("same as {title}, whose file and thumbnail this read supplied"),
+        (true, false) => format!("same as {title}, whose file this read supplied"),
+        (false, true) => format!("same as {title}, whose thumbnail this read supplied"),
+        (false, false) => format!("same as {title}"),
     }
 }
 

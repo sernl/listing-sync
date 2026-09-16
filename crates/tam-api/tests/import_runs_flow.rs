@@ -30,8 +30,8 @@ use tam_fingerprint::{Fingerprint, TextSketch};
 use tam_marketplace::{ImportedListing, ListingState, RemoteListingId};
 use tam_storage::{DeviceRegistration, DeviceRepo, SessionRepo, SessionToken};
 use tam_types::{
-    ContentHash, CopyFormat, FileKind, ImportedPrice, Marketplace, OrgId, ProductId, ScanOutcome,
-    Timestamp, UserId, Uuid,
+    ContentHash, CopyFormat, FileBytes, FileId, FileKind, FileRole, ImportedPrice, Marketplace,
+    OrgId, ProductFile, ProductId, ScanOutcome, Timestamp, UserId, Uuid,
 };
 use tower::ServiceExt;
 
@@ -41,6 +41,42 @@ const TOKEN_A: SessionToken = SessionToken([0x51; 32]);
 const NOW: Timestamp = Timestamp(5_000);
 const DEVICE_A: &str = "11112222333344445555666677778888";
 const CURRENT: &str = "0.9.0";
+
+/// One tenant's whole surface: the organisation, the seller, the session they
+/// hold and the machine they read a shop from.
+///
+/// Named rather than inlined because the second tenant exists to prove that a
+/// listing's identity belongs to one catalogue: every field here has to be
+/// that tenant's own for the assertion to mean anything.
+struct Tenant {
+    org: OrgId,
+    user: UserId,
+    token: SessionToken,
+    device: &'static str,
+    email: &'static str,
+    /// The byte this tenant's seeded connections and read digests are drawn
+    /// from, so no two tenants seed one `connection` row or read one file.
+    seed: u8,
+}
+
+const TENANT_A: Tenant = Tenant {
+    org: ORG_A,
+    user: USER_A,
+    token: TOKEN_A,
+    device: DEVICE_A,
+    email: "a1@example.test",
+    seed: 0xC1,
+};
+
+/// The second seller, who shares a database with the first and nothing else.
+const TENANT_B: Tenant = Tenant {
+    org: OrgId(Uuid([0xB1; 16])),
+    user: UserId(Uuid([0x0B; 16])),
+    token: SessionToken([0x52; 32]),
+    device: "99998888777766665555444433332222",
+    email: "b1@example.test",
+    seed: 0xD1,
+};
 
 /// Comfortably past the matcher's fifty-kilobyte floor, so an exact digest is
 /// decisive rather than "as likely a licence note as a resource".
@@ -102,24 +138,36 @@ async fn consented(pool: &PgPool, org: OrgId) {
     }
 }
 
+async fn provision(pool: &PgPool) {
+    provision_tenant(pool, &TENANT_A).await;
+}
+
+/// The same seeding for whichever tenant asks for it, so a second one is a
+/// second organisation rather than a second copy of this function.
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
 )]
-async fn provision(pool: &PgPool) {
+async fn provision_tenant(pool: &PgPool, tenant: &Tenant) {
     sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, $2, now())")
-        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+        .bind(uuid::Uuid::from_bytes(tenant.org.0 .0))
         .bind("a test org")
         .execute(pool)
         .await
         .expect("the org seeds");
-    consented(pool, ORG_A).await;
+    consented(pool, tenant.org).await;
     // Reading a shop and reviewing duplicates are both paid capabilities, so
     // the fixture subscribes: without a grant every page here would be
     // answered by the plan gate rather than by the machinery under test.
+    //
+    // One subscription reference per tenant, because
+    // `entitlement_grant_paddle_source_unique` holds a Paddle reference to a
+    // single grant across the whole deployment: two tenants seeded from one
+    // reference is exactly the double billing that index refuses.
+    let subscription = format!("sub_{:02x}", tenant.seed);
     tam_storage::EntitlementRepo::new(pool.clone())
         .grant(
-            ORG_A,
+            tenant.org,
             &tam_storage::NewGrant {
                 id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
                 plan: tam_limits::Plan::Subscriber,
@@ -127,7 +175,7 @@ async fn provision(pool: &PgPool) {
                 granted_by: tam_storage::GrantedBy::Paddle,
                 grantor_user: None,
                 reason: None,
-                source_ref: Some("sub_a1"),
+                source_ref: Some(&subscription),
                 granted_at: Timestamp(1_000),
                 expires_at: None,
             },
@@ -136,18 +184,18 @@ async fn provision(pool: &PgPool) {
         .expect("the fixture grant seeds");
     let sessions = SessionRepo::new(pool.clone());
     sessions
-        .create_user(ORG_A, USER_A, "a1@example.test", NOW)
+        .create_user(tenant.org, tenant.user, tenant.email, NOW)
         .await
         .expect("the user provisions");
     sessions
-        .mint(&TOKEN_A, USER_A, Timestamp(100_000), NOW)
+        .mint(&tenant.token, tenant.user, Timestamp(100_000), NOW)
         .await
         .expect("the session mints");
     DeviceRepo::new(pool.clone())
         .register(
-            ORG_A,
+            tenant.org,
             &DeviceRegistration {
-                id: DEVICE_A,
+                id: tenant.device,
                 name: "a test machine",
                 os: "linux",
                 arch: "x86_64",
@@ -159,7 +207,7 @@ async fn provision(pool: &PgPool) {
         .expect("the device registers");
     let mut tx = pool.begin().await.expect("a transaction opens");
     sqlx::query("SELECT set_config('app.current_org', $1, true)")
-        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
+        .bind(uuid::Uuid::from_bytes(tenant.org.0 .0).to_string())
         .execute(&mut *tx)
         .await
         .expect("the tenant pins");
@@ -167,10 +215,10 @@ async fn provision(pool: &PgPool) {
         "INSERT INTO connection (org_id, id, marketplace, state, created_at, updated_at) \
          VALUES ($1, $2, 'tes', 'linked', $3, $3), ($1, $4, 'tpt', 'linked', $3, $3)",
     )
-    .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
-    .bind(uuid::Uuid::from_bytes([0xC1; 16]))
+    .bind(uuid::Uuid::from_bytes(tenant.org.0 .0))
+    .bind(uuid::Uuid::from_bytes([tenant.seed; 16]))
     .bind(sqlx::types::chrono::DateTime::from_timestamp_millis(NOW.0).expect("a valid instant"))
-    .bind(uuid::Uuid::from_bytes([0xC2; 16]))
+    .bind(uuid::Uuid::from_bytes([tenant.seed.wrapping_add(1); 16]))
     .execute(&mut *tx)
     .await
     .expect("the connection seeds");
@@ -192,12 +240,25 @@ impl Answer {
     }
 }
 
+async fn call(
+    app: &axum::Router,
+    method: Method,
+    uri: &str,
+    body: Option<serde_json::Value>,
+) -> Answer {
+    call_as(app, &TOKEN_A, method, uri, body).await
+}
+
+/// The same request under a named session, which is what a second tenant
+/// needs: the cookie is the only thing that says which catalogue a call
+/// speaks for.
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
 )]
-async fn call(
+async fn call_as(
     app: &axum::Router,
+    token: &SessionToken,
     method: Method,
     uri: &str,
     body: Option<serde_json::Value>,
@@ -207,7 +268,7 @@ async fn call(
         .uri(uri)
         .header(
             header::COOKIE,
-            format!("{SESSION_COOKIE}={}", TOKEN_A.to_hex()),
+            format!("{SESSION_COOKIE}={}", token.to_hex()),
         )
         .header(header::CONTENT_TYPE, "application/json");
     if body.is_none() {
@@ -502,6 +563,29 @@ fn observed_on(
     }
 }
 
+/// The same read, addressed by a locator that is not the listing's own
+/// identifier.
+///
+/// Exactly what a shop hands a device: the row is addressed however the
+/// listing page numbered it, and the listing it names carries the identifier
+/// the catalogue keeps its claim under. Both encodings reach the commit, and
+/// they are not always the same string.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+fn observed_at(
+    locator: &str,
+    identifier: &str,
+    title: &str,
+    digest: Option<(u8, u64)>,
+) -> ObservedResource {
+    ObservedResource {
+        locator: Locator::new(locator).expect("a bounded locator"),
+        ..observed(identifier, title, digest, None)
+    }
+}
+
 /// One page of descriptions, under this device's fence and with its own
 /// receipt, which is what makes a resend safe.
 fn page(run: Uuid, resources: Vec<ObservedResource>, complete: bool) -> ImportPage {
@@ -628,6 +712,96 @@ async fn seed_catalogue(app: &axum::Router, state: &AppState) -> ImportRunView {
         "three resources, one drain, and the run settles"
     );
     settled
+}
+
+/// Reads one listing of one shop into one tenant's catalogue, whole: open,
+/// claim, describe, confirm, drain — and answers the resource it created.
+///
+/// Spelled out rather than routed through the helpers above, which speak for
+/// the first tenant only. That is the point of it: the second tenant's
+/// session, machine and fence are its own, and a file nobody else read.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn imported_by(
+    app: &axum::Router,
+    state: &AppState,
+    tenant: &Tenant,
+    identifier: &str,
+    title: &str,
+) -> ProductId {
+    let opened = call_as(
+        app,
+        &tenant.token,
+        Method::POST,
+        "/v1/imports/runs",
+        Some(serde_json::json!({
+            "source": "Tes",
+            "start_key": uuid_text(fresh_uuid()),
+        })),
+    )
+    .await;
+    assert_eq!(opened.status, StatusCode::CREATED, "{}", opened.body);
+    let run: Uuid = opened.json::<ImportRunView>().id;
+    let claimed = call_as(
+        app,
+        &tenant.token,
+        Method::POST,
+        &format!(
+            "/v1/devices/{}/import/{}/claim",
+            tenant.device,
+            uuid_text(run)
+        ),
+        Some(serde_json::json!({ "takeover": false })),
+    )
+    .await;
+    assert_eq!(claimed.status, StatusCode::OK, "{}", claimed.body);
+    let described = call_as(
+        app,
+        &tenant.token,
+        Method::POST,
+        &format!("/v1/devices/{}/import", tenant.device),
+        Some(
+            serde_json::to_value(page(
+                run,
+                vec![observed(identifier, title, Some((tenant.seed, BIG)), None)],
+                true,
+            ))
+            .unwrap_or(serde_json::Value::Null),
+        ),
+    )
+    .await;
+    assert_eq!(described.status, StatusCode::OK, "{}", described.body);
+    let accepted = call_as(
+        app,
+        &tenant.token,
+        Method::POST,
+        &format!("/v1/imports/runs/{}/commit", uuid_text(run)),
+        None,
+    )
+    .await;
+    assert_eq!(accepted.status, StatusCode::ACCEPTED, "{}", accepted.body);
+    drain(state).await;
+    let settled: ImportRunView = call_as(
+        app,
+        &tenant.token,
+        Method::GET,
+        &format!("/v1/imports/runs/{}", uuid_text(run)),
+        None,
+    )
+    .await
+    .json();
+    assert_eq!(
+        (settled.state, settled.counts.imported),
+        (ImportRunState::Complete, 1),
+        "this tenant's own read lands in this tenant's own catalogue"
+    );
+    settled
+        .items
+        .iter()
+        .find_map(|item| item.product_id)
+        .expect("the run created a product")
 }
 
 // -------------------------------------------------------------------- tests
@@ -1482,6 +1656,1644 @@ async fn a_resource_whose_file_is_not_captured_yet_still_lands(pool: PgPool) {
     );
 }
 
+/// Every product this session's catalogue page holds, in the order it draws
+/// them.
+async fn catalogue(app: &axum::Router) -> Vec<ProductId> {
+    catalogue_of(app, &TOKEN_A).await
+}
+
+/// The same page for a named session: what the seller actually sees, rather
+/// than what a row count says they might.
+async fn catalogue_of(app: &axum::Router, token: &SessionToken) -> Vec<ProductId> {
+    let page: tam_api::resources::ProductsPage =
+        call_as(app, token, Method::GET, "/v1/products", None)
+            .await
+            .json();
+    page.products.iter().map(|head| head.id).collect()
+}
+
+/// A resource the seller deleted locally comes back, as itself, when they
+/// import its listing again.
+///
+/// The defect this closes cost the seller the resource for good, and the shape
+/// of it is in the indexes: `mapping_one_bound_url` and
+/// `mapping_one_bound_numeric_id` hold a listing's claim for as long as the
+/// mapping says `bound`, and a local delete is a tombstone on `product` that
+/// leaves the mapping standing. So the claim outlives the resource. The
+/// commit's revalidation read the live products only, found nothing, minted a
+/// second product and reached `insert_mapping`, which the index refused:
+/// SQLSTATE 23505, reported as a fault of ours — and `commit_chunk` returns on
+/// a fault, so the item stayed `matched`, the run stayed `committing` through
+/// every later drain, and the catalogue page stayed empty.
+///
+/// Run against both shops, because neither the claim nor the repair is one
+/// marketplace's: a Tes listing is claimed by its URL and a TPT listing by its
+/// number, and the two land in different columns under different indexes.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn restores_after_a_local_delete(
+    pool: &PgPool,
+    shop: Marketplace,
+    inventory: &str,
+    identifier: &str,
+    label: &str,
+) {
+    let source = serde_json::to_value(shop).expect("the marketplace source encodes");
+    let source = source.as_str().expect("a marketplace source is a name");
+    let state = configured(pool.clone(), &store_root(&format!("restore-{inventory}")));
+    let app = router(state.clone());
+
+    // ---- the first import, by the path a device drives: list, tick,
+    // describe, confirm, drain.
+    let first = started_run_on(&app, source).await;
+    assert_eq!(
+        post_page(
+            &app,
+            &listing_page(first, vec![listed(identifier, "Statistics")])
+        )
+        .await
+        .status,
+        StatusCode::OK,
+        "the initial listing is accepted"
+    );
+    let selected = call(
+        &app,
+        Method::POST,
+        &format!("/v1/imports/runs/{}/select", uuid_text(first)),
+        Some(serde_json::json!({ "all": true })),
+    )
+    .await;
+    assert_eq!(selected.status, StatusCode::OK, "{}", selected.body);
+    assert_eq!(
+        post_page(
+            &app,
+            &page(
+                first,
+                vec![observed_on(
+                    shop,
+                    identifier,
+                    "Statistics",
+                    Some((0x5A, BIG)),
+                    None
+                )],
+                true,
+            ),
+        )
+        .await
+        .status,
+        StatusCode::OK,
+        "the initial capture is accepted"
+    );
+    let settled = confirm_and_drain(&app, &state, first).await;
+    assert_eq!(
+        (settled.state, settled.counts.imported),
+        (ImportRunState::Complete, 1),
+        "the first import lands"
+    );
+    let product = settled
+        .items
+        .iter()
+        .find_map(|item| item.product_id)
+        .expect("the first import created a resource");
+
+    // ---- the seller deletes their copy and leaves the listing standing,
+    // which is the only local delete a bound resource admits without a
+    // removal job.
+    let deleted = call(
+        &app,
+        Method::DELETE,
+        &format!("/v1/products/{}", product_text(product)),
+        Some(serde_json::json!({ "leave_live": true })),
+    )
+    .await;
+    assert_eq!(deleted.status, StatusCode::OK, "{}", deleted.body);
+    assert!(
+        catalogue(&app).await.is_empty(),
+        "the resource leaves the catalogue"
+    );
+    assert_eq!(
+        claims_on(pool, ORG_A, identifier).await,
+        vec![(product, "bound".to_owned())],
+        "and its claim on the listing outlives it, which is what the re-import collides with"
+    );
+
+    // ---- the same listing again. The shop still lists it and the seller no
+    // longer holds it, so the run offers the row rather than settling it as
+    // one they already have.
+    let again = started_run_on(&app, source).await;
+    assert_eq!(
+        post_page(
+            &app,
+            &listing_page(again, vec![listed(identifier, "Statistics")])
+        )
+        .await
+        .status,
+        StatusCode::OK,
+        "the re-import listing is accepted"
+    );
+    let view = run_view(&app, again).await;
+    assert_eq!(
+        (view.counts.listed, view.counts.skipped),
+        (1, 0),
+        "a resource the seller deleted locally is offered again rather than reported as one \
+         they already hold"
+    );
+    let selected = call(
+        &app,
+        Method::POST,
+        &format!("/v1/imports/runs/{}/select", uuid_text(again)),
+        Some(serde_json::json!({ "all": true })),
+    )
+    .await;
+    assert_eq!(selected.status, StatusCode::OK, "{}", selected.body);
+    assert_eq!(
+        post_page(
+            &app,
+            &page(
+                again,
+                vec![observed_on(
+                    shop,
+                    identifier,
+                    "Statistics revised",
+                    Some((0x5A, BIG)),
+                    None
+                )],
+                true,
+            ),
+        )
+        .await
+        .status,
+        StatusCode::OK,
+        "the re-import capture is accepted"
+    );
+    let settled = confirm_and_drain(&app, &state, again).await;
+    assert_eq!(
+        (
+            settled.state,
+            settled.counts.imported,
+            settled.counts.failed
+        ),
+        (ImportRunState::Complete, 1, 0),
+        "the re-import finishes rather than committing forever"
+    );
+    assert_eq!(
+        settled.items.iter().find_map(|item| item.product_id),
+        Some(product),
+        "and it is the resource the listing already named, not a second claim on it"
+    );
+
+    // ---- what the seller has afterwards: one resource, visible, carrying
+    // this read's description, its file and the shop's own label.
+    assert_eq!(
+        catalogue(&app).await,
+        vec![product],
+        "the catalogue page holds it again"
+    );
+    assert_eq!(
+        (products_held(pool).await, live_products(pool).await),
+        (1, 1),
+        "restored rather than duplicated"
+    );
+    assert_eq!(
+        claims_on(pool, ORG_A, identifier).await,
+        vec![(product, "bound".to_owned())],
+        "one claim still, and the live listing was not severed to make room for it"
+    );
+    assert_eq!(
+        mappings_on(pool, inventory).await,
+        1,
+        "restoring reuses the existing marketplace mapping"
+    );
+    let held: tam_api::resources::ProductView = call(
+        &app,
+        Method::GET,
+        &format!("/v1/products/{}", product_text(product)),
+        None,
+    )
+    .await
+    .json();
+    assert_eq!(
+        held.title, "Statistics revised",
+        "carrying what this read described rather than what the deleted copy said"
+    );
+    assert!(
+        held.files.iter().any(|file| file.role == "payload"),
+        "and the file that makes it usable: {:?}",
+        held.files
+    );
+    let labels: tam_api::resources::LabelsView = call(
+        &app,
+        Method::GET,
+        &format!("/v1/products/{}/labels", product_text(product)),
+        None,
+    )
+    .await
+    .json();
+    assert!(
+        labels
+            .labels
+            .iter()
+            .any(|shown| shown.name == label && shown.system),
+        "with the shop's own label, which the local delete had stripped: {:?}",
+        labels.labels
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn re_importing_a_deleted_tes_resource_restores_it(pool: PgPool) {
+    provision(&pool).await;
+    restores_after_a_local_delete(
+        &pool,
+        Marketplace::Tes,
+        "tes",
+        "https://www.tes.com/teaching-resource/-13264370",
+        "Tes",
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn re_importing_a_deleted_tpt_resource_restores_it(pool: PgPool) {
+    provision(&pool).await;
+    restores_after_a_local_delete(&pool, Marketplace::Tpt, "tpt", "13264370", "TPT").await;
+}
+
+/// One listing a shop names twice lands once.
+///
+/// A shop addresses a row however its own list numbered it and names the
+/// listing by the identifier the catalogue keeps its claim under, and those
+/// are not always the same string: a Tes row is numbered and its listing is a
+/// URL. The commit's revalidation was keyed on the row's locator, so the
+/// second row's claim was invisible to it — it minted a product and reached
+/// the insert the first row's claim already held, which is the same 23505 by
+/// another road, and left the run committing forever.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn one_listing_a_shop_names_twice_lands_once(pool: PgPool) {
+    provision(&pool).await;
+    let state = configured(pool.clone(), &store_root("twonames"));
+    let app = router(state.clone());
+    let url = "https://www.tes.com/teaching-resource/-13264370";
+    let run = started_run(&app).await;
+    assert_eq!(
+        post_page(
+            &app,
+            &listing_page(
+                run,
+                vec![listed(url, "Statistics"), listed("13264370", "Statistics")],
+            ),
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    let selected = call(
+        &app,
+        Method::POST,
+        &format!("/v1/imports/runs/{}/select", uuid_text(run)),
+        Some(serde_json::json!({ "all": true })),
+    )
+    .await;
+    assert_eq!(selected.status, StatusCode::OK, "{}", selected.body);
+    assert_eq!(
+        post_page(
+            &app,
+            &page(
+                run,
+                vec![
+                    observed(url, "Statistics", Some((0x5A, BIG)), None),
+                    observed_at("13264370", url, "Statistics", Some((0x5A, BIG))),
+                ],
+                true,
+            ),
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+
+    let settled = confirm_and_drain(&app, &state, run).await;
+    assert_eq!(
+        (
+            settled.state,
+            settled.counts.imported,
+            settled.counts.skipped,
+            settled.counts.failed,
+        ),
+        (ImportRunState::Complete, 1, 1, 0),
+        "one resource created, one row settled against it, and nothing failed"
+    );
+    assert_eq!(
+        products_held(&pool).await,
+        1,
+        "one resource for one listing, however many rows named it"
+    );
+    assert_eq!(
+        claims_on(&pool, ORG_A, url).await.len(),
+        1,
+        "and one claim on it"
+    );
+    let numbered = settled
+        .items
+        .iter()
+        .find(|item| item.locator.as_str() == "13264370")
+        .expect("the numbered row is on the run");
+    assert_eq!(numbered.state, ImportRunItemState::Skipped);
+}
+
+/// A read that carried no file keeps its identity across imports, and comes
+/// back after a local delete.
+///
+/// Migration 0061 admits no mapping onto a resource with no live payload, so a
+/// metadata-only read has no claim on its listing at all: the mapping every
+/// other test here leans on does not exist. What does exist is the run item
+/// the first import settled — the shop, the locator and the resource it
+/// created — and without reading it a second import of the same draft creates
+/// a second copy, and a re-import after a local delete can never find the
+/// first.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_fileless_read_re_imports_onto_the_resource_it_made(pool: PgPool) {
+    provision(&pool).await;
+    let state = configured(pool.clone(), &store_root("filelessagain"));
+    let app = router(state.clone());
+    let url = "https://www.tes.com/teaching-resource/-77";
+
+    let first = started_run(&app).await;
+    assert_eq!(
+        post_page(
+            &app,
+            &page(
+                first,
+                vec![observed(url, "Uncaptured pack", None, None)],
+                true
+            ),
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    let settled = confirm_and_drain(&app, &state, first).await;
+    assert_eq!(
+        (settled.state, settled.counts.imported),
+        (ImportRunState::Complete, 1),
+        "the metadata-only read lands"
+    );
+    let product = settled
+        .items
+        .iter()
+        .find_map(|item| item.product_id)
+        .expect("the first import created a resource");
+    assert_eq!(
+        mappings_on(&pool, "tes").await,
+        0,
+        "with no claim on its listing, because 0061 admits none without a payload"
+    );
+
+    // ---- the same draft again, still uncaptured.
+    let second = started_run(&app).await;
+    assert_eq!(
+        post_page(
+            &app,
+            &page(
+                second,
+                vec![observed(url, "Uncaptured pack", None, None)],
+                true
+            ),
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    let settled = confirm_and_drain(&app, &state, second).await;
+    assert_eq!(
+        (
+            settled.state,
+            settled.counts.imported,
+            settled.counts.skipped,
+            settled.counts.failed,
+        ),
+        (ImportRunState::Complete, 0, 1, 0),
+        "the second read settles against the resource the first one made"
+    );
+    assert_eq!(
+        products_held(&pool).await,
+        1,
+        "and creates no second copy of it"
+    );
+    assert_eq!(
+        mappings_on(&pool, "tes").await,
+        0,
+        "and binds nothing, because the bytes are still uncaptured"
+    );
+
+    // ---- deleted locally, then imported again. No claim exists to find it
+    // by, so the import's own provenance is the only thing that can.
+    let deleted = call(
+        &app,
+        Method::DELETE,
+        &format!("/v1/products/{}", product_text(product)),
+        Some(serde_json::json!({ "leave_live": true })),
+    )
+    .await;
+    assert_eq!(deleted.status, StatusCode::OK, "{}", deleted.body);
+    assert_eq!(live_products(&pool).await, 0);
+
+    let third = started_run(&app).await;
+    assert_eq!(
+        post_page(
+            &app,
+            &page(
+                third,
+                vec![observed(url, "Uncaptured pack", None, None)],
+                true
+            ),
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    let settled = confirm_and_drain(&app, &state, third).await;
+    assert_eq!(
+        (settled.state, settled.counts.imported),
+        (ImportRunState::Complete, 1),
+        "the draft the seller deleted comes back"
+    );
+    assert_eq!(
+        settled.items.iter().find_map(|item| item.product_id),
+        Some(product),
+        "as itself"
+    );
+    assert_eq!(catalogue(&app).await, vec![product]);
+    assert_eq!(
+        (products_held(&pool).await, live_products(&pool).await),
+        (1, 1),
+        "and there is still one of it"
+    );
+    assert_eq!(
+        mappings_on(&pool, "tes").await,
+        0,
+        "and it gains no claim it cannot carry"
+    );
+}
+
+/// The file arrives later, and lands on the resource the first read made.
+///
+/// The ordinary life of a draft: the first read carried metadata only, so the
+/// resource has no payload and — migration 0061 — no claim on its listing. A
+/// later read of the same listing captures the bundle, and that is not a
+/// second resource: the seller has one, it is the one this listing names, and
+/// what it gains is the file and the claim the file makes legal. A second
+/// copy, a mapping written while the payload was still missing, or a
+/// description quietly replaced with the shop's are each a way of getting
+/// this wrong, and the second of them aborts the whole commit at the deferred
+/// trigger.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_captured_file_lands_on_the_resource_the_fileless_read_made(pool: PgPool) {
+    provision(&pool).await;
+    let state = configured(pool.clone(), &store_root("promote"));
+    let app = router(state.clone());
+    let url = "https://www.tes.com/teaching-resource/-88";
+
+    let first = started_run(&app).await;
+    assert_eq!(
+        post_page(
+            &app,
+            &page(first, vec![observed(url, "Statistics", None, None)], true),
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    let settled = confirm_and_drain(&app, &state, first).await;
+    assert_eq!(
+        (settled.state, settled.counts.imported),
+        (ImportRunState::Complete, 1),
+        "the metadata-only read lands"
+    );
+    let product = settled
+        .items
+        .iter()
+        .find_map(|item| item.product_id)
+        .expect("the first import created a resource");
+    let draft: tam_api::resources::ProductView = call(
+        &app,
+        Method::GET,
+        &format!("/v1/products/{}", product_text(product)),
+        None,
+    )
+    .await
+    .json();
+    assert!(
+        !draft.files.iter().any(|file| file.role == "payload"),
+        "holding no file yet: {:?}",
+        draft.files
+    );
+    assert_eq!(mappings_on(&pool, "tes").await, 0);
+
+    // ---- the bundle is captured, by a later read of the same listing.
+    let second = started_run(&app).await;
+    assert_eq!(
+        post_page(
+            &app,
+            &page(
+                second,
+                vec![observed(url, "Statistics revised", Some((0x5A, BIG)), None)],
+                true,
+            ),
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    let settled = confirm_and_drain(&app, &state, second).await;
+    assert_eq!(
+        (
+            settled.state,
+            settled.counts.imported,
+            settled.counts.skipped,
+            settled.counts.failed,
+        ),
+        (ImportRunState::Complete, 0, 1, 0),
+        "the capture settles against the resource the seller already has rather than \
+         creating a second one or failing the row"
+    );
+    assert_eq!(
+        (products_held(&pool).await, live_products(&pool).await),
+        (1, 1),
+        "one resource, still"
+    );
+
+    let promoted: tam_api::resources::ProductView = call(
+        &app,
+        Method::GET,
+        &format!("/v1/products/{}", product_text(product)),
+        None,
+    )
+    .await
+    .json();
+    assert_eq!(
+        promoted.title, "Statistics",
+        "and the canonical fields are the product's own: the shop's drift is the seller's to \
+         adopt, so a capture supplies the file without rewriting the description \
+         (docs/notes/design/vendoo-for-teachers-rethink.md:75-77)"
+    );
+    let payloads: Vec<&tam_api::resources::FileView> = promoted
+        .files
+        .iter()
+        .filter(|file| file.role == "payload")
+        .collect();
+    assert_eq!(
+        payloads.len(),
+        1,
+        "one payload, on the resource that had none: {:?}",
+        promoted.files
+    );
+    assert_eq!(payloads[0].byte_len, BIG, "the file this read captured");
+    assert_eq!(
+        claims_on(&pool, ORG_A, url).await,
+        vec![(product, "bound".to_owned())],
+        "and the listing binds onto it now that the payload 0061 requires is there"
+    );
+    assert_eq!(mappings_on(&pool, "tes").await, 1);
+
+    // ---- and it is self-terminating: reading it again adds nothing and
+    // duplicates nothing.
+    let third = started_run(&app).await;
+    assert_eq!(
+        post_page(
+            &app,
+            &page(
+                third,
+                vec![observed(url, "Statistics revised", Some((0x5A, BIG)), None)],
+                true,
+            ),
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    let settled = confirm_and_drain(&app, &state, third).await;
+    assert_eq!(
+        (settled.state, settled.counts.skipped, settled.counts.failed),
+        (ImportRunState::Complete, 1, 0),
+    );
+    assert_eq!(
+        (
+            products_held(&pool).await,
+            mappings_on(&pool, "tes").await,
+            claims_on(&pool, ORG_A, url).await.len(),
+        ),
+        (1, 1, 1),
+        "one resource, one claim, one file's worth of history"
+    );
+    let unchanged: tam_api::resources::ProductView = call(
+        &app,
+        Method::GET,
+        &format!("/v1/products/{}", product_text(product)),
+        None,
+    )
+    .await
+    .json();
+    assert_eq!(
+        unchanged
+            .files
+            .iter()
+            .filter(|file| file.role == "payload")
+            .count(),
+        1,
+        "and the file it holds is not written twice: {:?}",
+        unchanged.files
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn concurrent_commits_preserve_fileless_import_provenance(pool: PgPool) {
+    provision(&pool).await;
+    let state = configured(pool.clone(), &store_root("concurrentfileless"));
+    let app = router(state.clone());
+    let resources: Vec<_> = (0..26)
+        .map(|index| {
+            observed(
+                &format!("https://www.tes.com/teaching-resource/-{}", 2000 + index),
+                &format!("Draft {index}"),
+                None,
+                None,
+            )
+        })
+        .collect();
+    let first = resources.first().expect("twenty-six resources").clone();
+    let run = started_run(&app).await;
+    let described = post_page(&app, &page(run, resources, true)).await;
+    assert_eq!(described.status, StatusCode::OK, "{}", described.body);
+    let accepted = confirm(&app, run).await;
+    assert_eq!(accepted.status, StatusCode::ACCEPTED, "{}", accepted.body);
+
+    let mut blocker = pool.begin().await.expect("the test lock opens");
+    tam_storage::lock_org_catalogue(&mut blocker, ORG_A)
+        .await
+        .expect("the test holds the catalogue lock");
+    let release = async {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let waiting: i64 = sqlx::query_scalar(
+                    "SELECT count(*) FROM pg_locks \
+                 WHERE locktype = 'advisory' AND NOT granted \
+                   AND database = (SELECT oid FROM pg_database WHERE datname = current_database())",
+                )
+                .fetch_one(&pool)
+                .await
+                .expect("the lock waiters can be read");
+                if waiting == 2 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("both passes fetched their pages before waiting for the lock");
+        blocker
+            .commit()
+            .await
+            .expect("both commit passes may proceed");
+    };
+    let (first_pass, second_pass, ()) = tokio::join!(
+        tam_api::scheduler::pass(&state, NOW),
+        tam_api::scheduler::pass(&state, NOW),
+        release,
+    );
+    first_pass.expect("the first pass runs");
+    second_pass.expect("the second pass runs");
+    drain(&state).await;
+
+    let committed = run_view(&app, run).await;
+    assert_eq!(
+        (
+            committed.state,
+            committed.counts.imported,
+            committed.counts.skipped
+        ),
+        (ImportRunState::Complete, 26, 0),
+        "a stale page must not replace imported items with skips"
+    );
+    let repeated = imported_read(&app, &state, "Tes", first).await;
+    assert_eq!(
+        (
+            repeated.state,
+            repeated.counts.imported,
+            repeated.counts.skipped
+        ),
+        (ImportRunState::Complete, 0, 1),
+        "the original fileless resource remains the source identity"
+    );
+    assert_eq!(catalogue(&app).await.len(), 26);
+}
+
+/// One described resource, read into the shop named and confirmed: the whole
+/// device road for a single-row import, answered as the run it settled.
+async fn imported_read(
+    app: &axum::Router,
+    state: &AppState,
+    source: &str,
+    resource: ObservedResource,
+) -> ImportRunView {
+    let run = started_run_on(app, source).await;
+    assert_eq!(
+        post_page(app, &page(run, vec![resource], true))
+            .await
+            .status,
+        StatusCode::OK,
+        "the description is accepted"
+    );
+    confirm_and_drain(app, state, run).await
+}
+
+/// The digest of a fixture's file, spelled the way the resource page answers
+/// it: every byte the same, lower-case hex.
+fn hash_text(seed: u8) -> String {
+    format!("{seed:02x}").repeat(32)
+}
+
+/// Every live payload a resource holds, as the seller's own resource page
+/// draws them: the digest and the length.
+///
+/// Read from the API rather than from `product_file`, because "which file
+/// would this seller publish" is what a stale locator costs them, and the
+/// page is where they would see it.
+async fn payloads_of(app: &axum::Router, product: ProductId) -> Vec<(String, u64)> {
+    let held: tam_api::resources::ProductView = call(
+        app,
+        Method::GET,
+        &format!("/v1/products/{}", product_text(product)),
+        None,
+    )
+    .await
+    .json();
+    held.files
+        .iter()
+        .filter(|file| file.role == "payload")
+        .map(|file| (file.hash.clone(), file.byte_len))
+        .collect()
+}
+
+/// A payload the seller uploaded themselves, onto a resource an import made.
+///
+/// Written through the repository rather than through `POST /uploads`, which
+/// is multipart and is exercised in `catalogue_flow.rs`: what these tests need
+/// is one live payload file no import read and no marketplace holds, and that
+/// is a row.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn seller_payload(pool: &PgPool, product: ProductId, seed: u8) {
+    let file = ProductFile {
+        id: FileId(fresh_uuid()),
+        role: FileRole::Payload,
+        kind: FileKind::Pdf,
+        bytes: FileBytes::Held {
+            hash: ContentHash([seed; 32]),
+            byte_len: BIG,
+            scan: ScanOutcome::Clean { at: NOW },
+        },
+    };
+    tam_storage::ProductRepo::new(pool.clone())
+        .add_file(ORG_A, product, (&file, Some("my-own-worksheet.pdf")), NOW)
+        .await
+        .expect("the fixture file writes")
+        .expect("the resource takes the seller's own payload");
+}
+
+/// A re-import of a listing the seller still holds leaves the words they
+/// wrote exactly as they wrote them.
+///
+/// The product record owns the canonical fields, and drift on the shop is
+/// surfaced for an adopt-or-overwrite decision rather than applied
+/// (`docs/notes/design/vendoo-for-teachers-rethink.md:75-77`). The reconciling
+/// commit refreshed title, body and price from every same-source read, and
+/// that path is reached by the ordinary repairs — a missing thumbnail, a
+/// bundle captured later — so confirming a repair destroyed the seller's own
+/// title and then reported the row as a skip, with nothing in the run to say
+/// what had been overwritten.
+///
+/// On TPT because the edit route refuses a live Tes listing outright
+/// (`tes.edit_published` is uncaptured), and an edit that never landed could
+/// not prove an import left it alone.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_re_import_leaves_the_seller_s_own_words_alone(pool: PgPool) {
+    provision(&pool).await;
+    let state = configured(pool.clone(), &store_root("authored"));
+    let app = router(state.clone());
+
+    let settled = imported_read(
+        &app,
+        &state,
+        "Tpt",
+        observed_on(
+            Marketplace::Tpt,
+            "4242",
+            "Statistics",
+            Some((0x5A, BIG)),
+            Some(sketch(0x0F0F_0F0F_0F0F_0F0F, 90, 1)),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (settled.state, settled.counts.imported),
+        (ImportRunState::Complete, 1),
+        "the first read lands"
+    );
+    let product = settled
+        .items
+        .iter()
+        .find_map(|item| item.product_id)
+        .expect("the first import created a resource");
+
+    // ---- the seller rewrites it in their own catalogue.
+    let edited = call(
+        &app,
+        Method::PATCH,
+        &format!("/v1/products/{}", product_text(product)),
+        Some(serde_json::json!({
+            "title": "Statistics, retitled by me",
+            "body": "My own description.",
+        })),
+    )
+    .await;
+    assert_eq!(
+        edited.status,
+        StatusCode::OK,
+        "the seller's edit lands: {}",
+        edited.body
+    );
+
+    // ---- the same listing read again, the shop's own copy having drifted.
+    let settled = imported_read(
+        &app,
+        &state,
+        "Tpt",
+        observed_on(
+            Marketplace::Tpt,
+            "4242",
+            "Statistics as the shop says it now",
+            Some((0x5A, BIG)),
+            Some(sketch(0x0F0F_0F0F_0F0F_0F0F, 90, 1)),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (
+            settled.state,
+            settled.counts.imported,
+            settled.counts.skipped,
+            settled.counts.failed,
+        ),
+        (ImportRunState::Complete, 0, 1, 0),
+        "the re-import settles against the resource the seller already holds"
+    );
+
+    let held: tam_api::resources::ProductView = call(
+        &app,
+        Method::GET,
+        &format!("/v1/products/{}", product_text(product)),
+        None,
+    )
+    .await
+    .json();
+    assert_eq!(
+        held.title, "Statistics, retitled by me",
+        "the title the seller authored outlives a re-import of the listing it came from"
+    );
+    assert_eq!(
+        held.body, "My own description.",
+        "and so does the description they wrote"
+    );
+    assert_eq!(
+        (products_held(&pool).await, live_products(&pool).await),
+        (1, 1),
+        "one resource, still"
+    );
+
+    let run = started_run(&app).await;
+    let described = post_page(
+        &app,
+        &page(
+            run,
+            vec![observed(
+                "https://www.tes.com/teaching-resource/-114",
+                "Statistics as the shop says it now",
+                Some((0x5B, BIG)),
+                Some(sketch(0x0F0F_0F0F_0F0F_0F0F, 90, 2)),
+            )],
+            true,
+        ),
+    )
+    .await;
+    assert_eq!(described.status, StatusCode::OK, "{}", described.body);
+    let described = run_view(&app, run).await;
+    assert!(
+        described.review_pairs.is_empty(),
+        "the declined marketplace title must not turn moderate text similarity into a duplicate question"
+    );
+    let settled = confirm_and_drain(&app, &state, run).await;
+    assert_eq!(
+        (
+            settled.state,
+            settled.counts.imported,
+            settled.counts.review
+        ),
+        (ImportRunState::Complete, 1, 0)
+    );
+}
+
+/// A listing the seller merged away is not resurrected by reading it again.
+///
+/// A merge tombstones the loser and deliberately leaves its claim on its own
+/// listing standing, so a later read of that listing finds a tombstoned
+/// identity — and a tombstone is not evidence of a local delete. Restoring it
+/// puts back the duplicate the seller had just resolved, outside the undo they
+/// were told about and without the question being reopened. The survivor
+/// already stands for this listing, so the honest outcome is a skip that
+/// leaves both the tombstone and the loser's claim exactly where the merge
+/// left them.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_merged_away_listing_is_not_resurrected_by_a_re_import(pool: PgPool) {
+    provision(&pool).await;
+    let state = configured(pool.clone(), &store_root("mergedagain"));
+    let app = router(state.clone());
+    let kept_url = "https://www.tes.com/teaching-resource/-101";
+    let lost_url = "https://www.tes.com/teaching-resource/-102";
+
+    let run = started_run(&app).await;
+    assert_eq!(
+        post_page(
+            &app,
+            &page(
+                run,
+                vec![
+                    observed(kept_url, "Fractions pack", Some((0x5A, BIG)), None),
+                    observed(lost_url, "Long division", Some((0x5B, BIG)), None),
+                ],
+                true,
+            ),
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    let settled = confirm_and_drain(&app, &state, run).await;
+    assert_eq!(
+        (settled.state, settled.counts.imported),
+        (ImportRunState::Complete, 2),
+        "two listings, two resources"
+    );
+    let kept = settled
+        .items
+        .iter()
+        .find(|item| item.locator == kept_url)
+        .and_then(|item| item.product_id)
+        .expect("the kept listing made a resource");
+    let lost = settled
+        .items
+        .iter()
+        .find(|item| item.locator == lost_url)
+        .and_then(|item| item.product_id)
+        .expect("the other listing made a resource");
+
+    merge_into(&app, &pool, lost, kept).await;
+    assert_eq!(
+        catalogue(&app).await,
+        vec![kept],
+        "the seller is left with one resource"
+    );
+    assert_eq!(
+        claims_on(&pool, ORG_A, lost_url).await,
+        vec![(lost, "bound".to_owned())],
+        "and the merge leaves the loser's claim on its own listing standing, which is what a \
+         re-import of that listing finds"
+    );
+
+    // ---- the shop still lists what the seller merged away.
+    let settled = imported_read(
+        &app,
+        &state,
+        "Tes",
+        observed(lost_url, "Long division", Some((0x5B, BIG)), None),
+    )
+    .await;
+    assert_eq!(
+        (
+            settled.state,
+            settled.counts.imported,
+            settled.counts.skipped,
+            settled.counts.failed,
+        ),
+        (ImportRunState::Complete, 0, 1, 0),
+        "the row settles against the resource the merge kept rather than creating or restoring \
+         a second one"
+    );
+    assert_eq!(
+        catalogue(&app).await,
+        vec![kept],
+        "the resource the seller merged away stays merged away"
+    );
+    assert_eq!(
+        (products_held(&pool).await, live_products(&pool).await),
+        (2, 1),
+        "nothing was restored and nothing was created"
+    );
+    assert_eq!(
+        claims_on(&pool, ORG_A, lost_url).await,
+        vec![(lost, "bound".to_owned())],
+        "and the loser's claim is neither stolen nor severed to make room"
+    );
+    assert_eq!(
+        mappings_on(&pool, "tes").await,
+        2,
+        "two claims for two listings, still"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_re_import_restores_the_deleted_survivor_of_a_long_merge_chain(pool: PgPool) {
+    provision(&pool).await;
+    let state = configured(pool.clone(), &store_root("mergedchain"));
+    let app = router(state.clone());
+    let titles = [
+        "Fractions",
+        "Division",
+        "Chemistry",
+        "Geography",
+        "Algebra",
+        "Biology",
+        "History",
+        "Mechanics",
+        "Weather",
+        "Ecology",
+    ];
+    let listings: Vec<_> = (0x60_u8..)
+        .zip(titles)
+        .map(|(seed, title)| {
+            observed(
+                &format!(
+                    "https://www.tes.com/teaching-resource/-{}",
+                    u16::from(seed) + 1000
+                ),
+                title,
+                Some((seed, BIG)),
+                None,
+            )
+        })
+        .collect();
+    let oldest = listings.first().expect("ten listings").clone();
+    let run = started_run(&app).await;
+    assert_eq!(
+        post_page(&app, &page(run, listings.clone(), true))
+            .await
+            .status,
+        StatusCode::OK
+    );
+    let imported = confirm_and_drain(&app, &state, run).await;
+    assert_eq!(imported.counts.imported, 10);
+    let products: Vec<_> = listings
+        .iter()
+        .map(|listing| {
+            imported
+                .items
+                .iter()
+                .find(|item| item.locator == listing.locator.as_str())
+                .and_then(|item| item.product_id)
+                .expect("each listing created a resource")
+        })
+        .collect();
+    for [lost, kept] in products.array_windows::<2>() {
+        merge_into(&app, &pool, *lost, *kept).await;
+    }
+    let survivor = *products.last().expect("the last resource survives");
+    assert_eq!(catalogue(&app).await, vec![survivor]);
+    let other_shop = started_run_on(&app, "Tpt").await;
+    let described = post_page(
+        &app,
+        &page(
+            other_shop,
+            vec![observed_on(
+                Marketplace::Tpt,
+                "4243",
+                "Ecology",
+                Some((0x69, BIG)),
+                None,
+            )],
+            true,
+        ),
+    )
+    .await;
+    assert_eq!(described.status, StatusCode::OK, "{}", described.body);
+    assert_eq!(
+        run_view(&app, other_shop).await.counts.skipped,
+        1,
+        "the survivor also carries its identical TPT listing"
+    );
+    let deleted = call(
+        &app,
+        Method::DELETE,
+        &format!("/v1/products/{}", product_text(survivor)),
+        Some(serde_json::json!({ "leave_live": true })),
+    )
+    .await;
+    assert_eq!(deleted.status, StatusCode::OK, "{}", deleted.body);
+    assert!(catalogue(&app).await.is_empty());
+
+    let restored = imported_read(&app, &state, "Tes", oldest).await;
+    assert_eq!(
+        (restored.state, restored.counts.imported, restored.counts.skipped, restored.counts.failed),
+        (ImportRunState::Complete, 1, 0, 0),
+        "a re-import must restore the selected resource's canonical survivor, not skip a hidden tombstone"
+    );
+    assert_eq!(catalogue(&app).await, vec![survivor]);
+    assert_eq!(
+        (products_held(&pool).await, live_products(&pool).await),
+        (10, 1)
+    );
+    let resource = call(
+        &app,
+        Method::GET,
+        &format!("/v1/products/{}", product_text(survivor)),
+        None,
+    )
+    .await;
+    assert_eq!(resource.status, StatusCode::OK);
+    assert_eq!(resource.body["title"], "Ecology");
+    assert_eq!(
+        claims_on(&pool, ORG_A, "https://www.tes.com/teaching-resource/-1096").await,
+        vec![(products[0], "bound".to_owned())],
+        "restoring the survivor neither resurrects nor steals the ancestor's claim"
+    );
+    let labels: tam_api::resources::LabelsView = call(
+        &app,
+        Method::GET,
+        &format!("/v1/products/{}/labels", product_text(survivor)),
+        None,
+    )
+    .await
+    .json();
+    let mut names: Vec<_> = labels
+        .labels
+        .iter()
+        .filter(|label| label.system)
+        .map(|label| label.name.as_str())
+        .collect();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        vec!["TPT", "Tes"],
+        "restoring the survivor restores chips for both retained marketplace claims"
+    );
+}
+
+/// Restoring a locally deleted resource takes the file this read captured.
+///
+/// A local delete leaves the `product_file` rows live, so a restore always
+/// found a payload already there and discarded the capture. What that row
+/// holds for an imported resource is a locator and the digest of the bytes the
+/// shop served last time, not bytes this server keeps: the manifest sends that
+/// old commitment and the device's verification rejects the file the shop
+/// serves now. The seller was told the restore had worked and was left holding
+/// a resource that cannot be published, on the very pass that had just
+/// captured usable bytes.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_restored_resource_carries_the_file_this_read_captured(pool: PgPool) {
+    provision(&pool).await;
+    let state = configured(pool.clone(), &store_root("restale"));
+    let app = router(state.clone());
+    let url = "https://www.tes.com/teaching-resource/-111";
+
+    let settled = imported_read(
+        &app,
+        &state,
+        "Tes",
+        observed(url, "Statistics", Some((0x5A, BIG)), None),
+    )
+    .await;
+    assert_eq!(
+        (settled.state, settled.counts.imported),
+        (ImportRunState::Complete, 1),
+        "the first read lands"
+    );
+    let product = settled
+        .items
+        .iter()
+        .find_map(|item| item.product_id)
+        .expect("the first import created a resource");
+    assert_eq!(
+        payloads_of(&app, product).await,
+        vec![(hash_text(0x5A), BIG)],
+        "holding the bundle that read captured"
+    );
+
+    let deleted = call(
+        &app,
+        Method::DELETE,
+        &format!("/v1/products/{}", product_text(product)),
+        Some(serde_json::json!({ "leave_live": true })),
+    )
+    .await;
+    assert_eq!(deleted.status, StatusCode::OK, "{}", deleted.body);
+
+    // ---- the seller imports it again, and the shop's bundle has moved on.
+    let settled = imported_read(
+        &app,
+        &state,
+        "Tes",
+        observed(url, "Statistics", Some((0x5C, BIG)), None),
+    )
+    .await;
+    assert_eq!(
+        (
+            settled.state,
+            settled.counts.imported,
+            settled.counts.failed
+        ),
+        (ImportRunState::Complete, 1, 0),
+        "the restore finishes as the creation it is"
+    );
+    assert_eq!(catalogue(&app).await, vec![product]);
+    assert_eq!(
+        payloads_of(&app, product).await,
+        vec![(hash_text(0x5C), BIG)],
+        "carrying the bytes this read captured rather than a locator whose old digest no \
+         device can satisfy"
+    );
+    assert_eq!(
+        claims_on(&pool, ORG_A, url).await,
+        vec![(product, "bound".to_owned())],
+        "and one claim on the listing, unsevered"
+    );
+}
+
+/// A restore does not touch the seller's own file.
+///
+/// The fence on the reconciliation above. Refreshing a restored resource's
+/// sourced locator is one thing; a file the seller uploaded, or a second
+/// payload they added beside the import's, is theirs, and a re-import has no
+/// business replacing or retiring it. Held shut here because the repair for
+/// the stale locator is exactly the kind that grows into "the newest read
+/// wins".
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_restore_leaves_the_seller_s_own_file_alone(pool: PgPool) {
+    provision(&pool).await;
+    let state = configured(pool.clone(), &store_root("resown"));
+    let app = router(state.clone());
+    let url = "https://www.tes.com/teaching-resource/-112";
+
+    let settled = imported_read(
+        &app,
+        &state,
+        "Tes",
+        observed(url, "Statistics", Some((0x5A, BIG)), None),
+    )
+    .await;
+    let product = settled
+        .items
+        .iter()
+        .find_map(|item| item.product_id)
+        .expect("the first import created a resource");
+    seller_payload(&pool, product, 0xEE).await;
+
+    let deleted = call(
+        &app,
+        Method::DELETE,
+        &format!("/v1/products/{}", product_text(product)),
+        Some(serde_json::json!({ "leave_live": true })),
+    )
+    .await;
+    assert_eq!(deleted.status, StatusCode::OK, "{}", deleted.body);
+
+    let settled = imported_read(
+        &app,
+        &state,
+        "Tes",
+        observed(url, "Statistics", Some((0x5C, BIG)), None),
+    )
+    .await;
+    assert_eq!(
+        (
+            settled.state,
+            settled.counts.imported,
+            settled.counts.failed
+        ),
+        (ImportRunState::Complete, 1, 0),
+        "the resource comes back"
+    );
+    let mut held: Vec<String> = payloads_of(&app, product)
+        .await
+        .into_iter()
+        .map(|(hash, _)| hash)
+        .collect();
+    held.sort();
+    assert_eq!(
+        held,
+        vec![hash_text(0x5A), hash_text(0xEE)],
+        "both files the seller had are still there, and this read replaced neither"
+    );
+}
+
+/// A read whose file the resource refused leaves that resource's sketch
+/// alone.
+///
+/// The stored sketch is what the matcher compares later reads against, and it
+/// is read beside the file the resource actually holds. Writing every
+/// same-source read's sketch onto the product gave the catalogue a row
+/// describing bytes it had just declined to keep — so a later read of those
+/// declined bytes, from another shop, matched the resource holding the old
+/// file and was put to the seller as the same thing. A sketch is only the
+/// resource's where the payload it describes is the payload the resource
+/// kept.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_refused_file_leaves_the_resource_s_sketch_alone(pool: PgPool) {
+    provision(&pool).await;
+    let state = configured(pool.clone(), &store_root("sketch"));
+    let app = router(state.clone());
+    let url = "https://www.tes.com/teaching-resource/-113";
+
+    let settled = imported_read(
+        &app,
+        &state,
+        "Tes",
+        observed(
+            url,
+            "Statistics",
+            Some((0x5A, BIG)),
+            Some(sketch(0x0F0F_0F0F_0F0F_0F0F, 10, 1)),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (settled.state, settled.counts.imported),
+        (ImportRunState::Complete, 1),
+        "the first read lands"
+    );
+    let product = settled
+        .items
+        .iter()
+        .find_map(|item| item.product_id)
+        .expect("the first import created a resource");
+
+    // ---- the same listing again, carrying another shop-side file entirely.
+    // The resource keeps the file it has, so this read's bytes are declined.
+    let settled = imported_read(
+        &app,
+        &state,
+        "Tes",
+        observed(
+            url,
+            "Algebra basics",
+            Some((0x5B, BIG)),
+            Some(sketch(0x5555_5555_5555_5555, 10, 2)),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (settled.state, settled.counts.skipped, settled.counts.failed),
+        (ImportRunState::Complete, 1, 0),
+        "the row settles against the resource it names"
+    );
+    assert_eq!(
+        payloads_of(&app, product).await,
+        vec![(hash_text(0x5A), BIG)],
+        "keeping the file it already held"
+    );
+
+    // ---- another shop, listing the file this resource declined. It is not
+    // this resource: this resource holds other bytes entirely.
+    let settled = imported_read(
+        &app,
+        &state,
+        "Tpt",
+        observed_on(
+            Marketplace::Tpt,
+            "31",
+            "Algebra basics",
+            Some((0x5B, BIG)),
+            Some(sketch(0x5555_5555_5555_5555, 10, 2)),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (
+            settled.state,
+            settled.counts.imported,
+            settled.counts.review,
+            settled.counts.skipped,
+        ),
+        (ImportRunState::Complete, 1, 0, 0),
+        "it lands as its own resource rather than being asked about, or merged into, the one \
+         holding a file it does not share"
+    );
+    let second = settled
+        .items
+        .iter()
+        .find_map(|item| item.product_id)
+        .expect("the second shop's read created a resource");
+    assert_ne!(second, product);
+    assert_eq!(
+        (products_held(&pool).await, live_products(&pool).await),
+        (2, 2),
+        "two resources, because they are two"
+    );
+}
+
+/// A listing whose marketplace slot the resource already fills fails the row
+/// rather than stalling the whole import.
+///
+/// A resource read for its metadata alone carries no claim on its listing, and
+/// the seller may give it a file and cross-list it to that same marketplace
+/// themselves. Reading the listing again then finds that resource through the
+/// import's own provenance and tries to write a second mapping for one
+/// marketplace, which `mapping_one_per_inventory` refuses. Reported as a fault
+/// that left the row `matched` and the run `committing` through every later
+/// drain — the healthy-looking stall, on a conflict no retry can clear. The
+/// slot the seller filled is theirs: it is not severed, not rebound, and not
+/// taken, and the run finishes so they can act.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_marketplace_slot_the_resource_already_fills_fails_the_row(pool: PgPool) {
+    provision(&pool).await;
+    let state = configured(pool.clone(), &store_root("slottaken"));
+    let app = router(state.clone());
+
+    let settled = imported_read(
+        &app,
+        &state,
+        "Tpt",
+        observed_on(Marketplace::Tpt, "4242", "Statistics", None, None),
+    )
+    .await;
+    assert_eq!(
+        (settled.state, settled.counts.imported),
+        (ImportRunState::Complete, 1),
+        "the metadata-only read lands"
+    );
+    let product = settled
+        .items
+        .iter()
+        .find_map(|item| item.product_id)
+        .expect("the first import created a resource");
+    assert_eq!(
+        mappings_on(&pool, "tpt").await,
+        0,
+        "with no claim on its listing, because 0061 admits none without a payload"
+    );
+
+    // ---- the seller gives it their own file and cross-lists it to the very
+    // shop it was read from, which is the mapping the create would have
+    // minted.
+    seller_payload(&pool, product, 0xEE).await;
+    let added = call(
+        &app,
+        Method::POST,
+        &format!("/v1/products/{}/mappings", product_text(product)),
+        Some(serde_json::json!({ "inventory": "Tpt" })),
+    )
+    .await;
+    assert_eq!(
+        added.status,
+        StatusCode::CREATED,
+        "the cross-listing lands: {}",
+        added.body
+    );
+    assert_eq!(mappings_on(&pool, "tpt").await, 1);
+
+    // ---- and the shop is read again.
+    let settled = imported_read(
+        &app,
+        &state,
+        "Tpt",
+        observed_on(
+            Marketplace::Tpt,
+            "4242",
+            "Mixed bag of algebra",
+            Some((0x5B, BIG)),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(
+        (
+            settled.state,
+            settled.counts.imported,
+            settled.counts.skipped,
+            settled.counts.failed,
+            settled.counts.matched,
+        ),
+        (ImportRunState::Complete, 0, 0, 1, 0),
+        "the run reaches an end, carrying the refusal, rather than retrying a conflict no \
+         drain can clear"
+    );
+    let row = settled
+        .items
+        .first()
+        .expect("the run holds the row it read");
+    assert_eq!(row.state, ImportRunItemState::Failed);
+    assert!(
+        row.failure_detail.is_some(),
+        "and it says what refused it: {row:?}"
+    );
+    assert_eq!(
+        counted(
+            &pool,
+            "SELECT count(*) FROM mapping WHERE org_id = $1 AND inventory = 'tpt' \
+             AND binding_state = 'unbound'",
+        )
+        .await,
+        1,
+        "the seller's own unbound mapping is left exactly as it was: not bound to this \
+         listing, not severed, and not doubled"
+    );
+    assert_eq!(mappings_on(&pool, "tpt").await, 1);
+    assert_eq!(
+        catalogue(&app).await,
+        vec![product],
+        "and their resource is untouched"
+    );
+    assert_eq!(
+        payloads_of(&app, product).await,
+        vec![(hash_text(0xEE), BIG)],
+        "file included"
+    );
+}
+
+/// A listing another tenant deleted locally is not this one's to take.
+///
+/// Two sellers may list the same resource on the same shop, and each holds
+/// their own copy of it: the claim, the tombstone and the provenance a
+/// re-import reads are all one organisation's. This is the fence on the reads
+/// that make the repair above possible — a re-import that found the other
+/// tenant's tombstone would restore a stranger's resource into this
+/// catalogue, or refuse this seller a listing they are entitled to import.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_listing_another_tenant_deleted_is_not_claimed_here(pool: PgPool) {
+    provision(&pool).await;
+    provision_tenant(&pool, &TENANT_B).await;
+    let state = configured(pool.clone(), &store_root("tenants"));
+    let app = router(state.clone());
+    let url = "https://www.tes.com/teaching-resource/-13264370";
+
+    let theirs = imported_by(&app, &state, &TENANT_B, url, "Statistics").await;
+    let deleted = call_as(
+        &app,
+        &TENANT_B.token,
+        Method::DELETE,
+        &format!("/v1/products/{}", product_text(theirs)),
+        Some(serde_json::json!({ "leave_live": true })),
+    )
+    .await;
+    assert_eq!(deleted.status, StatusCode::OK, "{}", deleted.body);
+
+    let run = started_run(&app).await;
+    assert_eq!(
+        post_page(
+            &app,
+            &page(
+                run,
+                vec![observed(url, "Statistics", Some((0x5A, BIG)), None)],
+                true,
+            ),
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    let settled = confirm_and_drain(&app, &state, run).await;
+    assert_eq!(
+        (settled.state, settled.counts.imported),
+        (ImportRunState::Complete, 1),
+        "this seller's import lands"
+    );
+    let mine = settled
+        .items
+        .iter()
+        .find_map(|item| item.product_id)
+        .expect("this tenant's import created a resource");
+    assert_ne!(
+        mine, theirs,
+        "as its own resource rather than as the other tenant's"
+    );
+    assert_eq!(catalogue(&app).await, vec![mine]);
+    assert!(
+        catalogue_of(&app, &TENANT_B.token).await.is_empty(),
+        "and the other tenant's deleted resource stays deleted"
+    );
+    assert_eq!(
+        claims_on(&pool, TENANT_B.org, url).await,
+        vec![(theirs, "bound".to_owned())],
+        "their claim is untouched"
+    );
+    assert_eq!(
+        claims_on(&pool, ORG_A, url).await,
+        vec![(mine, "bound".to_owned())],
+        "and this tenant's claim is its own"
+    );
+}
+
 /// A page from a device that has been taken over changes nothing, and says so
 /// as a conflict rather than as something the device should retry.
 #[sqlx::test(migrations = "../tam-storage/migrations")]
@@ -2309,22 +4121,29 @@ async fn aged(pool: &PgPool, run: Uuid, minutes: i32) {
 
 // ------------------------------------------------------------------ counted
 
+async fn counted(pool: &PgPool, sql: &str) -> i64 {
+    counted_for(pool, ORG_A, sql).await
+}
+
+/// The same count for whichever tenant asks for it: a count that could only
+/// ever read the first organisation could not tell a resource left alone from
+/// one this tenant took.
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
 )]
-async fn counted(pool: &PgPool, sql: &str) -> i64 {
+async fn counted_for(pool: &PgPool, org: OrgId, sql: &str) -> i64 {
     // Under a tenant pin, because `product` carries forced row-level security:
     // an unpinned count matches no rows and would agree with itself while
     // asserting nothing.
     let mut tx = pool.begin().await.expect("the transaction opens");
     sqlx::query("SELECT set_config('app.current_org', $1, true)")
-        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
+        .bind(uuid::Uuid::from_bytes(org.0 .0).to_string())
         .execute(&mut *tx)
         .await
         .expect("the tenant pin sets");
     let held: i64 = sqlx::query_scalar(sql)
-        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+        .bind(uuid::Uuid::from_bytes(org.0 .0))
         .fetch_one(&mut *tx)
         .await
         .expect("the count runs");
@@ -2340,6 +4159,50 @@ async fn live_products(pool: &PgPool) -> i64 {
     counted(
         pool,
         "SELECT count(*) FROM product WHERE org_id = $1 AND deleted_at IS NULL",
+    )
+    .await
+}
+
+/// Every claim one tenant's catalogue holds on one listing: the product the
+/// mapping names and the binding state it names it in.
+///
+/// Read from `mapping` rather than from a view, because the claim is what
+/// `mapping_one_bound_url` and `mapping_one_bound_numeric_id` refuse a second
+/// of: a re-import that left two, or that severed the one it found, would
+/// read the same on every API surface and be wrong in the table.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn claims_on(pool: &PgPool, org: OrgId, identifier: &str) -> Vec<(ProductId, String)> {
+    let mut tx = pool.begin().await.expect("the transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(org.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pin sets");
+    let rows: Vec<(uuid::Uuid, String)> = sqlx::query_as(
+        "SELECT product_id, binding_state FROM mapping \
+          WHERE org_id = $1 \
+            AND (remote_url = $2 OR remote_numeric_id::text = $2) \
+          ORDER BY created_at",
+    )
+    .bind(uuid::Uuid::from_bytes(org.0 .0))
+    .bind(identifier)
+    .fetch_all(&mut *tx)
+    .await
+    .expect("the claim read runs");
+    tx.commit().await.expect("the read commits");
+    rows.into_iter()
+        .map(|(product, state)| (ProductId(Uuid(*product.as_bytes())), state))
+        .collect()
+}
+
+/// How many mappings this tenant holds on one shop, whatever they bind.
+async fn mappings_on(pool: &PgPool, inventory: &str) -> i64 {
+    counted(
+        pool,
+        &format!("SELECT count(*) FROM mapping WHERE org_id = $1 AND inventory = '{inventory}'"),
     )
     .await
 }
@@ -2372,4 +4235,47 @@ async fn settled_events(pool: &PgPool, run: Uuid) -> i64 {
     .expect("the count runs");
     tx.commit().await.expect("the read commits");
     events
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests does not cover a free integration-test helper"
+)]
+async fn merge_into(app: &axum::Router, pool: &PgPool, lost: ProductId, kept: ProductId) {
+    let (lo, hi) = tam_storage::ordered_pair(kept, lost);
+    tam_storage::DuplicateRepo::new(pool.clone())
+        .raise(
+            ORG_A,
+            &tam_storage::NewVerdict {
+                lo,
+                hi,
+                verdict: tam_storage::Verdict::Parked,
+                decided_by: tam_storage::DecidedBy::Seller,
+                winning_layer: tam_storage::MatchLayer::L4,
+                log_odds: 3.5,
+                fingerprint_version: 1,
+                run: None,
+                kept: None,
+                raised_at: NOW,
+                decided_at: None,
+                reversible_until: None,
+                evidence: &[tam_storage::Evidence {
+                    layer: tam_storage::MatchLayer::L4,
+                    polarity: tam_storage::Polarity::Positive,
+                    measure: 0.9,
+                    unit: tam_storage::EvidenceUnit::Jaccard,
+                    observed_in: None,
+                }],
+            },
+        )
+        .await
+        .expect("the duplicate question is raised");
+    let merged = call(
+        app,
+        Method::POST,
+        &format!("/v1/duplicates/{}/{}", product_text(lo), product_text(hi)),
+        Some(serde_json::json!({ "verdict": "same", "keep": product_text(kept) })),
+    )
+    .await;
+    assert_eq!(merged.status, StatusCode::OK, "{}", merged.body);
 }

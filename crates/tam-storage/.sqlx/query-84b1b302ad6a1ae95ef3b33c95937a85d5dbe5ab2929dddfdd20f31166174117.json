@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, hash, source_marketplace, source_resource, source_entry, observed_hash, observed_byte_len FROM product_file WHERE org_id = $1 AND product_id = $2 AND role = 'payload' AND deleted_at IS NULL LIMIT 2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 2,
+        "name": "source_marketplace",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "source_resource",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "source_entry",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "observed_hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 6,
+        "name": "observed_byte_len",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "84b1b302ad6a1ae95ef3b33c95937a85d5dbe5ab2929dddfdd20f31166174117"
+}

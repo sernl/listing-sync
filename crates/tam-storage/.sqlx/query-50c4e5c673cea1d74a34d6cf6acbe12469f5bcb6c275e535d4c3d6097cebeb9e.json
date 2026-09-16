@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT inventory FROM mapping WHERE org_id = $1 AND product_id = $2 AND binding_state = 'bound'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "inventory",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "50c4e5c673cea1d74a34d6cf6acbe12469f5bcb6c275e535d4c3d6097cebeb9e"
+}

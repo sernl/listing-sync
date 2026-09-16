@@ -101,11 +101,11 @@ pub use import_batches::{
     BATCHES_LISTED_MAX,
 };
 pub use import_runs::{
-    append_listed, bound_product, claim_receipt, close_enumeration, counts_of, described_of,
-    fenced, guard_run, item_of_product, lock_org_catalogue, merged_into, note_contact, parked_for,
-    record_failed, record_imported, record_read, record_skipped, record_verdict, reopen_skipped,
-    reserved_product, reserved_state, select_items, set_run_state, store_receipt, ClaimOutcome,
-    FenceOutcome, ImportLease, ImportReasonCode, ImportRunHead, ImportRunItemRecord,
+    append_listed, claim_receipt, close_enumeration, counts_of, described_of, fenced, guard_run,
+    imported_product_for, item_of_product, lock_org_catalogue, merged_into, note_contact,
+    parked_for, record_failed, record_imported, record_read, record_skipped, record_verdict,
+    reopen_skipped, reserved_product, reserved_state, select_items, set_run_state, store_receipt,
+    ClaimOutcome, FenceOutcome, ImportLease, ImportReasonCode, ImportRunHead, ImportRunItemRecord,
     ImportRunRecord, ImportRunRepo, ImportStage, ItemAddress, ItemOrder, ItemPage, ItemPageFilter,
     ListedRow, NewImportRun, ProgressReport, ReadItem, ReceiptAck, ReceiptOutcome, RunCounts,
     RunExecution, RunGuard, RunHistoryFilter, RunHistoryPage, RunItemState, RunKind, RunOpening,
@@ -134,8 +134,8 @@ pub use lowering::{
     lower, lower_head, requires_bound_on, uncaptured_source, uncaptured_transition, LoweringRefusal,
 };
 pub use mapping::{
-    bind_listing, bound_product_for, insert_mapping, BoundListing, LossScope, MappingAdd,
-    MappingHead, MappingRecord, MappingRepo, PastedBind, RecordedLoss,
+    bind_listing, bound_product_for, claimed_product_for, insert_mapping, BoundClaim, BoundListing,
+    LossScope, MappingAdd, MappingHead, MappingRecord, MappingRepo, PastedBind, RecordedLoss,
 };
 pub use marketplace_requests::{
     MarketplaceRequestBackofficeRepo, MarketplaceRequestRecord, MarketplaceRequestRepo,
@@ -149,10 +149,11 @@ pub use operators::{OperatorRecord, OperatorRepo};
 pub use org::{OrgRecord, OrgRepo, OrgWrite};
 pub use overrides::OverrideRepo;
 pub use product::{
-    insert_product, offer_cover, restore_product, soft_delete_product, title_of, update_product,
-    CoverOffer, ExportedListing, ExportedResource, FileRefusal, FileReplacement, FileSwap,
-    FileTarget, ProductCreationFacts, ProductEdit, ProductFiles, ProductRecord, ProductRepo,
-    ProductSummary, ReplacedFiles, StoredCover, ThumbnailChange,
+    has_live_payload, insert_product, offer_cover, offer_payload, restore_product,
+    soft_delete_product, title_of, update_product, CoverOffer, ExportedListing, ExportedResource,
+    FileRefusal, FileReplacement, FileSwap, FileTarget, PayloadOffer, PayloadOfferPolicy,
+    ProductCreationFacts, ProductEdit, ProductFiles, ProductRecord, ProductRepo, ProductSummary,
+    ReplacedFiles, StoredCover, ThumbnailChange,
 };
 pub use profile::{AvatarWrite, ProfileRepo};
 pub use pruning::{PruneRepo, PruneReport};
@@ -265,6 +266,22 @@ pub enum StorageError {
     /// validation answer.
     #[error("that listing is already bound to another mapping")]
     ListingAlreadyBound,
+    /// A second mapping would fill a product's slot in one marketplace, which
+    /// `mapping_one_per_inventory` admits one of.
+    ///
+    /// Reached by the re-import that finds the product it made earlier and
+    /// binds the listing onto it, where the seller has since added that same
+    /// marketplace by hand: the slot is occupied by a mapping this run did not
+    /// make and must not steal or sever.
+    ///
+    /// Distinct from [`Self::MappingAlreadyBound`], which is a create's
+    /// admission answer — the listing that create would have made already
+    /// exists. This one is a constraint on the catalogue's shape, and it is
+    /// permanent in the sense that matters to a caller: no later attempt at
+    /// the same write clears it, so a run that read it as a fault would retry
+    /// it for as long as it is allowed to.
+    #[error("that product already carries a mapping for this marketplace")]
+    InventoryMappingAlreadyExists,
 }
 
 /// The tenant pin, for a caller assembling its own transaction across this
