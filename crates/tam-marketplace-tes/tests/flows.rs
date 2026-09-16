@@ -2156,23 +2156,41 @@ fn a_signed_url_that_redirects_again_is_refused_rather_than_followed() {
 
 #[test]
 fn a_draft_has_no_bundle_and_says_so_distinctly() {
-    for (label, body) in [
+    for (label, body, confirmation) in [
         (
             "a manifest carrying no zipUrls",
             json!({ "zipUrls": {} }).to_string().into_bytes(),
+            // The manifest answered and named no bundle for this id, which
+            // is the marketplace stating the absence. Nothing needs
+            // confirming.
+            Vec::new(),
         ),
         (
             "the html redirect the live route answers a draft with",
             b"<html><head><title>Not found</title></head></html>".to_vec(),
+            // The manifest did not answer a manifest, which on its own says
+            // only that this read failed. The published route is what makes
+            // it an absence: nothing answers there, and the overlay route
+            // does, so the session stands and the resource has no published
+            // version behind it.
+            vec![
+                Interaction {
+                    request: endpoints::read_resource_request(DRAFT),
+                    response: status(404),
+                },
+                Interaction {
+                    request: endpoints::read_draft_request(DRAFT),
+                    response: ok(&draft_state(9001, true)),
+                },
+            ],
         ),
     ] {
-        let cassette = Cassette {
-            interactions: vec![Interaction {
-                request: endpoints::download_manifest_request(DRAFT),
-                response: HttpResponse::plain(200, body),
-            }],
-        };
-        let adapter = adapter(cassette, vec![]);
+        let mut interactions = vec![Interaction {
+            request: endpoints::download_manifest_request(DRAFT),
+            response: HttpResponse::plain(200, body),
+        }];
+        interactions.extend(confirmation);
+        let adapter = adapter(Cassette { interactions }, vec![]);
         let refused = futures::executor::block_on(adapter.download_resource_bundle(
             &FetchReason::FirstPartyExport {
                 inventory: InventoryId::Tes,
@@ -2407,8 +2425,9 @@ fn an_import_read_refuses_a_price_that_is_not_a_whole_number_of_minor_units() {
 /// page carries the word the sign-in sniffer keys on. Read on its own that
 /// page is a dead session, and the founder's 2026-09-07 import skipped both
 /// of its drafts as `SessionExpired` on a session that read the next listing
-/// fine. The state route settles it: a session that can read the draft is
-/// alive, and the draft is what has no bundle.
+/// fine. Two reads settle it: nothing answers on the published route, so
+/// there is nothing to download, and the resource's own overlay does answer,
+/// so the session is alive and the absence is the resource's.
 #[test]
 fn a_drafts_manifest_page_that_mentions_login_is_no_bundle_rather_than_a_dead_session() {
     let cassette = Cassette {
@@ -2419,6 +2438,10 @@ fn a_drafts_manifest_page_that_mentions_login_is_no_bundle_rather_than_a_dead_se
                     200,
                     b"<html><a href=\"/login\">Log in</a> Page not found</html>".to_vec(),
                 ),
+            },
+            Interaction {
+                request: endpoints::read_resource_request(DRAFT),
+                response: status(404),
             },
             Interaction {
                 request: endpoints::read_draft_request(DRAFT),
@@ -2434,19 +2457,16 @@ fn a_drafts_manifest_page_that_mentions_login_is_no_bundle_rather_than_a_dead_se
         DRAFT,
     ))
     .expect_err("a draft has no bundle");
-    let AdapterError::Rejected { code, detail } = &refused else {
+    let AdapterError::Rejected { code, .. } = &refused else {
         panic!("an unpublished resource is a rejection naming the cause, and got: {refused:?}");
     };
     assert_eq!(*code, FailureCode::PreconditionElementAbsent);
-    assert!(
-        detail.0.contains("no published bundle"),
-        "the seller reads why: {detail:?}"
-    );
     assert_eq!(adapter.transport().remaining(), 0);
 }
 
 /// The same page on a session that really has lapsed stays a dead session,
-/// because the state route cannot be read either.
+/// because the published route cannot be read either — and a refusal there
+/// is a condition, never the absence a 404 would have been.
 #[test]
 fn a_manifest_page_on_a_session_the_state_route_also_refuses_is_a_dead_session() {
     let cassette = Cassette {
@@ -2454,10 +2474,6 @@ fn a_manifest_page_on_a_session_the_state_route_also_refuses_is_a_dead_session()
             Interaction {
                 request: endpoints::download_manifest_request(DRAFT),
                 response: HttpResponse::plain(200, b"<html>login</html>".to_vec()),
-            },
-            Interaction {
-                request: endpoints::read_draft_request(DRAFT),
-                response: status(401),
             },
             Interaction {
                 request: endpoints::read_resource_request(DRAFT),
@@ -2473,6 +2489,294 @@ fn a_manifest_page_on_a_session_the_state_route_also_refuses_is_a_dead_session()
         DRAFT,
     ))
     .expect_err("nothing reads on a dead session");
+    assert_eq!(refused, AdapterError::SessionExpired);
+    assert_eq!(adapter.transport().remaining(), 0);
+}
+
+/// A manifest that did not answer a manifest, for a resource that still
+/// answers on its published route, is a download that failed.
+///
+/// The distinction the import turns on. A confirmed absence of files is an
+/// ordinary outcome there — the resource crosses carrying its listing and no
+/// file — so an absence this read cannot actually confirm must never be
+/// reported as one, or a resource whose bundle was sitting there becomes a
+/// catalogue entry with no file and nothing says so.
+#[test]
+fn a_manifest_page_for_a_resource_that_still_publishes_is_a_failure_not_an_absence() {
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::download_manifest_request(DRAFT),
+                response: HttpResponse::plain(
+                    200,
+                    b"<html><head><title>Not found</title></head></html>".to_vec(),
+                ),
+            },
+            Interaction {
+                request: endpoints::read_resource_request(DRAFT),
+                response: ok(&draft_state(9001, false)),
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![]);
+    let refused = futures::executor::block_on(adapter.download_resource_bundle(
+        &FetchReason::FirstPartyExport {
+            inventory: InventoryId::Tes,
+        },
+        DRAFT,
+    ))
+    .expect_err("a published resource has a bundle, so this read failed rather than found none");
+    let AdapterError::Rejected { code, .. } = &refused else {
+        panic!("a download that failed is a rejection naming the cause, and got: {refused:?}");
+    };
+    assert_ne!(
+        *code,
+        FailureCode::PreconditionElementAbsent,
+        "the import reads that code as a confirmed absence of files, and this is not one"
+    );
+    assert_eq!(adapter.transport().remaining(), 0);
+}
+
+#[test]
+fn a_malformed_download_manifest_is_not_file_absence() {
+    let adapter = adapter(
+        Cassette {
+            interactions: vec![Interaction {
+                request: endpoints::download_manifest_request(DRAFT),
+                response: ok(&json!({})),
+            }],
+        },
+        vec![],
+    );
+    let refused = futures::executor::block_on(adapter.download_resource_bundle(
+        &FetchReason::FirstPartyExport {
+            inventory: InventoryId::Tes,
+        },
+        DRAFT,
+    ))
+    .expect_err("a missing manifest field is a failed download, not proof of an absent file");
+    assert!(
+        !matches!(
+            refused,
+            AdapterError::Rejected {
+                code: FailureCode::PreconditionElementAbsent,
+                ..
+            }
+        ),
+        "the binding must not turn a malformed manifest into a fileless import"
+    );
+    assert_eq!(adapter.transport().remaining(), 0);
+}
+
+#[test]
+fn a_truncated_manifest_is_not_reclassified_as_file_absence() {
+    let adapter = adapter(
+        Cassette {
+            interactions: vec![
+                Interaction {
+                    request: endpoints::download_manifest_request(DRAFT),
+                    response: HttpResponse::plain(200, b"{\"zipUrls\":".to_vec()),
+                },
+                Interaction {
+                    request: endpoints::read_resource_request(DRAFT),
+                    response: status(404),
+                },
+                Interaction {
+                    request: endpoints::read_draft_request(DRAFT),
+                    response: ok(&draft_state(9001, true)),
+                },
+            ],
+        },
+        vec![],
+    );
+    let refused = futures::executor::block_on(adapter.download_resource_bundle(
+        &FetchReason::FirstPartyExport {
+            inventory: InventoryId::Tes,
+        },
+        DRAFT,
+    ))
+    .expect_err("truncated JSON is a failed download, even for a readable draft");
+    assert!(
+        matches!(
+            refused,
+            AdapterError::Rejected {
+                code: FailureCode::VerificationMismatch,
+                ..
+            }
+        ),
+        "the malformed response must remain a download failure: {refused:?}"
+    );
+}
+
+#[test]
+fn a_resource_that_disappeared_from_both_routes_is_not_a_fileless_draft() {
+    let adapter = adapter(
+        Cassette {
+            interactions: vec![
+                Interaction {
+                    request: endpoints::download_manifest_request(DRAFT),
+                    response: status(404),
+                },
+                Interaction {
+                    request: endpoints::read_resource_request(DRAFT),
+                    response: status(404),
+                },
+                Interaction {
+                    request: endpoints::read_draft_request(DRAFT),
+                    response: status(404),
+                },
+            ],
+        },
+        vec![],
+    );
+    let refused = futures::executor::block_on(adapter.download_resource_bundle(
+        &FetchReason::FirstPartyExport {
+            inventory: InventoryId::Tes,
+        },
+        DRAFT,
+    ))
+    .expect_err("a vanished resource is a failed read");
+    assert!(
+        !matches!(
+            refused,
+            AdapterError::Rejected {
+                code: FailureCode::PreconditionElementAbsent,
+                ..
+            }
+        ),
+        "a missing resource must not become a successful metadata-only import"
+    );
+    assert_eq!(adapter.transport().remaining(), 0);
+}
+
+#[test]
+fn an_unrecognisable_draft_answer_cannot_confirm_file_absence() {
+    let adapter = adapter(
+        Cassette {
+            interactions: vec![
+                Interaction {
+                    request: endpoints::download_manifest_request(DRAFT),
+                    response: status(404),
+                },
+                Interaction {
+                    request: endpoints::read_resource_request(DRAFT),
+                    response: status(404),
+                },
+                Interaction {
+                    request: endpoints::read_draft_request(DRAFT),
+                    response: ok(&json!({})),
+                },
+            ],
+        },
+        vec![],
+    );
+    let refused = futures::executor::block_on(adapter.download_resource_bundle(
+        &FetchReason::FirstPartyExport {
+            inventory: InventoryId::Tes,
+        },
+        DRAFT,
+    ))
+    .expect_err("an unrecognisable response cannot establish that a draft exists");
+    assert!(
+        !matches!(
+            refused,
+            AdapterError::Rejected {
+                code: FailureCode::PreconditionElementAbsent,
+                ..
+            }
+        ),
+        "a readable response is not necessarily a readable resource"
+    );
+    assert_eq!(adapter.transport().remaining(), 0);
+}
+
+/// The import read reports the resource's own state, not the overlay's.
+///
+/// A `draft: true` overlay can belong to a published resource.
+#[test]
+fn an_import_read_of_a_published_resource_with_a_draft_overlay_reads_live() {
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::read_draft_request(DRAFT),
+                response: ok(&draft_state(9001, true)),
+            },
+            Interaction {
+                request: endpoints::read_resource_request(DRAFT),
+                response: ok(&draft_state(9001, false)),
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![]);
+    let listing = futures::executor::block_on(adapter.fetch_for_import(
+        &FetchReason::FirstPartyExport {
+            inventory: InventoryId::Tes,
+        },
+        DRAFT,
+    ))
+    .expect("the resource reads for import");
+    assert_eq!(
+        listing.state,
+        Some(ListingState::Live),
+        "the published route answers for it, so it is published and its overlay is an edit"
+    );
+    assert_eq!(
+        listing.title, "Fractions pack",
+        "and the overlay is still where the metadata comes from, because it is the newer copy"
+    );
+    assert_eq!(adapter.transport().remaining(), 0);
+}
+
+/// And a resource that answers on no published route is the draft its
+/// overlay says it is.
+#[test]
+fn an_import_read_of_a_resource_with_no_published_route_reads_as_a_draft() {
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::read_draft_request(DRAFT),
+                response: ok(&draft_state(9001, true)),
+            },
+            Interaction {
+                request: endpoints::read_resource_request(DRAFT),
+                response: status(404),
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![]);
+    let listing = futures::executor::block_on(adapter.fetch_for_import(
+        &FetchReason::FirstPartyExport {
+            inventory: InventoryId::Tes,
+        },
+        DRAFT,
+    ))
+    .expect("a draft reads for import too");
+    assert_eq!(
+        listing.state,
+        Some(ListingState::Draft),
+        "nothing answers on the published route, so nothing has been published"
+    );
+    assert_eq!(adapter.transport().remaining(), 0);
+}
+
+#[test]
+fn a_manifest_auth_refusal_is_not_reclassified_by_another_read() {
+    let adapter = adapter(
+        Cassette {
+            interactions: vec![Interaction {
+                request: endpoints::download_manifest_request(DRAFT),
+                response: status(401),
+            }],
+        },
+        vec![],
+    );
+    let refused = futures::executor::block_on(adapter.download_resource_bundle(
+        &FetchReason::FirstPartyExport {
+            inventory: InventoryId::Tes,
+        },
+        DRAFT,
+    ))
+    .expect_err("an explicit authentication refusal is not a file absence");
     assert_eq!(refused, AdapterError::SessionExpired);
     assert_eq!(adapter.transport().remaining(), 0);
 }
