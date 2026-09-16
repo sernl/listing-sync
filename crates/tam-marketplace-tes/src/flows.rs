@@ -933,19 +933,13 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
     /// the bundle is fetched — and the second step answers a 302 to a signed
     /// CDN url on another host.
     ///
-    /// Whether that hop is followed is the transport's to decide, and the two
-    /// this crate ships decide differently. The broker gateway followed it and
-    /// returned the ZIP, which is what this comment used to describe as though
-    /// it were the only case. The live transport on the seller's own device
-    /// does not: its session client stops at a host change so the rule about
-    /// which client may carry what survives a destination the marketplace
-    /// chose, and the hop comes back here as the 3xx it is. Re-issuing it on
-    /// the credential-free client is not built, so over that transport this
-    /// refuses by name rather than returning bytes.
+    /// The session transport stops at a host change. A validated signed CDN
+    /// redirect is re-issued once without marketplace credentials; a second
+    /// redirect remains an error.
     ///
-    /// Published-only by construction. A draft has no bundle, and that is
-    /// reported as a rejection naming the cause rather than as an ambiguity,
-    /// because nothing about it is unknown.
+    /// Only a confirmed absence becomes a metadata-only import.
+    /// A draft overlay does not prove absence; authentication, malformed
+    /// responses and failures fetching a named bundle remain errors.
     pub async fn download_resource_bundle(
         &self,
         reason: &FetchReason,
@@ -961,35 +955,43 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
             });
         }
         let manifest = self.send(endpoints::download_manifest_request(id)).await?;
-        // A draft's manifest route redirects to an HTML `?error=notfound`
-        // page, so a body that will not parse as a manifest means the
-        // resource is unpublished, not that the read failed. That page is a
-        // Tes page and carries the word the sign-in sniffer keys on, so the
-        // classifier calls it a dead session; the state route, which a dead
-        // session cannot read, is what tells the two apart.
+        // A manifest read that did not yield a manifest says, on its own,
+        // only that this read did not work. Two quite different things
+        // produce it: a resource with no published version, whose manifest
+        // route redirects to an HTML `?error=notfound` page, and a session
+        // that has lapsed, whose answer is an HTML page too — and that page
+        // is a Tes page, so it carries the word the sign-in sniffer keys on
+        // either way. Which it is has to be settled by a second read, and
+        // `manifest_absence_or_failure` is that read.
+        //
+        // It matters more than it used to. The import treats a confirmed
+        // absence of files as an ordinary outcome — the resource crosses
+        // carrying its listing and no file — so an absence this flow merely
+        // assumed would become a catalogue entry with no file for a resource
+        // whose bundle was sitting there.
         let body = match classify_read(&manifest) {
             Ok(body) => body,
-            Err(AdapterError::Rejected { .. }) => return Err(no_published_bundle(id)),
-            Err(AdapterError::SessionExpired) => {
-                return Err(match self.resource_state(id).await {
-                    Ok(state) if state.get("draft").and_then(Value::as_bool) == Some(true) => {
-                        no_published_bundle(id)
-                    }
-                    Ok(_) => AdapterError::Rejected {
-                        code: FailureCode::Other,
-                        detail: FailureDetail(format!(
-                            "the download manifest for resource {} answered a page rather than \
-                             a manifest while the resource itself still reads, so the session \
-                             stands and there is no bundle behind that page",
-                            id.0
-                        )),
-                    },
-                    Err(error) => error,
-                });
+            Err(answered @ (AdapterError::Rejected { .. } | AdapterError::SessionExpired))
+                if manifest.status == 404
+                    || (manifest.status == 200 && {
+                        let body = manifest.body.trim_ascii_start();
+                        [b"<html".as_slice(), b"<!doctype html".as_slice()]
+                            .into_iter()
+                            .any(|prefix| {
+                                body.get(..prefix.len())
+                                    .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+                            })
+                    }) =>
+            {
+                return Err(self.manifest_absence_or_failure(id, &answered).await)
             }
             Err(error) => return Err(error),
         };
         let path = endpoints::parse_download_manifest(&body, id).map_err(|error| match error {
+            endpoints::DownloadManifestError::InvalidShape => AdapterError::Rejected {
+                code: FailureCode::VerificationMismatch,
+                detail: FailureDetail(error.to_string()),
+            },
             endpoints::DownloadManifestError::NoPublishedBundle => no_published_bundle(id),
             endpoints::DownloadManifestError::OffOrigin(_) => AdapterError::Rejected {
                 code: FailureCode::UnexpectedOrigin,
@@ -1002,7 +1004,7 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
         // arrives here is the 3xx itself. Re-issuing it is deliberate rather
         // than automatic: the destination was named by the marketplace.
         if !(300..400).contains(&bundle.status) {
-            return classify_read_bytes(&bundle).map(<[u8]>::to_vec);
+            return classify_bundle_bytes(id, bundle);
         }
         let Some(location) = bundle.header(ResponseHeader::Location) else {
             return Err(AdapterError::Rejected {
@@ -1082,7 +1084,81 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
                 )),
             });
         }
-        classify_read_bytes(&followed).map(<[u8]>::to_vec)
+        classify_bundle_bytes(id, followed)
+    }
+
+    /// Distinguishes an HTML/404 manifest response from a failed download.
+    /// Absence requires both a missing published route and a readable draft.
+    /// A draft overlay alone also occurs on published resources.
+    async fn manifest_absence_or_failure(
+        &self,
+        id: DraftId,
+        answered: &AdapterError,
+    ) -> AdapterError {
+        let published = match self.send(endpoints::read_resource_request(id)).await {
+            Ok(response) => response,
+            Err(error) => return error,
+        };
+        if published.status != 404 {
+            return match classify_read(&published) {
+                Ok(_) => AdapterError::Rejected {
+                    code: FailureCode::Other,
+                    detail: FailureDetail(format!(
+                        "the download manifest for resource {} did not answer a manifest \
+                         ({answered:?}) while the resource still reads on its published route, \
+                         so this is a download that failed rather than a resource with no files",
+                        id.0
+                    )),
+                },
+                Err(error) => error,
+            };
+        }
+        // Nothing on the published route. That is an absence only if this
+        // session can read the resource at all: a session that reads nothing
+        // cannot tell a resource that is not published from a refusal it was
+        // never shown. The overlay route is the witness, because a
+        // never-published draft is exactly what answers there and nowhere
+        // else.
+        match self.send(endpoints::read_draft_request(id)).await {
+            Ok(overlay) => match classify_read(&overlay) {
+                Ok(snapshot) if snapshot.get("draft").and_then(Value::as_bool) == Some(true) => {
+                    no_published_bundle(id)
+                }
+                Ok(_) => AdapterError::Rejected {
+                    code: FailureCode::VerificationMismatch,
+                    detail: FailureDetail(format!(
+                        "resource {} did not return a recognisable draft",
+                        id.0
+                    )),
+                },
+                Err(AdapterError::Rejected {
+                    code: FailureCode::PreconditionElementAbsent,
+                    detail,
+                }) => AdapterError::Rejected {
+                    code: FailureCode::Other,
+                    detail,
+                },
+                Err(error) => error,
+            },
+            Err(error) => error,
+        }
+    }
+
+    /// A draft snapshot can be an edit overlay on a published resource.
+    /// Probe the published route only when the snapshot needs disambiguation.
+    async fn published_state(
+        &self,
+        id: DraftId,
+        snapshot: &Value,
+    ) -> Result<ListingState, AdapterError> {
+        if snapshot.get("draft").and_then(Value::as_bool) != Some(true) {
+            return Ok(ListingState::Live);
+        }
+        if self.is_present(id, ListingState::Live).await? {
+            Ok(ListingState::Live)
+        } else {
+            Ok(ListingState::Draft)
+        }
     }
 
     /// The first-party import read: the seller's own listing, verbatim, for
@@ -1190,16 +1266,9 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
             native,
             rights,
             price,
-            // A missing `draft` key reads as live, exactly as `read_back`
-            // does with the same key, so the state is read rather than
-            // assumed on every Tes resource.
-            state: Some(
-                if state.get("draft").and_then(Value::as_bool) == Some(true) {
-                    ListingState::Draft
-                } else {
-                    ListingState::Live
-                },
-            ),
+            // The resource's own state rather than the overlay's `draft`
+            // key, which describes the overlay: see `published_state`.
+            state: Some(self.published_state(id, &state).await?),
         })
     }
 
@@ -1508,15 +1577,38 @@ fn unprojectable_grade(detail: String) -> AdapterError {
     refused(detail)
 }
 
-/// A resource with no bundle behind it. Distinct from a failed read: the
-/// answer is known, and it is that only a published resource has files to
-/// download.
+/// Confirmed bundle absence, the only condition the import binding maps to
+/// a metadata-only resource. A 404 fetching a manifest-named bundle remains
+/// a download failure instead.
 fn no_published_bundle(id: DraftId) -> AdapterError {
     AdapterError::Rejected {
         code: FailureCode::PreconditionElementAbsent,
-        detail: FailureDetail(format!(
-            "resource {} has no published bundle; only a published resource can be downloaded",
-            id.0
-        )),
+        detail: FailureDetail(format!("resource {} has no downloadable bundle", id.0)),
+    }
+}
+
+/// The bundle hops' own bytes, whose absence is not the resource's.
+///
+/// [`classify_read_bytes`] reports a 404 as `PreconditionElementAbsent`,
+/// which is [`no_published_bundle`]'s code and which the import reads as a
+/// confirmed absence of files. A path the manifest just named answering 404
+/// is a fetch that failed, so it is renamed here rather than allowed to
+/// arrive as a resource that has nothing — every other condition the
+/// classifier names travels unchanged.
+fn classify_bundle_bytes(id: DraftId, response: HttpResponse) -> Result<Vec<u8>, AdapterError> {
+    match classify_read_bytes(&response) {
+        Ok(_) => Ok(response.body),
+        Err(AdapterError::Rejected {
+            code: FailureCode::PreconditionElementAbsent,
+            detail,
+        }) => Err(AdapterError::Rejected {
+            code: FailureCode::Other,
+            detail: FailureDetail(format!(
+                "the bundle the manifest named for resource {} is not there ({}), which is a \
+                 download that failed rather than a resource with no files",
+                id.0, detail.0
+            )),
+        }),
+        Err(error) => Err(error),
     }
 }

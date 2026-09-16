@@ -28,7 +28,7 @@ use core::time::Duration;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tam_marketplace::{ImportedListing, ListingState};
+use tam_marketplace::ImportedListing;
 use tam_types::{ContentHash, FileKind, Marketplace, ScanOutcome, Timestamp};
 use tokio::sync::Mutex;
 
@@ -379,15 +379,28 @@ pub trait CatalogueSource: Send + Sync {
     /// One listing, verbatim, for canonicalisation.
     fn read(&self, resource: i64) -> SourceFuture<'_, ImportedListing>;
 
-    /// The bytes of one resource's bundle, where this source hands them over
-    /// at all.
+    /// The bytes of one resource's bundle, where the marketplace has any to
+    /// hand over.
     ///
-    /// `Ok(None)` is a source whose own-file download this device has no
-    /// capture for, which is TPT's measured state — distinct from `Err`,
-    /// which is a fetch that was attempted and failed. The difference is what
-    /// the seller reads: a resource whose file could not be fetched is
-    /// skipped and named, and a resource from a source that has no file
-    /// download at all still crosses, carrying its listing and no file.
+    /// `Ok(None)` is an absence the marketplace itself stated: it answered,
+    /// and its answer was that this resource has no file to download. `Err`
+    /// is a fetch that was attempted and failed — a lapsed session, an
+    /// unreachable host, a rate limit, an answer nothing could parse. The
+    /// difference is what the seller reads and what their catalogue ends up
+    /// holding: a resource whose file could not be fetched is skipped and
+    /// named, and one that genuinely has no file still crosses, carrying its
+    /// listing and saying so. A binding that reported a failure as an
+    /// absence would import a catalogue entry with no file for a resource
+    /// whose file was there, silently, which is the one outcome this
+    /// distinction exists to prevent.
+    ///
+    /// Both Tes and TPT fetch their bundles. The Tes binding answers `None`
+    /// only for the adapter's own no-published-bundle verdict, which that
+    /// adapter reaches by confirming the absence against the route a
+    /// published resource answers on; the TPT binding answers `None` nowhere,
+    /// because no capture of that marketplace has ever shown a product
+    /// without a downloadable file and inventing the answer would be this
+    /// device stating a fact TPT did not.
     fn bundle(&self, resource: i64) -> SourceFuture<'_, Option<Vec<u8>>>;
 }
 
@@ -2495,25 +2508,28 @@ impl<S: CatalogueSource> ImportPass<S> {
             .read(locator)
             .await
             .map_err(|why| format!("its listing could not be read: {why}"))?;
-        // Skipped by its state rather than by its download failing: a draft
-        // has no published bundle, and the page its manifest route answers
-        // with reads as a dead session to a classifier that never sees the
-        // state. The seller is told the one thing that changes it.
-        if listing.state == Some(ListingState::Draft) {
-            return Err(format!(
-                "it is a draft on {:?}, and a draft has no published file to bring across; \
-                 publish it there and import again",
-                self.permission.marketplace()
-            ));
-        }
+        // Every resource the seller ticked has its file asked for, whatever
+        // the listing's state says. The state is the source's snapshot, and
+        // on Tes that snapshot is the `/{id}/draft` overlay — a published
+        // resource with an unpublished edit answers it too, so refusing on
+        // it drops resources whose bundle was there to be had. The founder's
+        // 2026-09-16 import selected four and imported none on exactly that
+        // reading.
+        //
+        // What separates a resource with no file from one whose file could
+        // not be fetched is therefore the source's own answer and not a
+        // state: `Ok(None)` is an absence the marketplace confirmed, and an
+        // `Err` is a fetch that failed and stays a named skip.
         let Some(bundle) = self
             .source
             .bundle(locator)
             .await
             .map_err(|why| format!("its file could not be fetched: {why}"))?
         else {
-            // Metadata-only sources contribute title evidence, not file
-            // evidence. The TES and TPT bindings both fetch their bundles.
+            // Metadata-only rather than skipped: a listing with no file is
+            // still a catalogue entry the seller can use, and its title is
+            // still evidence the matcher reads. Backed by the wire already —
+            // every file-shaped field of `ObservedResource` is optional.
             return Ok(ObservedResource {
                 locator: Locator::from_resource_id(locator),
                 fingerprint: Some(Fingerprint::of_title(&listing.title)),
@@ -4033,9 +4049,16 @@ mod tests {
         /// Resources whose bundle fetch fails, so one bad resource in a shop
         /// can be driven without failing the others.
         unfetchable: Vec<i64>,
-        /// Resources the marketplace holds as drafts, whose bundle the pass
-        /// must never ask for.
+        /// Resources whose snapshot reads as a draft. On Tes that snapshot
+        /// is the `/{id}/draft` overlay, which a published resource with an
+        /// unpublished edit also answers, so a draft here says nothing about
+        /// whether there are files to bring across.
         drafts: Vec<i64>,
+        /// Resources whose bundle the source confirms is not there, which is
+        /// what the live binding answers for a resource with no published
+        /// version. Distinct from `unfetchable`, which is a fetch that
+        /// failed.
+        bundleless: Vec<i64>,
         /// A source that hands this device no file at all, which is TPT.
         fileless: bool,
         pause: Option<Arc<tokio::sync::Barrier>>,
@@ -4048,6 +4071,7 @@ mod tests {
                 bundle,
                 unfetchable: Vec::new(),
                 drafts: Vec::new(),
+                bundleless: Vec::new(),
                 fileless: false,
                 pause: None,
             }
@@ -4103,8 +4127,8 @@ mod tests {
                 if self.fileless {
                     return Ok(None);
                 }
-                if self.drafts.contains(&resource) {
-                    return Err(tes_answered("a draft's bundle was asked for"));
+                if self.bundleless.contains(&resource) {
+                    return Ok(None);
                 }
                 if self.unfetchable.contains(&resource) {
                     return Err(tes_answered("the session expired"));
@@ -4793,39 +4817,216 @@ mod tests {
         assert_eq!(print.cover_phash, None);
     }
 
-    /// A draft is skipped by its state, with the sentence that names what
-    /// changes it, and its bundle is never asked for.
+    /// Every resource the seller ticked crosses, whatever the source's own
+    /// snapshot called its state.
     ///
-    /// The founder's 2026-09-07 import skipped both drafts in the shop as
-    /// "the control plane refused: SessionExpired": the marketplace's answer
-    /// was rendered as the control plane's, in the classifier's own
-    /// vocabulary, for a resource whose only fact was that it was a draft.
+    /// The founder's 2026-09-16 tablet import selected four resources and
+    /// imported none: three of the four answered `draft` on the Tes overlay
+    /// route, the pass refused them before it asked for a file, and the run
+    /// reported `selected 4, skipped 3, imported 0`. A draft overlay is an
+    /// unpublished edit, not proof that there is nothing to bring across, so
+    /// the state is not a reason to drop a resource the seller chose.
     #[tokio::test]
-    async fn a_draft_is_skipped_by_its_state_and_its_bundle_is_never_asked_for() {
+    async fn every_selected_resource_crosses_when_the_snapshot_says_draft() {
         let plane = Arc::new(FakePlane::default());
-        let mut source = Scripted::of(3, PDF.to_vec());
-        source.drafts = vec![2];
+        let mut source = Scripted::of(4, PDF.to_vec());
+        source.drafts = vec![2, 3, 4];
+        source.bundleless = vec![2, 3, 4];
         let report = pass(source, &plane)
             .run(NOW, |_| {})
             .await
-            .expect("a draft costs that draft and not the migration");
+            .expect("the seller's whole selection is describable");
 
-        assert_eq!(report.described, 2, "the two published ones crossed");
+        assert_eq!(report.described, 4, "all four of them crossed");
+        assert!(
+            report.skipped.is_empty(),
+            "and none of them was dropped: {:?}",
+            report.skipped
+        );
+
+        let posted = plane.pages().await;
+        let [_listed, page] = posted.as_slice() else {
+            panic!("one listing and one page, and got {}", posted.len());
+        };
+        let carried: Vec<&str> = page
+            .resources
+            .iter()
+            .map(|resource| resource.locator.as_str())
+            .collect();
+        assert_eq!(
+            carried,
+            vec!["1", "2", "3", "4"],
+            "the page the server keeps carries the whole selection"
+        );
+        for (index, resource) in page.resources.iter().enumerate() {
+            let number = index + 1;
+            assert_eq!(
+                resource.listing.title,
+                format!("Resource {number}"),
+                "each one carries its own listing rather than a placeholder"
+            );
+            assert_eq!(
+                resource.listing.body, "Ten pages of practice.",
+                "and its description, which is what makes it a usable entry"
+            );
+            assert!(
+                resource.fingerprint.is_some(),
+                "and something the matcher can read"
+            );
+        }
+        assert!(
+            page.resources[0].file.is_some(),
+            "the one with a bundle still carries its file"
+        );
+    }
+
+    /// A draft snapshot over a resource that does have a downloadable bundle
+    /// keeps its file.
+    ///
+    /// The failure mode the obvious repair would introduce: reading the
+    /// overlay's `draft` as "metadata only" would describe this resource
+    /// truthfully and still lose the bytes, so the seller's catalogue entry
+    /// would have no file and no cover for a file that was there to be had.
+    #[tokio::test]
+    async fn a_draft_snapshot_over_a_downloadable_bundle_keeps_its_file() {
+        let plane = Arc::new(FakePlane::default());
+        let mut source = Scripted::of(1, PDF.to_vec());
+        source.drafts = vec![1];
+        let report = pass(source, &plane)
+            .run(NOW, |_| {})
+            .await
+            .expect("a describable resource is described");
+
+        assert_eq!(report.described, 1);
+        let posted = plane.pages().await;
+        let [_listed, page] = posted.as_slice() else {
+            panic!("one listing and one page, and got {}", posted.len());
+        };
+        let Some(file) = page.resources[0].file.as_ref() else {
+            panic!("the bundle was there, so the file crosses");
+        };
+        assert_eq!(file.kind, FileKind::Pdf, "probed from the bytes that came");
+        assert_eq!(file.byte_len, PDF.len() as u64);
+        assert!(
+            page.resources[0]
+                .cover_png
+                .as_ref()
+                .is_some_and(|cover| cover.bytes().starts_with(PNG_MAGIC)),
+            "and the cover derived from them"
+        );
+    }
+
+    /// A resource the source confirms has no bundle crosses as its metadata,
+    /// and says so rather than claiming a file.
+    #[tokio::test]
+    async fn a_resource_with_no_bundle_behind_it_crosses_as_its_metadata() {
+        let plane = Arc::new(FakePlane::default());
+        let mut source = Scripted::of(2, PDF.to_vec());
+        source.bundleless = vec![2];
+        let report = pass(source, &plane)
+            .run(NOW, |_| {})
+            .await
+            .expect("a confirmed absence of files is not a failure");
+
+        assert_eq!(report.described, 2);
+        assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+        let posted = plane.pages().await;
+        let [_listed, page] = posted.as_slice() else {
+            panic!("one listing and one page, and got {}", posted.len());
+        };
+        let fileless = &page.resources[1];
+        assert_eq!(
+            fileless.file, None,
+            "no bytes were held, so no file is claimed"
+        );
+        assert_eq!(fileless.cover_png, None, "and no cover was made from them");
+        assert_eq!(
+            fileless.listing.title, "Resource 2",
+            "what it does carry is true"
+        );
+        assert_eq!(
+            fileless
+                .fingerprint
+                .as_ref()
+                .map(|print| print.title_norm.as_str()),
+            Some("resource 2"),
+            "and its title is still something the matcher can read"
+        );
+        assert!(
+            page.resources[0].file.is_some(),
+            "the resource beside it is unaffected"
+        );
+    }
+
+    /// A fetch that failed is a skip the seller reads, never a resource
+    /// imported as though it had no file.
+    ///
+    /// The one thing the repair must not buy: once an absent bundle is an
+    /// ordinary outcome, an expired session or an unreadable answer would
+    /// arrive as a metadata-only import — a catalogue entry with no file,
+    /// silently, for a resource whose file is sitting there behind a session
+    /// the seller only has to refresh.
+    #[tokio::test]
+    async fn a_fetch_that_failed_is_a_skip_rather_than_a_fileless_import() {
+        let plane = Arc::new(FakePlane::default());
+        let mut source = Scripted::of(2, PDF.to_vec());
+        source.unfetchable = vec![2];
+        let report = pass(source, &plane)
+            .run(NOW, |_| {})
+            .await
+            .expect("one bad resource costs that resource");
+
+        assert_eq!(report.described, 1, "only the one that could be read");
         let [skipped] = report.skipped.as_slice() else {
             panic!("one skip, and got {:?}", report.skipped);
         };
         assert_eq!(skipped.locator, Locator::from_resource_id(2));
         assert!(
-            skipped.why.as_str().contains("draft on Tes")
-                && skipped.why.as_str().contains("publish it there"),
-            "the seller reads what it is and what changes it: {}",
+            skipped.why.as_str().contains("could not be fetched"),
+            "the seller reads that the fetch failed: {}",
             skipped.why
         );
+
+        let posted = plane.pages().await;
+        let [_listed, page] = posted.as_slice() else {
+            panic!("one listing and one page, and got {}", posted.len());
+        };
         assert!(
-            !skipped.why.as_str().contains("could not be fetched"),
-            "and no download was attempted for it: {}",
-            skipped.why
+            page.resources
+                .iter()
+                .all(|resource| resource.locator.as_str() != "2"),
+            "and the failed one is not in the page at all, least of all as an entry with no \
+             file"
         );
+    }
+
+    /// A selection in which nothing has a bundle still completes.
+    ///
+    /// Its own case because completion is a different branch from a skip: a
+    /// run where every resource failed must not complete, and a run where
+    /// every resource is fileless must, or the server never mints the jobs
+    /// and the seller watches an import that never ends.
+    #[tokio::test]
+    async fn a_selection_where_nothing_has_a_bundle_still_completes() {
+        let plane = Arc::new(FakePlane::default());
+        let mut source = Scripted::of(3, PDF.to_vec());
+        source.drafts = vec![1, 2, 3];
+        source.bundleless = vec![1, 2, 3];
+        let report = pass(source, &plane)
+            .run(NOW, |_| {})
+            .await
+            .expect("three describable resources are a completed pass");
+
+        assert_eq!(report.described, 3);
+        let posted = plane.pages().await;
+        let [_listed, page] = posted.as_slice() else {
+            panic!("one listing and one page, and got {}", posted.len());
+        };
+        assert!(
+            page.complete,
+            "the last page says so, or nothing is minted and the run never ends"
+        );
+        assert_eq!(page.resources.len(), 3);
     }
 
     /// A bundle that opens like an archive and holds none is skipped, not
@@ -5049,6 +5250,7 @@ mod tests {
             bundle: PDF.to_vec(),
             unfetchable: Vec::new(),
             drafts: Vec::new(),
+            bundleless: Vec::new(),
             fileless: false,
             pause: None,
         };

@@ -980,6 +980,8 @@ pub fn redirected_bundle_request(url: String) -> HttpRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DownloadManifestError {
+    /// The expected manifest object or a named bundle's URL is malformed.
+    InvalidShape,
     /// No bundle for this resource — the shape a draft produces.
     NoPublishedBundle,
     /// The manifest named somewhere other than a path on this origin.
@@ -989,6 +991,7 @@ pub enum DownloadManifestError {
 impl core::fmt::Display for DownloadManifestError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::InvalidShape => write!(f, "the download manifest has an invalid zipUrls entry"),
             Self::NoPublishedBundle => write!(f, "no published bundle for this resource"),
             Self::OffOrigin(url) => write!(f, "the manifest named an off-origin url: {url}"),
         }
@@ -1010,12 +1013,17 @@ impl core::error::Error for DownloadManifestError {}
 /// bundle really lives is then the redirect's business, and the redirect is
 /// followed — if at all — by a client carrying nothing.
 pub fn parse_download_manifest(body: &Value, id: DraftId) -> Result<String, DownloadManifestError> {
-    let url = body
+    let urls = body
         .get("zipUrls")
-        .and_then(|urls| urls.get(id.0.to_string()))
-        .and_then(|entry| entry.get("url"))
-        .and_then(Value::as_str)
+        .and_then(Value::as_object)
+        .ok_or(DownloadManifestError::InvalidShape)?;
+    let entry = urls
+        .get(&id.0.to_string())
         .ok_or(DownloadManifestError::NoPublishedBundle)?;
+    let url = entry
+        .get("url")
+        .and_then(Value::as_str)
+        .ok_or(DownloadManifestError::InvalidShape)?;
     if url.starts_with('/') && !url.starts_with("//") {
         Ok(url.to_owned())
     } else {
@@ -1585,9 +1593,9 @@ mod tests {
     }
 
     #[test]
-    fn a_manifest_without_zip_urls_is_an_unpublished_resource() {
+    fn an_empty_bundle_map_reports_no_published_bundle() {
         assert_eq!(
-            parse_download_manifest(&json!({}), DraftId(9001)),
+            parse_download_manifest(&json!({"zipUrls": {}}), DraftId(9001)),
             Err(DownloadManifestError::NoPublishedBundle),
             "a draft has no bundle, which is a distinct answer from a failed read"
         );

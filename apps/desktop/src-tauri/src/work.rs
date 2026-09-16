@@ -368,10 +368,11 @@ fn marketplace_sentence(error: &AdapterError) -> String {
 impl<B: LiveTransport + Clone> crate::import::CatalogueSource for SellerCatalogue<B> {
     /// Every resource the seller has, drafts included.
     ///
-    /// Drafts are kept rather than filtered out even though a draft has no
-    /// published bundle. The pass skips one by its state with a sentence the
-    /// seller can read, and a filter here would instead make a draft vanish
-    /// from the migration silently — which is the outcome
+    /// Drafts are kept rather than filtered out. One may have no published
+    /// file, and one may be a published resource with an unpublished edit
+    /// whose file is there to be had; the pass asks for the file either way
+    /// and reports what it got. A filter here would instead make a resource
+    /// vanish from the migration silently — which is the outcome
     /// `ImportPage::skipped` exists to prevent, one step earlier.
     fn list<'a>(
         &'a self,
@@ -427,10 +428,27 @@ impl<B: LiveTransport + Clone> crate::import::CatalogueSource for SellerCatalogu
         })
     }
 
+    /// The resource's bundle, or the marketplace's own statement that there
+    /// is none.
+    ///
+    /// `PreconditionElementAbsent` out of this adapter's download means
+    /// exactly one thing — the resource answers on no published route, so it
+    /// has no files — and the adapter reaches that verdict by reading that
+    /// route rather than by inferring it from a draft overlay or from a
+    /// manifest that would not parse. It is the one answer that becomes
+    /// `Ok(None)` and therefore a metadata-only import.
+    ///
+    /// Nothing else is. A lapsed session, a challenge, a rate limit, an
+    /// unreachable host, an answer nothing could parse, a redirect this
+    /// download will not follow, a bundle path that 404s: each stays an
+    /// error, so it stays a skip the seller reads and can act on. A failure
+    /// mapped to `Ok(None)` here would import a catalogue entry with no file
+    /// for a resource whose file was sitting behind a session the seller
+    /// only had to refresh.
     fn bundle(&self, resource: i64) -> SourceFuture<'_, Option<Vec<u8>>> {
         Box::pin(async move {
             let adapter = self.adapter()?;
-            adapter
+            match adapter
                 .download_resource_bundle(
                     &FetchReason::FirstPartyExport {
                         inventory: self.inventory,
@@ -438,8 +456,14 @@ impl<B: LiveTransport + Clone> crate::import::CatalogueSource for SellerCatalogu
                     tam_marketplace_tes::DraftId(resource),
                 )
                 .await
-                .map(Some)
-                .map_err(|why| self.answered(&why))
+            {
+                Ok(bundle) => Ok(Some(bundle)),
+                Err(AdapterError::Rejected {
+                    code: FailureCode::PreconditionElementAbsent,
+                    ..
+                }) => Ok(None),
+                Err(why) => Err(self.answered(&why)),
+            }
         })
     }
 }
@@ -553,6 +577,20 @@ impl<B: LiveTransport + Clone> crate::import::CatalogueSource for TptSellerCatal
         })
     }
 
+    /// The product's bundle, and no absence answer at all.
+    ///
+    /// Every outcome but the bytes is an error here, deliberately, and this
+    /// is not the Tes binding with a piece missing. TPT's download has no
+    /// answer that means "this product has no file": no capture of that
+    /// marketplace has ever shown one, so there is nothing to map and
+    /// inventing a mapping would be this device stating a fact TPT did not.
+    ///
+    /// `PreconditionElementAbsent` in particular must not become `Ok(None)`
+    /// on this side. That adapter reports it for a product that is not in
+    /// the seller's own catalogue, which is a refusal to download somebody
+    /// else's file, and for a 404 on the download hop, which is a fetch that
+    /// failed. Either read as an absence would import a catalogue entry with
+    /// no file and tell the seller nothing.
     fn bundle(&self, resource: i64) -> SourceFuture<'_, Option<Vec<u8>>> {
         Box::pin(async move {
             let adapter = self.adapter()?;
@@ -2263,15 +2301,187 @@ mod tests {
         }
     }
 
+    /// The same seam for TPT, whose transport builder answers its own
+    /// marketplace.
+    #[derive(Clone)]
+    struct ScriptedTpt(std::sync::Arc<tam_marketplace::cassette::Cassette>);
+
+    impl crate::marketplace::LiveTransport for ScriptedTpt {
+        type Live = tam_marketplace::cassette::CassetteTransport;
+
+        fn marketplace(&self) -> Marketplace {
+            Marketplace::Tpt
+        }
+
+        fn build(&self, _cookie_header: &str) -> Result<Self::Live, String> {
+            Ok(tam_marketplace::cassette::CassetteTransport::new(
+                (*self.0).clone(),
+            ))
+        }
+    }
+
+    /// One Tes catalogue over a stated cassette.
+    async fn tes_catalogue_over(
+        cassette: tam_marketplace::cassette::Cassette,
+    ) -> super::SellerCatalogue<ScriptedTes> {
+        super::SellerCatalogue::over(
+            sessions_for(&[Marketplace::Tes]).await,
+            InventoryId::Tes,
+            ScriptedTes(std::sync::Arc::new(cassette)),
+        )
+    }
+
+    /// The live Tes binding answers `Ok(None)` for a confirmed absence of
+    /// files and an error for everything else.
+    ///
+    /// The pair is the point. `Ok(None)` is what makes a resource cross as
+    /// metadata only, so the binding has to hand it back for the one answer
+    /// that means "there is nothing to download" and for no other — a lapsed
+    /// session mapped to it would import a catalogue entry with no file for
+    /// a resource whose file was sitting there, and say nothing to the
+    /// seller. Both halves are driven over the recorded traffic the adapter
+    /// actually meets rather than over a stubbed adapter, because which
+    /// answer each condition produces is the thing under test.
+    #[tokio::test]
+    async fn the_live_tes_binding_reports_absence_as_no_file_and_failure_as_failure() {
+        use crate::import::CatalogueSource as _;
+        use tam_marketplace::cassette::{Cassette, Interaction};
+        use tam_marketplace::transport::HttpResponse;
+        use tam_marketplace_tes::endpoints as tes;
+
+        let resource = 13_549_126_i64;
+        let id = tam_marketplace_tes::DraftId(resource);
+        // A resource with no published version: its manifest route answers
+        // the not-found page, the published route answers nothing, and its
+        // own overlay answers — so the session stands and the absence is the
+        // marketplace's own.
+        let absent = tes_catalogue_over(Cassette {
+            interactions: vec![
+                Interaction {
+                    request: tes::download_manifest_request(id),
+                    response: HttpResponse::plain(
+                        200,
+                        b"<html><head><title>Not found</title></head></html>".to_vec(),
+                    ),
+                },
+                Interaction {
+                    request: tes::read_resource_request(id),
+                    response: HttpResponse::plain(404, Vec::new()),
+                },
+                Interaction {
+                    request: tes::read_draft_request(id),
+                    response: HttpResponse::plain(
+                        200,
+                        serde_json::json!({ "id": resource, "draft": true, "title": "A draft" })
+                            .to_string()
+                            .into_bytes(),
+                    ),
+                },
+            ],
+        })
+        .await;
+        assert_eq!(
+            absent
+                .bundle(resource)
+                .await
+                .expect("a confirmed absence of files is an answer, not a failure"),
+            None,
+            "so the resource crosses carrying its listing and no file"
+        );
+
+        // The same page on a session that has lapsed. Nothing about the
+        // resource is known, and the seller's remedy is to sign in again.
+        let lapsed = tes_catalogue_over(Cassette {
+            interactions: vec![
+                Interaction {
+                    request: tes::download_manifest_request(id),
+                    response: HttpResponse::plain(401, Vec::new()),
+                },
+                Interaction {
+                    request: tes::read_resource_request(id),
+                    response: HttpResponse::plain(401, Vec::new()),
+                },
+            ],
+        })
+        .await;
+        let why = lapsed
+            .bundle(resource)
+            .await
+            .expect_err("a lapsed session is a failure, never a resource with no files");
+        assert!(
+            why.to_string().contains("sign in again"),
+            "and the seller reads the remedy: {why}"
+        );
+    }
+
+    /// The live TPT binding turns no refusal into a fileless import.
+    ///
+    /// TPT reports "this product is not in the seller's own catalogue" with
+    /// the same failure code Tes uses for "this resource has no published
+    /// bundle", and the two mean opposite things: one is a refusal to
+    /// download somebody else's file, the other is the absence that makes a
+    /// metadata-only import honest. The Tes mapping must therefore stay on
+    /// the Tes binding, and this is what holds it there.
+    #[tokio::test]
+    async fn the_live_tpt_binding_never_turns_a_refusal_into_a_fileless_import() {
+        use crate::import::CatalogueSource as _;
+        use tam_marketplace::cassette::{Cassette, Interaction};
+        use tam_marketplace::transport::HttpResponse;
+        use tam_marketplace_tpt::endpoints as tpt;
+
+        let product = 8_112_233_u64;
+        // The seller's own catalogue, read for this product, holding nothing.
+        // Whatever that is, it is not TPT saying the product has no file.
+        let cassette = Cassette {
+            interactions: vec![Interaction {
+                request: tpt::product_by_id_request(tam_marketplace_tpt::read_model::ProductId(
+                    product,
+                )),
+                response: HttpResponse::plain(
+                    200,
+                    serde_json::json!({
+                        "data": { "seller": { "resources": {
+                            "results": [],
+                            "pageInfo": {
+                                "totalResultsCount": 0,
+                                "currentPage": 1,
+                                "totalPageCount": 1
+                            }
+                        } } }
+                    })
+                    .to_string()
+                    .into_bytes(),
+                ),
+            }],
+        };
+        let catalogue = super::TptSellerCatalogue::over(
+            sessions_for(&[Marketplace::Tpt]).await,
+            InventoryId::Tpt,
+            ScriptedTpt(std::sync::Arc::new(cassette)),
+        );
+
+        let why = catalogue
+            .bundle(i64::try_from(product).expect("the fixture id fits"))
+            .await
+            .expect_err("a product this read will not download is a failure, not a file-less one");
+        assert!(
+            !why.to_string().is_empty(),
+            "and it carries the marketplace's own sentence for the seller to read"
+        );
+    }
+
     /// The catalogue walk keeps drafts, and the source refuses to upload.
     ///
-    /// Drafts are the assertion that matters. A draft has no published bundle
-    /// and will fail its download, so filtering it out here would look tidier
-    /// and would make it vanish from the migration in silence — where keeping
-    /// it turns the failure into a named skip the seller reads. The upload
-    /// refusal is the other half of the same posture: a catalogue read writes
-    /// nothing, so the file source it is built with refuses rather than being
-    /// a permissive stub a later edit could write through.
+    /// Drafts are the assertion that matters. Filtering one out here would
+    /// look tidier and would make it vanish from the migration in silence,
+    /// where keeping it means the pass asks the marketplace for its file and
+    /// reports what it got — the bytes where an unpublished edit sits over a
+    /// published resource, a truthful metadata-only entry where there is no
+    /// published version, and a named skip the seller reads where the fetch
+    /// failed. The upload refusal is the other half of the same posture: a
+    /// catalogue read writes nothing, so the file source it is built with
+    /// refuses rather than being a permissive stub a later edit could write
+    /// through.
     #[tokio::test]
     async fn the_live_catalogue_lists_drafts_and_refuses_to_upload() {
         use crate::import::CatalogueSource as _;
@@ -2347,16 +2557,16 @@ mod tests {
         let located: Vec<&str> = listed.iter().map(|row| row.locator.as_str()).collect();
         assert!(
             located.contains(&"13549795"),
-            "a draft is listed rather than filtered out, so its download failure becomes a skip \
-             the seller reads instead of a resource that vanished: {listed:?}"
+            "a draft is listed rather than filtered out, so the seller can tick it and it \
+             crosses, instead of being a resource that vanished: {listed:?}"
         );
         assert!(located.contains(&"13549794"), "and so is the published one");
         assert!(
             listed
                 .iter()
                 .any(|row| row.state == Some(tam_marketplace::ListingState::Draft)),
-            "and the selection step is told which one is the draft, or the seller ticks a \
-             resource that will skip: {listed:?}"
+            "and the selection step is told which one the marketplace holds as a draft, which \
+             is what the seller is choosing between: {listed:?}"
         );
 
         let refused = tam_marketplace::FileSource::fetch(
