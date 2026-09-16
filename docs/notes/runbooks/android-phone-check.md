@@ -1,25 +1,23 @@
 ---
-title: Checking a real Android phone registers and connects
+title: Checking a real Android device
 ---
 
-# Checking a real Android phone registers and connects
+# Checking a real Android device
 
-Twenty minutes, one phone, no cable.
-It answers two questions: does a phone that installs Teachouse and signs in appear under "Your machines" with its own name beside it, and can that phone connect a marketplace of its own?
-Everything the Android client does has been exercised on an x86_64 emulator and on no real handset, so this is the first evidence that any of it works where it has to.
-The second exercise below cannot be emulated at all, for a reason worth knowing rather than working around: the Connect button only exists on a signed-in Marketplaces page, and the application accepts commands from one origin — the control plane's own — so there is no stand-in console to drive it from without widening the grant that keeps a marketplace page from reaching our commands.
+Use a real arm64 Android phone or tablet to check registration, marketplace sign-in and original-file opening.
+Emulator-only checks do not establish that these paths work on a seller's device.
+Marketplace sign-in must run from the authenticated control-plane origin; do not widen the native command grant to use a stand-in console.
 
 - date: 2026-09-06
-- applies to: an arm64 Android phone, which is every current handset
+- applies to: an arm64 Android phone or tablet
 - prerequisite: a Teachouse account you can sign in to, and — for the second exercise — a TPT or Tes account of your own
 
 ## Before you start
 
 Open the release page for the version you are testing and confirm it carries two files: `Teachouse_<version>_arm64.apk` and `SHA256SUMS-android.txt`.
-Version 0.3.2 carries both.
 
-If they are missing, the Android job was skipped because the three `ANDROID_KEY_*` secrets are not set, and the run summary for that tag says so.
-Set them and re-run the tag, or build locally with `just android-build` inside `nix develop .#android`, and come back.
+If either file is missing, inspect the complete tagged-release logs before installing anything.
+Missing signing credentials, a build failure and a skipped release job are distinct failures; do not substitute an unsigned or debug APK for an existing signed installation.
 
 The APK is arm64 only, deliberately.
 An x86 Android device — an emulator image, or one of the handful of Intel tablets — has no asset to install and is out of scope for this check.
@@ -29,18 +27,22 @@ An x86 Android device — an emulator image, or one of the handful of Intel tabl
 Download the APK onto the phone, from the release page in the phone's own browser.
 Android asks whether to allow installing from that source the first time; allow it, install, and open Teachouse.
 
+Update an existing installation in place, with the same package and signing certificate and a version code no lower than the installed one.
+For a cabled device, use `adb -s SERIAL install -r APK`.
+Never uninstall or clear app data to work around a signing mismatch: that destroys the Android Keystore key used to protect the saved sessions and library.
+
 The app opens its own window straight onto the console.
 If it shows a bundled page saying it cannot reach us instead, that is the network probe rather than a failure of the app, and the page's own button retries.
 
 ## Sign in
 
-Sign in on the phone exactly as you would on a computer, in the window the app opened.
+An in-place update should retain the existing sign-in. On a fresh installation, sign in in the window the app opened.
 Wait for the console to finish loading.
 Registration happens on that load, so a page that is still loading has not registered yet.
 
 ## Look
 
-Go to Marketplaces and scroll to "Your machines".
+Go to Settings → Preferences and find "Machine sign-ins", below "Browser sign-ins".
 
 The phone should be a row of its own, named by the phone rather than by a host name: "Google Pixel 8", "Samsung SM-G991B", "OnePlus CPH2451".
 Under the name should be a line reading `Android · aarch64 · app <version> · last seen just now`.
@@ -92,12 +94,26 @@ Our own copy of the session is gone either way, and the card and "Your machines"
 
 ## Confirm it is one machine and not two
 
-Close the app fully — from the recent-apps list, not by pressing back — reopen it, and reload Marketplaces.
+Close the app fully — from the recent-apps list, not by pressing back — reopen it, and return to Settings → Preferences → Machine sign-ins.
 Back is not a substitute here even now that it leaves the app once the pages behind you run out: an Activity that finishes leaves the process, and everything the app is holding, alive.
 
 There must still be one phone row.
 A second row means the device identity did not survive the restart, and every token bound to the first row is stranded.
 That is worth stopping for.
+
+## Open a kept original
+
+In Resources → Files, choose an original already kept on this device and press Open.
+If Android offers a chooser, select a local viewer and "Just once"; do not change the default app.
+The viewer must display the document or the archive's contents. A chooser alone is not a pass.
+Return to Teachouse and confirm the session and original remain available.
+
+With a cable, `adb -s SERIAL shell dumpsys activity activities` should show the receiver using a `content://io.teachouse.desktop.fileprovider/…` URI and the file's MIME type.
+Its intent grants read access, not write, persistent or prefix access.
+
+Do not test Remove on the only holder of an original.
+First complete a copy to another authorized native device and establish the peer-transfer recovery path.
+Re-import is not that recovery path: resources already in Resources are skipped before their files are downloaded.
 
 ## One notification, once a cycle has settled something
 
@@ -106,23 +122,23 @@ The same check on Windows needs an installed build rather than a development run
 
 ## If no phone row appears
 
-Press "Check in now", beside the "Your machines" heading, on the phone.
+Press "Check in now", beside "Machine sign-ins" in Settings → Preferences, on the device.
 It asks the app to register and check in again, and it is the same call the console makes when it loads.
 
 If it fails, a line appears under the panel's description reading "This machine could not tell us it is here:" and then the app's own sentence.
 There are four of them and each says something different: no way to reach the server in this build, the server refused, this device is not registered, and nobody is signed in on this device.
 That sentence is the report.
 
-Then open Settings and read the "Browser sign-ins" panel.
+Then read the "Browser sign-ins" panel immediately above it.
 A phone sign-in listed there as a row of its own, rather than absorbed into a machine, is the signature of the failure: the sign-in reached us and the registration did not.
 
-Send two screenshots — Marketplaces "Your machines", and Settings "Browser sign-ins" — and the sentence.
+Send screenshots of both sign-in panels and the refusal sentence.
 That is enough to name the cause without attaching the phone to anything.
 
 ## If you have a cable and want more
 
 Neither of these is required, and neither is a substitute for the screenshots above.
 
-`adb logcat -s RustStdoutStderr` carries this application's own stdout and stderr, including the `starting <version> android aarch64` line that every launch writes.
-`adb shell run-as io.teachouse.desktop cat startup.log` is the same log as it sits on disk, in the app's private storage.
+`adb -s SERIAL logcat -s RustStdoutStderr` carries this application's own stdout and stderr, including the `starting <version> android aarch64` line that every launch writes.
+`adb -s SERIAL shell run-as io.teachouse.desktop cat startup.log` is the same log as it sits on disk, in the app's private storage.
 No directory prefix: `run-as` starts in the app's data directory, which is where Tauri resolves `app_data_dir` to on Android (`activity.dataDir`, tauri 2.11.5 `PathPlugin.kt`), and the log sits directly in it.

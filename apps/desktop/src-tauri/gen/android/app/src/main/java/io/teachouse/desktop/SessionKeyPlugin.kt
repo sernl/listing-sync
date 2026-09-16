@@ -1,11 +1,14 @@
 package io.teachouse.desktop
 
 import android.app.Activity
+import android.content.Intent
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
+import androidx.core.content.FileProvider
 import app.tauri.annotation.Command
+import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSArray
@@ -18,6 +21,11 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+
+@InvokeArg
+class LibraryFileArgs {
+    lateinit var path: String
+}
 
 /**
  * Where the Android build's session-sealing secret lives.
@@ -119,6 +127,35 @@ class SessionKeyPlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun foreground(invoke: Invoke) {
         invoke.resolve(JSObject().put("foreground", MainActivity.isOnScreen()))
+    }
+
+    @Command
+    fun openLibraryFile(invoke: Invoke) {
+        try {
+            val args = invoke.parseArgs(LibraryFileArgs::class.java)
+            val context = activity.applicationContext
+            val file = File(args.path).canonicalFile
+            val exports = File(context.cacheDir.canonicalFile, "open")
+            require(file.parentFile == exports && file.isFile) {
+                "That file is not a cached library export."
+            }
+            val uri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                file,
+            )
+            val mime = requireNotNull(context.contentResolver.getType(uri)) {
+                "The exported file type could not be determined."
+            }
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mime)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(intent)
+            invoke.resolve()
+        } catch (failure: Exception) {
+            invoke.reject(failure.message ?: failure.javaClass.simpleName)
+        }
     }
 
     /**

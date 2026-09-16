@@ -898,6 +898,11 @@ pub async fn set_library_settings(
         .map_err(|why| CommandError(why.to_string()))
 }
 
+#[cfg(target_os = "android")]
+pub(crate) struct AndroidLibraryOpener<R: tauri::Runtime>(
+    pub(crate) tauri::plugin::PluginHandle<R>,
+);
+
 /// Hands one kept file to whatever application this machine opens that
 /// type with.
 ///
@@ -908,6 +913,7 @@ pub async fn set_library_settings(
 /// opener refuses, the refusal is the answer and there is no other route.
 #[tauri::command]
 pub async fn library_open_external(app: AppHandle, hash: String) -> Result<(), CommandError> {
+    #[cfg(not(target_os = "android"))]
     use tauri_plugin_opener::OpenerExt as _;
     let library = library_of(&app)?;
     let digest = hash_of(&hash)?;
@@ -939,9 +945,19 @@ pub async fn library_open_external(app: AppHandle, hash: String) -> Result<(), C
     tokio::fs::write(&path, &bytes)
         .await
         .map_err(|why| CommandError(why.to_string()))?;
-    app.opener()
-        .open_path(path.to_string_lossy().into_owned(), None::<&str>)
-        .map_err(|why| CommandError(why.to_string()))
+    #[cfg(target_os = "android")]
+    {
+        app.state::<AndroidLibraryOpener<tauri::Wry>>()
+            .0
+            .run_mobile_plugin::<()>("openLibraryFile", serde_json::json!({ "path": path }))
+            .map_err(|why| CommandError(why.to_string()))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        app.opener()
+            .open_path(path.to_string_lossy().into_owned(), None::<&str>)
+            .map_err(|why| CommandError(why.to_string()))
+    }
 }
 
 /// Whether this device holds a session for a marketplace, and nothing about

@@ -377,9 +377,8 @@ fn session_key_bridge<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
                 session::android_key::PLUGIN_IDENTIFIER,
                 session::android_key::PLUGIN_CLASS,
             )?;
-            // One Kotlin class answers every command, so one handle serves
-            // all three bindings and the later ones are clones rather than
-            // second registrations.
+            // Share one registration between the keystore, lifecycle and file bindings.
+            app.manage(commands::AndroidLibraryOpener(handle.clone()));
             let phone = Arc::new(android_name::PhoneName::new(handle.clone()));
             let names: Arc<dyn DeviceNameSource> = phone.clone();
             // The same object again, as the other trait it implements: the
