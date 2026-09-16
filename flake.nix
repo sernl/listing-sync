@@ -46,8 +46,8 @@
           craneLib = (inputs.crane.mkLib pkgs).overrideToolchain rustToolchain;
 
           # cleanCargoSource would drop sqlx's offline query metadata, the
-          # SQL migrations, the cassette fixtures and the captured taxonomy
-          # data, all of which the sandboxed build needs.
+          # SQL migrations, cassette and archive fixtures, captured taxonomy
+          # data and extension manifest, all needed by sandboxed builds.
           src = pkgs.lib.cleanSourceWith {
             src = ./.;
             filter =
@@ -56,7 +56,9 @@
               || (builtins.match ".*/\\.sqlx/query-.*\\.json" path != null)
               || (builtins.match ".*/migrations/.*\\.sql" path != null)
               || (builtins.match ".*/tests/cassettes/.*\\.json" path != null)
+              || (builtins.match ".*/tests/fixtures/.*\\.zip" path != null)
               || (builtins.match ".*/docs/design/data/.*\\.jsonl?" path != null)
+              || (builtins.match ".*/apps/extension/static/manifest\\.json" path != null)
               # The verdict-fixtures bin and equivalence test in tam-core-wasm
               # include drafts.json and verdicts.json from outside src/.
               || (builtins.match ".*/crates/[^/]+/fixtures/.*\\.json" path != null);
@@ -557,7 +559,13 @@
             # Leave cargoDenyChecks at its default. Advisories are cargoAudit's
             # lane; adding them here makes cargo-deny git-clone the RustSec
             # database at build time, and the sandbox has neither network nor git.
-            deny = craneLib.cargoDeny commonArgs;
+            deny = craneLib.cargoDeny (
+              commonArgs
+              // {
+                cargoExtraArgs = "";
+                cargoDenyExtraArgs = commonArgs.cargoExtraArgs;
+              }
+            );
 
             fmt = craneLib.cargoFmt { inherit src; };
 
