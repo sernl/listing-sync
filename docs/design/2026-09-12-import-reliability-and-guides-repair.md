@@ -1,8 +1,8 @@
 # Import reliability and guides repair
 
-- Status: implementation and physical-phone acceptance complete; coordinated release in progress.
+- Status: guides repair complete; additional cross-platform import remediation and live acceptance in progress.
 - Created: 2026-09-12.
-- Scope: repair the reported APK imports and guides before Phase 7.
+- Scope: repair TES and TPT imports across browser, Windows, Linux and Android before Phase 7.
 - Implementation plan: [bounded execution tasks](plans/2026-09-12-import-reliability-and-guides-repair.md).
 - Governing design: [seller workflows](../notes/design/2026-09-12-one-marketplace-per-site-and-the-seller-workflows.md), especially import, device origin, publishing consent and both client layouts.
 
@@ -86,7 +86,7 @@ Required outcomes:
 4. Stop, page navigation, app suspension and restart cannot create hidden continuing writes or duplicate catalogue resources.
 5. Import status distinguishes catalogue completion from destination publishing readiness.
 6. Guides support aligned fields, topics, tags, the requested Markdown insertions, live preview, safe draft autosave, and searchable/filterable published content.
-7. All changed surfaces work in the browser, Windows app and APK where applicable.
+7. The import contract applies equally to browser, Windows, Linux and Android clients.
 
 ## Selected recommendation and alternatives
 
@@ -100,6 +100,24 @@ The UI tells the seller to keep the app open during reads.
 If uninterrupted screen-off execution is required, that is a materially different design requiring explicit approval.
 
 ## Import contract
+
+### Shared resource and file semantics
+
+Browser-started imports and native starts use the same device capture and server commit paths.
+TES and TPT requests and marketplace credentials remain on the seller's device.
+
+- Retain every selected resource, including drafts.
+  A draft overlay is not proof that a published listing or its files are absent.
+- Create a metadata-only resource only when bundle absence is confirmed.
+  Authentication, malformed responses, missing named downloads and transport failures remain visible errors.
+- Reconcile the source identity within its organisation, including locally deleted resources and prior merges.
+  Restore the canonical resource rather than creating a duplicate or resurrecting a merge loser.
+- Preserve a live resource's authored metadata and existing files.
+  A genuinely deleted source resource may refresh its own sole source-backed payload; seller-owned files, unrelated source files and multi-file resources are not replaced automatically.
+- Record a capture fingerprint only when it describes the payload accepted or retained by that resource.
+  A declined file must not influence later duplicate matching.
+- Settle permanent mapping conflicts as failed items with a reason.
+  Roll back the item's catalogue changes and record the failure separately; a uniqueness conflict must not leave a run indefinitely committing.
 
 ### Starts, readiness and ownership
 
@@ -316,6 +334,10 @@ This revision addresses all seven: explicit manual commit confirmation/backfill,
 Approval covers the bounded design, foreground-safe Android semantics, and direct HTTPS guide images.
 It does not authorise production marketplace writes, account/session resets, infrastructure changes or a release tag.
 A required new dependency, uncaptured marketplace operation or expanded background-execution promise returns to the founder rather than being silently substituted.
+
+On 2026-09-16 the founder authorised publishing the verified import repair as 0.10.5, including its release notes and Windows, Linux and Android artifacts.
+The founder explicitly kept TPT disconnected and its two queued publishing jobs untouched.
+Live TPT acceptance therefore remains blocked; shared-code tests are not a substitute for that live gate.
 
 The repair is complete only when every acceptance gate in the implementation plan is evidenced, review findings are resolved, standard verification passes, and the actual changed client surfaces have been exercised.
 If TPT file capture or physical-phone access is unavailable, report that gate as blocked and finish all reachable work; do not call the import-to-publishing requirement complete.

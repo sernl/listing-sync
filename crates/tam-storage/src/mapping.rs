@@ -32,12 +32,24 @@ pub struct MappingRecord {
     pub updated_at: Timestamp,
 }
 
-/// Two mappings must not claim one listing, and the path that reaches this is
-/// an ordinary seller one: a migrate mints a fresh product per read and
-/// dedupes by nothing, so the same source listing submitted twice under two
-/// idempotency keys raises the second bound claim. Named rather than left as
-/// a bare unique violation, which surfaces as a 500 for what is a validation
-/// answer.
+/// Two mappings must not claim one listing, and two mappings must not fill
+/// one product's slot in one marketplace. Both paths that reach either are
+/// ordinary seller ones, so both are named rather than left as bare unique
+/// violations, which surface as a 500 for what is a conflict the caller can
+/// report and stop on.
+///
+/// The listing half: a migrate mints a fresh product per read and dedupes by
+/// nothing, so the same source listing submitted twice under two idempotency
+/// keys raises the second bound claim.
+///
+/// The inventory half: a fileless import that later gained a seller's upload
+/// and an unbound mapping for its own marketplace already occupies that slot,
+/// and a re-import of the same source finds that product and tries to bind a
+/// second mapping onto it. Distinct from [`StorageError::MappingAlreadyBound`]
+/// on purpose — that one is a create's admission answer, a write this tree
+/// has nothing left to make — while this is a permanent constraint on the
+/// catalogue's shape: no later attempt clears it, so a caller that read it as
+/// a fault would retry it forever.
 fn map_bound_claim<T>(outcome: Result<T, sqlx::Error>) -> Result<T, StorageError> {
     match outcome {
         Ok(value) => Ok(value),
@@ -48,6 +60,11 @@ fn map_bound_claim<T>(outcome: Result<T, sqlx::Error>) -> Result<T, StorageError
             ) =>
         {
             Err(StorageError::ListingAlreadyBound)
+        }
+        Err(sqlx::Error::Database(database))
+            if database.constraint() == Some(ONE_PER_INVENTORY) =>
+        {
+            Err(StorageError::InventoryMappingAlreadyExists)
         }
         Err(error) => Err(error.into()),
     }
@@ -119,6 +136,11 @@ impl MappingRepo {
 
     /// Adds one marketplace to a product that already exists, minting the same
     /// mapping a create naming that marketplace would have minted.
+    ///
+    /// The occupied slot is this caller's ordinary answer rather than a
+    /// conflict, which is the one place the two differ: a seller adding a
+    /// marketplace their resource already carries has asked for a state that
+    /// already holds, so the add reports it and writes nothing.
     pub async fn add(
         &self,
         org: OrgId,
@@ -128,11 +150,7 @@ impl MappingRepo {
     ) -> Result<MappingAdd, StorageError> {
         match self.insert(org, mapping, normaliser_version, at).await {
             Ok(()) => Ok(MappingAdd::Added),
-            Err(StorageError::Db(sqlx::Error::Database(database)))
-                if database.constraint() == Some(ONE_PER_INVENTORY) =>
-            {
-                Ok(MappingAdd::AlreadyMapped)
-            }
+            Err(StorageError::InventoryMappingAlreadyExists) => Ok(MappingAdd::AlreadyMapped),
             Err(error) => Err(error),
         }
     }
@@ -1461,27 +1479,50 @@ pub async fn insert_mapping(
     Ok(())
 }
 
-/// The live product of this organisation already bound to this listing, read
-/// inside a transaction.
+/// A listing's claim as the partial unique indexes hold it: the product of
+/// this organisation that binds it, and whether that product is still in the
+/// catalogue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoundClaim {
+    pub product: ProductId,
+    /// `false` where the product carrying the claim is tombstoned.
+    ///
+    /// The claim is in `mapping_one_bound_url` either way: both indexes are
+    /// partial on `binding_state`, not on the product's life, so a local
+    /// delete leaves the listing claimed by a resource no catalogue read
+    /// returns. A caller that could not tell the two apart would either
+    /// create a second product and be refused by the index, or refuse a
+    /// seller the resource altogether.
+    pub live: bool,
+}
+
+/// The claim this organisation holds on this listing, tombstones included.
 ///
 /// Keyed on the remote id as the columns store it, so a caller holding a
 /// `RemoteListingId` does not have to know which of the two partial unique
-/// indexes would have refused its insert.
-pub async fn bound_product_for(
+/// indexes would have refused its insert — and so no caller has to key on a
+/// locator instead, which is a different string on the shops that number
+/// their rows.
+///
+/// A live claim is answered ahead of a tombstoned one. `mapping_one_per_
+/// inventory` and the two bound indexes together make more than one
+/// impossible for a `bound` row, so the ordering states the preference rather
+/// than resolving a real ambiguity.
+pub async fn claimed_product_for(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     org: OrgId,
     inventory: InventoryId,
     remote: &RemoteListingId,
-) -> Result<Option<ProductId>, StorageError> {
+) -> Result<Option<BoundClaim>, StorageError> {
     let columns = RemoteIdColumns::encode(remote)?;
     let row = sqlx::query!(
-        "SELECT m.product_id FROM mapping m \
+        "SELECT m.product_id, (p.deleted_at IS NULL) AS \"live!\" FROM mapping m \
            JOIN product p ON p.org_id = m.org_id AND p.id = m.product_id \
           WHERE m.org_id = $1 AND m.inventory = $2 AND m.binding_state = 'bound' \
-            AND p.deleted_at IS NULL \
             AND m.remote_id_kind = $3 \
             AND ((m.remote_url IS NOT DISTINCT FROM $4 AND $4 IS NOT NULL) \
               OR (m.remote_numeric_id IS NOT DISTINCT FROM $5 AND $5 IS NOT NULL)) \
+          ORDER BY p.deleted_at NULLS FIRST \
           LIMIT 1",
         uuid_to_db(org.0),
         inventory_to_db(inventory),
@@ -1491,7 +1532,29 @@ pub async fn bound_product_for(
     )
     .fetch_optional(&mut **tx)
     .await?;
-    Ok(row.map(|row| ProductId(uuid_from_db(row.product_id))))
+    Ok(row.map(|row| BoundClaim {
+        product: ProductId(uuid_from_db(row.product_id)),
+        live: row.live,
+    }))
+}
+
+/// The live product of this organisation already bound to this listing, read
+/// inside a transaction.
+///
+/// The claim above, narrowed to the callers whose question is "which resource
+/// of mine does the catalogue show for this listing": a tombstoned claim is
+/// not an answer to that, and every one of these callers would have to filter
+/// it out.
+pub async fn bound_product_for(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    inventory: InventoryId,
+    remote: &RemoteListingId,
+) -> Result<Option<ProductId>, StorageError> {
+    Ok(claimed_product_for(tx, org, inventory, remote)
+        .await?
+        .filter(|claim| claim.live)
+        .map(|claim| claim.product))
 }
 
 /// Binds a listing to a product, leaving an existing claim standing.

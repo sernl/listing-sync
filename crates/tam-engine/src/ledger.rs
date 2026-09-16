@@ -134,7 +134,8 @@ pub fn to_wire_error(error: &StorageError) -> wire::LedgerError {
         | StorageError::OrgMismatch
         | StorageError::Inconsistent { .. }
         | StorageError::DuplicateIdempotencyKey { .. }
-        | StorageError::ListingAlreadyBound => wire::LedgerError::Refused {
+        | StorageError::ListingAlreadyBound
+        | StorageError::InventoryMappingAlreadyExists => wire::LedgerError::Refused {
             detail: error.to_string(),
         },
     }

@@ -1176,6 +1176,112 @@ async fn live_payloads(
     Ok(counted.unwrap_or(0))
 }
 
+/// One live payload row in the columns an offer has to weigh a capture
+/// against: which resource the row names, and what it commits to.
+///
+/// Read as columns rather than decoded into a [`ProductFile`], because the
+/// comparison is against the encoded forms the capture is about to be written
+/// in — a decode that failed on an unrelated column would turn a comparison
+/// into a corrupt-row fault for a question that did not need it.
+struct PayloadSlot {
+    id: uuid::Uuid,
+    /// The digest of bytes this deployment holds, and therefore `None` for a
+    /// marketplace-sourced row: `product_file_blob_or_source` keeps the two
+    /// groups total and exclusive.
+    hash: Option<Vec<u8>>,
+    source_marketplace: Option<String>,
+    source_resource: Option<String>,
+    source_entry: Option<String>,
+    observed_hash: Option<Vec<u8>>,
+    observed_byte_len: Option<i64>,
+}
+
+/// At most two live payloads: enough to distinguish zero, one and many.
+async fn live_payload_slots(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org_db: uuid::Uuid,
+    product_db: uuid::Uuid,
+) -> Result<Vec<PayloadSlot>, StorageError> {
+    Ok(sqlx::query_as!(
+        PayloadSlot,
+        "SELECT id, hash, source_marketplace, source_resource, source_entry, \
+                observed_hash, observed_byte_len \
+         FROM product_file \
+         WHERE org_id = $1 AND product_id = $2 AND role = 'payload' AND deleted_at IS NULL \
+         LIMIT 2",
+        org_db,
+        product_db,
+    )
+    .fetch_all(&mut **tx)
+    .await?)
+}
+
+/// How a payload a product already holds stands to the one a read captured.
+enum Correspondence {
+    /// The row is this capture: the same resource committed to the same bytes,
+    /// or the same digest this deployment already holds. Nothing to write
+    /// under any policy.
+    Same,
+    /// The row commits to this very marketplace resource and to a different
+    /// set of bytes — the staleness a restore exists to repair, and the only
+    /// case any policy may replace.
+    SourceMoved,
+    /// Anything else: bytes the seller owns, another resource's commitment, or
+    /// this capture's own row carrying a different observation, which is a
+    /// device disagreement to append rather than a row to overwrite.
+    Other,
+}
+
+fn correspondence(slot: &PayloadSlot, offered: &ProductFile) -> Correspondence {
+    match &offered.bytes {
+        tam_types::FileBytes::Held { hash, .. } => {
+            // A blob-backed row is the seller's own upload or an earlier
+            // capture this deployment ingested, and the digest is the whole
+            // of its identity: the same bytes are the same file, and any
+            // other bytes are not this write's to exchange.
+            if slot.hash.as_deref() == Some(hash.0.as_slice()) {
+                Correspondence::Same
+            } else {
+                Correspondence::Other
+            }
+        }
+        tam_types::FileBytes::Sourced {
+            marketplace,
+            resource,
+            entry,
+            observed,
+            ..
+        } => {
+            // Identity is the resource and the file within it, and
+            // deliberately not the connection: a seller who relinked the
+            // account is looking at the same listing, and a refresh that
+            // demanded the same connection row would leave the stale
+            // commitment in place for exactly the seller who reconnected to
+            // repair it.
+            let same_resource = slot.source_marketplace.as_deref()
+                == Some(crate::codec::marketplace_to_db(*marketplace))
+                && slot.source_resource.as_deref() == Some(resource.as_str())
+                && slot.source_entry.as_deref() == entry.as_deref();
+            if !same_resource {
+                return Correspondence::Other;
+            }
+            if slot.observed_hash.as_deref() == Some(observed.hash.0.as_slice())
+                && slot.observed_byte_len == i64::try_from(observed.byte_len).ok()
+            {
+                return Correspondence::Same;
+            }
+            // The capture's own row, disagreeing with itself: a replacement
+            // would collide on `(org_id, id)`, and 0052 says the row's first
+            // observation stands anyway.
+            if slot.id == uuid_to_db(offered.id.0) {
+                Correspondence::Other
+            } else {
+                Correspondence::SourceMoved
+            }
+        }
+    }
+}
+
 async fn retire(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     org_db: uuid::Uuid,
@@ -2385,6 +2491,185 @@ pub async fn offer_cover(
     Ok(outcome)
 }
 
+/// What offering a payload to a product that may already have one did.
+///
+/// Four answers rather than three, because `Written` and `Unchanged` are not
+/// the same fact and a caller acts differently on each: a capture that was
+/// accepted is the payload the catalogue now commits to, while `Unchanged` is
+/// the narrower statement that the one payload already there really is this
+/// capture. The caller that records a fingerprint beside the file needs
+/// exactly that distinction — writing the latest read's sketch against a
+/// payload the offer refused describes a file the product does not hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PayloadOffer {
+    /// This capture was accepted and written: the product held no live
+    /// payload, or held a stale commitment for this very resource that a
+    /// restore refreshed.
+    Written,
+    /// The one payload the product retains is this capture — the same
+    /// resource, the same digest, the same length — so there was nothing to
+    /// write and nothing about the file has changed.
+    Unchanged,
+    /// The product keeps payloads this offer may not touch: bytes the seller
+    /// owns, another resource's commitment, a different capture of this one,
+    /// or more than one file at once. Left exactly as they were.
+    AlreadyHeld,
+    /// This tenant holds no live product of that identifier.
+    NoProduct,
+}
+
+/// Which of a product's existing payload files an offer may touch.
+///
+/// The two callers are different questions, and one predicate could not
+/// answer both. A re-import of a live resource is filling a gap: a resource
+/// whose bytes were never captured has no payload and therefore no legal
+/// claim on its listing, and a resource that already has one is not the
+/// import's to rewrite. Restoring a locally deleted resource is the opposite
+/// situation — deleting a product leaves its `product_file` rows live, so the
+/// old commitment is still there, and it is only a locator plus the digest
+/// and length one read once saw. If the marketplace bundle moved while the
+/// resource sat deleted, that row names bytes no device can fetch any more:
+/// the manifest sends the old commitment, the device's verification refuses
+/// the current download, and the restore reports success with a payload that
+/// can never be published.
+///
+/// So the policy is the caller's statement of which situation it is in, not a
+/// permission level. Neither arm may touch a file the seller owns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PayloadOfferPolicy {
+    /// Write only where the product has no live payload at all. Never
+    /// replaces an existing file, whatever a read saw.
+    FillMissing,
+    /// Additionally refresh a commitment for this very marketplace resource,
+    /// where that commitment is the product's sole payload and the capture
+    /// disagrees with it. The old row is retired rather than edited, because
+    /// a source row's own observation is the first one and migration 0052
+    /// keeps it: a later disagreement is history to append, not a value to
+    /// overwrite.
+    RestoreSource,
+}
+
+/// Whether this product carries a live payload file, read inside a
+/// transaction the caller owns.
+///
+/// The condition migration 0061 makes the payload requirement a property of:
+/// a mapping onto a product with no live payload raises
+/// `mapping % names a product with no live payload file` at commit, and the
+/// trigger is deferred, so a caller that writes the mapping anyway loses the
+/// whole transaction rather than the one row. Every caller that binds a
+/// listing onto a product it did not itself create has to ask this first.
+pub async fn has_live_payload(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    product: ProductId,
+) -> Result<bool, StorageError> {
+    Ok(live_payloads(tx, uuid_to_db(org.0), uuid_to_db(product.0)).await? > 0)
+}
+
+/// Offers a product the payload a read captured, inside a transaction the
+/// caller owns.
+///
+/// The other half of a re-import's repair, and the mirror of [`offer_cover`]:
+/// a resource whose bytes were not captured when it was created holds no
+/// payload and — by 0061 — no claim on the listing it came from. A later read
+/// of that same listing captures the bundle, and what the seller has is still
+/// one resource: it gains the file, and the file is what makes the claim
+/// legal. Written in the caller's transaction for that reason, because the
+/// file and the mapping it admits are one decision.
+///
+/// What the offer may touch is [`PayloadOfferPolicy`]'s to say, and the one
+/// thing neither arm will do is take a file away from the seller. A product
+/// holding bytes this deployment stores, another resource's commitment, or
+/// more than one payload at once answers [`PayloadOffer::AlreadyHeld`] and is
+/// left alone — which is also what makes a repeated import idempotent rather
+/// than a growing pile of identical files. A product whose sole payload is
+/// this very capture answers [`PayloadOffer::Unchanged`] and writes nothing.
+///
+/// The one replacement is narrow on purpose: under
+/// [`PayloadOfferPolicy::RestoreSource`], a sole commitment naming the same
+/// marketplace resource as this capture, and disagreeing with it, is retired
+/// and the capture written in its place. Retired rather than updated, because
+/// a source row's `observed_*` group is the first observation and 0052 keeps
+/// it; retired before the insert, in the order [`ProductRepo::replace_file`]
+/// uses, under the product's own `FOR UPDATE` so the read that classified the
+/// row and the write that replaces it are one step. The product is never
+/// momentarily fileless to a reader, and the deferred payload triggers see a
+/// live payload at commit either way.
+///
+/// The position is `MAX(position) + 1` for the reason [`ProductRepo::add_file`]
+/// gives: `product_file_position` is not partial, so a retired row keeps its
+/// place and reusing it collides.
+///
+/// What it deliberately does not do: it touches no cover, no mapping and no
+/// title. A thumbnail drawn from a refreshed payload is [`offer_cover`]'s,
+/// which the same repair calls.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the transaction, the tenant, the product, the file offered, the name the seller \
+              would read, which existing files the offer may touch and the instant; a struct \
+              over those seven would name the call"
+)]
+pub async fn offer_payload(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    product: ProductId,
+    payload: &ProductFile,
+    name: Option<&str>,
+    policy: PayloadOfferPolicy,
+    at: Timestamp,
+) -> Result<PayloadOffer, StorageError> {
+    if payload.role != FileRole::Payload {
+        return Err(StorageError::Inconsistent {
+            reason: format!(
+                "file {:?} carries role {:?} and was offered as a payload",
+                payload.id, payload.role
+            ),
+        });
+    }
+    let org_db = uuid_to_db(org.0);
+    let product_db = uuid_to_db(product.0);
+    let at_db = timestamp_to_db(at)?;
+    if !lock_product(tx, org_db, product_db).await? {
+        return Ok(PayloadOffer::NoProduct);
+    }
+    // Two rows suffice; a multi-file resource is not this offer's to replace.
+    let live = live_payload_slots(tx, org_db, product_db).await?;
+    let stale = match live.as_slice() {
+        [] => None,
+        [only] => match correspondence(only, payload) {
+            Correspondence::Same => return Ok(PayloadOffer::Unchanged),
+            Correspondence::SourceMoved if matches!(policy, PayloadOfferPolicy::RestoreSource) => {
+                Some(only.id)
+            }
+            Correspondence::SourceMoved | Correspondence::Other => {
+                return Ok(PayloadOffer::AlreadyHeld)
+            }
+        },
+        _ => return Ok(PayloadOffer::AlreadyHeld),
+    };
+    if let Some(stale) = stale {
+        retire(tx, org_db, product_db, stale, at_db).await?;
+    }
+    let position = next_position(tx, org_db, product_db).await?;
+    insert_file(
+        tx,
+        &FileWrite {
+            org: org_db,
+            product: product_db,
+            at: at_db,
+        },
+        NewFile {
+            position,
+            slot: FileRole::Payload,
+            file: payload,
+            name,
+        },
+    )
+    .await?;
+    touch(tx, org_db, product_db, at_db).await?;
+    Ok(PayloadOffer::Written)
+}
+
 /// Edits one product inside a transaction the caller owns.
 ///
 /// The one implementation. The duplicate review's merge writes the survivor's
@@ -2510,7 +2795,7 @@ pub async fn soft_delete_product(
     Ok(deleted > 0)
 }
 
-/// Brings a tombstoned product back inside a transaction the caller owns.
+/// Restores a tombstoned product and the labels of its retained bound listings.
 pub async fn restore_product(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     org: OrgId,
@@ -2527,5 +2812,26 @@ pub async fn restore_product(
     .execute(&mut **tx)
     .await?
     .rows_affected();
-    Ok(restored > 0)
+    if restored == 0 {
+        return Ok(false);
+    }
+    let listings = sqlx::query!(
+        "SELECT inventory FROM mapping \
+         WHERE org_id = $1 AND product_id = $2 AND binding_state = 'bound'",
+        uuid_to_db(org.0),
+        uuid_to_db(id.0),
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    for listing in listings {
+        crate::labels::attach_system_label(
+            tx,
+            org,
+            id,
+            inventory_from_db(&listing.inventory)?.marketplace(),
+            at,
+        )
+        .await?;
+    }
+    Ok(true)
 }

@@ -1472,6 +1472,7 @@ async fn finish_in(
             | StorageError::DuplicateIdempotencyKey { .. }
             | StorageError::AttemptInFlight
             | StorageError::MappingAlreadyBound
+            | StorageError::InventoryMappingAlreadyExists
             | StorageError::ListingAlreadyBound) => storage_fault(state, &other),
         })?;
         recorded += usize::from(wrote);
@@ -1555,6 +1556,7 @@ fn create_fault(state: &AppState, error: &StorageError) -> APIError {
         | StorageError::DuplicateIdempotencyKey { .. }
         | StorageError::AttemptInFlight
         | StorageError::MappingAlreadyBound
+        | StorageError::InventoryMappingAlreadyExists
         | StorageError::ListingAlreadyBound) => storage_fault(state, other),
     }
 }

@@ -14,7 +14,7 @@ use tam_domain::{
     Binding, CanonicalProduct, FieldPolicies, FieldPolicy, Mapping, PublishMode, Verification,
 };
 use tam_marketplace::{RemoteLifecycle, RemoteListingId};
-use tam_storage::{MappingAdd, MappingRepo, PastedBind, ProductRepo};
+use tam_storage::{MappingAdd, MappingRepo, PastedBind, ProductRepo, StorageError};
 use tam_types::{
     ContentHash, FileBytes, FileId, FileKind, FileRole, InventoryId, MappingId, OrgId, PayloadSet,
     PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome, Timestamp, Uuid,
@@ -206,6 +206,53 @@ async fn a_second_add_of_the_same_marketplace_mints_nothing(pool: PgPool) {
             .len(),
         1,
         "one marketplace, one mapping"
+    );
+}
+
+/// The same constraint reached by the path that owns its own transaction, and
+/// therefore has no `MappingAdd` to answer with.
+///
+/// A re-import binds the listing onto the product it already made, in the
+/// transaction that writes the rest of the item; a fileless import that later
+/// gained a seller's upload and an unbound mapping for its own marketplace
+/// already occupies that slot. The insert then violates
+/// `mapping_one_per_inventory`, and what the caller does about it turns
+/// entirely on the type: a bare `Db` error is a fault, so the run leaves the
+/// item matched and retries a violation that no later attempt can clear.
+/// Named as its own conflict, distinct from `MappingAlreadyBound`, which says
+/// a create has nothing left to make.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_second_mapping_in_one_inventory_is_a_permanent_conflict(pool: PgPool) {
+    seed_org_a(&pool).await.expect("org a seeds");
+    ProductRepo::new(pool.clone())
+        .insert(ORG_A, &minimal_product(), NOW)
+        .await
+        .expect("the product inserts");
+    MappingRepo::new(pool.clone())
+        .add(
+            ORG_A,
+            &unbound(ORG_A, PRODUCT_1, InventoryId::Tpt, MAPPING_1),
+            0,
+            NOW,
+        )
+        .await
+        .expect("the seller's own add lands");
+
+    let mut tx = pool.begin().await.expect("tx begins");
+    tam_storage::pin_tenant(&mut tx, ORG_A)
+        .await
+        .expect("the tenant pins");
+    let refused = tam_storage::insert_mapping(
+        &mut tx,
+        ORG_A,
+        &unbound(ORG_A, PRODUCT_1, InventoryId::Tpt, MAPPING_2),
+        0,
+        NOW,
+    )
+    .await;
+    assert!(
+        matches!(refused, Err(StorageError::InventoryMappingAlreadyExists)),
+        "the slot is taken, and that is an answer rather than a fault: {refused:?}"
     );
 }
 
