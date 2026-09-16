@@ -100,12 +100,22 @@
 /* --- the import list ----------------------------------------------------- */
 
 /* A row card without the catalogue's cover thumbnail: an import has no image,
-   and the component's placeholder glyph would claim a missing one. The stage
-   badge takes the leading position instead. */
+   and the component's placeholder glyph would claim a missing one.
+
+   A grid rather than a flex row, and that is the fix for the overlap this
+   list used to have on a wide screen. The stage badge sat in a fixed 152px
+   slot, which is narrower than "Nothing imported" renders at: the label
+   overflowed its own slot and ran under the shop's name and, at the other
+   end, under the row's controls. Grid columns cannot overlap — the badge
+   column is as wide as the widest badge in the list and every other column
+   is measured after it — so the alignment the fixed width was for survives
+   and the collision cannot recur at any viewport. */
 .import-row {
-	display: flex;
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+	grid-template-areas: 'pick who mark at act';
 	align-items: center;
-	gap: 14px;
+	gap: 4px 14px;
 	background: var(--surface);
 	border: 1px solid var(--line);
 	border-radius: var(--r-card);
@@ -122,27 +132,44 @@
 	background: var(--hover);
 }
 
-/* The badge sits in a column of its own width above the phone breakpoint, so
-   the shop names line up: the stage words run from "Waiting" to "Nothing
-   imported" and a ragged left edge is what makes a list hard to read down.
-   Below it the row is two lines and the column would only cost width. */
-@media (min-width: 621px) {
-	.import-row .mark {
-		flex: none;
-		width: 152px;
-	}
+.import-row .pick {
+	grid-area: pick;
+	display: flex;
+	align-items: center;
+}
+
+.import-row .mark {
+	grid-area: mark;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	justify-content: flex-end;
 }
 
 .import-row .who {
-	flex: 1;
+	grid-area: who;
 	min-width: 0;
 }
 
+/* The title is the link, and the only one: the row used to be one whole-row
+   anchor, which cannot carry the tick and the Delete this list now needs —
+   a control inside a link is reached by the keyboard as part of the link and
+   a press activates both. */
 .import-row .who .t {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
 	font-size: 15.5px;
 	font-weight: 600;
 	line-height: 1.25;
 	overflow-wrap: anywhere;
+	color: inherit;
+	text-decoration: none;
+}
+
+.import-row .who .t:hover,
+.import-row .who .t:focus-visible {
+	text-decoration: underline;
 }
 
 .import-row .who .w {
@@ -153,11 +180,34 @@
 }
 
 .import-row .at {
-	flex: none;
+	grid-area: at;
 	font-size: 12px;
 	color: var(--faint);
 	white-space: nowrap;
 	font-variant-numeric: tabular-nums;
+}
+
+.import-row .act {
+	grid-area: act;
+	display: flex;
+	justify-content: flex-end;
+}
+
+/* The footnote about where the files are, beside the one place they can be
+   looked at. Wraps rather than shrinking the sentence, because on a phone the
+   control would otherwise take half the measure. */
+.import-files-note {
+	display: flex;
+	align-items: baseline;
+	flex-wrap: wrap;
+	gap: 10px 14px;
+	margin: 14px 0 24px;
+}
+
+.import-files-note .foot-note {
+	flex: 1 1 320px;
+	margin: 0;
+	min-width: 0;
 }
 
 /* --- the request page ---------------------------------------------------- */
@@ -238,11 +288,16 @@
 /* Above the phone breakpoint the badge sits in a column of its own width, so
    the locators line up: the five state words differ in length and a ragged
    left edge is what makes a list of two hundred listings hard to read down.
-   Below it the row wraps anyway and the column would only cost width. */
+   Below it the row wraps anyway and the column would only cost width.
+
+   A floor rather than a fixed width, for the reason the import list is now a
+   grid: a badge whose label is wider than the slot overflows a `width` and
+   runs under whatever sits beside it, which is the overlap this surface was
+   reported for. `min-width` keeps the alignment and cannot be overflowed. */
 @media (min-width: 621px) {
 	.import-listing .mark {
 		flex: none;
-		width: 116px;
+		min-width: 116px;
 	}
 }
 
@@ -296,24 +351,29 @@
 		padding: 18px;
 	}
 
-	/* On a phone the row is two lines rather than three columns: the badge and
-	   the age share the first, and the title and its line take the whole of the
-	   second. Left as columns, a hundred-character sentence rendered in a
-	   column a few characters wide. */
+	/* The badge gets its own band: long status labels must not share the
+	   timestamp's shrinking track. */
 	.import-row {
-		align-items: baseline;
-		flex-wrap: wrap;
-		gap: 6px 10px;
+		grid-template-columns: auto minmax(0, 1fr);
+		grid-template-areas:
+			'pick at'
+			'who who'
+			'mark mark'
+			'act act';
+		align-items: center;
+		gap: 8px 10px;
+	}
+
+	.import-row .mark {
+		justify-content: flex-start;
 	}
 
 	.import-row .at {
-		order: 1;
-		margin-left: auto;
+		text-align: right;
 	}
 
-	.import-row .who {
-		order: 2;
-		flex: 1 1 100%;
+	.import-row .act {
+		justify-content: flex-start;
 	}
 }
 

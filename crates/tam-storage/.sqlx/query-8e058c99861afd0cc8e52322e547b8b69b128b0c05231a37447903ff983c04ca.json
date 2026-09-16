@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT j.sync_request_id, j.import_run_id, (SELECT ir.id FROM import_run ir WHERE ir.org_id = j.org_id AND ir.anchor_job = j.id) AS anchored FROM job j WHERE j.org_id = $1 AND j.id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sync_request_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "import_run_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "anchored",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      null
+    ]
+  },
+  "hash": "8e058c99861afd0cc8e52322e547b8b69b128b0c05231a37447903ff983c04ca"
+}

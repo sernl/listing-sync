@@ -677,6 +677,8 @@ pub(crate) async fn publish(
         now,
         key.0,
         &items,
+        // A seller publishing a collection names no import.
+        None,
     )
     .await?;
     Ok(Json(CollectionPublishAck {

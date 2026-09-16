@@ -27,7 +27,7 @@ use tam_storage::{
 use tam_types::{InventoryId, JobId, OrgId, Timestamp, Uuid};
 
 mod common;
-use common::{seed_org_a, ORG_A};
+use common::{minimal_product, seed_org_a, ORG_A, PRODUCT_1};
 
 const ORG_B: OrgId = OrgId(Uuid([0xBB; 16]));
 const RUN_A: Uuid = Uuid([0x0A; 16]);
@@ -66,12 +66,13 @@ async fn seed_devices(pool: &PgPool, org: OrgId) {
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
 )]
 async fn anchor(pool: &PgPool, org: OrgId, run: Uuid, source: InventoryId) -> JobId {
-    let created = tam_storage::JobRepo::new(pool.clone())
+    let minted = tam_storage::JobRepo::new(pool.clone())
         .create_with_request_key(
             org,
             tam_storage::JobOrigin {
                 request_key: tam_storage::job_request_key(run, tam_storage::IMPORT_LEG),
                 run: None,
+                import_run: None,
             },
             &tam_storage::NewJob {
                 job: JobId(Uuid(*uuid::Uuid::new_v4().as_bytes())),
@@ -82,7 +83,11 @@ async fn anchor(pool: &PgPool, org: OrgId, run: Uuid, source: InventoryId) -> Jo
         )
         .await
         .expect("the anchor job mints");
-    created.job
+    match minted {
+        tam_storage::Minted::Job(created) => Some(created.job),
+        tam_storage::Minted::WorkflowDeleted(_) => None,
+    }
+    .expect("an anchor job names no workflow that could refuse it")
 }
 
 fn new_run(id: Uuid, source: InventoryId, anchor_job: JobId) -> NewImportRun {
@@ -1225,10 +1230,9 @@ async fn a_parked_pair_carries_no_system_decision(pool: PgPool) -> Result<(), sq
 // the run — while the run stays open and the per-source fence keeps that shop
 // shut against every import the seller starts next.
 //
-// These cases are asserted against the schema 0075 leaves, because that is the
-// schema the rows this migration exists for are sitting on: every migration
-// below 76 is applied, the legacy rows are seeded in the shape a fenced
-// backfill actually left them, and 0076 is then run as text.
+// Seed the legacy rows against schema 0075, run 0076 with no tenant pinned,
+// then apply later migrations before asking the current repository to read.
+// The pre-upgrade snapshot uses only columns that existed on schema 0075.
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
@@ -1373,6 +1377,16 @@ async fn apply_selection_backfill(pool: &PgPool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
+async fn apply_later_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
+    for migration in MIGRATOR
+        .iter()
+        .filter(|migration| migration.version > SELECTION_BACKFILL_VERSION)
+    {
+        pool.execute(&*migration.sql).await?;
+    }
+    Ok(())
+}
+
 /// An old run whose selection was taken becomes work a device can resume, and
 /// keeps every row it already had.
 ///
@@ -1394,29 +1408,28 @@ async fn the_selection_backfill_makes_an_old_taken_selection_resumable(
     seed_runs_as_0074_left_them(&pool).await;
     let runs = ImportRunRepo::new(pool.clone());
 
-    let before = runs
-        .head(ORG_A, RUN_OLD)
-        .await
-        .expect("the head reads")
-        .expect("the run stands");
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(as_text(ORG_A.0))
+        .execute(&mut *tx)
+        .await?;
+    let before: (Option<i32>, bool, i32, i32, Option<i32>) = sqlx::query_as(
+        "SELECT selected_total, enumeration_complete, discovered, processed, read_total \
+         FROM import_run WHERE org_id = $1 AND id = $2",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+    .bind(uuid::Uuid::from_bytes(RUN_OLD.0))
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
     assert_eq!(
-        (
-            before.execution.selected_total,
-            before.execution.enumeration_complete,
-            before.execution.discovered,
-            before.execution.processed,
-        ),
-        (None, false, 0, 0),
-        "0074's backfill ran fenced and moved nothing, so an old run carries the column defaults \
-         however much its own rows say; the fixture must start where production is"
-    );
-    assert_eq!(
-        before.read_total,
-        Some(5),
-        "and `read_total` is the one fact the old protocol did write, under a pinned tenant"
+        before,
+        (None, false, 0, 0, Some(5)),
+        "0074 left the execution defaults untouched; only the old protocol's read_total stands"
     );
 
     apply_selection_backfill(&pool).await?;
+    apply_later_migrations(&pool).await?;
 
     let head = runs
         .head(ORG_A, RUN_OLD)
@@ -1506,6 +1519,7 @@ async fn the_selection_backfill_leaves_an_unticked_list_and_a_settled_run_alone(
     let runs = ImportRunRepo::new(pool.clone());
 
     apply_selection_backfill(&pool).await?;
+    apply_later_migrations(&pool).await?;
 
     let manual = runs
         .head(ORG_A, RUN_MANUAL)
@@ -1588,6 +1602,7 @@ async fn the_selection_backfill_leaves_a_fenced_runs_reports_alone(
     let runs = ImportRunRepo::new(pool.clone());
 
     apply_selection_backfill(&pool).await?;
+    apply_later_migrations(&pool).await?;
 
     let fenced = runs
         .head(ORG_A, RUN_FENCED)
@@ -1712,6 +1727,7 @@ async fn maintenance_keeps_the_work_the_selection_backfill_recovered(
     let runs = ImportRunRepo::new(pool.clone());
 
     apply_selection_backfill(&pool).await?;
+    apply_later_migrations(&pool).await?;
     let recovered = runs
         .head(ORG_A, RUN_RECOVERED)
         .await
@@ -2028,5 +2044,197 @@ async fn a_reclaim_keeps_the_refusal_until_work_retires_it(
             "contact alone preserves the interruption; accepted work retires it",
         );
     }
+    Ok(())
+}
+
+// The publication provenance an upgrade has to supply, which is the half of
+// migration 0080 a new column could not reach.
+//
+// `job.import_run_id` arrived with 0080 and is NULL on every publishing job a
+// scheduled import minted before it. The deletion fence enumerates derived
+// work through that column alone, so a database upgraded with a queued
+// auto-publication in it holds a job whose only record of where it came from
+// is the `auto_publish_run` receipt the pass wrote — tenant-qualified,
+// durable, and unread. Deleting the import then fences the anchor, answers
+// the seller, and leaves that publication claimable: a marketplace write for
+// an import they were told is gone.
+//
+// The fixture is the upgrade itself. The historical rows are seeded against
+// the schema as it stands applied, every later migration the repository
+// carries is executed, and only then is the deletion asked for. With no
+// repair in the tree that later set is empty, so the assertions below report
+// the hole rather than fail to build.
+
+/// The head migration the local database has applied, and therefore the
+/// inclusive upper bound of the schema the historical rows are seeded
+/// against.
+const APPLIED_VERSION: i64 = 81;
+
+/// A publishing job of the shape a pre-0080 scheduler pass left: queued, with
+/// an item to claim, naming no import at all.
+const HISTORICAL_PUBLICATION: JobId = JobId(Uuid([0x9C; 16]));
+const HISTORICAL_ITEM: tam_domain::JobItemId = tam_domain::JobItemId(Uuid([0x9D; 16]));
+const HISTORICAL_MAPPING: tam_types::MappingId = tam_types::MappingId(Uuid([0x9E; 16]));
+
+async fn schema_as_applied(pool: &PgPool) -> Result<(), sqlx::Error> {
+    for migration in MIGRATOR
+        .iter()
+        .filter(|migration| migration.version <= APPLIED_VERSION)
+    {
+        pool.execute(&*migration.sql).await?;
+    }
+    Ok(())
+}
+
+/// Every migration the repository carries beyond the applied head, which is
+/// what an operator's upgrade runs over the rows seeded above.
+async fn upgrade_past_applied(pool: &PgPool) -> Result<(), sqlx::Error> {
+    for migration in MIGRATOR
+        .iter()
+        .filter(|migration| migration.version > APPLIED_VERSION)
+    {
+        pool.execute(&*migration.sql).await?;
+    }
+    Ok(())
+}
+
+/// The resource the historical publication sends, and the mapping its item
+/// names.
+async fn seed_published_resource(pool: &PgPool) -> Result<(), tam_storage::StorageError> {
+    tam_storage::ProductRepo::new(pool.clone())
+        .insert(ORG_A, &minimal_product(), NOW)
+        .await?;
+    tam_storage::MappingRepo::new(pool.clone())
+        .insert(
+            ORG_A,
+            &tam_domain::Mapping {
+                id: HISTORICAL_MAPPING,
+                org: ORG_A,
+                product: PRODUCT_1,
+                inventory: InventoryId::Tes,
+                binding: tam_domain::Binding::Unbound,
+                policies: tam_domain::FieldPolicies {
+                    title: tam_domain::FieldPolicy::Managed,
+                    description: tam_domain::FieldPolicy::Managed,
+                    price: tam_domain::FieldPolicy::Managed,
+                    taxonomy: tam_domain::FieldPolicy::Managed,
+                    grades: tam_domain::FieldPolicy::Managed,
+                    files: tam_domain::FieldPolicy::Managed,
+                },
+                price_rule: tam_types::PriceRule::Explicit(tam_types::PriceIntent::Free),
+                publish: tam_domain::PublishMode::DryRun,
+                lifecycle: tam_marketplace::RemoteLifecycle::Absent,
+            },
+            0,
+            NOW,
+        )
+        .await?;
+    Ok(())
+}
+
+/// Deleting an upgraded database's import fences the publication it produced
+/// before the provenance column existed.
+#[sqlx::test(migrations = false)]
+async fn an_upgrade_fences_a_historical_publication_with_its_import(
+    pool: PgPool,
+) -> Result<(), sqlx::Error> {
+    schema_as_applied(&pool).await?;
+    seed_org_a(&pool).await?;
+    seed_published_resource(&pool)
+        .await
+        .expect("the publication resource seeds");
+
+    let runs = ImportRunRepo::new(pool.clone());
+    let anchor = anchor(&pool, ORG_A, RUN_A, InventoryId::Tes).await;
+    runs.create(ORG_A, &new_run(RUN_A, InventoryId::Tes, anchor))
+        .await
+        .expect("the historical import opens");
+
+    let jobs = tam_storage::JobRepo::new(pool.clone());
+    let minted = jobs
+        .create_with_request_key(
+            ORG_A,
+            tam_storage::JobOrigin {
+                request_key: tam_storage::job_request_key(RUN_A, "publish:historical"),
+                run: None,
+                // The pre-0080 shape: the receipt is the only link back to
+                // the import whose resources this publishes.
+                import_run: None,
+            },
+            &tam_storage::NewJob {
+                job: HISTORICAL_PUBLICATION,
+                inventory: InventoryId::Tes,
+                stamp: tam_types::Stamp {
+                    at: NOW,
+                    actor: tam_types::Actor::System(tam_types::SystemComponent::Scheduler),
+                },
+            },
+            &[tam_storage::NewJobItem {
+                item: HISTORICAL_ITEM,
+                mapping: HISTORICAL_MAPPING,
+                idempotency_key: tam_marketplace::IdempotencyKey(Uuid([0x9F; 16])),
+                operation: tam_domain::ItemOperation::Create,
+                requires_bound_on: None,
+            }],
+        )
+        .await
+        .expect("the historical publication mints");
+    assert!(
+        matches!(minted, tam_storage::Minted::Job(_)),
+        "the publication names no workflow that could refuse it: {minted:?}"
+    );
+    assert!(
+        tam_storage::SyncSettingRepo::new(pool.clone())
+            .record_auto_publish(
+                ORG_A,
+                RUN_A,
+                PRODUCT_1,
+                InventoryId::Tes,
+                HISTORICAL_PUBLICATION,
+                NOW,
+            )
+            .await
+            .expect("the receipt writes"),
+        "the receipt is the ownership a database upgraded from before 0080 holds"
+    );
+
+    upgrade_past_applied(&pool).await?;
+
+    runs.delete(
+        ORG_A,
+        RUN_A,
+        tam_types::Stamp {
+            at: NOW,
+            actor: tam_types::Actor::System(tam_types::SystemComponent::Import),
+        },
+    )
+    .await
+    .expect("the deletion answers")
+    .expect("the import is this tenant's");
+
+    assert!(
+        jobs.deletion_status(ORG_A, HISTORICAL_PUBLICATION)
+            .await
+            .expect("the publication's deletion state reads")
+            .is_some(),
+        "the publication this import produced is fenced with it: its only link is the \
+         auto_publish_run receipt, and a fence that reads the provenance column alone leaves \
+         the job claimable after the seller was told the import is gone"
+    );
+    let outstanding = match tam_storage::JobReadRepo::new(pool.clone())
+        .snapshot(ORG_A, HISTORICAL_PUBLICATION)
+        .await
+        .expect("the publication reads")
+    {
+        // A fenced job whose every item settled is tombstoned, and a
+        // tombstone has no snapshot at all: nothing is left to claim.
+        None => 0,
+        Some(snapshot) => snapshot.counts.queued,
+    };
+    assert_eq!(
+        outstanding, 0,
+        "and its queued marketplace write is cancelled rather than left for the next device to \
+         claim"
+    );
     Ok(())
 }

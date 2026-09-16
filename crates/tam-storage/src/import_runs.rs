@@ -13,12 +13,16 @@
 //! stable name for a side of a pair before either side is a product.
 
 use sqlx::{PgPool, Postgres, Transaction};
-use tam_types::{ContentHash, InventoryId, JobId, Money, OrgId, ProductId, Timestamp, Uuid};
+use tam_types::{
+    Actor, ContentHash, InventoryId, JobId, Money, OrgId, ProductId, Stamp, SystemComponent,
+    Timestamp, Uuid,
+};
 
 use crate::codec::{
     currency_from_db, currency_to_db, hash_from_db, hash_to_db, inventory_from_db, inventory_to_db,
     timestamp_from_db, timestamp_to_db, uuid_from_db, uuid_to_db,
 };
+use crate::jobs::{DeletionStatus, JobFence};
 use crate::{pin_org, BoundClaim, StorageError};
 
 /// How many runs one page of the history may answer at most.
@@ -453,6 +457,14 @@ pub struct StartKeyBinding {
     pub run: Uuid,
     pub source: InventoryId,
     pub retry_of: Option<Uuid>,
+    /// Whether the run this key was spent on has been deleted.
+    ///
+    /// Carried on the binding rather than read separately, because the two
+    /// facts are always wanted together: a replayed start has to be answered
+    /// with the run its key made, and a key whose run the seller deleted has
+    /// to be refused rather than answered with a tombstone or spent again on
+    /// a second import of the same shop.
+    pub deleted: bool,
 }
 
 /// The acknowledgement one page was given, stored so a replay is answered
@@ -523,6 +535,28 @@ pub enum RunOpening {
     KeySpent { source: InventoryId },
 }
 
+/// What one spreadsheet batch's durable identity says, tombstone included.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BatchIdentity {
+    /// The run that reviews this batch.
+    pub run: Uuid,
+    /// Where a deletion of that run got to, and `None` where nobody deleted
+    /// it. A batch whose identity carries one has been imported and removed,
+    /// and is not imported again.
+    pub deletion: Option<DeletionStatus>,
+}
+
+/// What opening a spreadsheet batch's run answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchRunOpening {
+    /// This call opened it.
+    Opened,
+    /// The batch already has a run, and this is which.
+    Existing(Uuid),
+    /// The batch's import was deleted, so it is not reviewed again.
+    Deleted(DeletionStatus),
+}
+
 /// One run without its rows, which is what the listing draws.
 #[derive(Debug, Clone)]
 pub struct ImportRunHead {
@@ -541,6 +575,10 @@ pub struct ImportRunHead {
     pub scheduled: bool,
     /// The settled run this one retries, where a seller asked for one.
     pub retry_of: Option<Uuid>,
+    /// Where a Delete this run is still working through has got to. Never
+    /// `Deleted` on a head a seller can read: the tombstone is filtered in
+    /// the head query itself.
+    pub deletion: Option<DeletionStatus>,
     /// Who holds this run and what they have reported. See [`RunExecution`].
     pub execution: RunExecution,
 }
@@ -658,6 +696,13 @@ impl RunCounts {
 const ONE_OPEN_PER_SOURCE: &str = "import_run_one_open_per_source";
 const ONE_OPEN_PER_BATCH: &str = "import_run_one_open_per_batch";
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum Tombstones {
+    #[default]
+    Exclude,
+    Include,
+}
+
 /// Which runs a head read is about.
 ///
 /// One filter and one query rather than a statement per caller, because every
@@ -677,6 +722,8 @@ struct HeadFilter {
     /// Oldest first rather than newest first. The history's own default is
     /// newest, and this is the seller asking for the other end of it.
     oldest: bool,
+    /// Internal reconciliation includes tombstones; seller-facing reads do not.
+    tombstones: Tombstones,
     offset: i64,
     limit: i64,
 }
@@ -712,6 +759,7 @@ struct HeadRow {
     commit_authorised_by: Option<String>,
     /// Whether the lease is live, by the database's own clock.
     lease_live: bool,
+    deletion_state: Option<String>,
 }
 
 pub struct ImportRunRepo {
@@ -741,37 +789,15 @@ impl ImportRunRepo {
     pub async fn create(&self, org: OrgId, new: &NewImportRun) -> Result<RunOpening, StorageError> {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
-        let inserted = sqlx::query!(
-            "INSERT INTO import_run \
-               (org_id, id, kind, source, batch_id, target, state, anchor_job, created_at, \
-                scheduled, retry_of) \
-             VALUES ($1, $2, $3, $4, $5, $6, 'reading', $7, $8, $9, $10)",
-            uuid_to_db(org.0),
-            uuid_to_db(new.id),
-            new.kind.as_str(),
-            new.source.map(inventory_to_db),
-            new.batch_id.map(uuid_to_db),
-            new.target.map(inventory_to_db),
-            uuid_to_db(new.anchor_job.0),
-            timestamp_to_db(new.created_at)?,
-            new.scheduled,
-            new.retry_of.map(uuid_to_db),
-        )
-        .execute(&mut *tx)
-        .await;
-        match inserted {
-            Ok(_) => {}
-            Err(sqlx::Error::Database(database))
-                if database.constraint() == Some(ONE_OPEN_PER_SOURCE)
-                    || database.constraint() == Some(ONE_OPEN_PER_BATCH) =>
-            {
-                // The failed insert has aborted this transaction, so the
-                // linking — and the key binding that has to go with it —
-                // happens in one of its own.
+        match insert_run(&mut tx, org, new).await? {
+            Inserted::Done => {}
+            // The failed insert has aborted this transaction, so the
+            // linking — and the key binding that has to go with it —
+            // happens in one of its own.
+            Inserted::AlreadyOpen => {
                 drop(tx);
                 return self.link_existing(org, new).await;
             }
-            Err(error) => return Err(error.into()),
         }
         let (Some(start_key), Some(source)) = (new.start_key, new.source) else {
             tx.commit().await?;
@@ -872,7 +898,8 @@ impl ImportRunRepo {
                     reported_stage, reason_code, reason, discovered, processed, \
                     enumeration_complete, selected_total, commit_authorised_at, \
                     commit_authorised_by, \
-                    COALESCE(lease_expires_at > now(), false) AS \"lease_live!\" \
+                    COALESCE(lease_expires_at > now(), false) AS \"lease_live!\", \
+                    deletion_state \
                FROM import_run \
               WHERE org_id = $1 \
                 AND ($2::uuid IS NULL OR id = $2) \
@@ -881,6 +908,7 @@ impl ImportRunRepo {
                 AND ($5::uuid IS NULL OR batch_id = $5) \
                 AND ($6::text IS NULL OR state = $6) \
                 AND (NOT $7 OR state IN ('reading', 'reviewing', 'committing')) \
+                AND ($11 OR deletion_state IS DISTINCT FROM 'deleted') \
               ORDER BY CASE WHEN $8 THEN created_at END ASC, \
                        CASE WHEN NOT $8 THEN created_at END DESC, \
                        id DESC \
@@ -895,6 +923,7 @@ impl ImportRunRepo {
             filter.oldest,
             filter.limit,
             filter.offset,
+            filter.tombstones == Tombstones::Include,
         )
         .fetch_all(&mut *tx)
         .await?;
@@ -917,12 +946,14 @@ impl ImportRunRepo {
                 AND ($2::text IS NULL OR source = $2) \
                 AND (NOT $3 OR source IS NULL) \
                 AND ($4::text IS NULL OR state = $4) \
-                AND (NOT $5 OR state IN ('reading', 'reviewing', 'committing'))",
+                AND (NOT $5 OR state IN ('reading', 'reviewing', 'committing')) \
+                AND ($6 OR deletion_state IS DISTINCT FROM 'deleted')",
             uuid_to_db(org.0),
             filter.source.map(inventory_to_db),
             filter.spreadsheet_only,
             filter.state.map(RunState::as_str),
             filter.open_only,
+            filter.tombstones == Tombstones::Include,
         )
         .fetch_one(&mut *tx)
         .await?;
@@ -969,7 +1000,9 @@ impl ImportRunRepo {
             .next())
     }
 
-    /// The run that reviews one spreadsheet batch, if it exists.
+    /// The run that reviews one spreadsheet batch, as the seller sees it: a
+    /// deleted run is not one of them. [`Self::batch_identity`] is the
+    /// durable question.
     pub async fn by_batch(
         &self,
         org: OrgId,
@@ -987,6 +1020,75 @@ impl ImportRunRepo {
             .await?
             .into_iter()
             .next())
+    }
+
+    /// What this batch's identity says, tombstone included.
+    ///
+    /// Separate from [`Self::by_batch`] because the two questions are not the
+    /// same question. A seller's page asks "is there a run to show", and a
+    /// deleted one is not. A commit asks "has this batch been imported
+    /// before", and a deleted one emphatically has: the batch's rows are
+    /// preserved, so a lookup that could not see the tombstone opened a
+    /// second run against them and recreated the import the seller had just
+    /// deleted.
+    ///
+    /// A deletion anywhere in this batch's history is what is answered,
+    /// rather than merely the newest run's state, so no ordering of historic
+    /// rows can hide one.
+    pub async fn batch_identity(
+        &self,
+        org: OrgId,
+        batch: Uuid,
+    ) -> Result<Option<BatchIdentity>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let identity = batch_identity_in_tx(&mut tx, org, batch).await?;
+        tx.commit().await?;
+        Ok(identity)
+    }
+
+    /// Opens the run that reviews one spreadsheet batch, refusing a batch
+    /// whose import was deleted.
+    ///
+    /// One transaction under the batch's identity lock, which is what makes
+    /// the refusal sound: the read that decides and the insert that acts on
+    /// it cannot have a deletion land between them, so a recommit of a
+    /// deleted import's surviving batch meets the tombstone however the two
+    /// requests are interleaved.
+    pub async fn open_for_batch(
+        &self,
+        org: OrgId,
+        batch: Uuid,
+        new: &NewImportRun,
+    ) -> Result<BatchRunOpening, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        lock_batch(&mut tx, batch).await?;
+        if let Some(identity) = batch_identity_in_tx(&mut tx, org, batch).await? {
+            tx.commit().await?;
+            return Ok(match identity.deletion {
+                Some(deletion) => BatchRunOpening::Deleted(deletion),
+                None => BatchRunOpening::Existing(identity.run),
+            });
+        }
+        // Under the lock, with no run for this batch, the only unique index
+        // this insert can meet is the one open run per batch — which is the
+        // row just read as absent. A conflict here is therefore a lock that
+        // did not hold, and is reported rather than papered over with a
+        // second lookup.
+        match insert_run(&mut tx, org, new).await? {
+            Inserted::Done => {
+                tx.commit().await?;
+                Ok(BatchRunOpening::Opened)
+            }
+            Inserted::AlreadyOpen => {
+                drop(tx);
+                Err(StorageError::Inconsistent {
+                    reason: "a batch with no run refused its own run under the batch lock"
+                        .to_owned(),
+                })
+            }
+        }
     }
 
     /// One page of the organisation's run history, and how many runs the
@@ -1101,6 +1203,36 @@ impl ImportRunRepo {
                 &HeadFilter {
                     run: Some(run),
                     limit: 1,
+                    ..HeadFilter::default()
+                },
+            )
+            .await?
+            .into_iter()
+            .next())
+    }
+
+    /// The run's head, deleted runs included, for a caller whose question is
+    /// not the seller's.
+    ///
+    /// Two readers, and both need the tombstone rather than a not-found. A
+    /// device replaying a queued page or stop has to be told the run is over
+    /// — a 404 reads to the desktop transport as "this machine is not
+    /// registered", which is an outage it retries behind every other owed
+    /// post, so the queue never drains. Reconciliation has to be able to
+    /// read what it is reconciling. The seller's own history and detail
+    /// reads keep using [`Self::head`], which does not see tombstones.
+    pub async fn head_internal(
+        &self,
+        org: OrgId,
+        run: Uuid,
+    ) -> Result<Option<ImportRunHead>, StorageError> {
+        Ok(self
+            .heads(
+                org,
+                &HeadFilter {
+                    run: Some(run),
+                    limit: 1,
+                    tombstones: Tombstones::Include,
                     ..HeadFilter::default()
                 },
             )
@@ -1371,6 +1503,10 @@ impl ImportRunRepo {
                     skip_reason \
                FROM import_run_item \
               WHERE org_id = $1 AND run_id = $2 AND state = 'matched' \
+                AND EXISTS (SELECT 1 FROM import_run r \
+                      WHERE r.org_id = import_run_item.org_id \
+                        AND r.id = import_run_item.run_id \
+                        AND r.deletion_requested_at IS NULL) \
               ORDER BY ordinal LIMIT $3",
             uuid_to_db(org.0),
             uuid_to_db(run),
@@ -1541,6 +1677,33 @@ impl ImportRunRepo {
             return Ok(None);
         };
         if !guard.state.open() {
+            // A settled run this device owned, whose import the seller
+            // deleted: this stop is the acknowledgement that closes the
+            // deletion's remaining evidence. The retained lease is what said
+            // a phone might still be mid-read; the phone has just said it is
+            // not, so the hold is released and the deletion reclassified
+            // here rather than waiting out the lease's clock in the sweep.
+            if guard.deletion_requested_at.is_some()
+                && guard.owner_device.as_deref() == Some(device)
+                && guard.attempt == attempt
+            {
+                release_lease(&mut tx, org, run).await?;
+                let owned = fence_owned_jobs(
+                    &mut tx,
+                    org,
+                    run,
+                    guard.anchor_job,
+                    JobFence::Reconcile(Stamp {
+                        at,
+                        actor: Actor::System(SystemComponent::Device),
+                    }),
+                )
+                .await?;
+                let status = run_deletion_status(&mut tx, org, run, owned).await?;
+                set_run_deletion(&mut tx, org, run, status).await?;
+                tx.commit().await?;
+                return Ok(Some(StopOutcome::Settled(guard.state)));
+            }
             tx.rollback().await?;
             return Ok(Some(StopOutcome::Settled(guard.state)));
         }
@@ -1869,8 +2032,11 @@ impl ImportRunRepo {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let row = sqlx::query!(
-            "SELECT run_id, source, retry_of FROM import_run_start_key \
-              WHERE org_id = $1 AND start_key = $2",
+            "SELECT k.run_id, k.source, k.retry_of, \
+                    r.deletion_requested_at IS NOT NULL AS \"deleted!\" \
+               FROM import_run_start_key k \
+               JOIN import_run r ON r.org_id = k.org_id AND r.id = k.run_id \
+              WHERE k.org_id = $1 AND k.start_key = $2",
             uuid_to_db(org.0),
             uuid_to_db(start_key),
         )
@@ -1882,6 +2048,7 @@ impl ImportRunRepo {
                 run: uuid_from_db(row.run_id),
                 source: inventory_from_db(&row.source)?,
                 retry_of: row.retry_of.map(uuid_from_db),
+                deleted: row.deleted,
             })
         })
         .transpose()
@@ -1983,6 +2150,519 @@ impl ImportRunRepo {
         tx.commit().await?;
         Ok(rows.into_iter().map(|row| uuid_from_db(row.id)).collect())
     }
+
+    // -------------------------------------------------------- deletion
+
+    /// Stops an import and answers how far the removal got.
+    ///
+    /// An open run is settled `abandoned` with the seller's own reason, and
+    /// that transition is the fence rather than a second mechanism: every
+    /// write this run can still receive — a claim, a renewal, a progress
+    /// report, a page, a selection, a commit authorisation — is conditional
+    /// on the run being `reading`, `reviewing` or `committing`, so a device
+    /// mid-walk stops landing anything the moment this commits.
+    ///
+    /// What it deliberately does not touch is the catalogue. Resources an
+    /// earlier chunk already committed are products the seller has, with
+    /// their files, labels and fingerprints; they are not artefacts of the
+    /// import and deleting the import does not delete them. The run's rows
+    /// keep saying which resources those were, which is what a later import
+    /// of the same shop reads to recognise them.
+    ///
+    /// The anchor job goes with it, because it is this run's own ledger row
+    /// and would otherwise sit in the seller's publishing history naming an
+    /// import they deleted. It carries no items, so it is quiet by
+    /// construction — and it is not the only job this import owns. A
+    /// scheduled run publishes what it imported, and each publishing job it
+    /// minted names it in `job.import_run_id`; those carry items, they can
+    /// be claimed, and they are what would otherwise go on writing to a
+    /// marketplace after this call answered. Every one of them is fenced
+    /// here, under this run's lock, in this transaction.
+    ///
+    /// What the fence does *not* do is erase the evidence of work in flight.
+    /// The run's lease is left exactly where it was: the state transition is
+    /// what refuses the device's next claim, renewal, page and report, so
+    /// keeping the hold costs nothing — and it is the only record that a
+    /// phone is at this moment reading the shop, which is the difference
+    /// between answering `stopping` and telling a seller their import is
+    /// gone while it is still running. The hold is closed by the device
+    /// acknowledging the stop, or by lapsing; the sweep converges it either
+    /// way.
+    ///
+    /// Only where the fence actually interrupted something, mind: a run that
+    /// had already settled *before the first Delete* keeps no hold, because a
+    /// lease left over from its last page is a clock that has not run down
+    /// rather than a phone doing work. That is the `CASE` on
+    /// `lease_expires_at` below, and it is what keeps deleting a finished
+    /// import the immediate `deleted` it should be.
+    ///
+    /// Which is why the second press is not the first. A Delete that caught a
+    /// device mid-walk has already moved the run to `abandoned`, so a repeat
+    /// arriving before the device has acknowledged or lapsed would read its
+    /// own transition as "this was settled all along" and clear the very hold
+    /// the first press deliberately kept — reporting the import gone while
+    /// the phone is still reading it. A run that already carries a deletion
+    /// therefore keeps whatever hold it has, and nothing but the device's
+    /// stop or the clock retires it. The run terminal before its first Delete
+    /// had its hold cleared by that first press and has none to keep.
+    ///
+    /// `None` is a run this organisation does not have.
+    pub async fn delete(
+        &self,
+        org: OrgId,
+        run: Uuid,
+        stamp: Stamp,
+    ) -> Result<Option<DeletionStatus>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        // The batch's identity lock first, where this run reviews one, so a
+        // commit deciding whether that batch already has a run cannot decide
+        // it against a run this call is tombstoning. Taken before the row
+        // lock and never the other way round, which is the whole of the
+        // ordering rule here.
+        if let Some(batch) = batch_of(&mut tx, org, run).await? {
+            lock_batch(&mut tx, batch).await?;
+        }
+        // The run's own lock, taken in the order the commit and a device's
+        // page take it, so a chunk in flight either completes before this
+        // fence or sees it. Held rather than discarded: what the row said
+        // *before* the fence is the only account of what was executing when
+        // the seller pressed Delete, and the transition below overwrites it.
+        let standing = guard_run(&mut tx, org, run).await?;
+        let Some(row) = sqlx::query!(
+            "UPDATE import_run \
+                SET deletion_requested_at = COALESCE(deletion_requested_at, $3), \
+                    deletion_actor_kind = COALESCE(deletion_actor_kind, $4), \
+                    deletion_actor_id = COALESCE(deletion_actor_id, $5), \
+                    deletion_state = COALESCE(deletion_state, 'stopping'), \
+                    state = CASE WHEN state IN ('reading', 'reviewing', 'committing') \
+                                 THEN 'abandoned' ELSE state END, \
+                    settled_at = CASE WHEN state IN ('reading', 'reviewing', 'committing') \
+                                      THEN now() ELSE settled_at END, \
+                    failure_detail = CASE WHEN state IN ('reading', 'reviewing', 'committing') \
+                                          THEN $6 ELSE failure_detail END, \
+                    reason_code = CASE WHEN state IN ('reading', 'reviewing', 'committing') \
+                                       THEN 'stopped' ELSE reason_code END, \
+                    reason = CASE WHEN state IN ('reading', 'reviewing', 'committing') \
+                                  THEN $6 ELSE reason END, \
+                    lease_expires_at = CASE \
+                        WHEN state IN ('reading', 'reviewing', 'committing') \
+                             OR deletion_requested_at IS NOT NULL \
+                        THEN lease_expires_at ELSE NULL END \
+              WHERE org_id = $1 AND id = $2 \
+              RETURNING anchor_job",
+            uuid_to_db(org.0),
+            uuid_to_db(run),
+            timestamp_to_db(stamp.at)?,
+            stamp.actor.kind(),
+            stamp.actor.id(),
+            DELETED_IMPORT,
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            return Ok(None);
+        };
+        let owned = fence_owned_jobs(
+            &mut tx,
+            org,
+            run,
+            JobId(uuid_from_db(row.anchor_job)),
+            JobFence::Delete(stamp),
+        )
+        .await?;
+        let reached = run_deletion_status(&mut tx, org, run, owned).await?;
+        // A run the fence caught mid-commit. The chunk that authorisation had
+        // already let start may finish the resource it holds — that is what
+        // the contract means by an admitted write finishing — and nothing in
+        // the row says so afterwards, because the fence is the state it
+        // overwrote. So it is carried from the locked read above, and the
+        // sweep answers `deleted` once the chunk is done.
+        let status = if reached == DeletionStatus::Deleted
+            && standing.is_some_and(|guard| guard.state == RunState::Committing)
+        {
+            DeletionStatus::Stopping
+        } else {
+            reached
+        };
+        set_run_deletion(&mut tx, org, run, status).await?;
+        tx.commit().await?;
+        Ok(Some(status))
+    }
+
+    /// Re-reads one import's deletion as it now stands. `None` where nobody
+    /// deleted it.
+    pub async fn finalise_deletion(
+        &self,
+        org: OrgId,
+        run: Uuid,
+        stamp: Stamp,
+    ) -> Result<Option<DeletionStatus>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let _locked = guard_run(&mut tx, org, run).await?;
+        let Some(row) = sqlx::query!(
+            "SELECT anchor_job FROM import_run \
+              WHERE org_id = $1 AND id = $2 AND deletion_requested_at IS NOT NULL",
+            uuid_to_db(org.0),
+            uuid_to_db(run),
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            return Ok(None);
+        };
+        let owned = fence_owned_jobs(
+            &mut tx,
+            org,
+            run,
+            JobId(uuid_from_db(row.anchor_job)),
+            JobFence::Reconcile(stamp),
+        )
+        .await?;
+        let status = run_deletion_status(&mut tx, org, run, owned).await?;
+        set_run_deletion(&mut tx, org, run, status).await?;
+        tx.commit().await?;
+        Ok(Some(status))
+    }
+
+    /// Sweeps this tenant's open import deletions, and answers how many
+    /// reached the tombstone.
+    pub async fn finalise_deletions(&self, org: OrgId, stamp: Stamp) -> Result<u64, StorageError> {
+        let open = {
+            let mut tx = self.pool.begin().await?;
+            pin_org(&mut tx, org).await?;
+            let rows = sqlx::query_scalar!(
+                "SELECT id FROM import_run \
+                  WHERE org_id = $1 AND deletion_state IN ('stopping', 'needs_review') \
+                  ORDER BY created_at, id",
+                uuid_to_db(org.0),
+            )
+            .fetch_all(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            rows
+        };
+        let mut finalised = 0_u64;
+        for id in open {
+            if self.finalise_deletion(org, uuid_from_db(id), stamp).await?
+                == Some(DeletionStatus::Deleted)
+            {
+                finalised = finalised.saturating_add(1);
+            }
+        }
+        Ok(finalised)
+    }
+
+    /// Whether this run carries a deletion, tombstone included. The replay
+    /// check a start key needs where no binding is read.
+    pub async fn deletion_status(
+        &self,
+        org: OrgId,
+        run: Uuid,
+    ) -> Result<Option<DeletionStatus>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let raw = sqlx::query_scalar!(
+            "SELECT deletion_state FROM import_run WHERE org_id = $1 AND id = $2",
+            uuid_to_db(org.0),
+            uuid_to_db(run),
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        DeletionStatus::parse(raw.flatten().as_deref())
+    }
+}
+
+/// Whether the run insert landed, or met the index that says one is already
+/// open for this shop or this batch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Inserted {
+    Done,
+    AlreadyOpen,
+}
+
+/// Writes one run's row. One copy of the column list, shared by the ordinary
+/// opening and by the batch's own serialised one.
+///
+/// A unique-index conflict is an answer rather than a fault, and it aborts
+/// the transaction: every caller has to abandon this one and decide what the
+/// standing run means to it, which is why the branch is returned rather than
+/// handled here.
+async fn insert_run(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    new: &NewImportRun,
+) -> Result<Inserted, StorageError> {
+    let inserted = sqlx::query!(
+        "INSERT INTO import_run \
+           (org_id, id, kind, source, batch_id, target, state, anchor_job, created_at, \
+            scheduled, retry_of) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'reading', $7, $8, $9, $10)",
+        uuid_to_db(org.0),
+        uuid_to_db(new.id),
+        new.kind.as_str(),
+        new.source.map(inventory_to_db),
+        new.batch_id.map(uuid_to_db),
+        new.target.map(inventory_to_db),
+        uuid_to_db(new.anchor_job.0),
+        timestamp_to_db(new.created_at)?,
+        new.scheduled,
+        new.retry_of.map(uuid_to_db),
+    )
+    .execute(&mut **tx)
+    .await;
+    match inserted {
+        Ok(_) => Ok(Inserted::Done),
+        Err(sqlx::Error::Database(database))
+            if database.constraint() == Some(ONE_OPEN_PER_SOURCE)
+                || database.constraint() == Some(ONE_OPEN_PER_BATCH) =>
+        {
+            Ok(Inserted::AlreadyOpen)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// One batch's durable identity, decided inside the caller's transaction.
+///
+/// A deletion anywhere in this batch's run history is preferred over the
+/// newest row, which is the `ORDER BY`'s only job: the question is whether
+/// this batch has ever been imported and removed, and an older tombstone
+/// answers it as well as a newer one.
+async fn batch_identity_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    batch: Uuid,
+) -> Result<Option<BatchIdentity>, StorageError> {
+    let row = sqlx::query!(
+        "SELECT id, deletion_state FROM import_run \
+          WHERE org_id = $1 AND batch_id = $2 \
+          ORDER BY (deletion_state IS NOT NULL) DESC, created_at DESC, id DESC \
+          LIMIT 1",
+        uuid_to_db(org.0),
+        uuid_to_db(batch),
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    row.map(|row| {
+        Ok(BatchIdentity {
+            run: uuid_from_db(row.id),
+            deletion: DeletionStatus::parse(row.deletion_state.as_deref())?,
+        })
+    })
+    .transpose()
+}
+
+/// Releases the hold a deleted run retained, its work having been accounted
+/// for.
+///
+/// The counterpart of the lease this fence deliberately does not clear: the
+/// hold is outstanding-execution evidence, so it is closed by the device
+/// saying it has stopped, or by its own expiry, and never by the act of
+/// deleting.
+async fn release_lease(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    run: Uuid,
+) -> Result<(), StorageError> {
+    sqlx::query!(
+        "UPDATE import_run SET lease_expires_at = NULL WHERE org_id = $1 AND id = $2",
+        uuid_to_db(org.0),
+        uuid_to_db(run),
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// The sentence a deleted import records where it was still open.
+const DELETED_IMPORT: &str = "you deleted this import";
+
+/// What a deleted import is still doing.
+///
+/// An import writes to this catalogue and to nobody else's marketplace, so
+/// the only thing that can hold a deletion open here is work still in
+/// progress: a device holding a live lease, or a server commit chunk that
+/// authorisation had already let start. `commit_page` is fenced, so no
+/// further chunk begins; the one that is running may finish the resource it
+/// holds, which is exactly what `stopping` says.
+///
+/// The status of every job this import owns is folded in, so a run whose
+/// ledger rows are not all quiet does not read as tidied away.
+async fn run_deletion_status(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    run: Uuid,
+    owned: Option<DeletionStatus>,
+) -> Result<DeletionStatus, StorageError> {
+    let standing = sqlx::query!(
+        r#"SELECT
+             COALESCE(lease_expires_at > now(), false) AS "held!",
+             state = 'committing'                      AS "committing!"
+           FROM import_run WHERE org_id = $1 AND id = $2"#,
+        uuid_to_db(org.0),
+        uuid_to_db(run),
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    if standing.held || standing.committing {
+        return Ok(DeletionStatus::Stopping);
+    }
+    Ok(match owned {
+        None | Some(DeletionStatus::Deleted) => DeletionStatus::Deleted,
+        Some(open) => open,
+    })
+}
+
+async fn set_run_deletion(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    run: Uuid,
+    status: DeletionStatus,
+) -> Result<(), StorageError> {
+    sqlx::query!(
+        "UPDATE import_run SET deletion_state = $3 WHERE org_id = $1 AND id = $2",
+        uuid_to_db(org.0),
+        uuid_to_db(run),
+        status.as_str(),
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Fences, or re-reads, every job this import owns, and answers the worst
+/// state any of them is in.
+///
+/// Two kinds of job, and neither may be left out. The anchor is the run's own
+/// ledger row, itemless by construction. The others are the publishing jobs a
+/// scheduled run's publication pass minted, which name this run in
+/// `job.import_run_id` — they carry items, they are claimable, and a
+/// deletion that fenced only the anchor left them to go on writing to a
+/// marketplace after the seller had been told their import was gone.
+///
+/// Enumerated under this run's lock, in the caller's transaction, against the
+/// same column the mint writes while holding that lock: a publication either
+/// commits before this enumeration and is in it, or meets the fence and is
+/// never minted. There is no third outcome, which is the only reason this can
+/// be a plain `SELECT` rather than a retry loop.
+///
+/// The whole set is then locked in one statement, in `id` order, before any
+/// of it is fenced — and that ordering is load-bearing rather than tidy.
+/// Fencing a job appends an event, which holds this organisation's event
+/// counter to commit; a settling lease takes its own job row first and the
+/// counter after. A transaction that fenced one job and then reached for the
+/// next would hold the counter and want a row a settle holds, and the
+/// deadlock victim could be the settle of a write that had already reached a
+/// marketplace. Taking every row this transaction will need up front, in a
+/// fixed order, removes the cycle; each fence re-locks its own row, so the
+/// pre-lock costs nothing.
+async fn fence_owned_jobs(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    run: Uuid,
+    anchor: JobId,
+    fence: JobFence,
+) -> Result<Option<DeletionStatus>, StorageError> {
+    let derived = sqlx::query_scalar!(
+        "SELECT id FROM job \
+          WHERE org_id = $1 AND import_run_id = $2 AND id <> $3",
+        uuid_to_db(org.0),
+        uuid_to_db(run),
+        uuid_to_db(anchor.0),
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    let mut owned: Vec<_> = std::iter::once(uuid_to_db(anchor.0))
+        .chain(derived)
+        .collect();
+    owned.sort_unstable();
+    let locked = sqlx::query_scalar!(
+        "SELECT id FROM job \
+          WHERE org_id = $1 AND id = ANY($2) \
+          ORDER BY id FOR UPDATE",
+        uuid_to_db(org.0),
+        &owned,
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    crate::jobs::lock_job_items(tx, org, &locked).await?;
+    let mut worst = None;
+    for id in locked {
+        let job = JobId(uuid_from_db(id));
+        let reached = fence.apply(tx, org, job).await?;
+        worst = worse(worst, reached);
+    }
+    Ok(worst)
+}
+
+/// The less finished of two deletion states, `None` being nothing to report.
+///
+/// `needs_review` outranks `stopping` because an unaccounted write is the one
+/// thing a clock must never close, and both outrank `deleted`: an import is
+/// removed from a seller's history when *every* job it owns is quiet, not
+/// when the quietest one is.
+const fn worse(
+    held: Option<DeletionStatus>,
+    reached: Option<DeletionStatus>,
+) -> Option<DeletionStatus> {
+    match (held, reached) {
+        (Some(DeletionStatus::NeedsReview), _) | (_, Some(DeletionStatus::NeedsReview)) => {
+            Some(DeletionStatus::NeedsReview)
+        }
+        (Some(DeletionStatus::Stopping), _) | (_, Some(DeletionStatus::Stopping)) => {
+            Some(DeletionStatus::Stopping)
+        }
+        (Some(DeletionStatus::Deleted), _) | (_, Some(DeletionStatus::Deleted)) => {
+            Some(DeletionStatus::Deleted)
+        }
+        (None, None) => None,
+    }
+}
+
+/// The batch one run reviews, without locking it. `None` on a marketplace
+/// run, which reviews none.
+async fn batch_of(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    run: Uuid,
+) -> Result<Option<Uuid>, StorageError> {
+    Ok(sqlx::query_scalar!(
+        "SELECT batch_id FROM import_run WHERE org_id = $1 AND id = $2",
+        uuid_to_db(org.0),
+        uuid_to_db(run),
+    )
+    .fetch_optional(&mut **tx)
+    .await?
+    .flatten()
+    .map(uuid_from_db))
+}
+
+/// Serialises the decisions made about one spreadsheet batch's identity for
+/// the rest of the transaction.
+///
+/// The decision this protects is "does this batch already have a run", and
+/// the two transactions that must not interleave on it are a commit asking
+/// the question and a deletion tombstoning the answer. Without it a commit
+/// reads no usable run a moment before the delete commits, and opens a second
+/// run against the same preserved rows: the seller deletes a half-finished
+/// spreadsheet import and recommitting the batch creates the rest of it.
+///
+/// Advisory and transaction-scoped, for the reason [`lock_org_catalogue`]
+/// gives: what has to be serialised is a decision spread over the run table
+/// and the batch's own rows, not one row. Taken before [`guard_run`] wherever
+/// both are held, which is the ordering rule that keeps the pair deadlock-free.
+async fn lock_batch(tx: &mut Transaction<'_, Postgres>, batch: Uuid) -> Result<(), StorageError> {
+    let key = uuid_to_db(batch).to_string();
+    sqlx::query!(
+        "SELECT pg_advisory_xact_lock(hashtextextended('import-batch:' || $1, 0))",
+        key,
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 fn head_of(row: &HeadRow) -> Result<ImportRunHead, StorageError> {
@@ -2002,6 +2682,7 @@ fn head_of(row: &HeadRow) -> Result<ImportRunHead, StorageError> {
         failure_detail: row.failure_detail.clone(),
         scheduled: row.scheduled,
         retry_of: row.retry_of.map(uuid_from_db),
+        deletion: DeletionStatus::parse(row.deletion_state.as_deref())?,
         execution: RunExecution {
             owner_device: row.owner_device.clone(),
             attempt: u64::try_from(row.attempt).unwrap_or(0),
@@ -2115,6 +2796,15 @@ pub struct RunGuard {
     /// two servers that could disagree are exactly the ones a takeover
     /// decides between.
     pub lease_live: bool,
+    /// When this import's deletion was requested, at any stage of it.
+    ///
+    /// Read under the same `FOR UPDATE` as everything else here, which is
+    /// what makes it usable as an admission test: a caller that mints work
+    /// against this run — a publishing job the scheduler derives from it —
+    /// holds the row until its own insert commits, so the deletion either
+    /// precedes the mint and refuses it or follows it and fences what it
+    /// made.
+    pub deletion_requested_at: Option<Timestamp>,
 }
 
 /// Serialises this organisation's catalogue decisions for the rest of the
@@ -2157,7 +2847,8 @@ pub async fn guard_run(
     let row = sqlx::query!(
         "SELECT state, scheduled, source, anchor_job, owner_device, attempt, \
                 commit_authorised_at, \
-                COALESCE(lease_expires_at > now(), false) AS \"lease_live!\" \
+                COALESCE(lease_expires_at > now(), false) AS \"lease_live!\", \
+                deletion_requested_at \
            FROM import_run WHERE org_id = $1 AND id = $2 FOR UPDATE",
         uuid_to_db(org.0),
         uuid_to_db(run),
@@ -2176,6 +2867,7 @@ pub async fn guard_run(
         owner_device: row.owner_device,
         attempt: u64::try_from(row.attempt).unwrap_or(0),
         lease_live: row.lease_live,
+        deletion_requested_at: row.deletion_requested_at.map(timestamp_from_db),
     }))
 }
 

@@ -1,0 +1,65 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, request_idempotency_key AS \"key!\", sync_request_id, import_run_id, actor_kind, actor_id, EXISTS (SELECT 1 FROM job_item item WHERE item.org_id = job.org_id AND item.job_id = job.id) AS \"has_items!\", EXISTS (SELECT 1 FROM import_run run WHERE run.org_id = job.org_id AND run.anchor_job = job.id) AS \"anchors_import!\" FROM job WHERE job.org_id = $1 AND job.request_idempotency_key = ANY($2) ORDER BY job.id FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "key!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "sync_request_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "import_run_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "actor_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "actor_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "has_items!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
+        "name": "anchors_import!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      false,
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "755dcbd9cf4cf01bd27b18f8fccd45c3d0709e604212d822152e6629fe95c621"
+}

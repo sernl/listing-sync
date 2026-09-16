@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT anchor_job FROM import_run WHERE org_id = $1 AND id = $2 AND deletion_requested_at IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "anchor_job",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "676b2b9f24fe256fc883c0f7737141e1bb14ee2a3c75eab3c4b1f549c11a8e11"
+}

@@ -10,10 +10,12 @@ mod common;
 use sqlx::PgPool;
 use tam_marketplace::{ListingState, RemoteListingId};
 use tam_storage::{
-    job_request_key, Canonicalised, Disposition, Enqueued, NewSyncRequest, SyncIntent,
-    SyncRequestPage, SyncRequestRepo, CREATE_LEG, REMOVE_LEG,
+    job_request_key, Canonicalised, DeletionStatus, Disposition, Enqueued, NewSyncRequest,
+    ResourceAdmission, SyncIntent, SyncRequestPage, SyncRequestRepo, CREATE_LEG, REMOVE_LEG,
 };
-use tam_types::{InventoryId, MappingId, OrgId, ProductId, Timestamp, Uuid};
+use tam_types::{
+    Actor, InventoryId, MappingId, OrgId, ProductId, Stamp, SystemComponent, Timestamp, Uuid,
+};
 
 use common::{seed_org_a, ORG_A};
 
@@ -31,6 +33,68 @@ fn request_for(id: Uuid, locators: &[&str]) -> NewSyncRequest {
         requested_at: T0,
         locators: locators.iter().map(|l| (*l).to_owned()).collect(),
     }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_deleted_request_cannot_admit_a_prelisted_resource(pool: PgPool) {
+    seed_org_a(&pool).await.expect("the org seeds");
+    let repo = SyncRequestRepo::new(pool);
+    repo.create(ORG_A, &request_for(REQUEST, &["101", "202"]))
+        .await
+        .expect("the request writes");
+    let stamp = Stamp {
+        at: T0,
+        actor: Actor::System(SystemComponent::Device),
+    };
+    assert_eq!(
+        repo.delete(ORG_A, REQUEST, stamp)
+            .await
+            .expect("the request stops"),
+        Some(DeletionStatus::Deleted)
+    );
+    assert_eq!(
+        repo.admit_resource(ORG_A, REQUEST, "101", T0)
+            .await
+            .expect("the admission is decided"),
+        ResourceAdmission::Stopped
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_stopped_request_may_finish_only_the_resource_already_admitted(pool: PgPool) {
+    seed_org_a(&pool).await.expect("the org seeds");
+    let repo = SyncRequestRepo::new(pool);
+    repo.create(ORG_A, &request_for(REQUEST, &["101", "202"]))
+        .await
+        .expect("the request writes");
+    assert_eq!(
+        repo.admit_resource(ORG_A, REQUEST, "101", T0)
+            .await
+            .expect("the first resource starts"),
+        ResourceAdmission::Admitted(0)
+    );
+    let stamp = Stamp {
+        at: T0,
+        actor: Actor::System(SystemComponent::Device),
+    };
+    assert_eq!(
+        repo.delete(ORG_A, REQUEST, stamp)
+            .await
+            .expect("the request stops"),
+        Some(DeletionStatus::Stopping)
+    );
+    assert_eq!(
+        repo.admit_resource(ORG_A, REQUEST, "101", T0)
+            .await
+            .expect("the earlier resource may resume"),
+        ResourceAdmission::Admitted(0)
+    );
+    assert_eq!(
+        repo.admit_resource(ORG_A, REQUEST, "202", T0)
+            .await
+            .expect("the next admission is decided"),
+        ResourceAdmission::Stopped
+    );
 }
 
 #[expect(
@@ -461,5 +525,153 @@ async fn the_disposition_narrows_before_the_limit(pool: PgPool) {
         page.iter().map(|row| row.id).collect::<Vec<_>>(),
         vec![migrated],
         "the one migration is on the first page even though a newer sync exists"
+    );
+}
+
+/// The itemless anchor a legacy migration left, minted with the request's
+/// import key and naming no workflow of its own.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn legacy_anchor(pool: &PgPool, org: OrgId, key_of: Uuid) -> tam_types::JobId {
+    let minted = tam_storage::JobRepo::new(pool.clone())
+        .create_with_request_key(
+            org,
+            tam_storage::JobOrigin {
+                request_key: job_request_key(key_of, tam_storage::IMPORT_LEG),
+                run: None,
+                import_run: None,
+            },
+            &tam_storage::NewJob {
+                job: tam_types::JobId(Uuid(*uuid::Uuid::new_v4().as_bytes())),
+                inventory: InventoryId::Tes,
+                stamp: Stamp::system(SystemComponent::Import, T0),
+            },
+            &[],
+        )
+        .await
+        .expect("the anchor mints");
+    match minted {
+        tam_storage::Minted::Job(created) => Some(created.job),
+        tam_storage::Minted::WorkflowDeleted(_) => None,
+    }
+    .expect("an anchor names no workflow that could refuse it")
+}
+
+/// Normalization links a legacy migration's anchor to its request without
+/// touching an import's own anchor, another tenant's rows, or anything it has
+/// already linked.
+///
+/// The three boundaries worth asserting, because none of them is decidable
+/// from the anchor alone. An import run's anchor is minted with
+/// `job_request_key(run, IMPORT_LEG)` too (`tam-api/src/import_runs.rs`), so
+/// a run whose id matches a request's is reached by exactly the derivation
+/// this pass runs in reverse — and reassigning it would move the fence off
+/// the import that owns the work. The import key is per tenant, so two
+/// tenants can hold one request id and one tenant's pass must leave the
+/// other's anchor alone. And the pass is run from a launcher on every boot,
+/// so a second run over normalized rows has to move nothing.
+#[sqlx::test(migrations = "./migrations")]
+async fn normalizing_legacy_anchors_spares_import_anchors_and_other_tenants(pool: PgPool) {
+    seed_org_a(&pool).await.expect("org a seeds");
+    sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, 'org-b', now())")
+        .bind(uuid::Uuid::from_bytes(ORG_B.0 .0))
+        .execute(&pool)
+        .await
+        .expect("org b seeds");
+
+    let repo = SyncRequestRepo::new(pool.clone());
+    let jobs = tam_storage::JobRepo::new(pool.clone());
+
+    // A tombstoned migration, which is the row whose anchor matters most: its
+    // next page is the one that must be refused.
+    repo.create(ORG_A, &request_for(REQUEST, &["101"]))
+        .await
+        .expect("the migration writes");
+    let orphan = legacy_anchor(&pool, ORG_A, REQUEST).await;
+    repo.delete(ORG_A, REQUEST, Stamp::system(SystemComponent::Device, T0))
+        .await
+        .expect("the deletion answers")
+        .expect("the request is this tenant's");
+
+    // The same request id in another tenant, with its own unlinked anchor.
+    repo.create(ORG_B, &request_for(REQUEST, &["101"]))
+        .await
+        .expect("org b's migration writes");
+    let elsewhere = legacy_anchor(&pool, ORG_B, REQUEST).await;
+
+    // A request and an import run sharing one id, so the import's own anchor
+    // holds the very key this pass derives.
+    let shared = Uuid([0x77; 16]);
+    repo.create(ORG_A, &request_for(shared, &["202"]))
+        .await
+        .expect("the colliding request writes");
+    let native = legacy_anchor(&pool, ORG_A, shared).await;
+    tam_storage::ImportRunRepo::new(pool.clone())
+        .create(
+            ORG_A,
+            &tam_storage::NewImportRun {
+                id: shared,
+                kind: tam_storage::RunKind::Marketplace,
+                source: Some(InventoryId::Tes),
+                batch_id: None,
+                target: None,
+                anchor_job: native,
+                created_at: T0,
+                scheduled: false,
+                start_key: None,
+                retry_of: None,
+            },
+        )
+        .await
+        .expect("the import opens");
+
+    let reads = tam_storage::JobReadRepo::new(pool.clone());
+    let before = reads
+        .events_after(ORG_A, 0, 100)
+        .await
+        .expect("the tenant's events read");
+
+    assert_eq!(
+        repo.normalize_migration_anchors(ORG_A)
+            .await
+            .expect("the pass runs"),
+        1,
+        "the one anchor naming nothing is linked; the import's own anchor is not"
+    );
+    assert_eq!(
+        jobs.owner(ORG_A, orphan).await.expect("the owner reads"),
+        Some(tam_storage::JobOwner::SyncRequest(REQUEST)),
+        "the tombstoned migration now owns its anchor, so its deletion fences it and its next \
+         page is refused"
+    );
+    assert_eq!(
+        jobs.owner(ORG_A, native).await.expect("the owner reads"),
+        Some(tam_storage::JobOwner::ImportRun(shared)),
+        "the import's own anchor keeps the import as its owner even though it holds the key a \
+         request of the same id derives"
+    );
+    assert_eq!(
+        jobs.owner(ORG_B, elsewhere).await.expect("the owner reads"),
+        Some(tam_storage::JobOwner::Standalone),
+        "one tenant's pass links nothing in another's, even where both hold the same request id"
+    );
+    assert_eq!(
+        reads
+            .events_after(ORG_A, 0, 100)
+            .await
+            .expect("the tenant's events read"),
+        before,
+        "the pass writes one column and appends no event, so every anchor's history is exactly \
+         what it was"
+    );
+
+    assert_eq!(
+        repo.normalize_migration_anchors(ORG_A)
+            .await
+            .expect("the second pass runs"),
+        0,
+        "a launcher that runs this on every boot moves nothing the second time"
     );
 }

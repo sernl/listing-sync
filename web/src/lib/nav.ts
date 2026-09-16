@@ -95,6 +95,7 @@ export const SECTIONS: readonly NavSection[] = [
 		primary: { href: '/resources/new', label: 'New resource', icon: 'circle-plus' },
 		items: [
 			{ href: '/resources', label: 'Resources', icon: 'layout-list' },
+			{ href: '/resources/files', label: 'Files', icon: 'files' },
 			{ href: '/labels', label: 'Labels', icon: 'tag' },
 			// Between Labels and Analytics because a collection is the other
 			// selection dimension a seller files by: a label is a word on a
@@ -470,7 +471,7 @@ export const LEGACY_REDIRECTS: readonly { from: string; to: string }[] = [
 	// to reach the new one would redirect twice for every saved link.
 	{ from: '/listings', to: '/resources' },
 	{ from: '/connections', to: '/marketplaces' },
-	{ from: '/settings/devices', to: '/marketplaces' },
+	{ from: '/settings/devices', to: '/settings#machines' },
 	{ from: '/queue', to: '/reconciliation' },
 	// The help placeholder was `/library`, then `/resources`; it is `/guides`
 	// now, because "Resources" is what the catalogue is called and two

@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 161] = [
+pub const ROUTES: [Route; 164] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -196,6 +196,17 @@ pub const ROUTES: [Route; 161] = [
         summary: "The job roll-up: raw item counts, never a scalar verdict",
     },
     Route {
+        method: "delete",
+        path: "/{version}/jobs/{job}",
+        summary: "Stop new work and delete a job from history after active writes are reconciled",
+    },
+    Route {
+        method: "delete",
+        path: "/{version}/sync/{request}",
+        summary:
+            "Stop all migration legs and delete the request from history without deleting resources",
+    },
+    Route {
         method: "get",
         path: "/{version}/jobs/{job}/items",
         summary: "Page the job's items by opaque keyset cursor, filtered by outcome",
@@ -290,6 +301,11 @@ pub const ROUTES: [Route; 161] = [
         method: "get",
         path: "/{version}/imports/runs/{run}",
         summary: "One run with its items, its counts and its open duplicate questions",
+    },
+    Route {
+        method: "delete",
+        path: "/{version}/imports/runs/{run}",
+        summary: "Stop an import and delete its history, keeping already imported resources",
     },
     Route {
         method: "post",
@@ -590,7 +606,7 @@ pub const ROUTES: [Route; 161] = [
     Route {
         method: "get",
         path: "/{version}/library",
-        summary: "The seller's files on the seller's machines: who holds what, and who asked",
+        summary: "Search and page files by machine, availability and resource association",
     },
     Route {
         method: "post",

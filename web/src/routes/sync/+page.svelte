@@ -21,9 +21,19 @@
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
+	import StatusPill from '$lib/StatusPill.svelte';
 	import { AUTHORABLE_PLATFORMS, MARK_SRC, platformTitle } from '$lib/platforms';
 	import TabBar from '$lib/TabBar.svelte';
 	import Toggle from '$lib/Toggle.svelte';
+	import {
+		countWord,
+		deleteRefusal,
+		keptSelection,
+		retainedBadge,
+		type WorkDeleteOutcome,
+		type WorkItem
+	} from '$lib/work-delete';
+	import WorkDeleteDialog from '$lib/WorkDeleteDialog.svelte';
 	import MarketplaceList from '$lib/pages/automations/MarketplaceList.svelte';
 	import { heldSelection, marketplaceRows } from '$lib/pages/automations/marketplace-list';
 	import { columnCopy, readState } from '$lib/pages/automations/read-state';
@@ -42,6 +52,7 @@
 		runRows,
 		syncCards,
 		templateChoices,
+		type RunRow,
 		type SyncCard
 	} from '$lib/pages/automations/sync';
 	import { templates, type TemplateHead } from '$lib/pages/templates/api';
@@ -170,6 +181,59 @@
 		{ id: RUNS_TAB, label: 'Runs', count: null },
 		{ id: LOG_TAB, label: 'Activity', count: null }
 	]);
+
+	/** What the seller has ticked in the run history: the run's id against the
+	 *  words a confirmation names it by. A map rather than a set of ids,
+	 *  because the selection survives turning the page and a row that is no
+	 *  longer on screen still has to be nameable by the dialog deleting it. */
+	let picked = $state<Map<string, string>>(new Map());
+	/** The runs a Delete is being confirmed for, or null while none is. */
+	let deleting = $state<WorkItem[] | null>(null);
+
+	const RUNS = { one: 'run', many: 'runs' };
+	// A run already stopping or kept for review is not something a second
+	// Delete could move, so it is not offered as one.
+	const pickable = $derived(runs.filter((run) => run.deletion === null));
+	const allPickedHere = $derived(
+		pickable.length > 0 && pickable.every((run) => picked.has(run.job))
+	);
+	const pickedItems = $derived([...picked].map(([id, label]) => ({ id, label })));
+	const pickedElsewhere = $derived(
+		[...picked.keys()].filter((id) => !runs.some((run) => run.job === id)).length
+	);
+
+	function pick(run: RunRow, on: boolean) {
+		const next = new Map(picked);
+		if (on) {
+			next.set(run.job, run.meta);
+		} else {
+			next.delete(run.job);
+		}
+		picked = next;
+	}
+
+	/** Tick or untick the page in hand, leaving other pages' ticks alone:
+	 *  "all of these" and "all of my runs" are different sentences. */
+	function pickPage() {
+		const next = new Map(picked);
+		for (const run of pickable) {
+			if (allPickedHere) {
+				next.delete(run.job);
+			} else {
+				next.set(run.job, run.meta);
+			}
+		}
+		picked = next;
+	}
+
+	/** What one Delete settled: the rows the server answered about are
+	 *  unticked, the refusals stay ticked, and the page in hand is read again
+	 *  by the cursor it came from rather than reset to the newest run. */
+	function settled(outcome: WorkDeleteOutcome) {
+		const kept = keptSelection(new Set(picked.keys()), outcome);
+		picked = new Map([...picked].filter(([id]) => kept.has(id)));
+		void readRuns(runCursors[runPage - 1] ?? null, runPage);
+	}
 
 	/** One card's editable state: what the seller has changed, or the stored
 	 *  row where they have changed nothing. */
@@ -598,14 +662,79 @@
 								/>
 							{/if}
 						{:else}
+							<!-- The tick for the page in hand and whatever the seller has
+							     ticked elsewhere. In the flow above the rows, because a
+							     bar pinned to a phone's viewport covers the row it is
+							     about to act on. -->
+							<div class="work-bar">
+								<label class="work-pick-all">
+									<input
+										type="checkbox"
+										checked={allPickedHere}
+										disabled={pickable.length === 0}
+										onchange={pickPage}
+									/>
+									Select the {countWord(pickable.length, RUNS)} on this page
+								</label>
+								{#if picked.size > 0}
+									<span class="work-picked">
+										{countWord(picked.size, RUNS)} selected{pickedElsewhere > 0
+											? `, ${pickedElsewhere} of them on another page`
+											: ''}
+									</span>
+									<div class="work-bar-acts">
+										<Button small tier="quiet" onclick={() => (picked = new Map())}>
+											Clear selection
+										</Button>
+										<Button small danger onclick={() => (deleting = pickedItems)}>
+											Delete {countWord(picked.size, RUNS)}
+										</Button>
+									</div>
+								{/if}
+							</div>
+
 							{#each runs as run (run.job)}
-								<a class="auto-row" href={run.href}>
+								{@const going = retainedBadge(run.deletion)}
+								{@const refusal = deleteRefusal(run.deletion)}
+								<!-- A row rather than one whole-row anchor: it carries a
+								     tick and a Delete, and a control nested in a link is
+								     reached by the keyboard as part of the link and a
+								     press activates both. -->
+								<div class="auto-row">
+									<span class="pick">
+										<input
+											type="checkbox"
+											checked={picked.has(run.job)}
+											disabled={refusal !== null}
+											title={refusal ?? undefined}
+											aria-label={`Select the run ${run.meta}`}
+											onchange={(event) => pick(run, event.currentTarget.checked)}
+										/>
+									</span>
 									<span class="who">
-										<span class="t"><MarketplaceMark inventory={run.inventory} /></span>
+										<a class="t" href={run.href}>
+											<MarketplaceMark inventory={run.inventory} />
+										</a>
 										<span class="meta">{run.meta}</span>
 									</span>
+									<span class="mark">
+										{#if going !== null}
+											<StatusPill tone={going.tone} label={going.label} />
+										{/if}
+									</span>
 									<span class="when">{new Date(run.at).toLocaleString()}</span>
-								</a>
+									<span class="act">
+										<Button
+											small
+											danger
+											disabled={refusal !== null}
+											reason={refusal ?? undefined}
+											onclick={() => (deleting = [{ id: run.job, label: run.meta }])}
+										>
+											Delete
+										</Button>
+									</span>
+								</div>
 							{/each}
 						{/if}
 						{#if runs.length > 0 || runPage > 1}
@@ -688,3 +817,14 @@
 		Retry
 	</Button>
 {/snippet}
+
+<!-- One dialog for a row's own Delete and for the selection's: what a seller
+     has to read before deleting a run is the same either way. -->
+<WorkDeleteDialog
+	open={deleting !== null}
+	items={deleting ?? []}
+	noun={RUNS}
+	remove={api.deleteJob}
+	onClose={() => (deleting = null)}
+	onsettled={settled}
+/>

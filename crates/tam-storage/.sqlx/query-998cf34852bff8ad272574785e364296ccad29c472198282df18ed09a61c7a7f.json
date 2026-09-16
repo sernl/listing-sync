@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE job SET sync_request_id = link.request_id FROM unnest($2::uuid[], $3::uuid[]) AS link(anchor, request_id) WHERE job.org_id = $1 AND job.id = link.anchor AND job.sync_request_id IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "998cf34852bff8ad272574785e364296ccad29c472198282df18ed09a61c7a7f"
+}

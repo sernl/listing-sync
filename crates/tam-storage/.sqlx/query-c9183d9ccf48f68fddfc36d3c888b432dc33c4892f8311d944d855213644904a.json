@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT j.deletion_requested_at IS NULL AS \"live!\" FROM job j WHERE j.org_id = $1 AND j.id = (SELECT ji.job_id FROM job_item ji WHERE ji.org_id = $1 AND ji.id = $2) FOR SHARE OF j",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "live!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c9183d9ccf48f68fddfc36d3c888b432dc33c4892f8311d944d855213644904a"
+}

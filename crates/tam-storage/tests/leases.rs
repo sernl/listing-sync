@@ -19,9 +19,9 @@ use tam_storage::{
     revive_by_gap, revive_on, settle_if_complete, AttemptIntent, AttemptRef, AttemptVerdict,
     BudgetGrant, Charged, ClaimPolicy, ConnectionAudit, ConnectionRepo, DeviceClaim, DeviceRef,
     HaltCause, HaltRepo, ItemVerdict, JobOrigin, JobReadRepo, JobRepo, LandingEffect, LeaseRepo,
-    LeasedItem, MappingRepo, NewAttempt, NewJob, NewJobItem, NewOutboxMessage, OutboxRepo,
-    ProductRepo, RateBudgetRepo, StorageError, WriteAttemptRepo, AWAITING_MARKETPLACE_ANSWER,
-    AWAITING_SELLER_SIGNIN, REAUTH_REQUIRED,
+    LeasedItem, MappingRepo, Minted, NewAttempt, NewJob, NewJobItem, NewOutboxMessage, OutboxRepo,
+    ProductRepo, RateBudgetRepo, StorageError, WriteAttemptRepo, AWAITING_COUNTERPART,
+    AWAITING_MARKETPLACE_ANSWER, AWAITING_SELLER_SIGNIN, REAUTH_REQUIRED,
 };
 use tam_types::{
     Actor, CanonicalTermId, ConnectionId, ContentHash, CopyFormat, FailureCode, FailureDetail,
@@ -371,6 +371,403 @@ fn subject(seed: u8) -> RemoteListingId {
     RemoteListingId::Tes {
         url: format!("https://www.tes.com/teaching-resource/fixture-{seed}"),
     }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn deleting_two_legs_does_not_deadlock_a_sibling_claim(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xA0, true).await;
+    enqueue_one(&engine, &tenant, 0x11, 0x21).await;
+    let sibling = enqueue_one(&engine, &tenant, 0x12, 0x22).await;
+    let request = Uuid([0x71; 16]);
+    let repo = tam_storage::SyncRequestRepo::new(app.clone());
+    repo.create(
+        tenant.org,
+        &tam_storage::NewSyncRequest {
+            id: request,
+            source: InventoryId::Tes,
+            target: InventoryId::Tpt,
+            disposition: tam_storage::Disposition::Sync,
+            intent: tam_storage::SyncIntent::Draft,
+            requested_at: T0,
+            locators: Vec::new(),
+        },
+    )
+    .await
+    .expect("the owning request exists");
+    sqlx::query("UPDATE job SET sync_request_id = $2 WHERE org_id = $1")
+        .bind(db_uuid(tenant.org.0))
+        .bind(db_uuid(request))
+        .execute(&engine)
+        .await
+        .expect("both jobs name their request");
+
+    let mut claim_like = engine.begin().await.expect("the claim transaction opens");
+    let claimant: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *claim_like)
+        .await
+        .expect("the claimant can be identified");
+    sqlx::query("SELECT id FROM job_item WHERE org_id = $1 AND id = $2 FOR UPDATE")
+        .bind(db_uuid(tenant.org.0))
+        .bind(db_uuid(sibling.0))
+        .execute(&mut *claim_like)
+        .await
+        .expect("the sibling's claim holds its item");
+
+    let stamp = Stamp {
+        at: T0,
+        actor: Actor::System(SystemComponent::Device),
+    };
+    let (deleted, ()) = tokio::join!(repo.delete(tenant.org, request, stamp), async {
+        let mut blocked = false;
+        for _ in 0..600 {
+            blocked = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM pg_stat_activity \
+                  WHERE datname = current_database() \
+                    AND $1 = ANY(pg_blocking_pids(pid)))",
+            )
+            .bind(claimant)
+            .fetch_one(&engine)
+            .await
+            .expect("the overlap is observable");
+            if blocked {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(blocked, "deletion must overlap the held sibling claim");
+        // Claims append their event after locking the item. Deletion must
+        // not hold this counter while waiting for a later sibling's item.
+        sqlx::query("SELECT next_seq FROM org_event_counter WHERE org_id = $1 FOR UPDATE")
+            .bind(db_uuid(tenant.org.0))
+            .execute(&mut *claim_like)
+            .await
+            .expect("the earlier claim records its event without a lock cycle");
+        claim_like
+            .commit()
+            .await
+            .expect("the claim releases its item");
+    });
+    assert_eq!(
+        deleted.expect("the request deletion is not a deadlock victim"),
+        Some(tam_storage::DeletionStatus::Deleted)
+    );
+    assert!(
+        claim(&app, tenant.org, "after-delete", 60).await.is_none(),
+        "neither leg can start after deletion completes"
+    );
+}
+
+/// One leg of a migrate, enqueued with the two things `enqueue_on` cannot
+/// state: the counterpart binding the leg waits for, and a job id chosen so
+/// the multi-job prelock's `ORDER BY job_id, id` is known rather than
+/// incidental. The deadlock below is decided entirely by that order.
+#[derive(Debug, Clone)]
+struct MoveLeg {
+    mapping: MappingId,
+    job_seed: u8,
+    item_seed: u8,
+    inventory: InventoryId,
+    operation: ItemOperation,
+    requires_bound_on: Option<InventoryId>,
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn enqueue_move_leg(engine: &PgPool, tenant: &Tenant, leg: &MoveLeg) -> JobItemId {
+    let MoveLeg {
+        mapping,
+        job_seed,
+        item_seed,
+        inventory,
+        operation,
+        requires_bound_on,
+    } = leg.clone();
+    let mut new_item = item(item_seed);
+    new_item.mapping = mapping;
+    new_item.operation = operation;
+    new_item.requires_bound_on = requires_bound_on;
+    JobRepo::new(engine.clone())
+        .enqueue(
+            tenant.org,
+            &NewJob {
+                job: JobId(Uuid([job_seed; 16])),
+                inventory,
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
+            },
+            std::slice::from_ref(&new_item),
+        )
+        .await
+        .expect("the fixture leg enqueues");
+    new_item.item
+}
+
+/// Counts direct and transitive waiters so the repaired job-first ordering
+/// can wait behind deletion without touching the gated item.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn blocked_by(watcher: &PgPool, holder: i32) -> i64 {
+    sqlx::query_scalar(
+        "WITH RECURSIVE waiting AS ( \
+             SELECT pid, pg_blocking_pids(pid) AS blockers FROM pg_stat_activity \
+             WHERE datname = current_database() \
+         ), blocked AS ( \
+             SELECT pid FROM waiting WHERE $1 = ANY(blockers) \
+             UNION \
+             SELECT w.pid FROM waiting w JOIN blocked b ON b.pid = ANY(w.blockers) \
+         ) SELECT count(*) FROM blocked",
+    )
+    .bind(holder)
+    .fetch_one(watcher)
+    .await
+    .expect("the overlap is observable")
+}
+
+/// Waits, bounded, for the gate to be blocking `waiters` of them. `false` is
+/// an overlap that never formed, which is a broken fixture rather than a
+/// passing test.
+async fn wait_for_waiters(watcher: &PgPool, holder: i32, waiters: i64) -> bool {
+    for _ in 0..600 {
+        if blocked_by(watcher, holder).await >= waiters {
+            return true;
+        }
+        tokio::task::yield_now().await;
+    }
+    false
+}
+
+/// Settling a landed create must not deadlock the deletion of the migrate it
+/// belongs to.
+///
+/// The cycle the multi-job prelock opens, stated as the schedule that walks
+/// into it. A migrate's source removal sorts before its target create, and it
+/// is parked on `awaiting_counterpart` waiting for that create's binding.
+/// Settlement takes the create item's SHARE lock in `assert_current_epoch`
+/// and holds it through the attempt write and the bind, then calls
+/// `revive_counterparts`, which reaches for the removal item -- and revival
+/// still sees a job nobody has deleted, because the deletion has not
+/// committed. Deletion meanwhile locks the removal item first and reaches for
+/// the create item. Neither holds the other's job row, so nothing serialises
+/// them and Postgres has to abort one: either the seller's Delete, or the
+/// transaction recording a write that already reached the marketplace and can
+/// never be recorded again.
+///
+/// What is asserted is therefore the consequence rather than the lock order:
+/// both parties return, the committed listing is still in the ledger and
+/// bound to its mapping, and the deletion converged on the removal leg
+/// instead of the revival resurrecting a leg the seller stopped.
+///
+/// The gate is a third transaction holding the removal item, and it is what
+/// makes the interleaving a fact instead of a race. Deletion is started and
+/// observed to park on that row; only then does the settle start, and it
+/// cannot finish without the same row, so when the gate sees two waiters the
+/// settle provably holds the create item's SHARE lock underneath deletion's
+/// next reach. Releasing the gate then hands the removal item to deletion,
+/// which queued for it first.
+#[sqlx::test(migrations = "./migrations")]
+async fn settling_a_landed_create_does_not_deadlock_a_move_deletion(app: PgPool) {
+    const LANDED: &str = "https://www.tes.com/teaching-resource/moved-1";
+    let engine = engine_pool(&app).await;
+    let watcher = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xC0, true).await;
+    let source = seed_mapping_on(&app, &tenant, 0xC4, InventoryId::Tpt).await;
+    link_connection(&app, tenant.org, "tpt", 0xC5).await;
+
+    // The removal's job sorts first, so the prelock takes the removal item
+    // before the create item: that is the order the settle meets head-on.
+    let removal = enqueue_move_leg(
+        &engine,
+        &tenant,
+        &MoveLeg {
+            mapping: source,
+            job_seed: 0x11,
+            item_seed: 0x21,
+            inventory: InventoryId::Tpt,
+            operation: ItemOperation::Remove {
+                subject: RemoteListingId::Tpt { product_id: 0x21 },
+                state: ListingState::Live,
+            },
+            requires_bound_on: Some(InventoryId::Tes),
+        },
+    )
+    .await;
+    // Parked on the counterpart gate under its own lease, which is what a
+    // removal whose target listing does not exist yet is waiting for.
+    let parked = claim(&app, tenant.org, DEVICE, 60)
+        .await
+        .expect("the removal leases");
+    assert_eq!(
+        parked.item, removal,
+        "the only enqueued item must be the one leased"
+    );
+    LeaseRepo::new(engine.clone())
+        .park(&parked.lease_ref(), AWAITING_COUNTERPART, 86_400)
+        .await
+        .expect("the removal parks on its counterpart");
+
+    let creating = enqueue_move_leg(
+        &engine,
+        &tenant,
+        &MoveLeg {
+            mapping: tenant.mapping,
+            job_seed: 0x12,
+            item_seed: 0x22,
+            inventory: InventoryId::Tes,
+            operation: ItemOperation::Create,
+            requires_bound_on: None,
+        },
+    )
+    .await;
+    let held = claim(&app, tenant.org, DEVICE, 60)
+        .await
+        .expect("the create leases");
+    assert_eq!(
+        held.item, creating,
+        "the parked removal is not claimable, so the create must be what comes back"
+    );
+    let attempt = Uuid(*uuid::Uuid::new_v4().as_bytes());
+    WriteAttemptRepo::new(engine.clone())
+        .open(
+            &held.lease_ref(),
+            attempt,
+            &NewAttempt {
+                mapping: tenant.mapping,
+                intent: &intent(),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
+            },
+        )
+        .await
+        .expect("the create's fencing attempt opens");
+
+    let request = Uuid([0x7C; 16]);
+    let requests = tam_storage::SyncRequestRepo::new(app.clone());
+    requests
+        .create(
+            tenant.org,
+            &tam_storage::NewSyncRequest {
+                id: request,
+                source: InventoryId::Tpt,
+                target: InventoryId::Tes,
+                disposition: tam_storage::Disposition::Migrate,
+                intent: tam_storage::SyncIntent::Draft,
+                requested_at: T0,
+                locators: Vec::new(),
+            },
+        )
+        .await
+        .expect("the owning request exists");
+    sqlx::query("UPDATE job SET sync_request_id = $2 WHERE org_id = $1")
+        .bind(db_uuid(tenant.org.0))
+        .bind(db_uuid(request))
+        .execute(&engine)
+        .await
+        .expect("both legs name their request");
+
+    let mut gate = engine.begin().await.expect("the gate transaction opens");
+    let holder: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *gate)
+        .await
+        .expect("the gate can be identified");
+    sqlx::query("SELECT id FROM job_item WHERE org_id = $1 AND id = $2 FOR UPDATE")
+        .bind(db_uuid(tenant.org.0))
+        .bind(db_uuid(removal.0))
+        .execute(&mut *gate)
+        .await
+        .expect("the gate holds the removal item");
+
+    let verdict = AttemptVerdict {
+        state: "committed".to_owned(),
+        failure_code: None,
+        landing: LandingEffect::Landed {
+            id: RemoteListingId::Tes {
+                url: LANDED.to_owned(),
+            },
+            lifecycle: RemoteLifecycle::Draft,
+        },
+    };
+    let settling = WriteAttemptRepo::new(engine_pool(&app).await);
+    let lease = held.lease_ref();
+    let settled_ref = AttemptRef {
+        attempt,
+        mapping: tenant.mapping,
+    };
+    let stamp = Stamp {
+        at: T0,
+        actor: Actor::System(SystemComponent::Device),
+    };
+    // Borrowed once and shared: the gate's arm has to own its transaction, so
+    // it is an `async move`, and moving the pool in there would take it away
+    // from the arm that is watching for the second waiter.
+    let watching = &watcher;
+    let (deleted, settled, ()) = tokio::join!(
+        requests.delete(tenant.org, request, stamp),
+        async {
+            assert!(
+                wait_for_waiters(watching, holder, 1).await,
+                "the deletion must park on the removal item before the settle starts, or the \
+                 settle is not the party that arrives second"
+            );
+            settling.settle(&lease, settled_ref, &verdict, T0).await
+        },
+        async move {
+            let overlapped = wait_for_waiters(watching, holder, 2).await;
+            gate.commit()
+                .await
+                .expect("the gate releases the removal item");
+            assert!(
+                overlapped,
+                "both operations must be blocked before the gate releases their overlap"
+            );
+        },
+    );
+
+    assert_eq!(
+        settled.expect(
+            "the settle of a write that already reached the marketplace is not the deadlock \
+             victim: there is no retry on this path and no second chance to record it"
+        ),
+        tam_storage::BindDisposition::Bound,
+        "and it binds the mapping its listing landed on"
+    );
+    assert_eq!(
+        deleted.expect("nor is the seller's Delete the victim"),
+        Some(tam_storage::DeletionStatus::Stopping),
+        "the create is still under a live lease, so the request is stopping rather than done"
+    );
+    assert_eq!(
+        attempt_rows(&engine, tenant.org, tenant.mapping)
+            .await
+            .into_iter()
+            .map(|(state, _, url, _)| (state, url))
+            .collect::<Vec<_>>(),
+        vec![("committed".to_owned(), Some(LANDED.to_owned()))],
+        "the committed listing is durably recorded, which is the thing an aborted settle \
+         loses for good"
+    );
+    assert_eq!(
+        binding_state(&engine, tenant.org, tenant.mapping)
+            .await
+            .as_deref(),
+        Some("bound"),
+        "and the mapping carries the binding that record is worth"
+    );
+    let (state, _, _, _, _) = item_disposition(&engine, tenant.org, removal).await;
+    assert_eq!(
+        state.as_str(),
+        "settled",
+        "and the deletion converged on the removal leg rather than the revival handing back a \
+         leg the seller stopped"
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -1090,6 +1487,69 @@ async fn a_stale_worker_is_fenced_after_a_steal(app: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn a_write_only_halt_allows_reads_but_refuses_writes_and_can_be_escalated(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xA0, true).await;
+    register_device(&app, tenant.org, DEVICE).await;
+    enqueue_one(&engine, &tenant, 0x11, 0x21).await;
+    let mut tx = app.begin().await.expect("transaction begins");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(db_uuid(tenant.org.0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("tenant pin applies");
+    sqlx::query(
+        "INSERT INTO org_inventory_halt \
+         (org_id, inventory, marketplace, raised_by, reason, raised_at, write_only) \
+         VALUES ($1, 'tes', 'tes', 'operator', 'read-only source', now(), true)",
+    )
+    .bind(db_uuid(tenant.org.0))
+    .execute(&mut *tx)
+    .await
+    .expect("the write-only halt inserts");
+    tx.commit().await.expect("the halt commits");
+
+    let devices = tam_storage::DeviceRepo::new(app.clone());
+    assert_eq!(
+        devices
+            .entitled_marketplaces(tenant.org, DEVICE)
+            .await
+            .expect("the read grant is evaluated"),
+        vec![tam_types::Marketplace::Tes],
+        "a read-only source remains readable"
+    );
+    assert!(
+        claim(&app, tenant.org, DEVICE, 60).await.is_none(),
+        "the advisory read grant must not admit a marketplace write"
+    );
+
+    HaltRepo::new(engine)
+        .raise_org_inventory(
+            tenant.org,
+            InventoryId::Tes,
+            &HaltCause {
+                raised_by: "worker".to_owned(),
+                reason: "source must stop completely".to_owned(),
+                at: T0,
+            },
+        )
+        .await
+        .expect("a full halt can escalate an existing write-only halt");
+    assert!(
+        devices
+            .entitled_marketplaces(tenant.org, DEVICE)
+            .await
+            .expect("the read grant is evaluated again")
+            .is_empty(),
+        "a full stop must not be masked by the earlier write-only policy"
+    );
+    assert!(
+        claim(&app, tenant.org, DEVICE, 60).await.is_none(),
+        "escalation must not reopen writes"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn halts_and_the_connection_gate_fail_closed(app: PgPool) {
     let engine = engine_pool(&app).await;
     let halted = seed_tenant(&app, 0xA0, true).await;
@@ -1535,12 +1995,13 @@ async fn a_removal_enqueued_under_a_request_key_leases_as_a_removal(app: PgPool)
     let mut new_item = item(0x31);
     new_item.mapping = tenant.mapping;
     new_item.operation = removal.clone();
-    let created = JobRepo::new(engine.clone())
+    let minted = JobRepo::new(engine.clone())
         .create_with_request_key(
             tenant.org,
             JobOrigin {
                 request_key: Uuid([0x71; 16]),
                 run: None,
+                import_run: None,
             },
             &NewJob {
                 job: JobId(Uuid([0x15; 16])),
@@ -1554,6 +2015,9 @@ async fn a_removal_enqueued_under_a_request_key_leases_as_a_removal(app: PgPool)
         )
         .await
         .expect("the request-keyed job enqueues");
+    let Minted::Job(created) = minted else {
+        panic!("a job naming no workflow cannot be refused by one");
+    };
     assert!(
         !created.replay,
         "the first carrier of the key creates a job"
@@ -3043,10 +3507,6 @@ async fn a_create_parked_on_reauth_leaves_the_park_for_a_gate_the_seller_can_act
         .await
         .expect("the item leases");
     let leases = LeaseRepo::new(engine.clone());
-    leases
-        .park(&held.lease_ref(), REAUTH_REQUIRED, 1)
-        .await
-        .expect("the create parks on reauth");
     // An attempt left standing, as the submit path leaves one.
     WriteAttemptRepo::new(engine.clone())
         .open(
@@ -3063,6 +3523,10 @@ async fn a_create_parked_on_reauth_leaves_the_park_for_a_gate_the_seller_can_act
         )
         .await
         .expect("the attempt opens");
+    leases
+        .park(&held.lease_ref(), REAUTH_REQUIRED, 1)
+        .await
+        .expect("the create parks on reauth");
     sqlx::query("UPDATE job_item SET park_expires_at = now() - interval '1 hour'")
         .execute(&engine)
         .await
@@ -3998,6 +4462,253 @@ async fn an_attempt_whose_intent_names_no_title_is_not_a_reconcile(app: PgPool) 
         (None, None),
         "both or neither: an attempt that names no title identifies no listing, so this is \
          not a reconcile and the device is not sent to search for one"
+    );
+}
+
+/// The same rendered field set a revise records. The reconcile arm reads only
+/// `entries`, so an intent shaped like this is exactly what makes a
+/// non-create offerable: the operation is in the body for fidelity and no
+/// query reads it.
+fn revise_intent() -> AttemptIntent {
+    AttemptIntent {
+        body: serde_json::json!({
+            "operation": "revise",
+            "entries": recorded_entries(),
+            "files": [],
+        }),
+        hash: vec![0x02; 32],
+    }
+}
+
+/// The claim restricted to one marketplace, as the device issues it when it
+/// has already decided which session it is ready for. `claim_with_reconcile`
+/// cannot express that, and a fixture holding two stopped items needs it:
+/// with the marketplace absent the reconcile-first ordering decides which one
+/// comes back, so neither half could be asserted on its own.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn claim_on(app: &PgPool, org: OrgId, device: &str, marketplace: Marketplace) -> DeviceClaim {
+    register_device(app, org, device).await;
+    LeaseRepo::new(app.clone())
+        .claim_for_device(
+            &DeviceRef { org, device },
+            &ClaimPolicy {
+                ttl_seconds: 60,
+                grace_hours: 24,
+                marketplace: Some(marketplace),
+                reconcile: true,
+            },
+            T0,
+        )
+        .await
+        .expect("the claim runs")
+}
+
+/// One item's `lease_owner`, which is the connection slot itself: the
+/// live-lease index is keyed on it, so a row that still names an owner is a
+/// row every unrelated job on that connection is queued behind.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn lease_owner(pool: &PgPool, org: OrgId, item: JobItemId) -> Option<String> {
+    sqlx::query_scalar("SELECT lease_owner FROM job_item WHERE org_id = $1 AND id = $2")
+        .bind(db_uuid(org.0))
+        .bind(db_uuid(item.0))
+        .fetch_one(pool)
+        .await
+        .expect("the item's lease owner is readable")
+}
+
+/// Interrupts one item mid-write and stops its job: the item leases, its
+/// fencing attempt opens and stays `in_flight`, the lease lapses with the
+/// device gone, and the seller's Delete then finds a write it cannot account
+/// for.
+///
+/// This is the shape `park_stopped_writes` exists for, and both legs of the
+/// reconciliation test are built through it so the only difference between
+/// them is the operation.
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "allow-expect-in-tests and allow-panic-in-tests reach #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn stop_a_write_in_flight(
+    app: &PgPool,
+    engine: &PgPool,
+    org: OrgId,
+    on: Marketplace,
+    intent: &AttemptIntent,
+) -> Uuid {
+    let leased = match claim_on(app, org, DEVICE, on).await {
+        DeviceClaim::Leased(leased) => leased,
+        refused @ (DeviceClaim::Empty | DeviceClaim::HeldByAnotherDevice) => {
+            panic!("the fixture item must lease: {refused:?}")
+        }
+    };
+    let attempt = Uuid(*uuid::Uuid::new_v4().as_bytes());
+    WriteAttemptRepo::new(engine.clone())
+        .open(
+            &leased.lease_ref(),
+            attempt,
+            &NewAttempt {
+                mapping: leased.mapping,
+                intent,
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
+            },
+        )
+        .await
+        .expect("the write's fencing attempt opens");
+    // The device is gone, so the row ages rather than naming a later instant:
+    // the reaper and the park both read this against the database's clock.
+    sqlx::query("UPDATE job_item SET lease_expires_at = now() - interval '1 hour' WHERE id = $1")
+        .bind(db_uuid(leased.item.0))
+        .execute(engine)
+        .await
+        .expect("the lease ages");
+    assert_eq!(
+        JobRepo::new(app.clone())
+            .delete(
+                org,
+                leased.job,
+                Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Device),
+                },
+            )
+            .await
+            .expect("the delete runs"),
+        Some(tam_storage::DeletionStatus::NeedsReview),
+        "a stopped job holding a write nobody can account for is what `needs_review` reports"
+    );
+    attempt
+}
+
+/// A stopped write on a non-create frees its slot and stays a human's to
+/// close, rather than being handed back as reconciliation work.
+///
+/// `park_stopped_writes` has to release an expired in-flight item whatever
+/// the operation, because the live-lease index is per connection and one such
+/// row stalls every unrelated job behind it. But the park it releases into is
+/// the one the claim's reconcile arm reads, and that arm serves a
+/// `ResumeStranded`, which the machine refuses for anything but a create.
+/// Native execution then reports the refusal as abandoned without releasing
+/// the lease, so an interrupted revision is claimed, refused and served again
+/// on every poll -- consuming the marketplace slot it was just released from
+/// and never closing the `needs_review` the deletion reported.
+///
+/// A revise rather than a removal, because the reconcile arm also requires
+/// the attempt's intent to name a title and a removal renders none: a removal
+/// would be left parked for a reason that has nothing to do with the
+/// operation. A revise carries one, so it is the non-create that is actually
+/// offered.
+///
+/// The create is the same shape on the other device-branch inventory and is
+/// asserted from the same fixture, so the operation is provably what decided
+/// and not anything else about the park.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_stopped_revision_is_released_without_becoming_a_reconcile(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0x5B, true).await;
+    // The create is built first and in full: a stranded create is served
+    // ahead of queued work, so building it second would let it win the claim
+    // that has to lease the revision.
+    let target = seed_mapping_on(&app, &tenant, 0x90, InventoryId::Tpt).await;
+    link_connection(&app, tenant.org, "tpt", 0x91).await;
+    let creating = enqueue_on(
+        &engine,
+        &tenant,
+        &EnqueueOnto {
+            mapping: target,
+            job_seed: 0x92,
+            item_seed: 0x93,
+            inventory: InventoryId::Tpt,
+            operation: ItemOperation::Create,
+        },
+    )
+    .await;
+    let create_attempt =
+        stop_a_write_in_flight(&app, &engine, tenant.org, Marketplace::Tpt, &intent()).await;
+
+    let revising = enqueue_operation(
+        &engine,
+        &tenant,
+        0x94,
+        0x95,
+        ItemOperation::Revise {
+            subject: subject(0x95),
+            transition: LifecycleTransition {
+                from: ListingState::Draft,
+                to: ListingState::Live,
+            },
+        },
+    )
+    .await;
+    let revise_job = JobId(Uuid([0x94; 16]));
+    stop_a_write_in_flight(
+        &app,
+        &engine,
+        tenant.org,
+        Marketplace::Tes,
+        &revise_intent(),
+    )
+    .await;
+
+    let (state, blocked_on, _, _, _) = item_disposition(&engine, tenant.org, revising).await;
+    assert_eq!(
+        (state.as_str(), blocked_on.as_deref()),
+        ("parked_live", Some(AWAITING_MARKETPLACE_ANSWER)),
+        "the stopped revision comes out of its lapsed lease and onto the gate"
+    );
+    assert_eq!(
+        lease_owner(&engine, tenant.org, revising).await,
+        None,
+        "and the connection slot it was holding is free, which is the half of this that must \
+         keep working: an unreleased row queues every unrelated job on the connection behind it"
+    );
+
+    let offered = claim_on(&app, tenant.org, DEVICE, Marketplace::Tes).await;
+    assert!(
+        matches!(offered, DeviceClaim::Empty),
+        "but it is not automatic reconciliation work: all a reconcile claim can do is step \
+         `ResumeStranded`, which a revise is refused for, so serving it hands the device work \
+         the interpreter cannot run and takes the slot straight back: {offered:?}"
+    );
+    assert_eq!(
+        attempt_states(&engine, tenant.org, tenant.mapping).await,
+        vec!["in_flight".to_owned()],
+        "its attempt stays standing as the evidence of a write that may have gone out"
+    );
+    assert_eq!(
+        JobRepo::new(app.clone())
+            .deletion_status(tenant.org, revise_job)
+            .await
+            .expect("the deletion status reads"),
+        Some(tam_storage::DeletionStatus::NeedsReview),
+        "and the deletion stays the one a human closes rather than being churned by a claim \
+         that resolves nothing"
+    );
+
+    let reconciling = match claim_on(&app, tenant.org, DEVICE, Marketplace::Tpt).await {
+        DeviceClaim::Leased(reconciling) => reconciling,
+        refused @ (DeviceClaim::Empty | DeviceClaim::HeldByAnotherDevice) => {
+            panic!("the stranded create must still be claimable: {refused:?}")
+        }
+    };
+    assert_eq!(
+        (
+            reconciling.item,
+            reconciling.stranded_attempt,
+            reconciling.stranded_title.as_deref()
+        ),
+        (creating, Some(create_attempt), Some(RECORDED_TITLE)),
+        "the create, whose reconcile the consumer can actually run, keeps it: the operation is \
+         what decided and not the park, the gate word or the standing attempt"
     );
 }
 

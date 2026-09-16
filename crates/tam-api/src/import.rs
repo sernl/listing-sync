@@ -5,7 +5,7 @@
 //! receives a description and never the thing described. Each page carries what
 //! one device saw of some resources — a listing read verbatim, a file's digest
 //! and length and name, and a derived cover — and this applies them through the
-//! same `import_one` the operator import uses, writing the payload as a
+//! same import preparation and application as the operator path, writing the payload as a
 //! marketplace-sourced file that names where its bytes are and the cover as the
 //! one blob Q-c allows us to keep.
 //!
@@ -26,11 +26,14 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use tam_engine_driver::import::{ImportPage, ObservedResource};
-use tam_import::{import_one, AppliedResource, HeldFile, ImportRun, ImportedFile};
+use tam_import::{
+    apply_import, prepare_import, AppliedResource, HeldFile, ImportRun, ImportedFile,
+    PreparedImport,
+};
 use tam_storage::{
     job_request_key, BlobRepo, Completion, DeviceRepo, Disposition, EventScope, JobOrigin, JobRepo,
-    Mint, NewJob, Observed, ResourceCoverage, SyncRequestRecord, SyncRequestRepo, CREATE_LEG,
-    IMPORT_LEG,
+    Mint, NewJob, Observed, ResourceAdmission, ResourceCoverage, SyncRequestRecord,
+    SyncRequestRepo, CREATE_LEG, IMPORT_LEG,
 };
 use tam_types::{
     Actor, FileBytes, FileKind, JobEventPayload, JobId, Observation, OrgId, ScanOutcome, Stamp,
@@ -39,7 +42,7 @@ use tam_types::{
 
 use crate::entitlement::feature_refusal;
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
-use crate::jobs::{missing, storage_fault, validation};
+use crate::jobs::{missing, storage_fault, validation, workflow_deleted};
 use crate::{AppState, OrgContext};
 
 /// The longest listing copy this route will accept, in bytes.
@@ -208,9 +211,14 @@ async fn legacy_page(
     // per resource, and consulted BEFORE anything is canonicalised: `import_one`
     // mints a fresh product every time it runs, so a re-posted page checked
     // afterwards would leave a second product behind for every resource.
+    //
+    // Pending rows may be prelisted resources or interrupted admissions.
+    // Neither is described yet; the admission fence below decides whether
+    // this page may start or resume applying it.
     let described: Vec<&str> = record
         .resources
         .iter()
+        .filter(|row| row.state != "pending")
         .map(|row| row.locator.as_str())
         .collect();
     let fresh = page
@@ -223,7 +231,24 @@ async fn legacy_page(
             .iter()
             .filter(|skip| !described.contains(&skip.locator.as_str()))
             .count();
-    if settled(&record) {
+    // Deletion settles the request before admitted resources can finish.
+    // Only a replay naming a pending locator may reach the admission fence,
+    // which distinguishes an interrupted admission from an unstarted row.
+    let interrupted = settled(&record)
+        && record.resources.iter().any(|row| {
+            row.state == "pending"
+                && page
+                    .resources
+                    .iter()
+                    .any(|resource| resource.locator.as_str() == row.locator.as_str())
+        });
+    let resuming = interrupted
+        && requests
+            .deletion_status(context.org, request)
+            .await
+            .map_err(|error| storage_fault(&state, &error))?
+            .is_some();
+    if settled(&record) && !resuming {
         if fresh == 0 {
             return Ok((StatusCode::OK, Json(ack(&record, 0, 0, false))));
         }
@@ -259,17 +284,32 @@ async fn legacy_page(
         device: &device,
     };
     let mut applied = 0u32;
+    // Recovery may finish prior admissions, but cannot extend or complete
+    // the deleted request.
+    let mut stopped = resuming;
     for resource in &page.resources {
         if described.contains(&resource.locator.as_str()) {
             continue;
         }
-        apply_one(&state, &applying, resource).await?;
-        applied = applied.saturating_add(1);
+        match apply_one(&state, &applying, resource).await? {
+            ResourceApply::Applied => applied = applied.saturating_add(1),
+            ResourceApply::AlreadyDescribed => {}
+            ResourceApply::Stopped => {
+                stopped = true;
+                // Recovery must search past refused locators to find its prior admission.
+                if !resuming {
+                    break;
+                }
+            }
+        }
     }
 
+    // A stopped request takes no further breadcrumbs either. A skip creates
+    // nothing, so this is not a fence — it is not writing onto a row the
+    // seller has already had settled with the reason it ended.
     let mut skipped = 0u32;
     for skip in &page.skipped {
-        if described.contains(&skip.locator.as_str()) {
+        if stopped || described.contains(&skip.locator.as_str()) {
             continue;
         }
         if requests
@@ -303,6 +343,29 @@ async fn legacy_page(
         .await
         .map_err(|error| storage_fault(&state, &error))?;
 
+    if stopped {
+        // Completion would mint exactly the create job the seller stopped,
+        // so it is not attempted. The request already records why it ended;
+        // the device is told what this page managed and that there is
+        // nothing further to send.
+        let after = requests
+            .get(context.org, request)
+            .await
+            .map_err(|error| storage_fault(&state, &error))?;
+        return match after {
+            Some(after) => Ok((StatusCode::OK, Json(ack(&after, applied, skipped, true)))),
+            // Retired between the refusal and this read, which is the same
+            // answer with nothing left to read it from.
+            None => Err(APIError::new(
+                StatusCode::CONFLICT,
+                APIErrorEntry::new(
+                    "this migration was deleted while its import was running, so nothing \
+                     further was imported for it",
+                )
+                .kind(APIErrorKind::Validation),
+            )),
+        };
+    }
     if !page.complete {
         let after = requests
             .get(context.org, request)
@@ -444,17 +507,62 @@ struct Applying<'a> {
     device: &'a str,
 }
 
-/// One observed resource, canonicalised and recorded.
+enum ResourceApply {
+    Applied,
+    AlreadyDescribed,
+    Stopped,
+}
+
+async fn apply_one(
+    state: &AppState,
+    applying: &Applying<'_>,
+    resource: &ObservedResource,
+) -> Result<ResourceApply, APIError> {
+    let run = applying.run;
+    let requests = SyncRequestRepo::new(state.pool.clone());
+    // Admit before storing the cover or preparing a projection, so deletion
+    // observes work that has started even before its catalogue transaction.
+    let ordinal = match requests
+        .admit_resource(
+            run.org,
+            applying.request,
+            resource.locator.as_str(),
+            run.now,
+        )
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+    {
+        ResourceAdmission::Admitted(ordinal) => ordinal,
+        ResourceAdmission::AlreadyDescribed => return Ok(ResourceApply::AlreadyDescribed),
+        ResourceAdmission::Stopped => return Ok(ResourceApply::Stopped),
+    };
+    let result = apply_admitted(state, applying, resource).await;
+    if let Err(refusal) = &result {
+        let why = refusal
+            .errors
+            .first()
+            .map_or("this resource could not be imported", |entry| {
+                entry.message.as_str()
+            });
+        requests
+            .record_resource_failure(run.org, applying.request, ordinal, why)
+            .await
+            .map_err(|error| storage_fault(state, &error))?;
+    }
+    result
+}
+
+/// Prepares one observed resource without holding an application transaction.
 ///
 /// The payload is `Sourced` and names where the seller's bytes are; the cover
 /// is the one thing we keep, stored as a held blob directly rather than through
 /// the ingest pipeline, because the pipeline would derive a cover from the
 /// cover.
-async fn apply_one(
+async fn prepare_resource(
     state: &AppState,
     applying: &Applying<'_>,
     resource: &ObservedResource,
-) -> Result<(), APIError> {
+) -> Result<PreparedImport, APIError> {
     let run = applying.run;
     // A migration moves a file to another marketplace, so a read that named
     // none has nothing to migrate. Refused per resource rather than per page:
@@ -506,47 +614,84 @@ async fn apply_one(
             scan: ScanOutcome::Clean { at: run.now },
         }),
     };
-    let report = import_one(run, &applied)
+    prepare_import(run, &applied)
         .await
-        .map_err(|error| match error {
-            tam_import::ImportError::Storage(error) => storage_fault(state, &error),
-            // Every one of these is something about the seller's own listing:
-            // a resource with nothing to sell, a price that will not
-            // denominate, a currency nobody has measured. The seller can act
-            // on each, which is what makes them validation rather than faults.
-            refused @ (tam_import::ImportError::NoPayload
-            | tam_import::ImportError::Price(_)
-            | tam_import::ImportError::CurrencyUnknown { .. }) => validation(&refused.to_string()),
-            // `import_one` mints a product and never lowers an intent.
-            impossible @ (tam_import::ImportError::Lowering(_)
-            | tam_import::ImportError::NoTarget) => {
-                state.internal(&format!("the import answered {impossible}"))
-            }
-        })?;
-    SyncRequestRepo::new(state.pool.clone())
-        .append_observed(
-            run.org,
-            applying.request,
-            &Observed {
-                locator: resource.locator.as_str(),
-                product: report.product,
-                mapping: report.mapping.ok_or_else(|| {
-                    state.internal("a migrate import minted no mapping for its target")
-                })?,
-                source: &report.source,
-                source_state: report.source_state,
-                coverage: ResourceCoverage {
-                    terms_seen: u32::try_from(report.terms_seen).unwrap_or(u32::MAX),
-                    terms_mapped: u32::try_from(report.terms_mapped).unwrap_or(u32::MAX),
-                    terms_unmapped: u32::try_from(report.unmapped_native_ids.len())
-                        .unwrap_or(u32::MAX),
-                    terms_uncovered: u32::try_from(report.terms_uncovered).unwrap_or(u32::MAX),
-                },
-            },
-        )
+        .map_err(|error| import_fault(state, error))
+}
+
+async fn apply_admitted(
+    state: &AppState,
+    applying: &Applying<'_>,
+    resource: &ObservedResource,
+) -> Result<ResourceApply, APIError> {
+    let run = applying.run;
+    let prepared = prepare_resource(state, applying, resource).await?;
+    let mut tx = state
+        .pool
+        .begin()
+        .await
+        .map_err(|error| storage_fault(state, &error.into()))?;
+    tam_storage::pin_tenant(&mut tx, run.org)
         .await
         .map_err(|error| storage_fault(state, &error))?;
-    Ok(())
+    // The request lock covers the product, mappings and receipt. A concurrent
+    // replay either sees the receipt or takes over a fully rolled-back apply.
+    match SyncRequestRepo::admit_resource_in(
+        &mut tx,
+        run.org,
+        applying.request,
+        resource.locator.as_str(),
+        run.now,
+    )
+    .await
+    .map_err(|error| storage_fault(state, &error))?
+    {
+        ResourceAdmission::Admitted(_) => {}
+        ResourceAdmission::AlreadyDescribed => return Ok(ResourceApply::AlreadyDescribed),
+        ResourceAdmission::Stopped => return Ok(ResourceApply::Stopped),
+    }
+    let report = apply_import(&mut tx, run.org, &prepared, run.now)
+        .await
+        .map_err(|error| import_fault(state, error))?;
+    SyncRequestRepo::append_observed(
+        &mut tx,
+        run.org,
+        applying.request,
+        &Observed {
+            locator: resource.locator.as_str(),
+            product: report.product,
+            mapping: report.mapping.ok_or_else(|| {
+                state.internal("a migrate import minted no mapping for its target")
+            })?,
+            source: &report.source,
+            source_state: report.source_state,
+            coverage: ResourceCoverage {
+                terms_seen: u32::try_from(report.terms_seen).unwrap_or(u32::MAX),
+                terms_mapped: u32::try_from(report.terms_mapped).unwrap_or(u32::MAX),
+                terms_unmapped: u32::try_from(report.unmapped_native_ids.len()).unwrap_or(u32::MAX),
+                terms_uncovered: u32::try_from(report.terms_uncovered).unwrap_or(u32::MAX),
+            },
+        },
+    )
+    .await
+    .map_err(|error| storage_fault(state, &error))?;
+    tx.commit()
+        .await
+        .map_err(|error| storage_fault(state, &error.into()))?;
+    Ok(ResourceApply::Applied)
+}
+
+fn import_fault(state: &AppState, error: tam_import::ImportError) -> APIError {
+    match error {
+        tam_import::ImportError::Storage(error) => storage_fault(state, &error),
+        refused @ (tam_import::ImportError::NoPayload
+        | tam_import::ImportError::Price(_)
+        | tam_import::ImportError::CurrencyUnknown { .. }) => validation(&refused.to_string()),
+        // Applying a resource never lowers a publishing intent.
+        impossible @ (tam_import::ImportError::Lowering(_) | tam_import::ImportError::NoTarget) => {
+            state.internal(&format!("the import answered {impossible}"))
+        }
+    }
 }
 
 /// Which of the seller's connections can fetch this resource's bytes.
@@ -576,19 +721,26 @@ pub(crate) async fn source_connection(
 ///
 /// Keyed on the request, so every page of one import reaches the same job
 /// rather than minting one each.
+///
+/// The request link routes anchor deletion to the owning migration and puts
+/// new anchors behind its deletion fence. Otherwise an itemless anchor could
+/// disappear while the device continued importing resources.
+///
+/// An existing request key still resolves its tombstoned anchor, allowing a
+/// replay to finish an earlier resource admission without minting new work.
 async fn anchor_job(
     state: &AppState,
     record: &SyncRequestRecord,
     now: Timestamp,
 ) -> Result<JobId, APIError> {
     crate::consent::require_grant(state, record.org, record.source.marketplace()).await?;
-    let created = JobRepo::new(state.pool.clone())
+    let minted = JobRepo::new(state.pool.clone())
         .create_with_request_key(
             record.org,
             JobOrigin {
                 request_key: job_request_key(record.id, IMPORT_LEG),
-                // Not a run: it carries no items and settles nothing.
-                run: None,
+                run: Some(record.id),
+                import_run: None,
             },
             &NewJob {
                 job: JobId(fresh_uuid()),
@@ -602,7 +754,12 @@ async fn anchor_job(
         )
         .await
         .map_err(|error| storage_fault(state, &error))?;
-    Ok(created.job)
+    match minted {
+        tam_storage::Minted::Job(created) => Ok(created.job),
+        // The seller stopped the migration between this page's own read of
+        // the request and this mint. There is nothing to anchor.
+        tam_storage::Minted::WorkflowDeleted(workflow) => Err(workflow_deleted(workflow)),
+    }
 }
 
 /// The device must be this organisation's and must not be revoked.

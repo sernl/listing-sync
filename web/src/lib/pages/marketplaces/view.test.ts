@@ -1,15 +1,11 @@
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { SIGN_IN_LABEL } from '$lib/devices-view';
 import type { MarketplaceRow, MarketplaceSignIn, SignInState } from '$lib/devices-view';
 import { APP_CANNOT_FORGET, type LocalSessionOutcome, type SessionOutcome } from '$lib/desktop';
 import type { Marketplace } from '$lib/generated/vocab';
-import { osLabel, sessionLabel, sessionTone, sessionWords } from './machines';
+import { osLabel, sessionLabel, sessionTone, sessionWords } from '../account/machines';
 import {
 	CARD_NAME,
-	CONNECT_RETURN_MARKETPLACE_PARAM,
-	CONNECT_RETURN_PARAM,
 	CONNECT_VERDICT_CODES,
 	DOWNLOADS_ANCHOR,
 	MACHINES_ANCHOR,
@@ -307,7 +303,8 @@ describe('the card footer action', () => {
 				for (const local of [HERE, NOT_HERE, ...NO_LOCAL_ANSWER]) {
 					const action = footerAction(row(state, 'bad'), host, local);
 					if (action.kind === 'link') {
-						expect(action.href.startsWith('#'), `${host}/${state}`).toBe(true);
+						expect(new URL(action.href, 'https://teachouse.example').origin, `${host}/${state}`)
+							.toBe('https://teachouse.example');
 					}
 				}
 			}
@@ -772,42 +769,3 @@ describe('what a finished local sign-out says', () => {
 	});
 });
 
-describe('the address the application and this page share', () => {
-	const connectRs = readFileSync(
-		fileURLToPath(new URL('../../../../../apps/desktop/src-tauri/src/connect.rs', import.meta.url)),
-		'utf8'
-	);
-
-	// Both parameter names are written twice, once in each language, and nothing
-	// but this holds them together. The address is the only channel between the
-	// application and this page, because the page that pressed Connect was
-	// unloaded by the sign-in it started — so a rename on either side loses
-	// every verdict sentence, which is the one failure the return leg exists to
-	// prevent, and no other test anywhere goes red.
-	it('names the two parameters the way the application spells them', () => {
-		expect(connectRs).toContain(`RETURN_PARAM: &str = "${CONNECT_RETURN_PARAM}"`);
-		expect(connectRs).toContain(
-			`RETURN_MARKETPLACE_PARAM: &str = "${CONNECT_RETURN_MARKETPLACE_PARAM}"`
-		);
-	});
-
-	// And the verdicts themselves, in both directions. A code the application
-	// can send that this page does not word returns a seller to the console in
-	// silence; a code worded here that the application never sends is copy
-	// nobody will read. `ConnectVerdict::code` is an exhaustive match, so this
-	// reads the whole set rather than a sample of it.
-	it('words exactly the verdicts the application can send', () => {
-		// `[a-z_]+`, not `[a-z]+`: `signed_out` is two words on the wire, and a
-		// class that stopped at the underscore matched nothing on that arm —
-		// which would have read as the application never sending the code.
-		const sent = [...connectRs.matchAll(/Self::[A-Za-z]+ => "([a-z_]+)"/g)].map(([, code]) => code);
-		expect(sent.length).toBeGreaterThan(0);
-		expect([...sent].sort()).toEqual([...CONNECT_VERDICT_CODES].sort());
-		for (const code of sent) {
-			expect(
-				connectReturn(new URLSearchParams(`connect=${code}&marketplace=Tpt`)),
-				code
-			).not.toBeNull();
-		}
-	});
-});

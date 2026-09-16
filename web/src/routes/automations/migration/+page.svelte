@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { createQuery } from '@tanstack/svelte-query';
+	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import ActivityLog from '$lib/ActivityLog.svelte';
@@ -49,6 +50,15 @@
 		mayMigrate,
 		targetAuthorship
 	} from '$lib/sync-request';
+	import {
+		countWord,
+		deleteRefusal,
+		keptSelection,
+		retainedBadge,
+		type WorkDeleteOutcome,
+		type WorkItem
+	} from '$lib/work-delete';
+	import WorkDeleteDialog from '$lib/WorkDeleteDialog.svelte';
 	import MarketplaceList from '$lib/pages/automations/MarketplaceList.svelte';
 	import { heldSelection, marketplaceRows } from '$lib/pages/automations/marketplace-list';
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
@@ -57,7 +67,8 @@
 		WHAT_A_MIGRATION_IS,
 		migrationLog,
 		migrationRows,
-		pageSelection
+		pageSelection,
+		type MigrationRow
 	} from '$lib/pages/automations/migration';
 	import '$lib/pages/automations/automations.css';
 
@@ -90,6 +101,11 @@
 	// read on screen rather than emptying the list.
 	let requestsUnread = $state(false);
 	let requestAttempt = $state<Attempt | null>(null);
+	/** Which dispositions the history shows: both, or one of them. The
+	 *  seller's own choice, empty for both, and applied by the server. Held
+	 *  apart from `disposition` above, which is what a *new* transfer would
+	 *  be. */
+	let historyKind = $state<Disposition | ''>('');
 
 	// A marketplace list that could not be read is not a seller with no
 	// marketplace: the card says which of the two it is looking at rather than
@@ -202,6 +218,71 @@
 	const past = $derived(migrationRows(requests, Date.now()));
 	const log = $derived(migrationLog(requests, Date.now()));
 
+	/** What the seller has ticked in the migration history: the request's id
+	 *  against the words a confirmation names it by. A map rather than a set
+	 *  of ids, because the selection survives turning the page and a row that
+	 *  is no longer on screen still has to be nameable by the dialog that is
+	 *  about to delete it.
+	 *
+	 *  Kept well apart from `ticked` above, which is the resources a *new*
+	 *  migration would carry. */
+	let pickedPast = $state<Map<string, string>>(new Map());
+	/** The migrations a Delete is being confirmed for, or null while none is. */
+	let deleting = $state<WorkItem[] | null>(null);
+
+	// "Transfer" rather than "migration": this history holds Copies and Moves,
+	// and both are a transfer between two shops.
+	const TRANSFERS = { one: 'transfer', many: 'transfers' };
+	// One already stopping or kept for review is not something a second
+	// Delete could move, so it is not offered as one.
+	const pickable = $derived(past.filter((row) => row.deletion === null));
+	const allPickedHere = $derived(
+		pickable.length > 0 && pickable.every((row) => pickedPast.has(row.request))
+	);
+	const pickedItems = $derived([...pickedPast].map(([id, label]) => ({ id, label })));
+	const pickedElsewhere = $derived(
+		[...pickedPast.keys()].filter((id) => !past.some((row) => row.request === id)).length
+	);
+
+	/** How one migration is named where the row's two marks cannot be: in a
+	 *  confirmation, which is text. */
+	function pastLabel(row: MigrationRow): string {
+		return `${SHORT_NAME[row.source]} → ${SHORT_NAME[row.target]} · ${row.meta}`;
+	}
+
+	function pickPast(row: MigrationRow, on: boolean) {
+		const next = new Map(pickedPast);
+		if (on) {
+			next.set(row.request, pastLabel(row));
+		} else {
+			next.delete(row.request);
+		}
+		pickedPast = next;
+	}
+
+	/** Tick or untick the page in hand, leaving other pages' ticks alone. */
+	function pickPastPage() {
+		const next = new Map(pickedPast);
+		for (const row of pickable) {
+			if (allPickedHere) {
+				next.delete(row.request);
+			} else {
+				next.set(row.request, pastLabel(row));
+			}
+		}
+		pickedPast = next;
+	}
+
+	/** What one Delete settled: the rows the server answered about are
+	 *  unticked, the refusals stay ticked, and the page in hand is read again
+	 *  by the cursor it came from rather than reset to the newest
+	 *  migration. */
+	function settled(outcome: WorkDeleteOutcome) {
+		const kept = keptSelection(new Set(pickedPast.keys()), outcome);
+		pickedPast = new Map([...pickedPast].filter(([id]) => kept.has(id)));
+		void readRequests(requestCursors[requestPage - 1] ?? null, requestPage);
+	}
+
 	const body = $derived(
 		migrationBody({ source, target, disposition, all, products: [...ticked] })
 	);
@@ -244,19 +325,28 @@
 		key = null;
 	});
 
-	// The migrate half of the request list, narrowed by the server rather than
-	// by this page. A sync and a migration are one record under two
-	// dispositions, and filtering a page of ten mixed requests down to the
-	// migrations among them would answer nothing at all to a seller whose last
-	// ten requests were syncs.
+	let requestsRead = 0;
+
+	/** One page of the transfer history, narrowed by the server and never by
+	 *  this page.
+	 *
+	 *  Both dispositions by default. This used to ask for `migrate` only,
+	 *  which is Move: a seller whose transfers were all Copies — the default
+	 *  this screen offers — found their own history empty and had no way to
+	 *  delete anything from it. `historyKind` narrows it through the
+	 *  endpoint's own query, so a page of ten is ten of what was asked for
+	 *  rather than ten mixed rows filtered down to whatever survived. */
 	async function readRequests(cursor: string | null, page: number) {
+		const generation = ++requestsRead;
 		requestsBusy = true;
+		const asked = historyKind;
 		try {
 			const view = await api.syncRequests({
 				cursor,
 				limit: PER_PAGE,
-				disposition: 'migrate'
+				disposition: asked === '' ? undefined : asked
 			});
+			if (generation !== requestsRead) return;
 			requests = view.requests;
 			requestNext = view.next_cursor;
 			requestPage = page;
@@ -264,17 +354,32 @@
 			requestsUnread = false;
 			requestAttempt = null;
 		} catch {
+			if (generation !== requestsRead) return;
 			// The page on screen and the page number both stay, and the page
 			// that failed is remembered apart from them: an emptied list would
-			// read as "you have never migrated a shop", and a Retry that asked
+			// read as "you have never moved a shop", and a Retry that asked
 			// for the page still on screen would clear the failure without
 			// ever fetching the page the seller pressed Next for.
 			requestsUnread = true;
 			requestAttempt = { cursor, page };
 		} finally {
-			requestsBusy = false;
-			requestsLoaded = true;
+			if (generation === requestsRead) {
+				requestsBusy = false;
+				requestsLoaded = true;
+			}
 		}
+	}
+
+	/** Narrow the history to Copies, to Moves, or to neither.
+	 *
+	 *  Back to the first page and a fresh cursor ledger: the server's tokens
+	 *  are cut against the filter they were issued under, so page two of
+	 *  "everything" is not page two of "Moves". */
+	function narrowHistory() {
+		requestCursors = [null];
+		requestNext = null;
+		requestAttempt = null;
+		void readRequests(null, 1);
 	}
 
 	function retryRequestPage() {
@@ -310,10 +415,7 @@
 		}
 	}
 
-	$effect(() => {
-		// The first page by a null cursor rather than through the cursor
-		// ledger: reading that ledger here would make this effect depend on
-		// state the read writes, and it would re-run forever.
+	onMount(() => {
 		void readRequests(null, 1);
 		void readProducts(null, 1);
 		void api
@@ -702,41 +804,116 @@
 			     disagree about what the seller is looking at, and turning the
 			     page turns both. -->
 			<Panel
-				title="Your migrations"
-				description="Every shop you have brought across, newest first."
+				title="Your transfers"
+				description="Every transfer you have run, Copy and Move together, newest first."
 			>
+				<!-- The filter is the endpoint's own `disposition` query, not a
+				     sieve over the page: a page of ten filtered in the browser
+				     would answer "the Copies among the newest ten". -->
+				{#snippet more()}
+					<Field label="Show" id="history-kind">
+						<select id="history-kind" bind:value={historyKind} onchange={narrowHistory}>
+							<option value="">Copies and Moves</option>
+							<option value="sync">{DISPOSITION_WORD.sync} only</option>
+							<option value="migrate">{DISPOSITION_WORD.migrate} only</option>
+						</select>
+					</Field>
+				{/snippet}
 				{#if !requestsLoaded}
 					<p class="quiet">Loading…</p>
 				{:else if requestsUnread && requests.length === 0}
 					<Banner tone="bad" action={retryRequests}>
-						Your migrations could not be read, so this page cannot list them. Any migration
+						Your transfers could not be read, so this page cannot list them. Any transfer
 						already running is unaffected.
 					</Banner>
 				{:else}
 					{#if requestsUnread}
 						<Banner tone="bad" action={retryRequests}>
-							That page could not be read, so the migrations below are the last ones that
+							That page could not be read, so the transfers below are the last ones that
 							did.
 						</Banner>
 					{/if}
 					{#if past.length === 0}
+						<!-- "Nothing on this page", "nothing of this kind" and "you
+						     have never transferred a shop" are three different facts. -->
 						<p class="quiet">
 							{requestPage > 1
-								? 'There are no migrations on this page. Go back for the ones before it.'
-								: NO_MIGRATION_YET}
+								? 'There is nothing left on this page. Go back for the transfers before it.'
+								: historyKind !== ''
+									? `No ${DISPOSITION_WORD[historyKind].toLocaleLowerCase()} has run yet. Show both to see the rest.`
+									: NO_MIGRATION_YET}
 						</p>
 					{:else}
+						<!-- The tick for the page in hand and whatever the seller has
+						     ticked elsewhere. In the flow above the rows, because a bar
+						     pinned to a phone's viewport covers the row it acts on. -->
+						<div class="work-bar">
+							<label class="work-pick-all">
+								<input
+									type="checkbox"
+									checked={allPickedHere}
+									disabled={pickable.length === 0}
+									onchange={pickPastPage}
+								/>
+								Select the {countWord(pickable.length, TRANSFERS)} on this page
+							</label>
+							{#if pickedPast.size > 0}
+								<span class="work-picked">
+									{countWord(pickedPast.size, TRANSFERS)} selected{pickedElsewhere > 0
+										? `, ${pickedElsewhere} of them on another page`
+										: ''}
+								</span>
+								<div class="work-bar-acts">
+									<Button small tier="quiet" onclick={() => (pickedPast = new Map())}>
+										Clear selection
+									</Button>
+									<Button small danger onclick={() => (deleting = pickedItems)}>
+										Delete {countWord(pickedPast.size, TRANSFERS)}
+									</Button>
+								</div>
+							{/if}
+						</div>
+
 						{#each past as row (row.request)}
-							<a class="auto-row" href={row.href}>
-								<StatusPill tone={row.tone} label={row.label} />
+							{@const going = retainedBadge(row.deletion)}
+							{@const refusal = deleteRefusal(row.deletion)}
+							<!-- A row rather than one whole-row anchor: it carries a tick
+							     and a Delete, and a control nested in a link is reached by
+							     the keyboard as part of the link and a press activates
+							     both. -->
+							<div class="auto-row">
+								<span class="pick">
+									<input
+										type="checkbox"
+										checked={pickedPast.has(row.request)}
+										disabled={refusal !== null}
+										title={refusal ?? undefined}
+										aria-label={`Select the transfer ${pastLabel(row)}`}
+										onchange={(event) => pickPast(row, event.currentTarget.checked)}
+									/>
+								</span>
 								<span class="who">
-									<span class="t">
+									<a class="t" href={row.href}>
 										<MarketplaceMark inventory={row.source} /> →
 										<MarketplaceMark inventory={row.target} />
-									</span>
+									</a>
 									<span class="meta">{row.meta}</span>
 								</span>
-							</a>
+								<span class="mark">
+									<StatusPill tone={going?.tone ?? row.tone} label={going?.label ?? row.label} />
+								</span>
+								<span class="act">
+									<Button
+										small
+										danger
+										disabled={refusal !== null}
+										reason={refusal ?? undefined}
+										onclick={() => (deleting = [{ id: row.request, label: pastLabel(row) }])}
+									>
+										Delete
+									</Button>
+								</span>
+							</div>
 						{/each}
 					{/if}
 					{#if past.length > 0 || requestPage > 1}
@@ -744,8 +921,8 @@
 							page={requestPage}
 							hasNext={requestNext !== null}
 							busy={requestsBusy}
-							label="Your migrations"
-							summary={`${past.length} migrations on this page`}
+							label="Your transfers"
+							summary={`${past.length} transfers on this page`}
 							onprevious={() =>
 								void readRequests(requestCursors[requestPage - 2] ?? null, requestPage - 1)}
 							onnext={() => void readRequests(requestNext, requestPage + 1)}
@@ -756,14 +933,14 @@
 
 			<Panel
 				title="Activity log"
-				description="What each migration on this page did, newest first."
+				description="What each transfer on this page did, newest first."
 			>
 				<ActivityLog
 					entries={log}
 					bind:query={logQuery}
 					empty={requestPage > 1
-						? 'There is nothing to log on this page. Go back for the migrations before it.'
-						: 'No migration has run yet, so there is nothing to log.'}
+						? 'There is nothing to log on this page. Go back for the transfers before it.'
+						: 'No transfer has run yet, so there is nothing to log.'}
 				/>
 			</Panel>
 		</div>
@@ -800,3 +977,14 @@
 		Retry
 	</Button>
 {/snippet}
+
+<!-- One dialog for a row's own Delete and for the selection's: what a seller
+     has to read before deleting a transfer is the same either way. -->
+<WorkDeleteDialog
+	open={deleting !== null}
+	items={deleting ?? []}
+	noun={TRANSFERS}
+	remove={api.deleteSyncRequest}
+	onClose={() => (deleting = null)}
+	onsettled={settled}
+/>

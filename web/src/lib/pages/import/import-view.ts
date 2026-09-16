@@ -8,9 +8,10 @@
 // wording of a refusal from the machine the seller is standing at, and the
 // row one run draws in the list of them.
 
-import type { ConnectionView, ImportRunHead } from '$lib/api';
+import type { ConnectionView, ImportRunHead, JobDeletionStatus } from '$lib/api';
 import { standingMarketplaces } from '$lib/connection-standing';
 import { APP_TOO_OLD, type LocalSessionOutcome, type StartOutcome } from '$lib/desktop';
+import { agoLabel } from '$lib/elapsed';
 import { TRANSPORT_OF } from '$lib/inventory';
 import { MARKETPLACE_OF, INVENTORY_ORDER } from '$lib/listings-view';
 import { AUTHORABLE_PLATFORMS } from '$lib/platforms';
@@ -324,6 +325,11 @@ export interface ImportRow {
 	line: string;
 	label: string;
 	tone: PillTone;
+	/** Whether this run is on its way out of the history, and how far that
+	 *  has got. Null for a run nobody has asked to delete, which is almost
+	 *  all of them: a deleted run is filtered out by the server, so the only
+	 *  ones that reach this list are the retained arms. */
+	deletion: JobDeletionStatus | null;
 	created_at: number;
 }
 
@@ -344,9 +350,21 @@ export function importRows(runs: readonly ImportRunHead[]): ImportRow[] {
 			line: countsLine(run.counts, run.read_total),
 			label: badge.label,
 			tone: badge.tone,
+			deletion: run.deletion_status ?? null,
 			created_at: run.created_at
 		};
 	});
+}
+
+/** How one import is named where it is not in the list: in a confirmation
+ *  that is about to delete it, where the shop's name alone would not tell two
+ *  imports of the same shop apart.
+ *
+ *  Takes `now` rather than reading the clock, for the reason every other
+ *  elapsed label in this console does: a pure module that read the clock
+ *  could not be tested and would freeze at whenever it was first called. */
+export function importRunLabel(row: ImportRow, now: number): string {
+	return `${row.name} · started ${agoLabel(row.created_at, now)}`;
 }
 
 /** What the list says while it holds nothing, which is not the same as what it

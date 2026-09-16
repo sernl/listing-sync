@@ -20,7 +20,7 @@ use tam_api::import_runs::{
     ImportReasonCodeView, ImportRunItemState, ImportRunKind, ImportRunStage, ImportRunState,
     MatchLayerView,
 };
-use tam_api::jobs::{outcome_str, JobPhase, ALL_OUTCOMES};
+use tam_api::jobs::{outcome_str, JobPhase, ALL_DELETION_STATUSES, ALL_OUTCOMES};
 use tam_api::migrations::MigrationVerdict;
 use tam_api::org::SlugPrompt;
 use tam_api::product::StandardsState;
@@ -208,6 +208,13 @@ fn vocab() -> String {
         "JobPhase",
         "JOB_PHASES",
         &[JobPhase::Active, JobPhase::Settled],
+        serde_name,
+    ));
+    out.push('\n');
+    out.push_str(&closed(
+        "JobDeletionStatus",
+        "JOB_DELETION_STATUSES",
+        &ALL_DELETION_STATUSES,
         serde_name,
     ));
     out.push('\n');

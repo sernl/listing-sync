@@ -1,0 +1,71 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT state, scheduled, source, anchor_job, owner_device, attempt, commit_authorised_at, COALESCE(lease_expires_at > now(), false) AS \"lease_live!\", deletion_requested_at FROM import_run WHERE org_id = $1 AND id = $2 FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "scheduled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "source",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "anchor_job",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "owner_device",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "attempt",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "commit_authorised_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "lease_live!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 8,
+        "name": "deletion_requested_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      true,
+      null,
+      true
+    ]
+  },
+  "hash": "04262b6205cb4457b7516e59a976f8feb6a38a8a2dea0867f9236fb39aec5f48"
+}

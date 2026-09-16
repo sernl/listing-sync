@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE job SET deletion_requested_at = COALESCE(deletion_requested_at, $3), deletion_actor_kind = COALESCE(deletion_actor_kind, $4), deletion_actor_id = COALESCE(deletion_actor_id, $5), deletion_state = COALESCE(deletion_state, 'stopping') WHERE org_id = $1 AND id = $2 RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6f4ab29eb4c62c2fb3761d8f22668ab92152326a02f0d1d62d6bc8e42678f1fe"
+}

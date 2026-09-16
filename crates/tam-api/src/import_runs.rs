@@ -17,6 +17,7 @@
 
 use axum::extract::{Path, Query, State};
 use axum::http::{header, StatusCode};
+use axum::response::Response;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use tam_engine_driver::import::{
@@ -25,11 +26,12 @@ use tam_engine_driver::import::{
 };
 use tam_import::{AppliedResource, HeldFile, ImportRun, ImportedFile};
 use tam_storage::{
-    job_request_key, BlobRepo, ClaimOutcome, EventScope, FenceOutcome, FingerprintWrite,
-    ImportReasonCode, ImportRunHead, ImportRunItemRecord, ImportRunRepo, ImportStage, ItemOrder,
-    ItemPageFilter, JobOrigin, JobRepo, MatchLayer, NewImportRun, NewJob, NewVerdict,
-    ProgressReport, ReceiptOutcome, RunCounts, RunHistoryFilter, RunItemState, RunKind, RunOpening,
-    RunState, Selection, TextSketchColumns, IMPORT_LEG, ITEMS_LISTED_MAX, RUNS_LISTED_MAX,
+    job_request_key, BatchRunOpening, BlobRepo, ClaimOutcome, EventScope, FenceOutcome,
+    FingerprintWrite, ImportReasonCode, ImportRunHead, ImportRunItemRecord, ImportRunRepo,
+    ImportStage, ItemOrder, ItemPageFilter, JobOrigin, JobRepo, MatchLayer, Minted, NewImportRun,
+    NewJob, NewVerdict, ProgressReport, ReceiptOutcome, RunCounts, RunHistoryFilter, RunItemState,
+    RunKind, RunOpening, RunState, Selection, TextSketchColumns, IMPORT_LEG, ITEMS_LISTED_MAX,
+    RUNS_LISTED_MAX,
 };
 use tam_types::{
     Actor, ContentHash, FileBytes, FileKind, InventoryId, JobEventPayload, JobId, Marketplace,
@@ -39,7 +41,7 @@ use tam_types::{
 
 use crate::entitlement::feature_refusal;
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
-use crate::jobs::{missing, storage_fault, validation};
+use crate::jobs::{missing, storage_fault, validation, DeletionStatusView, JobDeletionView};
 use crate::matcher::{self, Side, SideFile, TextFacts};
 use crate::{AppState, OrgContext};
 
@@ -490,6 +492,10 @@ pub struct ImportRunHeadView {
     /// retry. The terminal run keeps everything it recorded; this is the
     /// lineage beside it.
     pub retry_of: Option<Uuid>,
+    /// Where a Delete this import is still working through has got to, and
+    /// nothing for an import nobody deleted. A listed run is never
+    /// `deleted`: the tombstone is filtered in the storage query.
+    pub deletion_status: Option<DeletionStatusView>,
     pub execution: ImportExecutionView,
 }
 
@@ -515,6 +521,8 @@ pub struct ImportRunView {
     pub created_at: Timestamp,
     pub settled_at: Option<Timestamp>,
     pub retry_of: Option<Uuid>,
+    /// See [`ImportRunHeadView::deletion_status`].
+    pub deletion_status: Option<DeletionStatusView>,
     pub execution: ImportExecutionView,
 }
 
@@ -620,6 +628,14 @@ pub(crate) async fn create_run(
         .await
         .map_err(|error| storage_fault(&state, &error))?
     {
+        // A key whose import the seller deleted is refused rather than
+        // answered with the tombstone or spent a second time. The binding is
+        // kept precisely so this answer exists: without it the replay would
+        // find no key, open a second import of the same shop, and the seller
+        // would have deleted an import that came straight back.
+        if held.deleted {
+            return Err(start_key_deleted());
+        }
         if held.source != body.source || held.retry_of != body.retry_of {
             return Err(start_key_spent(held.source));
         }
@@ -1417,6 +1433,34 @@ pub(crate) async fn abandon(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Deletes one import, at any stage of its life.
+///
+/// Distinct from [`abandon`], which is the seller stopping an import they
+/// intend to keep looking at: this removes it from their history, and stopping
+/// it is the part of that it has to do first. So an open run is stopped here
+/// too — a settled, failed, empty or already-abandoned one needs no stopping
+/// and is admitted just the same, which is most of what a seller deletes.
+///
+/// `200`/`deleted` once no chunk and no device can still be working; `202`
+/// with `stopping` while one can, and asking again is what learns that it has
+/// finished. The resources earlier chunks committed stay in the catalogue
+/// with their files and labels: they are the seller's own resources, and
+/// deleting the record of how they arrived does not delete them. Nothing here
+/// touches a marketplace.
+pub(crate) async fn delete_run(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, run)): Path<(String, String)>,
+) -> Result<Response, APIError> {
+    let run = parse_id(&run)?;
+    let status = ImportRunRepo::new(state.pool.clone())
+        .delete(context.org, run, context.stamp((state.wall)()))
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+        .ok_or_else(|| missing("no such import"))?;
+    Ok(JobDeletionView::answer(status))
+}
+
 /// The device's own stop, replayable.
 ///
 /// The console's [`abandon`] is the seller pressing stop in the browser and
@@ -1452,7 +1496,11 @@ pub(crate) async fn device_stop(
     // lock. A fence read here followed by a write afterwards would let a
     // takeover land between them, and this device's hour-old stop would
     // abandon the new owner's work.
-    let head = head_or_missing(&state, context.org, run).await?;
+    // The internal lookup, because this is a device's own post: a stop
+    // replayed after the seller deleted the import must reach the repository,
+    // where it is either the replay's own acknowledgement or the settled
+    // run's conflict — never the not-found the phone would retry forever.
+    let head = device_head(&state, context.org, run).await?;
     let outcome = ImportRunRepo::new(state.pool.clone())
         .stop_owned(context.org, run, &device, body.attempt, (state.wall)())
         .await
@@ -1513,6 +1561,51 @@ pub(crate) async fn head_or_missing(
         .map_err(|error| storage_fault(state, &error))?
         .map(|record| record.head)
         .ok_or_else(|| missing("no such import"))
+}
+
+/// The run's head for a device's own post, a deleted import included.
+///
+/// A device's queued page or stop is answered about the run rather than about
+/// the seller's list, and the difference matters because of what the two
+/// answers mean on the phone. The desktop transport reads a 404 as this
+/// machine not being registered — an outage it offers again, ahead of every
+/// other owed post — so a page replayed after the seller deleted the import
+/// would sit at the head of that queue forever and hold the rest of it up. A
+/// 409 naming a settled run is terminal: the post is retired and the queue
+/// drains.
+///
+/// So a deleted run is not hidden here; it is refused with the answer it
+/// already has for a run that is over. The seller's own history and detail
+/// reads keep [`head_or_missing`], where a deleted import is a 404.
+pub(crate) async fn device_head(
+    state: &AppState,
+    org: OrgId,
+    run: Uuid,
+) -> Result<ImportRunHead, APIError> {
+    ImportRunRepo::new(state.pool.clone())
+        .head_internal(org, run)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+        .ok_or_else(|| missing("no such import"))
+}
+
+/// The same lookup, refusing a deleted import outright.
+///
+/// What a page uses, because a page is a write: the run is over, nothing it
+/// carries is applied, and the refusal is stated before any effect rather
+/// than left to each branch's own fence. A stop uses [`device_head`]
+/// instead — it takes work from nobody, and letting it reach the repository
+/// is what lets a deleted run's retained hold be acknowledged.
+pub(crate) async fn device_head_or_refusal(
+    state: &AppState,
+    org: OrgId,
+    run: Uuid,
+) -> Result<ImportRunHead, APIError> {
+    let head = device_head(state, org, run).await?;
+    if head.deletion.is_some() {
+        return Err(run_settled(head.state));
+    }
+    Ok(head)
 }
 
 /// Which resources one run view carries with it.
@@ -1621,6 +1714,7 @@ pub(crate) async fn view_of_windowed(
         created_at: head.created_at,
         settled_at: head.settled_at,
         retry_of: head.retry_of,
+        deletion_status: head.deletion_status,
         execution: head.execution.clone(),
     })
 }
@@ -1645,6 +1739,7 @@ pub(crate) fn head_view(
         created_at: head.created_at,
         settled_at: head.settled_at,
         retry_of: head.retry_of,
+        deletion_status: head.deletion.map(DeletionStatusView::of),
         execution: ImportExecutionView::of(head, described),
     }
 }
@@ -1722,7 +1817,7 @@ pub(crate) async fn run_page(
     // Another organisation's run is missing rather than forbidden: the caller
     // learns nothing about whether the identifier exists, which is the posture
     // every other org-scoped read here takes.
-    let head = head_or_missing(state, context.org, page.run).await?;
+    let head = device_head_or_refusal(state, context.org, page.run).await?;
     // An unfenced catalogue page is refused before any effect. `import.rs`
     // makes the same refusal at the boundary; this is it stated where the run
     // is known, so no path reaches the writes without an attempt.
@@ -2624,25 +2719,41 @@ fn storage_fault_tx(org: OrgId, error: &tam_storage::StorageError) -> APIError {
     )
 }
 
-/// The run that reviews one spreadsheet batch, found or opened.
+/// The run that reviews one spreadsheet batch, found or opened, or the
+/// refusal that this batch's import was deleted.
 ///
 /// A run for the spreadsheet source too, and the reason is that the duplicate
 /// review has to be one thing rather than two: the same pair table, the same
 /// verdicts, the same never-ask-twice rule, and the same card. A batch that
 /// held its own review would be a second implementation of the hardest part of
 /// this feature.
+///
+/// The lookup is the batch's durable identity rather than the seller's
+/// listing, and that distinction is the whole of the fence here. Deleting an
+/// import does not destroy the spreadsheet's rows — they are the seller's own
+/// upload, and the receipts of what was created from them — so a lookup that
+/// could not see the tombstone found no run, opened a second one against
+/// those preserved rows and created the rest of an import the seller had just
+/// deleted. A deleted batch is refused instead, under the identity lock, so
+/// the refusal cannot be raced by the deletion it is about.
 pub(crate) async fn run_for_batch(
     state: &AppState,
     org: OrgId,
     batch: Uuid,
 ) -> Result<ImportRunHead, APIError> {
     let repo = ImportRunRepo::new(state.pool.clone());
-    if let Some(head) = repo
-        .by_batch(org, batch)
+    // The unlocked read first, which is the ordinary case and every resumed
+    // chunk: a batch whose run exists needs no anchor job minted to be told
+    // so. The locked decision below is what a first chunk reaches.
+    if let Some(identity) = repo
+        .batch_identity(org, batch)
         .await
         .map_err(|error| storage_fault(state, &error))?
     {
-        return Ok(head);
+        if let Some(deletion) = identity.deletion {
+            return Err(batch_import_deleted(deletion));
+        }
+        return head_or_missing(state, org, identity.run).await;
     }
     let now = (state.wall)();
     let run = fresh_uuid();
@@ -2651,8 +2762,9 @@ pub(crate) async fn run_for_batch(
     // attribute it to, and the job carries no items either way.
     let anchor = anchor_job(state, org, run, InventoryId::Tes, now).await?;
     let opening = repo
-        .create(
+        .open_for_batch(
             org,
+            batch,
             &NewImportRun {
                 id: run,
                 kind: RunKind::Spreadsheet,
@@ -2671,18 +2783,35 @@ pub(crate) async fn run_for_batch(
         .await
         .map_err(|error| storage_fault(state, &error))?;
     match opening {
-        RunOpening::Opened => head_or_missing(state, org, run).await,
+        BatchRunOpening::Opened => head_or_missing(state, org, run).await,
         // A run for this batch appeared between the read above and this
         // write, which is two commit chunks racing on one batch: the answer
         // is that run, because it is the one this batch is reviewed through.
-        RunOpening::AlreadyOpen(open) => head_or_missing(state, org, open).await,
-        // A spreadsheet run spends no start key, so this is unreachable; it
-        // is named rather than wildcarded so that a third opening answer
-        // fails here rather than falling into a silent branch.
-        RunOpening::KeySpent { .. } => {
-            Err(state.internal("a spreadsheet run answered with a spent start key"))
-        }
+        BatchRunOpening::Existing(open) => head_or_missing(state, org, open).await,
+        // And the deletion won that race. Refused for the same reason the
+        // unlocked read refuses it, which is why both answers are one
+        // sentence.
+        BatchRunOpening::Deleted(deletion) => Err(batch_import_deleted(deletion)),
     }
+}
+
+/// This spreadsheet's import was deleted, so its rows create nothing more.
+///
+/// A conflict rather than a not-found: the batch is still there, and the
+/// seller can still open it and read what it did. What is refused is
+/// committing it again, and the deletion's own state is carried so a console
+/// can say whether the stop has finished.
+fn batch_import_deleted(deletion: tam_storage::DeletionStatus) -> APIError {
+    APIError::new(
+        StatusCode::CONFLICT,
+        APIErrorEntry::new(
+            "you deleted the import this spreadsheet was committed through, so its rows create \
+             nothing more; upload it again to import it",
+        )
+        .code(APIErrorCode::ImportRunSettled)
+        .kind(APIErrorKind::Validation)
+        .detail(serde_json::json!({ "deletion_status": deletion.as_str() })),
+    )
 }
 
 /// One claimed spreadsheet row, ready for the matcher.
@@ -4154,6 +4283,12 @@ pub(crate) async fn anchor_job(
             JobOrigin {
                 request_key: job_request_key(run, IMPORT_LEG),
                 run: None,
+                // The anchor is minted before the run's own row exists — it
+                // is what that row's `anchor_job` names — so it cannot carry
+                // a link back to it. The deletion reaches it through
+                // `import_run.anchor_job` instead, which is the direction
+                // that is always available.
+                import_run: None,
             },
             &NewJob {
                 job: JobId(fresh_uuid()),
@@ -4167,6 +4302,12 @@ pub(crate) async fn anchor_job(
         )
         .await
         .map_err(|error| storage_fault(state, &error))?;
+    // The anchor names no workflow — it *is* the run's own row, minted before
+    // the run exists — so the mint has nothing to be refused by. A refusal
+    // here would mean the origin carried a link this function does not set.
+    let Minted::Job(created) = created else {
+        return Err(state.internal("an import anchor was refused by a workflow it never named"));
+    };
     Ok(created.job)
 }
 
@@ -4433,6 +4574,18 @@ fn start_key_spent(source: InventoryId) -> APIError {
         .code(APIErrorCode::ImportStartKeySpent)
         .kind(APIErrorKind::Validation)
         .detail(serde_json::json!({ "source": source })),
+    )
+}
+
+/// The start key names an import the seller deleted.
+///
+/// The same code a spent key answers, because that is what this is from the
+/// client's point of view — the key is used up and the run behind it is not
+/// available — and the sentence is what differs.
+fn start_key_deleted() -> APIError {
+    conflict(
+        "you deleted the import this start belongs to; start a new import instead",
+        APIErrorCode::ImportStartKeySpent,
     )
 }
 

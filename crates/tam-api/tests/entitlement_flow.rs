@@ -431,6 +431,34 @@ async fn a_tenant_wide_halt_grants_nothing(pool: PgPool) {
     );
 }
 
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_write_only_tpt_halt_keeps_the_source_in_the_signed_read_grant(pool: PgPool) {
+    let (key, public) = key_pair();
+    entitled_device(&pool, &key).await;
+    pinned(
+        &pool,
+        ORG_A,
+        "INSERT INTO org_inventory_halt \
+         (org_id, inventory, marketplace, raised_by, reason, raised_at, write_only) \
+         VALUES ($1, 'tpt', 'tpt', 'operator', 'read-only source', now(), true)",
+    )
+    .await;
+
+    let answer = beat(&pool, Some(key), &TOKEN_A, LAPTOP).await;
+    assert_eq!(answer.status, StatusCode::OK);
+    let view = answer.view();
+    let claims = verified(
+        view.entitlement
+            .as_deref()
+            .expect("a read-only source still receives a signed read grant"),
+        &public,
+    );
+    assert!(
+        claims.marketplaces.contains(&Marketplace::Tpt),
+        "the native importer must be able to read TPT without permitting TPT writes"
+    );
+}
+
 // T4, the fleet kill switch, at marketplace granularity.
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn halting_every_inventory_of_one_marketplace_drops_it_from_the_grant(pool: PgPool) {

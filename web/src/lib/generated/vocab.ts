@@ -314,6 +314,17 @@ export const JOB_PHASES: readonly JobPhase[] = [
   "settled",
 ];
 
+export type JobDeletionStatus =
+  | "stopping"
+  | "needs_review"
+  | "deleted";
+
+export const JOB_DELETION_STATUSES: readonly JobDeletionStatus[] = [
+  "stopping",
+  "needs_review",
+  "deleted",
+];
+
 export type TermKind =
   | "subject"
   | "topic"

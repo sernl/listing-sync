@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE job_item ji SET state = 'queued', lease_owner = NULL, lease_expires_at = NULL, lease_epoch = lease_epoch + 1, attempt_count = attempt_count + 1 WHERE ji.state IN ('leased', 'running', 'verifying') AND ji.lease_expires_at <= now() AND NOT EXISTS (SELECT 1 FROM job j WHERE j.org_id = ji.org_id AND j.id = ji.job_id AND j.deletion_requested_at IS NOT NULL)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "cffe74a0d50d02d807bc9b5a84ad4cb5780cfd5c15f4d70b6c42aedcbcb4b942"
+}

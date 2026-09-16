@@ -26,7 +26,7 @@ use tam_marketplace::idempotency::derive_idempotency_key;
 use tam_marketplace::{ListingState, RemoteLifecycle, RemoteListingId};
 use tam_storage::{
     job_request_key, ConsentRepo, Disposition, Enqueued, JobOrigin, JobRepo, LoweringRefusal,
-    MappingRepo, NewJob, NewJobItem, StorageError, SyncRequestRecord, SyncRequestRepo,
+    MappingRepo, Minted, NewJob, NewJobItem, StorageError, SyncRequestRecord, SyncRequestRepo,
     SyncResourceRecord, CREATE_LEG, REMOVE_LEG,
 };
 use tam_types::{
@@ -84,6 +84,20 @@ pub async fn drain_request(
     run: &ImportRun,
     request: Uuid,
 ) -> Result<DrainReport, DrainError> {
+    // The fence, before the request is read as work. A deleted request is
+    // hidden from `get`, so this is what turns a late drain into an honest
+    // "nothing to do" rather than a locator error — and `create_job_in_tx`
+    // holds the same fence inside the mint, for the case where the Delete
+    // commits after this read.
+    if requests.deletion_status(run.org, request).await?.is_some() {
+        return Ok(DrainReport {
+            request,
+            skipped: 0,
+            failed: 0,
+            create_job: None,
+            remove_job: None,
+        });
+    }
     let record = requests
         .get(run.org, request)
         .await?
@@ -160,14 +174,24 @@ pub async fn drain_request(
             .await?;
         return Ok(report);
     }
-    let create_job = enqueue_create(run, &record, &mappings).await?;
+    // A leg refused because the seller deleted the request mid-drain stops
+    // the pass where it stands. Nothing was written for that leg, the legs
+    // already minted carry their request's id and are fenced through it, and
+    // `record_enqueued` deliberately never runs: marking a deleted request
+    // `enqueued` would resurrect it in the seller's list.
+    let Some(create_job) = enqueue_create(run, &record, &mappings).await? else {
+        return Ok(report);
+    };
     report.create_job = Some(create_job);
     // A migrate is two jobs, forced: `job.inventory` is single-valued, so the
     // create on the target and the removal on the source cannot share one.
     // The request row is what holds the pair together and is what the seller
     // polls.
     let remove_job = if removes_the_source(record.disposition) {
-        Some(enqueue_removal(run, &record, &canonicalised).await?)
+        let Some(removal) = enqueue_removal(run, &record, &canonicalised).await? else {
+            return Ok(report);
+        };
+        Some(removal)
     } else {
         None
     };
@@ -256,7 +280,7 @@ async fn enqueue_create(
     run: &ImportRun,
     record: &SyncRequestRecord,
     mappings: &[tam_types::MappingId],
-) -> Result<Uuid, DrainError> {
+) -> Result<Option<Uuid>, DrainError> {
     // The items are `tam-import`'s, because the device import's completing page
     // mints the same rows inside its own transaction and two copies of this
     // lowering would let the two callers diverge on what a `live` request means.
@@ -281,7 +305,7 @@ async fn enqueue_create(
                 })
             }
         })?;
-    let created = JobRepo::new(run.pool.clone())
+    let minted = JobRepo::new(run.pool.clone())
         .create_with_request_key(
             run.org,
             JobOrigin {
@@ -290,8 +314,12 @@ async fn enqueue_create(
                 // same statement. `record_enqueued` names it the other
                 // way in a later transaction, and a settle landing
                 // before that -- or after it failed -- would otherwise
-                // find no run to notify a seller about.
+                // find no run to notify a seller about. It is also how a
+                // Delete finds this leg before those columns are written
+                // at all.
                 run: Some(record.id),
+                // A migration's legs are not an import's publication.
+                import_run: None,
             },
             &NewJob {
                 job,
@@ -307,7 +335,10 @@ async fn enqueue_create(
             // worker names itself rather than guessing at one.
         )
         .await?;
-    Ok(created.job.0)
+    Ok(match minted {
+        Minted::Job(created) => Some(created.job.0),
+        Minted::WorkflowDeleted(_) => None,
+    })
 }
 
 /// The removal leg: the source mapping bound from the read, and one removal
@@ -342,7 +373,7 @@ async fn enqueue_removal(
     run: &ImportRun,
     record: &SyncRequestRecord,
     canonicalised: &[Canonicalisation],
-) -> Result<Uuid, DrainError> {
+) -> Result<Option<Uuid>, DrainError> {
     if canonicalised.is_empty() {
         return Err(DrainError::Locator(
             "a migrate's removal leg carries no resources, so the source listings would \
@@ -429,7 +460,7 @@ async fn enqueue_removal(
             requires_bound_on: Some(record.target),
         });
     }
-    let created = JobRepo::new(run.pool.clone())
+    let minted = JobRepo::new(run.pool.clone())
         .create_with_request_key(
             run.org,
             JobOrigin {
@@ -438,8 +469,14 @@ async fn enqueue_removal(
                 // same statement. `record_enqueued` names it the other
                 // way in a later transaction, and a settle landing
                 // before that -- or after it failed -- would otherwise
-                // find no run to notify a seller about.
+                // find no run to notify a seller about. It is also how a
+                // Delete finds this leg before those columns are written
+                // at all, which for a removal is the difference between
+                // stopping a migration and taking the seller's source
+                // listing down after they stopped it.
                 run: Some(record.id),
+                // A migration's legs are not an import's publication.
+                import_run: None,
             },
             &NewJob {
                 job,
@@ -455,7 +492,10 @@ async fn enqueue_removal(
             // worker names itself rather than guessing at one.
         )
         .await?;
-    Ok(created.job.0)
+    Ok(match minted {
+        Minted::Job(created) => Some(created.job.0),
+        Minted::WorkflowDeleted(_) => None,
+    })
 }
 
 const fn lifecycle_of(state: ListingState, at: tam_types::Timestamp) -> RemoteLifecycle {

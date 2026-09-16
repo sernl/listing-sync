@@ -30,21 +30,22 @@
 //! pass. Nothing here waits on a device: the run is the rendezvous, and the
 //! device finds it through `GET /{version}/devices/{device}/import/open`.
 
+use axum::http::StatusCode;
 use tam_marketplace::ListingState;
 use tam_storage::{
-    due_tick, job_request_key, EntitlementRepo, ImportRunRepo, JobReadRepo, MappingRepo,
+    due_tick, job_request_key, EntitlementRepo, ImportRunRepo, JobReadRepo, JobRepo, MappingRepo,
     NewImportRun, NewJobItem, ProductRepo, RunKind, RunOpening, RunState, ScheduleMember,
     ScheduleOutcome, ScheduleRecord, ScheduleRepo, ScheduleRunWrite, SyncIntent, SyncRequestRepo,
     SyncSettingRepo,
 };
 use tam_types::{
-    Actor, InventoryId, JobId, MappingId, OrgId, PriceIntent, ProductId, SystemComponent,
+    Actor, InventoryId, JobId, MappingId, OrgId, PriceIntent, ProductId, Stamp, SystemComponent,
     Timestamp, TransportClass, Uuid,
 };
 
 use crate::catalogue::unbound_mapping;
 use crate::entitlement::Entitlement;
-use crate::error::APIError;
+use crate::error::{APIError, APIErrorCode};
 use crate::jobs::{mint_job, new_items, storage_fault};
 use crate::AppState;
 
@@ -371,6 +372,10 @@ async fn send(
         // answers the first job rather than a second one.
         job_request_key(schedule.id, &leg(tick, inventory)),
         &items,
+        // A schedule send is nothing's derivative: these resources are the
+        // seller's catalogue, however they arrived, so there is no import for
+        // a deletion to fence this job through.
+        None,
     )
     .await?;
     for product in sent {
@@ -582,6 +587,24 @@ async fn maintain(state: &AppState, org: OrgId, report: &mut PassReport) -> Resu
             crate::import_runs::progress_event(state, org, &head, counts).await?;
         }
     }
+    // The deletions this tenant has left open. Retired here because the two
+    // non-terminal states are closed by evidence rather than by the seller
+    // asking again: an item settling reconciles its own job on the settle
+    // path, but a lease that merely lapses settles nothing, and the browser
+    // that issued the Delete is long gone. Jobs first, because a request and
+    // an import are both retired by their jobs going quiet.
+    let stamp = Stamp::system(SystemComponent::Scheduler, (state.wall)());
+    JobRepo::new(state.pool.clone())
+        .finalise_deletions(org, stamp)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    SyncRequestRepo::new(state.pool.clone())
+        .finalise_deletions(org, stamp)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    runs.finalise_deletions(org, stamp)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
     Ok(())
 }
 
@@ -724,7 +747,15 @@ async fn publish(
             if items.is_empty() {
                 continue;
             }
-            let created = mint_job(
+            // Named with the import it publishes, which is what makes this
+            // mint fencible. `mint_job` locks that run and refuses a deleted
+            // one in the same transaction as the insert, and writes the link
+            // that lets the deletion fence this job if it lands first. Before
+            // that, this pass could enqueue and claim new marketplace work
+            // for an import whose DELETE had already answered: the head in
+            // hand was read before the deletion committed, and nothing
+            // downstream asked the run again.
+            let created = match mint_job(
                 state,
                 org,
                 job,
@@ -738,8 +769,18 @@ async fn publish(
                     &format!("publish:{}:{target:?}", product.0.to_hyphenated()),
                 ),
                 &items,
+                Some(head.id),
             )
-            .await?;
+            .await
+            {
+                Ok(created) => created,
+                // The seller deleted this import while the pass was draining
+                // it. That is the fence doing its job, not a fault: this run
+                // publishes nothing more, and the tenant's other runs and
+                // marketplaces still finish their pass.
+                Err(refusal) if import_fenced(&refusal) => return Ok(()),
+                Err(refusal) => return Err(refusal),
+            };
             if settings
                 .record_auto_publish(org, head.id, *product, target, created.job, now)
                 .await
@@ -753,6 +794,20 @@ async fn publish(
 }
 
 // ------------------------------------------------------------------ shared
+
+/// Whether a mint was refused because its import carries a deletion.
+///
+/// Read off the answer's own code rather than its sentence, which is the only
+/// stable part of it: the mint states the refusal as the settled-run conflict
+/// every other import fence uses, so a console meets one vocabulary and this
+/// pass has one thing to test for.
+fn import_fenced(error: &APIError) -> bool {
+    error.status == StatusCode::CONFLICT.as_u16()
+        && error
+            .errors
+            .iter()
+            .any(|entry| entry.code == Some(APIErrorCode::ImportRunSettled))
+}
 
 /// The draft a rule's template holds, or `None` where the rule names none.
 ///

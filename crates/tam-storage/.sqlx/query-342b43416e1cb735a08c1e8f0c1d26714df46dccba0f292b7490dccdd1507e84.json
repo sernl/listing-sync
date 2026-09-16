@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n             COALESCE(lease_expires_at > now(), false) AS \"held!\",\n             state = 'committing'                      AS \"committing!\"\n           FROM import_run WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "held!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "committing!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "342b43416e1cb735a08c1e8f0c1d26714df46dccba0f292b7490dccdd1507e84"
+}

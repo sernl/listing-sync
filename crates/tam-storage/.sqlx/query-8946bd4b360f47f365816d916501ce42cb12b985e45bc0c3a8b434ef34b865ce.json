@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE sync_request SET deletion_requested_at = COALESCE(deletion_requested_at, $3), deletion_actor_kind = COALESCE(deletion_actor_kind, $4), deletion_actor_id = COALESCE(deletion_actor_id, $5), deletion_state = COALESCE(deletion_state, 'stopping'), state = CASE WHEN state IN ('pending', 'draining') THEN 'failed' ELSE state END, settled_at = CASE WHEN state IN ('pending', 'draining') THEN $3 ELSE settled_at END, failure_detail = CASE WHEN state IN ('pending', 'draining') THEN $6 ELSE failure_detail END WHERE org_id = $1 AND id = $2 RETURNING create_job_id, remove_job_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "create_job_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "remove_job_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "8946bd4b360f47f365816d916501ce42cb12b985e45bc0c3a8b434ef34b865ce"
+}

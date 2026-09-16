@@ -258,7 +258,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/{version}/sync/activity", get(sync_activity::activity))
         .route("/{version}/sync/multi", get(sync_activity::multi_listed))
-        .route("/{version}/sync/{request}", get(jobs::sync_request_view))
+        .route(
+            "/{version}/sync/{request}",
+            get(jobs::sync_request_view).delete(jobs::delete_sync_request),
+        )
         // Publishing on a timetable. A schedule is a row these routes write
         // and `scheduler::pass` reads; nothing here fires one.
         .route(
@@ -282,7 +285,10 @@ pub fn router(state: AppState) -> Router {
             post(migrations::plan_migration),
         )
         .route("/{version}/migrations", post(migrations::create_migration))
-        .route("/{version}/jobs/{job}", get(jobs::job_view))
+        .route(
+            "/{version}/jobs/{job}",
+            get(jobs::job_view).delete(jobs::delete_job),
+        )
         .route("/{version}/jobs/{job}/items", get(jobs::job_items))
         .route("/{version}/jobs/{job}/items/{item}", get(jobs::item_detail))
         .route("/{version}/events/stream", get(stream::events_stream))
@@ -316,7 +322,10 @@ pub fn router(state: AppState) -> Router {
             "/{version}/imports/runs",
             post(import_runs::create_run).get(import_runs::list_runs),
         )
-        .route("/{version}/imports/runs/{run}", get(import_runs::run_view))
+        .route(
+            "/{version}/imports/runs/{run}",
+            get(import_runs::run_view).delete(import_runs::delete_run),
+        )
         .route(
             "/{version}/imports/runs/{run}/select",
             post(import_runs::select),

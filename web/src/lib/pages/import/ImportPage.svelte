@@ -28,6 +28,15 @@
 	import StatusPill from '$lib/StatusPill.svelte';
 	import { FILES_STAY_ON_YOUR_COMPUTER } from '$lib/sync-request';
 	import {
+		countWord,
+		deleteRefusal,
+		keptSelection,
+		retainedBadge,
+		type WorkDeleteOutcome,
+		type WorkItem
+	} from '$lib/work-delete';
+	import WorkDeleteDialog from '$lib/WorkDeleteDialog.svelte';
+	import {
 		CONNECTIONS_UNREAD,
 		CONNECT_HREF,
 		CONNECT_LABEL,
@@ -41,8 +50,10 @@
 		importCards,
 		importLabel,
 		importRows,
+		importRunLabel,
 		startRefusal,
 		standingBadge,
+		type ImportRow
 	} from './import-view';
 	import { fetchTemplate, openBatchFrom, uploadSheet } from './api';
 	import { IMPORT_ALREADY_OPEN, batchHref } from './sheet-view';
@@ -145,6 +156,71 @@
 	const rows = $derived(importRows(runs));
 	const runPages = $derived(pageCount(runsTotal, RUNS_PER_PAGE));
 	const runsFiltered = $derived(runState !== '' || runSource !== '' || runOrder !== 'newest');
+
+	/** What the seller has ticked in the history: the run's id against the
+	 *  words a confirmation names it by.
+	 *
+	 *  A map rather than a set of ids, because a selection survives turning
+	 *  the page and a row that has scrolled out of the page in hand still has
+	 *  to be nameable by the dialog that is about to delete it. */
+	let picked = $state<Map<string, string>>(new Map());
+	/** The runs a Delete is being confirmed for, or null while none is. One
+	 *  dialog for a row's own control and for the selection, because the
+	 *  sentence a seller has to read is the same sentence. */
+	let deleting = $state<WorkItem[] | null>(null);
+
+	const IMPORTS = { one: 'import', many: 'imports' };
+	// The rows on this page a Delete could still act on. A run already
+	// stopping or kept for review is not one of them: the server would accept
+	// the call and nothing the seller can see would change.
+	const pickable = $derived(rows.filter((row) => row.deletion === null));
+	const allPickedHere = $derived(
+		pickable.length > 0 && pickable.every((row) => picked.has(row.id))
+	);
+	const pickedItems = $derived([...picked].map(([id, label]) => ({ id, label })));
+	// How many ticks are not on the page in hand, said plainly: a figure that
+	// only counted the visible rows would make a selection look lost the
+	// moment the page turned.
+	const pickedElsewhere = $derived(
+		[...picked.keys()].filter((id) => !rows.some((row) => row.id === id)).length
+	);
+
+	function pick(row: ImportRow, on: boolean) {
+		const next = new Map(picked);
+		if (on) {
+			next.set(row.id, importRunLabel(row, Date.now()));
+		} else {
+			next.delete(row.id);
+		}
+		picked = next;
+	}
+
+	/** Tick or untick the page in hand, leaving every other page's ticks
+	 *  alone: "all of these" and "all of my imports" are different
+	 *  sentences. */
+	function pickPage() {
+		const next = new Map(picked);
+		for (const row of pickable) {
+			if (allPickedHere) {
+				next.delete(row.id);
+			} else {
+				next.set(row.id, importRunLabel(row, Date.now()));
+			}
+		}
+		picked = next;
+	}
+
+	/** What one Delete settled. The rows the server answered about are
+	 *  unticked and the refusals stay ticked, so a half-finished bulk is one
+	 *  press from being finished rather than a selection to rebuild by hand.
+	 *  Both reads are refreshed: a stopped run leaves the open-run list as
+	 *  well as the history page. */
+	function settled(outcome: WorkDeleteOutcome) {
+		const kept = keptSelection(new Set(picked.keys()), outcome);
+		picked = new Map([...picked].filter(([id]) => kept.has(id)));
+		void loadRuns();
+		void loadOpenRuns();
+	}
 	let startEpoch = 0;
 
 	// Mount-time work, untracked on purpose. `loadRuns` reads the page and the
@@ -531,7 +607,16 @@
 		{/each}
 	</div>
 
-	<p class="foot-note">{FILES_STAY_ON_YOUR_COMPUTER}</p>
+	<!-- The sentence about where the files are, and the one place they can
+	     actually be looked at. Said here because an import is when a seller
+	     first wonders which of their files we hold and which are still only
+	     on the computer in front of them. -->
+	<div class="import-files-note">
+		<p class="foot-note">{FILES_STAY_ON_YOUR_COMPUTER}</p>
+		<Button tier="outline" small icon="library-big" href="/resources/files">
+			See which files are on this computer
+		</Button>
+	</div>
 
 	<Panel
 		title="Your imports"
@@ -595,11 +680,16 @@
 		{#if !runsLoaded}
 			<p class="quiet">Loading…</p>
 		{:else if rows.length === 0}
-			<!-- "Nothing matches what you asked for" and "you have never run an
-			     import" are different facts, and a seller who filtered must not
-			     be told they have no imports. -->
+			<!-- "Nothing matches what you asked for", "there is nothing left on
+			     this page" and "you have never run an import" are three
+			     different facts. A seller who filtered, or who deleted the last
+			     run on page three, must not be told they have no imports. -->
 			{#if runsFiltered}
 				<p class="quiet">No import matches these filters. Clear them to see the rest.</p>
+			{:else if shownRunPage > 1}
+				<p class="quiet">
+					There is nothing left on this page. Go back for the imports before it.
+				</p>
 			{:else}
 				<Placeholder
 					icon="download"
@@ -608,24 +698,85 @@
 				/>
 			{/if}
 		{:else}
+			<!-- The tick for the page in hand and whatever the seller has ticked
+			     elsewhere. Above the rows rather than floating over them,
+			     because on a phone a bar pinned to the bottom of the viewport
+			     covers the row it is about to act on. -->
+			<div class="work-bar">
+				<label class="work-pick-all">
+					<input
+						type="checkbox"
+						checked={allPickedHere}
+						disabled={pickable.length === 0}
+						onchange={pickPage}
+					/>
+					Select the {countWord(pickable.length, IMPORTS)} on this page
+				</label>
+				{#if picked.size > 0}
+					<span class="work-picked">
+						{countWord(picked.size, IMPORTS)} selected{pickedElsewhere > 0
+							? `, ${pickedElsewhere} of them on another page`
+							: ''}
+					</span>
+					<div class="work-bar-acts">
+						<Button small tier="quiet" onclick={() => (picked = new Map())}>
+							Clear selection
+						</Button>
+						<Button small danger onclick={() => (deleting = pickedItems)}>
+							Delete {countWord(picked.size, IMPORTS)}
+						</Button>
+					</div>
+				{/if}
+			</div>
+
 			{#each rows as row (row.id)}
-				<!-- The badge and the line stay inside one link. Two of the labels
-				     are told apart by the sentence that follows them, and announced
-				     as one link the pairing resolves for a reader who gets no
-				     colour as the tone resolves it for everyone else. -->
-				<a class="import-row" href={row.href}>
-					<span class="mark"><StatusPill tone={row.tone} label={row.label} /></span>
+				{@const going = retainedBadge(row.deletion)}
+				{@const refusal = deleteRefusal(row.deletion)}
+				<!-- A row rather than one whole-row anchor: it carries a tick and
+				     a Delete, and a control nested inside a link is reached by
+				     the keyboard as part of the link and activates both. The
+				     title is the link, which is what the seller is aiming at. -->
+				<div class="import-row">
+					<span class="pick">
+						<input
+							type="checkbox"
+							checked={picked.has(row.id)}
+							disabled={refusal !== null}
+							title={refusal ?? undefined}
+							aria-label={`Select the import ${importRunLabel(row, Date.now())}`}
+							onchange={(event) => pick(row, event.currentTarget.checked)}
+						/>
+					</span>
 					<span class="who">
-						<span class="t">
+						<a class="t" href={row.href}>
 							{#if row.source !== null}
 								<MarketplaceMark inventory={row.source} />
 							{/if}
 							{row.name}
-						</span>
+						</a>
 						<span class="w">{row.line}</span>
 					</span>
+					<!-- Its own grid column of its natural width. It used to sit in
+					     a fixed 152px slot, which on a wide screen was narrower
+					     than the longest stage word and ran the label under the
+					     shop's name. -->
+					<span class="mark">
+						<StatusPill tone={going?.tone ?? row.tone} label={going?.label ?? row.label} />
+					</span>
 					<span class="at">{agoLabel(row.created_at, Date.now())}</span>
-				</a>
+					<span class="act">
+						<Button
+							small
+							danger
+							disabled={refusal !== null}
+							reason={refusal ?? undefined}
+							onclick={() =>
+								(deleting = [{ id: row.id, label: importRunLabel(row, Date.now()) }])}
+						>
+							Delete
+						</Button>
+					</span>
+				</div>
 			{/each}
 		{/if}
 
@@ -646,3 +797,15 @@
 {#snippet toMarketplaces()}
 	<Button tier="outline" small href={CONNECT_HREF}>{CONNECT_LABEL}</Button>
 {/snippet}
+
+<!-- One dialog for a row's own Delete and for the selection's: the sentence
+     a seller has to read is the same sentence, and two dialogs is where the
+     two of them drift apart. -->
+<WorkDeleteDialog
+	open={deleting !== null}
+	items={deleting ?? []}
+	noun={IMPORTS}
+	remove={api.deleteImportRun}
+	onClose={() => (deleting = null)}
+	onsettled={settled}
+/>

@@ -186,6 +186,9 @@
 			chosen at create time gets. Work for Tes and TPT runs on your own device, so a send waits
 			while that device is off.
 		</p>
+		<p class="foot-note">
+			Need to check a file or its machine? <a href="/resources/files">Open Resources → Files</a>.
+		</p>
 
 		{#if refusal !== null}
 			<p class="refusal">{refusal}</p>

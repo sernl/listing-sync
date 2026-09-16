@@ -45,6 +45,7 @@
 	import { toast } from '$lib/toast';
 	import { NOT_REMOVED, avatarRefusal, pictureRefusal } from '$lib/pages/account/avatar';
 	import Preferences from '$lib/pages/account/Preferences.svelte';
+	import Machines from '$lib/pages/account/Machines.svelte';
 	import { STORAGE_NOT_RECLAIMED } from '$lib/pages/resources/files';
 	import { historyLines, permissionRows, withdrawPrompt } from '$lib/pages/account/permissions';
 	import ConsentDialog from '$lib/pages/marketplaces/ConsentDialog.svelte';
@@ -52,6 +53,7 @@
 	import '$lib/pages/account/account.css';
 
 	const queryClient = useQueryClient();
+	const now = Date.now();
 
 	function refusalOf(failure: Error, fallback: string): string {
 		return failure instanceof AuthFailure ? failure.message : fallback;
@@ -410,11 +412,6 @@
 
 	// ------------------------------------------------- browser sign-ins
 
-	// The device registry is read here only to subtract: a sign-in already shown
-	// against a machine on Marketplaces is not repeated on this panel, and the
-	// join that decides which those are needs both halves. The key is the shared
-	// one, so this costs no second request when either screen has already read
-	// it.
 	const registry = createQuery(() => ({
 		queryKey: queryKeys.devices,
 		queryFn: () => api.devices()
@@ -799,40 +796,28 @@
 
 	<Panel
 		title="Browser sign-ins"
-		description="Where this account is signed in to Teachouse. These are sign-ins to us, not to any marketplace, and some cannot be matched to a machine."
+		description="Browser sessions for this Teachouse account. Ending one does not revoke its machine or remove its saved marketplace sign-ins."
 	>
-		<div class="acct-state-row">
-			<span class="who">
-				<span class="t">Machines</span>
-				<span class="why">
-					Sign a machine you no longer use out on Marketplaces, beside the logins it holds.
-				</span>
-			</span>
-			<Button tier="outline" small href="/marketplaces">Open</Button>
-		</div>
-
-		<!-- All three reads, not just the list. `joined` merges the browser
-		     sessions with the device registry, so a failed registry read empties
-		     the device half and lists every session here as an orphan. -->
-		{#if signIns.isPending || registry.isPending || current.isPending}
+		{#if signIns.isPending || current.isPending}
 			<p class="quiet">Loading…</p>
-		{:else if signIns.isError || registry.isError}
+		{:else if signIns.isError}
 			<p class="quiet">We could not list your browser sign-ins.</p>
-		{:else if joined.orphans.length === 0}
+		{:else if (signIns.data ?? []).length === 0}
 			<p class="quiet">
-				Every browser sign-in on this account is shown against a machine on Marketplaces.
+				No browser sign-ins were found.
 			</p>
 		{:else}
-			{#each joined.orphans as orphan (orphan.session.token)}
+			{#each signIns.data ?? [] as session (session.token)}
+				{@const isCurrent = session.token === current.data}
 				<div class="acct-state-row">
 					<span class="who">
 						<span class="t">
-							{sessionLabel(orphan.session)}
-							{#if orphan.isCurrent}<StatusPill tone="ok" label="this browser" />{/if}
+							{sessionLabel(session)}
+							{#if isCurrent}<StatusPill tone="ok" label="this browser" />{/if}
 						</span>
-						{#if orphan.session.createdAt}
+						{#if session.createdAt}
 							<span class="why">
-								Signed in {agoLabel(new Date(orphan.session.createdAt).getTime(), Date.now())}
+								Signed in {agoLabel(new Date(session.createdAt).getTime(), now)}
 							</span>
 						{/if}
 					</span>
@@ -840,13 +825,13 @@
 						tier="outline"
 						danger
 						small
-						disabled={endingSignIn.isPending && endingSignIn.variables === orphan.session.token}
-						reason={endingSignIn.isPending && endingSignIn.variables === orphan.session.token
+						disabled={endingSignIn.isPending && endingSignIn.variables === session.token}
+						reason={endingSignIn.isPending && endingSignIn.variables === session.token
 							? 'This sign-in is being ended.'
 							: undefined}
-						onclick={() => endSignIn(orphan.session, orphan.isCurrent)}
+						onclick={() => endSignIn(session, isCurrent)}
 					>
-						{endingSignIn.isPending && endingSignIn.variables === orphan.session.token
+						{endingSignIn.isPending && endingSignIn.variables === session.token
 							? 'Ending…'
 							: 'End sign-in'}
 					</Button>
@@ -860,6 +845,14 @@
 			{/if}
 		</p>
 	</Panel>
+
+	<Machines
+		devices={registry.data?.devices ?? []}
+		{joined}
+		{now}
+		pending={registry.isPending || signIns.isPending || current.isPending}
+		failed={registry.isError || signIns.isError}
+	/>
 
 	<Panel
 		id="permissions"

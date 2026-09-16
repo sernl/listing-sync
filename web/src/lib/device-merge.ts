@@ -157,7 +157,7 @@ export function matchNote(confidence: Confidence): string {
 		case 'matched':
 			return 'Matched to a browser sign-in by its reported platform.';
 		case 'ambiguous':
-			return 'Several sign-ins report this platform, so we cannot say which belongs to this machine. Signing out here signs the machine out; end a browser sign-in from its own row below.';
+			return 'Several sign-ins report this platform, so we cannot say which belongs to this machine. Signing out here signs the machine out; end a browser sign-in under Browser sign-ins.';
 		case 'unmatched':
 			return 'No browser sign-in reports this platform.';
 	}

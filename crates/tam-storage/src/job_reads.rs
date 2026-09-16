@@ -12,6 +12,7 @@ use crate::codec::{
     failure_code_from_db, inventory_from_db, timestamp_from_db, timestamp_to_db, uuid_from_db,
     uuid_to_db,
 };
+use crate::jobs::DeletionStatus;
 use crate::{pin_org, StorageError};
 
 /// The flat shape of a stored item state, for reading; the rich variants
@@ -98,6 +99,10 @@ pub struct JobListRow {
     pub job: JobId,
     pub inventory: InventoryId,
     pub created_at: Timestamp,
+    /// Where a Delete this job is still working through has got to. Never
+    /// `Deleted` on a listed row: the tombstone is filtered in SQL, and the
+    /// two retained states are exactly what the seller has to be able to see.
+    pub deletion: Option<DeletionStatus>,
 }
 
 /// The roll-up: raw counts, never a scalar verdict. Job status is computed
@@ -127,6 +132,9 @@ pub struct JobSnapshot {
     pub inventory: InventoryId,
     pub created_at: Timestamp,
     pub counts: ItemCounts,
+    /// See [`JobListRow::deletion`]. A tombstoned job has no snapshot at
+    /// all — `snapshot` answers `None` — so this is never `Deleted` either.
+    pub deletion: Option<DeletionStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -215,8 +223,16 @@ impl JobReadRepo {
             None => (None, None),
         };
         let rows = sqlx::query!(
-            "SELECT id, inventory, created_at FROM job \
+            // The tombstone is filtered here rather than by the caller, and
+            // the keyset is why it has to be: a page that fetched `limit`
+            // rows and then dropped the deleted ones would answer short
+            // pages and mint a cursor from a row it did not return, so a
+            // seller with a screenful of deleted jobs would page through
+            // empty answers. The partial index migration 0079 adds carries
+            // this predicate.
+            "SELECT id, inventory, created_at, deletion_state FROM job \
              WHERE org_id = $1 \
+               AND deletion_state IS DISTINCT FROM 'deleted' \
                AND ($2::timestamptz IS NULL OR (created_at, id) < ($2, $3)) \
              ORDER BY created_at DESC, id DESC LIMIT $4",
             uuid_to_db(org.0),
@@ -233,6 +249,7 @@ impl JobReadRepo {
                     job: JobId(uuid_from_db(row.id)),
                     inventory: inventory_from_db(&row.inventory)?,
                     created_at: timestamp_from_db(row.created_at),
+                    deletion: DeletionStatus::parse(row.deletion_state.as_deref())?,
                 })
             })
             .collect()
@@ -248,7 +265,12 @@ impl JobReadRepo {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let Some(head) = sqlx::query!(
-            "SELECT inventory, created_at FROM job WHERE org_id = $1 AND id = $2",
+            // A tombstoned job has no detail for the seller: the row is gone
+            // as far as they are concerned, and reconciliation reads the
+            // receipts directly rather than through this view.
+            "SELECT inventory, created_at, deletion_state FROM job \
+             WHERE org_id = $1 AND id = $2 \
+               AND deletion_state IS DISTINCT FROM 'deleted'",
             uuid_to_db(org.0),
             uuid_to_db(job.0),
         )
@@ -282,6 +304,7 @@ impl JobReadRepo {
             inventory: inventory_from_db(&head.inventory)?,
             created_at: timestamp_from_db(head.created_at),
             counts,
+            deletion: DeletionStatus::parse(head.deletion_state.as_deref())?,
         }))
     }
 
@@ -312,6 +335,9 @@ impl JobReadRepo {
                     blocked_on, attempt_count, created_at, settled_at \
              FROM job_item \
              WHERE org_id = $1 AND job_id = $2 \
+               AND EXISTS (SELECT 1 FROM job j \
+                     WHERE j.org_id = job_item.org_id AND j.id = job_item.job_id \
+                       AND j.deletion_state IS DISTINCT FROM 'deleted') \
                AND ($3::timestamptz IS NULL OR (created_at, id) > ($3, $4)) \
                AND ($6::text IS NULL OR outcome = $6) \
              ORDER BY created_at, id LIMIT $5",
@@ -370,7 +396,10 @@ impl JobReadRepo {
         let row = sqlx::query!(
             "SELECT id, mapping_id, state, outcome, failure_code, failure_detail, \
                     blocked_on, attempt_count, created_at, settled_at \
-             FROM job_item WHERE org_id = $1 AND job_id = $2 AND id = $3",
+             FROM job_item WHERE org_id = $1 AND job_id = $2 AND id = $3 \
+               AND EXISTS (SELECT 1 FROM job j \
+                     WHERE j.org_id = job_item.org_id AND j.id = job_item.job_id \
+                       AND j.deletion_state IS DISTINCT FROM 'deleted')",
             uuid_to_db(org.0),
             uuid_to_db(job.0),
             uuid_to_db(item.0),

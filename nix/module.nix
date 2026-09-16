@@ -211,6 +211,7 @@ let
     runtimeInputs = [
       pkgs.sqlx-cli
       config.services.postgresql.package
+      cfg.adminPackage
     ];
     text = ''
       appUrl=${lib.escapeShellArg (dbUrl "tam_app")}
@@ -222,6 +223,19 @@ let
       sqlx migrate info --source "$rust" --database-url "$appUrl"
       sqlx migrate run  --source "$rust" --database-url "$appUrl"
       sqlx migrate info --source "$rust" --database-url "$appUrl"
+
+      # The normalizations the schema set cannot express, run after it and
+      # under the same role the migrations applied as. A legacy migration's
+      # event anchor is found by re-deriving its idempotency key, which is a
+      # UUIDv5 this database has no extension to compute, so the pass is the
+      # Rust helper that minted it rather than SQL that reimplements it.
+      #
+      # Idempotent and counted: a second boot over an already-normalized
+      # database links nothing and says so. It is ordered here rather than
+      # left to an operator because the deletion fence reads the column it
+      # writes, and a service started before it would answer a seller's
+      # Delete without fencing their migration's next page.
+      tam-admin "$appUrl" backfill-workflow-owners
 
       # The identity set has its own ledger and its own applying role, so it
       # cannot ride sqlx's table. This is the shape `just auth-migrate` uses,
@@ -324,6 +338,18 @@ in
       default = packages.teachouse-migrations;
       defaultText = lib.literalMD "`packages.teachouse-migrations` from this flake";
       description = "Both migration sets under one path.";
+    };
+
+    adminPackage = lib.mkOption {
+      type = lib.types.package;
+      default = packages.tam-admin;
+      defaultText = lib.literalMD "`packages.tam-admin` from this flake";
+      description = ''
+        The operator one-shot. Runs under no unit of its own; the migration
+        runner invokes its `backfill-workflow-owners` pass after the schema
+        set, and an operator on the box uses the same binary to grant and
+        withdraw the platform-operator marking.
+      '';
     };
 
     landingPackage = lib.mkOption {

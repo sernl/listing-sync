@@ -12,13 +12,17 @@ use http_body_util::BodyExt;
 use sqlx::PgPool;
 use tam_api::jobs::{CreatedJobBody, ItemDetail, ItemsPage, JobPhase, JobView};
 use tam_api::{router, APIError, APIErrorCode, AppState, Config, SESSION_COOKIE};
-use tam_domain::{Binding, FieldPolicies, FieldPolicy, Mapping, PublishMode};
+use tam_domain::{
+    Binding, FieldPolicies, FieldPolicy, ItemOutcome, JobItemId, Mapping, PublishMode,
+};
 use tam_marketplace::RemoteLifecycle;
-use tam_storage::{MappingRepo, ProductRepo, SessionRepo, SessionToken};
+use tam_storage::{
+    ItemVerdict, LeaseRef, LeaseRepo, MappingRepo, ProductRepo, SessionRepo, SessionToken,
+};
 use tam_types::{
-    ContentHash, CopyFormat, FileBytes, FileId, FileKind, FileRole, InventoryId, ListingCopy,
-    MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome,
-    Timestamp, Title, UserId, Uuid,
+    Actor, ContentHash, CopyFormat, FileBytes, FileId, FileKind, FileRole, InventoryId,
+    ListingCopy, MappingId, OrgId, PayloadSet, PriceIntent, PriceRule, ProductFile, ProductId,
+    ScanOutcome, SystemComponent, Timestamp, Title, UserId, Uuid,
 };
 use tower::ServiceExt;
 
@@ -259,6 +263,712 @@ fn create_body() -> serde_json::Value {
 
 const KEY_1: &str = "11111111-1111-4111-8111-111111111111";
 const KEY_2: &str = "22222222-2222-4222-8222-222222222222";
+const KEY_3: &str = "33333333-3333-4333-8333-333333333333";
+
+/// Two attempt identities, because a second attempt row on one item needs an
+/// id of its own and the item's would collide with the first.
+const ATTEMPT_1: Uuid = Uuid([0xA1; 16]);
+const ATTEMPT_2: Uuid = Uuid([0xA2; 16]);
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn deleting_a_queued_job_preserves_resources_and_prevents_replay(pool: PgPool) {
+    provision(&pool).await;
+    let created = call(
+        pool.clone(),
+        Method::POST,
+        "/v1/jobs",
+        &TOKEN_A,
+        Some(KEY_1),
+        Some(create_body()),
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    let receipt: serde_json::Value = created.json();
+    let job = receipt["job"].as_str().expect("the created job has an id");
+    let path = format!("/v1/jobs/{job}");
+    let product_path = format!("/v1/products/{}", uuid::Uuid::from_bytes([0x01; 16]));
+    let before = call(
+        pool.clone(),
+        Method::GET,
+        &product_path,
+        &TOKEN_A,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(before.status, StatusCode::OK);
+
+    let other_tenant = call(pool.clone(), Method::DELETE, &path, &TOKEN_B, None, None).await;
+    assert_eq!(other_tenant.status, StatusCode::NOT_FOUND);
+
+    for _ in 0..2 {
+        let deleted = call(pool.clone(), Method::DELETE, &path, &TOKEN_A, None, None).await;
+        assert_eq!(deleted.status, StatusCode::OK);
+        assert_eq!(deleted.json::<serde_json::Value>()["status"], "deleted");
+    }
+    let history = call(pool.clone(), Method::GET, "/v1/jobs", &TOKEN_A, None, None).await;
+    assert_eq!(history.status, StatusCode::OK);
+    assert_eq!(
+        history.json::<serde_json::Value>()["jobs"],
+        serde_json::json!([])
+    );
+    let after = call(
+        pool.clone(),
+        Method::GET,
+        &product_path,
+        &TOKEN_A,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(after.status, StatusCode::OK);
+    assert_eq!(
+        after.json::<serde_json::Value>(),
+        before.json::<serde_json::Value>()
+    );
+    let replay = call(
+        pool,
+        Method::POST,
+        "/v1/jobs",
+        &TOKEN_A,
+        Some(KEY_1),
+        Some(create_body()),
+    )
+    .await;
+    assert_eq!(replay.status, StatusCode::CONFLICT);
+}
+
+/// Leases one of the job's items by hand and answers which item, under which
+/// epoch.
+///
+/// The ledger's own `acquire` is cross-tenant and runs on the engine role,
+/// which this file has no pool for; what the test needs is one item in a live
+/// lease state, which is exactly what this writes. The epoch comes back
+/// because a settle is fenced on it.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn lease_one(pool: &PgPool) -> (JobItemId, i64) {
+    let mut tx = pool.begin().await.expect("a transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pins");
+    let row: (uuid::Uuid, i64) = sqlx::query_as(
+        "UPDATE job_item SET state = 'leased', lease_owner = 'a-test-worker', \
+                lease_expires_at = now() + interval '5 minutes' \
+          WHERE org_id = $1 \
+            AND id = (SELECT id FROM job_item WHERE org_id = $1 \
+                       ORDER BY created_at, id LIMIT 1) \
+          RETURNING id, lease_epoch",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+    .fetch_one(&mut *tx)
+    .await
+    .expect("an item leases");
+    tx.commit().await.expect("the lease commits");
+    (JobItemId(Uuid(*row.0.as_bytes())), row.1)
+}
+
+/// A job whose item is being worked on right now is not hidden by a Delete.
+///
+/// The rule this is about: a leased item can still write to a marketplace, so
+/// a console that removed the row would be telling the seller a publish had
+/// been called off while the device was mid-submit. The Delete is accepted —
+/// nothing further is served, and the item that had not started is settled —
+/// and the row stays visible saying `stopping` until the work it is waiting
+/// on is quiet. Settling that item is what retires it, in the settle's own
+/// transaction, with nobody asking again.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn deleting_a_leased_job_reports_stopping_until_the_item_settles(pool: PgPool) {
+    provision(&pool).await;
+    let created = call(
+        pool.clone(),
+        Method::POST,
+        "/v1/jobs",
+        &TOKEN_A,
+        Some(KEY_1),
+        Some(create_body()),
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    let job = created.json::<serde_json::Value>()["job"]
+        .as_str()
+        .expect("the created job has an id")
+        .to_owned();
+    let path = format!("/v1/jobs/{job}");
+    let (item, epoch) = lease_one(&pool).await;
+
+    let stopping = call(pool.clone(), Method::DELETE, &path, &TOKEN_A, None, None).await;
+    assert_eq!(
+        stopping.status,
+        StatusCode::ACCEPTED,
+        "a job with a live lease is accepted for deletion, not deleted"
+    );
+    assert_eq!(
+        stopping.json::<serde_json::Value>()["status"],
+        "stopping",
+        "and it says so rather than claiming the work is gone"
+    );
+    let listed = call(pool.clone(), Method::GET, "/v1/jobs", &TOKEN_A, None, None).await;
+    let page: serde_json::Value = listed.json();
+    assert_eq!(
+        page["jobs"][0]["deletion_status"], "stopping",
+        "the seller keeps a row that can still write, labelled: {page}"
+    );
+
+    LeaseRepo::new(pool.clone())
+        .settle(
+            &LeaseRef {
+                org: ORG_A,
+                item,
+                lease_epoch: epoch,
+            },
+            &ItemVerdict {
+                outcome: ItemOutcome::Succeeded,
+                failure_code: None,
+                failure_detail: None,
+            },
+            NOW,
+        )
+        .await
+        .expect("the item the device was working on settles");
+
+    let history = call(pool.clone(), Method::GET, "/v1/jobs", &TOKEN_A, None, None).await;
+    assert_eq!(
+        history.json::<serde_json::Value>()["jobs"],
+        serde_json::json!([]),
+        "settling the last live item retires the deletion without a second request"
+    );
+    assert_eq!(
+        call(pool, Method::GET, &path, &TOKEN_A, None, None)
+            .await
+            .status,
+        StatusCode::NOT_FOUND,
+        "and its detail page goes with it"
+    );
+}
+
+/// A write nobody can account for is never written off by a Delete.
+///
+/// An attempt still `in_flight` is the ledger saying it does not know what the
+/// marketplace did with a write it issued. Deleting the job must not settle
+/// that item — an outcome nobody observed is the one thing this ledger cannot
+/// undo — so the job is retained, `needs_review`, for reconciliation to
+/// finish. Everything that had not started is still stopped.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn deleting_a_job_with_an_unresolved_write_stays_visible_for_review(pool: PgPool) {
+    provision(&pool).await;
+    let created = call(
+        pool.clone(),
+        Method::POST,
+        "/v1/jobs",
+        &TOKEN_A,
+        Some(KEY_1),
+        Some(create_body()),
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    let job = created.json::<serde_json::Value>()["job"]
+        .as_str()
+        .expect("the created job has an id")
+        .to_owned();
+    let (item, epoch) = lease_one(&pool).await;
+    open_attempt(&pool, item, epoch).await;
+
+    let accepted = call(
+        pool.clone(),
+        Method::DELETE,
+        &format!("/v1/jobs/{job}"),
+        &TOKEN_A,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(accepted.status, StatusCode::ACCEPTED);
+    assert_eq!(
+        accepted.json::<serde_json::Value>()["status"],
+        "stopping",
+        "the attempt is the live lease's own, and its holder may still settle it"
+    );
+
+    // The lease lapses with the attempt still standing, which is the state
+    // nothing but evidence resolves: the holder is gone and the write is
+    // undecided.
+    expire_leases(&pool).await;
+    let review = call(
+        pool.clone(),
+        Method::DELETE,
+        &format!("/v1/jobs/{job}"),
+        &TOKEN_A,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(review.status, StatusCode::ACCEPTED);
+    assert_eq!(
+        review.json::<serde_json::Value>()["status"],
+        "needs_review",
+        "an issued write with no answer is not a deleted job"
+    );
+    let page: serde_json::Value = call(pool, Method::GET, "/v1/jobs", &TOKEN_A, None, None)
+        .await
+        .json();
+    assert_eq!(
+        page["jobs"][0]["deletion_status"], "needs_review",
+        "and the seller can still see it: {page}"
+    );
+}
+
+/// A stopped item whose write is undecided stops holding the marketplace.
+///
+/// The state this is about has no other way out: the holder is gone, the
+/// attempt is in flight, and nothing may settle it. Left `leased` it keeps
+/// the per-connection live-lease slot, so every unrelated job on that
+/// marketplace waits behind a job the seller already deleted. The Delete
+/// moves it to the park a reconciling claim reads, without settling the
+/// attempt and without charging it — the evidence stays exactly where a
+/// human or a later reconcile can find it.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_stopped_undecided_write_releases_the_marketplace_slot(pool: PgPool) {
+    provision(&pool).await;
+    let created = call(
+        pool.clone(),
+        Method::POST,
+        "/v1/jobs",
+        &TOKEN_A,
+        Some(KEY_1),
+        Some(create_body()),
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    let job = created.json::<serde_json::Value>()["job"]
+        .as_str()
+        .expect("the created job has an id")
+        .to_owned();
+    let (item, epoch) = lease_one(&pool).await;
+    open_attempt(&pool, item, epoch).await;
+    expire_leases(&pool).await;
+
+    let review = call(
+        pool.clone(),
+        Method::DELETE,
+        &format!("/v1/jobs/{job}"),
+        &TOKEN_A,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(review.status, StatusCode::ACCEPTED);
+    assert_eq!(review.json::<serde_json::Value>()["status"], "needs_review");
+
+    let items: serde_json::Value = call(
+        pool,
+        Method::GET,
+        &format!("/v1/jobs/{job}/items"),
+        &TOKEN_A,
+        None,
+        None,
+    )
+    .await
+    .json();
+    let stopped = items["items"]
+        .as_array()
+        .expect("the items page is a list")
+        .iter()
+        .find(|row| row["item"] == uuid::Uuid::from_bytes(item.0 .0).to_string())
+        .expect("the item that held the lease is still in the ledger")
+        .clone();
+    assert_eq!(
+        stopped["state"], "parked_live",
+        "the lapsed lease is released rather than held against the marketplace: {stopped}"
+    );
+    assert_eq!(
+        stopped["blocked_on"], "awaiting_marketplace_answer",
+        "and it parks where a reconciling claim looks, not where a clock does: {stopped}"
+    );
+    assert!(
+        stopped["outcome"].is_null(),
+        "nothing was settled on its behalf: {stopped}"
+    );
+}
+
+/// A committed write receipt is never overwritten with `skipped`.
+///
+/// The driver settles the attempt and binds the mapping in one call and
+/// settles the item in a later one. A device that died between the two leaves
+/// a committed receipt over an unsettled item: the write happened. Reporting
+/// "nothing was sent to the marketplace" over that is the invented outcome
+/// this endpoint exists not to produce, so the item is retained for review
+/// while everything genuinely unstarted is still stopped.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_committed_receipt_over_an_unsettled_item_is_not_written_off(pool: PgPool) {
+    provision(&pool).await;
+    let created = call(
+        pool.clone(),
+        Method::POST,
+        "/v1/jobs",
+        &TOKEN_A,
+        Some(KEY_1),
+        Some(create_body()),
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    let job = created.json::<serde_json::Value>()["job"]
+        .as_str()
+        .expect("the created job has an id")
+        .to_owned();
+    let (item, epoch) = lease_one(&pool).await;
+    attempt_in_state(&pool, item, epoch, ATTEMPT_2, "committed").await;
+    expire_leases(&pool).await;
+
+    let review = call(
+        pool.clone(),
+        Method::DELETE,
+        &format!("/v1/jobs/{job}"),
+        &TOKEN_A,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        review.status,
+        StatusCode::ACCEPTED,
+        "an item with a committed write behind it is not a deleted job"
+    );
+    assert_eq!(review.json::<serde_json::Value>()["status"], "needs_review");
+
+    let items: serde_json::Value = call(
+        pool,
+        Method::GET,
+        &format!("/v1/jobs/{job}/items"),
+        &TOKEN_A,
+        None,
+        None,
+    )
+    .await
+    .json();
+    let rows = items["items"].as_array().expect("the items page is a list");
+    let written = rows
+        .iter()
+        .find(|row| row["item"] == uuid::Uuid::from_bytes(item.0 .0).to_string())
+        .expect("the item carrying the receipt is still in the ledger");
+    assert!(
+        written["outcome"].is_null(),
+        "the receipt says a write was issued, so no outcome is invented for it: {written}"
+    );
+    assert!(
+        rows.iter().any(|row| row["outcome"] == "skipped"),
+        "and the item that never ran is still stopped: {items}"
+    );
+}
+
+/// An ambiguous outcome keeps the job in the seller's history.
+///
+/// `ambiguous` is the ledger saying it does not know what the marketplace did
+/// with a write it sent. Every item may be settled and every attempt closed,
+/// and the external write is still unaccounted for — so the absence of an
+/// `in_flight` row is not proof that anything was answered.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_ambiguous_outcome_keeps_a_deleted_job_visible_for_review(pool: PgPool) {
+    provision(&pool).await;
+    let created = call(
+        pool.clone(),
+        Method::POST,
+        "/v1/jobs",
+        &TOKEN_A,
+        Some(KEY_1),
+        Some(create_body()),
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    let job = created.json::<serde_json::Value>()["job"]
+        .as_str()
+        .expect("the created job has an id")
+        .to_owned();
+    let (item, epoch) = lease_one(&pool).await;
+    LeaseRepo::new(pool.clone())
+        .settle(
+            &LeaseRef {
+                org: ORG_A,
+                item,
+                lease_epoch: epoch,
+            },
+            &ItemVerdict {
+                outcome: ItemOutcome::Ambiguous,
+                failure_code: None,
+                failure_detail: None,
+            },
+            NOW,
+        )
+        .await
+        .expect("the driver records what it could not determine");
+
+    let review = call(
+        pool.clone(),
+        Method::DELETE,
+        &format!("/v1/jobs/{job}"),
+        &TOKEN_A,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(review.status, StatusCode::ACCEPTED);
+    assert_eq!(
+        review.json::<serde_json::Value>()["status"],
+        "needs_review",
+        "an unresolved external write is not a deleted job, settled or not"
+    );
+    let page: serde_json::Value = call(pool, Method::GET, "/v1/jobs", &TOKEN_A, None, None)
+        .await
+        .json();
+    assert_eq!(
+        page["jobs"][0]["deletion_status"], "needs_review",
+        "and the seller keeps the row saying so: {page}"
+    );
+}
+
+/// Deleting one leg of a request stops the request and its sibling leg.
+///
+/// The window this is about is the drain's own: `drain_request` commits each
+/// leg's job in its own transaction and writes `create_job_id`/`remove_job_id`
+/// only afterwards, so a Delete arriving in between sees a request naming no
+/// legs at all. Fencing on those columns would report the request gone while
+/// a minted leg — a Copy's create, or a Move's source removal — stayed on the
+/// queue, claimable. The legs are discovered through the link the job carries
+/// from its first instant instead, and the Delete of either leg is the Delete
+/// of the whole request.
+///
+/// The two legs are minted through the ordinary job route and then linked to
+/// the request, because the drain that would mint them reads the source
+/// marketplace and this process holds no session for one. What the pair
+/// stands for is a migration's create and removal; what is reproduced exactly
+/// is the state the interleaving leaves: two committed legs naming their
+/// request, and a request naming neither.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn deleting_one_leg_stops_the_request_and_its_sibling(pool: PgPool) {
+    provision(&pool).await;
+    let accepted = call(
+        pool.clone(),
+        Method::POST,
+        "/v1/sync",
+        &TOKEN_A,
+        Some(KEY_1),
+        Some(serde_json::json!({
+            "source": "Tes",
+            "target": "Tpt",
+            "disposition": "sync",
+            "intent": "live",
+            "resources": ["13549794"],
+        })),
+    )
+    .await;
+    assert_eq!(accepted.status, StatusCode::ACCEPTED);
+    // The two legs a drain mints, before it has recorded either on the
+    // request: this is the interleaving, and the second job is the one that
+    // must not survive a Delete addressed to the first.
+    let mut legs = Vec::new();
+    for (key, mapping) in [(KEY_2, MAPPING_1), (KEY_3, MAPPING_2)] {
+        let mut body = create_body();
+        body["mappings"] = serde_json::json!([uuid::Uuid::from_bytes(mapping.0 .0).to_string()]);
+        let leg = call(
+            pool.clone(),
+            Method::POST,
+            "/v1/jobs",
+            &TOKEN_A,
+            Some(key),
+            Some(body),
+        )
+        .await;
+        assert_eq!(leg.status, StatusCode::CREATED);
+        legs.push(
+            leg.json::<serde_json::Value>()["job"]
+                .as_str()
+                .expect("the created job has an id")
+                .to_owned(),
+        );
+    }
+    own_by_request(&pool, KEY_1).await;
+
+    let deleted = call(
+        pool.clone(),
+        Method::DELETE,
+        &format!("/v1/jobs/{}", legs[0]),
+        &TOKEN_A,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(
+        deleted.status,
+        StatusCode::OK,
+        "both legs were queued and nothing had run, so the whole request stops at once"
+    );
+    assert_eq!(deleted.json::<serde_json::Value>()["status"], "deleted");
+
+    let history: serde_json::Value =
+        call(pool.clone(), Method::GET, "/v1/jobs", &TOKEN_A, None, None)
+            .await
+            .json();
+    assert_eq!(
+        history["jobs"],
+        serde_json::json!([]),
+        "the sibling leg goes with the leg the seller addressed: {history}"
+    );
+    assert_eq!(
+        call(
+            pool.clone(),
+            Method::GET,
+            &format!("/v1/jobs/{}", legs[1]),
+            &TOKEN_A,
+            None,
+            None,
+        )
+        .await
+        .status,
+        StatusCode::NOT_FOUND,
+        "including its detail page"
+    );
+    assert_eq!(
+        call(
+            pool.clone(),
+            Method::GET,
+            &format!("/v1/sync/{KEY_1}"),
+            &TOKEN_A,
+            None,
+            None,
+        )
+        .await
+        .status,
+        StatusCode::NOT_FOUND,
+        "and the request the legs belonged to is stopped too, not only the leg"
+    );
+    let replay = call(
+        pool,
+        Method::POST,
+        "/v1/sync",
+        &TOKEN_A,
+        Some(KEY_1),
+        Some(serde_json::json!({
+            "source": "Tes",
+            "target": "Tpt",
+            "disposition": "sync",
+            "intent": "live",
+            "resources": ["13549794"],
+        })),
+    )
+    .await;
+    assert_eq!(
+        replay.status,
+        StatusCode::CONFLICT,
+        "and its key cannot start the move again"
+    );
+}
+
+/// Links every unowned job of this tenant to one request, which is what a
+/// drain's own mint does in the statement that inserts the job.
+///
+/// The fixture exists because the drain that would write these links reads
+/// the source marketplace, and this process holds no session for one. What it
+/// reproduces is the state after both legs are committed and before
+/// `record_enqueued` names either — the interleaving under test.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn own_by_request(pool: &PgPool, request: &str) {
+    let request: uuid::Uuid = request.parse().expect("the request id parses");
+    let mut tx = pool.begin().await.expect("a transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pins");
+    sqlx::query(
+        "UPDATE job SET sync_request_id = $2 \
+          WHERE org_id = $1 AND sync_request_id IS NULL",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+    .bind(request)
+    .execute(&mut *tx)
+    .await
+    .expect("the legs name their request");
+    tx.commit().await.expect("the link commits");
+}
+
+/// Opens a write attempt by hand, in flight, against one leased item.
+///
+/// The fencing row is what "a write may have landed" is recorded as, and the
+/// repository's own `open_asserted` needs a projected body this test has no
+/// reason to build: the columns below are the fact under test.
+async fn open_attempt(pool: &PgPool, item: JobItemId, epoch: i64) {
+    attempt_in_state(pool, item, epoch, ATTEMPT_1, "in_flight").await;
+}
+
+/// One write-attempt row by hand, in the state named.
+///
+/// `actor_kind` and `actor_id` are not decoration: migration 0033 made
+/// attribution mandatory on every audit-bearing row, so a fixture omitting
+/// them is a NOT NULL violation rather than a row with an unknown author.
+/// The author recorded is the one the real path records — the seller's own
+/// machine is what issues these writes.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn attempt_in_state(pool: &PgPool, item: JobItemId, epoch: i64, attempt: Uuid, state: &str) {
+    let actor = Actor::System(SystemComponent::Device);
+    let mut tx = pool.begin().await.expect("a transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pins");
+    sqlx::query(
+        "INSERT INTO write_attempt \
+             (org_id, id, job_item_id, mapping_id, lease_epoch, intent, intent_hash, \
+              state, opened_at, actor_kind, actor_id) \
+         SELECT $1, $2, ji.id, ji.mapping_id, $3, '{}'::jsonb, $4, $6, now(), $7, $8 \
+           FROM job_item ji WHERE ji.org_id = $1 AND ji.id = $5",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+    .bind(uuid::Uuid::from_bytes(attempt.0))
+    .bind(epoch)
+    .bind(vec![0x11u8; 32])
+    .bind(uuid::Uuid::from_bytes(item.0 .0))
+    .bind(state)
+    .bind(actor.kind())
+    .bind(actor.id())
+    .execute(&mut *tx)
+    .await
+    .expect("the attempt opens");
+    tx.commit().await.expect("the attempt commits");
+}
+
+/// Ages every live lease out, without settling anything.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn expire_leases(pool: &PgPool) {
+    let mut tx = pool.begin().await.expect("a transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pins");
+    sqlx::query(
+        "UPDATE job_item SET lease_expires_at = now() - interval '1 minute' \
+          WHERE org_id = $1 AND state IN ('leased', 'running', 'verifying')",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+    .execute(&mut *tx)
+    .await
+    .expect("the leases lapse");
+    tx.commit().await.expect("the expiry commits");
+}
 
 /// The one enqueue for sync, migrate and bulk. It writes the request and
 /// returns: no marketplace is read here, because this process holds no
@@ -328,6 +1038,88 @@ async fn a_sync_request_is_accepted_written_and_polled_back(pool: PgPool) {
     assert!(
         record["create_job"].is_null() && record["remove_job"].is_null(),
         "no job exists until the drain has read the source"
+    );
+}
+
+/// Deleting a sync stops it, hides it, and refuses its key.
+///
+/// The request's identity *is* its idempotency key, which is what makes the
+/// last part load-bearing: the console's retry of a submit whose answer was
+/// lost carries the same key, and answering it with the deleted request — or
+/// worse, writing a second one under it — would resurrect exactly the work
+/// the seller stopped. A pending request has no leg running, so the Delete
+/// finishes immediately and repeating it says the same thing.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn deleting_a_sync_request_stops_it_and_refuses_the_replayed_key(pool: PgPool) {
+    provision(&pool).await;
+    let body = serde_json::json!({
+        "source": "Tes",
+        "target": "Tpt",
+        "disposition": "sync",
+        "intent": "live",
+        "resources": ["13549794", "13549795"],
+    });
+    let accepted = call(
+        pool.clone(),
+        Method::POST,
+        "/v1/sync",
+        &TOKEN_A,
+        Some(KEY_1),
+        Some(body.clone()),
+    )
+    .await;
+    assert_eq!(accepted.status, StatusCode::ACCEPTED);
+    let path = format!("/v1/sync/{KEY_1}");
+
+    let other_tenant = call(pool.clone(), Method::DELETE, &path, &TOKEN_B, None, None).await;
+    assert_eq!(
+        other_tenant.status,
+        StatusCode::NOT_FOUND,
+        "another tenant's request is not there to delete"
+    );
+
+    for _ in 0..2 {
+        let deleted = call(pool.clone(), Method::DELETE, &path, &TOKEN_A, None, None).await;
+        assert_eq!(
+            deleted.status,
+            StatusCode::OK,
+            "a request with no leg running is stopped outright: {}",
+            String::from_utf8_lossy(&deleted.body)
+        );
+        assert_eq!(deleted.json::<serde_json::Value>()["status"], "deleted");
+    }
+
+    assert_eq!(
+        call(pool.clone(), Method::GET, &path, &TOKEN_A, None, None)
+            .await
+            .status,
+        StatusCode::NOT_FOUND,
+        "a deleted request has no page"
+    );
+    let list: serde_json::Value = call(pool.clone(), Method::GET, "/v1/sync", &TOKEN_A, None, None)
+        .await
+        .json();
+    assert_eq!(
+        list["requests"],
+        serde_json::json!([]),
+        "and the history it was in is filtered in SQL: {list}"
+    );
+
+    let replay = call(
+        pool,
+        Method::POST,
+        "/v1/sync",
+        &TOKEN_A,
+        Some(KEY_1),
+        Some(body),
+    )
+    .await;
+    assert_eq!(
+        replay.status,
+        StatusCode::CONFLICT,
+        "the key is spent and its request is gone, so the retry is refused rather than \
+         re-enqueued: {}",
+        String::from_utf8_lossy(&replay.body)
     );
 }
 

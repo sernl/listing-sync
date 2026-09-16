@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n             EXISTS (SELECT 1 FROM job_item\n                      WHERE org_id = $1 AND job_id = $2\n                        AND state IN ('leased', 'running', 'verifying')\n                        AND lease_expires_at IS NOT NULL\n                        AND lease_expires_at > now())            AS \"executing!\",\n             EXISTS (SELECT 1 FROM job_item ji\n                       JOIN write_attempt wa\n                         ON wa.org_id = ji.org_id AND wa.job_item_id = ji.id\n                      WHERE ji.org_id = $1 AND ji.job_id = $2\n                        AND wa.state IN ('in_flight', 'ambiguous'))\n                                                                 AS \"undecided!\",\n             EXISTS (SELECT 1 FROM job_item\n                      WHERE org_id = $1 AND job_id = $2\n                        AND state <> 'settled')                  AS \"unsettled!\",\n             EXISTS (SELECT 1 FROM job_item\n                      WHERE org_id = $1 AND job_id = $2\n                        AND state = 'settled'\n                        AND outcome = 'ambiguous')               AS \"ambiguous!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "executing!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "undecided!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "unsettled!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "ambiguous!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "af3c6684bf5f6707e3087059b22c17972ec01e8908d8f4d3fa677d22e8b620f6"
+}
