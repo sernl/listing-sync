@@ -313,6 +313,17 @@ Windows needs an installed build rather than a development run, and the plugin's
 The code behind it sets the AppUserModelID only when the executable's directory is not `target/debug` or `target/release` (`src/desktop.rs`, the `cfg(windows)` block in `show`), so a development run shows PowerShell's name and icon or nothing at all.
 Neither the phone nor an installed Windows build has raised one yet; `docs/notes/runbooks/android-phone-check.md` says what to look for on each.
 
+## Amended 2026-09-16: foreground import discovery
+
+The mobile wake handler now consumes `RunEvent::WindowEvent` with `WindowEvent::Resumed`.
+In the pinned Tauri runtime, bare `RunEvent::Resumed` represents an event-loop poll rather than the Android activity lifecycle.
+The scheduler also rechecks local foreground state within one minute if that wake is missed, before a browser-started import's two-minute activation window expires.
+This local check does not permit marketplace work while the app is in the background.
+
+On the Samsung SM-N975F and SM-X906B, work activity resumed within a four-second observation window after returning to the app.
+Neither device recorded work events during the preceding twenty-second background interval.
+That observation verifies activity reporting and resume discovery, not a packet capture of all background traffic.
+
 ## Sources
 
 `docs/notes/design/vendoo-for-teachers-rethink.md`, decisions D2, D3, D12, D14 and D29, and its §5.1 and §5.2 readings of mobile session capture and mobile scheduling.

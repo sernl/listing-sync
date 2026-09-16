@@ -458,17 +458,17 @@ impl Coordination {
     /// Zero where something is due already. Capped at the cadence, so a
     /// device with nothing to do still reaches its hourly deadline.
     ///
-    /// A phone the seller is not looking at parks on that same cap and asks
-    /// for nothing when it wakes: the loop re-reads the lifecycle first, so
-    /// the wake is a local read and never a request. What actually brings such
-    /// a phone back is the resume, which is a trigger rather than a timer.
+    /// A background phone rechecks local visibility within one minute.
+    /// Resume normally wakes it immediately; this cap recovers a missed
+    /// notification before a manual import's two-minute activation expires.
+    /// The loop checks foreground again before making any network request.
     #[must_use]
     pub fn sleep(&self, at: Clocks) -> Duration {
         if self.due(at).any() {
             return Duration::ZERO;
         }
         if !self.present {
-            return self.cadence;
+            return self.cadence.min(Duration::from_mins(1));
         }
         let check_in = left(
             self.last_check_in,
@@ -1345,6 +1345,34 @@ mod tests {
             assert!(
                 !plan.due(now).any(),
                 "one pass serves all three triggers, rather than one pass each"
+            );
+        }
+
+        #[test]
+        fn a_missed_resume_still_discovers_before_a_web_import_expires() {
+            let mut plan = Coordination::on_a_phone(Scheduler::DEFAULT_CADENCE);
+            plan.observed_foreground(true);
+            served_sweep(&mut plan, at(Duration::ZERO), Discovery::Quiet);
+
+            let left = Duration::from_secs(15);
+            plan.observed_foreground(false);
+            assert!(!plan.due(at(left)).any());
+            let wait = plan.sleep(at(left));
+            assert!(
+                wait <= Duration::from_mins(1),
+                "a missed lifecycle notification must not outlast a web import's two-minute activation"
+            );
+            let next = left + wait;
+            assert!(
+                !plan.due(at(next)).any(),
+                "checking local visibility must not start network work in the background"
+            );
+
+            plan.observed_foreground(true);
+            let due = plan.due(at(next));
+            assert!(
+                due.discover || due.sweep,
+                "a visible phone discovers again even when its resume notification was lost"
             );
         }
 

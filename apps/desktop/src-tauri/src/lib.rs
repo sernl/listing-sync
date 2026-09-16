@@ -326,7 +326,13 @@ pub fn run() {
     app.run(|_, _| {});
     #[cfg(mobile)]
     app.run(move |_, event| {
-        if matches!(event, tauri::RunEvent::Resumed) {
+        if matches!(
+            event,
+            tauri::RunEvent::WindowEvent {
+                event: tauri::WindowEvent::Resumed,
+                ..
+            }
+        ) {
             on_resume.now();
         }
     });
