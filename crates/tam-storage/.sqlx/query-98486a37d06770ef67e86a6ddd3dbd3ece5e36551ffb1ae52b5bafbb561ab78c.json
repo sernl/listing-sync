@@ -1,0 +1,81 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT r.id, r.source, r.target, r.disposition, r.intent, r.state, r.requested_at,\n                      r.deletion_state,\n                      (SELECT count(*) FROM sync_request_resource s\n                        WHERE s.org_id = r.org_id AND s.request_id = r.id) AS \"total!\",\n                      (SELECT count(*) FROM sync_request_resource s\n                        WHERE s.org_id = r.org_id AND s.request_id = r.id\n                          AND s.state = 'failed') AS \"failed!\"\n               FROM sync_request r\n               WHERE r.org_id = $1\n                 AND r.deletion_state IS DISTINCT FROM 'deleted'\n                 AND ($3::timestamptz IS NULL OR (r.requested_at, r.id) < ($3, $4))\n                 AND ($5::text IS NULL OR r.disposition = $5)\n                 AND ($6::text IS NULL OR r.state = $6)\n               ORDER BY r.requested_at DESC, r.id DESC\n               LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "source",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "target",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "disposition",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "intent",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "requested_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "deletion_state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "total!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 9,
+        "name": "failed!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8",
+        "Timestamptz",
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "98486a37d06770ef67e86a6ddd3dbd3ece5e36551ffb1ae52b5bafbb561ab78c"
+}

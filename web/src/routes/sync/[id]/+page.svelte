@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { page } from '$app/state';
+	import { goto } from '$app/navigation';
 	import { ApiFailure, api, type ItemDetail, type ItemView, type JobView } from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
@@ -14,6 +15,13 @@
 	import { platformTitle } from '$lib/platforms';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import { toast } from '$lib/toast';
+	import {
+		deleteRefusal,
+		retainedBadge,
+		type WorkDeleteOutcome,
+		type WorkItem
+	} from '$lib/work-delete';
+	import WorkDeleteDialog from '$lib/WorkDeleteDialog.svelte';
 	import '$lib/pages/automations/automations.css';
 
 	const jobId = $derived(page.params.id ?? '');
@@ -268,6 +276,24 @@
 		URL.revokeObjectURL(url);
 		toast('info', 'These steps were downloaded.');
 	}
+
+	/** This run, while a Delete is being confirmed for it, or null while none
+	 *  is. The same dialog the Sync history uses: a run deleted from its own
+	 *  page and one deleted from the list are the same act. */
+	let deleting = $state<WorkItem[] | null>(null);
+
+	const RUNS = { one: 'run', many: 'runs' };
+
+	// Return accepted deletions to history, where stopping rows remain visible.
+	// Re-read other outcomes: a lost response does not prove nothing changed.
+	async function settledDelete(outcome: WorkDeleteOutcome) {
+		if (outcome.deleted.length > 0 || outcome.stopping.length > 0) {
+			deleting = null;
+			await goto('/sync');
+			return;
+		}
+		await refetch();
+	}
 </script>
 
 <div class="page">
@@ -280,9 +306,10 @@
 			description={`${platformTitle(run.inventory)} · started ${agoLabel(run.created_at, Date.now())}`}
 		>
 			{#snippet aside()}
+				{@const going = retainedBadge(run.deletion_status)}
 				<StatusPill
-					tone={run.phase === 'settled' ? 'ok' : 'run'}
-					label={run.phase}
+					tone={going?.tone ?? (run.phase === 'settled' ? 'ok' : 'run')}
+					label={going?.label ?? run.phase}
 				/>
 				<StatusPill
 					tone={live ? 'ok' : 'soon'}
@@ -295,6 +322,27 @@
 			title="Outcomes"
 			description="Every outcome we recorded, kept apart rather than rolled into one."
 		>
+			{#snippet more()}
+				{@const refusal = deleteRefusal(run.deletion_status)}
+				<!-- Delete takes the run out of the seller's history once new
+				     work has been fenced. It removes no resource and no
+				     marketplace listing, and the confirmation says so. -->
+				<Button
+					small
+					danger
+					disabled={refusal !== null}
+					reason={refusal ?? undefined}
+					onclick={() =>
+						(deleting = [
+							{
+								id: run.job,
+								label: `${platformTitle(run.inventory)} · started ${agoLabel(run.created_at, Date.now())}`
+							}
+						])}
+				>
+					Delete this run
+				</Button>
+			{/snippet}
 			<div class="run-outcome" role="img" aria-label="outcome distribution">
 				{#each segments(run.counts) as segment (segment.label)}
 					<div
@@ -474,3 +522,12 @@
 		Retry
 	</Button>
 {/snippet}
+
+<WorkDeleteDialog
+	open={deleting !== null}
+	items={deleting ?? []}
+	noun={RUNS}
+	remove={api.deleteJob}
+	onClose={() => (deleting = null)}
+	onsettled={(outcome) => void settledDelete(outcome)}
+/>

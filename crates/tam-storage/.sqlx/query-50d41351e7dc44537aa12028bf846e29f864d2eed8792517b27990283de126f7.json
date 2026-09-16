@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH held AS (\n                   SELECT h.hash AS hash,\n                          max(h.byte_len) AS byte_len,\n                          bool_or(d.last_seen_at >= $2) AS online,\n                          array_agg(h.device_id) AS devices\n                     FROM device_library_holding h\n                     JOIN device d ON d.org_id = h.org_id AND d.id = h.device_id\n                    WHERE h.org_id = $1 AND d.revoked_at IS NULL\n                    GROUP BY h.hash\n               ),\n               named AS (\n                   SELECT COALESCE(f.hash, f.observed_hash) AS hash,\n                          min(COALESCE(f.name, f.payload_file_name)) AS file_name\n                     FROM product_file f\n                    WHERE f.org_id = $1\n                    GROUP BY COALESCE(f.hash, f.observed_hash)\n               ),\n               linked AS (\n                   SELECT COALESCE(f.hash, f.observed_hash) AS hash,\n                          count(DISTINCT p.id) AS resources,\n                          max(COALESCE(b.byte_len, f.observed_byte_len)) AS byte_len,\n                          bool_or(f.role = 'payload') AS payload,\n                          bool_or($3::text IS NOT NULL AND position(lower($3) in lower(p.title)) > 0) AS title_matches\n                     FROM product_file f\n                     JOIN product p ON p.org_id = f.org_id AND p.id = f.product_id\n                     LEFT JOIN blob b ON b.org_id = f.org_id AND b.hash = f.hash\n                    WHERE f.org_id = $1\n                      AND f.deleted_at IS NULL\n                      AND p.deleted_at IS NULL\n                    GROUP BY COALESCE(f.hash, f.observed_hash)\n               ),\n               universe AS (\n                   SELECT COALESCE(h.hash, l.hash) AS hash,\n                          COALESCE(h.byte_len, l.byte_len, 0) AS byte_len,\n                          COALESCE(h.online, false) AS online,\n                          h.hash IS NOT NULL AS present,\n                          COALESCE(l.resources, 0) AS resources,\n                          COALESCE(h.devices, ARRAY[]::text[]) AS devices,\n                          l.title_matches AS title_matches\n                     FROM held h\n                     FULL OUTER JOIN linked l ON l.hash = h.hash\n                    WHERE h.hash IS NOT NULL OR l.payload\n               ),\n               filtered AS (\n                   SELECT u.hash AS hash,\n                          u.byte_len AS byte_len,\n                          n.file_name AS file_name,\n                          u.online AS online,\n                          u.present AS present,\n                          u.resources AS resources\n                     FROM universe u\n                     LEFT JOIN named n ON n.hash = u.hash\n                    WHERE ($3::text IS NULL\n                           OR position(lower($3) in lower(COALESCE(n.file_name, ''))) > 0\n                           OR COALESCE(u.title_matches, false)\n                           OR position(lower($3) in encode(u.hash, 'hex')) > 0)\n                      AND ($4::text IS NULL OR $4 = ANY (u.devices))\n                      AND ($5::text IS NULL\n                           OR ($5 = 'online' AND u.present AND u.online)\n                           OR ($5 = 'offline' AND u.present AND NOT u.online)\n                           OR ($5 = 'missing' AND NOT u.present))\n                      AND ($6::text IS NULL\n                           OR ($6 = 'linked' AND u.resources > 0)\n                           OR ($6 = 'unlinked' AND u.resources = 0))\n               ),\n               totals AS (SELECT count(*) AS total FROM filtered),\n               chosen AS (\n                   SELECT * FROM filtered\n                    ORDER BY file_name NULLS LAST, hash\n                    OFFSET $7 LIMIT $8\n               )\n               SELECT t.total AS \"total!\",\n                      c.hash AS \"hash?\",\n                      c.byte_len AS \"byte_len?\",\n                      c.file_name AS \"file_name?\"\n                 FROM totals t\n                 LEFT JOIN chosen c ON true\n                ORDER BY c.file_name NULLS LAST, c.hash",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "hash?",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 2,
+        "name": "byte_len?",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "file_name?",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "50d41351e7dc44537aa12028bf846e29f864d2eed8792517b27990283de126f7"
+}

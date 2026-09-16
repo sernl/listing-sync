@@ -54,7 +54,7 @@ export function carrying(row: MarketplaceRow): boolean {
 
 /** Where the machines this console knows about are listed. One constant,
  *  because the card foot and the sign-in explanation both point at it. */
-export const MACHINES_ANCHOR = '#machines';
+export const MACHINES_ANCHOR = '/settings#machines';
 
 /** Where a seller gets the app that holds a marketplace login. */
 export const DOWNLOADS_ANCHOR = '#downloads';
@@ -258,7 +258,7 @@ export function disconnectPrompt(marketplace: Marketplace, heldOnAMachine: boole
 		`\n\nThis removes no machine's login: your logins are never on our servers, so the ` +
 		`${name} login is still on the machine that holds it. While that machine keeps checking ` +
 		`in it reconnects ${name} by itself. To remove the login, sign out of ${name} in the ` +
-		'Teachouse app on that machine, or sign the machine out under Your machines below.'
+		'Teachouse app on that machine, or sign the machine out under Preferences > Machine sign-ins.'
 	);
 }
 
@@ -382,7 +382,7 @@ export function signOutHereSay(marketplace: Marketplace, forgotten: SessionOutco
 				tone: 'error',
 				message:
 					`This machine was signed out from the console, which already removed its ${name} ` +
-					'login. Sign the machine back in under Your machines.'
+					'login. Sign the machine back in under Preferences > Machine sign-ins.'
 			};
 		// A forget never asks for consent; the arm exists because the type is
 		// shared with connect, and it is worded as the impossibility it is.
@@ -481,7 +481,7 @@ const CONNECT_SAID: Record<ConnectVerdictCode, (name: string) => ConnectReturn> 
 	}),
 	signed_out: (name) => ({
 		tone: 'error',
-		message: `This machine was signed out from the console, so the ${name} sign-in was not opened and nothing was saved. Sign this machine back in under Your machines, then press Connect ${name}.`
+		message: `This machine was signed out from the console, so the ${name} sign-in was not opened and nothing was saved. Sign this machine back in under Preferences > Machine sign-ins, then press Connect ${name}.`
 	}),
 	// The seller has not agreed to the seller-device notice for this
 	// marketplace, so the application refused in front of the password.
@@ -530,7 +530,7 @@ const CONNECT_SAID_UNNAMED: Record<ConnectVerdictCode, ConnectReturn> = {
 	signed_out: {
 		tone: 'error',
 		message:
-			'This machine was signed out from the console, so your marketplace sign-in was not opened and nothing was saved. Sign this machine back in under Your machines, then press Connect on the card.'
+			'This machine was signed out from the console, so your marketplace sign-in was not opened and nothing was saved. Sign this machine back in under Preferences > Machine sign-ins, then press Connect on the card.'
 	},
 	consent: {
 		tone: 'error',

@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO org_inventory_halt (org_id, inventory, marketplace, raised_by, reason, raised_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (org_id, inventory, marketplace) DO UPDATE SET write_only = false, raised_by = EXCLUDED.raised_by, reason = EXCLUDED.reason, raised_at = EXCLUDED.raised_at WHERE org_inventory_halt.write_only",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fb05ae44b82791f26f0132ceb5c102b2510a5d0f43f20fb76adf5bd9dfded12f"
+}

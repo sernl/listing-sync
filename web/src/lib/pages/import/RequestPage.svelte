@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ApiFailure, api, type SyncRequestView } from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
@@ -28,6 +29,13 @@
 		stageOf,
 		termCoverageStrip
 	} from '$lib/sync-request';
+	import {
+		deleteRefusal,
+		retainedBadge,
+		type WorkDeleteOutcome,
+		type WorkItem
+	} from '$lib/work-delete';
+	import WorkDeleteDialog from '$lib/WorkDeleteDialog.svelte';
 	import { pillTone } from './import-view';
 	import './import.css';
 
@@ -129,6 +137,25 @@
 		}
 	}
 
+	/** This request, while a Delete is being confirmed for it, or null while
+	 *  none is. The same dialog the transfer history uses: one deleted from
+	 *  its own page and one deleted from the list are the same act. */
+	let deleting = $state<WorkItem[] | null>(null);
+
+	// "Transfer" rather than "migration": this record is a Copy or a Move.
+	const TRANSFERS = { one: 'transfer', many: 'transfers' };
+
+	// Return accepted deletions to history, where stopping rows remain visible.
+	// Re-read other outcomes: a lost response does not prove nothing changed.
+	async function settledDelete(outcome: WorkDeleteOutcome) {
+		if (outcome.deleted.length > 0 || outcome.stopping.length > 0) {
+			deleting = null;
+			await goto(MIGRATION_HREF);
+			return;
+		}
+		await refetch();
+	}
+
 	// The page the seller is on, read again. The ledger fires on every listing
 	// the device describes, and re-reading page one would walk them off the
 	// page they were reading each time the import made progress. The reads are
@@ -183,7 +210,8 @@
 			description={`${platformTitle(request.source)} → ${platformTitle(request.target)}`}
 		>
 			{#snippet aside()}
-				<StatusPill tone={pillTone(shown.tone)} label={shown.label} />
+				{@const going = retainedBadge(request.deletion_status)}
+				<StatusPill tone={going?.tone ?? pillTone(shown.tone)} label={going?.label ?? shown.label} />
 				<StatusPill tone={live ? 'ok' : 'soon'} label={live ? 'Live' : 'Reconnecting'} />
 			{/snippet}
 		</PageHead>
@@ -201,6 +229,7 @@
 		{#if !isDeviceImport(request)}
 			<Panel title="Not a move we follow here">
 				<p class="quiet">{NOT_AN_IMPORT}</p>
+				<div class="actions">{@render deleteRequest(request)}</div>
 			</Panel>
 		{:else}
 			<Panel title="Where this move stands">
@@ -234,6 +263,7 @@
 						{/if}
 					</div>
 				{/if}
+				<div class="actions">{@render deleteRequest(request)}</div>
 			</Panel>
 
 			{#if coverage !== null}
@@ -336,3 +366,33 @@
 		Retry
 	</Button>
 {/snippet}
+
+<!-- Delete, offered wherever this request's own actions are. Withdrawn as a
+     press once it is already on its way out: the server would accept the
+     call and nothing the seller can see would change. -->
+{#snippet deleteRequest(request: SyncRequestView)}
+	{@const gone = deleteRefusal(request.deletion_status)}
+	<Button
+		danger
+		disabled={gone !== null}
+		reason={gone ?? undefined}
+		onclick={() =>
+			(deleting = [
+				{
+					id: request.request,
+					label: `${platformTitle(request.source)} → ${platformTitle(request.target)} · ${request.request.slice(0, 8)}…`
+				}
+			])}
+	>
+		Delete this transfer
+	</Button>
+{/snippet}
+
+<WorkDeleteDialog
+	open={deleting !== null}
+	items={deleting ?? []}
+	noun={TRANSFERS}
+	remove={api.deleteSyncRequest}
+	onClose={() => (deleting = null)}
+	onsettled={(outcome) => void settledDelete(outcome)}
+/>

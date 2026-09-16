@@ -171,10 +171,22 @@ pub(crate) async fn create_migration(
             &QuotaKind::MigrationsPerMonth.sentence(0),
         ));
     }
+    let requests = SyncRequestRepo::new(state.pool.clone());
+    // A key whose migration the seller deleted, before the replay read below
+    // and before the plan. The deleted request is hidden from `get`, so
+    // without this the confirm would fall through to planning, meet the
+    // primary key on the way in, queue nothing and answer 200 — a silent
+    // no-op where the seller asked for something that cannot be given.
+    if let Some(deleted) = requests
+        .deletion_status(context.org, key.0)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+    {
+        return Err(crate::jobs::deleted_key_conflict(deleted));
+    }
     // A retried confirm is the same migration, answered before the plan is
     // recomputed: the first confirm queued the creates, so a fresh plan now
     // admits nothing and would refuse a request that already exists.
-    let requests = SyncRequestRepo::new(state.pool.clone());
     if let Some(existing) = requests
         .get(context.org, key.0)
         .await

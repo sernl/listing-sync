@@ -1,5 +1,6 @@
 //! The operator command-line tool: grants the platform-operator marking,
-//! withdraws it, and lists who holds it.
+//! withdraws it, lists who holds it, and runs the deployment-time data
+//! normalizations a migration cannot express in SQL.
 //!
 //! This is the only way an operator comes into existence. No HTTP path
 //! creates or modifies the marking, so there is no self-elevation endpoint to
@@ -16,16 +17,18 @@
 //! Usage: tam-admin <db-url> grant  (--user <uuid> | --email <address>) [--by <who>]
 //!        tam-admin <db-url> revoke (--user <uuid> | --email <address>)
 //!        tam-admin <db-url> list
+//!        tam-admin <db-url> backfill-workflow-owners
 
 #![forbid(unsafe_code)]
 
-use tam_storage::{OperatorRepo, SessionRepo};
+use tam_storage::{OperatorRepo, SessionRepo, SyncRequestRepo};
 use tam_types::{Timestamp, UserId, Uuid};
 
 const USAGE: &str =
     "usage: tam-admin <db-url> grant  (--user <uuid> | --email <address>) [--by <who>]\n\
                      \x20      tam-admin <db-url> revoke (--user <uuid> | --email <address>)\n\
-                     \x20      tam-admin <db-url> list";
+                     \x20      tam-admin <db-url> list\n\
+                     \x20      tam-admin <db-url> backfill-workflow-owners";
 
 /// What `granted_by` carries when nobody named a granter. The bootstrap grant
 /// is made from the box before any operator exists to attribute it to, and
@@ -71,6 +74,16 @@ enum Command {
         subject: Subject,
     },
     List,
+    /// The deployment-time normalization that gives a legacy migration's
+    /// event anchor the request it belongs to.
+    ///
+    /// Named for what it writes rather than for the release that needed it:
+    /// an anchor minted before the import leg named its request carries no
+    /// owner, so a deletion fences nothing and the device's next page walks
+    /// through the hole. It takes no subject and no tenant -- it visits
+    /// every organisation -- and it is idempotent, so the launcher may run
+    /// it on every boot.
+    BackfillWorkflowOwners,
 }
 
 struct Invocation {
@@ -118,6 +131,7 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
             subject: subject()?,
         },
         "list" => Command::List,
+        "backfill-workflow-owners" => Command::BackfillWorkflowOwners,
         other => {
             eprintln!("{USAGE}");
             return Err(format!("unknown command {other:?}").into());
@@ -155,7 +169,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect(&invocation.db_url)
         .await?;
     let operators = OperatorRepo::new(pool.clone());
-    let sessions = SessionRepo::new(pool);
+    let sessions = SessionRepo::new(pool.clone());
 
     match invocation.command {
         Command::Grant {
@@ -191,6 +205,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     record.granted_by,
                 );
             }
+        }
+        Command::BackfillWorkflowOwners => {
+            // Tenant by tenant, through the repository's own roster, because
+            // the pass runs as `tam_app` under forced row-level security and
+            // cannot scan across organisations at all. One failing tenant
+            // stops the command: an inconsistency this pass refuses to guess
+            // at is a deployment that must not continue, and the tenants it
+            // already normalized keep their links.
+            let requests = SyncRequestRepo::new(pool);
+            let mut linked = 0_u64;
+            let mut tenants = 0_u64;
+            for org in requests.tenants().await? {
+                linked += requests.normalize_migration_anchors(org).await?;
+                tenants += 1;
+            }
+            println!("workflow owners backfilled: {linked} anchor(s) across {tenants} tenant(s)");
         }
     }
     Ok(())

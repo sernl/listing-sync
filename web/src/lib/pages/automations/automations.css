@@ -220,18 +220,25 @@
 
 /* A run or a migration, drawn as a card in the catalogue's row rhythm. The
    catalogue's own `RowCard` is not used: its 88px cover thumbnail is a
-   resource affordance, and a run has no cover to put in it. */
+   resource affordance, and a run has no cover to put in it.
+
+   A grid rather than a flex row, so the five things a row carries — the tick,
+   what it is, its state, when it ran and what can be done with it — sit in
+   columns that cannot overlap at any width. The row is no longer an anchor:
+   it holds a tick and a Delete, and a control inside a link is reached by the
+   keyboard as part of the link. */
 
 .auto-row {
-	display: flex;
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+	grid-template-areas: 'pick who mark when act';
 	align-items: center;
-	gap: 14px;
+	gap: 4px 14px;
 	padding: 14px 18px;
 	border: 1px solid var(--line);
 	border-radius: var(--r-panel);
 	background: var(--surface);
 	box-shadow: var(--sh-1);
-	text-decoration: none;
 	color: inherit;
 }
 
@@ -243,18 +250,32 @@
 	border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
 }
 
+.auto-row .pick {
+	grid-area: pick;
+	display: flex;
+	align-items: center;
+}
+
 .auto-row .who {
+	grid-area: who;
 	display: flex;
 	flex-direction: column;
 	gap: 3px;
 	min-width: 0;
-	flex: 1;
 }
 
+/* The title is the link, and the only one in the row. */
 .auto-row .who .t {
 	font-size: 15px;
 	font-weight: 600;
 	line-height: 1.3;
+	color: inherit;
+	text-decoration: none;
+}
+
+.auto-row .who a.t:hover,
+.auto-row .who a.t:focus-visible {
+	text-decoration: underline;
 }
 
 .auto-row .who .meta {
@@ -263,11 +284,29 @@
 	color: var(--muted);
 }
 
+/* The state, in a column of its own natural width: as a fixed slot a label
+   longer than the slot runs under its neighbours, which is exactly what the
+   import list used to do at wide viewports. */
+.auto-row .mark {
+	grid-area: mark;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	justify-content: flex-end;
+}
+
 .auto-row .when {
-	flex: none;
+	grid-area: when;
 	font-size: 12px;
 	color: var(--faint);
+	white-space: nowrap;
 	font-variant-numeric: tabular-nums;
+}
+
+.auto-row .act {
+	grid-area: act;
+	display: flex;
+	justify-content: flex-end;
 }
 
 /* The paragraph that says what a migration does, set before anything is
@@ -993,9 +1032,30 @@
 		border-bottom: 0;
 	}
 
+	/* On a phone the row is bands rather than five columns: the tick, the
+	   state and the time share the first, what the row is takes a full-width
+	   band of its own, and the Delete sits under them where a thumb reaches
+	   it. The areas are named, so nothing depends on source order. */
 	.auto-row {
-		align-items: flex-start;
-		flex-wrap: wrap;
+		grid-template-columns: auto minmax(0, 1fr) auto;
+		grid-template-areas:
+			'pick mark when'
+			'who who who'
+			'act act act';
+		align-items: center;
+		gap: 8px 10px;
+	}
+
+	.auto-row .mark {
+		justify-content: flex-start;
+	}
+
+	.auto-row .when {
+		text-align: right;
+	}
+
+	.auto-row .act {
+		justify-content: flex-start;
 	}
 
 	.set-grid {

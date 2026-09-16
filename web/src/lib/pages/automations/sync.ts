@@ -5,6 +5,7 @@
 import type {
 	ActivityLine,
 	ConnectionView,
+	JobDeletionStatus,
 	JobHead,
 	MarketplaceSyncSettingView
 } from '$lib/api';
@@ -27,6 +28,10 @@ export interface RunRow {
 	 *  time in the seller's own locale without this module carrying a
 	 *  locale-dependent string. */
 	at: number;
+	/** Whether this run is on its way out of the history, and how far that
+	 *  has got. Null for a run nobody has asked to delete: a deleted one is
+	 *  filtered out by the server, so only the retained arms reach here. */
+	deletion: JobDeletionStatus | null;
 }
 
 export function runRows(jobs: readonly JobHead[], now: number): RunRow[] {
@@ -35,7 +40,8 @@ export function runRows(jobs: readonly JobHead[], now: number): RunRow[] {
 		href: `/sync/${job.job}`,
 		inventory: job.inventory,
 		meta: `${MARKETPLACE_WORD[MARKETPLACE_OF[job.inventory]]} · started ${agoLabel(job.created_at, now)}`,
-		at: job.created_at
+		at: job.created_at,
+		deletion: job.deletion_status ?? null
 	}));
 }
 

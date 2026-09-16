@@ -336,7 +336,7 @@ impl DeviceRepo {
     /// The work claim's own predicate asked as a question rather than embedded
     /// in a claim, and deliberately most of the same predicate. The grant set is
     /// a *superset* of what the claim will actually serve, never an equal set:
-    /// the two conditions below are omitted, so a marketplace can be named here
+    /// the conditions below are omitted, so a marketplace can be named here
     /// and still have every item refused.
     ///
     /// The over-approximation is the safe direction, and which direction is safe
@@ -348,20 +348,14 @@ impl DeviceRepo {
     /// a condition to the claim should therefore ask whether omitting it here
     /// could ever make this set too *narrow*; if not, it does not belong here.
     ///
-    /// Two of the claim's conditions are left out, each for a reason. A
-    /// reported `connected` session is not one, because the device knows its
-    /// own sessions better than its last report to us does, and refuses for
-    /// want of one on its own — under a different reason, which the seller acts
-    /// on differently; folding it in here would relabel "you are not logged in
-    /// to that marketplace" as "you are not entitled". The per-item conditions
-    /// are about an item rather than about entitlement.
+    /// Reported sessions are omitted because the device knows its own sessions
+    /// and reports a missing login separately from a missing entitlement.
+    /// Per-item conditions belong to the claim, not this marketplace grant.
     ///
-    /// Halts are keyed on an inventory and a marketplace while the token's
-    /// vocabulary is a marketplace alone, so a marketplace is granted when any
-    /// of its inventories is unhalted. "Any" can never let a halted inventory
-    /// be worked, because the claim still refuses per inventory; "all" would
-    /// stop a seller working two healthy Tes inventories because a third was
-    /// halted.
+    /// A full halt excludes its inventory. A write-only halt does not: native
+    /// imports use this grant for source reads, too. Both claim branches still
+    /// refuse every halted inventory, regardless of scope. Granting a marketplace
+    /// when any inventory permits reads cannot authorize a halted write.
     pub async fn entitled_marketplaces(
         &self,
         org: OrgId,
@@ -388,7 +382,7 @@ impl DeviceRepo {
                        WHERE ih.inventory = mi.code AND ih.marketplace = mi.marketplace)
                  AND NOT EXISTS (SELECT 1 FROM org_inventory_halt oih
                        WHERE oih.org_id = $1 AND oih.inventory = mi.code
-                         AND oih.marketplace = mi.marketplace)
+                         AND oih.marketplace = mi.marketplace AND NOT oih.write_only)
                ORDER BY 1"#,
             uuid_to_db(org.0),
             device,

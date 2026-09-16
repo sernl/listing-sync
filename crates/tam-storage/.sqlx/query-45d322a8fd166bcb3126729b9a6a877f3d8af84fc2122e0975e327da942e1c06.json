@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT k.run_id, k.source, k.retry_of, r.deletion_requested_at IS NOT NULL AS \"deleted!\" FROM import_run_start_key k JOIN import_run r ON r.org_id = k.org_id AND r.id = k.run_id WHERE k.org_id = $1 AND k.start_key = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "run_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "source",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "retry_of",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "deleted!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "45d322a8fd166bcb3126729b9a6a877f3d8af84fc2122e0975e327da942e1c06"
+}

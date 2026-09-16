@@ -3,9 +3,8 @@
 //
 // Separate from `$lib/auth-client` rather than folded into it: the identity
 // boundary module stays the place where the two planes meet rather than a
-// drawer for every endpoint better-auth exposes. Two screens read these now,
-// the machines list on Marketplaces and the browser sign-ins on Account
-// Settings, which is why they are shared rather than route-local.
+// drawer for every endpoint better-auth exposes. Preferences uses these for
+// browser sessions and the matched sign-in ended when a machine is revoked.
 //
 // `listSessions` and `revokeSession` are better-auth 1.7.2's own endpoints
 // (`/list-sessions`, `/revoke-session`). `revokeSession` takes the session's

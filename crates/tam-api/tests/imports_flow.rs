@@ -1698,6 +1698,106 @@ async fn a_commit_stops_where_the_seller_stopped_the_run(pool: PgPool) {
     );
 }
 
+/// A deleted spreadsheet import is not reopened by recommitting its batch.
+///
+/// Deleting an import deliberately preserves everything: the rows the seller
+/// uploaded, the resources already created, and the receipts of what each row
+/// did. So the batch survives the run, and the only thing standing between it
+/// and its remaining rows is the lookup that finds the run it is reviewed
+/// through. A lookup that could not see the tombstone found none, opened a
+/// second run, and finished the import the seller had just deleted — five
+/// more charged products, with no history entry anywhere that says where they
+/// came from.
+///
+/// The product count is the discriminating assertion: the conflict alone
+/// would also be produced by a batch settling for some other reason, and
+/// thirty products here is precisely the defect.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_deleted_spreadsheet_import_is_not_reopened_by_recommitting_its_batch(pool: PgPool) {
+    provision(&pool).await;
+    let titles: Vec<String> = (0..30).map(|index| format!("Pack {index}")).collect();
+    let rows: Vec<Vec<(Cell, &str)>> = titles
+        .iter()
+        .map(|title| vec![(Cell::Title, title.as_str())])
+        .collect();
+    let borrowed: Vec<&[(Cell, &str)]> = rows.iter().map(Vec::as_slice).collect();
+    let uploaded: UploadedBatchView = upload(
+        &pool,
+        &TOKEN_A,
+        KEY_A,
+        "Teachouse.csv",
+        filled_sheet("Teachouse", &borrowed),
+    )
+    .await
+    .json();
+    let batch = uploaded.detail.batch.id;
+
+    let first: CommitAck = commit(state(pool.clone()), &TOKEN_A, batch).await.json();
+    assert_eq!(
+        (first.applied, first.remaining, first.complete),
+        (25, 5, false),
+        "the first chunk is a page, so five rows are still owed"
+    );
+
+    let run = run_of_batch(&pool, ORG_A).await;
+    let deleted = call(
+        &pool,
+        Method::DELETE,
+        &format!("/v1/imports/runs/{}", run.hyphenated()),
+        &TOKEN_A,
+    )
+    .await;
+    assert!(
+        matches!(deleted.status, StatusCode::OK | StatusCode::ACCEPTED),
+        "the seller's Delete is answered: {} {}",
+        deleted.status,
+        String::from_utf8_lossy(&deleted.body)
+    );
+
+    let replayed = commit(state(pool.clone()), &TOKEN_A, batch).await;
+    assert_eq!(
+        replayed.status,
+        StatusCode::CONFLICT,
+        "recommitting the surviving batch meets the tombstone rather than opening a second \
+         run: {}",
+        String::from_utf8_lossy(&replayed.body)
+    );
+    assert_eq!(
+        products_held(&pool, ORG_A).await,
+        25,
+        "so the five rows the deletion stopped were never created, counted rather than trusted"
+    );
+    assert_eq!(
+        runs_of_batch(&pool, ORG_A).await,
+        1,
+        "and the batch still has exactly the one run it was imported through"
+    );
+}
+
+/// How many runs this organisation's spreadsheet batches opened, tombstones
+/// included: the count a second run would move.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn runs_of_batch(pool: &PgPool, org: OrgId) -> i64 {
+    let mut tx = pool.begin().await.expect("the transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(org.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pin sets");
+    let total: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM import_run WHERE org_id = $1 AND kind = 'spreadsheet'",
+    )
+    .bind(uuid::Uuid::from_bytes(org.0 .0))
+    .fetch_one(&mut *tx)
+    .await
+    .expect("the count reads");
+    tx.commit().await.expect("the read commits");
+    total
+}
+
 /// The spreadsheet run this organisation's batch opened.
 #[expect(
     clippy::expect_used,

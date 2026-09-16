@@ -30,6 +30,7 @@ import Download from '@lucide/svelte/icons/download';
 import EllipsisVertical from '@lucide/svelte/icons/ellipsis-vertical';
 import Eye from '@lucide/svelte/icons/eye';
 import FileDown from '@lucide/svelte/icons/file-down';
+import Files from '@lucide/svelte/icons/files';
 import HeartPulse from '@lucide/svelte/icons/heart-pulse';
 import Image from '@lucide/svelte/icons/image';
 import Info from '@lucide/svelte/icons/info';
@@ -83,6 +84,7 @@ export const ICONS = {
 	'ellipsis-vertical': EllipsisVertical,
 	eye: Eye,
 	'file-down': FileDown,
+	files: Files,
 	'heart-pulse': HeartPulse,
 	image: Image,
 	info: Info,

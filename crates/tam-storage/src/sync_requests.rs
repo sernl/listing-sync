@@ -15,9 +15,12 @@
 
 use sqlx::PgPool;
 use tam_marketplace::{ListingState, RemoteListingId};
-use tam_types::{InventoryId, MappingId, OrgId, ProductId, Timestamp, TransportClass, Uuid};
+use tam_types::{
+    InventoryId, MappingId, OrgId, ProductId, Stamp, SystemComponent, Timestamp, TransportClass,
+    Uuid,
+};
 
-use crate::jobs::{CreatedJob, NewJob, NewJobItem};
+use crate::jobs::{CreatedJob, DeletionStatus, JobFence, NewJob, NewJobItem};
 
 use crate::codec::{
     inventory_from_db, inventory_to_db, listing_state_from_db, listing_state_to_db,
@@ -219,6 +222,23 @@ pub struct Mint<'a> {
     pub items: &'a [NewJobItem],
 }
 
+/// What admitting one resource of a running page came to.
+///
+/// Three answers because the caller acts differently on each: a page carries
+/// on with an admitted resource, skips one it has already described, and
+/// stops without starting anything further when the seller has deleted the
+/// request underneath it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceAdmission {
+    /// Admitted, at this ordinal. The breadcrumb is `pending` until the
+    /// resource's commits finish, and the request reads `stopping` meanwhile.
+    Admitted(i32),
+    /// This locator already has a finished breadcrumb.
+    AlreadyDescribed,
+    /// Nothing was admitted: the request carries a deletion.
+    Stopped,
+}
+
 /// One resource the device described, as the import route records it.
 #[derive(Debug, Clone)]
 pub struct Observed<'a> {
@@ -249,6 +269,9 @@ pub struct SyncRequestSummary {
     /// resources is a different thing to a seller than one that crossed all
     /// forty it had.
     pub resources_failed: u32,
+    /// Where a Delete this request is still working through has got to.
+    /// Never `Deleted` on a listed row: the tombstone is filtered in SQL.
+    pub deletion: Option<DeletionStatus>,
 }
 
 /// One page of the request list: what to narrow it to, where the last page
@@ -321,6 +344,8 @@ pub struct SyncRequestHead {
     pub remove_job: Option<Uuid>,
     pub failure_detail: Option<String>,
     pub requested_at: Timestamp,
+    /// See [`SyncRequestSummary::deletion`].
+    pub deletion: Option<DeletionStatus>,
 }
 
 /// The coverage of a whole request, and how many resources it is summed over.
@@ -579,6 +604,7 @@ impl SyncRequestRepo {
         let disposition = page.disposition.map(Disposition::as_str);
         let rows = sqlx::query!(
             r#"SELECT r.id, r.source, r.target, r.disposition, r.intent, r.state, r.requested_at,
+                      r.deletion_state,
                       (SELECT count(*) FROM sync_request_resource s
                         WHERE s.org_id = r.org_id AND s.request_id = r.id) AS "total!",
                       (SELECT count(*) FROM sync_request_resource s
@@ -586,6 +612,7 @@ impl SyncRequestRepo {
                           AND s.state = 'failed') AS "failed!"
                FROM sync_request r
                WHERE r.org_id = $1
+                 AND r.deletion_state IS DISTINCT FROM 'deleted'
                  AND ($3::timestamptz IS NULL OR (r.requested_at, r.id) < ($3, $4))
                  AND ($5::text IS NULL OR r.disposition = $5)
                  AND ($6::text IS NULL OR r.state = $6)
@@ -612,6 +639,7 @@ impl SyncRequestRepo {
                     state: row.state,
                     requested_at: timestamp_from_db(row.requested_at),
                     resources_total: count_from_db(i32::try_from(row.total).unwrap_or(i32::MAX))?,
+                    deletion: DeletionStatus::parse(row.deletion_state.as_deref())?,
                     resources_failed: count_from_db(i32::try_from(row.failed).unwrap_or(i32::MAX))?,
                 })
             })
@@ -626,9 +654,14 @@ impl SyncRequestRepo {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let head = sqlx::query!(
+            // A tombstoned request is gone as far as every reader of this
+            // repository is concerned, and that includes the drain: a late
+            // pass finds no request, mints nothing and says so, which is
+            // exactly the fence a deleted migration needs.
             "SELECT source, target, disposition, intent, state, create_job_id, remove_job_id, \
                     failure_detail, requested_at \
-             FROM sync_request WHERE org_id = $1 AND id = $2",
+             FROM sync_request WHERE org_id = $1 AND id = $2 \
+               AND deletion_state IS DISTINCT FROM 'deleted'",
             uuid_to_db(org.0),
             uuid_to_db(request),
         )
@@ -716,9 +749,11 @@ impl SyncRequestRepo {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let head = sqlx::query!(
+            // Hidden for the reason `get` gives.
             "SELECT source, target, disposition, intent, state, create_job_id, remove_job_id, \
-                    failure_detail, requested_at \
-             FROM sync_request WHERE org_id = $1 AND id = $2",
+                    failure_detail, requested_at, deletion_state \
+             FROM sync_request WHERE org_id = $1 AND id = $2 \
+               AND deletion_state IS DISTINCT FROM 'deleted'",
             org_db,
             request_db,
         )
@@ -817,6 +852,7 @@ impl SyncRequestRepo {
                 remove_job: head.remove_job_id.map(uuid_from_db),
                 failure_detail: head.failure_detail,
                 requested_at: timestamp_from_db(head.requested_at),
+                deletion: DeletionStatus::parse(head.deletion_state.as_deref())?,
             },
             counts: counted
                 .into_iter()
@@ -857,6 +893,163 @@ impl SyncRequestRepo {
             .collect())
     }
 
+    /// Links a legacy migration's event anchor to the request it belongs to,
+    /// and answers how many anchors this pass linked.
+    ///
+    /// A migration's anchor is the itemless job its `job_event` rows hang
+    /// from, minted by the first page under [`IMPORT_LEG`]. Anchors minted
+    /// before that leg named its request carry no origin link at all, so
+    /// `JobRepo::owner` reads them as standalone work: deleting one reports
+    /// `deleted` without fencing its request, and the device's next page
+    /// reuses the same idempotency key, imports resources and mints the
+    /// create leg over a request the seller was told is gone.
+    ///
+    /// The link is derived rather than guessed. [`job_request_key`] is a
+    /// function of the request and the leg, so the anchor of a given request
+    /// is the job holding exactly that key -- the same derivation the page
+    /// that minted it used, run in reverse. No prose, no instant window and
+    /// no shape heuristic takes part.
+    ///
+    /// One maintenance pass, run once per tenant at deployment, not a
+    /// fallback any read consults: after it, ownership is a column again.
+    /// Bounded and restartable by construction -- the requests are walked in
+    /// `id` order in fixed batches, each batch is its own transaction, and
+    /// the anchors of a batch are locked in `id` order before anything is
+    /// written, which is `fence_owned_jobs`' own ordering. The pass appends
+    /// no event, so it never holds the organisation's event counter and
+    /// cannot deadlock with a settling lease.
+    ///
+    /// What it refuses to touch, and what it refuses outright:
+    ///
+    ///   * a job already naming this request is left exactly as it is, which
+    ///     is what makes a second run move zero rows;
+    ///   * an anchor naming an import -- `import_run_id`, or a run naming it
+    ///     as `anchor_job` -- is a native device import's own anchor and
+    ///     keeps that ownership, because reassigning it would move the fence
+    ///     off the import that actually owns the work;
+    ///   * a job holding a request's import key while naming a *different*
+    ///     request, carrying items, or attributed to something other than
+    ///     the import component is not an anchor this pass can explain, and
+    ///     it is reported rather than rewritten. Linking it would fence
+    ///     real work against a workflow that did not produce it.
+    pub async fn normalize_migration_anchors(&self, org: OrgId) -> Result<u64, StorageError> {
+        let org_db = uuid_to_db(org.0);
+        let mut linked = 0_u64;
+        let mut after: Option<uuid::Uuid> = None;
+        loop {
+            let mut tx = self.pool.begin().await?;
+            pin_org(&mut tx, org).await?;
+            // Every request this tenant retains, tombstoned ones included: a
+            // deleted request's anchor is exactly the one whose next page
+            // must be refused, so skipping it would leave the hole open on
+            // the rows that need it most.
+            let requests = sqlx::query_scalar!(
+                "SELECT id FROM sync_request \
+                  WHERE org_id = $1 AND ($2::uuid IS NULL OR id > $2) \
+                  ORDER BY id LIMIT $3",
+                org_db,
+                after,
+                ANCHOR_BATCH,
+            )
+            .fetch_all(&mut *tx)
+            .await?;
+            let Some(last) = requests.last().copied() else {
+                tx.commit().await?;
+                return Ok(linked);
+            };
+            after = Some(last);
+            let mut owner_of: std::collections::HashMap<uuid::Uuid, uuid::Uuid> =
+                std::collections::HashMap::with_capacity(requests.len());
+            for request in &requests {
+                owner_of.insert(
+                    uuid_to_db(job_request_key(uuid_from_db(*request), IMPORT_LEG)),
+                    *request,
+                );
+            }
+            let keys: Vec<uuid::Uuid> = owner_of.keys().copied().collect();
+            // Callers quiesce API and worker writers before this maintenance
+            // pass. Lock matching jobs in identity order within each batch.
+            let candidates = sqlx::query!(
+                "SELECT id, request_idempotency_key AS \"key!\", sync_request_id, \
+                        import_run_id, actor_kind, actor_id, \
+                        EXISTS (SELECT 1 FROM job_item item \
+                                 WHERE item.org_id = job.org_id AND item.job_id = job.id) \
+                            AS \"has_items!\", \
+                        EXISTS (SELECT 1 FROM import_run run \
+                                 WHERE run.org_id = job.org_id AND run.anchor_job = job.id) \
+                            AS \"anchors_import!\" \
+                   FROM job \
+                  WHERE job.org_id = $1 AND job.request_idempotency_key = ANY($2) \
+                  ORDER BY job.id \
+                    FOR UPDATE",
+                org_db,
+                &keys,
+            )
+            .fetch_all(&mut *tx)
+            .await?;
+            let mut anchors: Vec<uuid::Uuid> = Vec::new();
+            let mut owners: Vec<uuid::Uuid> = Vec::new();
+            for row in candidates {
+                let request =
+                    owner_of
+                        .get(&row.key)
+                        .copied()
+                        .ok_or_else(|| StorageError::Inconsistent {
+                            reason: format!("anchor {} returned an unrequested import key", row.id),
+                        })?;
+                if row.has_items
+                    || row.actor_kind != "system"
+                    || row.actor_id.as_deref() != Some(SystemComponent::Import.as_str())
+                {
+                    return Err(StorageError::Inconsistent {
+                        reason: format!(
+                            "job {} holds the import key of sync request {request} but is not \
+                             an itemless import anchor",
+                            row.id,
+                        ),
+                    });
+                }
+                if row.import_run_id.is_some() || row.anchors_import {
+                    continue;
+                }
+                match row.sync_request_id {
+                    Some(held) if held == request => {}
+                    Some(held) => {
+                        return Err(StorageError::Inconsistent {
+                            reason: format!(
+                                "anchor {} holds the import key of sync request {request} but \
+                                 names sync request {held}",
+                                row.id,
+                            ),
+                        })
+                    }
+                    None => {
+                        anchors.push(row.id);
+                        owners.push(request);
+                    }
+                }
+            }
+            if !anchors.is_empty() {
+                linked += sqlx::query!(
+                    "UPDATE job SET sync_request_id = link.request_id \
+                       FROM unnest($2::uuid[], $3::uuid[]) AS link(anchor, request_id) \
+                      WHERE job.org_id = $1 AND job.id = link.anchor \
+                        AND job.sync_request_id IS NULL",
+                    org_db,
+                    &anchors,
+                    &owners,
+                )
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+            }
+            tx.commit().await?;
+            if i64::try_from(requests.len()).unwrap_or(ANCHOR_BATCH) < ANCHOR_BATCH {
+                return Ok(linked);
+            }
+        }
+    }
+
     /// The drain's own work list. Ordered oldest first so a backlog drains in
     /// the order sellers asked, and scoped to one tenant because this repo is
     /// only ever reached through a pinned connection.
@@ -864,7 +1057,13 @@ impl SyncRequestRepo {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let rows = sqlx::query!(
+            // A deleted request is not drainable, whatever state it was in
+            // when the seller stopped it. The Delete settles a pending or
+            // draining request as well, so this predicate is belt beside
+            // braces — and it is the belt that holds if a future state is
+            // added to the drain's list.
             "SELECT id FROM sync_request WHERE org_id = $1 AND state IN ('pending', 'draining') \
+               AND deletion_requested_at IS NULL \
              ORDER BY requested_at, id LIMIT $2",
             uuid_to_db(org.0),
             limit,
@@ -903,7 +1102,7 @@ impl SyncRequestRepo {
             "UPDATE sync_request_resource \
              SET state = 'canonicalised', product_id = $4, mapping_id = $5, \
                  source_kind = $6, source_url = $7, source_numeric_id = $8, \
-                 source_state = $9, failure_detail = NULL \
+                 source_state = $9, failure_detail = NULL, admitted_at = NULL \
              WHERE org_id = $1 AND request_id = $2 AND ordinal = $3",
             uuid_to_db(org.0),
             uuid_to_db(*request),
@@ -927,38 +1126,139 @@ impl SyncRequestRepo {
         Ok(())
     }
 
-    /// Appends one described resource to a device import, at the next ordinal.
+    /// Admits one resource of a running page before any of its catalogue
+    /// writes begin.
     ///
-    /// `Ok(false)` means the request already carries a breadcrumb for this
-    /// locator and nothing was written. Identity is the marketplace resource
-    /// id within the request rather than the ordinal, because a device that
-    /// re-posts a page it already sent must not mint a second product: the
-    /// caller checks this before it canonicalises, and this is the write-side
-    /// half of the same rule.
+    /// `import_one` commits four times internally, so the fence has to go up
+    /// before the first of those rather than after the last: a Delete that
+    /// saw nothing outstanding would report the request gone while the page
+    /// it raced carried on minting products for it. The admission is that
+    /// fence in both directions — nothing is admitted once the request
+    /// carries a deletion, and an admitted resource is what makes that
+    /// deletion answer `stopping` until the one it let through is finished.
     ///
-    /// The ordinal is computed and inserted in one statement so two pages
-    /// cannot read the same maximum; the primary key refuses the remainder of
-    /// that race rather than the two silently sharing an ordinal.
-    pub async fn append_observed(
+    /// `admitted_at` rather than the row's `'pending'` state, because that
+    /// state already means something else: the drain's own requests
+    /// pre-create a pending row per resource the seller listed, and reading
+    /// those as work in progress would leave every unstarted sync's deletion
+    /// reporting `stopping` for ever. The instant says an apply is holding
+    /// this row right now; the state says the resource is not finished.
+    ///
+    /// Idempotent on the locator, which is what keeps a page recoverable: a
+    /// re-post whose earlier attempt died mid-apply is re-admitted against
+    /// the row it left behind, rather than being refused as a new start or
+    /// stopping the request for ever.
+    pub async fn admit_resource(
         &self,
         org: OrgId,
         request: Uuid,
-        observed: &Observed<'_>,
-    ) -> Result<bool, StorageError> {
-        let columns = RemoteIdColumns::encode(observed.source)?;
+        locator: &str,
+        at: Timestamp,
+    ) -> Result<ResourceAdmission, StorageError> {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
-        let written = sqlx::query!(
+        let admission = Self::admit_resource_in(&mut tx, org, request, locator, at).await?;
+        tx.commit().await?;
+        Ok(admission)
+    }
+
+    /// Rechecks admission while holding the owning request until the caller
+    /// commits its resource and receipt together. The transaction must already
+    /// be pinned to `org`; preparation must precede it.
+    pub async fn admit_resource_in(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        org: OrgId,
+        request: Uuid,
+        locator: &str,
+        at: Timestamp,
+    ) -> Result<ResourceAdmission, StorageError> {
+        let at_db = timestamp_to_db(at)?;
+        // The request row exclusively, and first: Delete takes the same row
+        // the same way, so one of the two waits and then reads the other's
+        // committed decision instead of both deciding on a stale snapshot.
+        let Some(deleted) = sqlx::query_scalar!(
+            "SELECT deletion_requested_at IS NOT NULL AS \"deleted!\" FROM sync_request \
+             WHERE org_id = $1 AND id = $2 FOR UPDATE",
+            uuid_to_db(org.0),
+            uuid_to_db(request),
+        )
+        .fetch_optional(&mut **tx)
+        .await?
+        else {
+            return Ok(ResourceAdmission::Stopped);
+        };
+        // A retry may finish an earlier admission after deletion. Merely
+        // appearing in the request's original resource list is not admission.
+        let standing = sqlx::query!(
+            "UPDATE sync_request_resource SET admitted_at = $4 \
+             WHERE org_id = $1 AND request_id = $2 AND locator = $3 \
+               AND state = 'pending' \
+               AND (NOT $5 OR admitted_at IS NOT NULL) \
+             RETURNING ordinal",
+            uuid_to_db(org.0),
+            uuid_to_db(request),
+            locator,
+            at_db,
+            deleted,
+        )
+        .fetch_optional(&mut **tx)
+        .await?;
+        if let Some(standing) = standing {
+            return Ok(ResourceAdmission::Admitted(standing.ordinal));
+        }
+        if deleted {
+            return Ok(ResourceAdmission::Stopped);
+        }
+        let finished = sqlx::query_scalar!(
+            "SELECT EXISTS (SELECT 1 FROM sync_request_resource \
+                             WHERE org_id = $1 AND request_id = $2 AND locator = $3) \
+                    AS \"finished!\"",
+            uuid_to_db(org.0),
+            uuid_to_db(request),
+            locator,
+        )
+        .fetch_one(&mut **tx)
+        .await?;
+        if finished {
+            return Ok(ResourceAdmission::AlreadyDescribed);
+        }
+        let ordinal = sqlx::query_scalar!(
             "INSERT INTO sync_request_resource \
-             (org_id, request_id, ordinal, locator, state, product_id, mapping_id, \
-              source_kind, source_url, source_numeric_id, source_state, \
-              terms_seen, terms_mapped, terms_unmapped, terms_uncovered) \
+             (org_id, request_id, ordinal, locator, state, admitted_at) \
              SELECT $1, $2, \
                     COALESCE((SELECT MAX(ordinal) FROM sync_request_resource \
                               WHERE org_id = $1 AND request_id = $2), -1) + 1, \
-                    $3, 'canonicalised', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13 \
-             WHERE NOT EXISTS (SELECT 1 FROM sync_request_resource \
-                               WHERE org_id = $1 AND request_id = $2 AND locator = $3)",
+                    $3, 'pending', $4 \
+             RETURNING ordinal",
+            uuid_to_db(org.0),
+            uuid_to_db(request),
+            locator,
+            at_db,
+        )
+        .fetch_one(&mut **tx)
+        .await?;
+        Ok(ResourceAdmission::Admitted(ordinal))
+    }
+
+    /// Records an admitted resource in the same tenant-pinned transaction as
+    /// its product and mappings. Call `admit_resource_in` first so concurrent
+    /// replays cannot commit another product for this locator.
+    pub async fn append_observed(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        org: OrgId,
+        request: Uuid,
+        observed: &Observed<'_>,
+    ) -> Result<(), StorageError> {
+        let columns = RemoteIdColumns::encode(observed.source)?;
+        let upgraded = sqlx::query!(
+            "UPDATE sync_request_resource \
+             SET state = 'canonicalised', product_id = $4, mapping_id = $5, \
+                 source_kind = $6, source_url = $7, source_numeric_id = $8, \
+                 source_state = $9, failure_detail = NULL, admitted_at = NULL, \
+                 terms_seen = $10, terms_mapped = $11, terms_unmapped = $12, \
+                 terms_uncovered = $13 \
+             WHERE org_id = $1 AND request_id = $2 AND locator = $3 \
+               AND state = 'pending' AND admitted_at IS NOT NULL",
             uuid_to_db(org.0),
             uuid_to_db(request),
             observed.locator,
@@ -973,11 +1273,19 @@ impl SyncRequestRepo {
             count_to_db(observed.coverage.terms_unmapped),
             count_to_db(observed.coverage.terms_uncovered),
         )
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?
         .rows_affected();
-        tx.commit().await?;
-        Ok(written == 1)
+        if upgraded != 1 {
+            return Err(StorageError::Inconsistent {
+                reason: format!(
+                    "resource {} has no pending admission in sync request {}",
+                    observed.locator,
+                    uuid_to_db(request),
+                ),
+            });
+        }
+        Ok(())
     }
 
     /// Appends one resource the device could not describe, as a failed
@@ -1050,6 +1358,7 @@ impl SyncRequestRepo {
                     crate::jobs::JobOrigin {
                         request_key: mint.request_key,
                         run: Some(completion.request),
+                        import_run: None,
                     },
                     mint.job,
                     mint.items,
@@ -1071,13 +1380,29 @@ impl SyncRequestRepo {
                             replay: true,
                         }));
                     }
+                    // The seller deleted the migration while its device was
+                    // still describing the shop. Nothing is minted and the
+                    // request is left exactly as the Delete settled it: the
+                    // device is answered with no job, which is the truth —
+                    // the catalogue keeps what earlier pages committed and
+                    // nothing will be published from it.
+                    crate::jobs::JobWrite::RunDeleted => {
+                        tx.rollback().await?;
+                        return Ok(None);
+                    }
+                    crate::jobs::JobWrite::ImportDeleted => {
+                        return Err(StorageError::Inconsistent {
+                            reason: "a sync-request mint without an import origin returned an import deletion".into(),
+                        });
+                    }
                 }
             }
         };
         sqlx::query!(
             "UPDATE sync_request \
              SET state = 'enqueued', create_job_id = $3, settled_at = $4 \
-             WHERE org_id = $1 AND id = $2 AND state <> 'enqueued'",
+             WHERE org_id = $1 AND id = $2 AND state <> 'enqueued' \
+               AND deletion_requested_at IS NULL",
             uuid_to_db(org.0),
             uuid_to_db(completion.request),
             created.map(|job| uuid_to_db(job.job.0)),
@@ -1110,6 +1435,9 @@ impl SyncRequestRepo {
         Ok(())
     }
 
+    /// One resource's failure, which is also the release of whatever
+    /// admission was holding it: a failed resource is finished, and a
+    /// deletion waiting on it has nothing further to wait for.
     pub async fn record_resource_failure(
         &self,
         org: OrgId,
@@ -1119,9 +1447,20 @@ impl SyncRequestRepo {
     ) -> Result<(), StorageError> {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
+        // Serialize with an applying replay before deciding whether the
+        // failed attempt still owns an unfinished admission.
+        sqlx::query_scalar!(
+            "SELECT id FROM sync_request WHERE org_id = $1 AND id = $2 FOR UPDATE",
+            uuid_to_db(org.0),
+            uuid_to_db(request),
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
         sqlx::query!(
-            "UPDATE sync_request_resource SET state = 'failed', failure_detail = $4 \
-             WHERE org_id = $1 AND request_id = $2 AND ordinal = $3",
+            "UPDATE sync_request_resource \
+             SET state = 'failed', failure_detail = $4, admitted_at = NULL \
+             WHERE org_id = $1 AND request_id = $2 AND ordinal = $3 \
+               AND state = 'pending' AND admitted_at IS NOT NULL",
             uuid_to_db(org.0),
             uuid_to_db(request),
             ordinal,
@@ -1136,6 +1475,15 @@ impl SyncRequestRepo {
     /// The jobs the request produced, recorded with the terminal state so a
     /// seller polling the request is never told it finished without being
     /// told where to look next.
+    ///
+    /// Never over a deleted request. This runs after the legs have been
+    /// minted and committed, so a Delete landing in between has already
+    /// settled the request `failed` and stamped its tombstone — writing
+    /// `enqueued` over that would resurrect the row in the seller's list and
+    /// clear the reason it carries. The legs themselves are not lost by the
+    /// refusal: a job names its request as it is minted, so the deletion
+    /// finds them through `job.sync_request_id` whether or not these columns
+    /// were ever written.
     pub async fn record_enqueued(
         &self,
         org: OrgId,
@@ -1152,7 +1500,7 @@ impl SyncRequestRepo {
         sqlx::query!(
             "UPDATE sync_request \
              SET state = 'enqueued', create_job_id = $3, remove_job_id = $4, settled_at = $5 \
-             WHERE org_id = $1 AND id = $2",
+             WHERE org_id = $1 AND id = $2 AND deletion_requested_at IS NULL",
             uuid_to_db(org.0),
             uuid_to_db(request),
             create_job.map(uuid_to_db),
@@ -1203,6 +1551,282 @@ impl SyncRequestRepo {
         tx.commit().await?;
         Ok(())
     }
+
+    /// Stops a sync or a migration, both legs together, and answers how far
+    /// the removal got.
+    ///
+    /// One transaction for the request and every job it owns, which is the
+    /// property a migration needs: the removal leg takes a listing down on
+    /// the *source* marketplace, so fencing the create and leaving the
+    /// removal for a second statement would let a drain or a claim start the
+    /// leg that removes the seller's original listing after they asked for
+    /// the whole migration to stop.
+    ///
+    /// An unsettled request is settled `failed` with the seller's own reason,
+    /// which is the existing terminal transition rather than a new state: a
+    /// failed request is not in the drain's work list, mints nothing, and
+    /// already reads correctly everywhere a state is rendered.
+    ///
+    /// `None` is a request this organisation does not have.
+    pub async fn delete(
+        &self,
+        org: OrgId,
+        request: Uuid,
+        stamp: Stamp,
+    ) -> Result<Option<DeletionStatus>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let Some(legs) = sqlx::query!(
+            "UPDATE sync_request \
+             SET deletion_requested_at = COALESCE(deletion_requested_at, $3), \
+                 deletion_actor_kind = COALESCE(deletion_actor_kind, $4), \
+                 deletion_actor_id = COALESCE(deletion_actor_id, $5), \
+                 deletion_state = COALESCE(deletion_state, 'stopping'), \
+                 state = CASE WHEN state IN ('pending', 'draining') THEN 'failed' \
+                              ELSE state END, \
+                 settled_at = CASE WHEN state IN ('pending', 'draining') THEN $3 \
+                                   ELSE settled_at END, \
+                 failure_detail = CASE WHEN state IN ('pending', 'draining') THEN $6 \
+                                       ELSE failure_detail END \
+             WHERE org_id = $1 AND id = $2 \
+             RETURNING create_job_id, remove_job_id",
+            uuid_to_db(org.0),
+            uuid_to_db(request),
+            timestamp_to_db(stamp.at)?,
+            stamp.actor.kind(),
+            stamp.actor.id(),
+            DELETED_BY_THE_SELLER,
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            return Ok(None);
+        };
+        let status = classify_legs(
+            &mut tx,
+            org,
+            request,
+            [legs.create_job_id, legs.remove_job_id],
+            JobFence::Delete(stamp),
+        )
+        .await?;
+        set_request_deletion(&mut tx, org, request, status).await?;
+        tx.commit().await?;
+        Ok(Some(status))
+    }
+
+    /// Re-reads one request's deletion against its legs as they now stand.
+    /// `None` where nobody deleted it.
+    pub async fn finalise_deletion(
+        &self,
+        org: OrgId,
+        request: Uuid,
+        stamp: Stamp,
+    ) -> Result<Option<DeletionStatus>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let Some(legs) = sqlx::query!(
+            "SELECT create_job_id, remove_job_id FROM sync_request \
+             WHERE org_id = $1 AND id = $2 AND deletion_requested_at IS NOT NULL \
+             FOR UPDATE",
+            uuid_to_db(org.0),
+            uuid_to_db(request),
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            return Ok(None);
+        };
+        let status = classify_legs(
+            &mut tx,
+            org,
+            request,
+            [legs.create_job_id, legs.remove_job_id],
+            JobFence::Reconcile(stamp),
+        )
+        .await?;
+        set_request_deletion(&mut tx, org, request, status).await?;
+        tx.commit().await?;
+        Ok(Some(status))
+    }
+
+    /// Sweeps this tenant's open request deletions, and answers how many
+    /// reached the tombstone. The sibling of `JobRepo::finalise_deletions`,
+    /// and run beside it: a request is retired by its legs going quiet, which
+    /// is an event on the jobs rather than on the request.
+    pub async fn finalise_deletions(&self, org: OrgId, stamp: Stamp) -> Result<u64, StorageError> {
+        let open = {
+            let mut tx = self.pool.begin().await?;
+            pin_org(&mut tx, org).await?;
+            let rows = sqlx::query_scalar!(
+                "SELECT id FROM sync_request \
+                 WHERE org_id = $1 AND deletion_state IN ('stopping', 'needs_review') \
+                 ORDER BY requested_at, id",
+                uuid_to_db(org.0),
+            )
+            .fetch_all(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            rows
+        };
+        let mut finalised = 0_u64;
+        for id in open {
+            if self.finalise_deletion(org, uuid_from_db(id), stamp).await?
+                == Some(DeletionStatus::Deleted)
+            {
+                finalised = finalised.saturating_add(1);
+            }
+        }
+        Ok(finalised)
+    }
+
+    /// Whether this request carries a deletion, tombstone included.
+    ///
+    /// The replay check for `POST /{v}/sync` and `POST /{v}/migrations`: the
+    /// request's identity is its idempotency key, so a resubmitted key whose
+    /// request was deleted has to answer a conflict rather than be handed
+    /// back a request the seller cannot see.
+    pub async fn deletion_status(
+        &self,
+        org: OrgId,
+        request: Uuid,
+    ) -> Result<Option<DeletionStatus>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let raw = sqlx::query_scalar!(
+            "SELECT deletion_state FROM sync_request WHERE org_id = $1 AND id = $2",
+            uuid_to_db(org.0),
+            uuid_to_db(request),
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        DeletionStatus::parse(raw.flatten().as_deref())
+    }
+}
+
+/// The sentence a deleted request records where it had not settled yet.
+const DELETED_BY_THE_SELLER: &str = "you deleted this request, so nothing further was queued";
+
+/// Fences every leg this request owns and answers the request's own status.
+///
+/// The legs are deleted rather than merely read, and in this transaction: a
+/// request whose Delete had fenced the row but not its jobs is exactly the
+/// window in which a claim starts the removal leg.
+///
+/// Discovered through `job.sync_request_id` rather than trusted from the
+/// request's own `create_job_id`/`remove_job_id`, because those two are
+/// written *after* both legs are minted and committed. A Delete arriving in
+/// between reads two nulls, and a request that reported `deleted` on the
+/// strength of them leaves a minted, unfenced leg on the queue — a Copy's
+/// create, or worse a Move's source removal. The job names its request in the
+/// same statement that inserts it, so this link exists from the leg's first
+/// instant. The recorded columns are still folded in: they are the only
+/// record of a leg whose job row has since gone, and one the ledger cannot
+/// produce is reported rather than passed over.
+///
+/// A resource admitted by a running migration page counts as executing even
+/// where no leg does. `apply_one` commits the product, the files and the
+/// mapping separately, so a page holding an admitted resource — an unfinished
+/// breadcrumb carrying `admitted_at` — is work in progress in exactly the
+/// sense `Stopping` names, and reporting the request gone while it finishes is
+/// how resources appear after a deletion has returned. An unfinished resource
+/// nobody is applying is not executing: the drain pre-creates one per listed
+/// resource, and a stopped request's drain will never run.
+///
+/// `Stopping` beats `NeedsReview` beats `Deleted`, in that order, because a
+/// request is only as finished as its least finished part — and a request
+/// with nothing outstanding at all is finished, which is the pending-request
+/// case and the commonest Delete there is.
+async fn classify_legs(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    request: Uuid,
+    recorded: [Option<uuid::Uuid>; 2],
+    fence: JobFence,
+) -> Result<DeletionStatus, StorageError> {
+    let mut legs = sqlx::query_scalar!(
+        "SELECT id FROM job WHERE org_id = $1 AND sync_request_id = $2 \
+         ORDER BY created_at, id",
+        uuid_to_db(org.0),
+        uuid_to_db(request),
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    for leg in recorded.into_iter().flatten() {
+        if !legs.contains(&leg) {
+            legs.push(leg);
+        }
+    }
+    // Every leg's row taken before the first of them is fenced, because
+    // fencing one appends events and holds the organisation's event counter
+    // to commit. A settle takes its own job row before that counter, so a
+    // transaction that held the counter from leg one and then reached for
+    // leg two would deadlock against a settle holding it — and the victim
+    // Postgres picks could be the settle of a write that already reached the
+    // marketplace. Ordered, so two of these serialise rather than cross.
+    legs.sort_unstable();
+    sqlx::query_scalar!(
+        "SELECT id FROM job WHERE org_id = $1 AND id = ANY($2) \
+         ORDER BY id FOR UPDATE",
+        uuid_to_db(org.0),
+        &legs[..],
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    crate::jobs::lock_job_items(tx, org, &legs).await?;
+    let mut worst = DeletionStatus::Deleted;
+    for leg in legs {
+        let job = tam_types::JobId(uuid_from_db(leg));
+        let status = fence.apply(tx, org, job).await?;
+        // A leg the request names and the ledger does not have is not a
+        // reason to call the request finished: it is a row that cannot be
+        // reconciled, and saying so is the only honest answer.
+        let status = status.unwrap_or(DeletionStatus::NeedsReview);
+        worst = worse_of(worst, status);
+    }
+    let applying = sqlx::query_scalar!(
+        "SELECT EXISTS (SELECT 1 FROM sync_request_resource \
+                         WHERE org_id = $1 AND request_id = $2 \
+                           AND state = 'pending' AND admitted_at IS NOT NULL) \
+                AS \"applying!\"",
+        uuid_to_db(org.0),
+        uuid_to_db(request),
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    if applying {
+        worst = worse_of(worst, DeletionStatus::Stopping);
+    }
+    Ok(worst)
+}
+
+/// The less finished of two states, which is the one a request reports.
+const fn worse_of(left: DeletionStatus, right: DeletionStatus) -> DeletionStatus {
+    match (left, right) {
+        (DeletionStatus::Stopping, _) | (_, DeletionStatus::Stopping) => DeletionStatus::Stopping,
+        (DeletionStatus::NeedsReview, _) | (_, DeletionStatus::NeedsReview) => {
+            DeletionStatus::NeedsReview
+        }
+        (DeletionStatus::Deleted, DeletionStatus::Deleted) => DeletionStatus::Deleted,
+    }
+}
+
+async fn set_request_deletion(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    request: Uuid,
+    status: DeletionStatus,
+) -> Result<(), StorageError> {
+    sqlx::query!(
+        "UPDATE sync_request SET deletion_state = $3 WHERE org_id = $1 AND id = $2",
+        uuid_to_db(org.0),
+        uuid_to_db(request),
+        status.as_str(),
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 /// The two request keys one request needs.
@@ -1231,6 +1855,15 @@ pub const REMOVE_LEG: &str = "remove";
 /// same device `record_drain_report` already uses. It can never become a
 /// publish: a `queued` item is what the lease scan claims, and it has none.
 pub const IMPORT_LEG: &str = "import";
+
+/// How many requests one normalization transaction reads and locks.
+///
+/// A deployment-time pass over a tenant's whole history, so the number only
+/// has to keep any one transaction short: a batch is the unit of locked
+/// anchors and of restartable progress. Small enough that a tenant with tens
+/// of thousands of migrations never holds a long-running lock, large enough
+/// that the common tenant is one round trip.
+const ANCHOR_BATCH: i64 = 256;
 
 fn disposition_from_db(raw: &str) -> Result<Disposition, StorageError> {
     match raw {

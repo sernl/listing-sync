@@ -1167,3 +1167,95 @@
 .resources-page .res-files .res-line:first-of-type {
 	padding-top: 0;
 }
+
+/* --- the file browser at /resources/files -------------------------------- */
+
+/* The keep-files setting and the usage line it applies to, side by side on a
+   desktop and stacked on a phone. Only ever drawn inside the application:
+   a browser keeps no files and is told so in a sentence instead. */
+.resources-page .files-keep {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 10px;
+}
+
+.resources-page .files-local {
+	margin-top: 14px;
+}
+
+.resources-page .files-local summary {
+	cursor: pointer;
+	font-weight: 600;
+}
+
+.resources-page .files-local input {
+	width: 100%;
+}
+
+/* One row per file. A grid rather than a row of flexed cells, because the
+   name, what uses it and the controls are three bands that must each keep
+   their own line on a phone: the old marketplace list put the status and the
+   actions on one line and they collided at 390px. */
+.resources-page .files-row {
+	display: grid;
+	gap: 6px;
+	padding: 14px 0;
+	border-top: 1px solid var(--line);
+}
+
+.resources-page .files-rows .files-row:first-of-type {
+	border-top: 0;
+}
+
+.resources-page .files-what {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 10px;
+}
+
+.resources-page .files-name {
+	font-size: 13.5px;
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+.resources-page .files-uses {
+	margin: 0;
+	font-size: 12.5px;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.resources-page .files-sep {
+	color: var(--faint);
+}
+
+/* The controls and the sentence that explains them share a line where there
+   is room and stack where there is not. The sentence comes first in the
+   markup, so a seller reading down the row knows why the control says what
+   it says before they reach it. */
+.resources-page .files-acts {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 10px;
+}
+
+.resources-page .files-acts .res-note {
+	margin: 0;
+}
+
+.resources-page .files-pager {
+	gap: 10px;
+}
+
+@media (max-width: 620px) {
+	.resources-page .files-acts {
+		align-items: stretch;
+		flex-direction: column;
+	}
+}

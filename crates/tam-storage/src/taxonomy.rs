@@ -280,6 +280,9 @@ impl TaxonomyRepo {
     /// Raises one item per blocked cause, deduplicated against the open queue
     /// by the partial unique index, so a five-hundred-product batch raises
     /// one item per gap.
+    ///
+    /// [`raise_taxonomy_gaps`] with a transaction opened around it, which is
+    /// what every standalone caller wants.
     pub async fn raise(
         &self,
         org: OrgId,
@@ -288,31 +291,7 @@ impl TaxonomyRepo {
     ) -> Result<RaiseReport, StorageError> {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
-        let mut report = RaiseReport {
-            new: 0,
-            already_open: 0,
-        };
-        for (term, kind) in causes {
-            let inserted = sqlx::query!(
-                "INSERT INTO reconciliation_item \
-                 (org_id, id, term, target_inventory, target_term_kind, \
-                  raised_by, raised_at, state) \
-                 VALUES ($1, gen_random_uuid(), $2, $3, $4, $5, $6, 'open') \
-                 ON CONFLICT (org_id, term, target_inventory, target_term_kind) \
-                 WHERE state = 'open' DO NOTHING",
-                uuid_to_db(org.0),
-                uuid_to_db(term.0),
-                inventory_to_db(scope.target),
-                term_kind_to_db(*kind),
-                uuid_to_db(scope.mapping.0),
-                timestamp_to_db(scope.at)?,
-            )
-            .execute(&mut *tx)
-            .await?
-            .rows_affected();
-            report.new += inserted;
-            report.already_open += 1 - inserted;
-        }
+        let report = raise_taxonomy_gaps(&mut tx, org, scope, causes).await?;
         tx.commit().await?;
         Ok(report)
     }
@@ -508,6 +487,51 @@ impl TaxonomyRepo {
         }
         Ok(stats)
     }
+}
+
+/// Raises one reconciliation item per blocked cause inside a transaction the
+/// caller owns.
+///
+/// The one implementation of the raise. A caller applying a prepared import
+/// writes the product and the target mapping in its own transaction; the
+/// items reference that still-uncommitted mapping through `raised_by`, so
+/// they have to be written on the same connection or the foreign key would
+/// wait on a transaction the waiter is itself holding open.
+///
+/// Uses only the transaction it is handed: no pin of its own, no commit. The
+/// caller has already pinned the tenant it means.
+pub async fn raise_taxonomy_gaps(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    scope: RaiseScope,
+    causes: &[(CanonicalTermId, TermKind)],
+) -> Result<RaiseReport, StorageError> {
+    let mut report = RaiseReport {
+        new: 0,
+        already_open: 0,
+    };
+    for (term, kind) in causes {
+        let inserted = sqlx::query!(
+            "INSERT INTO reconciliation_item \
+             (org_id, id, term, target_inventory, target_term_kind, \
+              raised_by, raised_at, state) \
+             VALUES ($1, gen_random_uuid(), $2, $3, $4, $5, $6, 'open') \
+             ON CONFLICT (org_id, term, target_inventory, target_term_kind) \
+             WHERE state = 'open' DO NOTHING",
+            uuid_to_db(org.0),
+            uuid_to_db(term.0),
+            inventory_to_db(scope.target),
+            term_kind_to_db(*kind),
+            uuid_to_db(scope.mapping.0),
+            timestamp_to_db(scope.at)?,
+        )
+        .execute(&mut **tx)
+        .await?
+        .rows_affected();
+        report.new += inserted;
+        report.already_open += 1 - inserted;
+    }
+    Ok(report)
 }
 
 /// One `canonical_term` row as the relation's own type. Free rather than a

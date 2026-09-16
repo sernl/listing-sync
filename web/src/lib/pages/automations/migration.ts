@@ -6,9 +6,10 @@
 // request's state means. This module chooses the words a card carries; it
 // decides nothing about the state itself.
 
-import type { SyncRequestHead } from '$lib/api';
+import type { JobDeletionStatus, SyncRequestHead } from '$lib/api';
 import type { LogEntry } from '$lib/ActivityLog.svelte';
 import { agoLabel } from '$lib/elapsed';
+import { DISPOSITION_WORD } from '$lib/migration-plan';
 import type { InventoryId } from '$lib/generated/vocab';
 import { platformTitle } from '$lib/platforms';
 import {
@@ -38,14 +39,30 @@ export interface MigrationRow {
 	meta: string;
 	label: string;
 	tone: RowTone;
+	/** Whether this migration is on its way out of the history, and how far
+	 *  that has got. Null for one nobody has asked to delete: a deleted
+	 *  request is filtered out by the server, so only the retained arms reach
+	 *  here. */
+	deletion: JobDeletionStatus | null;
 }
 
-// The rows arrive already narrowed to migrations: `/v1/sync` takes the
-// disposition as a query filter, applied before its limit. This module used
-// to filter the list itself, which was correct only while the list was a
-// single bounded read of everything — against a page of ten requests it would
-// answer "the migrations among the newest ten", so a seller whose last ten
-// requests were syncs saw an empty migration history.
+/** Copy and Move as a seller reads them, indexed by whatever string the wire
+ *  carried. A `Record<string, string | undefined>` view of the console's own
+ *  table rather than a cast: `disposition` is a wire string, and a value this
+ *  version does not know is shown as it came rather than mislabelled as one of
+ *  the two. */
+const KIND_WORD: Record<string, string | undefined> = DISPOSITION_WORD;
+
+// The rows arrive narrowed — or deliberately not narrowed — by the server:
+// `/v1/sync` takes the disposition as a query filter, applied before its
+// limit. This module never filters the list itself. That was correct only
+// while the list was a single bounded read of everything: against a page of
+// ten requests it would answer "the Moves among the newest ten", so a seller
+// whose last ten transfers were Copies saw an empty history.
+//
+// Both dispositions are one history, because both are a transfer between two
+// shops and a seller who copied on Monday and moved on Tuesday has made two
+// transfers rather than one of each. Each row therefore says which it was.
 
 export function migrationRows(
 	requests: readonly SyncRequestHead[],
@@ -54,14 +71,16 @@ export function migrationRows(
 	return requests.map((row) => {
 		const stage = headStage(row);
 		const shown = presentStage(stage);
+		const kind = KIND_WORD[row.disposition] ?? row.disposition;
 		return {
 			request: row.request,
 			href: `/sync/requests/${row.request}`,
 			source: row.source,
 			target: row.target,
-			meta: `${listRowLine(stage)} · started ${agoLabel(row.created_at, now)}`,
+			meta: `${kind} · ${listRowLine(stage)} · started ${agoLabel(row.created_at, now)}`,
 			label: shown.label,
-			tone: PILL[shown.tone]
+			tone: PILL[shown.tone],
+			deletion: row.deletion_status ?? null
 		};
 	});
 }
@@ -74,7 +93,7 @@ export function migrationLog(requests: readonly SyncRequestHead[], now: number):
 		const shown = presentStage(headStage(row));
 		return {
 			id: row.request,
-			what: `${platformTitle(row.source)} → ${platformTitle(row.target)} · ${shown.label}`,
+			what: `${KIND_WORD[row.disposition] ?? row.disposition} · ${platformTitle(row.source)} → ${platformTitle(row.target)} · ${shown.label}`,
 			at: agoLabel(row.created_at, now)
 		};
 	});

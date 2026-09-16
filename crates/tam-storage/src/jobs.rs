@@ -5,18 +5,28 @@
 //! # Lock order
 //!
 //! One order for this whole module, and every method that locks more than one
-//! row takes its locks in it: `job_item`, then `write_attempt`, then
-//! `mapping`. A method needing two of the three skips the one it does not
-//! need rather than reordering the two it does.
+//! row takes its locks in it: the owning workflow row (`sync_request` or
+//! `import_run`), then `job`, then `job_item`, then `write_attempt`, then
+//! `mapping`, and the per-organisation event counter after all of them. A
+//! method needing two of them skips the ones it does not need rather than
+//! reordering the two it does.
 //!
 //! Where each takes what. `WriteAttemptRepo::settle` takes the item row, then
 //! the attempt it is settling, then the mapping it binds or severs.
-//! `WriteAttemptRepo::open_asserted` takes the item row, then the attempt it
-//! inserts, then the mapping its admission check reads. The item row is what
-//! [`assert_current_epoch`] reads before either write, which is why both
-//! methods here begin at the same end of the order. `LeaseRepo::revive_expired` takes item
-//! rows, then the attempt rows its re-link arm settles.
-//! `LeaseRepo::charge_and_requeue` takes the item row alone.
+//! `WriteAttemptRepo::open_asserted` takes the job row, then the item row,
+//! then the attempt it inserts, then the mapping its admission check reads —
+//! the job row because a deletion must not find its fence bypassed by an
+//! attempt opened a moment later, and it is the outermost row here so taking
+//! it cannot invert anything. `LeaseRepo::revive_expired` takes item rows,
+//! then the attempt rows its re-link arm settles.
+//! `LeaseRepo::settle` and `LeaseRepo::charge_and_requeue` take the owning
+//! job row first and the item after it, because both finish by reconciling
+//! that job's deletion and both append events: without the job row first they
+//! would hold the item and the event counter while Delete held the job and
+//! wanted the counter, which is a cycle, and the transaction Postgres kills
+//! to break it is the one carrying a marketplace write that already happened.
+//! `create_job_in_tx` takes the workflow row exclusively before inserting the
+//! job, which is the same order Delete uses.
 //!
 //! Why this is a module-level rule rather than a habit of each method:
 //! Postgres resolves a cycle by killing one transaction, nothing on these
@@ -72,11 +82,11 @@ pub struct NewAttempt<'a> {
 }
 
 /// What asked for a job: the idempotency key that makes a retry a replay, and
-/// the run it belongs to where a `sync_request` asked for it.
+/// the workflow it belongs to where one asked for it.
 ///
-/// The two travel together because they are written by one statement and are
-/// both facts about the request rather than about the work. Carrying them as a
-/// pair also keeps the writer inside the argument bound the lint table sets,
+/// They travel together because they are written by one statement and are all
+/// facts about the asking rather than about the work. Carrying them as a
+/// struct also keeps the writer inside the argument bound the lint table sets,
 /// which is what stopped a sixth parameter being added to the two functions
 /// that take it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +97,15 @@ pub struct JobOrigin {
     /// measurement job -- and those settle without a run to notify anyone
     /// about.
     pub run: Option<Uuid>,
+    /// The `import_run` whose imported products this job publishes. Distinct
+    /// from `run` and never the same value: one is a migration's read leg,
+    /// the other an import the scheduler publishes from afterwards.
+    ///
+    /// It exists because deleting an import has to fence the work derived
+    /// from it, and the anchor job the import already owns is not that work:
+    /// a publication minted from `imported_product` rows is a second job
+    /// nothing linked back to the import until this column did.
+    pub import_run: Option<Uuid>,
 }
 
 /// The job-level half of an enqueue, grouped so call sites read as one
@@ -670,10 +689,13 @@ pub async fn revive_by_gap(
 ) -> Result<u64, StorageError> {
     pin_org(tx, org).await?;
     let rows = sqlx::query!(
-        "UPDATE job_item \
+        "UPDATE job_item ji \
          SET state = 'queued', blocked_on = NULL, park_expires_at = NULL \
-         WHERE org_id = $1 AND state = 'parked_live' AND blocked_on = $2 \
-         RETURNING org_id, job_id, id",
+         WHERE ji.org_id = $1 AND ji.state = 'parked_live' AND ji.blocked_on = $2 \
+           AND NOT EXISTS (SELECT 1 FROM job j \
+                 WHERE j.org_id = ji.org_id AND j.id = ji.job_id \
+                   AND j.deletion_requested_at IS NOT NULL) \
+         RETURNING ji.org_id, ji.job_id, ji.id",
         uuid_to_db(org.0),
         gate,
     )
@@ -703,11 +725,14 @@ pub async fn revive_on(
 ) -> Result<u64, StorageError> {
     pin_org(tx, org).await?;
     let rows = sqlx::query!(
-        "UPDATE job_item \
+        "UPDATE job_item ji \
          SET state = 'queued', blocked_on = NULL, park_expires_at = NULL \
-         WHERE org_id = $1 AND mapping_id = $2 AND state = 'parked_live' \
-           AND blocked_on = $3 \
-         RETURNING org_id, job_id, id",
+         WHERE ji.org_id = $1 AND ji.mapping_id = $2 AND ji.state = 'parked_live' \
+           AND ji.blocked_on = $3 \
+           AND NOT EXISTS (SELECT 1 FROM job j \
+                 WHERE j.org_id = ji.org_id AND j.id = ji.job_id \
+                   AND j.deletion_requested_at IS NOT NULL) \
+         RETURNING ji.org_id, ji.job_id, ji.id",
         uuid_to_db(org.0),
         uuid_to_db(mapping.0),
         gate,
@@ -756,6 +781,9 @@ pub async fn revive_counterparts(
            AND ji.state = 'parked_live' \
            AND ji.blocked_on = $3 \
            AND ji.requires_bound_on = landed.inventory \
+           AND NOT EXISTS (SELECT 1 FROM job j \
+                 WHERE j.org_id = ji.org_id AND j.id = ji.job_id \
+                   AND j.deletion_requested_at IS NOT NULL) \
          RETURNING ji.org_id, ji.job_id, ji.id",
         uuid_to_db(org.0),
         uuid_to_db(bound.0),
@@ -904,6 +932,14 @@ pub async fn settle_if_complete(
     .await?;
     if inserted.rows_affected() == 0 {
         return Ok(false);
+    }
+
+    // A job the seller deleted tells them nothing. The `JobSettled` event
+    // above is a ledger receipt and stays — reconciliation reads it — but a
+    // notification is a message about work they asked to be rid of, and the
+    // row its button would open is tombstoned.
+    if job_deletion_requested(tx, org, job).await? {
+        return Ok(true);
     }
 
     let Some(run) = run_of(tx, org, job).await? else {
@@ -1185,6 +1221,12 @@ impl LeaseRepo {
                    ON mi.code = j.inventory AND mi.marketplace = j.marketplace
                  WHERE ji.state = 'queued'
                    AND mi.transport_class = 'official_api'
+                   -- Deleted work is not handed out again. The seller's
+                   -- Delete settles everything that had not started, so this
+                   -- covers the narrow window in which it has not run yet
+                   -- and the item it would lease is one the deletion is
+                   -- about to cancel.
+                   AND j.deletion_requested_at IS NULL
                    AND NOT EXISTS (SELECT 1 FROM inventory_halt ih
                          WHERE ih.inventory = j.inventory
                            AND ih.marketplace = j.marketplace)
@@ -1330,12 +1372,26 @@ impl LeaseRepo {
                  JOIN job j ON j.org_id = ji.org_id AND j.id = ji.job_id
                  JOIN marketplace_inventory mi
                    ON mi.code = j.inventory AND mi.marketplace = j.marketplace
-                 WHERE (ji.state = 'queued'
+                 WHERE ((ji.state = 'queued'
+                         -- Ordinary work, and the only arm a deletion closes
+                         -- outright: an item the seller stopped is never
+                         -- handed out to be run.
+                         AND j.deletion_requested_at IS NULL)
                         -- A stranded create is claimable too, and first. Its
                         -- attempt is still in flight, so nothing else can run
                         -- on that mapping until this one is settled: every
                         -- pass that leaves it stranded leaves a fence
                         -- standing.
+                        --
+                        -- Deliberately open to a deleted job, and this is the
+                        -- only thing a deleted job is ever served for. The
+                        -- item holds a write nobody can account for, which is
+                        -- what the deletion is reporting as `needs_review`,
+                        -- and the claim that reconciles it is the only way
+                        -- that report is ever closed. It opens no attempt and
+                        -- issues no new write: `open_asserted` refuses a
+                        -- stopped job, so all this lease can do is settle the
+                        -- evidence already in the ledger.
                         --
                         -- Only where the caller says a reconcile can actually
                         -- run. Under a strategy that writes no marker the
@@ -1344,6 +1400,7 @@ impl LeaseRepo {
                         -- already knew; declining leaves it parked and
                         -- reconcilable by a later build.
                         OR ($5::bool
+                            AND ji.operation = 'create'
                             AND ji.state = 'parked_live'
                             AND ji.blocked_on IN ('awaiting_seller_signin',
                                                   'awaiting_marketplace_answer')
@@ -1860,6 +1917,17 @@ impl LeaseRepo {
         } = verdict;
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
+        // The owning job's row before the item's, which is this module's lock
+        // order and not an incidental choice. This transaction ends by
+        // appending events under the organisation's event counter and by
+        // reconciling the job's deletion, which takes the job row; Delete
+        // takes the job row first and then wants the counter. Held the other
+        // way round the two are a cycle, and the transaction Postgres kills
+        // to break it is this one — a settle of a write that has already
+        // reached the marketplace and can then never record that it did.
+        if lock_owning_job(&mut tx, org, item).await?.is_none() {
+            return Err(StorageError::StaleLease);
+        }
         let settled = sqlx::query!(
             "UPDATE job_item \
              SET state = 'settled', outcome = $4, failure_code = $5, failure_detail = $6, \
@@ -1898,6 +1966,24 @@ impl LeaseRepo {
             .await?;
         }
         settle_if_complete(&mut tx, org, job, at).await?;
+        // The quiescence hook for a deletion. An item settling is the one
+        // event that can turn "still executing" into "quiet", and it happens
+        // in this transaction: finalising here is what retires the seller's
+        // `stopping` row without waiting for a sweep or a second Delete. A
+        // job nobody deleted answers `None` and is untouched.
+        reconcile_job_deletion(
+            &mut tx,
+            org,
+            job,
+            event.map_or(
+                Stamp {
+                    at,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
+                |(stamp, _)| stamp,
+            ),
+        )
+        .await?;
         tx.commit().await?;
         Ok(())
     }
@@ -2049,6 +2135,13 @@ impl LeaseRepo {
         } = *lease;
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
+        // The owning job before the item, for the reason stated on
+        // `settle_inner` and in the module header: this transaction reconciles
+        // the job's deletion and may append the job's own settle event, and
+        // Delete holds that job row while it wants the event counter.
+        if lock_owning_job(&mut tx, org, item).await?.is_none() {
+            return Err(StorageError::StaleLease);
+        }
         let held = sqlx::query!(
             "SELECT attempt_count, job_id FROM job_item \
              WHERE org_id = $1 AND id = $2 AND lease_epoch = $3 \
@@ -2104,6 +2197,20 @@ impl LeaseRepo {
             .execute(&mut *tx)
             .await?;
         }
+        // Both arms, and the requeue is why. A host handing back an item of a
+        // deleted job puts it on the queue where no claim can ever reach it,
+        // so the deletion has to finish the thought in the same transaction:
+        // the item is cancellable now, and the job may have become quiet.
+        reconcile_job_deletion(
+            &mut tx,
+            org,
+            JobId(uuid_from_db(held.job_id)),
+            Stamp {
+                at: now,
+                actor: Actor::System(SystemComponent::Engine),
+            },
+        )
+        .await?;
         tx.commit().await?;
         Ok(if spent {
             Charged::Settled
@@ -2140,6 +2247,16 @@ impl LeaseRepo {
         // Not reconcile-specific: an ordinary create whose device died
         // between issuing the request and its read-back is the same shape and
         // wants the same answer.
+        // The settle and the steal skip a deleted job; this arm does not, and
+        // the asymmetry is the point. Settling one `failed`/`Other` records
+        // an outcome nobody observed for work that was cancelled rather than
+        // attempted, and stealing one back to `queued` puts it where no claim
+        // can reach it — so the count this answers would report progress that
+        // never happens. Parking one settles nothing and charges nothing: it
+        // releases the per-connection live-lease slot the lapsed lease was
+        // still holding against every other job on that marketplace, and
+        // leaves the item exactly where the deletion's own `needs_review`
+        // says it is, reconcilable by the claim arm that serves stopped work.
         let stranded = sqlx::query!(
             "UPDATE job_item ji \
              SET state = 'parked_live', blocked_on = $1, park_expires_at = NULL, \
@@ -2159,24 +2276,30 @@ impl LeaseRepo {
         .execute(&mut *tx)
         .await?;
         let failed = sqlx::query!(
-            "UPDATE job_item \
+            "UPDATE job_item ji \
              SET state = 'settled', outcome = 'failed', failure_code = 'Other', \
                  settled_at = $1, lease_owner = NULL, lease_expires_at = NULL, \
                  lease_epoch = lease_epoch + 1 \
-             WHERE state IN ('leased', 'running', 'verifying') \
-               AND lease_expires_at <= now() AND attempt_count + 1 >= $2 \
-             RETURNING org_id, job_id",
+             WHERE ji.state IN ('leased', 'running', 'verifying') \
+               AND ji.lease_expires_at <= now() AND ji.attempt_count + 1 >= $2 \
+               AND NOT EXISTS (SELECT 1 FROM job j \
+                     WHERE j.org_id = ji.org_id AND j.id = ji.job_id \
+                       AND j.deletion_requested_at IS NOT NULL) \
+             RETURNING ji.org_id, ji.job_id",
             now_db,
             attempts_max,
         )
         .fetch_all(&mut *tx)
         .await?;
         let stolen = sqlx::query!(
-            "UPDATE job_item \
+            "UPDATE job_item ji \
              SET state = 'queued', lease_owner = NULL, lease_expires_at = NULL, \
                  lease_epoch = lease_epoch + 1, attempt_count = attempt_count + 1 \
-             WHERE state IN ('leased', 'running', 'verifying') \
-               AND lease_expires_at <= now()",
+             WHERE ji.state IN ('leased', 'running', 'verifying') \
+               AND ji.lease_expires_at <= now() \
+               AND NOT EXISTS (SELECT 1 FROM job j \
+                     WHERE j.org_id = ji.org_id AND j.id = ji.job_id \
+                       AND j.deletion_requested_at IS NOT NULL)",
         )
         .execute(&mut *tx)
         .await?;
@@ -2261,12 +2384,15 @@ impl LeaseRepo {
             }
         }
         let rows = sqlx::query!(
-            "UPDATE job_item \
+            "UPDATE job_item ji \
              SET state = 'queued', blocked_on = NULL, park_expires_at = NULL, \
                  attempt_count = attempt_count + 1 \
-             WHERE state = 'parked_live' AND park_expires_at <= now() \
-               AND blocked_on = ANY($1) \
-             RETURNING org_id, job_id, id",
+             WHERE ji.state = 'parked_live' AND ji.park_expires_at <= now() \
+               AND ji.blocked_on = ANY($1) \
+               AND NOT EXISTS (SELECT 1 FROM job j \
+                     WHERE j.org_id = ji.org_id AND j.id = ji.job_id \
+                       AND j.deletion_requested_at IS NOT NULL) \
+             RETURNING ji.org_id, ji.job_id, ji.id",
             &REVIVABLE_GATES.map(str::to_owned)[..],
         )
         .fetch_all(&mut *tx)
@@ -2361,6 +2487,7 @@ impl LeaseRepo {
                  WHERE ji.state = 'parked_live' \
                    AND ji.blocked_on = $2 \
                    AND ji.operation <> 'create' \
+                   AND j.deletion_requested_at IS NULL \
                    AND EXISTS (SELECT 1 FROM connection c \
                          WHERE c.org_id = ji.org_id \
                            AND c.marketplace = j.marketplace \
@@ -2504,7 +2631,10 @@ impl HaltRepo {
             "INSERT INTO org_inventory_halt \
              (org_id, inventory, marketplace, raised_by, reason, raised_at) \
              VALUES ($1, $2, $3, $4, $5, $6) \
-             ON CONFLICT (org_id, inventory, marketplace) DO NOTHING",
+             ON CONFLICT (org_id, inventory, marketplace) DO UPDATE \
+             SET write_only = false, raised_by = EXCLUDED.raised_by, \
+                 reason = EXCLUDED.reason, raised_at = EXCLUDED.raised_at \
+             WHERE org_inventory_halt.write_only",
             uuid_to_db(org.0),
             inventory_to_db(inventory),
             marketplace_to_db(inventory.marketplace()),
@@ -2685,8 +2815,9 @@ impl WriteAttemptRepo {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, lease.org).await?;
         // Before the insert, so a stale holder cannot take the in-flight slot
-        // from the device that now owns the item.
-        assert_current_epoch(&mut tx, lease).await?;
+        // from the device that now owns the item, and so a job the seller has
+        // stopped cannot acquire a write nobody asked for.
+        assert_admissible_lease(&mut tx, lease).await?;
         let inserted = sqlx::query!(
             "INSERT INTO write_attempt              (org_id, id, job_item_id, mapping_id, lease_epoch, intent,               intent_hash, state, opened_at, actor_kind, actor_id, asserted_at)              VALUES ($1, $2, $3, $4, $5, $6, $7, 'in_flight', $8, $9, $10, $11)              ON CONFLICT (org_id, id) DO NOTHING",
             uuid_to_db(lease.org.0),
@@ -2717,6 +2848,68 @@ impl WriteAttemptRepo {
         }
         tx.commit().await?;
         Ok(())
+    }
+}
+
+/// Everything a *fresh* attempt needs beyond an epoch that is still current:
+/// a job nobody has stopped, and an item in a state a write can be issued
+/// from.
+///
+/// Separate from [`assert_current_epoch`], which settles keep using, because
+/// the two questions have opposite answers for the same row. An attempt that
+/// genuinely predates a deletion must still be able to settle — that
+/// settlement is the evidence the deletion is waiting on — while a new one
+/// must not be admitted at all. A single shared check would either strand the
+/// evidence or let the late attempt in.
+///
+/// Two statements, job first and item second, which is the module's order and
+/// the whole fence. `FOR SHARE` on the job makes Delete's own `UPDATE job`
+/// wait behind this open, so the classification that follows it sees this
+/// attempt and reports `needs_review`; and if Delete got there first, this
+/// read sees the stamp and refuses. Either way there is no schedule in which a
+/// job answers `deleted` and an in-flight attempt appears afterwards.
+///
+/// The item's state is read here rather than inferred from the epoch because
+/// a deletion revokes an item by settling or parking it *and* bumping the
+/// epoch — but `expire_and_steal`'s stranded park deliberately leaves the
+/// epoch alone so the existing attempt stays reconcilable, and a device that
+/// paused before its storage call would otherwise pass an epoch check into an
+/// item that is no longer being worked on.
+async fn assert_admissible_lease(
+    tx: &mut Transaction<'_, Postgres>,
+    lease: &LeaseRef,
+) -> Result<(), StorageError> {
+    let live = sqlx::query_scalar!(
+        "SELECT j.deletion_requested_at IS NULL AS \"live!\" \
+         FROM job j \
+         WHERE j.org_id = $1 \
+           AND j.id = (SELECT ji.job_id FROM job_item ji \
+                        WHERE ji.org_id = $1 AND ji.id = $2) \
+         FOR SHARE OF j",
+        uuid_to_db(lease.org.0),
+        uuid_to_db(lease.item.0),
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    if live != Some(true) {
+        return Err(StorageError::StaleLease);
+    }
+    let usable = sqlx::query_scalar!(
+        "SELECT lease_epoch = $3 \
+                AND state IN ('leased', 'running', 'verifying') AS \"usable!\" \
+         FROM job_item \
+         WHERE org_id = $1 AND id = $2 \
+         FOR SHARE",
+        uuid_to_db(lease.org.0),
+        uuid_to_db(lease.item.0),
+        lease.lease_epoch,
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    if usable == Some(true) {
+        Ok(())
+    } else {
+        Err(StorageError::StaleLease)
     }
 }
 
@@ -2851,6 +3044,14 @@ impl WriteAttemptRepo {
         let at_db = timestamp_to_db(at)?;
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, lease.org).await?;
+        // Binding can revive sibling items; serialize against their workflow's
+        // job-before-items deletion fence without rejecting prior write evidence.
+        if lock_owning_job(&mut tx, lease.org, lease.item)
+            .await?
+            .is_none()
+        {
+            return Err(StorageError::StaleLease);
+        }
         // Before the update, so a run whose lease was stolen cannot bind the
         // mapping on evidence from a run that no longer owns the item.
         assert_current_epoch(&mut tx, lease).await?;
@@ -3483,6 +3684,31 @@ pub struct CreatedJob {
     pub replay: bool,
 }
 
+/// Which workflow a refused mint belonged to.
+///
+/// The two are not interchangeable to a caller: a sync request that has been
+/// stopped ends a drain, while a deleted import run is one product's
+/// publication declined inside a scheduler pass that must carry on with the
+/// rest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowKind {
+    SyncRequest,
+    ImportRun,
+}
+
+/// What a mint came to.
+///
+/// The refusal is a value rather than an error because it is an ordinary,
+/// expected outcome of a race the seller started: they pressed Delete while
+/// something was still minting on their behalf. Nothing is written, and the
+/// caller is the only party that knows what to do about it — which is why
+/// this says which workflow refused it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Minted {
+    Job(CreatedJob),
+    WorkflowDeleted(WorkflowKind),
+}
+
 impl JobRepo {
     /// `enqueue` under a client-supplied request idempotency key. A key seen
     /// before returns the original job untouched; a race between two
@@ -3494,22 +3720,22 @@ impl JobRepo {
         origin: JobOrigin,
         new: &NewJob,
         items: &[NewJobItem],
-    ) -> Result<CreatedJob, StorageError> {
+    ) -> Result<Minted, StorageError> {
         if let Some(existing) = self.job_for_request_key(org, origin.request_key).await? {
-            return Ok(CreatedJob {
+            return Ok(Minted::Job(CreatedJob {
                 job: existing,
                 replay: true,
-            });
+            }));
         }
         let mut tx = self.pool.begin().await?;
         crate::pin_org(&mut tx, org).await?;
         match create_job_in_tx(&mut tx, org, origin, new, items).await? {
             JobWrite::Created => {
                 tx.commit().await?;
-                Ok(CreatedJob {
+                Ok(Minted::Job(CreatedJob {
                     job: new.job,
                     replay: false,
-                })
+                }))
             }
             JobWrite::KeyAlreadyUsed => {
                 // The failed INSERT aborted this transaction, so the losing
@@ -3521,10 +3747,25 @@ impl JobRepo {
                     .ok_or(StorageError::Inconsistent {
                         reason: "the winning request's job must exist".to_owned(),
                     })?;
-                Ok(CreatedJob {
+                Ok(Minted::Job(CreatedJob {
                     job: existing,
                     replay: true,
-                })
+                }))
+            }
+            // A workflow deleted between its own fence check and this mint.
+            // Nothing is written — both guards run before the INSERT — and
+            // the answer is the refusal itself rather than a job, because the
+            // alternative is a leg the seller stopped appearing in their
+            // ledger and publishing to a marketplace. The governing bias of
+            // this module is that a stalled queue is recoverable and an
+            // unasked-for write is not.
+            JobWrite::RunDeleted => {
+                drop(tx);
+                Ok(Minted::WorkflowDeleted(WorkflowKind::SyncRequest))
+            }
+            JobWrite::ImportDeleted => {
+                drop(tx);
+                Ok(Minted::WorkflowDeleted(WorkflowKind::ImportRun))
             }
         }
     }
@@ -3548,11 +3789,14 @@ impl JobRepo {
     }
 }
 
-/// Whether the job was written, or the request key was already spent.
+/// Whether the job was written, or the request key was already spent, or the
+/// workflow it would belong to has been deleted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum JobWrite {
     Created,
     KeyAlreadyUsed,
+    RunDeleted,
+    ImportDeleted,
 }
 
 /// One job and its items, written into a transaction the caller owns.
@@ -3575,7 +3819,11 @@ pub(crate) async fn create_job_in_tx(
     new: &NewJob,
     items: &[NewJobItem],
 ) -> Result<JobWrite, StorageError> {
-    let JobOrigin { request_key, run } = origin;
+    let JobOrigin {
+        request_key,
+        run,
+        import_run,
+    } = origin;
     let NewJob {
         job,
         inventory,
@@ -3584,11 +3832,56 @@ pub(crate) async fn create_job_in_tx(
     let Stamp { at, actor } = stamp;
     let org_db = uuid_to_db(org.0);
     let at_db = timestamp_to_db(at)?;
+    // The one choke point for "a deleted workflow mints no more work". Both
+    // enqueue paths route through this function, so the fence is stated once
+    // here rather than at the drain, the device's completing page, the
+    // scheduler's publication and whatever mints the next leg.
+    //
+    // `FOR UPDATE` rather than `FOR SHARE`, and the difference is a deadlock.
+    // A completing page mints its job and then UPDATEs the very row it was
+    // fenced against, so two pages each holding a shared lock deadlock the
+    // moment either tries to write it — and the loser of that race is meant
+    // to be an idempotent replay, not a killed transaction. Taking the row
+    // exclusively also serialises this mint against Delete, which takes the
+    // same row exclusively first: whichever commits first, the other sees it.
+    //
+    // A job that names no workflow cannot be fenced this way and needs no
+    // fence: nothing but a request or an import produces work on its behalf.
+    if let Some(request) = run {
+        let deleted = sqlx::query_scalar!(
+            "SELECT deletion_requested_at IS NOT NULL AS \"deleted!\" FROM sync_request \
+             WHERE org_id = $1 AND id = $2 FOR UPDATE",
+            org_db,
+            uuid_to_db(request),
+        )
+        .fetch_optional(&mut **tx)
+        .await?;
+        if deleted == Some(true) {
+            return Ok(JobWrite::RunDeleted);
+        }
+    }
+    // The import's half of the same fence, through the import's own guard
+    // rather than a second `import_run` read of our own: `ImportRunRepo`'s
+    // Delete, its commit page and this mint then take that row in one order,
+    // which is what makes a scheduled publication either precede a deletion
+    // or be refused by it. The lock is held to the caller's commit, so the
+    // job and its provenance land under it.
+    if let Some(import) = import_run {
+        let Some(guard) = crate::import_runs::guard_run(tx, org, import).await? else {
+            return Err(StorageError::Inconsistent {
+                reason: "the import run this job would publish for does not exist".to_owned(),
+            });
+        };
+        if guard.deletion_requested_at.is_some() {
+            return Ok(JobWrite::ImportDeleted);
+        }
+    }
     let inserted = sqlx::query!(
         "INSERT INTO job \
              (org_id, id, inventory, marketplace, created_at, \
-              request_idempotency_key, actor_kind, actor_id, sync_request_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+              request_idempotency_key, actor_kind, actor_id, sync_request_id, \
+              import_run_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         org_db,
         uuid_to_db(job.0),
         inventory_to_db(inventory),
@@ -3598,6 +3891,7 @@ pub(crate) async fn create_job_in_tx(
         actor.kind(),
         actor.id(),
         run.map(uuid_to_db),
+        import_run.map(uuid_to_db),
     )
     .execute(&mut **tx)
     .await;
@@ -3659,6 +3953,593 @@ impl HaltRepo {
             })
             .collect()
     }
+}
+
+/// A seller's deletion or a later reclassification against retained evidence.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum JobFence {
+    Delete(Stamp),
+    Reconcile(Stamp),
+}
+
+impl JobFence {
+    pub(crate) async fn apply(
+        self,
+        tx: &mut Transaction<'_, Postgres>,
+        org: OrgId,
+        job: JobId,
+    ) -> Result<Option<DeletionStatus>, StorageError> {
+        match self {
+            Self::Delete(stamp) => delete_job_in_tx(tx, org, job, stamp).await,
+            Self::Reconcile(stamp) => reconcile_job_deletion(tx, org, job, stamp).await,
+        }
+    }
+}
+
+/// How far a Delete has got, in one vocabulary for jobs, sync requests and
+/// import runs.
+///
+/// Three answers rather than a boolean, because the two non-terminal ones are
+/// the whole reason this is not a `DELETE`. `Stopping` is work that is still
+/// executing under a live lease: it may finish or reconcile the resource it
+/// holds, and a row that can still write must not read as gone. `NeedsReview`
+/// is a write already issued whose fate the ledger cannot determine — an
+/// attempt still in flight, or an item nothing can settle without inventing
+/// an outcome. Neither is opened by a clock; what closes them is evidence,
+/// which is why the sweep re-reads rather than ages them out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeletionStatus {
+    Stopping,
+    NeedsReview,
+    Deleted,
+}
+
+impl DeletionStatus {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Stopping => "stopping",
+            Self::NeedsReview => "needs_review",
+            Self::Deleted => "deleted",
+        }
+    }
+
+    pub(crate) fn from_db(raw: &str) -> Result<Self, StorageError> {
+        match raw {
+            "stopping" => Ok(Self::Stopping),
+            "needs_review" => Ok(Self::NeedsReview),
+            "deleted" => Ok(Self::Deleted),
+            other => Err(StorageError::CorruptRow {
+                reason: format!("unknown deletion state {other:?}"),
+            }),
+        }
+    }
+
+    pub(crate) fn parse(raw: Option<&str>) -> Result<Option<Self>, StorageError> {
+        raw.map(Self::from_db).transpose()
+    }
+}
+
+/// The closed set, in a stable order, for the cross-layer test that keeps the
+/// wire vocabulary in step with this one.
+pub const ALL_DELETION_STATUSES: [DeletionStatus; 3] = [
+    DeletionStatus::Stopping,
+    DeletionStatus::NeedsReview,
+    DeletionStatus::Deleted,
+];
+
+/// What a cancelled item records. `skipped`/`Other` rather than a seventh
+/// outcome: the vocabulary is closed and generated for the console, and the
+/// meaning is exactly the one the driver already writes it with — nothing a
+/// later lease could do would change the answer. The detail is what says why,
+/// and it says plainly that nothing was sent.
+const DELETED_BEFORE_IT_RAN: &str = "the seller deleted this work before this item ran, so \
+                                     nothing was sent to the marketplace";
+
+/// Which workflow a job belongs to, and therefore whose Delete stops it.
+///
+/// A job is reachable from the seller's publishing history whether or not
+/// anything owns it, so `DELETE /jobs/{id}` can name any of these three. Only
+/// the last is safe to stop on its own: fencing one leg of a migration leaves
+/// the other claimable, and fencing an import's event anchor leaves the
+/// import's device and the scheduler creating resources behind it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobOwner {
+    /// A leg of a sync or a migration. Both legs and the request stop
+    /// together.
+    SyncRequest(Uuid),
+    /// An import's event anchor, or a publication minted from what that
+    /// import produced.
+    ImportRun(Uuid),
+    /// A job the seller asked for directly.
+    Standalone,
+}
+
+impl JobRepo {
+    /// Who owns this job's lifecycle, for a caller that must delete the
+    /// workflow rather than the row the seller happened to click.
+    ///
+    /// Three links, checked in the order a job can carry them: the request it
+    /// is a leg of, the import it publishes for, and the import whose anchor
+    /// it is. The last is the one a bare column cannot answer, because the
+    /// anchor is named by the import rather than naming it.
+    ///
+    /// `None` is a job this organisation does not have, which is the only
+    /// thing a caller may turn into a 404.
+    pub async fn owner(&self, org: OrgId, job: JobId) -> Result<Option<JobOwner>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let found = sqlx::query!(
+            "SELECT j.sync_request_id, j.import_run_id, \
+                    (SELECT ir.id FROM import_run ir \
+                      WHERE ir.org_id = j.org_id AND ir.anchor_job = j.id) AS anchored \
+             FROM job j WHERE j.org_id = $1 AND j.id = $2",
+            uuid_to_db(org.0),
+            uuid_to_db(job.0),
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(found.map(|row| {
+            if let Some(request) = row.sync_request_id {
+                JobOwner::SyncRequest(uuid_from_db(request))
+            } else if let Some(run) = row.import_run_id.or(row.anchored) {
+                JobOwner::ImportRun(uuid_from_db(run))
+            } else {
+                JobOwner::Standalone
+            }
+        }))
+    }
+}
+
+impl JobRepo {
+    /// Fences a job's remaining work and answers how far the removal got.
+    ///
+    /// Idempotent by construction: the stamp is a `COALESCE`, the cancellation
+    /// matches only rows that have not settled, and the state is recomputed
+    /// from the ledger every time — so a repeated Delete is the same answer,
+    /// and a Delete that once said `stopping` says `deleted` as soon as the
+    /// work it was waiting on is quiet.
+    ///
+    /// `None` is a job this organisation does not have, which is the only
+    /// thing a caller may turn into a 404.
+    pub async fn delete(
+        &self,
+        org: OrgId,
+        job: JobId,
+        stamp: Stamp,
+    ) -> Result<Option<DeletionStatus>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let status = delete_job_in_tx(&mut tx, org, job, stamp).await?;
+        tx.commit().await?;
+        Ok(status)
+    }
+
+    /// Re-reads one deletion against the ledger as it now stands, cancelling
+    /// anything that became cancellable since the request.
+    ///
+    /// The same body as [`Self::delete`] minus the stamp, and the difference
+    /// matters: this never starts a deletion. A job nobody asked to delete
+    /// answers `None` and is untouched.
+    pub async fn finalise_deletion(
+        &self,
+        org: OrgId,
+        job: JobId,
+        stamp: Stamp,
+    ) -> Result<Option<DeletionStatus>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let status = reconcile_job_deletion(&mut tx, org, job, stamp).await?;
+        tx.commit().await?;
+        Ok(status)
+    }
+
+    /// Sweeps every deletion this tenant has left open, and answers how many
+    /// reached the tombstone.
+    ///
+    /// The sweep exists because the two non-terminal states are closed by
+    /// evidence rather than by the seller asking again: an item that settles
+    /// reconciles its own job on the settle path, but a lease that simply
+    /// lapses settles nothing, and a browser that has navigated away will
+    /// never re-issue the Delete.
+    ///
+    /// One transaction per job, deliberately. Reconciling a job appends
+    /// events, which holds the organisation's event counter to commit, and a
+    /// settle takes its job row before that counter: a sweep that held the
+    /// counter from the first job and then reached for a second job's row
+    /// would deadlock against a settle holding that row — and the
+    /// transaction Postgres kills to break it could be the settle of a write
+    /// that already happened. The list is read first and each row rechecked
+    /// under its own lock, so a job retired in between is simply not open
+    /// any more.
+    pub async fn finalise_deletions(&self, org: OrgId, stamp: Stamp) -> Result<u64, StorageError> {
+        let open = {
+            let mut tx = self.pool.begin().await?;
+            pin_org(&mut tx, org).await?;
+            let rows = sqlx::query_scalar!(
+                "SELECT id FROM job \
+                 WHERE org_id = $1 AND deletion_state IN ('stopping', 'needs_review') \
+                 ORDER BY created_at, id",
+                uuid_to_db(org.0),
+            )
+            .fetch_all(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            rows
+        };
+        let mut finalised = 0_u64;
+        for id in open {
+            if self
+                .finalise_deletion(org, JobId(uuid_from_db(id)), stamp)
+                .await?
+                == Some(DeletionStatus::Deleted)
+            {
+                finalised = finalised.saturating_add(1);
+            }
+        }
+        Ok(finalised)
+    }
+
+    /// Whether this job carries a deletion, and how far it got.
+    ///
+    /// Reads the tombstone too, which is what makes it the replay check: a
+    /// creation key whose job was deleted must answer a conflict rather than
+    /// hand back a job the seller cannot see or re-enqueue a second one.
+    pub async fn deletion_status(
+        &self,
+        org: OrgId,
+        job: JobId,
+    ) -> Result<Option<DeletionStatus>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let raw = sqlx::query_scalar!(
+            "SELECT deletion_state FROM job WHERE org_id = $1 AND id = $2",
+            uuid_to_db(org.0),
+            uuid_to_db(job.0),
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        DeletionStatus::parse(raw.flatten().as_deref())
+    }
+}
+
+/// Stamps the deletion and fences the job, inside the caller's transaction.
+///
+/// Visible to the crate because a sync request's Delete is its legs' Deletes:
+/// the request row and both jobs have to be fenced in one transaction, or a
+/// drain racing the second statement mints work for a request the seller has
+/// already stopped.
+pub(crate) async fn delete_job_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    job: JobId,
+    stamp: Stamp,
+) -> Result<Option<DeletionStatus>, StorageError> {
+    let Stamp { at, actor } = stamp;
+    // The stamp first, and in the statement that takes the row's lock. Every
+    // fence in this module reads `deletion_requested_at`, so it has to be
+    // written before anything is settled on the strength of it — and a second
+    // Delete must not move the instant or the actor the first one recorded.
+    let stamped = sqlx::query_scalar!(
+        "UPDATE job \
+         SET deletion_requested_at = COALESCE(deletion_requested_at, $3), \
+             deletion_actor_kind = COALESCE(deletion_actor_kind, $4), \
+             deletion_actor_id = COALESCE(deletion_actor_id, $5), \
+             deletion_state = COALESCE(deletion_state, 'stopping') \
+         WHERE org_id = $1 AND id = $2 \
+         RETURNING id",
+        uuid_to_db(org.0),
+        uuid_to_db(job.0),
+        timestamp_to_db(at)?,
+        actor.kind(),
+        actor.id(),
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    if stamped.is_none() {
+        return Ok(None);
+    }
+    fence_and_classify(tx, org, job, stamp).await.map(Some)
+}
+
+/// Re-reads a deletion already asked for. `None` where none was.
+pub(crate) async fn reconcile_job_deletion(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    job: JobId,
+    stamp: Stamp,
+) -> Result<Option<DeletionStatus>, StorageError> {
+    let open = sqlx::query_scalar!(
+        "SELECT deletion_requested_at IS NOT NULL AS \"requested!\" FROM job \
+         WHERE org_id = $1 AND id = $2 FOR UPDATE",
+        uuid_to_db(org.0),
+        uuid_to_db(job.0),
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    if open != Some(true) {
+        return Ok(None);
+    }
+    fence_and_classify(tx, org, job, stamp).await.map(Some)
+}
+
+/// Cancels what can be cancelled, then says what the job is still doing.
+///
+/// The order is the whole fence. Cancelling first means the classification
+/// reads a ledger in which every item that could be stopped already has been,
+/// so `Deleted` is a statement about the rows rather than about the moment the
+/// seller pressed the button.
+async fn fence_and_classify(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    job: JobId,
+    stamp: Stamp,
+) -> Result<DeletionStatus, StorageError> {
+    // The connection slot first. An item whose lease lapsed with a write
+    // still in flight cannot be settled and cannot be cancelled, and left in
+    // a live-lease state it holds `job_item_one_live_lease_per_connection`
+    // against every other job on that marketplace. Parking it releases the
+    // slot without touching its attempt, which is the state the reconcile
+    // claim reads.
+    park_stopped_writes(tx, org, job).await?;
+    let cancelled = cancel_unstarted_items(tx, org, job, stamp.at).await?;
+    for item in cancelled {
+        append_event(
+            tx,
+            &EventScope {
+                org,
+                job,
+                item: Some(item),
+            },
+            &JobEventPayload::ItemSettled {
+                outcome: format!("{:?}", ItemOutcome::Skipped),
+            },
+            stamp,
+        )
+        .await?;
+    }
+    let status = classify_deletion(tx, org, job).await?;
+    sqlx::query!(
+        "UPDATE job SET deletion_state = $3 WHERE org_id = $1 AND id = $2",
+        uuid_to_db(org.0),
+        uuid_to_db(job.0),
+        status.as_str(),
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(status)
+}
+/// Lock every item a multi-job fence may change before it appends any event.
+/// Claims take an item before the tenant event counter, so locking only the
+/// job rows would still leave a counter-to-sibling-item cycle.
+pub(crate) async fn lock_job_items(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    jobs: &[uuid::Uuid],
+) -> Result<(), StorageError> {
+    sqlx::query(
+        "SELECT id FROM job_item \
+          WHERE org_id = $1 AND job_id = ANY($2) AND state <> 'settled' \
+          ORDER BY job_id, id FOR UPDATE",
+    )
+    .bind(uuid_to_db(org.0))
+    .bind(jobs)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Moves a stopped item whose write cannot be written off out of its lapsed
+/// lease, without settling anything.
+///
+/// The one state neither settlement nor cancellation can reach: the holder is
+/// gone, a write was issued, and inventing an outcome over it is the thing
+/// this endpoint exists not to do. Leaving it `leased` is not an option
+/// either — the per-connection live-lease index is scoped to the tenant and
+/// the marketplace, so one such row stalls every unrelated job behind it.
+///
+/// Every attempt state but `'abandoned'`, because `'abandoned'` is the
+/// ledger's own record that nothing was sent — a rate refusal before the
+/// write, or a re-link releasing the row. The other three each say a write
+/// may have reached the marketplace, and an item carrying one of them is
+/// evidence rather than work.
+///
+/// `awaiting_marketplace_answer` rather than a new gate, because that is
+/// exactly what this is and the reconcile arm of `claim_for_device` already
+/// reads it. That arm serves only in-flight creates; other operations and
+/// committed or ambiguous attempts stay parked as `needs_review` for a human,
+/// without occupying the connection's live slot.
+///
+/// The epoch is deliberately left alone: the stranded attempt is matched to
+/// the item by `lease_epoch`, and bumping it here would make the evidence
+/// unreconcilable — which is why cancellation, whose items carry no such
+/// attempt, does bump it.
+async fn park_stopped_writes(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    job: JobId,
+) -> Result<(), StorageError> {
+    sqlx::query!(
+        "UPDATE job_item AS ji \
+         SET state = 'parked_live', blocked_on = $3, park_expires_at = NULL, \
+             lease_owner = NULL, lease_expires_at = NULL \
+         WHERE ji.org_id = $1 AND ji.job_id = $2 \
+           AND ji.state IN ('leased', 'running', 'verifying') \
+           AND (ji.lease_expires_at IS NULL OR ji.lease_expires_at <= now()) \
+           AND EXISTS (SELECT 1 FROM write_attempt wa \
+                 WHERE wa.org_id = ji.org_id AND wa.job_item_id = ji.id \
+                   AND wa.state IN ('in_flight', 'ambiguous', 'committed') \
+                   AND wa.lease_epoch = ji.lease_epoch)",
+        uuid_to_db(org.0),
+        uuid_to_db(job.0),
+        AWAITING_MARKETPLACE_ANSWER,
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Settles every item of this job that no marketplace write can be attributed
+/// to, and answers which.
+///
+/// Three exclusions, each of them something this must not pretend to know. An
+/// item under a live lease is being worked on right now, and settling it
+/// behind its holder's back is how a second writer appears. An item already
+/// settled keeps the outcome it earned. And an item carrying any attempt that
+/// is not the ledger's own "nothing was sent" — in flight, ambiguous, or
+/// committed — has a write this cannot rule out: `skipped` over it would be
+/// the fake success this endpoint exists not to report. The attempt row is
+/// written *before* the click, so its mere existence in one of those three
+/// states is the evidence; only `'abandoned'`, which the driver writes when a
+/// rate refusal or a re-link released an attempt without sending anything, is
+/// read as no write at all.
+///
+/// A lapsed lease is cancellable: the epoch fence and the state test in
+/// `settle` mean a former holder's late settle answers `StaleLease` rather
+/// than overwriting this, which is the same answer a steal already gives it.
+/// The epoch is bumped for the same reason both of the reaper's arms bump
+/// theirs: the item is being taken away from a claimant that may still be
+/// running, and a fresh attempt opened under the old epoch would otherwise
+/// pass [`assert_current_epoch`] into a job the seller has stopped.
+///
+/// Takes `job_item` and reads `write_attempt` inside that statement, which is
+/// this module's lock order and not the reverse; see the module header for
+/// what a violation costs.
+async fn cancel_unstarted_items(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    job: JobId,
+    at: Timestamp,
+) -> Result<Vec<JobItemId>, StorageError> {
+    let rows = sqlx::query_scalar!(
+        "UPDATE job_item AS ji \
+         SET state = 'settled', outcome = 'skipped', failure_code = $3, \
+             failure_detail = $4, settled_at = $5, blocked_on = NULL, \
+             park_expires_at = NULL, lease_owner = NULL, lease_expires_at = NULL, \
+             lease_epoch = ji.lease_epoch + 1 \
+         WHERE ji.org_id = $1 AND ji.job_id = $2 AND ji.state <> 'settled' \
+           AND (ji.state NOT IN ('leased', 'running', 'verifying') \
+                OR ji.lease_expires_at IS NULL OR ji.lease_expires_at <= now()) \
+           AND NOT EXISTS (SELECT 1 FROM write_attempt wa \
+                 WHERE wa.org_id = ji.org_id AND wa.job_item_id = ji.id \
+                   AND wa.state IN ('in_flight', 'ambiguous', 'committed')) \
+         RETURNING ji.id",
+        uuid_to_db(org.0),
+        uuid_to_db(job.0),
+        failure_code_to_db(FailureCode::Other),
+        DELETED_BEFORE_IT_RAN,
+        timestamp_to_db(at)?,
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|id| JobItemId(uuid_from_db(id)))
+        .collect())
+}
+
+/// What the job is still doing, from the four facts that decide it.
+///
+/// A live lease wins over an undecided attempt, because the attempt in flight
+/// is that lease's own and its holder is the party that can still settle it:
+/// reporting `needs_review` while a device is mid-submit would ask a human to
+/// reconcile a write that is about to reconcile itself.
+///
+/// `'ambiguous'` counts as undecided in both places it can be recorded. An
+/// attempt settled ambiguous is the driver saying it does not know what the
+/// marketplace did with the write it sent, and an item settled ambiguous says
+/// the same about the item as a whole; the absence of an `in_flight` row
+/// proves only that nobody is holding the question open, not that anybody
+/// answered it.
+async fn classify_deletion(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    job: JobId,
+) -> Result<DeletionStatus, StorageError> {
+    let standing = sqlx::query!(
+        r#"SELECT
+             EXISTS (SELECT 1 FROM job_item
+                      WHERE org_id = $1 AND job_id = $2
+                        AND state IN ('leased', 'running', 'verifying')
+                        AND lease_expires_at IS NOT NULL
+                        AND lease_expires_at > now())            AS "executing!",
+             EXISTS (SELECT 1 FROM job_item ji
+                       JOIN write_attempt wa
+                         ON wa.org_id = ji.org_id AND wa.job_item_id = ji.id
+                      WHERE ji.org_id = $1 AND ji.job_id = $2
+                        AND wa.state IN ('in_flight', 'ambiguous'))
+                                                                 AS "undecided!",
+             EXISTS (SELECT 1 FROM job_item
+                      WHERE org_id = $1 AND job_id = $2
+                        AND state <> 'settled')                  AS "unsettled!",
+             EXISTS (SELECT 1 FROM job_item
+                      WHERE org_id = $1 AND job_id = $2
+                        AND state = 'settled'
+                        AND outcome = 'ambiguous')               AS "ambiguous!""#,
+        uuid_to_db(org.0),
+        uuid_to_db(job.0),
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    if standing.executing {
+        return Ok(DeletionStatus::Stopping);
+    }
+    if standing.undecided || standing.unsettled || standing.ambiguous {
+        return Ok(DeletionStatus::NeedsReview);
+    }
+    Ok(DeletionStatus::Deleted)
+}
+
+/// Whether this job has been deleted, read inside the caller's transaction.
+///
+/// The predicate every fence in this module shares, stated once: an item of a
+/// deleted job is not leased, not requeued and not revived, and the job's
+/// completion tells the seller nothing.
+pub(crate) async fn job_deletion_requested(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    job: JobId,
+) -> Result<bool, StorageError> {
+    let requested = sqlx::query_scalar!(
+        "SELECT deletion_requested_at IS NOT NULL AS \"requested!\" FROM job \
+         WHERE org_id = $1 AND id = $2",
+        uuid_to_db(org.0),
+        uuid_to_db(job.0),
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(requested.unwrap_or(false))
+}
+
+/// Takes the owning job's row exclusively, ahead of anything the caller does
+/// to the item, and answers which job that is.
+///
+/// The item is read to find the job and not locked by this statement — a
+/// plain subquery takes no row lock — so the caller's own `UPDATE job_item`
+/// is still what takes the item, after the job. That is the order Delete
+/// uses, and the module header says what departing from it costs.
+///
+/// `None` is an item this organisation does not have, which every caller
+/// reads as a lease that is no longer current.
+async fn lock_owning_job(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    item: JobItemId,
+) -> Result<Option<JobId>, StorageError> {
+    let found = sqlx::query_scalar!(
+        "SELECT j.id FROM job j \
+         WHERE j.org_id = $1 \
+           AND j.id = (SELECT ji.job_id FROM job_item ji \
+                        WHERE ji.org_id = $1 AND ji.id = $2) \
+         FOR UPDATE",
+        uuid_to_db(org.0),
+        uuid_to_db(item.0),
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(found.map(|id| JobId(uuid_from_db(id))))
 }
 
 #[cfg(test)]

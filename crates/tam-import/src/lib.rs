@@ -17,8 +17,9 @@ use sqlx::PgPool;
 use tam_domain::registry::{registry, NativeVocabulary};
 use tam_marketplace::{ImportedListing, ListingState, RemoteListingId};
 use tam_storage::{
-    bind_listing, insert_product, ElectionRepo, EventScope, JobRepo, MappingRepo, NewJob,
-    OverrideRepo, RaiseReport, RaiseScope, StorageError, TaxonomyRepo,
+    bind_listing, insert_mapping, insert_product, raise_taxonomy_gaps, record_mapping_losses,
+    ElectionRepo, EventScope, JobRepo, NewJob, OverrideRepo, RaiseReport, RaiseScope, StorageError,
+    TaxonomyRepo,
 };
 use tam_taxonomy::listing::{project_listing_with_overrides, ListingContext};
 use tam_taxonomy::project::ingest_by_native_id;
@@ -826,6 +827,93 @@ pub async fn apply_prepared(
     Ok(true)
 }
 
+/// One resource, prepared whole: the catalogue half and, where the run names
+/// a target, the mapping it will mint together with the projection that
+/// mapping already answered.
+///
+/// Opaque, because the only thing a caller does with it is apply it. Its
+/// point is the split it forces: every read this import depends on — the
+/// taxonomy terms, both sides' edges, the recorded no-counterparts, the
+/// election rules and answers, the seller's overrides — and the whole of the
+/// pure projection happen while it is built, so the transaction that applies
+/// it touches nothing but that transaction. A caller may therefore hold the
+/// product, its bindings, the target mapping and the projection's own records
+/// inside its own decision — an API page's receipt, say — and roll every one
+/// of them back together.
+pub struct PreparedImport {
+    resource: PreparedResource,
+    /// `None` for a run that drafts nowhere, which is the ordinary catalogue
+    /// import: no mapping to mint, no projection to run.
+    target: Option<PreparedTarget>,
+}
+
+/// The target half of a prepared import: the mapping to be written and what
+/// the projection answered about it.
+///
+/// The outcome is the projection's own return type rather than a summary of
+/// it. Everything the application writes — the losses either arm measured,
+/// the gaps a block raises — is already in there, and restating it would put
+/// the gate's vocabulary in a second place.
+struct PreparedTarget {
+    mapping: tam_domain::Mapping,
+    outcome: Result<tam_domain::ListingProjection, tam_domain::ProjectionBlocked>,
+}
+
+/// Reads everything one import depends on, pure-projects it, and writes
+/// nothing.
+///
+/// # Errors
+///
+/// Whatever [`prepare_one`] refuses, plus storage for the projection's own
+/// reads.
+pub async fn prepare_import(
+    run: &ImportRun,
+    applied: &AppliedResource,
+) -> Result<PreparedImport, ImportError> {
+    let resource = prepare_one(run, applied).await?;
+    let target = match run.target {
+        Some(inventory) => Some(prepare_target(run, &resource, inventory).await?),
+        None => None,
+    };
+    Ok(PreparedImport { resource, target })
+}
+
+/// Writes one prepared import through a transaction the caller owns: the
+/// product, its source binding, the target mapping, the projection's losses
+/// and the reconciliation items its gaps raise.
+///
+/// Every write goes through `tx` and nothing else is touched — no pool read,
+/// no second transaction, no commit. That is the whole contract: the caller
+/// decides when this becomes true, and may bind its own record to the same
+/// decision. The tenant must already be pinned on `tx`.
+///
+/// # Errors
+///
+/// Only storage: everything a seller can act on was decided in
+/// [`prepare_import`].
+pub async fn apply_import(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    prepared: &PreparedImport,
+    now: Timestamp,
+) -> Result<ImportRowReport, ImportError> {
+    // Whether the source listing bound is not this caller's business: a read
+    // whose bytes are uncaptured lands as a product without one, and the
+    // report's catalogue half says the same either way.
+    let _bound = apply_prepared(tx, org, &prepared.resource, now).await?;
+    let mut report = prepared.resource.catalogue_report();
+    let Some(target) = prepared.target.as_ref() else {
+        return Ok(report);
+    };
+    insert_mapping(tx, org, &target.mapping, 0, now).await?;
+    let projected = apply_projection(tx, org, target, now).await?;
+    report.mapping = Some(target.mapping.id);
+    report.projectable = projected.projectable;
+    report.blocked_by = projected.blocked_by;
+    report.raised = projected.raised;
+    Ok(report)
+}
+
 /// Applies one resource to the catalogue: a canonical product, its target
 /// mapping, and one projection so every gap raises its queue item on the spot.
 ///
@@ -834,38 +922,25 @@ pub async fn apply_prepared(
 /// apply half serve an operator importing from disk and a device importing
 /// under the seller's own session.
 ///
-/// The product and its source binding are written in one transaction opened
-/// here; the target mapping and its projection follow it, as they always did,
-/// because the projection raises reconciliation items against a mapping that
-/// has to exist for them to reference.
+/// The convenience for a caller with no record of its own to bind: prepare,
+/// then one tenant-pinned transaction around the whole application. The
+/// product, its source binding, the target mapping and the projection's
+/// records land together or not at all, so a run killed mid-import leaves no
+/// half-imported resource for a replay to duplicate.
 pub async fn import_one(
     run: &ImportRun,
     applied: &AppliedResource,
 ) -> Result<ImportRowReport, ImportError> {
-    let prepared = prepare_one(run, applied).await?;
+    let prepared = prepare_import(run, applied).await?;
     let mut tx = run.pool.begin().await.map_err(StorageError::from)?;
     tam_storage::pin_tenant(&mut tx, run.org).await?;
-    // Whether the source listing bound is not this caller's business: a read
-    // whose bytes are uncaptured lands as a product without one, and the
-    // report's catalogue half says the same either way.
-    let _bound = apply_prepared(&mut tx, run.org, &prepared, run.now).await?;
+    let report = apply_import(&mut tx, run.org, &prepared, run.now).await?;
     tx.commit().await.map_err(StorageError::from)?;
-
-    let Some(target) = run.target else {
-        return Ok(prepared.catalogue_report());
-    };
-    let projected = project_target(run, &prepared, target).await?;
-    let mut report = prepared.catalogue_report();
-    report.mapping = Some(projected.mapping);
-    report.projectable = projected.projectable;
-    report.blocked_by = projected.blocked_by;
-    report.raised = projected.raised;
     Ok(report)
 }
 
-/// What the target mapping and its one projection answered.
+/// What the target mapping's one projection answered.
 struct Projected {
-    mapping: MappingId,
     projectable: bool,
     blocked_by: Option<String>,
     raised: RaiseReport,
@@ -879,46 +954,40 @@ struct Projected {
 /// nowhere, so there is no target mapping to mint, no gaps to raise and no
 /// coverage to report. Skipping them is not a degraded import -- it is the
 /// whole of what "nothing drafted" means.
-#[expect(
-    clippy::too_many_lines,
-    reason = "the projection's blocked arms are one match over a closed error type; splitting them would put the gate's own vocabulary in two places"
-)]
-async fn project_target(
+///
+/// Every read is here rather than beside the write. The projection is pure
+/// once its inputs are in hand, and its inputs are the same whether the
+/// mapping row exists yet or not: the mapping is an argument to the
+/// projection, not a row it consults.
+async fn prepare_target(
     run: &ImportRun,
     prepared: &PreparedResource,
     target: InventoryId,
-) -> Result<Projected, ImportError> {
+) -> Result<PreparedTarget, ImportError> {
     let product = &prepared.product;
-    let taxonomy = TaxonomyRepo::new(run.pool.clone());
-    let mapping_id = MappingId(fresh_uuid());
-    MappingRepo::new(run.pool.clone())
-        .insert(
-            run.org,
-            &tam_domain::Mapping {
-                id: mapping_id,
-                org: run.org,
-                product: product.id,
-                inventory: target,
-                binding: tam_domain::Binding::Unbound,
-                policies: tam_domain::FieldPolicies {
-                    title: tam_domain::FieldPolicy::Managed,
-                    description: tam_domain::FieldPolicy::Managed,
-                    price: tam_domain::FieldPolicy::Managed,
-                    taxonomy: tam_domain::FieldPolicy::Managed,
-                    grades: tam_domain::FieldPolicy::Managed,
-                    files: tam_domain::FieldPolicy::Managed,
-                },
-                price_rule: tam_types::PriceRule::Explicit(prepared.price),
-                publish: tam_domain::PublishMode::DryRun,
-                lifecycle: tam_marketplace::RemoteLifecycle::Absent,
-            },
-            0,
-            run.now,
-        )
-        .await?;
+    let mapping = tam_domain::Mapping {
+        id: MappingId(fresh_uuid()),
+        org: run.org,
+        product: product.id,
+        inventory: target,
+        binding: tam_domain::Binding::Unbound,
+        policies: tam_domain::FieldPolicies {
+            title: tam_domain::FieldPolicy::Managed,
+            description: tam_domain::FieldPolicy::Managed,
+            price: tam_domain::FieldPolicy::Managed,
+            taxonomy: tam_domain::FieldPolicy::Managed,
+            grades: tam_domain::FieldPolicy::Managed,
+            files: tam_domain::FieldPolicy::Managed,
+        },
+        price_rule: tam_types::PriceRule::Explicit(prepared.price),
+        publish: tam_domain::PublishMode::DryRun,
+        lifecycle: tam_marketplace::RemoteLifecycle::Absent,
+    };
 
-    // Project once, immediately: the gaps raise their items now, which is
-    // what makes the import's own report the drain measurement.
+    // Project once, immediately: the gaps raise their items the moment the
+    // import is applied, which is what makes the import's own report the
+    // drain measurement.
+    let taxonomy = TaxonomyRepo::new(run.pool.clone());
     let terms = taxonomy.terms().await?;
     let target_edges = taxonomy
         .edges_into_all(&tam_taxonomy::projection_vocabularies(target, product))
@@ -937,7 +1006,7 @@ async fn project_target(
         product,
         &ListingContext {
             org: run.org,
-            mapping: mapping_id,
+            mapping: mapping.id,
             inventory: target,
             now: run.now,
             terms: &terms,
@@ -948,9 +1017,25 @@ async fn project_target(
         },
         &overrides,
     );
-    let (projectable, blocked_by, raised) = match outcome {
+    Ok(PreparedTarget { mapping, outcome })
+}
+
+/// Writes what the prepared projection measured, through the caller's
+/// transaction: the losses either arm recorded, and one reconciliation item
+/// per gap where it blocked.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the projection's blocked arms are one match over a closed error type; splitting them would put the gate's own vocabulary in two places"
+)]
+async fn apply_projection(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    target: &PreparedTarget,
+    now: Timestamp,
+) -> Result<Projected, ImportError> {
+    let (projectable, blocked_by, raised) = match &target.outcome {
         Ok(projection) => {
-            record_losses(run, mapping_id, &projection.loss).await?;
+            record_losses(tx, org, target, &projection.loss, now).await?;
             (
                 true,
                 None,
@@ -966,7 +1051,7 @@ async fn project_target(
             loss,
             ..
         }) => {
-            record_losses(run, mapping_id, &loss).await?;
+            record_losses(tx, org, target, loss, now).await?;
             let causes: Vec<(CanonicalTermId, tam_domain::TermKind)> = gaps
                 .iter()
                 .map(|gap| {
@@ -974,17 +1059,17 @@ async fn project_target(
                     (gap.term, kind)
                 })
                 .collect();
-            let raised = taxonomy
-                .raise(
-                    run.org,
-                    RaiseScope {
-                        mapping: mapping_id,
-                        target,
-                        at: run.now,
-                    },
-                    &causes,
-                )
-                .await?;
+            let raised = raise_taxonomy_gaps(
+                tx,
+                org,
+                RaiseScope {
+                    mapping: target.mapping.id,
+                    target: target.mapping.inventory,
+                    at: now,
+                },
+                &causes,
+            )
+            .await?;
             let gate = if gaps.is_empty() && !elections.is_empty() {
                 "election"
             } else {
@@ -1026,7 +1111,6 @@ async fn project_target(
         ),
     };
     Ok(Projected {
-        mapping: mapping_id,
         projectable,
         blocked_by,
         raised,
@@ -1190,31 +1274,33 @@ fn listing_inventory(listing: &tam_marketplace::ImportedListing) -> InventoryId 
 }
 
 /// What the import's own projection could not carry, recorded against the
-/// mapping it just minted.
+/// mapping the same transaction is minting.
 ///
 /// The import projects once immediately, which is what makes its report the
 /// drain measurement; the losses that projection measured belong to the same
 /// record, so a Tes-to-TPT licence drop is visible from the moment the product
 /// exists rather than only after a sync run has leased it.
 async fn record_losses(
-    run: &ImportRun,
-    mapping: MappingId,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    target: &PreparedTarget,
     losses: &[tam_domain::equivalence::Loss],
+    now: Timestamp,
 ) -> Result<(), ImportError> {
     if losses.is_empty() {
         return Ok(());
     }
-    MappingRepo::new(run.pool.clone())
-        .record_losses(
-            tam_storage::LossScope {
-                org: run.org,
-                mapping,
-                attempt: tam_types::AttemptId(fresh_uuid()),
-                at: run.now,
-            },
-            losses,
-        )
-        .await?;
+    record_mapping_losses(
+        tx,
+        tam_storage::LossScope {
+            org,
+            mapping: target.mapping.id,
+            attempt: tam_types::AttemptId(fresh_uuid()),
+            at: now,
+        },
+        losses,
+    )
+    .await?;
     Ok(())
 }
 

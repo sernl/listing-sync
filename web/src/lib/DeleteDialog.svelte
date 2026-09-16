@@ -23,7 +23,6 @@
 	let element = $state<HTMLDialogElement | null>(null);
 	let removeFrom = $state<Set<InventoryId>>(new Set());
 	let leaveLive = $state(false);
-	let seeded = false;
 	let sending = $state(false);
 	let refusal = $state<string | null>(null);
 
@@ -37,18 +36,12 @@
 	// bound as well as when `open` moves.
 	$effect(() => {
 		if (open && element !== null && !element.open) {
+			removeFrom = new Set();
+			leaveLive = false;
+			refusal = null;
 			element.showModal();
 		} else if (!open) {
 			element?.close();
-		}
-	});
-
-	// Removing everywhere is the default, because a local delete that leaves
-	// bound mappings behind leaves live listings nobody tracks.
-	$effect(() => {
-		if (open && !seeded && bound.length > 0) {
-			seeded = true;
-			removeFrom = new Set(bound.map((mapping) => mapping.inventory));
 		}
 	});
 
@@ -69,6 +62,7 @@
 	}
 
 	async function remove() {
+		if (sending || blocked) return;
 		sending = true;
 		refusal = null;
 		try {
@@ -81,14 +75,21 @@
 			refusal =
 				failure instanceof ApiFailure
 					? failure.message
-					: 'The listing was not deleted. Nothing was removed anywhere.';
+					: 'Deletion could not be confirmed. Check Resources and Sync before trying again.';
 		} finally {
 			sending = false;
 		}
 	}
 </script>
 
-<dialog bind:this={element} aria-labelledby="delete-title" onclose={onClose}>
+<dialog
+	bind:this={element}
+	aria-labelledby="delete-title"
+	onclose={onClose}
+	oncancel={(event) => {
+		if (sending) event.preventDefault();
+	}}
+>
 	<div class="dialog-body">
 		<h2 id="delete-title">Delete “{title}”</h2>
 		<p>
@@ -98,7 +99,7 @@
 
 		{#if bound.length === 0}
 			<p class="quiet">
-				This listing is not on any marketplace yet, so only your own copy is deleted.
+				Only the Teachouse resource is removed. No marketplace listing will be changed.
 			</p>
 		{:else}
 			{#each bound as mapping (mapping.id)}
@@ -109,18 +110,17 @@
 						disabled={sending}
 						onchange={(event) => toggle(mapping.inventory, event.currentTarget.checked)}
 					/>
-					<span class="t">{platformTitle(mapping.inventory)}</span>
+					<span class="t">Also remove from {platformTitle(mapping.inventory)}</span>
 					<span class="why bad">
-						Deletes the live listing there. We cannot undo that, and the sales history behind it
-						belongs to the marketplace.
+						Removes the marketplace listing, including a live listing. This cannot be undone.
 					</span>
 				</label>
 			{/each}
 
 			{#if needsConfirmation}
 				<div class="notice">
-					{leftStanding.map(platformTitle).join(', ')} would keep a listing that nothing here tracks
-					any more.
+					Listings on {leftStanding.map(platformTitle).join(', ')} will remain unchanged.
+					After deleting this resource, Teachouse will no longer track them.
 				</div>
 				<div class="inline-choices" style="margin-top: 10px">
 					<label>
@@ -130,15 +130,15 @@
 							disabled={sending}
 							onchange={(event) => (leaveLive = event.currentTarget.checked)}
 						/>
-						Leave those listings alone, and delete only my copy
+						Leave unselected marketplace listings unchanged
 					</label>
 				</div>
 			{/if}
 		{/if}
 
 		<p class="foot-note">
-			Each removal runs as its own job. Whether it succeeded shows on that run, alongside every
-			other write.
+			Marketplace removals are separate jobs. Check Sync for their results; deleting the
+			Teachouse resource does not mean those removals have finished.
 		</p>
 
 		{#if refusal !== null}
@@ -148,7 +148,7 @@
 		<div class="actions">
 			<button class="btn" type="button" onclick={onClose} disabled={sending}>Keep it</button>
 			<button class="btn danger" type="button" onclick={remove} disabled={sending || blocked}>
-				{sending ? 'Deleting…' : 'Delete listing'}
+				{sending ? 'Deleting…' : 'Delete resource'}
 			</button>
 		</div>
 	</div>

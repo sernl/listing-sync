@@ -5,7 +5,7 @@
 // would replace working resumption with polling.
 
 import { QueryClient } from '@tanstack/svelte-query';
-import { ApiFailure } from '$lib/api';
+import { ApiFailure, type LibraryQuery } from '$lib/api';
 
 const MAX_RETRIES = 3;
 
@@ -32,10 +32,9 @@ export const queryKeys = {
 	 *  Connect gate and the Account page's permissions panel; a grant or a
 	 *  withdrawal on either invalidates it. */
 	consents: ['consents'] as const,
-	/** The seller's files across their machines, as the server coordinates
-	 *  them. Read by the library section and the machines list; a want
-	 *  placed or cancelled invalidates it. */
+	/** File-browser pages share this invalidation prefix with transfer actions. */
 	library: ['library'] as const,
+	libraryPage: (params: LibraryQuery) => ['library', 'page', params] as const,
 	analytics: ['analytics'] as const,
 	products: ['products'] as const,
 	/** The catalogue narrowed to one label. Its own key, because the label is
@@ -73,14 +72,9 @@ export const queryKeys = {
 	 *  that one holds job views, this one holds the items inside them, and one
 	 *  key under two shapes is a cache collision. */
 	inventoryWork: ['inventory-work'] as const,
-	/** The seller's own machines. Shared by the dashboard's device band and by
-	 *  the Marketplaces screen, which is the one place a machine is signed out,
-	 *  so a revoke there moves the band on the next read. */
+	/** Shared by connection readiness, file locations and Preferences sign-in controls. */
 	devices: ['devices'] as const,
-	/** The identity plane's browser sign-ins. Shared because the two screens
-	 *  that read them can each end one: Account Settings lists them, and the
-	 *  Marketplaces screen ends the matched sign-in when it signs a machine
-	 *  out. */
+	/** Browser sessions and matched machine sign-ins are managed in Preferences. */
 	browserSessions: ['browser-sessions'] as const,
 	/** The token of the sign-in this browser is using, so a row whose sign-out
 	 *  would end the session being read can say so. */

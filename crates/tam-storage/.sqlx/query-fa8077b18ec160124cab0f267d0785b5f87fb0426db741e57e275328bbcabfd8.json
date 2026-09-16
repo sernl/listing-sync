@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE sync_request_resource SET state = 'canonicalised', product_id = $4, mapping_id = $5, source_kind = $6, source_url = $7, source_numeric_id = $8, source_state = $9, failure_detail = NULL, admitted_at = NULL, terms_seen = $10, terms_mapped = $11, terms_unmapped = $12, terms_uncovered = $13 WHERE org_id = $1 AND request_id = $2 AND locator = $3 AND state = 'pending' AND admitted_at IS NOT NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Int8",
+        "Text",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fa8077b18ec160124cab0f267d0785b5f87fb0426db741e57e275328bbcabfd8"
+}

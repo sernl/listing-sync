@@ -4,6 +4,7 @@ What a teacher-seller sees: one catalogue of their own items, the standing of ea
 
 - date: 2026-09-03
 - status: built; the screens below are what the console renders today, and the gap list at the foot is what the API stream still owes them
+- amended: 2026-09-16 — machine sign-ins moved to Preferences; Files moved under Resources; import and cleanup layouts verified at desktop and phone widths
 - naming: the seller-facing noun is item, the board is Inventory, and the console's screens carry Vendoo's own words where Vendoo has one (founder question Q1, and `docs/research/rethink/vendoo-console-cross-reference.md` under "Rename map")
 - decisions it implements: D1 (the two-branch automation rule, shown to the seller as the device-driven reality rather than hidden), D3 (a phone starts work for a no-API marketplace but never schedules it), D14 and D30 (where a marketplace login lives, and the words for it)
 - sources: `docs/research/rethink/vendoo-console-cross-reference.md`, which is the map this console was aligned to; `docs/research/rethink/vendoo-workflows-and-ux.md` sections 1, 3, 9, 10 and 11; `docs/research/rethink/vendoo-architecture-and-market.md` sections 5 and 8; `docs/notes/design/creation-flow.md`; `docs/notes/design/device-registry.md`
@@ -13,7 +14,7 @@ What a teacher-seller sees: one catalogue of their own items, the standing of ea
 One item that fans out to many marketplaces, and every screen a view over that fan-out, is the whole product shape and it transfers intact.
 The per-marketplace glyph strip on an inventory row transfers, with its state set widened, and it is the single densest thing on the screen.
 Advanced filtering, search over the title, and the split editor with a destination rail transfer.
-The connections page shape transfers: one row per marketplace carrying its state and the control that changes it, merged here with the device registry so one screen answers whether a marketplace can be written to right now.
+The connections page keeps one row per marketplace with its standing and connection controls; installation management lives in Settings rather than below those rows.
 Vendoo's 2026 sidebar grouping transfers as far as it has counterparts: a Crosslist group, an Automations group, and a Help group at the foot for the destinations Vendoo keeps in its profile and help menus.
 
 Three things Vendoo does are deliberately not built.
@@ -34,15 +35,21 @@ Search over the title, filter by marketplace, by standing and by label, and five
 Four of the five run: cross-list, mark-as-listed, labels, and delete.
 One is rendered disabled with the reason on the control and again under the table: bulk edit, whose gap is a screen choosing which fields change across a selection rather than an endpoint, because the per-item edit is already served.
 The label filter narrows the catalogue's own page query rather than the rows already loaded, so paging a filtered catalogue is the same walk as paging the whole one.
-Bulk delete asks which way the listings already on a marketplace should go and defaults to neither, because removing everywhere fires one write per listing from one click and leaving them standing abandons listings nothing here tracks; that is the seller's decision at the moment they take it, not one the console makes for them.
+Single and bulk resource deletion select no marketplace automatically.
+Removing a marketplace listing requires selecting it explicitly; leaving an existing listing unchanged requires a separate acknowledgment.
+If a bulk deletion cannot confirm a result, it stops, refreshes Resources, reports the confirmed count and leaves the dialog open without a retry action.
 There is no bulk delist-and-relist under any name, and a test refuses one.
 
 `/resources/{id}` is one item: its canonical fields, one row per marketplace with that marketplace's standing and the action it admits, the runs this listing has started, and the destructive actions behind their own dialogs.
 The run timeline is not rebuilt here; a run links to `/sync/{job}`, which already renders items, gates and per-item events off the ledger.
 
-`/marketplaces` is one row per marketplace, carrying the branch its automation runs on, the sign-in or connection standing that branch decides, the machine holding a device-branch login, and the machines list itself below the rows.
-It is the one place a machine is signed out, and the dashboard band and the item screen link into it rather than duplicating it.
-Browser sign-ins are sign-ins to us rather than to any marketplace and sit on `/settings` beside the account.
+`/resources/files` lists files with links to the resources that use them.
+Search covers filenames, digests and linked resource titles; availability, resource-link and machine filters apply before pagination.
+The native application's local-file list is separate from the shared index, so a remote filter cannot hide a file kept on this machine.
+
+`/marketplaces` shows each marketplace's connection standing and where its session is held.
+Machine sign-ins are managed in `/settings`, under Preferences, immediately after Browser sign-ins.
+The former `/marketplaces#machines` destination redirects there; marketplace connection controls remain on Marketplaces.
 
 The dashboard band answers three questions in the order a seller asks them.
 Is anything scheduled running at all, which is true only where a machine is checking in and holds at least one marketplace login.
@@ -53,9 +60,9 @@ A device checks in hourly, so the band calls a machine current within two cadenc
 ## The small viewport
 
 The console is one SvelteKit app on the web, the Windows desktop and Android, so the Android instruction is this app below 620px rather than a second route tree.
-The sidebar is replaced there by a bottom bar of five tabs, Inventory, Marketplaces, Sync, Analytics and Account; that set is derived rather than sourced, because no public Vendoo page names its app's tab bar, and it will be corrected against the founder's own view of the app when they supply it.
-The inventory board becomes one block per item carrying its title, price, marketplace chip strip and the line saying what it needs, and importing and the many-item bulk verbs are hidden rather than disabled, because Vendoo's own availability article puts them on the desktop only.
-The desktop layout above the breakpoint is unchanged.
+At phone widths the bottom bar offers Import, Catalogue, New, Automate and Markets.
+Import and cleanup controls remain available on small screens.
+History rows separate selection, marketplace labels, status and actions rather than squeezing them into one line; desktop rows keep these controls aligned without overlap.
 
 ## The states, and the words for them
 
@@ -120,6 +127,7 @@ The last of those is what supplies the in-flight, blocked, stranded and failed s
 The item screen reads `GET /v1/products/{id}`, `GET /v1/mappings` filtered to the product, `GET /v1/vocabulary/{inventory}` per marketplace, `GET /v1/connections` and `GET /v1/status`, and it writes through `POST /v1/jobs`, `PATCH /v1/products/{id}` and `DELETE /v1/products/{id}`.
 
 The device band reads `GET /v1/devices` and `GET /v1/connections`.
+The Files view reads `GET /v1/library`; its result and total come from the same database snapshot.
 Which branch a marketplace is on is not served; it is a total map over the generated `Marketplace` union mirroring `tam_types`, in the same style as `MARKETPLACE_OF` and `PLATFORMS`, so a marketplace added in Rust stops the web lane rather than rendering under the wrong branch.
 
 ## Endpoint gaps

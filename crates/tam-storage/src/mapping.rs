@@ -1221,44 +1221,20 @@ impl MappingRepo {
     /// no-delete rule: a re-projection writes a new attempt's rows rather than
     /// replacing the previous ones, so every attempt's losses stay queryable
     /// and no delete grant is ever needed.
+    ///
+    /// [`record_mapping_losses`] with a transaction opened around it, which is
+    /// what every standalone caller wants.
     pub async fn record_losses(
         &self,
         scope: LossScope,
         losses: &[Loss],
     ) -> Result<u64, StorageError> {
-        let LossScope {
-            org,
-            mapping,
-            attempt,
-            at,
-        } = scope;
         if losses.is_empty() {
             return Ok(0);
         }
         let mut tx = self.pool.begin().await?;
-        pin_org(&mut tx, org).await?;
-        let mut written = 0;
-        for (position, loss) in losses.iter().enumerate() {
-            let position = i32::try_from(position).map_err(|_| StorageError::Inconsistent {
-                reason: "a projection cannot lose more values than an int can count".to_owned(),
-            })?;
-            written += sqlx::query!(
-                "INSERT INTO mapping_loss \
-                 (org_id, mapping_id, attempt, position, kind, axis, detail, recorded_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-                uuid_to_db(org.0),
-                uuid_to_db(mapping.0),
-                uuid_to_db(attempt.0),
-                position,
-                loss.kind().as_str(),
-                loss_axis(loss).map(term_kind_to_db),
-                loss_detail(loss),
-                timestamp_to_db(at)?,
-            )
-            .execute(&mut *tx)
-            .await?
-            .rows_affected();
-        }
+        pin_org(&mut tx, scope.org).await?;
+        let written = record_mapping_losses(&mut tx, scope, losses).await?;
         tx.commit().await?;
         Ok(written)
     }
@@ -1348,6 +1324,53 @@ fn loss_kind_from_db(raw: &str) -> Result<LossKind, StorageError> {
             reason: format!("unknown loss kind {other}"),
         }),
     }
+}
+
+/// Records one projection attempt's losses inside a transaction the caller
+/// owns.
+///
+/// The one implementation of the loss write. A caller applying a prepared
+/// import writes the product, the binding and the target mapping in its own
+/// transaction; the loss rows reference that still-uncommitted mapping, so
+/// they have to be written on the same connection or the foreign key would
+/// wait on a transaction the waiter is itself holding open.
+///
+/// Uses only the transaction it is handed: no pin of its own, no commit. The
+/// caller has already pinned the tenant it means.
+pub async fn record_mapping_losses(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    scope: LossScope,
+    losses: &[Loss],
+) -> Result<u64, StorageError> {
+    let LossScope {
+        org,
+        mapping,
+        attempt,
+        at,
+    } = scope;
+    let mut written = 0;
+    for (position, loss) in losses.iter().enumerate() {
+        let position = i32::try_from(position).map_err(|_| StorageError::Inconsistent {
+            reason: "a projection cannot lose more values than an int can count".to_owned(),
+        })?;
+        written += sqlx::query!(
+            "INSERT INTO mapping_loss \
+             (org_id, mapping_id, attempt, position, kind, axis, detail, recorded_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            uuid_to_db(org.0),
+            uuid_to_db(mapping.0),
+            uuid_to_db(attempt.0),
+            position,
+            loss.kind().as_str(),
+            loss_axis(loss).map(term_kind_to_db),
+            loss_detail(loss),
+            timestamp_to_db(at)?,
+        )
+        .execute(&mut **tx)
+        .await?
+        .rows_affected();
+    }
+    Ok(written)
 }
 
 /// Writes a mapping inside a transaction the caller owns.

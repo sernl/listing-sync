@@ -13,9 +13,9 @@ use tam_domain::{ItemOperation, ItemOutcome, JobItemId};
 use tam_marketplace::idempotency::derive_idempotency_key;
 use tam_marketplace::ListingState;
 use tam_storage::{
-    intent_digest, Disposition, EntitlementRepo, EventRow, ItemCounts, ItemRow, ItemsPageParams,
-    JobOrigin, JobReadRepo, JobRepo, LedgerCursor, MappingSeed, NewJob, NewJobItem, NewSyncRequest,
-    StorageError, SyncIntent, SyncRequestPage, SyncRequestRepo,
+    intent_digest, DeletionStatus, Disposition, EntitlementRepo, EventRow, ItemCounts, ItemRow,
+    ItemsPageParams, JobOrigin, JobReadRepo, JobRepo, LedgerCursor, MappingSeed, NewJob,
+    NewJobItem, NewSyncRequest, StorageError, SyncIntent, SyncRequestPage, SyncRequestRepo,
 };
 use tam_types::{Actor, FailureCode, InventoryId, JobId, MappingId, OrgId, Stamp, Timestamp, Uuid};
 
@@ -198,6 +198,13 @@ pub struct JobHead {
     pub job: JobId,
     pub inventory: InventoryId,
     pub created_at: Timestamp,
+    /// Where a Delete this job is still working through has got to, and
+    /// nothing for a job nobody deleted.
+    ///
+    /// A listed job is never `deleted`: the tombstone is filtered in SQL, so
+    /// what this carries is the two states a seller has to be able to see —
+    /// work that is still stopping, and a write nobody can account for.
+    pub deletion_status: Option<DeletionStatusView>,
 }
 
 /// The roll-up as the client reads it: the phase is derived, the counts are
@@ -209,6 +216,8 @@ pub struct JobView {
     pub created_at: Timestamp,
     pub phase: JobPhase,
     pub counts: CountsView,
+    /// See [`JobHead::deletion_status`].
+    pub deletion_status: Option<DeletionStatusView>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -216,6 +225,72 @@ pub struct JobView {
 pub enum JobPhase {
     Active,
     Settled,
+}
+
+/// How far a Delete has got, as the wire carries it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeletionStatusView {
+    /// Fenced, and something is still executing. The row stays visible.
+    Stopping,
+    /// Fenced, and a write already issued cannot be accounted for. Visible
+    /// until evidence closes it; never closed by a clock.
+    NeedsReview,
+    /// Quiescent and removed from the seller's history.
+    Deleted,
+}
+
+/// The closed set, in a stable order, for the vocabulary generator.
+pub const ALL_DELETION_STATUSES: [DeletionStatusView; 3] = [
+    DeletionStatusView::Stopping,
+    DeletionStatusView::NeedsReview,
+    DeletionStatusView::Deleted,
+];
+
+#[must_use]
+pub const fn deletion_status_str(status: DeletionStatusView) -> &'static str {
+    match status {
+        DeletionStatusView::Stopping => "stopping",
+        DeletionStatusView::NeedsReview => "needs_review",
+        DeletionStatusView::Deleted => "deleted",
+    }
+}
+
+impl DeletionStatusView {
+    #[must_use]
+    pub const fn of(status: DeletionStatus) -> Self {
+        match status {
+            DeletionStatus::Stopping => Self::Stopping,
+            DeletionStatus::NeedsReview => Self::NeedsReview,
+            DeletionStatus::Deleted => Self::Deleted,
+        }
+    }
+
+    /// 200 where the work is gone, 202 where the seller's Delete is accepted
+    /// and not finished. Two codes rather than one because the difference is
+    /// the whole contract: a console that rendered "deleted" over a 202 would
+    /// be telling a seller a marketplace write had been called off when
+    /// nobody knows that yet.
+    #[must_use]
+    pub const fn status_code(self) -> StatusCode {
+        match self {
+            Self::Deleted => StatusCode::OK,
+            Self::Stopping | Self::NeedsReview => StatusCode::ACCEPTED,
+        }
+    }
+}
+
+/// What a Delete answers, for all three kinds of work.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct JobDeletionView {
+    pub status: DeletionStatusView,
+}
+
+impl JobDeletionView {
+    pub(crate) fn answer(status: DeletionStatus) -> Response {
+        let status = DeletionStatusView::of(status);
+        (status.status_code(), Json(Self { status })).into_response()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -466,10 +541,26 @@ pub(crate) async fn create_sync_request(
     // the primary key, so the double-click this endpoint exists to absorb
     // came back a fault. The request's identity is the key, so the ack is the
     // same either way.
-    let written = SyncRequestRepo::new(state.pool.clone())
+    let requests = SyncRequestRepo::new(state.pool.clone());
+    let written = requests
         .create(context.org, &new)
         .await
         .map_err(|error| storage_fault(&state, &error))?;
+    if !written {
+        // The key is spent. Ordinarily that is the double-click this
+        // endpoint absorbs, and the answer is the request it already made —
+        // but a request the seller deleted is not a request to be handed
+        // back, and re-enqueueing under the same key would resurrect exactly
+        // the work they stopped. So the replay of a deleted request is a
+        // conflict, which is a thing a client can act on: start a new one.
+        if let Some(deleted) = requests
+            .deletion_status(context.org, key.0)
+            .await
+            .map_err(|error| storage_fault(&state, &error))?
+        {
+            return Err(deleted_key_conflict(deleted));
+        }
+    }
     let status = if written {
         StatusCode::ACCEPTED
     } else {
@@ -508,6 +599,8 @@ pub struct SyncRequestView {
     /// it stops being true the moment a seller updates one. `None` means
     /// nothing is waiting on a version.
     pub waiting_for_device_version: Option<String>,
+    /// See [`JobHead::deletion_status`].
+    pub deletion_status: Option<DeletionStatusView>,
     /// How many of the request's resources stand in each state, over the
     /// whole request.
     ///
@@ -602,6 +695,8 @@ pub struct SyncRequestSummaryView {
     pub created_at: i64,
     pub resources_total: u32,
     pub resources_failed: u32,
+    /// See [`JobHead::deletion_status`].
+    pub deletion_status: Option<DeletionStatusView>,
 }
 
 /// How many requests one page carries at most, and by default.
@@ -700,6 +795,7 @@ pub(crate) async fn list_sync_requests(
                 created_at: row.requested_at.0,
                 resources_total: row.resources_total,
                 resources_failed: row.resources_failed,
+                deletion_status: row.deletion.map(DeletionStatusView::of),
             })
             .collect(),
         next_cursor,
@@ -787,6 +883,7 @@ pub(crate) async fn sync_request_view(
         remove_job: head.remove_job,
         coverage,
         waiting_for_device_version,
+        deletion_status: head.deletion.map(DeletionStatusView::of),
         resource_counts: detail
             .counts
             .into_iter()
@@ -813,6 +910,33 @@ pub(crate) async fn sync_request_view(
             .collect(),
         resources_next: detail.next_ordinal,
     }))
+}
+
+/// Deletes one sync or migration request, both legs together.
+///
+/// `200` with `deleted` where the work is gone, `202` with `stopping` or
+/// `needs_review` where the Delete is accepted and not finished, and the same
+/// `404` another organisation's request gets. Repeating it is the same answer,
+/// recomputed: a Delete that said `stopping` says `deleted` once the legs are
+/// quiet, which is how a console that asks again learns that it can stop
+/// showing the row.
+///
+/// Nothing here touches a marketplace, a product, a mapping or a file. It
+/// stops work and hides the request; the catalogue keeps everything the
+/// migration had already canonicalised, because those are the seller's own
+/// resources and not artefacts of the request.
+pub(crate) async fn delete_sync_request(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, request)): Path<(String, String)>,
+) -> Result<Response, APIError> {
+    let request = parse_id(&request)?;
+    let status = SyncRequestRepo::new(state.pool.clone())
+        .delete(context.org, request, context.stamp((state.wall)()))
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+        .ok_or_else(|| missing("no such sync request"))?;
+    Ok(JobDeletionView::answer(status))
 }
 
 /// The version a device needs before it can run a marketplace-sourced item,
@@ -927,8 +1051,23 @@ pub(crate) async fn create_job(
         now,
         key.0,
         &items,
+        // A seller pressing Publish names no import; nothing derived this.
+        None,
     )
     .await?;
+    if created.replay {
+        // The same rule the sync submit follows, at the other enqueue: a key
+        // whose job the seller deleted is answered with a conflict rather
+        // than with the tombstone, and nothing is enqueued. The ledger keeps
+        // the key, which is what makes this answer possible at all.
+        if let Some(deleted) = JobRepo::new(state.pool.clone())
+            .deletion_status(context.org, created.job)
+            .await
+            .map_err(|error| storage_fault(&state, &error))?
+        {
+            return Err(deleted_key_conflict(deleted));
+        }
+    }
     let status = if created.replay {
         StatusCode::OK
     } else {
@@ -983,10 +1122,19 @@ pub(crate) fn new_items(
 /// The actor is the caller's, because the two callers differ in exactly that:
 /// a seller pressed Publish, or the scheduler's pass reached a minute nobody
 /// was present for.
+///
+/// `import_run` is the import whose products this job publishes, where one
+/// asked for it. It is written in the transaction that inserts the job, under
+/// that import's own row lock, so a publication either precedes the import's
+/// deletion or is refused by it — and the job it writes carries the link that
+/// lets the deletion fence it. Every caller with no import behind it passes
+/// `None`, which is every caller but the scheduler's post-import
+/// publication.
 #[expect(
     clippy::too_many_arguments,
     reason = "one job is its identity, its marketplace, its author, its instant, its request \
-              key and its items; a struct over those would be this signature with a name"
+              key, the import it publishes for and its items; a struct over those would be \
+              this signature with a name"
 )]
 pub(crate) async fn mint_job(
     state: &AppState,
@@ -997,14 +1145,16 @@ pub(crate) async fn mint_job(
     now: Timestamp,
     request_key: Uuid,
     items: &[NewJobItem],
+    import_run: Option<Uuid>,
 ) -> Result<tam_storage::CreatedJob, APIError> {
     crate::consent::require_grant(state, org, inventory.marketplace()).await?;
-    JobRepo::new(state.pool.clone())
+    let minted = JobRepo::new(state.pool.clone())
         .create_with_request_key(
             org,
             JobOrigin {
                 request_key,
                 run: None,
+                import_run,
             },
             &NewJob {
                 job,
@@ -1028,7 +1178,40 @@ pub(crate) async fn mint_job(
             } else {
                 storage_fault(state, &error)
             }
-        })
+        })?;
+    match minted {
+        tam_storage::Minted::Job(created) => Ok(created),
+        tam_storage::Minted::WorkflowDeleted(workflow) => Err(workflow_deleted(workflow)),
+    }
+}
+
+/// The refusal a mint answers when the workflow behind it has been stopped.
+///
+/// A conflict rather than a fault: nothing is wrong with the request, and the
+/// state it conflicts with is one the seller created deliberately. The code is
+/// what makes it actionable from outside this module — the scheduler skips
+/// this product's publication and carries on with the rest of its pass rather
+/// than failing the tenant's whole tick over one deleted import.
+pub(crate) fn workflow_deleted(workflow: tam_storage::WorkflowKind) -> APIError {
+    let entry = match workflow {
+        // Coded, because the scheduler matches on it: a tenant's pass skips
+        // the publication of a deleted import and carries on with the rest
+        // rather than failing the whole tick. `ImportRunSettled` is the
+        // existing name for "this import is over, a late write changes
+        // nothing", which is exactly what a deletion makes it.
+        tam_storage::WorkflowKind::ImportRun => APIErrorEntry::new(
+            "this import has been deleted, so nothing further is published from it",
+        )
+        .code(APIErrorCode::ImportRunSettled),
+        // Uncoded: nothing branches on it. The drain reads the refusal as the
+        // end of the request and stops, and no client reaches this arm,
+        // because the enqueue routes that take a request key fence
+        // themselves before they mint.
+        tam_storage::WorkflowKind::SyncRequest => {
+            APIErrorEntry::new("this request has been deleted, so no further leg is queued for it")
+        }
+    };
+    APIError::new(StatusCode::CONFLICT, entry.kind(APIErrorKind::Validation))
 }
 
 /// The one place the API mints row identity; v4 via the generator the
@@ -1073,6 +1256,7 @@ pub(crate) async fn list_jobs(
                 job: row.job,
                 inventory: row.inventory,
                 created_at: row.created_at,
+                deletion_status: row.deletion.map(DeletionStatusView::of),
             })
             .collect(),
         next_cursor,
@@ -1110,7 +1294,83 @@ pub(crate) async fn job_view(
         created_at: snapshot.created_at,
         phase,
         counts: CountsView::from_counts(snapshot.counts),
+        deletion_status: snapshot.deletion.map(DeletionStatusView::of),
     }))
+}
+
+/// Deletes one publishing job, or the workflow that owns it.
+///
+/// Everything the module header says about the ledger applies to stopping it:
+/// the fence goes up before any row is hidden, and a write already issued is
+/// never written off. So this answers `200`/`deleted` only for a job whose
+/// items are all settled and whose attempts are all decided; a job with a
+/// live lease answers `202`/`stopping`, and one with an attempt nobody can
+/// account for answers `202`/`needs_review` and stays in the seller's history
+/// saying so.
+///
+/// Ownership is resolved before anything is fenced, because most jobs in the
+/// seller's history are not independent. One leg of a migration is deleted by
+/// deleting the migration: fencing the target create alone leaves the source
+/// removal claimable, and the create's own settle then revives it — which is
+/// the seller's original listing taken down after they stopped the move. An
+/// import's event anchor is worse: it has no items, so stopping it is
+/// instantaneous and changes nothing about the import whose device and
+/// scheduler go on creating resources behind it. Only a job nothing owns is
+/// stopped on its own.
+///
+/// It removes no listing, no product, no mapping and no file. The items it
+/// cancels are items that had not run, and they keep their receipts.
+pub(crate) async fn delete_job(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, job)): Path<(String, String)>,
+) -> Result<Response, APIError> {
+    let job = JobId(parse_id(&job)?);
+    let jobs = JobRepo::new(state.pool.clone());
+    let stamp = context.stamp((state.wall)());
+    let owner = jobs
+        .owner(context.org, job)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+        .ok_or_else(|| missing("no such job"))?;
+    let status = match owner {
+        tam_storage::JobOwner::SyncRequest(request) => {
+            tam_storage::SyncRequestRepo::new(state.pool.clone())
+                .delete(context.org, request, stamp)
+                .await
+        }
+        tam_storage::JobOwner::ImportRun(run) => {
+            tam_storage::ImportRunRepo::new(state.pool.clone())
+                .delete(context.org, run, stamp)
+                .await
+        }
+        tam_storage::JobOwner::Standalone => jobs.delete(context.org, job, stamp).await,
+    }
+    .map_err(|error| storage_fault(&state, &error))?
+    // The owning workflow was read in this request and the job it owns
+    // exists, so its absence here is not a 404 the seller can act on.
+    .ok_or_else(|| {
+        state.internal("the workflow owning this job could not be read back to stop it")
+    })?;
+    Ok(JobDeletionView::answer(status))
+}
+
+/// The replay of a creation key whose work was deleted.
+///
+/// A conflict rather than a 404 or a fresh enqueue, and the distinction is
+/// what a client can act on: the key is spent and the work behind it is
+/// deliberately gone, so the next move is a new request under a new key
+/// rather than a retry of this one.
+pub(crate) fn deleted_key_conflict(status: DeletionStatus) -> APIError {
+    APIError::new(
+        StatusCode::CONFLICT,
+        APIErrorEntry::new(
+            "this request was deleted, so it cannot be started again under the same \
+             idempotency key; start a new one",
+        )
+        .kind(APIErrorKind::Validation)
+        .detail(serde_json::json!({ "deletion_status": status.as_str() })),
+    )
 }
 
 pub(crate) async fn job_items(
@@ -1213,12 +1473,28 @@ impl OrgContext {
     pub const fn organisation(&self) -> OrgId {
         self.org
     }
+
+    /// Who is asking and when, for a write that records both.
+    ///
+    /// A Delete is the seller's decision and the receipt has to say so: the
+    /// deletion columns carry the actor beside the instant, and the session
+    /// extractor is the only thing that knows which seller it was.
+    #[must_use]
+    pub const fn stamp(&self, at: Timestamp) -> Stamp {
+        Stamp {
+            at,
+            actor: Actor::Person(self.user),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_cursor, encode_cursor, phase_of, JobPhase};
-    use tam_storage::{ItemCounts, LedgerCursor};
+    use super::{
+        decode_cursor, deletion_status_str, encode_cursor, phase_of, DeletionStatusView, JobPhase,
+        ALL_DELETION_STATUSES,
+    };
+    use tam_storage::{ItemCounts, LedgerCursor, ALL_DELETION_STATUSES as STORED_STATUSES};
     use tam_types::{Timestamp, Uuid};
 
     #[test]
@@ -1267,5 +1543,38 @@ mod tests {
         assert_eq!(decode_cursor("zz.abcd"), None, "bad millis");
         assert_eq!(decode_cursor("10.short"), None, "bad id length");
         assert_eq!(decode_cursor("10"), None, "no separator");
+    }
+
+    /// The stored deletion vocabulary and the wire's are one vocabulary.
+    ///
+    /// Two enums, because the storage layer owns no wire format and the API
+    /// owns no column — and one spelling drifting from the other is a state
+    /// the console renders as an unknown string or refuses to decode at all.
+    /// Iterated over both closed sets rather than spot-checked, so a fourth
+    /// state added to either side fails here.
+    #[test]
+    fn the_wire_deletion_vocabulary_is_the_stored_one() {
+        assert_eq!(
+            STORED_STATUSES.len(),
+            ALL_DELETION_STATUSES.len(),
+            "one state per state"
+        );
+        for (stored, wire) in STORED_STATUSES.into_iter().zip(ALL_DELETION_STATUSES) {
+            assert_eq!(
+                DeletionStatusView::of(stored),
+                wire,
+                "the two sets are in the same order"
+            );
+            assert_eq!(
+                deletion_status_str(wire),
+                stored.as_str(),
+                "and each state is spelled the same on the wire as in the column"
+            );
+            assert_eq!(
+                serde_json::to_value(wire).ok(),
+                Some(serde_json::Value::String(stored.as_str().to_owned())),
+                "which is what the client's own union is generated from"
+            );
+        }
     }
 }

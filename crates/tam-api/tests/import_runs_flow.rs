@@ -4279,3 +4279,430 @@ async fn merge_into(app: &axum::Router, pool: &PgPool, lost: ProductId, kept: Pr
     .await;
     assert_eq!(merged.status, StatusCode::OK, "{}", merged.body);
 }
+
+/// Deleting an import takes the record away and leaves the resources.
+///
+/// Four things at once, because they are one promise: the run stops being
+/// something the seller can see or reach, the products it created stay
+/// exactly as they were, the same Delete repeated says the same thing, and
+/// the start key that opened it cannot open a second import of the same shop.
+/// The last one is the trap: the key binding outlives the run on purpose, so
+/// a client whose acknowledgement was lost reaches the import it made — and
+/// without a refusal here a deleted import would come straight back.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn deleting_an_import_keeps_its_resources_and_refuses_its_start_key(pool: PgPool) {
+    provision(&pool).await;
+    provision_tenant(&pool, &TENANT_B).await;
+    let state = configured(pool.clone(), &store_root("delete-import"));
+    let app = router(state.clone());
+
+    let key = fresh_uuid();
+    let opened = open_run_keyed(&app, "Tes", key).await;
+    assert_eq!(opened.status, StatusCode::CREATED, "{}", opened.body);
+    let run = opened.json::<ImportRunView>().id;
+    assert_eq!(claim_run(&app, run).await, ATTEMPT);
+    let locator = "https://www.tes.com/teaching-resource/-41";
+    let listed_page = post_page(
+        &app,
+        &listing_page(run, vec![listed(locator, "Fractions pack")]),
+    )
+    .await;
+    assert_eq!(listed_page.status, StatusCode::OK, "{}", listed_page.body);
+    let selected = call(
+        &app,
+        Method::POST,
+        &format!("/v1/imports/runs/{}/select", uuid_text(run)),
+        Some(serde_json::json!({ "all": true })),
+    )
+    .await;
+    assert_eq!(selected.status, StatusCode::OK, "{}", selected.body);
+    let described = post_page(
+        &app,
+        &page(
+            run,
+            vec![observed(locator, "Fractions pack", Some((0x7A, BIG)), None)],
+            true,
+        ),
+    )
+    .await;
+    assert_eq!(described.status, StatusCode::OK, "{}", described.body);
+    let settled = confirm_and_drain(&app, &state, run).await;
+    assert_eq!(
+        (settled.state, settled.counts.imported),
+        (ImportRunState::Complete, 1),
+        "the import created the seller's resource: {settled:?}"
+    );
+    let before = catalogue(&app).await;
+    assert_eq!(before.len(), 1, "one resource, from one import");
+
+    let path = format!("/v1/imports/runs/{}", uuid_text(run));
+    let other_tenant = call_as(&app, &TENANT_B.token, Method::DELETE, &path, None).await;
+    assert_eq!(
+        other_tenant.status,
+        StatusCode::NOT_FOUND,
+        "another catalogue's import is not there to delete"
+    );
+
+    for _ in 0..2 {
+        let deleted = call(&app, Method::DELETE, &path, None).await;
+        assert_eq!(
+            deleted.status,
+            StatusCode::OK,
+            "nothing can still be writing to a complete import: {}",
+            deleted.body
+        );
+        assert_eq!(deleted.body["status"], "deleted");
+    }
+
+    assert_eq!(
+        call(&app, Method::GET, &path, None).await.status,
+        StatusCode::NOT_FOUND,
+        "a deleted import has no detail page"
+    );
+    let history: ImportRunsView = call(&app, Method::GET, "/v1/imports/runs", None)
+        .await
+        .json();
+    assert!(
+        history.runs.is_empty() && history.total == 0,
+        "the page and its total are both filtered, because a total that counted the \
+         tombstone would page a seller into nothing: {history:?}"
+    );
+    assert_eq!(
+        catalogue(&app).await,
+        before,
+        "deleting the record of an import deletes none of the resources it made"
+    );
+
+    let replay = open_run_keyed(&app, "Tes", key).await;
+    assert_eq!(
+        replay.status,
+        StatusCode::CONFLICT,
+        "the spent key answers a conflict rather than opening a second import: {}",
+        replay.body
+    );
+    let fresh = open_run_keyed(&app, "Tes", fresh_uuid()).await;
+    assert_eq!(
+        fresh.status,
+        StatusCode::CREATED,
+        "and a new key still opens one, because the deleted run holds no open fence: {}",
+        fresh.body
+    );
+}
+
+/// Deleting an import a device is reading answers `stopping`, and stays
+/// visible until that device says it has stopped.
+///
+/// The contract's whole distinction between 200 and 202 lives here. A run
+/// whose phone holds a live lease may be in the middle of a read: the fence
+/// stops anything new, but the seller must not be told the import is gone
+/// while something is still executing against it. Three things are therefore
+/// asserted in order — the 202 with `stopping`, that the row is still in the
+/// seller's history carrying that state, and that a sweep does not promote it
+/// by the clock — and only the device's own terminal answer converges it.
+///
+/// The defect this discriminates cleared the lease as part of the fence, so
+/// the classification that follows found nothing executing and answered 200
+/// `deleted`: the import vanished from the history of a seller whose phone
+/// was still walking their shop, and the sweep never looked at the row again
+/// because it only revisits the two open states.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn deleting_an_import_a_device_holds_stops_before_it_disappears(pool: PgPool) {
+    provision(&pool).await;
+    let state = configured(pool.clone(), &store_root("delete-held-import"));
+    let app = router(state.clone());
+
+    // Opened and claimed: the claim is what puts a live lease on the row,
+    // which is the outstanding-execution evidence this test is about.
+    let run = started_run(&app).await;
+    let path = format!("/v1/imports/runs/{}", uuid_text(run));
+
+    let deleted = call(&app, Method::DELETE, &path, None).await;
+    assert_eq!(
+        deleted.status,
+        StatusCode::ACCEPTED,
+        "a held import is accepted for deletion rather than reported deleted: {}",
+        deleted.body
+    );
+    assert_eq!(deleted.body["status"], "stopping");
+
+    let history: ImportRunsView = call(&app, Method::GET, "/v1/imports/runs", None)
+        .await
+        .json();
+    assert_eq!(
+        (history.runs.len(), history.total),
+        (1, 1),
+        "a run something can still be executing stays in the seller's history: {history:?}"
+    );
+    assert_eq!(
+        serde_json::to_value(history.runs.first().map(|head| head.deletion_status))
+            .unwrap_or(serde_json::Value::Null),
+        serde_json::json!("stopping"),
+        "and says why it is still there"
+    );
+
+    // The device's queued page, arriving after the deletion. Terminal rather
+    // than a not-found: the desktop transport retires a conflict and retries
+    // a 404 forever, holding every post behind it in the outbox.
+    let late = post_page(
+        &app,
+        &listing_page(
+            run,
+            vec![listed("https://www.tes.com/teaching-resource/-9", "Late")],
+        ),
+    )
+    .await;
+    assert_eq!(
+        late.status,
+        StatusCode::CONFLICT,
+        "a page for a deleted import is refused: {}",
+        late.body
+    );
+    assert_eq!(late.body["errors"][0]["code"], "import_run_settled");
+
+    // A sweep, which is what the scheduler runs. Nothing has acknowledged
+    // anything, so nothing converges.
+    drain(&state).await;
+    let swept: ImportRunsView = call(&app, Method::GET, "/v1/imports/runs", None)
+        .await
+        .json();
+    assert_eq!(
+        swept.total, 1,
+        "the sweep does not tidy away a run whose hold is still live: {swept:?}"
+    );
+
+    // The device's own stop, which is the acknowledgement the fence was
+    // waiting for.
+    let stopped = call(
+        &app,
+        Method::POST,
+        &format!("/v1/devices/{DEVICE_A}/import/{}/stop", uuid_text(run)),
+        Some(serde_json::json!({ "attempt": ATTEMPT })),
+    )
+    .await;
+    assert_eq!(
+        stopped.status,
+        StatusCode::OK,
+        "the queued stop is answered rather than refused as unregistered: {}",
+        stopped.body
+    );
+    assert_eq!(stopped.body["abandoned"], true);
+
+    let converged: ImportRunsView = call(&app, Method::GET, "/v1/imports/runs", None)
+        .await
+        .json();
+    assert!(
+        converged.runs.is_empty() && converged.total == 0,
+        "with nothing executing the deletion completes, page and total together: {converged:?}"
+    );
+    assert_eq!(
+        call(&app, Method::GET, &path, None).await.status,
+        StatusCode::NOT_FOUND,
+        "and the detail page goes with it"
+    );
+}
+
+/// Deleting an import fences the publishing jobs it produced, and no
+/// publication is minted against it afterwards.
+///
+/// A scheduled import publishes what it imported, and each publishing job is
+/// a separate row the seller reaches through their publishing history. The
+/// defect this discriminates is that those rows named no import: deleting the
+/// run fenced its itemless anchor, answered `deleted`, and left the
+/// publication claimable — new marketplace writes, for an import the seller
+/// had been told was gone.
+///
+/// Both halves are asserted, because either alone leaves the hole open. A
+/// publication minted before the deletion must be fenced by it; one minted
+/// after must be refused, against the run's own lock, so there is no window
+/// between the two.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn deleting_an_import_fences_the_publications_derived_from_it(pool: PgPool) {
+    provision(&pool).await;
+    let state = configured(pool.clone(), &store_root("delete-import-publication"));
+    let app = router(state.clone());
+
+    let run = started_run(&app).await;
+    let jobs = tam_storage::JobRepo::new(pool.clone());
+    let derived = tam_types::JobId(fresh_uuid());
+    let minted = jobs
+        .create_with_request_key(
+            ORG_A,
+            tam_storage::JobOrigin {
+                request_key: tam_storage::job_request_key(run, "publish:test"),
+                run: None,
+                import_run: Some(run),
+            },
+            &tam_storage::NewJob {
+                job: derived,
+                inventory: tam_types::InventoryId::Tes,
+                stamp: tam_types::Stamp {
+                    at: NOW,
+                    actor: tam_types::Actor::System(tam_types::SystemComponent::Scheduler),
+                },
+            },
+            &[],
+        )
+        .await;
+    assert!(
+        matches!(minted, Ok(tam_storage::Minted::Job(_))),
+        "a publication for a live import is minted: {minted:?}"
+    );
+
+    let path = format!("/v1/imports/runs/{}", uuid_text(run));
+    let deleted = call(&app, Method::DELETE, &path, None).await;
+    assert!(
+        matches!(deleted.status, StatusCode::OK | StatusCode::ACCEPTED),
+        "the Delete is answered: {} {}",
+        deleted.status,
+        deleted.body
+    );
+
+    let fenced = jobs.deletion_status(ORG_A, derived).await;
+    assert!(
+        matches!(fenced, Ok(Some(_))),
+        "the publication the import produced is fenced with it rather than left claimable: \
+         {fenced:?}"
+    );
+
+    // And nothing new begins. The same mint, under a fresh key so the request
+    // key cannot answer it as a replay, meets the deletion under the run's
+    // own lock.
+    let after = jobs
+        .create_with_request_key(
+            ORG_A,
+            tam_storage::JobOrigin {
+                request_key: tam_storage::job_request_key(run, "publish:after"),
+                run: None,
+                import_run: Some(run),
+            },
+            &tam_storage::NewJob {
+                job: tam_types::JobId(fresh_uuid()),
+                inventory: tam_types::InventoryId::Tes,
+                stamp: tam_types::Stamp {
+                    at: NOW,
+                    actor: tam_types::Actor::System(tam_types::SystemComponent::Scheduler),
+                },
+            },
+            &[],
+        )
+        .await;
+    assert!(
+        matches!(
+            after,
+            Ok(tam_storage::Minted::WorkflowDeleted(
+                tam_storage::WorkflowKind::ImportRun
+            ))
+        ),
+        "a publication minted against a deleted import is refused, and refused as the import's \
+         own deletion rather than as a fault: {after:?}"
+    );
+}
+
+/// A repeated Delete does not retire a hold the device has not released.
+///
+/// The first Delete answers `stopping` because a phone holds a live lease on
+/// the run, and that hold is the only record that something is executing
+/// against it. A second Delete before the device has acknowledged anything —
+/// the seller pressing the button twice, the console retrying a request whose
+/// answer was lost — must say the same thing: the fence has not converged
+/// just because it was asked for twice. Clearing the hold on the repeat
+/// reports the import gone while the phone is still walking the shop, and
+/// takes the row out of the two open states the sweep revisits, so nothing
+/// ever looks at it again.
+///
+/// Asserted through both doors the console offers, because they reach the
+/// same run: the import's own path, and the import's event anchor in the
+/// seller's publishing history. Only the device's own stop converges it.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_repeated_delete_keeps_a_hold_the_device_has_not_released(pool: PgPool) {
+    provision(&pool).await;
+    let state = configured(pool.clone(), &store_root("delete-import-twice"));
+    let app = router(state.clone());
+
+    let run = started_run(&app).await;
+    let path = format!("/v1/imports/runs/{}", uuid_text(run));
+    let anchor = tam_storage::ImportRunRepo::new(pool.clone())
+        .head(ORG_A, run)
+        .await
+        .expect("the run reads")
+        .expect("the run stands")
+        .anchor_job;
+
+    for press in 1..=2 {
+        let deleted = call(&app, Method::DELETE, &path, None).await;
+        assert_eq!(
+            deleted.status,
+            StatusCode::ACCEPTED,
+            "Delete {press} is accepted rather than reported complete, because the device that \
+             holds this run has neither acknowledged the stop nor lapsed: {}",
+            deleted.body
+        );
+        assert_eq!(deleted.body["status"], "stopping");
+    }
+
+    // The same import, reached through its event anchor. Ownership routes it
+    // to the run, so this is the same answer rather than a different fence.
+    let through_anchor = call(
+        &app,
+        Method::DELETE,
+        &format!("/v1/jobs/{}", uuid_text(anchor.0)),
+        None,
+    )
+    .await;
+    assert_eq!(
+        through_anchor.status,
+        StatusCode::ACCEPTED,
+        "the anchor-routed Delete is the run's own Delete: {}",
+        through_anchor.body
+    );
+    assert_eq!(through_anchor.body["status"], "stopping");
+
+    let history: ImportRunsView = call(&app, Method::GET, "/v1/imports/runs", None)
+        .await
+        .json();
+    assert_eq!(
+        (history.runs.len(), history.total),
+        (1, 1),
+        "a run whose phone may still be reading stays in the seller's history: {history:?}"
+    );
+    assert_eq!(
+        serde_json::to_value(history.runs.first().map(|head| head.deletion_status))
+            .unwrap_or(serde_json::Value::Null),
+        serde_json::json!("stopping"),
+        "and still says why it is there"
+    );
+
+    // A sweep, which is what the scheduler runs: nothing has acknowledged
+    // anything, so nothing converges by the clock.
+    drain(&state).await;
+    let swept: ImportRunsView = call(&app, Method::GET, "/v1/imports/runs", None)
+        .await
+        .json();
+    assert_eq!(
+        swept.total, 1,
+        "the sweep does not tidy away a run whose hold is still live: {swept:?}"
+    );
+
+    // The device's own stop, which is the acknowledgement the fence waits
+    // for, and the only thing that retires the hold.
+    let stopped = call(
+        &app,
+        Method::POST,
+        &format!("/v1/devices/{DEVICE_A}/import/{}/stop", uuid_text(run)),
+        Some(serde_json::json!({ "attempt": ATTEMPT })),
+    )
+    .await;
+    assert_eq!(
+        stopped.status,
+        StatusCode::OK,
+        "the queued stop is answered: {}",
+        stopped.body
+    );
+    let converged: ImportRunsView = call(&app, Method::GET, "/v1/imports/runs", None)
+        .await
+        .json();
+    assert!(
+        converged.runs.is_empty() && converged.total == 0,
+        "and with the device stopped the deletion completes: {converged:?}"
+    );
+}

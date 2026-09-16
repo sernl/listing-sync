@@ -6,7 +6,6 @@
 	import AddCard from '$lib/AddCard.svelte';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
-	import { currentSessionToken, listBrowserSessions } from '$lib/browser-sessions';
 	import { entitlementRead, limitOf } from '$lib/entitlement-read';
 	import {
 		APP_CANNOT_CONNECT,
@@ -17,7 +16,6 @@
 		sessionStatusHere,
 		type SessionOutcome
 	} from '$lib/desktop';
-	import { merge } from '$lib/device-merge';
 	import { marketplaceRows, needingAttention } from '$lib/devices-view';
 	import type { Marketplace } from '$lib/generated/vocab';
 	import { TRANSPORT_OF } from '$lib/inventory';
@@ -27,8 +25,6 @@
 	import ConsentDialog from './ConsentDialog.svelte';
 	import { blockedBanner, needsConsent, standingFor } from './consent';
 	import Downloads from './Downloads.svelte';
-	import Machines from './Machines.svelte';
-	import Library from './Library.svelte';
 	import MarketplaceCard from './MarketplaceCard.svelte';
 	import RequestCard from './RequestCard.svelte';
 	import { fetchManifest } from './api';
@@ -40,6 +36,7 @@
 		CONNECT_RETURN_PARAM,
 		type DisconnectServer,
 		type LiveRead,
+		MACHINES_ANCHOR,
 		TRANSPORT_BADGE,
 		busyAt,
 		connectReturn,
@@ -64,18 +61,18 @@
 	} from './view';
 	import './marketplaces.css';
 
+	$effect(() => {
+		if (page.url.hash === '#machines') {
+			void goto(`${MACHINES_ANCHOR.split('#')[0]}${page.url.search}#machines`, {
+				replaceState: true
+			});
+		}
+	});
+
 	const registry = createQuery(() => ({ queryKey: queryKeys.devices, queryFn: () => api.devices() }));
 	const linked = createQuery(() => ({
 		queryKey: queryKeys.connections,
 		queryFn: () => api.connections()
-	}));
-	const signIns = createQuery(() => ({
-		queryKey: queryKeys.browserSessions,
-		queryFn: () => listBrowserSessions()
-	}));
-	const current = createQuery(() => ({
-		queryKey: queryKeys.currentSessionToken,
-		queryFn: () => currentSessionToken()
 	}));
 	const releases = createQuery(() => ({
 		queryKey: queryKeys.downloadsManifest,
@@ -119,7 +116,6 @@
 	const devices = $derived(registry.data?.devices ?? []);
 	const connections = $derived(linked.data ?? []);
 	const rows = $derived(marketplaceRows(devices, connections, now));
-	const joined = $derived(merge(devices, signIns.data ?? [], current.data ?? null));
 
 	/** Whether the two reads this page's live tiles depend on have landed.
 	 *
@@ -638,20 +634,6 @@
 
 	<div class="mp-part">
 		<Downloads manifest={releases.data ?? null} />
-	</div>
-
-	<div class="mp-part">
-		<Machines
-			{devices}
-			{joined}
-			{now}
-			pending={registry.isPending}
-			failed={registry.isError}
-		/>
-	</div>
-
-	<div class="mp-part">
-		<Library />
 	</div>
 
 	<div class="mp-part">

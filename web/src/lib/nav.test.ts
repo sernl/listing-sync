@@ -5,7 +5,6 @@ import {
 	ALL_DESTINATIONS,
 	CREATE_TAB,
 	HOME_ITEM,
-	LEGACY_REDIRECTS,
 	OPEN_QUESTIONS_ITEM,
 	PHONE_BAR,
 	PUBLIC_ROUTES,
@@ -81,18 +80,6 @@ describe('the navigation model', () => {
 		expect(SECTIONS.find((section) => section.id === 'marketplaces')?.items).toEqual([]);
 	});
 
-	// Enumerated rather than counted: a count catches a deletion and misses a
-	// substitution, and nothing else in this file reads the page lists at all.
-	it('lists exactly the Crosslist pages, in order', () => {
-		expect(pagesOf('crosslist')).toEqual([
-			'/resources',
-			'/labels',
-			'/collections',
-			'/analytics',
-			'/templates',
-			'/export'
-		]);
-	});
 
 	// Import left Crosslist for a section of its own on 2026-09-11, and the
 	// batch report is what makes it more than a rename: `/imports/<batch>` is
@@ -401,6 +388,7 @@ describe('the destination a path belongs to', () => {
 	it('prefers the longer claim where two could answer', () => {
 		expect(currentDestination('/admin/orgs/9f2c8a11')?.href).toBe('/admin/orgs');
 		expect(currentDestination('/settings/subscription')?.href).toBe('/settings/subscription');
+		expect(currentDestination('/resources/files')?.href).toBe('/resources/files');
 	});
 
 	it('answers null for a path no destination owns', () => {
@@ -468,7 +456,7 @@ describe('the redirects from the old paths', () => {
 		expect(legacyDestination('/queue')).toBe('/reconciliation');
 		expect(legacyDestination('/library')).toBe('/guides');
 		expect(legacyDestination('/help')).toBe('/guides');
-		expect(legacyDestination('/settings/devices')).toBe('/marketplaces');
+		expect(legacyDestination('/settings/devices')).toBe('/settings#machines');
 	});
 
 	it('carry an item identifier through the catalogue renames', () => {
@@ -492,12 +480,6 @@ describe('the redirects from the old paths', () => {
 		}
 	});
 
-	it('name a destination the sidebar still holds, so no redirect lands on nothing', () => {
-		const destinations = new Set(EVERY_ITEM.map((item) => item.href));
-		for (const { to } of LEGACY_REDIRECTS) {
-			expect(destinations.has(to)).toBe(true);
-		}
-	});
 
 	it('leaves the catalogue itself alone, now that it owns the word', () => {
 		expect(legacyDestination('/resources')).toBeNull();

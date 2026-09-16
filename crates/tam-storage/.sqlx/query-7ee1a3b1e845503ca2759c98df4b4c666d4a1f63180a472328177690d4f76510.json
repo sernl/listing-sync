@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT h.hash, h.device_id, d.name AS device_name, d.last_seen_at FROM device_library_holding h JOIN device d ON d.org_id = h.org_id AND d.id = h.device_id WHERE h.org_id = $1 AND d.revoked_at IS NULL AND h.hash = ANY ($2) ORDER BY h.hash, d.name",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 1,
+        "name": "device_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "device_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "last_seen_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "ByteaArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7ee1a3b1e845503ca2759c98df4b4c666d4a1f63180a472328177690d4f76510"
+}

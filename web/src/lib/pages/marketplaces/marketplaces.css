@@ -459,8 +459,6 @@ a.mp-mark:hover {
   overflow-wrap: anywhere;
 }
 
-/* --- the machines list --------------------------------------------------- */
-
 .mp-machine {
   border-top: 1px solid var(--line);
   padding: 14px 0;
@@ -499,27 +497,6 @@ a.mp-mark:hover {
   margin: 10px 0 0 14px;
   padding-left: 14px;
   border-left: 1px solid var(--line);
-}
-
-/* A device name and the account label beside a held login are both arbitrary
-   text the desktop app reports. Neither could break, so an unbroken sixty
-   character hostname pushed the card wider than the page at 390. */
-.mp-held .one {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  padding: 5px 0;
-  font-size: 13px;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.mp-held .when {
-  margin-left: auto;
-  font-size: 12px;
-  color: var(--faint);
-  white-space: nowrap;
 }
 
 .mp-warned {

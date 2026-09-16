@@ -1,0 +1,90 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT locator, ordinal, state, product_id, observed, title, price_minor, price_currency, cover_hash, observed_by_device, failure_detail, skip_reason FROM import_run_item WHERE org_id = $1 AND run_id = $2 AND state = 'matched' AND EXISTS (SELECT 1 FROM import_run r WHERE r.org_id = import_run_item.org_id AND r.id = import_run_item.run_id AND r.deletion_requested_at IS NULL) ORDER BY ordinal LIMIT $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "locator",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "ordinal",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "observed",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "price_minor",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "price_currency",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "cover_hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 9,
+        "name": "observed_by_device",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "failure_detail",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "skip_reason",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "d9475358b29d40809c3ca05a332a9bced8caf94f553d7cccfed79c265c47f406"
+}

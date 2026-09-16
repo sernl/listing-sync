@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import {
 		ApiFailure,
@@ -30,6 +31,13 @@
 	import Placeholder from '$lib/Placeholder.svelte';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import { FILES_STAY_ON_YOUR_COMPUTER } from '$lib/sync-request';
+	import {
+		deleteRefusal,
+		retainedBadge,
+		type WorkDeleteOutcome,
+		type WorkItem
+	} from '$lib/work-delete';
+	import WorkDeleteDialog from '$lib/WorkDeleteDialog.svelte';
 	import { NEEDS_THE_APP, startRefusal } from './import-view';
 	import ReviewCards from './ReviewCards.svelte';
 	import {
@@ -138,6 +146,24 @@
 	const itemsTotal = $derived(view?.items_total ?? 0);
 	const pages = $derived(pageCount(itemsTotal, PER_PAGE));
 	const filtered = $derived(searching !== '' || itemState !== '');
+
+	/** This run, while a Delete is being confirmed for it, or null while none
+	 *  is. The same dialog the history list uses: one import deleted from its
+	 *  own page and one deleted from the list are the same act. */
+	let deleting = $state<WorkItem[] | null>(null);
+
+	const IMPORTS = { one: 'import', many: 'imports' };
+
+	// Return accepted deletions to history, where stopping rows remain visible.
+	// Re-read other outcomes: a lost response does not prove nothing changed.
+	async function settledDelete(outcome: WorkDeleteOutcome) {
+		if (outcome.deleted.length > 0 || outcome.stopping.length > 0) {
+			deleting = null;
+			await goto('/import');
+			return;
+		}
+		await refetch();
+	}
 
 	async function refetch() {
 		if (!runId) {
@@ -470,7 +496,8 @@
 			description={`Started ${new Date(run.created_at).toLocaleString('en-GB')}`}
 		>
 			{#snippet aside()}
-				<StatusPill tone={badge.tone} label={badge.label} />
+				{@const going = retainedBadge(run.deletion_status)}
+				<StatusPill tone={going?.tone ?? badge.tone} label={going?.label ?? badge.label} />
 				<StatusPill tone={live ? 'ok' : 'soon'} label={live ? 'Updates connected' : 'Updates reconnecting'} />
 			{/snippet}
 		</PageHead>
@@ -549,6 +576,7 @@
 					{#if stage === 'failed' && run.source !== null}
 						<Button href={`/import?source=${encodeURIComponent(run.source)}&retry=${encodeURIComponent(run.id)}`}>Start a new attempt</Button>
 					{/if}
+					{@render deleteRun(run)}
 				</div>
 			{:else}
 				<div class="actions">
@@ -559,6 +587,10 @@
 					{#if (stage === 'waiting' || stage === 'interrupted') && invoke !== null && !machineHere.revoked && !signedOut}
 						<Button tier="primary" disabled={sending} onclick={() => void resume()}>Resume on this device</Button>
 					{/if}
+					<!-- Stop and Delete are different acts and both are offered.
+					     Stop leaves the import in the history to be read or
+					     resumed; Delete takes the record away once new work has
+					     been fenced. Neither touches what was already imported. -->
 					<Button
 						danger
 						disabled={sending}
@@ -567,6 +599,7 @@
 					>
 						Stop this import
 					</Button>
+					{@render deleteRun(run)}
 				</div>
 			{/if}
 		</Panel>
@@ -821,3 +854,28 @@
 		<span class="run-cover none" aria-hidden="true"></span>
 	{/if}
 {/snippet}
+
+<!-- Delete, offered wherever the run's own actions are. Withdrawn as a
+     press once the run is already on its way out: the server would accept
+     the call and nothing the seller can see would change, which reads as a
+     control that does nothing. -->
+{#snippet deleteRun(run: ImportRunView)}
+	{@const refusal = deleteRefusal(run.deletion_status)}
+	<Button
+		danger
+		disabled={refusal !== null}
+		reason={refusal ?? undefined}
+		onclick={() => (deleting = [{ id: run.id, label: runName(run) }])}
+	>
+		Delete this import
+	</Button>
+{/snippet}
+
+<WorkDeleteDialog
+	open={deleting !== null}
+	items={deleting ?? []}
+	noun={IMPORTS}
+	remove={api.deleteImportRun}
+	onClose={() => (deleting = null)}
+	onsettled={(outcome) => void settledDelete(outcome)}
+/>

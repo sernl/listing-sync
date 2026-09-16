@@ -40,6 +40,7 @@
 	import TabBar from '$lib/TabBar.svelte';
 	import { toast } from '$lib/toast';
 	import type { InventoryId } from '$lib/generated/vocab';
+	import { FILES_HREF } from './files-browser';
 	import {
 		MARKETPLACE_TILES,
 		PAGE_STEP,
@@ -447,6 +448,13 @@
 		]);
 	}
 
+	async function partlyDeleted(_count: number) {
+		await Promise.all([
+			queryClient.invalidateQueries({ queryKey: queryKeys.products }),
+			queryClient.invalidateQueries({ queryKey: queryKeys.mappings })
+		]);
+	}
+
 	async function deletedOne() {
 		removing = null;
 		toast('info', 'Resource deleted.');
@@ -465,6 +473,11 @@
 		search={() => palette.show()}
 	>
 		{#snippet aside()}
+			<!-- The way to the seller's own files, which are a property of the
+			     catalogue rather than of the marketplaces they came from: one
+			     file can belong to several resources, and the browser is where
+			     that is visible. -->
+			<Button tier="outline" icon="files" href={FILES_HREF}>Files</Button>
 			<Menu bind:open={bulkMenu} label="Bulk actions">
 				{#snippet trigger()}
 					<Button tier="primary" icon="ellipsis-vertical" onclick={() => (bulkMenu = !bulkMenu)}>
@@ -834,6 +847,7 @@
 	rows={chosen}
 	onClose={() => (deleting = false)}
 	onDeleted={deletedInBulk}
+	onPartial={partlyDeleted}
 />
 
 <DeleteDialog

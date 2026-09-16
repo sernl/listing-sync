@@ -19,6 +19,7 @@ import type {
 	InventoryId,
 	ItemOutcome,
 	ItemState,
+	JobDeletionStatus,
 	JobPhase,
 	LengthUnit,
 	Marketplace,
@@ -310,7 +311,14 @@ export interface CreatedJob {
 	replay: boolean;
 }
 
+export type { JobDeletionStatus };
+
+export interface JobDeletionView {
+	status: JobDeletionStatus;
+}
+
 export interface JobHead {
+	deletion_status?: JobDeletionStatus | null;
 	job: string;
 	inventory: InventoryId;
 	created_at: number;
@@ -337,6 +345,7 @@ export interface Counts {
 }
 
 export interface JobView {
+	deletion_status?: JobDeletionStatus | null;
 	job: string;
 	inventory: InventoryId;
 	created_at: number;
@@ -511,6 +520,7 @@ export interface ResourceStateCount {
  *  `waiting_for_device_version` is present while no device this seller has
  *  registered is new enough to run the work, and absent otherwise. */
 export interface SyncRequestView {
+	deletion_status?: JobDeletionStatus | null;
 	request: string;
 	source: InventoryId;
 	target: InventoryId;
@@ -534,6 +544,7 @@ export interface SyncRequestView {
  *  because the list exists so that a request created on one machine is
  *  reachable from another, not so that it can be read in full from here. */
 export interface SyncRequestHead {
+	deletion_status?: JobDeletionStatus | null;
 	request: string;
 	source: InventoryId;
 	target: InventoryId;
@@ -843,16 +854,34 @@ export interface LibraryHolderView {
 	online: boolean;
 }
 
+export interface LibraryResourceView {
+	id: string;
+	title: string;
+}
+
 export interface LibraryFileView {
 	hash: string;
 	file_name: string | null;
 	byte_len: number;
 	holders: LibraryHolderView[];
 	wanted_by: string[];
+	resources: LibraryResourceView[];
 }
 
 export interface LibraryView {
 	files: LibraryFileView[];
+	total: number;
+	offset: number;
+	limit: number;
+}
+
+export interface LibraryQuery {
+	q?: string;
+	device?: string;
+	availability?: 'online' | 'offline' | 'missing';
+	linked?: 'linked' | 'unlinked';
+	offset?: number;
+	limit?: number;
 }
 
 /** The list out of the envelope, which is the only shape this module lets out.
@@ -2377,6 +2406,7 @@ export interface ImportExecutionView {
  *  it and say how far it got. No items and no pairs, for the reason
  *  `SyncRequestHead` carries counts rather than rows. */
 export interface ImportRunHead {
+	deletion_status?: JobDeletionStatus | null;
 	id: string;
 	kind: ImportRunKind;
 	/** The shop this read, on a marketplace run. Null on a spreadsheet one. */
@@ -2679,6 +2709,8 @@ export const api = {
 		return request<JobsPage>(`/v1/jobs${suffix}`);
 	},
 	job: (id: string) => request<JobView>(`/v1/jobs/${id}`),
+	deleteJob: (id: string) =>
+		request<JobDeletionView>(`/v1/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 	items: (job: string, cursor?: string | null, limit?: number) => {
 		const query = new URLSearchParams();
 		if (cursor) query.set('cursor', cursor);
@@ -2693,6 +2725,9 @@ export const api = {
 		const suffix = query.size === 0 ? '' : `?${query}`;
 		return request<ItemDetail>(`/v1/jobs/${job}/items/${item}${suffix}`);
 	},
+
+	deleteSyncRequest: (id: string) =>
+		request<JobDeletionView>(`/v1/sync/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
 	/** Ask for a sync or a migrate. The key is the request's own identity on the
 	 *  server rather than a deduplication token beside it, so a retried submit is
@@ -2842,6 +2877,8 @@ export const api = {
 	/** Cancel future work; previously committed resources remain. */
 	abandonImportRun: (run: string) =>
 		post<void>(`/v1/imports/runs/${encodeURIComponent(run)}/abandon`, {}),
+	deleteImportRun: (run: string) =>
+		request<JobDeletionView>(`/v1/imports/runs/${encodeURIComponent(run)}`, { method: 'DELETE' }),
 
 	/** The pairs still waiting on the seller, for one run or for the whole
 	 *  organisation where none is named. */
@@ -2915,7 +2952,17 @@ export const api = {
 
 	/** The seller's files across their machines: who holds what and who
 	 *  asked. Coordination only; the bytes never pass through the server. */
-	library: () => request<LibraryView>('/v1/library'),
+	library: (params: LibraryQuery = {}) => {
+		const query = new URLSearchParams();
+		if (params.q) query.set('q', params.q);
+		if (params.device) query.set('device', params.device);
+		if (params.availability) query.set('availability', params.availability);
+		if (params.linked) query.set('linked', params.linked);
+		if (params.offset !== undefined) query.set('offset', String(params.offset));
+		if (params.limit !== undefined) query.set('limit', String(params.limit));
+		const suffix = query.size === 0 ? '' : `?${query}`;
+		return request<LibraryView>(`/v1/library${suffix}`);
+	},
 	/** Ask one machine to fetch one file directly from another that holds
 	 *  it. 404 where no other machine of the seller's holds it. */
 	wantFile: (device: string, hash: string) =>

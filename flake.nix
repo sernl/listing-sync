@@ -263,6 +263,10 @@
             default = bin;
             tam-server = serviceBin "tam-server";
             tam-worker = serviceBin "tam-worker";
+            # The operator one-shot: no unit of its own, but the migration
+            # runner calls its deployment-time normalization pass, so it is
+            # part of the deployed closure on both launchers.
+            tam-admin = serviceBin "tam-admin";
             tam-auth = tamAuth;
             teachouse-console = teachouseConsole;
             teachouse-landing = teachouseLanding;

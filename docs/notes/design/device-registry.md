@@ -4,6 +4,7 @@ Decision D14's server-side half: which of the seller's own machines exist, what 
 
 - date: 2026-09-03
 - status: implemented; the 2026-09-13 coordination repair passed the targeted checks recorded in `docs/design/plans/2026-09-13-device-coordination-and-bounded-ui.md`. Full-suite and physical-device end-to-end checks were not run for that repair.
+- amended: 2026-09-16 — Browser sign-ins and Machine sign-ins are consecutive panels in Settings > Preferences
 - decisions it implements: D14 (per-surface marketplace login, the device registry, the "Your devices" page with per-device sign-out), D1 (the two-branch automation rule the registry's contents obey), D10 and D11 (the entitlement the check-in closes on revocation), D30 (the wording the page uses about where a login lives)
 
 ## Why a registry of our own
@@ -76,14 +77,14 @@ That is D14's own framing — two facts recorded rather than engineered away —
 
 ## The page, and how the join works
 
-`/settings/devices` renders two panels.
-
-The first is the machines: each device with its operating system, architecture, application version, when it was last seen, and every marketplace it holds with the account label and the status.
+`/settings` shows Browser sign-ins followed immediately by Machine sign-ins under Preferences.
+The browser panel lists Teachouse sign-ins; ending one does not revoke a native installation.
+The machine panel lists each installation's operating system, application version, recent contact and saved marketplace sign-ins.
 A sign-out control on each row performs both acts, because the two planes are separate and neither implies the other: it calls our revoke endpoint, and it ends the browser sign-in matched to that machine through better-auth's `revokeSession`.
 Both are started before either is awaited, so one failing cannot skip the other, and the result says which parts actually happened.
 
-The second panel is the browser sign-ins the join could not attribute to a machine, each with its own control to end it.
-The sign-in this browser is using is marked in whichever panel it lands in, so the seller can tell which control signs them out of the page they are reading.
+Signed-out installations remain under Earlier installations and sign-outs, including any outstanding marketplace-session wipe.
+The current browser sign-in and the current native installation are marked independently; the installation marker uses its persisted device ID, not its display name.
 
 The join itself is a heuristic and the page says so on every row.
 There is no shared key between the two planes: better-auth stores `ipAddress` and `userAgent`, and the registry stores a name and an operating system.
@@ -110,7 +111,12 @@ Turning the cache on is now a founder decision that has to answer for the latenc
 Nothing in the report type can carry a cookie, for the same reason `SessionStatus` cannot, and a test asserts that neither a cookie name nor a value appears in the report's `Debug` output.
 
 Amended 2026-09-04: the check-in also carries decision D10's entitlement.
-`POST /v1/devices/{device}/heartbeat` answers an optional `entitlement` field holding a signed token, minted only when the deployment has a signing key, the device is not revoked, and `DeviceRepo::entitled_marketplaces` returns a non-empty set — the work claim's own predicate asked as a question rather than embedded in a claim.
+`POST /v1/devices/{device}/heartbeat` answers an optional `entitlement` field holding a signed token, minted only when the deployment has a signing key, the device is not revoked, and `DeviceRepo::entitled_marketplaces` returns a non-empty set.
+That grant permits source reads; it does not admit marketplace writes.
+Migration 0081 adds an explicit `org_inventory_halt.write_only` scope: a write-only halt keeps the source in the read grant, while every halt still excludes its marketplace from both authoritative work-claim paths.
+Existing halts remain full halts by default, and raising a full halt escalates a write-only row.
+Changing a guard to write-only requires first excluding outstanding writers, including expired leased/running/verifying items and in-flight attempts in parked or stranded items.
+Keep the guard row present and condition the scope change on its expected identity and reason; changing the scope does not revoke a lease already held.
 `check_in` verifies it against the key compiled into the binary and installs the gate; a token that does not verify, and an answer carrying none, both close it, which is what keeps a lapsed plan to one revalidation window rather than one grace window.
 A check-in that could not reach the server leaves the gate alone, for the same reason it wipes nothing: an offline period is not a lapse.
 The field is optional and skipped when absent, and neither `HeartbeatView` nor the client's own reply type denies unknown fields, so the published 0.1.3 client sees bytes identical to what it saw before.

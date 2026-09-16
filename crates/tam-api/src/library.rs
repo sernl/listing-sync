@@ -17,7 +17,10 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use tam_storage::{DeviceLibraryRepo, HoldingReport, LibraryReport};
+use tam_storage::{
+    DeviceLibraryRepo, HoldingReport, LibraryAvailability, LibraryFilter, LibraryLinked,
+    LibraryReport, LIBRARY_LIMIT_DEFAULT, LIBRARY_LIMIT_MAX,
+};
 use tam_types::{ContentHash, OrgId, Timestamp};
 
 use crate::devices::{HeartbeatLibrary, ID_MAX_CHARS};
@@ -129,6 +132,14 @@ pub struct HolderView {
     pub online: bool,
 }
 
+/// One resource a file belongs to, as the browser links it: the identifier
+/// `/resources/{id}` takes, and the title it shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LibraryResourceView {
+    pub id: String,
+    pub title: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LibraryFileView {
     pub hash: String,
@@ -136,24 +147,101 @@ pub struct LibraryFileView {
     pub byte_len: u64,
     pub holders: Vec<HolderView>,
     pub wanted_by: Vec<String>,
+    /// Every live resource of this seller's that uses these bytes. Empty
+    /// where a machine keeps a file no resource uses, and where the only
+    /// resource that used it was deleted.
+    pub resources: Vec<LibraryResourceView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LibraryView {
     pub files: Vec<LibraryFileView>,
+    /// Files matching the filter, not files on the page: the pager needs
+    /// the figure the page was cut from.
+    pub total: u64,
+    pub offset: u32,
+    pub limit: u32,
+}
+
+/// The bound on the search box, so a filter cannot be a payload.
+const SEARCH_MAX_CHARS: usize = 128;
+
+/// What the file browser asked for. Every member is optional; the bare
+/// route answers the first page of everything, as it did before there was
+/// a browser to ask.
+#[derive(Debug, Deserialize)]
+pub struct LibraryParams {
+    pub q: Option<String>,
+    pub device: Option<String>,
+    pub availability: Option<String>,
+    pub linked: Option<String>,
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+}
+
+fn availability_of(raw: &str) -> Result<LibraryAvailability, APIError> {
+    match raw {
+        "online" => Ok(LibraryAvailability::Online),
+        "offline" => Ok(LibraryAvailability::Offline),
+        "missing" => Ok(LibraryAvailability::Missing),
+        _ => Err(validation(
+            "availability is one of online, offline or missing",
+        )),
+    }
+}
+
+fn linked_of(raw: &str) -> Result<LibraryLinked, APIError> {
+    match raw {
+        "linked" => Ok(LibraryLinked::Linked),
+        "unlinked" => Ok(LibraryLinked::Unlinked),
+        _ => Err(validation("linked is one of linked or unlinked")),
+    }
+}
+
+/// A search term the seller left blank is no search at all, which is what
+/// an empty box posts: the alternative is a filter matching every file by
+/// the empty string and a total nobody can account for.
+fn search_of(raw: Option<&String>) -> Result<Option<&str>, APIError> {
+    let Some(term) = raw.map(|term| term.trim()).filter(|term| !term.is_empty()) else {
+        return Ok(None);
+    };
+    if term.chars().count() > SEARCH_MAX_CHARS {
+        return Err(validation("a search is at most 128 characters"));
+    }
+    Ok(Some(term))
 }
 
 pub(crate) async fn list_library(
     State(state): State<AppState>,
     context: OrgContext,
+    Query(params): Query<LibraryParams>,
 ) -> Result<Json<LibraryView>, APIError> {
     let now = (state.wall)();
-    let files = DeviceLibraryRepo::new(state.pool.clone())
-        .files(context.org)
+    let limit = params.limit.unwrap_or(LIBRARY_LIMIT_DEFAULT);
+    if limit == 0 || limit > LIBRARY_LIMIT_MAX {
+        return Err(validation("a page holds between 1 and 100 files"));
+    }
+    let device = params.device.as_deref().map(device_of).transpose()?;
+    let filter = LibraryFilter {
+        search: search_of(params.q.as_ref())?,
+        device,
+        availability: params
+            .availability
+            .as_deref()
+            .map(availability_of)
+            .transpose()?,
+        linked: params.linked.as_deref().map(linked_of).transpose()?,
+        offset: params.offset.unwrap_or(0),
+        limit,
+        online_after: Timestamp(now.0.saturating_sub(ONLINE_WINDOW_MS)),
+    };
+    let page = DeviceLibraryRepo::new(state.pool.clone())
+        .page(context.org, &filter)
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
     Ok(Json(LibraryView {
-        files: files
+        files: page
+            .files
             .into_iter()
             .map(|file| LibraryFileView {
                 hash: hex_of(file.hash),
@@ -169,8 +257,19 @@ pub(crate) async fn list_library(
                     })
                     .collect(),
                 wanted_by: file.wanted_by,
+                resources: file
+                    .resources
+                    .into_iter()
+                    .map(|resource| LibraryResourceView {
+                        id: resource.id.to_hyphenated(),
+                        title: resource.title,
+                    })
+                    .collect(),
             })
             .collect(),
+        total: page.total,
+        offset: page.offset,
+        limit: page.limit,
     }))
 }
 
@@ -198,11 +297,9 @@ pub(crate) async fn want(
     let hash = hash_of(&body.hash)?;
     let repo = DeviceLibraryRepo::new(state.pool.clone());
     let held = repo
-        .files(context.org)
+        .held_elsewhere(context.org, device, hash)
         .await
-        .map_err(|error| state.internal(&error.to_string()))?
-        .into_iter()
-        .any(|file| file.hash == hash && file.holders.iter().any(|holder| holder.device != device));
+        .map_err(|error| state.internal(&error.to_string()))?;
     if !held {
         return Err(missing("no other machine of yours holds that file"));
     }

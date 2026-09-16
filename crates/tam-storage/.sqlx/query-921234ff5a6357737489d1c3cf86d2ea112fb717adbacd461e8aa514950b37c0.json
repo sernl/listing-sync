@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT lease_epoch = $3 AND state IN ('leased', 'running', 'verifying') AS \"usable!\" FROM job_item WHERE org_id = $1 AND id = $2 FOR SHARE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "usable!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "921234ff5a6357737489d1c3cf86d2ea112fb717adbacd461e8aa514950b37c0"
+}

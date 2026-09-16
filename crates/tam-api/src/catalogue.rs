@@ -2307,7 +2307,7 @@ pub(crate) async fn delete_product(
             operation,
         };
         crate::consent::require_grant(&state, context.org, inventory.marketplace()).await?;
-        let created = jobs
+        let minted = jobs
             .create_with_request_key(
                 context.org,
                 // Derived rather than taken from a header: a repeated delete
@@ -2319,8 +2319,10 @@ pub(crate) async fn delete_product(
                         &format!("{DELETE_LEG}:{inventory:?}"),
                     ),
                     // A delete is the seller acting on one listing, not a run
-                    // a `sync_request` asked for.
+                    // a `sync_request` asked for, and not a publication of an
+                    // import's products either.
                     run: None,
+                    import_run: None,
                 },
                 &NewJob {
                     job,
@@ -2334,6 +2336,13 @@ pub(crate) async fn delete_product(
             )
             .await
             .map_err(|error| storage_fault(&state, &error))?;
+        // This mint names no workflow, so the refusal arm is unreachable: a
+        // job nothing owns has nothing to be stopped by.
+        let tam_storage::Minted::Job(created) = minted else {
+            return Err(state.internal(
+                "a removal job names no workflow, so its mint cannot be refused by one",
+            ));
+        };
         removals.push(RemovalView {
             inventory,
             job: created.job,

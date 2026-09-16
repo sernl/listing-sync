@@ -72,7 +72,9 @@ pub use device::{
     DeviceSessionReport, DeviceSessionStatus,
 };
 pub use device_library::{
-    DeviceLibraryRepo, Holder, HoldingReport, LibraryFile, LibraryReport, Peer,
+    DeviceLibraryRepo, Holder, HoldingReport, LibraryAvailability, LibraryFile, LibraryFilter,
+    LibraryLinked, LibraryPage, LibraryReport, LibraryResource, Peer, LIBRARY_LIMIT_DEFAULT,
+    LIBRARY_LIMIT_MAX,
 };
 pub use duplicates::{
     answered_pairs, decide_verdict, ordered as ordered_pair, pair_verdict, raise_verdict,
@@ -105,12 +107,13 @@ pub use import_runs::{
     imported_product_for, item_of_product, lock_org_catalogue, merged_into, note_contact,
     parked_for, record_failed, record_imported, record_read, record_skipped, record_verdict,
     reopen_skipped, reserved_product, reserved_state, select_items, set_run_state, store_receipt,
-    ClaimOutcome, FenceOutcome, ImportLease, ImportReasonCode, ImportRunHead, ImportRunItemRecord,
-    ImportRunRecord, ImportRunRepo, ImportStage, ItemAddress, ItemOrder, ItemPage, ItemPageFilter,
-    ListedRow, NewImportRun, ProgressReport, ReadItem, ReceiptAck, ReceiptOutcome, RunCounts,
-    RunExecution, RunGuard, RunHistoryFilter, RunHistoryPage, RunItemState, RunKind, RunOpening,
-    RunState, Selection, SelectionOutcome, StartKeyBinding, StopOutcome, StoredReceipt,
-    ITEMS_LISTED_MAX, LEASE_SECS, MANUAL_ACTIVATION_SECS, RENEWAL_SECS, RUNS_LISTED_MAX,
+    BatchIdentity, BatchRunOpening, ClaimOutcome, FenceOutcome, ImportLease, ImportReasonCode,
+    ImportRunHead, ImportRunItemRecord, ImportRunRecord, ImportRunRepo, ImportStage, ItemAddress,
+    ItemOrder, ItemPage, ItemPageFilter, ListedRow, NewImportRun, ProgressReport, ReadItem,
+    ReceiptAck, ReceiptOutcome, RunCounts, RunExecution, RunGuard, RunHistoryFilter,
+    RunHistoryPage, RunItemState, RunKind, RunOpening, RunState, Selection, SelectionOutcome,
+    StartKeyBinding, StopOutcome, StoredReceipt, ITEMS_LISTED_MAX, LEASE_SECS,
+    MANUAL_ACTIVATION_SECS, RENEWAL_SECS, RUNS_LISTED_MAX,
 };
 pub use job_reads::{
     intent_digest, payload_digest, EventRow, ItemCounts, ItemRow, ItemStateKind, ItemsPageParams,
@@ -119,10 +122,11 @@ pub use job_reads::{
 pub use jobs::{
     append_event, append_event_asserted, revive_by_gap, revive_counterparts, revive_on,
     settle_if_complete, AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant,
-    Charged, ClaimPolicy, CreatedJob, DeviceClaim, DeviceRef, EventScope, HaltCause, HaltRepo,
-    InventoryFailureWindow, InventoryHaltRow, ItemVerdict, JobOrigin, JobRepo, LandingEffect,
-    LeaseRef, LeaseRepo, LeasedItem, MessageRef, NewAttempt, NewJob, NewJobItem, NewOutboxMessage,
-    OutboxMessage, OutboxRepo, RateBudgetRepo, RenewedLease, Revived, WriteAttemptRepo, ALL_GATES,
+    Charged, ClaimPolicy, CreatedJob, DeletionStatus, DeviceClaim, DeviceRef, EventScope,
+    HaltCause, HaltRepo, InventoryFailureWindow, InventoryHaltRow, ItemVerdict, JobOrigin,
+    JobOwner, JobRepo, LandingEffect, LeaseRef, LeaseRepo, LeasedItem, MessageRef, Minted,
+    NewAttempt, NewJob, NewJobItem, NewOutboxMessage, OutboxMessage, OutboxRepo, RateBudgetRepo,
+    RenewedLease, Revived, WorkflowKind, WriteAttemptRepo, ALL_DELETION_STATUSES, ALL_GATES,
     AWAITING_COUNTERPART, AWAITING_MARKETPLACE_ANSWER, AWAITING_SELLER_SIGNIN, ELECTION,
     REAUTH_REQUIRED, REVIVABLE_GATES,
 };
@@ -134,8 +138,9 @@ pub use lowering::{
     lower, lower_head, requires_bound_on, uncaptured_source, uncaptured_transition, LoweringRefusal,
 };
 pub use mapping::{
-    bind_listing, bound_product_for, claimed_product_for, insert_mapping, BoundClaim, BoundListing,
-    LossScope, MappingAdd, MappingHead, MappingRecord, MappingRepo, PastedBind, RecordedLoss,
+    bind_listing, bound_product_for, claimed_product_for, insert_mapping, record_mapping_losses,
+    BoundClaim, BoundListing, LossScope, MappingAdd, MappingHead, MappingRecord, MappingRepo,
+    PastedBind, RecordedLoss,
 };
 pub use marketplace_requests::{
     MarketplaceRequestBackofficeRepo, MarketplaceRequestRecord, MarketplaceRequestRepo,
@@ -179,13 +184,14 @@ pub use elections::{
 };
 pub use sync_requests::{
     job_request_key, CanonicalResource, Canonicalised, Completion, Disposition, Enqueued, Mint,
-    NewMigration, NewSyncRequest, Observed, ResourceCoverage, SyncCoverageTotals, SyncIntent,
-    SyncRequestDetail, SyncRequestHead, SyncRequestPage, SyncRequestRecord, SyncRequestRepo,
-    SyncRequestSummary, SyncResourceRecord, SyncResourceStateCount, CREATE_LEG, IMPORT_LEG,
-    REMOVE_LEG,
+    NewMigration, NewSyncRequest, Observed, ResourceAdmission, ResourceCoverage,
+    SyncCoverageTotals, SyncIntent, SyncRequestDetail, SyncRequestHead, SyncRequestPage,
+    SyncRequestRecord, SyncRequestRepo, SyncRequestSummary, SyncResourceRecord,
+    SyncResourceStateCount, CREATE_LEG, IMPORT_LEG, REMOVE_LEG,
 };
 pub use taxonomy::{
-    DrainStats, NoCounterpartReport, OpenItem, RaiseReport, RaiseScope, SeedReport, TaxonomyRepo,
+    raise_taxonomy_gaps, DrainStats, NoCounterpartReport, OpenItem, RaiseReport, RaiseScope,
+    SeedReport, TaxonomyRepo,
 };
 
 /// Whether a write leaves a nullable field alone, or gives it a new value.

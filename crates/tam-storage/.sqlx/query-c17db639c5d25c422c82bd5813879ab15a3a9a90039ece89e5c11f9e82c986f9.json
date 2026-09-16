@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n                   SELECT 1 FROM device_library_holding h\n                     JOIN device d ON d.org_id = h.org_id AND d.id = h.device_id\n                    WHERE h.org_id = $1 AND h.hash = $2 AND h.device_id <> $3\n                      AND d.revoked_at IS NULL\n               ) AS \"held!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "held!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bytea",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c17db639c5d25c422c82bd5813879ab15a3a9a90039ece89e5c11f9e82c986f9"
+}

@@ -9,29 +9,30 @@
 		open,
 		rows,
 		onClose,
-		onDeleted
+		onDeleted,
+		onPartial
 	}: {
 		open: boolean;
 		/** The selected rows, in the order the table shows them. */
 		rows: InventoryRow[];
 		onClose: () => void;
 		onDeleted: (deleted: number) => void;
+		onPartial: (deleted: number) => void;
 	} = $props();
 
 	let element = $state<HTMLDialogElement | null>(null);
-	/** Undefaulted on purpose. The single-item dialog defaults to removing
-	 *  everywhere, and defaulting the same way over a selection would fire a
-	 *  removal per bound mapping per item from one click; defaulting the other
-	 *  way would abandon live listings silently. Neither is a choice this
-	 *  console makes for the seller, so the confirm stays disabled until they
-	 *  make it. */
-	let policy = $state<'remove' | 'leave' | null>(null);
+	let removeFrom = $state<Set<InventoryId>>(new Set());
+	let leaveLive = $state(false);
 	let sending = $state(false);
 	let refusal = $state<string | null>(null);
 	let done = $state(0);
 
 	$effect(() => {
 		if (open && element !== null && !element.open) {
+			removeFrom = new Set();
+			leaveLive = false;
+			refusal = null;
+			done = 0;
 			element.showModal();
 		} else if (!open) {
 			element?.close();
@@ -40,7 +41,8 @@
 
 	$effect(() => {
 		if (!open) {
-			policy = null;
+			removeFrom = new Set();
+			leaveLive = false;
 			refusal = null;
 			done = 0;
 		}
@@ -60,9 +62,24 @@
 	);
 	const withListings = $derived(rows.filter((row) => boundOf(row).length > 0).length);
 	const platforms = $derived([...new Set(standing.map((entry) => entry.inventory))]);
+	const leftStanding = $derived(platforms.filter((inventory) => !removeFrom.has(inventory)));
+	const blocked = $derived(leftStanding.length > 0 && !leaveLive);
+	const removalCount = $derived(
+		standing.filter((entry) => removeFrom.has(entry.inventory)).length
+	);
+
+	function toggle(inventory: InventoryId, on: boolean) {
+		const next = new Set(removeFrom);
+		if (on) {
+			next.add(inventory);
+		} else {
+			next.delete(inventory);
+		}
+		removeFrom = next;
+	}
 
 	async function run() {
-		if (policy === null) {
+		if (sending || blocked || rows.length === 0 || refusal !== null) {
 			return;
 		}
 		sending = true;
@@ -73,10 +90,10 @@
 			// belongs to, and every item before it is already gone rather than
 			// left in an unknown state by a batch that half-succeeded.
 			for (const row of rows) {
-				const removeFrom = policy === 'remove' ? boundOf(row) : [];
+				const selected = boundOf(row).filter((inventory) => removeFrom.has(inventory));
 				await api.deleteProduct(row.product.id, {
-					remove_from: removeFrom,
-					leave_live: policy === 'leave'
+					remove_from: selected,
+					leave_live: leaveLive
 				});
 				deleted += 1;
 				done = deleted;
@@ -85,33 +102,40 @@
 		} catch (failure) {
 			refusal =
 				failure instanceof ApiFailure
-					? `${failure.message} ${deleted} of ${rows.length} were deleted before this.`
-					: `The delete stopped after ${deleted} of ${rows.length}. The rest are untouched.`;
-			if (deleted > 0) {
-				onDeleted(deleted);
-			}
+					? `${failure.message} Confirmed deletions: ${deleted} of ${rows.length}.`
+					: `Confirmed deletions: ${deleted} of ${rows.length}. Check Resources and Sync before retrying the last resource; its result could not be confirmed.`;
+			onPartial(deleted);
 		} finally {
 			sending = false;
 		}
 	}
 </script>
 
-<dialog bind:this={element} aria-labelledby="bulk-delete-title" onclose={onClose}>
+<dialog
+	bind:this={element}
+	aria-labelledby="bulk-delete-title"
+	onclose={onClose}
+	oncancel={(event) => {
+		if (sending) event.preventDefault();
+	}}
+>
 	<div class="dialog-body">
 		<h2 id="bulk-delete-title">
-			Delete {rows.length}
-			{rows.length === 1 ? 'item' : 'items'}
+			{#if refusal !== null}
+				Resource deletion stopped
+			{:else}
+				Delete {rows.length} {rows.length === 1 ? 'resource' : 'resources'}
+			{/if}
 		</h2>
 		<p>
-			This removes {rows.length === 1 ? 'it' : 'them'} from your Resources here, and it cannot be
-			undone. What happens to the listings already on a marketplace is the choice below, and there
-			is no default.
+			This removes the selected resources from Teachouse. Removing their marketplace listings
+			is a separate choice. No marketplace is selected automatically.
 		</p>
 
+		{#if refusal === null}
 		{#if withListings === 0}
 			<p class="foot-note">
-				None of the selected {rows.length === 1 ? 'item is' : 'items are'} on a marketplace yet, so
-				there is nothing standing to decide about. Either choice does the same thing here.
+				None of the selected resources has a marketplace listing to remove.
 			</p>
 		{:else}
 			<p class="foot-note">
@@ -123,50 +147,58 @@
 			</p>
 		{/if}
 
-		<div class="inline-choices">
-			<label>
-				<input
-					type="radio"
-					name="bulk-delete-policy"
-					checked={policy === 'leave'}
-					disabled={sending}
-					onchange={() => (policy = 'leave')}
-				/>
-				Leave the listings standing
-			</label>
-			<label>
-				<input
-					type="radio"
-					name="bulk-delete-policy"
-					checked={policy === 'remove'}
-					disabled={sending}
-					onchange={() => (policy = 'remove')}
-				/>
-				Remove them from every marketplace too
-			</label>
-		</div>
-		<p class="foot-note">
-			Leaving them standing is what a reselling tool does, and it means those listings keep selling
-			with nothing here tracking them. Removing them enqueues one removal per listing on the same
-			ledger every other write travels, so {standing.length}
-			{standing.length === 1 ? 'write' : 'writes'} would start from this one click, and work for Tes
-			and TPT waits while your own device is off.
-		</p>
+		{#if platforms.length > 0}
+			<div class="inline-choices">
+				{#each platforms as inventory (inventory)}
+					<label>
+						<input
+							type="checkbox"
+							checked={removeFrom.has(inventory)}
+							disabled={sending}
+							onchange={(event) => toggle(inventory, event.currentTarget.checked)}
+						/>
+						Also remove from {platformTitle(inventory)}
+					</label>
+				{/each}
+			</div>
+			{#if leftStanding.length > 0}
+				<div class="notice">
+					Listings on {leftStanding.map(platformTitle).join(', ')} will remain unchanged.
+					Teachouse will no longer track them after these resources are deleted.
+				</div>
+				<div class="inline-choices">
+					<label>
+						<input type="checkbox" bind:checked={leaveLive} disabled={sending} />
+						Leave unselected marketplace listings unchanged
+					</label>
+				</div>
+			{/if}
+			<p class="foot-note">
+				{removalCount} marketplace {removalCount === 1 ? 'removal' : 'removals'} will be
+				queued. Check Sync for their results; deleting the Teachouse resources does not mean
+				those removals have finished.
+			</p>
+		{/if}
+		{/if}
 
 		{#if refusal !== null}
 			<p class="refusal">{refusal}</p>
 		{/if}
 
 		<div class="actions">
-			<button class="btn" type="button" onclick={onClose} disabled={sending}>Keep them</button>
-			<button
-				class="btn danger"
-				type="button"
-				onclick={run}
-				disabled={sending || policy === null || rows.length === 0}
+			<button class="btn" type="button" onclick={onClose} disabled={sending}
+				>{refusal !== null ? 'Close' : 'Keep them'}</button
 			>
-				{sending ? `Deleting ${done} of ${rows.length}…` : `Delete ${rows.length}`}
-			</button>
+			{#if refusal === null}
+				<button
+					class="btn danger"
+					type="button"
+					onclick={run}
+					disabled={sending || blocked || rows.length === 0}
+				>
+					{sending ? `Deleting ${done} of ${rows.length}…` : `Delete ${rows.length}`}
+				</button>
+			{/if}
 		</div>
 	</div>
 </dialog>

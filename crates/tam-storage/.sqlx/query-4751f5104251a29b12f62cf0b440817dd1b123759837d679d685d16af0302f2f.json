@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE job_item ji SET state = 'queued', blocked_on = NULL, park_expires_at = NULL WHERE ji.org_id = $1 AND ji.state = 'parked_live' AND ji.blocked_on = $2 AND NOT EXISTS (SELECT 1 FROM job j WHERE j.org_id = ji.org_id AND j.id = ji.job_id AND j.deletion_requested_at IS NOT NULL) RETURNING ji.org_id, ji.job_id, ji.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "org_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "job_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "4751f5104251a29b12f62cf0b440817dd1b123759837d679d685d16af0302f2f"
+}
