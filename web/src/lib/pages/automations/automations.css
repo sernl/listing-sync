@@ -1130,3 +1130,226 @@
 		white-space: normal;
 	}
 }
+
+/* The two rule pages: Pricing and Mappings.
+
+   One column rather than the two-column `.auto-body` the other Automations
+   pages use: neither page has a marketplace list beside it — the direction is
+   a pair of selects at the top, because a rule is about a pair and not about
+   one shop. */
+
+.rule-page {
+	display: grid;
+	gap: 16px;
+	min-width: 0;
+}
+
+.rule-page .set-foot {
+	flex-wrap: wrap;
+}
+
+/* A saved rule's row. The catalogue's own row rhythm, with the actions in a
+   column of their own so three controls cannot overlap the meta line at any
+   width. */
+
+.rule-row {
+	align-items: start;
+}
+
+.rule-row .who .meta + .meta {
+	margin-top: 2px;
+}
+
+.rule-acts {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	justify-content: flex-end;
+}
+
+.rule-row .mark {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+
+/* A heading inside the editor card, dividing what a rule matches from what it
+   proposes. Smaller than the panel's own title, because it names a part of one
+   form rather than a second card. */
+
+.rule-heading {
+	margin: 18px 0 0;
+	font-size: 0.95rem;
+	font-weight: 600;
+	color: var(--text);
+}
+
+/* A value list: as many columns as fit, so a marketplace with thirty resource
+   types is a block to scan rather than a thirty-row column. */
+
+.rule-values {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+	gap: 6px 14px;
+	margin-top: 6px;
+}
+
+.rule-value {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	font-size: 0.9rem;
+	line-height: 1.35;
+}
+
+/* The three automatic scopes carry a sentence each, so they are one per row
+   rather than in the grid above: the sentence is what is being chosen. */
+
+.rule-uses {
+	grid-template-columns: minmax(0, 1fr);
+}
+
+.rule-use .meta {
+	display: block;
+	color: var(--muted);
+	font-size: 0.85rem;
+}
+
+/* One attribute condition, boxed so it reads as a unit that can be removed. */
+
+.rule-cond {
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	padding: 12px;
+	margin-top: 10px;
+}
+
+/* A preset. Bordered like a condition and never filled like a chosen option:
+   it is a suggestion, and a card that looked selected would be the one thing
+   this screen must not imply. */
+
+.rule-preset {
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	padding: 14px;
+	margin-top: 12px;
+}
+
+.rule-preset-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	flex-wrap: wrap;
+}
+
+.rule-notice {
+	color: var(--muted);
+	font-size: 0.88rem;
+	margin-top: 6px;
+}
+
+/* A preview row: the tick, the title, the three fields, the two pills and the
+   provenance. A grid rather than a flex row, so the source, current and
+   proposed values line up down the list and can be compared without reading
+   each title first. */
+
+.rule-plan-row {
+	display: grid;
+	grid-template-columns: 28px minmax(0, 1.2fr) minmax(0, 2fr) auto;
+	grid-template-areas: 'pick title fields mark' '. why why why';
+	align-items: start;
+	gap: 8px 12px;
+}
+
+.rule-plan-row .pick {
+	grid-area: pick;
+}
+
+.rule-plan-row .plan-title {
+	grid-area: title;
+}
+
+.rule-plan-row .prop-grid {
+	grid-area: fields;
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 10px;
+}
+
+.rule-plan-row .mark {
+	grid-area: mark;
+	display: flex;
+	gap: 6px;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+}
+
+.rule-plan-row .plan-why {
+	grid-area: why;
+}
+
+.prop-field {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.prop-label {
+	color: var(--muted);
+	font-size: 0.78rem;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+
+.prop-value {
+	font-variant-numeric: tabular-nums;
+	overflow-wrap: anywhere;
+}
+
+/* A blocker, in the refusal colour the rest of the console uses for one. */
+
+.rule-blocker {
+	color: var(--danger, var(--text));
+}
+
+/* Tablet: the three fields stay side by side — comparing them is the whole
+   point of the row — but the pills move under the title so neither column is
+   squeezed to a word a line. */
+
+@media (max-width: 900px) {
+	.rule-plan-row {
+		grid-template-columns: 28px minmax(0, 1fr);
+		grid-template-areas: 'pick title' '. mark' '. fields' '. why';
+	}
+
+	.rule-plan-row .mark {
+		justify-content: flex-start;
+	}
+}
+
+@media (max-width: 620px) {
+	.rule-page .set-foot {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.rule-page .set-foot > :is(.btn, .cta) {
+		width: 100%;
+		min-height: 44px;
+	}
+
+	.rule-plan-row .prop-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.rule-acts {
+		justify-content: flex-start;
+	}
+
+	.rule-values {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}

@@ -286,10 +286,7 @@ async fn send(
             // writes when a seller adds a marketplace by hand, so a tick that
             // then fails leaves them the mapping they would have got by
             // ticking it rather than an artefact of a half-run drop.
-            let price = prices
-                .iter()
-                .find(|(product, _)| *product == member.product)
-                .map_or(PriceIntent::Free, |(_, price)| *price);
+            let price = minted_price(state, org, member.product, inventory, &prices).await?;
             let id = MappingId(fresh_uuid());
             let minted = unbound_mapping(org, member.product, inventory, id, price);
             crate::migrations::mint(state, &mappings, &minted, inventory, now).await?
@@ -710,10 +707,7 @@ async fn publish(
             let mapping = if let Some(head) = existing {
                 head.id
             } else {
-                let price = prices
-                    .iter()
-                    .find(|(held, _)| held == product)
-                    .map_or(PriceIntent::Free, |(_, price)| *price);
+                let price = minted_price(state, org, *product, target, &prices).await?;
                 let id = MappingId(fresh_uuid());
                 let minted = unbound_mapping(org, *product, target, id, price);
                 crate::migrations::mint(state, &mappings, &minted, target, now).await?
@@ -838,6 +832,11 @@ async fn rule_template(
 /// `price_rule` is the product's own price at mint time, which is what
 /// `add_mapping` writes, and reading it per member would be a statement per
 /// resource per marketplace.
+///
+/// The canonical figure only. A resource the seller has approved a target
+/// price for is resolved through [`minted_price`], which is where the target
+/// is known: this read has no target, and the same canonical price mints
+/// mappings on two marketplaces that may hold two different approved prices.
 async fn prices_of(
     state: &AppState,
     org: OrgId,
@@ -849,6 +848,37 @@ async fn prices_of(
         .into_iter()
         .map(|summary| (summary.id, summary.price))
         .collect())
+}
+
+/// The price a newly minted mapping records for one resource on one target.
+///
+/// The seller's approved target price wherever they have approved one, and
+/// the canonical price otherwise. An unattended pass writes no approvals and
+/// invents no conversion: where nothing is approved this is exactly the
+/// figure `add_mapping` would have written, and the publish that follows
+/// meets the ordinary currency gate.
+async fn minted_price(
+    state: &AppState,
+    org: OrgId,
+    product: ProductId,
+    target: InventoryId,
+    canonical: &[(ProductId, PriceIntent)],
+) -> Result<PriceIntent, APIError> {
+    if let Some(approved) = tam_storage::rule_capture::approved_price(
+        &state.pool,
+        org,
+        product,
+        tam_storage::rule_capture::PricingScope::CrossList(target),
+    )
+    .await
+    .map_err(|error| storage_fault(state, &error))?
+    {
+        return Ok(approved);
+    }
+    Ok(canonical
+        .iter()
+        .find(|(held, _)| *held == product)
+        .map_or(PriceIntent::Free, |(_, price)| *price))
 }
 
 fn fresh_uuid() -> Uuid {

@@ -407,6 +407,484 @@ async fn a_projectable_mapping_seeds_the_machine(pool: PgPool) {
     assert_eq!(seed.fields.files, vec![FileId(Uuid([0x21; 16]))]);
 }
 
+fn automatic_rule(
+    source: InventoryId,
+    action: tam_domain::seller_rules::RuleAction,
+) -> tam_domain::seller_rules::SellerRuleDefinition {
+    tam_domain::seller_rules::SellerRuleDefinition {
+        title: "Seller's automatic target rule".to_owned(),
+        description: "Use this explicit choice when cross-listing.".to_owned(),
+        enabled: true,
+        source,
+        target: InventoryId::Tes,
+        auto_apply: vec![tam_domain::seller_rules::RuleUse::CrossList],
+        conditions: tam_domain::seller_rules::RuleConditions::default(),
+        action,
+    }
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "a broken integration fixture must stop the scenario"
+)]
+async fn pricing_seller(pool: &PgPool) -> UserId {
+    let seller = UserId(Uuid([0x5E; 16]));
+    tam_storage::SessionRepo::new(pool.clone())
+        .create_user(ORG, seller, "pricing@example.test", NOW)
+        .await
+        .expect("the rule author exists");
+    seller
+}
+
+async fn enqueue_pricing_item(pool: &PgPool) -> Result<(), tam_storage::StorageError> {
+    let item = lease();
+    tam_storage::JobRepo::new(pool.clone())
+        .enqueue(
+            ORG,
+            &tam_storage::NewJob {
+                job: item.job,
+                inventory: item.inventory,
+                stamp: Stamp {
+                    at: NOW,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
+            },
+            &[tam_storage::NewJobItem {
+                item: item.item,
+                mapping: item.mapping,
+                idempotency_key: item.idempotency_key,
+                operation: item.operation,
+                requires_bound_on: None,
+            }],
+        )
+        .await
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn queued_rule_price_and_licence_survive_edits(pool: PgPool) {
+    use tam_domain::seller_rules::RuleAction;
+    use tam_storage::seller_rules::{RuleDelete, RuleEdit, SellerRuleRepo};
+    use tam_types::{Currency, Money, Rounding};
+
+    provision_undecided(
+        &pool,
+        true,
+        tam_domain::Binding::Unbound,
+        tam_marketplace::RemoteLifecycle::Absent,
+    )
+    .await;
+    let seller = pricing_seller(&pool).await;
+    let products = ProductRepo::new(pool.clone());
+    products
+        .update(
+            ORG,
+            PRODUCT,
+            &tam_storage::ProductEdit {
+                price: Some(PriceIntent::Paid(
+                    Money::new(300, Currency::Usd).expect("source amount"),
+                )),
+                ..Default::default()
+            },
+            NOW,
+        )
+        .await
+        .expect("source price is stored");
+    let rules = SellerRuleRepo::new(pool.clone());
+    let mut pricing = automatic_rule(
+        InventoryId::Tpt,
+        RuleAction::Pricing {
+            rate: "0.75".to_owned(),
+            rounding: Rounding::Nearest,
+            reference: None,
+        },
+    );
+    let priced = rules
+        .create(ORG, seller, &pricing, NOW)
+        .await
+        .expect("price rule saves");
+    let licensed = rules
+        .create(
+            ORG,
+            seller,
+            &automatic_rule(
+                InventoryId::Tpt,
+                RuleAction::Mapping {
+                    licence: Some("TES-PAID".to_owned()),
+                    resource_type: Some("99009".to_owned()),
+                },
+            ),
+            NOW,
+        )
+        .await
+        .expect("licence rule saves");
+    enqueue_pricing_item(&pool)
+        .await
+        .expect("the approved operation enqueues");
+
+    pricing.action = RuleAction::Pricing {
+        rate: "0.50".to_owned(),
+        rounding: Rounding::Nearest,
+        reference: None,
+    };
+    let changed = rules
+        .update(
+            ORG,
+            &RuleEdit {
+                id: uuid::Uuid::from_bytes(priced.id.0),
+                revision: priced.revision,
+                definition: &pricing,
+                author: seller,
+                at: NOW,
+            },
+        )
+        .await
+        .expect("future pricing changes");
+    changed.expect("the rule edit took effect");
+    let deleted = rules
+        .delete(
+            ORG,
+            uuid::Uuid::from_bytes(licensed.id.0),
+            licensed.revision,
+        )
+        .await
+        .expect("future licence rule deletes");
+    assert!(
+        matches!(deleted, RuleDelete::Deleted),
+        "the licence rule really is removed"
+    );
+    products
+        .update(
+            ORG,
+            PRODUCT,
+            &tam_storage::ProductEdit {
+                price: Some(PriceIntent::Paid(
+                    Money::new(400, Currency::Usd).expect("new source amount"),
+                )),
+                ..Default::default()
+            },
+            NOW,
+        )
+        .await
+        .expect("source price changes after enqueue");
+
+    let outcome = prepare_item(&pool, &lease(), NOW)
+        .await
+        .expect("queued projection runs");
+    let ItemPreparation::Ready {
+        projected: Some(projected),
+        ..
+    } = outcome
+    else {
+        panic!("the previously approved money and grant must still project");
+    };
+    assert_eq!(
+        projected.price,
+        PriceIntent::Paid(Money::new(225, Currency::Gbp).expect("literal target amount")),
+        "queue execution uses £2.25, not a later rule or source price",
+    );
+    let adapter = TesAdapter::new(
+        InventoryId::Tes,
+        CassetteTransport::new(Cassette {
+            interactions: vec![],
+        }),
+        NoFiles,
+    )
+    .expect("a TES adapter");
+    let prepared = preparation(&lease(), ItemOperation::Create, Some(projected.clone()));
+    let seed = seed_from_projection(&adapter, &prepared, &projected).expect("real TES rendering");
+    assert_eq!(
+        entry(&seed, FieldKey::Price),
+        "TES-PAID:225",
+        "the native write carries the frozen amount and licence"
+    );
+    let taxonomy: serde_json::Value = serde_json::from_str(&entry(&seed, FieldKey::Taxonomy))
+        .expect("the native taxonomy payload parses");
+    assert_eq!(
+        taxonomy["mainType"], 99009,
+        "the frozen resource type reaches the native TES field"
+    );
+    let source = products
+        .get(ORG, PRODUCT)
+        .await
+        .expect("source reads")
+        .expect("source remains");
+    assert_eq!(
+        source.product.price,
+        PriceIntent::Paid(Money::new(400, Currency::Usd).expect("source amount")),
+        "target execution never rewrites source money"
+    );
+    assert_eq!(
+        source.product.rights,
+        tam_domain::RightsDeclaration::Unstated,
+        "the target grant is not a source rights declaration"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn conflicting_automatic_licences_refuse_even_with_legacy_election(pool: PgPool) {
+    provision(&pool, true, tam_domain::Binding::Unbound).await;
+    let seller = pricing_seller(&pool).await;
+    let rules = tam_storage::seller_rules::SellerRuleRepo::new(pool.clone());
+    for licence in ["CC-BY", "CC-BY-ND"] {
+        rules
+            .create(
+                ORG,
+                seller,
+                &automatic_rule(
+                    InventoryId::Tpt,
+                    tam_domain::seller_rules::RuleAction::Mapping {
+                        licence: Some(licence.to_owned()),
+                        resource_type: None,
+                    },
+                ),
+                NOW,
+            )
+            .await
+            .expect("the conflicting rule saves");
+    }
+    let refused = enqueue_pricing_item(&pool).await;
+    assert!(
+        matches!(refused, Err(tam_storage::StorageError::SellerRuleBlocked { product: PRODUCT, .. })),
+        "a Free resource cannot evade a rule conflict through its old CC-BY-SA election: {refused:?}",
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn only_real_source_rules_determine_automatic_licence(pool: PgPool) {
+    provision_undecided(
+        &pool,
+        true,
+        tam_domain::Binding::Unbound,
+        tam_marketplace::RemoteLifecycle::Absent,
+    )
+    .await;
+    let seller = pricing_seller(&pool).await;
+    let rules = tam_storage::seller_rules::SellerRuleRepo::new(pool.clone());
+    for (source, licence) in [(InventoryId::Etsy, "CC-BY"), (InventoryId::Tpt, "CC-BY-ND")] {
+        rules
+            .create(
+                ORG,
+                seller,
+                &automatic_rule(
+                    source,
+                    tam_domain::seller_rules::RuleAction::Mapping {
+                        licence: Some(licence.to_owned()),
+                        resource_type: None,
+                    },
+                ),
+                NOW,
+            )
+            .await
+            .expect("a directional rule saves");
+    }
+    enqueue_pricing_item(&pool)
+        .await
+        .expect("only the actual TPT source applies");
+    let outcome = prepare_item(&pool, &lease(), NOW)
+        .await
+        .expect("projection runs");
+    let ItemPreparation::Ready {
+        projected: Some(projected),
+        ..
+    } = outcome
+    else {
+        panic!("the actual source's licence must project");
+    };
+    let adapter = TesAdapter::new(
+        InventoryId::Tes,
+        CassetteTransport::new(Cassette {
+            interactions: vec![],
+        }),
+        NoFiles,
+    )
+    .expect("a TES adapter");
+    let prepared = preparation(&lease(), ItemOperation::Create, Some(projected.clone()));
+    let seed = seed_from_projection(&adapter, &prepared, &projected).expect("real TES rendering");
+    assert_eq!(
+        entry(&seed, FieldKey::Price),
+        "CC-BY-ND",
+        "an unrelated Etsy rule must not grant CC-BY"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn confirmations_freeze_known_outputs_and_unknown_source_policies(pool: PgPool) {
+    use tam_domain::seller_rules::{RuleAction, RuleUse};
+    use tam_storage::seller_rules::{RuleEdit, SellerRuleRepo};
+    use tam_storage::sync_requests::{
+        CanonicalResource, Disposition, NewMigration, NewSyncRequest, SyncIntent, SyncRequestRepo,
+    };
+    use tam_types::{Currency, Money, Rounding};
+
+    provision_undecided(
+        &pool,
+        true,
+        tam_domain::Binding::Unbound,
+        tam_marketplace::RemoteLifecycle::Absent,
+    )
+    .await;
+    let seller = pricing_seller(&pool).await;
+    let products = ProductRepo::new(pool.clone());
+    products
+        .update(
+            ORG,
+            PRODUCT,
+            &tam_storage::ProductEdit {
+                price: Some(PriceIntent::Paid(
+                    Money::new(300, Currency::Usd).expect("source amount"),
+                )),
+                ..Default::default()
+            },
+            NOW,
+        )
+        .await
+        .expect("source price is stored");
+    let rules = SellerRuleRepo::new(pool.clone());
+    let mut pricing = automatic_rule(
+        InventoryId::Tpt,
+        RuleAction::Pricing {
+            rate: "0.75".to_owned(),
+            rounding: Rounding::Nearest,
+            reference: None,
+        },
+    );
+    pricing.auto_apply = vec![RuleUse::Copy];
+    let priced = rules
+        .create(ORG, seller, &pricing, NOW)
+        .await
+        .expect("copy pricing saves");
+    let mut mapping = automatic_rule(
+        InventoryId::Tpt,
+        RuleAction::Mapping {
+            licence: Some("TES-PAID".to_owned()),
+            resource_type: None,
+        },
+    );
+    mapping.auto_apply = vec![RuleUse::Copy];
+    rules
+        .create(ORG, seller, &mapping, NOW)
+        .await
+        .expect("copy grant saves");
+    let requests = SyncRequestRepo::new(pool.clone());
+    let native = Uuid([0x91; 16]);
+    let catalogue = Uuid([0x92; 16]);
+    assert!(
+        requests
+            .create(
+                ORG,
+                &NewSyncRequest {
+                    id: native,
+                    source: InventoryId::Tpt,
+                    target: InventoryId::Tes,
+                    disposition: Disposition::Sync,
+                    intent: SyncIntent::Draft,
+                    requested_at: NOW,
+                    locators: vec!["42".to_owned()],
+                }
+            )
+            .await
+            .expect("native confirmation and snapshot commit together"),
+        "a fresh native request is created"
+    );
+    assert!(
+        requests
+            .create_canonicalised(
+                ORG,
+                &NewMigration {
+                    id: catalogue,
+                    source: InventoryId::Tpt,
+                    target: InventoryId::Tes,
+                    disposition: Disposition::Sync,
+                    intent: SyncIntent::Draft,
+                    requested_at: NOW,
+                    resources: vec![CanonicalResource {
+                        locator: "42".to_owned(),
+                        product: PRODUCT,
+                        mapping: MAPPING,
+                        source: tam_marketplace::RemoteListingId::Tpt { product_id: 42 },
+                        source_state: Some(tam_marketplace::ListingState::Live),
+                    }],
+                }
+            )
+            .await
+            .expect("catalogue confirmation and snapshot commit together"),
+        "a fresh catalogue request is created"
+    );
+    pricing.action = RuleAction::Pricing {
+        rate: "0.50".to_owned(),
+        rounding: Rounding::Nearest,
+        reference: None,
+    };
+    rules
+        .update(
+            ORG,
+            &RuleEdit {
+                id: uuid::Uuid::from_bytes(priced.id.0),
+                revision: priced.revision,
+                definition: &pricing,
+                author: seller,
+                at: NOW,
+            },
+        )
+        .await
+        .expect("later rule edit")
+        .expect("future pricing changed");
+    products
+        .update(
+            ORG,
+            PRODUCT,
+            &tam_storage::ProductEdit {
+                price: Some(PriceIntent::Paid(
+                    Money::new(400, Currency::Usd).expect("new source amount"),
+                )),
+                ..Default::default()
+            },
+            NOW,
+        )
+        .await
+        .expect("later source data lands");
+    let product = products
+        .get(ORG, PRODUCT)
+        .await
+        .expect("source reads")
+        .expect("source exists")
+        .product;
+    let known = tam_storage::rule_capture::confirmed_output(&pool, ORG, catalogue, &product)
+        .await
+        .expect("known output resolves")
+        .expect("confirmation has a snapshot");
+    let observed = tam_storage::rule_capture::confirmed_output(&pool, ORG, native, &product)
+        .await
+        .expect("native source resolves")
+        .expect("confirmation has a snapshot");
+    assert_eq!(
+        known.price,
+        PriceIntent::Paid(Money::new(225, Currency::Gbp).expect("known price")),
+        "a known catalogue output stays £2.25 after source and rule edits"
+    );
+    assert_eq!(
+        observed.price,
+        PriceIntent::Paid(Money::new(300, Currency::Gbp).expect("observed price")),
+        "a later native read uses its observed $4.00 and the confirmed 0.75 rate, not 0.50"
+    );
+    assert_eq!(
+        known
+            .licence
+            .as_ref()
+            .map(|choice| choice.native_id.as_str()),
+        Some("TES-PAID"),
+        "the confirmed grant remains attached"
+    );
+    assert_eq!(
+        observed
+            .licence
+            .as_ref()
+            .map(|choice| choice.native_id.as_str()),
+        Some("TES-PAID"),
+        "the native read uses the confirmed mapping policy"
+    );
+}
+
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_gap_parks_the_item_behind_the_queue_it_just_raised(pool: PgPool) {
     provision(&pool, false, tam_domain::Binding::Unbound).await;

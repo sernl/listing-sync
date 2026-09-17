@@ -438,6 +438,29 @@ pub async fn prepare_item(
         .await
         .map_err(|error| crate::ledger::to_wire_error(&error))?;
 
+    // What this item was enqueued to post, frozen at that instant. Read here
+    // rather than re-evaluated because a rule is a policy the seller may edit
+    // at any moment and this item is money and terms they already
+    // authorised: re-reading the policy would let an edit made after the
+    // enqueue change what a device posts, with nothing recording that the two
+    // differed.
+    //
+    // `None` for an item enqueued before the freeze existed, and that absence
+    // is the whole of the cutover: those items project exactly as they did,
+    // from the canonical price and the relation's own answers. Nothing
+    // backfills them, because a canonical price relabelled as an approval
+    // would be indistinguishable afterwards from one a seller actually
+    // approved.
+    //
+    // An immutable row, which is what makes the two projections of one lease
+    // agree: `live_lease_files` prepares the same item a second time to
+    // recover its file list, and a value re-derived from a mutable policy
+    // could differ between the two calls, leaving a work order whose files
+    // and price came from different worlds.
+    let approved = tam_storage::rule_capture::frozen_output(pool, lease.org, lease.item)
+        .await
+        .map_err(|error| crate::ledger::to_wire_error(&error))?;
+
     let projection = match project_listing_with_overrides(
         &product,
         &ListingContext {
@@ -452,6 +475,7 @@ pub async fn prepare_item(
             settled: &settled,
         },
         &overrides,
+        approved.as_ref(),
     ) {
         Ok(projection) => {
             record_losses(pool, lease, &projection.loss, now).await?;

@@ -65,6 +65,7 @@ fn t4() -> Timestamp {
 
 fn state(pool: PgPool, wall: WallClock) -> AppState {
     AppState {
+        exchange_rates: None,
         pool,
         config: Config::default(),
         wall,

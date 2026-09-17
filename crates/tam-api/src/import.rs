@@ -269,6 +269,7 @@ async fn legacy_page(
     let anchor = anchor_job(&state, &record, now).await?;
 
     let run = ImportRun {
+        request: Some(request),
         pool: state.pool.clone(),
         org: context.org,
         source: record.source,

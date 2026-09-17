@@ -431,6 +431,11 @@ async fn enqueue_removal(
             mappings.insert(run.org, &source, 0, run.now).await?;
             mapping
         };
+        // No frozen output travels with a removal, and the ledger's capture
+        // skips one for it: a removal posts no price and no terms, so there
+        // is nothing to approve and nothing an approval could change. It
+        // therefore keeps the key derived here, where a create's is mixed
+        // with what it will post.
         items.push(NewJobItem {
             item: JobItemId(fresh_uuid()),
             mapping,

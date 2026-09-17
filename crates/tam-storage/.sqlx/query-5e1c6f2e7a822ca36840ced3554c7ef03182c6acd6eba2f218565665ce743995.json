@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"pending!\" FROM seller_rule_preview_row WHERE org_id = $1 AND preview_id = $2 AND decision = 'pending'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "pending!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "5e1c6f2e7a822ca36840ced3554c7ef03182c6acd6eba2f218565665ce743995"
+}

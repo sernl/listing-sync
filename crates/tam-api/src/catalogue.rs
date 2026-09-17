@@ -64,7 +64,7 @@ const DELETE_LEG: &str = "product-delete";
 // ------------------------------------------------------------------ errors
 
 fn storage_fault(state: &AppState, error: &StorageError) -> APIError {
-    state.internal(&error.to_string())
+    crate::jobs::storage_fault(state, error)
 }
 
 fn validation(message: &str) -> APIError {
@@ -1468,6 +1468,7 @@ async fn finish_in(
             | StorageError::TimestampOutOfRange { .. }
             | StorageError::CorruptRow { .. }
             | StorageError::OrgMismatch
+            | StorageError::SellerRuleBlocked { .. }
             | StorageError::StaleLease
             | StorageError::DuplicateIdempotencyKey { .. }
             | StorageError::AttemptInFlight
@@ -1552,6 +1553,7 @@ fn create_fault(state: &AppState, error: &StorageError) -> APIError {
         | StorageError::TimestampOutOfRange { .. }
         | StorageError::CorruptRow { .. }
         | StorageError::OrgMismatch
+        | StorageError::SellerRuleBlocked { .. }
         | StorageError::StaleLease
         | StorageError::DuplicateIdempotencyKey { .. }
         | StorageError::AttemptInFlight
@@ -1645,16 +1647,24 @@ pub(crate) async fn add_mapping(
     let now = (state.wall)();
     let mapping = MappingId(fresh_uuid());
     let repo = MappingRepo::new(state.pool.clone());
+    // The seller's approved price for this marketplace where they have
+    // approved one, and the canonical price otherwise. The mapping's figure
+    // is what the export reads, so minting the canonical price over an
+    // approval would have this route report a price the publish then
+    // contradicts.
+    let price = tam_storage::rule_capture::approved_price(
+        &state.pool,
+        context.org,
+        product,
+        tam_storage::rule_capture::PricingScope::CrossList(body.inventory),
+    )
+    .await
+    .map_err(|error| storage_fault(&state, &error))?
+    .unwrap_or(stored.product.price);
     let added = repo
         .add(
             context.org,
-            &unbound_mapping(
-                context.org,
-                product,
-                body.inventory,
-                mapping,
-                stored.product.price,
-            ),
+            &unbound_mapping(context.org, product, body.inventory, mapping, price),
             0,
             now,
         )

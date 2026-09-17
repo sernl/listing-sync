@@ -877,3 +877,27 @@ A collection is an ordered reference list beside labels, capped by the plan, wit
 
 The identity plane stays closed to the application roles: `/admin/users` merges an API row (organisation, plan, last sign-in from the audit trail) into better-auth's own admin listing on the console, and sessions and sign-out-everywhere come from better-auth's admin plugin, which needs the identity admin marking granted by hand (`docs/notes/runbooks/operator-markings.md`).
 Guides are a global table rendered server-side with raw HTML escaped, so a guide body can never carry markup the console did not write; their images live under a lazily created platform organisation (`guides`) so the tenant-count invariants stay exact until a guide image exists.
+
+## Seller-controlled target prices and native terms, 2026-09-17
+
+The founder approved separate Pricing and Mappings pages under Automations, with titled, described presets and multiple conditional rules.
+The initial USD-to-GBP multiplier is a manual 0.75 estimate, not a live quote.
+A seller may instead fetch a dated ECB reference, enter another rate, and choose rounding; the server computes all proposed amounts.
+A manual rate edit clears ECB provenance, and a late quote cannot replace that newer choice.
+Explicit target choices and opted-in pricing rules take precedence over the same-number price described in the migration decision above.
+
+With “All resources”, a preview covers the catalogue bound to the chosen source marketplace, excluding unrelated imports and unbound drafts.
+The seller may instead select resources explicitly, then approve or reject selected rows or every eligible undecided row.
+Decisions belong to that durable preview; reloading it preserves rejections, and changed source facts or rules require a fresh preview.
+If decision readback fails, the console keeps the preview identity and blocks further decisions until the seller reloads it; it does not turn a recorded rejection into a fresh pending proposal.
+Approval saves target choices without rewriting source prices or rights and without publishing a listing.
+
+Saving a rule does not authorize automatic use: Copy, Move and Cross-list are separate opt-ins.
+Disagreeing rules block rather than using list order, and explicit choices settle the affected fields.
+Request confirmation freezes known target outputs and the policy used for source resources not yet imported, so subsequent rule edits or deletion cannot change queued work.
+Partial approvals preserve the authorship of inherited fields.
+
+The closest writable licence suggestions are TES-PAID for paid resources and CC-BY-ND for free resources; neither is equivalent to TPT's terms.
+[CC-BY-ND](https://creativecommons.org/licenses/by-nd/4.0/) permits commercial redistribution of unchanged copies with attribution, and compliant recipients retain those permissions.
+The seller must intend that wider grant; choosing a preset is not legal acceptance on their behalf.
+Unsupported school licences and uncaptured TPT resource-type conditions are refused, not silently substituted.

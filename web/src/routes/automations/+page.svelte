@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { api, type ConnectionView, type SyncRequestHead } from '$lib/api';
+	import { sellerRules, type RuleCounts } from '$lib/seller-rules';
 	import Button from '$lib/Button.svelte';
 	import Icon from '$lib/Icon.svelte';
 	import PageHead from '$lib/PageHead.svelte';
@@ -13,6 +14,11 @@
 	// fetch is not a count of zero, and the sync card says so by dropping the
 	// figure rather than by claiming one.
 	let openQuestions = $state<number | null>(null);
+	// The rule totals the Pricing and Mappings cards state. Null until read,
+	// for the same reason: a card that says "no rule yet" about a read that
+	// failed is a card that lies about the seller's own work.
+	let pricingRules = $state<RuleCounts | null>(null);
+	let mappingRules = $state<RuleCounts | null>(null);
 
 	$effect(() => {
 		void api
@@ -27,9 +33,19 @@
 			.drainStats()
 			.then((stats) => (openQuestions = stats.open))
 			.catch(() => (openQuestions = null));
+		void sellerRules
+			.list({ kind: 'pricing', state: 'all' })
+			.then((view) => (pricingRules = view.counts))
+			.catch(() => (pricingRules = null));
+		void sellerRules
+			.list({ kind: 'mapping', state: 'all' })
+			.then((view) => (mappingRules = view.counts))
+			.catch(() => (mappingRules = null));
 	});
 
-	const shown = $derived(cards({ connections, requests, openQuestions }));
+	const shown = $derived(
+		cards({ connections, requests, openQuestions, pricingRules, mappingRules })
+	);
 </script>
 
 <div class="page">

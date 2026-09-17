@@ -1,0 +1,65 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT price_kind, price_minor_units, price_currency, licence_native_id, licence_author, resource_type_native_id, resource_type_author, matches FROM job_item_rule_output WHERE org_id = $1 AND item_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "price_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "price_minor_units",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "price_currency",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "licence_native_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "licence_author",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "resource_type_native_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "resource_type_author",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "matches",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "bea9bc6d953c99178886c212b0b6db1f293dfc15ca9b878dfb67b6c506b1dc84"
+}

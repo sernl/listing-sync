@@ -43,6 +43,7 @@ fn store_root(name: &str) -> std::path::PathBuf {
 )]
 fn configured(pool: PgPool, root: &std::path::Path) -> AppState {
     AppState {
+        exchange_rates: None,
         pool,
         config: Config::default(),
         wall: || NOW,

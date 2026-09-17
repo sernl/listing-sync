@@ -46,6 +46,7 @@ const KEY_B: &str = "22222222-2222-4222-8222-222222222222";
 
 fn state(pool: PgPool) -> AppState {
     AppState {
+        exchange_rates: None,
         pool,
         config: Config::default(),
         wall: || MADE,
@@ -1150,6 +1151,7 @@ fn store_root(name: &str) -> std::path::PathBuf {
 )]
 fn sealing(pool: PgPool, root: &std::path::Path) -> AppState {
     AppState {
+        exchange_rates: None,
         blobs: Some(BlobStore::local(
             tam_secrets::Kek::from_bytes(&[0x7Cu8; 32]).expect("a 32-byte key is a key"),
             root.to_path_buf(),

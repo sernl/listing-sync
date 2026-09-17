@@ -757,6 +757,19 @@ async fn publish_plan(
         .into_iter()
         .find(|halt| halt.inventory == body.inventory)
         .map(|halt| format!("{} is paused: {}", name_of(halt.inventory), halt.reason));
+    // The seller's approved target price per member, so the mapping this
+    // confirm mints records what the listing will actually be priced at
+    // rather than the canonical figure the enqueue is about to convert away
+    // from. Without it the collection's own export reports one price and the
+    // device posts another.
+    let approved = tam_storage::rule_capture::approved_prices(
+        &state.pool,
+        context.org,
+        &products,
+        tam_storage::rule_capture::PricingScope::CrossList(body.inventory),
+    )
+    .await
+    .map_err(|error| storage_fault(state, &error))?;
 
     let to = intent_state(&intent);
     let mut rows = Vec::with_capacity(members.len());
@@ -825,10 +838,18 @@ async fn publish_plan(
         counts.will_create = counts.will_create.saturating_add(1);
         admitted.push(PublishAdmitted {
             product: member.product,
-            price: catalogue
+            price: approved
                 .iter()
-                .find(|summary| summary.id == member.product)
-                .map_or(PriceIntent::Free, |summary| summary.price),
+                .find(|(subject, _)| *subject == member.product)
+                .map_or_else(
+                    || {
+                        catalogue
+                            .iter()
+                            .find(|summary| summary.id == member.product)
+                            .map_or(PriceIntent::Free, |summary| summary.price)
+                    },
+                    |(_, approved)| *approved,
+                ),
             mapping: head.map(|head| head.id),
         });
     }

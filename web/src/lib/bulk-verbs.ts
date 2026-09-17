@@ -12,6 +12,8 @@
 export type BulkVerb =
 	| 'cross_list'
 	| 'move'
+	| 'price'
+	| 'map_terms'
 	| 'edit'
 	| 'apply_template'
 	| 'add_to_collection'
@@ -44,7 +46,13 @@ const MISSING: Record<BulkVerb, string | null> = {
 	add_to_collection: null,
 	labels: null,
 	mark_listed: null,
-	move: null
+	move: null,
+	// Both hand the selection to the page that previews what would be proposed
+	// for it, the same way `move` hands one to Migrations: the figures and the
+	// terms are the server's, and approving them is a decision taken beside a
+	// preview rather than blind on a bulk bar.
+	price: null,
+	map_terms: null
 };
 
 const LABEL: Record<BulkVerb, string> = {
@@ -55,7 +63,9 @@ const LABEL: Record<BulkVerb, string> = {
 	labels: 'Labels',
 	delete: 'Delete',
 	mark_listed: 'Mark as listed',
-	move: 'Copy or move'
+	move: 'Copy or move',
+	price: 'Set target prices',
+	map_terms: 'Set licence and type'
 };
 
 /** The order the board shows them in: what is built first, then what is
@@ -64,6 +74,8 @@ export const BULK_VERBS: readonly BulkVerb[] = [
 	'cross_list',
 	'mark_listed',
 	'move',
+	'price',
+	'map_terms',
 	'labels',
 	'add_to_collection',
 	'apply_template',

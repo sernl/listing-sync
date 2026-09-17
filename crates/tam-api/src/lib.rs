@@ -27,6 +27,7 @@ pub mod devices;
 pub mod duplicates;
 pub mod entitlement;
 pub mod error;
+pub mod exchange_rates;
 pub mod export;
 pub mod guides;
 pub mod import;
@@ -47,6 +48,7 @@ pub mod resource_templates;
 pub mod resources;
 pub mod scheduler;
 pub mod schedules;
+pub mod seller_rules;
 pub mod session;
 pub mod stream;
 pub mod sync_activity;
@@ -146,6 +148,8 @@ pub struct AppState {
     /// operator surface takes without its backoffice pool, and the same one
     /// revocation takes without the broker socket.
     pub blobs: Option<BlobStore>,
+    /// Public reference data only; no marketplace credentials or requests.
+    pub exchange_rates: Option<std::sync::Arc<dyn exchange_rates::ExchangeRateSource>>,
 }
 
 /// The two values an upload needs and no other route does: the key every
@@ -285,6 +289,34 @@ pub fn router(state: AppState) -> Router {
             post(migrations::plan_migration),
         )
         .route("/{version}/migrations", post(migrations::create_migration))
+        .route(
+            "/{version}/seller-rules",
+            get(seller_rules::list).post(seller_rules::create),
+        )
+        .route(
+            "/{version}/seller-rules/presets",
+            get(seller_rules::presets),
+        )
+        .route(
+            "/{version}/seller-rules/reference",
+            get(seller_rules::reference),
+        )
+        .route(
+            "/{version}/seller-rules/preview",
+            post(seller_rules::preview),
+        )
+        .route(
+            "/{version}/seller-rules/previews/{preview}",
+            get(seller_rules::read_preview),
+        )
+        .route(
+            "/{version}/seller-rules/previews/{preview}/decision",
+            post(seller_rules::decide),
+        )
+        .route(
+            "/{version}/seller-rules/{rule}",
+            put(seller_rules::update).delete(seller_rules::delete),
+        )
         .route(
             "/{version}/jobs/{job}",
             get(jobs::job_view).delete(jobs::delete_job),

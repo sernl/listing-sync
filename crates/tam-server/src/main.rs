@@ -18,6 +18,7 @@
 #![forbid(unsafe_code)]
 
 mod downloads;
+mod exchange_rates;
 mod notify;
 mod serving;
 
@@ -516,6 +517,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
     let state = AppState {
+        exchange_rates: Some(std::sync::Arc::new(exchange_rates::EcbRates::new()?)),
         pool,
         config: invocation.config.clone(),
         wall: wall_now,
@@ -1504,7 +1506,7 @@ mod composition {
     /// The router `main` builds, over the three directories above.
     fn assembled() -> axum::Router {
         let state = tam_api::AppState {
-            // Lazy: this never opens a socket, and no route reached below would
+            exchange_rates: None, // Lazy: this never opens a socket, and no route reached below would
             // use it if it did.
             pool: sqlx::postgres::PgPoolOptions::new()
                 .connect_lazy("postgres://tam_app@127.0.0.1/tam")

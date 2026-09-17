@@ -45,6 +45,7 @@ fn digest(byte: u8) -> String {
 
 fn state(pool: PgPool, wall: WallClock) -> AppState {
     AppState {
+        exchange_rates: None,
         pool,
         config: Config::default(),
         wall,

@@ -490,6 +490,19 @@ impl SyncRequestRepo {
             .execute(&mut *tx)
             .await?;
         }
+        crate::rule_capture::confirm_request_snapshot(
+            &mut tx,
+            org,
+            &crate::rule_capture::RequestCapture {
+                request: new.id,
+                source: new.source,
+                target: new.target,
+                use_: crate::rule_capture::scope_of(new.disposition),
+                products: None,
+                at: new.requested_at,
+            },
+        )
+        .await?;
         tx.commit().await?;
         Ok(true)
     }
@@ -569,6 +582,24 @@ impl SyncRequestRepo {
             .execute(&mut *tx)
             .await?;
         }
+        let products: Vec<_> = new
+            .resources
+            .iter()
+            .map(|resource| resource.product)
+            .collect();
+        crate::rule_capture::confirm_request_snapshot(
+            &mut tx,
+            org,
+            &crate::rule_capture::RequestCapture {
+                request: new.id,
+                source: new.source,
+                target: new.target,
+                use_: crate::rule_capture::scope_of(new.disposition),
+                products: Some(&products),
+                at: new.requested_at,
+            },
+        )
+        .await?;
         tx.commit().await?;
         Ok(true)
     }

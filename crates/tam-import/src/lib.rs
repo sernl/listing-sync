@@ -113,6 +113,8 @@ pub struct ImportRun {
     /// because reading a target that means "nowhere" is exactly the trap
     /// migration 0053 names.
     pub target: Option<InventoryId>,
+    /// The copy/move confirmation whose frozen policy precedes this source read.
+    pub request: Option<Uuid>,
     pub now: Timestamp,
 }
 
@@ -965,6 +967,21 @@ async fn prepare_target(
     target: InventoryId,
 ) -> Result<PreparedTarget, ImportError> {
     let product = &prepared.product;
+    let output = match run.request {
+        Some(request) => {
+            tam_storage::rule_capture::confirmed_output(&run.pool, run.org, request, product)
+                .await?
+        }
+        None => Some(
+            tam_storage::rule_capture::prospective_output(
+                &run.pool,
+                run.org,
+                product,
+                tam_storage::rule_capture::PricingScope::CrossList(target),
+            )
+            .await?,
+        ),
+    };
     let mapping = tam_domain::Mapping {
         id: MappingId(fresh_uuid()),
         org: run.org,
@@ -979,7 +996,9 @@ async fn prepare_target(
             grades: tam_domain::FieldPolicy::Managed,
             files: tam_domain::FieldPolicy::Managed,
         },
-        price_rule: tam_types::PriceRule::Explicit(prepared.price),
+        price_rule: tam_types::PriceRule::Explicit(
+            output.as_ref().map_or(prepared.price, |value| value.price),
+        ),
         publish: tam_domain::PublishMode::DryRun,
         lifecycle: tam_marketplace::RemoteLifecycle::Absent,
     };
@@ -1016,6 +1035,7 @@ async fn prepare_target(
             settled: &settled,
         },
         &overrides,
+        output.as_ref(),
     );
     Ok(PreparedTarget { mapping, outcome })
 }
@@ -1231,14 +1251,13 @@ fn rights_from(listing: &tam_marketplace::ImportedListing) -> tam_domain::Rights
         })
 }
 
-/// Every source value in an axis this model does not type, kept verbatim so a
-/// round trip back to the source loses nothing and a projection into a
-/// platform without the field can name what it dropped.
+/// Preserve unclassified values and native resource types. Resource types may
+/// have a canonical projection, but conditions still need the original ID.
 fn residue_of(listing: &tam_marketplace::ImportedListing) -> Vec<ImportedTerm> {
     listing
         .native
         .iter()
-        .filter(|term| term.kind.is_none())
+        .filter(|term| term.kind.is_none() || term.kind == Some(TermKind::ResourceType))
         .cloned()
         .collect()
 }

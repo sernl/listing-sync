@@ -70,6 +70,7 @@
 		pageSelection,
 		type MigrationRow
 	} from '$lib/pages/automations/migration';
+	import { MAPPINGS_HREF, PRICING_HREF } from '$lib/pages/automations/seller-rules';
 	import '$lib/pages/automations/automations.css';
 
 	// How many migrations one page shows. Ten, because a past migration is a
@@ -758,6 +759,22 @@
 								{/each}
 							</div>
 							<p class="foot-note">{countsLine(plan.counts)}</p>
+							<!-- A blocked row is often blocked on what the listing would
+							     cost or land under on the target, which is decided on its
+							     own screen beside a preview of the proposed figures. The
+							     hand-off is offered whenever anything is blocked rather
+							     than parsed out of each reason: this page reads verdicts,
+							     and guessing which blocker is a pricing one from its
+							     sentence would be this page deciding. -->
+							{#if plan.counts.blocked > 0}
+								<p class="foot-note">
+									Blocked on what a resource would cost or land under on
+									{SHORT_NAME[target]}?
+									<a href={PRICING_HREF}>Set target prices</a> ·
+									<a href={MAPPINGS_HREF}>Set licence and resource type</a>. Both preview
+									every resource before anything is approved.
+								</p>
+							{/if}
 						{/if}
 					{/if}
 

@@ -65,6 +65,7 @@ fn key_pair() -> (EntitlementKey, Vec<u8>) {
 /// A deployment that mints, and one that does not.
 fn state(pool: PgPool, key: Option<EntitlementKey>) -> AppState {
     AppState {
+        exchange_rates: None,
         pool,
         config: Config {
             entitlement_key: key,

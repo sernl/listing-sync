@@ -41,7 +41,9 @@ mod product;
 pub mod profile;
 pub mod pruning;
 pub mod resource_templates;
+pub mod rule_capture;
 pub mod schedules;
+pub mod seller_rules;
 pub mod sessions;
 pub mod sync_settings;
 pub mod taxonomy;
@@ -248,6 +250,11 @@ pub enum StorageError {
     OrgMismatch,
     #[error("the aggregate is inconsistent: {reason}")]
     Inconsistent { reason: String },
+    #[error("seller rules block resource {product:?}: {reasons:?}")]
+    SellerRuleBlocked {
+        product: tam_types::ProductId,
+        reasons: Vec<String>,
+    },
     #[error("the lease epoch is stale; another worker holds this item")]
     StaleLease,
     #[error("idempotency key {key} already has an item")]

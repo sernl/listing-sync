@@ -1,0 +1,96 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT ON (product_id) product_id, id, sequence, price_kind, price_minor_units, price_currency, price_author, licence_native_id, licence_author, resource_type_native_id, resource_type_author, matches, approved_at FROM seller_rule_application WHERE org_id = $1 AND target = $2 AND ($3::uuid[] IS NULL OR product_id = ANY($3)) ORDER BY product_id, sequence DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "sequence",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "price_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "price_minor_units",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "price_currency",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "price_author",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "licence_native_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "licence_author",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 9,
+        "name": "resource_type_native_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "resource_type_author",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 11,
+        "name": "matches",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 12,
+        "name": "approved_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "27e39e07e94528cda1ded40d3d1926895decd5349e5db83571b536df5f1161ef"
+}

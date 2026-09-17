@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO seller_rule_preview_row (org_id, preview_id, product_id, title, source_price_kind, source_price_minor, source_price_ccy, source_fingerprint, previous_choice, before, proposed, patch, matches, blockers, status, decision) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'pending')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Int8",
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Jsonb",
+        "Jsonb",
+        "Jsonb",
+        "Jsonb",
+        "Jsonb",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "20e5a316882c42036b59fa380b45c8db0cc7d82cff58e0a747e8b8fb3b1fef6b"
+}

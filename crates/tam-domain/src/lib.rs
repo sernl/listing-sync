@@ -13,6 +13,7 @@ pub mod entitlement;
 pub mod equivalence;
 pub mod product;
 pub mod registry;
+pub mod seller_rules;
 
 use tam_marketplace::{
     settle, AdapterError, AmbiguityCause, ChallengeKind, CorrelationMarker, CreateStrategy,

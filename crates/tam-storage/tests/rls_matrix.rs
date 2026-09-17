@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 
 use sqlx::PgPool;
 
-const TENANT_TABLES: [&str; 64] = [
+const TENANT_TABLES: [&str; 72] = [
     "auto_publish_rule",
     "auto_publish_run",
     "billing_subscription",
@@ -44,6 +44,7 @@ const TENANT_TABLES: [&str; 64] = [
     "job",
     "job_event",
     "job_item",
+    "job_item_rule_output",
     "label",
     "listing_metric_snapshot",
     "mapping",
@@ -72,8 +73,15 @@ const TENANT_TABLES: [&str; 64] = [
     "schedule_marketplace",
     "schedule_product",
     "schedule_run",
+    "seller_rule",
+    "seller_rule_application",
+    "seller_rule_preview",
+    "seller_rule_preview_row",
+    "seller_rule_reference",
     "sync_request",
     "sync_request_resource",
+    "sync_request_rule_choice",
+    "sync_request_rule_snapshot",
     "write_attempt",
 ];
 

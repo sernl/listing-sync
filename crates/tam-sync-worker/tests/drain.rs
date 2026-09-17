@@ -179,6 +179,7 @@ async fn a_drain_without_consent_mints_nothing_and_says_so(pool: PgPool) {
         .await
         .expect("the breadcrumb writes");
     let run = tam_import::ImportRun {
+        request: None,
         pool: pool.clone(),
         org: ORG,
         source: SOURCE,
@@ -264,6 +265,7 @@ async fn a_resumed_migrate_removes_every_source_it_canonicalised(pool: PgPool) {
     }
 
     let run = tam_import::ImportRun {
+        request: None,
         pool: pool.clone(),
         org: ORG,
         source: SOURCE,
@@ -368,6 +370,7 @@ async fn a_live_sync_enqueues_the_create_and_the_publish_it_gates(pool: PgPool) 
         .expect("the breadcrumb writes");
 
     let run = tam_import::ImportRun {
+        request: None,
         pool: pool.clone(),
         org: ORG,
         source: SOURCE,

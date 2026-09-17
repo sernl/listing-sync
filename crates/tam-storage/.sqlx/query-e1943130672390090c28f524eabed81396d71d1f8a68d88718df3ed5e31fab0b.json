@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT inventory FROM mapping WHERE org_id = $1 AND product_id = $2 AND binding_state = 'bound' AND inventory <> $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "inventory",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e1943130672390090c28f524eabed81396d71d1f8a68d88718df3ed5e31fab0b"
+}

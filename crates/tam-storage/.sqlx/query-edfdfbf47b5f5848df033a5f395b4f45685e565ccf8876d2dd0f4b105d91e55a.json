@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO seller_rule_application (org_id, id, product_id, source, target, sequence, price_kind, price_minor_units, price_currency, price_author, licence_native_id, licence_author, resource_type_native_id, resource_type_author, matches, preview_id, author, approved_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Int8",
+        "Text",
+        "Int8",
+        "Text",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Jsonb",
+        "Uuid",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "edfdfbf47b5f5848df033a5f395b4f45685e565ccf8876d2dd0f4b105d91e55a"
+}
