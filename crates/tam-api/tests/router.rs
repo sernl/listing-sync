@@ -34,6 +34,7 @@ impl Answer {
 )]
 fn test_state() -> AppState {
     AppState {
+        exchange_rates: None,
         pool: sqlx::postgres::PgPoolOptions::new()
             .acquire_timeout(core::time::Duration::from_millis(200))
             .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")

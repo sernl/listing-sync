@@ -25,6 +25,16 @@
 //! in the cell beside the amount because it follows the inventory, so a US
 //! listing's figure is not the same money as a GB one.
 //!
+//! A price the seller has approved for one marketplace is that marketplace's
+//! figure, ahead of the mint-time snapshot on the mapping. The two disagree
+//! the moment an approval lands — the mapping's price is whatever the product
+//! cost when the mapping was minted and no statement ever updates it — and
+//! the approved one is what the publishing path freezes and posts, so
+//! exporting the other would put a number in front of the seller that their
+//! own listing contradicts. A resource with no approval still exports the
+//! mapping's snapshot, unchanged: absence of an approval is not an approval
+//! of the canonical price, and this document must not read as though it were.
+//!
 //! The date in the filename is the server's own civil date in UTC, so a seller
 //! east of Greenwich exporting in their morning gets a file dated the day
 //! before theirs. It is deliberate rather than defaulted: the alternative is
@@ -179,7 +189,7 @@ async fn selected(
 }
 
 fn storage_fault(state: &AppState, error: &StorageError) -> APIError {
-    state.internal(&error.to_string())
+    crate::jobs::storage_fault(state, error)
 }
 
 /// The document, gathered through the export page walk under this
@@ -217,11 +227,31 @@ async fn document(
             id: last.id.0,
         });
         let exhausted = i64::try_from(page.len()).unwrap_or(i64::MAX) < PAGE;
+        let subjects: Vec<ProductId> = page.iter().map(|resource| resource.id).collect();
+        // Per inventory rather than per resource, and per page rather than
+        // per document: the figure is a question about one resource on one
+        // marketplace, and two marketplaces can hold two different approved
+        // prices for the same resource.
+        let mut approved: Vec<(InventoryId, Vec<(ProductId, PriceIntent)>)> =
+            Vec::with_capacity(EXPORT_ORDER.len());
+        for inventory in EXPORT_ORDER {
+            approved.push((
+                inventory,
+                tam_storage::rule_capture::approved_prices(
+                    &state.pool,
+                    org,
+                    &subjects,
+                    tam_storage::rule_capture::PricingScope::CrossList(inventory),
+                )
+                .await
+                .map_err(|error| storage_fault(state, &error))?,
+            ));
+        }
         for resource in page
             .iter()
             .filter(|resource| only.is_none_or(|ids| ids.contains(&resource.id)))
         {
-            write_row(&mut out, &row(resource));
+            write_row(&mut out, &row(resource, &approved));
         }
         if exhausted {
             break;
@@ -243,7 +273,10 @@ fn header_row() -> Vec<String> {
     cells
 }
 
-fn row(resource: &ExportedResource) -> Vec<String> {
+fn row(
+    resource: &ExportedResource,
+    approved: &[(InventoryId, Vec<(ProductId, PriceIntent)>)],
+) -> Vec<String> {
     let mut cells = vec![
         resource.id.0.to_hyphenated(),
         resource.title.0.clone(),
@@ -264,7 +297,9 @@ fn row(resource: &ExportedResource) -> Vec<String> {
             None => cells.extend([String::new(), String::new(), String::new()]),
             Some(listing) => cells.extend([
                 standing(&listing.binding_state, &listing.lifecycle_state).to_owned(),
-                listing_price(listing.listed_price),
+                listing_price(
+                    approved_for(approved, inventory, resource.id).or(listing.listed_price),
+                ),
                 listing
                     .remote
                     .as_ref()
@@ -274,6 +309,20 @@ fn row(resource: &ExportedResource) -> Vec<String> {
         }
     }
     cells
+}
+
+/// The price the seller approved for one resource on one marketplace, where
+/// they approved one.
+fn approved_for(
+    approved: &[(InventoryId, Vec<(ProductId, PriceIntent)>)],
+    inventory: InventoryId,
+    product: ProductId,
+) -> Option<PriceIntent> {
+    approved
+        .iter()
+        .find(|(held, _)| *held == inventory)
+        .and_then(|(_, rows)| rows.iter().find(|(subject, _)| *subject == product))
+        .map(|(_, price)| *price)
 }
 
 /// The label set as one cell.

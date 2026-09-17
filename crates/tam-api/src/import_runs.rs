@@ -3165,6 +3165,7 @@ async fn commit_one(
         .ok_or_else(|| state.internal("a marketplace run names no source"))?;
 
     let run = ImportRun {
+        request: None,
         pool: state.pool.clone(),
         org,
         source,
@@ -4001,6 +4002,9 @@ fn claim_refusal(state: &AppState, error: &tam_storage::StorageError) -> APIErro
         }
         filled @ tam_storage::StorageError::InventoryMappingAlreadyExists => {
             conflict(&filled.to_string(), APIErrorCode::MappingAlreadyExists)
+        }
+        blocked @ tam_storage::StorageError::SellerRuleBlocked { .. } => {
+            crate::jobs::storage_fault(state, blocked)
         }
         fault @ (tam_storage::StorageError::Db(_)
         | tam_storage::StorageError::TimestampOutOfRange { .. }

@@ -59,6 +59,7 @@ const GRANTED: u8 = 0x04;
 
 fn state(pool: PgPool) -> AppState {
     AppState {
+        exchange_rates: None,
         pool,
         config: Config::default(),
         wall: || NOW,

@@ -59,6 +59,7 @@ use crate::codec::{
     uuid_from_db, uuid_to_db, OperationColumns, RemoteIdColumns, StoredOperation,
 };
 use crate::mapping::{remote_id_from_db, LifecycleColumns};
+use crate::rule_capture::RuleCapture;
 use crate::{pin_org, StorageError};
 
 pub(crate) const fn item_outcome_to_db(outcome: ItemOutcome) -> &'static str {
@@ -270,8 +271,13 @@ impl JobRepo {
         )
         .execute(&mut *tx)
         .await?;
+        // No `sync_request` behind this path, so the freeze reads the
+        // seller's standing scope. `enqueue` is the unattended and test
+        // entrypoint; every request-bound mint goes through
+        // `create_job_in_tx`.
+        let mut capture = RuleCapture::for_job(org, inventory, None);
         for item in items {
-            insert_job_item(&mut tx, org_db, uuid_to_db(job.0), item, at_db).await?;
+            insert_job_item(&mut tx, (org, uuid_to_db(job.0)), item, at_db, &mut capture).await?;
         }
         let item_count = u32::try_from(items.len()).map_err(|_| StorageError::Inconsistent {
             reason: format!("{} items exceed the event range", items.len()),
@@ -401,14 +407,34 @@ impl JobRepo {
 /// 0019 drops `operation`'s default after backfilling, which turns such an
 /// omission into a NOT NULL violation rather than a removal silently stored
 /// and later run as a create.
+///
+/// It is also the one place a non-remove item's price and approved native
+/// terms are frozen, for exactly the same reason: a second capture point
+/// would be a second answer to what the seller authorised, and the two would
+/// disagree the first time a rule was edited between them. The capture reads
+/// only — no `FOR UPDATE` anywhere in it — so it runs before the insert it
+/// keys without entering this module's lock order, and the frozen output it
+/// produces is written after the insert, under the item row it belongs to.
 async fn insert_job_item(
     tx: &mut Transaction<'_, Postgres>,
-    org: uuid::Uuid,
-    job: uuid::Uuid,
+    job: (OrgId, uuid::Uuid),
     item: &NewJobItem,
     at: DateTime<Utc>,
+    capture: &mut RuleCapture,
 ) -> Result<(), StorageError> {
+    let (org, job) = job;
+    let org_db = uuid_to_db(org.0);
     let operation = OperationColumns::encode(&item.operation)?;
+    let frozen = capture
+        .freeze(tx, item.mapping, &item.operation, item.idempotency_key)
+        .await?;
+    // The stored key is the frozen output's where there is one. `NewJobItem`
+    // carries the base key the enqueuer derived and `item.item` is an
+    // independent v4, so mixing here changes no identity the caller holds:
+    // nothing outside this statement addresses an item by its key.
+    let idempotency_key = frozen
+        .as_ref()
+        .map_or(item.idempotency_key, |frozen| frozen.key);
     // `marketplace` is read from the mapping inside the statement rather than
     // supplied: the live-lease mutex is an index over it, so a caller-supplied
     // value that disagreed with the mapping would put the mutex on the wrong
@@ -421,11 +447,11 @@ async fn insert_job_item(
          SELECT $1, $2, $3, $4, $5, 'queued', $6, $7, $8, $9, $10, $11, $12, $13, \
                 m.marketplace \
          FROM mapping m WHERE m.org_id = $1 AND m.id = $4",
-        org,
+        org_db,
         uuid_to_db(item.item.0),
         job,
         uuid_to_db(item.mapping.0),
-        uuid_to_db(item.idempotency_key.0),
+        uuid_to_db(idempotency_key.0),
         at,
         operation.operation,
         operation.subject_kind,
@@ -439,9 +465,21 @@ async fn insert_job_item(
     .await;
     map_unique(inserted, "job_item_idempotent", || {
         StorageError::DuplicateIdempotencyKey {
-            key: uuid_to_db(item.idempotency_key.0),
+            key: uuid_to_db(idempotency_key.0),
         }
     })?;
+    // After the item row, so the output cannot exist without the item it
+    // describes. The write is insert-only: a frozen output is never rewritten,
+    // which is the whole of what "frozen" means here.
+    if let Some(frozen) = frozen {
+        crate::seller_rules::save_item_output_in_tx(
+            tx,
+            org,
+            uuid_to_db(item.item.0),
+            &frozen.output,
+        )
+        .await?;
+    }
     Ok(())
 }
 
@@ -3904,8 +3942,14 @@ pub(crate) async fn create_job_in_tx(
         }
         Err(error) => return Err(error.into()),
     }
+    // The freeze's scope is this job's own origin. A request-bound job
+    // evaluates the definitions frozen when the seller confirmed that
+    // request, so a rule edited while the source read was still running
+    // cannot reach the operation they authorised; a job with no request reads
+    // their standing scope instead.
+    let mut capture = RuleCapture::for_job(org, inventory, run);
     for item in items {
-        insert_job_item(tx, org_db, uuid_to_db(job.0), item, at_db).await?;
+        insert_job_item(tx, (org, uuid_to_db(job.0)), item, at_db, &mut capture).await?;
     }
     let item_count = u32::try_from(items.len()).map_err(|_| StorageError::Inconsistent {
         reason: format!("{} items exceed the event range", items.len()),

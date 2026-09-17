@@ -86,7 +86,7 @@ export class ApiFailure extends Error {
 	}
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	const response = await fetch(path, {
 		...init,
 		headers: { accept: 'application/json', ...(init?.headers ?? {}) }
@@ -126,7 +126,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	return body as T;
 }
 
-function post<T>(path: string, body: unknown, headers?: Record<string, string>): Promise<T> {
+export function post<T>(path: string, body: unknown, headers?: Record<string, string>): Promise<T> {
 	return request<T>(path, {
 		method: 'POST',
 		headers: { 'content-type': 'application/json', ...(headers ?? {}) },
@@ -134,7 +134,7 @@ function post<T>(path: string, body: unknown, headers?: Record<string, string>):
 	});
 }
 
-function put<T>(path: string, body: unknown): Promise<T> {
+export function put<T>(path: string, body: unknown): Promise<T> {
 	return request<T>(path, {
 		method: 'PUT',
 		headers: { 'content-type': 'application/json' },

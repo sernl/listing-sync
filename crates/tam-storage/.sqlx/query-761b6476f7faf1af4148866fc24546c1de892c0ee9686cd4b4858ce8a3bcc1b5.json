@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO sync_request_rule_choice (org_id, request_id, product_id, application_id, price_kind, price_minor_units, price_currency, price_author, licence_native_id, licence_author, resource_type_native_id, resource_type_author, matches, approved_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Int8",
+        "Text",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Jsonb",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "761b6476f7faf1af4148866fc24546c1de892c0ee9686cd4b4858ce8a3bcc1b5"
+}

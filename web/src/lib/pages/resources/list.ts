@@ -317,7 +317,9 @@ export const VERB_PHRASE: Record<BulkVerb, string> = {
 	apply_template: 'apply a template to',
 	delete: 'delete',
 	edit: 'edit',
-	move: 'copy or move to another marketplace'
+	move: 'copy or move to another marketplace',
+	price: 'set the target price for',
+	map_terms: 'set the licence and resource type for'
 };
 
 /**

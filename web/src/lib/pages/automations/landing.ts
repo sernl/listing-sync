@@ -10,6 +10,13 @@ import type { ConnectionView, SyncRequestHead } from '$lib/api';
 import { anyConnectionStands } from '$lib/connection-standing';
 import type { IconName } from '$lib/icons';
 import { headStage, mayMigrate, migrateSource, targetAuthorship } from '$lib/sync-request';
+import type { RuleCounts } from '$lib/seller-rules';
+import {
+	MAPPINGS_HREF,
+	PRICING_HREF,
+	WHAT_MAPPING_IS,
+	WHAT_PRICING_IS
+} from '$lib/pages/automations/seller-rules';
 
 /** The tones a landing badge takes. A subset of the status pill's own tones:
  *  `bad` belongs to a connection that is gone and `flat` to a transport class,
@@ -22,7 +29,7 @@ export interface CardState {
 	tone: CardTone;
 }
 
-export type AutomationId = 'scheduling' | 'migration' | 'sync';
+export type AutomationId = 'scheduling' | 'migration' | 'pricing' | 'mapping' | 'sync';
 
 export interface AutomationCard {
 	id: AutomationId;
@@ -36,13 +43,18 @@ export interface AutomationCard {
 }
 
 /** Everything the landing needs to state each automation's condition, taken
- *  from the three reads the page makes. */
+ *  from the reads the page makes. */
 export interface AutomationFacts {
 	connections: readonly ConnectionView[];
 	requests: readonly SyncRequestHead[];
 	/** Reconciliation questions still open, or null where the figure could not
 	 *  be read. A count this console failed to read is not a count of zero. */
 	openQuestions: number | null;
+	/** How many pricing rules the seller holds, and how many are on, or null
+	 *  where the list could not be read. Same reason as above: a card that
+	 *  says "no rule yet" about a read that failed is a card that lies. */
+	pricingRules: RuleCounts | null;
+	mappingRules: RuleCounts | null;
 }
 
 const SCHEDULING_WHAT =
@@ -56,6 +68,36 @@ const MIGRATION_WHAT =
 const SYNC_WHAT =
 	'Keep every marketplace’s copy of a resource up to date. Change a price or a description ' +
 	'here and it is carried out to each marketplace that has it.';
+
+/** What a rule page's card says about the rules behind it.
+ *
+ * Four answers rather than "Ready": a list that could not be read, a seller
+ * who has written none, rules that exist and are all switched off, and rules
+ * that are on. The third is worth saying because a rule switched off proposes
+ * nothing, and a card reading "Ready" over it would be the wrong summary. */
+function ruleCardState(counts: RuleCounts | null, facts: AutomationFacts): CardState {
+	if (!anyConnectionStands(facts.connections)) {
+		return { label: 'No marketplace connected', tone: 'warn' };
+	}
+	if (counts === null) {
+		return { label: 'Rules unknown', tone: 'soon' };
+	}
+	if (counts.enabled > 0) {
+		return { label: plural(counts.enabled, 'rule on', 'rules on'), tone: 'ok' };
+	}
+	if (counts.all > 0) {
+		return { label: plural(counts.all, 'rule off', 'rules off'), tone: 'warn' };
+	}
+	return { label: 'No rule yet', tone: 'soon' };
+}
+
+export function pricingState(facts: AutomationFacts): CardState {
+	return ruleCardState(facts.pricingRules, facts);
+}
+
+export function mappingState(facts: AutomationFacts): CardState {
+	return ruleCardState(facts.mappingRules, facts);
+}
 
 /** Whether a request is still doing something, read off the stage the request
  *  list already presents rather than off the raw state, so this page and the
@@ -149,6 +191,22 @@ export function cards(facts: AutomationFacts): AutomationCard[] {
 			icon: 'arrow-right-left',
 			what: MIGRATION_WHAT,
 			state: migrationState(facts)
+		},
+		{
+			id: 'pricing',
+			href: PRICING_HREF,
+			title: 'Pricing',
+			icon: 'credit-card',
+			what: WHAT_PRICING_IS,
+			state: pricingState(facts)
+		},
+		{
+			id: 'mapping',
+			href: MAPPINGS_HREF,
+			title: 'Mappings',
+			icon: 'tag',
+			what: WHAT_MAPPING_IS,
+			state: mappingState(facts)
 		},
 		{
 			id: 'sync',

@@ -21,6 +21,7 @@ use tam_domain::equivalence::{
     Election, ElectionRule, Loss, PricingBranch, ProjectionOverride, SettledElection, VocabularyGap,
 };
 use tam_domain::registry::{registry, truncate, AxisBinding, FieldSpec};
+use tam_domain::seller_rules::{FrozenRuleOutput, SellerTermChoice};
 use tam_domain::{
     CanonicalProduct, CanonicalTerm, ListingProjection, ProjectionBlocked, ProjectionEdge,
     RightsDeclaration, TermKind, TermProjection, VocabularyId, VocabularyPath,
@@ -128,11 +129,12 @@ pub fn project_listing(
     product: &CanonicalProduct,
     ctx: &ListingContext<'_>,
 ) -> Result<ListingProjection, ProjectionBlocked> {
-    project_listing_with_overrides(product, ctx, &[])
+    project_listing_with_overrides(product, ctx, &[], None)
 }
 
 /// The same projection with one tenant's own mapping decisions consulted
-/// first, where they name a term.
+/// first, where they name a term, and with the output a seller approved for
+/// this target where one was frozen.
 ///
 /// The overrides are a parameter rather than a `ListingContext` field so that
 /// the layer breaks no existing construction of that struct. That is not only
@@ -143,10 +145,23 @@ pub fn project_listing(
 /// They must already be scoped to `ctx.org`. The durable read enforces that,
 /// because `projection_override` carries forced row-level security and a
 /// query pinned to one organisation cannot return another's rows.
+///
+/// `approved` is the frozen output of the seller's own pricing and mapping
+/// decisions for this item, captured when it was enqueued, and it is a
+/// parameter for the same reason the overrides are. Where it is present its
+/// price is the price — at the currency gate and in the output both, because
+/// a gate reading the canonical price and an output carrying the approved one
+/// would refuse every conversion the seller authorised. Where it names a
+/// native term, that term is the axis's answer and the relation is not asked:
+/// a human already answered, so no election is raised for it and no gap is
+/// recorded against it. Nothing here touches the product: the canonical
+/// price, the canonical rights and the loss disclosure that follows from them
+/// are unchanged, which is what keeps the source a source.
 pub fn project_listing_with_overrides(
     product: &CanonicalProduct,
     ctx: &ListingContext<'_>,
     overrides: &[ProjectionOverride],
+    approved: Option<&FrozenRuleOutput>,
 ) -> Result<ListingProjection, ProjectionBlocked> {
     // Lookup only — no iteration order ever reaches the output.
     let kinds: HashMap<CanonicalTermId, TermKind> =
@@ -179,7 +194,15 @@ pub fn project_listing_with_overrides(
             None => unrecognised.push(source.clone()),
         }
     }
-    let pricing = match product.price {
+    // The price this listing will actually carry, which is the approved one
+    // wherever the seller approved one. The election branch reads it too:
+    // free and paid ask different questions, and an approved conversion
+    // never crosses that line — a converted free listing stays free and a
+    // paid one can never round to zero — so this is the same branch the
+    // canonical price gives and is taken from the same value the output and
+    // the gate use, rather than from a second one that could drift.
+    let price = approved.map_or(product.price, |frozen| frozen.price);
+    let pricing = match price {
         PriceIntent::Free => PricingBranch::Free,
         PriceIntent::Paid(_) => PricingBranch::Paid,
     };
@@ -191,6 +214,20 @@ pub fn project_listing_with_overrides(
     let mut gaps: Vec<VocabularyGap> = Vec::new();
     let mut elections: Vec<Election> = Vec::new();
     for binding in routed_axes(ctx.inventory) {
+        // An axis a human has already answered for this item. The accepted
+        // native is the answer, so the relation is not consulted for it at
+        // all: consulting it would raise the very election the acceptance
+        // settled and park an item the seller has already decided. Only axes
+        // the target actually binds are visited here, so an accepted licence
+        // against a target measured to have no licence field is ignored
+        // rather than reported as delivered.
+        if let Some(choice) = accepted_term(approved, binding.axis) {
+            natives.push((
+                binding.axis,
+                accepted_path(choice, VocabularyId(ctx.inventory, binding.axis), ctx.edges),
+            ));
+            continue;
+        }
         let of_kind: Vec<CanonicalTermId> = product
             .subjects
             .iter()
@@ -280,7 +317,7 @@ pub fn project_listing_with_overrides(
     // inventory whose currency is unmeasured or unverified blocks, and one
     // priced in a currency the inventory does not sell in blocks by name
     // rather than crossing as a bare amount in the other denomination.
-    if let PriceIntent::Paid(money) = product.price {
+    if let PriceIntent::Paid(money) = price {
         match ctx.inventory.currency_rule() {
             CurrencyRule::Fixed(sells) if sells == money.currency() => {}
             CurrencyRule::Fixed(sells) => {
@@ -317,13 +354,60 @@ pub fn project_listing_with_overrides(
         title: capped(&product.title.0, &declared.title),
         body: capped(&product.body.body, &declared.description),
         body_format: product.body.format,
-        price: product.price,
+        price,
         taxonomy: included,
         grades,
         files: product.payload_files().map(|file| file.id).collect(),
         natives,
         loss,
     })
+}
+
+/// The term a seller approved for one axis on this item, where they approved
+/// one.
+///
+/// Only the two axes a target names no canonical field for can be answered
+/// this way. A subject, a topic or a grade is the relation's answer and a
+/// seller's mapping decision is not a substitute for one: those axes carry
+/// canonical ids, and an accepted native would have to be read back into one
+/// before it meant anything.
+fn accepted_term(approved: Option<&FrozenRuleOutput>, axis: TermKind) -> Option<&SellerTermChoice> {
+    let frozen = approved?;
+    match axis {
+        TermKind::Licence => frozen.licence.as_ref(),
+        TermKind::ResourceType => frozen.resource_type.as_ref(),
+        TermKind::Subject | TermKind::Topic | TermKind::Phase => None,
+    }
+}
+
+/// The accepted native id as a path in the target's own vocabulary.
+///
+/// The relation is read for the segments rather than the value: the seller
+/// chose the target's own term, and the target's own tree is where that term's
+/// segments live. Where the relation holds no edge onto it — a measured
+/// target value nothing canonical projects to, which is the ordinary case for
+/// a licence Tes declares and no source carries — the path is the value
+/// itself, carrying the native id the adapter posts. Nothing is invented
+/// either way: the native id is the seller's own, and the segments are
+/// whatever we actually know.
+fn accepted_path(
+    choice: &SellerTermChoice,
+    vocabulary: VocabularyId,
+    edges: &[ProjectionEdge],
+) -> VocabularyPath {
+    edges
+        .iter()
+        .map(|edge| &edge.to)
+        .find(|path| {
+            path.vocabulary == vocabulary
+                && path.native_id.as_deref() == Some(choice.native_id.as_str())
+        })
+        .cloned()
+        .unwrap_or_else(|| VocabularyPath {
+            vocabulary,
+            segments: vec![choice.native_id.clone()],
+            native_id: Some(choice.native_id.clone()),
+        })
 }
 
 /// The source's own paths for one axis, which is what a `NoTargetField` loss
@@ -349,12 +433,13 @@ fn capped(text: &str, spec: &FieldSpec) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{project_listing, ListingContext};
+    use super::{project_listing, project_listing_with_overrides, ListingContext};
     use tam_domain::equivalence::{
         ElectionAnswer, ElectionRule, ElectionTrigger, ElectionTriggerKind, Loss, PricingBranch,
         SettledElection,
     };
     use tam_domain::registry::registry;
+    use tam_domain::seller_rules::{FrozenRuleOutput, SellerTermChoice};
     use tam_domain::ListingProjection;
     use tam_domain::{
         CanonicalTerm, Decider, EdgeKind, ProjectionBlocked, ProjectionEdge, RightsDeclaration,
@@ -363,7 +448,7 @@ mod tests {
     use tam_types::{
         CanonicalTermId, ContentHash, CopyFormat, Currency, FileBytes, FileId, FileKind, FileRole,
         InventoryId, ListingCopy, MappingId, Money, OrgId, PayloadSet, PriceIntent, ProductFile,
-        ProductId, ScanOutcome, Timestamp, Title, Uuid,
+        ProductId, ScanOutcome, Timestamp, Title, UserId, Uuid,
     };
 
     const ORG: OrgId = OrgId(Uuid([0xAA; 16]));
@@ -1172,5 +1257,105 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The approved output the seller's own decision produced, as the freeze
+    /// stores it.
+    fn approved(price: PriceIntent, licence: Option<&str>) -> FrozenRuleOutput {
+        FrozenRuleOutput {
+            price,
+            licence: licence.map(|native| SellerTermChoice {
+                native_id: native.to_owned(),
+                author: UserId(Uuid([0x0D; 16])),
+            }),
+            resource_type: None,
+            matches: vec![],
+        }
+    }
+
+    /// The whole point of the feature at the gate that would otherwise refuse
+    /// it: a US-priced resource crossing to a marketplace that sells in
+    /// pounds, under a conversion the seller approved.
+    #[test]
+    fn an_approved_price_crosses_the_currency_gate_the_canonical_one_blocks_on() {
+        let catalogue = terms();
+        let policy = licence_policy();
+        let edges = [tes_edge()];
+        let dollars = PriceIntent::Paid(Money::new(30_000, Currency::Usd).expect("a price"));
+        let source = product(dollars, true, ScanOutcome::Clean { at: NOW });
+        project_listing(&source, &ctx(&catalogue, &edges, &policy))
+            .expect_err("without an approval the dollar price still blocks by name");
+        let pounds = PriceIntent::Paid(Money::new(22_500, Currency::Gbp).expect("a price"));
+        let projection = project_listing_with_overrides(
+            &source,
+            &ctx(&catalogue, &edges, &policy),
+            &[],
+            Some(&approved(pounds, None)),
+        )
+        .expect("the approved conversion is denominated in what Tes sells in");
+        assert_eq!(
+            projection.price, pounds,
+            "the listing posts the money the seller approved, not the canonical figure"
+        );
+        assert_eq!(
+            source.price, dollars,
+            "the source keeps its own price: a target rule never rewrites the canonical one"
+        );
+    }
+
+    /// An approval is frozen per item, so the canonical price moving
+    /// afterwards cannot move what the item posts. This is the projection's
+    /// half of that: given the same frozen output, the price is the same
+    /// whatever the product now says.
+    #[test]
+    fn a_later_canonical_price_change_cannot_move_an_approved_one() {
+        let catalogue = terms();
+        let policy = licence_policy();
+        let edges = [tes_edge()];
+        let pounds = PriceIntent::Paid(Money::new(22_500, Currency::Gbp).expect("a price"));
+        let frozen = approved(pounds, None);
+        let edited = PriceIntent::Paid(Money::new(100, Currency::Gbp).expect("a price"));
+        let projection = project_listing_with_overrides(
+            &product(edited, true, ScanOutcome::Clean { at: NOW }),
+            &ctx(&catalogue, &edges, &policy),
+            &[],
+            Some(&frozen),
+        )
+        .expect("the frozen price is denominated correctly");
+        assert_eq!(
+            projection.price, pounds,
+            "an edit after the enqueue must not change posted money"
+        );
+    }
+
+    /// A licence the seller accepted is an answer, so the axis that would
+    /// have asked does not ask. Without it this product blocks on the very
+    /// election `an_unstated_licence_into_a_target_that_requires_one_asks...`
+    /// pins.
+    #[test]
+    fn an_accepted_licence_answers_the_axis_that_would_have_raised_an_election() {
+        let catalogue = terms();
+        let mut edges = vec![tes_edge()];
+        edges.extend(licence_edges());
+        let source = product(PriceIntent::Free, true, ScanOutcome::Clean { at: NOW });
+        project_listing(&source, &ctx(&catalogue, &edges, &[]))
+            .expect_err("with no policy and no approval the licence is still a question");
+        let projection = project_listing_with_overrides(
+            &source,
+            &ctx(&catalogue, &edges, &[]),
+            &[],
+            Some(&approved(PriceIntent::Free, Some("TES-PAID"))),
+        )
+        .expect("a licence the seller accepted is an answer, so nothing is asked");
+        assert_eq!(
+            elected_licence(&projection).as_deref(),
+            Some("TES-PAID"),
+            "the accepted grant reaches the seam under the target's own token"
+        );
+        assert_eq!(
+            source.rights,
+            RightsDeclaration::Unstated,
+            "accepting a target licence states nothing new about the source's rights"
+        );
     }
 }

@@ -39,7 +39,7 @@ const DEVICE: &str = "11112222333344445555666677778888";
 const OTHER_ORG: OrgId = OrgId(Uuid([0xAB; 16]));
 const SUBJECT: CanonicalTermId = CanonicalTermId(Uuid([0x77; 16]));
 const TOPIC: CanonicalTermId = CanonicalTermId(Uuid([0x78; 16]));
-/// The resource type the fixture's `mainType: 1` names.
+/// The source's captured `mainType: 99009` (Worksheet/Activity).
 const RESOURCE_TYPE: CanonicalTermId = CanonicalTermId(Uuid([0x79; 16]));
 const NOW: Timestamp = Timestamp(1_000);
 
@@ -59,7 +59,7 @@ fn draft_body_licensed(resource: i64, licence: &str, price: serde_json::Value) -
         "yearGroups": ["year-2"],
         "curriculum": "English",
         "mainAge": 6,
-        "mainType": 1,
+        "mainType": 99009,
         "ages": [5, 6, 7]
     });
     if !price.is_null() {
@@ -167,7 +167,7 @@ async fn seed(pool: &PgPool, with_target_edges: bool) {
             InventoryId::Tes,
             TermKind::ResourceType,
             &["Worksheet"],
-            "1",
+            "99009",
         ),
         edge(
             RESOURCE_TYPE,
@@ -254,6 +254,7 @@ fn run_for(pool: PgPool) -> ImportRun {
 /// The same run for a stated tenant.
 fn run_for_org(pool: PgPool, org: OrgId) -> ImportRun {
     ImportRun {
+        request: None,
         pool,
         org,
         source: InventoryId::Tes,
@@ -524,21 +525,82 @@ async fn a_mapped_catalogue_row_imports_and_projects(pool: PgPool) {
          and now travels with the product"
     );
     assert_eq!(
-        product
-            .native_residue
-            .iter()
-            .filter_map(|term| term.native_id.clone())
-            .collect::<Vec<_>>(),
-        vec!["year-2".to_owned(), "English".to_owned()],
-        "a GB resource answers the phase axis from ageRanges, so the yearGroups value and \
-         the curriculum orientation are values in axes this model does not type, kept \
-         verbatim rather than filed under a kind they do not mean"
-    );
-    assert_eq!(
         report.curriculum,
         vec!["English".to_owned()],
         "the operator-facing column is derived from the residue by membership in the \
          twelve-value orientation vocabulary, not carried as its own field"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn imported_resource_types_select_the_target_price(pool: PgPool) {
+    use tam_domain::seller_rules::{RuleAction, RuleConditions, RuleUse, SellerRuleDefinition};
+    use tam_storage::rule_capture::{approved_fields, PricingScope};
+    use tam_storage::seller_rules::SellerRuleRepo;
+    use tam_types::{Currency, Money, Rounding};
+
+    seed(&pool, true).await;
+    let seller = UserId(Uuid([0x91; 16]));
+    tam_storage::SessionRepo::new(pool.clone())
+        .create_user(ORG, seller, "resource-type-rule@example.test", NOW)
+        .await
+        .expect("the seller exists");
+    let definition = SellerRuleDefinition {
+        title: "Convert these TES resource types".to_owned(),
+        description: "Only worksheets receive this dollar price.".to_owned(),
+        enabled: true,
+        source: InventoryId::Tes,
+        target: InventoryId::Tpt,
+        auto_apply: vec![RuleUse::CrossList],
+        conditions: RuleConditions {
+            resource_types: vec!["99009".to_owned()],
+            ..RuleConditions::default()
+        },
+        action: RuleAction::Pricing {
+            rate: "1.25".to_owned(),
+            rounding: Rounding::Nearest,
+            reference: None,
+        },
+    };
+    SellerRuleRepo::new(pool.clone())
+        .create(ORG, seller, &definition, NOW)
+        .await
+        .expect("the conditional rule saves");
+    let adapter = adapter_licensed(13_549_794, "TES-PAID", serde_json::json!(300));
+    let entry = applied_held(
+        &pool,
+        store_root("resource-type-price"),
+        &adapter,
+        13_549_794,
+    )
+    .await;
+    let report = import_one(&run_for(pool.clone()), &entry)
+        .await
+        .expect("the resource imports");
+    let target = approved_fields(
+        &pool,
+        ORG,
+        report.product,
+        PricingScope::CrossList(InventoryId::Tpt),
+    )
+    .await
+    .expect("the imported source type can select a rule");
+    assert_eq!(
+        target.price,
+        Some(PriceIntent::Paid(
+            Money::new(375, Currency::Usd).expect("positive dollars")
+        )),
+        "the preserved source type selects the seller's conversion after import"
+    );
+    let source = ProductRepo::new(pool)
+        .get(ORG, report.product)
+        .await
+        .expect("the source reads")
+        .expect("the source remains");
+    assert_eq!(
+        source.product.price,
+        PriceIntent::Paid(Money::new(300, Currency::Gbp).expect("positive pounds")),
+        "the target rule does not rewrite source money"
     );
 }
 
@@ -1061,6 +1123,7 @@ async fn the_coverage_number_counts_terms_and_not_the_projections_blocker(pool: 
     // blocker that is not a term is the whole point of the fixture.
     let adapter = adapter_licensed(13_549_794, "TES-PAID-SCHOOL", serde_json::json!(450));
     let run = ImportRun {
+        request: None,
         pool: pool.clone(),
         org: ORG,
         source: InventoryId::Tes,

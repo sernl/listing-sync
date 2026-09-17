@@ -42,6 +42,7 @@ const NOW: Timestamp = Timestamp(NOW_SECS * 1_000);
 
 fn state(pool: PgPool, secret: Option<&str>) -> AppState {
     AppState {
+        exchange_rates: None,
         pool,
         config: Config {
             paddle_webhook_secret: secret.map(|raw| WebhookSecret::new(raw.to_owned())),

@@ -44,7 +44,7 @@ use crate::product::{StandardInput, TptBaseInput};
 use crate::{AppState, OrgContext};
 
 fn storage_fault(state: &AppState, error: &tam_storage::StorageError) -> APIError {
-    state.internal(&error.to_string())
+    crate::jobs::storage_fault(state, error)
 }
 
 fn validation(message: &str) -> APIError {
@@ -1755,6 +1755,7 @@ pub(crate) async fn bind_mapping(
             | StorageError::TimestampOutOfRange { .. }
             | StorageError::CorruptRow { .. }
             | StorageError::OrgMismatch
+            | StorageError::SellerRuleBlocked { .. }
             | StorageError::StaleLease
             | StorageError::DuplicateIdempotencyKey { .. }
             | StorageError::AttemptInFlight

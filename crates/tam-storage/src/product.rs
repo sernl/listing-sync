@@ -266,147 +266,168 @@ impl ProductRepo {
         org: OrgId,
         id: ProductId,
     ) -> Result<Option<ProductRecord>, StorageError> {
-        let org_db = uuid_to_db(org.0);
-        let product_db = uuid_to_db(id.0);
-
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
-
-        let Some(row) = sqlx::query_as!(
-            ProductRow,
-            "SELECT org_id, id, title, body, body_format, price_kind, price_minor_units, \
-             price_currency, rights_state, rights_source_inventory, rights_segments, \
-             rights_native_id, created_at, updated_at \
-             FROM product \
-             WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL",
-            org_db,
-            product_db,
-        )
-        .fetch_optional(&mut *tx)
-        .await?
-        else {
-            tx.commit().await?;
-            return Ok(None);
-        };
-
-        let files = sqlx::query_as!(
-            FileRow,
-            // A LEFT JOIN, because a marketplace-sourced file has no blob row
-            // and an inner one would not merely omit its length — it would
-            // drop the file from the product entirely, so a device-imported
-            // product would read back with its payload missing everywhere the
-            // catalogue is read from, the console and the manifest builder
-            // included.
-            "SELECT f.id, f.role, f.kind, f.hash, b.byte_len AS \"byte_len?\", \
-             f.scan_state, f.scan_signature, f.scanned_at, f.scan_failure_code, \
-             f.source_marketplace, f.source_connection, f.source_resource, f.source_entry, \
-             f.observed_hash, f.observed_byte_len, f.observed_by_device, f.observed_at, \
-             f.asserted_scan_state, f.asserted_scan_signature, \
-             f.asserted_scanned_at, f.asserted_scan_failure_code, \
-             f.payload_file_name, f.payload_content_type, f.name \
-             FROM product_file f \
-             LEFT JOIN blob b ON b.org_id = f.org_id AND b.hash = f.hash \
-             WHERE f.org_id = $1 AND f.product_id = $2 AND f.deleted_at IS NULL \
-             ORDER BY f.position",
-            org_db,
-            product_db,
-        )
-        .fetch_all(&mut *tx)
-        .await?;
-
-        let terms = sqlx::query!(
-            "SELECT term_id FROM product_term \
-             WHERE org_id = $1 AND product_id = $2 \
-             ORDER BY position",
-            org_db,
-            product_db,
-        )
-        .fetch_all(&mut *tx)
-        .await?;
-
-        let grade = sqlx::query_as!(
-            GradeRow,
-            "SELECT source, source_inventory, source_term_kind, \
-             derived_low_years, derived_high_years \
-             FROM grade_declaration \
-             WHERE org_id = $1 AND product_id = $2",
-            org_db,
-            product_db,
-        )
-        .fetch_optional(&mut *tx)
-        .await?;
-
-        let paths = sqlx::query_as!(
-            PathRow,
-            "SELECT inventory, term_kind, segments, native_id \
-             FROM grade_declaration_path \
-             WHERE org_id = $1 AND product_id = $2 \
-             ORDER BY position",
-            org_db,
-            product_db,
-        )
-        .fetch_all(&mut *tx)
-        .await?;
-
-        let residue = sqlx::query_as!(
-            ResidueRow,
-            "SELECT inventory, term_kind, segments, native_id \
-             FROM native_residue \
-             WHERE org_id = $1 AND product_id = $2 \
-             ORDER BY position",
-            org_db,
-            product_db,
-        )
-        .fetch_all(&mut *tx)
-        .await?;
-
+        let record = get_product_in_tx(&mut tx, org, id).await?;
         tx.commit().await?;
+        Ok(record)
+    }
+}
 
-        let native_residue = residue
-            .into_iter()
-            .map(decode_residue)
-            .collect::<Result<Vec<_>, _>>()?;
-        let ProductFiles {
+/// One product read whole, inside a transaction the caller owns.
+///
+/// The one implementation, and [`ProductRepo::get`] is this call with a
+/// transaction opened around it. Reachable this way because a caller that has
+/// just canonicalised a product in its own transaction has to read that
+/// product back — the rule evaluation at enqueue does exactly that — and a
+/// second pooled read cannot see rows the caller has not committed yet. It
+/// would read the previous state of the resource, or none at all, and freeze
+/// a price for a resource that no longer exists in the shape it was priced
+/// in.
+///
+/// Pinning is the caller's, as it is for every other `*_in_tx` in this
+/// module: the transaction is theirs and the pin is transaction-local.
+pub(crate) async fn get_product_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    id: ProductId,
+) -> Result<Option<ProductRecord>, StorageError> {
+    let org_db = uuid_to_db(org.0);
+    let product_db = uuid_to_db(id.0);
+
+    let Some(row) = sqlx::query_as!(
+        ProductRow,
+        "SELECT org_id, id, title, body, body_format, price_kind, price_minor_units, \
+         price_currency, rights_state, rights_source_inventory, rights_segments, \
+         rights_native_id, created_at, updated_at \
+         FROM product \
+         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL",
+        org_db,
+        product_db,
+    )
+    .fetch_optional(&mut **tx)
+    .await?
+    else {
+        return Ok(None);
+    };
+
+    let files = sqlx::query_as!(
+        FileRow,
+        // A LEFT JOIN, because a marketplace-sourced file has no blob row
+        // and an inner one would not merely omit its length — it would
+        // drop the file from the product entirely, so a device-imported
+        // product would read back with its payload missing everywhere the
+        // catalogue is read from, the console and the manifest builder
+        // included.
+        "SELECT f.id, f.role, f.kind, f.hash, b.byte_len AS \"byte_len?\", \
+         f.scan_state, f.scan_signature, f.scanned_at, f.scan_failure_code, \
+         f.source_marketplace, f.source_connection, f.source_resource, f.source_entry, \
+         f.observed_hash, f.observed_byte_len, f.observed_by_device, f.observed_at, \
+         f.asserted_scan_state, f.asserted_scan_signature, \
+         f.asserted_scanned_at, f.asserted_scan_failure_code, \
+         f.payload_file_name, f.payload_content_type, f.name \
+         FROM product_file f \
+         LEFT JOIN blob b ON b.org_id = f.org_id AND b.hash = f.hash \
+         WHERE f.org_id = $1 AND f.product_id = $2 AND f.deleted_at IS NULL \
+         ORDER BY f.position",
+        org_db,
+        product_db,
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+
+    let terms = sqlx::query!(
+        "SELECT term_id FROM product_term \
+         WHERE org_id = $1 AND product_id = $2 \
+         ORDER BY position",
+        org_db,
+        product_db,
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+
+    let grade = sqlx::query_as!(
+        GradeRow,
+        "SELECT source, source_inventory, source_term_kind, \
+         derived_low_years, derived_high_years \
+         FROM grade_declaration \
+         WHERE org_id = $1 AND product_id = $2",
+        org_db,
+        product_db,
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    let paths = sqlx::query_as!(
+        PathRow,
+        "SELECT inventory, term_kind, segments, native_id \
+         FROM grade_declaration_path \
+         WHERE org_id = $1 AND product_id = $2 \
+         ORDER BY position",
+        org_db,
+        product_db,
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+
+    let residue = sqlx::query_as!(
+        ResidueRow,
+        "SELECT inventory, term_kind, segments, native_id \
+         FROM native_residue \
+         WHERE org_id = $1 AND product_id = $2 \
+         ORDER BY position",
+        org_db,
+        product_db,
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+
+    let native_residue = residue
+        .into_iter()
+        .map(decode_residue)
+        .collect::<Result<Vec<_>, _>>()?;
+    let ProductFiles {
+        payload,
+        cover,
+        previews,
+        names,
+    } = partition_files(files)?;
+    let subjects = terms
+        .into_iter()
+        .map(|row| CanonicalTermId(uuid_from_db(row.term_id)))
+        .collect();
+    let grade = grade.ok_or_else(|| StorageError::CorruptRow {
+        reason: "product without a grade_declaration row".to_owned(),
+    })?;
+    let grades = decode_grades(&grade, paths)?;
+    let rights = rights_from_db(&row)?;
+    let price = price_from_db(&row.price_kind, row.price_minor_units, row.price_currency)?;
+
+    Ok(Some(ProductRecord {
+        product: CanonicalProduct {
+            id: ProductId(uuid_from_db(row.id)),
+            org: OrgId(uuid_from_db(row.org_id)),
+            title: Title(row.title),
+            body: tam_types::ListingCopy {
+                body: row.body,
+                format: copy_format_from_db(&row.body_format)?,
+            },
             payload,
             cover,
             previews,
-            names,
-        } = partition_files(files)?;
-        let subjects = terms
-            .into_iter()
-            .map(|row| CanonicalTermId(uuid_from_db(row.term_id)))
-            .collect();
-        let grade = grade.ok_or_else(|| StorageError::CorruptRow {
-            reason: "product without a grade_declaration row".to_owned(),
-        })?;
-        let grades = decode_grades(&grade, paths)?;
-        let rights = rights_from_db(&row)?;
-        let price = price_from_db(&row.price_kind, row.price_minor_units, row.price_currency)?;
+            subjects,
+            grades,
+            price,
+            rights,
+            native_residue,
+        },
+        file_names: names,
+        created_at: timestamp_from_db(row.created_at),
+        updated_at: timestamp_from_db(row.updated_at),
+    }))
+}
 
-        Ok(Some(ProductRecord {
-            product: CanonicalProduct {
-                id: ProductId(uuid_from_db(row.id)),
-                org: OrgId(uuid_from_db(row.org_id)),
-                title: Title(row.title),
-                body: tam_types::ListingCopy {
-                    body: row.body,
-                    format: copy_format_from_db(&row.body_format)?,
-                },
-                payload,
-                cover,
-                previews,
-                subjects,
-                grades,
-                price,
-                rights,
-                native_residue,
-            },
-            file_names: names,
-            created_at: timestamp_from_db(row.created_at),
-            updated_at: timestamp_from_db(row.updated_at),
-        }))
-    }
-
+impl ProductRepo {
     /// Applies one edit to a product's canonical fields, in one transaction.
     ///
     /// Files are absent from [`ProductEdit`] on purpose: bytes enter through
@@ -1021,7 +1042,7 @@ struct FileWrite {
 /// Takes the product's row for the length of the transaction, so two file
 /// mutations against one product cannot interleave. `false` is the tenant
 /// holding no live product of that identifier.
-async fn lock_product(
+pub(crate) async fn lock_product(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     org_db: uuid::Uuid,
     product_db: uuid::Uuid,
@@ -1614,15 +1635,15 @@ struct ProductRow {
 /// The four columns a rights declaration occupies, so the insert and the
 /// `product_rights_total` CHECK cannot disagree about which combination is
 /// representable.
-struct RightsColumns {
-    state: &'static str,
-    inventory: Option<String>,
-    segments: Option<Vec<String>>,
-    native_id: Option<String>,
+pub(crate) struct RightsColumns {
+    pub(crate) state: &'static str,
+    pub(crate) inventory: Option<String>,
+    pub(crate) segments: Option<Vec<String>>,
+    pub(crate) native_id: Option<String>,
 }
 
 impl RightsColumns {
-    fn encode(rights: &RightsDeclaration) -> Self {
+    pub(crate) fn encode(rights: &RightsDeclaration) -> Self {
         match rights {
             RightsDeclaration::Unstated => Self {
                 state: "unstated",

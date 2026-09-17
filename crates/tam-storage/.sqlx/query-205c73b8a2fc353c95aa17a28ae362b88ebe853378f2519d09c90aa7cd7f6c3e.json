@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT source, target, captured_rules, rule_scope FROM seller_rule_preview WHERE org_id = $1 AND id = $2 FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "source",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "target",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "captured_rules",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "rule_scope",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "205c73b8a2fc353c95aa17a28ae362b88ebe853378f2519d09c90aa7cd7f6c3e"
+}

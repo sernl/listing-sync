@@ -17,11 +17,11 @@
 
 use pulldown_cmark::{html::push_html, Options, Parser};
 use serde_json::{json, Value};
-use tam_marketplace::{AdapterError, FieldSet, NativeTerm, ProjectedListing};
+use tam_marketplace::{AdapterError, FieldSet, NativeAxis, NativeTerm, ProjectedListing};
 use tam_types::natives::is_tpt_tag_slug;
 use tam_types::{
     CopyFormat, CurrencyRule, FailureCode, FailureDetail, FieldKey, InventoryId, PriceIntent,
-    Timestamp,
+    TermKind, Timestamp,
 };
 
 use crate::form::{ThumbHandle, TptFormTokens};
@@ -723,7 +723,7 @@ fn refuse(detail: String) -> AdapterError {
 
 /// A tag-bearing axis, named for the refusals it raises. TPT's registry binds
 /// every equivalence axis to `taxonomyTags`, so each of these is the same flat
-/// slug namespace and none of them is addressed by a number; the two exist
+/// slug namespace and none of them is addressed by a number; they exist
 /// separately only so a refusal names the field the seller sees.
 #[derive(Debug, Clone, Copy)]
 enum TagAxis {
@@ -731,6 +731,10 @@ enum TagAxis {
     Taxonomy,
     /// Grades, which TPT files in that same flat namespace.
     Grade,
+    /// Resource types, which reach this adapter through
+    /// [`ProjectedListing::natives`] because the projection has no field of
+    /// its own for them, and which TPT files in that same namespace again.
+    Resource,
 }
 
 impl TagAxis {
@@ -738,8 +742,40 @@ impl TagAxis {
         match self {
             Self::Taxonomy => "taxonomy",
             Self::Grade => "grade",
+            Self::Resource => "resource type",
         }
     }
+}
+
+/// The resource types the projection resolved, as `taxonomyTags` members.
+///
+/// `natives` carries the axes [`ProjectedListing`] names no field for, and a
+/// resource type a seller approved is one of them. TPT binds that axis to the
+/// same flat `taxonomyTags` field as subjects, topics and grades, so the value
+/// lands there, addressed by the slug TPT issued and checked by the same
+/// guard — there is no separate wire shape to invent for it.
+///
+/// Any other axis is refused rather than dropped. TPT's wire carries no field
+/// this adapter could route one into, and a listing posted without a value the
+/// seller approved is a listing they did not author: a refusal on the record
+/// is the honest form of that loss.
+fn resource_type_slugs(natives: &[NativeAxis]) -> Result<Vec<String>, AdapterError> {
+    let mut slugs = Vec::with_capacity(natives.len());
+    for native in natives {
+        if native.axis != TermKind::ResourceType {
+            return Err(refuse(format!(
+                "the projection resolved a {:?} value for this TPT listing and TPT's wire has no \
+                 field it belongs in; posting the listing without it would publish terms the \
+                 seller did not approve",
+                native.axis
+            )));
+        }
+        slugs.extend(tag_slugs(
+            core::slice::from_ref(&native.value),
+            TagAxis::Resource,
+        )?);
+    }
+    Ok(slugs)
 }
 
 /// One axis's terms as `taxonomyTags` members, or a refusal naming the first
@@ -841,6 +877,12 @@ fn body_as_html(body: &str, format: CopyFormat) -> String {
 /// its tags by identifiers it issued, and there is nothing to send in place
 /// of one.
 ///
+/// A resource type the seller approved arrives on `natives` rather than in a
+/// field of its own, because the projection has no field for an axis TPT files
+/// in its flat namespace. It lands in `taxonomyTags` beside the subjects, and
+/// an axis this wire has no home for is refused rather than dropped —
+/// [`resource_type_slugs`] is where both of those decisions live.
+///
 /// A body in the other format is not refused; it is rendered. TPT stores and
 /// returns its description as HTML, so a Tes-sourced Markdown body posted
 /// verbatim would show its `**bold**` and its `#` headings as themselves on
@@ -886,7 +928,16 @@ pub fn project_fields(listing: &ProjectedListing) -> Result<FieldSet, AdapterErr
             })
         }
     };
-    let tags = tag_slugs(&listing.taxonomy, TagAxis::Taxonomy)?;
+    // Subjects, topics and the approved resource types all land in the one
+    // field, which is TPT's own shape rather than a flattening this adapter
+    // chose. A slug already present is not posted twice: the wire carries a
+    // set of tag names, and repeating one says nothing further.
+    let mut tags = tag_slugs(&listing.taxonomy, TagAxis::Taxonomy)?;
+    for slug in resource_type_slugs(&listing.natives)? {
+        if !tags.contains(&slug) {
+            tags.push(slug);
+        }
+    }
     let grades = tag_slugs(&listing.grades, TagAxis::Grade)?;
     Ok(FieldSet {
         // TPT's own wire is HTML and the projection above renders anything
@@ -1001,9 +1052,10 @@ mod tests {
     };
     use crate::form::TptFormTokens;
     use crate::upload::ProcessedHandle;
-    use tam_marketplace::{AdapterError, AgeSpan, NativeTerm, ProjectedListing};
+    use tam_marketplace::{AdapterError, AgeSpan, NativeAxis, NativeTerm, ProjectedListing};
     use tam_types::{
-        CopyFormat, Currency, FailureCode, FieldKey, FileId, Money, PriceIntent, Timestamp, Uuid,
+        CopyFormat, Currency, FailureCode, FieldKey, FileId, Money, PriceIntent, TermKind,
+        Timestamp, Uuid,
     };
 
     /// The only way to obtain a token set is to scrape a render, which is
@@ -1627,6 +1679,96 @@ mod tests {
             listing.category_ids
         );
         assert_eq!(fields.files.len(), 1, "the file list crosses untouched");
+    }
+
+    /// An approved resource type reaches the posted tags rather than being
+    /// dropped between the seam and the wire.
+    ///
+    /// TPT binds that axis to the same flat `taxonomyTags` field as subjects,
+    /// so the whole chain is exercised: the value starts on `natives`, crosses
+    /// the `FieldSet` the ledger records as the intent, and comes back out of
+    /// `listing_from_field_set` as a tag a create would post. It was discarded
+    /// here before this change — the field builder read `taxonomy` and
+    /// `grades` and never `natives`.
+    #[test]
+    fn an_accepted_resource_type_reaches_the_posted_taxonomy_tags() {
+        let mut projection = projected(PriceIntent::Free);
+        projection.natives = vec![
+            NativeAxis {
+                axis: TermKind::ResourceType,
+                value: NativeTerm {
+                    native_id: Some("unit-plans".to_owned()),
+                    segments: vec!["Unit Plans".to_owned()],
+                },
+            },
+            NativeAxis {
+                axis: TermKind::ResourceType,
+                value: NativeTerm {
+                    native_id: Some("math".to_owned()),
+                    segments: vec!["Math".to_owned()],
+                },
+            },
+        ];
+        let fields = project_fields(&projection).expect("an approved resource type projects");
+        let listing =
+            listing_from_field_set(&fields).expect("the submit parses its own projection");
+        assert_eq!(
+            listing.taxonomy_tags,
+            vec![
+                "math".to_owned(),
+                "fractions".to_owned(),
+                "unit-plans".to_owned(),
+                "4th-grade".to_owned()
+            ],
+            "the approved slug rides the flat namespace beside the subjects, and a slug the \
+             listing already carries is not posted twice"
+        );
+
+        // The same guard as every other axis, because it is the same field: a
+        // Tes `mainType` id is not a slug TPT can have issued, and posting it
+        // would write it into a live listing verbatim.
+        projection.natives = vec![NativeAxis {
+            axis: TermKind::ResourceType,
+            value: NativeTerm {
+                native_id: Some("99003".to_owned()),
+                segments: vec!["Lesson".to_owned()],
+            },
+        }];
+        let refused = project_fields(&projection);
+        let Err(AdapterError::Rejected { detail, .. }) = refused else {
+            panic!("a foreign identifier on the tag field is a rejection, got {refused:?}");
+        };
+        assert!(
+            detail.0.contains("resource type") && detail.0.contains("99003"),
+            "the refusal names the axis the seller sees and the identifier, got {}",
+            detail.0
+        );
+    }
+
+    /// TPT publishes no licence field anywhere on its wire, so an elected
+    /// licence arriving on `natives` has no home here. It is refused rather
+    /// than dropped: a listing posted without terms the seller approved is a
+    /// listing they did not author, and a silent omission is the one outcome
+    /// nobody can see.
+    #[test]
+    fn an_axis_tpt_has_no_field_for_is_refused_rather_than_dropped() {
+        let mut projection = projected(PriceIntent::Free);
+        projection.natives = vec![NativeAxis {
+            axis: TermKind::Licence,
+            value: NativeTerm {
+                native_id: Some("TES-PAID".to_owned()),
+                segments: vec!["Paid licence".to_owned()],
+            },
+        }];
+        let refused = project_fields(&projection);
+        let Err(AdapterError::Rejected { detail, .. }) = refused else {
+            panic!("an axis with no field on the wire is a rejection, got {refused:?}");
+        };
+        assert!(
+            detail.0.contains("Licence"),
+            "the refusal names the axis it could not place, got {}",
+            detail.0
+        );
     }
 
     /// G-O6, settled: TPT sells in USD and offers the seller no other

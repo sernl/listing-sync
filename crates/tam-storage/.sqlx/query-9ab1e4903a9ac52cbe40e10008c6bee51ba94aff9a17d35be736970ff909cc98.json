@@ -1,0 +1,65 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, source_currency, target_currency, rate_micros, as_of, provider, source_url, fetched_at FROM seller_rule_reference WHERE org_id = $1 AND id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "source_currency",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "target_currency",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "rate_micros",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "as_of",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 5,
+        "name": "provider",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "source_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "fetched_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "9ab1e4903a9ac52cbe40e10008c6bee51ba94aff9a17d35be736970ff909cc98"
+}

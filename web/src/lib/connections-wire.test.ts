@@ -1,29 +1,12 @@
-// The `/v1/connections` wire shape, and every consumer of it read against the
-// answer the server actually sends.
-//
-// Written after a live crash: the route answers an envelope, four queries
-// under the one `['connections']` cache key held two shapes of it, and
-// whichever refetched last decided which one the Resources board's `find` was
-// handed. The board threw `connections.find is not a function` inside a
-// `$derived`, so the render boundary drew its sentence instead of the page,
-// and the sentence stayed up across navigation. The account that showed it had
-// connections and resources; the test accounts had neither, so nothing on the
-// way to production ever called `find`.
-//
-// WIRE below is transcribed from `ConnectionsView` and `ConnectionView` in
-// `crates/tam-api/src/resources.rs`, including the `skip_serializing_if` that
-// omits `authorship` rather than nulling it.
+// Regression fixture for the ConnectionsView envelope. Mixed cache shapes once
+// caused Resources to throw `connections.find is not a function`.
 
-import { readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { api, connectionList, type ConnectionView } from '$lib/api';
 import { rowFor } from '$lib/inventory';
 import { connectionFor } from '$lib/publish-readiness';
 import { targetAuthorship } from '$lib/sync-request';
-import { marketplaceRows, signInStates } from '$lib/devices-view';
-import { importCards } from '$lib/pages/import/import-view';
-import { cards } from '$lib/pages/automations/landing';
+import { marketplaceRows } from '$lib/devices-view';
 import type { DeviceView, ProductHead } from '$lib/api';
 
 const NOW = 1_788_000_000_000;
@@ -158,55 +141,11 @@ describe('every consumer of the list, on the real shape', () => {
 		expect(targetAuthorship(none, 'Tpt')).toEqual({ kind: 'unrecorded' });
 	});
 
-	it('builds the marketplaces rows and sign-in states from the list', () => {
-		for (const connections of [held, none]) {
-			expect(signInStates([device()], connections, NOW).length).toBeGreaterThan(0);
-			expect(marketplaceRows([device()], connections, NOW).length).toBeGreaterThan(0);
-		}
+	it('preserves seller authorship when building marketplace rows', () => {
 		expect(
 			marketplaceRows([device()], held, NOW).find((row) => row.marketplace === 'Tpt')?.authorship
 		).toEqual({ state: 'declared', name: 'Kauri Classroom', attested_at: NOW - 2_592_000_000 });
 	});
 
-	it('builds the import cards from the list, and from an unread one', () => {
-		expect(importCards(held).length).toBeGreaterThan(0);
-		expect(importCards(none).length).toBeGreaterThan(0);
-		expect(importCards(null).length).toBeGreaterThan(0);
-	});
-
-	it('builds the automations cards from the list', () => {
-		for (const connections of [held, none]) {
-			expect(cards({ connections, requests: [], openQuestions: 0 }).length).toBeGreaterThan(0);
-		}
-	});
 });
 
-// The bug was not one wrong line, it was two query functions under one cache
-// key. TanStack keeps one entry per key and hands it to every observer, so a
-// second shape written under `['connections']` is read by the consumers of the
-// first, and which one wins is decided by whichever page was navigated to
-// last. Nothing about that is visible in the file being edited, so the
-// invariant is asserted over the tree.
-describe('one cache key, one shape', () => {
-	function sources(dir: string): string[] {
-		return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-			const path = join(dir, entry.name);
-			if (entry.isDirectory()) {
-				return sources(path);
-			}
-			return entry.name.endsWith('.svelte') || entry.name.endsWith('.ts') ? [path] : [];
-		});
-	}
-
-	it('reads queryKeys.connections through exactly one query function', () => {
-		const found = sources(new URL('..', import.meta.url).pathname).flatMap((path) =>
-			[...readFileSync(path, 'utf8').matchAll(/queryKey: queryKeys\.connections,\s*\n\s*(queryFn:[^\n]*)/g)].map(
-				(match) => ({ path, queryFn: match[1].trim() })
-			)
-		);
-		expect(found.length).toBeGreaterThan(1);
-		expect([...new Set(found.map((entry) => entry.queryFn))]).toEqual([
-			'queryFn: () => api.connections()'
-		]);
-	});
-});

@@ -138,6 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let barren_first = arguments.iter().any(|word| word == "--barren-first");
     let mut run = ImportRun {
+        request: None,
         pool: PgPool::connect(db_url).await?,
         org,
         source,

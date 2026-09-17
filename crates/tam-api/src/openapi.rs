@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 164] = [
+pub const ROUTES: [Route; 173] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -93,6 +93,51 @@ pub const ROUTES: [Route; 164] = [
         method: "delete",
         path: "/{version}/mappings/overrides",
         summary: "Withdraw one override, leaving the global relation to answer again",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/seller-rules",
+        summary: "Search and page the tenant's pricing and mapping rules",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/seller-rules",
+        summary: "Save a seller-authored directional rule",
+    },
+    Route {
+        method: "put",
+        path: "/{version}/seller-rules/{rule}",
+        summary: "Revise a rule without changing accepted or queued outputs",
+    },
+    Route {
+        method: "delete",
+        path: "/{version}/seller-rules/{rule}",
+        summary: "Remove a current rule while preserving its recorded applications",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/seller-rules/presets",
+        summary: "Read editable suggestions and their licence differences",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/seller-rules/reference",
+        summary: "Fetch and retain a dated informational ECB cross-rate",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/seller-rules/preview",
+        summary: "Compare target proposals for all or selected resources",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/seller-rules/previews/{preview}",
+        summary: "Read the original proposals and their recorded decisions",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/seller-rules/previews/{preview}/decision",
+        summary: "Accept or reject exact proposals after checking for stale inputs",
     },
     Route {
         method: "post",

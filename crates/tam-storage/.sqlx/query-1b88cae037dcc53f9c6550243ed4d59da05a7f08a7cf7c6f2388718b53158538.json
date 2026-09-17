@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE seller_rule_preview_row SET decision = $4, decided_at = $5, decided_by = $6 WHERE org_id = $1 AND preview_id = $2 AND product_id = $3 AND decision = 'pending'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Timestamptz",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1b88cae037dcc53f9c6550243ed4d59da05a7f08a7cf7c6f2388718b53158538"
+}

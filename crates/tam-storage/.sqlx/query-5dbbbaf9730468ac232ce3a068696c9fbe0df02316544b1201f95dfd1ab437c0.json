@@ -1,0 +1,90 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, sequence, price_kind, price_minor_units, price_currency, price_author, licence_native_id, licence_author, resource_type_native_id, resource_type_author, matches, approved_at FROM seller_rule_application WHERE org_id = $1 AND product_id = $2 AND target = $3 ORDER BY sequence DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "sequence",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "price_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "price_minor_units",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "price_currency",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "price_author",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "licence_native_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "licence_author",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 8,
+        "name": "resource_type_native_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "resource_type_author",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 10,
+        "name": "matches",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 11,
+        "name": "approved_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "5dbbbaf9730468ac232ce3a068696c9fbe0df02316544b1201f95dfd1ab437c0"
+}

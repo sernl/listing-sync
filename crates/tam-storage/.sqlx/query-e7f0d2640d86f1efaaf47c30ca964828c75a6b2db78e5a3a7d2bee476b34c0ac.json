@@ -1,0 +1,89 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT product_id, application_id, price_kind, price_minor_units, price_currency, price_author, licence_native_id, licence_author, resource_type_native_id, resource_type_author, matches, approved_at FROM sync_request_rule_choice WHERE org_id = $1 AND request_id = $2 ORDER BY product_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "application_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "price_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "price_minor_units",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "price_currency",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "price_author",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "licence_native_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "licence_author",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 8,
+        "name": "resource_type_native_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "resource_type_author",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 10,
+        "name": "matches",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 11,
+        "name": "approved_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "e7f0d2640d86f1efaaf47c30ca964828c75a6b2db78e5a3a7d2bee476b34c0ac"
+}

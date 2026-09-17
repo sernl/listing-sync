@@ -36,6 +36,7 @@ const MAPPING_2: MappingId = MappingId(Uuid([0x32; 16]));
 
 fn state(pool: PgPool) -> AppState {
     AppState {
+        exchange_rates: None,
         pool,
         config: Config::default(),
         wall: || NOW,

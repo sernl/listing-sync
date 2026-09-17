@@ -298,6 +298,7 @@ pub(crate) async fn create_migration(
     // replayed confirm drains nothing twice.
     if written {
         let run = tam_import::ImportRun {
+            request: Some(key.0),
             pool: state.pool.clone(),
             org: context.org,
             source: body.source,
@@ -461,6 +462,29 @@ async fn plan(
         .with_open_items(context.org, &target_ids)
         .await
         .map_err(|error| storage_fault(state, &error))?;
+    // What the seller has already approved for each of these resources on
+    // this target. The plan's currency gate and the price it admits both read
+    // it, because a gate reading the canonical price refuses every conversion
+    // the seller authorised — a USD source into Tes is exactly the case this
+    // feature exists for — and an admitted price that differed from the one
+    // the enqueue will freeze would report a figure nothing posts.
+    let source_products: Vec<_> = on_source
+        .iter()
+        .filter(|head| head.remote.is_some())
+        .map(|head| head.product)
+        .collect();
+    let approved = tam_storage::rule_capture::approved_prices(
+        &state.pool,
+        context.org,
+        &source_products,
+        tam_storage::rule_capture::PricingScope::Transfer {
+            source: body.source,
+            target: body.target,
+            use_: tam_storage::rule_capture::scope_of(disposition),
+        },
+    )
+    .await
+    .map_err(|error| storage_fault(state, &error))?;
 
     let mut rows = Vec::with_capacity(chosen.len());
     let mut admitted = Vec::new();
@@ -510,7 +534,15 @@ async fn plan(
             counts.blocked = counts.blocked.saturating_add(1);
             continue;
         }
-        if let Some(reason) = currency_refusal(product.price, body.target) {
+        // The approved target price where there is one, and the canonical
+        // price where there is not. An unapproved resource keeps the existing
+        // refusal by name rather than being given a target currency nobody
+        // chose.
+        let price = approved
+            .iter()
+            .find(|(subject, _)| *subject == product.id)
+            .map_or(product.price, |(_, approved)| *approved);
+        if let Some(reason) = currency_refusal(price, body.target) {
             rows.push(blocked(product, reason));
             counts.blocked = counts.blocked.saturating_add(1);
             continue;
@@ -560,7 +592,7 @@ async fn plan(
         counts.will_create = counts.will_create.saturating_add(1);
         admitted.push(Admitted {
             product: product.id,
-            price: product.price,
+            price,
             locator: locator_of(&source),
             source,
             source_state,

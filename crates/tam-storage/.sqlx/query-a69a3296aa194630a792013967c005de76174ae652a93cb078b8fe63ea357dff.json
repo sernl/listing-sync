@@ -1,0 +1,101 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT product_id, title, source_price_kind, source_price_minor, source_price_ccy, source_fingerprint, previous_choice, before, proposed, patch, matches, blockers, status, decision FROM seller_rule_preview_row WHERE org_id = $1 AND preview_id = $2 ORDER BY product_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "source_price_kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "source_price_minor",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "source_price_ccy",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "source_fingerprint",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "previous_choice",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "before",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 8,
+        "name": "proposed",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 9,
+        "name": "patch",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 10,
+        "name": "matches",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 11,
+        "name": "blockers",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 12,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 13,
+        "name": "decision",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "a69a3296aa194630a792013967c005de76174ae652a93cb078b8fe63ea357dff"
+}

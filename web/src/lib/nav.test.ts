@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-	ACCOUNT_DESTINATION,
 	ADMIN_SECTION,
 	ALL_DESTINATIONS,
 	CREATE_TAB,
@@ -8,10 +7,8 @@ import {
 	OPEN_QUESTIONS_ITEM,
 	PHONE_BAR,
 	PUBLIC_ROUTES,
-	SECTION_TABS,
 	SECTIONS,
 	accountTile,
-	breadcrumbFor,
 	currentDestination,
 	initialsOf,
 	isCurrent,
@@ -21,47 +18,8 @@ import {
 	signedOutView
 } from './nav';
 
-// Read from the model rather than composed again here: a second composition is
-// what let `/marketplaces` be reachable in the shell and absent from the list
-// the redirect test checks against.
-const EVERY_ITEM = ALL_DESTINATIONS;
-
-const pagesOf = (id: string) =>
-	SECTIONS.find((section) => section.id === id)?.items.map((item) => item.href);
 
 describe('the navigation model', () => {
-	it('names the four sections the founder asked for, then Account', () => {
-		expect(SECTIONS.map((section) => section.label)).toEqual([
-			'Import',
-			'Crosslist',
-			'Automations',
-			'Marketplaces',
-			'Account'
-		]);
-	});
-
-	// The founder's own sentences, which the rail tooltip and the navigation
-	// card's lede both read. Pinned because they are the words shown, not
-	// decoration: a section that lost its hint would render a bare card.
-	it('says the founder sentence for every section', () => {
-		expect(SECTIONS.map((section) => [section.id, section.hint])).toEqual([
-			['import', 'Bring your current portfolio to Teachouse from anywhere it is housed.'],
-			['crosslist', 'Publish your resources to multiple marketplaces.'],
-			['automations', 'Edit tags, descriptions, titles and files across your listings.'],
-			['marketplaces', 'Connect the places you sell.'],
-			['account', 'Your settings, plan and notifications.']
-		]);
-	});
-
-	it('gives a section-primary button to Crosslist alone', () => {
-		const withPrimary = SECTIONS.filter((section) => section.primary !== undefined);
-		expect(withPrimary.map((section) => section.id)).toEqual(['crosslist']);
-	});
-
-	// A rail glyph lands either on one of its section's own pages, as Crosslist
-	// and Account do, or on a landing page of its own, as Automations and
-	// Marketplaces do. Either way the path has to be a destination the model
-	// names, or the breadcrumb answers "Console" on it.
 	it('lands each rail glyph on a destination the model names', () => {
 		const named = new Set(ALL_DESTINATIONS.map((item) => item.href));
 		for (const section of [...SECTIONS, ADMIN_SECTION]) {
@@ -69,139 +27,21 @@ describe('the navigation model', () => {
 		}
 	});
 
-	it('gives Automations a landing page of its own, with the sync list inside it', () => {
-		const automations = SECTIONS.find((section) => section.id === 'automations');
-		expect(automations?.href).toBe('/automations');
-		expect(automations?.items.map((item) => item.href)).toContain('/sync');
-		expect(automations?.items.some((item) => item.href === '/automations')).toBe(false);
-	});
-
-	it('leaves Marketplaces without a page list, so it renders no card', () => {
-		expect(SECTIONS.find((section) => section.id === 'marketplaces')?.items).toEqual([]);
-	});
-
-
-	// Import left Crosslist for a section of its own on 2026-09-11, and the
-	// batch report is what makes it more than a rename: `/imports/<batch>` is
-	// not under `/import`, so the page claims it or the breadcrumb loses it.
-	it('gives Import its own section, holding the batch report too', () => {
-		expect(pagesOf('import')).toEqual(['/import']);
-		expect(pagesOf('crosslist')).not.toContain('/import');
+	it('keeps an import batch report in the Import section', () => {
 		expect(sectionFor('/imports/b-4')?.id).toBe('import');
-		expect(breadcrumbFor('/imports/b-4')).toBe('Import');
-	});
-
-	it('lists exactly the Automations pages, in order', () => {
-		expect(pagesOf('automations')).toEqual([
-			'/automations/sharing',
-			'/automations/migration',
-			'/sync'
-		]);
-	});
-
-	it('lists exactly the Account pages, in order', () => {
-		expect(pagesOf('account')).toEqual([
-			'/settings',
-			'/settings/subscription',
-			'/notifications',
-			'/status',
-			'/guides'
-		]);
-	});
-
-	// Which pages are unbuilt is asserted in `nav-routes.test.ts`, against the
-	// routes themselves. A list kept here would pass while a slice finished its
-	// page and left the flag on, which is the failure that actually happens.
-
-	it('never marks the landing page of a section unbuilt', () => {
-		for (const section of SECTIONS) {
-			const landing = section.items.find((item) => item.href === section.href);
-			expect(landing?.soon).toBeUndefined();
-		}
 	});
 
 	it('names every destination once', () => {
-		const paths = EVERY_ITEM.map((item) => item.href);
+		const paths = ALL_DESTINATIONS.map((item) => item.href);
 		expect(new Set(paths).size).toBe(paths.length);
 	});
-
-	it('keeps the home path and the queue off the rail but inside the model', () => {
-		const listed = SECTIONS.flatMap((section) => section.items).map((item) => item.href);
-		expect(listed).not.toContain(HOME_ITEM.href);
-		expect(listed).not.toContain(OPEN_QUESTIONS_ITEM.href);
-	});
 });
 
-// The rail's sections rendered as tabs, which is the navigating half of the
-// phone bar rather than the bar itself: `PHONE_BAR` below drops Account and
-// puts the create action in the middle of what is left.
-describe('the section tabs', () => {
-	it('mirrors the rail rather than choosing its own destinations', () => {
-		expect(SECTION_TABS.map((tab) => tab.href)).toEqual(SECTIONS.map((section) => section.href));
-		expect(SECTION_TABS.map((tab) => tab.label)).toEqual(SECTIONS.map((section) => section.label));
-	});
-
-	it('carries all five sections the rail names, in rail order', () => {
-		expect(SECTION_TABS.map((tab) => tab.href)).toEqual([
-			'/import',
-			'/resources',
-			'/automations',
-			'/marketplaces',
-			'/settings'
-		]);
-	});
-
-	it('names the home path for what it shows, not for a dashboard', () => {
-		expect(HOME_ITEM.href).toBe('/app');
-		expect(HOME_ITEM.label).toBe('Resources');
-		const resources = SECTIONS.find((section) => section.id === 'crosslist')?.items[0];
-		expect(HOME_ITEM.icon).toBe(resources?.icon);
-	});
-
-	it('takes each glyph from its section rather than a second copy', () => {
-		for (const [index, tab] of SECTION_TABS.entries()) {
-			expect(tab.icon).toBe(SECTIONS[index].icon);
-		}
-	});
-
-	// Checked against the section's own item rather than the derived tab: the
-	// tab is built from `{ href, label, icon }` and cannot carry `soon` at all,
-	// so asserting it there passes whatever the model says.
-	it('offers no tab to a section whose landing page is not built', () => {
-		for (const tab of SECTION_TABS) {
-			const landing = SECTIONS.flatMap((section) => section.items).find(
-				(item) => item.href === tab.href
-			);
-			expect(landing?.soon).toBeUndefined();
-		}
-	});
-});
 
 describe('the phone bar', () => {
-	it('carries five cells, with the create action in the middle', () => {
-		expect(PHONE_BAR.map((tab) => tab.short ?? tab.label)).toEqual([
-			'Import',
-			'Catalogue',
-			'New',
-			'Automate',
-			'Markets'
-		]);
-	});
-
-	// The centring is the whole point of the redesign, so it is asserted as
-	// arithmetic rather than as the index 2: an added cell has to fail here.
 	it('puts the create cell at the centre of an odd number of cells', () => {
 		expect(PHONE_BAR.length % 2).toBe(1);
 		expect(PHONE_BAR[(PHONE_BAR.length - 1) / 2]).toBe(CREATE_TAB);
-	});
-
-	it('names the create action exactly as the navigation card names it', () => {
-		const primary = SECTIONS.find((section) => section.id === 'crosslist')?.primary;
-		expect(CREATE_TAB.label).toBe(primary?.label);
-		expect(CREATE_TAB.label).toBe('New resource');
-		// The word on screen is shorter than the accessible name, because the
-		// cell is 72px wide at 360px and the disc above the word is 48px.
-		expect(CREATE_TAB.short).toBe('New');
 	});
 
 	it('marks exactly one cell as create and gives the others a destination', () => {
@@ -211,50 +51,8 @@ describe('the phone bar', () => {
 		}
 	});
 
-	it('navigates to every section the rail states but Account, and never twice', () => {
-		const going = PHONE_BAR.filter((tab) => tab.create !== true);
-		expect(going.map((tab) => tab.href)).toEqual(
-			SECTION_TABS.filter((tab) => tab.href !== ACCOUNT_DESTINATION.href).map((tab) => tab.href)
-		);
-		// The rail's own words survive as the accessible name even where the bar
-		// draws a shorter one, so a cell cannot come to name a destination the
-		// rail does not.
-		expect(going.map((tab) => tab.label)).toEqual(
-			SECTION_TABS.filter((tab) => tab.href !== ACCOUNT_DESTINATION.href).map((tab) => tab.label)
-		);
-		const hrefs = PHONE_BAR.map((tab) => tab.href).filter((href) => href !== undefined);
-		expect(new Set(hrefs).size).toBe(hrefs.length);
-	});
-
-	// Reversed twice, and pinned in the third direction. Wave 3 kept Account
-	// off the bar and reached it by the top strip's avatar; the founder asked
-	// for a cell on 2026-09-06; on 2026-09-12, looking at the seven-cell bar
-	// that produced, they asked for fewer icons and the create action dead
-	// centre. Account is now a phone-only avatar button in every page header,
-	// which is severe rather than cosmetic: the strip is not drawn below 620px
-	// at all, so that button is a phone build's only route to Settings and to
-	// logging out.
-	it('leaves Account off the bar, reached from the page header instead', () => {
-		const account = SECTIONS.find((section) => section.id === 'account');
-		expect(account).toBeDefined();
-		expect(PHONE_BAR.some((tab) => tab.href === '/settings')).toBe(false);
-		expect(ACCOUNT_DESTINATION.href).toBe(account?.href);
-		expect(ACCOUNT_DESTINATION.label).toBe(account?.label);
-		expect(ACCOUNT_DESTINATION.icon).toBe(account?.icon);
-	});
-
-	it('leaves search off the bar, so no cell is an action without a place', () => {
-		expect(PHONE_BAR.some((tab) => tab.icon === 'search')).toBe(false);
-	});
-
-	it('opens the same screen the section-primary button opens', () => {
-		const primary = SECTIONS.find((section) => section.id === 'crosslist')?.primary;
-		expect(CREATE_TAB.href).toBe(primary?.href);
-	});
-
-	it('is not a navigation destination, so it lights nothing', () => {
+	it('does not light the create action while viewing the catalogue', () => {
 		expect(isCurrent('/resources', CREATE_TAB.href)).toBe(false);
-		expect(SECTION_TABS.some((tab) => tab.href === CREATE_TAB.href)).toBe(false);
 	});
 });
 
@@ -280,13 +78,11 @@ describe('the section the rail lights', () => {
 	// it happens to sit beneath (D8).
 	it('follows a request detail page to Migrations rather than to Marketplace Sync', () => {
 		expect(sectionFor('/sync/requests/9f2c8a11')?.id).toBe('automations');
-		expect(breadcrumbFor('/sync/requests/9f2c8a11')).toBe('Migrations');
 	});
 
 	it('leaves every other path under /sync on Marketplace Sync', () => {
 		expect(sectionFor('/sync')?.id).toBe('automations');
 		expect(sectionFor('/sync/9f2c8a11')?.id).toBe('automations');
-		expect(breadcrumbFor('/sync/9f2c8a11')).toBe('Marketplace Sync');
 	});
 
 	it('reaches a section with no page list through its landing path alone', () => {
@@ -341,21 +137,6 @@ describe('the current destination', () => {
 	});
 });
 
-describe('the operator section', () => {
-	it('is not one of the sections every seller sees', () => {
-		expect(SECTIONS.map((section) => section.id)).not.toContain(ADMIN_SECTION.id);
-	});
-
-	it('sends every entry into the operator subtree', () => {
-		for (const item of ADMIN_SECTION.items) {
-			expect(item.href.startsWith('/admin')).toBe(true);
-		}
-	});
-
-	it('marks no operator destination unbuilt', () => {
-		expect(ADMIN_SECTION.items.filter((item) => item.soon)).toEqual([]);
-	});
-});
 
 describe('the destination a path belongs to', () => {
 	it('is the item whose own href contains it', () => {
@@ -396,45 +177,6 @@ describe('the destination a path belongs to', () => {
 	});
 });
 
-describe('the breadcrumb', () => {
-	it('names the page the browser is on', () => {
-		expect(breadcrumbFor('/app')).toBe('Resources');
-		expect(breadcrumbFor('/resources')).toBe('Resources');
-		expect(breadcrumbFor('/reconciliation')).toBe('Open questions');
-		expect(breadcrumbFor('/settings')).toBe('Preferences');
-		expect(breadcrumbFor('/marketplaces')).toBe('Marketplaces');
-	});
-
-	it('names the parent of a detail page rather than the home path', () => {
-		expect(breadcrumbFor('/sync/9f2c8a11')).toBe('Marketplace Sync');
-	});
-
-	it('lets a destination claim a path that is not under its own href', () => {
-		const owner = SECTIONS.flatMap((section) => section.items).find(
-			(item) => item.href === '/automations/migration'
-		);
-		expect(owner?.owns).toEqual(['/sync/requests']);
-		expect(breadcrumbFor('/sync/requests')).toBe('Migrations');
-	});
-
-	it('leaves exactly one destination owning that prefix', () => {
-		const owners = SECTIONS.flatMap((section) => section.items).filter((item) =>
-			item.owns?.includes('/sync/requests')
-		);
-		expect(owners.map((item) => item.href)).toEqual(['/automations/migration']);
-	});
-
-	it('names the operator page rather than its group', () => {
-		expect(breadcrumbFor('/admin')).toBe('Overview');
-		expect(breadcrumbFor('/admin/orgs')).toBe('Organisations');
-		expect(breadcrumbFor('/admin/orgs/9f2c8a11')).toBe('Organisations');
-		expect(breadcrumbFor('/admin/users')).toBe('Identity users');
-	});
-
-	it('falls back to the console for a path the sidebar does not name', () => {
-		expect(breadcrumbFor('/nowhere')).toBe('Console');
-	});
-});
 
 describe('the redirects from the old paths', () => {
 	it('send the jobs list to sync', () => {

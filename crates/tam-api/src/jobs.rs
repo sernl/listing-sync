@@ -425,7 +425,24 @@ impl EventView {
 // ---------------------------------------------------------------- handlers
 
 pub(crate) fn storage_fault(state: &AppState, error: &StorageError) -> APIError {
-    state.internal(&error.to_string())
+    match error {
+        StorageError::SellerRuleBlocked { product, reasons } => validation(&format!(
+            "Resource {} needs a pricing or mapping choice: {}",
+            product.0.to_hyphenated(),
+            reasons.join("; "),
+        )),
+        StorageError::Db(_)
+        | StorageError::TimestampOutOfRange { .. }
+        | StorageError::CorruptRow { .. }
+        | StorageError::OrgMismatch
+        | StorageError::Inconsistent { .. }
+        | StorageError::StaleLease
+        | StorageError::DuplicateIdempotencyKey { .. }
+        | StorageError::AttemptInFlight
+        | StorageError::MappingAlreadyBound
+        | StorageError::ListingAlreadyBound
+        | StorageError::InventoryMappingAlreadyExists => state.internal(&error.to_string()),
+    }
 }
 
 /// The one enqueue for sync, migrate and bulk. Bulk is not a separate verb;

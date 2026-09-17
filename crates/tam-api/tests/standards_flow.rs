@@ -35,6 +35,7 @@ const CCSS: u32 = 3054;
 fn state(pool: PgPool) -> AppState {
     prime().expect("the committed corpus parses");
     AppState {
+        exchange_rates: None,
         pool,
         config: Config::default(),
         wall: || NOW,

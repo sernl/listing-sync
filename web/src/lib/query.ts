@@ -49,6 +49,13 @@ export const queryKeys = {
 	/** The seller's own projection overrides, which the Templates screen reads
 	 *  and writes. */
 	overrides: ['overrides'] as const,
+	/** The pricing and mapping suggestions the Pricing and Mappings pages
+	 *  offer. One entry for both pages: the answer is the same list and each
+	 *  page shows the presets of its own kind and direction. The seller's own
+	 *  rules are deliberately not cached here — that list is searched, filtered
+	 *  and paginated by the server, so its answer is a page of a question
+	 *  rather than a resource with an identity. */
+	sellerRulePresets: ['seller-rule-presets'] as const,
 	/** One product's aggregate, keyed by its identifier. */
 	product: (id: string) => ['product', id] as const,
 	/** The labels on one item, which is a different read from the

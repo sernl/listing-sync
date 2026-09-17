@@ -133,6 +133,7 @@ pub fn to_wire_error(error: &StorageError) -> wire::LedgerError {
         | StorageError::CorruptRow { .. }
         | StorageError::OrgMismatch
         | StorageError::Inconsistent { .. }
+        | StorageError::SellerRuleBlocked { .. }
         | StorageError::DuplicateIdempotencyKey { .. }
         | StorageError::ListingAlreadyBound
         | StorageError::InventoryMappingAlreadyExists => wire::LedgerError::Refused {

@@ -37,6 +37,7 @@
 	import { queryKeys } from '$lib/query';
 	import RowCard from '$lib/RowCard.svelte';
 	import { MIGRATION_HREF } from '$lib/sync-request';
+	import { MAPPINGS_HREF, PRICING_HREF } from '$lib/pages/automations/seller-rules';
 	import TabBar from '$lib/TabBar.svelte';
 	import { toast } from '$lib/toast';
 	import type { InventoryId } from '$lib/generated/vocab';
@@ -361,12 +362,22 @@
 			templating = true;
 		} else if (chosenVerb === 'delete') {
 			deleting = true;
-		} else if (chosenVerb === 'move') {
+		} else if (chosenVerb === 'move' || chosenVerb === 'price' || chosenVerb === 'map_terms') {
 			// Each identifier escaped and the commas left as commas: the separator
 			// is part of the address's own grammar, and escaping it whole turned a
 			// readable link into `products=p4%2Cp5`.
 			const products = chosen.map((row) => encodeURIComponent(row.product.id)).join(',');
-			void goto(`${MIGRATION_HREF}?products=${products}`);
+			// Pricing and Mappings are the same kind of hand-off as Migrations:
+			// what a resource should cost or land under on the target is decided
+			// beside a per-resource preview the server computed, so the selection
+			// travels in the address and the decision is taken there.
+			const where =
+				chosenVerb === 'move'
+					? MIGRATION_HREF
+					: chosenVerb === 'price'
+						? PRICING_HREF
+						: MAPPINGS_HREF;
+			void goto(`${where}?products=${products}`);
 		}
 	}
 

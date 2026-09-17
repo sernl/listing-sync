@@ -2132,6 +2132,50 @@ async fn seed_published_resource(pool: &PgPool) -> Result<(), tam_storage::Stora
     Ok(())
 }
 
+// The current enqueue path reads policy tables that do not exist at schema 81.
+// Seed the historical rows directly, before exercising the real upgrade.
+async fn seed_historical_publication(pool: &PgPool) -> Result<(), sqlx::Error> {
+    let db = |id: Uuid| uuid::Uuid::from_bytes(id.0);
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(as_text(ORG_A.0))
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "INSERT INTO job \
+         (org_id, id, inventory, marketplace, created_at, request_idempotency_key, \
+          actor_kind, actor_id) \
+         VALUES ($1, $2, 'tes', 'tes', to_timestamp($3::double precision / 1000), \
+                 $4, 'system', 'scheduler')",
+    )
+    .bind(db(ORG_A.0))
+    .bind(db(HISTORICAL_PUBLICATION.0))
+    .bind(NOW.0)
+    .bind(db(tam_storage::job_request_key(
+        RUN_A,
+        "publish:historical",
+    )))
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO job_item \
+         (org_id, id, job_id, mapping_id, idempotency_key, state, created_at, \
+          operation, marketplace) \
+         SELECT $1, $2, $3, $4, $5, 'queued', to_timestamp($6::double precision / 1000), \
+                'create', m.marketplace \
+         FROM mapping m WHERE m.org_id = $1 AND m.id = $4",
+    )
+    .bind(db(ORG_A.0))
+    .bind(db(HISTORICAL_ITEM.0))
+    .bind(db(HISTORICAL_PUBLICATION.0))
+    .bind(db(HISTORICAL_MAPPING.0))
+    .bind(db(Uuid([0x9F; 16])))
+    .bind(NOW.0)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await
+}
+
 /// Deleting an upgraded database's import fences the publication it produced
 /// before the provenance column existed.
 #[sqlx::test(migrations = false)]
@@ -2151,38 +2195,7 @@ async fn an_upgrade_fences_a_historical_publication_with_its_import(
         .expect("the historical import opens");
 
     let jobs = tam_storage::JobRepo::new(pool.clone());
-    let minted = jobs
-        .create_with_request_key(
-            ORG_A,
-            tam_storage::JobOrigin {
-                request_key: tam_storage::job_request_key(RUN_A, "publish:historical"),
-                run: None,
-                // The pre-0080 shape: the receipt is the only link back to
-                // the import whose resources this publishes.
-                import_run: None,
-            },
-            &tam_storage::NewJob {
-                job: HISTORICAL_PUBLICATION,
-                inventory: InventoryId::Tes,
-                stamp: tam_types::Stamp {
-                    at: NOW,
-                    actor: tam_types::Actor::System(tam_types::SystemComponent::Scheduler),
-                },
-            },
-            &[tam_storage::NewJobItem {
-                item: HISTORICAL_ITEM,
-                mapping: HISTORICAL_MAPPING,
-                idempotency_key: tam_marketplace::IdempotencyKey(Uuid([0x9F; 16])),
-                operation: tam_domain::ItemOperation::Create,
-                requires_bound_on: None,
-            }],
-        )
-        .await
-        .expect("the historical publication mints");
-    assert!(
-        matches!(minted, tam_storage::Minted::Job(_)),
-        "the publication names no workflow that could refuse it: {minted:?}"
-    );
+    seed_historical_publication(&pool).await?;
     assert!(
         tam_storage::SyncSettingRepo::new(pool.clone())
             .record_auto_publish(
@@ -2199,6 +2212,17 @@ async fn an_upgrade_fences_a_historical_publication_with_its_import(
     );
 
     upgrade_past_applied(&pool).await?;
+    assert_eq!(
+        tam_storage::JobReadRepo::new(pool.clone())
+            .snapshot(ORG_A, HISTORICAL_PUBLICATION)
+            .await
+            .expect("the upgraded publication reads")
+            .expect("the publication is still visible before deletion")
+            .counts
+            .queued,
+        1,
+        "the upgrade preserves the historical queued write until its import is deleted"
+    );
 
     runs.delete(
         ORG_A,

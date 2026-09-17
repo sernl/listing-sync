@@ -41,6 +41,7 @@ const NOW: Timestamp = Timestamp(5_000);
 
 fn state(pool: PgPool) -> AppState {
     AppState {
+        exchange_rates: None,
         pool,
         config: Config::default(),
         wall: || NOW,

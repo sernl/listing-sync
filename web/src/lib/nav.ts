@@ -131,6 +131,12 @@ export const SECTIONS: readonly NavSection[] = [
 				// happens to sit beneath (D8).
 				owns: ['/sync/requests']
 			},
+			// Both sit above the sync list and below Migrations, because a seller
+			// sets what a resource should cost and land under before they send
+			// it anywhere: the two pages are what a migration, a copy and a
+			// cross-list read their target price and terms from.
+			{ href: '/automations/pricing', label: 'Pricing', icon: 'credit-card' },
+			{ href: '/automations/mappings', label: 'Mappings', icon: 'tag' },
 			// The sync list stays at `/sync` rather than moving under
 			// `/automations/`, because `/sync/<id>` and `/sync/requests/<id>` are
 			// its detail pages and a list that left its own children behind would

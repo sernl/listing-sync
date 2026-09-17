@@ -3,6 +3,7 @@
 	import { bulkTarget, type BulkTarget, type InventoryRow } from '$lib/inventory';
 	import { AUTHORABLE_PLATFORMS, platformTitle } from '$lib/platforms';
 	import type { InventoryId } from '$lib/generated/vocab';
+	import { MAPPINGS_HREF, PRICING_HREF } from '$lib/pages/automations/seller-rules';
 
 	let {
 		open,
@@ -188,6 +189,17 @@
 		</p>
 		<p class="foot-note">
 			Need to check a file or its machine? <a href="/resources/files">Open Resources → Files</a>.
+		</p>
+		<!-- The price and the terms a listing arrives with are decided on their
+		     own screens, beside a preview of what each resource would get: this
+		     send carries whatever has been approved for these resources, and a
+		     send is not the place to choose it blind. A rule ticked for
+		     Cross-list applies here without being approved row by row; nothing
+		     else does. -->
+		<p class="foot-note">
+			What will these cost, and what will they land under?
+			<a href={PRICING_HREF}>Set target prices</a> ·
+			<a href={MAPPINGS_HREF}>Set licence and resource type</a>.
 		</p>
 
 		{#if refusal !== null}

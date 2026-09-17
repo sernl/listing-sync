@@ -1,0 +1,22 @@
+<script lang="ts">
+	// Mappings: the rules that say which of the target marketplace's own terms —
+	// its licence and its resource type — a resource should land under, and the
+	// proposals a seller approves before any of them is used.
+
+	import PageHead from '$lib/PageHead.svelte';
+	import RuleWorkbench from '$lib/pages/automations/RuleWorkbench.svelte';
+	import { WHAT_MAPPING_IS } from '$lib/pages/automations/seller-rules';
+	import '$lib/pages/automations/automations.css';
+</script>
+
+<div class="page">
+	<PageHead
+		icon="tag"
+		title="Mappings"
+		description="Choose the licence and resource type your resources land under, and approve each one."
+	/>
+
+	<p class="migrate-lead">{WHAT_MAPPING_IS}</p>
+
+	<RuleWorkbench kind="mapping" />
+</div>
