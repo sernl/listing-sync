@@ -4,7 +4,15 @@
 //! A handler takes [`APIVersion`] as an argument and receives a value from a
 //! closed set, so versioning is decided once here rather than by string
 //! handling inside every handler, and a route reached with a version this
-//! build does not serve is refused before the handler body runs.
+//! build does not serve never runs a handler body.
+//!
+//! The same closed set answers a second question, one the route table cannot:
+//! which paths are the API's at all. Every route is written against a
+//! `{version}` parameter, and that parameter matches any first segment
+//! whatever, so [`APIVersion::from_path_prefix`] is what a binary mounting
+//! anything behind the API asks before this router is allowed to answer. A
+//! deployment serving the API alone has nothing to hand such a request to and
+//! refuses it here instead, with the structured body below.
 
 use std::collections::HashMap;
 
@@ -37,6 +45,26 @@ impl APIVersion {
             Self::V1 => "v1",
             Self::V2 => "v2",
         }
+    }
+
+    /// The version a request path names in its first segment, if that segment
+    /// names one this build serves.
+    ///
+    /// The router's ownership question rather than a handler's, and the reason
+    /// it has to be asked: `/{version}/mappings` matches
+    /// `/automations/mappings` with `automations` for a version, so a console
+    /// deep link whose second segment happens to name an API collection is an
+    /// API call as far as the route table is concerned. This closed set is the
+    /// only thing that can tell the two apart.
+    ///
+    /// The segment is read as it arrived rather than percent-decoded: every
+    /// client of this API — the console's fetch base, the device client, the
+    /// operator's curl — names `/v1` literally, and a request spelling the
+    /// prefix as an escape is not one of them.
+    #[must_use]
+    pub fn from_path_prefix(path: &str) -> Option<Self> {
+        let first = path.strip_prefix('/')?.split('/').next()?;
+        first.parse::<Self>().ok()
     }
 }
 
@@ -191,6 +219,61 @@ mod tests {
             entry.code,
             Some(APIErrorCode::VersionParameterMissing),
             "a route mounted without a version parameter is our bug, and says so"
+        );
+    }
+
+    /// The path test reads the first segment and nothing else.
+    #[test]
+    fn a_path_under_a_supported_version_is_the_apis() {
+        for version in APIVersion::SUPPORTED {
+            let path = format!("/{version}/mappings/overrides");
+            assert_eq!(
+                APIVersion::from_path_prefix(&path),
+                Some(version),
+                "{path} is the API's, at the version its first segment names"
+            );
+        }
+        assert_eq!(
+            APIVersion::from_path_prefix("/v1"),
+            Some(APIVersion::V1),
+            "a bare version prefix names one too: there is no depth requirement"
+        );
+    }
+
+    /// The defect this test stands for: a console deep link whose second
+    /// segment names an API collection is matched by `/{version}/mappings`
+    /// with `automations` for a version, and only the closed set refuses it.
+    #[test]
+    fn a_console_deep_link_names_no_version() {
+        for path in [
+            "/automations/mappings",
+            "/resources/status",
+            "/library",
+            "/healthz",
+            "/",
+            "",
+            "v1/mappings",
+        ] {
+            assert_eq!(
+                APIVersion::from_path_prefix(path),
+                None,
+                "{path} does not name a version this build serves"
+            );
+        }
+    }
+
+    /// A version-shaped first segment this build does not serve is not the
+    /// API's either, and that is a deliberate change of answer: where a binary
+    /// mounts a console behind this router, `/v9/mappings` reaches the console
+    /// shell rather than the structured refusal above. The refusal is what a
+    /// deployment serving the API alone still answers, because there nothing
+    /// else could, and it stays exercised by the extractor's own tests.
+    #[test]
+    fn an_unsupported_version_is_not_claimed_from_the_path() {
+        assert_eq!(
+            APIVersion::from_path_prefix("/v9/mappings"),
+            None,
+            "a version this build does not serve is not one of its paths"
         );
     }
 }

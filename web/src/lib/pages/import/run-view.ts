@@ -448,6 +448,39 @@ export function reasonLine(code: ImportReasonCode | null, reason: string | null)
 	}
 }
 
+/** Whether the reason a run carries describes something wrong *now*.
+ *
+ * A run keeps the last reason it was given, and a reason that was true once
+ * stays on the record after the run has recovered from it: a lease that
+ * expired while a device slept is still recorded on the run the seller is now
+ * reviewing. Presence of a reason is therefore no evidence of a current
+ * failure, and only the run's own state can say whether the condition still
+ * holds. So this reads the state and never the reason: while a device owns
+ * the run, what it last reported is what is happening; once the run has
+ * reached a stage we run ourselves, that report is history and belongs behind
+ * the diagnostics disclosure rather than in the bar. */
+export function deviceConditionIsCurrent(run: ImportRunHead): boolean {
+	switch (run.state) {
+		// A device holds this run: waiting to be picked up, listing the shop,
+		// reading it, or paused part-way through. Whatever it last reported is
+		// the run's present condition.
+		case 'reading':
+			return true;
+		// Settled by a condition rather than by a seller finishing, so the
+		// reason is the thing the page is there to explain.
+		case 'failed':
+		case 'abandoned':
+			return true;
+		// Past device execution: the read produced enough to review, and the
+		// review, the confirmation and the commit are ours rather than a
+		// device's, so an earlier device condition cannot be what is happening.
+		case 'reviewing':
+		case 'committing':
+		case 'complete':
+			return false;
+	}
+}
+
 /** How many pages a list of this size is cut into, at this page size.
  *
  * At least one, so a list with nothing in it reads as "Page 1 of 1" rather

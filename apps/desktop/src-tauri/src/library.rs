@@ -21,8 +21,11 @@
 //! deleted at open, because a blob nothing describes is a file nothing can
 //! show the seller and nothing will ever remove otherwise.
 
+use core::future::Future;
+use core::pin::Pin;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tam_secrets::{hex_encode, open_bytes, seal_bytes, Kek, Sealed};
@@ -204,8 +207,9 @@ async fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), LibraryError>
     Ok(())
 }
 
-/// The same write, blocking, for the one caller that runs before the
-/// runtime does: `open`, from the application's set-up closure.
+/// The same write, blocking, for the one caller that is itself blocking:
+/// `open`, which [`LibrarySlot`] calls on the task that asked for the
+/// library.
 fn write_atomically_blocking(path: &Path, bytes: &[u8]) -> Result<(), LibraryError> {
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, bytes)?;
@@ -221,11 +225,11 @@ fn encode_index(entries: Vec<LibraryEntry>) -> Result<Vec<u8>, LibraryError> {
 impl Library {
     /// Opens the library under `data_dir`, creating it where none is.
     ///
-    /// Blocking, because it is called once from the application's set-up
-    /// closure, before any runtime task exists to await it. A missing or
-    /// unreadable index is rebuilt empty and logged, and every blob the index
-    /// does not name is deleted, so the directory holds nothing the seller
-    /// cannot see.
+    /// Blocking, and called from [`LibrarySlot::get`] on whichever task
+    /// needed the library: one index this process wrote and one bounded
+    /// directory listing. A missing or unreadable index is rebuilt empty and
+    /// logged, and every blob the index does not name is deleted, so the
+    /// directory holds nothing the seller cannot see.
     #[expect(
         clippy::disallowed_methods,
         reason = "the ban targets upload payloads, which are bounded but not small; the index \
@@ -486,6 +490,14 @@ pub fn keychain_library_key(service: &str) -> Result<Kek, LibraryError> {
 /// The per-device library key on a phone: thirty-two random bytes sealed
 /// under the Keystore-held session key into a file of their own, created on
 /// first use. The same store the session file lives in, under its own name.
+///
+/// Nothing is written until the sealing has succeeded, and the write itself
+/// goes through a temporary name and a rename. That order matters while the
+/// phone is locked: the Keystore refuses the wrap, this returns the refusal,
+/// and the file is either the one it already was or absent — never a
+/// half-written envelope and never one sealed under something else. The next
+/// attempt, after the seller unlocks the phone, creates the key as a first
+/// use still.
 #[cfg(target_os = "android")]
 pub async fn sealed_library_key(
     data_dir: &Path,
@@ -520,6 +532,152 @@ pub async fn sealed_library_key(
     }
 }
 
+/// The library key, as a future, so both platforms are asked for it the same
+/// way: the phone's sealed file is read asynchronously and the desktop's
+/// credential store is read synchronously.
+pub type KeyFuture<'a> = Pin<Box<dyn Future<Output = Result<Kek, LibraryError>> + Send + 'a>>;
+
+/// Where this machine's library key comes from.
+///
+/// A seam rather than a direct call at each use, because the key is not
+/// always obtainable and the answer changes over the life of the process. A
+/// phone's Keystore refuses every operation while the keyguard is showing —
+/// the wrapping key is deliberately generated with
+/// `setUnlockedDeviceRequired(true)` — so an application launched from the
+/// lock screen cannot have the key yet and can have it a minute later. The
+/// slot below is what turns that into a retry; this is what it retries
+/// through.
+pub trait LibraryKeySource: Send + Sync {
+    /// This machine's library key, created on first use.
+    fn library_key(&self) -> KeyFuture<'_>;
+}
+
+/// The operating system's credential store, as a key source.
+#[cfg(not(target_os = "android"))]
+pub struct KeychainKey {
+    service: String,
+}
+
+#[cfg(not(target_os = "android"))]
+impl KeychainKey {
+    /// The key filed under [`KEY_ENTRY`] in `service`.
+    #[must_use]
+    pub fn under(service: &str) -> Self {
+        Self {
+            service: service.to_owned(),
+        }
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+impl LibraryKeySource for KeychainKey {
+    fn library_key(&self) -> KeyFuture<'_> {
+        // Synchronous underneath, and wrapped rather than moved to a blocking
+        // pool: it is one credential-store lookup, which is what every
+        // session read on this platform already does inline.
+        Box::pin(async move { keychain_library_key(&self.service) })
+    }
+}
+
+/// The Keystore-wrapped file beside the session's, as a key source.
+#[cfg(target_os = "android")]
+pub struct SealedKey {
+    data_dir: PathBuf,
+    keys: Arc<dyn crate::session::encrypted::DeviceKeySource>,
+}
+
+#[cfg(target_os = "android")]
+impl SealedKey {
+    /// The key sealed under the device key in `data_dir`.
+    #[must_use]
+    pub fn in_data_dir(
+        data_dir: &Path,
+        keys: Arc<dyn crate::session::encrypted::DeviceKeySource>,
+    ) -> Self {
+        Self {
+            data_dir: data_dir.to_path_buf(),
+            keys,
+        }
+    }
+}
+
+#[cfg(target_os = "android")]
+impl LibraryKeySource for SealedKey {
+    fn library_key(&self) -> KeyFuture<'_> {
+        Box::pin(sealed_library_key(&self.data_dir, self.keys.as_ref()))
+    }
+}
+
+/// This machine's library, opened on first use and retried until it opens.
+///
+/// Held by everything that needs the library — the state the console's
+/// commands read, the work source, an import pass, the payload cache, the
+/// sync schedule — and asked at the moment of use rather than at start-up.
+/// That is the whole reason it exists. The library used to be opened once in
+/// the application's set-up closure, and whatever came of that one attempt
+/// was handed out for the life of the process: a phone launched while locked
+/// could not obtain the key, so every import in that process kept no
+/// original, the console said this machine keeps no files, and nothing
+/// changed when the seller unlocked the phone until they restarted the
+/// application. Asking the slot makes "can this machine keep files" a
+/// question about now.
+pub struct LibrarySlot {
+    data_dir: PathBuf,
+    keys: Arc<dyn LibraryKeySource>,
+    /// The opened library, once it has opened. A lock around an option
+    /// rather than a `OnceCell`, because a failed attempt has to be
+    /// repeatable; and the lock is held across the attempt, so two consumers
+    /// asking at once open one library rather than two.
+    open: Mutex<Option<Arc<Library>>>,
+}
+
+/// Prints the directory and nothing about the key, as [`Library`]'s own does.
+impl core::fmt::Debug for LibrarySlot {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("LibrarySlot")
+            .field("data_dir", &self.data_dir)
+            .finish_non_exhaustive()
+    }
+}
+
+impl LibrarySlot {
+    #[must_use]
+    pub fn new(data_dir: &Path, keys: Arc<dyn LibraryKeySource>) -> Self {
+        Self {
+            data_dir: data_dir.to_path_buf(),
+            keys,
+            open: Mutex::new(None),
+        }
+    }
+
+    /// The library, opening it where it is not open yet.
+    ///
+    /// Cheap once it has opened: one lock and a clone of the handle. Before
+    /// then each call is a fresh attempt at the key and at the directory, and
+    /// a refusal is returned to the caller to report as that caller reports
+    /// things — a command answers the seller, an import logs and goes on
+    /// describing the resource — rather than remembered here as a verdict.
+    pub async fn get(&self) -> Result<Arc<Library>, LibraryError> {
+        let mut open = self.open.lock().await;
+        if let Some(library) = open.as_ref() {
+            return Ok(Arc::clone(library));
+        }
+        let key = self.keys.library_key().await?;
+        // `Library::open` blocks, and stays blocking: it reads one JSON index
+        // this process wrote and lists a directory bounded by the entries
+        // that index names. Moving it to a blocking pool would buy nothing
+        // but a join failure with nothing to say to the seller.
+        let library = Arc::new(Library::open(&self.data_dir, key)?);
+        *open = Some(Arc::clone(&library));
+        // The lock goes before the handle is handed out, as `keep` releases
+        // the index before it persists: nothing after this line needs the
+        // slot, and the attempt the next caller makes should not queue behind
+        // this one's return.
+        drop(open);
+        Ok(library)
+    }
+}
+
 #[cfg(test)]
 #[expect(
     clippy::disallowed_methods,
@@ -527,6 +685,7 @@ pub async fn sealed_library_key(
 )]
 mod tests {
     use super::*;
+    use core::sync::atomic::{AtomicUsize, Ordering};
 
     fn kek() -> Kek {
         Kek::from_bytes(&[0x5A; 32]).expect("32 bytes is a key")
@@ -704,5 +863,60 @@ mod tests {
             "but a file already kept goes on being kept"
         );
         assert_eq!(library.entries().await.len(), 1);
+    }
+
+    /// A key source that refuses its first caller and answers every caller
+    /// after it, which is what a phone's Keystore does across an unlock: the
+    /// wrapping key requires an unlocked device, so the operation fails while
+    /// the keyguard shows and succeeds once it is gone.
+    #[derive(Default)]
+    struct LockedOnce {
+        asked: AtomicUsize,
+    }
+
+    impl LibraryKeySource for LockedOnce {
+        fn library_key(&self) -> KeyFuture<'_> {
+            Box::pin(async move {
+                if self.asked.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Err(LibraryError::Io(
+                        "the session store refused: Keystore operation failed".to_owned(),
+                    ));
+                }
+                Ok(kek())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_library_whose_first_open_failed_opens_on_the_next_ask() {
+        let dir = scratch("slot");
+        let keys = Arc::new(LockedOnce::default());
+        // Method-call syntax for the unsizing coercion, as `lib.rs` does.
+        let source: Arc<dyn LibraryKeySource> = keys.clone();
+        let slot = LibrarySlot::new(&dir, source);
+        assert!(
+            slot.get().await.is_err(),
+            "a key the platform refuses is a library that cannot open yet"
+        );
+        let library = slot
+            .get()
+            .await
+            .expect("the ask after the refusal opens the library");
+        let bytes = b"%PDF-1.4 kept after the unlock";
+        library
+            .keep(entry(bytes, "1"), bytes)
+            .await
+            .expect("an import after the retry keeps its original");
+        let again = slot.get().await.expect("stays open");
+        assert!(
+            Arc::ptr_eq(&library, &again),
+            "one library per process, so the index in memory is one index"
+        );
+        assert_eq!(
+            keys.asked.load(Ordering::SeqCst),
+            2,
+            "an open library is not opened again, so the platform is asked for the key only \
+             while there is nothing to hand out"
+        );
     }
 }

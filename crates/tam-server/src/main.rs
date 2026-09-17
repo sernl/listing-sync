@@ -1028,6 +1028,16 @@ fn console_router(dir: &std::path::Path) -> Result<axum::Router, Box<dyn std::er
 /// is one function, and layering it here is what puts it in front of the
 /// console's policy layer, which inserts its own header over anything already
 /// there.
+///
+/// The API goes in front of all three, but only for the paths it owns, and
+/// `api_namespace` is what limits it to those. Its route table is written
+/// against `/{version}/…`, and a path parameter matches any first segment, so
+/// the table alone claimed every two-segment console route whose second
+/// segment names an API collection: `/automations/mappings` was answered by
+/// `/{version}/mappings`, which handed the phone's WebView mapping JSON and an
+/// anonymous browser a 401 where the console shell was asked for. That is a
+/// fourth mutation of this function, and the test named for it is the only one
+/// that sees it.
 fn assemble(
     state: AppState,
     console: Option<axum::Router>,
@@ -1045,8 +1055,54 @@ fn assemble(
         console
     };
     match fallback {
-        Some(fallback) => tam_api::router(state).fallback_service(fallback),
+        // The same tier twice, and deliberately: as this router's fallback it
+        // answers the paths the API matched no route for, and as the guard's
+        // state it answers the paths the API must not be consulted about at
+        // all. One value, so the two cannot diverge.
+        Some(fallback) => {
+            let guard = axum::middleware::from_fn_with_state(fallback.clone(), api_namespace);
+            tam_api::router(state)
+                .fallback_service(fallback)
+                .layer(guard)
+        }
+        // Nothing is mounted behind the API, so it owns every path there is
+        // and its own refusal of an unknown version is the only answer left.
         None => tam_api::router(state),
+    }
+}
+
+/// The API consulted only where the path is the API's, with everything else
+/// answered by the tier mounted behind it.
+///
+/// The decision is `tam_api::claims_path`, which reads the closed version set
+/// rather than a `/v1` written here: a build that starts serving `v3` moves
+/// that set once and this guard, `serving::route` and the router all follow.
+/// `serving::route` states the same precedence for the static tiers, and it
+/// has to be stated twice because the two run at different depths — that one
+/// decides which tier answers behind the API, this one decides whether the API
+/// is reached at all.
+///
+/// A middleware added with `Router::layer` runs after routing and so cannot
+/// rewrite a URI, and it does not need to: by the time this runs the request
+/// has been routed — to one of the API's routes, or to the API's fallback,
+/// which is this same tier — and the repair is to answer from `fallback`
+/// rather than to call `next`. Every path the API does own passes straight
+/// through, whichever route matched it.
+async fn api_namespace(
+    axum::extract::State(mut fallback): axum::extract::State<axum::Router>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    if tam_api::claims_path(request.uri().path()) {
+        return next.run(request).await;
+    }
+    // A `Router` is ready without being polled — its `poll_ready` answers
+    // `Ready` unconditionally — so the call is the whole protocol here.
+    match tower_service::Service::call(&mut fallback, request).await {
+        Ok(response) => response,
+        // A `Router`'s error type is `Infallible`, so this arm names a value
+        // that cannot be constructed and the match over it has no arms.
+        Err(never) => match never {},
     }
 }
 
@@ -1744,6 +1800,52 @@ mod composition {
             "the API's namespace is never a static tier's: {}",
             api.body
         );
+    }
+
+    /// A console path whose second segment names an API collection reaches the
+    /// console.
+    ///
+    /// The defect `api_namespace` repairs, and the only test here that fails
+    /// without it. `/{version}/mappings` matches `/automations/mappings` with
+    /// `automations` for a version, so the API answered a page request: the
+    /// phone's WebView was handed mapping JSON where it had a session, and an
+    /// anonymous browser a 401 where it had none. Deleting the guard turns
+    /// every path below into a JSON body or a refusal, and leaves every other
+    /// test in this module green.
+    #[tokio::test]
+    async fn a_console_deep_link_is_never_read_as_a_version() {
+        for path in [
+            "/automations/mappings",
+            "/automations/status",
+            "/settings/notifications",
+            // Version-shaped but not a version this build serves. The API used
+            // to refuse this with its structured body; the console now answers
+            // it, which is the same answer any other unknown first segment
+            // gets and the one a browser can render.
+            "/v9/mappings",
+        ] {
+            let answer = get(path).await;
+            assert_eq!(
+                answer.status,
+                StatusCode::OK,
+                "{path} names no version, so it is a page: {}",
+                answer.body
+            );
+            assert!(
+                answer.body.contains("__sveltekit"),
+                "{path} must reach the console shell, not an API route: {}",
+                answer.body
+            );
+        }
+        // And the API keeps every path it does own, including the one route it
+        // mounts without a version at all.
+        for path in ["/healthz", "/v1/healthz"] {
+            assert_eq!(
+                get(path).await.status,
+                StatusCode::OK,
+                "{path} is the API's and the guard must hand it on"
+            );
+        }
     }
 
     /// Only GET and HEAD reach a static tier, through the assembled router.

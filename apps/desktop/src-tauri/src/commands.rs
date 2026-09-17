@@ -781,13 +781,28 @@ pub async fn device_activity(app: AppHandle) -> Result<Vec<DeviceActivity>, Comm
 
 // ----------------------------------------------------------------- library
 
-/// The sentence a console reads when this build keeps no library.
+/// The sentence a console reads when this machine is keeping no files: this
+/// build has no library at all, or the library cannot be opened right now.
 const NO_LIBRARY: &str = "this machine is not keeping files";
 
-fn library_of(app: &AppHandle) -> Result<Arc<crate::library::Library>, CommandError> {
-    app.state::<DesktopState>()
+/// The library, asked for at the moment the seller asked for it.
+///
+/// The answer is about now rather than about start-up. A phone launched from
+/// its lock screen cannot open the library — the Keystore refuses every
+/// operation while the keyguard shows — and by the time the seller has the
+/// console in front of them it can, so the refusal must be re-asked rather
+/// than remembered. Why it refused goes to the log, where a developer
+/// reading a device's output can see it; the seller gets the one sentence
+/// they can act on, because "Keystore operation failed" tells them nothing.
+async fn library_of(app: &AppHandle) -> Result<Arc<crate::library::Library>, CommandError> {
+    let slot = app
+        .state::<DesktopState>()
         .library()
-        .ok_or_else(|| CommandError(NO_LIBRARY.to_owned()))
+        .ok_or_else(|| CommandError(NO_LIBRARY.to_owned()))?;
+    slot.get().await.map_err(|why| {
+        eprintln!("the library on this machine could not be opened: {why}");
+        CommandError(NO_LIBRARY.to_owned())
+    })
 }
 
 fn hash_of(hex: &str) -> Result<tam_types::ContentHash, CommandError> {
@@ -838,7 +853,7 @@ impl From<crate::library::LibraryEntry> for LibraryEntryView {
 /// Every file kept on this machine, newest first.
 #[tauri::command]
 pub async fn library_entries(app: AppHandle) -> Result<Vec<LibraryEntryView>, CommandError> {
-    let library = library_of(&app)?;
+    let library = library_of(&app).await?;
     Ok(library
         .entries()
         .await
@@ -850,7 +865,7 @@ pub async fn library_entries(app: AppHandle) -> Result<Vec<LibraryEntryView>, Co
 /// The bytes kept on this machine, as the seller would count them.
 #[tauri::command]
 pub async fn library_usage(app: AppHandle) -> Result<u64, CommandError> {
-    Ok(library_of(&app)?.usage().await)
+    Ok(library_of(&app).await?.usage().await)
 }
 
 /// One kept file's bytes, in the clear, for a preview or a viewer in the
@@ -861,7 +876,7 @@ pub async fn library_read(
     app: AppHandle,
     hash: String,
 ) -> Result<tauri::ipc::Response, CommandError> {
-    let library = library_of(&app)?;
+    let library = library_of(&app).await?;
     let bytes = library
         .read(hash_of(&hash)?)
         .await
@@ -874,7 +889,8 @@ pub async fn library_read(
 /// copy are untouched, as the console's confirmation says.
 #[tauri::command]
 pub async fn library_remove(app: AppHandle, hash: String) -> Result<(), CommandError> {
-    library_of(&app)?
+    library_of(&app)
+        .await?
         .remove(hash_of(&hash)?)
         .await
         .map_err(|why| CommandError(why.to_string()))
@@ -884,7 +900,7 @@ pub async fn library_remove(app: AppHandle, hash: String) -> Result<(), CommandE
 pub async fn library_settings(
     app: AppHandle,
 ) -> Result<crate::library::LibrarySettings, CommandError> {
-    Ok(library_of(&app)?.settings().await)
+    Ok(library_of(&app).await?.settings().await)
 }
 
 #[tauri::command]
@@ -892,7 +908,8 @@ pub async fn set_library_settings(
     app: AppHandle,
     keep_originals: bool,
 ) -> Result<crate::library::LibrarySettings, CommandError> {
-    library_of(&app)?
+    library_of(&app)
+        .await?
         .set_keep_originals(keep_originals)
         .await
         .map_err(|why| CommandError(why.to_string()))
@@ -915,7 +932,7 @@ pub(crate) struct AndroidLibraryOpener<R: tauri::Runtime>(
 pub async fn library_open_external(app: AppHandle, hash: String) -> Result<(), CommandError> {
     #[cfg(not(target_os = "android"))]
     use tauri_plugin_opener::OpenerExt as _;
-    let library = library_of(&app)?;
+    let library = library_of(&app).await?;
     let digest = hash_of(&hash)?;
     let entry = library
         .entries()

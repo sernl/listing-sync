@@ -198,10 +198,10 @@ pub struct DevicePayloads<T: PayloadTransport> {
     /// The seller's own marketplace sessions, where this run has any. `None`
     /// is a run whose every file is ours, which needs no marketplace at all.
     marketplace: Option<std::sync::Arc<dyn MarketplaceFiles>>,
-    /// This machine's library of imported originals, where the build has
-    /// one: a file it holds under the manifest's digest is read from it
-    /// rather than fetched from anywhere.
-    library: Option<std::sync::Arc<crate::library::Library>>,
+    /// Where this machine's library of imported originals lives, where the
+    /// build has one: a file it holds under the manifest's digest is read
+    /// from it rather than fetched from anywhere.
+    library: Option<std::sync::Arc<crate::library::LibrarySlot>>,
     manifests: HashMap<FileId, PayloadManifest>,
     directory: PathBuf,
 }
@@ -249,8 +249,13 @@ impl<T: PayloadTransport> DevicePayloads<T> {
     /// Attaches this machine's library, so a file it already holds is read
     /// from it rather than transferred again. The same builder shape as
     /// [`Self::sourcing`].
+    ///
+    /// The slot rather than the library, because a run may start before the
+    /// library can be opened — on a phone launched while locked it always
+    /// does — and a fetch that happens after the seller unlocks the phone
+    /// should still find what this machine holds.
     #[must_use]
-    pub fn reading(mut self, library: std::sync::Arc<crate::library::Library>) -> Self {
+    pub fn reading(mut self, library: std::sync::Arc<crate::library::LibrarySlot>) -> Self {
         self.library = Some(library);
         self
     }
@@ -307,10 +312,16 @@ impl<T: PayloadTransport> DevicePayloads<T> {
         // imports read. A hit is the seller's file already on the seller's
         // machine, so no marketplace is asked and nothing crosses a wire;
         // it is verified against the commitment exactly as a transfer is,
-        // and a library that cannot answer falls through to the source.
-        if let (Some(library), Some(committed)) = (&self.library, manifest.committed()) {
-            if let Ok(Some(bytes)) = library.read(committed.hash).await {
-                return checked(manifest, bytes);
+        // and a library that cannot answer falls through to the source. A
+        // library that cannot be opened at all — a locked phone's is not
+        // openable — is one of those: the slot is asked here rather than at
+        // start-up so a run that begins locked still reads from the library
+        // once it is not.
+        if let (Some(slot), Some(committed)) = (&self.library, manifest.committed()) {
+            if let Ok(library) = slot.get().await {
+                if let Ok(Some(bytes)) = library.read(committed.hash).await {
+                    return checked(manifest, bytes);
+                }
             }
         }
 

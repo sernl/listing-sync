@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+	deviceConditionIsCurrent,
 	emptyItemsLine,
 	importedHref,
 	itemRows,
@@ -287,6 +288,16 @@ describe('why an import stopped', () => {
 			'The shop answered nothing for ten minutes.'
 		);
 		expect(reasonLine(null, null)).toBeNull();
+	});
+
+	// The reported defect: a lease that expired once and was recovered from
+	// stays on the run, and the review screen read it as a live failure.
+	it('reads the state, not the reason, to decide whether a failure is live', () => {
+		const expired = { reason_code: 'lease_expired' as const, reason: null };
+		const reviewing = head({ state: 'reviewing', execution: { ...head().execution, ...expired } });
+		expect(deviceConditionIsCurrent(reviewing)).toBe(false);
+		const waiting = head({ state: 'reading', execution: { ...head().execution, ...expired } });
+		expect(deviceConditionIsCurrent(waiting)).toBe(true);
 	});
 });
 

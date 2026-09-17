@@ -170,39 +170,49 @@ pub fn run() {
             let notifier: Arc<dyn crate::notify::Notifier> = Arc::new(DeviceNotifier::new(
                 PluginSurface::new(app.handle().clone()),
             ));
-            // The library key, from the same custody the session has on this
-            // platform, under its own entry. A library that cannot open is
-            // logged and left absent rather than failing start-up: the
-            // seller can still connect and import, and the console says the
-            // files are not being kept.
+            // Where the library key comes from on this platform, under its
+            // own entry in the same custody the session's key has. The
+            // library is not opened into a handle here: whether it opens is
+            // not a fact about start-up. A phone launched from its lock
+            // screen cannot obtain the key at all — the Keystore refuses
+            // every operation while the keyguard shows, by the deliberate
+            // choice of `setUnlockedDeviceRequired` — and can obtain it a
+            // moment later, so what is built and handed out is the slot each
+            // consumer asks at the moment it needs the library.
             #[cfg(not(target_os = "android"))]
-            let library_key = library::keychain_library_key(session::keychain::SERVICE);
+            let keys: Arc<dyn library::LibraryKeySource> =
+                Arc::new(library::KeychainKey::under(session::keychain::SERVICE));
             #[cfg(target_os = "android")]
-            let library_key = tauri::async_runtime::block_on(library::sealed_library_key(
-                &data_dir,
-                app.state::<Arc<dyn DeviceKeySource>>().inner().as_ref(),
-            ));
-            let library = match library_key.and_then(|key| library::Library::open(&data_dir, key)) {
-                Ok(library) => Some(Arc::new(library)),
-                Err(why) => {
-                    eprintln!("the library on this machine could not be opened: {why}");
-                    None
-                }
-            };
-            let mut state = DesktopState::with_control_plane(device.clone(), sessions, registry)
+            let keys: Arc<dyn library::LibraryKeySource> =
+                Arc::new(library::SealedKey::in_data_dir(
+                    &data_dir,
+                    Arc::clone(app.state::<Arc<dyn DeviceKeySource>>().inner()),
+                ));
+            let library = Arc::new(library::LibrarySlot::new(&data_dir, keys));
+            // One attempt now, so a machine that can open its library has it
+            // open before the console's first read, and so the log says at
+            // start-up when one cannot. Nothing is decided by the refusal:
+            // the seller can still connect and import, the console says the
+            // files are not being kept while it stands, and the next ask —
+            // a command, an import's keep, the schedule's next beat — tries
+            // again.
+            if let Err(why) = tauri::async_runtime::block_on(library.get()) {
+                eprintln!(
+                    "the library on this machine could not be opened, and opening it will be \
+                     retried: {why}"
+                );
+            }
+            let state = DesktopState::with_control_plane(device.clone(), sessions, registry)
                 .with_ledger(ledger)
                 .with_journal(Arc::new(crate::import::FileJournal::in_data_dir(&data_dir)))
-                .with_notifier(notifier);
-            if let Some(library) = &library {
-                state = state.with_library(Arc::clone(library));
-            }
+                .with_notifier(notifier)
+                .with_library(Arc::clone(&library));
             // The parts the schedule needs to keep this machine's library in
             // step with the seller's others: the endpoint is bound inside the
             // schedule's own task, because binding is asynchronous and this
-            // closure is not.
-            let syncing = library
-                .as_ref()
-                .map(|library| (device.id.clone(), Arc::clone(&plane), Arc::clone(library)));
+            // closure is not, and it is bound whenever the library opens
+            // rather than only if it opened above.
+            let syncing = Syncing::of(device.id.clone(), Arc::clone(&plane), Arc::clone(&library));
             let work = DeviceWork::new(
                 device.id.clone(),
                 plane,
@@ -210,7 +220,7 @@ pub fn run() {
                 &data_dir,
                 state.stopper(),
             )
-            .reading(library);
+            .reading(Some(library));
             app.manage(state);
             // The handle the commands reach the coordinator through. Managed
             // rather than passed, because a command is handed an `AppHandle`
@@ -423,6 +433,95 @@ async fn run_open_runs(app: &AppHandle) -> scheduler::Discovery {
     crate::import::serve_open_runs(&state, state.control_plane()).await
 }
 
+/// This machine's side of keeping the seller's libraries in step, and what it
+/// takes to bring it up.
+///
+/// The endpoint cannot be bound in the set-up closure — binding is
+/// asynchronous and that closure is not — and it cannot be bound once at the
+/// top of the schedule either, because the library it serves may not be
+/// openable then: a phone launched from its lock screen has no library until
+/// the seller unlocks it. So the schedule asks this on each beat, and it
+/// answers with the endpoint once there is one.
+struct Syncing {
+    device: crate::device::DeviceId,
+    plane: Arc<HttpControlPlane>,
+    library: Arc<library::LibrarySlot>,
+    /// One endpoint for the life of the process. `None` before the library
+    /// opens, and `None` for good where the binding itself failed — see
+    /// `bound`.
+    endpoint: Option<library_sync::LibrarySync>,
+    /// Raised once the library has opened and the endpoint has been
+    /// attempted, so exactly one endpoint is ever bound and a binding that
+    /// failed is reported once rather than on every beat for the life of the
+    /// process.
+    bound: bool,
+}
+
+impl Syncing {
+    fn of(
+        device: crate::device::DeviceId,
+        plane: Arc<HttpControlPlane>,
+        library: Arc<library::LibrarySlot>,
+    ) -> Self {
+        Self {
+            device,
+            plane,
+            library,
+            endpoint: None,
+            bound: false,
+        }
+    }
+
+    /// The endpoint, binding it if the library has opened since the last ask.
+    ///
+    /// A library that still will not open is silent here: the start-up line
+    /// already said the open would be retried, and repeating it on every beat
+    /// for the whole time a phone sits locked would say nothing new. A
+    /// library whose endpoint cannot bind is still a library — imports keep
+    /// their originals and the console lists them, only the direct copy to
+    /// another machine is off — and that failure is logged where it happens.
+    async fn ready(&mut self) -> Option<&library_sync::LibrarySync> {
+        if !self.bound {
+            if let Ok(library) = self.library.get().await {
+                self.bound = true;
+                self.endpoint =
+                    Self::bind(self.device.clone(), Arc::clone(&self.plane), library).await;
+            }
+        }
+        self.endpoint.as_ref()
+    }
+
+    /// The endpoint if this process has one, with no attempt to bind.
+    fn endpoint(&self) -> Option<&library_sync::LibrarySync> {
+        self.endpoint.as_ref()
+    }
+
+    async fn bind(
+        device: crate::device::DeviceId,
+        plane: Arc<HttpControlPlane>,
+        library: Arc<library::Library>,
+    ) -> Option<library_sync::LibrarySync> {
+        match library.node_secret().await {
+            Ok(secret) => match transfer::Transfer::start(Arc::clone(&library), secret).await {
+                Ok(transfer) => Some(library_sync::LibrarySync {
+                    device,
+                    plane,
+                    library,
+                    transfer: Arc::new(transfer),
+                }),
+                Err(why) => {
+                    eprintln!("this machine's transfer endpoint did not start: {why}");
+                    None
+                }
+            },
+            Err(why) => {
+                eprintln!("this machine's node key could not be read: {why}");
+                None
+            }
+        }
+    }
+}
+
 /// The heavy pass: claim whatever the queue holds and run it to a verdict.
 ///
 /// Spawned rather than awaited in the loop, and supervised one at a time. One
@@ -479,33 +578,8 @@ async fn run_schedule<W: scheduler::WorkSource + 'static>(
     app: AppHandle,
     work: W,
     wake: Arc<Wake>,
-    syncing: Option<(
-        crate::device::DeviceId,
-        Arc<HttpControlPlane>,
-        Arc<library::Library>,
-    )>,
+    mut syncing: Syncing,
 ) {
-    // The transfer endpoint, bound once for the life of the process. A
-    // library whose endpoint cannot bind is still a library: imports keep
-    // their originals and the console lists them; only the direct copy to
-    // another machine is off, and the log says so.
-    let mut library_sync = None;
-    if let Some((device, plane, library)) = syncing {
-        match library.node_secret().await {
-            Ok(secret) => match transfer::Transfer::start(Arc::clone(&library), secret).await {
-                Ok(transfer) => {
-                    library_sync = Some(library_sync::LibrarySync {
-                        device,
-                        plane,
-                        library,
-                        transfer: Arc::new(transfer),
-                    });
-                }
-                Err(why) => eprintln!("this machine's transfer endpoint did not start: {why}"),
-            },
-            Err(why) => eprintln!("this machine's node key could not be read: {why}"),
-        }
-    }
     let scheduler = Scheduler::hourly_over_seller_device_marketplaces();
     // Shared with the supervised task rather than moved into it, so the next
     // pass uses the same source and the same claim identity.
@@ -535,7 +609,13 @@ async fn run_schedule<W: scheduler::WorkSource + 'static>(
             plan.swept(reading(started));
         }
         if due.sweep || due.check_in {
-            if let Some(sync) = &library_sync {
+            // The endpoint is asked for on every beat rather than held from
+            // the top of this function, which is what brings a phone whose
+            // library was locked at launch into the seller's other machines'
+            // company without a restart: a resume is a trigger, a trigger
+            // makes the check-in due, and this is the first thing the beat
+            // does.
+            if let Some(sync) = syncing.ready().await {
                 sync.advertise().await;
             }
             let revoked = run_check_in(&app).await;
@@ -545,7 +625,7 @@ async fn run_schedule<W: scheduler::WorkSource + 'static>(
             plan.observed_revoked(revoked);
             // The wants after the check-in, and only while this machine is
             // in good standing: a signed-out machine fetches nothing.
-            if let (Some(sync), false) = (&library_sync, revoked) {
+            if let (Some(sync), false) = (syncing.endpoint(), revoked) {
                 sync.serve_wants().await;
             }
         }
