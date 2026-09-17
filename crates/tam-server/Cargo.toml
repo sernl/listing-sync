@@ -36,6 +36,12 @@ tam-types = { path = "../tam-types" }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "time", "fs"] }
 tokio-util = { version = "0.7", features = ["io"] }
 tower-http = { version = "0.6", features = ["fs"] }
+# The `Service` trait itself, so `api_namespace` can hand a request the API
+# does not own to the tier mounted behind it. That tier is a `Router`, which
+# is already a service; naming the trait's own crate is what makes it callable
+# here. It is axum's own dependency and already in the lock, so this edge adds
+# a name and no package.
+tower-service = "0.3"
 
 # The assembled router driven without a listener, which is the only way to see
 # the tier ordering and the per-tier headers at once. Both versions are the ones

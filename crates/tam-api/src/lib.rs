@@ -3,11 +3,18 @@
 //!
 //! The crate owns the router, the extractors and the error mapping; a binary
 //! that serves it owns a listener and nothing else. Every route mounted under
-//! `/{version}` receives its version through the [`APIVersion`] extractor, so
-//! an unknown version is refused with the same structured body as any other
-//! fault rather than falling through to a bare not-found. The tenant boundary
-//! is the [`OrgContext`] extractor; a handler that forgets it cannot name an
-//! organisation, because no other source of one exists. The operator surface
+//! `/{version}` receives its version through the [`APIVersion`] extractor.
+//! That parameter matches any first segment whatever, so a binary that mounts
+//! anything behind this router asks [`claims_path`] which requests are the
+//! API's before letting it answer: `/{version}/mappings` matches the console's
+//! own `/automations/mappings`, and without that guard a browser asking for a
+//! page was handed mapping JSON, or a 401. Where the guard is in place an
+//! unknown but version-shaped first segment reaches whatever is mounted behind
+//! the API rather than the structured refusal the extractor writes; that
+//! refusal is what a deployment serving the API alone still answers, because
+//! there nothing else could. The tenant boundary is the [`OrgContext`]
+//! extractor; a handler that forgets it cannot name an organisation, because
+//! no other source of one exists. The operator surface
 //! under `/{version}/admin` is the one exception to that keying, and it is a
 //! different extractor rather than a flag on the same one: [`OperatorContext`]
 //! names no organisation at all, and the pool it reads through is a second
@@ -218,6 +225,30 @@ pub struct Whoami {
     pub user: UserId,
     pub slug: Option<String>,
     pub slug_prompt: org::SlugPrompt,
+}
+
+/// Every route this build serves outside a version prefix.
+///
+/// Listed rather than derived, because nothing can derive it: axum's table is
+/// not introspectable, so this is the one place [`claims_path`] can learn that
+/// `/healthz` is the API's. A route added to [`router`] without a version and
+/// not named here is a route whatever is mounted behind the API swallows.
+const UNVERSIONED_ROUTES: [&str; 1] = ["/healthz"];
+
+/// Whether the API owns `path`, which is the question a binary mounting
+/// anything behind this router has to ask before it lets the router answer.
+///
+/// The route table cannot answer it. Every versioned route begins with a
+/// `{version}` parameter, and a parameter matches any segment:
+/// `/{version}/mappings` claims the console's `/automations/mappings` with
+/// `automations` for a version, and `/{version}/status`, `/{version}/library`
+/// and every other one-word collection claim a console page of the same name.
+/// The closed version set is what separates the two, so ownership is decided
+/// from [`APIVersion::from_path_prefix`] and from the list above, and from
+/// nothing else.
+#[must_use]
+pub fn claims_path(path: &str) -> bool {
+    APIVersion::from_path_prefix(path).is_some() || UNVERSIONED_ROUTES.contains(&path)
 }
 
 /// The whole API surface this build serves, configured by the binary.
@@ -839,4 +870,41 @@ async fn whoami(
         slug,
         slug_prompt,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{claims_path, APIVersion, UNVERSIONED_ROUTES};
+
+    /// What the guard in front of this router is allowed to hand on, and what
+    /// it has to hand back.
+    #[test]
+    fn the_api_claims_its_versions_and_its_unversioned_probe() {
+        for version in APIVersion::SUPPORTED {
+            let path = format!("/{version}/openapi.json");
+            assert!(
+                claims_path(&path),
+                "{path} is a route this build serves and must reach it"
+            );
+        }
+        for path in UNVERSIONED_ROUTES {
+            assert!(
+                claims_path(path),
+                "{path} is mounted without a version, so only this list can save it"
+            );
+        }
+        for path in [
+            "/automations/mappings",
+            "/settings/notifications",
+            "/resources",
+            "/library",
+            "/login",
+            "/",
+        ] {
+            assert!(
+                !claims_path(path),
+                "{path} is a console page, whatever the route table matches"
+            );
+        }
+    }
 }

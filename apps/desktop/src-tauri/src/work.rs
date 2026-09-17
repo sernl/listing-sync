@@ -697,9 +697,9 @@ pub struct DeviceWork<P: DevicePlane, M: Marketplaces<P>> {
     /// which is how a revocation reaches the interpreter before its next
     /// marketplace request rather than after it.
     stopper: Arc<AtomicBool>,
-    /// This machine's library of imported originals, where the build has
-    /// one; a run whose bytes it holds reads them from it.
-    library: Option<Arc<crate::library::Library>>,
+    /// Where this machine's library of imported originals lives, where the
+    /// build has one; a run whose bytes it holds reads them from it.
+    library: Option<Arc<crate::library::LibrarySlot>>,
 }
 
 impl<P: DevicePlane, M: Marketplaces<P>> core::fmt::Debug for DeviceWork<P, M> {
@@ -732,8 +732,11 @@ impl<P: DevicePlane, M: Marketplaces<P>> DeviceWork<P, M> {
 
     /// Attaches this machine's library. A separate step so the call sites
     /// that build a work source without one read as before.
+    ///
+    /// The slot rather than an opened library, so a process whose first open
+    /// failed still keeps the originals of the runs it claims afterwards.
     #[must_use]
-    pub fn reading(mut self, library: Option<Arc<crate::library::Library>>) -> Self {
+    pub fn reading(mut self, library: Option<Arc<crate::library::LibrarySlot>>) -> Self {
         self.library = library;
         self
     }
@@ -814,7 +817,7 @@ impl<P: DevicePlane, M: Marketplaces<P>> DeviceWork<P, M> {
             None => payloads,
         };
         let payloads = match &self.library {
-            Some(library) => payloads.reading(Arc::clone(library)),
+            Some(slot) => payloads.reading(Arc::clone(slot)),
             None => payloads,
         };
 

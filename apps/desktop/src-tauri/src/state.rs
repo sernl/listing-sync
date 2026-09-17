@@ -181,10 +181,12 @@ pub struct DesktopState {
     /// settled. [`Silent`] by default, because a state built without a
     /// surface to show one on has nothing to raise it on.
     notifier: Arc<dyn Notifier>,
-    /// The seller's own files, kept sealed on this machine. `None` in a
-    /// build with no data directory, which keeps nothing and answers the
-    /// console's library reads as unavailable.
-    library: Option<Arc<crate::library::Library>>,
+    /// Where the seller's own files are kept sealed on this machine, asked
+    /// at each use rather than resolved here: whether the library can be
+    /// opened is a fact about the moment a command or an import needs it, not
+    /// about start-up. `None` in a build with no data directory, which keeps
+    /// nothing and answers the console's library reads as unavailable.
+    library: Option<Arc<crate::library::LibrarySlot>>,
 }
 
 impl DesktopState {
@@ -287,16 +289,16 @@ impl DesktopState {
         self.notifier.as_ref()
     }
 
-    /// The library of imported originals on this machine. A separate step
-    /// for the reason [`Self::with_ledger`] is one.
+    /// Where the library of imported originals lives on this machine. A
+    /// separate step for the reason [`Self::with_ledger`] is one.
     #[must_use]
-    pub fn with_library(mut self, library: Arc<crate::library::Library>) -> Self {
+    pub fn with_library(mut self, library: Arc<crate::library::LibrarySlot>) -> Self {
         self.library = Some(library);
         self
     }
 
     #[must_use]
-    pub fn library(&self) -> Option<Arc<crate::library::Library>> {
+    pub fn library(&self) -> Option<Arc<crate::library::LibrarySlot>> {
         self.library.clone()
     }
 

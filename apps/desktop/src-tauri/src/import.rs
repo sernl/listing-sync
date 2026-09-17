@@ -2144,7 +2144,7 @@ pub struct ImportPass<S: CatalogueSource> {
     permission: SourcePermission,
     /// Where an import's originals are kept on this machine, where the
     /// build has one.
-    library: Option<Arc<crate::library::Library>>,
+    library: Option<Arc<crate::library::LibrarySlot>>,
 }
 
 /// Whether this pass may go on reading the marketplace it is reading.
@@ -2187,8 +2187,12 @@ impl<S: CatalogueSource> ImportPass<S> {
     /// Attaches the machine's library, so each described original is kept
     /// where the seller's setting says to. A builder rather than a fourth
     /// argument, so the tests that build a pass without one read as before.
+    ///
+    /// The slot rather than an opened library: a pass claimed while the
+    /// library could not be opened keeps the originals it describes after it
+    /// can be, which on a phone is as soon as the seller unlocks it.
     #[must_use]
-    pub fn keeping(mut self, library: Option<Arc<crate::library::Library>>) -> Self {
+    pub fn keeping(mut self, library: Option<Arc<crate::library::LibrarySlot>>) -> Self {
         self.library = library;
         self
     }
@@ -2608,23 +2612,35 @@ impl<S: CatalogueSource> ImportPass<S> {
         // says so. A failure to keep is logged and does not fail the import:
         // the resource is described either way, and the library is a
         // convenience for the seller rather than a step the read depends on.
-        if let Some(library) = &self.library {
-            let kept = library
-                .keep_original(
-                    crate::library::LibraryEntry {
-                        hash: ContentHash(*hash.as_bytes()),
-                        file_name: name.clone(),
-                        content_type: content_type_for(kind, &payload).to_owned(),
-                        byte_len: payload.len() as u64,
-                        marketplace: self.permission.marketplace(),
-                        resource: locator.to_string(),
-                        kept_at: now,
-                        pinned: false,
-                    },
-                    &payload,
-                )
-                .await;
-            if let Err(why) = kept {
+        //
+        // The library is asked for here, resource by resource, rather than
+        // held open from the start of the run. A phone whose keyguard was
+        // showing when the application launched could not open it then and
+        // can open it now, and an import the seller started after unlocking
+        // their phone has to keep what it reads.
+        if let Some(slot) = &self.library {
+            let refused = match slot.get().await {
+                Ok(library) => library
+                    .keep_original(
+                        crate::library::LibraryEntry {
+                            hash: ContentHash(*hash.as_bytes()),
+                            file_name: name.clone(),
+                            content_type: content_type_for(kind, &payload).to_owned(),
+                            byte_len: payload.len() as u64,
+                            marketplace: self.permission.marketplace(),
+                            resource: locator.to_string(),
+                            kept_at: now,
+                            pinned: false,
+                        },
+                        &payload,
+                    )
+                    .await
+                    .err(),
+                // A library that will not open is reported the same way a
+                // keep that failed is: the seller's import goes on either way.
+                Err(why) => Some(why),
+            };
+            if let Some(why) = refused {
                 eprintln!("the original of resource {locator} was not kept on this machine: {why}");
             }
         }
@@ -2807,7 +2823,7 @@ pub struct ImportContext {
     pub catalogue: CatalogueFactory,
     /// Where an import keeps the originals it reads, where this build has
     /// a library.
-    pub library: Option<Arc<crate::library::Library>>,
+    pub library: Option<Arc<crate::library::LibrarySlot>>,
 }
 
 impl ImportContext {

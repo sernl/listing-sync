@@ -45,6 +45,7 @@
 		READING_HAPPENS_ON_YOUR_COMPUTER,
 		RUN_UNREAD,
 		countsLine,
+		deviceConditionIsCurrent,
 		emptyItemsLine,
 		importedHref,
 		itemRows,
@@ -524,7 +525,7 @@
 			<p class="quiet">{copy.detail}</p>
 
 			<p class="quiet">{countsLine(run.counts, run.read_total)}</p>
-			{@const why = run.state === 'complete' ? null : reasonLine(run.execution.reason_code, run.execution.reason)}
+			{@const why = deviceConditionIsCurrent(run) ? reasonLine(run.execution.reason_code, run.execution.reason) : null}
 			{#if why !== null}
 				<p class="run-bar">{why}</p>
 			{/if}
@@ -543,7 +544,7 @@
 			{#if run.execution.owner_device !== null || run.execution.last_contact_at !== null || run.execution.last_progress_at !== null || run.execution.reason_code !== null}
 				<details class="run-tech">
 					<summary>Technical details</summary>
-					{#if run.state === 'complete' && run.execution.reason_code !== null}
+					{#if !deviceConditionIsCurrent(run) && run.execution.reason_code !== null}
 						<p class="quiet">Earlier device condition: {run.execution.reason_code}.</p>
 					{/if}
 					{#if run.execution.owner_device !== null}
