@@ -2,8 +2,15 @@
 //! executing each effect in order and feeding the result back as the next
 //! input. Every ledger write carries the lease epoch; time enters as data
 //! through the clock seam; and every unhandleable condition abandons the
-//! item so the lease expires and the stealer requeues it — the stall bias,
-//! never an invented outcome.
+//! item — the stall bias, never an invented outcome.
+//!
+//! An abandoned run hands the lease back rather than leaving it to expire.
+//! The expiry is the backstop for a device that stopped existing, and it was
+//! being used as the ordinary path: the live-lease mutex is per marketplace,
+//! so an item nobody was working still held its seller's whole queue for the
+//! rest of its TTL, and the work resumed one poll after the reaper requeued
+//! it. What the run knows at the moment it stops is exactly what the server
+//! needs to decide where the item goes, so it says so instead.
 
 use serde_json::json;
 use tam_domain::{
@@ -121,8 +128,10 @@ pub struct DriverContext<'a, A, N, P, L, C, I, R> {
 pub enum RunVerdict {
     Settled(ItemOutcome),
     Parked,
-    /// The lease was deliberately left to expire; the stealer requeues with
-    /// the epoch bumped. The stall bias as a value.
+    /// The run stopped without deciding the item. The lease is handed back —
+    /// see [`ItemLedger::hand_back`] — so the server disposes of the item at
+    /// once rather than a TTL later. The stall bias as a value: the run
+    /// invents no outcome.
     Abandoned {
         reason: String,
     },
@@ -490,6 +499,175 @@ async fn verify_with_backoff<
     )
 }
 
+/// How long a stranded create waits, inside its own lease, for the
+/// marketplace to publish what it did with the write, before the seller's
+/// catalogue is walked looking for it.
+///
+/// A wait rather than a re-claim, and the difference is the whole of what the
+/// heartbeat is for. The wait used to be spent by ending the run: the item
+/// kept its lease until the TTL expired, the reaper parked it, and the next
+/// claim reconciled it. So one stranded write cost the seller a full lease
+/// TTL — and cost every sibling item on that marketplace the same, because
+/// the live-lease mutex is per marketplace and an item nobody was working
+/// still held it. Waited for here, the cost is the marketplace's own lag and
+/// nothing else.
+pub const STRAND_SETTLE_WAIT_MS: u32 = 30_000;
+
+/// How many catalogue walks one reconcile is worth, and why absence needs
+/// more than one of them.
+///
+/// `Ok(None)` is a complete enumeration that did not contain the listing, and
+/// the machine settles an ambiguity and halts the tenant's inventory on it.
+/// That is the right answer to absence and the wrong one to lag — the same
+/// distinction [`verify_with_backoff`] exists for. A resource the marketplace
+/// has accepted but not yet indexed reads exactly like one it never made, so
+/// an absence seen before the last walk is treated as lag and the walk is
+/// repeated; only the last answer is handed to the machine.
+pub const RECONCILE_WALKS_MAX: u32 = 3;
+
+/// The wait between two walks of one reconcile.
+pub const RECONCILE_WALK_INTERVAL_MS: u32 = 30_000;
+
+/// The longest stretch of either wait taken without looking at the
+/// cancellation.
+///
+/// The interpreter's interruption points are between effects, so a wait taken
+/// whole is a wait a closing application or a revoked device sits through. Two
+/// seconds is the granularity the verification poll already has — its interval
+/// is the same order — so the waits added here are no coarser than the ones
+/// that were already here.
+const WAIT_SLICE_MS: u32 = 2_000;
+
+/// Waits, in slices, and answers whether the run may still continue.
+///
+/// `false` is a cancellation or the wall-clock deadline arriving inside the
+/// wait. The caller stops rather than carrying on: the point of waiting was to
+/// give the marketplace time, and a run that has been told to stop is not
+/// going to use it.
+async fn waited_through<
+    A: MarketplaceAdapter,
+    N: NowSource,
+    P: Pause,
+    L: ItemLedger,
+    C: Cancellation,
+    I: IdSource,
+    R: ReconcileSource,
+>(
+    ctx: &DriverContext<'_, A, N, P, L, C, I, R>,
+    total_ms: u32,
+    deadline: i64,
+) -> bool {
+    let mut waited = 0;
+    while waited < total_ms {
+        if ctx.cancel.is_cancelled() || ctx.clock.now().0 >= deadline {
+            return false;
+        }
+        let slice = WAIT_SLICE_MS.min(total_ms - waited);
+        ctx.pause.pause(slice).await;
+        waited += slice;
+    }
+    !ctx.cancel.is_cancelled() && ctx.clock.now().0 < deadline
+}
+
+/// What one reconcile poll is asked to establish.
+struct Reconciliation {
+    locator: ListingLocator,
+    attempt: WriteAttemptId,
+    connection: ConnectionId,
+    deadline: i64,
+}
+
+/// Two answers, for the same reason the verification poll has two: what the
+/// catalogue says about the listing is evidence the machine settles on, and
+/// what stopped us looking says nothing about the listing at all.
+enum ReconcileOutcome {
+    Answered(Result<Option<RemoteListingId>, AdapterError>),
+    /// The walk could not be performed to an answer. The write may have
+    /// landed and we simply stopped looking, so the create's fence stays
+    /// standing and the run abandons.
+    Stopped(&'static str),
+}
+
+/// Walks the seller's own catalogue for a create whose fate is unknown,
+/// repeating the walk while it answers absence.
+///
+/// The lease is extended before every walk, as before every other
+/// network-bearing effect: an enumeration is one, and on a large catalogue a
+/// slow one. Each walk is charged as a read, because that is what it is, and
+/// a window that closes mid-poll stops the poll rather than being reported as
+/// absence — absence halts the tenant's inventory, and a rate ceiling is a
+/// fact about us rather than about the listing.
+async fn reconcile_with_backoff<
+    A: MarketplaceAdapter,
+    N: NowSource,
+    P: Pause,
+    L: ItemLedger,
+    C: Cancellation,
+    I: IdSource,
+    R: ReconcileSource,
+>(
+    ctx: &DriverContext<'_, A, N, P, L, C, I, R>,
+    lease: &LeasedItem,
+    request: Reconciliation,
+) -> Result<ReconcileOutcome, EngineError> {
+    let lease_ref = lease.lease_ref();
+    for walked in 0..RECONCILE_WALKS_MAX {
+        let now = ctx.clock.now();
+        if ctx.cancel.is_cancelled() || now.0 >= request.deadline {
+            return Ok(ReconcileOutcome::Stopped("the run was cut"));
+        }
+        ctx.ledger.renew(&lease_ref).await?;
+        let grant = ctx
+            .ledger
+            .request_grant(&lease_ref, request.connection, GrantKind::VerifyRead, now)
+            .await?;
+        if grant == BudgetGrant::Exhausted {
+            return Ok(ReconcileOutcome::Stopped(
+                "the per-connection rate window closed",
+            ));
+        }
+        let found = ctx
+            .reconcile
+            .find_listing(&request.locator, request.attempt)
+            .await;
+        let last_walk = walked + 1 >= RECONCILE_WALKS_MAX;
+        match found {
+            // Found, or a condition rather than lag: both are answers, and
+            // repeating the walk would only spend the seller's allowance on
+            // a question already decided.
+            Ok(Some(_)) | Err(_) => return Ok(ReconcileOutcome::Answered(found)),
+            Ok(None) if last_walk => return Ok(ReconcileOutcome::Answered(found)),
+            // Absence this early is lag, so the wait between walks is where
+            // the marketplace catches up. A cancellation arriving inside it
+            // stops the poll rather than being slept through: the answer
+            // this run would have had is not one it may invent.
+            Ok(None) => {
+                if !waited_through(ctx, RECONCILE_WALK_INTERVAL_MS, request.deadline).await {
+                    return Ok(ReconcileOutcome::Stopped("the run was cut"));
+                }
+            }
+        }
+    }
+    // Unreachable while the bound is non-zero, and stated rather than
+    // assumed: a poll that never looked has nothing to hand over, and
+    // absence is the one answer it must not invent.
+    Ok(ReconcileOutcome::Stopped("the reconcile never walked"))
+}
+
+/// What a strand recorded that identifies its create to a catalogue walk.
+///
+/// Only the recorded title: a marker strategy never strands — its ambiguous
+/// submit emits the search directly, because the marker is embedded in the
+/// write and needs no wait — and a durable identifier belongs to an
+/// operation that was given one. So `None` is a locator this run has no
+/// search for, which abandons rather than guessing.
+fn recorded_by(locator: &ListingLocator) -> Option<RecordedTitle> {
+    match locator {
+        ListingLocator::Recorded { title, .. } => Some(title.clone()),
+        ListingLocator::Marker { .. } | ListingLocator::Durable(_) => None,
+    }
+}
+
 const fn outcome_to_attempt_state(outcome: &Outcome) -> &'static str {
     match outcome {
         Outcome::Committed { .. } | Outcome::Degraded { .. } => "committed",
@@ -531,12 +709,65 @@ const _: () = assert!(
     "an item admitted with no attempts behind it must be able to reach the streak bound"
 );
 
-/// Drives one leased item to a terminal state, a park, or abandonment.
+/// Drives one leased item to a terminal state, a park, or abandonment, and
+/// hands the lease back where the run decided nothing.
+///
+/// The hand-back is here rather than at each of the eight places that
+/// abandon, so a path added to the interpreter cannot forget it. It is
+/// best-effort by construction: the refusal is reported in the verdict's own
+/// reason and never replaces it, because a lease we could not hand back is
+/// exactly the case the expiry backstop still covers.
+pub async fn run_item<
+    A: MarketplaceAdapter,
+    N: NowSource,
+    P: Pause,
+    L: ItemLedger,
+    C: Cancellation,
+    I: IdSource,
+    R: ReconcileSource,
+>(
+    ctx: &DriverContext<'_, A, N, P, L, C, I, R>,
+    lease: &LeasedItem,
+    seed: MachineSeed,
+) -> Result<RunVerdict, EngineError> {
+    let run = drive_item(ctx, lease, seed).await;
+    // A settle and a park both end the item and release its lease in the
+    // server's own transaction; only an undecided run leaves one standing.
+    let undecided = match &run {
+        Ok(RunVerdict::Settled(_) | RunVerdict::Parked) => false,
+        Ok(RunVerdict::Abandoned { .. }) | Err(_) => true,
+    };
+    if !undecided {
+        return run;
+    }
+    let handed = ctx
+        .ledger
+        .hand_back(&lease.lease_ref(), ctx.clock.now())
+        .await;
+    // Only an abandoned run has a sentence to append the refusal to, and a
+    // stolen lease is not worth appending: the steal already owns the item,
+    // which is why the hand-back was fenced out. Every other pairing keeps
+    // the run's own answer.
+    match (run, handed) {
+        (Ok(RunVerdict::Abandoned { reason }), Err(why))
+            if !matches!(why, LedgerError::StaleLease) =>
+        {
+            Ok(RunVerdict::Abandoned {
+                reason: format!(
+                    "{reason}; and the lease could not be handed back, so it runs to its \
+                     expiry: {why}"
+                ),
+            })
+        }
+        (run, _) => run,
+    }
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "the effect loop is one cohesive interpreter; the lint is advisory here by charter"
 )]
-pub async fn run_item<
+async fn drive_item<
     A: MarketplaceAdapter,
     N: NowSource,
     P: Pause,
@@ -604,6 +835,14 @@ pub async fn run_item<
     // would imply.
     let mut observed_lifecycle: Option<RemoteLifecycle> = None;
     let mut sequence: u32 = 0;
+    // Whether this run has already resumed its own stranded create. One
+    // resume per claim: the wait and the walks are bounded, and a second
+    // strand means the search itself is not answering.
+    let mut resumed = false;
+    // Whether the write this run sent was answered by a challenge rather
+    // than by the marketplace. See the submit arm: it decides whether a
+    // strand is searchable from inside this run.
+    let mut blocked_mid_write = false;
 
     loop {
         let now = ctx.clock.now();
@@ -687,6 +926,19 @@ pub async fn run_item<
                 .step(Input::BudgetExhausted, LogicalInstant(now.0))?;
         }
         let Transition { next, effects } = transition;
+        // Read before the effects run, because the arm below needs the
+        // strand's own identification and the machine is consumed by the
+        // step that follows. `None` is either a run that has already
+        // searched once — one wait and one poll per claim, so a marketplace
+        // that answers nothing cannot hold the lease indefinitely — or a
+        // locator this run cannot search, which is the case the abandon
+        // still covers.
+        let strand_resume = match (&next.state, resumed) {
+            (SyncState::Stranded { attempt, locator }, false) if !blocked_mid_write => {
+                recorded_by(locator).map(|title| (*attempt, title))
+            }
+            _ => None,
+        };
         let mut pending: Option<Input> = None;
         for effect in effects.0 {
             sequence += 1;
@@ -820,6 +1072,21 @@ pub async fn run_item<
                     ctx.ledger.renew(&lease_ref).await?;
                     record_action(ctx, lease, sequence, "submit", now).await?;
                     let submitted = ctx.adapter.submit(key, fields, now).await;
+                    // A create can strand two ways and only one of them is
+                    // searchable from here. A lost answer leaves the
+                    // marketplace reachable and merely behind, which is what
+                    // the walk below waits out. A challenge or a lapsed
+                    // session is the edge answering our address rather than
+                    // our write, and it answers an enumeration the same way:
+                    // the walk would come back empty, and an empty walk is
+                    // the answer that settles an ambiguity and halts this
+                    // tenant's inventory. So the run records the strand and
+                    // stops, exactly as it did before, and the item is
+                    // reconciled once the seller has cleared the edge.
+                    blocked_mid_write = matches!(
+                        submitted,
+                        Err(AdapterError::Challenge(_) | AdapterError::SessionExpired)
+                    );
                     pending = Some(Input::SubmitResult(submitted));
                 }
                 Effect::Revise {
@@ -970,12 +1237,38 @@ pub async fn run_item<
                     }
                 }
                 Effect::Reconcile { attempt, locator } => {
-                    // The lease is extended first, as before every other
-                    // network-bearing effect: an enumeration is one, and on a
-                    // large catalogue a slow one.
-                    ctx.ledger.renew(&lease_ref).await?;
+                    // One action for the whole poll, exactly as the read-back
+                    // records one: a reconcile is one logical read of the
+                    // seller's catalogue, and recording each walk would
+                    // multiply the item's event stream by the walk budget.
                     record_action(ctx, lease, sequence, "reconcile", now).await?;
-                    let found = ctx.reconcile.find_listing(&locator, attempt).await;
+                    let walked = reconcile_with_backoff(
+                        ctx,
+                        lease,
+                        Reconciliation {
+                            locator,
+                            attempt,
+                            connection,
+                            deadline: wall_deadline,
+                        },
+                    )
+                    .await?;
+                    let found = match walked {
+                        ReconcileOutcome::Answered(found) => found,
+                        // Nothing was established about the listing, so
+                        // nothing is settled: the attempt stays in flight and
+                        // the create cannot repeat. The same shape the
+                        // read-back's stop takes, for the same reason.
+                        ReconcileOutcome::Stopped(stopped_by) => {
+                            return Ok(RunVerdict::Abandoned {
+                                reason: format!(
+                                    "{stopped_by} before the seller's catalogue could answer \
+                                     for this create; the attempt stays in flight so the \
+                                     create cannot repeat"
+                                ),
+                            })
+                        }
+                    };
                     // A resume opens no attempt, so the run reaches here owning
                     // none. The find substitutes for the lost write response,
                     // and adopting the standing row on it is what lets the
@@ -1169,17 +1462,52 @@ pub async fn run_item<
                 return Ok(RunVerdict::Settled(item_outcome));
             }
             (SyncState::Parked { .. }, _) => return Ok(RunVerdict::Parked),
-            // The run stopped without deciding the item, on purpose. Nothing
-            // is settled here: the attempt stays in flight so no second create
-            // can start, and the reaper parks the item for a later claim to
-            // reconcile against what the marketplace says by then.
+            // The write went out and its fate is unknown. Nothing is settled
+            // here — the attempt stays in flight so no second create can
+            // start — and where the marketplace is still readable the search
+            // for it happens in this run rather than in a later claim. A
+            // later claim could not begin until this lease expired, so
+            // deferring cost the seller a whole TTL of held queue for every
+            // stranded write; this run already holds the lease, the session
+            // and the catalogue access it needs.
             (SyncState::Stranded { .. }, _) => {
-                return Ok(RunVerdict::Abandoned {
-                    reason: "the write went out and its fate is unknown; the attempt stays \
-                             in flight and the recorded title identifies the create for a \
-                             later reconcile"
-                        .to_owned(),
-                })
+                let Some((attempt, recorded)) = strand_resume else {
+                    let why = if blocked_mid_write {
+                        "the marketplace is challenging this device, so the catalogue \
+                         cannot be walked from here either; the item is reconciled once \
+                         the challenge is cleared"
+                    } else if resumed {
+                        "this run has already searched the seller's catalogue for it once"
+                    } else {
+                        "this strand records no identification a catalogue walk could use"
+                    };
+                    return Ok(RunVerdict::Abandoned {
+                        reason: format!(
+                            "the write went out and its fate is unknown; the attempt stays \
+                             in flight and {why}"
+                        ),
+                    });
+                };
+                resumed = true;
+                // The lease is extended before the wait rather than after
+                // it. The heartbeat is what makes a run allowed to be slow,
+                // and a wait taken without one would hand the item to the
+                // reaper in the middle of it — which is the failure this
+                // whole path replaces.
+                ctx.ledger.renew(&lease_ref).await?;
+                if !waited_through(ctx, STRAND_SETTLE_WAIT_MS, wall_deadline).await {
+                    return Ok(RunVerdict::Abandoned {
+                        reason: "the write went out and its fate is unknown; the run was \
+                                 cut while waiting for the marketplace to publish it, and \
+                                 the attempt stays in flight so the create cannot repeat"
+                            .to_owned(),
+                    });
+                }
+                let now = ctx.clock.now();
+                transition = next.step(
+                    Input::ResumeStranded { attempt, recorded },
+                    LogicalInstant(now.0),
+                )?;
             }
             (_, Some(input)) => {
                 let now = ctx.clock.now();

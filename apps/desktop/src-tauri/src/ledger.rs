@@ -156,6 +156,7 @@ pub const fn call_name(call: &LedgerCall) -> &'static str {
         LedgerCall::RequestGrant { .. } => "request_grant",
         LedgerCall::Renew { .. } => "renew",
         LedgerCall::RecordEvent { .. } => "record_event",
+        LedgerCall::HandBack { .. } => "hand_back",
         LedgerCall::Notify { .. } => "notify",
     }
 }
@@ -444,6 +445,21 @@ impl<T: LedgerTransport> ItemLedger for HttpLedger<T> {
         self.write(&LedgerCall::Notify {
             lease: *lease,
             event,
+            at_ms: at.0,
+        })
+        .await
+    }
+
+    /// Hands the lease back when the run decided nothing.
+    ///
+    /// It names no disposition: whether the item is requeued, charged,
+    /// parked awaiting the marketplace's answer or settled out of attempts is
+    /// the server's decision, and a device that chose could requeue a create
+    /// whose write may have landed. What this device asserts is only that it
+    /// has stopped working the item, which is the one fact it holds.
+    async fn hand_back(&self, lease: &LeaseRef, at: Timestamp) -> Result<(), LedgerError> {
+        self.write(&LedgerCall::HandBack {
+            lease: *lease,
             at_ms: at.0,
         })
         .await

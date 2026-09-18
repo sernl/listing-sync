@@ -788,4 +788,36 @@ mod lease_budget_tests {
             );
         }
     }
+
+    /// The waits a stranded create now spends inside its own lease, which is
+    /// what the deferral used to charge a whole TTL for.
+    ///
+    /// What can be asserted here is the part that is ours. The wait before the
+    /// first walk and the wait between walks are the interpreter's own
+    /// constants; the walk itself is a catalogue enumeration whose duration is
+    /// the marketplace's and is not measured, and the renew sits before every
+    /// walk precisely so the unmeasured part starts with a full lease in hand.
+    ///
+    /// So the property is that every wait one reconciliation takes, plus the
+    /// verification poll that settles it, is a minority of the lease — which
+    /// leaves the rest of the TTL for the walks themselves. The factor is a
+    /// judgement and is stated as one: half, so the waits can never be the
+    /// reason a run loses its item.
+    #[test]
+    fn the_waits_a_stranded_create_spends_leave_the_lease_room_to_walk() {
+        let lease_ms = lease_ms();
+        let waits = u64::from(tam_engine_driver::driver::STRAND_SETTLE_WAIT_MS)
+            + u64::from(tam_engine_driver::driver::RECONCILE_WALKS_MAX.saturating_sub(1))
+                * u64::from(tam_engine_driver::driver::RECONCILE_WALK_INTERVAL_MS);
+        for inventory in InventoryId::ALL {
+            let ours = waits + verify_policy(inventory).window_ms();
+            assert!(
+                ours * 2 < lease_ms,
+                "{inventory:?}: the reconciliation's own waits come to {ours}ms against a \
+                 {lease_ms}ms lease; a stranded create is reconciled inside the lease it \
+                 was claimed under, and waits that filled the lease would hand the item \
+                 to the reaper mid-wait — which is the ten-minute stall this replaced"
+            );
+        }
+    }
 }

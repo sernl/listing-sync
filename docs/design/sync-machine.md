@@ -73,9 +73,10 @@ A requeued item recomputes the same key, which is what lets a connection that tr
 `Submitted` holds the driver's evidence and is the only state from which ambiguity can arise.
 `AwaitingReadBack` holds the locator that will settle the write.
 `Parked` holds a live challenge and is deliberately not terminal.
-`Stranded` is the run ending without a verdict on the item: a create whose write went out under a strategy this build can identify and whose fate this run cannot determine, holding the attempt that fences its mapping and the locator a later run should search for.
+`Stranded` is a create whose write went out under a strategy this build can identify and whose fate this run cannot determine, holding the attempt that fences its mapping and the locator to search for.
 Two arrivals reach it, a submit whose answer was lost and a challenge that arrived mid-write, and they are one situation rather than two.
-No input carries the machine forward from it, which is the point — entering `AwaitingReadBack` without having asked for a read would let a fabricated read result commit a listing nobody looked at, and `every_committed_terminal_follows_a_read` is the property that refuses it.
+One input carries the machine forward from it, and it is the same one a fresh machine is stepped through on a later claim: `ResumeStranded`, naming the attempt this state already holds.
+A resume naming another attempt is an `AttemptMismatch` and every other input is inapplicable, so the state still means "a write went out and its fate is unknown" and nothing about it can be invented — entering `AwaitingReadBack` without having asked for a read would let a fabricated read result commit a listing nobody looked at, and `every_committed_terminal_follows_a_read` is the property that refuses it.
 `BudgetExhausted` still terminates it, as `Ambiguous`, because a write did go out; nothing else applies.
 `Terminal` holds an `Outcome` and can be stepped no further, which `step` taking `self` by value enforces at compile time.
 
@@ -118,18 +119,23 @@ A reconcile that finds the listing never settles ambiguous on the grounds that t
 | `AwaitingReadBack` | `ReconcileResult(Ok Some)` | `AwaitingReadBack` | `ReadBack` |
 | `AwaitingReadBack` | `ReconcileResult(Ok None)` | `Terminal(Ambiguous NoDurableIdentifier)` | `Halt OrgInventory`, `Notify` |
 | `AwaitingReadBack` | `ReconcileResult(Err)` | `Terminal(Ambiguous ReadBackIndeterminate)` | `Halt OrgInventory`, `Notify` |
+| `Stranded` | `ResumeStranded` (same attempt, marker or recorded-title strategy) | `AwaitingReadBack` | `Reconcile` |
+| `Stranded` | `ResumeStranded` (same attempt, nothing to identify) | `Terminal(Ambiguous NoDurableIdentifier)` | `Notify` |
 | `Parked` | `ChallengeCleared` | `AwaitingPreflight` | `AssertFormSchema` |
 | `Parked` | `ParkExpired` | `Terminal(Blocked)` | `Notify` |
 | any non-terminal | `BudgetExhausted` | `Terminal(Ambiguous or Skipped)` | `CaptureDiagnostics` |
 
 `NotSent` is the only class that returns to a pre-submit state, because it is the only class where the request provably never left.
 
-An ambiguous submit on a create is three rows rather than one, and which of them applies is the strategy's to decide; only one of the three is chosen so that the run stops rather than continues.
-Under a marker strategy the search runs inside the same run, because a marker is embedded at submit time and is there to be found.
-Under the recorded-title strategy it does not: the listing sits in the marketplace's own processing queue for minutes after the submit, so a search run now answers a completed-and-absent `Ok(None)`, which this table settles ambiguous and halts the tenant's inventory on.
-So the machine records the identification in the locator, emits only `CaptureDiagnostics`, and steps to `Stranded`, a state no input carries forward; the interpreter maps it straight to an abandoned run, leaving the attempt in flight and the mapping fenced.
+An ambiguous submit on a create is three rows rather than one, and which of them applies is the strategy's to decide; only one of the three searches immediately.
+Under a marker strategy the search runs in the same transition, because a marker is embedded at submit time and is there to be found.
+Under the recorded-title strategy it does not: the listing sits in the marketplace's own processing queue for minutes after the submit, so a search run in the same breath answers a completed-and-absent `Ok(None)`, which this table settles ambiguous and halts the tenant's inventory on.
+So the machine records the identification in the locator, emits only `CaptureDiagnostics`, and steps to `Stranded`.
 It is `Stranded` rather than `AwaitingReadBack` because no read was asked for, and a state that accepted a read result it never requested would let one be invented.
-The reaper parks the item on `awaiting_marketplace_answer` and a later claim reconciles it against the seller's own catalogue, by which time the marketplace has had time to answer.
+What waits out the marketplace's own lag is the interpreter, in the run that stranded the write: it renews the lease, pauses, and steps `ResumeStranded` with the strand's own attempt, so the walk happens once the marketplace has had time to answer and the whole create still settles under the lease it was claimed on.
+That wait used to be spent by ending the run — the reaper parked the item on `awaiting_marketplace_answer` at the lease's expiry and a later claim reconciled it — and the cost was a whole lease TTL per stranded write, during which the per-marketplace live-lease predicate held every sibling item behind an item nobody was working.
+The interpreter still ends the run where the strand is not searchable from inside it: a challenge arrival, because the edge that answered the write answers an enumeration the same way, and a walk that comes back empty is the answer that halts the tenant.
+Such a run hands the lease back, so the item is parked on `awaiting_marketplace_answer` at once and the next claim reconciles it rather than the one after the expiry.
 The recorded title is read from the machine's own `fields` here and only here: this is the run that rendered them, so they are the intent the submit actually sent, where `ResumeStranded` must carry the title on the input because its `fields` are a fresh projection of a product the seller may have renamed since.
 
 The create's challenge rows are the same three-way branch, reached a different way and decided the same way.

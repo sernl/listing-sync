@@ -317,11 +317,44 @@ impl<T: PayloadTransport> DevicePayloads<T> {
         // openable — is one of those: the slot is asked here rather than at
         // start-up so a run that begins locked still reads from the library
         // once it is not.
-        if let (Some(slot), Some(committed)) = (&self.library, manifest.committed()) {
-            if let Ok(library) = slot.get().await {
-                if let Ok(Some(bytes)) = library.read(committed.hash).await {
-                    return checked(manifest, bytes);
-                }
+        //
+        // Every way of missing is logged, and the reason with it. A miss
+        // costs a download of the seller's own file from the marketplace
+        // that holds it, under their own session, which is minutes rather
+        // than milliseconds and was silent: the library is keyed by the
+        // digest the import observed, so a manifest naming another digest,
+        // or carrying none, reads exactly like a file this machine never
+        // kept.
+        let missed = match (&self.library, manifest.committed()) {
+            (None, _) => Some("this build keeps no library".to_owned()),
+            (Some(_), None) => Some(
+                "the work order commits to no digest for this file, so there is nothing to \
+                 look up"
+                    .to_owned(),
+            ),
+            (Some(slot), Some(committed)) => match slot.get().await {
+                Err(why) => Some(format!("this machine's library could not be opened: {why}")),
+                Ok(library) => match library.read(committed.hash).await {
+                    Ok(Some(bytes)) => return checked(manifest, bytes),
+                    Ok(None) => Some(
+                        "this machine's library keeps nothing under the digest the work order \
+                         commits to"
+                            .to_owned(),
+                    ),
+                    Err(why) => Some(format!(
+                        "this machine's library refused the digest the work order commits \
+                         to: {why}"
+                    )),
+                },
+            },
+        };
+        if let Some(why) = missed {
+            if let PayloadSource::Marketplace { marketplace, .. } = &manifest.source {
+                eprintln!(
+                    "file {} is being fetched from {marketplace:?} under the seller's own \
+                     session rather than read from this machine: {why}",
+                    manifest.file.0.to_hyphenated()
+                );
             }
         }
 
@@ -777,6 +810,153 @@ mod tests {
 
         drop(source);
         std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    /// The same file, held by the marketplace, with the digest a device
+    /// observed travelling as the commitment — which is the shape the work
+    /// order carries once any import has seen the bytes.
+    fn observed_manifest(id: FileId, bytes: &[u8], observed: ContentHash) -> PayloadManifest {
+        PayloadManifest {
+            file: id,
+            file_name: "worksheet.pdf".to_owned(),
+            content_type: "application/pdf".to_owned(),
+            source: PayloadSource::Marketplace {
+                marketplace: Marketplace::Tpt,
+                resource: "13549126".to_owned(),
+                entry: None,
+                expected: Some(Committed {
+                    hash: observed,
+                    byte_len: i64::try_from(bytes.len()).expect("a fixture fits in an i64"),
+                }),
+            },
+        }
+    }
+
+    /// One key, so a fixture's library opens without a keychain.
+    struct FixedKey;
+
+    impl crate::library::LibraryKeySource for FixedKey {
+        fn library_key(&self) -> crate::library::KeyFuture<'_> {
+            Box::pin(async {
+                tam_secrets::Kek::from_bytes(&[0x5A; 32]).map_err(|why| {
+                    crate::library::LibraryError::Io(format!("the fixture's key is one: {why:?}"))
+                })
+            })
+        }
+    }
+
+    /// A library holding one file under the digest an import observed.
+    async fn library_holding(dir: &Path, bytes: &[u8]) -> Arc<crate::library::LibrarySlot> {
+        let keys: Arc<dyn crate::library::LibraryKeySource> = Arc::new(FixedKey);
+        let slot = Arc::new(crate::library::LibrarySlot::new(dir, keys));
+        slot.get()
+            .await
+            .expect("the fixture's library opens")
+            .keep(
+                crate::library::LibraryEntry {
+                    hash: ContentHash(*blake3::hash(bytes).as_bytes()),
+                    file_name: "worksheet.pdf".to_owned(),
+                    content_type: "application/pdf".to_owned(),
+                    byte_len: bytes.len() as u64,
+                    marketplace: Marketplace::Tpt,
+                    resource: "13549126".to_owned(),
+                    kept_at: tam_types::Timestamp(1_000),
+                    pinned: false,
+                },
+                bytes,
+            )
+            .await
+            .expect("the fixture's library keeps");
+        slot
+    }
+
+    /// A file this machine already holds is read from its own library, and the
+    /// marketplace holding it is never asked.
+    ///
+    /// The lookup key is the whole of this test. The library is keyed by the
+    /// digest the import observed over the payload it unwrapped, and the work
+    /// order's marketplace arm commits to that same digest. A manifest that
+    /// named some other digest — or an arm whose commitment was dropped on the
+    /// way through — would miss every time and send the device to fetch the
+    /// seller's file back out of the source marketplace under the seller's own
+    /// session. That is minutes per file rather than milliseconds, it happens
+    /// inside `submit`, and nothing in the item's event stream says it is
+    /// happening.
+    #[tokio::test]
+    async fn a_file_this_machine_holds_is_read_from_the_library_and_not_from_the_marketplace() {
+        let data_dir = scratch();
+        let library_dir = scratch();
+        let id = file(8);
+        let slot = library_holding(&library_dir, BYTES).await;
+        let market = FakeMarketplace::answering(b"the marketplace must not be asked".to_vec());
+        let files: Arc<dyn MarketplaceFiles> = market.clone();
+        let source = payloads(
+            &data_dir,
+            FakePlane::default(),
+            vec![observed_manifest(
+                id,
+                BYTES,
+                ContentHash(*blake3::hash(BYTES).as_bytes()),
+            )],
+        )
+        .sourcing(files)
+        .reading(Arc::clone(&slot));
+
+        let got = source.fetch(id).await.expect("the library answers");
+        assert_eq!(got.bytes, BYTES, "the seller's own original, unchanged");
+        assert!(
+            market.asked.lock().await.is_empty(),
+            "the marketplace holding the bytes is never asked for bytes this machine \
+             already has"
+        );
+        assert!(
+            source.transport.asked().await.is_empty(),
+            "and neither is our control plane, which never held them"
+        );
+
+        drop(source);
+        std::fs::remove_dir_all(&data_dir).ok();
+        std::fs::remove_dir_all(&library_dir).ok();
+    }
+
+    /// The other side of the same key: a commitment this machine holds nothing
+    /// under falls through to the marketplace rather than failing.
+    ///
+    /// The fall-through is correct — the bytes have to come from somewhere —
+    /// and it is the expensive path, so the run says so on the way past. What
+    /// this pins is that a miss is a miss and not a refusal: the library is a
+    /// saving, never a requirement.
+    #[tokio::test]
+    async fn a_digest_this_machine_holds_nothing_under_falls_through_to_the_marketplace() {
+        let data_dir = scratch();
+        let library_dir = scratch();
+        let id = file(9);
+        let slot = library_holding(&library_dir, b"some other file this machine kept").await;
+        let market = FakeMarketplace::answering(BYTES.to_vec());
+        let files: Arc<dyn MarketplaceFiles> = market.clone();
+        let source = payloads(
+            &data_dir,
+            FakePlane::default(),
+            vec![observed_manifest(
+                id,
+                BYTES,
+                ContentHash(*blake3::hash(BYTES).as_bytes()),
+            )],
+        )
+        .sourcing(files)
+        .reading(Arc::clone(&slot));
+
+        let got = source.fetch(id).await.expect("the marketplace answers");
+        assert_eq!(got.bytes, BYTES);
+        assert_eq!(
+            market.asked.lock().await.as_slice(),
+            [(Marketplace::Tpt, "13549126".to_owned())],
+            "asked the marketplace the manifest named, for the resource it named"
+        );
+
+        drop(source);
+        std::fs::remove_dir_all(&data_dir).ok();
+        std::fs::remove_dir_all(&library_dir).ok();
     }
 
     /// The unwrap's policy half. Its mechanics — what "exactly one entry"

@@ -7,7 +7,7 @@
 
 use tam_domain::{ItemOperation, JobItemId};
 use tam_engine_driver::conformance;
-use tam_engine_driver::memory::{InMemoryLedger, ScriptedReconcile, Seeded};
+use tam_engine_driver::memory::{InMemoryLedger, LaggingReconcile, ScriptedReconcile, Seeded};
 use tam_engine_driver::vocabulary::LeasedItem;
 use tam_marketplace::IdempotencyKey;
 use tam_types::{ConnectionId, InventoryId, JobId, MappingId, OrgId, Uuid};
@@ -133,6 +133,42 @@ fn a_read_that_could_not_be_performed_leaves_it_stranded_too() {
             &ledger,
             &lease,
             ScriptedReconcile::could_not_read("the session lapsed mid-walk"),
+        ),
+    );
+}
+
+/// The lag between a create being accepted and being published, which is the
+/// reason the reconcile is a poll rather than one walk. Without it the seller
+/// loses their whole inventory to a halt over an indexing delay.
+#[test]
+fn a_catalogue_that_has_not_published_yet_is_walked_again_rather_than_believed() {
+    let (ledger, lease) = fixture();
+    ledger.strand(lease.mapping, conformance::STRANDED);
+    let found = tam_marketplace::RemoteListingId::Tes {
+        url: "https://www.tes.com/api/v2/resources/7778".to_owned(),
+    };
+    let catalogue = LaggingReconcile::publishing_after(1, found.clone());
+    futures::executor::block_on(
+        conformance::a_reconcile_that_sees_absence_before_the_listing_still_settles_it(
+            &ledger, &lease, &catalogue, found,
+        ),
+    );
+    assert_eq!(
+        catalogue.walked(),
+        2,
+        "one walk that answered absence and one that answered the listing: the poll stops \
+         as soon as it has an answer rather than spending the seller's allowance"
+    );
+}
+
+/// The other half of the hand-back: a run that stopped with a write in flight
+/// gives the lease back and the server parks the item behind its own fence.
+#[test]
+fn an_abandoned_write_parks_the_item_rather_than_holding_its_lease() {
+    let (ledger, lease) = fixture();
+    futures::executor::block_on(
+        conformance::an_abandoned_write_parks_the_item_rather_than_holding_its_lease(
+            &ledger, &lease,
         ),
     );
 }

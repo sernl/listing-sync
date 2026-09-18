@@ -765,16 +765,28 @@ impl<P: DevicePlane, M: Marketplaces<P>> DeviceWork<P, M> {
     /// stall bias covers the rest. A failure here that surfaced as a work-source
     /// error would leave the seller with no record of an item their device did
     /// claim.
+    ///
+    /// Every exit hands the lease back. A refusal here is a claim this device
+    /// took and cannot use, and holding it to its expiry is what made one
+    /// refusal cost ten minutes of this marketplace's whole queue rather than
+    /// one poll: the live-lease predicate is per marketplace, and the claim
+    /// answers idle while the refusing device holds the only slot.
     async fn execute(&self, marketplace: Marketplace, order: WorkOrder) -> Vec<WorkEvent> {
         let item = order.lease.item.0.to_hyphenated();
+        // Built before the refusals rather than beside the run, because a
+        // refusal has a lease to hand back and needs the ledger to do it.
+        // Unmoved: nothing has renewed anything yet, so there is no deadline
+        // for a renew to extend.
+        let ledger = HttpLedger::new(self.device.clone(), &*self.plane);
         if order.lease.inventory.marketplace() != marketplace {
+            let detail = format!(
+                "the control plane answered a {:?} item for a {marketplace:?} ask; the \
+                 readiness gate is per marketplace, so this item is handed back for the \
+                 tick that gated on its own",
+                order.lease.inventory.marketplace()
+            );
             return vec![WorkEvent::Failed {
-                detail: format!(
-                    "the control plane answered a {:?} item for a {marketplace:?} ask; the \
-                     readiness gate is per marketplace, so this item is left for the tick that \
-                     gated on its own",
-                    order.lease.inventory.marketplace()
-                ),
+                detail: handing_back(&ledger, &order, detail).await,
             }];
         }
 
@@ -789,17 +801,19 @@ impl<P: DevicePlane, M: Marketplaces<P>> DeviceWork<P, M> {
             .source_refusal(&order, Timestamp(order.server_now_ms))
             .await
         {
-            return vec![WorkEvent::Failed { detail: why }];
+            return vec![WorkEvent::Failed {
+                detail: handing_back(&ledger, &order, why).await,
+            }];
         }
 
         let mut events = vec![WorkEvent::Started { item: item.clone() }];
         let gate = RunGate::from_envelope(order.server_now_ms, order.server_deadline_ms)
             .stopped_by(Arc::clone(&self.stopper));
         // The ledger moves this run's deadline when the server extends the
-        // lease. Built after the gate for that reason: the heartbeat's whole
+        // lease. Bound to the gate here for that reason: the heartbeat's whole
         // purpose is that a run doing slow work keeps the item, and the gate
         // is what would otherwise stop it at the original deadline.
-        let ledger = HttpLedger::new(self.device.clone(), &*self.plane).moving(gate.deadline());
+        let ledger = ledger.moving(gate.deadline());
         let payloads = DevicePayloads::for_item(
             self.device.clone(),
             &*self.plane,
@@ -850,6 +864,34 @@ impl<P: DevicePlane, M: Marketplaces<P>> DeviceWork<P, M> {
             },
         });
         events
+    }
+}
+
+/// Hands this order's lease back, and says what came of that in the refusal
+/// the seller reads.
+///
+/// The two cases are the same sentence to a seller and ten minutes apart in
+/// fact — a lease back on the queue is worked again on the next poll, and one
+/// left standing holds this marketplace's whole queue until it expires — so
+/// the refusal says which happened rather than leaving it to be inferred.
+///
+/// The server's own reading of now, off the envelope: the asserted instant is
+/// evidence beside the server's receipt, and this device's clock is the one
+/// value here nobody should rely on.
+async fn handing_back<T: LedgerTransport>(
+    ledger: &HttpLedger<T>,
+    order: &WorkOrder,
+    detail: String,
+) -> String {
+    match ledger
+        .hand_back(&order.lease.lease_ref(), Timestamp(order.server_now_ms))
+        .await
+    {
+        Ok(()) => detail,
+        Err(why) => format!(
+            "{detail}; and the lease could not be handed back, so it runs to its expiry: \
+             {why}"
+        ),
     }
 }
 
@@ -1726,7 +1768,7 @@ mod tests {
     use core::time::Duration;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
-    use tam_domain::{ItemOperation, JobItemId, StepBudget};
+    use tam_domain::{ItemOperation, ItemOutcome, JobItemId, StepBudget};
     use tam_engine_driver::conformance::{landed_evidence, ScriptedAdapter};
     use tam_engine_driver::driver::VerifyPolicy;
     use tam_engine_driver::memory::ScriptedReconcile;
@@ -1734,7 +1776,10 @@ mod tests {
         BindDisposition, BudgetGrant, ClaimView, ItemPreparation, LeasedItem, LedgerAnswer,
         LedgerCall, PreflightStreak, Renewed, SettleEnvelope, WorkOrder,
     };
-    use tam_marketplace::{CreateStrategy, FormId, IdempotencyKey, ProjectedListing};
+    use tam_marketplace::{
+        AdapterError, AmbiguityCause, CreateStrategy, FormId, IdempotencyKey, ProjectedListing,
+        RemoteListingId,
+    };
     use tam_types::{
         ConnectionId, CopyFormat, InventoryId, JobId, MappingId, Marketplace, OrgId, PriceIntent,
         Timestamp, Uuid,
@@ -1899,6 +1944,7 @@ mod tests {
                 | LedgerCall::GateConnection { .. }
                 | LedgerCall::HaltThisTenant { .. }
                 | LedgerCall::RecordEvent { .. }
+                | LedgerCall::HandBack { .. }
                 | LedgerCall::Notify { .. } => LedgerAnswer::Done,
             }
         }
@@ -1986,6 +2032,50 @@ mod tests {
         }
     }
 
+    /// The interpreter over an adapter whose create lands but whose answer is
+    /// lost, which is the shape a Tes create strands in: the write went out,
+    /// nothing came back, and the listing is findable in the seller's own
+    /// catalogue once the marketplace has published it.
+    struct StrandingTes;
+
+    impl<P: DevicePlane> Marketplaces<P> for StrandingTes {
+        fn drive<'a>(
+            &'a self,
+            order: &'a WorkOrder,
+            ledger: &'a HttpLedger<&'a P>,
+            gate: &'a RunGate,
+            _payloads: &'a DevicePayloads<&'a P>,
+        ) -> RunFuture<'a> {
+            Box::pin(async move {
+                let adapter = ScriptedAdapter::answering(Err(AdapterError::Ambiguous(
+                    AmbiguityCause::SubmitTimedOut,
+                )));
+                interpret(
+                    &adapter,
+                    &ScriptedReconcile::found(RemoteListingId::Tes {
+                        url: "https://www.tes.com/api/v2/resources/13578900".to_owned(),
+                    }),
+                    ledger,
+                    gate,
+                    order,
+                )
+                .await
+            })
+        }
+
+        fn source_refusal<'a>(
+            &'a self,
+            _order: &'a WorkOrder,
+            _now: Timestamp,
+        ) -> RefusalFuture<'a> {
+            Box::pin(core::future::ready(None))
+        }
+
+        fn files(&self) -> Option<Arc<dyn MarketplaceFiles>> {
+            None
+        }
+    }
+
     fn scratch() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "tam-desktop-work-{}",
@@ -2007,6 +2097,34 @@ mod tests {
             data_dir,
             Arc::clone(stopper),
         )
+    }
+
+    /// The same work source over another binding, for the tests that script
+    /// the marketplace differently.
+    fn work_over<M: Marketplaces<FakePlane>>(
+        plane: &Arc<FakePlane>,
+        data_dir: &Path,
+        stopper: &Arc<AtomicBool>,
+        marketplaces: M,
+    ) -> DeviceWork<FakePlane, M> {
+        DeviceWork::new(
+            DeviceId::from_raw(DEVICE),
+            Arc::clone(plane),
+            marketplaces,
+            data_dir,
+            Arc::clone(stopper),
+        )
+    }
+
+    /// An order whose create is identified by the title it recorded, which is
+    /// what production configures for Tes and the only strategy a stranded
+    /// create can be reconciled under.
+    fn draft_then_publish_order() -> WorkOrder {
+        let mut order = order();
+        order.preparation.strategy = tam_marketplace::CreateStrategy::DraftThenPublish {
+            draft_state: tam_marketplace::RemoteLifecycleKind::Draft,
+        };
+        order
     }
 
     async fn sessions_for(marketplaces: &[Marketplace]) -> Arc<dyn SessionStore> {
@@ -2680,6 +2798,113 @@ mod tests {
                 .exists(),
             "nothing the run fetched outlives the settle"
         );
+        drop(source);
+        std::fs::remove_dir_all(&data_dir).ok();
+    }
+
+    /// One claim, one lease, one verdict — for the create whose write lands
+    /// and whose answer is lost, which is the common Tes create rather than
+    /// an exotic failure.
+    ///
+    /// This is the stall the tablet showed in production. The run stranded the
+    /// create and ended, the item kept its lease with nothing working it, the
+    /// claim answered idle for the rest of the TTL because the live-lease
+    /// predicate is per marketplace, and the reconcile happened ten minutes
+    /// later on the next claim. The assertions here are the three facts that
+    /// together say it cannot: one `work` request, the three actions in one
+    /// run, and a settle.
+    ///
+    /// `start_paused` is what makes the wait for the marketplace's own lag
+    /// free: the driver pauses on the runtime's timer, which auto-advances
+    /// while nothing else is runnable, so the test proves the ordering without
+    /// spending the wall time.
+    #[tokio::test(start_paused = true)]
+    async fn a_create_whose_answer_is_lost_settles_inside_the_lease_it_was_claimed_under() {
+        let data_dir = scratch();
+        let plane = Arc::new(FakePlane::serving(Some(draft_then_publish_order())));
+        let stopper = Arc::new(AtomicBool::new(false));
+        let source = work_over(&plane, &data_dir, &stopper, StrandingTes);
+
+        let events = source
+            .pull(Marketplace::Tes)
+            .await
+            .expect("the pull returns what the device did");
+
+        let item = uuid(2).to_hyphenated();
+        assert_eq!(
+            events,
+            vec![
+                WorkEvent::Started { item: item.clone() },
+                WorkEvent::Settled {
+                    item,
+                    outcome: ItemOutcome::Succeeded,
+                },
+            ],
+            "the ambiguous submit is reconciled and read back in the same run, so the seller \
+             sees a claim and a verdict rather than a claim and a silence: {events:?}"
+        );
+
+        let paths = plane.paths().await;
+        assert_eq!(
+            paths.iter().filter(|path| *path == "work").count(),
+            1,
+            "one claim: nothing here waits for another lease, which could not be issued \
+             until this one expired: {paths:?}"
+        );
+        assert_eq!(
+            paths.iter().filter(|path| *path == "settle").count(),
+            1,
+            "and the item settles once, under the lease it was claimed on: {paths:?}"
+        );
+
+        let calls = plane.ledger_calls().await;
+        let actions: Vec<String> = calls
+            .iter()
+            .filter_map(|call| {
+                // Only the action labels are read; every other ledger call
+                // and every other event payload is noise for this shape.
+                if let LedgerCall::RecordEvent {
+                    payload: tam_types::JobEventPayload::ItemActionStarted { label, .. },
+                    ..
+                } = call
+                {
+                    Some(label.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let shape: Vec<&str> = actions
+            .iter()
+            .map(|label| match label.split_once(':') {
+                // The capture's label carries the attempt id, which is minted
+                // per run; the label's head is what identifies it.
+                Some((head, _)) => head,
+                None => label.as_str(),
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            vec!["submit", "capture", "reconcile", "read-back"],
+            "the whole create runs in one claim: the write, the ambiguity captured, the \
+             catalogue walked and the listing read back: {actions:?}"
+        );
+
+        assert!(
+            !calls
+                .iter()
+                .any(|call| matches!(*call, LedgerCall::HandBack { .. })),
+            "a run that decided the item hands nothing back: the settle released the \
+             lease: {calls:?}"
+        );
+        assert!(
+            calls
+                .iter()
+                .any(|call| matches!(*call, LedgerCall::Renew { .. })),
+            "and the wait for the marketplace's lag is covered by the heartbeat rather \
+             than by luck: {calls:?}"
+        );
+
         drop(source);
         std::fs::remove_dir_all(&data_dir).ok();
     }

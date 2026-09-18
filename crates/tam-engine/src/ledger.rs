@@ -487,6 +487,24 @@ impl ItemLedger for PgLedger {
         .await
         .map_err(|error| to_wire_error(&error))
     }
+
+    async fn hand_back(
+        &self,
+        lease: &wire::LeaseRef,
+        at: Timestamp,
+    ) -> Result<(), wire::LedgerError> {
+        // The disposition is the repository's, taken from the item's own
+        // state: this method carries nothing the caller chose. The attempt
+        // ceiling is read from the limits here for the same reason the
+        // rate ceiling is — it is ours, and a device naming it would be
+        // setting its own.
+        let attempts_max = i32::try_from(tam_limits::job::ATTEMPTS_MAX).unwrap_or(i32::MAX);
+        self.leases
+            .hand_back(&to_storage_lease(lease), attempts_max, at)
+            .await
+            .map(drop)
+            .map_err(|error| to_wire_error(&error))
+    }
 }
 
 /// The wall clock as the driver's id source. `uuid::Uuid::new_v4` is the same

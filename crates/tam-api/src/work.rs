@@ -575,6 +575,10 @@ async fn dispatch(ledger: &PgLedger, call: LedgerCall) -> Result<LedgerAnswer, L
             ledger.notify(&lease, event, Timestamp(at_ms)).await?;
             LedgerAnswer::Done
         }
+        LedgerCall::HandBack { lease, at_ms } => {
+            ledger.hand_back(&lease, Timestamp(at_ms)).await?;
+            LedgerAnswer::Done
+        }
     })
 }
 
