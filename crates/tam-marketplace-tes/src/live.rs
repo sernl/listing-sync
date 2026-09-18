@@ -1410,7 +1410,7 @@ mod tests {
             .port();
         let head = cookies.iter().fold(String::new(), |mut head, cookie| {
             use core::fmt::Write as _;
-            let _ = write!(head, "set-cookie: {cookie}\r\n");
+            write!(head, "set-cookie: {cookie}\r\n").expect("a String accepts every write");
             head
         });
         let handle = std::thread::spawn(move || {
