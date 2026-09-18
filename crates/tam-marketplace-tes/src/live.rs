@@ -631,7 +631,16 @@ async fn send_over_capped(
     // seconds and a body that took ninety are the same exchange, and the
     // 2026-09-18 create is exactly that shape.
     match &body {
-        Ok(bytes) => trace_wire(method, &target, &status.to_string(), bytes.len(), started),
+        Ok(bytes) => {
+            trace_wire(method, &target, &status.to_string(), bytes.len(), started);
+            // A refused write's body is the marketplace's own account of why,
+            // and nothing else carries it: the 2026-09-19 publish answered 500
+            // with two kilobytes the device printed none of. Writes only, an
+            // error status only, bounded, and lossy on purpose.
+            if status >= 400 && method != "GET" {
+                trace_refusal(&target, bytes);
+            }
+        }
         Err(error) => trace_wire(
             method,
             &target,
@@ -666,6 +675,19 @@ fn trace_wire(
         "tes: {method} {target} -> {outcome} in {} ms, {bytes} bytes body",
         started.elapsed().as_millis()
     );
+}
+
+/// The first `REFUSAL_EXCERPT` bytes of a refused write's body, printable
+/// characters only, so a stack trace or a login page can be told from a
+/// validation message without the whole page reaching the log.
+const REFUSAL_EXCERPT: usize = 400;
+
+fn trace_refusal(target: &str, body: &[u8]) {
+    let excerpt: String = String::from_utf8_lossy(&body[..body.len().min(REFUSAL_EXCERPT)])
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    eprintln!("tes: refusal body for {target}: {excerpt}");
 }
 
 const fn method_name(method: Method) -> &'static str {
