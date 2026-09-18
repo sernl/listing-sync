@@ -867,14 +867,44 @@ impl CreationBlocked {
     }
 }
 
+/// What the seller has already approved for one resource on one marketplace,
+/// as an eligibility gate reads it.
+///
+/// The inventory travels beside the fields rather than being assumed, because
+/// an approval is always an approval *for a target*: a seller-rule mapping
+/// that supplies `TES-PAID` answers Tes's licence field and answers nothing
+/// about Etsy, and a gate handed a bare `TargetFields` could not tell the two
+/// apart. A caller that resolved its approvals against one marketplace and
+/// asks about another therefore gets the honest answer, which is that it
+/// knows nothing.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Approved<'a> {
+    /// The marketplace these fields were resolved against — the `target` of
+    /// the `PricingScope` the caller read them under.
+    pub(crate) inventory: InventoryId,
+    pub(crate) fields: &'a tam_domain::seller_rules::TargetFields,
+}
+
 /// The one eligibility decision, over facts a caller read in one go.
 ///
 /// Synchronous and total: every read it needs is in
-/// [`tam_storage::ProductCreationFacts`], which is what lets a forty-row
-/// preview ask it forty times without forty transactions.
+/// [`tam_storage::ProductCreationFacts`] and in the `approved` the caller
+/// already holds, which is what lets a forty-row preview ask it forty times
+/// without forty transactions.
+///
+/// `approved` is the third way the target's licence can already be answered,
+/// beside the product's own rights declaration and a settled election for
+/// that inventory. It is a parameter rather than a read because the decision
+/// has to stay synchronous, and it is explicit rather than defaulted because
+/// every caller then has to say what it knows: the migration preview knows
+/// the seller's approved mapping for the pair it is planning, and a bare
+/// product create knows nothing at all. Nothing here widens the rule for the
+/// other inventories in the tick — an approval names one target and answers
+/// for that one only.
 pub(crate) fn creation_blocked(
     facts: &tam_storage::ProductCreationFacts,
     inventory: InventoryId,
+    approved: Option<Approved<'_>>,
 ) -> Option<CreationBlocked> {
     if facts.payload_files == 0 {
         return Some(CreationBlocked::NoPayload);
@@ -892,6 +922,14 @@ pub(crate) fn creation_blocked(
     let unmet = unmet_required_fields(&[inventory], |target| {
         facts.rights_declared
             || (target == inventory && facts.settled_axes.contains(&TermKind::Licence))
+            // A licence the seller's own approved rule supplies for this
+            // target. The enqueue freezes exactly this value and the device
+            // posts it, so refusing the row for a missing licence would
+            // refuse work whose licence is already decided — which is the
+            // production refusal this arm removes.
+            || approved.is_some_and(|approved| {
+                approved.inventory == target && approved.fields.licence.is_some()
+            })
     });
     (!unmet.is_empty()).then_some(CreationBlocked::RequiredFields(unmet))
 }
@@ -1625,6 +1663,22 @@ pub(crate) async fn add_mapping(
         .map_err(|error| storage_fault(&state, &error))?
         .ok_or_else(|| missing("no such product"))?;
 
+    // What the seller has already approved for this marketplace, read before
+    // the gate rather than after it because both halves of this route need
+    // it: the mapping's figure is what the export reads, so minting the
+    // canonical price over an approval would have this route report a price
+    // the publish then contradicts, and an approved licence is one of the
+    // three ways the target's required field can already be answered. One
+    // read, one resolution, so the two cannot disagree.
+    let approved = tam_storage::rule_capture::approved_fields(
+        &state.pool,
+        context.org,
+        product,
+        tam_storage::rule_capture::PricingScope::CrossList(body.inventory),
+    )
+    .await
+    .map_err(|error| storage_fault(&state, &error))?;
+
     // Everything a listing that does not exist yet needs, asked once and
     // asked the same way the previews ask it. D32's other half is in there —
     // a resource kept on Teachouse carries no file, and the moment it is
@@ -1640,27 +1694,21 @@ pub(crate) async fn add_mapping(
     let facts = facts
         .first()
         .ok_or_else(|| state.internal("the product just read has no creation facts"))?;
-    if let Some(blocked) = creation_blocked(facts, body.inventory) {
+    if let Some(blocked) = creation_blocked(
+        facts,
+        body.inventory,
+        Some(Approved {
+            inventory: body.inventory,
+            fields: &approved,
+        }),
+    ) {
         return Err(blocked.refusal());
     }
 
     let now = (state.wall)();
     let mapping = MappingId(fresh_uuid());
     let repo = MappingRepo::new(state.pool.clone());
-    // The seller's approved price for this marketplace where they have
-    // approved one, and the canonical price otherwise. The mapping's figure
-    // is what the export reads, so minting the canonical price over an
-    // approval would have this route report a price the publish then
-    // contradicts.
-    let price = tam_storage::rule_capture::approved_price(
-        &state.pool,
-        context.org,
-        product,
-        tam_storage::rule_capture::PricingScope::CrossList(body.inventory),
-    )
-    .await
-    .map_err(|error| storage_fault(&state, &error))?
-    .unwrap_or(stored.product.price);
+    let price = approved.price.unwrap_or(stored.product.price);
     let added = repo
         .add(
             context.org,
@@ -2875,7 +2923,8 @@ pub fn upload_body_limit() -> DefaultBodyLimit {
 mod tests {
     use super::{
         creation_blocked, hex_encode, parse_hash, required_fields_answered, trigger_kind_of,
-        uncaptured_edits, CreationBlocked, ElectionInput, FileHandle, RightsInput, FILE_NAME_MAX,
+        uncaptured_edits, Approved, CreationBlocked, ElectionInput, FileHandle, RightsInput,
+        FILE_NAME_MAX,
     };
     use tam_domain::equivalence::ElectionTriggerKind;
     use tam_domain::{
@@ -2912,6 +2961,15 @@ mod tests {
         }
     }
 
+    /// A seller-rule mapping's resolved answer, as the plan reads it.
+    fn approved_licence(native: &str) -> tam_domain::seller_rules::TargetFields {
+        tam_domain::seller_rules::TargetFields {
+            price: None,
+            licence: Some(native.to_owned()),
+            resource_type: None,
+        }
+    }
+
     /// The three reasons a creation is blocked, decided against the real
     /// registry rather than a stubbed one.
     ///
@@ -2929,7 +2987,8 @@ mod tests {
                     payload_files: 0,
                     ..facts()
                 },
-                InventoryId::Tpt
+                InventoryId::Tpt,
+                None
             ),
             Some(CreationBlocked::NoPayload),
             "a resource kept on Teachouse alone has nothing a buyer could download"
@@ -2942,7 +3001,8 @@ mod tests {
                     rights_declared: true,
                     ..facts()
                 },
-                InventoryId::Tes
+                InventoryId::Tes,
+                None
             ),
             Some(CreationBlocked::PayloadUnacquirable {
                 marketplace: Marketplace::Etsy,
@@ -2958,14 +3018,15 @@ mod tests {
                     rights_declared: true,
                     ..facts()
                 },
-                InventoryId::Tpt
+                InventoryId::Tpt,
+                None
             ),
             None,
             "and the two whose seller download is captured block nothing, TPT's since the \
              2026-09-13 capture"
         );
 
-        let missing = creation_blocked(&facts(), InventoryId::Tes)
+        let missing = creation_blocked(&facts(), InventoryId::Tes, None)
             .expect("Tes declares its licence required and these facts answer it nowhere");
         let CreationBlocked::RequiredFields(unmet) = &missing else {
             panic!("a resource with a file and no licence is blocked on the field: {missing:?}");
@@ -2991,7 +3052,8 @@ mod tests {
                     rights_declared: true,
                     ..facts()
                 },
-                InventoryId::Tes
+                InventoryId::Tes,
+                None
             ),
             None,
             "the product's own rights grant answers it"
@@ -3002,15 +3064,95 @@ mod tests {
                     settled_axes: vec![TermKind::Licence],
                     ..facts()
                 },
-                InventoryId::Tes
+                InventoryId::Tes,
+                None
             ),
             None,
             "so does a licence this tenant already settled for that inventory"
         );
         assert_eq!(
-            creation_blocked(&facts(), InventoryId::Tpt),
+            creation_blocked(&facts(), InventoryId::Tpt, None),
             None,
             "and TPT declares no required field, so the same resource crosses to it"
+        );
+    }
+
+    /// The production refusal this arm removes: a seller approved `TES-PAID`
+    /// for these resources through a rule mapping, and the migration plan
+    /// refused every one of them for the licence that approval supplies.
+    ///
+    /// The approval is the third answer beside a rights declaration and a
+    /// settled election, and it is the answer the write actually uses: the
+    /// enqueue freezes this native id into the request snapshot and the
+    /// device posts it, so a gate that ignored it would refuse a create
+    /// whose licence was already decided.
+    #[test]
+    fn a_sellers_approved_licence_answers_the_targets_required_field() {
+        let fields = approved_licence("TES-PAID");
+        assert_eq!(
+            creation_blocked(
+                &facts(),
+                InventoryId::Tes,
+                Some(Approved {
+                    inventory: InventoryId::Tes,
+                    fields: &fields,
+                })
+            ),
+            None,
+            "no declaration and no election, but the seller's approved mapping names the \
+             licence this create will post"
+        );
+    }
+
+    /// An approval names one target and answers for that one only.
+    ///
+    /// A plan that resolved its approvals against TPT and then asked about
+    /// Tes must be told it knows nothing, because the two marketplaces do not
+    /// share a licence vocabulary and a grant made for one is not a grant
+    /// for the other.
+    #[test]
+    fn an_approval_for_another_inventory_answers_nothing_here() {
+        let fields = approved_licence("TES-PAID");
+        let blocked = creation_blocked(
+            &facts(),
+            InventoryId::Tes,
+            Some(Approved {
+                inventory: InventoryId::Tpt,
+                fields: &fields,
+            }),
+        )
+        .expect("an approval for TPT says nothing about what Tes requires");
+        assert!(
+            matches!(blocked, CreationBlocked::RequiredFields(_)),
+            "and it is still the required field that blocks it: {blocked:?}"
+        );
+    }
+
+    /// An approval that resolved no licence is not an answer either.
+    ///
+    /// The row exists — the seller has an approval for this target — and it
+    /// supplied a price and nothing else, which leaves the licence exactly as
+    /// unanswered as it was before anyone asked.
+    #[test]
+    fn an_approval_supplying_no_licence_still_refuses() {
+        let fields = tam_domain::seller_rules::TargetFields {
+            price: Some(PriceIntent::Free),
+            licence: None,
+            resource_type: None,
+        };
+        assert!(
+            matches!(
+                creation_blocked(
+                    &facts(),
+                    InventoryId::Tes,
+                    Some(Approved {
+                        inventory: InventoryId::Tes,
+                        fields: &fields,
+                    })
+                ),
+                Some(CreationBlocked::RequiredFields(_))
+            ),
+            "no approved licence, no declaration and no election is the refusal that stands"
         );
     }
 

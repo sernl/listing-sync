@@ -760,40 +760,58 @@ pub async fn frozen_output(
     seller_rules::item_output(pool, org, uuid_to_db(item.0)).await
 }
 
-/// The approved price for one resource and target where the seller has
-/// approved one, for the gates that must admit a conversion they authorised.
-pub async fn approved_price(
+/// Every field the seller has already approved for a page of resources on one
+/// target, in one transaction, so an admission or an export over five hundred
+/// rows does not open five hundred.
+///
+/// A row per resource the catalogue still holds, including one whose approval
+/// supplied nothing: the absent case is an answer a gate needs — "the seller
+/// approved no licence here" is what refuses the row — and dropping it would
+/// leave a caller unable to tell it from a resource that was never asked
+/// about.
+///
+/// The same resolution [`approved_fields`] makes for one resource, which is
+/// the resolution the enqueue will freeze: a gate reading anything else
+/// refuses work the seller authorised, or admits work they did not.
+pub async fn approved_targets(
     pool: &PgPool,
     org: OrgId,
-    product: ProductId,
+    products: &[ProductId],
     scope: PricingScope,
-) -> Result<Option<PriceIntent>, StorageError> {
-    Ok(approved_fields(pool, org, product, scope).await?.price)
+) -> Result<Vec<(ProductId, TargetFields)>, StorageError> {
+    let mut tx = pool.begin().await?;
+    pin_org(&mut tx, org).await?;
+    let mut capture = RuleCapture::for_scope(org, scope);
+    let mut found = Vec::with_capacity(products.len());
+    for product in products {
+        let Some(record) = crate::product::get_product_in_tx(&mut tx, org, *product).await? else {
+            continue;
+        };
+        let resolved = capture.standing(&mut tx, *product, &record.product).await?;
+        found.push((*product, resolved.fields()));
+    }
+    tx.commit().await?;
+    Ok(found)
 }
 
-/// The same question for a page of resources, in one transaction, so an
-/// admission or an export over five hundred rows does not open five hundred.
+/// The price half of [`approved_targets`], for the callers that need only
+/// that.
+///
+/// Built on the one traversal rather than beside it: two walks over the same
+/// resources under the same scope could disagree about what the seller
+/// approved only by one of them being wrong, and a resource with no approved
+/// price is absent here exactly as it always was.
 pub async fn approved_prices(
     pool: &PgPool,
     org: OrgId,
     products: &[ProductId],
     scope: PricingScope,
 ) -> Result<Vec<(ProductId, PriceIntent)>, StorageError> {
-    let mut tx = pool.begin().await?;
-    pin_org(&mut tx, org).await?;
-    let mut capture = RuleCapture::for_scope(org, scope);
-    let mut found = Vec::new();
-    for product in products {
-        let Some(record) = crate::product::get_product_in_tx(&mut tx, org, *product).await? else {
-            continue;
-        };
-        let resolved = capture.standing(&mut tx, *product, &record.product).await?;
-        if let Some(price) = resolved.price {
-            found.push((*product, price));
-        }
-    }
-    tx.commit().await?;
-    Ok(found)
+    Ok(approved_targets(pool, org, products, scope)
+        .await?
+        .into_iter()
+        .filter_map(|(product, fields)| fields.price.map(|price| (product, price)))
+        .collect())
 }
 
 #[cfg(test)]
