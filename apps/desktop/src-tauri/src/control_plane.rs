@@ -1205,6 +1205,7 @@ mod tests {
                     name: "sessionKey".to_owned(),
                     value: "s3cr3t".to_owned(),
                 }]),
+                verified_at: Some(Timestamp(1_756_000_000_000)),
             })
             .await
             .expect("the session stores");
@@ -1271,6 +1272,7 @@ mod tests {
                     captured_at: Timestamp(1_756_000_000_000),
                     device_id: DeviceId::from_raw(DEVICE),
                     jar: CookieJar::default(),
+                    verified_at: Some(Timestamp(1_756_000_000_000)),
                 })
                 .await
                 .expect("the session stores");
@@ -1398,6 +1400,7 @@ mod tests {
                 captured_at: Timestamp(1_756_000_000_000),
                 device_id: DeviceId::from_raw(DEVICE),
                 jar: CookieJar::default(),
+                verified_at: Some(Timestamp(1_756_000_000_000)),
             })
             .await
             .expect("the session stores");
@@ -1437,6 +1440,7 @@ mod tests {
                 captured_at: Timestamp(1_756_000_000_000),
                 device_id: DeviceId::from_raw(DEVICE),
                 jar: CookieJar::default(),
+                verified_at: Some(Timestamp(1_756_000_000_000)),
             })
             .await
             .expect("the session stores");

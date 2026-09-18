@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, state, outcome FROM job_item WHERE org_id = $1 AND idempotency_key = $2 FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "outcome",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "d0356b339243290dd291330fec3e8843175a2ee295ba313afa5920581d8cb7eb"
+}

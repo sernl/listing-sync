@@ -749,6 +749,22 @@ pub fn seller_tier_request() -> HttpRequest {
     HttpRequest::get(format!("{ORIGIN}/api/tier/gmv/me"))
 }
 
+/// The route that renews the seller's session cookies.
+///
+/// Tes rotates a session on this call: it answers with a fresh `Set-Cookie`
+/// for the cookies whose values have moved on, which is how a captured jar is
+/// kept alive rather than left to lapse a few hours after it was taken. It is
+/// the same call `probes/session-longevity.sh` makes before each of its polls,
+/// and that probe is the only method this repository has recorded for keeping
+/// a captured session valid.
+///
+/// Like the tier read it names no account and takes nothing: there is no
+/// parameter through which a caller could renew somebody else's session.
+#[must_use]
+pub fn refresh_cookies_request() -> HttpRequest {
+    HttpRequest::get(format!("{ORIGIN}/api/authn/refresh-cookies"))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CataloguePageError(pub String);
 

@@ -43,6 +43,16 @@ pub enum BlockReason {
     /// Nobody has signed in to this marketplace on this device, so there is no
     /// session to compose a request under.
     NoSession,
+    /// A session is held, and the marketplace has stopped accepting it. The
+    /// seller signs in again on this device; nothing else clears it.
+    ///
+    /// Its own reason rather than [`Self::NoSession`], because the two read
+    /// as different sentences and the difference is the whole of a defect:
+    /// a lapsed Tes session used to be indistinguishable from a working one
+    /// here, so the device went on claiming items and each one settled as
+    /// blocked. A seller who has signed in needs to be told that the sign-in
+    /// has expired, not that they never made one.
+    SessionLapsed,
 }
 
 /// One thing this device did, or declined to do, for one marketplace.

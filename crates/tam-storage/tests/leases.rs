@@ -1801,6 +1801,120 @@ async fn a_reused_idempotency_key_is_named(app: PgPool) {
     );
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn stored_key(engine: &PgPool, org: OrgId, item: JobItemId) -> uuid::Uuid {
+    sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT idempotency_key FROM job_item WHERE org_id = $1 AND id = $2",
+    )
+    .bind(db_uuid(org.0))
+    .bind(db_uuid(item.0))
+    .fetch_one(engine)
+    .await
+    .expect("the item's key is readable")
+}
+
+/// The same content asked for again: one fresh item, one fresh job, and the
+/// base key of an item already in the ledger. What the enqueuer does on a
+/// re-queue, and what it did on the nine migrations that met a 500.
+async fn requeue(
+    engine: &PgPool,
+    tenant: &Tenant,
+    job_seed: u8,
+    item_seed: u8,
+) -> Result<JobItemId, StorageError> {
+    let mut again = item(item_seed);
+    again.item = JobItemId(Uuid([item_seed.wrapping_add(0x60); 16]));
+    again.mapping = tenant.mapping;
+    JobRepo::new(engine.clone())
+        .enqueue(
+            tenant.org,
+            &NewJob {
+                job: JobId(Uuid([job_seed; 16])),
+                inventory: InventoryId::Tes,
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
+            },
+            std::slice::from_ref(&again),
+        )
+        .await
+        .map(|()| again.item)
+}
+
+/// Which settled items still own their idempotency key, which is the whole
+/// of whether a seller can ask for a write again.
+///
+/// The key is request-independent by design, so the fence it puts up outlives
+/// the item that put it there. That is right for a write that landed or may
+/// have landed, and wrong for one that was refused: nine TPT-to-Tes creates
+/// settled `blocked` on an expired session, and every later attempt at those
+/// resources derived the same key and was refused, with `job_item` rows never
+/// being deleted to end it.
+#[sqlx::test(migrations = "./migrations")]
+async fn an_adversely_settled_item_gives_up_its_key_and_a_landed_or_live_one_keeps_it(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xA0, true).await;
+    // One item per state the rule distinguishes, oldest first: the tenant
+    // mutex admits one lease at a time, so the claims below settle them in
+    // this order.
+    let blocked = enqueue_one(&engine, &tenant, 0x11, 0x21).await;
+    let landed = enqueue_one(&engine, &tenant, 0x12, 0x22).await;
+    enqueue_one(&engine, &tenant, 0x13, 0x23).await;
+    let refused_key = stored_key(&engine, tenant.org, blocked).await;
+
+    let leases = LeaseRepo::new(engine.clone());
+    let first = claim(&app, tenant.org, "w1", 60)
+        .await
+        .expect("the oldest item leases");
+    assert_eq!(first.item, blocked, "the fixture settles them in order");
+    leases
+        .settle(&first.lease_ref(), &verdict(ItemOutcome::Blocked), T0)
+        .await
+        .expect("the create settles blocked, as an expired session leaves it");
+    let second = claim(&app, tenant.org, "w1", 60)
+        .await
+        .expect("the next item leases");
+    assert_eq!(second.item, landed, "the fixture settles them in order");
+    leases
+        .settle(&second.lease_ref(), &verdict(ItemOutcome::Succeeded), T0)
+        .await
+        .expect("the second create lands");
+
+    let requeued = requeue(&engine, &tenant, 0x14, 0x21)
+        .await
+        .expect("a resource whose last write was refused can be asked for again");
+    assert_eq!(
+        stored_key(&engine, tenant.org, requeued).await,
+        refused_key,
+        "the re-queue is the same write, so it carries the key the refused item was holding"
+    );
+    let superseded = stored_key(&engine, tenant.org, blocked).await;
+    assert_ne!(
+        superseded, refused_key,
+        "the refused item keeps a key of its own so the ledger's history stays unique"
+    );
+
+    assert!(
+        matches!(
+            requeue(&engine, &tenant, 0x15, 0x22).await,
+            Err(StorageError::DuplicateIdempotencyKey { .. })
+        ),
+        "a write that landed still owns its key: asking again is the duplicate listing this \
+         fence exists to prevent"
+    );
+    assert!(
+        matches!(
+            requeue(&engine, &tenant, 0x16, 0x23).await,
+            Err(StorageError::DuplicateIdempotencyKey { .. })
+        ),
+        "and so does a write still queued: two live writes of the same content are one write"
+    );
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn the_outbox_deduplicates_backs_off_and_dead_letters(app: PgPool) {
     let engine = engine_pool(&app).await;

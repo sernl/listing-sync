@@ -89,7 +89,39 @@ impl CookieJar {
             .collect::<Vec<_>>()
             .join("; ")
     }
+
+    /// The jar a `name=value; name=value` header describes.
+    ///
+    /// The inverse of [`Self::header_value`], and it exists because a
+    /// marketplace that rotates its session hands the rotated cookies back as
+    /// a header rather than as a jar: this is how the live transport's current
+    /// session becomes something the store can hold. Anything that names
+    /// nothing is dropped rather than stored as a nameless cookie.
+    #[must_use]
+    pub fn from_header_value(header: &str) -> Self {
+        Self(
+            header
+                .split(';')
+                .filter_map(|element| {
+                    let (name, value) = element.trim().split_once('=')?;
+                    let name = name.trim();
+                    (!name.is_empty()).then(|| Cookie {
+                        name: name.to_owned(),
+                        value: value.trim().to_owned(),
+                    })
+                })
+                .collect(),
+        )
+    }
 }
+
+/// How long a session's last proof of life counts for.
+///
+/// Longer than the five-minute check-in that renews it, so a beat the network
+/// ate does not read as a lapse, and far shorter than the few hours a Tes
+/// session survived unattended: the whole point is that a session nobody has
+/// proven recently is reported as what it is rather than as connected.
+pub const PROOF_MAX_AGE: core::time::Duration = core::time::Duration::from_mins(15);
 
 /// A captured session, as it is written to the keychain.
 ///
@@ -104,6 +136,39 @@ pub struct SessionRecord {
     pub captured_at: Timestamp,
     pub device_id: DeviceId,
     pub jar: CookieJar,
+    /// When the marketplace itself last answered these cookies as an
+    /// authenticated principal, and `None` when it last refused them or has
+    /// never been asked.
+    ///
+    /// Distinct from `captured_at`, and the distinction is the defect it
+    /// closes: a stored jar is evidence that somebody signed in once, not
+    /// evidence that the session still works. A device that read presence as
+    /// connection reported a jar Tes had stopped accepting as `connected`
+    /// every five minutes, so the server re-linked the connection and every
+    /// claim behind it burned an item.
+    ///
+    /// `#[serde(default)]` so a record written before this field existed
+    /// parses, as an unproven one — which is the honest reading of a jar
+    /// nothing has ever verified.
+    #[serde(default)]
+    pub verified_at: Option<Timestamp>,
+}
+
+impl SessionRecord {
+    /// Whether the marketplace has proven this session inside
+    /// [`PROOF_MAX_AGE`] of `now`.
+    ///
+    /// A proof stamped in the future is not one: a clock correction must not
+    /// hand a lapsed session an indefinite reprieve.
+    #[must_use]
+    pub fn proven_at(&self, now: Timestamp) -> bool {
+        let Some(verified) = self.verified_at else {
+            return false;
+        };
+        let age = now.0.saturating_sub(verified.0);
+        let max = i64::try_from(PROOF_MAX_AGE.as_millis()).unwrap_or(i64::MAX);
+        (0..=max).contains(&age)
+    }
 }
 
 /// What the interface is allowed to see about a session. Structurally unable
@@ -112,10 +177,21 @@ pub struct SessionRecord {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionStatus {
     pub marketplace: Marketplace,
+    /// Whether the marketplace still accepts this session, rather than
+    /// whether a jar is held for it. The two came apart in production: a
+    /// lapsed Tes session was still stored, still shown as connected, and
+    /// refused every call.
     pub connected: bool,
     pub account_label: Option<String>,
     pub captured_at: Option<Timestamp>,
     pub cookie_count: usize,
+    /// When the marketplace last answered these cookies as the seller.
+    ///
+    /// Carried so the console can say which it is: a session nobody has
+    /// proven in a quarter of an hour reads as needing a fresh sign-in, and
+    /// the seller is told that rather than left to infer it from work that
+    /// stopped.
+    pub verified_at: Option<Timestamp>,
 }
 
 impl SessionStatus {
@@ -127,17 +203,21 @@ impl SessionStatus {
             account_label: None,
             captured_at: None,
             cookie_count: 0,
+            verified_at: None,
         }
     }
 
+    /// A held session as of `now`, which is what decides whether its last
+    /// proof still counts.
     #[must_use]
-    pub fn of(record: &SessionRecord) -> Self {
+    pub fn of(record: &SessionRecord, now: Timestamp) -> Self {
         Self {
             marketplace: record.marketplace,
-            connected: true,
+            connected: record.proven_at(now),
             account_label: record.account_label.clone(),
             captured_at: Some(record.captured_at),
             cookie_count: record.jar.len(),
+            verified_at: record.verified_at,
         }
     }
 }
@@ -192,7 +272,7 @@ pub const fn entry_key(marketplace: Marketplace) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cookie, CookieJar, SessionRecord, SessionStatus};
+    use super::{Cookie, CookieJar, SessionRecord, SessionStatus, PROOF_MAX_AGE};
     use crate::device::DeviceId;
     use tam_types::{Marketplace, Timestamp};
 
@@ -216,6 +296,7 @@ mod tests {
             captured_at: Timestamp(1_756_000_000),
             device_id: DeviceId::from_raw("11112222333344445555666677778888"),
             jar: a_jar(),
+            verified_at: Some(Timestamp(1_756_000_000)),
         }
     }
 
@@ -250,7 +331,7 @@ mod tests {
     #[test]
     fn the_status_the_interface_reads_carries_no_cookie() {
         let record = a_record(Marketplace::Tes);
-        let status = SessionStatus::of(&record);
+        let status = SessionStatus::of(&record, record.captured_at);
         let printed = format!("{status:?}");
         assert!(
             !printed.contains("s3cr3t"),
@@ -261,6 +342,86 @@ mod tests {
             "the count is what the interface shows"
         );
         assert!(status.connected);
+    }
+
+    /// The defect, stated as the smallest thing that used to be wrong: a jar
+    /// is held, and the marketplace has not answered it for hours.
+    #[test]
+    fn a_session_nobody_has_proven_lately_is_not_connected_merely_because_it_is_held() {
+        let record = a_record(Marketplace::Tes);
+        let four_hours_on = Timestamp(record.captured_at.0 + 4 * 60 * 60 * 1_000);
+        assert!(
+            !record.proven_at(four_hours_on),
+            "a Tes session lived about four hours; a device that read presence as connection \
+             reported this one as connected and burned an item on every claim behind it"
+        );
+        let status = SessionStatus::of(&record, four_hours_on);
+        assert!(
+            !status.connected,
+            "and the interface says so rather than showing the seller a working connection"
+        );
+        assert_eq!(
+            status.cookie_count, 2,
+            "the jar is kept: the seller may be about to sign in again, and a rotation could \
+             still be stored against it"
+        );
+    }
+
+    #[test]
+    fn a_proof_holds_for_its_whole_window_and_not_one_millisecond_past_it() {
+        let record = a_record(Marketplace::Tes);
+        let at = record.captured_at.0;
+        let window = i64::try_from(PROOF_MAX_AGE.as_millis()).expect("the window fits");
+        assert!(record.proven_at(Timestamp(at + window)), "the edge counts");
+        assert!(!record.proven_at(Timestamp(at + window + 1)));
+    }
+
+    /// A clock correction must not hand a lapsed session an open-ended
+    /// reprieve: a proof stamped after the instant being asked about is not
+    /// one.
+    #[test]
+    fn a_proof_from_the_future_does_not_count() {
+        let record = a_record(Marketplace::Tes);
+        assert!(!record.proven_at(Timestamp(record.captured_at.0 - 1)));
+    }
+
+    /// A record written before the field existed parses as unproven, which is
+    /// the honest reading of a jar nothing has ever verified — and it must
+    /// parse rather than be rejected, or an upgrade would silently lose every
+    /// stored session.
+    #[test]
+    fn a_record_stored_before_proofs_existed_parses_as_unproven() {
+        // Serialised from a real record and then stripped, rather than
+        // hand-written: a literal would pin this test to whatever spelling
+        // the fields happen to have today instead of to the field's absence,
+        // which is the only thing under test.
+        let mut stored =
+            serde_json::to_value(a_record(Marketplace::Tes)).expect("a record serialises");
+        stored
+            .as_object_mut()
+            .expect("a record is an object")
+            .remove("verified_at")
+            .expect("the field was there to remove");
+        let record: SessionRecord =
+            serde_json::from_value(stored).expect("a record without the field still parses");
+        assert_eq!(record.verified_at, None);
+        assert!(!record.proven_at(Timestamp(1_756_000_000)));
+    }
+
+    /// The round trip the rotation write-back depends on: what the live
+    /// transport hands back as a header is what the store holds as a jar.
+    #[test]
+    fn a_header_round_trips_through_the_jar_it_describes() {
+        let jar = CookieJar::from_header_value("csrfToken=deadbeef; sessionKey=s3cr3t");
+        assert_eq!(jar.len(), 2);
+        assert_eq!(jar.header_value(), "csrfToken=deadbeef; sessionKey=s3cr3t");
+        assert!(jar.contains("sessionKey"));
+    }
+
+    #[test]
+    fn a_header_element_that_names_nothing_is_dropped_rather_than_stored() {
+        let jar = CookieJar::from_header_value("  ; TESSession=v ; =orphan; ");
+        assert_eq!(jar.header_value(), "TESSession=v");
     }
 
     #[test]

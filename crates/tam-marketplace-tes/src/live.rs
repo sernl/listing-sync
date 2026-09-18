@@ -14,8 +14,15 @@
 //! answers a 302 to a signed CDN url whose signature is the authorisation, and
 //! re-issuing it deliberately is what keeps the two clients' rule intact
 //! across a hop the marketplace chose.
+//!
+//! The seller's cookies are the one piece of client state that changes while
+//! the client lives. Tes rotates a session on its authenticated responses, so
+//! they are held in [`SessionCookies`] and attached per request rather than
+//! fixed in `default_headers`, and every `Set-Cookie` is merged back into that
+//! holder here — below the seam, which still carries none.
 
 use core::error::Error as _;
+use std::sync::RwLock;
 
 use tam_marketplace::transport::{
     HttpRequest, HttpResponse, Method, RequestAuth, RequestBody, ResponseHeader, Transport,
@@ -35,6 +42,10 @@ const S3_HOST_SUFFIX: &str = ".s3.amazonaws.com";
 
 pub struct ReqwestTransport {
     session: reqwest::Client,
+    /// The seller's cookies, which outlive any one request and change under
+    /// us as Tes rotates them. On the transport rather than on the client
+    /// because a `reqwest::Client`'s default headers are fixed at build.
+    cookies: SessionCookies,
     bare: reqwest::Client,
     redirected: reqwest::Client,
 }
@@ -62,16 +73,102 @@ fn bare_headers() -> reqwest::header::HeaderMap {
     headers
 }
 
-fn session_headers(
-    session: &TesSession,
-) -> Result<reqwest::header::HeaderMap, TransportBuildError> {
-    let mut headers = bare_headers();
-    headers.insert(
-        reqwest::header::COOKIE,
-        reqwest::header::HeaderValue::from_str(session.header_value())
-            .map_err(|error| TransportBuildError(error.to_string()))?,
-    );
-    Ok(headers)
+/// The seller's session cookies, as the live client holds them between
+/// requests.
+///
+/// Held here rather than in `default_headers`, and that is the whole of a
+/// defect this type exists to have fixed. Tes rotates a session on its own
+/// authenticated responses, so a `Cookie` header fixed at construction is a
+/// session that stops working a few hours after it was captured however much
+/// the seller keeps using it: every `Set-Cookie` Tes sent was dropped, and the
+/// device went on presenting the superseded values until Tes answered every
+/// call as a lapsed session.
+///
+/// The rotated values are merged here, at the live boundary, and are never
+/// projected into [`HttpResponse`] — so [`project_headers`]' allow-list still
+/// has nowhere for a `Set-Cookie` to land, a cassette still cannot carry one,
+/// and the seam's no-credential invariant is untouched.
+///
+/// `Debug` redacts, for the same reason [`TesSession`]'s does.
+pub struct SessionCookies(RwLock<String>);
+
+impl core::fmt::Debug for SessionCookies {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("SessionCookies(redacted)")
+    }
+}
+
+impl SessionCookies {
+    fn new(header: String) -> Self {
+        Self(RwLock::new(header))
+    }
+
+    /// The `name=value; name=value` header as it now stands.
+    ///
+    /// A poisoned lock is read through rather than propagated. The only writer
+    /// is [`Self::absorb`], which allocates and parses owned strings and has
+    /// no call that can unwind mid-update; and a session the seller can no
+    /// longer send is a worse outcome than one value an unrelated unwind
+    /// happened to touch.
+    #[must_use]
+    pub fn header(&self) -> String {
+        self.0
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Merges whatever `Set-Cookie` a response carried into the held header.
+    ///
+    /// By name and in place, so a rotation replaces a value rather than
+    /// appending a second cookie of the same name that Tes would then see
+    /// twice. A cookie sent with an empty value is dropped, because that is
+    /// how a server withdraws one.
+    ///
+    /// Attributes are discarded. `Domain`, `Path`, `Secure` and `Expires`
+    /// describe a cookie store, and this is not one: the single host these
+    /// cookies may reach is already asserted by [`route`], and an expiry is
+    /// Tes's to enforce on the next request rather than ours to model.
+    fn absorb(&self, headers: &reqwest::header::HeaderMap) {
+        let refreshed: Vec<(String, String)> = headers
+            .get_all(reqwest::header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .filter_map(cookie_pair)
+            .collect();
+        if refreshed.is_empty() {
+            return;
+        }
+        let mut held = self
+            .0
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut pairs: Vec<(String, String)> = held.split(';').filter_map(cookie_pair).collect();
+        for (name, value) in refreshed {
+            match pairs.iter_mut().find(|(present, _)| *present == name) {
+                Some(slot) => slot.1 = value,
+                None => pairs.push((name, value)),
+            }
+        }
+        pairs.retain(|(_, value)| !value.is_empty());
+        *held = pairs
+            .into_iter()
+            .map(|(name, value)| format!("{name}={value}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+    }
+}
+
+/// One `name=value`, read from a `Cookie` element or from the first element of
+/// a `Set-Cookie`. `None` for anything that names nothing.
+fn cookie_pair(cookie: &str) -> Option<(String, String)> {
+    let first = cookie.split(';').next()?.trim();
+    let (name, value) = first.split_once('=')?;
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    Some((name.to_owned(), value.trim().to_owned()))
 }
 
 /// How many same-host hops one request may take before it is refused.
@@ -149,14 +246,27 @@ fn same_host_only() -> reqwest::redirect::Policy {
     })
 }
 
+/// Every Tes API call is small and answers fast, so thirty seconds is the
+/// ceiling for the session and the redirected clients. The one exception is
+/// the presigned S3 upload, which carries the resource's own bundle: a
+/// fifteen-megabyte ZIP from a tablet on domestic Wi-Fi took about thirty-five
+/// seconds on 2026-09-18, so a thirty-second ceiling turned every create into
+/// a timed-out submit that the reconcile then found had landed. The upload's
+/// ceiling is therefore its own, sized under the driver's measured worst-case
+/// submit budget (`MEASURED_SUBMIT_WORST_CASE_MS`, 180 s against the 600 s
+/// lease) rather than under an API round trip.
+const API_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(30);
+const UPLOAD_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(150);
+
 fn build_client(
     headers: reqwest::header::HeaderMap,
     redirects: reqwest::redirect::Policy,
+    timeout: core::time::Duration,
 ) -> Result<reqwest::Client, TransportBuildError> {
     reqwest::Client::builder()
         .default_headers(headers)
         .redirect(redirects)
-        .timeout(core::time::Duration::from_secs(30))
+        .timeout(timeout)
         .connect_timeout(core::time::Duration::from_secs(10))
         .build()
         .map_err(|error| TransportBuildError(error.to_string()))
@@ -169,8 +279,13 @@ fn build_client(
 /// does. A test that assembled its own client would prove the policy works
 /// and not that anything uses it, which is the failure mode this exists to
 /// rule out.
-fn session_client(session: &TesSession) -> Result<reqwest::Client, TransportBuildError> {
-    build_client(session_headers(session)?, same_host_only())
+///
+/// It carries no cookie of its own. What makes it the session client is its
+/// redirect policy; the jar is attached per request out of
+/// [`SessionCookies`], because the values move on as Tes rotates them and a
+/// client's default headers cannot.
+fn session_client() -> Result<reqwest::Client, TransportBuildError> {
+    build_client(bare_headers(), same_host_only(), API_TIMEOUT)
 }
 
 /// The client that carries no credential of ours as client state: what it
@@ -183,6 +298,7 @@ fn bare_client() -> Result<reqwest::Client, TransportBuildError> {
     build_client(
         bare_headers(),
         reqwest::redirect::Policy::limited(MAX_REDIRECTS),
+        UPLOAD_TIMEOUT,
     )
 }
 
@@ -196,16 +312,40 @@ fn bare_client() -> Result<reqwest::Client, TransportBuildError> {
 /// refusal would never be reached, because the client would have consumed the
 /// 3xx before the flow saw it.
 fn redirected_client() -> Result<reqwest::Client, TransportBuildError> {
-    build_client(bare_headers(), reqwest::redirect::Policy::none())
+    build_client(
+        bare_headers(),
+        reqwest::redirect::Policy::none(),
+        API_TIMEOUT,
+    )
 }
 
 impl ReqwestTransport {
     pub fn new(session: &TesSession) -> Result<Self, TransportBuildError> {
+        // Validated here rather than per request. The captured header is the
+        // one value in this holder that did not come from Tes's own
+        // `Set-Cookie`, so it is the one that can be malformed, and refusing
+        // to build is a better answer than a request that cannot be composed.
+        reqwest::header::HeaderValue::from_str(session.header_value())
+            .map_err(|error| TransportBuildError(error.to_string()))?;
         Ok(Self {
-            session: session_client(session)?,
+            session: session_client()?,
+            cookies: SessionCookies::new(session.header_value().to_owned()),
             bare: bare_client()?,
             redirected: redirected_client()?,
         })
+    }
+
+    /// The seller's session as it now stands, rotations included.
+    ///
+    /// The one method that yields the credential, and it exists because the
+    /// alternative is a jar that goes stale wherever it was stored while this
+    /// client quietly works: the next process, or any rebuild of this
+    /// transport, would seed itself from the captured values Tes has already
+    /// superseded. The caller that stored the jar writes back what this
+    /// returns.
+    #[must_use]
+    pub fn session_cookies(&self) -> String {
+        self.cookies.header()
     }
 
     /// Which client a route rides.
@@ -291,8 +431,22 @@ fn classify_reqwest(error: &reqwest::Error) -> TransportError {
 
 impl Transport for ReqwestTransport {
     async fn send(&self, request: HttpRequest) -> Result<HttpResponse, TransportError> {
-        let client = self.client_for(route(&request)?);
-        send_over(client, request).await
+        let route = route(&request)?;
+        // The holder travels with the session route and with no other, which
+        // is the same one-host rule `route` just applied, stated once more in
+        // the only place a cookie is attached: the bare and redirected
+        // clients cannot acquire one by a later edit to this match.
+        let cookies = match route {
+            Route::Session => Some(&self.cookies),
+            Route::Bare | Route::Redirected => None,
+        };
+        send_over_capped(
+            self.client_for(route),
+            request,
+            REDIRECTED_BODY_MAX,
+            cookies,
+        )
+        .await
     }
 }
 
@@ -362,7 +516,7 @@ async fn send_over(
     client: &reqwest::Client,
     request: HttpRequest,
 ) -> Result<HttpResponse, TransportError> {
-    send_over_capped(client, request, REDIRECTED_BODY_MAX).await
+    send_over_capped(client, request, REDIRECTED_BODY_MAX, None).await
 }
 
 /// The same path with the bound named, and every shipping caller passes
@@ -370,10 +524,17 @@ async fn send_over(
 /// gigabyte: a test driving this call site at the real ceiling would have to
 /// allocate a gigabyte to fail it, so nothing would assert that a
 /// `Redirected` body is read under a bound at all.
+///
+/// `cookies` is the seller's session where one may ride at all, and it is
+/// both halves of a rotation: the header goes out from it and every
+/// `Set-Cookie` that comes back is merged into it. `None` is a client that
+/// carries none of ours, which is the bare and redirected routes and the
+/// gateway transport.
 async fn send_over_capped(
     client: &reqwest::Client,
     request: HttpRequest,
     cap: u64,
+    cookies: Option<&SessionCookies>,
 ) -> Result<HttpResponse, TransportError> {
     let bounded = matches!(request.auth, RequestAuth::Redirected);
     let builder = match request.method {
@@ -383,12 +544,30 @@ async fn send_over_capped(
         Method::Delete => client.delete(&request.url),
     };
     let builder = apply_auth(builder, &request.auth);
+    let builder = match cookies {
+        Some(held) => builder.header(
+            reqwest::header::COOKIE,
+            reqwest::header::HeaderValue::from_str(&held.header())
+                // `NotSent` is the truth here: nothing has been composed, let
+                // alone sent. Unreachable with a jar Tes itself rotated, and
+                // one refusal away from being reachable, which is why it is
+                // an arm rather than an assumption.
+                .map_err(|_| TransportError::NotSent(ConnectFailure::NoRouteToHost))?,
+        ),
+        None => builder,
+    };
     let builder = apply_body(builder, request.body)?;
     let response = builder
         .send()
         .await
         .map_err(|error| classify_reqwest(&error))?;
     let status = response.status().as_u16();
+    // Before the projection, and the order is the point: the rotation is
+    // taken off the real header map, into the holder, and the allow-list then
+    // runs on the same map and lets nothing of it through.
+    if let Some(held) = cookies {
+        held.absorb(response.headers());
+    }
     let headers = project_headers(response.headers());
     // `.bytes()` not `.text()`: text decodes lossily and would silently
     // corrupt every download bundle.
@@ -461,7 +640,9 @@ async fn bounded_body(response: reqwest::Response, cap: u64) -> Result<Vec<u8>, 
 /// redirect the client declined to follow is legible only through it.
 /// Everything outside the allow-list is dropped at the boundary, so
 /// `Set-Cookie` has nowhere to land and a recording cannot carry one however
-/// Tes answers.
+/// Tes answers. A rotated session is not an exception to that: it is taken
+/// out of the same header map into [`SessionCookies`] before this runs, and
+/// what crosses the seam is still `Location` and nothing else.
 fn project_headers(headers: &reqwest::header::HeaderMap) -> Vec<(ResponseHeader, String)> {
     headers
         .get(reqwest::header::LOCATION)
@@ -491,9 +672,12 @@ impl GatewayTransport {
             reqwest::header::HeaderValue::from_str(&format!("Bearer {lease_token}"))
                 .map_err(|error| TransportBuildError(error.to_string()))?,
         );
+        // One client for every hop, and the hops include the bundle upload,
+        // so the ceiling is the upload's; an API call that took anywhere near
+        // it would be a fault the classifier reports either way.
         let inner = reqwest::Client::builder()
             .default_headers(headers)
-            .timeout(core::time::Duration::from_secs(30))
+            .timeout(UPLOAD_TIMEOUT)
             .connect_timeout(core::time::Duration::from_secs(10))
             .build()
             .map_err(|error| TransportBuildError(error.to_string()))?;
@@ -526,7 +710,8 @@ mod tests {
 
     use super::{
         bare_client, bounded_body, route, send_over, send_over_capped, session_client,
-        ReqwestTransport, Route, MAX_REDIRECTS, SESSION_HOST,
+        HttpResponse, ReqwestTransport, Route, SessionCookies, MAX_REDIRECTS, REDIRECTED_BODY_MAX,
+        SESSION_HOST,
     };
     use crate::session::TesSession;
 
@@ -537,7 +722,23 @@ mod tests {
     /// The shipping session client, built exactly as `ReqwestTransport::new`
     /// builds it, so a policy that stopped being applied there fails here.
     fn session() -> reqwest::Client {
-        session_client(&a_session()).expect("the session client builds")
+        session_client().expect("the session client builds")
+    }
+
+    /// The captured jar, in the holder the shipping transport keeps it in.
+    fn held() -> SessionCookies {
+        SessionCookies::new("TESSession=secret".to_owned())
+    }
+
+    /// One send on the session route, composed exactly as
+    /// `<ReqwestTransport as Transport>::send` composes it: the session
+    /// client, the shipping cap, and the cookie holder both halves of a
+    /// rotation run through.
+    async fn send_session(
+        cookies: &SessionCookies,
+        request: HttpRequest,
+    ) -> Result<HttpResponse, TransportError> {
+        send_over_capped(&session(), request, REDIRECTED_BODY_MAX, Some(cookies)).await
     }
 
     fn a_session() -> TesSession {
@@ -1003,6 +1204,7 @@ mod tests {
                 auth: RequestAuth::Redirected,
             },
             4,
+            None,
         )
         .await
         .expect_err("a body past the cap is not a response");
@@ -1039,14 +1241,14 @@ mod tests {
     /// The custody assertion this whole policy exists for.
     ///
     /// Tes's bundle download answers a 302 to a signed CDN url on another
-    /// host. `default_headers` are re-sent on every hop, so a client that
+    /// host. A request's headers are re-sent on every hop, so a client that
     /// followed it would hand the seller's session cookie to that host, and
     /// neither host assertion would see it: `route` runs once, against the url
     /// the caller named. A 200 here would be that leak.
     #[tokio::test]
     async fn the_session_client_does_not_follow_a_redirect_to_another_host() {
         let (url, server) = redirecting(|port| format!("http://localhost:{port}/signed"));
-        let answer = send_over(&session(), HttpRequest::get(url))
+        let answer = send_session(&held(), HttpRequest::get(url))
             .await
             .expect("the redirect comes back rather than failing");
 
@@ -1083,7 +1285,7 @@ mod tests {
     #[tokio::test]
     async fn a_same_host_redirect_is_still_followed() {
         let (url, server) = redirecting(|port| format!("http://127.0.0.1:{port}/error=notfound"));
-        let answer = send_over(&session(), HttpRequest::get(url))
+        let answer = send_session(&held(), HttpRequest::get(url))
             .await
             .expect("the probe server answers");
 
@@ -1124,7 +1326,7 @@ mod tests {
     #[tokio::test]
     async fn the_session_client_does_send_the_cookie() {
         let (url, server) = echo_once();
-        send_over(&session(), HttpRequest::get(url))
+        send_session(&held(), HttpRequest::get(url))
             .await
             .expect("the probe server answers");
         let head = server.join().expect("the probe server finishes");
@@ -1132,5 +1334,98 @@ mod tests {
             head.contains("cookie: tessession=secret"),
             "the control: the probe can see a cookie when one is sent, and saw: {head}"
         );
+    }
+
+    /// The defect this holder exists to have fixed.
+    ///
+    /// Tes rotates a session on its authenticated responses. A transport that
+    /// dropped the `Set-Cookie` went on presenting the values it captured
+    /// until Tes stopped accepting them, which a seller saw as every call
+    /// answering as a lapsed session a few hours after signing in. The
+    /// assertion is on the next request's own header, because the holder
+    /// agreeing with itself would prove only that a string was stored.
+    #[tokio::test]
+    async fn a_rotated_session_is_what_the_next_request_carries() {
+        let cookies = held();
+        let (url, server) = setting_cookies(&["TESSession=rotated; Path=/; HttpOnly"]);
+        send_session(&cookies, HttpRequest::get(url))
+            .await
+            .expect("the probe server answers");
+        server.join().expect("the probe server finishes");
+
+        let (url, server) = echo_once();
+        send_session(&cookies, HttpRequest::get(url))
+            .await
+            .expect("the probe server answers");
+        let head = server.join().expect("the probe server finishes");
+        assert!(
+            head.contains("cookie: tessession=rotated"),
+            "the second request carries what Tes last issued, or the session goes stale while \
+             the seller keeps using it: {head}"
+        );
+    }
+
+    /// A rotation replaces a value rather than appending a second cookie of
+    /// the same name, and a cookie Tes cleared is gone rather than sent empty.
+    #[test]
+    fn absorbing_replaces_by_name_and_drops_what_was_cleared() {
+        let cookies = SessionCookies::new("csrfToken=old; TESSession=old".to_owned());
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.append(
+            reqwest::header::SET_COOKIE,
+            reqwest::header::HeaderValue::from_static("TESSession=new; Path=/"),
+        );
+        headers.append(
+            reqwest::header::SET_COOKIE,
+            reqwest::header::HeaderValue::from_static("csrfToken=; Max-Age=0"),
+        );
+        headers.append(
+            reqwest::header::SET_COOKIE,
+            reqwest::header::HeaderValue::from_static("tesUser=added"),
+        );
+        cookies.absorb(&headers);
+        assert_eq!(
+            cookies.header(),
+            "TESSession=new; tesUser=added",
+            "a rotation is an update in place, a cleared cookie is dropped, and a new one is \
+             appended; a jar that grew a second TESSession would be sent twice"
+        );
+    }
+
+    /// A response carrying no rotation leaves the captured jar exactly as it
+    /// was, so an ordinary read cannot empty a working session.
+    #[test]
+    fn a_response_with_no_set_cookie_changes_nothing() {
+        let cookies = held();
+        cookies.absorb(&reqwest::header::HeaderMap::new());
+        assert_eq!(cookies.header(), "TESSession=secret");
+    }
+
+    /// A loopback server answering one 200 with the given `Set-Cookie` lines.
+    fn setting_cookies(cookies: &[&str]) -> (String, std::thread::JoinHandle<String>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("loopback binds");
+        let port = listener
+            .local_addr()
+            .expect("the listener has an address")
+            .port();
+        let head = cookies.iter().fold(String::new(), |mut head, cookie| {
+            use core::fmt::Write as _;
+            let _ = write!(head, "set-cookie: {cookie}\r\n");
+            head
+        });
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("the client connects");
+            let sent = read_head(&stream);
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\n{head}content-length: 0\r\nconnection: close\r\n\r\n"
+                    )
+                    .as_bytes(),
+                )
+                .expect("the response goes out");
+            sent
+        });
+        (format!("http://127.0.0.1:{port}/probe"), handle)
     }
 }

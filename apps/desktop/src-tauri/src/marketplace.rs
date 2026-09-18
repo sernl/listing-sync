@@ -35,7 +35,8 @@ use tam_types::{Marketplace, Timestamp};
 use tokio::sync::Mutex;
 
 use crate::connect::login_target;
-use crate::session::{CookieJar, SessionStore, StoreError};
+use crate::heartbeat::{ProofFuture, SessionProbe, SessionProof};
+use crate::session::{CookieJar, SessionRecord, SessionStore, StoreError};
 
 /// Why this device can hold no local transport for a marketplace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,6 +137,18 @@ pub trait LiveTransport: Send + Sync {
     /// The argument is the credential, so a failure states a reason and never
     /// a value.
     fn build(&self, cookie_header: &str) -> Result<Self::Live, String>;
+
+    /// The session that client now holds, where it holds one that can change.
+    ///
+    /// `None` is the honest default and the one every builder but Tes takes:
+    /// a client whose cookies are fixed at construction has nothing to hand
+    /// back, and a `Some` carrying the unchanged header would make every
+    /// request look like a rotation. Tes overrides it because Tes rotates the
+    /// session on its own responses, and what it answers here is what the
+    /// store must hold from then on.
+    fn session_cookies(&self, _live: &Self::Live) -> Option<String> {
+        None
+    }
 }
 
 /// Whether a cached client is still the stored one.
@@ -230,8 +243,14 @@ impl<B: LiveTransport> SessionTransport<B> {
     }
 
     /// The live client for the currently stored session, built if the stored
-    /// record has changed since the last one was.
-    async fn resolve(&self) -> Result<Arc<B::Live>, SessionTransportError> {
+    /// record has changed since the last one was, with the record it was
+    /// built from.
+    ///
+    /// The record travels back out because the caller needs it anyway: a
+    /// rotation is detected by comparing what the client now holds against
+    /// what the store holds, and re-reading the store for that would be a
+    /// second keychain read per request.
+    async fn resolve(&self) -> Result<(Arc<B::Live>, SessionRecord), SessionTransportError> {
         let marketplace = self.builder.marketplace();
         let record = self
             .store
@@ -247,7 +266,7 @@ impl<B: LiveTransport> SessionTransport<B> {
         let mut cached = self.cached.lock().await;
         if let Some(current) = cached.as_ref() {
             if current.freshness == freshness {
-                return Ok(Arc::clone(&current.live));
+                return Ok((Arc::clone(&current.live), record));
             }
         }
         let live = Arc::new(
@@ -260,7 +279,43 @@ impl<B: LiveTransport> SessionTransport<B> {
             live: Arc::clone(&live),
         });
         drop(cached);
-        Ok(live)
+        Ok((live, record))
+    }
+
+    /// Stores whatever the marketplace rotated the session to.
+    ///
+    /// Without this the keychain keeps the cookies the login window captured
+    /// while the live client works from the ones Tes has since issued, and
+    /// the two diverge silently: the next rebuild of this transport — a
+    /// restart, a second marketplace login, a cache miss — seeds itself from
+    /// the stale jar and every call from then on is refused as a lapsed
+    /// session. That is the whole of the four-hour session this repair is
+    /// for.
+    ///
+    /// `verified_at` is deliberately untouched. A response arrived, which is
+    /// not the same fact as Tes having accepted the session that sent it —
+    /// a 401 is a response too — and the only thing entitled to stamp a
+    /// proof is the probe that reads the answer.
+    ///
+    /// A store that refuses is not an error for the request that provoked it.
+    /// The response is already in hand, the client still holds the rotated
+    /// cookies for as long as it lives, and failing the seller's work over a
+    /// keychain write would turn a recoverable staleness into a lost item.
+    async fn store_rotation(&self, record: &SessionRecord, live: &B::Live) {
+        let Some(current) = self.builder.session_cookies(live) else {
+            return;
+        };
+        let rotated = CookieJar::from_header_value(&current);
+        if rotated.is_empty() || rotated == record.jar {
+            return;
+        }
+        let updated = SessionRecord {
+            jar: rotated,
+            ..record.clone()
+        };
+        if let Err(why) = self.store.put(&updated).await {
+            eprintln!("the rotated session could not be stored: {why}");
+        }
     }
 }
 
@@ -275,18 +330,26 @@ impl<B: LiveTransport> Transport for SessionTransport<B> {
     /// the actionable cases are diagnosed by [`Self::has_session`] before a
     /// run starts rather than inside it.
     async fn send(&self, request: HttpRequest) -> Result<HttpResponse, TransportError> {
-        if request.auth.is_session() {
+        let session_routed = request.auth.is_session();
+        if session_routed {
             let host =
                 host_of(&request.url).ok_or(TransportError::NotSent(ConnectFailure::DnsFailure))?;
             if host != self.origin_host {
                 return Err(TransportError::NotSent(ConnectFailure::NoRouteToHost));
             }
         }
-        let live = self
+        let (live, record) = self
             .resolve()
             .await
             .map_err(|_| TransportError::NotSent(ConnectFailure::NoRouteToHost))?;
-        live.send(request).await
+        let answer = live.send(request).await;
+        // After the send and whatever it answered, including a failure: a
+        // rotation the marketplace issued on a response the flow then
+        // refuses is still the session this device must present next.
+        if session_routed {
+            self.store_rotation(&record, &live).await;
+        }
+        answer
     }
 }
 
@@ -330,6 +393,12 @@ impl LiveTransport for TesLive {
             .map_err(|why| why.to_string())?;
         tam_marketplace_tes::ReqwestTransport::new(&session).map_err(|why| why.to_string())
     }
+
+    /// Tes is the marketplace that rotates, so Tes is the one builder that
+    /// has something to hand back.
+    fn session_cookies(&self, live: &Self::Live) -> Option<String> {
+        Some(live.session_cookies())
+    }
 }
 
 /// TES also issues `TESSession` to anonymous visitors. Only its own
@@ -342,11 +411,84 @@ pub(crate) async fn verify_tes_login(jar: &CookieJar) -> Result<bool, String> {
         .map_err(|why| why.to_string())
 }
 
+/// Renews a stored Tes session and says whether it still authenticates,
+/// handing back the cookies as Tes left them.
+///
+/// Two calls rather than one, in the order `probes/session-longevity.sh` uses
+/// and for the reason it records: the renewal is what rotates the cookies,
+/// and the identity read is what proves the rotated ones still speak as the
+/// seller. A refused renewal is not the verdict — the read below is — because
+/// a session can be perfectly good and the renewal route can be having a bad
+/// day.
+///
+/// The jar comes back whatever the verdict. A session Tes has just refused
+/// still rotated on the way to being refused, and storing what it rotated to
+/// is how the next attempt is made against the current cookies rather than
+/// against cookies that were stale before it started.
+pub(crate) async fn refresh_tes_session(jar: &CookieJar) -> Result<(CookieJar, bool), String> {
+    let transport = TesLive.build(&jar.header_value())?;
+    let _renewed = tam_marketplace_tes::refresh_session(&transport)
+        .await
+        .map_err(|why| why.to_string())?;
+    let principal = tam_marketplace_tes::read_seller_user_id(&transport)
+        .await
+        .map_err(|why| why.to_string())?;
+    Ok((
+        CookieJar::from_header_value(&transport.session_cookies()),
+        principal.is_some(),
+    ))
+}
+
 /// The shipping TPT transport: the keychain jar, bound to TPT's own origin.
 pub type TptTransport = SessionTransport<TptLive>;
 
 /// The shipping Tes transport, likewise.
 pub type TesTransport = SessionTransport<TesLive>;
+
+/// The shipping [`SessionProbe`]: the real marketplaces, under the seller's
+/// own stored cookies.
+///
+/// Holds nothing. Each probe builds its own live client from the jar it is
+/// handed, exactly as [`verify_tes_login`] does at sign-in, so the question
+/// the check-in asks is the same question the login capture asked and a
+/// session cannot pass one and fail the other.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LiveProbe;
+
+impl SessionProbe for LiveProbe {
+    fn prove<'a>(&'a self, marketplace: Marketplace, jar: &'a CookieJar) -> ProofFuture<'a> {
+        Box::pin(async move {
+            match marketplace {
+                Marketplace::Tes => {
+                    refresh_tes_session(jar)
+                        .await
+                        .map(|(refreshed, authed)| SessionProof {
+                            authenticated: authed,
+                            refreshed: Some(refreshed),
+                        })
+                }
+                // No TPT probe exists: nothing on this device can tell a live
+                // TPT session from a lapsed one without a request whose shape
+                // no capture has measured, which is the same reason
+                // `verify_login_candidate` files a TPT login unverified. A
+                // held jar therefore keeps its proof rather than being
+                // reported as signed out on a question nobody asked, and TPT
+                // behaves exactly as it did before this repair.
+                Marketplace::Tpt => Ok(SessionProof {
+                    authenticated: true,
+                    refreshed: None,
+                }),
+                // Sanctioned automation: no session is held for it on this
+                // device at all, so there is nothing to prove and saying so
+                // is not a failure.
+                Marketplace::Etsy => Ok(SessionProof {
+                    authenticated: false,
+                    refreshed: None,
+                }),
+            }
+        })
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -409,6 +551,10 @@ mod tests {
         marketplace: Marketplace,
         ledger: Arc<Ledger>,
         refuse: bool,
+        /// What the built client reports its session as afterwards, standing
+        /// in for the rotation Tes performs on an authenticated response.
+        /// `None` means the client still holds what it was built with.
+        rotates_to: Option<String>,
     }
 
     impl FakeLive {
@@ -417,11 +563,17 @@ mod tests {
                 marketplace,
                 ledger: Arc::clone(ledger),
                 refuse: false,
+                rotates_to: None,
             }
         }
 
         const fn refusing(mut self) -> Self {
             self.refuse = true;
+            self
+        }
+
+        fn rotating(mut self, to: &str) -> Self {
+            self.rotates_to = Some(to.to_owned());
             self
         }
     }
@@ -451,6 +603,17 @@ mod tests {
                 cookie_header: cookie_header.to_owned(),
             })
         }
+
+        /// The rotation where one was configured, and otherwise the header
+        /// the client was built with — which is what a marketplace that
+        /// rotates nothing leaves the client holding.
+        fn session_cookies(&self, live: &Self::Live) -> Option<String> {
+            Some(
+                self.rotates_to
+                    .clone()
+                    .unwrap_or_else(|| live.cookie_header.clone()),
+            )
+        }
     }
 
     fn jar(pairs: &[(&str, &str)]) -> CookieJar {
@@ -472,6 +635,7 @@ mod tests {
             captured_at: Timestamp(at),
             device_id: DeviceId::from_raw("11112222333344445555666677778888"),
             jar,
+            verified_at: Some(Timestamp(at)),
         }
     }
 
@@ -802,6 +966,42 @@ mod tests {
         assert!(TesLive.build("TESSession=s").is_ok());
     }
 
+    /// The join between the two halves of the repair: the shipping Tes
+    /// builder hands back the session its own client holds, and the jar it
+    /// round-trips through is the one the store keeps.
+    ///
+    /// Both fakes above prove the write-back given a builder that answers;
+    /// this is what says the shipping builder answers at all. A `None` here
+    /// would make every rotation a silent no-op with every other test still
+    /// green.
+    #[test]
+    fn the_shipping_tes_builder_hands_back_the_session_its_client_holds() {
+        let live = TesLive
+            .build("TESSession=captured")
+            .expect("a jar with a cookie in it builds");
+        let held = TesLive
+            .session_cookies(&live)
+            .expect("Tes rotates, so Tes reads its session back");
+        assert_eq!(held, "TESSession=captured");
+        assert_eq!(
+            CookieJar::from_header_value(&held).header_value(),
+            "TESSession=captured",
+            "and it survives the jar the store holds it as"
+        );
+    }
+
+    /// TPT's client fixes its cookies at construction, so it has nothing to
+    /// hand back — and must say so rather than report the unchanged header,
+    /// which would make every TPT request look like a rotation and provoke a
+    /// keychain write.
+    #[test]
+    fn the_shipping_tpt_builder_reports_no_rotation() {
+        let live = TptLive
+            .build("csrfToken=t; sessionKey=s")
+            .expect("tpt builds from a jar carrying both");
+        assert_eq!(TptLive.session_cookies(&live), None);
+    }
+
     #[test]
     fn a_host_is_read_off_an_absolute_url_and_nothing_else() {
         assert_eq!(host_of("https://www.tes.com/a/b?c#d"), Some("www.tes.com"));
@@ -809,5 +1009,90 @@ mod tests {
         assert_eq!(host_of("https://user@host/a"), Some("host"));
         assert_eq!(host_of("/relative"), None);
         assert_eq!(host_of("ftp://host/a"), None);
+    }
+
+    /// The defect, at the seam it was lost at.
+    ///
+    /// Tes rotates the session on its authenticated responses. The stored jar
+    /// used to keep the cookies the login window captured for ever, so the
+    /// next client built from the store — a restart, a cache miss, a second
+    /// login — presented values Tes had superseded and every call answered as
+    /// a lapsed session. The assertion is on what the store holds afterwards,
+    /// because the store is what the next client is built from.
+    #[tokio::test]
+    async fn a_rotated_session_is_written_back_to_the_store() {
+        let ledger = Arc::new(Ledger::default());
+        let captured = record(
+            Marketplace::Tes,
+            1_756_000_000_000,
+            jar(&[("TESSession", "captured")]),
+        );
+        let store = store_holding(std::slice::from_ref(&captured)).await;
+        let bridge = SessionTransport::new(
+            FakeLive::for_marketplace(Marketplace::Tes, &ledger).rotating("TESSession=rotated"),
+            Arc::clone(&store),
+        )
+        .expect("tes is a seller-device marketplace");
+
+        bridge
+            .send(HttpRequest::get(TES_URL.to_owned()))
+            .await
+            .expect("the request is delegated");
+
+        let held = store
+            .get(Marketplace::Tes)
+            .await
+            .expect("the store answers")
+            .expect("the session is still held");
+        assert_eq!(
+            held.jar.header_value(),
+            "TESSession=rotated",
+            "the store must hold what the marketplace last issued, or the session goes stale \
+             in the keychain while the live client quietly works"
+        );
+        assert_eq!(
+            held.verified_at,
+            Some(Timestamp(1_756_000_000_000)),
+            "a response arriving is not the marketplace accepting the session that sent it — a \
+             401 is a response too — so only the probe may stamp a proof"
+        );
+        assert_eq!(
+            held.captured_at,
+            Timestamp(1_756_000_000_000),
+            "and the capture instant is the seller's sign-in, which a rotation did not repeat"
+        );
+    }
+
+    /// A marketplace that rotated nothing must not provoke a keychain write,
+    /// and must not look like a rotation to the next reader.
+    #[tokio::test]
+    async fn a_session_that_did_not_rotate_is_left_exactly_as_it_was() {
+        let ledger = Arc::new(Ledger::default());
+        let stored = record(
+            Marketplace::Tes,
+            1_756_000_000_000,
+            jar(&[("TESSession", "captured")]),
+        );
+        let store = store_holding(std::slice::from_ref(&stored)).await;
+        let bridge = SessionTransport::new(
+            FakeLive::for_marketplace(Marketplace::Tes, &ledger),
+            Arc::clone(&store),
+        )
+        .expect("tes is a seller-device marketplace");
+
+        bridge
+            .send(HttpRequest::get(TES_URL.to_owned()))
+            .await
+            .expect("the request is delegated");
+
+        assert_eq!(
+            store
+                .get(Marketplace::Tes)
+                .await
+                .expect("the store answers")
+                .as_ref(),
+            Some(&stored),
+            "an ordinary read leaves the record untouched"
+        );
     }
 }

@@ -448,6 +448,8 @@ async fn insert_job_item(
     let idempotency_key = frozen
         .as_ref()
         .map_or(item.idempotency_key, |frozen| frozen.key);
+    // Before the insert, and why it cannot be after it, in `free_retired_key`.
+    free_retired_key(tx, org_db, idempotency_key).await?;
     // `marketplace` is read from the mapping inside the statement rather than
     // supplied: the live-lease mutex is an index over it, so a caller-supplied
     // value that disagreed with the mapping would put the mutex on the wrong
@@ -493,6 +495,77 @@ async fn insert_job_item(
         )
         .await?;
     }
+    Ok(())
+}
+
+/// Frees the key from an item that no longer owns it, so a resource whose
+/// last write settled adversely can be asked for again.
+///
+/// The key is minted from the organisation, the inventory, the resource, the
+/// intent version and the intent digest, and deliberately from nothing about
+/// the request that asked: an unchanged write asked for twice is one write.
+/// That is right while the first item is live or has landed, and wrong the
+/// moment the first item has settled adversely. A create refused because the
+/// seller's marketplace session had expired leaves the listing not there; the
+/// next attempt at it derives the same key, and `job_item` rows are never
+/// deleted, so `job_item_idempotent` refuses it forever with a message about
+/// unchanged content that is false.
+///
+/// So `blocked` and `failed` retire an item's claim on its key, and every
+/// other settled outcome keeps it, as does every live state. `succeeded` and
+/// `degraded` keep it because the write landed. `ambiguous` keeps it because
+/// the write may have landed, and that fence is the one thing standing
+/// between a seller and a duplicate listing. `skipped` keeps it because the
+/// item was never charged an attempt and nothing about why it was passed over
+/// has moved. The rule is stated the safe way round -- retired is the
+/// enumerated set and everything else owns its key -- so an outcome added
+/// later keeps its fence until someone decides otherwise.
+///
+/// A retired item keeps a key derived from the one it gives up, rather than a
+/// fresh v4, so the ledger's history stays unique without a second story
+/// about where an item's key came from: the row still answers which key it
+/// was written under, one hash away.
+///
+/// The repair runs before the insert rather than on its unique violation
+/// because a constraint violation aborts the enclosing transaction, and this
+/// insert is one of several in it. Reading the incumbent afterwards would
+/// need a savepoint around every item ever enqueued -- two extra statements
+/// on the ordinary path to save one here. `FOR UPDATE` is what serialises two
+/// enqueues racing for one retired key: the loser waits, re-evaluates the
+/// predicate against the winner's committed row, no longer matches it, and
+/// meets `job_item_idempotent` against the live row the winner inserted.
+/// Which is that constraint's intent rather than a hole in it -- two live
+/// writes of the same content still collide.
+async fn free_retired_key(
+    tx: &mut Transaction<'_, Postgres>,
+    org_db: uuid::Uuid,
+    key: IdempotencyKey,
+) -> Result<(), StorageError> {
+    let key_db = uuid_to_db(key.0);
+    let Some(incumbent) = sqlx::query!(
+        "SELECT id, state, outcome FROM job_item \
+         WHERE org_id = $1 AND idempotency_key = $2 FOR UPDATE",
+        org_db,
+        key_db,
+    )
+    .fetch_optional(&mut **tx)
+    .await?
+    else {
+        return Ok(());
+    };
+    if incumbent.state != "settled"
+        || !matches!(incumbent.outcome.as_deref(), Some("blocked" | "failed"))
+    {
+        return Ok(());
+    }
+    sqlx::query!(
+        "UPDATE job_item SET idempotency_key = $3 WHERE org_id = $1 AND id = $2",
+        org_db,
+        incumbent.id,
+        uuid::Uuid::new_v5(&key_db, incumbent.id.as_bytes()),
+    )
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 

@@ -5676,6 +5676,7 @@ mod tests {
                         name: "TESSession".to_owned(),
                         value: "value".to_owned(),
                     }]),
+                    verified_at: Some(crate::run::wall_now()),
                 },
             )
             .await

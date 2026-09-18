@@ -415,8 +415,26 @@ fn session_key_bridge<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
 /// server says nothing about whether the seller signed this machine out, and
 /// a coordinator that read an outage as a revocation would stop discovering
 /// for the length of the outage.
+///
+/// The sessions are renewed and re-proved first, and that order is the
+/// repair: Tes rotates its session cookies on its own authenticated
+/// responses, so this beat is what keeps a stored jar current and what
+/// notices a jar the marketplace has stopped accepting. The check-in then
+/// reports what the marketplace actually said rather than that a jar exists,
+/// which is what flips the connection to `needs_reauth` before an item is
+/// claimed against a session that cannot settle it.
+///
+/// One more marketplace request per marketplace per five minutes, and it
+/// buys back every claim a lapsed session would have burned.
 async fn run_check_in(app: &AppHandle) -> bool {
     let state = app.state::<DesktopState>();
+    heartbeat::refresh_sessions(
+        state.store(),
+        &crate::marketplace::LiveProbe,
+        crate::run::wall_now(),
+    )
+    .await
+    .ok();
     heartbeat::check_in_or_register(&state, state.control_plane())
         .await
         .ok();

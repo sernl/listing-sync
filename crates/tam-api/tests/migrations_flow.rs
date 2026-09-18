@@ -29,6 +29,9 @@ const ORG: OrgId = OrgId(Uuid([0xAA; 16]));
 const TOKEN: SessionToken = SessionToken([0x41; 32]);
 const NOW: Timestamp = Timestamp(1_756_000_000_000);
 const KEY: &str = "11111111-1111-4111-8111-111111111111";
+/// The seller asking again after the first attempt was refused, which is a
+/// second migration and therefore a second key.
+const SECOND_KEY: &str = "22222222-2222-4222-8222-222222222222";
 
 /// The resource that crosses: bound on Tes, with a file.
 const MOVES: u8 = 0x01;
@@ -708,4 +711,112 @@ async fn a_spent_allowance_refuses_the_confirm(pool: PgPool) {
     assert_eq!(detail["quota"], "migrations_per_month");
     assert_eq!(detail["used"], 20);
     assert_eq!(detail["limit"], 20);
+}
+
+/// The expired session as the device reports it: every item of the job
+/// settles `blocked` having written nothing, so the listing is still not on
+/// the target.
+///
+/// Written straight onto the ledger rather than through a claim and a settle,
+/// because what this test needs is the state the nine refused creates were
+/// left in; `crates/tam-storage/tests/leases.rs` is where the settle itself
+/// is exercised.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn settle_blocked(pool: &PgPool, job: Uuid) {
+    let mut tx = pool.begin().await.expect("the fixture transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pins");
+    let settled = sqlx::query(
+        "UPDATE job_item SET state = 'settled', outcome = 'blocked', \
+           failure_code = 'SessionExpired', settled_at = now() \
+         WHERE org_id = $1 AND job_id = $2",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+    .bind(uuid::Uuid::from_bytes(job.0))
+    .execute(&mut *tx)
+    .await
+    .expect("the items settle");
+    assert_eq!(settled.rows_affected(), 1, "the job had its one create");
+    tx.commit().await.expect("the fixture commits");
+}
+
+/// A resource whose last create was refused can be migrated again.
+///
+/// The production defect: nine resources whose earlier items settled
+/// `blocked` on an expired Tes session were re-submitted, and the confirm
+/// answered 500 with the `sync_request` row already committed — state
+/// `draining`, no jobs, nothing saying why. The item's idempotency key is
+/// derived from the content and nothing about the request, `job_item` rows are
+/// never deleted, and so the second attempt met `job_item_idempotent` and left
+/// through the fault path.
+///
+/// A second key, because the same key is the retry of one migration and is
+/// answered as a replay before the plan is ever recomputed. This is the
+/// seller asking again, which is a migration of its own.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_migration_whose_create_was_blocked_can_be_asked_for_again(pool: PgPool) {
+    provision(&pool, Some(tam_limits::Plan::Subscriber)).await;
+    let first = call(pool.clone(), "/v1/migrations", Some(KEY), move_body()).await;
+    assert_eq!(first.status, StatusCode::ACCEPTED);
+    let requests = SyncRequestRepo::new(pool.clone());
+    let refused = requests
+        .get(ORG, first.json::<MigrationAck>().request)
+        .await
+        .expect("the request reads")
+        .expect("it exists");
+    let refused_job = refused
+        .create_job
+        .expect("the confirm drained a create onto the target");
+    settle_blocked(&pool, refused_job).await;
+
+    let again = call(
+        pool.clone(),
+        "/v1/migrations",
+        Some(SECOND_KEY),
+        move_body(),
+    )
+    .await;
+    assert_eq!(
+        again.status,
+        StatusCode::ACCEPTED,
+        "a refused create is work still owed, not a duplicate: {}",
+        String::from_utf8_lossy(&again.body)
+    );
+    let ack: MigrationAck = again.json();
+    assert_eq!(ack.queued, 1, "the resource is offered again, and admitted");
+    let record = requests
+        .get(ORG, ack.request)
+        .await
+        .expect("the request reads")
+        .expect("it exists");
+    assert_eq!(
+        record.state, "enqueued",
+        "the drain finished, so the request is not left draining with no jobs"
+    );
+    let queued_job = record
+        .create_job
+        .expect("the re-submit mints a create of its own");
+    assert_ne!(
+        queued_job, refused_job,
+        "a new job, rather than the one whose item was refused"
+    );
+    let items = tam_storage::JobReadRepo::new(pool.clone())
+        .items_page(
+            ORG,
+            JobId(queued_job),
+            tam_storage::ItemsPageParams {
+                cursor: None,
+                limit: 10,
+                outcome: None,
+            },
+        )
+        .await
+        .expect("the create job's items read");
+    assert_eq!(items.len(), 1, "one create for the one admitted resource");
 }
