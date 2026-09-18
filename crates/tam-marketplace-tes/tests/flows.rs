@@ -204,6 +204,85 @@ fn the_full_submit_flow_replays_and_lands() {
     );
 }
 
+/// The create answered its identifier and the upload confirmed, but the
+/// draft route does not yet name the resource and the resource route answers
+/// an empty body: the JSON API is behind its own upload. That is lag on a
+/// write that landed, and the evidence says so, carrying the identifier the
+/// verification read will address; it is not an ambiguous submit, which would
+/// strand the run and halt the tenant on the next one.
+#[test]
+fn a_draft_read_that_lags_a_landed_create_is_reported_as_lag_not_ambiguity() {
+    let file_id = FileId(Uuid([0x21; 16]));
+    let content = FileContent {
+        file_name: "pack.pdf".to_owned(),
+        content_type: "application/pdf".to_owned(),
+        bytes: b"%PDF-1.4 tiny".to_vec(),
+    };
+    let presign_body = presign_response();
+    let upload = endpoints::parse_presign(&presign_body, "pack.pdf", "application/pdf")
+        .expect("the fixture presign parses");
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::create_draft_request(),
+                response: ok(&json!({"id": 9001})),
+            },
+            Interaction {
+                request: endpoints::set_metadata_request(DRAFT, &sample_listing()),
+                response: ok(&json!({"id": 9001, "title": "Fractions pack"})),
+            },
+            Interaction {
+                request: endpoints::presign_request(DRAFT, "pack.pdf", "TEMP-0"),
+                response: ok(&presign_body),
+            },
+            Interaction {
+                request: endpoints::s3_upload_request(
+                    &upload,
+                    FilePart {
+                        part_name: "file".to_owned(),
+                        file_name: "pack.pdf".to_owned(),
+                        content_type: "application/pdf".to_owned(),
+                        bytes: content.bytes.clone(),
+                    },
+                ),
+                response: status(204),
+            },
+            Interaction {
+                request: endpoints::confirm_request(DRAFT, &upload),
+                response: ok(&json!([{"isUploaded": true, "s3pending": {"key": "k/9001"}}])),
+            },
+            Interaction {
+                request: endpoints::read_draft_request(DRAFT),
+                response: ok(&json!({})),
+            },
+            Interaction {
+                request: endpoints::read_resource_request(DRAFT),
+                response: ok(&json!({})),
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![(file_id, content)]);
+    let evidence = futures::executor::block_on(adapter.submit(
+        tam_marketplace::IdempotencyKey(Uuid([1; 16])),
+        sample_field_set(file_id),
+        NOW,
+    ))
+    .expect("a landed create whose read lags is evidence, not an error");
+    assert!(evidence.observed_lag, "the lag is stated");
+    assert_eq!(
+        evidence.response_body_digest, None,
+        "no body was read, so none is digested"
+    );
+    assert_eq!(
+        evidence.landed,
+        Some(tam_marketplace::RemoteListingId::Tes {
+            url: "https://www.tes.com/api/v2/resources/9001".to_owned(),
+        }),
+        "the identifier the create answered is what the verification read addresses"
+    );
+    assert_eq!(adapter.transport().remaining(), 0);
+}
+
 #[test]
 fn a_confirm_that_never_flips_is_a_missing_confirmation() {
     let file_id = FileId(Uuid([0x21; 16]));

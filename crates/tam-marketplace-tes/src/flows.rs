@@ -652,11 +652,28 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
             contents.push(content);
         }
         let id = self.create_listing(&listing, &contents).await?;
-        let state = self.resource_state(id).await?;
-        let digest: [u8; 32] = Sha256::digest(state.to_string().as_bytes()).into();
+        // The create has already answered with the durable identifier by the
+        // time this read runs, so a read that cannot yet name the draft is
+        // the JSON API lagging behind its own upload rather than a write
+        // whose fate is unknown. Measured 2026-09-18: after a fifteen-megabyte
+        // bundle the draft route stayed indeterminate for tens of seconds and
+        // every create was classified ambiguous, which strands the run and
+        // halts the tenant on the next such answer. Reporting the lag lets
+        // the driver's own verification poll address the identifier it holds;
+        // a transport failure on the read is still a failure.
+        let (digest, observed_lag) = match self.resource_state(id).await {
+            Ok(state) => (
+                Some(ContentHash(
+                    Sha256::digest(state.to_string().as_bytes()).into(),
+                )),
+                false,
+            ),
+            Err(AdapterError::Ambiguous(_)) => (None, true),
+            Err(error) => return Err(error),
+        };
         Ok(SubmitEvidence {
             http_status: Some(200),
-            response_body_digest: Some(ContentHash(digest)),
+            response_body_digest: digest,
             landed_on_route: Some(id.canonical_url()),
             // The durable identifier the create returned, so the pre-settle
             // verification read addresses the resource directly rather than
@@ -664,7 +681,7 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
             landed: Some(RemoteListingId::Tes {
                 url: id.canonical_url(),
             }),
-            observed_lag: false,
+            observed_lag,
         })
     }
 
