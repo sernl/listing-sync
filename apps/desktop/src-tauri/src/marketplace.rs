@@ -153,15 +153,28 @@ pub trait LiveTransport: Send + Sync {
 
 /// Whether a cached client is still the stored one.
 ///
-/// A capture instant and a cookie count rather than anything derived from the
-/// jar. A session record is only ever replaced wholesale, by a capture that
-/// stamps a fresh instant, so two records agreeing on both are the same
-/// record; deriving the key from the cookies would put a function of the
-/// credential in memory and buy nothing.
+/// A digest of the jar, not the capture instant and a count. Those two were
+/// enough while a record was only ever replaced wholesale by a fresh capture,
+/// but a rotation stored by the check-in probe keeps both unchanged, and a
+/// client keyed on them went on presenting the pre-rotation cookies to Tes,
+/// which reads a superseded cookie as a lapsed session: measured 2026-09-18 as
+/// a reauth refusal within minutes of a proven session. A blake3 digest of the
+/// header value is a function of the credential that reveals nothing about it,
+/// which is why it is acceptable in memory where the cookies themselves are
+/// not kept beyond the client that needs them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Freshness {
     captured_at: Timestamp,
-    cookies: usize,
+    jar: [u8; 32],
+}
+
+impl Freshness {
+    fn of(record: &SessionRecord) -> Self {
+        Self {
+            captured_at: record.captured_at,
+            jar: *blake3::hash(record.jar.header_value().as_bytes()).as_bytes(),
+        }
+    }
 }
 
 struct Cached<L> {
@@ -258,10 +271,7 @@ impl<B: LiveTransport> SessionTransport<B> {
             .await
             .map_err(SessionTransportError::Store)?
             .ok_or(SessionTransportError::NoSession(marketplace))?;
-        let freshness = Freshness {
-            captured_at: record.captured_at,
-            cookies: record.jar.len(),
-        };
+        let freshness = Freshness::of(&record);
 
         let mut cached = self.cached.lock().await;
         if let Some(current) = cached.as_ref() {
@@ -831,6 +841,41 @@ mod tests {
             vec![first.jar.header_value(), renewed.jar.header_value()],
             "a cookie that expired is replaced by signing in again, and the very next request \
              must carry the new jar rather than waiting for a restart"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rotation_stored_under_the_same_capture_instant_rebuilds_the_client() {
+        let ledger = Arc::new(Ledger::default());
+        let captured = tpt_record(1_756_000_000_000, "issued-at-login");
+        let store = store_holding(std::slice::from_ref(&captured)).await;
+        let bridge = SessionTransport::new(
+            FakeLive::for_marketplace(Marketplace::Tpt, &ledger),
+            Arc::clone(&store),
+        )
+        .expect("tpt is a seller-device marketplace");
+
+        bridge
+            .send(HttpRequest::get(TPT_URL.to_owned()))
+            .await
+            .expect("the first request is sent");
+        // The check-in probe stores what the marketplace rotated to: same
+        // instant, same cookie names, different values.
+        let rotated = tpt_record(1_756_000_000_000, "rotated-by-the-marketplace");
+        store
+            .put(&rotated)
+            .await
+            .expect("the probe stores the rotation");
+        bridge
+            .send(HttpRequest::get(TPT_URL.to_owned()))
+            .await
+            .expect("the second request is sent");
+
+        assert_eq!(
+            ledger.headers().await,
+            vec![captured.jar.header_value(), rotated.jar.header_value()],
+            "a superseded cookie is a lapsed session to the marketplace, so the request after \
+             a stored rotation must carry the rotated jar"
         );
     }
 
