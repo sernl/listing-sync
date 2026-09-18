@@ -107,6 +107,7 @@ fn a_full_settle_envelope_round_trips() {
     let attempt = AttemptVerdict {
         state: "committed".to_owned(),
         failure_code: None,
+        ambiguity: None,
         landing: LandingEffect::Landed {
             id: RemoteListingId::Tpt {
                 product_id: 17_511_712,
@@ -507,6 +508,7 @@ fn every_ledger_call_and_answer_round_trips() {
             verdict: AttemptVerdict {
                 state: "committed".to_owned(),
                 failure_code: None,
+                ambiguity: None,
                 landing: LandingEffect::None,
             },
             at_ms: 1_756_000_002_000,

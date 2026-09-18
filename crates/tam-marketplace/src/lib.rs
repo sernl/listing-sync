@@ -150,13 +150,55 @@ pub struct FieldDiffReport {
     pub mismatches: Vec<FieldMismatch>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Which of the five ways a write's fate became unknown this one was.
+///
+/// Carried rather than discarded, because an ambiguity with no cause is a
+/// halted tenant nobody can diagnose: the operator screen, the
+/// `write_attempt.ambiguity_cause` column and the driver's capture action
+/// label all want to say which of these five happened, and until this type
+/// could be written down as text none of them did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AmbiguityCause {
     SubmitTimedOut,
     ResponseEventLost,
     ProcessKilledByBackstop,
     ReadBackIndeterminate,
     NoDurableIdentifier,
+}
+
+impl AmbiguityCause {
+    /// The closed set, in a stable order, so the name test covers every
+    /// variant rather than the ones somebody remembered.
+    pub const ALL: [Self; 5] = [
+        Self::SubmitTimedOut,
+        Self::ResponseEventLost,
+        Self::ProcessKilledByBackstop,
+        Self::ReadBackIndeterminate,
+        Self::NoDurableIdentifier,
+    ];
+
+    /// One name across every layer, which is `schema.md`'s rule for the
+    /// failure code and is this column's too: the text in
+    /// `write_attempt.ambiguity_cause`, the text in the driver's `capture:`
+    /// action label, and the serde tag the admin API serves are the same
+    /// string. The test in this crate asserts that agreement, so a renamed
+    /// variant cannot leave the column and the wire disagreeing.
+    ///
+    /// Lives here rather than in the storage codec, where `FailureCode`'s db
+    /// text lives, because two of the three readers are outside the storage
+    /// crate and a `pub(crate)` mapping there would have had the driver
+    /// inventing a second spelling.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::SubmitTimedOut => "submit_timed_out",
+            Self::ResponseEventLost => "response_event_lost",
+            Self::ProcessKilledByBackstop => "process_killed_by_backstop",
+            Self::ReadBackIndeterminate => "read_back_indeterminate",
+            Self::NoDurableIdentifier => "no_durable_identifier",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -831,13 +873,33 @@ pub trait FaultPlan: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::{
-        settle, FieldDiffReport, ImportedListing, InstantPause, ListingState, Outcome, Pause as _,
-        RemoteListingId,
+        settle, AmbiguityCause, FieldDiffReport, ImportedListing, InstantPause, ListingState,
+        Outcome, Pause as _, RemoteListingId,
     };
     use tam_types::{
         AttemptId, CopyFormat, FieldKey, FieldMismatch, ImportedPrice, ImportedTerm, InventoryId,
         MismatchClass, TermKind, Timestamp, Uuid,
     };
+
+    /// The column text, the action label and the serde tag are one string.
+    ///
+    /// `write_attempt.ambiguity_cause` is unconstrained `text` and the
+    /// driver's capture label is free-form, so nothing but this test stops a
+    /// rename leaving the ledger, the label and the admin API spelling the
+    /// same cause three ways. The serde tag is the independent oracle: it is
+    /// derived by the `rename_all` attribute rather than by `name`.
+    #[test]
+    fn every_ambiguity_cause_names_itself_the_way_it_serialises() {
+        for cause in AmbiguityCause::ALL {
+            let serialised =
+                serde_json::to_string(&cause).expect("a fieldless enum serialises to its tag");
+            assert_eq!(
+                serialised.trim_matches('"'),
+                cause.name(),
+                "the db text and the serde tag must agree for {cause:?}"
+            );
+        }
+    }
 
     /// The whole imported listing survives the wire.
     ///

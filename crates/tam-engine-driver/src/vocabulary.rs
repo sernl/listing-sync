@@ -18,7 +18,8 @@ use serde::{Deserialize, Serialize};
 use crate::driver::VerifyPolicy;
 use tam_domain::{ItemOperation, ItemOutcome, JobItemId, SellerEvent, StepBudget};
 use tam_marketplace::{
-    CreateStrategy, FormId, IdempotencyKey, ProjectedListing, RemoteLifecycle, RemoteListingId,
+    AmbiguityCause, CreateStrategy, FormId, IdempotencyKey, ProjectedListing, RemoteLifecycle,
+    RemoteListingId,
 };
 use tam_types::{
     ConnectionId, ContentHash, FailureCode, FailureDetail, FileId, InventoryId, JobEventPayload,
@@ -179,6 +180,16 @@ pub enum LandingEffect {
 pub struct AttemptVerdict {
     pub state: String,
     pub failure_code: Option<FailureCode>,
+    /// Which ambiguity this was, where the state is `ambiguous`.
+    ///
+    /// `write_attempt.ambiguity_cause` has existed since migration 0005 and
+    /// nothing ever wrote it, because the cause the machine computes was
+    /// dropped here: an operator meeting a halted tenant saw an `ambiguous`
+    /// row with three NULL diagnostic columns and no way to tell a lost
+    /// response from an unreadable read-back. `None` on every other state,
+    /// and on an ambiguous settle that genuinely observed no cause — the
+    /// column stays NULL rather than naming a guess.
+    pub ambiguity: Option<AmbiguityCause>,
     pub landing: LandingEffect,
 }
 

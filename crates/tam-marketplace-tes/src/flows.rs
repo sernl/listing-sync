@@ -113,6 +113,46 @@ impl core::fmt::Display for NotATesInventory {
 
 impl core::error::Error for NotATesInventory {}
 
+/// Which step of a write flow produced a verdict, and what it saw.
+///
+/// The write path has seven classifying steps — create, metadata, presign,
+/// s3, confirm, read-draft, read-resource — and an `AdapterError` names
+/// none of them. A tenant halted on `Ambiguous(ReadBackIndeterminate)` could
+/// have been halted by the S3 POST, by the confirm echo or by either read,
+/// and until this line existed the device said nothing at all about which.
+///
+/// The status travels with it, because the classifiers map whole ranges to
+/// one cause: `ReadBackIndeterminate` is every status outside the handful
+/// each classifier names, so the cause alone does not recover the answer.
+///
+/// Returns its argument, so a call site reads as the classification it wraps.
+fn classified<T>(
+    step: &str,
+    status: u16,
+    outcome: Result<T, AdapterError>,
+) -> Result<T, AdapterError> {
+    if let Err(error) = &outcome {
+        eprintln!("tes: {step} saw {status} -> {}", adapter_verdict(error));
+    }
+    outcome
+}
+
+/// An adapter verdict in one field, with the ambiguity's own cause spelled
+/// the way the ledger's `write_attempt.ambiguity_cause` column spells it, so
+/// a log line and a row can be read against each other.
+fn adapter_verdict(error: &AdapterError) -> String {
+    match error {
+        AdapterError::Ambiguous(cause) => format!("ambiguous:{}", cause.name()),
+        AdapterError::Rejected { code, .. } => format!("rejected:{code:?}"),
+        AdapterError::Challenge(kind) => format!("challenge:{kind:?}"),
+        AdapterError::SessionExpired => "session-expired".to_owned(),
+        AdapterError::SchemaDrift(_) => "schema-drift".to_owned(),
+        AdapterError::RateLimited { .. } => "rate-limited".to_owned(),
+        AdapterError::NotSent(cause) => format!("not-sent:{cause:?}"),
+        AdapterError::Uncaptured { capability } => format!("uncaptured:{capability}"),
+    }
+}
+
 impl<T: Transport, F: FileSource> TesAdapter<T, F> {
     pub fn new(
         inventory: InventoryId,
@@ -133,10 +173,16 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
         &self,
         request: tam_marketplace::transport::HttpRequest,
     ) -> Result<tam_marketplace::transport::HttpResponse, AdapterError> {
-        self.transport
-            .send(request)
-            .await
-            .map_err(classify_transport)
+        // The url is kept before the request moves, so a transport failure
+        // names its own destination. The live transport's own line already
+        // named the exchange; this one names what the seam made of it, which
+        // is the value the machine is about to be stepped with.
+        let url = request.url.clone();
+        self.transport.send(request).await.map_err(|error| {
+            let verdict = classify_transport(error);
+            eprintln!("tes: transport {url} -> {}", adapter_verdict(&verdict));
+            verdict
+        })
     }
 
     /// Creates a draft, sets its metadata and uploads every file. The draft
@@ -148,12 +194,12 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
         files: &[FileContent],
     ) -> Result<DraftId, AdapterError> {
         let created = self.send(endpoints::create_draft_request()).await?;
-        let id = classify_create(&created)?;
+        let id = classified("create", created.status, classify_create(&created))?;
 
         let metadata = self
             .send(endpoints::set_metadata_request(id, listing))
             .await?;
-        classify_write(&metadata, id.0)?;
+        classified("metadata", metadata.status, classify_write(&metadata, id.0))?;
 
         for (index, file) in files.iter().enumerate() {
             self.upload_file(id, index, file).await?;
@@ -179,7 +225,7 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
         let presign = self
             .send(endpoints::presign_request(id, &file.file_name, &temp_id))
             .await?;
-        let presign_body = classify_write_json(&presign)?;
+        let presign_body = classified("presign", presign.status, classify_write_json(&presign))?;
         let upload: PresignedUpload =
             endpoints::parse_presign(&presign_body, &file.file_name, &file.content_type).map_err(
                 |error| AdapterError::Rejected {
@@ -199,10 +245,11 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
                 },
             ))
             .await?;
-        classify_write_status(&s3)?;
+        classified("s3", s3.status, classify_write_status(&s3))?;
 
         let confirmed = self.send(endpoints::confirm_request(id, &upload)).await?;
-        let confirm_body = classify_write_json(&confirmed)?;
+        let confirm_body =
+            classified("confirm", confirmed.status, classify_write_json(&confirmed))?;
         let uploaded = confirm_body
             .get(0)
             .and_then(|attachment| attachment.get("isUploaded"))
@@ -211,10 +258,16 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
         if !uploaded {
             // The M0 trap: an echo missing the s3pending key leaves
             // isUploaded false while every status on the way said 2xx.
-            return Err(AdapterError::Rejected {
+            let refusal = AdapterError::Rejected {
                 code: FailureCode::SubmitNoConfirmation,
                 detail: FailureDetail("confirm left isUploaded false".to_owned()),
-            });
+            };
+            eprintln!(
+                "tes: confirm saw {} -> {}",
+                confirmed.status,
+                adapter_verdict(&refusal)
+            );
+            return Err(refusal);
         }
         Ok(())
     }
@@ -374,20 +427,26 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
     async fn resource_state(&self, id: DraftId) -> Result<Value, AdapterError> {
         let draft = self.send(endpoints::read_draft_request(id)).await?;
         if draft.status == 200 {
-            if let Ok(value) = classify_read(&draft) {
+            if let Ok(value) = classified("read-draft", draft.status, classify_read(&draft)) {
                 if value.get("id").is_some() {
                     return Ok(value);
                 }
             }
         }
         let resource = self.send(endpoints::read_resource_request(id)).await?;
-        let value = classify_read(&resource)?;
+        let value = classified("read-resource", resource.status, classify_read(&resource))?;
         if value.get("id").is_some() {
             Ok(value)
         } else {
-            Err(AdapterError::Ambiguous(
-                AmbiguityCause::ReadBackIndeterminate,
-            ))
+            // A 200 that named no listing: the classifier passed it, so this
+            // is the one ambiguity on the write path no classifier logs.
+            classified(
+                "read-resource",
+                resource.status,
+                Err(AdapterError::Ambiguous(
+                    AmbiguityCause::ReadBackIndeterminate,
+                )),
+            )
         }
     }
 
@@ -638,7 +697,9 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
         fields: FieldSet,
         _now: Timestamp,
     ) -> Result<SubmitEvidence, AdapterError> {
-        let listing = Self::listing_from_field_set(&fields)?;
+        let listing = Self::listing_from_field_set(&fields).inspect_err(|error| {
+            eprintln!("tes: projection -> {}", adapter_verdict(error));
+        })?;
         let mut contents = Vec::with_capacity(fields.files.len());
         for file in &fields.files {
             let content =
@@ -651,7 +712,16 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
                     })?;
             contents.push(content);
         }
-        let id = self.create_listing(&listing, &contents).await?;
+        let id = self
+            .create_listing(&listing, &contents)
+            .await
+            .inspect_err(|error| {
+                // The whole-flow line, so a halted create can be read without
+                // reconstructing which of the seven steps its own line came
+                // from: the step line above says where, this says what the
+                // machine is about to be stepped with.
+                eprintln!("tes: create_listing -> {}", adapter_verdict(error));
+            })?;
         // The create has already answered with the durable identifier by the
         // time this read runs, so a read that cannot yet name the draft is
         // the JSON API lagging behind its own upload rather than a write
@@ -668,8 +738,20 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
                 )),
                 false,
             ),
-            Err(AdapterError::Ambiguous(_)) => (None, true),
-            Err(error) => return Err(error),
+            // The lag the 2026-09-18 create measured, named as such: the
+            // read did not settle, the create's identifier still stands, and
+            // the driver's own poll addresses it.
+            Err(AdapterError::Ambiguous(cause)) => {
+                eprintln!(
+                    "tes: submit read-back lagged ({}); the create's identifier stands",
+                    cause.name()
+                );
+                (None, true)
+            }
+            Err(error) => {
+                eprintln!("tes: submit -> {}", adapter_verdict(&error));
+                return Err(error);
+            }
         };
         Ok(SubmitEvidence {
             http_status: Some(200),

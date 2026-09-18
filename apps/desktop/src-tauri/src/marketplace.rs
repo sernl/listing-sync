@@ -429,10 +429,18 @@ pub(crate) async fn refresh_tes_session(jar: &CookieJar) -> Result<(CookieJar, b
     let transport = TesLive.build(&jar.header_value())?;
     let _renewed = tam_marketplace_tes::refresh_session(&transport)
         .await
+        .inspect_err(|why| eprintln!("tes: session renewal refused: {why}"))
         .map_err(|why| why.to_string())?;
     let principal = tam_marketplace_tes::read_seller_user_id(&transport)
         .await
+        .inspect_err(|why| eprintln!("tes: session identity read failed: {why}"))
         .map_err(|why| why.to_string())?;
+    // The verdict the check-in files, printed because the driver's own
+    // preflight can answer `reauth` seconds after this said the session was
+    // good: the two lines together are what tells a genuinely lapsed
+    // credential from a preflight that failed indeterminately and was read
+    // as reauth. Whether a principal came back, never who it was.
+    eprintln!("tes: session probe authenticated={}", principal.is_some());
     Ok((
         CookieJar::from_header_value(&transport.session_cookies()),
         principal.is_some(),

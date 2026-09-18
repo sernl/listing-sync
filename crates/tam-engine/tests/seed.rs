@@ -1975,6 +1975,7 @@ async fn a_publish_that_leased_before_its_create_is_woken_by_the_binding(pool: P
                 &tam_storage::AttemptVerdict {
                     state: "committed".to_owned(),
                     failure_code: None,
+                    ambiguity: None,
                     landing: tam_storage::LandingEffect::Landed {
                         id: tes(HELD),
                         lifecycle: tam_marketplace::RemoteLifecycle::Draft,
