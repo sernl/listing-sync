@@ -14,14 +14,14 @@
 
 use serde_json::json;
 use tam_domain::{
-    attempt_budget_spent, seller_clears, verification_settles, BlockCause, Effect, Input,
-    ItemOperation, ItemOutcome, MachineError, SellerEvent, StepBudget, SyncMachine, SyncState,
-    Transition,
+    attempt_budget_spent, seller_clears, verification_settles, BlockCause, CaptureCause, Effect,
+    Input, ItemOperation, ItemOutcome, MachineError, SellerEvent, StepBudget, SyncMachine,
+    SyncState, Transition,
 };
 use tam_marketplace::{
-    AdapterError, ChallengeKind, CreateStrategy, FetchReason, FieldSet, FormId, ListingLocator,
-    ListingState, MarketplaceAdapter, ObservedListing, Outcome, Pause, RecordedTitle,
-    RemoteLifecycle, RemoteListingId, RemovalPlan, RevisePlan, WriteAttemptId,
+    AdapterError, AmbiguityCause, ChallengeKind, CreateStrategy, FetchReason, FieldSet, FormId,
+    ListingLocator, ListingState, MarketplaceAdapter, ObservedListing, Outcome, Pause,
+    RecordedTitle, RemoteLifecycle, RemoteListingId, RemovalPlan, RevisePlan, WriteAttemptId,
 };
 use tam_types::{
     BindAnomaly, ConnectionId, ContentHash, FailureCode, FailureDetail, JobEventPayload,
@@ -291,6 +291,24 @@ fn challenge_verdict(challenge: ChallengeKind) -> (FailureCode, tam_types::Failu
     )
 }
 
+/// What a halted ambiguity tells the seller and the operator.
+///
+/// `FailureCode::Other` because the item's own `outcome` column already says
+/// `ambiguous` and no code in the closed set names one of the five causes;
+/// the cause travels in the detail, where it is the only thing on the item
+/// row that says which ambiguity this was. Before this, an ambiguous item
+/// settled with both columns NULL, so the halted tenant's own record said
+/// nothing at all about why.
+fn ambiguity_verdict(cause: AmbiguityCause) -> (FailureCode, FailureDetail) {
+    (
+        FailureCode::Other,
+        FailureDetail(format!(
+            "this write's fate is unknown ({}); an operator settles it rather than a retry",
+            cause.name()
+        )),
+    )
+}
+
 fn outcome_to_item(outcome: &Outcome) -> ItemVerdict {
     let (item_outcome, failure_code, failure_detail) = match outcome {
         Outcome::Committed { .. } => (ItemOutcome::Succeeded, None, None),
@@ -298,7 +316,10 @@ fn outcome_to_item(outcome: &Outcome) -> ItemVerdict {
         Outcome::Rejected { code, detail } => {
             (ItemOutcome::Failed, Some(*code), Some(detail.clone()))
         }
-        Outcome::Ambiguous { .. } => (ItemOutcome::Ambiguous, None, None),
+        Outcome::Ambiguous { cause, .. } => {
+            let (code, detail) = ambiguity_verdict(*cause);
+            (ItemOutcome::Ambiguous, Some(code), Some(detail))
+        }
         Outcome::Blocked { challenge } => {
             let (code, detail) = challenge_verdict(*challenge);
             (ItemOutcome::Blocked, Some(code), Some(detail))
@@ -677,6 +698,109 @@ const fn outcome_to_attempt_state(outcome: &Outcome) -> &'static str {
     }
 }
 
+/// The ambiguity a settled outcome names, where it names one.
+const fn outcome_ambiguity(outcome: &Outcome) -> Option<AmbiguityCause> {
+    match outcome {
+        Outcome::Ambiguous { cause, .. } => Some(*cause),
+        Outcome::Committed { .. }
+        | Outcome::Degraded { .. }
+        | Outcome::Rejected { .. }
+        | Outcome::Blocked { .. }
+        | Outcome::Skipped { .. } => None,
+    }
+}
+
+/// The ambiguity an adapter answer carries, read off the input on its way
+/// into the machine.
+///
+/// The machine drops it on the submit row — `ambiguous_submit` takes the
+/// attempt and not the cause, because a strand is reconciled by a search
+/// rather than by the cause of the strand. That is right for the transition
+/// table and wrong for the record: the capture action recorded 73 seconds
+/// into a create is the only trace of why that create became unknown, and
+/// without this it said `capture:Ambiguity` and nothing more. So the driver
+/// keeps what it fed in.
+const fn input_ambiguity(input: &Input) -> Option<AmbiguityCause> {
+    let answered = match input {
+        Input::SubmitResult(Err(error))
+        | Input::ReadBackResult(Err(error))
+        | Input::ReconcileResult(Err(error)) => error,
+        Input::PreflightResult(_)
+        | Input::IntentRecorded(_)
+        | Input::SubmitResult(Ok(_))
+        | Input::ReadBackResult(Ok(_))
+        | Input::ReconcileResult(Ok(_))
+        | Input::ResumeStranded { .. }
+        | Input::ChallengeCleared
+        | Input::ParkExpired
+        | Input::BudgetExhausted => return None,
+    };
+    match answered {
+        AdapterError::Ambiguous(cause) => Some(*cause),
+        AdapterError::Rejected { .. }
+        | AdapterError::Challenge(_)
+        | AdapterError::SessionExpired
+        | AdapterError::SchemaDrift(_)
+        | AdapterError::RateLimited { .. }
+        | AdapterError::NotSent(_)
+        | AdapterError::Uncaptured { .. } => None,
+    }
+}
+
+/// The capture action's label, which is the operator's first look at a
+/// halted create.
+///
+/// Three fields rather than two: the capture cause says which class of
+/// diagnostic this is, the ambiguity names which of the five ways the write
+/// became unknown, and the attempt names the row. `unknown` is written where
+/// nothing observed a cause — a schema drift or a verification mismatch
+/// captures diagnostics with no ambiguity at all — rather than leaving the
+/// field out, so the label's shape does not change with its content.
+fn capture_label(
+    cause: CaptureCause,
+    ambiguity: Option<AmbiguityCause>,
+    attempt: Option<WriteAttemptId>,
+) -> String {
+    format!(
+        "capture:{cause:?}:{}:{attempt:?}",
+        ambiguity.map_or("unknown", AmbiguityCause::name)
+    )
+}
+
+/// The ambiguity a machine state names, which is only ever a terminal one.
+const fn state_ambiguity(state: &SyncState) -> Option<AmbiguityCause> {
+    match state {
+        SyncState::Terminal(outcome) => outcome_ambiguity(outcome),
+        SyncState::AwaitingPreflight
+        | SyncState::PreflightAsserted { .. }
+        | SyncState::IntentRecorded { .. }
+        | SyncState::Submitted { .. }
+        | SyncState::AwaitingReadBack { .. }
+        | SyncState::Stranded { .. }
+        | SyncState::Parked { .. } => None,
+    }
+}
+
+/// Everything this run knows, at this instant, about which ambiguity it met.
+///
+/// Three sources because the capture effect can be raised before, with or
+/// after the answer that explains it: the machine emits `CaptureDiagnostics`
+/// alongside the read-back it has not yet taken (`reconcile`), alongside the
+/// terminal outcome that names the cause (`halt_ambiguous`), and one
+/// transition after the submit that produced it (`ambiguous_submit`). Newest
+/// first, so a read-back that answered a different ambiguity than the submit
+/// is the one recorded.
+fn ambiguity_now(
+    observed: Option<AmbiguityCause>,
+    pending: Option<&Input>,
+    state: &SyncState,
+) -> Option<AmbiguityCause> {
+    pending
+        .and_then(input_ambiguity)
+        .or_else(|| state_ambiguity(state))
+        .or(observed)
+}
+
 /// How many indeterminate preflights in a row stop being read as a transient.
 ///
 /// A preflight failure other than schema drift abandons the run, which is the
@@ -830,6 +954,11 @@ async fn drive_item<
         )?;
     }
     let mut current_attempt: Option<WriteAttemptId> = None;
+    // The last ambiguity an adapter answered this run with, kept because the
+    // machine's transition table does not: the capture label and the
+    // `write_attempt.ambiguity_cause` column are both written from it, and
+    // both said nothing before.
+    let mut observed_ambiguity: Option<AmbiguityCause> = None;
     // What the verification read last saw, so a bind records the lifecycle
     // the listing was observed in rather than the one its create convention
     // would imply.
@@ -1209,6 +1338,13 @@ async fn drive_item<
                                 let verdict = AttemptVerdict {
                                     state: "ambiguous".to_owned(),
                                     failure_code: None,
+                                    // Whatever this run observed, which for a
+                                    // run cut while polling is usually
+                                    // nothing: the column stays NULL rather
+                                    // than naming the stop as a cause, which
+                                    // it is not — the stop is why we gave up
+                                    // looking, not why the write is unknown.
+                                    ambiguity: observed_ambiguity,
                                     landing: addressed_by(&operation),
                                 };
                                 settle_open_attempt(
@@ -1332,11 +1468,17 @@ async fn drive_item<
                     .await?;
                 }
                 Effect::CaptureDiagnostics { attempt, cause } => {
+                    // Read here rather than remembered, because this effect
+                    // is raised before, with and after the answer that
+                    // explains it depending on which row emitted it.
+                    let ambiguity =
+                        ambiguity_now(observed_ambiguity, pending.as_ref(), &next.state);
+                    observed_ambiguity = ambiguity;
                     record_action(
                         ctx,
                         lease,
                         sequence,
-                        &format!("capture:{cause:?}:{attempt:?}"),
+                        &capture_label(cause, ambiguity, attempt),
                         now,
                     )
                     .await?;
@@ -1391,6 +1533,12 @@ async fn drive_item<
                     let attempt_verdict = AttemptVerdict {
                         state: outcome_to_attempt_state(outcome).to_owned(),
                         failure_code: verdict.failure_code,
+                        // The terminal outcome's own cause where it has one,
+                        // and it does on every ambiguous settle: the machine
+                        // computes it in `halt_ambiguous` and it was dropped
+                        // here, which is why every ambiguous row in the
+                        // ledger carries a NULL cause today.
+                        ambiguity: outcome_ambiguity(outcome).or(observed_ambiguity),
                         landing: outcome_to_landing(
                             &operation,
                             outcome,
@@ -1510,6 +1658,10 @@ async fn drive_item<
                 )?;
             }
             (_, Some(input)) => {
+                // Before the step, because the machine's submit row drops the
+                // cause and the capture action one transition later is where
+                // an operator looks for it.
+                observed_ambiguity = input_ambiguity(&input).or(observed_ambiguity);
                 let now = ctx.clock.now();
                 transition = next.step(input, LogicalInstant(now.0))?;
             }
@@ -1581,6 +1733,8 @@ async fn rate_refused_before_the_write(
     let verdict = AttemptVerdict {
         state: "abandoned".to_owned(),
         failure_code: None,
+        // Nothing was sent, so there is no ambiguity to name.
+        ambiguity: None,
         landing: addressed_by(operation),
     };
     settle_open_attempt(ctx, lease_ref, settling, &verdict, at).await?;
@@ -1689,6 +1843,24 @@ async fn preflight_failed(
     } else {
         BlockCause::Challenge
     };
+    // The one line that makes a refused claim diagnosable on the device.
+    // `ItemBlocked{cause: "reauth"}` reaches the server one second after the
+    // lease and says nothing about what the marketplace answered, so a
+    // session the check-in probe proved good seconds earlier reads as a
+    // lapsed credential with no evidence either way. This names the
+    // adapter's own verdict, the streak that widened it and whether the
+    // whole streak was the edge — enough to tell "Tes really said 401" from
+    // "the preflight failed indeterminately and indeterminate reads as
+    // reauth here". `eprintln!` because on Android this is the only channel
+    // that reaches logcat, and the adapter's own step line printed just
+    // above it names the request and status this verdict was read from.
+    eprintln!(
+        "driver: preflight blocked {} after {} failure(s), edge_only {}: seen {seen:?} from \
+         {error:?}",
+        block_cause_name(cause),
+        streak.failures,
+        streak.edge_only,
+    );
     if matches!(cause, BlockCause::Reauth) {
         ctx.ledger
             .gate_connection(&lease_ref, lease.inventory, at)
@@ -2011,10 +2183,15 @@ async fn notify(
 
 #[cfg(test)]
 mod tests {
-    use super::{attested_intent, bind_anomaly, intent_as_json, outcome_to_item};
+    use super::{
+        ambiguity_now, attested_intent, bind_anomaly, capture_label, intent_as_json,
+        outcome_to_item,
+    };
     use crate::vocabulary::{Attestation, BindDisposition};
-    use tam_domain::{ItemOperation, ItemOutcome};
-    use tam_marketplace::{FieldSet, Outcome, RemoteListingId};
+    use tam_domain::{CaptureCause, Input, ItemOperation, ItemOutcome, SyncState};
+    use tam_marketplace::{
+        AdapterError, AmbiguityCause, FieldSet, Outcome, RemoteListingId, WriteAttemptId,
+    };
     use tam_types::{
         BindAnomaly, CopyFormat, FailureCode, FailureDetail, FieldKey, MappingId, Uuid,
     };
@@ -2200,6 +2377,98 @@ mod tests {
             "a removal that took down a listing the mapping no longer holds names the one it \
              does, which a refusal against the binding state could not say without \
              contradicting itself"
+        );
+    }
+
+    /// The capture label names the ambiguity, which is the line an operator
+    /// reads first.
+    ///
+    /// The label was `capture:Ambiguity:Some(WriteAttemptId(..))` — a class
+    /// and a row id, with nothing saying which of the five ambiguities it
+    /// was. Pinned as a literal deliberately: this string is read by a human
+    /// out of `job_event`, so its shape is the contract, and the `unknown`
+    /// row is here because a schema-drift capture carries no ambiguity at
+    /// all and must still produce a four-field label.
+    #[test]
+    fn the_capture_label_names_which_ambiguity_it_was() {
+        let attempt = WriteAttemptId(Uuid([7; 16]));
+        assert_eq!(
+            capture_label(
+                CaptureCause::Ambiguity,
+                Some(AmbiguityCause::ResponseEventLost),
+                Some(attempt),
+            ),
+            format!("capture:Ambiguity:response_event_lost:{:?}", Some(attempt)),
+        );
+        assert_eq!(
+            capture_label(CaptureCause::SchemaDrift, None, None),
+            "capture:SchemaDrift:unknown:None",
+            "a capture with no ambiguity says so rather than dropping the field"
+        );
+    }
+
+    /// An ambiguous item's own row states the cause too.
+    ///
+    /// The attempt row is the operator's record and the item row is the
+    /// seller-facing one; both were blank on this path, so the failure
+    /// surface showed an ambiguous item with no code at all.
+    #[test]
+    fn an_ambiguous_item_carries_its_cause_in_the_detail() {
+        let verdict = outcome_to_item(&Outcome::Ambiguous {
+            attempt: tam_types::AttemptId(Uuid([9; 16])),
+            cause: AmbiguityCause::SubmitTimedOut,
+            evidence: tam_marketplace::EvidenceRef("none".to_owned()),
+        });
+        assert_eq!(verdict.outcome, ItemOutcome::Ambiguous);
+        assert_eq!(verdict.failure_code, Some(FailureCode::Other));
+        let detail = verdict.failure_detail.expect("an ambiguity states itself");
+        assert!(
+            detail.0.contains("submit_timed_out"),
+            "the item's detail spells the cause the way the ledger column spells it: {detail:?}"
+        );
+    }
+
+    /// The newest answer wins, and a terminal outcome outranks what the run
+    /// remembered.
+    ///
+    /// The capture effect is raised before, with and after the answer that
+    /// explains it depending on which transition emitted it, so the
+    /// precedence is the whole of whether the label says anything true.
+    #[test]
+    fn the_recorded_ambiguity_prefers_the_newest_answer() {
+        let pending = Input::ReadBackResult(Err(AdapterError::Ambiguous(
+            AmbiguityCause::ReadBackIndeterminate,
+        )));
+        assert_eq!(
+            ambiguity_now(
+                Some(AmbiguityCause::SubmitTimedOut),
+                Some(&pending),
+                &SyncState::AwaitingPreflight,
+            ),
+            Some(AmbiguityCause::ReadBackIndeterminate),
+            "the answer about to be stepped is newer than the one remembered"
+        );
+        assert_eq!(
+            ambiguity_now(
+                Some(AmbiguityCause::SubmitTimedOut),
+                None,
+                &SyncState::Terminal(Outcome::Ambiguous {
+                    attempt: tam_types::AttemptId(Uuid([3; 16])),
+                    cause: AmbiguityCause::NoDurableIdentifier,
+                    evidence: tam_marketplace::EvidenceRef("none".to_owned()),
+                }),
+            ),
+            Some(AmbiguityCause::NoDurableIdentifier),
+            "a settled outcome's own cause is the record, not the run's memory of the submit"
+        );
+        assert_eq!(
+            ambiguity_now(
+                Some(AmbiguityCause::SubmitTimedOut),
+                Some(&Input::ChallengeCleared),
+                &SyncState::AwaitingPreflight,
+            ),
+            Some(AmbiguityCause::SubmitTimedOut),
+            "an input that answers no ambiguity does not erase the one already observed"
         );
     }
 }

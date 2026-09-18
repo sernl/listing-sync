@@ -349,6 +349,7 @@ impl ItemLedger for PgLedger {
         let verdict = tam_storage::AttemptVerdict {
             state: verdict.state.clone(),
             failure_code: verdict.failure_code,
+            ambiguity: verdict.ambiguity,
             landing: to_storage_landing(&verdict.landing),
         };
         self.attempts
@@ -570,21 +571,28 @@ impl tam_engine_driver::ports::LedgerInspector for PgLedger {
         &self,
         mapping: tam_types::MappingId,
     ) -> Option<tam_engine_driver::ports::AttemptObservation> {
-        let row: Option<(String, bool, Option<String>, Option<String>, Option<i64>)> =
-            sqlx::query_as(
-                "SELECT state, settled_at IS NOT NULL, remote_id_kind, remote_url, \
-                        remote_numeric_id FROM write_attempt WHERE mapping_id = $1 \
-                 ORDER BY opened_at DESC LIMIT 1",
-            )
-            .bind(uuid::Uuid::from_bytes(mapping.0 .0))
-            .fetch_optional(&self.pool)
-            .await
-            .expect("the attempt row reads");
+        let row: Option<(
+            String,
+            bool,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<i64>,
+        )> = sqlx::query_as(
+            "SELECT state, settled_at IS NOT NULL, ambiguity_cause, remote_id_kind, \
+                    remote_url, remote_numeric_id FROM write_attempt WHERE mapping_id = $1 \
+             ORDER BY opened_at DESC LIMIT 1",
+        )
+        .bind(uuid::Uuid::from_bytes(mapping.0 .0))
+        .fetch_optional(&self.pool)
+        .await
+        .expect("the attempt row reads");
         row.map(
-            |(state, settled, remote_id_kind, remote_url, remote_numeric_id)| {
+            |(state, settled, ambiguity_cause, remote_id_kind, remote_url, remote_numeric_id)| {
                 tam_engine_driver::ports::AttemptObservation {
                     state,
                     settled,
+                    ambiguity_cause,
                     remote_id_kind,
                     remote_url,
                     remote_numeric_id,

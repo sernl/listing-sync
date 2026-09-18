@@ -62,12 +62,11 @@ The `absent` verdict reverts the row to `unbound`, clearing `binding_attempt` an
 The create requeues on the next lowering, which is the point of reverting rather than settling.
 
 Evidence the operator screen must show, all of it already stored: the settled `write_attempt` row for `binding_attempt` — its `intent`, `correlation_marker`, `opened_at`, `settled_at`, `failure_code` and `evidence_ref` (`crates/tam-storage/migrations/0005_job_ledger.sql:82-99`); the mapping's `ambiguous_since`; the item's job and its events; and any `binding_candidate` rows (`crates/tam-storage/migrations/0004_mapping.sql:157-167`).
-One field the screen needs is stored nowhere.
-`write_attempt.ambiguity_cause` exists at `crates/tam-storage/migrations/0005_job_ledger.sql:98` but no production code writes it — the only other references are a live example at `crates/tam-worker/examples/live_provision.rs:788` and the migration itself.
-`AttemptVerdict` carries no cause field (`crates/tam-storage/src/jobs.rs:1449-1456`), so the `AmbiguityCause` the machine computes at `crates/tam-domain/src/lib.rs:1075-1080` is discarded before it reaches the ledger.
-Closing that is in scope here: an attestation made without knowing which ambiguity occurred is a blind attestation, and the column is a shipped gap between schema and code rather than new surface.
-`AttemptVerdict` gains an `ambiguity: Option<AmbiguityCause>` field, the settle writes it in the `write_attempt` UPDATE beside `failure_code`, and a `const fn ambiguity_cause_to_db` joins `failure_code_to_db` in `crates/tam-storage/src/codec.rs:222-240` covering the five variants at `crates/tam-marketplace/src/lib.rs:144-150`.
-The column is unconstrained `text` (`crates/tam-storage/migrations/0005_job_ledger.sql:98`), so no migration follows.
+One field the screen needs was stored nowhere, and now is.
+`write_attempt.ambiguity_cause` has existed at `crates/tam-storage/migrations/0005_job_ledger.sql:98` since that migration and nothing populated it; the write-path diagnostics work closed that, so this section is a record of a landed decision rather than a plan.
+`AttemptVerdict` carries `ambiguity: Option<AmbiguityCause>` (`crates/tam-engine-driver/src/vocabulary.rs`, `crates/tam-storage/src/jobs.rs`), the settle writes it in the `write_attempt` UPDATE beside `failure_code`, and the driver's terminal settle fills it from `Outcome::Ambiguous`'s own cause.
+The one name across the column, the driver's `capture:` action label and the admin API is `AmbiguityCause::name` at `crates/tam-marketplace/src/lib.rs`, rather than the `ambiguity_cause_to_db` in `crates/tam-storage/src/codec.rs` this section first proposed: two of the three readers sit outside the storage crate, so a `pub(crate)` mapping there would have had the driver inventing a second spelling.
+The column is unconstrained `text` (`crates/tam-storage/migrations/0005_job_ledger.sql:98`), so no migration followed.
 
 ## 3. Halt interplay and ordering
 

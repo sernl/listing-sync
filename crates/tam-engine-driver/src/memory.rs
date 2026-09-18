@@ -54,6 +54,10 @@ struct Attempt {
     id: Uuid,
     state: String,
     settled: bool,
+    /// The `ambiguity_cause` column, held as the text the real settle writes
+    /// rather than as the enum, so a test asserting on it asserts on the
+    /// string that reaches the database.
+    ambiguity_cause: Option<String>,
     remote_id_kind: Option<String>,
     remote_url: Option<String>,
     remote_numeric_id: Option<i64>,
@@ -132,6 +136,7 @@ impl InMemoryLedger {
                     id: attempt,
                     state: "in_flight".to_owned(),
                     settled: false,
+                    ambiguity_cause: None,
                     remote_id_kind: None,
                     remote_url: None,
                     remote_numeric_id: None,
@@ -346,6 +351,7 @@ impl ItemLedger for InMemoryLedger {
                     id: new.attempt,
                     state: "in_flight".to_owned(),
                     settled: false,
+                    ambiguity_cause: None,
                     remote_id_kind: None,
                     remote_url: None,
                     remote_numeric_id: None,
@@ -377,6 +383,7 @@ impl ItemLedger for InMemoryLedger {
             }
             row.state.clone_from(&verdict.state);
             row.settled = true;
+            row.ambiguity_cause = verdict.ambiguity.map(|cause| cause.name().to_owned());
             row.remote_id_kind.clone_from(&kind);
             row.remote_url.clone_from(&url);
             row.remote_numeric_id = numeric;
@@ -579,6 +586,7 @@ impl LedgerInspector for InMemoryLedger {
             state.attempts.get(&mapping).map(|row| AttemptObservation {
                 state: row.state.clone(),
                 settled: row.settled,
+                ambiguity_cause: row.ambiguity_cause.clone(),
                 remote_id_kind: row.remote_id_kind.clone(),
                 remote_url: row.remote_url.clone(),
                 remote_numeric_id: row.remote_numeric_id,

@@ -480,6 +480,34 @@ pub async fn an_ambiguous_submit_halts_the_inventory<L: ItemLedger + LedgerInspe
         binding.binding_state, "unbound",
         "an ambiguous submit landed nothing, so there is nothing to bind"
     );
+    // The whole point of carrying the cause: an operator meeting this halt
+    // reads one string and knows which ambiguity it was. Every one of these
+    // three was NULL or absent before, so a halted tenant's own record said
+    // only that something was unknown.
+    let attempt = ledger
+        .attempt(lease.mapping)
+        .await
+        .expect("the run opened a fencing attempt");
+    assert_eq!(
+        (attempt.state.as_str(), attempt.ambiguity_cause.as_deref()),
+        ("ambiguous", Some("no_durable_identifier")),
+        "the settled attempt names which ambiguity halted it; a create with nothing to \
+         search for cannot be verified, whatever ended the submit"
+    );
+    let item = ledger.item(lease.item).await;
+    assert_eq!(
+        item.failure_code.as_deref(),
+        Some("Other"),
+        "the item's own row carries a code, so the failure surface shows the halt at all"
+    );
+    assert!(
+        item.failure_detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("no_durable_identifier")),
+        "the cause is spelled on the item the same way it is spelled on the attempt: \
+         {:?}",
+        item.failure_detail
+    );
 }
 
 /// A read-back that answers a condition rather than an observation abandons

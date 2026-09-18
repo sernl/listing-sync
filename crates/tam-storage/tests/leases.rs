@@ -688,6 +688,7 @@ async fn settling_a_landed_create_does_not_deadlock_a_move_deletion(app: PgPool)
     let verdict = AttemptVerdict {
         state: "committed".to_owned(),
         failure_code: None,
+        ambiguity: None,
         landing: LandingEffect::Landed {
             id: RemoteListingId::Tes {
                 url: LANDED.to_owned(),
@@ -1326,6 +1327,7 @@ async fn a_stale_holder_cannot_settle_its_attempt_after_a_steal(app: PgPool) {
             &AttemptVerdict {
                 state: "committed".to_owned(),
                 failure_code: None,
+                ambiguity: None,
                 landing: LandingEffect::Landed {
                     id: RemoteListingId::Tes {
                         url: "https://www.tes.com/teaching-resource/stale-9".to_owned(),
@@ -1381,6 +1383,7 @@ async fn a_stale_holder_cannot_settle_its_attempt_after_a_steal(app: PgPool) {
             &AttemptVerdict {
                 state: "committed".to_owned(),
                 failure_code: None,
+                ambiguity: None,
                 landing: LandingEffect::Landed {
                     id: RemoteListingId::Tes {
                         url: "https://www.tes.com/teaching-resource/stale-9".to_owned(),
@@ -4055,6 +4058,7 @@ async fn a_settle_and_an_open_on_one_mapping_do_not_deadlock(app: PgPool) {
     let verdict = AttemptVerdict {
         state: "committed".to_owned(),
         failure_code: None,
+        ambiguity: None,
         landing: LandingEffect::Landed {
             id: RemoteListingId::Tes {
                 url: "https://www.tes.com/teaching-resource/x-9".to_owned(),

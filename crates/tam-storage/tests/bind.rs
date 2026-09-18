@@ -403,6 +403,7 @@ async fn settle_attempt(
             &AttemptVerdict {
                 state: "committed".to_owned(),
                 failure_code: None,
+                ambiguity: None,
                 landing,
             },
             at,

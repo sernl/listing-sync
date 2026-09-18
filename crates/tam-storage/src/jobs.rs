@@ -48,7 +48,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use tam_domain::{
     attempt_budget_spent, ItemOperation, ItemOutcome, JobItemId, SellerEvent, LEASE_TTL_SECS,
 };
-use tam_marketplace::{IdempotencyKey, RemoteLifecycle, RemoteListingId};
+use tam_marketplace::{AmbiguityCause, IdempotencyKey, RemoteLifecycle, RemoteListingId};
 use tam_types::{
     Actor, FailureCode, FailureDetail, InventoryId, JobEventPayload, JobId, MappingId, Marketplace,
     NotificationCounts, NotificationKind, OrgId, Stamp, SystemComponent, Timestamp, Uuid,
@@ -2955,6 +2955,12 @@ impl LandingEffect {
 pub struct AttemptVerdict {
     pub state: String,
     pub failure_code: Option<FailureCode>,
+    /// Which ambiguity this was, where the state is `ambiguous`, written to
+    /// `write_attempt.ambiguity_cause`. The column has existed since
+    /// migration 0005 and nothing populated it until this field arrived, so
+    /// an operator meeting a halted tenant had an `ambiguous` row with no
+    /// statement of which ambiguity halted it.
+    pub ambiguity: Option<AmbiguityCause>,
     /// What the write did to the listing it addressed. Without it the ledger
     /// cannot say what it created, so reconciliation, verification and dedup
     /// have nothing to address.
@@ -3246,6 +3252,7 @@ impl WriteAttemptRepo {
         let AttemptVerdict {
             state,
             failure_code,
+            ambiguity,
             landing,
         } = verdict;
         let remote = landing
@@ -3268,7 +3275,12 @@ impl WriteAttemptRepo {
         // mapping on evidence from a run that no longer owns the item.
         assert_current_epoch(&mut tx, lease).await?;
         let updated = sqlx::query!(
-            "UPDATE write_attempt              SET state = $4, settled_at = $5, failure_code = $6,                  remote_id_kind = $7, remote_url = $8, remote_numeric_id = $9              WHERE org_id = $1 AND id = $2 AND lease_epoch = $3                AND state = 'in_flight'",
+            "UPDATE write_attempt \
+             SET state = $4, settled_at = $5, failure_code = $6, \
+                 ambiguity_cause = $10, \
+                 remote_id_kind = $7, remote_url = $8, remote_numeric_id = $9 \
+             WHERE org_id = $1 AND id = $2 AND lease_epoch = $3 \
+               AND state = 'in_flight'",
             org_db,
             uuid_to_db(attempt),
             lease.lease_epoch,
@@ -3278,6 +3290,10 @@ impl WriteAttemptRepo {
             remote.as_ref().map(|remote| remote.kind),
             remote.as_ref().and_then(|remote| remote.url),
             remote.as_ref().and_then(|remote| remote.numeric_id),
+            // The one name the column, the driver's action label and the
+            // admin API all carry; `None` leaves the column NULL rather than
+            // naming a cause nothing observed.
+            ambiguity.map(AmbiguityCause::name),
         )
         .execute(&mut *tx)
         .await?;

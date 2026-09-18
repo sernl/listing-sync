@@ -702,6 +702,7 @@ mod tests {
                     &AttemptVerdict {
                         state: "committed".to_owned(),
                         failure_code: None,
+                        ambiguity: None,
                         landing: LandingEffect::None,
                     },
                     AT,

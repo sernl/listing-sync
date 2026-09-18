@@ -294,6 +294,9 @@ pub struct ItemObservation {
 pub struct AttemptObservation {
     pub state: String,
     pub settled: bool,
+    /// The text the settle wrote to `write_attempt.ambiguity_cause`, so a
+    /// driver test reads the same string an operator would.
+    pub ambiguity_cause: Option<String>,
     pub remote_id_kind: Option<String>,
     pub remote_url: Option<String>,
     pub remote_numeric_id: Option<i64>,

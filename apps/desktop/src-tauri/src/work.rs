@@ -622,6 +622,18 @@ impl<P: DevicePlane> Marketplaces<P> for LiveMarketplaces {
         payloads: &'a DevicePayloads<&'a P>,
     ) -> RunFuture<'a> {
         Box::pin(async move {
+            // The anchor every other line on the device is read against: the
+            // adapter's step lines and the transport's exchange lines carry
+            // no item, so without this a logcat capture of two concurrent
+            // runs cannot be separated. Identifiers only — no field, no
+            // title, nothing the seller authored.
+            eprintln!(
+                "driver: run item {:?} {:?} on {:?} attempt {}",
+                order.lease.item,
+                order.lease.operation,
+                order.lease.inventory,
+                order.lease.attempt_count,
+            );
             // The marketplace is the inventory's, and `execute` has already
             // refused an order whose inventory is not the one it gated on.
             match order.lease.inventory.marketplace() {

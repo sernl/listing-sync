@@ -332,6 +332,68 @@ fn a_confirm_that_never_flips_is_a_missing_confirmation() {
     );
 }
 
+/// The bucket answered 503 and the upload's fate is unknown.
+///
+/// The pinned cause is the one the device's own log line names, and that
+/// pairing is the point of the test: the step line reads
+/// `tes: s3 saw 503 -> ambiguous:read_back_indeterminate`, so the string in
+/// the log and the string in `write_attempt.ambiguity_cause` are the same
+/// string and an operator can read one against the other. It also pins
+/// which branch of `classify_write_status` a 5xx takes: 5xx is not one of
+/// the statuses that classifier names, so it falls to the catch-all
+/// ambiguity rather than to a rejection — a POST that got as far as S3 may
+/// have stored the object.
+///
+/// The confirm never runs, which the fully-consumed assertion proves: an
+/// upload whose fate is unknown must not be followed by a handshake that
+/// would read `isUploaded: false` and report a clean refusal.
+#[test]
+fn an_s3_server_error_leaves_the_upload_ambiguous() {
+    let file_id = FileId(Uuid([0x21; 16]));
+    let content = FileContent {
+        file_name: "pack.pdf".to_owned(),
+        content_type: "application/pdf".to_owned(),
+        bytes: b"%PDF-1.4 tiny".to_vec(),
+    };
+    let presign_body = presign_response();
+    let upload = endpoints::parse_presign(&presign_body, "pack.pdf", "application/pdf")
+        .expect("the fixture presign parses");
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::presign_request(DRAFT, "pack.pdf", "TEMP-0"),
+                response: ok(&presign_body),
+            },
+            Interaction {
+                request: endpoints::s3_upload_request(
+                    &upload,
+                    FilePart {
+                        part_name: "file".to_owned(),
+                        file_name: "pack.pdf".to_owned(),
+                        content_type: "application/pdf".to_owned(),
+                        bytes: content.bytes.clone(),
+                    },
+                ),
+                response: status(503),
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![(file_id, content.clone())]);
+    let unknown = futures::executor::block_on(adapter.upload_file(DRAFT, 0, &content));
+    assert_eq!(
+        unknown,
+        Err(AdapterError::Ambiguous(
+            AmbiguityCause::ReadBackIndeterminate
+        )),
+        "a 5xx from the bucket is a POST whose fate is unknown, never a refusal"
+    );
+    assert_eq!(
+        adapter.transport().remaining(),
+        0,
+        "the flow stopped at the upload; no confirm was attempted"
+    );
+}
+
 #[test]
 fn delete_reports_success_only_after_the_read_returns_not_found() {
     let cassette = Cassette {

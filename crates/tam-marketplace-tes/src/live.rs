@@ -537,6 +537,8 @@ async fn send_over_capped(
     cookies: Option<&SessionCookies>,
 ) -> Result<HttpResponse, TransportError> {
     let bounded = matches!(request.auth, RequestAuth::Redirected);
+    let method = method_name(request.method);
+    let target = wire_target(&request.url);
     let builder = match request.method {
         Method::Get => client.get(&request.url),
         Method::Post => client.post(&request.url),
@@ -557,10 +559,24 @@ async fn send_over_capped(
         None => builder,
     };
     let builder = apply_body(builder, request.body)?;
-    let response = builder
-        .send()
-        .await
-        .map_err(|error| classify_reqwest(&error))?;
+    // The one ambient clock read in this crate, and it measures nothing the
+    // system decides on: the elapsed time is printed and never returned, so
+    // no behaviour depends on it.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the exchange's duration is the diagnostic; nothing reads it back"
+    )]
+    let started = std::time::Instant::now();
+    let response = builder.send().await.map_err(|error| {
+        trace_wire(
+            method,
+            &target,
+            &format!("error:{}", reqwest_kind(&error)),
+            0,
+            started,
+        );
+        classify_reqwest(&error)
+    })?;
     let status = response.status().as_u16();
     // Before the projection, and the order is the point: the rotation is
     // taken off the real header map, into the holder, and the allow-list then
@@ -572,21 +588,123 @@ async fn send_over_capped(
     // `.bytes()` not `.text()`: text decodes lossily and would silently
     // corrupt every download bundle.
     let body = if bounded {
-        bounded_body(response, cap).await?
+        bounded_body(response, cap).await
     } else {
         response
             .bytes()
             .await
             .map_err(|error| TransportError::AfterSend {
                 detail: error.to_string(),
-            })?
-            .to_vec()
+            })
+            .map(|bytes| bytes.to_vec())
     };
+    // After the body, not after the headers: a status that arrived in two
+    // seconds and a body that took ninety are the same exchange, and the
+    // 2026-09-18 create is exactly that shape.
+    match &body {
+        Ok(bytes) => trace_wire(method, &target, &status.to_string(), bytes.len(), started),
+        Err(error) => trace_wire(
+            method,
+            &target,
+            &format!("{status} then body-{}", transport_kind(error)),
+            0,
+            started,
+        ),
+    }
     Ok(HttpResponse {
         status,
-        body,
+        body: body?,
         headers,
     })
+}
+
+/// One line per live HTTP exchange, on stderr because that is where the
+/// Android client's output reaches logcat (`RustStdoutStderr`) and the device
+/// printed nothing at all during the 2026-09-18 create.
+///
+/// What it may carry is fixed by what it omits: no header, no cookie, no body
+/// and no query string. A Tes url's query carries search terms and a
+/// presigned S3 url's query *is* the credential, so the target is host and
+/// path only — see [`wire_target`].
+fn trace_wire(
+    method: &str,
+    target: &str,
+    outcome: &str,
+    bytes: usize,
+    started: std::time::Instant,
+) {
+    eprintln!(
+        "tes: {method} {target} -> {outcome} in {} ms, {bytes} bytes body",
+        started.elapsed().as_millis()
+    );
+}
+
+const fn method_name(method: Method) -> &'static str {
+    match method {
+        Method::Get => "GET",
+        Method::Post => "POST",
+        Method::Put => "PUT",
+        Method::Delete => "DELETE",
+    }
+}
+
+/// A url's host and path, with the query and fragment dropped.
+///
+/// Dropped rather than truncated: the presigned upload's query holds the
+/// policy and its signature, which is a credential, and this line is
+/// deliberately safe to paste into an issue. A url this cannot parse is
+/// reported as `?` rather than printed raw, for the same reason.
+fn wire_target(url: &str) -> String {
+    let Some(host) = host_of(url) else {
+        return "?".to_owned();
+    };
+    let after_scheme = url.split_once("://").map_or("", |(_, rest)| rest);
+    let path = after_scheme
+        .find('/')
+        .and_then(|start| after_scheme.get(start..))
+        .unwrap_or("/");
+    let path = path
+        .split_once(['?', '#'])
+        .map_or(path, |(before, _)| before);
+    format!("{host}{path}")
+}
+
+/// Which reqwest failure this was, in reqwest's own vocabulary.
+///
+/// The distinction the seam then discards: `classify_reqwest` maps every
+/// failure that is not a connect failure to `AfterSend`, which
+/// `classify_transport` maps to `Ambiguous(ResponseEventLost)`. That is the
+/// right classification — a request that left and was not answered may have
+/// landed — and it is why a 150-second upload timeout and a connection reset
+/// in the middle of the multipart body reach the ledger as the same cause.
+/// This line is where they stop being indistinguishable.
+fn reqwest_kind(error: &reqwest::Error) -> &'static str {
+    if error.is_timeout() {
+        "timeout"
+    } else if error.is_connect() {
+        "connect"
+    } else if error.is_request() {
+        "request"
+    } else if error.is_body() {
+        "body"
+    } else if error.is_decode() {
+        "decode"
+    } else if error.is_redirect() {
+        "redirect"
+    } else {
+        "other"
+    }
+}
+
+/// Which seam-level class a transport failure is, for the body half of the
+/// exchange where the reqwest error has already been mapped.
+const fn transport_kind(error: &TransportError) -> &'static str {
+    match error {
+        TransportError::NotSent(_) => "not-sent",
+        TransportError::AfterSend { .. } => "after-send",
+        TransportError::Refused { .. } => "refused",
+        TransportError::Harness { .. } => "harness",
+    }
 }
 
 /// The largest body a marketplace-named hop may return.
@@ -709,7 +827,7 @@ mod tests {
     use tam_marketplace::transport::{HttpRequest, RequestAuth, ResponseHeader, TransportError};
 
     use super::{
-        bare_client, bounded_body, route, send_over, send_over_capped, session_client,
+        bare_client, bounded_body, route, send_over, send_over_capped, session_client, wire_target,
         HttpResponse, ReqwestTransport, Route, SessionCookies, MAX_REDIRECTS, REDIRECTED_BODY_MAX,
         SESSION_HOST,
     };
@@ -1399,6 +1517,40 @@ mod tests {
         let cookies = held();
         cookies.absorb(&reqwest::header::HeaderMap::new());
         assert_eq!(cookies.header(), "TESSession=secret");
+    }
+
+    /// The traced target carries no query string, and that is a credential
+    /// rule rather than tidiness.
+    ///
+    /// A presigned S3 url's query *is* its authorisation — the policy and
+    /// the signature ride in it — so a log line that printed the url would
+    /// hand an upload credential to anyone the line reaches, which on
+    /// Android is logcat and every crash report built from it. The Tes case
+    /// is milder and still real: a catalogue url's query carries what the
+    /// seller searched for.
+    #[test]
+    fn a_traced_target_never_carries_a_query_string() {
+        assert_eq!(
+            wire_target(
+                "https://tes-uploads.s3.amazonaws.com/k/9001?X-Amz-Signature=deadbeef&policy=abc"
+            ),
+            "tes-uploads.s3.amazonaws.com/k/9001",
+            "the signature is the credential and must not be printed"
+        );
+        assert_eq!(
+            wire_target("https://www.tes.com/api/v2/resources/9001/draft"),
+            "www.tes.com/api/v2/resources/9001/draft"
+        );
+        assert_eq!(
+            wire_target("https://www.tes.com"),
+            "www.tes.com/",
+            "a url with no path still names one"
+        );
+        assert_eq!(
+            wire_target("not a url"),
+            "?",
+            "an unparseable destination is reported rather than printed raw"
+        );
     }
 
     /// A loopback server answering one 200 with the given `Set-Cookie` lines.
