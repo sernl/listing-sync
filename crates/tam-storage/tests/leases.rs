@@ -18,9 +18,9 @@ use tam_marketplace::{
 use tam_storage::{
     revive_by_gap, revive_on, settle_if_complete, AttemptIntent, AttemptRef, AttemptVerdict,
     BudgetGrant, Charged, ClaimPolicy, ConnectionAudit, ConnectionRepo, DeviceClaim, DeviceRef,
-    HaltCause, HaltRepo, ItemVerdict, JobOrigin, JobReadRepo, JobRepo, LandingEffect, LeaseRepo,
-    LeasedItem, MappingRepo, Minted, NewAttempt, NewJob, NewJobItem, NewOutboxMessage, OutboxRepo,
-    ProductRepo, RateBudgetRepo, StorageError, WriteAttemptRepo, AWAITING_COUNTERPART,
+    HaltCause, HaltRepo, HandedBack, ItemVerdict, JobOrigin, JobReadRepo, JobRepo, LandingEffect,
+    LeaseRepo, LeasedItem, MappingRepo, Minted, NewAttempt, NewJob, NewJobItem, NewOutboxMessage,
+    OutboxRepo, ProductRepo, RateBudgetRepo, StorageError, WriteAttemptRepo, AWAITING_COUNTERPART,
     AWAITING_MARKETPLACE_ANSWER, AWAITING_SELLER_SIGNIN, REAUTH_REQUIRED,
 };
 use tam_types::{
@@ -3314,6 +3314,151 @@ async fn a_release_from_a_run_that_no_longer_holds_the_item_is_refused(app: PgPo
         matches!(leases.release(&stale).await, Err(StorageError::StaleLease)),
         "and a second release has nothing to release, which is the fence answering rather \
          than a write silently doing nothing"
+    );
+}
+
+/// A hand-back from a run that sent nothing charges an attempt and requeues,
+/// which is what the reaper would have done at the expiry.
+///
+/// The point is the timing rather than the disposition. Holding the lease to
+/// its TTL was the only way to end an undecided run, and the live-lease
+/// predicate is per marketplace: for those ten minutes the claim answered
+/// idle to the very device that held the item, and every sibling on that
+/// marketplace waited behind it. An item that burns two or three undecided
+/// runs burns two or three of them.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_hand_back_with_nothing_in_flight_charges_and_requeues_at_once(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xC1, true).await;
+    enqueue_one(&engine, &tenant, 0xC2, 0xC3).await;
+    let leases = LeaseRepo::new(engine.clone());
+    let held = claim(&app, tenant.org, "stopping-device", 600)
+        .await
+        .expect("the item leases");
+
+    let handed = leases
+        .hand_back(&held.lease_ref(), ATTEMPTS_MAX, T0)
+        .await
+        .expect("the holder hands back");
+    assert_eq!(
+        handed,
+        HandedBack::Requeued,
+        "nothing was in flight, so there is no fence to wait behind and the item is work \
+         to be done again"
+    );
+
+    let row: (String, i32, i64, Option<String>) = sqlx::query_as(
+        "SELECT state, attempt_count, lease_epoch, lease_owner FROM job_item LIMIT 1",
+    )
+    .fetch_one(&engine)
+    .await
+    .expect("the item reads");
+    assert_eq!(
+        (row.0.as_str(), row.1, row.2, row.3.as_deref()),
+        ("queued", 1, held.lease_epoch + 1, None),
+        "back on the queue, one attempt paid so a deterministic refusal cannot be served \
+         for ever, and the epoch bumped so this holder's writes are fenced out"
+    );
+
+    assert!(
+        matches!(
+            leases.hand_back(&held.lease_ref(), ATTEMPTS_MAX, T0).await,
+            Err(StorageError::StaleLease)
+        ),
+        "and a second hand-back has nothing to hand back, which is the fence answering \
+         rather than the item being charged twice"
+    );
+}
+
+/// A hand-back from a run whose create may have landed parks the item on the
+/// marketplace's answer instead, keeping the epoch its attempt is keyed by.
+///
+/// This is the disposition that must not be a requeue. The standing attempt is
+/// the only fence against a second live listing, and a queued create is one
+/// the next claim creates again. It is also why the hand-back names no
+/// disposition: the device knows it stopped, and the server is what knows
+/// there is a write in flight under this epoch and a mapping still unbound.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_hand_back_with_a_write_in_flight_parks_rather_than_requeueing(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    let tenant = seed_tenant(&app, 0xC4, true).await;
+    enqueue_one(&engine, &tenant, 0xC5, 0xC6).await;
+    let leases = LeaseRepo::new(engine.clone());
+    let held = claim(&app, tenant.org, "stranding-device", 600)
+        .await
+        .expect("the item leases");
+    WriteAttemptRepo::new(engine.clone())
+        .open(
+            &held.lease_ref(),
+            Uuid(*uuid::Uuid::new_v4().as_bytes()),
+            &NewAttempt {
+                mapping: tenant.mapping,
+                intent: &intent(),
+                stamp: Stamp {
+                    at: T0,
+                    actor: Actor::System(SystemComponent::Engine),
+                },
+            },
+        )
+        .await
+        .expect("the holder opens its fencing attempt");
+
+    let handed = leases
+        .hand_back(&held.lease_ref(), ATTEMPTS_MAX, T0)
+        .await
+        .expect("the holder hands back");
+    assert_eq!(
+        handed,
+        HandedBack::Parked,
+        "a write that may have landed is not work to be redone"
+    );
+
+    let row: (String, Option<String>, i32, i64, Option<String>) = sqlx::query_as(
+        "SELECT state, blocked_on, attempt_count, lease_epoch, lease_owner FROM job_item \
+         LIMIT 1",
+    )
+    .fetch_one(&engine)
+    .await
+    .expect("the item reads");
+    assert_eq!(
+        (
+            row.0.as_str(),
+            row.1.as_deref(),
+            row.2,
+            row.3,
+            row.4.as_deref()
+        ),
+        (
+            "parked_live",
+            Some(AWAITING_MARKETPLACE_ANSWER),
+            0,
+            held.lease_epoch,
+            None
+        ),
+        "parked where the claim's reconcile arm serves it, charged nothing, and at the \
+         epoch the standing attempt is keyed by — a bump would fence the reconcile out of \
+         the very attempt it exists to settle"
+    );
+
+    let attempts: Vec<String> = sqlx::query_scalar("SELECT state FROM write_attempt")
+        .fetch_all(&engine)
+        .await
+        .expect("the attempt rows read");
+    assert_eq!(
+        attempts,
+        vec!["in_flight".to_owned()],
+        "and the fence is still standing"
+    );
+
+    // The claim serves it straight back rather than after a TTL, which is the
+    // whole of the fix: the reconcile is the next poll's work.
+    let revived = claim(&app, tenant.org, "stranding-device", 600)
+        .await
+        .expect("the parked create is served for reconciliation at once");
+    assert_eq!(
+        (revived.lease_epoch, revived.stranded_attempt.is_some()),
+        (held.lease_epoch, true),
+        "at the same epoch, carrying the attempt to reconcile: {revived:?}"
     );
 }
 

@@ -638,6 +638,15 @@ pub enum LedgerCall {
         event: SellerEvent,
         at_ms: i64,
     },
+    /// The lease, handed back by a run that decided nothing.
+    ///
+    /// No disposition: where the item goes is the server's decision, taken
+    /// from the state it holds rather than from anything the device asserts.
+    /// See [`crate::ports::ItemLedger::hand_back`].
+    HandBack {
+        lease: LeaseRef,
+        at_ms: i64,
+    },
 }
 
 impl LedgerCall {
@@ -657,6 +666,7 @@ impl LedgerCall {
             | Self::RequestGrant { lease, .. }
             | Self::Renew { lease, .. }
             | Self::RecordEvent { lease, .. }
+            | Self::HandBack { lease, .. }
             | Self::Notify { lease, .. } => lease,
         }
     }
@@ -676,6 +686,7 @@ impl LedgerCall {
             | Self::HaltThisTenant { at_ms, .. }
             | Self::RequestGrant { at_ms, .. }
             | Self::RecordEvent { at_ms, .. }
+            | Self::HandBack { at_ms, .. }
             | Self::Notify { at_ms, .. } => Some(*at_ms),
         }
     }

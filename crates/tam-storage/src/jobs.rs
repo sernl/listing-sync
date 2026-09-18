@@ -131,6 +131,19 @@ pub enum Charged {
     Settled,
 }
 
+/// What a hand-back did with the item, as three answers rather than a bool.
+///
+/// `Parked` is the one that is not a retry: the write may have landed, so the
+/// item waits where the claim's reconcile arm finds it and the create's fence
+/// stays standing. The other two are [`Charged`]'s own answers, restated here
+/// so a caller reads one vocabulary for the whole disposition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandedBack {
+    Parked,
+    Requeued,
+    Settled,
+}
+
 /// What one revive pass did, as two numbers rather than one sum.
 ///
 /// A pass that relabelled three parked creates and revived nothing is not
@@ -1907,6 +1920,94 @@ impl LeaseRepo {
             return Err(StorageError::StaleLease);
         }
         Ok(())
+    }
+
+    /// Disposes of a leased item the way the reaper would have disposed of it
+    /// when the lease expired — now, because the holder says it has stopped.
+    ///
+    /// This is the whole of what an undecided run needs and it is deliberately
+    /// not a choice the holder makes. Two dispositions exist and the item's own
+    /// state picks between them:
+    ///
+    /// - A create with a write attempt still in flight under this epoch, whose
+    ///   mapping is not bound, is parked on [`AWAITING_MARKETPLACE_ANSWER`],
+    ///   exactly as [`Self::expire_and_steal`] parks one. The attempt is the
+    ///   only fence against a second live listing and stays standing;
+    ///   requeueing such an item would let the next claim create the listing
+    ///   again. Charged nothing and epoch untouched, both for the reaper's own
+    ///   reasons: the epoch is what the standing attempt is keyed by, and the
+    ///   claim's reconcile arm is what serves the item next.
+    /// - Anything else is [`Self::charge_and_requeue`]: back on the queue
+    ///   having paid one attempt, or settled failed where that attempt was the
+    ///   last. Charging is what keeps a deterministic refusal from being served
+    ///   again for ever.
+    ///
+    /// Why it exists at all: before it, a run that decided nothing could only
+    /// stop calling, and the item kept its lease for the rest of its TTL. The
+    /// live-lease predicate in [`Self::claim_for_device`] is per marketplace,
+    /// so an item nobody was working held its seller's whole queue for that
+    /// span while the claim answered idle — and a create that strands once and
+    /// reconciles once spent two of them.
+    ///
+    /// Two transactions in the requeue case rather than one, because
+    /// `charge_and_requeue` locks the owning job and reconciles its deletion.
+    /// The second is epoch-fenced like the first, so an item stolen in between
+    /// answers `StaleLease` instead of being disposed of twice.
+    pub async fn hand_back(
+        &self,
+        lease: &LeaseRef,
+        attempts_max: i32,
+        now: Timestamp,
+    ) -> Result<HandedBack, StorageError> {
+        let LeaseRef {
+            org,
+            item,
+            lease_epoch,
+        } = *lease;
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let parked = sqlx::query!(
+            "UPDATE job_item ji \
+             SET state = 'parked_live', blocked_on = $4, park_expires_at = NULL, \
+                 lease_owner = NULL, lease_expires_at = NULL \
+             WHERE ji.org_id = $1 AND ji.id = $2 AND ji.lease_epoch = $3 \
+               AND ji.state IN ('leased', 'running', 'verifying') \
+               AND ji.operation = 'create' \
+               AND EXISTS (SELECT 1 FROM write_attempt wa \
+                     WHERE wa.org_id = ji.org_id AND wa.job_item_id = ji.id \
+                       AND wa.state = 'in_flight' \
+                       AND wa.lease_epoch = ji.lease_epoch) \
+               AND NOT EXISTS (SELECT 1 FROM mapping m \
+                     WHERE m.org_id = ji.org_id AND m.id = ji.mapping_id \
+                       AND m.binding_state = 'bound')",
+            uuid_to_db(org.0),
+            uuid_to_db(item.0),
+            lease_epoch,
+            AWAITING_MARKETPLACE_ANSWER,
+        )
+        .execute(&mut *tx)
+        .await?;
+        if parked.rows_affected() > 0 {
+            tx.commit().await?;
+            return Ok(HandedBack::Parked);
+        }
+        // Nothing was parked, so nothing was written: the read this statement
+        // performed is the only thing to discard.
+        tx.rollback().await?;
+        let charged = self
+            .charge_and_requeue(
+                lease,
+                attempts_max,
+                Some(FailureDetail(
+                    "the device that claimed this item stopped without deciding it".to_owned(),
+                )),
+                now,
+            )
+            .await?;
+        Ok(match charged {
+            Charged::Requeued => HandedBack::Requeued,
+            Charged::Settled => HandedBack::Settled,
+        })
     }
 
     /// Every fenced write shares this shape: the epoch must still match, and

@@ -830,9 +830,15 @@ pub enum SyncState {
     /// at, which is what `every_committed_terminal_follows_a_read` exists to
     /// refuse.
     ///
-    /// No input carries the machine forward from here. The run is over as far
-    /// as the machine is concerned, and the item's fate belongs to the claim
-    /// that serves it next and steps a fresh machine through `ResumeStranded`.
+    /// One input carries the machine forward from here, and it is the same
+    /// one a fresh machine is stepped through on a later claim:
+    /// `ResumeStranded`, naming the attempt this state already holds. The
+    /// run that stranded the create is the cheapest place to reconcile it —
+    /// it holds the lease, the session and the seller's own catalogue
+    /// access — and deferring it to another claim costs a whole lease TTL
+    /// during which this marketplace's queue is held by an item nobody is
+    /// working. Every other input is inapplicable, so the state still says
+    /// "a write went out and its fate is unknown".
     ///
     /// `BudgetExhausted` is the one exception and settles this `Ambiguous`,
     /// because a write did go out. Every non-terminal state must reach a
@@ -1101,9 +1107,10 @@ impl SyncMachine {
             SyncState::IntentRecorded { attempt, schema } => {
                 self.intent_recorded_rows(input, attempt, schema, now)
             }
-            SyncState::Submitted { .. } | SyncState::Stranded { .. } | SyncState::Terminal(_) => {
+            SyncState::Submitted { .. } | SyncState::Terminal(_) => {
                 Err(MachineError::InputNotApplicable)
             }
+            SyncState::Stranded { attempt, .. } => self.stranded_rows(input, attempt),
             SyncState::AwaitingReadBack { attempt, .. } => {
                 self.awaiting_read_back_rows(input, attempt, now)
             }
@@ -1142,72 +1149,7 @@ impl SyncMachine {
             // and the reason it is an input rather than a second constructor:
             // the state it reaches is established by a transition like every
             // other, so the table stays the whole specification.
-            //
-            // It reaches the same state the ambiguous-submit row reaches, and
-            // emits the same search, because the situation is the same one —
-            // a create whose fate the ledger cannot determine. What differs is
-            // how it was arrived at, and nothing downstream depends on that.
-            Input::ResumeStranded { attempt, recorded } => {
-                if !matches!(self.operation, ItemOperation::Create) {
-                    return Err(MachineError::ResumeNotACreate);
-                }
-                // How the create is identified is the strategy's to say, and
-                // the two that can be searched are searched differently: a
-                // marker is unique and matched by substring, a recorded title
-                // is not unique and is matched exactly and narrowed to the
-                // state a create leaves. `HaltOnAmbiguity` embeds nothing and
-                // leaves nothing to narrow on, which is what its name says.
-                let locator = match self.strategy {
-                    CreateStrategy::CorrelationMarker { .. } => ListingLocator::Marker {
-                        marker: marker_for(attempt),
-                        inventory: self.inventory,
-                    },
-                    // A draft-then-publish create leaves its listing in a
-                    // state the seller's own catalogue walk exposes, so the
-                    // narrowing that makes a non-unique title usable is
-                    // available exactly where this strategy is configured.
-                    CreateStrategy::DraftThenPublish { .. } => ListingLocator::Recorded {
-                        title: recorded,
-                        inventory: self.inventory,
-                    },
-                    // Ambiguous, and one item's worth of it. Every other
-                    // ambiguity row halts the tenant's inventory, and is right
-                    // to: an ambiguity there means this tenant's automation has
-                    // stopped being safe to continue. Here it means only that
-                    // this build configures no strategy the search can use,
-                    // which is equally true of every item in the queue and is
-                    // not a reason to stop it. The claim declines to serve a
-                    // stranded create at all where that is so; this arm is what
-                    // holds if one ever arrives anyway, and it costs one item.
-                    //
-                    // The attempt is deliberately left standing. It is the
-                    // mapping's only fence against a second live listing, and
-                    // the item stays reconcilable by a build whose strategy can
-                    // be searched.
-                    CreateStrategy::HaltOnAmbiguity => {
-                        // `ItemParked` rather than `InventoryHalted`, because
-                        // nothing was halted and the closed vocabulary has no
-                        // variant for this; it is the "an item stopped, come
-                        // and look" signal, which is what happened.
-                        let effects = vec![Effect::Notify {
-                            org: self.org,
-                            event: SellerEvent::ItemParked,
-                        }];
-                        return self.advance(
-                            SyncState::Terminal(ambiguous(
-                                attempt,
-                                AmbiguityCause::NoDurableIdentifier,
-                            )),
-                            effects,
-                        );
-                    }
-                };
-                let effects = vec![Effect::Reconcile {
-                    attempt,
-                    locator: locator.clone(),
-                }];
-                self.advance(SyncState::AwaitingReadBack { attempt, locator }, effects)
-            }
+            Input::ResumeStranded { attempt, recorded } => self.resume_stranded(attempt, recorded),
             Input::PreflightResult(Ok(schema)) => {
                 let effects = vec![Effect::RecordIntent {
                     intent_hash: self.intent_hash,
@@ -1245,6 +1187,113 @@ impl SyncMachine {
             | Input::ReconcileResult(_)
             | Input::ChallengeCleared
             | Input::ParkExpired
+            | Input::BudgetExhausted => Err(MachineError::InputNotApplicable),
+        }
+    }
+
+    /// The resume, from either side: a fresh machine stepped by the claim
+    /// that took a stranded create out of its park, or the very run whose
+    /// ambiguous submit stranded it.
+    ///
+    /// It reaches the same state the ambiguous-submit row reaches, and emits
+    /// the same search, because the situation is the same one — a create
+    /// whose fate the ledger cannot determine. What differs is how it was
+    /// arrived at, and nothing downstream depends on that.
+    fn resume_stranded(
+        self,
+        attempt: WriteAttemptId,
+        recorded: RecordedTitle,
+    ) -> Result<Transition, MachineError> {
+        if !matches!(self.operation, ItemOperation::Create) {
+            return Err(MachineError::ResumeNotACreate);
+        }
+        // How the create is identified is the strategy's to say, and
+        // the two that can be searched are searched differently: a
+        // marker is unique and matched by substring, a recorded title
+        // is not unique and is matched exactly and narrowed to the
+        // state a create leaves. `HaltOnAmbiguity` embeds nothing and
+        // leaves nothing to narrow on, which is what its name says.
+        let locator = match self.strategy {
+            CreateStrategy::CorrelationMarker { .. } => ListingLocator::Marker {
+                marker: marker_for(attempt),
+                inventory: self.inventory,
+            },
+            // A draft-then-publish create leaves its listing in a
+            // state the seller's own catalogue walk exposes, so the
+            // narrowing that makes a non-unique title usable is
+            // available exactly where this strategy is configured.
+            CreateStrategy::DraftThenPublish { .. } => ListingLocator::Recorded {
+                title: recorded,
+                inventory: self.inventory,
+            },
+            // Ambiguous, and one item's worth of it. Every other
+            // ambiguity row halts the tenant's inventory, and is right
+            // to: an ambiguity there means this tenant's automation has
+            // stopped being safe to continue. Here it means only that
+            // this build configures no strategy the search can use,
+            // which is equally true of every item in the queue and is
+            // not a reason to stop it. The claim declines to serve a
+            // stranded create at all where that is so; this arm is what
+            // holds if one ever arrives anyway, and it costs one item.
+            //
+            // The attempt is deliberately left standing. It is the
+            // mapping's only fence against a second live listing, and
+            // the item stays reconcilable by a build whose strategy can
+            // be searched.
+            CreateStrategy::HaltOnAmbiguity => {
+                // `ItemParked` rather than `InventoryHalted`, because
+                // nothing was halted and the closed vocabulary has no
+                // variant for this; it is the "an item stopped, come
+                // and look" signal, which is what happened.
+                let effects = vec![Effect::Notify {
+                    org: self.org,
+                    event: SellerEvent::ItemParked,
+                }];
+                return self.advance(
+                    SyncState::Terminal(ambiguous(attempt, AmbiguityCause::NoDurableIdentifier)),
+                    effects,
+                );
+            }
+        };
+        let effects = vec![Effect::Reconcile {
+            attempt,
+            locator: locator.clone(),
+        }];
+        self.advance(SyncState::AwaitingReadBack { attempt, locator }, effects)
+    }
+
+    /// The stranded rows: the resume of the attempt this state holds, and
+    /// nothing else.
+    ///
+    /// The attempt is checked rather than assumed. A resume naming another
+    /// attempt is a caller reconciling a different write under this item's
+    /// fence, which is a mismatch in exactly the sense
+    /// [`MachineError::AttemptMismatch`] names.
+    fn stranded_rows(
+        self,
+        input: Input,
+        attempt: WriteAttemptId,
+    ) -> Result<Transition, MachineError> {
+        match input {
+            Input::ResumeStranded {
+                attempt: offered,
+                recorded,
+            } => {
+                if offered != attempt {
+                    return Err(MachineError::AttemptMismatch);
+                }
+                self.resume_stranded(offered, recorded)
+            }
+            Input::PreflightResult(_)
+            | Input::IntentRecorded(_)
+            | Input::SubmitResult(_)
+            | Input::ReadBackResult(_)
+            | Input::ReconcileResult(_)
+            | Input::ChallengeCleared
+            | Input::ParkExpired
+            // Intercepted ahead of the state dispatch, and listed rather
+            // than caught by a wildcard so a new input cannot be absorbed
+            // here silently.
             | Input::BudgetExhausted => Err(MachineError::InputNotApplicable),
         }
     }

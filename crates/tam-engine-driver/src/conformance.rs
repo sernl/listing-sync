@@ -37,7 +37,7 @@ use tam_types::{ContentHash, FieldKey, InventoryId, Timestamp, Uuid};
 
 use crate::driver::{run_item, DriverContext, MachineSeed, NowSource, RunVerdict, VerifyPolicy};
 use crate::memory::ScriptedReconcile;
-use crate::ports::{Cancellation, IdSource, ItemLedger, LedgerInspector};
+use crate::ports::{Cancellation, IdSource, ItemLedger, LedgerInspector, ReconcileSource};
 use crate::vocabulary::LeasedItem;
 
 /// The instant every body starts from.
@@ -350,12 +350,12 @@ pub const STRANDED: Uuid = Uuid([0x5A; 16]);
 /// The seed's `resume` is what makes it one: the run steps straight to the
 /// search and the entry row's effects are discarded, so no form is asserted
 /// and no second attempt is opened.
-async fn drive_reconcile<L: ItemLedger>(
+async fn drive_reconcile<L: ItemLedger, R: ReconcileSource>(
     ledger: &L,
     lease: &LeasedItem,
     adapter: &ScriptedAdapter<'_>,
     switch: &Switch,
-    reconcile: &ScriptedReconcile,
+    reconcile: &R,
 ) -> RunVerdict {
     let clock = SteppingClock::from(Timestamp(T0.0 + 1_000));
     let ids = SequentialIds::default();
@@ -742,10 +742,112 @@ pub async fn a_run_stopped_before_the_write_abandons_rather_than_settling_the_it
          lease can open its own rather than colliding with this one"
     );
     let item = ledger.item(lease.item).await;
-    assert_ne!(
-        item.state, "settled",
-        "and the item itself is left for a device that can still do it"
+    assert_eq!(
+        item.state, "queued",
+        "and the item is handed straight back to the queue rather than held to the lease's \
+         expiry: the live-lease predicate is per marketplace, so a lease nobody is working \
+         is this seller's whole queue standing still"
     );
+}
+
+/// An abandoned run whose write may have landed hands the lease back too, and
+/// the server parks the item rather than requeueing it.
+///
+/// Two facts in one body because they are one decision. The lease must not be
+/// held to its expiry — that is the ten minutes of held queue this whole path
+/// exists to remove — and the item must not go back on the queue either,
+/// because the standing attempt is the only fence against a second live
+/// listing and a requeued create would be created again. Which of the two
+/// happens is the server's call, taken from the item's own state, and this
+/// asserts the call rather than the request.
+pub async fn an_abandoned_write_parks_the_item_rather_than_holding_its_lease(
+    ledger: &crate::memory::InMemoryLedger,
+    lease: &LeasedItem,
+) {
+    let switch = Switch::default();
+    // The write went out; the verifying read answered a condition rather than
+    // an observation, so the run stops knowing nothing about the listing.
+    let adapter = ScriptedAdapter::answering(Ok(landed_evidence()))
+        .with_read_back_condition(AdapterError::SessionExpired);
+    let verdict = drive(ledger, lease, &adapter, &switch).await;
+    assert!(
+        matches!(verdict, RunVerdict::Abandoned { .. }),
+        "the read condition abandons rather than inventing an outcome: {verdict:?}"
+    );
+    let item = ledger.item(lease.item).await;
+    assert_eq!(
+        (item.state.as_str(), item.blocked_on.as_deref()),
+        ("parked_live", Some("awaiting_marketplace_answer")),
+        "the lease is back with the server the moment the run stopped, and the item waits \
+         where the claim's reconcile arm finds it rather than where a fresh create would \
+         start: {item:?}"
+    );
+    let attempt = ledger
+        .attempt(lease.mapping)
+        .await
+        .expect("the run opened a fencing attempt");
+    assert!(
+        !attempt.settled,
+        "and the fence it parked behind is still standing"
+    );
+}
+
+/// Absence before the listing is lag, not absence.
+///
+/// The catalogue answers a complete walk that did not contain the listing, and
+/// the machine settles an ambiguity and halts the tenant's inventory on that
+/// answer — rightly, because a create nobody can find may have landed twice.
+/// A resource the marketplace has accepted and not yet published reads exactly
+/// the same, which is why the walk is repeated before its answer is believed.
+/// Without the repeat this run halts the seller's whole inventory on the
+/// marketplace's indexing delay.
+pub async fn a_reconcile_that_sees_absence_before_the_listing_still_settles_it<L, R>(
+    ledger: &L,
+    lease: &LeasedItem,
+    reconcile: &R,
+    found: RemoteListingId,
+) where
+    L: ItemLedger + LedgerInspector,
+    R: ReconcileSource,
+{
+    let switch = Switch::default();
+    let adapter = ScriptedAdapter::answering(Err(AdapterError::Ambiguous(
+        AmbiguityCause::ResponseEventLost,
+    )));
+    let verdict = drive_reconcile(ledger, lease, &adapter, &switch, reconcile).await;
+    assert_eq!(
+        verdict,
+        RunVerdict::Settled(ItemOutcome::Succeeded),
+        "the listing was there all along, one walk later: {verdict:?}"
+    );
+    assert_eq!(
+        ledger.halt_count(lease.org).await,
+        0,
+        "and nothing halted: a marketplace that had not published yet is not this seller's \
+         automation having stopped being safe"
+    );
+    let binding = ledger
+        .binding(lease.mapping)
+        .await
+        .expect("the mapping exists");
+    assert_eq!(
+        (
+            binding.binding_state.as_str(),
+            binding.remote_url.as_deref()
+        ),
+        ("bound", Some(listing_url(&found).as_str())),
+        "and the mapping is bound to what the walk found and the read-back verified"
+    );
+}
+
+/// The URL a Tes listing is addressed by, for an assertion that must name the
+/// listing rather than a shape.
+fn listing_url(id: &RemoteListingId) -> String {
+    match id {
+        RemoteListingId::Tes { url } => url.clone(),
+        RemoteListingId::Tpt { product_id } => product_id.to_string(),
+        RemoteListingId::Etsy { listing_id } => listing_id.to_string(),
+    }
 }
 
 /// An exhausted rate window stops the form scrape, before any attempt exists.

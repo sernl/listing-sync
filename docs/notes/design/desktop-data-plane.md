@@ -137,7 +137,11 @@ Two endpoints are specified here and served nowhere.
 A third gap is smaller and sharper.
 `POST /v1/devices/{device}/work` takes no body, so it cannot be asked for one marketplace.
 The device sends the marketplace as a filter the server currently ignores, and refuses an order whose inventory is not the marketplace it gated on, because the readiness gate is per marketplace and running past it would bypass the session and entitlement checks that gate performed.
-That refusal costs a lease expiry, which is what makes serving the filter worth doing.
+That refusal used to cost a lease expiry, which is what made serving the filter worth doing.
+
+Amended 2026-09-18: it no longer does. Every exit from `DeviceWork::execute` hands the lease back through `ItemLedger::hand_back`, so a refused order is disposed of by the server at once — charged one attempt and requeued — rather than held until its TTL ran out.
+The cost of the refusal is now one poll instead of ten minutes of this marketplace's whole queue, because the live-lease predicate is per marketplace and the claim answered idle to the very device holding the item.
+Serving the filter is still worth doing: not claiming the item at all is cheaper than claiming, refusing and handing back, and it is the only shape that does not charge the item an attempt for a decision it had no part in.
 
 Amended 2026-09-04: the entitlement verifier is wired, and a build given no `TAM_ENTITLEMENT_PUBLIC_KEY` carries an empty key set, so it verifies no token and every gate answers no until the founder supplies the real one.
 This paragraph previously said the placeholder was an all-zero key "which is not a valid Ed25519 point"; that was false — all-zero is a valid point of order four and signatures can be forged against it without a private key — and it is why "no key" is now an empty set rather than a value assumed to fail.

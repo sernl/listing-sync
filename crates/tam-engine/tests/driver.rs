@@ -361,17 +361,42 @@ const LEASE_SECONDS: i64 = 600;
 
 /// One lease and one pump against a ledger the caller has already seeded, so
 /// a test that needs the same item driven across several leases can take them
-/// one at a time.
-#[expect(
-    clippy::expect_used,
-    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
-)]
+/// one at a time. No `expect` of its own: it only delegates.
 async fn drive(
     app: &PgPool,
     engine: &PgPool,
     adapter: &ScriptedAdapter,
     strategy: CreateStrategy,
     at: Timestamp,
+) -> RunVerdict {
+    drive_over(
+        (app, engine),
+        adapter,
+        strategy,
+        at,
+        // The catalogue most bodies here cannot be walked: they are about the
+        // write, and a body whose run reaches the search says what the
+        // seller's catalogue holds.
+        &ScriptedReconcile::could_not_read("this fixture drives no reconcile"),
+    )
+    .await
+}
+
+/// The same, with the seller's catalogue scripted, for the bodies whose run
+/// searches it: a create whose answer was lost is reconciled inside the lease
+/// it was claimed under, so the walk is part of the run rather than of a
+/// later one. The two pools travel as one pair because they are always the
+/// same two and never vary independently.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn drive_over(
+    (app, engine): (&PgPool, &PgPool),
+    adapter: &ScriptedAdapter,
+    strategy: CreateStrategy,
+    at: Timestamp,
+    reconcile: &ScriptedReconcile,
 ) -> RunVerdict {
     let lease = claim(app, DEVICE, LEASE_SECONDS)
         .await
@@ -383,9 +408,7 @@ async fn drive(
     let cancel = TokenCancellation(&adapter.cancel);
     let ctx = DriverContext {
         adapter,
-        // No body here drives a reconcile; one that did would say what the
-        // seller's catalogue holds.
-        reconcile: &ScriptedReconcile::could_not_read("this fixture drives no reconcile"),
+        reconcile,
         ledger: &ledger,
         clock: &clock,
         ids: &RandomIds,
@@ -678,44 +701,60 @@ async fn an_item_out_of_attempt_budget_still_settles_on_the_connection(app: PgPo
     );
 }
 
-/// An ambiguous submit on a create this build can identify abandons the run
-/// and leaves its fence standing, rather than halting the tenant.
+/// An ambiguous submit on a create this build can identify is reconciled
+/// inside the lease it was claimed under.
 ///
-/// The end-to-end half of the transition row. The machine steps to
-/// `SyncState::Stranded`, a named state carrying the attempt and the locator,
-/// and the driver's own arm for it returns `RunVerdict::Abandoned` without
-/// settling anything. What that leaves behind is what this test is for and is
-/// exactly what the machine tests cannot see, because they stop at the
-/// transition: the attempt still in flight, so nothing can create a second
-/// listing on that mapping, the mapping unbound, because nothing was observed,
-/// and no halt row, because the fence already does the job a halt would.
+/// The end-to-end half of the transition row, and the end of a stall that cost
+/// a seller a lease TTL per stranded write. The machine steps to
+/// `SyncState::Stranded`, a named state carrying the attempt and the locator;
+/// the driver waits for the marketplace to publish what it accepted, walks the
+/// seller's catalogue, verifies what it found and settles. It used to end the
+/// run there and leave the reconcile to whichever claim came next — which
+/// could not come until this lease expired, because the live-lease predicate
+/// is per marketplace, so the item held its seller's whole queue for ten
+/// minutes with nobody working it.
 ///
-/// The contrast with `a_challenge_on_a_create_holds_the_fence_and_mints_nothing_further`
-/// above is deliberate. Both are a create whose fate is unknown; that one halts
-/// under `HaltOnAmbiguity`, which embeds nothing a walk could find, and this
-/// one records what it sent and waits, because a draft-then-publish create is
-/// identifiable by the title its own attempt recorded.
+/// What this asserts that the machine tests cannot: the attempt is committed
+/// and the mapping bound under the epoch the item was claimed on, so the whole
+/// create happened in one lease, and the tenant's inventory was never halted
+/// on the way.
+///
+/// The contrast with `a_challenge_on_a_create_under_draft_then_publish_strands_and_holds_the_fence`
+/// below is deliberate and is the reason both exist. Both are a create whose
+/// fate is unknown. This one is searchable, because the marketplace answered
+/// the write and merely lost the answer; that one is not, because the edge
+/// standing between this device and the write answers an enumeration the same
+/// way, and a walk that comes back empty is what settles an ambiguity and
+/// halts the tenant.
 #[sqlx::test(migrations = "../tam-storage/migrations")]
-async fn an_ambiguous_submit_under_draft_then_publish_abandons_and_holds_the_fence(app: PgPool) {
+async fn an_ambiguous_submit_under_draft_then_publish_reconciles_inside_its_own_lease(app: PgPool) {
     let adapter =
         ScriptedAdapter::answering(Err(AdapterError::Ambiguous(AmbiguityCause::SubmitTimedOut)));
     let engine = engine_pool(&app).await;
     seed(&app, &engine).await;
+    let landed = "https://www.tes.com/api/v2/resources/13578900";
 
-    let verdict = drive(
-        &app,
-        &engine,
+    let epoch_before: i64 = sqlx::query_scalar("SELECT lease_epoch FROM job_item LIMIT 1")
+        .fetch_one(&engine)
+        .await
+        .expect("the item row reads");
+    let verdict = drive_over(
+        (&app, &engine),
         &adapter,
         CreateStrategy::DraftThenPublish {
             draft_state: tam_marketplace::RemoteLifecycleKind::Draft,
         },
         T0,
+        &ScriptedReconcile::found(RemoteListingId::Tes {
+            url: landed.to_owned(),
+        }),
     )
     .await;
-    assert!(
-        matches!(verdict, RunVerdict::Abandoned { .. }),
-        "the run stops without settling, so the item is still there to be reconciled when \
-         the marketplace has answered: {verdict:?}"
+    assert_eq!(
+        verdict,
+        RunVerdict::Settled(ItemOutcome::Succeeded),
+        "the create landed, the catalogue says so and the read-back proved it, all in the \
+         run that sent it: {verdict:?}"
     );
 
     let attempts: Vec<String> = sqlx::query_scalar("SELECT state FROM write_attempt")
@@ -724,19 +763,32 @@ async fn an_ambiguous_submit_under_draft_then_publish_abandons_and_holds_the_fen
         .expect("the attempt rows read");
     assert_eq!(
         attempts,
-        vec!["in_flight".to_owned()],
-        "the fence is the point: while this row stands nothing can create a second \
-         listing for that mapping, which is the failure this ledger cannot undo"
+        vec!["committed".to_owned()],
+        "one attempt, settled by the run that opened it: the fence is released by evidence \
+         rather than by a later lease finding it standing"
     );
 
-    let bound: Option<String> = sqlx::query_scalar("SELECT binding_state FROM mapping LIMIT 1")
-        .fetch_one(&engine)
-        .await
-        .expect("the mapping row reads");
-    assert_ne!(
-        bound.as_deref(),
-        Some("bound"),
-        "nothing was bound, because nothing was observed"
+    let bound: (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT binding_state, remote_url FROM mapping LIMIT 1")
+            .fetch_one(&engine)
+            .await
+            .expect("the mapping row reads");
+    assert_eq!(
+        (bound.0.as_deref(), bound.1.as_deref()),
+        (Some("bound"), Some(landed)),
+        "and the mapping is bound to the listing the walk identified, so no later pass can \
+         create a second"
+    );
+
+    let settled: (String, Option<String>, i64) =
+        sqlx::query_as("SELECT state, outcome, lease_epoch FROM job_item LIMIT 1")
+            .fetch_one(&engine)
+            .await
+            .expect("the item row reads");
+    assert_eq!(
+        (settled.0.as_str(), settled.1.as_deref(), settled.2),
+        ("settled", Some("succeeded"), epoch_before),
+        "under the epoch it was claimed on: no expiry, no steal, no second claim"
     );
 
     let halted: i64 = sqlx::query_scalar("SELECT count(*) FROM org_inventory_halt")
@@ -745,8 +797,8 @@ async fn an_ambiguous_submit_under_draft_then_publish_abandons_and_holds_the_fen
         .expect("the halt table reads");
     assert_eq!(
         halted, 0,
-        "and the tenant's inventory is not stopped: the fence already prevents the second \
-         create, so a halt would only stop work that is still safe to do"
+        "and the tenant's inventory was never stopped: the marketplace was behind, not \
+         unsafe"
     );
 }
 

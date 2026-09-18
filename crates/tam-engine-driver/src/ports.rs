@@ -195,6 +195,37 @@ pub trait ItemLedger: Send + Sync {
         event: SellerEvent,
         at: Timestamp,
     ) -> impl core::future::Future<Output = Result<(), LedgerError>> + Send;
+
+    /// Hands this lease back, naming nothing about where the item should go.
+    ///
+    /// The run calls it when it stopped without deciding the item. Before it
+    /// existed the only way to end such a run was to stop calling: the lease
+    /// stood until its TTL expired and the reaper disposed of the item then.
+    /// That cost the seller the whole remainder of the TTL per undecided run,
+    /// and cost every sibling item on the same marketplace the same span,
+    /// because the live-lease mutex is per marketplace and an item nobody was
+    /// working still held it. Two or three undecided runs per item is two or
+    /// three lease expiries of nothing happening.
+    ///
+    /// The caller states no disposition, which is the same refusal the rest
+    /// of this port is built on. Whether the item is requeued, charged an
+    /// attempt, parked awaiting the marketplace's answer or settled out of
+    /// attempts is the server's decision, taken from the state it holds —
+    /// the operation, the attempt in flight under this epoch, the mapping's
+    /// binding, the attempt count — none of which the device may assert. A
+    /// device that named the disposition could requeue a create whose write
+    /// may have landed, which is the one failure the standing attempt exists
+    /// to prevent.
+    ///
+    /// Fenced on the epoch like every other call: a hand-back of a lease this
+    /// device no longer holds is refused, and the refusal is
+    /// [`LedgerError::StaleLease`] rather than a fault, because a stolen
+    /// lease is a run whose item somebody else now owns.
+    fn hand_back(
+        &self,
+        lease: &LeaseRef,
+        at: Timestamp,
+    ) -> impl core::future::Future<Output = Result<(), LedgerError>> + Send;
 }
 
 /// What a test may observe of a ledger, and nothing a client may.

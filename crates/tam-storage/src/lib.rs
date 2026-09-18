@@ -125,11 +125,11 @@ pub use jobs::{
     append_event, append_event_asserted, revive_by_gap, revive_counterparts, revive_on,
     settle_if_complete, AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant,
     Charged, ClaimPolicy, CreatedJob, DeletionStatus, DeviceClaim, DeviceRef, EventScope,
-    HaltCause, HaltRepo, InventoryFailureWindow, InventoryHaltRow, ItemVerdict, JobOrigin,
-    JobOwner, JobRepo, LandingEffect, LeaseRef, LeaseRepo, LeasedItem, MessageRef, Minted,
-    NewAttempt, NewJob, NewJobItem, NewOutboxMessage, OutboxMessage, OutboxRepo, RateBudgetRepo,
-    RenewedLease, Revived, WorkflowKind, WriteAttemptRepo, ALL_DELETION_STATUSES, ALL_GATES,
-    AWAITING_COUNTERPART, AWAITING_MARKETPLACE_ANSWER, AWAITING_SELLER_SIGNIN, ELECTION,
+    HaltCause, HaltRepo, HandedBack, InventoryFailureWindow, InventoryHaltRow, ItemVerdict,
+    JobOrigin, JobOwner, JobRepo, LandingEffect, LeaseRef, LeaseRepo, LeasedItem, MessageRef,
+    Minted, NewAttempt, NewJob, NewJobItem, NewOutboxMessage, OutboxMessage, OutboxRepo,
+    RateBudgetRepo, RenewedLease, Revived, WorkflowKind, WriteAttemptRepo, ALL_DELETION_STATUSES,
+    ALL_GATES, AWAITING_COUNTERPART, AWAITING_MARKETPLACE_ANSWER, AWAITING_SELLER_SIGNIN, ELECTION,
     REAUTH_REQUIRED, REVIVABLE_GATES,
 };
 pub use labels::{

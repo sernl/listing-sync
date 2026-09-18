@@ -500,6 +500,30 @@ impl ItemLedger for InMemoryLedger {
         self.with(|state| state.outbox.push((lease.org, topic.to_owned())));
         Ok(())
     }
+
+    async fn hand_back(&self, lease: &LeaseRef, _at: Timestamp) -> Result<(), LedgerError> {
+        self.with(|state| {
+            Self::fenced(state, lease)?;
+            // The server's own disposition, modelled rather than mirrored: a
+            // write that may have landed is parked where an operator and the
+            // next claim can both see it, and anything else goes back on the
+            // queue. The blocked-on string is the server's constant, spelt
+            // here because this fixture answers for the server.
+            //
+            // Any unsettled attempt, because a `LeaseRef` names no mapping
+            // and a fixture drives one item.
+            let stranded = state.attempts.values().any(|attempt| !attempt.settled);
+            let item = state.items.get_mut(&lease.item).ok_or_else(missing_item)?;
+            if stranded {
+                "parked_live".clone_into(&mut item.state);
+                item.blocked_on = Some("awaiting_marketplace_answer".to_owned());
+            } else {
+                "queued".clone_into(&mut item.state);
+                item.blocked_on = None;
+            }
+            Ok(())
+        })
+    }
 }
 
 fn missing_item() -> LedgerError {
@@ -642,5 +666,56 @@ impl ReconcileSource for ScriptedReconcile {
     ) -> impl core::future::Future<Output = Result<Option<RemoteListingId>, AdapterError>> + Send + 'a
     {
         core::future::ready(self.0.clone())
+    }
+}
+
+/// A catalogue that has not published the listing yet: absence for the first
+/// `absences` walks, then the listing.
+///
+/// The lag it models is the reason the reconcile walks more than once. A
+/// complete walk that does not contain the listing settles an ambiguity and
+/// halts the tenant's inventory, and a marketplace that has accepted a create
+/// and not yet indexed it answers exactly that — so a fixture that could only
+/// say "found" could not tell the two apart and neither could the driver.
+pub struct LaggingReconcile {
+    absences: usize,
+    walked: std::sync::atomic::AtomicUsize,
+    found: RemoteListingId,
+}
+
+impl LaggingReconcile {
+    #[must_use]
+    pub const fn publishing_after(absences: usize, found: RemoteListingId) -> Self {
+        Self {
+            absences,
+            walked: std::sync::atomic::AtomicUsize::new(0),
+            found,
+        }
+    }
+
+    /// How many walks this catalogue has answered, so a test can assert the
+    /// poll stopped as soon as it had an answer rather than spending the whole
+    /// budget.
+    #[must_use]
+    pub fn walked(&self) -> usize {
+        self.walked.load(core::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl ReconcileSource for LaggingReconcile {
+    fn find_listing<'a>(
+        &'a self,
+        _locator: &'a ListingLocator,
+        _attempt: WriteAttemptId,
+    ) -> impl core::future::Future<Output = Result<Option<RemoteListingId>, AdapterError>> + Send + 'a
+    {
+        let walked = self
+            .walked
+            .fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+        core::future::ready(Ok(if walked < self.absences {
+            None
+        } else {
+            Some(self.found.clone())
+        }))
     }
 }
