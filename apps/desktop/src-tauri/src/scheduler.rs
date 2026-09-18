@@ -662,8 +662,15 @@ impl Scheduler {
     ///
     /// Ordered by what the seller can do about it: the sign-out they performed
     /// themselves, then the console sign-in that resolves itself, then the
-    /// entitlement, then the marketplace login. A store that cannot be read is
-    /// not a refusal — it is a fault, and it travels as one.
+    /// entitlement, then the marketplace login, and last the marketplace
+    /// login that has expired. A store that cannot be read is not a refusal —
+    /// it is a fault, and it travels as one.
+    ///
+    /// The last of those is why a held session is no longer enough. A stored
+    /// jar means somebody signed in once; the marketplace's own last answer
+    /// is what means the session works. Reading the first as the second is
+    /// what let this device claim items against a lapsed Tes session and
+    /// settle every one of them as blocked.
     async fn refusal(
         &self,
         ready: &Readiness<'_>,
@@ -679,13 +686,16 @@ impl Scheduler {
         if !ready.gate.may_work(marketplace, now) {
             return Ok(Some(BlockReason::NotEntitled));
         }
-        let held = ready
+        let Some(held) = ready
             .sessions
             .get(marketplace)
             .await
-            .map_err(|why| WorkError(why.to_string()))?;
-        if held.is_none() {
+            .map_err(|why| WorkError(why.to_string()))?
+        else {
             return Ok(Some(BlockReason::NoSession));
+        };
+        if !held.proven_at(now) {
+            return Ok(Some(BlockReason::SessionLapsed));
         }
         Ok(None)
     }
@@ -800,6 +810,7 @@ mod tests {
                         name: "TESSession".to_owned(),
                         value: "value".to_owned(),
                     }]),
+                    verified_at: Some(NOW),
                 })
                 .await
                 .expect("the fixture store accepts");
@@ -919,6 +930,41 @@ mod tests {
             source.0.load(Ordering::SeqCst),
             1,
             "and the marketplace that does have one is unaffected"
+        );
+    }
+
+    /// The claim that used to burn an item.
+    ///
+    /// A stored jar means somebody signed in once. Reading that as "the
+    /// marketplace accepts this session" is what let a device claim work
+    /// against a Tes session that had lapsed four hours earlier: every claim
+    /// went out, every one came back blocked, and the item was spent.
+    #[tokio::test]
+    async fn a_marketplace_whose_session_has_lapsed_is_not_pulled_for_either() {
+        let source = CountingSource::default();
+        let gate = open_gate();
+        let sessions = sessions_for(&[Marketplace::Tpt, Marketplace::Tes]).await;
+        let four_hours_on = Timestamp(NOW.0 + 4 * 60 * 60 * 1_000);
+
+        let report = scheduler()
+            .tick(&ready(&gate, &sessions), &source, four_hours_on)
+            .await;
+
+        assert_eq!(
+            report.blocked(),
+            vec![
+                (Marketplace::Tpt, BlockReason::SessionLapsed),
+                (Marketplace::Tes, BlockReason::SessionLapsed),
+            ],
+            "a session nobody has proven since it was captured is refused before the claim, so \
+             the item stays in the queue for the seller's next sign-in instead of settling as \
+             blocked"
+        );
+        assert_eq!(
+            source.0.load(Ordering::SeqCst),
+            0,
+            "and no claim is made at all, which is the difference between a wasted request and \
+             a wasted item"
         );
     }
 

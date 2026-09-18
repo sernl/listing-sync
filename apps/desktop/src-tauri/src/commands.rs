@@ -667,15 +667,22 @@ async fn file_session<R: tauri::Runtime>(
     jar: CookieJar,
 ) -> Result<SessionStatus, NotFiled> {
     let state = app.state::<DesktopState>();
+    let captured_at = wall_now();
     let record = SessionRecord {
         marketplace,
         // No label. The only value that names the account is the marketplace's
         // own identity read, and that is a marketplace request, which this
         // slice makes none of.
         account_label: None,
-        captured_at: wall_now(),
+        captured_at,
         device_id: state.device().id.clone(),
         jar,
+        // `await_session` did not file this jar until the marketplace
+        // answered it as the seller, so the capture instant is also the
+        // instant it was last proven. Leaving it unproven would report a
+        // session the seller has this moment signed in to as needing another
+        // sign-in.
+        verified_at: Some(captured_at),
     };
     state.store().put(&record).await?;
 
@@ -688,7 +695,7 @@ async fn file_session<R: tauri::Runtime>(
             return Err(NotFiled::SignedOut);
         }
     }
-    Ok(SessionStatus::of(&record))
+    Ok(SessionStatus::of(&record, captured_at))
 }
 
 /// Registers this device with the server's registry and checks in.
@@ -987,7 +994,7 @@ pub async fn session_status(
     let found = app.state::<DesktopState>().store().get(marketplace).await?;
     Ok(found.as_ref().map_or_else(
         || SessionStatus::disconnected(marketplace),
-        SessionStatus::of,
+        |record| SessionStatus::of(record, wall_now()),
     ))
 }
 
@@ -1916,6 +1923,7 @@ mod import_early_failure_tests {
                 name: "sessionKey".to_owned(),
                 value: "s3cr3t".to_owned(),
             }]),
+            verified_at: Some(NOW),
         };
         store
             .put(&record)
@@ -2032,6 +2040,7 @@ mod session_command_tests {
                 name: "sessionKey".to_owned(),
                 value: "s3cr3t".to_owned(),
             }]),
+            verified_at: Some(Timestamp(1_756_000_000_000)),
         }
     }
 

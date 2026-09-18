@@ -21,7 +21,7 @@ pub mod session;
 
 pub use endpoints::{CatalogueEntry, DraftId};
 pub use flows::{route_name, NotATesInventory, TesAdapter};
-pub use identity::{read_seller_user_id, seller_user_id, SellerId};
+pub use identity::{read_seller_user_id, refresh_session, seller_user_id, SellerId};
 #[cfg(feature = "live")]
 pub use live::{GatewayTransport, ReqwestTransport};
 pub use session::{SessionError, TesSession};

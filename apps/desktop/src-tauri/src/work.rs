@@ -2140,6 +2140,7 @@ mod tests {
                         name: "TESSession".to_owned(),
                         value: "value".to_owned(),
                     }]),
+                    verified_at: Some(NOW),
                 })
                 .await
                 .expect("the fixture store accepts");

@@ -305,16 +305,39 @@ pub(crate) async fn create_migration(
             target: Some(body.target),
             now,
         };
-        tam_sync_worker::drain_request(&requests, &run, key.0)
-            .await
-            .map_err(|error| match error {
+        if let Err(error) = tam_sync_worker::drain_request(&requests, &run, key.0).await {
+            // The request is committed and the drain has already marked it
+            // `draining`, so a refusal that only became a response would
+            // leave the row there forever: state `draining`, no jobs, and
+            // nothing on it saying why. That is what request
+            // edb5b47e-d15c-49c2-a742-6b8e8f60b922 was.
+            //
+            // Settled on the way out rather than made atomic with the mint.
+            // The drain commits a job per leg in a transaction of its own --
+            // deliberately, because the removal leg is gated on the create's
+            // binding -- so one transaction spanning the request and both
+            // legs would have to be threaded through `tam_sync_worker`'s
+            // surface and would hold the workflow row across every item's
+            // freeze. `failed` with the reason is the terminal transition the
+            // drain's own internal refusals already take, and a failed
+            // request is in no work list, mints nothing, and reads correctly
+            // wherever a state is rendered.
+            let reason = format!("this migration could not be queued: {error}");
+            if let Err(unsettled) = requests
+                .record_failure(context.org, key.0, &reason, now)
+                .await
+            {
+                eprintln!("tam-api: {reason}; and it could not be settled: {unsettled}");
+            }
+            return Err(match error {
                 tam_sync_worker::DrainError::Storage(error) => storage_fault(&state, &error),
                 // Both are answers about the seller's own listings that the
                 // plan admitted a moment ago; a change between the two is a
                 // thing to say rather than a fault.
                 tam_sync_worker::DrainError::Locator(why) => validation(&why),
                 tam_sync_worker::DrainError::Lowering(refusal) => validation(&refusal.to_string()),
-            })?;
+            });
+        }
     }
     let status = if written {
         StatusCode::ACCEPTED

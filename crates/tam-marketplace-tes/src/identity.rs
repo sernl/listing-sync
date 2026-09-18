@@ -73,6 +73,25 @@ pub async fn read_seller_user_id<T: Transport>(
     Ok(seller_user_id(&response.body))
 }
 
+/// Renews the seller's session and says whether Tes accepted it.
+///
+/// Beside the identity read rather than in a module of its own, because the
+/// two are one question asked twice: this one asks Tes to rotate the cookies
+/// it is about to check, and [`read_seller_user_id`] asks whether what came
+/// back still authenticates. Neither names an account, so neither can be
+/// pointed at another seller's session.
+///
+/// A non-2xx is `false` rather than an error: the renewal is the marketplace's
+/// answer about the session it holds, and the caller's remedy for a refused
+/// one is a fresh sign-in rather than a retry. A transport failure stays an
+/// error, because it says nothing about the session at all.
+pub async fn refresh_session<T: Transport>(transport: &T) -> Result<bool, TransportError> {
+    let response: HttpResponse = transport
+        .send(crate::endpoints::refresh_cookies_request())
+        .await?;
+    Ok((200..300).contains(&response.status))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{seller_user_id, SellerId};
@@ -217,6 +236,40 @@ mod tests {
             "the route carries no selector and no query, so the account it names is the \
              server's choice rather than the caller's: {}",
             request.url
+        );
+    }
+
+    /// The renewal's whole job is to be sent, so what is asserted is the
+    /// route it sends and the fact that a refusal is a verdict rather than an
+    /// error: a caller that treated a bad day on this route as a failure
+    /// would stop probing the session it was about to check.
+    #[test]
+    fn the_renewal_asks_the_cookie_route_and_reports_a_refusal_as_a_verdict() {
+        let transport = RecordingTransport {
+            seen: std::sync::OnceLock::new(),
+            status: 200,
+            body: Vec::new(),
+        };
+        assert_eq!(
+            futures::executor::block_on(super::refresh_session(&transport)),
+            Ok(true)
+        );
+        assert_eq!(
+            *transport.seen.get().expect("exactly one request was made"),
+            crate::endpoints::refresh_cookies_request(),
+            "the renewal names no account and takes nothing, so it cannot renew somebody \
+             else's session"
+        );
+
+        let refused = RecordingTransport {
+            seen: std::sync::OnceLock::new(),
+            status: 401,
+            body: Vec::new(),
+        };
+        assert_eq!(
+            futures::executor::block_on(super::refresh_session(&refused)),
+            Ok(false),
+            "a refused renewal is an answer about the session, not a transport fault"
         );
     }
 

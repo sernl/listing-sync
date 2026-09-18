@@ -431,13 +431,33 @@ pub(crate) fn storage_fault(state: &AppState, error: &StorageError) -> APIError 
             product.0.to_hyphenated(),
             reasons.join("; "),
         )),
+        // Not a fault, and it stopped being one everywhere at once by being
+        // answered here: the ledger already holding this write is a fact
+        // about the seller's own catalogue that the seller can act on. Until
+        // this arm existed it fell through to `internal`, so a re-queue
+        // refused by the key of an item that had settled `blocked` reached
+        // the console as an unexplained 500.
+        //
+        // What arrives here now is only the live and the landed case:
+        // `free_retired_key` in `tam-storage` frees the key an adversely
+        // settled item was sitting on, so a key still held is a write either
+        // queued or done.
+        StorageError::DuplicateIdempotencyKey { key } => APIError::new(
+            StatusCode::CONFLICT,
+            APIErrorEntry::new(
+                "this resource already has that exact write queued or completed, so it was \
+                 not queued a second time",
+            )
+            .code(APIErrorCode::DuplicateSyncItem)
+            .kind(APIErrorKind::Validation)
+            .reason(&format!("idempotency key {key}")),
+        ),
         StorageError::Db(_)
         | StorageError::TimestampOutOfRange { .. }
         | StorageError::CorruptRow { .. }
         | StorageError::OrgMismatch
         | StorageError::Inconsistent { .. }
         | StorageError::StaleLease
-        | StorageError::DuplicateIdempotencyKey { .. }
         | StorageError::AttemptInFlight
         | StorageError::MappingAlreadyBound
         | StorageError::ListingAlreadyBound
@@ -1133,8 +1153,9 @@ pub(crate) fn new_items(
         .collect()
 }
 
-/// One job under a request key, with the duplicate-item conflict rendered as
-/// the validation answer it is.
+/// One job under a request key. The duplicate-item conflict it used to render
+/// itself is `storage_fault`'s now, so every enqueue answers it in the same
+/// words rather than this one alone.
 ///
 /// The actor is the caller's, because the two callers differ in exactly that:
 /// a seller pressed Publish, or the scheduler's pass reached a minute nobody
@@ -1181,21 +1202,7 @@ pub(crate) async fn mint_job(
             items,
         )
         .await
-        .map_err(|error| {
-            if matches!(error, StorageError::DuplicateIdempotencyKey { .. }) {
-                APIError::new(
-                    StatusCode::CONFLICT,
-                    APIErrorEntry::new(
-                        "an identical sync item is already in the ledger; unchanged content \
-                         does not need re-uploading",
-                    )
-                    .code(APIErrorCode::DuplicateSyncItem)
-                    .kind(APIErrorKind::Validation),
-                )
-            } else {
-                storage_fault(state, &error)
-            }
-        })?;
+        .map_err(|error| storage_fault(state, &error))?;
     match minted {
         tam_storage::Minted::Job(created) => Ok(created),
         tam_storage::Minted::WorkflowDeleted(workflow) => Err(workflow_deleted(workflow)),

@@ -194,8 +194,16 @@ impl AppState {
     /// through the disclosure split. Trace identifiers arrive with the
     /// observability milestone; until then the entry is deliberately
     /// untraced rather than pseudo-traced.
+    ///
+    /// And the one place the internals are written down. `APIErrorEntry`
+    /// holds no logger and says so: under `Disclosure::Redacted` — which is
+    /// every deployment a seller reaches — the text it is handed is dropped,
+    /// so a caller that does not log it has destroyed the only copy. That is
+    /// how nine migrations refused by a stale idempotency key produced a 500
+    /// with nothing in `kubectl logs` to say which key or which resource.
     #[must_use]
     pub fn internal(&self, internals: &str) -> APIError {
+        eprintln!("tam-api: internal fault: {internals}");
         APIError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             APIErrorEntry::internal(self.config.disclosure, internals, "untraced"),

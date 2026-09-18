@@ -2708,14 +2708,19 @@ async fn survivor_now(
 
 /// A storage fault raised inside a transaction, where the fault reporter's
 /// own connection is not available.
+///
+/// Logged here for the reason `AppState::internal` logs: this is the other
+/// constructor of a 500 in this crate, and a fault only the response carries
+/// is a fault nobody can read after the response is gone.
 fn storage_fault_tx(org: OrgId, error: &tam_storage::StorageError) -> APIError {
+    let internals = format!(
+        "the catalogue decision could not be written for {}: {error}",
+        org.0.to_hyphenated()
+    );
+    eprintln!("tam-api: internal fault: {internals}");
     APIError::new(
         StatusCode::INTERNAL_SERVER_ERROR,
-        APIErrorEntry::new(&format!(
-            "the catalogue decision could not be written for {}: {error}",
-            org.0.to_hyphenated()
-        ))
-        .kind(APIErrorKind::Internal),
+        APIErrorEntry::new(&internals).kind(APIErrorKind::Internal),
     )
 }
 

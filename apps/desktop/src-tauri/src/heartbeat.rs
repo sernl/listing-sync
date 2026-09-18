@@ -41,7 +41,7 @@ use crate::device::{DeviceId, DeviceIdentity};
 use crate::entitlement::{Entitlement, EntitlementGate, PUBLIC_KEY_BYTES};
 use crate::notify::CycleSummary;
 use crate::scheduler::{Readiness, Scheduler, TickReport, WorkSource};
-use crate::session::{SessionStore, StoreError};
+use crate::session::{CookieJar, SessionRecord, SessionStore, StoreError};
 use crate::state::DesktopState;
 
 /// The version this build reports. Read from the manifest rather than written
@@ -72,8 +72,16 @@ impl HostFacts {
 }
 
 /// What a device says about one marketplace session. The three values the
-/// server's closed vocabulary accepts, and every one of them is something this
-/// device can tell without making a marketplace request.
+/// server's closed vocabulary accepts.
+///
+/// `Connected` used to mean "a jar is stored here", which is a fact this
+/// device can tell without asking a marketplace anything — and a fact that
+/// says nothing about whether the marketplace would still accept it. A Tes
+/// session that had lapsed was reported as connected every five minutes, so
+/// the server re-linked the connection and every claim behind it burned an
+/// item. It now means the marketplace itself answered these cookies inside
+/// [`crate::session::PROOF_MAX_AGE`], which is what
+/// [`refresh_sessions`] renews on the check-in beat.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionState {
     Connected,
@@ -401,6 +409,72 @@ impl From<StoreError> for CheckInError {
     }
 }
 
+/// What a probe learned about one stored session.
+pub struct SessionProof {
+    /// Whether the marketplace answered these cookies as the seller.
+    pub authenticated: bool,
+    /// The cookies as the marketplace left them, where the probe's transport
+    /// holds cookies that can change. `None` where nothing rotated.
+    pub refreshed: Option<CookieJar>,
+}
+
+pub type ProofFuture<'a> = Pin<Box<dyn Future<Output = Result<SessionProof, String>> + Send + 'a>>;
+
+/// What asks a marketplace whether a stored session still works.
+///
+/// A seam for the same reason [`ControlPlane`] is one: the answer costs a
+/// marketplace request, and every test of what this device does with the
+/// answer would otherwise need a network. [`crate::marketplace::LiveProbe`]
+/// is the shipping implementation.
+pub trait SessionProbe: Send + Sync {
+    fn prove<'a>(&'a self, marketplace: Marketplace, jar: &'a CookieJar) -> ProofFuture<'a>;
+}
+
+/// Renews and re-proves every session this device holds, and records what
+/// each marketplace said.
+///
+/// The beat that closes the four-hour hole. Tes rotates its session cookies
+/// on its own authenticated responses, so a device that made no request for
+/// an hour presented cookies an hour out of date; this asks on every
+/// check-in, stores whatever the marketplace rotated to, and stamps the
+/// proof that [`report_of`] and the scheduler read.
+///
+/// A transport failure leaves the record exactly as it was. It is not
+/// evidence of a lapse — the same judgement [`check_in`] makes about an
+/// unreachable server — and it needs none: the stamp it failed to renew ages
+/// out of [`crate::session::PROOF_MAX_AGE`] on its own, so an outage long
+/// enough to matter still ends with the session reported as needing a fresh
+/// sign-in rather than as connected.
+pub async fn refresh_sessions(
+    store: &dyn SessionStore,
+    probe: &dyn SessionProbe,
+    now: Timestamp,
+) -> Result<(), StoreError> {
+    for marketplace in Marketplace::ALL {
+        if marketplace.transport_class() != TransportClass::SellerDevice {
+            continue;
+        }
+        let Some(record) = store.get(marketplace).await? else {
+            continue;
+        };
+        let Ok(proof) = probe.prove(marketplace, &record.jar).await else {
+            continue;
+        };
+        store
+            .put(&SessionRecord {
+                jar: proof.refreshed.unwrap_or(record.jar),
+                // `None` on a refusal rather than the old stamp left
+                // standing: a session the marketplace has just declined must
+                // stop being reported as connected on this beat, not fifteen
+                // minutes after it.
+                verified_at: proof.authenticated.then_some(now),
+                ..record
+            })
+            .await?;
+    }
+    Ok(())
+}
+
 /// What this device holds, as the report the server takes.
 ///
 /// The whole set rather than a delta: the server replaces what it has with
@@ -408,7 +482,18 @@ impl From<StoreError> for CheckInError {
 /// held. Only seller-device marketplaces are walked — a marketplace with an
 /// official API never has a session on this machine, and the server refuses a
 /// report naming one.
-pub async fn report_of(store: &dyn SessionStore) -> Result<Vec<SessionReport>, StoreError> {
+///
+/// A held session whose last proof has aged out is reported `SignedOut`
+/// rather than `Connected`, and that is the repair: the server then flips the
+/// connection to `needs_reauth` and stops handing this device items to burn,
+/// instead of re-linking a session the marketplace has stopped accepting
+/// every five minutes. The jar is kept — the seller may be about to sign in
+/// again, and forgetting it here would lose the cookies a rotation could
+/// still be persisted against — so the state is reported rather than wiped.
+pub async fn report_of(
+    store: &dyn SessionStore,
+    now: Timestamp,
+) -> Result<Vec<SessionReport>, StoreError> {
     let mut held = Vec::new();
     for marketplace in Marketplace::ALL {
         if marketplace.transport_class() != TransportClass::SellerDevice {
@@ -420,7 +505,11 @@ pub async fn report_of(store: &dyn SessionStore) -> Result<Vec<SessionReport>, S
         held.push(SessionReport {
             marketplace,
             account_label: record.account_label.clone(),
-            status: SessionState::Connected,
+            status: if record.proven_at(now) {
+                SessionState::Connected
+            } else {
+                SessionState::SignedOut
+            },
         });
     }
     Ok(held)
@@ -436,7 +525,7 @@ pub async fn check_in(
     state: &DesktopState,
     plane: &dyn ControlPlane,
 ) -> Result<CheckIn, CheckInError> {
-    let sessions = report_of(state.store()).await?;
+    let sessions = report_of(state.store(), crate::run::wall_now()).await?;
     let answer = match plane.heartbeat(&state.device().id, &sessions).await {
         Ok(answer) => answer,
         Err(why) => {
@@ -674,16 +763,35 @@ mod tests {
         super::work_pending(state, scheduler, source, now).await
     }
 
+    /// When the fixture session was captured, and the instant every report in
+    /// these tests is taken at unless it is testing staleness.
+    ///
+    /// `pub(super)`, with [`proven`] beside it, so the sibling `proving`
+    /// module drives the same fixture: one session shape for both halves of
+    /// the question, rather than two that could come to disagree.
+    pub(super) const CAPTURED: Timestamp = Timestamp(1_756_000_000_000);
+
+    /// A held session, proven at the instant it was captured.
     fn a_record(marketplace: Marketplace, label: Option<&str>) -> SessionRecord {
+        proven(marketplace, label, Some(CAPTURED))
+    }
+
+    /// The same session, with its last proof placed where a test wants it.
+    pub(super) fn proven(
+        marketplace: Marketplace,
+        label: Option<&str>,
+        verified_at: Option<Timestamp>,
+    ) -> SessionRecord {
         SessionRecord {
             marketplace,
             account_label: label.map(str::to_owned),
-            captured_at: Timestamp(1_756_000_000_000),
+            captured_at: CAPTURED,
             device_id: identity().id,
             jar: CookieJar::new(vec![Cookie {
                 name: "sessionKey".to_owned(),
                 value: "s3cr3t".to_owned(),
             }]),
+            verified_at,
         }
     }
 
@@ -808,7 +916,9 @@ mod tests {
             .await
             .expect("etsy stores");
 
-        let report = report_of(store.as_ref()).await.expect("the report builds");
+        let report = report_of(store.as_ref(), CAPTURED)
+            .await
+            .expect("the report builds");
         assert_eq!(
             report
                 .iter()
@@ -831,7 +941,12 @@ mod tests {
             .put(&a_record(Marketplace::Tes, None))
             .await
             .expect("tes stores");
-        let printed = format!("{:?}", report_of(store.as_ref()).await.expect("it builds"));
+        let printed = format!(
+            "{:?}",
+            report_of(store.as_ref(), CAPTURED)
+                .await
+                .expect("it builds")
+        );
         assert!(
             !printed.contains("s3cr3t") && !printed.contains("sessionKey"),
             "the report type must be structurally unable to carry a credential: {printed}"
@@ -1663,5 +1778,173 @@ mod tests {
             vec![],
             "a revoked device works nothing and therefore announces nothing"
         );
+    }
+}
+
+/// The check-in beat, and what the seller's device now does with what the
+/// marketplace said.
+#[cfg(test)]
+mod proving {
+    use super::tests::{proven, CAPTURED};
+    use super::{
+        refresh_sessions, report_of, ProofFuture, SessionProbe, SessionProof, SessionState,
+    };
+    use crate::session::memory::MemorySessionStore;
+    use crate::session::{CookieJar, SessionStore, PROOF_MAX_AGE};
+    use std::sync::Arc;
+    use tam_types::{Marketplace, Timestamp};
+
+    /// A probe that answers whatever it was built with, and never a network.
+    struct Scripted(Result<SessionProof, String>);
+
+    impl Scripted {
+        fn authenticated(refreshed: Option<&str>) -> Self {
+            Self(Ok(SessionProof {
+                authenticated: true,
+                refreshed: refreshed.map(CookieJar::from_header_value),
+            }))
+        }
+
+        fn refused() -> Self {
+            Self(Ok(SessionProof {
+                authenticated: false,
+                refreshed: None,
+            }))
+        }
+
+        fn unreachable() -> Self {
+            Self(Err("the marketplace could not be reached".to_owned()))
+        }
+    }
+
+    impl SessionProbe for Scripted {
+        fn prove<'a>(&'a self, _marketplace: Marketplace, _jar: &'a CookieJar) -> ProofFuture<'a> {
+            Box::pin(async move {
+                match &self.0 {
+                    Ok(proof) => Ok(SessionProof {
+                        authenticated: proof.authenticated,
+                        refreshed: proof.refreshed.clone(),
+                    }),
+                    Err(why) => Err(why.clone()),
+                }
+            })
+        }
+    }
+
+    async fn holding(verified_at: Option<Timestamp>) -> Arc<MemorySessionStore> {
+        let store = Arc::new(MemorySessionStore::new());
+        store
+            .put(&proven(Marketplace::Tes, None, verified_at))
+            .await
+            .expect("the fixture stores");
+        store
+    }
+
+    /// The beat that closes the hole: the renewal's cookies are stored and
+    /// the proof is stamped, so the session the next request composes is the
+    /// current one and the check-in can say so.
+    #[tokio::test]
+    async fn a_renewed_session_is_stored_with_the_proof_it_earned() {
+        let store = holding(None).await;
+        let beat = Timestamp(CAPTURED.0 + 4 * 60 * 60 * 1_000);
+
+        refresh_sessions(
+            store.as_ref(),
+            &Scripted::authenticated(Some("TESSession=renewed")),
+            beat,
+        )
+        .await
+        .expect("the beat completes");
+
+        let held = store
+            .get(Marketplace::Tes)
+            .await
+            .expect("the store answers")
+            .expect("the session is held");
+        assert_eq!(held.jar.header_value(), "TESSession=renewed");
+        assert_eq!(held.verified_at, Some(beat));
+        assert!(
+            held.proven_at(beat),
+            "four hours in, the session is proven rather than lapsed: that is the whole repair"
+        );
+    }
+
+    /// A refusal must land on this beat rather than fifteen minutes after it,
+    /// so the check-in that follows reports the lapse immediately.
+    #[tokio::test]
+    async fn a_refused_session_loses_its_proof_at_once() {
+        let store = holding(Some(CAPTURED)).await;
+
+        refresh_sessions(store.as_ref(), &Scripted::refused(), CAPTURED)
+            .await
+            .expect("the beat completes");
+
+        let held = store
+            .get(Marketplace::Tes)
+            .await
+            .expect("the store answers")
+            .expect("the jar is kept for the seller's next sign-in");
+        assert_eq!(held.verified_at, None);
+        let report = report_of(store.as_ref(), CAPTURED)
+            .await
+            .expect("the report builds");
+        assert_eq!(
+            report[0].status,
+            SessionState::SignedOut,
+            "the server flips the connection to needs_reauth instead of re-linking a session \
+             the marketplace has stopped accepting and handing this device items to burn"
+        );
+    }
+
+    /// An unreachable marketplace says nothing about the session, so the
+    /// record stands — and needs no help, because the stamp it failed to
+    /// renew ages out on its own.
+    #[tokio::test]
+    async fn an_unreachable_marketplace_is_not_evidence_of_a_lapse() {
+        let store = holding(Some(CAPTURED)).await;
+
+        refresh_sessions(store.as_ref(), &Scripted::unreachable(), CAPTURED)
+            .await
+            .expect("a probe failure is not a beat failure");
+
+        let held = store
+            .get(Marketplace::Tes)
+            .await
+            .expect("the store answers")
+            .expect("the session is held");
+        assert_eq!(held.verified_at, Some(CAPTURED));
+        let window = i64::try_from(PROOF_MAX_AGE.as_millis()).expect("the window fits");
+        let report = report_of(store.as_ref(), Timestamp(CAPTURED.0 + window + 1))
+            .await
+            .expect("the report builds");
+        assert_eq!(
+            report[0].status,
+            SessionState::SignedOut,
+            "an outage long enough to matter still ends with the session reported as needing a \
+             fresh sign-in rather than as connected"
+        );
+    }
+
+    /// Nothing is invented for a marketplace this device holds no session
+    /// for, and no probe is made for one.
+    #[tokio::test]
+    async fn a_marketplace_with_no_session_is_not_probed_and_not_reported() {
+        let store = Arc::new(MemorySessionStore::new());
+        refresh_sessions(
+            store.as_ref(),
+            &Scripted::authenticated(Some("TESSession=x")),
+            CAPTURED,
+        )
+        .await
+        .expect("the beat completes");
+        assert!(store
+            .get(Marketplace::Tes)
+            .await
+            .expect("the store answers")
+            .is_none());
+        assert!(report_of(store.as_ref(), CAPTURED)
+            .await
+            .expect("the report builds")
+            .is_empty());
     }
 }
