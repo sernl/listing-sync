@@ -248,15 +248,31 @@ fn same_host_only() -> reqwest::redirect::Policy {
 
 /// Every Tes API call is small and answers fast, so thirty seconds is the
 /// ceiling for the session and the redirected clients. The one exception is
-/// the presigned S3 upload, which carries the resource's own bundle: a
-/// fifteen-megabyte ZIP from a tablet on domestic Wi-Fi took about thirty-five
-/// seconds on 2026-09-18, so a thirty-second ceiling turned every create into
-/// a timed-out submit that the reconcile then found had landed. The upload's
-/// ceiling is therefore its own, sized under the driver's measured worst-case
-/// submit budget (`MEASURED_SUBMIT_WORST_CASE_MS`, 180 s against the 600 s
-/// lease) rather than under an API round trip.
+/// the presigned S3 upload, which carries the resource's own bundle, and its
+/// ceiling is sized by the bundle rather than fixed: the thirty bundles of the
+/// 2026-09-18 trial run 9–28 MB, and the tablet's uplink measured 57–148 KB/s
+/// the same day, so a flat 150 s cut roughly every second upload off mid-body
+/// and turned the create into an ambiguity the reconcile then found had
+/// landed. The floor covers connection and the S3 answer; the per-byte term
+/// admits an uplink down to `UPLOAD_MIN_RATE` bytes a second; the cap keeps
+/// the stretch inside the lease the driver renews immediately before
+/// `submit` (600 s, see `tam-engine`'s lease budget tests), with room for the
+/// verification that follows. Slower than the cap allows is a network the
+/// reconcile exists for.
 const API_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(30);
-const UPLOAD_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(150);
+const UPLOAD_TIMEOUT_FLOOR: core::time::Duration = core::time::Duration::from_mins(1);
+const UPLOAD_MIN_RATE: u64 = 64 * 1024;
+const UPLOAD_TIMEOUT_CAP: core::time::Duration = core::time::Duration::from_mins(8);
+/// The client-wide default for clients that may carry an upload; the
+/// per-request ceiling from [`upload_timeout`] overrides it whenever a body
+/// is actually posted.
+const UPLOAD_TIMEOUT: core::time::Duration = UPLOAD_TIMEOUT_CAP;
+
+/// The ceiling for a request that posts `bytes` of file.
+fn upload_timeout(bytes: usize) -> core::time::Duration {
+    let per_byte = core::time::Duration::from_secs((bytes as u64).div_ceil(UPLOAD_MIN_RATE));
+    (UPLOAD_TIMEOUT_FLOOR + per_byte).min(UPLOAD_TIMEOUT_CAP)
+}
 
 fn build_client(
     headers: reqwest::header::HeaderMap,
@@ -558,7 +574,20 @@ async fn send_over_capped(
         ),
         None => builder,
     };
+    let posted = match &request.body {
+        RequestBody::Multipart {
+            file: Some(part), ..
+        } => Some(part.bytes.len()),
+        RequestBody::Multipart { file: None, .. }
+        | RequestBody::Empty
+        | RequestBody::Json(_)
+        | RequestBody::Bytes(_) => None,
+    };
     let builder = apply_body(builder, request.body)?;
+    let builder = match posted {
+        Some(bytes) => builder.timeout(upload_timeout(bytes)),
+        None => builder,
+    };
     // The one ambient clock read in this crate, and it measures nothing the
     // system decides on: the elapsed time is printed and never returned, so
     // no behaviour depends on it.

@@ -775,6 +775,22 @@ mod lease_budget_tests {
         );
     }
 
+    /// Tes's upload ceiling (`UPLOAD_TIMEOUT_CAP` in
+    /// `crates/tam-marketplace-tes/src/live.rs`, 480 s) plus the verification
+    /// window that follows the submit, against the same lease.
+    #[test]
+    fn tes_upload_cap_plus_verification_fits_inside_the_lease() {
+        const TES_UPLOAD_CAP_MS: u64 = 480_000;
+        let spent = TES_UPLOAD_CAP_MS + verify_policy(InventoryId::Tes).window_ms();
+        assert!(
+            spent < lease_ms(),
+            "a bundle upload at the cap plus the verification window is {spent}ms against a \
+             {}ms lease; raise the lease or lower the cap, or a slow uplink loses its item \
+             mid-upload",
+            lease_ms()
+        );
+    }
+
     #[test]
     fn the_verification_poll_fits_inside_the_lease() {
         let lease_ms = lease_ms();
