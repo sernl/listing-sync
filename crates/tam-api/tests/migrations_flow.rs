@@ -36,6 +36,9 @@ const MOVES: u8 = 0x01;
 const UNLISTED: u8 = 0x02;
 /// Already bound on TPT, so the migration has nothing to create.
 const LANDED: u8 = 0x03;
+/// Held on TPT only, with a file and a paid price, declaring no rights: the
+/// resource whose licence the seller's approved rule is the only answer to.
+const GRANTED: u8 = 0x04;
 
 fn state(pool: PgPool) -> AppState {
     AppState {
@@ -283,6 +286,162 @@ fn move_body() -> serde_json::Value {
         "target": "Tpt",
         "disposition": "migrate",
         "selection": { "all": true },
+    })
+}
+
+/// A resource whose only answer to Tes's required licence is the seller's own
+/// approved rule is admitted, and the licence it was admitted on is the one
+/// the device will post.
+///
+/// The production refusal this pins: the seller approved a TPT-to-Tes mapping
+/// supplying `TES-PAID`, and the plan refused every row with "that
+/// marketplace requires Licence", because the required-field gate could not
+/// see the approval. This resource declares no rights and has settled no
+/// election, so the approval is the only answer there is.
+///
+/// Both halves are asserted, in order: the same plan with no rule written
+/// still refuses the row, which is the rule that must not be lost, and the
+/// frozen output the confirm writes carries the native id, which is what the
+/// engine reads at claim and the Tes adapter renders into the create.
+///
+/// The db lane, because an approval exists only once a rule row is written
+/// and resolved through a `rule_capture` transaction.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_approved_mapping_answers_the_targets_required_licence(pool: PgPool) {
+    provision(&pool, Some(tam_limits::Plan::Subscriber)).await;
+    // Held on TPT and nowhere else, priced in the currency Tes sells in, and
+    // declaring no rights at all: everything a create on Tes needs except the
+    // licence it declares required.
+    let mut granted = product(GRANTED);
+    granted.price = PriceIntent::Paid(
+        tam_types::Money::new(450, tam_types::Currency::Gbp).expect("a positive price"),
+    );
+    ProductRepo::new(pool.clone())
+        .insert(ORG, &granted, Timestamp(1_000))
+        .await
+        .expect("the granted resource inserts");
+    MappingRepo::new(pool.clone())
+        .insert(
+            ORG,
+            &bound(
+                GRANTED | 0x30,
+                InventoryId::Tpt,
+                RemoteListingId::Tpt { product_id: 9002 },
+            ),
+            0,
+            NOW,
+        )
+        .await
+        .expect("the source mapping inserts");
+
+    let row = |plan: &MigrationPlanView| {
+        plan.rows
+            .iter()
+            .find(|row| row.product == ProductId(Uuid([GRANTED; 16])))
+            .expect("the granted resource is previewed")
+            .clone()
+    };
+
+    // Before the approval exists, the refusal stands: no declaration, no
+    // election and no approved mapping is the case that must stay blocked.
+    let unanswered: MigrationPlanView = call(pool.clone(), "/v1/migrations/plan", None, sync_up())
+        .await
+        .json();
+    let unanswered = row(&unanswered);
+    assert_eq!(unanswered.verdict, MigrationVerdict::Blocked);
+    assert!(
+        unanswered
+            .reason
+            .as_deref()
+            .is_some_and(|why| why.contains("requires Licence")),
+        "the licence is what blocks it: {:?}",
+        unanswered.reason
+    );
+
+    // The seller's own rule, opted into moves, supplying the paid licence.
+    tam_storage::seller_rules::SellerRuleRepo::new(pool.clone())
+        .create(
+            ORG,
+            UserId(Uuid([0x0A; 16])),
+            &tam_domain::seller_rules::SellerRuleDefinition {
+                title: "Paid on Tes".to_owned(),
+                description: "Everything I move to Tes is sold, not given away.".to_owned(),
+                enabled: true,
+                source: InventoryId::Tpt,
+                target: InventoryId::Tes,
+                auto_apply: vec![tam_domain::seller_rules::RuleUse::Move],
+                conditions: tam_domain::seller_rules::RuleConditions::default(),
+                action: tam_domain::seller_rules::RuleAction::Mapping {
+                    licence: Some("TES-PAID".to_owned()),
+                    resource_type: None,
+                },
+            },
+            Timestamp(1_000),
+        )
+        .await
+        .expect("the mapping rule writes");
+
+    let answered: MigrationPlanView = call(pool.clone(), "/v1/migrations/plan", None, sync_up())
+        .await
+        .json();
+    let answered = row(&answered);
+    assert_eq!(
+        (answered.verdict, answered.reason.as_deref()),
+        (MigrationVerdict::WillCreate, None),
+        "the approved mapping answers the field the target requires"
+    );
+
+    // And the licence the plan admitted on is the licence the write carries:
+    // the confirm freezes it into the request snapshot, the mint copies that
+    // into the item's own frozen output, and the engine reads exactly this
+    // row when a device claims the create.
+    let accepted = call(pool.clone(), "/v1/migrations", Some(KEY), sync_up()).await;
+    assert_eq!(accepted.status, StatusCode::ACCEPTED);
+    let ack: MigrationAck = accepted.json();
+    assert_eq!(ack.queued, 1, "only the granted resource crosses");
+    let create_job = SyncRequestRepo::new(pool.clone())
+        .get(ORG, ack.request)
+        .await
+        .expect("the request reads")
+        .expect("it exists")
+        .create_job
+        .expect("a migration creates on the target");
+    let items = tam_storage::JobReadRepo::new(pool.clone())
+        .items_page(
+            ORG,
+            JobId(create_job),
+            tam_storage::ItemsPageParams {
+                cursor: None,
+                limit: 10,
+                outcome: None,
+            },
+        )
+        .await
+        .expect("the create job's items read");
+    assert_eq!(items.len(), 1);
+    let frozen = tam_storage::rule_capture::frozen_output(&pool, ORG, items[0].item)
+        .await
+        .expect("the frozen output reads")
+        .expect("a create the seller approved carries one");
+    assert_eq!(
+        frozen.licence.map(|choice| choice.native_id).as_deref(),
+        Some("TES-PAID"),
+        "the grant the device posts is the one the seller's rule authored"
+    );
+}
+
+/// The same body the approved-licence test plans and confirms with: TPT is
+/// the source Tes takes the listing from.
+fn sync_up() -> serde_json::Value {
+    serde_json::json!({
+        "source": "Tpt",
+        "target": "Tes",
+        "disposition": "migrate",
+        // The one resource, rather than the whole catalogue: the other
+        // fixtures are free, and a rule that sets `TES-PAID` on a free
+        // resource is refused outright — a real refusal, and a different
+        // one from the licence gate this test is about.
+        "selection": { "products": ["04040404-0404-0404-0404-040404040404"] },
     })
 }
 

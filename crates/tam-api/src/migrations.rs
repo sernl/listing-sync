@@ -463,17 +463,22 @@ async fn plan(
         .await
         .map_err(|error| storage_fault(state, &error))?;
     // What the seller has already approved for each of these resources on
-    // this target. The plan's currency gate and the price it admits both read
-    // it, because a gate reading the canonical price refuses every conversion
-    // the seller authorised — a USD source into Tes is exactly the case this
-    // feature exists for — and an admitted price that differed from the one
-    // the enqueue will freeze would report a figure nothing posts.
+    // this target: the price, the licence and the resource type as one
+    // answer. The plan's currency gate, the required-field gate and the
+    // price it admits all read it, because a gate reading the canonical
+    // price refuses every conversion the seller authorised — a USD source
+    // into Tes is exactly the case this feature exists for — an admitted
+    // price that differed from the one the enqueue will freeze would report
+    // a figure nothing posts, and a required-field gate blind to the
+    // approval refuses every row whose licence the approved mapping already
+    // supplies. One traversal, because these are three uses of one answer
+    // rather than three questions.
     let source_products: Vec<_> = on_source
         .iter()
         .filter(|head| head.remote.is_some())
         .map(|head| head.product)
         .collect();
-    let approved = tam_storage::rule_capture::approved_prices(
+    let approved = tam_storage::rule_capture::approved_targets(
         &state.pool,
         context.org,
         &source_products,
@@ -521,14 +526,35 @@ async fn plan(
             counts.already_there = counts.already_there.saturating_add(1);
             continue;
         }
+        // This resource's own approved answer, found once for both gates
+        // below.
+        let approved_here = approved
+            .iter()
+            .find(|(subject, _)| *subject == product.id)
+            .map(|(_, fields)| fields);
         // Everything a listing that does not exist yet needs, asked after the
         // already-there arm and not before it: a resource the target already
         // carries is having nothing created for it, so what a create would
         // have required of it is not a reason to block the row.
+        //
+        // The approval travels into the gate, so a target that requires a
+        // licence and a seller-rule mapping that supplies one meet: the
+        // enqueue freezes that licence and the device posts it, and a row
+        // refused here for the field the approval answers would refuse a
+        // create that was already fully decided.
         if let Some(why) = facts
             .iter()
             .find(|facts| facts.product == product.id)
-            .and_then(|facts| crate::catalogue::creation_blocked(facts, body.target))
+            .and_then(|facts| {
+                crate::catalogue::creation_blocked(
+                    facts,
+                    body.target,
+                    approved_here.map(|fields| crate::catalogue::Approved {
+                        inventory: body.target,
+                        fields,
+                    }),
+                )
+            })
         {
             rows.push(blocked(product, why.reason()));
             counts.blocked = counts.blocked.saturating_add(1);
@@ -538,10 +564,9 @@ async fn plan(
         // price where there is not. An unapproved resource keeps the existing
         // refusal by name rather than being given a target currency nobody
         // chose.
-        let price = approved
-            .iter()
-            .find(|(subject, _)| *subject == product.id)
-            .map_or(product.price, |(_, approved)| *approved);
+        let price = approved_here
+            .and_then(|fields| fields.price)
+            .unwrap_or(product.price);
         if let Some(reason) = currency_refusal(price, body.target) {
             rows.push(blocked(product, reason));
             counts.blocked = counts.blocked.saturating_add(1);

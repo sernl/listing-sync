@@ -244,6 +244,21 @@ async fn send(
         .creation_facts(org, &ids, inventory)
         .await
         .map_err(|error| storage_fault(state, &error))?;
+    // What the seller has already approved for this marketplace across the
+    // tick's members, read once beside the facts rather than per member. Both
+    // halves of the loop below need it — the gate reads the licence, because
+    // an approved grant is the grant the enqueue will freeze and the device
+    // will post, and a minted mapping records the price — so it is one
+    // traversal answering two questions rather than two walks that could
+    // disagree.
+    let approved = tam_storage::rule_capture::approved_targets(
+        &state.pool,
+        org,
+        &ids,
+        tam_storage::rule_capture::PricingScope::CrossList(inventory),
+    )
+    .await
+    .map_err(|error| storage_fault(state, &error))?;
 
     let mut rows: Vec<ScheduleRunWrite> = Vec::new();
     let mut chosen: Vec<(ProductId, MappingId)> = Vec::new();
@@ -266,6 +281,10 @@ async fn send(
                 continue;
             }
         }
+        let approved_here = approved
+            .iter()
+            .find(|(subject, _)| *subject == member.product)
+            .map(|(_, fields)| fields);
         // A member the marketplace would refuse is skipped before anything is
         // minted for it. An already-bound republish is past this: its listing
         // exists, so what a create would need is not the question being asked.
@@ -273,7 +292,14 @@ async fn send(
             let blocked = facts
                 .iter()
                 .find(|held| held.product == member.product)
-                .and_then(|held| crate::catalogue::creation_blocked(held, inventory));
+                .and_then(|held| {
+                    crate::catalogue::creation_blocked(
+                        held,
+                        inventory,
+                        approved_here
+                            .map(|fields| crate::catalogue::Approved { inventory, fields }),
+                    )
+                });
             if let Some(blocked) = blocked {
                 rows.push(skipped(member.product, inventory, &blocked.reason()));
                 continue;
@@ -286,7 +312,7 @@ async fn send(
             // writes when a seller adds a marketplace by hand, so a tick that
             // then fails leaves them the mapping they would have got by
             // ticking it rather than an artefact of a half-run drop.
-            let price = minted_price(state, org, member.product, inventory, &prices).await?;
+            let price = minted_price(approved_here, member.product, &prices);
             let id = MappingId(fresh_uuid());
             let minted = unbound_mapping(org, member.product, inventory, id, price);
             crate::migrations::mint(state, &mappings, &minted, inventory, now).await?
@@ -689,6 +715,17 @@ async fn publish(
             .heads_for_products(org, target, &products)
             .await
             .map_err(|error| storage_fault(state, &error))?;
+        // The approved answers for this target, once per target rather than
+        // once per resource: a rule firing over a hundred imported resources
+        // opened a hundred transactions for the same question.
+        let approved = tam_storage::rule_capture::approved_targets(
+            &state.pool,
+            org,
+            &products,
+            tam_storage::rule_capture::PricingScope::CrossList(target),
+        )
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
         for product in &products {
             if settings
                 .auto_published(org, head.id, *product, target)
@@ -707,7 +744,14 @@ async fn publish(
             let mapping = if let Some(head) = existing {
                 head.id
             } else {
-                let price = minted_price(state, org, *product, target, &prices).await?;
+                let price = minted_price(
+                    approved
+                        .iter()
+                        .find(|(subject, _)| subject == product)
+                        .map(|(_, fields)| fields),
+                    *product,
+                    &prices,
+                );
                 let id = MappingId(fresh_uuid());
                 let minted = unbound_mapping(org, *product, target, id, price);
                 crate::migrations::mint(state, &mappings, &minted, target, now).await?
@@ -857,28 +901,23 @@ async fn prices_of(
 /// invents no conversion: where nothing is approved this is exactly the
 /// figure `add_mapping` would have written, and the publish that follows
 /// meets the ordinary currency gate.
-async fn minted_price(
-    state: &AppState,
-    org: OrgId,
+///
+/// The approval arrives as an argument rather than being read here, because
+/// the caller already read it for the eligibility gate: one resolution per
+/// resource per target, rather than one for the gate and a second one for
+/// the figure that could differ from it.
+fn minted_price(
+    approved: Option<&tam_domain::seller_rules::TargetFields>,
     product: ProductId,
-    target: InventoryId,
     canonical: &[(ProductId, PriceIntent)],
-) -> Result<PriceIntent, APIError> {
-    if let Some(approved) = tam_storage::rule_capture::approved_price(
-        &state.pool,
-        org,
-        product,
-        tam_storage::rule_capture::PricingScope::CrossList(target),
-    )
-    .await
-    .map_err(|error| storage_fault(state, &error))?
-    {
-        return Ok(approved);
+) -> PriceIntent {
+    if let Some(price) = approved.and_then(|fields| fields.price) {
+        return price;
     }
-    Ok(canonical
+    canonical
         .iter()
         .find(|(held, _)| *held == product)
-        .map_or(PriceIntent::Free, |(_, price)| *price))
+        .map_or(PriceIntent::Free, |(_, price)| *price)
 }
 
 fn fresh_uuid() -> Uuid {

@@ -757,12 +757,14 @@ async fn publish_plan(
         .into_iter()
         .find(|halt| halt.inventory == body.inventory)
         .map(|halt| format!("{} is paused: {}", name_of(halt.inventory), halt.reason));
-    // The seller's approved target price per member, so the mapping this
-    // confirm mints records what the listing will actually be priced at
-    // rather than the canonical figure the enqueue is about to convert away
-    // from. Without it the collection's own export reports one price and the
-    // device posts another.
-    let approved = tam_storage::rule_capture::approved_prices(
+    // The seller's approved answer per member for this marketplace: the
+    // price, so the mapping this confirm mints records what the listing will
+    // actually be priced at rather than the canonical figure the enqueue is
+    // about to convert away from — without it the collection's own export
+    // reports one price and the device posts another — and the licence, which
+    // is one of the three ways the target's required field can already be
+    // answered.
+    let approved = tam_storage::rule_capture::approved_targets(
         &state.pool,
         context.org,
         &products,
@@ -793,16 +795,34 @@ async fn publish_plan(
             counts.already_there = counts.already_there.saturating_add(1);
             continue;
         }
+        // This member's own approved answer, found once for the gate and the
+        // price below.
+        let approved_here = approved
+            .iter()
+            .find(|(subject, _)| *subject == member.product)
+            .map(|(_, fields)| fields);
         // Everything a listing that does not exist yet needs, asked after the
         // already-there arm above: a member the target already carries is
         // having nothing created for it. Silent until now — `mapping_seeds`
         // inner-joins the payload file, so a member without one yielded no
         // item and the job carried a short list nobody was told about — and
         // the target's own required fields were never asked at all.
+        //
+        // The approval travels in, because a licence the seller's own rule
+        // supplies is the licence this publish will freeze and post.
         if let Some(why) = facts
             .iter()
             .find(|facts| facts.product == member.product)
-            .and_then(|facts| crate::catalogue::creation_blocked(facts, body.inventory))
+            .and_then(|facts| {
+                crate::catalogue::creation_blocked(
+                    facts,
+                    body.inventory,
+                    approved_here.map(|fields| crate::catalogue::Approved {
+                        inventory: body.inventory,
+                        fields,
+                    }),
+                )
+            })
         {
             rows.push(row(MigrationVerdict::Blocked, None, Some(why.reason())));
             counts.blocked = counts.blocked.saturating_add(1);
@@ -838,18 +858,14 @@ async fn publish_plan(
         counts.will_create = counts.will_create.saturating_add(1);
         admitted.push(PublishAdmitted {
             product: member.product,
-            price: approved
-                .iter()
-                .find(|(subject, _)| *subject == member.product)
-                .map_or_else(
-                    || {
-                        catalogue
-                            .iter()
-                            .find(|summary| summary.id == member.product)
-                            .map_or(PriceIntent::Free, |summary| summary.price)
-                    },
-                    |(_, approved)| *approved,
-                ),
+            price: approved_here
+                .and_then(|fields| fields.price)
+                .unwrap_or_else(|| {
+                    catalogue
+                        .iter()
+                        .find(|summary| summary.id == member.product)
+                        .map_or(PriceIntent::Free, |summary| summary.price)
+                }),
             mapping: head.map(|head| head.id),
         });
     }
