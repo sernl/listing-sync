@@ -624,6 +624,72 @@ pub fn s3_upload_request(upload: &PresignedUpload, file: FilePart) -> HttpReques
     )
 }
 
+/// The cover image's first hop. Tes's uploader hands cover images to
+/// Uploadcare (its widget, public key below, observed 2026-09-19 on
+/// `uploader/v2/{id}/files`): a multipart POST answering `{"file": uuid}`.
+/// No credential of ours travels; the public key is the site's own and is
+/// embedded in every uploader page.
+pub const UPLOADCARE_UPLOAD_URL: &str = "https://upload.uploadcare.com/base/";
+pub const UPLOADCARE_PUBLIC_KEY: &str = "5f93e59f109ebf8e3ed6";
+/// The crop the widget is configured with (`crop: "700:525"`,
+/// `imageShrink: "700x525"`), restated in the CDN modifiers Tes is told
+/// about so the stored cover is the same shape the uploader would store.
+pub const COVER_CDN_MODIFIERS: &str = "-/scale_crop/700x525/center/-/preview/";
+
+#[must_use]
+pub fn uploadcare_upload_request(file: FilePart) -> HttpRequest {
+    HttpRequest::post_multipart(
+        UPLOADCARE_UPLOAD_URL.to_owned(),
+        vec![
+            (
+                "UPLOADCARE_PUB_KEY".to_owned(),
+                UPLOADCARE_PUBLIC_KEY.to_owned(),
+            ),
+            ("UPLOADCARE_STORE".to_owned(), "auto".to_owned()),
+        ],
+        Some(file),
+        RequestAuth::Anonymous,
+    )
+}
+
+/// The second hop: Tes copies the Uploadcare file into its own bucket and
+/// answers `{"fileName", "url"}`; `fileName` is the `customThumbnails` key
+/// the draft metadata and the publish both carry. The body is the shape the
+/// widget's `fileInfo` has, trimmed to what the route reads (verified
+/// 2026-09-19: this exact body answered 200).
+#[must_use]
+pub fn upload_cover_image_request(
+    uuid: &str,
+    file_name: &str,
+    content_type: &str,
+    size: usize,
+) -> HttpRequest {
+    HttpRequest::post_json(
+        format!("{ORIGIN}/teaching-resource/upload-cover-image"),
+        json!({
+            "uuid": uuid,
+            "name": file_name,
+            "size": size,
+            "isStored": true,
+            "isImage": true,
+            "mimeType": content_type,
+            "originalUrl": format!("https://ucarecdn.com/{uuid}/"),
+            "cdnUrlModifiers": COVER_CDN_MODIFIERS,
+            "cdnUrl": format!("https://ucarecdn.com/{uuid}/{COVER_CDN_MODIFIERS}"),
+            "sourceInfo": { "source": "local", "file": {} },
+        }),
+    )
+}
+
+/// The cover key written onto the draft, the same route the metadata takes.
+#[must_use]
+pub fn set_cover_request(id: DraftId, key: &str) -> HttpRequest {
+    HttpRequest::post_json(
+        format!("{ORIGIN}/api/v2/resources/{}/draft", id.0),
+        json!({ "customThumbnails": [{ "key": key }] }),
+    )
+}
+
 /// The confirm handshake: the full presigned attachment object echoed back
 /// with `type: file` and `isUploaded: true`, which is what makes the server
 /// verify the S3 object by the key carried in `s3pending` (the M0 finding —
@@ -653,9 +719,12 @@ pub fn confirm_request(id: DraftId, upload: &PresignedUpload) -> HttpRequest {
 /// declares nothing to fill it with. `additionalAge` is not added here: it
 /// rides the draft body itself, which is where the capture shows it.
 #[must_use]
-pub fn publish_request(id: DraftId, listing: &TesListing) -> HttpRequest {
+pub fn publish_request(id: DraftId, listing: &TesListing, thumbnails: Value) -> HttpRequest {
     let mut body = metadata_body(listing);
-    body["customThumbnails"] = json!([]);
+    // The draft's own `customThumbnails`, read back before the publish: the
+    // publish re-posts the whole resource and an empty list here would drop
+    // the cover the create set.
+    body["customThumbnails"] = thumbnails;
     if let Some(primary) = listing.category_ids.first() {
         body["primaryCategory"] = json!(primary);
     }
@@ -1433,7 +1502,7 @@ mod tests {
 
     #[test]
     fn the_publish_body_restates_the_metadata_with_the_price_and_the_primary_category() {
-        let request = super::publish_request(DraftId(13_264_370), &listing(paid(500)));
+        let request = super::publish_request(DraftId(13_264_370), &listing(paid(500)), json!([]));
         assert_eq!(
             request.url, "https://www.tes.com/api/v2/resources/13264370/draft/publish",
             "the captured publish is the draft's own route, not the resource's"
@@ -1482,6 +1551,7 @@ mod tests {
                 age_channel: TesAges::new(vec![4]),
                 ..listing(TesPricing::Free(FreeLicence::CcByNd))
             },
+            json!([]),
         );
         let RequestBody::Json(body) = &request.body else {
             panic!("publish is a JSON body");

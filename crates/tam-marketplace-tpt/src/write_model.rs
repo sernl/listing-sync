@@ -955,6 +955,9 @@ pub fn project_fields(listing: &ProjectedListing) -> Result<FieldSet, AdapterErr
             (FieldKey::Grades, json!({ "tags": grades }).to_string()),
         ],
         files: listing.files.clone(),
+        // TPT's cover slot is not captured yet; the projected cover is carried
+        // and ignored here rather than dropped upstream.
+        cover: listing.cover,
         appropriate_for_country: listing.appropriate_for_country,
     })
 }
@@ -1509,6 +1512,7 @@ mod tests {
     fn projected(price: PriceIntent) -> ProjectedListing {
         ProjectedListing {
             title: "Fractions".to_owned(),
+            cover: None,
             body: "<p>ten</p>".to_owned(),
             price,
             taxonomy: vec![

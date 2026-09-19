@@ -146,6 +146,7 @@ fn read_file(path: &str) -> Result<Vec<u8>, std::io::Error> {
 fn projection(title: String, body: String, price: PriceIntent) -> ProjectedListing {
     ProjectedListing {
         title,
+        cover: None,
         body,
         price,
         taxonomy: vec![NativeTerm {

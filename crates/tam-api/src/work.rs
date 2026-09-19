@@ -30,7 +30,7 @@ use tam_storage::{
     describe_files, BlobRepo, Charged, ClaimPolicy, ConnectionFactsRepo, DeviceClaim, DeviceRef,
     LeaseRepo,
 };
-use tam_types::{FailureDetail, FileBytes, Timestamp};
+use tam_types::{FailureDetail, FileBytes, FileId, Timestamp};
 
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::{AppState, OrgContext};
@@ -236,13 +236,18 @@ async fn work_order(
     // digest another device asserted rather than one we committed to.
     let preparation = preparation_for(leased, operation, projected);
     let payload = match preparation.projected.as_ref() {
-        Some(listing) => describe_files(&state.pool, org, &listing.files)
-            .await
-            .map_err(|error| state.internal(&error.to_string()))?
-            .into_iter()
-            .map(manifest_for)
-            .collect::<Result<Vec<_>, String>>()
-            .map_err(|error| state.internal(&error))?,
+        Some(listing) => {
+            // The cover travels the same way the files do, described here so
+            // the device fetches and checks it before the adapter asks.
+            let wanted: Vec<FileId> = listing.files.iter().copied().chain(listing.cover).collect();
+            describe_files(&state.pool, org, &wanted)
+                .await
+                .map_err(|error| state.internal(&error.to_string()))?
+                .into_iter()
+                .map(manifest_for)
+                .collect::<Result<Vec<_>, String>>()
+                .map_err(|error| state.internal(&error))?
+        }
         None => Vec::new(),
     };
     // The seller's own declaration, off the connection they linked. The device

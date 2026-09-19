@@ -93,6 +93,7 @@ fn paid_listing(minor_units: i64) -> TesListing {
 
 fn sample_field_set(file: FileId) -> FieldSet {
     FieldSet {
+        cover: None,
         entries: vec![
             (FieldKey::Title, "Fractions pack".to_owned()),
             (FieldKey::Description, "A pack.".to_owned()),
@@ -201,6 +202,103 @@ fn the_full_submit_flow_replays_and_lands() {
         adapter.transport().remaining(),
         0,
         "every recorded interaction was exercised"
+    );
+}
+
+/// The cover rides the three hops the uploader page makes, after the files
+/// and before the read-back, and the key Tes answers is what lands on the
+/// draft. Observed 2026-09-19 on `uploader/v2/{id}/files`: the widget stages
+/// the image at Uploadcare, `upload-cover-image` copies it and names the key,
+/// and the draft metadata carries `customThumbnails: [{key}]`.
+#[test]
+fn a_projected_cover_is_staged_imported_and_set_after_the_files() {
+    let file_id = FileId(Uuid([0x21; 16]));
+    let cover_id = FileId(Uuid([0x22; 16]));
+    let content = FileContent {
+        file_name: "pack.pdf".to_owned(),
+        content_type: "application/pdf".to_owned(),
+        bytes: b"%PDF-1.4 tiny".to_vec(),
+    };
+    let cover = FileContent {
+        file_name: "abc.png".to_owned(),
+        content_type: "image/png".to_owned(),
+        bytes: b"\x89PNG tiny".to_vec(),
+    };
+    let presign_body = presign_response();
+    let upload = endpoints::parse_presign(&presign_body, "pack.pdf", "application/pdf")
+        .expect("the fixture presign parses");
+    let key = "u-1/abc.scale_crop_700x525_center.preview.jpg";
+    let cassette = Cassette {
+        interactions: vec![
+            Interaction {
+                request: endpoints::create_draft_request(),
+                response: ok(&json!({"id": 9001})),
+            },
+            Interaction {
+                request: endpoints::set_metadata_request(DRAFT, &sample_listing()),
+                response: ok(&json!({"id": 9001, "title": "Fractions pack"})),
+            },
+            Interaction {
+                request: endpoints::presign_request(DRAFT, "pack.pdf", "TEMP-0"),
+                response: ok(&presign_body),
+            },
+            Interaction {
+                request: endpoints::s3_upload_request(
+                    &upload,
+                    FilePart {
+                        part_name: "file".to_owned(),
+                        file_name: "pack.pdf".to_owned(),
+                        content_type: "application/pdf".to_owned(),
+                        bytes: content.bytes.clone(),
+                    },
+                ),
+                response: status(204),
+            },
+            Interaction {
+                request: endpoints::confirm_request(DRAFT, &upload),
+                response: ok(&json!([{"isUploaded": true, "s3pending": {"key": "k/9001"}}])),
+            },
+            Interaction {
+                request: endpoints::uploadcare_upload_request(FilePart {
+                    part_name: "file".to_owned(),
+                    file_name: "abc.png".to_owned(),
+                    content_type: "image/png".to_owned(),
+                    bytes: cover.bytes.clone(),
+                }),
+                response: ok(&json!({"file": "u-1"})),
+            },
+            Interaction {
+                request: endpoints::upload_cover_image_request(
+                    "u-1",
+                    "abc.png",
+                    "image/png",
+                    cover.bytes.len(),
+                ),
+                response: ok(&json!({"fileName": key, "url": format!("https://cdn/{key}")})),
+            },
+            Interaction {
+                request: endpoints::set_cover_request(DRAFT, key),
+                response: ok(&json!({"id": 9001, "customThumbnails": [{"key": key}]})),
+            },
+            Interaction {
+                request: endpoints::read_draft_request(DRAFT),
+                response: ok(&draft_state(9001, true)),
+            },
+        ],
+    };
+    let adapter = adapter(cassette, vec![(file_id, content), (cover_id, cover)]);
+    let mut fields = sample_field_set(file_id);
+    fields.cover = Some(cover_id);
+    futures::executor::block_on(adapter.submit(
+        tam_marketplace::IdempotencyKey(Uuid([1; 16])),
+        fields,
+        NOW,
+    ))
+    .expect("the recorded flow lands");
+    assert_eq!(
+        adapter.transport().remaining(),
+        0,
+        "the cover's three hops ran, in order, after the file"
     );
 }
 
@@ -447,7 +545,16 @@ fn publish_proves_itself_by_reading_back() {
     let cassette = Cassette {
         interactions: vec![
             Interaction {
-                request: endpoints::publish_request(DRAFT, &sample_listing()),
+                // The publish reads the draft first, for the cover key it restates.
+                request: endpoints::read_draft_request(DRAFT),
+                response: ok(&draft_state(9001, true)),
+            },
+            Interaction {
+                request: endpoints::publish_request(
+                    DRAFT,
+                    &sample_listing(),
+                    serde_json::json!([]),
+                ),
                 response: ok(&json!({})),
             },
             Interaction {
@@ -467,7 +574,16 @@ fn an_unconfirmed_publish_is_ambiguous() {
     let cassette = Cassette {
         interactions: vec![
             Interaction {
-                request: endpoints::publish_request(DRAFT, &sample_listing()),
+                // The publish reads the draft first, for the cover key it restates.
+                request: endpoints::read_draft_request(DRAFT),
+                response: ok(&draft_state(9001, true)),
+            },
+            Interaction {
+                request: endpoints::publish_request(
+                    DRAFT,
+                    &sample_listing(),
+                    serde_json::json!([]),
+                ),
                 response: ok(&json!({})),
             },
             Interaction {
@@ -488,6 +604,7 @@ fn an_unconfirmed_publish_is_ambiguous() {
 /// native ids Tes addresses its taxonomy by.
 fn projected(price: PriceIntent) -> ProjectedListing {
     ProjectedListing {
+        cover: None,
         title: "Fractions pack".to_owned(),
         body: "A pack.".to_owned(),
         price,
@@ -692,6 +809,7 @@ fn a_field_set_declaring_html_submits_the_draft_under_the_html_type() {
     };
     let adapter = adapter(cassette, vec![]);
     let fields = FieldSet {
+        cover: None,
         entries: vec![
             (FieldKey::Title, "Fractions pack".to_owned()),
             (FieldKey::Description, "<p>A pack.</p>".to_owned()),
@@ -936,6 +1054,7 @@ fn a_paid_field_set_parses_back_into_the_priced_draft_the_projection_named() {
     };
     let adapter = adapter(cassette, vec![]);
     let fields = FieldSet {
+        cover: None,
         entries: vec![
             (FieldKey::Title, "Fractions pack".to_owned()),
             (FieldKey::Description, "A pack.".to_owned()),
@@ -976,6 +1095,7 @@ fn a_paid_token_without_a_usable_amount_is_refused_rather_than_freed() {
             vec![],
         );
         let fields = FieldSet {
+            cover: None,
             entries: vec![
                 (FieldKey::Title, "T".to_owned()),
                 (FieldKey::Description, "D".to_owned()),
@@ -1017,7 +1137,12 @@ fn a_paid_publish_carries_the_price_to_the_drafts_own_publish_route() {
     let cassette = Cassette {
         interactions: vec![
             Interaction {
-                request: endpoints::publish_request(DRAFT, &listing),
+                // The publish reads the draft first, for the cover key it restates.
+                request: endpoints::read_draft_request(DRAFT),
+                response: ok(&draft_state(9001, true)),
+            },
+            Interaction {
+                request: endpoints::publish_request(DRAFT, &listing, serde_json::json!([])),
                 response: ok(&json!({})),
             },
             Interaction {
@@ -1140,16 +1265,24 @@ fn revise_to_live_publishes_and_revise_to_draft_reposts_the_metadata() {
                 from: ListingState::Draft,
                 to: ListingState::Live,
             },
-            endpoints::publish_request(DRAFT, &sample_listing()),
+            endpoints::publish_request(DRAFT, &sample_listing(), serde_json::json!([])),
             "https://www.tes.com/api/v2/resources/9001/draft/publish",
         ),
     ] {
-        let cassette = Cassette {
-            interactions: vec![Interaction {
-                request,
-                response: ok(&draft_state(9001, false)),
-            }],
-        };
+        // A publish restates the draft's cover key, so it reads the draft
+        // first; the metadata re-post reads nothing.
+        let mut interactions = Vec::new();
+        if transition.to == ListingState::Live {
+            interactions.push(Interaction {
+                request: endpoints::read_draft_request(DRAFT),
+                response: ok(&draft_state(9001, true)),
+            });
+        }
+        interactions.push(Interaction {
+            request,
+            response: ok(&draft_state(9001, false)),
+        });
+        let cassette = Cassette { interactions };
         let adapter = adapter(cassette, vec![]);
         let evidence = futures::executor::block_on(adapter.revise(revise_plan(transition), NOW))
             .unwrap_or_else(|error| panic!("{label}: the cell posts its route: {error:?}"));
@@ -1161,7 +1294,7 @@ fn revise_to_live_publishes_and_revise_to_draft_reposts_the_metadata() {
         assert_eq!(
             adapter.transport().remaining(),
             0,
-            "{label}: the cell posts and classifies and reads nothing back — verification is \
+            "{label}: the cell posts and classifies and verifies nothing — verification is \
              the driver's, because only the driver holds a budget to poll with"
         );
     }
@@ -1713,7 +1846,16 @@ fn a_publish_whose_state_read_404s_is_still_an_error() {
     let cassette = Cassette {
         interactions: vec![
             Interaction {
-                request: endpoints::publish_request(DRAFT, &sample_listing()),
+                // The publish reads the draft first, for the cover key it restates.
+                request: endpoints::read_draft_request(DRAFT),
+                response: ok(&draft_state(9001, true)),
+            },
+            Interaction {
+                request: endpoints::publish_request(
+                    DRAFT,
+                    &sample_listing(),
+                    serde_json::json!([]),
+                ),
                 response: status(200),
             },
             Interaction {
