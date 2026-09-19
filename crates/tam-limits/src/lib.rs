@@ -208,6 +208,9 @@ impl Plan {
                     support: Support::Email30DaysAfterPurchase,
                 }
             }
+            // The rung on a Studio grant is an operator-set monthly
+            // allowance above the published hundred, granted with a reason
+            // for a founder trial or a large migration; it never lowers it.
             Self::Studio => Capabilities {
                 resources_max: u32::MAX,
                 marketplaces_max: u32::MAX,
@@ -217,7 +220,10 @@ impl Plan {
                 duplicate_review: true,
                 publish_marketplaces_max: u32::MAX,
                 edit_days_after_purchase: None,
-                migrations_per_month: 100,
+                migrations_per_month: match rung {
+                    Some(granted) if granted > 100 => granted,
+                    _ => 100,
+                },
                 scheduling: true,
                 sync_pull_interval_secs: Some(3_600),
                 auto_publish_rules: true,
