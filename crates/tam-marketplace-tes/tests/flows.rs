@@ -612,13 +612,13 @@ fn an_elected_creative_commons_licence_on_a_priced_listing_is_refused() {
     );
 }
 
-/// F3, settled by the 2026-08-29 live probe: Tes accepts
-/// `descriptionRawType: "html"`, echoes the type back and returns the markup
-/// byte-intact. So a TPT-sourced body -- every one of which is HTML -- crosses
-/// into Tes as itself. The refusal this replaces was the interim that stood
-/// while the wire question was open.
+/// F3 revisited 2026-09-19 on the draft page rather than the API: the API
+/// takes `html` (2026-08-29 probe), but the seller's draft page shows the
+/// markup verbatim and the publish refuses emoji and anything over 3,000
+/// characters. So a TPT-sourced body crosses into Tes as plain text posted
+/// under `md`, which plain text is a subset of.
 #[test]
-fn an_html_body_posts_under_the_html_type_rather_than_being_refused() {
+fn an_html_body_posts_as_plain_text_under_the_markdown_type() {
     let adapter = adapter(
         Cassette {
             interactions: vec![],
@@ -626,20 +626,20 @@ fn an_html_body_posts_under_the_html_type_rather_than_being_refused() {
         vec![],
     );
     let mut listing = projected(PriceIntent::Free);
-    listing.body = "<p>A pack.</p>".to_owned();
+    listing.body = "<p>A pack 🎉 for <em>fractions</em>.</p><ul><li>Answers</li></ul>".to_owned();
     listing.body_format = CopyFormat::Html;
     let fields = adapter
         .project_fields(&listing)
-        .expect("Tes takes either format, so an HTML body projects");
+        .expect("an HTML body projects");
     assert_eq!(
         entry(&fields, FieldKey::Description),
-        "<p>A pack.</p>",
-        "the markup travels verbatim; nothing converts it"
+        "A pack for fractions.\n\n- Answers",
+        "markup and emoji are gone; paragraphs and items keep their breaks"
     );
     assert_eq!(
         fields.body_format,
-        Some(CopyFormat::Html),
-        "and the declaration travels beside it, because the type posted is a function of it"
+        Some(CopyFormat::Markdown),
+        "and the type posted says so, whatever the source declared"
     );
 }
 
