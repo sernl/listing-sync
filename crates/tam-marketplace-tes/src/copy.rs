@@ -187,7 +187,7 @@ mod tests {
                     <ul><li>Worksheet</li><li>Answers</li></ul><p>Enjoy!&nbsp;🎉</p>";
         assert_eq!(
             tes_description(body, CopyFormat::Html),
-            "Fractions & decimals\n\nIncludes:\n- Worksheet\n- Answers\n\nEnjoy!"
+            "Fractions & decimals\n\nIncludes:\n\n- Worksheet\n- Answers\n\nEnjoy!"
         );
     }
 

@@ -284,6 +284,11 @@ fn build_client(
         .redirect(redirects)
         .timeout(timeout)
         .connect_timeout(core::time::Duration::from_secs(10))
+        // IPv4 only. Tes and its S3 bucket publish AAAA records, and a device
+        // whose Wi-Fi hands out no global IPv6 address (the 2026-09-19 tablet)
+        // spent a fixed six seconds failing the v6 connect before giving up
+        // rather than falling back, which the trace reported as `connect`.
+        .local_address(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED))
         .build()
         .map_err(|error| TransportBuildError(error.to_string()))
 }
@@ -848,6 +853,7 @@ impl GatewayTransport {
             .default_headers(headers)
             .timeout(UPLOAD_TIMEOUT)
             .connect_timeout(core::time::Duration::from_secs(10))
+            .local_address(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED))
             .build()
             .map_err(|error| TransportBuildError(error.to_string()))?;
         Ok(Self { inner, base })
