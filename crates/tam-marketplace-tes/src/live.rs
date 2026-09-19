@@ -40,6 +40,11 @@ const SESSION_HOST: &str = "www.tes.com";
 /// suffix is what the policy's own bucket condition resolves against.
 const S3_HOST_SUFFIX: &str = ".s3.amazonaws.com";
 
+/// Where the cover image is staged: Tes's uploader hands cover images to
+/// Uploadcare, and the stage carries no credential of ours (the site's public
+/// key is a form field). Observed 2026-09-19.
+const IMAGE_STAGE_HOST: &str = "upload.uploadcare.com";
+
 pub struct ReqwestTransport {
     session: reqwest::Client,
     /// The seller's cookies, which outlive any one request and change under
@@ -401,7 +406,8 @@ fn route(request: &HttpRequest) -> Result<Route, TransportError> {
     let host = host_of(&request.url).ok_or(TransportError::NotSent(ConnectFailure::DnsFailure))?;
     let permitted = match request.auth {
         RequestAuth::Session => host == SESSION_HOST,
-        RequestAuth::Anonymous | RequestAuth::S3SigV2 { .. } => host.ends_with(S3_HOST_SUFFIX),
+        RequestAuth::Anonymous => host.ends_with(S3_HOST_SUFFIX) || host == IMAGE_STAGE_HOST,
+        RequestAuth::S3SigV2 { .. } => host.ends_with(S3_HOST_SUFFIX),
         // Any host but ours, and https only. The destination was named by the
         // marketplace rather than chosen here, so there is no constant to
         // assert it against; what is asserted instead is that it is not the
