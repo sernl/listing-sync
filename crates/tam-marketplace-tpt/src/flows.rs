@@ -845,6 +845,9 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
 /// the size it observed and names no cause. Reusing the classifier there
 /// would import its diagnosis along with its test.
 const ARCHIVE_MAGIC: &[u8; 4] = b"PK\x03\x04";
+/// A single-file product is served as the file itself rather than a bundle:
+/// 28 of the founder's 153 products on 2026-09-19 answered 19-60 MB PDFs.
+const PDF_MAGIC: &[u8; 4] = b"%PDF";
 
 impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
     /// The seller's own copy of one of their products: the bytes behind the
@@ -1010,12 +1013,12 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
                 )),
             });
         }
-        if !followed.body.starts_with(ARCHIVE_MAGIC) {
+        if !followed.body.starts_with(ARCHIVE_MAGIC) && !followed.body.starts_with(PDF_MAGIC) {
             return Err(AdapterError::Rejected {
                 code: FailureCode::VerificationMismatch,
                 detail: FailureDetail(format!(
-                    "the asset hop for product {} answered 200 with {} bytes that do not open \
-                     with the archive signature",
+                    "the asset hop for product {} answered 200 with {} bytes that open with \
+                     neither the archive nor the PDF signature",
                     id.0,
                     followed.body.len()
                 )),
