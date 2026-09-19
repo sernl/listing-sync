@@ -1821,6 +1821,37 @@ impl LeaseRepo {
     ///
     /// Org-pinned like the device claim, so the tenant is the pin's rather
     /// than an argument's, and it answers `None` for an item that is not
+    /// The files a device may fetch under the leases it holds: the live
+    /// payloads and the cover of every product whose item it currently
+    /// leases. Read from the rows, under the tenant pin, rather than by
+    /// preparing the item again -- preparation refuses an item whose own
+    /// attempt is open, which is when a run fetches bytes it has not cached.
+    pub async fn fetchable_files(
+        &self,
+        org: OrgId,
+        device: &str,
+    ) -> Result<Vec<tam_types::FileId>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let rows = sqlx::query_scalar!(
+            "SELECT pf.id FROM job_item ji \
+             JOIN mapping m ON m.org_id = ji.org_id AND m.id = ji.mapping_id \
+             JOIN product_file pf ON pf.org_id = m.org_id AND pf.product_id = m.product_id \
+             WHERE ji.org_id = $1 AND ji.lease_owner = $2 \
+               AND ji.state IN ('leased', 'running', 'verifying') \
+               AND pf.role IN ('payload', 'cover') AND pf.deleted_at IS NULL",
+            uuid_to_db(org.0),
+            device,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(rows
+            .into_iter()
+            .map(|id| tam_types::FileId(uuid_from_db(id)))
+            .collect())
+    }
+
     /// currently live rather than one that merely exists: the callers are
     /// asking what this lease covers, not what the ledger remembers.
     pub async fn leased_item(
