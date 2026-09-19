@@ -429,6 +429,9 @@ async fn live_lease_files(
         }) = prepare_item(&state.pool, &leased, (state.wall)()).await
         {
             files.extend(listing.files);
+            // The cover the work order described beside the files, so the
+            // device can fetch it under the same lease.
+            files.extend(listing.cover);
         }
     }
     Ok(files)
