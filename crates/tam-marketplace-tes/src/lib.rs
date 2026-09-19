@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod classify;
+pub mod copy;
 pub mod endpoints;
 pub mod flows;
 pub mod identity;
