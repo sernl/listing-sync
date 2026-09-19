@@ -368,7 +368,7 @@ pub async fn measure_one(
 ) -> Result<MeasureReport, ImportError> {
     let taxonomy = TaxonomyRepo::new(run.pool.clone());
     let inbound = inbound_terms(&taxonomy, run.source, listing).await?;
-    let terms_seen = listing.native_ids(TermKind::Subject).len();
+    let terms_seen = inbound.subjects.len() + inbound.unmapped.len();
     let terms_mapped = inbound.subjects.len();
 
     let uncovered = uncovered_terms(
@@ -400,6 +400,10 @@ struct InboundTerms {
     /// A native subject or topic id the relation does not know, verbatim.
     unmapped: Vec<String>,
     resource_type: Option<CanonicalTermId>,
+    /// The native ids the relation places on the source's phase axis, in
+    /// listing order: the grade declaration reads these rather than the
+    /// tagged axis alone.
+    phases: Vec<String>,
 }
 
 impl InboundTerms {
@@ -412,10 +416,43 @@ impl InboundTerms {
     }
 }
 
+/// The native ids on one axis: the ones the reader tagged with it, and the
+/// untagged ones the source's relation binds to it.
+///
+/// TPT's reader tags nothing, deliberately -- its facets are one flat
+/// namespace, and which axis a slug answers is a fact of the seeded relation
+/// rather than of the array it came out of. So the relation is consulted
+/// here: an untagged id with an exact edge into the axis's vocabulary is on
+/// that axis. Before this the untagged ids were never asked about and every
+/// TPT import landed with no subject, no type and no grade, which Tes's
+/// publish then refused (2026-09-19).
+fn native_ids_on(
+    listing: &tam_marketplace::ImportedListing,
+    source: InventoryId,
+    kind: tam_domain::TermKind,
+    edges: &[tam_domain::ProjectionEdge],
+) -> Vec<String> {
+    let vocabulary = tam_domain::VocabularyId(source, kind);
+    let mut ids: Vec<String> = Vec::new();
+    for term in &listing.native {
+        let Some(native) = term.native_id.as_deref() else {
+            continue;
+        };
+        let on_axis = match term.kind {
+            Some(tagged) => tagged == kind,
+            None => ingest_by_native_id(native, vocabulary, edges).is_some(),
+        };
+        if on_axis && !ids.iter().any(|id| id == native) {
+            ids.push(native.to_owned());
+        }
+    }
+    ids
+}
+
 /// The inbound projection shared by the full import and the measure path: the
-/// seller's native category ids mapped to canonical subjects over the source
-/// vocabulary's edges, an unmapped id retained verbatim, and the declared
-/// resource type mapped over the same relation.
+/// seller's native ids mapped to canonical terms over the source vocabulary's
+/// edges, an unmapped subject retained verbatim, and the resource type and
+/// phases read over the same relation.
 async fn inbound_terms(
     taxonomy: &TaxonomyRepo,
     source: InventoryId,
@@ -430,7 +467,13 @@ async fn inbound_terms(
 
     let mut subjects: Vec<CanonicalTermId> = Vec::new();
     let mut unmapped: Vec<String> = Vec::new();
-    for native in &listing.native_ids(TermKind::Subject) {
+    let mut on_subject_axes = native_ids_on(listing, source, tam_domain::TermKind::Subject, &edges);
+    for topic in native_ids_on(listing, source, tam_domain::TermKind::Topic, &edges) {
+        if !on_subject_axes.contains(&topic) {
+            on_subject_axes.push(topic);
+        }
+    }
+    for native in &on_subject_axes {
         let found = ingest_by_native_id(
             native,
             tam_domain::VocabularyId(source, tam_domain::TermKind::Subject),
@@ -449,8 +492,7 @@ async fn inbound_terms(
             None => unmapped.push(native.clone()),
         }
     }
-    let resource_type = listing
-        .native_ids(TermKind::ResourceType)
+    let resource_type = native_ids_on(listing, source, tam_domain::TermKind::ResourceType, &edges)
         .iter()
         .find_map(|native| {
             ingest_by_native_id(
@@ -459,10 +501,12 @@ async fn inbound_terms(
                 &edges,
             )
         });
+    let phases = native_ids_on(listing, source, tam_domain::TermKind::Phase, &edges);
     Ok(InboundTerms {
         subjects,
         unmapped,
         resource_type,
+        phases,
     })
 }
 
@@ -652,14 +696,14 @@ pub async fn prepare_one(
             .len(),
         None => 0,
     };
-    let terms_seen = listing.native_ids(TermKind::Subject).len();
+    let terms_seen = inbound.subjects.len() + inbound.unmapped.len();
     let terms_mapped = inbound.subjects.len();
 
     // Grades verbatim: the declared age-range ids as paths, the label looked
     // up from the measured table where it exists, the interval derived only
     // when every declared range is bounded.
-    let grade_paths: Vec<tam_domain::VocabularyPath> = listing
-        .native_ids(TermKind::Phase)
+    let grade_paths: Vec<tam_domain::VocabularyPath> = inbound
+        .phases
         .iter()
         .map(|native| {
             let label = TES_MAIN_AGE_RANGES
