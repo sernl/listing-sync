@@ -18,8 +18,7 @@ use axum::Json;
 use tam_domain::LEASE_TTL_SECS;
 use tam_engine::ledger::{to_storage_lease, to_wire_item, PgLedger};
 use tam_engine::seed::{
-    preparation as preparation_for, prepare_and_dispose, prepare_item, reconcile_is_available,
-    Disposed, ItemPreparation,
+    preparation as preparation_for, prepare_and_dispose, reconcile_is_available, Disposed,
 };
 use tam_engine_driver::vocabulary::{
     AttemptRef, Attestation, ClaimView, Committed, LeaseRef, LeasedItem, LedgerAnswer, LedgerCall,
@@ -393,48 +392,38 @@ pub(crate) async fn payload(
     Ok(([(header::CONTENT_TYPE, "application/octet-stream")], bytes))
 }
 
-/// The files every item this device currently holds a live lease on projects.
+/// The files every item this device currently holds a live lease on may
+/// fetch: the live payloads and the cover of each leased item's product.
 ///
-/// Read through `prepare_item` rather than from a stored list, because the
-/// projection is what the work order committed to and a second source could
-/// name a file the order never did.
+/// Read from the rows rather than by preparing the item again. Preparation
+/// is a disposition and refuses an item whose own write attempt is already
+/// open, which is exactly when a run asks for bytes it has not cached — the
+/// 2026-09-19 cover fetch, made inside `submit` after `RecordIntent`, was
+/// refused on every item whose bundle the device had read from its own
+/// library instead of from here. What the work order committed to is the
+/// product's live files at that instant, and this reads the same rows.
 async fn live_lease_files(
     state: &AppState,
     org: tam_types::OrgId,
     device: &str,
 ) -> Result<Vec<tam_types::FileId>, APIError> {
     let held: Vec<uuid::Uuid> = sqlx::query_scalar(
-        "SELECT id FROM job_item \
-         WHERE org_id = $1 AND lease_owner = $2 \
-           AND state IN ('leased', 'running', 'verifying')",
+        "SELECT pf.id FROM job_item ji \
+         JOIN mapping m ON m.org_id = ji.org_id AND m.id = ji.mapping_id \
+         JOIN product_file pf ON pf.org_id = m.org_id AND pf.product_id = m.product_id \
+         WHERE ji.org_id = $1 AND ji.lease_owner = $2 \
+           AND ji.state IN ('leased', 'running', 'verifying') \
+           AND pf.role IN ('payload', 'cover') AND pf.deleted_at IS NULL",
     )
     .bind(uuid::Uuid::from_bytes(org.0 .0))
     .bind(device)
     .fetch_all(&state.pool)
     .await
     .map_err(|error| state.internal(&error.to_string()))?;
-    let mut files = Vec::new();
-    for item in held {
-        let leased = LeaseRepo::new(state.pool.clone())
-            .leased_item(
-                org,
-                tam_domain::JobItemId(tam_types::Uuid(*item.as_bytes())),
-            )
-            .await
-            .map_err(|error| state.internal(&error.to_string()))?;
-        let Some(leased) = leased else { continue };
-        if let Ok(ItemPreparation::Ready {
-            projected: Some(listing),
-            ..
-        }) = prepare_item(&state.pool, &leased, (state.wall)()).await
-        {
-            files.extend(listing.files);
-            // The cover the work order described beside the files, so the
-            // device can fetch it under the same lease.
-            files.extend(listing.cover);
-        }
-    }
-    Ok(files)
+    Ok(held
+        .into_iter()
+        .map(|id| tam_types::FileId(tam_types::Uuid(*id.as_bytes())))
+        .collect())
 }
 
 /// One ledger call from the device, under the same fences the settle takes.
