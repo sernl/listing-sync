@@ -2546,6 +2546,14 @@ impl<S: CatalogueSource> ImportPass<S> {
         let (payload, name, entry) = payload_of(bundle, &format!("{locator}-bundle.zip"));
         let kind = tam_pipeline::probe::probe_kind(&payload)
             .ok_or_else(|| "its file is of a kind this device does not recognise".to_owned())?;
+        // A single-file product arrives as the file itself, not as a bundle,
+        // so the fallback name follows the bytes rather than the wrapper.
+        let name = match (entry.is_none(), kind) {
+            (true, FileKind::Pdf) => format!("{locator}.pdf"),
+            (true, FileKind::Pptx) => format!("{locator}.pptx"),
+            (true, FileKind::Docx) => format!("{locator}.docx"),
+            _ => name,
+        };
 
         // The scan is the device's own and is recorded as the device's. Q-b
         // decided it is acceptable and advisory precisely because we never see
