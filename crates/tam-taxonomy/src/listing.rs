@@ -358,6 +358,7 @@ pub fn project_listing_with_overrides(
         taxonomy: included,
         grades,
         files: product.payload_files().map(|file| file.id).collect(),
+        cover: product.cover.as_ref().map(|file| file.id),
         natives,
         loss,
     })

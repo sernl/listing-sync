@@ -271,6 +271,7 @@ fn extension(kind: &str) -> &'static str {
         "pptx" => "pptx",
         "docx" => "docx",
         "zip" => "zip",
+        "image" => "png",
         _ => "bin",
     }
 }

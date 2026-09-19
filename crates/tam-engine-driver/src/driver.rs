@@ -2209,6 +2209,7 @@ mod tests {
         let fields = FieldSet {
             entries: vec![(FieldKey::Title, "Fractions".to_owned())],
             files: vec![],
+            cover: None,
             body_format: Some(CopyFormat::Html),
             appropriate_for_country: None,
         };

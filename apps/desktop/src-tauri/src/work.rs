@@ -1679,6 +1679,7 @@ mod reconcile_tests {
                     .submit(
                         IdempotencyKey(Uuid([0x11; 16])),
                         Set {
+                            cover: None,
                             entries: vec![],
                             files: vec![],
                             body_format: None,
@@ -1827,6 +1828,7 @@ mod tests {
             preparation: ItemPreparation {
                 operation: ItemOperation::Create,
                 projected: Some(ProjectedListing {
+                    cover: None,
                     title: "Fixture".to_owned(),
                     body: "A worksheet.".to_owned(),
                     body_format: CopyFormat::Markdown,

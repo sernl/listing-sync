@@ -446,6 +446,9 @@ pub struct FormSchemaFingerprint(pub ContentHash);
 pub struct FieldSet {
     pub entries: Vec<(FieldKey, String)>,
     pub files: Vec<FileId>,
+    /// The cover image, resolved through the same [`FileSource`] as `files`,
+    /// for adapters whose marketplace takes one apart from the attachments.
+    pub cover: Option<FileId>,
     /// What the [`FieldKey::Description`] entry's bytes are, absent exactly
     /// where the set carries no description -- a removal renders none, and
     /// neither does a set naming only a title.
@@ -499,6 +502,9 @@ pub struct AgeSpan {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectedListing {
     pub title: String,
+    /// The cover image to set on the listing, where the product has one and
+    /// the marketplace has somewhere to put it. Never one of `files`.
+    pub cover: Option<FileId>,
     pub body: String,
     /// How `body` is written, so an adapter whose platform takes the other
     /// format refuses rather than posting escaped markup nobody asked for.

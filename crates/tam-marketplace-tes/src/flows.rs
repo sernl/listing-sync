@@ -207,6 +207,56 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
         Ok(id)
     }
 
+    /// The cover image, by the two hops the uploader page makes: the bytes
+    /// to Uploadcare, then the Uploadcare id to Tes, which copies the image
+    /// into its own bucket and answers the key the draft stores under
+    /// `customThumbnails`. Observed and replayed 2026-09-19.
+    pub async fn set_cover(&self, id: DraftId, cover: &FileContent) -> Result<(), AdapterError> {
+        let staged = self
+            .send(endpoints::uploadcare_upload_request(
+                tam_marketplace::transport::FilePart {
+                    part_name: "file".to_owned(),
+                    file_name: cover.file_name.clone(),
+                    content_type: cover.content_type.clone(),
+                    bytes: cover.bytes.clone(),
+                },
+            ))
+            .await?;
+        let staged_body = classified("cover-stage", staged.status, classify_write_json(&staged))?;
+        let uuid = staged_body
+            .get("file")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AdapterError::Rejected {
+                code: FailureCode::UploadRejected,
+                detail: FailureDetail("the image host answered no file id".to_owned()),
+            })?
+            .to_owned();
+        let imported = self
+            .send(endpoints::upload_cover_image_request(
+                &uuid,
+                &cover.file_name,
+                &cover.content_type,
+                cover.bytes.len(),
+            ))
+            .await?;
+        let imported_body = classified(
+            "cover-import",
+            imported.status,
+            classify_write_json(&imported),
+        )?;
+        let key = imported_body
+            .get("fileName")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AdapterError::Rejected {
+                code: FailureCode::UploadRejected,
+                detail: FailureDetail("Tes answered no cover key".to_owned()),
+            })?
+            .to_owned();
+        let set = self.send(endpoints::set_cover_request(id, &key)).await?;
+        classified("cover-set", set.status, classify_write(&set, id.0))?;
+        Ok(())
+    }
+
     /// The transport, so a harness can interrogate its cassette.
     pub fn transport(&self) -> &T {
         &self.transport
@@ -303,7 +353,21 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
         id: DraftId,
         listing: &TesListing,
     ) -> Result<HttpResponse, AdapterError> {
-        let published = self.send(endpoints::publish_request(id, listing)).await?;
+        // The publish re-posts the whole resource, so the cover the create
+        // set has to be read off the draft and restated or the publish
+        // would drop it. A read that cannot name the draft is the JSON API
+        // lagging (see `submit`); the publish then carries no cover rather
+        // than failing, which is the state the seller can repair by hand.
+        let thumbnails = match self.resource_state(id).await {
+            Ok(state) => state
+                .get("customThumbnails")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([])),
+            Err(_) => serde_json::json!([]),
+        };
+        let published = self
+            .send(endpoints::publish_request(id, listing, thumbnails))
+            .await?;
         classify_write_status(&published)?;
         Ok(published)
     }
@@ -647,6 +711,7 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
                 ),
             ],
             files: listing.files.clone(),
+            cover: listing.cover,
             appropriate_for_country: None,
         })
     }
@@ -728,6 +793,22 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
                 // machine is about to be stepped with.
                 eprintln!("tes: create_listing -> {}", adapter_verdict(error));
             })?;
+        // After the files, so a cover that cannot be set leaves a draft
+        // whose attachments are complete; a missing cover is the seller's
+        // to add by hand, a missing bundle is not.
+        if let Some(cover) = fields.cover {
+            let content =
+                self.file_source
+                    .fetch(cover)
+                    .await
+                    .map_err(|error| AdapterError::Rejected {
+                        code: FailureCode::UploadRejected,
+                        detail: FailureDetail(format!("cover source: {error:?}")),
+                    })?;
+            self.set_cover(id, &content).await.inspect_err(|error| {
+                eprintln!("tes: set_cover -> {}", adapter_verdict(error));
+            })?;
+        }
         // The create has already answered with the durable identifier by the
         // time this read runs, so a read that cannot yet name the draft is
         // the JSON API lagging behind its own upload rather than a write

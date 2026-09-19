@@ -136,6 +136,7 @@ fn losing(cassette: Cassette, lose_at: usize) -> TptAdapter<LosesHop, OneFile, I
 fn projected() -> ProjectedListing {
     ProjectedListing {
         title: "Fractions pack".to_owned(),
+        cover: None,
         body: "<p>ten worksheets</p>".to_owned(),
         price: tam_types::PriceIntent::Free,
         taxonomy: vec![

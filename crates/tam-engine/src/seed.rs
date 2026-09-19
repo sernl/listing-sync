@@ -575,6 +575,7 @@ pub async fn prepare_item(
     Ok(ItemPreparation::Ready {
         operation,
         projected: Some(ProjectedListing {
+            cover: projection.cover,
             title: projection.title,
             body: projection.body,
             price: projection.price,

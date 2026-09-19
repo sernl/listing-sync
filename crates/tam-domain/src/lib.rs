@@ -533,6 +533,10 @@ impl CanonicalProduct {
 /// and produced by a pure function so it is property-testable without I/O.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListingProjection {
+    /// The product's cover image, where it has one, so a marketplace with a
+    /// cover slot of its own (Tes's is 700x525, uploaded beside the files)
+    /// shows the same picture the seller's catalogue does.
+    pub cover: Option<FileId>,
     pub inventory: InventoryId,
     pub title: String,
     pub body: String,
@@ -2089,6 +2093,7 @@ mod machine_tests {
         FieldSet {
             entries: vec![(FieldKey::Title, "a resource".to_owned())],
             files: vec![],
+            cover: None,
             body_format: None,
             appropriate_for_country: None,
         }

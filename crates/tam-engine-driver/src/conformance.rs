@@ -178,6 +178,7 @@ impl MarketplaceAdapter for ScriptedAdapter<'_> {
         Ok(FieldSet {
             entries: vec![(FieldKey::Title, listing.title.clone())],
             files: listing.files.clone(),
+            cover: listing.cover,
             body_format: Some(listing.body_format),
             appropriate_for_country: None,
         })
@@ -297,6 +298,7 @@ fn seed_machine() -> MachineSeed {
         fields: FieldSet {
             entries: vec![(FieldKey::Title, "Fixture".to_owned())],
             files: vec![],
+            cover: None,
             body_format: None,
             appropriate_for_country: None,
         },

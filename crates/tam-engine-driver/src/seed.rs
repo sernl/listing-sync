@@ -72,6 +72,7 @@ pub fn seed_for_removal(preparation: &ItemPreparation) -> MachineSeed {
     let fields = FieldSet {
         entries: vec![],
         files: vec![],
+        cover: None,
         // A removal renders no listing, so there are no body bytes for a
         // format to describe and no declaration to carry.
         body_format: None,
