@@ -393,37 +393,18 @@ pub(crate) async fn payload(
 }
 
 /// The files every item this device currently holds a live lease on may
-/// fetch: the live payloads and the cover of each leased item's product.
-///
-/// Read from the rows rather than by preparing the item again. Preparation
-/// is a disposition and refuses an item whose own write attempt is already
-/// open, which is exactly when a run asks for bytes it has not cached — the
-/// 2026-09-19 cover fetch, made inside `submit` after `RecordIntent`, was
-/// refused on every item whose bundle the device had read from its own
-/// library instead of from here. What the work order committed to is the
-/// product's live files at that instant, and this reads the same rows.
+/// fetch, read by the ledger under the tenant pin. A raw-pool read here
+/// answered nothing under forced row-level security, so the route refused
+/// every server-held byte it was ever asked for.
 async fn live_lease_files(
     state: &AppState,
     org: tam_types::OrgId,
     device: &str,
 ) -> Result<Vec<tam_types::FileId>, APIError> {
-    let held: Vec<uuid::Uuid> = sqlx::query_scalar(
-        "SELECT pf.id FROM job_item ji \
-         JOIN mapping m ON m.org_id = ji.org_id AND m.id = ji.mapping_id \
-         JOIN product_file pf ON pf.org_id = m.org_id AND pf.product_id = m.product_id \
-         WHERE ji.org_id = $1 AND ji.lease_owner = $2 \
-           AND ji.state IN ('leased', 'running', 'verifying') \
-           AND pf.role IN ('payload', 'cover') AND pf.deleted_at IS NULL",
-    )
-    .bind(uuid::Uuid::from_bytes(org.0 .0))
-    .bind(device)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|error| state.internal(&error.to_string()))?;
-    Ok(held
-        .into_iter()
-        .map(|id| tam_types::FileId(tam_types::Uuid(*id.as_bytes())))
-        .collect())
+    LeaseRepo::new(state.pool.clone())
+        .fetchable_files(org, device)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))
 }
 
 /// One ledger call from the device, under the same fences the settle takes.
