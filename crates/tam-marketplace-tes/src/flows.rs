@@ -629,10 +629,16 @@ impl<T: Transport, F: FileSource> MarketplaceAdapter for TesAdapter<T, F> {
                     ))
                 })?;
         Ok(FieldSet {
-            body_format: Some(listing.body_format),
+            // Plain text posted as `md`, whatever the source wrote: the draft
+            // page shows HTML verbatim and refuses emoji and length, see
+            // `crate::copy`.
+            body_format: Some(CopyFormat::Markdown),
             entries: vec![
                 (FieldKey::Title, listing.title.clone()),
-                (FieldKey::Description, listing.body.clone()),
+                (
+                    FieldKey::Description,
+                    crate::copy::tes_description(&listing.body, listing.body_format),
+                ),
                 (FieldKey::Price, licence),
                 (FieldKey::Taxonomy, taxonomy_entry(&categories, main_type)),
                 (
