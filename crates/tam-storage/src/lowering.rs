@@ -37,6 +37,19 @@ pub enum LoweringRefusal {
     CreateInFlight,
 }
 
+/// Why a removal cannot be lowered against this mapping.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum RemovalRefusal {
+    #[error("this listing is not on that marketplace, so there is nothing to remove")]
+    NotThere,
+    #[error("this listing's state is unknown; verify it first")]
+    LifecycleUnknown,
+    #[error("this mapping reads bound but names no listing; verify it first")]
+    SubjectUnnamed,
+    #[error("this mapping has a create in flight; wait for it to settle")]
+    CreateInFlight,
+}
+
 /// Lowers one mapping against the state the seller asked it to end up in.
 ///
 /// # Errors
@@ -83,6 +96,31 @@ pub fn lower(
         // there is no binding to lower against and enqueuing a second write
         // would be a write on the strength of a guess.
         _ => Err(LoweringRefusal::CreateInFlight),
+    }
+}
+
+/// Lowers one mapping into the removal of the listing it names, in the state
+/// the bind recorded. The state travels with the operation because every
+/// adapter's delete is asymmetric between draft and live and discovering it
+/// from a probe is unsound (see `MarketplaceAdapter::remove`); the driver's
+/// absence poll is what settles the item, never the delete's own status.
+///
+/// # Errors
+///
+/// Every arm the table refuses rather than lowers against a guess.
+pub fn lower_removal(seed: &MappingSeed) -> Result<ItemOperation, RemovalRefusal> {
+    match seed.binding_state.as_str() {
+        "unbound" | "severed" => Err(RemovalRefusal::NotThere),
+        "bound" => {
+            let state = match seed.lifecycle_state.as_str() {
+                "draft" => ListingState::Draft,
+                "live" => ListingState::Live,
+                _ => return Err(RemovalRefusal::LifecycleUnknown),
+            };
+            let subject = seed.subject.clone().ok_or(RemovalRefusal::SubjectUnnamed)?;
+            Ok(ItemOperation::Remove { subject, state })
+        }
+        _ => Err(RemovalRefusal::CreateInFlight),
     }
 }
 
@@ -192,10 +230,12 @@ pub const fn uncaptured_source(inventory: InventoryId) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{lower, requires_bound_on, uncaptured_source, LoweringRefusal};
+    use super::{
+        lower, lower_removal, requires_bound_on, uncaptured_source, LoweringRefusal, RemovalRefusal,
+    };
     use crate::job_reads::MappingSeed;
     use tam_domain::ItemOperation;
-    use tam_marketplace::ListingState;
+    use tam_marketplace::{ListingState, RemoteListingId};
     use tam_types::{InventoryId, MappingId, ProductId, Uuid};
 
     fn seed(binding_state: &str, lifecycle_state: &str) -> MappingSeed {
@@ -274,6 +314,48 @@ mod tests {
                 &seed("creating", "absent")
             ),
             Err(LoweringRefusal::CreateInFlight),
+        );
+    }
+
+    #[test]
+    fn a_removal_carries_the_state_the_bind_recorded_and_waits_for_nothing() {
+        let subject = RemoteListingId::Tes {
+            url: "https://www.tes.com/api/v2/resources/9001".to_owned(),
+        };
+        let bound = MappingSeed {
+            subject: Some(subject.clone()),
+            ..seed("bound", "live")
+        };
+        let operation = lower_removal(&bound).expect("a bound live listing is removable");
+        assert_eq!(
+            operation,
+            ItemOperation::Remove {
+                subject,
+                state: ListingState::Live
+            },
+            "the delete route is chosen from the recorded state, never from a probe"
+        );
+        assert_eq!(requires_bound_on(&operation, InventoryId::Tes), None);
+    }
+
+    #[test]
+    fn a_removal_of_nothing_is_refused_before_anything_is_enqueued() {
+        assert_eq!(
+            lower_removal(&seed("unbound", "absent")),
+            Err(RemovalRefusal::NotThere)
+        );
+        assert_eq!(
+            lower_removal(&seed("bound", "absent")),
+            Err(RemovalRefusal::LifecycleUnknown)
+        );
+        assert_eq!(
+            lower_removal(&seed("bound", "draft")),
+            Err(RemovalRefusal::SubjectUnnamed),
+            "a bound row naming no listing is corrupt, not removable"
+        );
+        assert_eq!(
+            lower_removal(&seed("creating", "absent")),
+            Err(RemovalRefusal::CreateInFlight)
         );
     }
 

@@ -137,7 +137,8 @@ pub use labels::{
     LabelRename, LabelRepo,
 };
 pub use lowering::{
-    lower, lower_head, requires_bound_on, uncaptured_source, uncaptured_transition, LoweringRefusal,
+    lower, lower_head, lower_removal, requires_bound_on, uncaptured_source, uncaptured_transition,
+    LoweringRefusal, RemovalRefusal,
 };
 pub use mapping::{
     bind_listing, bound_product_for, claimed_product_for, insert_mapping, record_mapping_losses,

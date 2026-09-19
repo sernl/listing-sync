@@ -516,6 +516,14 @@ pub(crate) async fn create_sync_request(
     let intent = match parse_intent(body.intent.as_deref())? {
         Intent::Draft => SyncIntent::Draft,
         Intent::Live => SyncIntent::Live,
+        // A sync lands listings on a target; taking them off one is a job
+        // over the mappings that name them (`POST /{v}/jobs`, intent remove).
+        Intent::Remove => {
+            return Err(validation(
+                "a sync's intent is \"draft\" or \"live\"; to remove listings, post a job over \
+                 their mappings with intent \"remove\"",
+            ));
+        }
     };
     // Who supplies the resources, decided by the source marketplace's transport
     // class rather than by a request kind of its own. Under D1 a device-branch
@@ -997,18 +1005,21 @@ async fn waiting_for_a_device(state: &AppState, org: OrgId) -> Result<Option<Str
     Ok((!ready).then(|| format!("{major}.{minor}.{patch}")))
 }
 
-/// What the seller asked the listing to end up as.
+/// What the seller asked the listing to end up as, or that it should not be
+/// there at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Intent {
     Draft,
     Live,
+    Remove,
 }
 
 fn parse_intent(raw: Option<&str>) -> Result<Intent, APIError> {
     match raw {
         None | Some("draft") => Ok(Intent::Draft),
         Some("live") => Ok(Intent::Live),
-        Some(_) => Err(validation("intent is \"draft\" or \"live\"")),
+        Some("remove") => Ok(Intent::Remove),
+        Some(_) => Err(validation("intent is \"draft\", \"live\" or \"remove\"")),
     }
 }
 
@@ -1017,7 +1028,8 @@ fn parse_intent(raw: Option<&str>) -> Result<Intent, APIError> {
 ///
 /// The intent reaches it as the state the seller asked for rather than as a
 /// second intent enum: `Draft` and `Live` are exactly `ListingState`, and one
-/// vocabulary is one fewer thing to keep in step.
+/// vocabulary is one fewer thing to keep in step. `Remove` is the one intent
+/// that names no state to end up in, so it takes the removal table instead.
 fn lower(
     intent: Intent,
     inventory: InventoryId,
@@ -1026,6 +1038,11 @@ fn lower(
     let to = match intent {
         Intent::Draft => ListingState::Draft,
         Intent::Live => ListingState::Live,
+        Intent::Remove => {
+            return tam_storage::lower_removal(seed)
+                .map(|operation| vec![operation])
+                .map_err(|refusal| validation(&refusal.to_string()));
+        }
     };
     tam_storage::lower(to, inventory, seed).map_err(|refusal| validation(&refusal.to_string()))
 }
