@@ -22,6 +22,10 @@ const plainHttp: ProxyOptions = {
 };
 
 export default defineConfig({
+  // `PUBLIC_` beside Vite's own prefix, so a build-time public value follows
+  // SvelteKit's naming for one rather than Vite's. Nothing without one of
+  // the two prefixes reaches the bundle.
+  envPrefix: ['VITE_', 'PUBLIC_'],
   plugins: [tailwindcss(), sveltekit()],
   server: {
     // The dev flow: Vite serves the client, tam-server serves the API, and

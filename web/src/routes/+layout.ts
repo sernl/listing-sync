@@ -4,6 +4,7 @@ export const prerender = false;
 import { api, ApiFailure, type Whoami } from '$lib/api';
 import { describeUnreachable, type Unreachable } from '$lib/unreachable';
 import { setLedgerScope } from '$lib/ledger';
+import { identifyOrg, startTelemetry } from '$lib/posthog';
 
 /** What the one request every console visit begins with came back as.
  *
@@ -16,9 +17,13 @@ import { setLedgerScope } from '$lib/ledger';
  *  actually came back, and whether anything came back at all, is the one thing
  *  that screen needs to say and the one thing it could not. */
 export async function load(): Promise<{ session: Whoami | null; unreachable: Unreachable | null }> {
+	// Before the await, so a visit whose session call fails is still a
+	// pageview rather than a gap in the funnel.
+	startTelemetry();
 	try {
 		const session = await api.whoami();
 		setLedgerScope(session.org);
+		identifyOrg(session.org);
 		return { session, unreachable: null };
 	} catch (failure) {
 		if (failure instanceof ApiFailure && failure.status === 401 && failure.body !== null) {
