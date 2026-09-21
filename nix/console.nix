@@ -24,6 +24,9 @@
   # with it.
   turnstileSiteKey ? "",
   socialProviders ? "",
+  # The PostHog project key. Public by PostHog's own description (the browser
+  # ships it) and off when empty: `posthog.ts` never calls `init` without it.
+  posthogKey ? "",
 }:
 stdenv.mkDerivation {
   pname = "teachouse-console";
@@ -48,6 +51,7 @@ stdenv.mkDerivation {
   env = {
     VITE_TURNSTILE_SITE_KEY = turnstileSiteKey;
     VITE_SOCIAL_PROVIDERS = socialProviders;
+    PUBLIC_POSTHOG_KEY = posthogKey;
   };
 
   preBuild = ''
