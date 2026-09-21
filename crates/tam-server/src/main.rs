@@ -13,7 +13,7 @@
 //! Given an engine-role url it also hosts the two service loops the design
 //! puts in this process: the outbox drainer and the job-event pruner.
 //!
-//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--paddle-webhook-secret <secret>] [--paddle-price-map <path>] [--ui-dir <path>] [--landing-dir <path>] [--downloads-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> (--blob-store-root <path> | --blob-store-s3 <endpoint> --blob-store-bucket <name> --blob-store-credentials <path> [--blob-store-region <region>])] [--entitlement-key-path <path>] [--entitlement-public-key <hex>] [--require-entitlement-key] [--resend-api-key-file <path> --email-from <address> --console-url <url> --auth-internal-url <url> --auth-internal-secret-file <path>] [--disclose-internals]
+//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--stripe-webhook-secret <secret>] [--stripe-secret-key <path>] [--stripe-price-map <path>] [--ui-dir <path>] [--landing-dir <path>] [--downloads-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> (--blob-store-root <path> | --blob-store-s3 <endpoint> --blob-store-bucket <name> --blob-store-credentials <path> [--blob-store-region <region>])] [--entitlement-key-path <path>] [--entitlement-public-key <hex>] [--require-entitlement-key] [--resend-api-key-file <path> --email-from <address> --console-url <url> --auth-internal-url <url> --auth-internal-secret-file <path>] [--posthog-key <key> [--posthog-host <url>]] [--disclose-internals]
 
 #![forbid(unsafe_code)]
 
@@ -27,7 +27,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tam_api::devices::EntitlementKey;
 use tam_api::{
     AppState, AuthBridge, BlobStore, Config, Disclosure, JwkSet, JwksFuture, JwksSource,
-    JwksUnavailable, PriceMap, WebhookSecret,
+    JwksUnavailable, PriceMap, SecretKey, WebhookSecret,
 };
 use tam_blob_store::{BackendFlags, BlobBackend, STORE_ROOT_FLAG, STORE_S3_FLAG};
 use tam_engine::outbox::{drain, Deliverer, LoggingDeliverer};
@@ -59,23 +59,50 @@ const ENGINE_DB_FLAG: &str = "--engine-db-url";
 /// refuses: a deployment serves the operator surface or it does not.
 const BACKOFFICE_DB_FLAG: &str = "--backoffice-db-url";
 
-/// Paddle's notification-webhook secret, which is the whole authentication of
+/// Stripe's endpoint signing secret, which is the whole authentication of
 /// the billing webhook. Given on the command line like every other
 /// configuration value here, because the lint table bans environment reads
 /// outside the one crate that will own them. Absent, `/{version}/billing/webhook`
 /// answers 503: there is no unauthenticated mode of that route to fall back to.
-const PADDLE_WEBHOOK_SECRET_FLAG: &str = "--paddle-webhook-secret";
+const STRIPE_WEBHOOK_SECRET_FLAG: &str = "--stripe-webhook-secret";
 
-/// The file mapping Paddle price identifiers to what they sell: a JSON
-/// object of `"<price_id>": { "plan": "subscriber" }` or
-/// `{ "plan": "migration_only", "rung": 50 }`.
+/// The file holding Stripe's secret API key, which is what opens a checkout,
+/// re-reads a completed session and mints a billing-portal link.
+///
+/// A file rather than an inline value, for the reason the blob and
+/// entitlement keys are files: a secret on a command line is in every
+/// process listing on the host. The webhook secret beside it is inline
+/// because it authenticates an inbound caller rather than authorising an
+/// outbound charge, and the two are worth different things to whoever reads
+/// the process table. Absent, checkout and the portal answer 503.
+const STRIPE_SECRET_KEY_FLAG: &str = "--stripe-secret-key";
+
+/// The file mapping Stripe price identifiers to what they sell: a JSON
+/// object of `"<stripe_price_id>": "sync_monthly"`, whose values are the
+/// price keys `tam-limits` names.
 ///
 /// A file rather than a flag value, because the map is per environment and
-/// grows a line per rung, and a path is the shape the deployment already
-/// uses for the key material beside it. Absent, the map is empty: a
-/// completed one-off transaction then grants nothing and says so on the log,
-/// which is the fail-closed direction for a purchase we cannot interpret.
-const PADDLE_PRICE_MAP_FLAG: &str = "--paddle-price-map";
+/// grows a line per price, and a path is the shape the deployment already
+/// uses for the key material beside it. Absent, the map is empty: a checkout
+/// is refused and a completed session then grants nothing and says so on the
+/// log, which is the fail-closed direction for a purchase we cannot
+/// interpret.
+const STRIPE_PRICE_MAP_FLAG: &str = "--stripe-price-map";
+
+/// The PostHog project key this deployment captures product analytics under.
+///
+/// Inline rather than a path, unlike the two secrets above: the project key
+/// is public by PostHog's own description — the browser bundle ships the
+/// same value — so a process listing holding it discloses nothing a page
+/// source does not. Absent, the whole facility is inert: every `capture`
+/// call in the API is a no-op and nothing is sent.
+const POSTHOG_KEY_FLAG: &str = "--posthog-key";
+
+/// Which PostHog region ingests. Defaults to the EU host, which is the only
+/// residency correct under every branch of the jurisdiction fork the
+/// compliance floor leaves open, and is a one-way door: moving later
+/// abandons the history.
+const POSTHOG_HOST_FLAG: &str = "--posthog-host";
 
 /// The built client directory, served as the router's fallback so the API
 /// and the UI share one origin; unknown paths fall through to index.html,
@@ -516,6 +543,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         None
     };
+    // Built here rather than in `parse_invocation` because it spawns its
+    // sender task, which needs the runtime this function is already on.
+    let telemetry = match &invocation.posthog_key {
+        Some(key) => tam_api::telemetry::Telemetry::new(
+            &invocation.posthog_host,
+            tam_api::telemetry::ProjectKey::new(key.clone()),
+        ),
+        None => tam_api::telemetry::Telemetry::disabled(),
+    };
     let state = AppState {
         exchange_rates: Some(std::sync::Arc::new(exchange_rates::EcbRates::new()?)),
         pool,
@@ -524,24 +560,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         auth,
         backoffice,
         blobs,
+        telemetry,
     };
 
     let listener = tokio::net::TcpListener::bind(invocation.bind).await?;
     let bound = listener.local_addr()?;
     eprintln!("tam-server listening on http://{bound}");
-    if invocation.config.paddle_webhook_secret.is_some() {
-        eprintln!("tam-server accepting Paddle billing notifications");
+    if invocation.config.stripe_webhook_secret.is_some() {
+        eprintln!("tam-server accepting Stripe billing events");
     }
-    if invocation.config.paddle_price_map.is_empty() {
+    if invocation.config.stripe.is_none() {
         eprintln!(
-            "tam-server has no Paddle price map ({PADDLE_PRICE_MAP_FLAG}); a completed one-off \
-             transaction will grant nothing"
+            "tam-server has no Stripe secret key ({STRIPE_SECRET_KEY_FLAG}); checkout and the \
+             billing portal will refuse"
+        );
+    }
+    if invocation.config.stripe_price_map.is_empty() {
+        eprintln!(
+            "tam-server has no Stripe price map ({STRIPE_PRICE_MAP_FLAG}); a completed checkout \
+             session will grant nothing"
         );
     } else {
         eprintln!(
-            "tam-server mapping {} Paddle prices to plans",
-            invocation.config.paddle_price_map.len()
+            "tam-server mapping {} Stripe prices to price keys",
+            invocation.config.stripe_price_map.len()
         );
+    }
+    match &invocation.posthog_key {
+        Some(_) => eprintln!(
+            "tam-server capturing product analytics to {}",
+            invocation.posthog_host
+        ),
+        None => eprintln!(
+            "tam-server capturing no product analytics ({POSTHOG_KEY_FLAG} unset); every \
+             capture is a no-op"
+        ),
     }
     if invocation.config.disclosure == Disclosure::Full {
         eprintln!("tam-server disclosing fault internals ({DISCLOSE_FLAG}); development only");
@@ -661,6 +714,10 @@ struct Invocation {
     entitlement_public_key: Option<String>,
     /// The completion mail's five values, if this deployment sends any.
     mail: Option<notify::MailConfig>,
+    /// The PostHog project key, if this deployment captures anything.
+    posthog_key: Option<String>,
+    /// Which region ingests. Always set; the default is the EU host.
+    posthog_host: String,
 }
 
 /// The database url first, then an optional bind address and the disclosure
@@ -687,6 +744,8 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     let mut console_url = None;
     let mut auth_internal_url = None;
     let mut auth_internal_secret_file = None;
+    let mut posthog_key = None;
+    let mut posthog_host = tam_api::telemetry::DEFAULT_HOST.to_owned();
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         if argument == DISCLOSE_FLAG {
@@ -703,17 +762,35 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
                     .next()
                     .ok_or("--backoffice-db-url needs a url argument")?,
             );
-        } else if argument == PADDLE_WEBHOOK_SECRET_FLAG {
-            config.paddle_webhook_secret = Some(WebhookSecret::new(
+        } else if argument == STRIPE_WEBHOOK_SECRET_FLAG {
+            config.stripe_webhook_secret = Some(WebhookSecret::new(
                 arguments
                     .next()
-                    .ok_or("--paddle-webhook-secret needs a secret argument")?,
+                    .ok_or("--stripe-webhook-secret needs a secret argument")?,
             ));
-        } else if argument == PADDLE_PRICE_MAP_FLAG {
+        } else if argument == STRIPE_SECRET_KEY_FLAG {
             let path = arguments
                 .next()
-                .ok_or("--paddle-price-map needs a path argument")?;
-            config.paddle_price_map = load_price_map(&path)?;
+                .ok_or("--stripe-secret-key needs a path argument")?;
+            config.stripe = Some(tam_api::stripe::Client::new(SecretKey::new(read_secret(
+                &path,
+            )?)));
+        } else if argument == STRIPE_PRICE_MAP_FLAG {
+            let path = arguments
+                .next()
+                .ok_or("--stripe-price-map needs a path argument")?;
+            config.stripe_price_map = load_price_map(&path)?;
+        } else if argument == POSTHOG_KEY_FLAG {
+            let given = arguments
+                .next()
+                .ok_or("--posthog-key needs a key argument")?;
+            // An empty value is how a deployment template that leaves the
+            // secret unset reaches here, and it means the same as absent.
+            posthog_key = Some(given.trim().to_owned()).filter(|key| !key.is_empty());
+        } else if argument == POSTHOG_HOST_FLAG {
+            posthog_host = arguments
+                .next()
+                .ok_or("--posthog-host needs a url argument")?;
         } else if argument == UI_FLAG {
             ui_dir = Some(std::path::PathBuf::from(
                 arguments.next().ok_or("--ui-dir needs a path argument")?,
@@ -886,6 +963,8 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
         entitlement_key_path,
         entitlement_public_key,
         mail,
+        posthog_key,
+        posthog_host,
     })
 }
 
@@ -914,23 +993,23 @@ fn read_secret(path: &str) -> Result<String, Box<dyn std::error::Error>> {
     Ok(secret)
 }
 
-/// How large the Paddle price map may be. A line per price and a handful of
+/// How large the Stripe price map may be. A line per price and a handful of
 /// prices; anything at this cap is a mis-pointed path rather than a map.
 const PRICE_MAP_BYTES_MAX: u64 = 64 * 1024;
 
-/// The Paddle price map off disk: a bounded read, for the reason the two
+/// The Stripe price map off disk: a bounded read, for the reason the two
 /// key loaders beside it are bounded, and a parse that refuses rather than
 /// half-applies. A malformed map must stop the server at startup, because
-/// the alternative is a seller paying for a rung the running process cannot
+/// the alternative is a seller paying for a pack the running process cannot
 /// interpret.
 fn load_price_map(path: &str) -> Result<PriceMap, Box<dyn std::error::Error>> {
     use std::io::Read as _;
     let mut bytes = Vec::new();
     std::fs::File::open(path)
-        .map_err(|error| format!("{PADDLE_PRICE_MAP_FLAG} {path}: {error}"))?
+        .map_err(|error| format!("{STRIPE_PRICE_MAP_FLAG} {path}: {error}"))?
         .take(PRICE_MAP_BYTES_MAX + 1)
         .read_to_end(&mut bytes)
-        .map_err(|error| format!("{PADDLE_PRICE_MAP_FLAG} {path}: {error}"))?;
+        .map_err(|error| format!("{STRIPE_PRICE_MAP_FLAG} {path}: {error}"))?;
     if bytes.len() as u64 > PRICE_MAP_BYTES_MAX {
         return Err(format!(
             "{path} is larger than {PRICE_MAP_BYTES_MAX} bytes, so it is not a price map"
@@ -938,8 +1017,8 @@ fn load_price_map(path: &str) -> Result<PriceMap, Box<dyn std::error::Error>> {
         .into());
     }
     let raw = String::from_utf8(bytes)
-        .map_err(|_| format!("{PADDLE_PRICE_MAP_FLAG} {path} is not utf-8"))?;
-    PriceMap::parse(&raw).map_err(|error| format!("{PADDLE_PRICE_MAP_FLAG} {path}: {error}").into())
+        .map_err(|_| format!("{STRIPE_PRICE_MAP_FLAG} {path} is not utf-8"))?;
+    PriceMap::parse(&raw).map_err(|error| format!("{STRIPE_PRICE_MAP_FLAG} {path}: {error}").into())
 }
 
 /// The key-encryption key off disk, read the way `tam-worker` reads its own:
@@ -1186,8 +1265,11 @@ async fn nothing_here() -> axum::http::StatusCode {
 /// Every host admitted is admitted by directive with its reason, in this one
 /// place, so an addition is a decision rather than an accretion:
 /// `challenges.cloudflare.com` is Turnstile, which needs both a script and a
-/// frame; `cdn.paddle.com` is the checkout script. `wasm-unsafe-eval` is the
-/// console's WebAssembly, which Chromium engines refuse without it.
+/// frame. `wasm-unsafe-eval` is the console's WebAssembly, which Chromium
+/// engines refuse without it. It named `cdn.paddle.com` until the billing
+/// rail moved to Stripe: Checkout is a hosted page the browser navigates to
+/// rather than a script this origin loads, so the swap removed a grant
+/// instead of exchanging one.
 ///
 /// It named Google's two font hosts until the console's faces moved into
 /// `web/static/fonts`, declared by `@font-face` in `web/src/app.css`. The
@@ -1225,7 +1307,7 @@ fn console_policy(shell: &str) -> String {
         script.push_str(&hash);
         script.push('\'');
     }
-    script.push_str(" https://challenges.cloudflare.com https://cdn.paddle.com");
+    script.push_str(" https://challenges.cloudflare.com");
     format!(
         "default-src 'self'; connect-src 'self'; {script}; \
          img-src 'self' data: blob: https:; \
@@ -1348,7 +1430,6 @@ mod tests {
         for (directive, host) in [
             ("script-src", "https://challenges.cloudflare.com"),
             ("frame-src", "https://challenges.cloudflare.com"),
-            ("script-src", "https://cdn.paddle.com"),
         ] {
             let section = policy
                 .split(';')
@@ -1359,6 +1440,11 @@ mod tests {
                 "{host} belongs on {directive}: {section}"
             );
         }
+        assert!(
+            !policy.contains("paddle"),
+            "the billing rail is a hosted redirect now, so no processor script is admitted: \
+             {policy}"
+        );
     }
 
     /// Type is served from this origin, so no directive names a font host.
@@ -1572,6 +1658,7 @@ mod composition {
             auth: None,
             backoffice: None,
             blobs: None,
+            telemetry: tam_api::telemetry::Telemetry::disabled(),
         };
         let built = fixtures();
         crate::assemble(

@@ -56,6 +56,11 @@ pub const LABEL_MAX_CHARS: usize = 200;
 /// the same width as an account label because it is the same kind of thing: a
 /// human name typed into a form.
 pub const AUTHORSHIP_MAX_CHARS: usize = 200;
+/// The marketplace's own identifier for a storefront. Both observed values
+/// are short decimal strings -- a Tes `userId`, a TPT `author.id` -- so the
+/// bound is generous by an order of magnitude and exists to stop a client
+/// sending a body instead of an id.
+pub const EXTERNAL_ID_MAX_CHARS: usize = 128;
 
 /// Milliseconds to the seconds RFC 7519 fixes `exp` to be. `div_euclid` rather
 /// than `/`, which the workspace lint table denies.
@@ -151,6 +156,37 @@ fn missing() -> APIError {
     )
 }
 
+/// The marketplace as a seller reads it, for the one sentence on this surface
+/// a seller reads. Spelled out here rather than derived from the serde name,
+/// which is the wire token and renders "Tpt".
+const fn shop_name(marketplace: Marketplace) -> &'static str {
+    match marketplace {
+        Marketplace::Tes => "Tes",
+        Marketplace::Etsy => "Etsy",
+        Marketplace::Tpt => "TPT",
+    }
+}
+
+/// The refusal a seller gets when the shop their device holds a session for
+/// is already bound to another organisation.
+///
+/// One sentence, naming the marketplace and nothing else. Who holds it is
+/// deliberately absent: the constraint must never become a directory of the
+/// platform's sellers, and the remedy is a person rather than a self-service
+/// override either way. 409 rather than 422 because nothing in the request is
+/// malformed -- the state of the world refuses it.
+fn bound_elsewhere(marketplace: Marketplace) -> APIError {
+    APIError::new(
+        StatusCode::CONFLICT,
+        APIErrorEntry::new(&format!(
+            "This {} shop is already connected to another Teachouse account.",
+            shop_name(marketplace)
+        ))
+        .code(APIErrorCode::PlatformAccountAlreadyLinked)
+        .kind(APIErrorKind::Validation),
+    )
+}
+
 /// A trimmed, bounded, non-empty field, or the refusal naming the bound it
 /// applied. Characters rather than bytes, matching `char_length` in the
 /// migration and the way the human who typed a machine name sees it.
@@ -182,6 +218,16 @@ pub struct HeartbeatSession {
     pub marketplace: Marketplace,
     pub account_label: Option<String>,
     pub status: String,
+    /// The marketplace's own identifier for the storefront this session
+    /// speaks for, where the device has read one.
+    ///
+    /// `#[serde(default)]` for the reason `HeartbeatView.entitlement` has one:
+    /// neither end denies unknown fields, so an installation from before this
+    /// field keeps checking in and simply claims no storefront. It is never
+    /// stored as itself -- the check-in digests it under the deployment's key
+    /// and keeps only the digest.
+    #[serde(default)]
+    pub external_id: Option<String>,
 }
 
 /// One file a device holds in its library, by digest hex.
@@ -347,9 +393,14 @@ fn reported(session: &HeartbeatSession) -> Result<DeviceSessionReport<'_>, APIEr
         Some(raw) => Some(bounded("an account label", raw, LABEL_MAX_CHARS)?),
         None => None,
     };
+    let external_id = match session.external_id.as_deref() {
+        Some(raw) => Some(bounded("a storefront id", raw, EXTERNAL_ID_MAX_CHARS)?),
+        None => None,
+    };
     Ok(DeviceSessionReport {
         marketplace: session.marketplace,
         account_label: label,
+        external_id,
         status: status_of(&session.status)?,
     })
 }
@@ -494,6 +545,14 @@ pub(crate) async fn register(
         .register(context.org, &registration, (state.wall)())
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
+    state.telemetry.capture(
+        context.org,
+        "device_enrolled",
+        serde_json::json!({
+            "platform": record.os.as_str(),
+            "nth_device": live.saturating_add(1),
+        }),
+    );
     Ok(Json(device_view(record)))
 }
 
@@ -516,11 +575,57 @@ pub(crate) async fn heartbeat(
         .map(reported)
         .collect::<Result<Vec<_>, APIError>>()?;
     let now = (state.wall)();
-    let beat = DeviceRepo::new(state.pool.clone())
+    // The storefront claim is digested under the same key-encryption key the
+    // sealed-credential envelope uses, which this process reaches through the
+    // blob store. A deployment started without one takes no claim rather than
+    // taking one under a key it invented; exclusivity is then unenforced
+    // there, which is true of that deployment and is not something a
+    // heartbeat can repair.
+    let mut devices = DeviceRepo::new(state.pool.clone());
+    if let Some(blobs) = &state.blobs {
+        devices = devices.with_account_key(blobs.kek.clone());
+    }
+    let beat = devices
         .heartbeat(context.org, device, &sessions, now)
         .await
-        .map_err(|error| state.internal(&error.to_string()))?
+        .map_err(|error| {
+            // `if let` rather than a match with a catch-all arm: the workspace
+            // lint table denies a wildcard over an enum, and every other
+            // storage fault is genuinely a fault.
+            if let tam_storage::StorageError::StorefrontBoundElsewhere { marketplace } = &error {
+                state.telemetry.capture(
+                    context.org,
+                    "storefront_bound_elsewhere",
+                    serde_json::json!({ "marketplace": marketplace }),
+                );
+                return bound_elsewhere(*marketplace);
+            }
+            state.internal(&error.to_string())
+        })?
         .ok_or_else(missing)?;
+    if !beat.linked.is_empty() {
+        let held = ConnectionRepo::new(state.pool.clone())
+            .list(context.org, now)
+            .await
+            .map_err(|error| state.internal(&error.to_string()))?;
+        let mut live: Vec<Marketplace> = Vec::new();
+        for row in &held {
+            if row.state != "revoked" && !live.contains(&row.marketplace) {
+                live.push(row.marketplace);
+            }
+        }
+        for marketplace in &beat.linked {
+            state.telemetry.capture(
+                context.org,
+                "marketplace_connected",
+                serde_json::json!({
+                    "marketplace": marketplace,
+                    "transport_class": marketplace.transport_class(),
+                    "nth_connection": live.len(),
+                }),
+            );
+        }
+    }
     if let Some(library) = &body.library {
         crate::library::record_report(&state, context.org, device, library, now).await?;
     }
@@ -709,6 +814,7 @@ mod tests {
         HeartbeatSession {
             marketplace,
             account_label: None,
+            external_id: None,
             status: status.to_owned(),
         }
     }

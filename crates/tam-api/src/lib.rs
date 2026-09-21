@@ -48,7 +48,6 @@ pub mod migrations;
 pub mod notifications;
 pub mod openapi;
 pub mod org;
-pub mod paddle;
 pub mod product;
 pub mod profile;
 pub mod resource_templates;
@@ -58,11 +57,14 @@ pub mod schedules;
 pub mod seller_rules;
 pub mod session;
 pub mod stream;
+pub mod stripe;
 pub mod sync_activity;
 pub mod sync_settings;
 pub mod taxonomy;
+pub mod telemetry;
 pub mod template_apply;
 pub mod text;
+pub mod time;
 pub mod version;
 pub mod vocabulary;
 pub mod work;
@@ -81,13 +83,12 @@ pub use crate::{
     auth::{
         AuthBridge, JwkSet, JwksFuture, JwksSource, JwksUnavailable, VerifiedSubject, AUDIENCE,
     },
-    billing::{
-        BillingView, PriceMap, PricedPlan, SubscriptionView, WebhookSecret, ORG_CUSTOM_DATA_KEY,
-    },
+    billing::{BillingView, Cadence, CheckoutBody, MoveBalance, RedirectView, ORG_METADATA_KEY},
     catalogue::{FileHandle, UploadedView},
     entitlement::{Entitlement, EntitlementView, PlansView, QuotaKind},
     error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind, Disclosure},
     session::{OperatorContext, OrgContext, StreamAuth, SESSION_COOKIE},
+    stripe::{PriceMap, SecretKey, WebhookSecret},
     version::{APIVersion, VersionError},
 };
 
@@ -97,16 +98,25 @@ pub use crate::{
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Config {
     pub disclosure: Disclosure,
-    /// Paddle's notification-webhook secret, which is the only thing that
+    /// Stripe's endpoint signing secret, which is the only thing that
     /// authenticates the billing webhook. Absent, that route answers 503:
     /// there is no unauthenticated mode of it to fall back to.
-    pub paddle_webhook_secret: Option<billing::WebhookSecret>,
-    /// Which Paddle price identifier sells which plan and rung.
+    pub stripe_webhook_secret: Option<stripe::WebhookSecret>,
+    /// The Stripe API client, which is what opens a checkout, re-reads a
+    /// completed session and mints a billing-portal link.
     ///
-    /// Empty by default, which is the fail-closed posture: a completed
-    /// transaction naming a price this map does not know grants nothing and
-    /// says so on the log, rather than being guessed into the largest rung.
-    pub paddle_price_map: billing::PriceMap,
+    /// Absent means this deployment holds no secret key, and all three
+    /// answer 503 rather than a link to nowhere. The key lives inside the
+    /// client rather than beside it, so there is no second place to read it
+    /// from.
+    pub stripe: Option<stripe::Client>,
+    /// Which Stripe price identifier sells which price key.
+    ///
+    /// Empty by default, which is the fail-closed posture: a checkout naming
+    /// a key this map does not carry is refused, and a completed session
+    /// naming a price it does not carry grants nothing and says so on the
+    /// log rather than being guessed into the largest pack.
+    pub stripe_price_map: stripe::PriceMap,
     /// The Ed25519 signing key for the entitlement tokens the heartbeat mints
     /// under decision D10. Absent in development, and the heartbeat then
     /// answers without a token: the client gate reads that as closed.
@@ -157,6 +167,11 @@ pub struct AppState {
     pub blobs: Option<BlobStore>,
     /// Public reference data only; no marketplace credentials or requests.
     pub exchange_rates: Option<std::sync::Arc<dyn exchange_rates::ExchangeRateSource>>,
+    /// Where product-analytics events go, or nowhere. Not an `Option`: the
+    /// unconfigured form is a value that drops every capture, so no handler
+    /// has to ask whether a deployment has a collector before recording that
+    /// something happened.
+    pub telemetry: telemetry::Telemetry,
 }
 
 /// The two values an upload needs and no other route does: the key every
@@ -272,6 +287,11 @@ pub fn router(state: AppState) -> Router {
         .route("/{version}/org", get(org::org_view).patch(org::update_org))
         .route("/{version}/org/slug/{slug}", get(org::slug_availability))
         .route("/{version}/billing", get(billing::billing_view))
+        // Both open Stripe and answer a URL rather than redirecting, because
+        // the console fetches them and a 303 to a third party is not
+        // something `fetch` can follow into a new tab.
+        .route("/{version}/billing/checkout", post(billing::checkout))
+        .route("/{version}/billing/portal", post(billing::portal))
         .route("/{version}/billing/webhook", post(billing::webhook))
         // The price list, unauthenticated: the pricing page is public, and a
         // price a seller cannot read before signing up is not a price list.
@@ -795,6 +815,13 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/{version}/admin/orgs/{org}/plan/{grant}/revoke",
             post(admin::revoke_plan),
+        )
+        // The second operator write, on the same terms: a balance is a tenant
+        // fact, changed through the application pool with the organisation
+        // pinned rather than through the read-only backoffice role.
+        .route(
+            "/{version}/admin/orgs/{org}/moves",
+            post(admin::credit_moves),
         )
         .route("/{version}/admin/sync-health", get(admin::sync_health))
         .route("/{version}/admin/failed-writes", get(admin::failed_writes))

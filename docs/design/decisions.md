@@ -901,3 +901,44 @@ The closest writable licence suggestions are TES-PAID for paid resources and CC-
 [CC-BY-ND](https://creativecommons.org/licenses/by-nd/4.0/) permits commercial redistribution of unchanged copies with attribution, and compliant recipients retain those permissions.
 The seller must intend that wider grant; choosing a preset is not legal acceptance on their behalf.
 Unsupported school licences and uncaptured TPT resource-type conditions are refused, not silently substituted.
+
+## Stripe replaces Paddle as the billing rail, 2026-09-22
+
+Stripe is the processor. Paddle's code is deleted rather than kept beside it as a dormant second rail.
+
+The reason is Paddle's Acceptable Use Policy, last updated 13 April 2026 and incorporated by the MSA's definition clause.
+Prohibited category 4 reaches "any product or service that infringes upon, or enables the infringement upon copyrights, trademarks, **terms and conditions**, or trade secrets of another party".
+Stripe's restricted-businesses list, last updated 13 May 2026, contains no equivalent: the only clause reaching this product is the general third-party intellectual-property one, and it names IP rights alone.
+A bulk tool driving a marketplace that publishes no API for the purpose is arguable under Paddle's clause and is not reached by Stripe's, and the construction is Paddle's to decide, not ours.
+Prohibited category 2 — "human services that are not related to a software offering … including coaching, IT services" — additionally forbids the $99 "Move with me" booking outright, so part of the catalogue could not be sold through Paddle at all.
+Paddle publishes no pre-approval mechanism, and its MSA lets it suspend the account and set off collected funds without notice at its sole discretion (cl. 8.2, 8.4, 9.6(i), 16.3(vi)) while holding the customer of record and the stored card for every live subscription.
+
+Stripe publishes an express pre-approval route, Services Agreement 1.2(a)(ix) (General Terms last modified 18 November 2025):
+
+> (ix) use the Services to conduct a Prohibited or Restricted Business … **unless Stripe has pre-approved the respective Prohibited or Restricted Business in writing.**
+
+The enquiry sent under it, phrased to disclose the model without admitting a marketplace terms breach (insurance exclusion 8.13(b)):
+
+> Subject: Pre-approval request under Services Agreement 1.2(a)(ix)
+>
+> We are a New Zealand software business preparing to launch Teachouse, a subscription tool for teachers who sell digital teaching resources. It keeps a teacher's own listings consistent across the marketplaces they already sell on, chiefly TeachersPayTeachers and Tes.
+>
+> Two things we want on the record before we build. First, where a marketplace publishes an official API, we use it under a token issued to us for that purpose. Where a marketplace publishes none, every request is made from the teacher's own computer, signed in as themselves, to their own account; we never hold their marketplace password, and our servers never contact those marketplaces. Second, we sell two things: a monthly or annual subscription, and one-off packs priced by how many of the teacher's own resources are brought across.
+>
+> We have read the Prohibited and Restricted Businesses list and do not believe we fall within any category. We would like written confirmation under Services Agreement 1.2(a)(ix) that Stripe is content to support this business, or to be told what further information would help you decide.
+>
+> Business location: New Zealand. Expected volume in year one: under USD 50,000. Customers: individual teachers in the US, UK, EU, Australia and New Zealand.
+
+The reply landing is a hard gate on the first charge, recorded in [`runbook-m1j-first-charge.md`](runbook-m1j-first-charge.md).
+
+This is not the cheaper choice and was not taken as one.
+Re-run against the pack prices that carry the business, Paddle costs 5.1–5.4% on the $127–$397 packs against Stripe's roughly 6.0–6.1%, and Paddle absorbs the worldwide registration and filing that Stripe does not.
+Under Stripe, Teachouse is the seller of record: Stripe Tax calculates and collects but never assumes the obligation, the registrations are added before collection begins rather than after, and UK VAT on B2C digital services has no threshold for a non-established supplier and therefore lands on the first British teacher.
+What Stripe uniquely offers is a written answer before customers are subscribed, and that is what the decision buys.
+
+No dormant second processor exists. FastSpring remains the documented fallback in the compliance floor and remains unquoted.
+
+Shape: Checkout for both packs and subscriptions, Billing for renewals, the customer portal for card and cancellation, and five subscribed events — `checkout.session.completed`, `invoice.paid`, `invoice.payment_failed`, `customer.subscription.updated`, `customer.subscription.deleted`.
+Fulfilment is idempotent on the Stripe object — the session, the subscription, the billing period — rather than on the event id, because one purchase produces more than one event and a retry must not pay out twice.
+The price map lives on the server alone and is keyed by Stripe's identifier; the console names only our own price keys, so a browser cannot name a price.
+The console loads no third-party billing script, and `cdn.paddle.com` leaves the content-security policy rather than being exchanged for another host.

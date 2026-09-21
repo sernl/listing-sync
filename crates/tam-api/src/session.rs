@@ -27,7 +27,7 @@ pub const SESSION_COOKIE: &str = "tam_session";
 /// organisation's live grants per request, beside the session resolution
 /// that already happens.
 ///
-/// No longer `Copy`: a grant carries the Paddle identifier it came from, and
+/// No longer `Copy`: a grant carries the provider identifier it came from, and
 /// a heap string is worth more than the convenience of an implicit copy on a
 /// value every handler takes by move anyway.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -298,9 +298,10 @@ async fn from_assertion(
         .user_by_auth_subject(verified.subject)
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
-    let (org, user) = match linked {
-        Some(linked) => linked,
-        None => repo
+    let (org, user) = if let Some(linked) = linked {
+        linked
+    } else {
+        let provisioned = repo
             .provision_for_auth_subject(
                 NewTenant {
                     subject: verified.subject,
@@ -312,7 +313,17 @@ async fn from_assertion(
                 now,
             )
             .await
-            .map_err(|error| state.internal(&error.to_string()))?,
+            .map_err(|error| state.internal(&error.to_string()))?;
+        // The one place a tenant comes into existence, so the one place a
+        // signup can be counted. Nothing about the subject is carried: the
+        // assertion is the only self-serve route there is, which is the whole
+        // of what `auth_method` says.
+        state.telemetry.capture(
+            provisioned.0,
+            "signup_completed",
+            serde_json::json!({ "auth_method": "assertion" }),
+        );
+        provisioned
     };
 
     let token = fresh_session_token();

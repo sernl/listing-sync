@@ -1,7 +1,7 @@
 # The M1j founder runbook: link, probe, first run, rehearsal, and the charge
 
 M1j draws a boundary: code wires, proves and rehearses the duplication flow, and five acts stay the founder's.
-This file is the procedure for those five — linking the real Tes session through the broker, probing the New Zealand currency rule, the supervised first run on the founder's own catalogue, the ZZ-prefix rehearsal against the live account, and sending the Stripe payment link.
+This file is the procedure for those five — linking the real Tes session through the broker, probing the New Zealand currency rule, the supervised first run on the founder's own catalogue, the ZZ-prefix rehearsal against the live account, and taking the first charge through Stripe.
 The plan is [`plans/2026-08-25-m1j-duplication-and-first-charge.md`](plans/2026-08-25-m1j-duplication-and-first-charge.md); its boundary and decisions sections govern and nothing here reopens them.
 
 Every procedure below drives a binary that already exists, and none of them changes code.
@@ -160,44 +160,106 @@ If a run dies between create and delete, delete the artefact by hand in the dash
 If the schema fingerprint changed, stop.
 That is the drift the canary escalates as a fleet halt for the inventory, and rehearsing over drift corrupts listings.
 
-## The Stripe payment link
+## The first charge through Stripe
 
-Charging is manual by decision for M1: the plan records the payment-link flow and what is charged for, and automated billing is M5's, needed at roughly fifty customers.
-No billing code and no billing tables exist in this repository, and that absence is the decision rather than an omission.
+Billing is wired end to end and dormant: the routes exist, the webhook records what Stripe says, and nothing can be bought until a deployment is given the three Stripe flags.
+Stripe is the rail by the decision of 2026-09-22 recorded in [`decisions.md`](decisions.md); Paddle's code is deleted rather than kept beside it, so there is no second processor to configure and no fallback to switch to in a hurry.
+Teachouse is the seller of record under Stripe Payments, which means Teachouse owns the tax registrations Stripe Tax calculates against.
 
 ### Preconditions
 
 The written pre-approval reply from Stripe under Services Agreement 1.2(a)(ix) has landed.
 This is a hard gate, not a formality.
-[`compliance-floor.md`](compliance-floor.md) lists the enquiry as a Stage A item owned by the founder at line 30 and gives the reasoning at lines 96 and 97: Stripe's restricted-businesses list contains no anti-automation, anti-scraping, terms-circumvention or credential clause, the only clause reaching this product is the general third-party intellectual-property one, and asking in writing before any billing code is written creates a record that a post-launch discovery cannot.
+[`compliance-floor.md`](compliance-floor.md) lists the enquiry as a Stage A item owned by the founder at line 30 and gives the reasoning at lines 96 and 97: Stripe's restricted-businesses list contains no anti-automation, anti-scraping, terms-circumvention or credential clause, and the only clause reaching this product is the general third-party intellectual-property one.
 Two merchant-of-record candidates prohibit this product by name and are ruled out at lines 89 to 91; FastSpring is the documented fallback at line 98 and Lemon Squeezy is not to be built on at line 99.
 
-The uncalibrated-constant budget in `tam-limits` is the second hard gate, and the payment link may not be sent while it is above zero.
-`crates/tam-limits/src/lib.rs:246` pins `UNCALIBRATED_BUDGET` at seven, and the crate header at lines 17 to 20 states the rule: an `UNCALIBRATED` marker is a guess, it is a release blocker for the first paying deployment rather than a wish, and the number is driven to zero before taking money.
-Calibrating those constants against measurements from real runs is its own founder session; this runbook reads the number and calibrates nothing, and `crates/tam-limits` is a founder-gated file either way.
+The uncalibrated-constant budget in `tam-limits` is the second hard gate, and nothing may be charged while it is above zero.
+The crate header states the rule: an `UNCALIBRATED` marker is a guess, it is a release blocker for the first paying deployment rather than a wish, and the number is driven to zero before taking money.
+The ratchet test `uncalibrated_markers_are_ratcheted` fails when the marker count and the budget disagree, so a green suite with a non-zero budget means the gate is closed rather than open; the number itself is the check.
 
-### Steps
+The tax registrations that apply are added in the Stripe dashboard **before** the first charge, not after.
+Stripe Tax calculates and collects; it never assumes the obligation, and its threshold monitoring sends nothing below USD 10,000 of prior-year revenue, which is precisely the launch year.
+The line that bites first is UK VAT on B2C digital services, which has no registration threshold for a non-established supplier and therefore lands on the first British teacher.
+
+### Configuring a deployment
+
+1. In the Stripe dashboard, create one Product per thing sold and a Price under each: two recurring prices for Sync (monthly and yearly), one recurring annual price for the founding cohort, five one-time prices for the packs, and one one-time price for "Move with me".
+   The prices are the ones `crates/tam-limits` names; the dashboard holds the identifiers and nothing else.
+2. Write the price map to a file the server can read, keyed by Stripe's identifier and valued by our price key:
+
+   ```json
+   {
+     "price_...": "sync_monthly",
+     "price_...": "sync_yearly",
+     "price_...": "founding_yearly",
+     "price_...": "pack_20",
+     "price_...": "pack_50",
+     "price_...": "pack_100",
+     "price_...": "pack_250",
+     "price_...": "pack_500",
+     "price_...": "move_with_me"
+   }
+   ```
+
+   A key the map does not carry cannot be bought: checkout refuses it rather than guessing, and a completed session naming a price the map does not carry grants nothing and says so on the log.
+   A malformed map stops the server at startup.
+3. Write the secret key to its own file, readable only by the service user.
+   It is a file rather than a command-line value because a secret on a command line is in every process listing on the host.
+4. Add the webhook endpoint in the dashboard, pointed at `https://<host>/v1/billing/webhook`, and subscribe it to exactly these five events:
+
+   | Event | What it does here |
+   |---|---|
+   | `checkout.session.completed` | The primary fulfilment trigger: credits a pack, records a "Move with me" booking, or starts a subscription |
+   | `invoice.paid` | The renewal signal: moves the grant's expiry forward and accrues the period's moves |
+   | `invoice.payment_failed` | A day of grace while dunning runs; the plan is not taken away on the first failure |
+   | `customer.subscription.updated` | Status and period changes, including a plan switch made in the portal |
+   | `customer.subscription.deleted` | The cancellation: the grant runs to the period end with no grace |
+
+   Subscribing to more is harmless — an unhandled event type is acknowledged and ignored — and subscribing to fewer silently drops money.
+5. Copy the endpoint's signing secret and start the server with all three:
+
+   ```
+   tam-server <db-url> \
+     --stripe-webhook-secret whsec_... \
+     --stripe-secret-key /run/secrets/stripe-secret-key \
+     --stripe-price-map /etc/teachouse/stripe-prices.json
+   ```
+
+   Without the webhook secret the webhook answers 503 rather than trusting an unauthenticated caller; without the secret key, checkout and the billing portal refuse rather than offering a link to nowhere.
+   The startup log says which of the three are present, and how many prices the map carries.
+6. Enable Stripe Tax and the customer billing portal in the dashboard, and add the registrations from the preconditions.
+   The checkout sets `automatic_tax[enabled]`, so a missing registration means tax is not collected rather than an error anybody sees.
+
+### Rehearsing in test mode
+
+1. Point a staging deployment at the test-mode key, the test-mode price map and a test-mode endpoint secret, and drive the whole flow from the console: buy a pack, buy a subscription, open the portal, cancel.
+2. Confirm on the seller's Account page that the pack's moves arrived, that the plan reads `subscriber`, and that the renewal date matches the subscription in the dashboard.
+3. Replay each of the five events from the dashboard's event log and confirm the second delivery changes nothing.
+   Fulfilment is keyed on the session and the subscription rather than on the event, so a retry is a no-op; a second credit appearing here is the defect this step exists to catch.
+4. Read the endpoint's delivery log for non-2xx answers.
+   A 401 means the signing secret is wrong; a 422 means a payload shape drifted and the event is replayable once the code is fixed; a 503 means the deployment is missing a flag.
+
+### The charge itself
 
 1. Confirm the pre-approval reply is on file, with its date, before anything else.
-2. Confirm the uncalibrated budget is zero: run the crate's test suite with `cargo nextest run -p tam-limits` and read `UNCALIBRATED_BUDGET` at `crates/tam-limits/src/lib.rs:246`.
-   The ratchet test `uncalibrated_markers_are_ratcheted` fails when the marker count and the budget disagree, so a green suite with a non-zero budget means the gate is closed rather than open; the number itself is the check.
-3. Create the payment link in the Stripe dashboard for the agreed amount.
-   The price structure is unsettled: [`commercial-model.md`](commercial-model.md) records a $29-a-month subscription floor and, as the structure to test against it, a one-time onboarding fee plus a lower recurring price modelled at $299 one-time plus $19 a month.
-   Choosing between them is a founder decision recorded there rather than here.
-4. State on the link what is being charged for: the migration, meaning the bulk duplication of the seller's catalogue from the GB inventory into the New Zealand one, run and supervised by the operator.
-5. Send the link to the customer directly.
-   There is no signup, no trial and no self-serve flow at M1.
-6. Record the charge against the tenant by hand: the org id, the payment link and payment ids, the amount, the date, and the job id of the migration it paid for.
-   That record is the only one that exists.
+2. Confirm the uncalibrated budget is zero with `cargo nextest run -p tam-limits`.
+3. Switch the deployment to the live key, the live price map and the live endpoint secret.
+4. Send the customer to the console and let them buy.
+   There is no payment link to compose and no charge to record by hand: the webhook writes the grant, the ledger and the subscription row, and the operator surface reads all three.
+
+A hand-made payment link is still available in the dashboard for a case the catalogue does not cover, and a charge made that way grants nothing, because no webhook of ours describes it.
+Anything sold that way has to be granted by hand through the operator surface, with the reason recorded there.
 
 ### Success
 
-A pre-approval reply on file, an uncalibrated budget of zero, a charge paid by somebody other than the founder — one of the three things M1 exists to prove — and a hand-kept record tying that charge to the tenant and to the job it paid for.
+A pre-approval reply on file, an uncalibrated budget of zero, and a charge paid by somebody other than the founder — one of the three things M1 exists to prove — with the grant, the move ledger and the subscription row all agreeing about what was bought.
 
 ### Abort and rollback
 
 If the pre-approval reply has not landed, or the uncalibrated budget is above zero, do not charge, and do not work around either gate.
 A refusal discovered after customers are subscribed is the kill risk the first gate exists to prevent, and a guessed resource bound met by a paying tenant is what the second one prevents.
-To undo a charge, refund it in the Stripe dashboard and record the reversal in the same hand-kept record.
-Assume refunds the founder does not control are possible for sixty days under Stripe Managed Payments, which makes a sync failure inside that window a billing-continuity risk as well as a trust one.
+To undo a charge, refund it in the Stripe dashboard.
+A refund does not revoke anything on its own — no `charge.refunded` handler exists — so the grant or the move credit is reversed by hand through the operator surface in the same sitting, with the reason recorded.
+Teachouse carries chargeback liability under Stripe Payments and controls its own refunds, which is the trade made for owning the tax registrations.
 Never admit a marketplace terms breach in correspondence with a customer or a processor, because the insurance exclusion at 8.13(b) triggers on an admission alone without any adjudication.
+

@@ -190,6 +190,11 @@ pub(crate) async fn grant_consent(
         )
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
+    state.telemetry.capture(
+        context.org,
+        "consent_granted",
+        serde_json::json!({ "marketplace": wire_name(marketplace) }),
+    );
     Ok(Json(ConsentView::of(record)))
 }
 

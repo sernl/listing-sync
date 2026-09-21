@@ -25,6 +25,12 @@ jsonwebtoken = { version = "9.3", default-features = false }
 # escapes raw HTML rather than passing it through — and the difference is
 # stated there rather than assumed from the shared dependency.
 pulldown-cmark = { workspace = true }
+# The three outbound Stripe calls the checkout needs, and the telemetry
+# capture beside them. `default-features = false` drops the bundled native
+# TLS stack, so the process keeps exactly one: rustls, which `sqlx` already
+# carries. No package joins the lock for it — `tam-server` holds the same
+# edge with the same two features.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 # The checked PKCS#8 parse, which is what derives the public half an operator
 # compares against the fleet's repository variable. `jsonwebtoken` signs through
 # `from_pkcs8_maybe_unchecked` and so cannot answer that question. Promoted from

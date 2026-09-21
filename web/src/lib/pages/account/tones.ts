@@ -1,15 +1,19 @@
-// The badge's vocabulary, against the older one two shared modules still speak.
+// The badge's vocabulary, against the older one a shared module still speaks.
 //
-// `$lib/paddle` and `$lib/connection-status` both answer with the pill
-// modifiers the sheet carried before the redraw — `ok`, `run`, `bad`, `mut` —
-// and `StatusPill` takes a different closed set. Neither of those modules is
-// this slice's to change, so the translation lives here, once, rather than as
-// an inline record on each page that renders one of their answers.
+// `$lib/connection-status` answers with the pill modifiers the sheet carried
+// before the redraw — `ok`, `run`, `bad`, `mut` — and `StatusPill` takes a
+// different closed set. That module is not this slice's to change, so the
+// translation lives here, once, rather than as an inline record on each page
+// that renders one of its answers.
+//
+// It translated a processor's subscription status too, until the billing rail
+// moved to Stripe and `/v1/billing` stopped serving one: the page now answers
+// the plan, the cadence and the renewal date, none of which is a status word
+// needing a tone.
 
 import type { Tone } from '$lib/StatusPill.svelte';
-import { subscriptionTone } from '$lib/paddle';
 
-/** The pill modifiers `$lib/paddle` and `$lib/connection-status` return. */
+/** The pill modifiers `$lib/connection-status` returns. */
 export type LegacyTone = 'ok' | 'run' | 'bad' | 'mut';
 
 /** `mut` is the older set's untinted value and the badge has no untinted tone,
@@ -24,13 +28,4 @@ const BADGE: Record<LegacyTone, Tone> = {
 
 export function badgeTone(legacy: LegacyTone): Tone {
 	return BADGE[legacy];
-}
-
-/** How the badge renders one of Paddle's own statuses.
- *
- *  Paddle's vocabulary is open and the server passes it through, so a status
- *  neither module recognises reaches the grey rather than being tinted as
- *  something it may not be. */
-export function paddleBadge(status: string): Tone {
-	return badgeTone(subscriptionTone(status));
 }
