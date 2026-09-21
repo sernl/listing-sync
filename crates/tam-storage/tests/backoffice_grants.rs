@@ -88,7 +88,7 @@ async fn seed_two_tenants(app: &PgPool) -> Result<(), sqlx::Error> {
         // holding nothing answers zero whether or not the policy is there.
         sqlx::query(
             "INSERT INTO billing_subscription \
-             (org_id, paddle_subscription_id, paddle_customer_id, status, \
+             (org_id, provider_subscription_id, provider_customer_id, status, \
               current_period_end, occurred_at, updated_at) \
              VALUES ($1, $2, $3, 'active', now(), now(), now())",
         )

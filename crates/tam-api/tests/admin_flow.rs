@@ -23,7 +23,7 @@ use tam_api::admin::{
 };
 use tam_api::openapi::ROUTES;
 use tam_api::{router, APIError, APIErrorCode, APIErrorKind, AppState, Config, SESSION_COOKIE};
-use tam_storage::{BackofficeRepo, OperatorRepo, SessionRepo, SessionToken};
+use tam_storage::{BackofficeRepo, EntitlementRepo, OperatorRepo, SessionRepo, SessionToken};
 use tam_types::{OrgId, Timestamp, UserId, Uuid};
 use tower::ServiceExt;
 
@@ -58,14 +58,16 @@ const ADMIN_PATHS: [&str; 9] = [
 /// Listing it here keeps the closure below failing for the next route somebody
 /// forgets, which is the whole point of closing the world; an unlisted absence
 /// would make the closure vacuous instead.
-/// The two plan-grant routes are here rather than in `ADMIN_PATHS` because
+/// The three operator writes are here rather than in `ADMIN_PATHS` because
 /// that list drives GET refusal loops, and a POST route answered by those
 /// loops would be testing method routing rather than the operator fence.
-/// Their own refusal is asserted by `a_seller_cannot_grant_themselves_a_plan`.
-const ADMIN_PATHS_UNCOVERED: [&str; 12] = [
+/// Their own refusal is asserted by `a_seller_cannot_grant_themselves_a_plan`
+/// and `an_operator_credits_moves_once_per_reason`.
+const ADMIN_PATHS_UNCOVERED: [&str; 13] = [
     "/{version}/admin/marketplace-requests",
     "/{version}/admin/orgs/{org}/plan",
     "/{version}/admin/orgs/{org}/plan/{grant}/revoke",
+    "/{version}/admin/orgs/{org}/moves",
     // The guide corpus is global and lives on the application pool, so these
     // three are the operator routes that keep serving when no backoffice
     // database is configured -- which is exactly what the second loop below
@@ -104,6 +106,7 @@ async fn backoffice_pool(app: &PgPool) -> PgPool {
 
 fn state(pool: PgPool, backoffice: Option<PgPool>) -> AppState {
     AppState {
+        telemetry: tam_api::telemetry::Telemetry::default(),
         exchange_rates: None,
         pool,
         config: Config::default(),
@@ -294,7 +297,7 @@ async fn provision(pool: &PgPool) {
         pool,
         ORG_B,
         &["INSERT INTO billing_subscription \
-             (org_id, paddle_subscription_id, paddle_customer_id, status, \
+             (org_id, provider_subscription_id, provider_customer_id, status, \
               current_period_end, occurred_at, updated_at) \
              VALUES ($1, 'sub_fixture', 'ctm_fixture', 'active', NULL, \
                  timestamptz '2026-02-03T04:05:06Z', now())"
@@ -623,17 +626,17 @@ async fn one_organisation_renders_its_connections_and_halts(pool: PgPool) {
         .expect("the tenant carrying a subscription reports one");
     assert_eq!(
         subscription.status, "active",
-        "Paddle's own vocabulary reaches the operator untranslated"
+        "Stripe's own vocabulary reaches the operator untranslated"
     );
     assert!(
         subscription.current_period_end.is_none(),
-        "a subscription Paddle sent no billing period for reports none, \
+        "a subscription Stripe sent no billing period for reports none, \
          rather than a fabricated instant"
     );
     assert_eq!(
         subscription.occurred_at,
         Timestamp(1_770_091_506_000),
-        "the instant Paddle stamped on the notification, not the instant of the write"
+        "the instant Stripe stamped on the event, not the instant of the write"
     );
 }
 
@@ -1309,8 +1312,77 @@ async fn a_grant_without_a_reason_is_refused(pool: PgPool) {
     assert_eq!(
         answer.status,
         StatusCode::UNPROCESSABLE_ENTITY,
-        "a Catalogue Import grant with no rung would grant nothing, so it is refused \
+        "migration_only is not a plan any more; a spelling outside the set is refused \
          rather than written"
+    );
+}
+
+/// The operator credit, which is the other half of the move ledger: a
+/// balance an operator can correct, with the reason on the row.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_operator_credits_moves_once_per_reason(pool: PgPool) {
+    provision(&pool).await;
+    grant_operator(&pool).await;
+    let backoffice = backoffice_pool(&pool).await;
+
+    let refused = post_json(
+        pool.clone(),
+        Some(backoffice.clone()),
+        &format!("{}/moves", org_path(ORG_A)),
+        Some(&TOKEN_OPERATOR),
+        serde_json::json!({ "moves": 20, "reason": "  " }),
+    )
+    .await;
+    assert_eq!(
+        refused.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a credit with no reason leaves no audit trail, so it is not written"
+    );
+
+    let granted = post_json(
+        pool.clone(),
+        Some(backoffice.clone()),
+        &format!("{}/moves", org_path(ORG_A)),
+        Some(&TOKEN_OPERATOR),
+        serde_json::json!({ "moves": 20, "reason": "a pack that never landed" }),
+    )
+    .await;
+    assert_eq!(granted.status, StatusCode::OK);
+    let view: OrgDetailView = granted.json();
+    assert_eq!(
+        view.moves.available, 20,
+        "the org detail answers the balance the credit left, so the panel \
+         redraws from the server rather than from what it just sent"
+    );
+    assert_eq!(
+        EntitlementRepo::new(pool.clone())
+            .move_balance(ORG_A, NOW)
+            .await
+            .expect("the balance reads")
+            .available,
+        20
+    );
+
+    let replayed = post_json(
+        pool.clone(),
+        Some(backoffice),
+        &format!("{}/moves", org_path(ORG_A)),
+        Some(&TOKEN_OPERATOR),
+        serde_json::json!({ "moves": 20, "reason": "a pack that never landed" }),
+    )
+    .await;
+    assert_eq!(
+        replayed.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a double-clicked form credits once"
+    );
+    assert_eq!(
+        EntitlementRepo::new(pool)
+            .move_balance(ORG_A, NOW)
+            .await
+            .expect("the balance reads")
+            .available,
+        20
     );
 }
 

@@ -130,6 +130,7 @@ fn bridge(key: &TestKey, fetches: &Arc<AtomicUsize>) -> Arc<AuthBridge> {
 
 fn state(pool: PgPool, auth: Option<Arc<AuthBridge>>) -> AppState {
     AppState {
+        telemetry: tam_api::telemetry::Telemetry::default(),
         exchange_rates: None,
         pool,
         config: Config::default(),

@@ -54,6 +54,7 @@ fn holding(status: DeviceSessionStatus) -> [DeviceSessionReport<'static>; 1] {
     [DeviceSessionReport {
         marketplace: Marketplace::Tpt,
         account_label: None,
+        external_id: None,
         status,
     }]
 }

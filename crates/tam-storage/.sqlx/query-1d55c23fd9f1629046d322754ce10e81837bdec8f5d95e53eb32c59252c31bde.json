@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n                 (SELECT count(*) FROM product\n                   WHERE org_id = $1 AND deleted_at IS NULL)          AS \"resources!\",\n                 (SELECT count(DISTINCT marketplace) FROM connection\n                   WHERE org_id = $1 AND state = 'linked')            AS \"marketplaces!\",\n                 (SELECT count(*) FROM resource_template\n                   WHERE org_id = $1)                                 AS \"templates!\",\n                 (SELECT count(*) FROM label\n                   WHERE org_id = $1)                                 AS \"labels!\",\n                 (SELECT count(*) FROM collection\n                   WHERE org_id = $1)                                 AS \"collections!\",\n                 (SELECT count(*) FROM device\n                   WHERE org_id = $1 AND revoked_at IS NULL)          AS \"devices!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "resources!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "marketplaces!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "templates!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "labels!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "collections!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "devices!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "1d55c23fd9f1629046d322754ce10e81837bdec8f5d95e53eb32c59252c31bde"
+}

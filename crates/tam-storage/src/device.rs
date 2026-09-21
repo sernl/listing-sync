@@ -36,6 +36,13 @@
 //! a connection no device has reported at all, and never writes over
 //! `revoked`, because a revocation a device lifted by restarting would not be
 //! the seller's decision any more.
+//!
+//! The heartbeat is also where a storefront is bound. A device that named the
+//! marketplace's own identifier for the shop it holds a session for carries
+//! the one fact global exclusivity is enforced on, and the check-in digests it
+//! and writes the claim inside the same transaction as the link derivation --
+//! so a beat naming a storefront another organisation holds links nothing at
+//! all rather than linking and then failing to claim.
 
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
@@ -48,6 +55,16 @@ use crate::codec::{
 };
 use crate::connections::{marketplace_from_db, record_connection_event, ConnectionEventRecord};
 use crate::{pin_org, StorageError};
+
+/// The generation of the key the storefront digest's pepper is derived from.
+///
+/// Bound into every digest by [`tam_secrets::account_digest`], so a rotation
+/// is a visibly different value rather than a silent failure to match -- which
+/// on a constraint enforced by equality would let a second organisation claim
+/// a storefront the first still holds under the retired key. Rotating means
+/// bumping this and re-claiming, which every check-in does on its own within
+/// one beat.
+const ACCOUNT_KEY_VERSION: i32 = 1;
 
 /// What a device last reported about one marketplace session.
 ///
@@ -117,6 +134,16 @@ pub struct DeviceSessionReport<'a> {
     /// Whatever the marketplace made cheaply visible at capture time; `None`
     /// is normal and is never worth a request to fill in.
     pub account_label: Option<&'a str>,
+    /// The marketplace's own identifier for the storefront this session
+    /// speaks for -- Tes's `userId`, TPT's `author.id` -- read by the device
+    /// from a route that names its principal and takes no selector, so it is
+    /// the marketplace's assertion rather than the seller's.
+    ///
+    /// `None` from a client that predates the field, and from a marketplace
+    /// the device has no identity read for yet. It is never stored as itself:
+    /// the check-in digests it and keeps only the digest, so a database dump
+    /// names no seller's shop.
+    pub external_id: Option<&'a str>,
     pub status: DeviceSessionStatus,
 }
 
@@ -146,28 +173,60 @@ pub struct DeviceRecord {
     pub sessions: Vec<DeviceSessionRecord>,
 }
 
-/// What a heartbeat answers with: whether this device may keep working, and
-/// since when it may not.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What a heartbeat answers with: whether this device may keep working, since
+/// when it may not, and which marketplaces this beat linked.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceHeartbeat {
     pub revoked_at: Option<Timestamp>,
+    /// The marketplaces whose connection this beat moved *to* `linked`.
+    ///
+    /// Transitions rather than state, which is what makes it the honest input
+    /// to an event: a device reporting the same session every thirty seconds
+    /// answers an empty list, and the one beat that turned a connection on
+    /// answers it once.
+    pub linked: Vec<Marketplace>,
 }
 
 impl DeviceHeartbeat {
     #[must_use]
-    pub const fn revoked(self) -> bool {
+    pub const fn revoked(&self) -> bool {
         self.revoked_at.is_some()
     }
 }
 
 pub struct DeviceRepo {
     pool: PgPool,
+    /// The key the storefront digest's pepper is derived from, where this
+    /// deployment has one.
+    ///
+    /// The same key-encryption key the sealed-credential envelope uses, and
+    /// the reason it is optional is the reason the upload route's store is:
+    /// a deployment started without one cannot digest anything, and a
+    /// check-in there takes no claim rather than taking a claim under a key
+    /// it invented. Exclusivity is then unenforced on that deployment, which
+    /// is true of it and is not something a heartbeat can repair.
+    account_key: Option<tam_secrets::Kek>,
 }
 
 impl DeviceRepo {
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            account_key: None,
+        }
+    }
+
+    /// Hands the repository the key a storefront claim is digested under.
+    ///
+    /// A builder rather than a constructor parameter because exactly one
+    /// route needs it -- the check-in, which is the only place a marketplace
+    /// identifier arrives -- and every other caller of this repository reads
+    /// devices and would otherwise carry a key it never uses.
+    #[must_use]
+    pub fn with_account_key(mut self, kek: tam_secrets::Kek) -> Self {
+        self.account_key = Some(kek);
+        self
     }
 
     /// Records this device, or refreshes what a known one says about itself.
@@ -233,6 +292,12 @@ impl DeviceRepo {
     ///
     /// `Ok(None)` means no such device for this tenant, which the API answers
     /// as not-found: a heartbeat is not a registration and must not create one.
+    ///
+    /// [`StorageError::StorefrontBoundElsewhere`] is the one refusal that
+    /// fails the whole beat: a device naming a storefront another
+    /// organisation holds has its link derivation and its claim rolled back
+    /// together, because a linked connection whose claim was refused would be
+    /// exactly the standing exclusivity hole this write closes.
     pub async fn heartbeat(
         &self,
         org: OrgId,
@@ -258,12 +323,32 @@ impl DeviceRepo {
             return Ok(None);
         };
 
+        let mut linked = Vec::new();
         for marketplace in replace_sessions(&mut tx, org, device, sessions, seen).await? {
-            derive_link(&mut tx, org, &marketplace, at).await?;
+            // The claim only ever rides a session this beat named. A
+            // marketplace the device stopped naming is a link to take down,
+            // and nothing about it identifies a storefront.
+            let claim = sessions
+                .iter()
+                .find(|session| marketplace_to_db(session.marketplace) == marketplace)
+                .and_then(|session| {
+                    let key = self.account_key.as_ref()?;
+                    let external = session.external_id?;
+                    Some(tam_secrets::account_digest(
+                        key,
+                        session.marketplace,
+                        ACCOUNT_KEY_VERSION,
+                        external,
+                    ))
+                });
+            if derive_link(&mut tx, org, &marketplace, claim.as_ref(), at).await? {
+                linked.push(marketplace_from_db(&marketplace)?);
+            }
         }
         tx.commit().await?;
         Ok(Some(DeviceHeartbeat {
             revoked_at: row.revoked_at.map(timestamp_from_db),
+            linked,
         }))
     }
 
@@ -553,12 +638,24 @@ async fn replace_sessions(
 /// forget its sessions, so counting what it still reports would hold a
 /// connection open on a machine we have disowned, which is the reading the
 /// claim's own device predicate already takes.
+///
+/// `claim` is the digest of the storefront the device named, where it named
+/// one. It is written whether or not this beat moved the state, because a
+/// connection that was already `linked` when its device first learned the
+/// storefront is the ordinary case for every seller who connected before the
+/// field existed, and a claim written only on a transition would never reach
+/// them.
+///
+/// Answers whether this beat moved the connection *to* `linked`, which is the
+/// one fact a caller cannot derive for itself: the state afterwards says
+/// nothing about whether this beat is the one that turned it on.
 async fn derive_link(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     org: OrgId,
     marketplace: &str,
+    claim: Option<&[u8; 32]>,
     at: Timestamp,
-) -> Result<(), StorageError> {
+) -> Result<bool, StorageError> {
     let connected = sqlx::query_scalar!(
         r#"SELECT EXISTS (
              SELECT 1 FROM device_marketplace_session dms
@@ -607,8 +704,17 @@ async fn derive_link(
         .fetch_optional(&mut **tx)
         .await?
     };
+    // The claim rides the connected branch only. A marketplace the last live
+    // device stopped reporting is on its way to `needs_reauth`, and taking a
+    // lock on the way down would claim a storefront on the strength of a
+    // session nothing holds.
+    if connected {
+        if let Some(digest) = claim {
+            bind_storefront(tx, org, marketplace, digest, at).await?;
+        }
+    }
     let Some(connection) = moved else {
-        return Ok(());
+        return Ok(false);
     };
     record_connection_event(
         tx,
@@ -627,7 +733,91 @@ async fn derive_link(
             stamp: Stamp::system(SystemComponent::Device, at),
         },
     )
+    .await?;
+    Ok(connected)
+}
+
+/// The index the crossing is enforced by.
+///
+/// Named because the refusal is mapped by name rather than by SQLSTATE:
+/// `connection` carries other unique constraints, and a writer that read
+/// every 23505 as this one would tell a seller their shop belonged to
+/// somebody else over a collision that was nothing of the kind.
+/// `crates/tam-storage/tests/exclusivity.rs` pins the spelling.
+const EXCLUSIVITY_CONSTRAINT: &str = "connection_platform_account_exclusive";
+
+/// Binds this organisation to the storefront the digest names.
+///
+/// Idempotent by the `IS DISTINCT FROM` predicate, so the first beat after a
+/// device learns its storefront writes the claim and every beat after it
+/// writes nothing: a claim re-asserted every thirty seconds would be a row
+/// version per beat for a fact that does not change.
+///
+/// The exclusivity is the database's, not this function's. There is no read
+/// of the other tenant's row to precede the write -- there could not be, the
+/// tenant pin forbids seeing it -- so the crossing is enforced by the global
+/// partial unique index and this only names the refusal it answers.
+///
+/// A successful first bind is also where the free lifetime moves are granted,
+/// keyed on the storefront rather than on the organisation, which is what
+/// makes them once-ever: a second signup against the same shop finds the
+/// allowance already taken, and an unlink never gives it back because the
+/// allowance row is never deleted.
+async fn bind_storefront(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    marketplace: &str,
+    digest: &[u8; 32],
+    at: Timestamp,
+) -> Result<(), StorageError> {
+    let stamp = timestamp_to_db(at)?;
+    let bound = sqlx::query_scalar!(
+        "UPDATE connection \
+            SET platform_account_digest = $3, platform_account_seen_at = $4 \
+          WHERE org_id = $1 AND marketplace = $2 \
+            AND state IN ('linking', 'linked', 'needs_reauth') \
+            AND platform_account_digest IS DISTINCT FROM $3 \
+          RETURNING id",
+        uuid_to_db(org.0),
+        marketplace,
+        &digest[..],
+        stamp,
+    )
+    .fetch_optional(&mut **tx)
     .await
+    .map_err(|why| storefront_refusal(why, marketplace))?;
+    if bound.is_none() {
+        return Ok(());
+    }
+    let free_moves = tam_limits::Plan::Free
+        .capabilities(None)
+        .free_moves_lifetime;
+    crate::entitlement::grant_storefront_allowance_in(
+        tx,
+        org,
+        crate::entitlement::StorefrontAllowance {
+            marketplace,
+            digest: &digest[..],
+            moves: free_moves,
+            at,
+        },
+    )
+    .await
+    .map(|_granted| ())
+}
+
+/// The refusal the exclusivity index answers, by name, or the fault as it
+/// came.
+fn storefront_refusal(why: sqlx::Error, marketplace: &str) -> StorageError {
+    if let sqlx::Error::Database(refusal) = &why {
+        if refusal.constraint() == Some(EXCLUSIVITY_CONSTRAINT) {
+            return match marketplace_from_db(marketplace) {
+                Ok(named) => StorageError::StorefrontBoundElsewhere { marketplace: named },
+                Err(corrupt) => corrupt,
+            };
+        }
+    }
+    StorageError::Db(why)
 }
 
 /// The devices and their sessions, folded into one record each. `only` narrows

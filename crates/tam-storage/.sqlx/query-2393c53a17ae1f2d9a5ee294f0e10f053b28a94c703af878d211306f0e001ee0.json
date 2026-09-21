@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT MIN(expires_at) FROM move_ledger WHERE org_id = $1 AND delta > 0 AND expires_at IS NOT NULL AND expires_at > $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "min",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "2393c53a17ae1f2d9a5ee294f0e10f053b28a94c703af878d211306f0e001ee0"
+}

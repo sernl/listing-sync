@@ -65,6 +65,7 @@ fn t4() -> Timestamp {
 
 fn state(pool: PgPool, wall: WallClock) -> AppState {
     AppState {
+        telemetry: tam_api::telemetry::Telemetry::default(),
         exchange_rates: None,
         pool,
         config: Config::default(),
@@ -715,12 +716,14 @@ async fn a_restore_is_refused_for_an_unknown_device_and_over_the_allowance(pool:
         revoke(&pool, &TOKEN_A, LAPTOP, t1).await.status,
         StatusCode::OK
     );
-    // The Studio plan the fixture grants covers three computers, and the
-    // signed-out laptop is not one of them, so three more register freely.
+    // Every plan covers five computers, and the signed-out laptop is not one
+    // of them, so five more register freely.
     for (id, name) in [
         (DESKTOP, "studio-pc"),
         (PHONE, "founder-phone"),
         (TABLET, "founder-tablet"),
+        ("fourth-machine", "school-pc"),
+        ("fifth-machine", "family-pc"),
     ] {
         assert_eq!(
             register(&pool, &TOKEN_A, id, name).await.status,

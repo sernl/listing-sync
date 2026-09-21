@@ -3173,7 +3173,7 @@ async fn subscribe(app: &PgPool, org: OrgId, status: &str, period_end: &str) {
         .expect("tenant pin applies");
     sqlx::query(&format!(
         "INSERT INTO billing_subscription \
-           (org_id, paddle_subscription_id, paddle_customer_id, status, \
+           (org_id, provider_subscription_id, provider_customer_id, status, \
             current_period_end, occurred_at, updated_at) \
          VALUES ($1, 'sub_fixture', 'ctm_fixture', $2, {period_end}, now(), now()) \
          ON CONFLICT (org_id) DO UPDATE SET status = $2, current_period_end = {period_end}"

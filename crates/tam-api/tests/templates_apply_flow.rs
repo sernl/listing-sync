@@ -57,6 +57,7 @@ const ON_TES: u8 = 0x03;
 
 fn state(pool: PgPool) -> AppState {
     AppState {
+        telemetry: tam_api::telemetry::Telemetry::default(),
         exchange_rates: None,
         pool,
         config: Config::default(),

@@ -41,6 +41,7 @@ const NOW: Timestamp = Timestamp(5_000);
 
 fn state(pool: PgPool) -> AppState {
     AppState {
+        telemetry: tam_api::telemetry::Telemetry::default(),
         exchange_rates: None,
         pool,
         config: Config::default(),
@@ -168,7 +169,7 @@ async fn provision(pool: &PgPool) {
                     id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
                     plan: tam_limits::Plan::Subscriber,
                     rung: None,
-                    granted_by: tam_storage::GrantedBy::Paddle,
+                    granted_by: tam_storage::GrantedBy::Stripe,
                     grantor_user: None,
                     reason: None,
                     source_ref: Some(name),
@@ -404,7 +405,7 @@ async fn lapse_entitlement(pool: &PgPool, org: OrgId) {
         .execute(&mut *tx)
         .await
         .expect("tenant pin applies");
-    // The lapse is a grant that has run out, not a Paddle status: the grace
+    // The lapse is a grant that has run out, not a provider status: the grace
     // is folded into the grant's own expiry when the webhook writes it.
     sqlx::query(
         "UPDATE entitlement_grant SET expires_at = now() - interval '30 days' \

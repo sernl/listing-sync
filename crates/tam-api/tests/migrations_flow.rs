@@ -45,6 +45,7 @@ const GRANTED: u8 = 0x04;
 
 fn state(pool: PgPool) -> AppState {
     AppState {
+        telemetry: tam_api::telemetry::Telemetry::default(),
         exchange_rates: None,
         pool,
         config: Config::default(),
@@ -151,11 +152,18 @@ async fn consented(pool: &PgPool, org: OrgId) {
     }
 }
 
+async fn provision(pool: &PgPool, plan: Option<tam_limits::Plan>) {
+    provision_with_moves(pool, plan, 100).await;
+}
+
+/// The same fixture with the balance stated, for the two tests whose subject
+/// is the balance itself. Every other test wants moves to spend and does not
+/// care how many, which is what `provision` gives them.
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
 )]
-async fn provision(pool: &PgPool, plan: Option<tam_limits::Plan>) {
+async fn provision_with_moves(pool: &PgPool, plan: Option<tam_limits::Plan>, moves: i32) {
     sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, 'org-a', now())")
         .bind(uuid::Uuid::from_bytes(ORG.0 .0))
         .execute(pool)
@@ -170,7 +178,7 @@ async fn provision(pool: &PgPool, plan: Option<tam_limits::Plan>) {
                     id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
                     plan,
                     rung: None,
-                    granted_by: tam_storage::GrantedBy::Paddle,
+                    granted_by: tam_storage::GrantedBy::Stripe,
                     grantor_user: None,
                     reason: None,
                     source_ref: Some("org-a"),
@@ -180,6 +188,21 @@ async fn provision(pool: &PgPool, plan: Option<tam_limits::Plan>) {
             )
             .await
             .expect("the fixture grant seeds");
+    }
+    if moves != 0 {
+        tam_storage::EntitlementRepo::new(pool.clone())
+            .credit_moves(
+                ORG,
+                tam_storage::MoveCredit {
+                    delta: moves,
+                    source: tam_storage::MoveSource::Operator,
+                    source_ref: Some("fixture"),
+                    expires_at: None,
+                    at: Timestamp(1_000),
+                },
+            )
+            .await
+            .expect("the fixture balance seeds");
     }
     let sessions = SessionRepo::new(pool.clone());
     sessions
@@ -487,9 +510,9 @@ async fn a_move_previews_each_resource_and_queues_only_what_it_admitted(pool: Pg
     assert_eq!(verdict(LANDED).verdict, MigrationVerdict::AlreadyThere);
     assert_eq!(verdict(LANDED).remote.as_deref(), Some("9001"));
     assert_eq!(
-        (plan.cap.limit, plan.cap.used, plan.cap.remaining),
-        (20, 0, 20),
-        "the preview states the allowance against the selection, before any of it is spent"
+        (plan.cap.available, plan.cap.required, plan.cap.remaining),
+        (100, 1, 99),
+        "the preview states the balance against the selection, before any of it is spent"
     );
 
     // A source whose download nobody has captured is offered and refused with
@@ -649,68 +672,56 @@ async fn a_move_previews_each_resource_and_queues_only_what_it_admitted(pool: Pg
     );
 }
 
-/// A plan that includes no moving at all is refused as a missing feature,
-/// not as an exhausted count.
+/// An empty balance refuses the confirm, and the refusal names the balance
+/// rather than a plan.
 ///
-/// The two send the console to different places: one is an upgrade, the other
-/// is a date to wait for.
+/// There is one gate now: no plan withholds moving, so a seller is never
+/// told to upgrade to reach a capability they already hold. They are told to
+/// buy moves, which is the only thing that would let them through.
 #[sqlx::test(migrations = "../tam-storage/migrations")]
-async fn a_free_plan_is_refused_the_capability_rather_than_the_count(pool: PgPool) {
-    provision(&pool, None).await;
-    let refused = call(pool.clone(), "/v1/migrations", Some(KEY), move_body()).await;
-    assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
-    let error: APIError = refused.json();
-    let detail = error.errors[0]
-        .detail
-        .as_ref()
-        .expect("a quota refusal carries its detail");
-    assert_eq!(detail["quota"], "plan_feature");
-    assert_eq!(detail["feature"], "migrations_per_month");
-}
-
-/// A month's allowance already spent refuses the confirm and says when the
-/// next one arrives.
-#[sqlx::test(migrations = "../tam-storage/migrations")]
-async fn a_spent_allowance_refuses_the_confirm(pool: PgPool) {
-    provision(&pool, Some(tam_limits::Plan::Subscriber)).await;
-    // Twenty resources copied this month, which is a subscriber's whole
-    // allowance. Counted in resources rather than in requests, so one request
-    // of twenty exhausts it exactly as twenty of one would.
-    SyncRequestRepo::new(pool.clone())
-        .create(
-            ORG,
-            &tam_storage::NewSyncRequest {
-                id: Uuid([0x99; 16]),
-                source: InventoryId::Tes,
-                target: InventoryId::Tpt,
-                disposition: Disposition::Sync,
-                intent: tam_storage::SyncIntent::Draft,
-                requested_at: NOW,
-                locators: (0..20).map(|n| n.to_string()).collect(),
-            },
-        )
-        .await
-        .expect("the earlier month's work seeds");
-
+async fn an_empty_balance_refuses_the_confirm(pool: PgPool) {
+    provision_with_moves(&pool, None, 0).await;
     let planned: MigrationPlanView = call(pool.clone(), "/v1/migrations/plan", None, move_body())
         .await
         .json();
     assert_eq!(
-        (planned.cap.used, planned.cap.remaining),
-        (20, 0),
-        "the preview says the allowance is gone before the seller confirms"
+        (planned.cap.available, planned.cap.required),
+        (0, 1),
+        "the preview says the balance is empty before the seller confirms"
     );
 
     let refused = call(pool.clone(), "/v1/migrations", Some(KEY), move_body()).await;
     assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
     let error: APIError = refused.json();
+    assert_eq!(
+        error.errors[0].message,
+        "You have no moves left. Buy a pack to move more resources."
+    );
     let detail = error.errors[0]
         .detail
         .as_ref()
         .expect("a quota refusal carries its detail");
-    assert_eq!(detail["quota"], "migrations_per_month");
-    assert_eq!(detail["used"], 20);
-    assert_eq!(detail["limit"], 20);
+    assert_eq!(detail["quota"], "moves");
+    assert_eq!(detail["available"], 0);
+    assert_eq!(detail["requested"], 1);
+}
+
+/// A balance too small for the selection refuses it, even on a subscription:
+/// the plan is not the gate, the balance is.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_balance_smaller_than_the_selection_refuses_the_confirm(pool: PgPool) {
+    provision_with_moves(&pool, Some(tam_limits::Plan::Subscriber), 0).await;
+    let refused = call(pool.clone(), "/v1/migrations", Some(KEY), move_body()).await;
+    assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY);
+    let error: APIError = refused.json();
+    let detail = error.errors[0]
+        .detail
+        .as_ref()
+        .expect("a quota refusal carries its detail");
+    assert_eq!(
+        detail["quota"], "moves",
+        "a subscriber out of moves is out of moves, not short of a feature"
+    );
 }
 
 /// The expired session as the device reports it: every item of the job

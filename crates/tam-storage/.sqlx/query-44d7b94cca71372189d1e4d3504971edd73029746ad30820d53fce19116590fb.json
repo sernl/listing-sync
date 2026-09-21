@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO storefront_allowance (marketplace, platform_account_digest, org_id, granted_at) VALUES ($1, $2, $3, $4) ON CONFLICT (marketplace, platform_account_digest) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Bytea",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "44d7b94cca71372189d1e4d3504971edd73029746ad30820d53fce19116590fb"
+}

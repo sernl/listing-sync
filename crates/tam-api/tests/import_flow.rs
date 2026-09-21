@@ -68,6 +68,7 @@ fn store_root(name: &str) -> std::path::PathBuf {
 )]
 fn configured(pool: PgPool, root: &std::path::Path) -> AppState {
     AppState {
+        telemetry: tam_api::telemetry::Telemetry::default(),
         exchange_rates: None,
         pool,
         config: Config::default(),
@@ -130,7 +131,7 @@ async fn provision(pool: &PgPool, org: OrgId, user: UserId, token: &SessionToken
                 id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
                 plan: tam_limits::Plan::Subscriber,
                 rung: None,
-                granted_by: tam_storage::GrantedBy::Paddle,
+                granted_by: tam_storage::GrantedBy::Stripe,
                 grantor_user: None,
                 reason: None,
                 source_ref: Some(&format!("sub_{}", org.0 .0[0])),
@@ -140,6 +141,21 @@ async fn provision(pool: &PgPool, org: OrgId, user: UserId, token: &SessionToken
         )
         .await
         .expect("the fixture grant seeds");
+    // Moves arrive with a billing period in production; the fixture credits
+    // a balance directly so the import machinery, not the move gate, answers.
+    tam_storage::EntitlementRepo::new(pool.clone())
+        .credit_moves(
+            org,
+            tam_storage::MoveCredit {
+                delta: 100,
+                source: tam_storage::MoveSource::Operator,
+                source_ref: Some("fixture"),
+                expires_at: None,
+                at: Timestamp(1_000),
+            },
+        )
+        .await
+        .expect("the fixture balance seeds");
     let sessions = SessionRepo::new(pool.clone());
     sessions
         .create_user(org, user, &format!("{}@example.test", org.0 .0[0]), NOW)

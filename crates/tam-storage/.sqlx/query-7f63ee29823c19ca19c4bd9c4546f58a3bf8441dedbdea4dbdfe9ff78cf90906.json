@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO service_booking (org_id, id, key, provider_ref, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (provider_ref) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7f63ee29823c19ca19c4bd9c4546f58a3bf8441dedbdea4dbdfe9ff78cf90906"
+}

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n                 COALESCE(SUM(delta), 0)::bigint          AS \"available!\",\n                 MIN(expires_at) FILTER (WHERE delta > 0) AS \"expiring_soonest\"\n               FROM move_ledger\n              WHERE org_id = $1\n                AND (expires_at IS NULL OR expires_at > $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "available!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "expiring_soonest",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "4922c0063a160fca1f60cc6f3025e9cfcb9d285158492370cbcb6b6d475f9ca6"
+}

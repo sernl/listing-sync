@@ -1,30 +1,35 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT paddle_subscription_id, paddle_customer_id, status, current_period_end, occurred_at FROM billing_subscription WHERE org_id = $1",
+  "query": "SELECT provider_subscription_id, provider_customer_id, provider_price_id, status, current_period_end, occurred_at FROM billing_subscription WHERE org_id = $1",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "paddle_subscription_id",
+        "name": "provider_subscription_id",
         "type_info": "Text"
       },
       {
         "ordinal": 1,
-        "name": "paddle_customer_id",
+        "name": "provider_customer_id",
         "type_info": "Text"
       },
       {
         "ordinal": 2,
-        "name": "status",
+        "name": "provider_price_id",
         "type_info": "Text"
       },
       {
         "ordinal": 3,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
         "name": "current_period_end",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "occurred_at",
         "type_info": "Timestamptz"
       }
@@ -37,10 +42,11 @@
     "nullable": [
       false,
       false,
+      true,
       false,
       true,
       false
     ]
   },
-  "hash": "27d19238d1ea95ef0f08b93657d9e5eb026f8fec3ebb23a42cfb65c7b83d2f33"
+  "hash": "124821deeddde8b5ba90c4f65a8f730f6d3ff8d2e0e6cfdcb9da68bfd18ac7ff"
 }

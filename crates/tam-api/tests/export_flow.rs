@@ -47,6 +47,7 @@ const TITLE_B: &str = "Org B place value pack";
 
 fn state(pool: PgPool) -> AppState {
     AppState {
+        telemetry: tam_api::telemetry::Telemetry::default(),
         exchange_rates: None,
         pool,
         config: Config::default(),

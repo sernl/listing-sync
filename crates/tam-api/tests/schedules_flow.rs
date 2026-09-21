@@ -87,6 +87,7 @@ fn store_root(name: &str) -> std::path::PathBuf {
 )]
 fn configured(pool: PgPool, root: &std::path::Path) -> AppState {
     AppState {
+        telemetry: tam_api::telemetry::Telemetry::default(),
         exchange_rates: None,
         pool,
         config: Config::default(),
@@ -145,7 +146,7 @@ async fn provision(pool: &PgPool, plan: Option<tam_limits::Plan>) {
                     id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
                     plan,
                     rung: None,
-                    granted_by: tam_storage::GrantedBy::Paddle,
+                    granted_by: tam_storage::GrantedBy::Stripe,
                     grantor_user: None,
                     reason: None,
                     source_ref: Some("sub_a1"),

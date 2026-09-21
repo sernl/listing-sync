@@ -6451,6 +6451,7 @@ dependencies = [
  "http-body-util",
  "jsonwebtoken",
  "pulldown-cmark",
+ "reqwest 0.12.28",
  "ring",
  "rust_xlsxwriter",
  "serde",

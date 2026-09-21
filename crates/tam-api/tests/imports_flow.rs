@@ -46,6 +46,7 @@ const KEY_B: &str = "22222222-2222-4222-8222-222222222222";
 
 fn state(pool: PgPool) -> AppState {
     AppState {
+        telemetry: tam_api::telemetry::Telemetry::default(),
         exchange_rates: None,
         pool,
         config: Config::default(),
@@ -105,7 +106,7 @@ async fn provision(pool: &PgPool) {
                     id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
                     plan: tam_limits::Plan::Subscriber,
                     rung: None,
-                    granted_by: tam_storage::GrantedBy::Paddle,
+                    granted_by: tam_storage::GrantedBy::Stripe,
                     grantor_user: None,
                     reason: None,
                     source_ref: Some(name),
@@ -1151,6 +1152,7 @@ fn store_root(name: &str) -> std::path::PathBuf {
 )]
 fn sealing(pool: PgPool, root: &std::path::Path) -> AppState {
     AppState {
+        telemetry: tam_api::telemetry::Telemetry::default(),
         exchange_rates: None,
         blobs: Some(BlobStore::local(
             tam_secrets::Kek::from_bytes(&[0x7Cu8; 32]).expect("a 32-byte key is a key"),

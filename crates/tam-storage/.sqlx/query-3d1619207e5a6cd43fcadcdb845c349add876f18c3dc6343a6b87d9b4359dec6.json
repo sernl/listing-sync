@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"nth!\" FROM move_ledger\n                WHERE org_id = $1 AND source = 'commit'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "nth!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "3d1619207e5a6cd43fcadcdb845c349add876f18c3dc6343a6b87d9b4359dec6"
+}
