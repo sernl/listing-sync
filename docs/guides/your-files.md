@@ -14,7 +14,7 @@ Your listing files stay on your own machines. Teachouse records which machine ho
 3. Read the machine name beside each file.
 
 <!-- shot: /resources/files, the file list showing two machines -->
-__omp_shell("[Which machine holds which file](image:your-files-1)")
+![Which machine holds which file](/v1/guides/images/bda4ac14eff896a9def3fe06e8159891a7f5f42b5163fb03df12904ba1b6f500)
 
 ## Add a machine
 
@@ -41,4 +41,4 @@ Removing a resource in Teachouse removes the record, not your file. Delete the f
 A thumbnail is stored by Teachouse so the console and the marketplace can show it without waking your machine. Everything a buyer downloads stays with you.
 
 <!-- shot: /resources/files, a resource card showing its stored thumbnail -->
-__omp_shell("[A stored thumbnail](image:your-files-2)")
+![A stored thumbnail](/v1/guides/images/01756d3ff1e23642b4bb368ba4b43c9af84cfdad04c5d56083fe33838fd98a89)

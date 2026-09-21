@@ -16,7 +16,7 @@ Labels are your own words for grouping resources. A collection is an ordered set
 A label is at most 30 characters. A resource carries at most 20 labels.
 
 <!-- shot: /labels, the label list with counts -->
-__omp_shell("[Your labels](image:labels-and-collections-1)")
+![Your labels](/v1/guides/images/ce49ab69f75c95c88303068aadeb44f0ab6fb1f9fca3df22d8b661f86f4657ce)
 
 ## Marks an import wrote
 
@@ -29,7 +29,7 @@ An import writes its own marks so you can find what it brought in. Those marks c
 3. Add resources and drag them into the order you want.
 
 <!-- shot: /collections/[id], a collection with its ordered resources -->
-__omp_shell("[An ordered collection](image:labels-and-collections-2)")
+![An ordered collection](/v1/guides/images/96bf4516d665ea0de72f4beba5b9e43bd9baa7b1c69574f10a377dc516193bc7)
 
 ## The order matters
 

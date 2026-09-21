@@ -16,7 +16,7 @@ tags: connections, publishing, desktop-app
 A pull asks your computer to read each listing on the marketplace, so keep the desktop app signed in.
 
 <!-- shot: /sync, the pull settings for one marketplace -->
-__omp_shell("[Pull settings](image:updates-1)")
+![Pull settings](/v1/guides/images/73301eabfaaf766e03a1e6a4f0dfc9e9e0bdcedda3440652bc04093002386a09)
 
 ## Where pulled resources arrive
 
@@ -39,7 +39,7 @@ Where a pull finds no value, your template fills the gap. Fields the pull did fi
 Outcomes are kept apart from steps, so a failure tells you which step it stopped at.
 
 <!-- shot: /sync/[id], one run's timeline with outcomes and steps -->
-__omp_shell("[A run's timeline](image:updates-2)")
+![A run's timeline](/v1/guides/images/4b5e71c2bf3d615916dea5900bd8739eba5c1d11ecf0a606109dbf4a4511592b)
 
 ## When a change has more than one home
 

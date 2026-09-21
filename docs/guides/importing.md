@@ -14,7 +14,7 @@ An import brings listings you already sell into your Teachouse catalogue. Nothin
 3. Leave the desktop app running until the run finishes.
 
 <!-- shot: /import, the import panel with a connected marketplace selected -->
-__omp_shell("[Starting a marketplace import](image:importing-1)")
+![Starting a marketplace import](/v1/guides/images/9c754cbab524b163c5a6d0da15b9fd47e90cc0da4702e0bb2e469b01caa3c608)
 
 ## Import from a spreadsheet
 
@@ -25,7 +25,7 @@ __omp_shell("[Starting a marketplace import](image:importing-1)")
 Every row that names a marketplace needs the fields that marketplace asks for. A row missing one is listed as needing an answer, and you can fix it in the sheet and upload again.
 
 <!-- shot: /imports/[batch], the report table with one row needing an answer -->
-__omp_shell("[The import report](image:importing-2)")
+![The import report](/v1/guides/images/17469df6e0c8839da388425ae78dd84f27dceab41512670e79ce1ab2fdc9fbd2)
 
 ## Files come separately
 

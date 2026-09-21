@@ -14,7 +14,7 @@ tags: analytics, connections
 3. Read the table.
 
 <!-- shot: /analytics, the figures table for one marketplace -->
-__omp_shell("[Your figures](image:analytics-1)")
+![Your figures](/v1/guides/images/5f596b785e89798fc6c6041ec4abdb3ed31d3d2825841c65228c0b70c90349d4)
 
 ## Which marketplace reports what
 
@@ -34,7 +34,7 @@ Figures arrive when a signed-in machine reads the marketplace.
 The page says when a device last sent figures. If that date is old, the machine has not been awake.
 
 <!-- shot: /analytics, the "last sent" line under the table -->
-__omp_shell("[When figures last arrived](image:analytics-2)")
+![When figures last arrived](/v1/guides/images/0ce74b67cfbe47baee2c1f2127f9dd59172aa6d24be07e39c8e5799e206095cc)
 
 ## Nothing to rank
 

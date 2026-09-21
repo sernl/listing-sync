@@ -15,7 +15,7 @@ A template is a set of saved answers a new resource starts from.
 4. Save.
 
 <!-- shot: /templates, the template list with one saved template -->
-__omp_shell("[A saved template](image:templates-1)")
+![A saved template](/v1/guides/images/33f4383deca621b4d28adb59f80b6f78a98279f96da5aff238422955ccc51cd5)
 
 ## What a template fills and what it leaves
 
@@ -36,7 +36,7 @@ A field marked as an example is there to be edited before you save. Replace the 
 **Undo** puts back the last saved version of the template. If you have written more since, Undo loses it, so save first if you want to keep it.
 
 <!-- shot: /templates, the editor with the Undo action visible -->
-__omp_shell("[Undoing a template edit](image:templates-2)")
+![Undoing a template edit](/v1/guides/images/76e4c2d7d984c6ddefca7e4a5e3bb214e0a757ff03e7dffb872bdc7d4195cfdd)
 
 ## Use one
 

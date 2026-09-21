@@ -16,7 +16,7 @@ Connect a marketplace once, then Teachouse can read your shop and send listings 
 Tes and TPT are reached through your own browser session on your own machine, which is what the desktop app provides. There is no browser extension.
 
 <!-- shot: /marketplaces, the downloads panel with the app for this platform -->
-__omp_shell("[Downloading the desktop app](image:connecting-1)")
+![Downloading the desktop app](/v1/guides/images/a3a33cd254d0403925091f067c731b7ae8fff81dcafffbdd00346598bb8e4be7)
 
 ## Connect a shop
 
@@ -26,7 +26,7 @@ __omp_shell("[Downloading the desktop app](image:connecting-1)")
 4. Come back to **Marketplaces** and check the shop is listed.
 
 <!-- shot: /marketplaces, a connected shop with its name and status -->
-__omp_shell("[A connected shop](image:connecting-2)")
+![A connected shop](/v1/guides/images/16d27f535f4f49d3533e6a64960406d78a3095be0bbab16a647b10d1b274e4e1)
 
 ## Where the sign-in is kept
 

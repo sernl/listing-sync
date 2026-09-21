@@ -14,7 +14,7 @@ An export is a spreadsheet of your catalogue that you can open anywhere.
 3. Build the file and download it.
 
 <!-- shot: /export, the export panel ready to build a file -->
-__omp_shell("[Building an export](image:export-1)")
+![Building an export](/v1/guides/images/9ee2537658c7158112464438c5399516b7dfe397c3650e4a3ddc70e1496d7cb3)
 
 ## Export one collection
 
@@ -39,4 +39,4 @@ Each file is named for your catalogue and dated in UTC, so files sort in the ord
 The file is built when you ask for it and is not kept. Ask again for a fresh one after you have changed something.
 
 <!-- shot: /export, a built file ready to download -->
-__omp_shell("[A built export](image:export-2)")
+![A built export](/v1/guides/images/2090115d3e8bf6df223a8b0bf8a1b0c18acabecda5f858b2484aaa53ad9335d1)

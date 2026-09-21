@@ -15,7 +15,7 @@ Tell us who holds the copyright for the work you sell. It is your own statement,
 4. Save.
 
 <!-- shot: /marketplaces, the authorship panel with a saved declaration -->
-__omp_shell("[Declaring authorship](image:copyright-1)")
+![Declaring authorship](/v1/guides/images/c9ca8891aef831d13c9b84d65b456e9bf3dc00cc714f0935957892d1f04e93f8)
 
 ## Why it has to be there first
 
@@ -30,7 +30,7 @@ A declaration applies to what is sent after it. Listings that already failed are
 3. Send those resources again.
 
 <!-- shot: /sync, a failed run ready to be sent again -->
-__omp_shell("[Sending failed resources again](image:copyright-2)")
+![Sending failed resources again](/v1/guides/images/b1779c6daf1e668a707d5a01c3743beb33e2f0be29a6f52e3098ebc7c566b6b4)
 
 ## Changing it
 

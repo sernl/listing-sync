@@ -22,7 +22,7 @@ A migration takes resources you already sell on one marketplace and commits them
 A preview queues nothing and costs nothing.
 
 <!-- shot: /automations/migration, the preview plan table with priced rows -->
-__omp_shell("[Previewing a migration](image:migrations-1)")
+![Previewing a migration](/v1/guides/images/5122c1c8e4478a3ec42ea4090b90eb1ac1320eca1240e6dc0ffdaa89c1a0350b)
 
 ## Copy or move
 
@@ -49,4 +49,4 @@ A migration starts at the next device check-in, so leave the desktop app signed 
 Fix what a row names and run the migration again; rows already committed are not committed twice.
 
 <!-- shot: /automations/migration, a blocked row showing its reason -->
-__omp_shell("[A blocked row](image:migrations-2)")
+![A blocked row](/v1/guides/images/18b6546fdbbabf617509ec0fa4d52da3bcceaaad38daaafe492f3949ca4d9fff)

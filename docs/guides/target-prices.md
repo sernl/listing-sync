@@ -15,7 +15,7 @@ A target price rule says what a resource should cost on a marketplace. Nothing i
 4. Set how the price is worked out and save.
 
 <!-- shot: /automations/pricing, the rule workbench with one saved rule -->
-__omp_shell("[A pricing rule](image:target-prices-1)")
+![A pricing rule](/v1/guides/images/f862a99c7cf93c09c4c8078b8d42bf9d7682ccf5257e7fabd690a13e1c1d4022)
 
 ## Presets are suggestions
 
@@ -38,7 +38,7 @@ A currency rate is applied when the marketplace sells in another currency. The r
 Nothing applies until you approve it.
 
 <!-- shot: /automations/pricing, the plan with rows awaiting approval -->
-__omp_shell("[Approving priced rows](image:target-prices-2)")
+![Approving priced rows](/v1/guides/images/a2376c57b957698959fa7d6cecab58e0de63ab4312ba34d7d08dc1a5eb95a4d3)
 
 ## Apply automatically
 

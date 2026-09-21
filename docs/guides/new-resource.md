@@ -14,7 +14,7 @@ A resource is one thing you sell, with one set of words that every marketplace d
 3. Save as a draft at any point.
 
 <!-- shot: /resources/new, the form with the details band open -->
-__omp_shell("[Creating a resource](image:new-resource-1)")
+![Creating a resource](/v1/guides/images/d50b4ee471fee802cdb1e6c77f8192560311f7ffa5d333ba35e1494beac751b7)
 
 ## Start from a template
 
@@ -37,7 +37,7 @@ Grades read in British or American words from the same set. Switch the labels wi
 The preview is built on your own machine and uploaded as the resource's preview.
 
 <!-- shot: /resources/new, page ticks with the watermark switch on -->
-__omp_shell("[Choosing preview pages](image:new-resource-2)")
+![Choosing preview pages](/v1/guides/images/45425b382cf6bb0c209af8ce3f2301a62748fd7b6fa3c53c7a2b183fd844e518)
 
 ## Draft or active
 

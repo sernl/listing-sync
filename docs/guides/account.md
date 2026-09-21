@@ -23,7 +23,7 @@ Free moves are given once per shop, ever. Moving a shop to a new account does no
 Neither this name nor your address is shown to buyers. What buyers see is what you publish.
 
 <!-- shot: /settings, the organisation and profile panels -->
-__omp_shell("[Your account settings](image:account-1)")
+![Your account settings](/v1/guides/images/2127cb8e461cc1905542ea642cfdc31d0898d14542e0ab6426b97217c7d5a02b)
 
 ## Passkeys
 
@@ -47,7 +47,7 @@ Set the address notices go to under **Account settings**. It can differ from the
 Signing a machine out stops it doing work. It does not delete anything already stored, and space already used is not reclaimed.
 
 <!-- shot: /settings, the machines panel with one machine signed in -->
-__omp_shell("[Machines signed in](image:account-2)")
+![Machines signed in](/v1/guides/images/f3eb740ea53f9456926b63cd6a0597059a57126d10807223b1738820c1d5765c)
 
 ## Forgotten password
 

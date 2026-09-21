@@ -15,7 +15,7 @@ Each marketplace has its own list of subjects, grades, licences and resource typ
 4. Choose the marketplace's term it becomes and save.
 
 <!-- shot: /automations/mappings, the rule list for one marketplace -->
-__omp_shell("[Target term rules](image:target-terms-1)")
+![Target term rules](/v1/guides/images/91a06a02e9459f5985c243b70bca43f2d5cde2041ff11a10075a6ac5e8d6f4e8)
 
 ## What you must map
 
@@ -38,7 +38,7 @@ A word no rule covers becomes an unmatched word.
 Each one you answer stays answered, and the answer is used the next time a run meets that word.
 
 <!-- shot: /reconciliation, the unmatched words list with one open question -->
-__omp_shell("[Answering an unmatched word](image:target-terms-2)")
+![Answering an unmatched word](/v1/guides/images/4efd74e93eabd257c8c71dcf2b940f82cb23ca536dd6f0529f7a3e10e954fdef)
 
 ## Templates fill, rules map
 

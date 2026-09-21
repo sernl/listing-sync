@@ -23,7 +23,7 @@ A schedule with no connected marketplace, or no signed-in machine, waits instead
 5. Save.
 
 <!-- shot: /automations/sharing, the schedule form with a time and timezone set -->
-__omp_shell("[Creating a schedule](image:schedules-1)")
+![Creating a schedule](/v1/guides/images/1049fc8e0d90df1b5f017419315ab894f4add6f4901fc57dfa3d507c93364d14)
 
 ## Timezone
 
@@ -42,7 +42,7 @@ A resource already live is only sent again when you have changed it. Turn on rep
 Tes accepts a new listing but will not accept a revision to one already live. Take the listing down on Tes and let the schedule send it again.
 
 <!-- shot: /automations/sharing, the schedule list showing the last run's result -->
-__omp_shell("[Schedule results](image:schedules-2)")
+![Schedule results](/v1/guides/images/73ac178bcbfb2dbf1e1d730c20f4f47a24bda1d7430c7abd45e5402b28deaeed)
 
 ## Check a run
 
