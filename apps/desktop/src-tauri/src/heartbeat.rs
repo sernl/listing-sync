@@ -111,6 +111,10 @@ impl SessionState {
 pub struct SessionReport {
     pub marketplace: Marketplace,
     pub account_label: Option<String>,
+    /// The marketplace's own identifier for the storefront this session
+    /// speaks for, as the device last read it. `None` until an identity read
+    /// has answered one.
+    pub external_id: Option<String>,
     pub status: SessionState,
 }
 
@@ -416,6 +420,14 @@ pub struct SessionProof {
     /// The cookies as the marketplace left them, where the probe's transport
     /// holds cookies that can change. `None` where nothing rotated.
     pub refreshed: Option<CookieJar>,
+    /// The storefront the marketplace named as this session's, where the
+    /// probe read one.
+    ///
+    /// `None` is not a denial: a probe that made no identity read, or whose
+    /// read was refused, answers `None` and the stored identifier stands.
+    /// A storefront does not change hands, so the first answer is kept and a
+    /// later silence never unbinds it.
+    pub external_id: Option<String>,
 }
 
 pub type ProofFuture<'a> = Pin<Box<dyn Future<Output = Result<SessionProof, String>> + Send + 'a>>;
@@ -427,7 +439,17 @@ pub type ProofFuture<'a> = Pin<Box<dyn Future<Output = Result<SessionProof, Stri
 /// answer would otherwise need a network. [`crate::marketplace::LiveProbe`]
 /// is the shipping implementation.
 pub trait SessionProbe: Send + Sync {
-    fn prove<'a>(&'a self, marketplace: Marketplace, jar: &'a CookieJar) -> ProofFuture<'a>;
+    /// `known` is the storefront this device has already read for that
+    /// marketplace, so a probe with an identity read to make can skip it once
+    /// the answer is in hand. A storefront is read once per session and then
+    /// never again, which is what keeps the identity capture free of a
+    /// per-beat marketplace request.
+    fn prove<'a>(
+        &'a self,
+        marketplace: Marketplace,
+        jar: &'a CookieJar,
+        known: Option<&'a str>,
+    ) -> ProofFuture<'a>;
 }
 
 /// Renews and re-proves every session this device holds, and records what
@@ -457,7 +479,10 @@ pub async fn refresh_sessions(
         let Some(record) = store.get(marketplace).await? else {
             continue;
         };
-        let Ok(proof) = probe.prove(marketplace, &record.jar).await else {
+        let Ok(proof) = probe
+            .prove(marketplace, &record.jar, record.external_id.as_deref())
+            .await
+        else {
             continue;
         };
         store
@@ -468,6 +493,11 @@ pub async fn refresh_sessions(
                 // stop being reported as connected on this beat, not fifteen
                 // minutes after it.
                 verified_at: proof.authenticated.then_some(now),
+                // Kept where the probe named none. A storefront does not
+                // change hands, so a read that failed is silence rather than
+                // a denial, and unbinding on silence would hand the claim
+                // back to anyone on the first bad beat.
+                external_id: proof.external_id.or(record.external_id),
                 ..record
             })
             .await?;
@@ -505,6 +535,7 @@ pub async fn report_of(
         held.push(SessionReport {
             marketplace,
             account_label: record.account_label.clone(),
+            external_id: record.external_id.clone(),
             status: if record.proven_at(now) {
                 SessionState::Connected
             } else {
@@ -783,6 +814,7 @@ mod tests {
         verified_at: Option<Timestamp>,
     ) -> SessionRecord {
         SessionRecord {
+            external_id: None,
             marketplace,
             account_label: label.map(str::to_owned),
             captured_at: CAPTURED,
@@ -1800,6 +1832,7 @@ mod proving {
     impl Scripted {
         fn authenticated(refreshed: Option<&str>) -> Self {
             Self(Ok(SessionProof {
+                external_id: None,
                 authenticated: true,
                 refreshed: refreshed.map(CookieJar::from_header_value),
             }))
@@ -1807,6 +1840,7 @@ mod proving {
 
         fn refused() -> Self {
             Self(Ok(SessionProof {
+                external_id: None,
                 authenticated: false,
                 refreshed: None,
             }))
@@ -1818,10 +1852,16 @@ mod proving {
     }
 
     impl SessionProbe for Scripted {
-        fn prove<'a>(&'a self, _marketplace: Marketplace, _jar: &'a CookieJar) -> ProofFuture<'a> {
+        fn prove<'a>(
+            &'a self,
+            _marketplace: Marketplace,
+            _jar: &'a CookieJar,
+            _known: Option<&'a str>,
+        ) -> ProofFuture<'a> {
             Box::pin(async move {
                 match &self.0 {
                     Ok(proof) => Ok(SessionProof {
+                        external_id: None,
                         authenticated: proof.authenticated,
                         refreshed: proof.refreshed.clone(),
                     }),

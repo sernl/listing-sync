@@ -2202,6 +2202,13 @@ impl<S: CatalogueSource> ImportPass<S> {
         Arc::clone(&self.ledger)
     }
 
+    /// The marketplace this pass reads, which is the run's own inventory
+    /// asked as a marketplace.
+    #[must_use]
+    pub fn marketplace(&self) -> Marketplace {
+        self.permission.marketplace()
+    }
+
     /// Why this pass may not make another marketplace request, if it may not.
     ///
     /// Consulted before each one rather than once at the start. The answers
@@ -3653,7 +3660,7 @@ fn spawn_worker(
 ) {
     tauri::async_runtime::spawn(async move {
         let outcome = match claimed.phase {
-            RunPhase::Discover => discover(&pass).await,
+            RunPhase::Discover => discover(&ctx, &pass).await,
             RunPhase::Describe => describe(&ctx, &claimed, &pass).await,
         };
         finish(&ctx, &claimed, &ledger, outcome).await;
@@ -3664,9 +3671,50 @@ fn spawn_worker(
 }
 
 /// The first half: read the shop and post what is in it.
-async fn discover(pass: &ImportPass<Box<dyn CatalogueSource>>) -> Result<(), PassError> {
+async fn discover(
+    ctx: &ImportContext,
+    pass: &ImportPass<Box<dyn CatalogueSource>>,
+) -> Result<(), PassError> {
     let listed = pass.enumerate(crate::run::wall_now()).await?;
+    learn_storefront(ctx, pass.marketplace()).await;
     pass.post_listing(listed).await
+}
+
+/// Reads the storefront the marketplace says this session speaks for, once,
+/// after an enumeration has just proven the session live.
+///
+/// This is the capture point for TPT, and it is here rather than at connect
+/// for the reason `marketplace.rs` records: nothing on the device can tell a
+/// live TPT session from a lapsed one without a request, and the enumeration
+/// that has just succeeded is that request. The identity read is the same
+/// `MyProductListings` query with one row, so the shape is one a capture has
+/// measured.
+///
+/// Silent on every failure, and that is deliberate: the storefront binds the
+/// shop to this account on the next check-in, and an import that read the
+/// shop is not worth failing over an identifier the next import will read
+/// again. Tes needs none of this -- its own session probe names the seller on
+/// every beat.
+async fn learn_storefront(ctx: &ImportContext, marketplace: Marketplace) {
+    if marketplace != Marketplace::Tpt {
+        return;
+    }
+    let Ok(Some(record)) = ctx.sessions.get(marketplace).await else {
+        return;
+    };
+    if record.external_id.is_some() {
+        return;
+    }
+    let Ok(Some(store)) = crate::marketplace::read_tpt_storefront(&record.jar).await else {
+        return;
+    };
+    let stored = crate::session::SessionRecord {
+        external_id: Some(store),
+        ..record
+    };
+    if let Err(why) = ctx.sessions.put(&stored).await {
+        eprintln!("the storefront this session speaks for could not be stored: {why}");
+    }
 }
 
 /// The second half: describe what the run's own selection names, minus what a
@@ -5676,6 +5724,7 @@ mod tests {
             crate::session::SessionStore::put(
                 store.as_ref(),
                 &crate::session::SessionRecord {
+                    external_id: None,
                     marketplace,
                     account_label: None,
                     captured_at: crate::run::wall_now(),

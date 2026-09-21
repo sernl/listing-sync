@@ -6,6 +6,7 @@
 	import AddCard from '$lib/AddCard.svelte';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
+	import type { Marketplace } from '$lib/generated/vocab';
 	import { entitlementRead, limitOf } from '$lib/entitlement-read';
 	import {
 		APP_CANNOT_CONNECT,
@@ -17,7 +18,7 @@
 		type SessionOutcome
 	} from '$lib/desktop';
 	import { marketplaceRows, needingAttention } from '$lib/devices-view';
-	import type { Marketplace } from '$lib/generated/vocab';
+	import Note from '$lib/Note.svelte';
 	import { TRANSPORT_OF } from '$lib/inventory';
 	import { queryKeys } from '$lib/query';
 	import { toast } from '$lib/toast';
@@ -40,8 +41,9 @@
 		TRANSPORT_BADGE,
 		busyAt,
 		connectReturn,
-		connectConsentRequired,
 		connectSignedOut,
+		connectConsentRequired,
+		connectBoundElsewhere,
 		deviceBranchInTileOrder,
 		disconnectAsk,
 		disconnectLabel,
@@ -258,6 +260,13 @@
 				// The application read the record itself and refused in front of
 				// the password: the grant was withdrawn since this page read it.
 				toast('error', connectConsentRequired(marketplace).message);
+			} else if (outcome.kind === 'boundElsewhere') {
+				// The sign-in worked and the server refused the shop: another
+				// account holds it, and nothing on this machine changes that.
+				// Kept on the page as well as said in a toast, because the
+				// remedy is a person and a toast is gone in seconds.
+				boundElsewhere = marketplace;
+				toast('error', connectBoundElsewhere(marketplace).message);
 			} else {
 				// Unreachable from this page, which offers the command only where
 				// there is an invoker. Said rather than swallowed, because a
@@ -375,6 +384,10 @@
 			return;
 		}
 		toast(said.tone, said.message);
+		if (page.url.searchParams.get(CONNECT_RETURN_PARAM) === 'bound_elsewhere') {
+			const named = page.url.searchParams.get(CONNECT_RETURN_MARKETPLACE_PARAM) ?? '';
+			boundElsewhere = Object.hasOwn(CARD_NAME, named) ? (named as Marketplace) : null;
+		}
 		void loadLocalSessions();
 		const rest = new URLSearchParams(page.url.searchParams);
 		rest.delete(CONNECT_RETURN_PARAM);
@@ -389,6 +402,11 @@
 
 	/** The marketplace whose notice is open, or null. */
 	let consentFor = $state<Marketplace | null>(null);
+
+	/** The shop the server refused because another account holds it, or null.
+	 *  Kept rather than left in a toast: the remedy is a person, so the
+	 *  sentence has to still be there when the seller comes back to it. */
+	let boundElsewhere = $state<Marketplace | null>(null);
 
 	function connect(marketplace: Marketplace) {
 		// The notice first, where no grant stands. The card's action is
@@ -495,7 +513,8 @@
 		<div>
 			<h1>Marketplaces</h1>
 			<p>
-				Connect the places you sell. Your marketplace logins stay on your own computer.
+				Connect the places you sell.
+				<a class="mp-guide" href="/guides/connecting">How connecting works</a>
 			</p>
 		</div>
 		<span class="act">
@@ -518,15 +537,20 @@
 
 	{#if undeclared}
 		<Banner tone="warn" title="TPT needs to know who holds the copyright" action={toCopyright}>
-			Tell us who holds the copyright for your work. Until you do, nothing you send to TPT
-			will go live.
+			Tell us who holds the copyright before you send anything to TPT.
 		</Banner>
 	{/if}
 
 	{#if blocked !== null}
 		<Banner tone="warn" title={blocked.title} action={toPermissions}>
-			Nothing new is started on {CARD_NAME[blocked.marketplace]} on any of your machines until
-			you grant it. Logins already on your machines are untouched.
+			Nothing new is started on {CARD_NAME[blocked.marketplace]} until you grant it.
+		</Banner>
+	{/if}
+
+	{#if boundElsewhere !== null}
+		<Banner tone="bad" title="That shop is connected elsewhere">
+			{connectBoundElsewhere(boundElsewhere).message}
+			<Note icon="lock">If the shop is yours, ask us to move it.</Note>
 		</Banner>
 	{/if}
 
@@ -612,10 +636,7 @@
 	<section class="mp-part">
 		<div class="mp-sect">
 			<h2>Browser extension</h2>
-			<p>
-				An extension would let you connect from your browser instead of the desktop app.
-			</p>
-			<p>Neither is available yet, and the desktop app does everything an extension would.</p>
+			<p>The desktop app does everything a browser extension would.</p>
 		</div>
 
 		<div class="mp-grid">

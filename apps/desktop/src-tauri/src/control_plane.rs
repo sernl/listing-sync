@@ -360,6 +360,11 @@ struct RegisterBody<'a> {
 struct SessionLine<'a> {
     marketplace: tam_types::Marketplace,
     account_label: Option<&'a str>,
+    /// The marketplace's own identifier for the storefront, where this device
+    /// has read one. The server digests it and stores only the digest; a
+    /// build old enough to send nothing keeps checking in and claims no
+    /// storefront.
+    external_id: Option<&'a str>,
     status: &'static str,
 }
 
@@ -670,6 +675,11 @@ fn refusal(reply: &Reply) -> ControlPlaneError {
     match reply.status {
         404 => ControlPlaneError::Unregistered,
         403 => forbidden(&reply.body),
+        // A fact about what was reported rather than an outage, which is the
+        // distinction `Rejected` exists for: the check-in's one 409 is a
+        // storefront another organisation holds, and reporting the same
+        // session again can only be answered the same way.
+        409 => ControlPlaneError::Rejected(excerpt(&reply.body)),
         status => ControlPlaneError::Refused(format!("{status}: {}", excerpt(&reply.body))),
     }
 }
@@ -928,6 +938,7 @@ impl ControlPlane for HttpControlPlane {
                     .map(|session| SessionLine {
                         marketplace: session.marketplace,
                         account_label: session.account_label.as_deref(),
+                        external_id: session.external_id.as_deref(),
                         status: session.status.as_str(),
                     })
                     .collect(),
@@ -1116,6 +1127,7 @@ mod tests {
 
     fn held(marketplace: Marketplace, label: Option<&str>) -> SessionReport {
         SessionReport {
+            external_id: None,
             marketplace,
             account_label: label.map(str::to_owned),
             status: SessionState::Connected,
@@ -1160,7 +1172,10 @@ mod tests {
             .heartbeat(
                 &identity().id,
                 &[
-                    held(Marketplace::Tpt, Some("Founder's Classroom")),
+                    SessionReport {
+                        external_id: Some("classroom-90210".to_owned()),
+                        ..held(Marketplace::Tpt, Some("Founder's Classroom"))
+                    },
                     held(Marketplace::Tes, None),
                 ],
             )
@@ -1179,14 +1194,23 @@ mod tests {
         assert_eq!(lines[0]["account_label"], "Founder's Classroom");
         assert_eq!(lines[0]["status"], "connected");
         assert_eq!(
+            lines[0]["external_id"], "classroom-90210",
+            "the storefront this device read travels beside the label"
+        );
+        assert_eq!(
             lines[1]["account_label"],
             serde_json::Value::Null,
             "no label is null rather than an invented string"
         );
         assert_eq!(
+            lines[1]["external_id"],
+            serde_json::Value::Null,
+            "a device that read no storefront claims none rather than inventing one"
+        );
+        assert_eq!(
             lines[0].as_object().map(serde_json::Map::len),
-            Some(3),
-            "a line is three keys, none of which a credential could travel in: {body}"
+            Some(4),
+            "a line is four keys, none of which a credential could travel in: {body}"
         );
     }
 
@@ -1197,6 +1221,7 @@ mod tests {
         let store = Arc::new(MemorySessionStore::new());
         store
             .put(&SessionRecord {
+                external_id: None,
                 marketplace: Marketplace::Tpt,
                 account_label: Some("Founder's Classroom".to_owned()),
                 captured_at: Timestamp(1_756_000_000_000),
@@ -1267,6 +1292,7 @@ mod tests {
         for marketplace in Marketplace::ALL {
             store
                 .put(&SessionRecord {
+                    external_id: None,
                     marketplace,
                     account_label: None,
                     captured_at: Timestamp(1_756_000_000_000),
@@ -1395,6 +1421,7 @@ mod tests {
         let store = Arc::new(MemorySessionStore::new());
         store
             .put(&SessionRecord {
+                external_id: None,
                 marketplace: Marketplace::Tpt,
                 account_label: None,
                 captured_at: Timestamp(1_756_000_000_000),
@@ -1435,6 +1462,7 @@ mod tests {
         let store = Arc::new(MemorySessionStore::new());
         store
             .put(&SessionRecord {
+                external_id: None,
                 marketplace: Marketplace::Tpt,
                 account_label: None,
                 captured_at: Timestamp(1_756_000_000_000),

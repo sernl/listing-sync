@@ -413,11 +413,18 @@ impl LiveTransport for TesLive {
 
 /// TES also issues `TESSession` to anonymous visitors. Only its own
 /// authenticated principal makes a candidate safe to file as a login.
-pub(crate) async fn verify_tes_login(jar: &CookieJar) -> Result<bool, String> {
+///
+/// Answers the storefront rather than a yes, because the two are the same
+/// read: `/api/tier/gmv/me` names its principal in the path and takes no
+/// selector, so the `userId` it returns is Tes's own statement of whose shop
+/// this session speaks for. `None` is "not authenticated", which is exactly
+/// what it meant when this returned a `bool`, and the identifier the read
+/// already produced stops being thrown away.
+pub(crate) async fn verify_tes_login(jar: &CookieJar) -> Result<Option<String>, String> {
     let transport = TesLive.build(&jar.header_value())?;
     tam_marketplace_tes::read_seller_user_id(&transport)
         .await
-        .map(|principal| principal.is_some())
+        .map(|principal| principal.map(|seller| seller.0))
         .map_err(|why| why.to_string())
 }
 
@@ -435,7 +442,9 @@ pub(crate) async fn verify_tes_login(jar: &CookieJar) -> Result<bool, String> {
 /// still rotated on the way to being refused, and storing what it rotated to
 /// is how the next attempt is made against the current cookies rather than
 /// against cookies that were stale before it started.
-pub(crate) async fn refresh_tes_session(jar: &CookieJar) -> Result<(CookieJar, bool), String> {
+pub(crate) async fn refresh_tes_session(
+    jar: &CookieJar,
+) -> Result<(CookieJar, Option<String>), String> {
     let transport = TesLive.build(&jar.header_value())?;
     let _renewed = tam_marketplace_tes::refresh_session(&transport)
         .await
@@ -449,12 +458,32 @@ pub(crate) async fn refresh_tes_session(jar: &CookieJar) -> Result<(CookieJar, b
     // preflight can answer `reauth` seconds after this said the session was
     // good: the two lines together are what tells a genuinely lapsed
     // credential from a preflight that failed indeterminately and was read
-    // as reauth. Whether a principal came back, never who it was.
+    // as reauth. Whether a principal came back, never who it was: the
+    // storefront travels to the server and never to a log line.
     eprintln!("tes: session probe authenticated={}", principal.is_some());
     Ok((
         CookieJar::from_header_value(&transport.session_cookies()),
-        principal.is_some(),
+        principal.map(|seller| seller.0),
     ))
+}
+
+/// Reads the storefront TPT says this session speaks for.
+///
+/// `MyProductListings` with one row, which is the same query the import's own
+/// enumeration makes and the only admissible entry point to the author read:
+/// it passes neither a seller nor a resource selector, so TPT resolves the
+/// catalogue from the session alone and the author it answers is the
+/// session's own by construction.
+///
+/// Asked once per session and then never again. TPT has no cheap liveness
+/// probe, so this is deliberately not one: a refusal answers `None` and
+/// nothing about the session's standing is concluded from it.
+pub(crate) async fn read_tpt_storefront(jar: &CookieJar) -> Result<Option<String>, String> {
+    let transport = TptLive.build(&jar.header_value())?;
+    tam_marketplace_tpt::read_seller_store_id(&transport)
+        .await
+        .map(|store| store.map(|found| found.0))
+        .map_err(|why| why.to_string())
 }
 
 /// The shipping TPT transport: the keychain jar, bound to TPT's own origin.
@@ -474,15 +503,21 @@ pub type TesTransport = SessionTransport<TesLive>;
 pub struct LiveProbe;
 
 impl SessionProbe for LiveProbe {
-    fn prove<'a>(&'a self, marketplace: Marketplace, jar: &'a CookieJar) -> ProofFuture<'a> {
+    fn prove<'a>(
+        &'a self,
+        marketplace: Marketplace,
+        jar: &'a CookieJar,
+        known: Option<&'a str>,
+    ) -> ProofFuture<'a> {
         Box::pin(async move {
             match marketplace {
                 Marketplace::Tes => {
                     refresh_tes_session(jar)
                         .await
-                        .map(|(refreshed, authed)| SessionProof {
-                            authenticated: authed,
+                        .map(|(refreshed, seller)| SessionProof {
+                            authenticated: seller.is_some(),
                             refreshed: Some(refreshed),
+                            external_id: seller,
                         })
                 }
                 // No TPT probe exists: nothing on this device can tell a live
@@ -492,9 +527,21 @@ impl SessionProbe for LiveProbe {
                 // held jar therefore keeps its proof rather than being
                 // reported as signed out on a question nobody asked, and TPT
                 // behaves exactly as it did before this repair.
+                //
+                // The one request this branch does make is the storefront
+                // read, and only while the storefront is unknown: the shop
+                // this session speaks for is what binds it to one account,
+                // and TPT names it in the enumeration the import makes
+                // anyway. A refusal is still not a lapse -- the proof stands
+                // either way -- so the beat costs nothing in standing and one
+                // request in a session's whole life.
                 Marketplace::Tpt => Ok(SessionProof {
                     authenticated: true,
                     refreshed: None,
+                    external_id: match known {
+                        Some(_) => None,
+                        None => read_tpt_storefront(jar).await.unwrap_or_default(),
+                    },
                 }),
                 // Sanctioned automation: no session is held for it on this
                 // device at all, so there is nothing to prove and saying so
@@ -502,6 +549,7 @@ impl SessionProbe for LiveProbe {
                 Marketplace::Etsy => Ok(SessionProof {
                     authenticated: false,
                     refreshed: None,
+                    external_id: None,
                 }),
             }
         })
@@ -648,6 +696,7 @@ mod tests {
 
     fn record(marketplace: Marketplace, at: i64, jar: CookieJar) -> SessionRecord {
         SessionRecord {
+            external_id: None,
             marketplace,
             account_label: None,
             captured_at: Timestamp(at),

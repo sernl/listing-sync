@@ -647,6 +647,16 @@ describe('reading what a connect answered', () => {
 		expect(await connectHere(invoke, 'Tes')).toEqual({ kind: 'signedOut' });
 	});
 
+	// The other two refusals that file nothing, and the reason they are not
+	// read as `done`: a console that showed a connected card here would be
+	// showing a shop this account does not hold.
+	it('reads the consent and bound-elsewhere answers as their own outcomes', async () => {
+		const consent = vi.fn().mockResolvedValue({ outcome: 'consent_required' });
+		expect(await connectHere(consent, 'Tpt')).toEqual({ kind: 'consentRequired' });
+		const bound = vi.fn().mockResolvedValue({ outcome: 'bound_elsewhere' });
+		expect(await connectHere(bound, 'Etsy')).toEqual({ kind: 'boundElsewhere' });
+	});
+
 	// The compatibility arm, and it is the one that must not be an oversight:
 	// before `ConnectOutcome` existed the command answered a bare session
 	// status, which carries no `outcome` at all and meant a completed capture.

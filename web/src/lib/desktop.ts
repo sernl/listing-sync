@@ -450,6 +450,10 @@ async function ranOnRun(
  * record from the server itself rather than trusting the page, so a grant
  * withdrawn between the page's read and the press is still refused.
  *
+ * `boundElsewhere` is the server refusing the shop rather than the machine:
+ * the sign-in worked and the capture was dropped, because another Teachouse
+ * account already holds that shop. No press of Connect changes it.
+ *
  * `unavailable` is the ordinary browser answer and is not a failure. The
  * caller shows the seller where the act can be performed instead. */
 export type SessionOutcome =
@@ -457,6 +461,7 @@ export type SessionOutcome =
 	| { kind: 'opening' }
 	| { kind: 'signedOut' }
 	| { kind: 'consentRequired' }
+	| { kind: 'boundElsewhere' }
 	| { kind: 'refused'; detail: string }
 	| { kind: 'unsupported' }
 	| { kind: 'unavailable' };
@@ -525,6 +530,9 @@ function connectOutcome(answer: unknown): SessionOutcome {
 	}
 	if (said === 'consent_required') {
 		return { kind: 'consentRequired' };
+	}
+	if (said === 'bound_elsewhere') {
+		return { kind: 'boundElsewhere' };
 	}
 	return said === 'signed_out' ? { kind: 'signedOut' } : { kind: 'done' };
 }

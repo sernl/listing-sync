@@ -152,6 +152,20 @@ pub struct SessionRecord {
     /// nothing has ever verified.
     #[serde(default)]
     pub verified_at: Option<Timestamp>,
+    /// The marketplace's own identifier for the storefront these cookies
+    /// speak for: Tes's `userId`, TPT's `author.id`.
+    ///
+    /// Read from a route that names its principal and takes no selector, so
+    /// it is the marketplace's assertion about whose shop this is rather than
+    /// anything the seller typed. It travels to the server on every check-in,
+    /// which digests it and keeps only the digest; it is what makes one
+    /// storefront belong to one account.
+    ///
+    /// `#[serde(default)]` so a record written before this field existed
+    /// parses, claiming no storefront -- which is the honest reading of a jar
+    /// nothing has ever asked the question of.
+    #[serde(default)]
+    pub external_id: Option<String>,
 }
 
 impl SessionRecord {
@@ -291,6 +305,7 @@ mod tests {
 
     pub(crate) fn a_record(marketplace: Marketplace) -> SessionRecord {
         SessionRecord {
+            external_id: None,
             marketplace,
             account_label: Some("Founder's Classroom".to_owned()),
             captured_at: Timestamp(1_756_000_000),

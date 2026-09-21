@@ -145,6 +145,11 @@ pub enum ConnectOutcome {
     /// [`crate::connect::ConnectVerdict::ConsentRequired`] travels as, so the
     /// console words one sentence for the two channels.
     ConsentRequired,
+    /// The shop this sign-in speaks for is already connected to another
+    /// Teachouse account. The same word
+    /// [`crate::connect::ConnectVerdict::BoundElsewhere`] travels as, so the
+    /// console words one sentence for the two channels.
+    BoundElsewhere,
 }
 
 /// Which shape a login takes here, decided by the surface rather than by the
@@ -334,12 +339,12 @@ async fn in_a_second_window<R: tauri::Runtime>(
     let watched = app.clone();
     let closed = label.clone();
     let mut capture = Capture::of(&window, &origin);
-    let jar = match await_session(&target, &mut capture, move || {
+    let (jar, external_id) = match await_session(&target, &mut capture, move || {
         watched.get_webview_window(&closed).is_none()
     })
     .await
     {
-        Ok(jar) => jar,
+        Ok(captured) => captured,
         Err(Waited::Left) => {
             return Err(CommandError(
                 "the login window was closed before the sign-in completed".to_owned(),
@@ -358,12 +363,13 @@ async fn in_a_second_window<R: tauri::Runtime>(
     };
 
     window.destroy().ok();
-    match file_session(&app, marketplace, jar).await {
+    match file_session(&app, marketplace, jar, external_id).await {
         Ok(session) => Ok(ConnectOutcome::Captured { session }),
         // Not a failure to report as one: the seller signed in and nothing
         // went wrong with the sign-in. What cannot happen is keeping it here,
         // and that is one sentence with one remedy rather than a diagnostic.
         Err(NotFiled::SignedOut) => Ok(ConnectOutcome::SignedOut),
+        Err(NotFiled::BoundElsewhere) => Ok(ConnectOutcome::BoundElsewhere),
         Err(NotFiled::Failed(why)) => Err(why),
     }
 }
@@ -467,20 +473,26 @@ async fn capture_in_place<R: tauri::Runtime>(
         {
             ConnectVerdict::ConsentRequired
         }
-        Ok(jar) => match file_session(app, target.marketplace, jar).await {
-            Ok(_) => ConnectVerdict::Captured,
-            // The revocation reached this device between the Connect press
-            // and the sign-in finishing — the pre-flight check-in in
-            // `connect_on_target` caught every earlier one — and the wipe it
-            // triggered took the capture with it. Named as itself rather than
-            // as `NotKept`, because the remedy is signing this machine back in
-            // and pressing Connect again does nothing for it.
-            Err(NotFiled::SignedOut) => ConnectVerdict::SignedOut,
-            // Not `Refused`: the sign-in opened and the seller finished it.
-            // The keychain or the store refused it, and the diagnostic has
-            // nowhere to go on this surface.
-            Err(NotFiled::Failed(_)) => ConnectVerdict::NotKept,
-        },
+        Ok((jar, external_id)) => {
+            match file_session(app, target.marketplace, jar, external_id).await {
+                Ok(_) => ConnectVerdict::Captured,
+                // The revocation reached this device between the Connect press
+                // and the sign-in finishing — the pre-flight check-in in
+                // `connect_on_target` caught every earlier one — and the wipe it
+                // triggered took the capture with it. Named as itself rather than
+                // as `NotKept`, because the remedy is signing this machine back in
+                // and pressing Connect again does nothing for it.
+                Err(NotFiled::SignedOut) => ConnectVerdict::SignedOut,
+                // The shop is another account's, which is a person's job and not
+                // this surface's: the capture is gone and pressing Connect again
+                // would be refused identically.
+                Err(NotFiled::BoundElsewhere) => ConnectVerdict::BoundElsewhere,
+                // Not `Refused`: the sign-in opened and the seller finished it.
+                // The keychain or the store refused it, and the diagnostic has
+                // nowhere to go on this surface.
+                Err(NotFiled::Failed(_)) => ConnectVerdict::NotKept,
+            }
+        }
         Err(Waited::Left) => ConnectVerdict::Abandoned,
         Err(Waited::Deadline) => ConnectVerdict::Deadline,
         // The diagnostic has nowhere to go on this surface: there is no caller
@@ -526,8 +538,23 @@ async fn sign_in_showing<R: tauri::Runtime>(
 /// Read from Rust rather than from the page: `document.cookie` cannot see the
 /// HttpOnly session cookie, which is the only one that matters.
 type ReadJar = Box<dyn FnMut() -> Result<CookieJar, CommandError> + Send>;
-type VerifyFuture<'a> =
-    core::pin::Pin<Box<dyn core::future::Future<Output = Result<bool, CommandError>> + Send + 'a>>;
+/// What a verification learned about a captured jar: whether the marketplace
+/// answered it as the seller, and the storefront it named where the same read
+/// named one.
+///
+/// A pair rather than a `bool` because the two facts come out of one request.
+/// The identity read is the verification for Tes, so reducing it to a yes and
+/// then asking again for the identifier would be a second marketplace request
+/// for an answer already in hand.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct Verified {
+    pub(crate) authenticated: bool,
+    pub(crate) external_id: Option<String>,
+}
+
+type VerifyFuture<'a> = core::pin::Pin<
+    Box<dyn core::future::Future<Output = Result<Verified, CommandError>> + Send + 'a>,
+>;
 type VerifyJar = Box<dyn for<'a> FnMut(Marketplace, &'a CookieJar) -> VerifyFuture<'a> + Send>;
 
 fn verify_login_candidate(marketplace: Marketplace, jar: &CookieJar) -> VerifyFuture<'_> {
@@ -535,8 +562,19 @@ fn verify_login_candidate(marketplace: Marketplace, jar: &CookieJar) -> VerifyFu
         match marketplace {
             Marketplace::Tes => crate::marketplace::verify_tes_login(jar)
                 .await
+                .map(|seller| Verified {
+                    authenticated: seller.is_some(),
+                    external_id: seller,
+                })
                 .map_err(CommandError),
-            Marketplace::Tpt => Ok(true),
+            // TPT's login is filed unverified, and the storefront read that
+            // would name the shop is left to the first import: it is the one
+            // request whose shape a capture has measured, and making it here
+            // would be a probe against a session nothing has proven.
+            Marketplace::Tpt => Ok(Verified {
+                authenticated: true,
+                external_id: None,
+            }),
             Marketplace::Etsy => Err(CommandError(
                 "Etsy does not use a device-held login".to_owned(),
             )),
@@ -583,11 +621,14 @@ impl Capture {
 /// and the deadline cannot come to differ between a computer and a phone.
 /// `left` is the surface's own way of saying the seller has gone: a closed
 /// window on one, a return to our own origin on the other.
+///
+/// Answers the storefront the verification named beside the jar, because the
+/// read that admitted the jar is the read that named it.
 async fn await_session(
     target: &LoginTarget,
     capture: &mut Capture,
     mut left: impl FnMut() -> bool + Send,
-) -> Result<CookieJar, Waited> {
+) -> Result<(CookieJar, Option<String>), Waited> {
     let deadline = tokio::time::Instant::now() + capture.deadline;
     let mut rejected = None;
     let mut verify_after = tokio::time::Instant::now();
@@ -612,8 +653,8 @@ async fn await_session(
             if left() {
                 return Err(Waited::Left);
             }
-            if verified {
-                return Ok(jar);
+            if verified.authenticated {
+                return Ok((jar, verified.external_id));
             }
             // Login can activate a session without replacing its cookie.
             // Changed jars are checked immediately; unchanged ones are bounded.
@@ -639,17 +680,24 @@ enum Waited {
 
 /// Why a captured jar was not kept.
 ///
-/// Two arms rather than one string, because the two are a different sentence
+/// Three arms rather than one string, because each is a different sentence
 /// and a different remedy on both surfaces: a machine signed out from the
-/// console is signed back in once and then every sign-in holds, while a store
-/// that refused is a fault the seller can only retry. A single error type
-/// collapsed them, and what the founder read for the first was the prose of
-/// the second.
+/// console is signed back in once and then every sign-in holds, a shop
+/// another account holds is a person's job and no press of Connect changes
+/// it, and a store that refused is a fault the seller can only retry. A
+/// single error type collapsed the first and the last, and what the founder
+/// read for one was the prose of the other.
 enum NotFiled {
     /// The check-in that follows the capture answered that this machine was
     /// signed out from the console, and the wipe it ran took the capture with
     /// it.
     SignedOut,
+    /// The check-in that follows the capture was refused because the shop
+    /// this session speaks for is bound to another organisation. The capture
+    /// is forgotten here: kept, it would be reported on every later beat and
+    /// refused on every later beat, and a device whose check-in always fails
+    /// never learns it was signed out either.
+    BoundElsewhere,
     /// The store refused, with its own diagnostic.
     Failed(CommandError),
 }
@@ -665,14 +713,16 @@ async fn file_session<R: tauri::Runtime>(
     app: &AppHandle<R>,
     marketplace: Marketplace,
     jar: CookieJar,
+    external_id: Option<String>,
 ) -> Result<SessionStatus, NotFiled> {
     let state = app.state::<DesktopState>();
     let captured_at = wall_now();
     let record = SessionRecord {
         marketplace,
-        // No label. The only value that names the account is the marketplace's
-        // own identity read, and that is a marketplace request, which this
-        // slice makes none of.
+        // No label. The storefront name the marketplace shows the seller is a
+        // display string that authenticates nothing, and reading it is a
+        // second marketplace request; `external_id` below is the identifier,
+        // and it came out of the read that admitted this jar.
         account_label: None,
         captured_at,
         device_id: state.device().id.clone(),
@@ -683,6 +733,7 @@ async fn file_session<R: tauri::Runtime>(
         // session the seller has this moment signed in to as needing another
         // sign-in.
         verified_at: Some(captured_at),
+        external_id,
     };
     state.store().put(&record).await?;
 
@@ -690,10 +741,20 @@ async fn file_session<R: tauri::Runtime>(
     // it just captured, so the check-in that would learn of it happens before
     // the capture is reported as a success. A check-in that could not reach the
     // server is not evidence of revocation and leaves the capture standing.
-    if let Ok(answer) = check_in(&state, state.control_plane()).await {
-        if answer.revoked {
-            return Err(NotFiled::SignedOut);
+    //
+    // The storefront refusal is the same shape and the opposite disposition:
+    // the server read the report and will not accept it, so the capture goes
+    // rather than standing. It is the check-in's only `Rejected` answer.
+    match check_in(&state, state.control_plane()).await {
+        Ok(answer) if answer.revoked => return Err(NotFiled::SignedOut),
+        Err(crate::heartbeat::CheckInError::Plane(
+            crate::heartbeat::ControlPlaneError::Rejected(said),
+        )) => {
+            eprintln!("the server refused this storefront: {said}");
+            state.store().forget(marketplace).await?;
+            return Err(NotFiled::BoundElsewhere);
         }
+        Ok(_) | Err(_) => {}
     }
     Ok(SessionStatus::of(&record, captured_at))
 }
@@ -1915,6 +1976,7 @@ mod import_early_failure_tests {
     async fn signed_in_to(marketplace: Marketplace) -> Arc<MemorySessionStore> {
         let store = Arc::new(MemorySessionStore::default());
         let record = SessionRecord {
+            external_id: None,
             marketplace,
             account_label: Some("the seller".to_owned()),
             captured_at: NOW,
@@ -2032,6 +2094,7 @@ mod session_command_tests {
 
     fn a_record(marketplace: Marketplace) -> SessionRecord {
         SessionRecord {
+            external_id: None,
             marketplace,
             account_label: None,
             captured_at: Timestamp(1_756_000_000_000),
@@ -2524,6 +2587,7 @@ mod session_command_tests {
                 name: "sessionKey".to_owned(),
                 value: "s3cr3t".to_owned(),
             }]),
+            None,
         )
         .await
         .expect_err("a device signed out from the console does not keep what it just captured");
@@ -2534,6 +2598,7 @@ mod session_command_tests {
              {}",
             match refusal {
                 super::NotFiled::SignedOut => "signed out".to_owned(),
+                super::NotFiled::BoundElsewhere => "the shop is another account's".to_owned(),
                 super::NotFiled::Failed(why) => why.0,
             }
         );
@@ -2745,7 +2810,12 @@ mod session_command_tests {
             deadline,
             verification_interval: core::time::Duration::from_secs(5),
             read: Box::new(read),
-            verify: Box::new(|_, _| Box::pin(core::future::ready(Ok(true)))),
+            verify: Box::new(|_, _| {
+                Box::pin(core::future::ready(Ok(super::Verified {
+                    authenticated: true,
+                    external_id: None,
+                })))
+            }),
         }
     }
 
@@ -2889,7 +2959,8 @@ mod session_command_tests {
                 }]))
             },
         );
-        capture.verify = Box::new(|_, _| Box::pin(core::future::ready(Ok(false))));
+        capture.verify =
+            Box::new(|_, _| Box::pin(core::future::ready(Ok(super::Verified::default()))));
         super::capture_here(app.handle(), target, window.clone(), capture)
             .expect("the phone opens TES");
 
@@ -2928,7 +2999,10 @@ mod session_command_tests {
         let mut probes = 0;
         capture.verify = Box::new(move |_, _| {
             probes += 1;
-            Box::pin(core::future::ready(Ok(probes == 2)))
+            Box::pin(core::future::ready(Ok(super::Verified {
+                authenticated: probes == 2,
+                external_id: None,
+            })))
         });
         super::capture_here(app.handle(), target, window.clone(), capture)
             .expect("the phone opens TES");
@@ -2958,7 +3032,8 @@ mod session_command_tests {
                 core::time::Duration::from_millis(100),
                 || Ok(a_signed_in_jar()),
             );
-            capture.verify = Box::new(|_, _| Box::pin(core::future::ready(Ok(false))));
+            capture.verify =
+                Box::new(|_, _| Box::pin(core::future::ready(Ok(super::Verified::default()))));
             capture
         };
         super::capture_here(
