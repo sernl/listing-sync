@@ -18,6 +18,7 @@
 	import Field from '$lib/Field.svelte';
 	import Icon from '$lib/Icon.svelte';
 	import { machineHere } from '$lib/machine.svelte';
+	import Note from '$lib/Note.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Pagination from '$lib/Pagination.svelte';
 	import Panel from '$lib/Panel.svelte';
@@ -31,6 +32,7 @@
 		AVAILABILITY_LABEL,
 		BROWSER_SENTENCE,
 		EMPTY_FILTERS,
+		FILES_STAY_ON_YOUR_MACHINES,
 		HERE,
 		KEEP_LABEL,
 		NOT_KEEPING_SENTENCE,
@@ -303,8 +305,9 @@
 <div class="page resources-page files-page">
 	<PageHead
 		icon="files"
-		title="Files"
+		title="Your machines' files"
 		description="Every file your machines hold, and the resources that use them."
+		guide="your-files"
 	/>
 
 	<Panel>
@@ -409,9 +412,7 @@
 			</div>
 			<details class="files-local">
 				<summary>Files saved on this machine ({local.entries.length})</summary>
-				<p class="res-note">
-					Read directly from this app, independently of the machine filters and server connection.
-				</p>
+				<Note>Read directly from this app, whatever the filters above say.</Note>
 				<Field label="Search saved files" id="local-file-search">
 					<input
 						id="local-file-search"
@@ -484,13 +485,11 @@
 	{#if files.isPending}
 		<p class="res-note">Reading your files…</p>
 	{:else if files.isError}
-		<p class="res-note">
-			The server’s file records could not be listed.
-			{#if local.state === 'read'}Files saved in this app remain available above.{/if}
+		<Note icon="triangle-alert">
 			{files.error instanceof ApiFailure
 				? files.error.message
-				: 'The server did not answer.'}
-		</p>
+				: 'The server’s file records could not be listed.'}
+		</Note>
 	{:else if rows.length === 0}
 		<Placeholder
 			icon="files"
@@ -571,13 +570,7 @@
 			{/each}
 		</div>
 
-
-		<p class="res-foot">
-			<span class="block">
-				Your files stay on your own machines. This page is the record of which machine holds which,
-				so one can take a copy straight from another; no file passes through our servers.
-			</span>
-		</p>
+		<Note icon="lock">{FILES_STAY_ON_YOUR_MACHINES}</Note>
 	{/if}
 	{#if !files.isPending && !files.isError && (shown.hasPrev || shown.hasNext)}
 		<Pagination

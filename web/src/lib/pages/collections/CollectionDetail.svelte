@@ -31,6 +31,7 @@
 	import type { InventoryId } from '$lib/generated/vocab';
 	import { INVENTORY_ORDER, normaliseQuery } from '$lib/listings-view';
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
+	import Note from '$lib/Note.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
@@ -335,7 +336,7 @@
 		<Placeholder
 			icon="search"
 			headline="No such collection"
-			body="It may have been deleted. Your resources are untouched either way."
+			body="It may have been deleted."
 		>
 			{#snippet actions()}
 				<Button href="/collections" icon="layers">Back to Collections</Button>
@@ -351,7 +352,7 @@
 		<Placeholder
 			icon="triangle-alert"
 			headline="This collection could not be read"
-			body="Nothing has happened to it; the reading failed. Reload to try again."
+			body="Reload to try again."
 		>
 			{#snippet actions()}
 				<Button href="/collections" icon="layers">Back to Collections</Button>
@@ -417,7 +418,7 @@
 			<div>
 				<Panel
 					title="What is in it"
-					description="The order every verb uses: a publish sends them in this order, and an export lists them in it."
+					description="The order every verb uses."
 				>
 					{#snippet more()}
 						<!-- Which marketplaces this set reaches, as one strip rather than
@@ -430,10 +431,7 @@
 						</span>
 					{/snippet}
 					{#if members.length === 0}
-						<p class="quiet">
-							This collection is empty. Add resources below, or pick several on the Resources
-							board and use Add to collection there.
-						</p>
+						<p class="quiet">This collection is empty.</p>
 					{:else}
 						{#each members as member, index (member.product)}
 							<div class="coll-member">
@@ -498,10 +496,7 @@
 						<Banner tone="bad">{memberRefusal}</Banner>
 					{/if}
 
-					<p class="foot-note">
-						Removing a resource takes it out of this collection and nothing else: it stays in
-						your Resources and on every marketplace it is already on.
-					</p>
+					<Note>Removing a resource takes it out of this collection and nothing else.</Note>
 				</Panel>
 
 				<Panel title="Add resources">
@@ -512,15 +507,9 @@
 					{:else if catalogue.isPending || mappings.isPending}
 						<p class="quiet">Loading your resources…</p>
 					{:else if catalogue.isError || mappings.isError}
-						<p class="quiet">
-							Your resources could not be read, so there is nothing to tick. Reload to try
-							again.
-						</p>
+						<p class="quiet">Your resources could not be read; reload to try again.</p>
 					{:else if products.length === 0}
-						<p class="quiet">
-							You have no resources yet, so there is nothing to add. Import brings your
-							existing shop across first.
-						</p>
+						<p class="quiet">Import brings your existing shop across first.</p>
 					{:else}
 						<div class="pick-head">
 							<input
@@ -603,15 +592,12 @@
 					>
 						Publish…
 					</Button>
-					<p class="foot-note">
-						Nothing is queued until you have read the preview and confirmed it. A resource
-						already on the marketplace is left alone rather than published twice.
-					</p>
+					<Note>A resource already on the marketplace is left alone rather than published twice.</Note>
 				</Panel>
 
 				<Panel
 					title="Apply a template and labels"
-					description="One template's fields across the whole set, and your own words to file them under."
+					description="One template's fields across the whole set."
 				>
 					<Button
 						disabled={stored.count === 0}
@@ -626,7 +612,7 @@
 					<Field
 						label="Add labels"
 						id="collection-labels"
-						hint="Several at once, separated by commas. They are added to what each resource already carries; nothing is taken away."
+						hint="Several at once, separated by commas."
 					>
 						<input
 							id="collection-labels"
@@ -659,7 +645,7 @@
 
 				<Panel
 					title="Export"
-					description="A spreadsheet of this collection alone, in the same columns the whole catalogue exports in."
+					description="A spreadsheet of this collection alone."
 				>
 					<Button
 						icon="file-down"
@@ -676,9 +662,7 @@
 					{#if exportFailure !== null}
 						<Banner tone="bad">{exportFailure}</Banner>
 					{/if}
-					<p class="foot-note">
-						Details only: no file a buyer downloads, and no marketplace login.
-					</p>
+					<Note>Details only: no file a buyer downloads, and no marketplace login.</Note>
 				</Panel>
 			</div>
 		</div>

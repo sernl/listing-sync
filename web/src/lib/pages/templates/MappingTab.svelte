@@ -196,7 +196,7 @@
 
 <Panel
 	title="Add an override"
-	description="Pick which of a marketplace's own choices one of your words should use. This applies to your resources only."
+	description="Pick which of a marketplace's own choices one of your words should use."
 >
 	<div class="tpl-grid">
 		<Field label="Marketplace" id="{base}-inventory">

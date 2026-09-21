@@ -12,6 +12,7 @@
 	import Button from '$lib/Button.svelte';
 	import Field from '$lib/Field.svelte';
 	import type { InventoryRow } from '$lib/inventory';
+	import Note from '$lib/Note.svelte';
 	import {
 		DESCRIPTION_MAX_CHARS,
 		NAME_MAX_CHARS,
@@ -161,14 +162,10 @@
 		<h2 id="add-to-collection-title">
 			Add {rows.length} {rows.length === 1 ? 'resource' : 'resources'} to a collection
 		</h2>
-		<p>
-			A collection is an ordered set of your resources. These join the end of the one you
-			pick, in the order the board has them; a resource the collection already holds keeps its
-			place.
-		</p>
+		<p>These join the end of the collection you pick.</p>
 
 		{#if reading}
-			<p class="foot-note">Reading your collections…</p>
+			<Note>Reading your collections…</Note>
 		{:else if unread}
 			<p class="refusal">
 				Your collections could not be read, so there is none to pick. Making one below still

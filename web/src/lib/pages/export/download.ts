@@ -48,8 +48,7 @@ export const FILENAME_PATTERN = 'teachouse-resources-<date>.csv';
  * host saved the file and when the host dropped it, and so that a seller who
  * finds nothing knows the next thing to try without having to be told a
  * failure this page cannot detect. */
-export const HANDOFF_ADVICE =
-	'Check your downloads folder. If nothing arrived, try the export in your browser.';
+export const HANDOFF_ADVICE = 'Check your downloads folder.';
 
 /** The name the server gave this document, read out of `Content-Disposition`.
  *

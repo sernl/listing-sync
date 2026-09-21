@@ -45,14 +45,17 @@ export function runRows(jobs: readonly JobHead[], now: number): RunRow[] {
 	}));
 }
 
-/** The header control's own words. A figure this page could not read is not a
- *  figure of zero, so the control drops the count rather than claiming one. */
+/** The guide the Updates page deep-links to. */
+export const UPDATES_GUIDE = 'updates';
+
+/** The header control's own words, matching the navigation's own label for
+ *  `/reconciliation`. A figure this page could not read is not a figure of
+ *  zero, so the control drops the count rather than claiming one. */
 export function openQuestionsLabel(open: number | null): string {
-	return open === null ? 'Open questions' : `Open questions (${open})`;
+	return open === null ? 'Unmatched words' : `Unmatched words (${open})`;
 }
 
-export const NO_RUN_YET =
-	'Start one from Resources: choose what to send, and we take it from there.';
+export const NO_RUN_YET = 'Start one from Resources.';
 
 // ------------------------------------------------------------------ cadence
 
@@ -252,5 +255,4 @@ export const NO_ACTIVITY_YET =
 	'Nothing has been pulled or published yet, so there is nothing to log.';
 
 export const NOTHING_MULTI_LISTED =
-	'Nothing of yours is on more than one marketplace yet. Send a resource to a second one and ' +
-	'it appears here.';
+	'Send a resource to a second marketplace and it appears here.';

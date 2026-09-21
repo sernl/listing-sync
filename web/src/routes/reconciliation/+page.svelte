@@ -95,9 +95,10 @@
 <div class="page">
 	<PageHead
 		icon="circle-question-mark"
-		back={{ href: '/sync', label: 'Back to Marketplace Sync' }}
-		title="Open questions"
-		description="Words we could not match on a marketplace. Tell us where each one belongs."
+		back={{ href: '/sync', label: 'Back to Updates' }}
+		guide="target-terms"
+		title="Unmatched words"
+		description="Tell us where each word belongs on the marketplace."
 	>
 		{#snippet aside()}
 			{#if stats}
@@ -126,6 +127,7 @@
 						/>
 						<Button
 							tier="primary"
+							icon="circle-check"
 							disabled={busy === question.id}
 							reason={busy === question.id ? 'This answer is being saved.' : undefined}
 							onclick={() => void resolve(question.item)}
@@ -134,6 +136,7 @@
 						</Button>
 						<Button
 							tier="outline"
+							icon="circle-x"
 							disabled={busy === question.id}
 							reason={busy === question.id ? 'This answer is being saved.' : undefined}
 							onclick={() => void noCounterpart(question.item)}

@@ -275,59 +275,40 @@ button {
 	text-underline-offset: 2px;
 }
 
+/* The header band, written phone first: the narrow layout is the base and each
+   wider one is added, which is the shape `pages/collections/collections.css`
+   already uses and the shape the rest of the console is converging on. Three
+   stages, because the band is genuinely three layouts rather than one layout
+   squeezed:
+
+   - phone: four grid tracks, the glyph and the three controls across the top
+     and the title beneath them. Three 44px circles and a 28px title do not
+     share a 360px row -- measured, "Resources" wrapped mid-word into
+     "Resou/rces" -- and shrinking either spends the thing being read.
+   - tablet: three tracks, the title back beside the glyph, the actions on a
+     row of their own.
+   - desktop: flex, where wrapping is enough because the row is wide enough
+     that nothing wraps.
+
+   Rows are pinned rather than left to auto-placement: the actions come before
+   the help control in the markup and span every column, so auto-placement
+   filled row two with them and pushed the help control to a row of its own
+   below. */
 .page-head {
-	display: flex;
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr) auto auto;
 	align-items: flex-start;
 	gap: 14px;
 	margin-bottom: 22px;
-	flex-wrap: wrap;
 }
 
 .page-head > div {
 	min-width: 0;
 }
 
-/* Below this width the header band stops relying on wrapping and says where
-   each part goes. Wrapping put the help control on the second row — sometimes
-   after the actions, sometimes alone at the far left, depending on what fitted
-   — and a control that moves rows as the title lengthens is not a control
-   anyone learns the position of. Three columns, and the actions span all of
-   them on a row of their own; with no actions there is no second row to make. */
-@media (max-width: 900px) {
-	.page-head {
-		display: grid;
-		grid-template-columns: auto minmax(0, 1fr) auto;
-	}
-
-	/* Rows pinned, not left to auto-placement: the actions come before the help
-	   control in the markup and span every column, so auto-placement filled row
-	   two with them and pushed the help control to a row of its own below. */
-	.page-ico {
-		grid-column: 1;
-		grid-row: 1;
-	}
-
-	.head-titles {
-		grid-column: 2;
-		grid-row: 1;
-	}
-
-	.page-help {
-		grid-column: 3;
-		grid-row: 1;
-		margin-left: 0;
-		justify-self: end;
-	}
-
-	.head-aside {
-		grid-column: 1 / -1;
-		grid-row: 2;
-		margin-left: 0;
-		justify-content: flex-end;
-	}
-}
-
 .page-ico {
+	grid-column: 1;
+	grid-row: 1;
 	width: 38px;
 	height: 38px;
 	border-radius: 11px;
@@ -338,6 +319,11 @@ button {
 	justify-content: center;
 	font-size: 17px;
 	flex: none;
+}
+
+.head-titles {
+	grid-column: 1 / -1;
+	grid-row: 2;
 }
 
 .page-head h1 {
@@ -357,19 +343,24 @@ button {
 }
 
 .head-aside {
-	margin-left: auto;
+	grid-column: 1 / -1;
+	grid-row: 3;
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
+	justify-content: flex-end;
 	gap: 10px;
 }
 
-/* The header band's help control. `margin-left: auto` as well, so it sits at
-   the far right whether or not the page gave the band any actions. */
+/* The header band's help control. 44px on a phone alongside the kebab in
+   `components.css`: it is the one thing in the band a thumb has to hit, and
+   `--control-h` is a shared gate rather than a phone measurement. */
 .page-help {
-	margin-left: auto;
-	width: var(--control-h);
-	height: var(--control-h);
+	grid-column: 3;
+	grid-row: 1;
+	justify-self: end;
+	width: 44px;
+	height: 44px;
 	border-radius: 50%;
 	border: 1px solid var(--line);
 	display: grid;
@@ -379,27 +370,120 @@ button {
 	align-self: center;
 }
 
-.head-aside + .page-help {
-	margin-left: 0;
-}
-
 .page-help:hover {
 	background: var(--hover);
 	color: var(--text);
 }
 
 /* The header band's phone-only controls: this page's search, where it has one,
-   and the account avatar. Hidden by default rather than shown by default,
-   because every viewport above the phone breakpoint reaches both from the
-   shell's own top strip and would otherwise draw each of them twice. */
+   and the account avatar. Drawn here and taken away above the phone line,
+   because every wider viewport reaches both from the shell's own top strip
+   and would otherwise draw each of them twice. */
 .head-phone {
-	display: none;
+	grid-column: 4;
+	grid-row: 1;
+	align-self: center;
+	display: flex;
+	align-items: center;
+	gap: 8px;
 }
 
+/* Both controls draw as the help control beside them: 44px for a thumb, a
+   circle, and the band's own hairline. The avatar is the exception it has to
+   be -- it is a filled tile wherever the seller set a picture or the
+   organisation has a name -- so it takes the strip avatar's own fill and
+   clips whatever it holds to the circle. */
+.head-tool {
+	width: 44px;
+	height: 44px;
+	border-radius: 50%;
+	border: 1px solid var(--line);
+	background: none;
+	display: grid;
+	place-items: center;
+	color: var(--muted);
+	flex: none;
+	padding: 0;
+	cursor: pointer;
+}
+
+.head-tool.head-account {
+	background: var(--accent-soft);
+	color: var(--primary);
+	font: 600 13px var(--sans);
+	overflow: hidden;
+}
+
+/* Above the phone line: the title returns beside the glyph, the fourth track
+   goes with the controls that occupied it, and the actions take the row under
+   the title. */
+@media (min-width: 621px) {
+	.page-head {
+		grid-template-columns: auto minmax(0, 1fr) auto;
+	}
+
+	.head-titles {
+		grid-column: 2;
+		grid-row: 1;
+	}
+
+	.head-aside {
+		grid-row: 2;
+	}
+
+	.page-help {
+		width: var(--control-h);
+		height: var(--control-h);
+	}
+
+	.head-phone {
+		display: none;
+	}
+}
+
+/* Wide enough that wrapping is enough: the band goes back to a flex row, and
+   the two auto margins put the actions and the help control at the far right
+   whether or not the page gave the band any actions. Every grid placement
+   above is inert on a flex item, so none of it needs undoing. */
+@media (min-width: 901px) {
+	.page-head {
+		display: flex;
+		flex-wrap: wrap;
+	}
+
+	.head-aside {
+		margin-left: auto;
+		justify-content: flex-start;
+	}
+
+	.page-help {
+		margin-left: auto;
+	}
+
+	.head-aside + .page-help {
+		margin-left: 0;
+	}
+}
+
+/* One card per row on a phone, two above it, four on a desktop. The stacking
+   arm is the base rather than the exception, so a card grid added by a slice
+   is readable on a phone before anyone writes a query for it. */
 .cards {
 	display: grid;
-	grid-template-columns: repeat(4, 1fr);
+	grid-template-columns: 1fr;
 	gap: 16px;
+}
+
+@media (min-width: 621px) {
+	.cards {
+		grid-template-columns: repeat(2, 1fr);
+	}
+}
+
+@media (min-width: 981px) {
+	.cards {
+		grid-template-columns: repeat(4, 1fr);
+	}
 }
 
 .stat {
@@ -480,11 +564,19 @@ button {
 	margin-top: 3px;
 }
 
+/* A wide panel and a narrow one beside it, stacked until there is room for
+   both. */
 .band {
 	display: grid;
-	grid-template-columns: 1.6fr 1fr;
+	grid-template-columns: 1fr;
 	gap: 14px;
 	margin-top: 14px;
+}
+
+@media (min-width: 981px) {
+	.band {
+		grid-template-columns: 1.6fr 1fr;
+	}
 }
 
 /* The card the specification's catalogue describes: a soft shadow and no
@@ -940,99 +1032,23 @@ input:focus-visible {
 	background: var(--hover);
 }
 
-@media (max-width: 980px) {
-	.cards {
-		grid-template-columns: repeat(2, 1fr);
-	}
+/* The page-level phone rules live beside the rules they widen, above: the
+   header band with `.page-head`, the card grids with `.cards` and `.band`.
+   The shell's own phone half -- the rail and the navigation card giving way
+   to the tab bar -- is in `lib/styles/shell.css`.
 
-	.band {
-		grid-template-columns: 1fr;
-	}
+   What is left here is the one rule that only a phone needs: an item's
+   per-marketplace actions stretch to the full width under the row they belong
+   to rather than crowding its right edge. */
+.row .btn,
+.row .act {
+	flex: 1 1 auto;
 }
 
-/* The phone layout's page-level half. The shell's own half — the rail and the
-   navigation card giving way to the tab bar — is in `lib/styles/shell.css`. */
-@media (max-width: 620px) {
-	.cards {
-		grid-template-columns: 1fr;
-	}
-
-	/* 44px, alongside the kebab in `components.css`: the help control is the
-	   one thing in the header band a thumb has to hit, and `--control-h` is a
-	   shared gate rather than a phone measurement. */
-	.page-help {
-		width: 44px;
-		height: 44px;
-	}
-
-	/* The band becomes two rows: the glyph and the controls across the top, the
-	   title and its sentence beneath them. Three 44px circles and a 28px title
-	   do not share a 360px row -- measured, "Resources" wrapped mid-word into
-	   "Resou/rces" -- and shrinking either the title or the thumb targets to
-	   make them fit spends the thing being read to keep a layout that a phone
-	   does not need. It is also the pattern a phone application already uses: a
-	   control row above a large title.
-
-	   The fourth track is declared here rather than in the 900px block so a
-	   tablet does not carry the column gap of a track nothing occupies. */
-	.page-head {
-		grid-template-columns: auto minmax(0, 1fr) auto auto;
-	}
-
-	.head-titles {
-		grid-column: 1 / -1;
-		grid-row: 2;
-	}
-
-	.head-phone {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		grid-column: 4;
-		grid-row: 1;
-		align-self: center;
-	}
-
-	/* The page's own actions move down a row, below the title they act on. */
-	.head-aside {
-		grid-row: 3;
-	}
-
-	/* Both controls draw as the help control beside them: 44px for a thumb,
-	   a circle, and the band's own hairline. The avatar is the exception it
-	   has to be -- it is a filled tile wherever the seller set a picture or
-	   the organisation has a name -- so it takes the strip avatar's own fill
-	   and clips whatever it holds to the circle. */
-	.head-tool {
-		width: 44px;
-		height: 44px;
-		border-radius: 50%;
-		border: 1px solid var(--line);
-		background: none;
-		display: grid;
-		place-items: center;
-		color: var(--muted);
-		flex: none;
-		padding: 0;
-		cursor: pointer;
-	}
-
-	.head-tool.head-account {
-		background: var(--accent-soft);
-		color: var(--primary);
-		font: 600 13px var(--sans);
-		overflow: hidden;
-	}
-
-	/* An item's per-marketplace actions stack to the full width under the row
-	   they belong to, rather than crowding its right edge. */
-	.row {
-		flex-wrap: wrap;
-	}
-
+@media (min-width: 621px) {
 	.row .btn,
 	.row .act {
-		flex: 1 1 auto;
+		flex: 0 1 auto;
 	}
 }
 

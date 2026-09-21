@@ -64,7 +64,7 @@
 				required={!optional}
 				hint={form === null
 					? 'Set the price for extra copies.'
-					: `We suggest ${form.limits.additional_licence_percentage}% of the price. Change it if you like.`}
+					: `We suggest ${form.limits.additional_licence_percentage}% of the price.`}
 			>
 				<input
 					id="draft-additional-licence"
@@ -79,7 +79,7 @@
 			<Field
 				label="Bundle Discount Price"
 				id="draft-bundle-discount"
-				hint="Enter the price for the whole bundle. A price is easier for buyers to compare than a percentage."
+				hint="Enter the price for the whole bundle."
 			>
 				<input
 					id="draft-bundle-discount"

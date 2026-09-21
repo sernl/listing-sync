@@ -22,22 +22,21 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
+/** The guide this page deep-links to. */
+export const SCHEDULES_GUIDE = 'schedules';
+
 /** What the page is for, said once at the top. */
 export const WHAT_SCHEDULING_IS =
-	'Publish a set of resources to the marketplaces you choose, at a time you choose, ' +
-	'without being at your computer.';
+	'Publish a set of resources to the marketplaces you choose, at a time you choose.';
 
 /** Where the work happens, which is the part a seller has to know: the tick
  *  is ours, the marketplace request is their own machine's. */
 export const RUNS_ON_YOUR_COMPUTER =
-	'We queue the work at the time you set. Your own computer sends it at its next check-in, ' +
-	'signed in as you, which is the only place your marketplace login is kept.';
+	'Your own computer sends it at its next check-in, signed in as you.';
 
 export const NO_DEVICE_TITLE = 'A schedule needs a computer to run on';
 
-export const NO_DEVICE_BODY =
-	'Install the Teachouse app to give the schedule a computer to run on. Your marketplace ' +
-	'sign-in stays there.';
+export const NO_DEVICE_BODY = 'Install the Teachouse app to give the schedule a computer.';
 
 /** Why the republish rule cannot do everything it says on one marketplace.
  *
@@ -46,12 +45,9 @@ export const NO_DEVICE_BODY =
  * is not taken, so the tick records the resource as skipped with this reason.
  * A seller who reads it first is not surprised by it afterwards. */
 export const TES_CANNOT_REVISE =
-	'Tes cannot yet change a listing that is already live, so a resource that changes is ' +
-	'skipped there and the run says so. Every other marketplace is republished.';
+	'Tes skips a resource that changes after it is live; every other marketplace is republished.';
 
-export const NO_SCHEDULE_YET =
-	'Nothing is scheduled. A schedule sends the same selection on a timetable, so a weekly ' +
-	'drop takes one setup rather than one evening a week.';
+export const NO_SCHEDULE_YET = 'A schedule sends the same selection on a timetable.';
 
 /** How often a schedule comes round, in the order the form offers them. */
 export const REPEATS: readonly { value: ScheduleRepeat; label: string }[] = [

@@ -14,6 +14,7 @@
 	let {
 		tier = 'outline',
 		icon,
+		label,
 		href,
 		type = 'button',
 		danger = false,
@@ -27,6 +28,11 @@
 	}: {
 		tier?: Tier;
 		icon?: IconName;
+		/** The control's accessible name, set where the button is drawn as its
+		 *  glyph alone on a narrow screen. The children stay the word: a
+		 *  button that ships no text has nothing to fall back to when the
+		 *  glyph fails to load, and nothing for a search to match. */
+		label?: string;
 		href?: string;
 		type?: 'button' | 'submit';
 		danger?: boolean;
@@ -43,7 +49,8 @@
 			tier === 'additive' ? 'add' : '',
 			tier === 'quiet' ? 'quiet' : '',
 			danger ? 'danger' : '',
-			small ? 'small' : ''
+			small ? 'small' : '',
+			label === undefined ? '' : 'btn-iconic'
 		]
 			.filter(Boolean)
 			.join(' ')
@@ -51,13 +58,20 @@
 </script>
 
 {#if href !== undefined && !disabled}
-	<a class={classes} {href} title={reason}>
+	<a class={classes} {href} title={reason ?? label} aria-label={label}>
 		{#if icon}<Icon name={icon} size={small ? 14 : 16} />{/if}
-		{@render children()}
+		<span class="btn-word">{@render children()}</span>
 	</a>
 {:else}
-	<button class={classes} {type} {disabled} title={reason} {onclick}>
+	<button
+		class={classes}
+		{type}
+		{disabled}
+		title={reason ?? label}
+		aria-label={label}
+		{onclick}
+	>
 		{#if icon}<Icon name={icon} size={small ? 14 : 16} />{/if}
-		{@render children()}
+		<span class="btn-word">{@render children()}</span>
 	</button>
 {/if}

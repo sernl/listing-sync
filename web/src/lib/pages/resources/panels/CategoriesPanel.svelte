@@ -85,7 +85,7 @@
 		<Field
 			label="Custom Category"
 			id="draft-custom-category"
-			hint="A custom category is any word or phrase you would like to use to group your own resources. These are your own categories rather than a marketplace vocabulary, which is why they are different from the three options above."
+			hint="Your own word for grouping resources."
 		>
 			<input
 				id="draft-custom-category"

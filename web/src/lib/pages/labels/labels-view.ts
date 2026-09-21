@@ -133,9 +133,9 @@ export function deleteWarning(name: string, count: number | null): string {
 		return `Deleting ${name} removes it from every resource that carries it.`;
 	}
 	if (count === 1) {
-		return `${name} is on 1 resource. Deleting it removes it from that resource.`;
+		return `Deleting ${name} removes it from the 1 resource that carries it.`;
 	}
-	return `${name} is on ${count} resources. Deleting it removes it from all of them.`;
+	return `Deleting ${name} removes it from all ${count} resources that carry it.`;
 }
 
 /** The eyebrow over the list. */

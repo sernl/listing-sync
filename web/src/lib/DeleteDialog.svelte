@@ -3,6 +3,7 @@
 	import { platformTitle } from '$lib/platforms';
 	import { standingOf } from '$lib/tes-portfolio';
 	import type { InventoryId } from '$lib/generated/vocab';
+	import Note from '$lib/Note.svelte';
 
 	let {
 		open,
@@ -136,10 +137,7 @@
 			{/if}
 		{/if}
 
-		<p class="foot-note">
-			Marketplace removals are separate jobs. Check Sync for their results; deleting the
-			Teachouse resource does not mean those removals have finished.
-		</p>
+		<Note icon="refresh-cw">Check Updates for each marketplace removal.</Note>
 
 		{#if refusal !== null}
 			<p class="refusal">{refusal}</p>

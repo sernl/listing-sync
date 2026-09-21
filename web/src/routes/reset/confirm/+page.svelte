@@ -65,11 +65,11 @@
 <div class="auth-card acct-signed-out">
 	{#if unusable}
 		<h1>That link no longer works</h1>
-		<p>A reset link expires, and each one can be spent once. Ask for a fresh one.</p>
+		<p>Ask for a fresh link.</p>
 		<div class="actions"><Button tier="primary" href="/reset">Send a new link</Button></div>
 	{:else}
 		<h1>Choose a new password</h1>
-		<p>This link signs off the change. Type the new password twice.</p>
+		<p>Type the new password twice.</p>
 
 		<form onsubmit={choose} class="form">
 			<Field label="New password" id="password" required>

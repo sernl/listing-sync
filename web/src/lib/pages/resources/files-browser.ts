@@ -18,6 +18,10 @@ import type { LibraryEntry } from '$lib/desktop';
 /** Where the browser lives, named once for every surface that links to it. */
 export const FILES_HREF = '/resources/files';
 
+/** The promise the browser closes with. One sentence; which machine holds
+ *  what, and how a copy crosses between them, is the `your-files` guide's. */
+export const FILES_STAY_ON_YOUR_MACHINES = 'Your files stay on your own machines.';
+
 /** What the page says in a browser, where no machine is keeping files. */
 export const BROWSER_SENTENCE = 'Files are kept on the machines running the Teachouse app.';
 

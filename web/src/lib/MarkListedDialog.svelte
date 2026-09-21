@@ -3,6 +3,7 @@
 	import type { InventoryRow } from '$lib/inventory';
 	import { AUTHORABLE_PLATFORMS, platformTitle } from '$lib/platforms';
 	import type { InventoryId } from '$lib/generated/vocab';
+	import Note from '$lib/Note.svelte';
 
 	let {
 		open,
@@ -120,11 +121,7 @@
 			</div>
 		{/each}
 
-		<p class="foot-note">
-			An item left blank is passed over. We do not check the address against the marketplace here,
-			so a link to the wrong listing attaches the wrong listing; the next sync reads it back and
-			reports a mismatch rather than overwriting anything.
-		</p>
+		<Note icon="triangle-alert">Check each address: a wrong link attaches the wrong listing.</Note>
 
 		<div class="actions">
 			<button class="btn" type="button" onclick={onClose} disabled={sending}>Cancel</button>

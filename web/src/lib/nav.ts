@@ -88,14 +88,14 @@ export const SECTIONS: readonly NavSection[] = [
 	},
 	{
 		id: 'crosslist',
-		label: 'Crosslist',
+		label: 'Catalogue',
 		hint: 'Publish your resources to multiple marketplaces.',
 		icon: 'package',
 		href: '/resources',
 		primary: { href: '/resources/new', label: 'New resource', icon: 'circle-plus' },
 		items: [
 			{ href: '/resources', label: 'Resources', icon: 'layout-list' },
-			{ href: '/resources/files', label: 'Files', icon: 'files' },
+			{ href: '/resources/files', label: "Your machines' files", icon: 'files' },
 			{ href: '/labels', label: 'Labels', icon: 'tag' },
 			// Between Labels and Analytics because a collection is the other
 			// selection dimension a seller files by: a label is a word on a
@@ -103,7 +103,7 @@ export const SECTIONS: readonly NavSection[] = [
 			// needs no `owns` entry -- it falls under this href by prefix.
 			{ href: '/collections', label: 'Collections', icon: 'layers' },
 			{ href: '/analytics', label: 'Analytics', icon: 'chart-line' },
-			{ href: '/templates', label: 'Template Manager', icon: 'layout-template' },
+			{ href: '/templates', label: 'Templates', icon: 'layout-template' },
 			{ href: '/export', label: 'Export', icon: 'file-down' }
 		]
 	},
@@ -121,7 +121,7 @@ export const SECTIONS: readonly NavSection[] = [
 			// The path is unchanged although the word is: `/automations/sharing`
 			// is where the page has always been, and moving it would break every
 			// link a seller has kept.
-			{ href: '/automations/sharing', label: 'Scheduling', icon: 'calendar-clock' },
+			{ href: '/automations/sharing', label: 'Schedules', icon: 'calendar-clock' },
 			{
 				href: '/automations/migration',
 				label: 'Migrations',
@@ -136,12 +136,12 @@ export const SECTIONS: readonly NavSection[] = [
 			// it anywhere: the two pages are what a migration, a copy and a
 			// cross-list read their target price and terms from.
 			{ href: '/automations/pricing', label: 'Pricing', icon: 'credit-card' },
-			{ href: '/automations/mappings', label: 'Mappings', icon: 'tag' },
+			{ href: '/automations/mappings', label: 'Target terms', icon: 'tag' },
 			// The sync list stays at `/sync` rather than moving under
 			// `/automations/`, because `/sync/<id>` and `/sync/requests/<id>` are
 			// its detail pages and a list that left its own children behind would
 			// break both the breadcrumb and the lit nav entry.
-			{ href: '/sync', label: 'Marketplace Sync', icon: 'refresh-cw' }
+			{ href: '/sync', label: 'Updates', icon: 'refresh-cw' }
 		]
 	},
 	{
@@ -159,10 +159,10 @@ export const SECTIONS: readonly NavSection[] = [
 		icon: 'circle-user',
 		href: '/settings',
 		items: [
-			{ href: '/settings', label: 'Preferences', icon: 'sliders-horizontal' },
-			{ href: '/settings/subscription', label: 'Subscription', icon: 'credit-card' },
+			{ href: '/settings', label: 'Account settings', icon: 'sliders-horizontal' },
+			{ href: '/settings/subscription', label: 'Plan and moves', icon: 'credit-card' },
 			{ href: '/notifications', label: 'Notifications', icon: 'bell' },
-			{ href: '/status', label: 'Status', icon: 'activity' },
+			{ href: '/status', label: 'Marketplace status', icon: 'activity' },
 			{ href: '/guides', label: 'Help and guides', icon: 'book-open' }
 		]
 	}
@@ -186,7 +186,7 @@ export const HOME_ITEM: NavItem = {
 
 export const OPEN_QUESTIONS_ITEM: NavItem = {
 	href: '/reconciliation',
-	label: 'Open questions',
+	label: 'Unmatched words',
 	icon: 'circle-question-mark'
 };
 
@@ -328,12 +328,12 @@ export interface PhoneTab extends Omit<NavItem, 'href'> {
 	create?: true;
 }
 
-/** The create action the phone bar carries, taken from the Crosslist section's
- *  own primary rather than written again, so the phone button and the two
- *  desktop ones cannot come to open different screens. */
+/** The create action the phone bar carries, taken from the Catalogue
+ *  section's own primary rather than written again, so the phone button and
+ *  the two desktop ones cannot come to open different screens. */
 const createAction = SECTIONS.find((section) => section.id === 'crosslist')?.primary;
 if (createAction === undefined) {
-	throw new Error('the phone bar carries the Crosslist create action, which that section has none of');
+	throw new Error('the phone bar carries the Catalogue create action, which that section has none of');
 }
 
 /** `href` narrowed back to a definite string: the top strip's own create link
@@ -375,14 +375,18 @@ export const ACCOUNT_DESTINATION: NavItem = {
 
 /** What a section is called and drawn as on the phone bar.
  *
- * Three of the four navigating sections need bar-only wording and two need a
+ * Two of the four navigating sections need bar-only wording and two need a
  * bar-only glyph: `package` and `waves-horizontal` are the rail's marks for
- * Crosslist and Automations, and at 24px over a nine-character word they read
+ * Catalogue and Automations, and at 24px over a nine-character word they read
  * as a box and a river rather than as a catalogue and a workflow. Keyed by
  * section id, so a section that gains a cell is a line here rather than a
- * second list of destinations. */
-const BAR_CELLS: Partial<Record<SectionId, { short: string; icon: IconName }>> = {
-	crosslist: { short: 'Catalogue', icon: 'library-big' },
+ * second list of destinations.
+ *
+ * Catalogue keeps its bar glyph and no longer needs a bar word: the rail says
+ * Catalogue too, since the 2026-09-22 rename, and a short form that repeats
+ * the label is a second place for the same word to drift from. */
+const BAR_CELLS: Partial<Record<SectionId, { short?: string; icon: IconName }>> = {
+	crosslist: { icon: 'library-big' },
 	automations: { short: 'Automate', icon: 'workflow' },
 	marketplaces: { short: 'Markets', icon: 'store' }
 };
@@ -399,7 +403,7 @@ const NAVIGATING: readonly PhoneTab[] = SECTIONS.filter((section) => section.id 
 			href: section.href,
 			label: section.label,
 			icon: cell?.icon ?? section.icon,
-			...(cell === undefined ? {} : { short: cell.short })
+			...(cell?.short === undefined ? {} : { short: cell.short })
 		};
 	}
 );
@@ -442,8 +446,8 @@ export function isCurrent(pathname: string, href: string): boolean {
 }
 
 /** The page's own name, which the shell sets the document title from. The
- *  longest matching destination wins, so `/sync/<id>` reads as Marketplace
- *  Sync rather than as the first nav entry that happens to prefix it. */
+ *  longest matching destination wins, so `/sync/<id>` reads as Updates
+ *  rather than as the first nav entry that happens to prefix it. */
 export function breadcrumbFor(pathname: string): string {
 	return currentDestination(pathname)?.label ?? 'Console';
 }

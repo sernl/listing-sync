@@ -34,6 +34,7 @@
 	import Field from '$lib/Field.svelte';
 	import { initialsOf } from '$lib/nav';
 	import { NAME_MAX_CHARS, checkOrgName } from '$lib/org-name';
+	import Note from '$lib/Note.svelte';
 	import { checkOrgSlug } from '$lib/org-slug';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
@@ -502,11 +503,12 @@
 <div class="page">
 	<PageHead
 		icon="sliders-horizontal"
-		title="Preferences"
+		title="Account settings"
 		description="Your organisation, your profile, and the ways you sign in."
+		guide="account"
 	>
 		{#snippet aside()}
-			<Button tier="quiet" icon="credit-card" href="/settings/subscription">Subscription</Button>
+			<Button tier="quiet" icon="credit-card" href="/settings/subscription">Plan and moves</Button>
 			<!-- The shell's account nav-card carries the other one, and `shell.css`
 			     hides that card below 620px, so this is the whole of signing out on
 			     a phone. Both run `signOut`. -->
@@ -516,7 +518,7 @@
 
 	<Panel
 		title="Organisation"
-		description="What this account is called. Neither name is ever sent to a marketplace."
+		description="What this account is called."
 	>
 		{#if organisation.isPending}
 			<p class="quiet">Loading…</p>
@@ -593,7 +595,7 @@
 
 	<Panel
 		title="Profile"
-		description="Who you are signed in as. Your email address cannot be changed yet."
+		description="Who you are signed in as."
 	>
 		<div class="acct-avatar">
 			<!-- Decoration beside the control that names it: the tile shows the
@@ -619,8 +621,7 @@
 								? 'Choose a different picture'
 								: 'Choose a picture'}
 					</b>
-					A JPEG, PNG or GIF. It is shown to you beside your organisation's name and is never
-					sent to a marketplace.
+					A JPEG, PNG or GIF, shown to you beside your organisation's name.
 					<input
 						id="avatar-file"
 						type="file"
@@ -637,6 +638,7 @@
 						<Button
 							tier="outline"
 							danger
+							icon="trash-2"
 							small
 							disabled={avatarSending || removingAvatar.isPending}
 							reason={avatarSending
@@ -649,7 +651,7 @@
 							{removingAvatar.isPending ? 'Removing…' : 'Remove picture'}
 						</Button>
 					</div>
-					<p class="foot-note">{STORAGE_NOT_RECLAIMED}</p>
+					<Note>{STORAGE_NOT_RECLAIMED}</Note>
 				{/if}
 			</div>
 		</div>
@@ -710,19 +712,17 @@
 				disabled={settingNotifyEmail.isPending}
 				onchange={(value) => settingNotifyEmail.mutate(value)}
 			/>
-			<p class="foot-note">
-				<!-- The address comes from the profile read above rather than from
-				     this setting's own answer: the domain database holds no seller
-				     address by design, so the identity service is the only thing
-				     that knows one. -->
+			<!-- The address comes from the profile read above rather than from
+			     this setting's own answer: the domain database holds no seller
+			     address by design, so the identity service is the only thing
+			     that knows one. -->
+			<Note icon="circle-user">
 				{#if profile.data}
-					Mail goes to {profile.data.email}, the address you signed up with.
+					Mail goes to {profile.data.email}.
 				{:else}
 					Mail goes to the address you signed up with.
 				{/if}
-				One email for each run that changed something, and none for a run that
-				changed nothing.
-			</p>
+			</Note>
 		{/if}
 	</Panel>
 
@@ -732,8 +732,7 @@
 	>
 		{#if !supported}
 			<p class="quiet">
-				This browser does not support passkeys. Your password and any linked account still
-				work.
+				This browser does not support passkeys, so use your password instead.
 			</p>
 		{:else}
 			{#if passkeys.isPending}
@@ -757,6 +756,7 @@
 						<Button
 							tier="outline"
 							danger
+							icon="trash-2"
 							small
 							disabled={removing.isPending && removing.variables === passkey.id}
 							reason={removing.isPending && removing.variables === passkey.id
@@ -783,6 +783,7 @@
 				<div class="actions">
 					<Button
 						tier="outline"
+						icon="shield-check"
 						type="submit"
 						disabled={registering.isPending}
 						reason={registering.isPending ? 'Your device is being asked for a passkey.' : undefined}
@@ -796,16 +797,14 @@
 
 	<Panel
 		title="Browser sign-ins"
-		description="Browser sessions for this Teachouse account. Ending one does not revoke its machine or remove its saved marketplace sign-ins."
+		description="Browser sessions for this Teachouse account."
 	>
 		{#if signIns.isPending || current.isPending}
 			<p class="quiet">Loading…</p>
 		{:else if signIns.isError}
 			<p class="quiet">We could not list your browser sign-ins.</p>
 		{:else if (signIns.data ?? []).length === 0}
-			<p class="quiet">
-				No browser sign-ins were found.
-			</p>
+			<p class="quiet">No browser sign-ins were found.</p>
 		{:else}
 			{#each signIns.data ?? [] as session (session.token)}
 				{@const isCurrent = session.token === current.data}
@@ -824,6 +823,7 @@
 					<Button
 						tier="outline"
 						danger
+						icon="log-out"
 						small
 						disabled={endingSignIn.isPending && endingSignIn.variables === session.token}
 						reason={endingSignIn.isPending && endingSignIn.variables === session.token
@@ -838,12 +838,11 @@
 				</div>
 			{/each}
 		{/if}
-		<p class="foot-note">
-			Ending a sign-in takes effect the next time that browser asks us for anything.
-			{#if !currentKnown}
-				We could not tell which of these is the browser you are using, so none is marked.
-			{/if}
-		</p>
+		<Note>
+			{currentKnown
+				? 'Ending a sign-in takes effect the next time that browser asks us for anything.'
+				: 'We could not tell which of these is the browser you are using.'}
+		</Note>
 	</Panel>
 
 	<Machines
@@ -857,7 +856,7 @@
 	<Panel
 		id="permissions"
 		title="Marketplace permissions"
-		description="Marketplaces with no official API are connected through your own sign-in on your own machines. Each needs your permission, once, for every machine you use."
+		description="Each machine you use needs your permission, once, per marketplace."
 	>
 		{#if consents.isError}
 			<p class="quiet">We could not read your permissions.</p>
@@ -869,7 +868,9 @@
 					<span class="why"><StatusPill tone={row.pill.tone} label={row.pill.label} /></span>
 				</span>
 				{#if row.action === 'grant'}
-					<Button tier="outline" small onclick={() => (grantingFor = row.marketplace)}>Grant</Button>
+					<Button tier="outline" small icon="shield-check" onclick={() => (grantingFor = row.marketplace)}>
+						Grant
+					</Button>
 				{:else if row.action === 'withdraw'}
 					<Button
 						tier="outline"

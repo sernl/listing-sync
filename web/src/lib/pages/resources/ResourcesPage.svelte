@@ -7,7 +7,7 @@
 	import ApplyTemplateDialog from '$lib/ApplyTemplateDialog.svelte';
 	import Banner from '$lib/Banner.svelte';
 	import BulkDeleteDialog from '$lib/BulkDeleteDialog.svelte';
-	import { BULK_ACTIONS, unavailable, type BulkVerb } from '$lib/bulk-verbs';
+	import { BULK_ACTIONS, type BulkVerb } from '$lib/bulk-verbs';
 	import Button from '$lib/Button.svelte';
 	import CrossListDialog from '$lib/CrossListDialog.svelte';
 	import DeleteDialog from '$lib/DeleteDialog.svelte';
@@ -28,6 +28,8 @@
 	import MarketplaceChips from '$lib/MarketplaceChips.svelte';
 	import MarkListedDialog from '$lib/MarkListedDialog.svelte';
 	import Menu from '$lib/Menu.svelte';
+	import MenuItem from '$lib/MenuItem.svelte';
+	import Note from '$lib/Note.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import { palette } from '$lib/palette.svelte';
 	import Panel from '$lib/Panel.svelte';
@@ -43,6 +45,7 @@
 	import type { InventoryId } from '$lib/generated/vocab';
 	import { FILES_HREF } from './files-browser';
 	import {
+		BULK_ICON,
 		MARKETPLACE_TILES,
 		PAGE_STEP,
 		DEFAULT_TAB,
@@ -239,7 +242,8 @@
 			id: entry.id,
 			label: entry.label,
 			count: counts[entry.id],
-			hint: entry.hint
+			hint: entry.hint,
+			icon: entry.icon
 		}))
 	);
 
@@ -481,6 +485,7 @@
 		icon="layout-list"
 		title="Resources"
 		description="Every resource you have, and where each one is listed."
+		guide="labels-and-collections"
 		search={() => palette.show()}
 	>
 		{#snippet aside()}
@@ -496,10 +501,10 @@
 					</Button>
 				{/snippet}
 				{#each BULK_ACTIONS as action (action.verb)}
-					<button
-						type="button"
+					<MenuItem
+						icon={BULK_ICON[action.verb]}
 						disabled={action.missing !== null}
-						title={action.missing ?? undefined}
+						reason={action.missing ?? undefined}
 						onclick={() => {
 							bulkMenu = false;
 							mode = action.verb;
@@ -507,7 +512,7 @@
 						}}
 					>
 						{action.label}…
-					</button>
+					</MenuItem>
 				{/each}
 			</Menu>
 		{/snippet}
@@ -518,8 +523,7 @@
 			tone="warn"
 			title={`${counts.attention} ${counts.attention === 1 ? 'resource needs' : 'resources need'} you`}
 		>
-			A marketplace is waiting on a sign-in, holding a send, or reporting a failure. Work for Tes
-			and TPT runs on your own device, so nothing moves while that device is off.
+			Work for Tes and TPT runs on your own device, so nothing moves while that device is off.
 			{#snippet action()}
 				<Button
 					onclick={() => {
@@ -672,33 +676,33 @@
 						Scope
 					</Button>
 				{/snippet}
-				<button
-					type="button"
+				<MenuItem
+					icon="check"
 					onclick={() => {
 						scopeMenu = false;
 						selectAllShown();
 					}}
 				>
 					Select the {shown.length} shown
-				</button>
-				<button
-					type="button"
+				</MenuItem>
+				<MenuItem
+					icon="layers"
 					onclick={() => {
 						scopeMenu = false;
 						selected = new Set(rows.map((row) => row.product.id));
 					}}
 				>
 					Select all {rows.length} matching
-				</button>
-				<button
-					type="button"
+				</MenuItem>
+				<MenuItem
+					icon="x"
 					onclick={() => {
 						scopeMenu = false;
 						selected = new Set();
 					}}
 				>
 					Select none
-				</button>
+				</MenuItem>
 			</Menu>
 			<span>Select the resources to {VERB_PHRASE[verb.verb]}</span>
 		</div>
@@ -711,15 +715,14 @@
 		     drawn from what did arrive: a row built without the connections says
 		     every marketplace needs a sign-in, and one built without the statuses
 		     says a paused marketplace is running. -->
-		<Banner tone="bad" title="Some of this page could not be loaded">
-			What failed: {unread.join(', ')}. Your resources are not shown, because what we could
-			draw would be wrong. Reload to try again.
+		<Banner tone="bad" title={`Some of this page could not be loaded: ${unread.join(', ')}`}>
+			Reload to try again.
 		</Banner>
 	{:else if allRows.length === 0 && !anythingSet}
 		<Placeholder
 			icon="layout-list"
 			headline="Nothing in your Resources yet."
-			body="Import brings your existing shop across as drafts you review. Creating one starts from a blank form."
+			body="Import brings your existing shop across as drafts you review."
 		>
 			{#snippet actions()}
 				<Button
@@ -769,18 +772,20 @@
 						<MarketplaceChips chips={row.chips} />
 					{/snippet}
 					{#snippet menu(close: () => void)}
-						<a class="res-menu-link" href={`/resources/${row.product.id}`}>Open</a>
-						<button type="button" disabled title={DUPLICATE_MISSING}>Duplicate</button>
-						<button
-							class="res-danger"
-							type="button"
+						<a class="res-menu-link menu-item" href={`/resources/${row.product.id}`}>
+							<Icon name="eye" size={14} />Open
+						</a>
+						<MenuItem icon="copy" disabled reason={DUPLICATE_MISSING}>Duplicate</MenuItem>
+						<MenuItem
+							icon="trash-2"
+							danger
 							onclick={() => {
 								close();
 								removing = row;
 							}}
 						>
 							Delete
-						</button>
+						</MenuItem>
 					{/snippet}
 				</RowCard>
 			{/each}
@@ -794,17 +799,11 @@
 			</div>
 		{/if}
 
-		<p class="res-foot">
-			{#each unavailable() as action (action.verb)}
-				<span class="block">{action.label} in bulk is not built. {action.missing}</span>
-			{/each}
-			{#if work.isError}
-				<span class="block">
-					What each marketplace is doing right now could not be read, so the chips show the last
-					state recorded rather than a live one.
-				</span>
-			{/if}
-		</p>
+		{#if work.isError}
+			<Note icon="triangle-alert">
+				The chips show the last state recorded rather than a live one.
+			</Note>
+		{/if}
 	{/if}
 
 	{#if mode !== null && verb !== null}
@@ -816,6 +815,7 @@
 			     verb is the one it will act on. -->
 			<Button
 				tier="additive"
+				icon={BULK_ICON[verb.verb]}
 				disabled={chosen.length === 0}
 				reason={chosen.length === 0
 					? 'Select at least one resource that is in view.'
@@ -824,8 +824,8 @@
 			>
 				{verb.label} ({chosen.length})
 			</Button>
-			<Button tier="quiet" onclick={() => (selected = new Set())}>Unselect all</Button>
-			<Button onclick={cancelBulk}>Cancel</Button>
+			<Button tier="quiet" icon="x" onclick={() => (selected = new Set())}>Unselect all</Button>
+			<Button icon="chevron-left" onclick={cancelBulk}>Cancel</Button>
 		</div>
 	{/if}
 </div>

@@ -7,6 +7,7 @@
 	import Button from '$lib/Button.svelte';
 	import { createLedger, type Ledger } from '$lib/ledger';
 	import PageHead from '$lib/PageHead.svelte';
+	import Note from '$lib/Note.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import Pagination from '$lib/Pagination.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
@@ -269,7 +270,7 @@
 			{#if coverage !== null}
 				<Panel
 					title="Words we could match"
-					description="How much of this shop's wording we could match to our own lists. A zero here was measured, not missing."
+					description="How much of this shop's wording we could match to our own lists."
 				>
 					<ul class="import-figures">
 						{#each coverageRows(coverage) as figure (figure.label)}
@@ -281,15 +282,13 @@
 
 			<Panel
 				title="Listings"
-				description="Each listing the import has reached, in order, with the reason given for any it skipped."
+				description="Each listing the import has reached, in order."
 			>
 				{#if refusal !== null}
-					<!-- The page below is the last one that read. The request's own
-					     figures above it are from that read too, so nothing on
-					     screen is a mixture of two. -->
-					<Banner tone="bad" action={retryListings}>
-						That page of listings could not be read, so the ones below are the last that
-						did. {refusal}
+					<!-- The page below is the last one that read, and the figures
+					     above it are from that read too. -->
+					<Banner tone="bad" title="That page of listings could not be read" action={retryListings}>
+						{refusal}
 					</Banner>
 				{/if}
 				{#if rows.length === 0}
@@ -299,7 +298,7 @@
 							: emptyListingsLine(stageOf(request))}
 					</p>
 				{:else if anyCoverage}
-					<p class="foot-note">Figures below read: {TERM_COVERAGE_LEGEND}.</p>
+					<Note>Figures below read: {TERM_COVERAGE_LEGEND}.</Note>
 				{/if}
 				{#each rows as row (row.ordinal)}
 					<div class="import-listing">
@@ -330,7 +329,7 @@
 						onnext={() => goListings(request.resources_next, listingPage + 1)}
 					/>
 				{/if}
-				<p class="foot-note">{FILES_STAY_ON_YOUR_COMPUTER}</p>
+				<Note icon="lock">{FILES_STAY_ON_YOUR_COMPUTER}</Note>
 			</Panel>
 		{/if}
 	{:else if refusal !== null}

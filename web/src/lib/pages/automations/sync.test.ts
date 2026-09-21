@@ -171,14 +171,14 @@ describe('the activity log', () => {
 	});
 });
 
-describe('the open-questions control', () => {
+describe('the unmatched-words control', () => {
 	it('carries the figure where there is one', () => {
-		expect(openQuestionsLabel(3)).toBe('Open questions (3)');
-		expect(openQuestionsLabel(0)).toBe('Open questions (0)');
+		expect(openQuestionsLabel(3)).toBe('Unmatched words (3)');
+		expect(openQuestionsLabel(0)).toBe('Unmatched words (0)');
 	});
 
 	it('drops the figure rather than claiming zero where it could not be read', () => {
-		expect(openQuestionsLabel(null)).toBe('Open questions');
+		expect(openQuestionsLabel(null)).toBe('Unmatched words');
 	});
 });
 

@@ -4,6 +4,7 @@
 	import { platformTitle } from '$lib/platforms';
 	import { standingOf } from '$lib/tes-portfolio';
 	import type { InventoryId } from '$lib/generated/vocab';
+	import Note from '$lib/Note.svelte';
 
 	let {
 		open,
@@ -127,24 +128,19 @@
 				Delete {rows.length} {rows.length === 1 ? 'resource' : 'resources'}
 			{/if}
 		</h2>
-		<p>
-			This removes the selected resources from Teachouse. Removing their marketplace listings
-			is a separate choice. No marketplace is selected automatically.
-		</p>
+		<p>Tick a marketplace below to remove its listings too.</p>
 
 		{#if refusal === null}
 		{#if withListings === 0}
-			<p class="foot-note">
-				None of the selected resources has a marketplace listing to remove.
-			</p>
+			<Note>None of the selected resources has a marketplace listing to remove.</Note>
 		{:else}
-			<p class="foot-note">
+			<Note>
 				{withListings} of {rows.length}
 				{withListings === 1 ? 'is' : 'are'} on a marketplace, across {platforms
 					.map((inventory) => platformTitle(inventory))
 					.join(', ')}, for {standing.length}
 				{standing.length === 1 ? 'listing' : 'listings'} in total.
-			</p>
+			</Note>
 		{/if}
 
 		{#if platforms.length > 0}
@@ -173,11 +169,10 @@
 					</label>
 				</div>
 			{/if}
-			<p class="foot-note">
-				{removalCount} marketplace {removalCount === 1 ? 'removal' : 'removals'} will be
-				queued. Check Sync for their results; deleting the Teachouse resources does not mean
-				those removals have finished.
-			</p>
+			<Note icon="refresh-cw">
+				Check Updates for the {removalCount}
+				{removalCount === 1 ? 'removal' : 'removals'} this queues.
+			</Note>
 		{/if}
 		{/if}
 

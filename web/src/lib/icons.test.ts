@@ -74,6 +74,35 @@ describe('the icon set', () => {
 		expect(literalNames().size).toBeGreaterThan(20);
 	});
 
+	// The verbs, as opposed to the destinations. Every page and every nav
+	// entry names its glyph in a typed field, so the type check catches a
+	// missing one; an action's glyph is passed at the call site, and a slice
+	// that reaches for `pencil` before the registry has it gets a type error
+	// in its own file rather than an answer here. This pins the set so the
+	// registry cannot lose one while the call sites are still being written.
+	it('carries a glyph for every action verb the console draws', () => {
+		const verbs = [
+			'bold',
+			'italic',
+			'list',
+			'trash-2',
+			'pencil',
+			'upload',
+			'external-link',
+			'filter',
+			'chevron-right',
+			'chevron-left',
+			'clock',
+			'credit-card',
+			'sparkles',
+			'shopping-bag',
+			'gift',
+			'calendar'
+		];
+		const absent = verbs.filter((name) => !(name in ICONS));
+		expect(absent).toEqual([]);
+	});
+
 	it('carries every name a component writes as a literal', () => {
 		const shipped = new Set<string>(ICON_NAMES);
 		const missing = [...literalNames()]

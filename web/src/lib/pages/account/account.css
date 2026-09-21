@@ -1,39 +1,59 @@
-/* The Account section's own rules: the plan card, the allowance list, the
- * one-off import ladder, the marketplace status list, and the small
- * definition list the preferences and subscription pages state a recorded
- * fact in.
+/* The Account section's own rules: the move balance, the plan and pack
+ * cards, the marketplace status list, and the small definition list the
+ * preferences and subscription pages state a recorded fact in.
  *
  * Everything else on these pages is the catalogue — `Panel`, `Field`,
- * `Button`, `Banner`, `StatusPill`, `Placeholder` — so what is here is only
- * what no component covers.
+ * `Button`, `Banner`, `StatusPill`, `Placeholder`, `Note` — so what is here
+ * is only what no component covers.
  *
  * The operator's tenant page imports this sheet as well, for the same fact
- * list and the same status rows: duplicating either into the admin sheet would
- * be two definitions of one shape.
+ * list and the same status rows: duplicating either into the admin sheet
+ * would be two definitions of one shape.
  */
 
-/* --- the plan card, the usage list and the import ladder ----------------- */
+/* --- the move balance, the plan cards and the pack grid ------------------ */
 
-/* The cadence switch sits above the card rather than inside it: the price on
-   the card is one cadence at a time, and a switch inside the thing it
-   retitles reads as part of what is being bought. */
-.acct-cadence {
+/* The balance, which is the first thing the page answers. Large because it
+   is the number the seller opened the page for, and tabular so it does not
+   shift width as it counts down. */
+.moves-count {
 	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 12px;
-	flex-wrap: wrap;
-	margin-bottom: 16px;
-}
-
-.acct-cadence .saving {
-	font-size: 12.5px;
+	align-items: baseline;
+	gap: 8px;
+	margin: 0 0 6px;
+	font-size: 13px;
 	color: var(--muted);
 }
 
-/* The Marketplaces card treatment: a border and no shadow. One card now
-   rather than a grid of four — the deployment sells one recurring plan and
-   the one-off ladder is a list of rungs, not a column of tiers. */
+.moves-count .n {
+	font-family: var(--display);
+	font-size: 40px;
+	font-weight: 600;
+	letter-spacing: -0.02em;
+	font-variant-numeric: tabular-nums;
+	color: var(--ink);
+}
+
+/* One column of cards inside a `.page-grid` cell. The grid itself is one
+   column until 701px, so on a phone every card on this page is simply
+   stacked. */
+.plan-column {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-4);
+	min-width: 0;
+}
+
+/* The five packs. They wrap rather than sitting in a fixed column count:
+   five cards of one number each read as a row a seller scans, and a fixed
+   grid would push the last one off a laptop. */
+.pack-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+	gap: 12px;
+}
+
+/* The Marketplaces card treatment: a border and no shadow. */
 .acct-plan {
 	display: flex;
 	flex-direction: column;
@@ -45,14 +65,6 @@
 	min-width: 0;
 }
 
-/* The plan the grant names. Marked rather than merely stated, because the
-   card is also the buy control and a seller already on it is managing rather
-   than purchasing. */
-.acct-plan.acct-current {
-	border-color: var(--accent);
-	box-shadow: var(--sh-1);
-}
-
 .acct-plan .acct-plan-top {
 	display: flex;
 	align-items: center;
@@ -61,16 +73,13 @@
 }
 
 .acct-plan .name {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
 	font-family: var(--display);
 	font-size: 20px;
 	font-weight: 600;
 	letter-spacing: -0.01em;
-}
-
-.acct-plan .blurb {
-	font-size: 12.5px;
-	color: var(--muted);
-	margin: 0;
 }
 
 .acct-plan .price {
@@ -93,124 +102,21 @@
 	color: var(--muted);
 }
 
-/* Always rendered, empty or not: the four cards are read across, and a note
-   on one of them would otherwise start its allowance list a line lower than
-   the three beside it. */
-.acct-plan .note {
-	font-size: 12px;
-	line-height: 1.4;
-	min-height: 1.4em;
-	color: var(--primary);
-}
-
-.acct-plan ul {
-	list-style: none;
-	margin: 4px 0 0;
-	padding: 0;
-	display: flex;
-	flex-direction: column;
-	gap: 7px;
-	flex: 1;
-}
-
-.acct-plan li {
-	display: flex;
-	align-items: flex-start;
-	gap: 8px;
-	font-size: 13px;
-	line-height: 1.35;
-}
-
-.acct-plan li .acct-tick {
-	display: grid;
-	flex: none;
-	margin-top: 1px;
-	color: var(--ok-ink);
-}
-
-/* Where the purchase controls would stand on a build that has no Paddle
-   token and price map: a sentence rather than greyed buttons nobody can
-   press. */
-.acct-checkout-note {
-	margin: 18px 0 0;
-	font-size: 13px;
-	color: var(--muted);
-}
-
-/* The buy control sits at the foot of the card it buys, because there is one
-   card and one price on it at a time. */
-.acct-plan .actions {
-	margin-top: 4px;
-}
-
-/* --- what has been used ---------------------------------------------------
-
-   The allowance list on the plan panel. Shares `.acct-tick` with the card's
-   feature list because both are a glyph and a line; the difference is that a
-   full allowance is marked, since that is the row the seller opened the page
-   about. */
-.acct-usage {
-	list-style: none;
-	margin: 14px 0 16px;
-	padding: 0;
-	display: flex;
-	flex-direction: column;
-	gap: 7px;
-}
-
-.acct-usage li {
-	display: flex;
-	align-items: flex-start;
-	gap: 8px;
-	font-size: 13px;
-	line-height: 1.35;
-}
-
-.acct-usage li .acct-tick {
-	display: grid;
-	flex: none;
-	margin-top: 1px;
-	color: var(--ok-ink);
-}
-
-.acct-usage li.acct-full {
-	color: var(--warn-ink);
-}
-
-.acct-usage li.acct-full .acct-tick {
-	color: var(--warn-ink);
-}
-
-/* --- the one-off import ladder --------------------------------------------
-
-   A list of rows rather than a grid of cards: the rungs differ in one number
-   each, and six cards of one number apiece read as six plans. The row wraps
-   at the phone width so the price keeps its own line above its button. */
-.acct-ladder {
-	list-style: none;
+.acct-plan p {
 	margin: 0;
-	padding: 0;
-	display: flex;
-	flex-direction: column;
+	font-size: 13px;
+	line-height: 1.4;
 }
 
-.acct-ladder li {
+/* The buy controls sit at the foot of the card they buy. Two of them on the
+   subscription card — yearly first, because it is the price the headline
+   states — so they wrap rather than overflow a narrow card. */
+.acct-plan .actions {
 	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 12px;
 	flex-wrap: wrap;
-	padding: 12px 2px;
-	border-top: 1px solid var(--line);
-}
-
-.acct-ladder li:first-child {
-	border-top: 0;
-}
-
-.acct-ladder .rung {
-	font-size: 13.5px;
-	font-variant-numeric: tabular-nums;
+	gap: 8px;
+	margin-top: auto;
+	padding-top: 4px;
 }
 
 /* --- a recorded fact ------------------------------------------------------ */

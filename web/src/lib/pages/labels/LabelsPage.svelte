@@ -6,11 +6,11 @@
 	import Field from '$lib/Field.svelte';
 	import { entitlementRead, limitOf } from '$lib/entitlement-read';
 	import Icon from '$lib/Icon.svelte';
+	import MenuItem from '$lib/MenuItem.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
 	import RowCard from '$lib/RowCard.svelte';
 	import { queryKeys } from '$lib/query';
-	import { remember, remembered } from '$lib/dismissal';
 	import { toast } from '$lib/toast';
 	import { LABEL_COUNTS_KEY, countAll, deleteLabel, renameLabel } from './api';
 	import {
@@ -71,10 +71,6 @@
 	}));
 
 	let search = $state('');
-	/** Read at setup rather than in an effect: this app does not render on the
-	 *  server, so storage is readable here, and an effect would draw the banner
-	 *  and then take it away in front of a seller who closed it last week. */
-	let bannerShown = $state(!remembered('labels.what-are-labels'));
 	/** Closed for the visit alone. Every label is still listed under this
 	 *  sentence -- it is the counts beside them that are missing -- so closing
 	 *  it leaves a page that still explains itself, and the counts may well be
@@ -215,6 +211,7 @@
 		icon="tag"
 		title="Labels"
 		description="Your own words for grouping resources, up to twenty on each one."
+		guide="labels-and-collections"
 	>
 		{#snippet aside()}
 			<Button
@@ -229,18 +226,6 @@
 		{/snippet}
 	</PageHead>
 
-	{#if bannerShown}
-		<Banner
-			title="What are labels?"
-			onDismiss={() => {
-				bannerShown = false;
-				remember('labels.what-are-labels');
-			}}
-		>
-			Use labels to group and filter your resources. Each label's colour comes from its
-			name.
-		</Banner>
-	{/if}
 
 	<!-- There is no empty label to create: a label exists exactly while a
 	     resource carries it, which is what `GET /v1/labels` answers and what
@@ -264,7 +249,7 @@
 		<p class="quiet">Loading…</p>
 	{:else if labels.isError}
 		<Banner tone="bad" title="We could not read your labels">
-			Nothing has changed. We could not load the list just now.
+			Nothing has changed.
 			{#snippet action()}
 				<Button onclick={() => labels.refetch()}>Try again</Button>
 			{/snippet}
@@ -273,7 +258,7 @@
 		<Placeholder
 			icon="tag"
 			headline="Create your first label to get started."
-			body="A label is your own word for a group of resources; add one on a resource and it appears here."
+			body="Add one on a resource and it appears here."
 		>
 			{#snippet actions()}
 				<Button tier="additive" href="/resources" icon="layout-list">Go to Resources</Button>
@@ -301,7 +286,7 @@
 				title="Some counts are missing"
 				onDismiss={() => (uncountedShown = false)}
 			>
-				Every label is listed below. We could not read all of the counts.
+				Every label is listed below.
 				{#snippet action()}
 					<Button onclick={() => counts.refetch()}>Try again</Button>
 				{/snippet}
@@ -333,22 +318,25 @@
 								     offer a control whose refusal would say the label is not
 								     there. -->
 								{#if !row.system}
-									<button
-										type="button"
-										role="menuitem"
+									<MenuItem
+										icon="pencil"
 										onclick={() => {
 											close();
 											startRename(row.name);
-										}}>Rename</button
+										}}
 									>
-									<button
-										type="button"
-										role="menuitem"
+										Rename
+									</MenuItem>
+									<MenuItem
+										icon="trash-2"
+										danger
 										onclick={() => {
 											close();
 											startDelete(row.name);
-										}}>Delete</button
+										}}
 									>
+										Delete
+									</MenuItem>
 								{/if}
 							{/snippet}
 						</RowCard>
@@ -358,7 +346,7 @@
 								<Field
 									label="New name"
 									id="label-rename"
-									hint={`At most ${LABEL_MAX_CHARS} characters; every resource that has it keeps it.`}
+									hint={`At most ${LABEL_MAX_CHARS} characters.`}
 								>
 									<!-- No `maxlength`: it counts UTF-16 code units, so a name
 									     written in astral characters would be cut at thirty while

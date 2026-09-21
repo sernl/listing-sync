@@ -25,6 +25,7 @@
 	import { createLedger, type Ledger } from '$lib/ledger';
 	import { machineHere } from '$lib/machine.svelte';
 	import { SIGN_BACK_IN, signedOutHere } from '$lib/machine-here';
+	import Note from '$lib/Note.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Pagination from '$lib/Pagination.svelte';
 	import Panel from '$lib/Panel.svelte';
@@ -606,10 +607,7 @@
 		</Panel>
 
 		{#if stage === 'selecting'}
-			<Panel
-				title="Choose what to bring across"
-				description="Only what you tick is opened and read. Everything else is left where it is."
-			>
+			<Panel title="Choose what to bring across">
 				{@render filterRow('Search resources')}
 
 				{#if wholeRun}
@@ -691,7 +689,7 @@
 								: `Import ${chosen.size} ${chosen.size === 1 ? 'resource' : 'resources'}`}
 					</Button>
 				</div>
-				<p class="foot-note">{READING_HAPPENS_ON_YOUR_COMPUTER}</p>
+				<Note icon="lock">{READING_HAPPENS_ON_YOUR_COMPUTER}</Note>
 			</Panel>
 		{/if}
 
@@ -707,7 +705,7 @@
 		{#if stage === 'reviewing' || stage === 'confirming' || stage === 'committing'}
 			<Panel
 				title="Add them to your catalogue"
-				description="Everything that is ready is created here. Anything you have left for later waits."
+				description="Everything that is ready is created here."
 			>
 				{#if commitRefusal !== null}
 					<Banner tone="bad" title="That did not finish">{commitRefusal}</Banner>
@@ -736,7 +734,7 @@
 		{#if stage !== 'selecting'}
 			<Panel
 				title="Resources"
-				description="Each resource this import reached. Search covers the whole import, not this page."
+				description="Each resource this import reached."
 			>
 				{@render filterRow('Search resources')}
 				{#if rows.length === 0}
@@ -762,7 +760,7 @@
 					</div>
 				{/each}
 				{@render pager('Resources')}
-				<p class="foot-note">{FILES_STAY_ON_YOUR_COMPUTER}</p>
+				<Note icon="lock">{FILES_STAY_ON_YOUR_COMPUTER}</Note>
 			</Panel>
 		{/if}
 	{:else if refusal !== null}

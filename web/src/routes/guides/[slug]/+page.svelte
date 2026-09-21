@@ -11,6 +11,7 @@
 	import { IMAGE_PRIVACY, loadsRemoteImages } from '$lib/pages/guides/editor';
 	import { taxonLabel } from '$lib/pages/guides/filters';
 	import '$lib/pages/guides/guides.css';
+	import { capture } from '$lib/posthog';
 
 	const slug = $derived(page.params.slug ?? '');
 	const now = Date.now();
@@ -45,6 +46,21 @@
 	/** Whether this guide loads a picture from another site, which is the only
 	 *  case the privacy line has anything to say about. */
 	const remoteImages = $derived(view !== undefined && loadsRemoteImages(view.html));
+
+	// One row per guide actually read, once: the effect re-runs whenever the
+	// query settles again, and a reader who scrolls is not a second opening.
+	let openedSlug: string | null = null;
+	$effect(() => {
+		if (view === undefined || openedSlug === view.slug) {
+			return;
+		}
+		openedSlug = view.slug;
+		capture('guide_opened', {
+			slug: view.slug,
+			taxon: view.topic?.slug ?? null,
+			signed_in: page.data.session !== null && page.data.session !== undefined
+		});
+	});
 </script>
 
 <div class="page">

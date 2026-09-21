@@ -1,313 +1,373 @@
 <script lang="ts">
-	import { createQuery } from '@tanstack/svelte-query';
-	import { api } from '$lib/api';
-	import { identity } from '$lib/auth-client';
+	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { onMount } from 'svelte';
+	import { page } from '$app/state';
+	import { ApiFailure, api } from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
-	import { capabilityLines, grantNotice, migrationsLine, usageLines } from '$lib/entitlement';
-	import { entitlementRead, readOf } from '$lib/entitlement-read';
-	import { FOUNDING, IMPORT_LADDER, LADDER_ABOVE, PLANS, AI } from '$lib/generated/plans';
+	import { movesLimit } from '$lib/entitlement';
+	import { FOUNDING, PACKS, SERVICES } from '$lib/generated/plans';
+	import { type PriceKey } from '$lib/generated/vocab';
 	import Icon from '$lib/Icon.svelte';
+	import Note from '$lib/Note.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
-	import { PADDLE_CONFIG, openCheckout, planPriceKey, rungPriceKey } from '$lib/paddle';
+	import { capture } from '$lib/posthog';
 	import { queryKeys } from '$lib/query';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import { toast } from '$lib/toast';
-	import Toggle from '$lib/Toggle.svelte';
-	import { paddleBadge } from '$lib/pages/account/tones';
 	import {
-		CHECKOUT_DORMANT,
-		checkoutLabel,
+		bestValuePack,
+		checkoutOutcome,
 		dollars,
-		monthsFreeOnAnnual,
-		periodLabel,
-		priceOf,
-		rungLabel,
-		standingFor,
-		type Cadence
+		expiryLine,
+		foundingClosesLabel,
+		foundingOpen,
+		moves,
+		packsBySize,
+		perMonth,
+		renewsLine,
+		syncPlan
 	} from '$lib/pages/account/plans';
+	import { readIntent } from '$lib/pages/account/intent';
 	import '$lib/pages/account/account.css';
 
-	// The plan, under the key the shell already filled, so opening this page
-	// asks nothing it has not asked.
-	const entitlement = createQuery(() => entitlementRead);
+	// Everything priced on this page comes from the generated table, which is
+	// `tam-limits`' own and the same figures the checkout charges. Nothing
+	// here writes a price as a literal: a number typed into markup is a price
+	// that drifts from the one Stripe takes.
+	const sync = syncPlan();
+	const packs = packsBySize();
+	const best = bestValuePack();
+	const service = SERVICES[0];
+	const founding = FOUNDING;
 
-	// The price table as the server holds it. The same figures are compiled
-	// into `$lib/generated/plans` by `just web-typegen` and `just web-check`
-	// fails if the two differ, so the generated copy stands while this read is
-	// in flight rather than the page rendering a priceless grid for a moment.
-	const served = createQuery(() => ({
-		queryKey: queryKeys.plans,
-		queryFn: () => api.plans(),
-		staleTime: Infinity
-	}));
+	// The allowance sentence is `entitlement.ts`' own, because the plan card
+	// and the gate that refuses a move must promise the same thing in the
+	// same words.
+	const allowance = sync === null ? null : movesLimit(sync.capabilities);
 
-	// Paddle's own record, which the plan panel still states: a grant says
-	// what the seller is entitled to, and this says what the card is doing.
+	// Read once at load rather than in a `$derived`: whether the offer is open
+	// is a fact about today, and re-evaluating it per render would make the
+	// card flicker off mid-session at midnight on the closing day.
+	const foundingIsOpen = foundingOpen(founding);
+
+	const queryClient = useQueryClient();
+
 	const billing = createQuery(() => ({
 		queryKey: queryKeys.billing,
 		queryFn: () => api.billing()
 	}));
 
-	// The checkout needs the organisation the webhook will be told about, and
-	// the address Paddle should prefill. Both share the keys the rest of the
-	// console reads them under, so neither costs a second request.
-	const organisation = createQuery(() => ({
-		queryKey: queryKeys.org,
-		queryFn: () => api.org()
-	}));
+	const held = $derived(billing.data);
+	const balance = $derived(held?.moves);
+	const subscribed = $derived(held?.plan === 'subscriber' || held?.plan === 'studio');
+	const expiry = $derived(balance === undefined ? null : expiryLine(balance));
+	const renews = $derived(renewsLine(held?.renews_at));
 
-	const profile = createQuery(() => ({
-		queryKey: queryKeys.identity,
-		queryFn: () => identity()
-	}));
+	// What Stripe handed back, and which gate sent the seller here. The gate
+	// is a query parameter so the paywall that linked here is what the
+	// checkout event is attributed to, rather than every purchase looking as
+	// though it started on this page.
+	const outcome = $derived(checkoutOutcome(page.url.searchParams.get('checkout')));
+	const gate = $derived(page.url.searchParams.get('gate') ?? 'plans_page');
 
-	const read = $derived(readOf(entitlement));
-	const table = $derived(served.data?.plans ?? PLANS);
-	const ladder = $derived(served.data?.import_ladder ?? IMPORT_LADDER);
-	const above = $derived(served.data?.ladder_above ?? LADDER_ABOVE);
-	const founding = $derived(served.data?.founding ?? FOUNDING);
-	const ai = $derived(served.data?.ai ?? AI);
-	const standing = $derived(standingFor(read, table));
+	// Which checkout was opened, across the redirect to Stripe and back. The
+	// browser leaves the page entirely, so the fact cannot live in a
+	// component: `sessionStorage` is the narrowest place that survives the
+	// round trip and dies with the tab.
+	const OPENED_KEY = 'teachouse.checkout_opened';
 
-	const held = $derived(entitlement.data);
-	const caps = $derived(held?.capabilities);
-	const usage = $derived(held?.usage);
-	const notice = $derived(held === undefined ? null : grantNotice(held));
+	// What the landing page's CTA asked to buy, carried across the signup the
+	// seller had to do first. `$lib/pages/account/intent` holds the record and
+	// the rules about it; this is its only reader, and reading spends it — an
+	// intent that survived a refused checkout would reopen Stripe on every
+	// visit.
 
-	const subscription = $derived(billing.data?.subscription ?? null);
+	/** Why the checkout the landing page promised did not open, or null. Said
+	 *  on the page rather than in a toast: nothing here was clicked, so the
+	 *  sentence has to stand beside the options it is asking the seller to
+	 *  pick from again. */
+	let intentRefused = $state<string | null>(null);
 
-	// The one recurring plan this deployment sells. `studio` ships priced and
-	// unsold, so it is not a card here: a card for it would offer a plan no
-	// checkout can buy.
-	const recurring = $derived(table.find((plan) => plan.id === 'subscriber' && plan.sold));
-	const monthsFree = $derived(recurring === undefined ? null : monthsFreeOnAnnual(recurring));
+	let working = $state<PriceKey | null>(null);
+	let portalOpening = $state(false);
 
-	// Null while the read has not answered, so the control cannot be rendered
-	// over a standing that does not know what it would be changing.
-	const label = $derived(checkoutLabel(read));
+	// Set while this page is the one navigating away, so the `pagehide` the
+	// redirect itself fires is not reported as an abandonment.
+	let leaving = false;
 
-	let yearly = $state(false);
-	const cadence = $derived<Cadence>(yearly ? 'annual' : 'monthly');
-
-	// The controls render only where the build was given Paddle's client token
-	// and price map. With neither, the sentence stands in their place and
-	// Paddle's script is never loaded.
-	const checkout = PADDLE_CONFIG;
-	let opening = $state<string | null>(null);
-
-	/** Why a purchase control cannot run, or null where it can.
-	 *
-	 *  The price key is checked here rather than at the click: a build whose
-	 *  map is missing a rung must say so on the button, because a button that
-	 *  looked buyable and then threw is the shape that gets reported as a
-	 *  broken checkout. */
-	function purchaseReason(priceKey: string): string | null {
-		if (organisation.data === undefined) {
-			return 'The organisation this would be billed to has not been read yet.';
+	function opened(): { price_key: string; origin_gate: string } | null {
+		const raw = sessionStorage.getItem(OPENED_KEY);
+		if (raw === null) {
+			return null;
 		}
-		if (checkout !== null && checkout.prices[priceKey] === undefined) {
-			return 'This deployment has no price configured for that option.';
-		}
-		if (opening !== null) {
-			return 'A checkout is opening.';
-		}
-		return null;
-	}
-
-	async function buy(priceKey: string) {
-		const org = organisation.data?.id;
-		if (checkout === null || org === undefined) {
-			return;
-		}
-		opening = priceKey;
 		try {
-			await openCheckout(checkout, priceKey, org, profile.data?.email);
+			return JSON.parse(raw) as { price_key: string; origin_gate: string };
 		} catch {
-			toast('error', 'The checkout could not be opened.');
-		} finally {
-			opening = null;
+			return null;
 		}
 	}
 
-	// "Talk to us" above the top rung. No support address reaches the console
-	// — neither the session nor the organisation view carries one, and the
-	// landing page's own is still null — so it lands on the guides rather than
-	// on a `mailto:` that reaches nobody.
-	const talkHref = '/guides';
+	onMount(() => {
+		if (outcome === 'success') {
+			// The purchase landed, so the checkout that opened is spent and
+			// the balance on this page is stale: Stripe's webhook writes the
+			// moves, and this asks the server again rather than adding them
+			// in the browser.
+			sessionStorage.removeItem(OPENED_KEY);
+			void queryClient.invalidateQueries({ queryKey: queryKeys.billing });
+		}
+
+		// Straight on to the checkout the landing page promised, but never on
+		// a return from Stripe: a seller who cancelled would be sent back
+		// into the same checkout they just left.
+		if (outcome === null) {
+			const wanted = readIntent()?.price ?? null;
+			if (wanted !== null) {
+				void buy(wanted, 'landing');
+			}
+		}
+
+		function abandoned() {
+			if (leaving || outcome === 'success') {
+				return;
+			}
+			const record = opened();
+			if (record === null) {
+				return;
+			}
+			sessionStorage.removeItem(OPENED_KEY);
+			capture('checkout_abandoned', record);
+		}
+
+		window.addEventListener('pagehide', abandoned);
+		return () => window.removeEventListener('pagehide', abandoned);
+	});
+
+	async function buy(priceKey: PriceKey, origin: string = gate) {
+		working = priceKey;
+		try {
+			const { url } = await api.billingCheckout(priceKey);
+			sessionStorage.setItem(
+				OPENED_KEY,
+				JSON.stringify({ price_key: priceKey, origin_gate: origin })
+			);
+			capture('checkout_opened', { price_key: priceKey, origin_gate: origin });
+			leaving = true;
+			window.location.assign(url);
+		} catch (failure) {
+			working = null;
+			const why =
+				failure instanceof ApiFailure ? failure.message : 'The checkout did not open.';
+			if (origin === 'landing') {
+				// The API's own sentence where it gave one; otherwise the one
+				// thing left to say, which is what to do next.
+				intentRefused =
+					failure instanceof ApiFailure ? why : 'Pick an option below to try again.';
+				return;
+			}
+			toast('error', why);
+		}
+	}
+
+	async function manage() {
+		portalOpening = true;
+		try {
+			const { url } = await api.billingPortal();
+			leaving = true;
+			window.location.assign(url);
+		} catch (failure) {
+			portalOpening = false;
+			toast(
+				'error',
+				failure instanceof ApiFailure ? failure.message : 'Billing did not open.'
+			);
+		}
+	}
+
+	/** Why a buy control cannot run, or null where it can. */
+	const busy = $derived(working === null ? null : 'A checkout is opening.');
 </script>
 
 <div class="page">
-	<PageHead
-		icon="credit-card"
-		title="Subscription"
-		description="What you are on, what it allows, and the two ways to buy more."
-	/>
+	<PageHead icon="credit-card" title="Plan and moves" guide="plans" />
 
-	<Panel title="Your plan" description="Read from the server, which is also what enforces it.">
-		{#if entitlement.isPending}
+	{#if outcome === 'success'}
+		<Banner tone="ok" title="Payment taken">Your moves are on the card above.</Banner>
+	{:else if outcome === 'cancel'}
+		<Banner tone="info" title="Checkout closed">Pick an option below to try again.</Banner>
+	{:else if intentRefused !== null}
+		<Banner tone="bad" title="Checkout did not open">{intentRefused}</Banner>
+	{/if}
+
+	<Panel title="Your moves">
+		{#if billing.isPending}
 			<p class="quiet">Loading…</p>
-		{:else if entitlement.isError}
-			<p class="quiet">We could not read your plan.</p>
+		{:else if billing.isError || balance === undefined}
+			<p class="quiet">We could not read your balance.</p>
 		{:else}
-			{#if notice !== null}
-				<Banner tone="info" title="Set by Teachouse">
-					{notice} If that is not what you expected, ask us before buying anything here.
-				</Banner>
+			<p class="moves-count"><span class="n">{balance.available}</span> available</p>
+			{#if expiry !== null}
+				<p class="quiet">{expiry}</p>
 			{/if}
-
-			<p>{standing.headline}</p>
-			<p class="quiet">{standing.detail}</p>
-
-			{#if caps !== undefined && usage !== undefined}
-				<ul class="acct-usage">
-					{#each usageLines(usage, caps) as row (row.limit)}
-						<li class:acct-full={row.full}>
-							<span class="acct-tick"><Icon name="circle-check" size={15} /></span>
-							{row.line}
-						</li>
-					{/each}
-					<li>
-						<span class="acct-tick"><Icon name="arrow-right-left" size={15} /></span>
-						{migrationsLine(usage, caps)}
-					</li>
-				</ul>
-			{/if}
-
-			{#if subscription !== null}
-				<dl class="acct-detail">
-					<dt>Status</dt>
-					<dd>
-						<StatusPill tone={paddleBadge(subscription.status)} label={subscription.status} />
-					</dd>
-					<dt>Current period ends</dt>
-					<dd>{periodLabel(subscription)}</dd>
-					<dt>Last recorded</dt>
-					<dd>{new Date(subscription.occurred_at).toLocaleString()}</dd>
-				</dl>
-				<p class="foot-note">
-					Subscription <span class="mono">{subscription.paddle_subscription_id}</span> · customer
-					<span class="mono">{subscription.paddle_customer_id}</span>. The status is Paddle's own
-					word for it, passed through rather than translated.
-				</p>
-			{/if}
+			<Note icon="info">
+				<a href="/guides/plans">Read how moves are spent.</a>
+			</Note>
 		{/if}
 	</Panel>
 
-	{#if checkout === null}
-		<Panel title="The two ways to buy">
-			<p class="acct-checkout-note">{CHECKOUT_DORMANT}</p>
-		</Panel>
-	{:else}
-		<Panel
-			title="Subscribe"
-			description="Everything, every month, with the migration allowance that keeps it going."
-		>
-			{#if recurring === undefined}
-				<p class="quiet">No subscription is on sale in this deployment.</p>
-			{:else}
-				{@const price = priceOf(recurring, cadence)}
-				{@const priceKey = planPriceKey(recurring.id, cadence)}
-				{@const refusal = purchaseReason(priceKey)}
-				<div class="acct-cadence">
-					<Toggle bind:checked={yearly} label="Pay yearly" />
-					{#if monthsFree !== null}
-						<span class="saving">Paying yearly costs {monthsFree} months less.</span>
-					{/if}
-				</div>
-
+	<div class="page-grid">
+		<div class="plan-column">
+			{#if sync !== null && sync.yearly_cents !== null && sync.monthly_cents !== null}
 				<div class="acct-plan">
 					<div class="acct-plan-top">
-						<span class="name">{recurring.name}</span>
-						{#if standing.plan === recurring.id}
+						<span class="name">
+							<Icon name="credit-card" size={16} />
+							{sync.name}
+						</span>
+						{#if subscribed}
 							<StatusPill tone="ok" label="current" />
 						{/if}
 					</div>
 					<div class="price">
-						<span class="n">{price.amount}</span>
-						{#if price.per}<span class="per">{price.per}</span>{/if}
+						<span class="n">{perMonth(sync.yearly_cents)}</span>
+						<span class="per">a month, billed yearly</span>
 					</div>
-					<div class="note">
-						{#if recurring.trial_days > 0}
-							{recurring.trial_days}-day free trial, card required
+					<p class="quiet">
+						{dollars(sync.yearly_cents)} a year, or {dollars(sync.monthly_cents)} a month.
+					</p>
+					{#if allowance !== null}
+						<p>{allowance}.</p>
+					{/if}
+					{#if subscribed}
+						{#if renews !== null}
+							<p class="quiet">{renews}</p>
 						{/if}
-					</div>
-					<ul>
-						{#each capabilityLines(recurring.capabilities) as line (line)}
-							<li>
-								<span class="acct-tick"><Icon name="circle-check" size={15} /></span>
-								{line}
-							</li>
-						{/each}
-					</ul>
-					{#if label !== null}
 						<div class="actions">
 							<Button
 								tier="primary"
-								disabled={refusal !== null}
-								reason={refusal ?? undefined}
-								onclick={() => buy(priceKey)}
+								disabled={portalOpening || held?.portal_available === false}
+								reason={portalOpening
+									? 'Billing is opening.'
+									: held?.portal_available === false
+										? 'Billing opens once a payment has been taken.'
+										: undefined}
+								onclick={manage}
 							>
-								{opening === priceKey ? 'Opening…' : label}
+								{portalOpening ? 'Opening…' : 'Manage billing'}
 							</Button>
 						</div>
 					{:else}
-						<p class="acct-checkout-note">{standing.detail}</p>
+						<div class="actions">
+							<Button
+								tier="primary"
+								disabled={busy !== null}
+								reason={busy ?? undefined}
+								onclick={() => buy('sync_yearly')}
+							>
+								{working === 'sync_yearly' ? 'Opening…' : 'Choose yearly'}
+							</Button>
+							<Button
+								disabled={busy !== null}
+								reason={busy ?? undefined}
+								onclick={() => buy('sync_monthly')}
+							>
+								{working === 'sync_monthly' ? 'Opening…' : 'Choose monthly'}
+							</Button>
+						</div>
 					{/if}
 				</div>
 			{/if}
-		</Panel>
+		</div>
 
-		<Panel
-			title="Catalogue Import"
-			description="A one-off purchase that brings a back catalogue in and publishes it once. No subscription."
-		>
-			<ul class="acct-ladder">
-				{#each ladder as rung (rung.up_to)}
-					{@const priceKey = rungPriceKey(rung.up_to)}
-					{@const refusal = purchaseReason(priceKey)}
-					<li>
-						<span class="rung">{rungLabel(rung)}</span>
+		<div class="plan-column">
+			{#if foundingIsOpen}
+				<div class="acct-plan">
+					<div class="acct-plan-top">
+						<span class="name">
+							<Icon name="gift" size={16} />
+							Founding {founding.places}
+						</span>
+					</div>
+					<div class="price">
+						<span class="n">{dollars(founding.year_one_cents)}</span>
+						<span class="per">first year</span>
+					</div>
+					<p>
+						Then {dollars(founding.ongoing_cents)} a year for years 2–{founding.ongoing_years},
+						with {founding.extra_moves} extra moves.
+					</p>
+					<p class="quiet">{foundingClosesLabel(founding)}</p>
+					<div class="actions">
 						<Button
-							disabled={refusal !== null}
-							reason={refusal ?? undefined}
-							onclick={() => buy(priceKey)}
+							tier="primary"
+							disabled={busy !== null}
+							reason={busy ?? undefined}
+							onclick={() => buy('founding_yearly')}
 						>
-							{opening === priceKey ? 'Opening…' : `Buy ${dollars(rung.price_cents)}`}
+							{working === 'founding_yearly' ? 'Opening…' : 'Take a founding place'}
 						</Button>
-					</li>
-				{/each}
-				<li>
-					<span class="rung">More than {ladder[ladder.length - 1]?.up_to} resources</span>
-					<Button href={talkHref}>{above}</Button>
-				</li>
-			</ul>
-			<p class="foot-note">
-				The rung counts resources committed to your catalogue after duplicate merges, so 60
-				listings that merge into 45 cost the 50 rung.
-			</p>
-		</Panel>
+					</div>
+				</div>
+			{/if}
 
-		<Panel title="Founding {founding.places}">
-			<p>
-				{founding.discount_year_one_pct}% off your first year, {founding.discount_ongoing_pct}% off
-				for {founding.ongoing_years} years after that, and your first {founding.free_imports}
-				resources imported free. {founding.places} places.
-			</p>
-			<p class="foot-note">
-				Tell us when you subscribe and we apply it to your account. The ongoing discount ends
-				after {founding.ongoing_years} years.
-			</p>
-		</Panel>
+			{#if service !== undefined}
+				<div class="acct-plan">
+					<div class="acct-plan-top">
+						<span class="name">
+							<Icon name="sparkles" size={16} />
+							{service.name}
+						</span>
+					</div>
+					<div class="price">
+						<span class="n">{dollars(service.price_cents)}</span>
+						<span class="per">one off</span>
+					</div>
+					<p>We move your back catalogue for you.</p>
+					<div class="actions">
+						<Button
+							disabled={busy !== null}
+							reason={busy ?? undefined}
+							onclick={() => buy(service.key)}
+						>
+							{working === service.key ? 'Opening…' : 'Book a move'}
+						</Button>
+					</div>
+				</div>
+			{/if}
+		</div>
+	</div>
 
-		{#if ai.status === 'coming_soon'}
-			<Panel title="AI auto-fill">
-				<p>
-					Coming soon. Your subscription will include {ai.included_fills} fills a month, with {ai.add_on_fills}
-					more for {dollars(ai.add_on_cents)}. Nothing is charged for it today.
-				</p>
-			</Panel>
-		{/if}
-	{/if}
+	<Panel title="Move packs">
+		<div class="pack-grid">
+			{#each packs as pack (pack.key)}
+				<div class="acct-plan">
+					<div class="acct-plan-top">
+						<span class="name">
+							<Icon name="shopping-bag" size={16} />
+							{moves(pack.moves)}
+						</span>
+						{#if best !== null && best.key === pack.key}
+							<StatusPill tone="ok" label="best value" />
+						{/if}
+					</div>
+					<div class="price">
+						<span class="n">{dollars(pack.price_cents)}</span>
+						<span class="per">{dollars(pack.per_move_cents)} a move</span>
+					</div>
+					<p class="quiet">Valid 12 months.</p>
+					<div class="actions">
+						<Button
+							disabled={busy !== null}
+							reason={busy ?? undefined}
+							onclick={() => buy(pack.key)}
+						>
+							{working === pack.key ? 'Opening…' : `Buy ${dollars(pack.price_cents)}`}
+						</Button>
+					</div>
+				</div>
+			{/each}
+		</div>
+	</Panel>
 </div>

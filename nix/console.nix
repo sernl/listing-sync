@@ -12,19 +12,18 @@
   importNpmLock,
   coreWasm,
   # Every value below is substituted into the bundle the browser downloads, so
-  # none of them is a secret. `web/src/lib/captcha.ts`, `social-providers.ts` and
-  # `paddle.ts` each read one at build time and treat an absent value as the
-  # feature being off, which is why the defaults are empty: a console built with
-  # no argument has a dormant widget, no social buttons and no checkout.
+  # none of them is a secret. `web/src/lib/captcha.ts` and
+  # `social-providers.ts` each read one at build time and treat an absent
+  # value as the feature being off, which is why the defaults are empty: a
+  # console built with no argument has a dormant widget and no social buttons.
+  #
+  # Billing carries no build-time value at all. It did until the rail moved to
+  # Stripe: the console now posts a price key to its own origin and follows
+  # the URL the server answers, so there is no publishable token and no price
+  # map in the bundle, and the two-sided key-rename hazard between them went
+  # with it.
   turnstileSiteKey ? "",
   socialProviders ? "",
-  paddleClientToken ? "",
-  # A JSON object of price keys to Paddle price identifiers, because the
-  # deployment sells a recurring plan at two cadences and five one-off ladder
-  # rungs; `web/src/lib/paddle.ts` treats an unparseable or empty map as no
-  # checkout at all.
-  paddlePrices ? "",
-  paddleEnvironment ? "",
 }:
 stdenv.mkDerivation {
   pname = "teachouse-console";
@@ -49,9 +48,6 @@ stdenv.mkDerivation {
   env = {
     VITE_TURNSTILE_SITE_KEY = turnstileSiteKey;
     VITE_SOCIAL_PROVIDERS = socialProviders;
-    VITE_PADDLE_CLIENT_TOKEN = paddleClientToken;
-    VITE_PADDLE_PRICES = paddlePrices;
-    VITE_PADDLE_ENVIRONMENT = paddleEnvironment;
   };
 
   preBuild = ''

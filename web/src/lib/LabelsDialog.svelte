@@ -2,6 +2,7 @@
 	import { ApiFailure, api, type LabelView } from '$lib/api';
 	import type { InventoryRow } from '$lib/inventory';
 	import type { LabelColour } from '$lib/generated/vocab';
+	import Note from '$lib/Note.svelte';
 
 	/** The class each stored colour renders as.
 	 *
@@ -180,7 +181,7 @@
 		{/if}
 
 		{#if suggestions.length > 0}
-			<p class="foot-note">Labels you already use:</p>
+			<Note>Labels you already use:</Note>
 			<div class="chips">
 				{#each suggestions as label (label.name)}
 					<button
@@ -195,10 +196,7 @@
 			</div>
 		{/if}
 
-		<p class="foot-note">
-			These are added to what each item already carries; nothing is taken away. To remove a label
-			from one item, open the item.
-		</p>
+		<Note>Open an item to take a label off it.</Note>
 
 		{#if refusal !== null}
 			<p class="refusal">{refusal}</p>

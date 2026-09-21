@@ -1,9 +1,21 @@
 ---
 import { faqs } from '../pricing.js';
+import { tesBands } from '../tes-bands.js';
 
 /* The questions and their answers live in `src/pricing.js` beside the figures
    they quote, which come from the server's plan table; this component only
-   draws them. */
+   draws them. They are `<details>` rather than a list of paragraphs: twelve
+   answers open at once is a wall, and the browser's own disclosure needs no
+   script to work.
+
+   The Tes band calculator under them carries the one piece of client script
+   on this site besides the desktop redirect. It is bundled from this
+   component, so it is served from our own origin like every other byte here
+   and the landing CSP covers it. Its bands come from `src/tes-bands.js`,
+   which the browser can import without dragging the generated plan table
+   into the page with it. */
+
+const top = tesBands[tesBands.length - 1];
 ---
 
 <section class="section" id="faq">
@@ -11,16 +23,82 @@ import { faqs } from '../pricing.js';
 		<h2>Common questions</h2>
 		<p class="lede">The ones we are asked first.</p>
 		<div class="panel">
-			<dl class="faq">
+			<div class="faq">
 				{
 					faqs.map((item) => (
-						<div class="qa">
-							<dt>{item.q}</dt>
-							<dd>{item.a}</dd>
-						</div>
+						<details class="qa">
+							<summary>{item.q}</summary>
+							<p>{item.a}</p>
+						</details>
 					))
 				}
-			</dl>
+			</div>
+		</div>
+
+		<div class="panel calc" data-tes-calc>
+			<h3>Tes pays by band</h3>
+			<p class="calc-lede">
+				Tes reads your last twelve months of sales and pays every later sale at that band&rsquo;s
+				rate.
+			</p>
+			<label class="calc-label" for="tes-sales">
+				Enter your last 12 months of Tes sales (&pound;)
+			</label>
+			<input
+				class="calc-input"
+				id="tes-sales"
+				type="number"
+				min="0"
+				step="1"
+				inputmode="decimal"
+				autocomplete="off"
+			/>
+			<p class="calc-out" data-tes-out role="status" aria-live="polite"></p>
+			<p class="calc-note">
+				The top band pays {top.rate}% and Teachouse changes none of this &mdash; the bands are
+				Tes&rsquo;s own.
+			</p>
 		</div>
 	</div>
 </section>
+
+<script>
+	import { tesBands } from '../tes-bands.js';
+
+	/* One input, one sentence. The bands are cumulative on the seller's own
+	   trailing twelve months, so the useful answer is the distance to the next
+	   one rather than the rate they are on: a seller £120 short of 70% is
+	   looking at a different decision from one £4,000 short of 80%. */
+
+	/** "4,000" — grouped here rather than by `toLocaleString`, which needs an
+	 * ICU build this page cannot assume of a visitor's browser engine. */
+	const grouped = (n) => {
+		const whole = String(Math.ceil(n));
+		return whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+	};
+
+	const sentence = (sales) => {
+		const index = tesBands.findIndex((band) => band.upTo === null || sales < band.upTo);
+		const band = tesBands[index];
+		const next = tesBands[index + 1];
+		if (next === undefined) {
+			return `You are in the top band: every sale pays ${band.rate}%.`;
+		}
+		return `£${grouped(band.upTo - sales)} more and every later sale pays ${next.rate}% instead of ${band.rate}%.`;
+	};
+
+	for (const calc of document.querySelectorAll('[data-tes-calc]')) {
+		const input = calc.querySelector('input');
+		const out = calc.querySelector('[data-tes-out]');
+		if (input === null || out === null) {
+			continue;
+		}
+		const update = () => {
+			const sales = Number(input.value);
+			out.textContent =
+				input.value.trim() === '' || !Number.isFinite(sales) || sales < 0 ? '' : sentence(sales);
+		};
+		input.addEventListener('input', update);
+		update();
+	}
+</script>

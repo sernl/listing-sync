@@ -1,6 +1,7 @@
 import type { NativeValueView, PriceIntent, VocabularyView } from '$lib/api';
 import type { Tab } from '$lib/TabBar.svelte';
 import type { InventoryId, TermKind } from '$lib/generated/vocab';
+import type { IconName } from '$lib/icons';
 import { formatPrice } from '$lib/listings-view';
 import { SHORT_NAME } from '$lib/platforms';
 import type {
@@ -30,26 +31,26 @@ export const MAPPINGS_HREF = '/automations/mappings';
  *  to name a different path from the navigation. */
 export const RULE_PAGE: Record<RuleKind, { href: string; title: string }> = {
 	pricing: { href: PRICING_HREF, title: 'Pricing' },
-	mapping: { href: MAPPINGS_HREF, title: 'Mappings' }
+	mapping: { href: MAPPINGS_HREF, title: 'Target terms' }
 };
 
-/** What a pricing rule does for a seller, in the words a teacher would use.
- *  Read by the Automations landing card and by the page's own lead. */
+/** What a pricing rule does for a seller, in one sentence. The conversion,
+ *  the rounding and the approval step are the `target-prices` guide's; this
+ *  is the line the page and the Automations card lead with. */
 export const WHAT_PRICING_IS =
-	'Say what a resource should cost on the marketplace you are sending it to — a conversion ' +
-	'from the price you already charge, taken to a penny the way you choose. Teachouse ' +
-	'proposes the figures; nothing is used until you approve it.';
+	'Say what a resource should cost on the marketplace you are sending it to.';
 
 export const WHAT_MAPPING_IS =
-	'Say which of the target marketplace’s own terms your resources should land under — its ' +
-	'licence and its resource type. Teachouse proposes the closest fit it has evidence for; ' +
-	'you edit it and approve it, and only then does it apply.';
+	'Say which of the target marketplace’s own terms your resources land under.';
 
-/** Proposal records are not changes to source resources or marketplace listings. */
-export const NOTHING_APPLIES_UNTIL_APPROVED =
-	'A preview shows source values, your saved target choices and the proposed changes. ' +
-	'Approval saves those choices; publishing is a separate action. Rules only apply to future ' +
-	'operations without another preview when you explicitly enable “Apply automatically”.';
+/** The guide each rule page deep-links to, so the page and its card cannot
+ *  come to name different slugs. */
+export const PRICING_GUIDE = 'target-prices';
+export const MAPPING_GUIDE = 'target-terms';
+
+/** Proposal records are not changes to source resources or marketplace
+ *  listings. What a preview holds and when a scope applies is the guide's. */
+export const NOTHING_APPLIES_UNTIL_APPROVED = 'Nothing applies until you approve a preview.';
 
 // ------------------------------------------------------------ the scopes
 
@@ -74,8 +75,7 @@ export const USE_LINE: Record<RuleUse, string> = {
 /** What ticking nothing means, stated where the checkboxes are: the empty set
  *  is the default and it is not an idle state. */
 export const NO_AUTO_APPLY =
-	'With none of these ticked the rule proposes and never applies: you approve it per ' +
-	'resource in the preview below.';
+	'With none of these ticked, approve the rule per resource in the preview below.';
 
 /** The scopes as one sentence for a saved rule's row. */
 export function autoApplyLine(uses: readonly RuleUse[]): string {
@@ -97,6 +97,14 @@ export const STATE_LABEL: Record<RuleState, string> = {
 	disabled: 'Off'
 };
 
+/** One glyph per state, so the three tabs read at a glance rather than as
+ *  three one-word labels a thumb has to parse. */
+export const STATE_ICON: Record<RuleState, IconName> = {
+	all: 'layout-list',
+	enabled: 'circle-check',
+	disabled: 'circle-x'
+};
+
 /** The list's tabs, with the totals the server sent beside the page.
  *
  *  `null` where the counts have not been read: a figure this console failed to
@@ -106,6 +114,7 @@ export function ruleTabs(counts: RuleCounts | null): Tab[] {
 	return RULE_STATES.map((state) => ({
 		id: state,
 		label: STATE_LABEL[state],
+		icon: STATE_ICON[state],
 		count: counts === null ? null : counts[state]
 	}));
 }
@@ -238,14 +247,11 @@ export function keywordsFrom(text: string): string[] {
 export const MANUAL_RATE = '0.75';
 
 export const MANUAL_RATE_NOTE =
-	'A flat estimate you own: 0.75 GBP for every 1.00 USD. It is not a market rate and it is ' +
-	'not read from anywhere — it stays exactly this until you change it.';
+	'A flat estimate you own: 0.75 GBP for every 1.00 USD, until you change it.';
 
 /** What the reference action does, said before it is pressed. */
 export const REFERENCE_NOTE =
-	'Asks the server for the European Central Bank’s published daily reference rate and stores ' +
-	'the quote it answers with, so the figure your prices were converted at can be shown and ' +
-	're-checked later.';
+	'Stores the European Central Bank’s published daily rate against this rule.';
 
 /** A quote as a seller reads it. The observation date is the provider's, not
  *  the moment it was fetched: a rate read on Monday for Friday's observation
@@ -262,8 +268,7 @@ export function referenceLine(reference: RuleReference): string {
  *  place: a stale rate shown as today's is the one failure a seller cannot
  *  see, so the action refuses and the rate field is left as it was. */
 export const REFERENCE_FAILURE =
-	'The reference rate could not be read, so no rate has been filled in. Nothing was changed ' +
-	'and no earlier figure has been substituted — try again, or type a rate you choose.';
+	'The reference rate could not be read, so no rate has been filled in.';
 
 export const ROUNDINGS: readonly Rounding[] = ['Nearest', 'UpToCharm'];
 
@@ -424,23 +429,18 @@ export function ruleMeta(definition: SellerRuleDefinition): string {
 // --------------------------------------------------------------- the presets
 
 /** A preset is a suggestion. Said wherever one is shown, because the whole
- *  hazard of a preset is that it looks like a decision already taken. */
-export const PRESETS_ARE_SUGGESTIONS =
-	'A preset is a starting point, not a saved rule. Loading one fills the form in and changes ' +
-	'nothing: it applies only once you save it and then approve a preview, or tick a scope ' +
-	'under “Apply automatically”.';
+ *  hazard of a preset is that it looks like a decision already taken. What
+ *  loading one does and does not do is the `target-prices` guide's. */
+export const PRESETS_ARE_SUGGESTIONS = 'Loading a preset fills the form in and changes nothing.';
 
-/** The warning a Creative Commons licence suggestion carries, in full and
- *  never abbreviated to "closest fit".
+/** The warning a Creative Commons licence suggestion carries.
  *
  *  The grant is wider than the marketplace's own in exactly the ways a seller
- *  cares about, and no text here claims the two are equivalent. */
+ *  cares about, and no text here claims the two are equivalent. The seller
+ *  has to act on the irrevocability, so it is the clause that stays on the
+ *  page; which grant permits what is set out in the `target-terms` guide. */
 export const FREE_GRANT_WARNING =
-	'A Creative Commons grant is not equivalent to TPT’s terms. CC BY-ND allows anyone to ' +
-	'redistribute unchanged copies, including commercially, with attribution. Those freedoms ' +
-	'cannot be revoked while recipients comply with the licence. CC BY and CC BY-SA also ' +
-	'allow sharing adaptations. Choose one only if you intend to grant those rights; otherwise ' +
-	'do not publish the resource as free on Tes.';
+	'A Creative Commons grant lets anyone redistribute your resource and cannot be revoked.';
 
 /** The presets that belong on this page, in this direction. A preset for
  *  another pair is not shown as though it applied here. */
@@ -607,7 +607,7 @@ export function decisionRefusal(
 	const named = offered.filter((row) => picked.has(row.product));
 	if (named.length === 0) {
 		return decision === 'accept'
-			? 'Tick the rows to approve. A blocked row cannot be approved, so ticking one does not count.'
+			? 'Tick the rows to approve; a blocked row cannot be.'
 			: 'Tick the rows to reject.';
 	}
 	return null;
@@ -617,14 +617,11 @@ export function decisionRefusal(
  *  discarded with it: the rows on screen were checked against a source, a rule
  *  revision and a target choice that have since moved. */
 export const STALE_PREVIEW =
-	'Something this preview was based on has changed — a resource, one of the rules, or a ' +
-	'target choice already on record — so nothing was written. The preview has been dropped; ' +
-	'take it again to see the current figures.';
+	'Something this preview was based on has changed, so take it again.';
 
 /** What a 409 from a save means. */
 export const STALE_RULE =
-	'This rule was changed somewhere else after you opened it, so your edit was not saved. ' +
-	'Reload the list and open it again to edit the current version.';
+	'This rule was changed somewhere else, so reload the list and open it again.';
 
 // --------------------------------------------------------- rendering a row
 

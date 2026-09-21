@@ -54,6 +54,15 @@ describe('the phone bar', () => {
 	it('does not light the create action while viewing the catalogue', () => {
 		expect(isCurrent('/resources', CREATE_TAB.href)).toBe(false);
 	});
+
+	// A bar cell exists to say a section's name in fewer characters than the
+	// rail's word. Where the two words are the same the cell is carrying a
+	// second copy of one label, which is exactly how the rail and the bar came
+	// to disagree before Crosslist was renamed to Catalogue.
+	it('gives no cell a short form that repeats the label it shortens', () => {
+		const repeated = PHONE_BAR.filter((tab) => tab.short === tab.label).map((tab) => tab.label);
+		expect(repeated).toEqual([]);
+	});
 });
 
 describe('the section the rail lights', () => {
@@ -76,11 +85,11 @@ describe('the section the rail lights', () => {
 	// A past migrate request is opened from the Migrations list, so
 	// it belongs to Automations rather than to the section that owns the path
 	// it happens to sit beneath (D8).
-	it('follows a request detail page to Migrations rather than to Marketplace Sync', () => {
+	it('follows a request detail page to Migrations rather than to Updates', () => {
 		expect(sectionFor('/sync/requests/9f2c8a11')?.id).toBe('automations');
 	});
 
-	it('leaves every other path under /sync on Marketplace Sync', () => {
+	it('leaves every other path under /sync on Updates', () => {
 		expect(sectionFor('/sync')?.id).toBe('automations');
 		expect(sectionFor('/sync/9f2c8a11')?.id).toBe('automations');
 	});
@@ -89,7 +98,7 @@ describe('the section the rail lights', () => {
 		expect(sectionFor('/marketplaces')?.id).toBe('marketplaces');
 	});
 
-	it('prefers the longest matching page, so Subscription is not Preferences', () => {
+	it('prefers the longest matching page, so Subscription is not Account settings', () => {
 		expect(sectionFor('/settings/subscription')?.id).toBe('account');
 	});
 
@@ -111,7 +120,7 @@ describe('the current destination', () => {
 		expect(isCurrent('/resources', '/app')).toBe(false);
 	});
 
-	it('keeps Subscription off Preferences, which prefixes it', () => {
+	it('keeps Subscription off Account settings, which prefixes it', () => {
 		expect(isCurrent('/settings/subscription', '/settings')).toBe(false);
 		expect(isCurrent('/settings/subscription', '/settings/subscription')).toBe(true);
 	});
@@ -146,13 +155,13 @@ describe('the destination a path belongs to', () => {
 
 	// The reason this exists rather than an `isCurrent` per item: an import's
 	// detail page sits under `/sync` and belongs to Import, so asking each item
-	// whether the path is under it lights Marketplace Sync, or nothing.
+	// whether the path is under it lights Updates, or nothing.
 	it('is the item that owns a prefix it does not contain', () => {
 		expect(currentDestination('/sync/requests/9f2c8a11')?.href).toBe('/automations/migration');
 		expect(currentDestination('/sync/requests')?.href).toBe('/automations/migration');
 	});
 
-	it('leaves every other path under /sync on Marketplace Sync', () => {
+	it('leaves every other path under /sync on Updates', () => {
 		expect(currentDestination('/sync')?.href).toBe('/sync');
 		expect(currentDestination('/sync/9f2c8a11')?.href).toBe('/sync');
 	});

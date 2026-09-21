@@ -893,12 +893,24 @@
 	color: var(--muted);
 }
 
+/* The override row's own actions. Mobile first: stacked, because Update all,
+   Reset and the sentence naming the listing's value are three items that do
+   not fit one 360px line, and wrapping them mid-sentence read as a fault. */
 .resources-page .res-acts {
 	display: flex;
-	align-items: center;
-	gap: 12px;
-	flex-wrap: wrap;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 8px;
 	margin-top: 16px;
+}
+
+@media (min-width: 621px) {
+	.resources-page .res-acts {
+		flex-direction: row;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 12px;
+	}
 }
 
 /* A sentence beside or beneath a control: smaller than body text, and the same
@@ -907,20 +919,6 @@
 	font-size: 12.5px;
 	color: var(--muted);
 	margin: 0;
-}
-
-.resources-page .res-foot {
-	font-size: 12px;
-	color: var(--faint);
-	margin-top: 12px;
-}
-
-.resources-page .res-foot .block {
-	display: block;
-}
-
-.resources-page .res-foot .block + .block {
-	margin-top: 4px;
 }
 
 /* --- the stack ----------------------------------------------------------- */
@@ -949,13 +947,6 @@
 
 .resources-page .res-menu-link:hover {
 	background: var(--hover);
-}
-
-/* The row menu's destructive item. Its own name rather than a rule over the
-   shared menu's buttons, so two pages cannot come to colour one component
-   differently from two sheets. */
-.resources-page .res-danger {
-	color: var(--bad-ink);
 }
 
 /* --- the thumbnail preview ----------------------------------------------- */

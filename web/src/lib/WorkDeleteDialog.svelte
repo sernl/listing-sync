@@ -9,6 +9,7 @@
 	// nothing outside the seller's own history, and saying so is most of what
 	// it is for.
 	import { ApiFailure, type JobDeletionView } from '$lib/api';
+	import Note from '$lib/Note.svelte';
 	import {
 		WORK_DELETE_IN_FLIGHT,
 		WORK_DELETE_KEEPS,
@@ -141,7 +142,7 @@
 		</h2>
 
 		<p>{WORK_DELETE_KEEPS}</p>
-		<p class="foot-note">{WORK_DELETE_IN_FLIGHT}</p>
+		<Note>{WORK_DELETE_IN_FLIGHT}</Note>
 
 		{#if items.length > 1}
 			<!-- Named rather than counted. A selection survives turning the

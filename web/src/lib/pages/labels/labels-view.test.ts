@@ -150,10 +150,10 @@ describe('the delete warning', () => {
 	// which row it belongs to before destroying something.
 	it('names the label, the count, and what deleting does to the resources', () => {
 		expect(deleteWarning('Autumn term', 12)).toBe(
-			'Autumn term is on 12 resources. Deleting it removes it from all of them.'
+			'Deleting Autumn term removes it from all 12 resources that carry it.'
 		);
 		expect(deleteWarning('Phonics', 1)).toBe(
-			'Phonics is on 1 resource. Deleting it removes it from that resource.'
+			'Deleting Phonics removes it from the 1 resource that carries it.'
 		);
 	});
 

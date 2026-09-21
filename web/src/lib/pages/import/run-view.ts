@@ -512,7 +512,7 @@ export function pageSummary(
  *  with nothing in it, and the page holds those two apart. */
 export const RUN_UNREAD = 'We could not read this import. Anything already running carries on.';
 
-/** What the seller is told while the reading happens somewhere else. */
+/** What the seller is told while the reading happens somewhere else. One
+ *  sentence; which bytes travel is the `your-files` guide's to hold. */
 export const READING_HAPPENS_ON_YOUR_COMPUTER =
-	'Each resource is opened on your own computer. Only what describes it — its details and its ' +
-	'thumbnail — is sent here.';
+	'Each resource is opened on your own computer.';

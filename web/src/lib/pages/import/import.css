@@ -5,19 +5,10 @@
  * token.
  */
 
-/* The D27 footnote closes the cards above it and is not the chrome of the
-   panel below, so it carries the page's own card gap. `.foot-note` has a top
-   margin and no bottom one, and no page-rhythm rule covers a paragraph
-   followed by a panel. */
-.import-cards + .foot-note {
+/* The note closes the cards above it and is not the chrome of the panel
+   below, so it carries the page's own card gap. */
+.import-cards + .note {
 	margin-bottom: 24px;
-}
-
-.import-lead {
-	margin: 0 0 20px;
-	max-width: 62ch;
-	font-size: 13.5px;
-	color: var(--muted);
 }
 
 .import-cards {
@@ -204,7 +195,7 @@
 	margin: 14px 0 24px;
 }
 
-.import-files-note .foot-note {
+.import-files-note .note {
 	flex: 1 1 320px;
 	margin: 0;
 	min-width: 0;

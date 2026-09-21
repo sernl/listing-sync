@@ -4,6 +4,7 @@
 	import { AUTHORABLE_PLATFORMS, platformTitle } from '$lib/platforms';
 	import type { InventoryId } from '$lib/generated/vocab';
 	import { MAPPINGS_HREF, PRICING_HREF } from '$lib/pages/automations/seller-rules';
+	import Note from '$lib/Note.svelte';
 
 	let {
 		open,
@@ -151,10 +152,7 @@
 				Publish live
 			</label>
 		</div>
-		<p class="foot-note">
-			Draft is the default. A live publish on a Tes site cannot be reversed by us: neither editing
-			a published listing nor taking one back to draft is a transition we have captured.
-		</p>
+		<Note icon="triangle-alert">A live publish to a Tes site cannot be undone here.</Note>
 
 		{#each targets as target (target.inventory)}
 			{@const reaches = target.mappings.length + target.unmapped.length}
@@ -181,26 +179,21 @@
 			</label>
 		{/each}
 
-		<p class="foot-note">
-			An item this marketplace does not carry is added to it before the send, which writes your
-			own catalogue and contacts nobody; the send that follows is the same one a marketplace
-			chosen at create time gets. Work for Tes and TPT runs on your own device, so a send waits
-			while that device is off.
-		</p>
-		<p class="foot-note">
-			Need to check a file or its machine? <a href="/resources/files">Open Resources → Files</a>.
-		</p>
+		<Note>A resource this marketplace does not carry is added to it first.</Note>
+		<Note icon="laptop">Tes and TPT sends wait for your own device to be on.</Note>
+		<Note icon="files"
+			>Check a file or its machine on <a href="/resources/files">Your machines' files</a>.</Note
+		>
 		<!-- The price and the terms a listing arrives with are decided on their
 		     own screens, beside a preview of what each resource would get: this
 		     send carries whatever has been approved for these resources, and a
 		     send is not the place to choose it blind. A rule ticked for
 		     Cross-list applies here without being approved row by row; nothing
 		     else does. -->
-		<p class="foot-note">
-			What will these cost, and what will they land under?
-			<a href={PRICING_HREF}>Set target prices</a> ·
-			<a href={MAPPINGS_HREF}>Set licence and resource type</a>.
-		</p>
+		<Note icon="tag"
+			>Set what these cost and land under on <a href={PRICING_HREF}>Target prices</a> and
+			<a href={MAPPINGS_HREF}>Target terms</a>.</Note
+		>
 
 		{#if refusal !== null}
 			<p class="refusal">{refusal}</p>

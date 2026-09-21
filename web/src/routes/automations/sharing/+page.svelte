@@ -19,6 +19,7 @@
 	import type { InventoryId, Marketplace } from '$lib/generated/vocab';
 	import { MARKETPLACE_OF, normaliseQuery } from '$lib/listings-view';
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
+	import Note from '$lib/Note.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
@@ -35,6 +36,7 @@
 		NO_SCHEDULE_YET,
 		REPEATS,
 		RUNS_ON_YOUR_COMPUTER,
+		SCHEDULES_GUIDE,
 		TES_CANNOT_REVISE,
 		WEEKDAYS,
 		WHAT_SCHEDULING_IS,
@@ -308,22 +310,25 @@
 </script>
 
 <div class="page">
-	<PageHead icon="calendar-clock" title="Scheduling" description={WHAT_SCHEDULING_IS} />
+	<PageHead
+		icon="calendar-clock"
+		title="Schedules"
+		description={WHAT_SCHEDULING_IS}
+		guide={SCHEDULES_GUIDE}
+	/>
 
 	{#if gate !== null}
 		<!-- Stated once, with the way out, rather than only as a tooltip on
 		     every dead control. The controls below carry it too, because a
 		     disabled control with no reason reads as a fault. -->
-		<Banner tone="warn" title="Scheduling is not on your plan" action={toPlans}>
+		<Banner tone="warn" title="Schedules are not on your plan" action={toPlans}>
 			{gate}
 		</Banner>
 	{/if}
 
 	{#if nothingConnected}
 		<Banner tone="warn" title="No marketplace is connected" action={toMarketplaces}>
-			A schedule sends to a marketplace, so there is nothing to send to until one is
-			connected. Connect it in the Teachouse app on your computer: the app opens the
-			marketplace sign-in there and keeps your login on that machine.
+			Connect a marketplace in the Teachouse app on your computer.
 		</Banner>
 	{/if}
 
@@ -344,10 +349,7 @@
 		<div class="auto-right">
 			<Panel title="Your schedules" description="What goes out, where, and when.">
 				{#if schedulesUnread}
-					<p class="quiet">
-						Your schedules could not be read, so this page cannot list them. Any schedule
-						already set is unaffected and still runs.
-					</p>
+					<p class="quiet">Your schedules could not be read, and any already set still runs.</p>
 				{:else if !schedulesLoaded}
 					<p class="quiet">Loading…</p>
 				{:else if schedules.length === 0}
@@ -385,12 +387,13 @@
 									disabled={gate !== null}
 									onchange={(value) => void setEnabled(schedule, value)}
 								/>
-								<Button tier="quiet" small onclick={() => void openRuns(schedule.id)}>
+								<Button tier="quiet" small icon="clock" onclick={() => void openRuns(schedule.id)}>
 									{runsOf === schedule.id ? 'Hide runs' : 'Runs'}
 								</Button>
 								<Button
 									tier="outline"
 									small
+									icon="pencil"
 									disabled={gate !== null}
 									reason={gate ?? undefined}
 									onclick={() => edit(schedule)}
@@ -401,6 +404,7 @@
 									tier="outline"
 									small
 									danger
+									icon="trash-2"
 									disabled={gate !== null}
 									reason={gate ?? undefined}
 									onclick={() => (deleting = schedule.id)}
@@ -413,7 +417,7 @@
 						{#if deleting === schedule.id}
 							<div class="sched-confirm">
 								<span>{deletePrompt(schedule.name)}</span>
-								<Button tier="outline" small danger onclick={() => void remove(schedule.id)}>
+								<Button tier="outline" small danger icon="trash-2" onclick={() => void remove(schedule.id)}>
 									Delete it
 								</Button>
 								<Button tier="quiet" small onclick={() => (deleting = null)}>Keep it</Button>
@@ -516,10 +520,7 @@
 						</Field>
 					</div>
 					{#if labels.isError}
-						<p class="quiet">
-							Your labels could not be read, so there is none to choose. Ticking the resources
-							yourself does not need this list.
-						</p>
+						<p class="quiet">Your labels could not be read, so tick the resources yourself.</p>
 					{/if}
 				{:else if catalogue.isPending}
 					<p class="quiet">Loading your resources…</p>
@@ -664,9 +665,9 @@
 					/>
 				</div>
 				{#if republishGate !== null}
-					<p class="foot-note">{republishGate}</p>
+					<Note icon="circle-alert">{republishGate}</Note>
 				{/if}
-				<p class="foot-note">{TES_CANNOT_REVISE}</p>
+				<Note>{TES_CANNOT_REVISE}</Note>
 
 				<div class="set-toggle">
 					<Toggle
@@ -680,6 +681,7 @@
 				<div class="set-foot">
 					<Button
 						tier="primary"
+						icon="circle-check"
 						disabled={formRefusal !== null || saving}
 						reason={formRefusal ?? (saving ? 'The schedule is being saved.' : undefined)}
 						onclick={() => void save()}
@@ -690,7 +692,7 @@
 						<Button tier="quiet" onclick={cancel}>Cancel</Button>
 					{/if}
 					{#if formRefusal !== null}
-						<p class="foot-note">{formRefusal}</p>
+						<Note icon="circle-alert">{formRefusal}</Note>
 					{/if}
 				</div>
 

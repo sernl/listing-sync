@@ -10,7 +10,7 @@
 // answered or fails the type check here.
 
 import type { Disposition, MigrationBody, MigrationCap, MigrationCounts } from '$lib/api';
-import { migrationsReason } from '$lib/entitlement';
+import { movesReason } from '$lib/entitlement';
 import type { InventoryId, MigrationVerdict } from '$lib/generated/vocab';
 import { INVENTORY_ORDER } from '$lib/listings-view';
 import { AUTHORABLE, SHORT_NAME, platformTitle } from '$lib/platforms';
@@ -151,21 +151,17 @@ export function countsLine(counts: MigrationCounts): string {
 	);
 }
 
-/** The allowance sentence and the refusal, read off the plan's own `cap` block
+/** The balance sentence and the refusal, read off the plan's own `cap` block
  *  rather than off the entitlement read.
  *
- * One writer, `migrationsReason`: the figure over the confirm and the figure
- * the submit is checked against have to be the same figure, and the plan's cap
- * is the fresher of the two. */
+ * One writer, `movesReason`: the figure over the confirm and the figure the
+ * submit is checked against have to be the same figure, and the plan's cap is
+ * the fresher of the two. */
 export function capSentence(
 	cap: MigrationCap,
 	requested: number
 ): { line: string; refusal: string | null } {
-	return migrationsReason(
-		{ migrations_per_month: cap.limit },
-		{ migrations_this_month: cap.used, migrations_reset_at: cap.resets_at },
-		requested
-	);
+	return movesReason({ available: cap.available }, requested);
 }
 
 // ------------------------------------------------------------------ the body

@@ -174,6 +174,23 @@
 	--sh-3: 0 6px 20px color-mix(in srgb, var(--text) 18%, transparent);
 	--scrim: color-mix(in srgb, var(--text) 42%, transparent);
 
+	/* The spacing scale, in fours. Before this the console wrote gaps and
+	   paddings as literals and reached eleven distinct values between 4px and
+	   24px, several of them one pixel apart and none of them chosen against
+	   the others.
+
+	   New rules take a step from here. The existing literals are deliberately
+	   left where they are rather than rounded to the nearest step in the same
+	   change that introduces the steps: that is a repaint of every page, and
+	   it belongs to whoever is looking at the page rather than to the sheet
+	   that names the numbers. */
+	--s-1: 4px;
+	--s-2: 8px;
+	--s-3: 12px;
+	--s-4: 16px;
+	--s-5: 24px;
+	--s-6: 32px;
+
 	/* the two fixed measures the shell's grid is built from */
 	--rail-w: 56px;
 	--nav-w: 216px;

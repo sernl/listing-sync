@@ -414,7 +414,7 @@
 			icon="layout-list"
 			back={{ href: '/import', label: 'Back to Import' }}
 			title={detail.source_name}
-			description="What your sheet said, what will be created, and what we could not accept."
+			description="What your sheet said and what will be created."
 		>
 			{#snippet aside()}
 				<StatusPill tone={shown.tone} label={shown.label} />
@@ -461,7 +461,7 @@
 		{#if stage.kind === 'parsed' && !adding}
 			<Panel
 				title="What your sheet said"
-				description="Your rows, in the order you filled them. Searching and the counts above cover the whole sheet."
+				description="Your rows, in the order you filled them."
 			>
 				{@render reportControls()}
 				{@render reportList(reportSlice)}
@@ -620,7 +620,7 @@
 		{:else}
 			<Panel
 				title="What was created"
-				description="Your rows and where each ended up. Searching and the counts above cover the whole sheet."
+				description="Your rows and where each ended up."
 			>
 				{@render reportControls()}
 				{@render reportList(reportSlice)}

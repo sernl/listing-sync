@@ -27,8 +27,6 @@ function usage(over: Partial<EntitlementUsage> = {}): EntitlementUsage {
 	return {
 		resources: 0,
 		marketplaces: 0,
-		migrations_this_month: 0,
-		migrations_reset_at: Date.UTC(2026, 9, 1),
 		templates: 0,
 		collections: 0,
 		labels: 0,

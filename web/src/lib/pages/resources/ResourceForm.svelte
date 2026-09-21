@@ -815,6 +815,7 @@
 			icon="circle-plus"
 			title="New resource"
 			description="Fill this in once, then choose where it goes."
+			guide="new-resource"
 		>
 			{#snippet aside()}
 				<Button href="/resources">Cancel</Button>
@@ -824,8 +825,7 @@
 
 	{#if vocabulary.isError}
 		<Banner tone="bad" title="The form's own vocabulary could not be read">
-			Without it this form cannot render its pickers or state their limits, so creating is held
-			back. Reload to try again.
+			Reload to try again.
 		</Banner>
 	{/if}
 
@@ -838,7 +838,7 @@
 			<Field
 				label="Start from a template"
 				id="start-from-template"
-				hint="It fills the fields you have not answered yet. Anything you have typed is left alone."
+				hint="It fills the fields you have not answered yet."
 			>
 				<select
 					id="start-from-template"
@@ -1029,7 +1029,7 @@
 					{@const projection = projectionOf(draft, where, view ?? null)}
 					<Panel
 						title={platformTitle(where)}
-						description="What this marketplace will carry. Values follow the listing unless you change one here."
+						description="What this marketplace will carry."
 					>
 						{#each projection.rows.filter((row) => row.kind === 'field') as row (row.key)}
 							{@const own = row.values[0]}
@@ -1108,16 +1108,13 @@
 					<section class="res-sec">
 						{#if editing !== null && editing.blockedBy.length > 0}
 							<Banner tone="warn" title="This resource is live and cannot be edited through us">
-								{editing.blockedBy.map(platformTitle).join(', ')} has a published listing, and
-								editing one there is not something we can do yet. The fields above are shown as
-								stored and the change is held back.
+								{editing.blockedBy.map(platformTitle).join(', ')} has a published listing, so
+								this change is held back.
 							</Banner>
 						{/if}
 
 						{#if refusals.length > 0}
-							<p class="res-errs-h">
-								These are the errors that need to be fixed. Click one to go to that section.
-							</p>
+							<p class="res-errs-h">Click an error to go to that section.</p>
 							<ul class="res-errs">
 								{#each refusals as refusal, index (`${refusal.group}-${index}`)}
 									<li>
@@ -1175,8 +1172,7 @@
 		<div class="dialog-body">
 			<h2 id="file-first-title">Add your file first</h2>
 			<p>
-				A marketplace cannot list something buyers cannot download. Add the file, and then this
-				listing can go to
+				Add the file, and then this listing can go to
 				{draft.marketplaces.length === 1
 					? MARKETPLACE_WORD[draft.marketplaces[0]]
 					: 'the marketplaces you chose'}.

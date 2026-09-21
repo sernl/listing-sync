@@ -10,6 +10,7 @@
 		fieldWordsOf,
 		scopeLabel
 	} from '$lib/pages/templates/resource-template';
+	import Note from '$lib/Note.svelte';
 
 	// Applying a template over a selection is a plan and then a submit, as a
 	// migration is and for the same reason: `patch_product` refuses a resource
@@ -171,10 +172,7 @@
 				</select>
 			</label>
 			{#if scopedTo !== null}
-				<p class="foot-note">
-					This template is written for {scopeLabel(scopedTo)}. Its own questions are applied to
-					every resource you have ticked, whether or not that resource is listed there yet.
-				</p>
+				<Note>This template is written for {scopeLabel(scopedTo)}.</Note>
 			{/if}
 
 			<label class="choice">
@@ -189,11 +187,7 @@
 				/>
 				<span class="t">Overwrite what these resources already say</span>
 			</label>
-			<p class="foot-note">
-				Off, a template fills only the fields a resource has left empty. On, every field the
-				template holds is written over what the resource says now — the title excepted, which
-				is never written.
-			</p>
+			<Note>Left off, a template fills only the fields a resource leaves empty.</Note>
 
 			{#if plan !== null}
 				<div class="apply-rows" role="table" aria-label="What the apply would do">
@@ -215,10 +209,10 @@
 						</div>
 					{/each}
 				</div>
-				<p class="foot-note">
+				<Note>
 					{plan.counts.will_change} to change, {plan.counts.unchanged} already as the template says,
 					{plan.counts.blocked} refused.
-				</p>
+				</Note>
 			{/if}
 
 			{#if done !== null}

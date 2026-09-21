@@ -49,15 +49,11 @@
 <div class="auth-card acct-signed-out">
 	{#if sent}
 		<h1>Check your email</h1>
-		<p>
-			If <b>{email.trim()}</b> has an account, a link to choose a new password is on its way.
-		</p>
+		<p>If <b>{email.trim()}</b> has an account, a reset link is on its way.</p>
 		<div class="actions"><Button tier="outline" href="/login">Go to sign in</Button></div>
 	{:else}
 		<h1>Reset your password</h1>
-		<p>
-			Give the address you signed up with and we will send a link for choosing a new password.
-		</p>
+		<p>Give the address you signed up with.</p>
 
 		<form onsubmit={request} class="form">
 			<Field label="Email" id="email" required>
