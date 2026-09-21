@@ -1,7 +1,7 @@
 //! What a plan grants, read once per request and enforced at every write it
 //! bounds.
 //!
-//! The plan is not a column and not a Paddle status. It is the strongest
+//! The plan is not a column and not a billing status. It is the strongest
 //! unexpired row in `entitlement_grant`, read by the [`OrgContext`] extractor
 //! before any handler runs and carried on the context as a [`Capabilities`]
 //! value. That is one extra indexed read per authenticated request, and it
@@ -10,11 +10,11 @@
 //! about what a plan holds.
 //!
 //! This module replaces `quota.rs`, which derived two numbers from the
-//! recorded Paddle subscription because no plan existed to read. Deriving an
+//! recorded subscription because no plan existed to read. Deriving an
 //! entitlement from a billing status was always a stand-in — it could not
 //! express a one-off purchase, an operator grant or an expiry — and the
 //! subscription table goes back to being what its migration says it is: a
-//! record of what Paddle said.
+//! record of what the billing provider said.
 //!
 //! Every refusal here is the same 422 the two original quota refusals were,
 //! carrying `detail.quota` naming the bound and, for a capability that is
@@ -28,10 +28,10 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use tam_limits::{
-    AiOffer, Capabilities, Founding, Plan, PlanRow, Rung, AI, FOUNDING, IMPORT_LADDER,
-    LADDER_ABOVE, PLANS,
+    AiOffer, Capabilities, Founding, Pack, Plan, PlanRow, PriceKey, Service, AI, FOUNDING, PACKS,
+    PACK_ABOVE, PLANS, SERVICES,
 };
-use tam_storage::{EntitlementRepo, Grant, Usage};
+use tam_storage::{EntitlementRepo, Grant, MoveBalance, Usage};
 use tam_types::Timestamp;
 
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
@@ -78,7 +78,9 @@ pub enum QuotaKind {
     Listings,
     StorageBytes,
     Marketplaces,
-    MigrationsPerMonth,
+    /// The move balance, which is the one bound that is a balance rather
+    /// than a ceiling: it is bought and spent rather than reset.
+    Moves,
     Templates,
     Labels,
     Collections,
@@ -93,7 +95,7 @@ impl QuotaKind {
         Self::Listings,
         Self::StorageBytes,
         Self::Marketplaces,
-        Self::MigrationsPerMonth,
+        Self::Moves,
         Self::Templates,
         Self::Labels,
         Self::Collections,
@@ -107,7 +109,7 @@ impl QuotaKind {
             Self::Listings => "listings_max",
             Self::StorageBytes => "storage_bytes_max",
             Self::Marketplaces => "marketplaces_max",
-            Self::MigrationsPerMonth => "migrations_per_month",
+            Self::Moves => "moves",
             Self::Templates => "templates_max",
             Self::Labels => "labels_max",
             Self::Collections => "collections_max",
@@ -139,12 +141,11 @@ impl QuotaKind {
             Self::Marketplaces => {
                 format!("Your plan connects {limit} marketplaces. Upgrade to connect more.")
             }
-            Self::MigrationsPerMonth if limit == 0 => {
-                "Your plan does not include copying or moving resources. Upgrade to use it."
-                    .to_owned()
+            Self::Moves if limit == 0 => {
+                "Your plan includes no moves. Buy a pack to move resources.".to_owned()
             }
-            Self::MigrationsPerMonth => {
-                format!("Your plan copies or moves {limit} resources a month. Upgrade to do more.")
+            Self::Moves => {
+                format!("Your plan includes {limit} moves a month. Buy a pack to move more.")
             }
             Self::Templates if limit == 0 => {
                 "Your plan does not include templates. Upgrade to use them.".to_owned()
@@ -215,96 +216,69 @@ pub fn feature_refusal(feature: &str, sentence: &str) -> APIError {
     )
 }
 
-/// The migration cap's own refusal, which carries what is left and when the
-/// counter returns to zero.
+/// A move the balance cannot pay for.
 ///
-/// A month's allowance is the one bound a seller can wait out, so the
-/// sentence says when rather than only that they may not now.
-#[must_use]
-pub fn migration_refusal(used: i64, limit: u32, requested: i64, resets_at: Timestamp) -> APIError {
-    let remaining = i64::from(limit).saturating_sub(used).max(0);
-    let sentence = if limit == 0 {
-        "Your plan does not include copying or moving resources. Upgrade to use it.".to_owned()
-    } else if remaining == 0 {
-        format!(
-            "Your plan copies or moves {limit} resources a month, and this month's are used. \
-             The next {limit} are available on {}.",
-            day_of(resets_at)
-        )
-    } else {
-        format!(
-            "Your plan copies or moves {limit} resources a month. You have {remaining} left \
-             this month and asked for {requested}; the next {limit} are available on {}.",
-            day_of(resets_at)
-        )
-    };
-    APIError::new(
-        StatusCode::UNPROCESSABLE_ENTITY,
-        APIErrorEntry::new(&sentence)
-            .code(APIErrorCode::QuotaExceeded)
-            .kind(APIErrorKind::Validation)
-            .detail(serde_json::json!({
-                "quota": QuotaKind::MigrationsPerMonth.as_str(),
-                "used": used,
-                "limit": limit,
-                "requested": requested,
-                "resets_at": resets_at,
-            })),
-    )
+/// A struct rather than four positional arguments, because the two gates
+/// that raise it — the migration confirm and the sync submit — must say the
+/// same thing, and the shape is what makes that true rather than a comment
+/// asking for it.
+///
+/// The balance is not a monthly counter and the refusal must not read like
+/// one: there is no date on which more arrive unless the seller is paying
+/// for a subscription, so the sentence says what to do rather than when to
+/// come back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MoveRefusal {
+    pub available: i64,
+    pub requested: i64,
+    /// When the soonest part of the balance lapses, where any of it does.
+    /// Carried so the console can warn before it happens rather than after.
+    pub expiring_soonest: Option<Timestamp>,
 }
 
-/// The reset date as the sentence spells it: a day in UTC, which is the
-/// boundary the counter actually turns on.
-///
-/// The civil-date arithmetic is written out rather than taken from a date
-/// library, for the reason `paddle::instant_from_rfc3339` writes out the
-/// forward direction: this crate parses and renders exactly two instants and
-/// takes no calendar dependency for them. The algorithm is Howard Hinnant's
-/// `civil_from_days`, the inverse of the one beside it.
-fn day_of(at: Timestamp) -> String {
-    const MONTHS: [&str; 12] = [
-        "January",
-        "February",
-        "March",
-        "April",
-        "May",
-        "June",
-        "July",
-        "August",
-        "September",
-        "October",
-        "November",
-        "December",
-    ];
-    let (year, month, day) = civil_from_days(at.0.div_euclid(86_400_000));
-    let name = MONTHS
-        .get(usize::try_from(month).unwrap_or(1).saturating_sub(1))
-        .copied()
-        .unwrap_or("January");
-    format!("{day} {name} {year}")
+impl MoveRefusal {
+    #[must_use]
+    pub fn of(balance: &MoveBalance, requested: i64) -> Self {
+        Self {
+            available: balance.available,
+            requested,
+            expiring_soonest: balance.expiring_soonest,
+        }
+    }
+
+    #[must_use]
+    pub fn sentence(self) -> String {
+        if self.available == 0 {
+            "You have no moves left. Buy a pack to move more resources.".to_owned()
+        } else if self.available == 1 {
+            format!(
+                "You have one move left and asked to move {}. Buy a pack or pick fewer.",
+                self.requested
+            )
+        } else {
+            format!(
+                "You have {} moves left and asked to move {}. Buy a pack or pick fewer.",
+                self.available, self.requested
+            )
+        }
+    }
 }
 
-/// Days since 1970-01-01 to a civil year, month and day, proleptic
-/// Gregorian.
-fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let shifted = days + 719_468;
-    let era = shifted.div_euclid(146_097);
-    let day_of_era = shifted.rem_euclid(146_097);
-    let year_of_era = (day_of_era - day_of_era.div_euclid(1_460) + day_of_era.div_euclid(36_524)
-        - day_of_era.div_euclid(146_096))
-    .div_euclid(365);
-    let year = year_of_era + era * 400;
-    let day_of_year =
-        day_of_era - (365 * year_of_era + year_of_era.div_euclid(4) - year_of_era.div_euclid(100));
-    let shifted_month = (5 * day_of_year + 2).div_euclid(153);
-    let day = day_of_year - (153 * shifted_month + 2).div_euclid(5) + 1;
-    let month = if shifted_month < 10 {
-        shifted_month + 3
-    } else {
-        shifted_month - 9
-    };
-    let year = if month <= 2 { year + 1 } else { year };
-    (year, month, day)
+impl From<MoveRefusal> for APIError {
+    fn from(refusal: MoveRefusal) -> Self {
+        Self::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            APIErrorEntry::new(&refusal.sentence())
+                .code(APIErrorCode::QuotaExceeded)
+                .kind(APIErrorKind::Validation)
+                .detail(serde_json::json!({
+                    "quota": QuotaKind::Moves.as_str(),
+                    "available": refusal.available,
+                    "requested": refusal.requested,
+                    "expiring_soonest": refusal.expiring_soonest,
+                })),
+        )
+    }
 }
 
 // ------------------------------------------------------------- GET /v1/plans
@@ -330,11 +304,64 @@ impl PlanRowView {
             monthly_cents: row.monthly_cents,
             yearly_cents: row.yearly_cents,
             trial_days: row.trial_days,
-            // At no rung, which is what a price list shows: a Catalogue
-            // Import row's allowance is the rung the buyer picks from the
-            // ladder below, so the row itself grants nothing until one is.
+            // At no rung, which is what a price list shows: the only plan
+            // that reads one is Studio, whose rung is an operator's decision
+            // about one tenant rather than a figure on a public page.
             capabilities: row.id.capabilities(None),
             sold: row.sold,
+        }
+    }
+}
+
+/// One service as the pricing page reads it.
+///
+/// Owned rather than [`Service`] itself, for [`PlanRowView`]'s reason: the
+/// constant carries `&'static str`, and a view a client deserialises cannot
+/// borrow from a lifetime it does not have.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServiceView {
+    pub key: PriceKey,
+    pub name: String,
+    pub price_cents: u32,
+}
+
+impl ServiceView {
+    fn of(service: Service) -> Self {
+        Self {
+            key: service.key,
+            name: service.name.to_owned(),
+            price_cents: service.price_cents,
+        }
+    }
+}
+
+/// The founding offer as the pricing page reads it. Owned for the same
+/// reason as [`ServiceView`]; `closes_at` is the borrowed field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FoundingView {
+    pub discount_year_one_pct: u32,
+    pub discount_ongoing_pct: u32,
+    pub ongoing_years: u32,
+    pub year_one_cents: u32,
+    pub ongoing_cents: u32,
+    pub closes_at: String,
+    pub annual_only: bool,
+    pub extra_moves: u32,
+    pub places: u32,
+}
+
+impl FoundingView {
+    fn of(founding: Founding) -> Self {
+        Self {
+            discount_year_one_pct: founding.discount_year_one_pct,
+            discount_ongoing_pct: founding.discount_ongoing_pct,
+            ongoing_years: founding.ongoing_years,
+            year_one_cents: founding.year_one_cents,
+            ongoing_cents: founding.ongoing_cents,
+            closes_at: founding.closes_at.to_owned(),
+            annual_only: founding.annual_only,
+            extra_moves: founding.extra_moves,
+            places: founding.places,
         }
     }
 }
@@ -342,9 +369,10 @@ impl PlanRowView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlansView {
     pub plans: Vec<PlanRowView>,
-    pub import_ladder: Vec<Rung>,
-    pub ladder_above: String,
-    pub founding: Founding,
+    pub packs: Vec<Pack>,
+    pub pack_above: String,
+    pub services: Vec<ServiceView>,
+    pub founding: FoundingView,
     pub ai: AiOffer,
 }
 
@@ -353,9 +381,10 @@ pub struct PlansView {
 pub(crate) async fn plans_view(_version: APIVersion) -> Json<PlansView> {
     Json(PlansView {
         plans: PLANS.into_iter().map(PlanRowView::of).collect(),
-        import_ladder: IMPORT_LADDER.to_vec(),
-        ladder_above: LADDER_ABOVE.to_owned(),
-        founding: FOUNDING,
+        packs: PACKS.to_vec(),
+        pack_above: PACK_ABOVE.to_owned(),
+        services: SERVICES.into_iter().map(ServiceView::of).collect(),
+        founding: FoundingView::of(FOUNDING),
         ai: AI,
     })
 }
@@ -366,8 +395,6 @@ pub(crate) async fn plans_view(_version: APIVersion) -> Json<PlansView> {
 pub struct UsageView {
     pub resources: i64,
     pub marketplaces: i64,
-    pub migrations_this_month: i64,
-    pub migrations_reset_at: Timestamp,
     pub templates: i64,
     pub labels: i64,
     pub collections: i64,
@@ -379,12 +406,27 @@ impl UsageView {
         Self {
             resources: usage.resources,
             marketplaces: usage.marketplaces,
-            migrations_this_month: usage.migrations_this_month,
-            migrations_reset_at: usage.migrations_reset_at,
             templates: usage.templates,
             labels: usage.labels,
             collections: usage.collections,
             devices: usage.devices,
+        }
+    }
+}
+
+/// The moves an organisation can spend, as the console reads them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MoveBalanceView {
+    pub available: i64,
+    pub expiring_soonest: Option<Timestamp>,
+}
+
+impl MoveBalanceView {
+    #[must_use]
+    pub const fn of(balance: MoveBalance) -> Self {
+        Self {
+            available: balance.available,
+            expiring_soonest: balance.expiring_soonest,
         }
     }
 }
@@ -404,6 +446,10 @@ pub struct EntitlementView {
     pub expires_at: Option<Timestamp>,
     pub capabilities: Capabilities,
     pub usage: UsageView,
+    /// The balance, which is not a usage figure: it is bought and spent
+    /// rather than counted against a ceiling, so it sits beside the usage
+    /// block rather than inside it.
+    pub moves: MoveBalanceView,
 }
 
 pub(crate) async fn entitlement_view(
@@ -411,8 +457,13 @@ pub(crate) async fn entitlement_view(
     State(state): State<AppState>,
     context: OrgContext,
 ) -> Result<Json<EntitlementView>, APIError> {
-    let usage = EntitlementRepo::new(state.pool.clone())
-        .usage(context.org, (state.wall)())
+    let entitlements = EntitlementRepo::new(state.pool.clone());
+    let usage = entitlements
+        .usage(context.org)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?;
+    let moves = entitlements
+        .move_balance(context.org, (state.wall)())
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
     let grant = &context.entitlement.grant;
@@ -424,14 +475,14 @@ pub(crate) async fn entitlement_view(
         expires_at: grant.expires_at,
         capabilities: context.entitlement.caps,
         usage: UsageView::of(usage),
+        moves: MoveBalanceView::of(moves),
     }))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{day_of, QuotaKind};
+    use super::{MoveRefusal, QuotaKind};
     use tam_limits::Plan;
-    use tam_types::Timestamp;
 
     #[test]
     fn every_bound_names_itself_on_the_wire_and_speaks_to_the_seller() {
@@ -440,7 +491,7 @@ mod tests {
                 QuotaKind::Listings
                 | QuotaKind::StorageBytes
                 | QuotaKind::Marketplaces
-                | QuotaKind::MigrationsPerMonth
+                | QuotaKind::Moves
                 | QuotaKind::Templates
                 | QuotaKind::Labels
                 | QuotaKind::Collections
@@ -468,7 +519,7 @@ mod tests {
         let free = Plan::Free.capabilities(None);
         assert_eq!(
             QuotaKind::Listings.sentence(u64::from(free.resources_max)),
-            "Your plan includes 20 resources. Upgrade to add more."
+            "Your plan includes 500 resources. Upgrade to add more."
         );
         assert_eq!(
             QuotaKind::StorageBytes.sentence(free.storage_bytes_max),
@@ -476,8 +527,37 @@ mod tests {
         );
     }
 
+    /// A balance is not a monthly counter, so its refusal must never tell a
+    /// seller to come back next month: on Free there is no next month, and a
+    /// sentence promising one is the worst kind of wrong.
     #[test]
-    fn the_reset_date_reads_as_a_day_rather_than_an_instant() {
-        assert_eq!(day_of(Timestamp(1_790_812_800_000)), "1 October 2026");
+    fn a_move_refusal_says_what_to_do_rather_than_when_to_return() {
+        let empty = MoveRefusal {
+            available: 0,
+            requested: 4,
+            expiring_soonest: None,
+        };
+        assert_eq!(
+            empty.sentence(),
+            "You have no moves left. Buy a pack to move more resources."
+        );
+        let short = MoveRefusal {
+            available: 3,
+            requested: 9,
+            expiring_soonest: None,
+        };
+        assert_eq!(
+            short.sentence(),
+            "You have 3 moves left and asked to move 9. Buy a pack or pick fewer."
+        );
+        let one = MoveRefusal {
+            available: 1,
+            requested: 2,
+            expiring_soonest: None,
+        };
+        assert_eq!(
+            one.sentence(),
+            "You have one move left and asked to move 2. Buy a pack or pick fewer."
+        );
     }
 }

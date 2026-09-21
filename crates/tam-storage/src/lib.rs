@@ -56,7 +56,7 @@ pub use backoffice::{
     ImpersonationEvent, ImportDrainPage, ImportDrainRun, OrgDetail, OrgSummary, PlatformUser,
     SignupsRepo, SubscriptionRecord, SyncHealth,
 };
-pub use billing::{BillingRepo, SubscriptionState};
+pub use billing::{BillingRepo, ServiceBooking, SubscriptionState};
 pub use blobs::{
     describe_files, BlobError, BlobRepo, PipelineFileSource, StoredFile, TenantBlobSink,
 };
@@ -83,7 +83,10 @@ pub use duplicates::{
     DecidedBy, DuplicateRepo, Evidence, EvidenceUnit, MatchLayer, NewVerdict, Polarity, Verdict,
     VerdictRecord, REVERSIBLE_MS,
 };
-pub use entitlement::{EntitlementRepo, Grant, GrantRecord, GrantedBy, NewGrant, Usage};
+pub use entitlement::{
+    Accrual, EntitlementRepo, Grant, GrantRecord, GrantedBy, MoveBalance, MoveCredit, MoveSource,
+    NewGrant, StorefrontAllowance, Usage,
+};
 pub use file_source::ProductFileSourceRepo;
 pub use fingerprints::{
     candidates_in, digest_frequency_in, digests_for_in, metadata_for_in, products_by_digest_in,
@@ -296,6 +299,16 @@ pub enum StorageError {
     /// it for as long as it is allowed to.
     #[error("that product already carries a mapping for this marketplace")]
     InventoryMappingAlreadyExists,
+    /// A second organisation's check-in named a storefront this platform
+    /// already binds to someone else.
+    ///
+    /// Raised from the refusal `connection_platform_account_exclusive`
+    /// answers, by constraint name, so the crossing stays a database fact
+    /// rather than a read-then-write check two tenants can interleave. Named
+    /// rather than left as a bare unique violation because the API layer owes
+    /// the seller a sentence and a 409 rather than a 500.
+    #[error("that {marketplace:?} shop is already bound to another organisation")]
+    StorefrontBoundElsewhere { marketplace: tam_types::Marketplace },
 }
 
 /// The tenant pin, for a caller assembling its own transaction across this

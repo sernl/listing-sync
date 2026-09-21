@@ -44,6 +44,39 @@
 	opacity: 1;
 }
 
+/* Every button's children are wrapped so the word can be taken away without
+   taking the glyph with it. `display: contents` by default, so the wrapper
+   changes no layout on the hundreds of buttons that never hide anything: the
+   children stay the flex items they were, and the 7px gap still falls between
+   them rather than around a single box. */
+.btn-word {
+	display: contents;
+}
+
+/* A control that names itself in `label` keeps its word on a screen wide
+   enough to hold it and draws as its glyph alone below that, which is how a
+   six-verb bulk bar fits a 360px row at all. The word stays in the markup:
+   the `aria-label` names the control either way, and the word is what a
+   find-in-page matches. Narrower padding while it is hidden, so the pill does
+   not read as a half-empty capsule. */
+.btn-iconic .btn-word {
+	display: none;
+}
+
+.btn-iconic {
+	padding-inline: 10px;
+}
+
+@media (min-width: 621px) {
+	.btn-iconic .btn-word {
+		display: contents;
+	}
+
+	.btn-iconic {
+		padding-inline: 14px;
+	}
+}
+
 /* --- status badge -------------------------------------------------------- */
 
 .status {
@@ -180,6 +213,10 @@
 }
 
 .tab-bar button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: var(--s-2);
 	padding: 9px 8px 10px;
 	text-align: center;
 	font-size: 13.5px;
@@ -492,7 +529,13 @@
 	left: 0;
 }
 
+/* A menu row is a verb, and `MenuItem.svelte` draws it with an optional glyph
+   before the word: a flex row rather than a text box, so the glyph sits on the
+   word's own line however long the word is. */
 .menu button {
+	display: flex;
+	align-items: center;
+	gap: var(--s-2);
 	text-align: left;
 	background: none;
 	border: 0;
@@ -501,6 +544,10 @@
 	font-size: 14px;
 	color: var(--text);
 	min-height: var(--control-h);
+}
+
+.menu button.danger {
+	color: var(--bad-ink);
 }
 
 .menu button:hover:not(:disabled) {
@@ -566,6 +613,56 @@
 .add-card .why {
 	font-size: 12.5px;
 	color: var(--muted);
+}
+
+/* --- note ---------------------------------------------------------------- */
+
+/* One quiet sentence beside a control, drawn by `Note.svelte` and by nothing
+   else. It replaces the bare `<p class="foot-note">` the console wrote inline:
+   the class had no component gate, so it became the place every explain-why
+   paragraph was parked, and a component is what carries the one-sentence
+   budget the class could not.
+
+   A flex row rather than a text box, because the optional glyph has to sit on
+   the first line of the sentence rather than in the middle of a wrapped one. */
+.note {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--s-2);
+	color: var(--faint);
+	font-size: 12px;
+	margin-top: 12px;
+}
+
+/* The glyph keeps the sentence's own line height rather than stretching with
+   it, so a two-line note does not draw a tall icon beside it. */
+.note > svg {
+	flex: none;
+	margin-top: 2px;
+}
+
+/* --- page grid ----------------------------------------------------------- */
+
+/* The two-column page body, for a page whose main content has a narrower
+   companion beside it -- a form and its preview, a list and its summary.
+   Phone first: one column until there is room for two, which is the shape
+   `pages/collections/collections.css` uses and the reason its pages are the
+   only ones in the console that hold up at 360px.
+
+   A utility rather than a per-page rule because nine pages were about to
+   write the same grid, each with its own breakpoint and three of them with
+   none at all. */
+.page-grid {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	gap: var(--s-4);
+	align-items: start;
+}
+
+@media (min-width: 701px) {
+	.page-grid {
+		grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+	}
 }
 
 /* --- activity log -------------------------------------------------------- */

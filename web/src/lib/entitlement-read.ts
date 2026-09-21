@@ -21,6 +21,7 @@ import {
 } from '$lib/entitlement';
 import type { EntitlementRead } from '$lib/pages/account/plans';
 import { queryKeys } from '$lib/query';
+import { capture } from '$lib/posthog';
 
 export const entitlementRead = {
 	queryKey: queryKeys.entitlement,
@@ -55,7 +56,19 @@ export function limitOf(
 	held: EntitlementView | undefined,
 	limit: Limit
 ): string | null {
-	return held === undefined ? null : limitReason(held.capabilities, held.usage, limit);
+	if (held === undefined) {
+		return null;
+	}
+	const reason = limitReason(held.capabilities, held.usage, limit);
+	if (reason !== null) {
+		// The wire spells a limit's used figure `<limit>` on the usage and
+		// its ceiling `<limit>_max` on the capabilities, so both are read by
+		// that rule rather than through a second copy of the mapping.
+		const usage = held.usage as unknown as Record<string, number>;
+		const caps = held.capabilities as unknown as Record<string, number>;
+		gateHit(held, limit, usage[limit] ?? null, caps[`${limit}_max`] ?? null);
+	}
+	return reason;
 }
 
 /** Why a control's capability is not on this plan, or null — including null
@@ -64,5 +77,35 @@ export function featureOf(
 	held: EntitlementView | undefined,
 	feature: Feature
 ): string | null {
-	return held === undefined ? null : featureReason(held.capabilities, feature);
+	if (held === undefined) {
+		return null;
+	}
+	const reason = featureReason(held.capabilities, feature);
+	if (reason !== null) {
+		gateHit(held, feature, null, null);
+	}
+	return reason;
+}
+
+// Which gates this page load has already reported.
+//
+// Both functions above are called from `$derived` expressions, which re-run
+// on every render of every page that gates a control: without this the one
+// seller meeting one paywall would be a thousand events. The interesting
+// fact is that they met it at all, which is one row.
+const reported = new Set<string>();
+
+function gateHit(
+	held: EntitlementView,
+	gate: string,
+	used: number | null,
+	max: number | null
+): void {
+	const route = typeof window === 'undefined' ? '' : window.location.pathname;
+	const key = `${gate}|${route}`;
+	if (reported.has(key)) {
+		return;
+	}
+	reported.add(key);
+	capture('plan_gate_hit', { gate, plan: held.plan, used, max, route });
 }

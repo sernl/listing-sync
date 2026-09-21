@@ -1,6 +1,7 @@
 //! The grant store: what an organisation holds when it holds several grants,
-//! what it holds when a grant has lapsed, what a revocation does, and the
-//! usage counters the Account page and the migration gate read.
+//! what it holds when a grant has lapsed, what a revocation does, the usage
+//! counters the Account page reads, and the move ledger the commit gate
+//! spends against.
 //!
 //! The request-level counterparts live in `tam-api/tests/billing_flow.rs` and
 //! `tam-api/tests/admin_flow.rs`.
@@ -9,7 +10,9 @@
 
 use sqlx::PgPool;
 use tam_limits::Plan;
-use tam_storage::{EntitlementRepo, GrantedBy, NewGrant};
+use tam_storage::{
+    Accrual, EntitlementRepo, GrantedBy, MoveCredit, MoveSource, NewGrant, StorefrontAllowance,
+};
 use tam_types::{OrgId, Timestamp, Uuid};
 
 const ORG_A: OrgId = OrgId(Uuid([0xAA; 16]));
@@ -39,12 +42,12 @@ fn id(byte: u8) -> Uuid {
     Uuid([byte; 16])
 }
 
-fn paddle(grant: u8, plan: Plan, granted_at: Timestamp) -> NewGrant<'static> {
+fn purchase(grant: u8, plan: Plan, granted_at: Timestamp) -> NewGrant<'static> {
     NewGrant {
         id: id(grant),
         plan,
         rung: None,
-        granted_by: GrantedBy::Paddle,
+        granted_by: GrantedBy::Stripe,
         grantor_user: None,
         reason: None,
         source_ref: None,
@@ -67,32 +70,26 @@ async fn an_organisation_with_no_grant_holds_free(pool: PgPool) {
     );
 }
 
-/// The case newest-wins would get wrong: a seller who bought a one-off import
-/// and later subscribed must be served the subscription.
+/// The case newest-wins would get wrong: an organisation on a subscription
+/// that an operator later lifts to Studio must be served Studio, and the
+/// reverse order must not hold a subscriber down to Free.
 #[sqlx::test(migrations = "./migrations")]
 async fn the_strongest_unexpired_grant_wins_regardless_of_which_landed_last(pool: PgPool) {
     provision(&pool).await;
     let repo = EntitlementRepo::new(pool);
-    repo.grant(ORG_A, &paddle(1, Plan::Subscriber, EARLIER))
+    repo.grant(ORG_A, &purchase(1, Plan::Studio, EARLIER))
+        .await
+        .expect("the studio grant writes");
+    repo.grant(ORG_A, &purchase(2, Plan::Subscriber, LATER))
         .await
         .expect("the subscription grant writes");
-    repo.grant(
-        ORG_A,
-        &NewGrant {
-            rung: Some(50),
-            ..paddle(2, Plan::MigrationOnly, LATER)
-        },
-    )
-    .await
-    .expect("the one-off grant writes");
 
     let held = repo.current(ORG_A, NOW).await.expect("the read runs");
     assert_eq!(
         held.plan,
-        Plan::Subscriber,
-        "the later one-off must not hold the subscription down to its narrower set"
+        Plan::Studio,
+        "the later subscription must not hold Studio down to its narrower set"
     );
-    assert_eq!(held.rung, None, "the subscription's row carries no rung");
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -103,7 +100,7 @@ async fn a_lapsed_grant_stops_entitling_and_a_revoked_one_stops_at_once(pool: Pg
         ORG_A,
         &NewGrant {
             expires_at: Some(EARLIER),
-            ..paddle(1, Plan::Subscriber, EARLIER)
+            ..purchase(1, Plan::Subscriber, EARLIER)
         },
     )
     .await
@@ -114,7 +111,7 @@ async fn a_lapsed_grant_stops_entitling_and_a_revoked_one_stops_at_once(pool: Pg
         "an expiry in the past stops granting rather than granting forever"
     );
 
-    repo.grant(ORG_A, &paddle(2, Plan::Subscriber, EARLIER))
+    repo.grant(ORG_A, &purchase(2, Plan::Subscriber, EARLIER))
         .await
         .expect("the live grant writes");
     assert_eq!(
@@ -140,7 +137,7 @@ async fn a_lapsed_grant_stops_entitling_and_a_revoked_one_stops_at_once(pool: Pg
     );
 }
 
-/// The cancellation path: Paddle says the subscription ends at the period
+/// The cancellation path: the provider says the subscription ends at the period
 /// end, so the grant keeps entitling until then and not a moment past it.
 #[sqlx::test(migrations = "./migrations")]
 async fn moving_a_grants_expiry_is_what_a_cancellation_does(pool: PgPool) {
@@ -150,16 +147,16 @@ async fn moving_a_grants_expiry_is_what_a_cancellation_does(pool: PgPool) {
         ORG_A,
         &NewGrant {
             source_ref: Some("sub_01"),
-            ..paddle(1, Plan::Subscriber, EARLIER)
+            ..purchase(1, Plan::Subscriber, EARLIER)
         },
     )
     .await
     .expect("the grant writes");
     let found = repo
-        .paddle_grant(ORG_A, "sub_01")
+        .provider_grant(ORG_A, "sub_01")
         .await
         .expect("the lookup runs")
-        .expect("the subscription's grant is found by its Paddle id");
+        .expect("the subscription's grant is found by the processor's own id");
     assert_eq!(found, id(1));
 
     assert!(repo
@@ -185,7 +182,7 @@ async fn moving_a_grants_expiry_is_what_a_cancellation_does(pool: PgPool) {
 async fn one_organisations_grant_is_invisible_to_another(pool: PgPool) {
     provision(&pool).await;
     let repo = EntitlementRepo::new(pool);
-    repo.grant(ORG_A, &paddle(1, Plan::Subscriber, EARLIER))
+    repo.grant(ORG_A, &purchase(1, Plan::Subscriber, EARLIER))
         .await
         .expect("the grant writes");
     assert_eq!(
@@ -241,22 +238,196 @@ async fn the_history_keeps_revoked_and_expired_rows_with_their_attribution(pool:
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn the_migration_counter_opens_at_the_first_of_the_month_and_names_its_reset(pool: PgPool) {
+async fn the_usage_read_counts_what_the_account_page_shows(pool: PgPool) {
+    provision(&pool).await;
+    let usage = EntitlementRepo::new(pool)
+        .usage(ORG_A)
+        .await
+        .expect("the read runs");
+    assert_eq!(usage.resources, 0);
+    assert_eq!(usage.devices, 0);
+}
+
+/// The balance is a sum over what has not expired, and a credit whose
+/// reference has already been seen is not a second credit.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_credit_is_idempotent_on_its_reference_and_lapses_on_its_expiry(pool: PgPool) {
     provision(&pool).await;
     let repo = EntitlementRepo::new(pool);
-    let usage = repo.usage(ORG_A, NOW).await.expect("the read runs");
-    assert_eq!(usage.resources, 0);
-    assert_eq!(usage.migrations_this_month, 0);
+    let pack = MoveCredit {
+        delta: 100,
+        source: MoveSource::Pack,
+        source_ref: Some("cs_test_one"),
+        expires_at: Some(LATER),
+        at: EARLIER,
+    };
+    assert!(repo
+        .credit_moves(ORG_A, pack)
+        .await
+        .expect("the credit writes"));
+    assert!(
+        !repo
+            .credit_moves(ORG_A, pack)
+            .await
+            .expect("the replay runs"),
+        "a replayed webhook credits once"
+    );
+
+    let held = repo.move_balance(ORG_A, NOW).await.expect("the read runs");
+    assert_eq!(held.available, 100);
+    assert_eq!(held.expiring_soonest, Some(LATER));
+
+    let lapsed = repo
+        .move_balance(ORG_A, Timestamp(LATER.0 + 1))
+        .await
+        .expect("the read runs");
     assert_eq!(
-        usage.migrations_reset_at,
-        Timestamp(1_790_812_800_000),
-        "the counter resets at 2026-10-01T00:00:00Z"
+        lapsed.available, 0,
+        "a pack's moves are gone the instant they expire"
     );
     assert_eq!(
-        repo.migrations_used_this_month(ORG_A, NOW)
+        repo.move_balance(ORG_B, NOW)
             .await
-            .expect("the read runs"),
+            .expect("the read runs")
+            .available,
         0,
-        "an organisation that has migrated nothing has used nothing"
+        "one organisation's balance is not another's"
+    );
+}
+
+/// The property the whole expiry design exists for: a move spent against a
+/// credit leaves with that credit, so a lapsed pack cannot drive a balance
+/// negative for a seller who did nothing wrong.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_spent_move_lapses_with_the_credit_it_drew_against(pool: PgPool) {
+    provision(&pool).await;
+    let repo = EntitlementRepo::new(pool);
+    repo.credit_moves(
+        ORG_A,
+        MoveCredit {
+            delta: 20,
+            source: MoveSource::Pack,
+            source_ref: Some("cs_test_two"),
+            expires_at: Some(LATER),
+            at: EARLIER,
+        },
+    )
+    .await
+    .expect("the credit writes");
+
+    assert_eq!(
+        repo.debit_move(ORG_A, id(0x31), NOW)
+            .await
+            .expect("the debit runs"),
+        Some(1),
+        "the first move ever is the first"
+    );
+    assert_eq!(
+        repo.debit_move(ORG_A, id(0x31), NOW)
+            .await
+            .expect("the replay runs"),
+        None,
+        "a retried settle spends nothing"
+    );
+    assert_eq!(
+        repo.debit_move(ORG_A, id(0x32), NOW)
+            .await
+            .expect("the debit runs"),
+        Some(2)
+    );
+    assert_eq!(
+        repo.move_balance(ORG_A, NOW)
+            .await
+            .expect("the read runs")
+            .available,
+        18
+    );
+    assert_eq!(
+        repo.move_balance(ORG_A, Timestamp(LATER.0 + 1))
+            .await
+            .expect("the read runs")
+            .available,
+        0,
+        "the pack and the two moves drawn against it leave together"
+    );
+}
+
+/// The subscription tops up to its cap and never past it, and the free
+/// lifetime grant is given to a storefront once across every tenant.
+#[sqlx::test(migrations = "./migrations")]
+async fn the_accrual_stops_at_the_cap_and_a_storefront_is_granted_once(pool: PgPool) {
+    provision(&pool).await;
+    let repo = EntitlementRepo::new(pool);
+    let mut month = EARLIER;
+    for expected in [25_i64, 50, 75, 75] {
+        repo.accrue_subscription_moves(
+            ORG_A,
+            Accrual {
+                period_start: month,
+                per_period: 25,
+                accrual_cap: 75,
+                at: month,
+            },
+        )
+        .await
+        .expect("the accrual runs");
+        assert_eq!(
+            repo.move_balance(ORG_A, month)
+                .await
+                .expect("the read runs")
+                .available,
+            expected,
+            "the rolling allowance stops at its cap"
+        );
+        month = Timestamp(month.0 + 2_592_000_000);
+    }
+    assert!(
+        !repo
+            .accrue_subscription_moves(
+                ORG_A,
+                Accrual {
+                    period_start: EARLIER,
+                    per_period: 25,
+                    accrual_cap: 75,
+                    at: EARLIER,
+                },
+            )
+            .await
+            .expect("the replay runs"),
+        "a period already credited is not credited again"
+    );
+
+    let digest = [0x5A_u8; 32];
+    let claim = StorefrontAllowance {
+        marketplace: "tpt",
+        digest: &digest,
+        moves: 5,
+        at: NOW,
+    };
+    assert!(repo
+        .grant_storefront_allowance(ORG_B, claim)
+        .await
+        .expect("the first claim runs"));
+    assert_eq!(
+        repo.move_balance(ORG_B, NOW)
+            .await
+            .expect("the read runs")
+            .available,
+        5
+    );
+    assert!(
+        !repo
+            .grant_storefront_allowance(ORG_A, claim)
+            .await
+            .expect("the second claim runs"),
+        "a shop already claimed grants a second organisation nothing"
+    );
+    assert_eq!(
+        repo.move_balance(ORG_A, NOW)
+            .await
+            .expect("the read runs")
+            .available,
+        75,
+        "and credits it nothing"
     );
 }

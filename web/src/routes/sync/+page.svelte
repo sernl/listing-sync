@@ -17,6 +17,7 @@
 	import type { InventoryId, Marketplace } from '$lib/generated/vocab';
 	import { MARKETPLACE_OF } from '$lib/listings-view';
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
+	import Note from '$lib/Note.svelte';
 	import Pagination from '$lib/Pagination.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
@@ -44,6 +45,7 @@
 		NO_ACTIVITY_YET,
 		NO_RUN_YET,
 		PUBLISHED_WITH_CATALOGUE_WORDS,
+		UPDATES_GUIDE,
 		activityEntries,
 		cadenceOptions,
 		heldCadence,
@@ -178,8 +180,8 @@
 	const runs = $derived(runRows(jobs, Date.now()));
 	const log = $derived(activityEntries(activity, Date.now()));
 	const historyTabs = $derived([
-		{ id: RUNS_TAB, label: 'Runs', count: null },
-		{ id: LOG_TAB, label: 'Activity', count: null }
+		{ id: RUNS_TAB, label: 'Runs', icon: 'refresh-cw' as const, count: null },
+		{ id: LOG_TAB, label: 'Activity', icon: 'layout-list' as const, count: null }
 	]);
 
 	/** What the seller has ticked in the run history: the run's id against the
@@ -401,8 +403,9 @@
 <div class="page">
 	<PageHead
 		icon="refresh-cw"
-		title="Marketplace Sync"
+		title="Updates"
 		description="Keep every marketplace’s copy of a resource up to date."
+		guide={UPDATES_GUIDE}
 	>
 		{#snippet aside()}
 			<Button href="/reconciliation" tier="outline" icon="circle-question-mark">
@@ -431,13 +434,10 @@
 		<div class="auto-right">
 			<Panel
 				title="Pull new resources"
-				description="We ask your computer to read each shop on this timetable, and anything new arrives in Import."
+				description="Anything new your computer finds on this timetable arrives in Import."
 			>
 				{#if settingsUnread}
-					<p class="quiet">
-						Your pull settings could not be read, so this page is showing none. Nothing has
-						been changed, and any pull already set still runs.
-					</p>
+					<p class="quiet">Your pull settings could not be read, and any already set still runs.</p>
 				{:else}
 					{#each cards as card (card.inventory)}
 						{@const pull = editOf(card)}
@@ -527,9 +527,9 @@
 								{/each}
 							</div>
 							{#if rulesGate !== null}
-								<p class="foot-note">{rulesGate}</p>
+								<Note icon="circle-alert">{rulesGate}</Note>
 							{/if}
-							<p class="foot-note">{PUBLISHED_WITH_CATALOGUE_WORDS}</p>
+							<Note>{PUBLISHED_WITH_CATALOGUE_WORDS}</Note>
 
 							<!-- The template the rule fills a new pull from. Under the
 							     publish targets rather than above them, because which
@@ -538,10 +538,9 @@
 							     fields nothing carries unless the rule publishes to it,
 							     and the server answers 422 for exactly that. -->
 							{#if headsUnread}
-								<p class="foot-note">
-									Your templates could not be read, so this card is offering none. Any
-									template already set on this rule still runs.
-								</p>
+								<Note icon="circle-alert">
+									Your templates could not be read, and any already set still runs.
+								</Note>
 							{:else if heads.length > 0}
 								{@const choices = templateChoices(heads, pull.publishTo)}
 								<div class="set-grid">
@@ -571,12 +570,13 @@
 										</select>
 									</Field>
 								</div>
-								<p class="foot-note">{FILLS_WHAT_THE_PULL_LEFT_EMPTY}</p>
+								<Note>{FILLS_WHAT_THE_PULL_LEFT_EMPTY}</Note>
 							{/if}
 
 							<div class="set-foot">
 								<Button
 									tier="primary"
+									icon="circle-check"
 									small
 									disabled={why !== null || saving === card.inventory}
 									reason={why ??
@@ -586,7 +586,7 @@
 									{saving === card.inventory ? 'Saving…' : 'Save'}
 								</Button>
 								{#if why !== null}
-									<p class="foot-note">{why}</p>
+									<Note icon="circle-alert">{why}</Note>
 								{/if}
 							</div>
 						</div>
@@ -627,7 +627,7 @@
 			     carries one list's worth of rows instead of two. -->
 			<Panel
 				title="History"
-				description="Every update we have sent, and what each pull and each send did."
+				description="Every update we have sent, and what each one did."
 			>
 				<TabBar tabs={historyTabs} bind:current={historyTab} />
 
@@ -636,8 +636,7 @@
 						<p class="quiet">Loading…</p>
 					{:else if runsUnread && jobs.length === 0}
 						<Banner tone="bad" action={retryRuns}>
-							Your runs could not be read, so this page cannot list them. Anything already
-							running is unaffected.
+							Your runs could not be read, so this page cannot list them.
 						</Banner>
 					{:else}
 						{#if runsUnread}
@@ -651,13 +650,11 @@
 						{/if}
 						{#if runs.length === 0}
 							{#if runPage > 1}
-								<p class="quiet">
-									There are no runs on this page. Go back for the ones before it.
-								</p>
+								<p class="quiet">Go back for the runs before this page.</p>
 							{:else}
 								<Placeholder
 									icon="refresh-cw"
-									headline="No sync has run yet"
+									headline="No update has run yet"
 									body={NO_RUN_YET}
 								/>
 							{/if}
@@ -683,10 +680,10 @@
 											: ''}
 									</span>
 									<div class="work-bar-acts">
-										<Button small tier="quiet" onclick={() => (picked = new Map())}>
+										<Button small tier="quiet" icon="circle-x" onclick={() => (picked = new Map())}>
 											Clear selection
 										</Button>
-										<Button small danger onclick={() => (deleting = pickedItems)}>
+										<Button small danger icon="trash-2" onclick={() => (deleting = pickedItems)}>
 											Delete {countWord(picked.size, RUNS)}
 										</Button>
 									</div>
@@ -727,6 +724,7 @@
 										<Button
 											small
 											danger
+											icon="trash-2"
 											disabled={refusal !== null}
 											reason={refusal ?? undefined}
 											onclick={() => (deleting = [{ id: run.job, label: run.meta }])}
@@ -752,8 +750,7 @@
 					{/if}
 				{:else if activityUnread && activity.length === 0}
 					<Banner tone="bad" action={retryLog}>
-						The activity log could not be read, so it is showing nothing rather than a
-						guess.
+						The activity log could not be read, so it is showing nothing.
 					</Banner>
 				{:else}
 					{#if activityUnread}
@@ -766,7 +763,7 @@
 						entries={log}
 						bind:query={logQuery}
 						empty={logPage > 1
-							? 'There are no lines on this page. Go back for the ones before it.'
+							? 'Go back for the lines before this page.'
 							: NO_ACTIVITY_YET}
 					/>
 					{#if log.length > 0 || logPage > 1}
@@ -798,6 +795,7 @@
 	<Button
 		tier="outline"
 		small
+		icon="refresh-cw"
 		disabled={runsBusy}
 		reason={runsBusy ? 'A page is being read.' : undefined}
 		onclick={retryRunPage}
@@ -810,6 +808,7 @@
 	<Button
 		tier="outline"
 		small
+		icon="refresh-cw"
 		disabled={logBusy}
 		reason={logBusy ? 'A page is being read.' : undefined}
 		onclick={retryLogPage}

@@ -602,13 +602,11 @@ export const MIGRATION_HREF = '/automations/migration';
 /** The sentence the import screen exists to carry, required by section 4 of
  *  `docs/notes/design/migration-file-routing.md`.
  *
- * Precise about which bytes, because the honest claim is narrower than "we
- * keep nothing": the thumbnail — the file the wire calls the `cover` role —
- * travels inside the page and is stored, and only the listing's own file never
- * reaches us. A broader promise would be a nicer sentence and a false one. */
-export const FILES_STAY_ON_YOUR_COMPUTER =
-	'Your listing files are read on your own computer and never reach our servers. ' +
-	'Only what describes each listing — its details and its thumbnail — is sent here.';
+ * One sentence, per the wording rule. The detail it used to carry — that the
+ * thumbnail is the one file that does travel, so the claim is narrower than
+ * "we keep nothing" — is the `your-files` guide's to hold, and every page
+ * that draws this line links to it. */
+export const FILES_STAY_ON_YOUR_COMPUTER = 'Your files stay on your own computer.';
 
 /** Whether this request is the kind this screen was written for.
  *

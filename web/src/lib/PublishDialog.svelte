@@ -10,6 +10,7 @@
 	} from '$lib/api';
 	import { connectionFor, readinessOf } from '$lib/publish-readiness';
 	import type { InventoryId } from '$lib/generated/vocab';
+	import Note from '$lib/Note.svelte';
 
 	let {
 		open,
@@ -143,10 +144,7 @@
 				Publish live
 			</label>
 		</div>
-		<p class="foot-note">
-			Draft is the default. A live publish on a Tes site cannot be reversed by us: neither editing
-			a published listing nor taking one back to draft is a transition we have captured.
-		</p>
+		<Note icon="triangle-alert">A live publish to a Tes site cannot be undone here.</Note>
 
 		{#each rows as row (row.mapping.id)}
 			<label class="choice">
@@ -163,10 +161,7 @@
 			<p class="quiet">This listing carries no marketplace mapping, so there is nothing to send.</p>
 		{/each}
 
-		<p class="foot-note">
-			An unready platform stays selectable: you may be about to fix it, and readiness is a
-			prediction from what we hold. The engine checks again when it picks the work up.
-		</p>
+		<Note>An unready marketplace stays selectable, and is checked again when the work runs.</Note>
 
 		{#if refusal !== null}
 			<p class="refusal">{refusal}</p>

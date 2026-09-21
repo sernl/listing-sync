@@ -445,7 +445,7 @@ fn field(raw: &str) -> String {
 
 /// The instant as RFC 3339, to the second.
 ///
-/// Hand-written for the reason `paddle::instant_from_rfc3339` is: this crate
+/// Hand-written for the reason `time::instant_from_rfc3339` is: this crate
 /// holds no date library, and the shape needed is one civil date and one
 /// clock time in UTC.
 fn rfc3339(at: Timestamp) -> String {
@@ -466,7 +466,7 @@ fn civil_date(at: Timestamp) -> String {
 }
 
 /// Hinnant's `civil_from_days`, the inverse of the `days_from_civil` the
-/// Paddle instant parser reads with, exact over the range a stored timestamp
+/// instant parser in `time.rs` reads with, exact over the range a stored timestamp
 /// can hold.
 const fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let shifted = days + 719_468;

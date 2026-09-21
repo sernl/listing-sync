@@ -160,20 +160,17 @@ let
     ]
     ++ blobStoreArgs
   )
-  ++ lib.optionals (cfg.server.paddleWebhookSecret != null) [
-    "--paddle-webhook-secret"
-    cfg.server.paddleWebhookSecret
+  ++ lib.optionals (cfg.server.stripeWebhookSecret != null) [
+    "--stripe-webhook-secret"
+    cfg.server.stripeWebhookSecret
   ]
-  ++ lib.optionals (cfg.server.paddlePriceMap != { }) [
-    "--paddle-price-map"
-    (pkgs.writeText "teachouse-paddle-price-map.json" (
-      builtins.toJSON (
-        lib.mapAttrs (
-          _: priced:
-          { inherit (priced) plan; } // lib.optionalAttrs (priced.rung != null) { inherit (priced) rung; }
-        ) cfg.server.paddlePriceMap
-      )
-    ))
+  ++ lib.optionals (cfg.server.stripeSecretKeyFile != null) [
+    "--stripe-secret-key"
+    cfg.server.stripeSecretKeyFile
+  ]
+  ++ lib.optionals (cfg.server.stripePriceMap != { }) [
+    "--stripe-price-map"
+    (pkgs.writeText "teachouse-stripe-price-map.json" (builtins.toJSON cfg.server.stripePriceMap))
   ]
   ++ lib.optionals mailEnabled [
     "--resend-api-key-file"
@@ -328,7 +325,7 @@ in
       description = ''
         The built console served from `--ui-dir`. Override this with
         `packages.teachouse-console.override { ... }` to supply the Turnstile
-        site key, the social-provider list and the Paddle client values, each of
+        site key and the social-provider list, each of
         which is substituted into the bundle at build time and is public.
       '';
     };
@@ -527,53 +524,55 @@ in
           };
         };
       };
-      paddleWebhookSecret = lib.mkOption {
+      stripeWebhookSecret = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
         description = ''
-          The billing webhook's whole authentication. The one option here that
-          takes a value rather than a path, because `tam-server` offers no
-          path-shaped flag for it — so setting it publishes the secret in
-          `/proc/<pid>/cmdline` to every local account. Left null the webhook
-          answers 503, which is the intended state until the binary grows a
-          `--paddle-webhook-secret-path`.
+          The billing webhook's whole authentication, Stripe's endpoint
+          signing secret. The one billing option here that takes a value
+          rather than a path, because `tam-server` offers no path-shaped flag
+          for it — so setting it publishes the secret in `/proc/<pid>/cmdline`
+          to every local account. Left null the webhook answers 503, which is
+          the intended state until the binary grows a
+          `--stripe-webhook-secret-path`.
         '';
       };
 
-      paddlePriceMap = lib.mkOption {
+      stripeSecretKeyFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = ''
+          A path to Stripe's secret API key, which is what opens a checkout,
+          re-reads a completed session and mints a billing-portal link. A path
+          rather than a value, for the reason the blob and entitlement keys
+          are paths: a secret on a command line is in every process listing on
+          the host. Left null, checkout and the portal answer 503.
+        '';
+      };
+
+      stripePriceMap = lib.mkOption {
         type = lib.types.attrsOf (
-          lib.types.submodule {
-            options = {
-              plan = lib.mkOption {
-                type = lib.types.enum [
-                  "subscriber"
-                  "migration_only"
-                ];
-                description = "The plan a purchase of this Paddle price grants.";
-              };
-              rung = lib.mkOption {
-                type = lib.types.nullOr lib.types.ints.positive;
-                default = null;
-                description = "For a one-off Catalogue Import, the rung bought (resources); null for a subscription.";
-              };
-            };
-          }
+          lib.types.enum [
+            "sync_monthly"
+            "sync_yearly"
+            "founding_yearly"
+            "pack_20"
+            "pack_50"
+            "pack_100"
+            "pack_250"
+            "pack_500"
+            "move_with_me"
+          ]
         );
         default = { };
         example = {
-          "pri_01abc" = {
-            plan = "subscriber";
-          };
-          "pri_01def" = {
-            plan = "migration_only";
-            rung = 50;
-          };
+          "price_01abc" = "sync_monthly";
+          "price_01def" = "pack_100";
         };
         description = ''
-          Paddle price identifiers and the plan each grants when the webhook
-          reports it paid. Rendered to a file in the store, which is fine: a
-          price id is public and appears in the console bundle too. Empty, the
-          webhook still records the subscription but grants no plan, and the
+          Stripe price identifiers and what each one sells. Rendered to a file
+          in the store, which is fine: a price id is public. Empty, checkout
+          refuses every key and a completed session grants nothing, and the
           server says so at startup.
         '';
       };
@@ -873,8 +872,8 @@ in
     ];
 
     warnings =
-      lib.optional (cfg.server.paddleWebhookSecret != null) ''
-        services.teachouse.server.paddleWebhookSecret puts the billing webhook's
+      lib.optional (cfg.server.stripeWebhookSecret != null) ''
+        services.teachouse.server.stripeWebhookSecret puts the billing webhook's
         secret in /proc/<pid>/cmdline, where every local account can read it.
         tam-server takes every configuration value as argv and offers no
         path-shaped flag for this one.

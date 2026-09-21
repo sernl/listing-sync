@@ -21,6 +21,7 @@
 	import type { InventoryId } from '$lib/generated/vocab';
 	import { INVENTORY_ORDER } from '$lib/listings-view';
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
+	import Note from '$lib/Note.svelte';
 	import { VERDICT_TONE, VERDICT_WORD, countsLine } from '$lib/migration-plan';
 	import { AUTHORABLE, SHORT_NAME, platformTitle } from '$lib/platforms';
 	import StatusPill from '$lib/StatusPill.svelte';
@@ -193,11 +194,7 @@
 				Live
 			</label>
 		</div>
-		<p class="foot-note">
-			Draft is the default. A live publish on a Tes site cannot be reversed by us: neither
-			editing a published listing nor taking one back to draft is a transition we have
-			captured.
-		</p>
+		<Note icon="triangle-alert">A live publish on a Tes site cannot be reversed by us.</Note>
 
 		<div class="coll-verb-foot">
 			<Button
@@ -212,13 +209,9 @@
 		{#if planFailure !== null}
 			<Banner tone="bad">{planFailure}</Banner>
 		{:else if plan === null}
-			<p class="foot-note">
-				Nothing is queued by a preview. It says, for each resource in the collection, whether
-				it would be created on {SHORT_NAME[inventory]}, is already there, or is blocked and
-				why.
-			</p>
+			<Note>A preview queues nothing.</Note>
 		{:else if plan.rows.length === 0}
-			<p class="foot-note">This collection holds no resources, so there is nothing to send.</p>
+			<Note>This collection holds no resources, so there is nothing to send.</Note>
 		{:else}
 			<div class="plan-rows">
 				{#each plan.rows as row (row.product)}
@@ -244,7 +237,7 @@
 					</div>
 				{/each}
 			</div>
-			<p class="foot-note">{countsLine(plan.counts)}</p>
+			<Note>{countsLine(plan.counts)}</Note>
 		{/if}
 
 		{#if refusal !== null}

@@ -24,6 +24,7 @@ import { AUTHORABLE, SHORT_NAME } from '$lib/platforms';
 import type { Tone } from '$lib/StatusPill.svelte';
 import type { ChipTone } from '$lib/inventory';
 import type { InventoryId } from '$lib/generated/vocab';
+import type { IconName } from '$lib/icons';
 
 /** The status badge's tone for a chip's or a row's own tone, which are the
  *  same four words. `mut` is this board's word for nothing to act on, which
@@ -50,27 +51,52 @@ export interface TabDefinition {
 	id: TabId;
 	label: string;
 	hint: string;
+	icon: IconName;
 }
 
 export const RESOURCE_TABS: readonly TabDefinition[] = [
-	{ id: 'all', label: 'All', hint: 'Every resource in the catalogue.' },
+	{ id: 'all', label: 'All', hint: 'Every resource in the catalogue.', icon: 'layout-list' },
 	{
 		id: 'not_listed',
 		label: 'Not listed',
-		hint: 'No marketplace holds this resource yet.'
+		hint: 'No marketplace holds this resource yet.',
+		icon: 'minus'
 	},
 	{
 		id: 'draft',
 		label: 'Draft',
-		hint: 'A marketplace holds it and is not showing it to buyers.'
+		hint: 'A marketplace holds it and is not showing it to buyers.',
+		icon: 'pencil'
 	},
-	{ id: 'listed', label: 'Listed', hint: 'At least one marketplace is showing it.' },
+	{
+		id: 'listed',
+		label: 'Listed',
+		hint: 'At least one marketplace is showing it.',
+		icon: 'circle-check'
+	},
 	{
 		id: 'attention',
 		label: 'Needs you',
-		hint: 'Waiting on a sign-in, holding a send, or reporting a failure. Overlaps the other three on purpose.'
+		hint: 'Overlaps the other three on purpose.',
+		icon: 'triangle-alert'
 	}
 ];
+
+/** A glyph for every bulk verb, so the bar and the menu read as controls
+ *  rather than as a column of words. Total over `BulkVerb`, so a verb added
+ *  to `$lib/bulk-verbs` is drawn rather than silently glyphless. */
+export const BULK_ICON: Record<BulkVerb, IconName> = {
+	cross_list: 'share-2',
+	mark_listed: 'circle-check',
+	move: 'arrow-right-left',
+	price: 'tag',
+	map_terms: 'sliders-horizontal',
+	labels: 'tag',
+	add_to_collection: 'layers',
+	apply_template: 'layout-template',
+	edit: 'pencil',
+	delete: 'trash-2'
+};
 
 /** Where a resource stands, read from its chips: listed if any marketplace
  *  shows it, else draft if any holds it, else not listed. */

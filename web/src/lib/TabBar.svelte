@@ -1,5 +1,6 @@
 <script lang="ts" module>
 	import type { Marketplace } from '$lib/generated/vocab';
+	import type { IconName } from '$lib/icons';
 
 	export interface Tab {
 		id: string;
@@ -16,6 +17,10 @@
 		/** What the tab means where the label cannot say it, such as a filter
 		 *  that deliberately overlaps the others. */
 		hint?: string;
+		/** The glyph drawn before the label, where the tab is a kind of thing
+		 *  rather than a marketplace. Ignored on a tab that carries a `mark`,
+		 *  which is already a glyph. */
+		icon?: IconName;
 		/** The marketplace whose mark is drawn in place of the label, where the
 		 *  tab is one marketplace; the label stays the tab's accessible name. */
 		mark?: Marketplace;
@@ -31,6 +36,7 @@
 
 <script lang="ts">
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
+	import Icon from '$lib/Icon.svelte';
 
 	let {
 		tabs,
@@ -58,7 +64,7 @@
 			}}
 		>
 			{#if tab.mark === undefined}
-				{labelFor(tab)}
+				{#if tab.icon}<Icon name={tab.icon} size={14} />{/if}{labelFor(tab)}
 			{:else}
 				<MarketplaceMark marketplace={tab.mark} size={18} />{#if tab.count !== null}<span
 						class="count">({tab.count})</span

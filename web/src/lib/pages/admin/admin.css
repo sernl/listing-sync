@@ -151,6 +151,16 @@
 	gap: 12px;
 }
 
+/* The line between the two writes this form carries. A rule rather than a
+   heading: the sentence above each half already says which is which, and
+   both halves are one operator action against one tenant. */
+.op-grant hr {
+	border: 0;
+	border-top: 1px solid var(--line);
+	margin: 4px 0;
+	width: 100%;
+}
+
 .op-table select {
 	border: 1px solid var(--line);
 	background: var(--surface);

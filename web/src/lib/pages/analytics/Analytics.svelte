@@ -7,6 +7,7 @@
 	import { remember, remembered } from '$lib/dismissal';
 	import { agoLabel } from '$lib/elapsed';
 	import Field from '$lib/Field.svelte';
+	import Note from '$lib/Note.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
@@ -171,7 +172,8 @@
 	<PageHead
 		icon="chart-line"
 		title="Analytics"
-		description="What each marketplace reports about your resources, and when it last said so."
+		description="What each marketplace reports about your resources."
+		guide="analytics"
 	>
 		{#snippet aside()}
 			<div class="an-meta">
@@ -213,8 +215,7 @@
 				remember('analytics.tpt-reports-only');
 			}}
 		>
-			Only TPT reports figures today. TES reports none, so its panel counts your own
-			resources instead.
+			Only TPT reports figures today.
 		</Banner>
 	{/if}
 
@@ -299,10 +300,7 @@
 							</div>
 						{/each}
 					</div>
-					<p class="an-note">
-						Each listing shows what we last recorded, not a live check of TES. The price is
-						the one in your Resources; TES may show a different one.
-					</p>
+					<Note>Each listing shows what we last recorded, not a live check of TES.</Note>
 				{/if}
 			</Panel>
 		{:else}
@@ -353,9 +351,7 @@
 							<div class="an-l">In another state</div>
 						</div>
 					</div>
-					<p class="an-note">
-						Each listing shows what we last recorded, not a live check of the marketplace.
-					</p>
+					<Note>Each listing shows what we last recorded, not a live check.</Note>
 				{/if}
 			</Panel>
 		{/if}
@@ -366,7 +362,7 @@
 			<Placeholder
 				icon="chart-line"
 				headline="{silent} reports no figures"
-				body="There is nothing to rank here — the panels above count your own Resources instead."
+				body="The panels above count your own Resources instead."
 			/>
 		{:else if figuresRead === 'failed'}
 			<p class="an-quiet">The analytics could not be read.</p>
@@ -416,10 +412,7 @@
 					</tbody>
 				</table>
 			</div>
-			<p class="an-note">
-				Every figure is a captured total, not a live one. A row states the age of its oldest
-				figure, so nothing above reads fresher than it is.
-			</p>
+			<Note>Every figure is a captured total, not a live one.</Note>
 		{/if}
 	</Panel>
 </div>

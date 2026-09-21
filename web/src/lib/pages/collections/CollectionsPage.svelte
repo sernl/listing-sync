@@ -16,6 +16,8 @@
 	import Field from '$lib/Field.svelte';
 	import Icon from '$lib/Icon.svelte';
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
+	import MenuItem from '$lib/MenuItem.svelte';
+	import Note from '$lib/Note.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
@@ -150,7 +152,8 @@
 	<PageHead
 		icon="layers"
 		title="Collections"
-		description="Ordered sets of your resources: publish, apply a template or export a whole set at once."
+		description="Ordered sets of your resources."
+		guide="labels-and-collections"
 	>
 		{#snippet aside()}
 			<Button
@@ -230,7 +233,7 @@
 		<p class="quiet">Loading…</p>
 	{:else if collections.isError}
 		<Banner tone="bad" title="We could not read your collections">
-			Nothing has changed. We could not load the list just now.
+			Nothing has changed.
 			{#snippet action()}
 				<Button onclick={() => collections.refetch()}>Try again</Button>
 			{/snippet}
@@ -287,17 +290,19 @@
 						</span>
 					{/snippet}
 					{#snippet menu(close: () => void)}
-						<a class="coll-menu-link" href={`/collections/${collection.id}`}>Open</a>
-						<button
-							class="coll-danger"
-							type="button"
+						<a class="coll-menu-link menu-item" href={`/collections/${collection.id}`}>
+							<Icon name="eye" size={14} />Open
+						</a>
+						<MenuItem
+							icon="trash-2"
+							danger
 							onclick={() => {
 								close();
 								confirming = collection.id;
 							}}
 						>
 							Delete
-						</button>
+						</MenuItem>
 					{/snippet}
 				</RowCard>
 			{/each}
@@ -306,9 +311,8 @@
 		{#if removing !== null}
 			<Panel title={`Delete ${removing.name}?`}>
 				<p>
-					The collection goes and its order with it. The {countLine(removing.count)} in it stay
-					in your Resources, on every marketplace they are already on: a collection is a way
-					of picking resources, not a place they are kept.
+					The {countLine(removing.count)} in it stay in your Resources, on every marketplace
+					they are already on.
 				</p>
 				<div class="coll-form-foot">
 					<Button
@@ -324,6 +328,6 @@
 			</Panel>
 		{/if}
 
-		<p class="quiet">{WHAT_A_COLLECTION_IS}</p>
+		<Note>{WHAT_A_COLLECTION_IS}</Note>
 	{/if}
 </div>

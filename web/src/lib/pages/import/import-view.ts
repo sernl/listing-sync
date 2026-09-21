@@ -247,20 +247,8 @@ export function notConnected(card: ImportCard): string {
 /** The permanent line under the site choice, which says where the work runs
  *  and therefore what has to be open for it to run at all. */
 export function deviceLine(card: ImportCard): string {
-	return (
-		`${card.name} is read by the Teachouse app on your own device, under the login kept ` +
-		'there. Keep the app open; on Android, keep it in the foreground. You can leave this page.'
-	);
+	return `Keep the Teachouse app open on this device while ${card.name} is read.`;
 }
-
-/** What an import is, said before anything is chosen.
- *
- * Says what the footnote does not: that the arriving thing is a record, and
- * that the file's own location is part of it. What travels and what does not
- * is `FILES_STAY_ON_YOUR_COMPUTER`'s sentence, and stating it twice on one
- * screen makes a seller read the second as a correction of the first. */
-export const WHAT_AN_IMPORT_IS =
-	'An import adds your marketplace listings and their details to Resources. Files and target requirements are checked separately before crosslisting.';
 
 /** Where a connection is made, which is the marketplaces screen.
  *

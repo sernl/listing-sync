@@ -1,5 +1,6 @@
 ---
 import { loginUrl } from '../site.js';
+import { FOUNDING, foundingOpen, signupUrl } from '../pricing.js';
 
 /* About points at the challenge section and Resources at the marketplace strip,
    because neither has a page of its own. */
@@ -22,7 +23,13 @@ import { loginUrl } from '../site.js';
 			<a href="/#about">About</a>
 			<a href="/#resources">Resources</a>
 			<a class="btn" href={loginUrl}>Log in</a>
-			<a class="cta" href="/pricing/#founding">Join the Founding 100</a>
+			{
+				foundingOpen ? (
+					<a class="cta" href="/pricing/#founding">Join the Founding {FOUNDING.places}</a>
+				) : (
+					<a class="cta" href={signupUrl()}>Start free</a>
+				)
+			}
 		</nav>
 	</div>
 </header>

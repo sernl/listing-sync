@@ -5,18 +5,17 @@
 
 	import PageHead from '$lib/PageHead.svelte';
 	import RuleWorkbench from '$lib/pages/automations/RuleWorkbench.svelte';
-	import { WHAT_MAPPING_IS } from '$lib/pages/automations/seller-rules';
+	import { MAPPING_GUIDE, WHAT_MAPPING_IS } from '$lib/pages/automations/seller-rules';
 	import '$lib/pages/automations/automations.css';
 </script>
 
 <div class="page">
 	<PageHead
 		icon="tag"
-		title="Mappings"
-		description="Choose the licence and resource type your resources land under, and approve each one."
+		title="Target terms"
+		description={WHAT_MAPPING_IS}
+		guide={MAPPING_GUIDE}
 	/>
-
-	<p class="migrate-lead">{WHAT_MAPPING_IS}</p>
 
 	<RuleWorkbench kind="mapping" />
 </div>

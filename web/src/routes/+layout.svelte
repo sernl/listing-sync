@@ -16,6 +16,7 @@
 	import { PUBLIC_ROUTES, signedOutView } from '$lib/nav';
 	import { createQueryClient, queryKeys } from '$lib/query';
 	import { signOut } from '$lib/sign-out';
+	import { resetIdentity } from '$lib/posthog';
 	import { afterToastDismissed, captureSlots, focusRegion } from '$lib/focus-return';
 	import type { IconName } from '$lib/icons';
 	import { dismiss, sweep, toastStore, type Toast } from '$lib/toast';
@@ -84,6 +85,9 @@
 	}
 
 	async function logout() {
+		// Before the sign-out, so the identity is dropped even if the call
+		// fails: the next seller on a shared machine must not inherit it.
+		resetIdentity();
 		await signOut(queryClient);
 	}
 
@@ -242,7 +246,7 @@
 			</div>
 			<div class="auth-card">
 				<h1>Signing you in</h1>
-				<p>This page needs a Teachouse account. Taking you to the sign-in screen.</p>
+				<p>Sign in to reach this page.</p>
 				<Button href="/login" tier="primary">Sign in</Button>
 			</div>
 		</div>

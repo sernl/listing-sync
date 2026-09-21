@@ -48,6 +48,7 @@
 		icon="activity"
 		title="Marketplace status"
 		description="Whether each marketplace is working right now."
+		guide="connecting"
 	>
 		{#snippet aside()}
 			<!-- Three answers, because a failed read is not an ongoing one. This
@@ -75,7 +76,7 @@
 			<Placeholder
 				icon="activity"
 				headline="No marketplace to show yet"
-				body="Every marketplace we work with appears here, with whether it is working."
+				body="Every marketplace we work with appears here."
 			/>
 		{:else}
 			{#each rows as row (row.marketplace)}
@@ -92,9 +93,6 @@
 					<StatusPill tone={row.tone} label={row.label} />
 				</div>
 			{/each}
-			<p class="foot-note">
-				This page needs no sign-in, because it matters most when signing in is what is broken.
-			</p>
 		{/if}
 	</Panel>
 </div>

@@ -155,17 +155,13 @@ export function checkName(typed: string, taken: readonly string[] = []): NameVer
  *
  * Written here rather than in the markup because the empty state and the
  * page's own lede say the same thing, and two copies are how they come to
- * disagree. */
-export const WHAT_A_COLLECTION_IS =
-	'A collection is an ordered set of your resources: a bundle, a unit, a series. ' +
-	'Publishing, applying a template and exporting all act on the whole set, so a ' +
-	'collection is picked once and used many times.';
+ * disagree. One sentence: what the three verbs do to a whole set is the
+ * `labels-and-collections` guide's. */
+export const WHAT_A_COLLECTION_IS = 'A collection is an ordered set of your resources.';
 
 /** What the free plan's seller reads under the New collection control.
  *
  * `limitReason` already says the plan includes none and to upgrade; this is
  * the sentence that says what they would be for, because a refusal with no
  * stated benefit reads as a control we took away. */
-export const WHY_COLLECTIONS_COST =
-	'Collections are on the subscription. Labels group resources on every plan; a ' +
-	'collection is what carries an order and the three verbs that act on a whole set.';
+export const WHY_COLLECTIONS_COST = 'Collections are on the subscription.';

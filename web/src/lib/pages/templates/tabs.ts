@@ -38,19 +38,22 @@ export function tabsOf(counts: { templates: number | null; mappings: number | nu
 			id: NEW,
 			label: 'New template',
 			count: null,
-			hint: 'What a new resource starts out with.'
+			hint: 'What a new resource starts out with.',
+			icon: 'circle-plus'
 		},
 		{
 			id: SAVED,
 			label: 'Saved templates',
 			count: counts.templates,
-			hint: 'The starting points you have already saved.'
+			hint: 'The starting points you have already saved.',
+			icon: 'layout-template'
 		},
 		{
 			id: MAPPING,
 			label: 'Marketplace words',
 			count: counts.mappings,
-			hint: 'How your own words land on each marketplace.'
+			hint: 'How your own words land on each marketplace.',
+			icon: 'sliders-horizontal'
 		}
 	];
 }

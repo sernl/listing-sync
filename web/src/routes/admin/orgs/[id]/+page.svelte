@@ -181,8 +181,13 @@
 			<dl class="acct-detail">
 				<dt>Plan</dt>
 				<dd>{planName(view.plan.plan)}</dd>
-				<dt>Rung</dt>
-				<dd>{view.plan.rung === null ? '—' : `up to ${view.plan.rung} resources`}</dd>
+				<dt>Moves</dt>
+				<dd>
+					{view.moves.available}
+					{#if view.moves.expiring_soonest !== undefined}
+						<span class="quiet">· soonest expiry {instant(view.moves.expiring_soonest)}</span>
+					{/if}
+				</dd>
 				<dt>Set by</dt>
 				<dd>
 					{#if view.plan.granted_by === null}

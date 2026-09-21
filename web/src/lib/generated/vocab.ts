@@ -392,7 +392,7 @@ export type QuotaKind =
   | "listings_max"
   | "storage_bytes_max"
   | "marketplaces_max"
-  | "migrations_per_month"
+  | "moves"
   | "templates_max"
   | "labels_max"
   | "collections_max"
@@ -403,7 +403,7 @@ export const QUOTA_KINDS: readonly QuotaKind[] = [
   "listings_max",
   "storage_bytes_max",
   "marketplaces_max",
-  "migrations_per_month",
+  "moves",
   "templates_max",
   "labels_max",
   "collections_max",
@@ -745,28 +745,47 @@ export const SCHEDULE_REPEATS: readonly ScheduleRepeat[] = [
 
 export type Plan =
   | "free"
-  | "migration_only"
   | "subscriber"
   | "studio";
 
 export const PLAN_IDS: readonly Plan[] = [
   "free",
-  "migration_only",
   "subscriber",
   "studio",
+];
+
+export type PriceKey =
+  | "sync_monthly"
+  | "sync_yearly"
+  | "founding_yearly"
+  | "pack_20"
+  | "pack_50"
+  | "pack_100"
+  | "pack_250"
+  | "pack_500"
+  | "move_with_me";
+
+export const PRICE_KEYS: readonly PriceKey[] = [
+  "sync_monthly",
+  "sync_yearly",
+  "founding_yearly",
+  "pack_20",
+  "pack_50",
+  "pack_100",
+  "pack_250",
+  "pack_500",
+  "move_with_me",
 ];
 
 export type SupportLevel =
   | "guides"
   | "email_2_days"
-  | "email_1_day"
-  | "email_30_days_after_purchase";
+  | "email_1_day";
 
 export const SUPPORT_LEVELS: readonly SupportLevel[] = [
   "guides",
   "email_2_days",
   "email_1_day",
-  "email_30_days_after_purchase",
 ];
 
 export type AiStatus =
@@ -778,9 +797,11 @@ export const AI_STATUSES: readonly AiStatus[] = [
 
 export type GrantedBy =
   | "paddle"
+  | "stripe"
   | "operator";
 
 export const GRANTED_BY: readonly GrantedBy[] = [
   "paddle",
+  "stripe",
   "operator",
 ];

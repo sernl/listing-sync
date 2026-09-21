@@ -3,15 +3,15 @@
 	import { ApiFailure, api } from '$lib/api';
 	import Button from '$lib/Button.svelte';
 	import Field from '$lib/Field.svelte';
-	import { IMPORT_LADDER, PLANS } from '$lib/generated/plans';
+	import { PLANS } from '$lib/generated/plans';
 	import type { Plan } from '$lib/generated/vocab';
 	import { toast } from '$lib/toast';
 
-	// The one control on the operator surface that writes an entitlement. A
-	// component rather than markup inside the organisation page because the
-	// users page sets a plan on the same organisation from a dialog, and two
-	// copies of this form are two forms to keep in step with what the server
-	// requires of a grant.
+	// The two controls on the operator surface that write an entitlement: the
+	// plan a tenant holds, and the moves it can spend. A component rather than
+	// markup inside the organisation page because the users page sets a plan
+	// on the same organisation from a dialog, and two copies of this form are
+	// two forms to keep in step with what the server requires.
 	let {
 		org,
 		onGranted
@@ -24,14 +24,9 @@
 	} = $props();
 
 	let chosen = $state<Plan>('subscriber');
-	let rung = $state<number>(IMPORT_LADDER[0]?.up_to ?? 20);
 	let expiry = $state('');
 	let why = $state('');
 
-	// The rung only means something on the one-off plan: it is the volume the
-	// purchase bought, and a rung on a subscription would be a figure nothing
-	// reads.
-	const needsRung = $derived(chosen === 'migration_only');
 	const trimmedWhy = $derived(why.trim());
 
 	/** Why the grant form cannot be submitted, or null where it can. */
@@ -49,7 +44,6 @@
 		mutationFn: () =>
 			api.grantPlan(org, {
 				plan: chosen,
-				...(needsRung ? { rung } : {}),
 				// Midnight UTC on the named day, because the server counts a
 				// month in UTC and a local midnight would expire a grant on the
 				// wrong day for half the world.
@@ -63,16 +57,47 @@
 			toast('info', 'Plan set. The tenant sees it on their next request.');
 		},
 		onError: (failure: Error) =>
+			toast('error', failure instanceof ApiFailure ? failure.message : 'The plan was not set.')
+	}));
+
+	// The moves half. Signed, because an operator reaches for this to correct
+	// a balance as often as to give moves away, and a correction that could
+	// only add would leave a double credit standing.
+	let delta = $state(0);
+	let creditWhy = $state('');
+
+	const trimmedCreditWhy = $derived(creditWhy.trim());
+
+	/** Why the credit cannot be submitted, or null where it can. */
+	const creditRefusal = $derived.by(() => {
+		if (!Number.isInteger(delta) || delta === 0) {
+			return 'A credit of no moves changes nothing.';
+		}
+		if (trimmedCreditWhy.length === 0) {
+			return 'A reason is required: the server is idempotent on it, and an unreasoned credit explains nothing.';
+		}
+		return null;
+	});
+
+	const crediting = createMutation(() => ({
+		mutationFn: () => api.creditMoves(org, { moves: delta, reason: trimmedCreditWhy }),
+		onSuccess: async () => {
+			await onGranted();
+			delta = 0;
+			creditWhy = '';
+			toast('info', 'Balance set. The tenant sees it on their next request.');
+		},
+		onError: (failure: Error) =>
 			toast(
 				'error',
-				failure instanceof ApiFailure ? failure.message : 'The plan was not set.'
+				failure instanceof ApiFailure ? failure.message : 'The balance was not changed.'
 			)
 	}));
 </script>
 
 <div class="op-grant">
 	<p class="foot-note">
-		This writes an operator grant against your own operator account. It does not touch Paddle,
+		This writes an operator grant against your own operator account. It does not touch Stripe,
 		so a tenant who is also paying keeps whichever grant is stronger.
 	</p>
 	<Field label="Plan" id={`grant-plan-${org}`}>
@@ -82,15 +107,6 @@
 			{/each}
 		</select>
 	</Field>
-	{#if needsRung}
-		<Field label="Rung" id={`grant-rung-${org}`} hint="The volume the one-off purchase covers.">
-			<select id={`grant-rung-${org}`} bind:value={rung}>
-				{#each IMPORT_LADDER as step (step.up_to)}
-					<option value={step.up_to}>up to {step.up_to} resources</option>
-				{/each}
-			</select>
-		</Field>
-	{/if}
 	<Field
 		label="Expires"
 		id={`grant-expiry-${org}`}
@@ -114,6 +130,30 @@
 			onclick={() => granting.mutate()}
 		>
 			{granting.isPending ? 'Setting…' : 'Set plan'}
+		</Button>
+	</div>
+
+	<hr />
+
+	<p class="foot-note">Credit moves this tenant can spend, or take back moves credited twice.</p>
+	<Field label="Moves" id={`credit-moves-${org}`} hint="Negative takes moves back.">
+		<input id={`credit-moves-${org}`} type="number" step="1" bind:value={delta} />
+	</Field>
+	<Field label="Reason" id={`credit-reason-${org}`} required>
+		<input
+			id={`credit-reason-${org}`}
+			type="text"
+			bind:value={creditWhy}
+			placeholder="Why this balance is being changed"
+		/>
+	</Field>
+	<div class="actions">
+		<Button
+			disabled={creditRefusal !== null || crediting.isPending}
+			reason={creditRefusal ?? (crediting.isPending ? 'The credit is being written.' : undefined)}
+			onclick={() => crediting.mutate()}
+		>
+			{crediting.isPending ? 'Crediting…' : 'Credit moves'}
 		</Button>
 	</div>
 </div>

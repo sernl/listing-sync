@@ -33,7 +33,7 @@ use tam_storage::{
 use tam_types::{CurrencyRule, InventoryId, MappingId, PriceIntent, ProductId, Timestamp, Uuid};
 
 use crate::catalogue::unbound_mapping;
-use crate::entitlement::{feature_refusal, migration_refusal, QuotaKind};
+use crate::entitlement::MoveRefusal;
 use crate::error::APIError;
 use crate::jobs::{storage_fault, validation, RequestKey};
 use crate::{AppState, OrgContext};
@@ -98,13 +98,21 @@ pub struct PairView {
     pub reason: Option<String>,
 }
 
-/// The month's allowance measured against this selection.
+/// The move balance measured against this selection.
+///
+/// Still called `cap` on the wire because the console's preview panel is
+/// built around it, but what it carries is a balance now: `available` is
+/// what the seller holds, not what a month allows, and there is no reset
+/// instant because nothing resets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CapView {
-    pub limit: u32,
-    pub used: u32,
-    pub remaining: u32,
-    pub resets_at: Timestamp,
+    pub available: i64,
+    /// What this selection would spend, which is the will-create count.
+    pub required: u32,
+    /// What would be left if the seller confirmed, floored at zero.
+    pub remaining: i64,
+    /// When the soonest part of the balance lapses, where any of it does.
+    pub expiring_soonest: Option<Timestamp>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -149,6 +157,18 @@ pub(crate) async fn plan_migration(
     Json(body): Json<MigrationBody>,
 ) -> Result<Json<MigrationPlanView>, APIError> {
     let plan = plan(&state, &context, &body).await?;
+    state.telemetry.capture(
+        context.org,
+        "migration_previewed",
+        serde_json::json!({
+            "source": body.source,
+            "target": body.target,
+            "disposition": plan.disposition.as_str(),
+            "will_create": plan.view.counts.will_create,
+            "already_there": plan.view.counts.already_there,
+            "blocked": plan.view.counts.blocked,
+        }),
+    );
     Ok(Json(plan.view))
 }
 
@@ -160,17 +180,6 @@ pub(crate) async fn create_migration(
     key: RequestKey,
     Json(body): Json<MigrationBody>,
 ) -> Result<Response, APIError> {
-    // The capability before the count. A plan that holds none of this
-    // capability is not exhausted for the month, it does not include moving
-    // resources at all, and the two refusals send the console to different
-    // places.
-    let caps = context.entitlement.caps;
-    if caps.migrations_per_month == 0 {
-        return Err(feature_refusal(
-            "migrations_per_month",
-            &QuotaKind::MigrationsPerMonth.sentence(0),
-        ));
-    }
     let requests = SyncRequestRepo::new(state.pool.clone());
     // A key whose migration the seller deleted, before the replay read below
     // and before the plan. The deleted request is hidden from `get`, so
@@ -224,17 +233,30 @@ pub(crate) async fn create_migration(
              either already there or blocked, and the reasons are on each row",
         ));
     }
-    // Counted in resources and re-checked here rather than trusted from the
-    // preview, which is a read the seller may have left open for an hour while
-    // another tab spent the same allowance.
-    let used = i64::from(plan.view.cap.used);
-    if used.saturating_add(i64::from(queued)) > i64::from(caps.migrations_per_month) {
-        return Err(migration_refusal(
-            used,
-            caps.migrations_per_month,
-            i64::from(queued),
-            plan.view.cap.resets_at,
-        ));
+    // Counted in moves and re-checked here rather than trusted from the
+    // preview, which is a read the seller may have left open for an hour
+    // while another tab spent the same balance. The balance is the only gate
+    // a move passes: no plan withholds the capability, so a seller with
+    // moves may always spend them and a seller with none is told to buy a
+    // pack rather than to upgrade.
+    let available = plan.view.cap.available;
+    if available < i64::from(queued) {
+        state.telemetry.capture(
+            context.org,
+            "migration_refused_by_cap",
+            serde_json::json!({
+                "requested": queued,
+                "available": available,
+                "cap_remaining_after": 0,
+                "plan": context.entitlement.grant.plan.as_str(),
+            }),
+        );
+        return Err(MoveRefusal {
+            available,
+            requested: i64::from(queued),
+            expiring_soonest: plan.view.cap.expiring_soonest,
+        }
+        .into());
     }
 
     let mappings = MappingRepo::new(state.pool.clone());
@@ -339,6 +361,24 @@ pub(crate) async fn create_migration(
             });
         }
     }
+    // Only a request this call actually wrote is a confirm; a replayed key
+    // answered above, and `written == false` is the same migration a moment
+    // later. Counting either would double the one number the pricing model
+    // is calibrated on.
+    if written {
+        state.telemetry.capture(
+            context.org,
+            "migration_confirmed",
+            serde_json::json!({
+                "source": body.source,
+                "target": body.target,
+                "disposition": plan.disposition.as_str(),
+                "queued": queued,
+                "cap_remaining_after": available.saturating_sub(i64::from(queued)),
+                "is_first_ever": first_migration_ever(&requests, context.org).await,
+            }),
+        );
+    }
     let status = if written {
         StatusCode::ACCEPTED
     } else {
@@ -353,6 +393,27 @@ pub(crate) async fn create_migration(
         }),
     )
         .into_response())
+}
+
+/// Whether the migration just written is this organisation's first ever.
+///
+/// Two rows are asked for and one is enough to answer: with the new request
+/// already committed, a second row means there was a migration before it. A
+/// read that fails answers `false`, because an analytics property is never
+/// worth failing a confirm the seller has already been told about.
+async fn first_migration_ever(requests: &SyncRequestRepo, org: tam_types::OrgId) -> bool {
+    let listed = requests
+        .list(
+            org,
+            &tam_storage::SyncRequestPage {
+                after: None,
+                limit: 2,
+                disposition: Some(Disposition::Migrate),
+                state: None,
+            },
+        )
+        .await;
+    matches!(listed, Ok(rows) if rows.len() <= 1)
 }
 
 /// Writes the minted mapping, and answers the row that already exists when a
@@ -411,17 +472,15 @@ async fn plan(
         _ => return Err(validation("disposition is \"sync\" or \"migrate\"")),
     };
     let now = (state.wall)();
-    let caps = context.entitlement.caps;
-    let usage = EntitlementRepo::new(state.pool.clone())
-        .usage(context.org, now)
+    let balance = EntitlementRepo::new(state.pool.clone())
+        .move_balance(context.org, now)
         .await
         .map_err(|error| storage_fault(state, &error))?;
-    let used = u32::try_from(usage.migrations_this_month).unwrap_or(u32::MAX);
-    let cap = CapView {
-        limit: caps.migrations_per_month,
-        used,
-        remaining: caps.migrations_per_month.saturating_sub(used),
-        resets_at: usage.migrations_reset_at,
+    let cap = |required: u32| CapView {
+        available: balance.available,
+        required,
+        remaining: balance.available.saturating_sub(i64::from(required)).max(0),
+        expiring_soonest: balance.expiring_soonest,
     };
     let pair = pair_view(body.source, body.target);
 
@@ -446,7 +505,7 @@ async fn plan(
         return Ok(Plan {
             view: MigrationPlanView {
                 pair,
-                cap,
+                cap: cap(0),
                 rows,
                 counts,
             },
@@ -651,7 +710,7 @@ async fn plan(
     Ok(Plan {
         view: MigrationPlanView {
             pair,
-            cap,
+            cap: cap(counts.will_create),
             rows,
             counts,
         },

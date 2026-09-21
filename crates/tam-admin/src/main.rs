@@ -18,17 +18,29 @@
 //!        tam-admin <db-url> revoke (--user <uuid> | --email <address>)
 //!        tam-admin <db-url> list
 //!        tam-admin <db-url> backfill-workflow-owners
+//!        tam-admin guides seed --dir <path> [--dry-run] [--db <url>]
+//!                              [--user <uuid> | --email <address>]
+//!
+//! The guide seed is the one command whose database is optional: `--dry-run`
+//! reads the corpus, prints what it would write and never connects, so a
+//! build lane can check the files parse without a server.
 
 #![forbid(unsafe_code)]
 
-use tam_storage::{OperatorRepo, SessionRepo, SyncRequestRepo};
+mod guides_seed;
+
+use std::path::PathBuf;
+
+use tam_storage::{GuideRepo, OperatorRepo, SessionRepo, SyncRequestRepo};
 use tam_types::{Timestamp, UserId, Uuid};
 
 const USAGE: &str =
     "usage: tam-admin <db-url> grant  (--user <uuid> | --email <address>) [--by <who>]\n\
                      \x20      tam-admin <db-url> revoke (--user <uuid> | --email <address>)\n\
                      \x20      tam-admin <db-url> list\n\
-                     \x20      tam-admin <db-url> backfill-workflow-owners";
+                     \x20      tam-admin <db-url> backfill-workflow-owners\n\
+                     \x20      tam-admin guides seed --dir <path> [--dry-run] [--db <url>]\n\
+                     \x20                            [--user <uuid> | --email <address>]";
 
 /// What `granted_by` carries when nobody named a granter. The bootstrap grant
 /// is made from the box before any operator exists to attribute it to, and
@@ -84,10 +96,27 @@ enum Command {
     /// every organisation -- and it is idempotent, so the launcher may run
     /// it on every boot.
     BackfillWorkflowOwners,
+    /// The help corpus, read from a directory of Markdown files and written
+    /// into the guide tables.
+    ///
+    /// The author is who the working copy records as having last touched it.
+    /// Nobody names one in the ordinary case, and the command then attributes
+    /// the write to the first operator holding an active grant: a seed is a
+    /// deployment step, and attributing it to a human who did not run it
+    /// would be the tool inventing evidence, while attributing it to nobody
+    /// is not available -- the column the write fills is not nullable.
+    GuidesSeed {
+        dir: PathBuf,
+        dry_run: bool,
+        author: Option<Subject>,
+    },
 }
 
 struct Invocation {
-    db_url: String,
+    /// Absent where the command does not need one: `guides seed --dry-run`
+    /// reads files and prints, and a database it never opens is not a
+    /// missing argument.
+    db_url: Option<String>,
     command: Command,
 }
 
@@ -101,17 +130,21 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     let mut user = None;
     let mut email = None;
     let mut granted_by = None;
+    let mut dir = None;
+    let mut db = None;
+    let mut dry_run = false;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--user" => user = Some(arguments.next().ok_or("--user needs a uuid argument")?),
             "--email" => email = Some(arguments.next().ok_or("--email needs an address")?),
             "--by" => granted_by = Some(arguments.next().ok_or("--by needs a name argument")?),
+            "--dir" => dir = Some(arguments.next().ok_or("--dir needs a directory argument")?),
+            "--db" => db = Some(arguments.next().ok_or("--db needs a connection url")?),
+            "--dry-run" => dry_run = true,
             _ => positional.push(argument),
         }
     }
-    let db_url = positional.first().cloned().ok_or_else(usage_error)?;
-    let verb = positional.get(1).cloned().ok_or_else(usage_error)?;
     let subject = || -> Result<Subject, Box<dyn std::error::Error>> {
         match (&user, &email) {
             (Some(raw), None) => Ok(Subject::User(user_from_uuid(raw)?)),
@@ -122,6 +155,37 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
             }
         }
     };
+    // Naming nobody is the ordinary case for a seed, so the two-ways refusal
+    // still applies but the neither-way case is an absence rather than a
+    // fault.
+    let optional_subject = || -> Result<Option<Subject>, Box<dyn std::error::Error>> {
+        match (&user, &email) {
+            (None, None) => Ok(None),
+            (Some(_) | None, _) => subject().map(Some),
+        }
+    };
+
+    let head = positional.first().cloned().ok_or_else(usage_error)?;
+    // The guide seed is addressed by name rather than by database, because
+    // its dry run has no database to be addressed by.
+    if head == "guides" {
+        let verb = positional.get(1).map_or("", String::as_str);
+        if verb != "seed" {
+            eprintln!("{USAGE}");
+            return Err(format!("unknown guides command {verb:?}").into());
+        }
+        let dir = dir.ok_or("name the corpus with --dir <path>")?;
+        return Ok(Invocation {
+            db_url: db,
+            command: Command::GuidesSeed {
+                dir: PathBuf::from(dir),
+                dry_run,
+                author: optional_subject()?,
+            },
+        });
+    }
+
+    let verb = positional.get(1).cloned().ok_or_else(usage_error)?;
     let command = match verb.as_str() {
         "grant" => Command::Grant {
             subject: subject()?,
@@ -137,7 +201,10 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
             return Err(format!("unknown command {other:?}").into());
         }
     };
-    Ok(Invocation { db_url, command })
+    Ok(Invocation {
+        db_url: Some(head),
+        command,
+    })
 }
 
 /// The subject to a user id, refusing rather than guessing when no such user
@@ -161,12 +228,44 @@ fn render(user: UserId) -> String {
     uuid::Uuid::from_bytes(user.0 .0).to_string()
 }
 
+/// Who a guide seed records as the author when the operator named nobody:
+/// whoever holds the oldest active operator grant.
+async fn seeding_author(operators: &OperatorRepo) -> Result<UserId, Box<dyn std::error::Error>> {
+    operators
+        .list()
+        .await?
+        .into_iter()
+        .find(|record| record.revoked_at.is_none())
+        .map(|record| record.user)
+        .ok_or_else(|| {
+            "no operator holds an active grant; run `grant` first or name an author with --user <uuid>".into()
+        })
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let invocation = parse_invocation()?;
+
+    // The one path that needs no server, answered before the connection is
+    // attempted rather than after it fails.
+    if let Command::GuidesSeed {
+        dir,
+        dry_run: true,
+        author: _,
+    } = &invocation.command
+    {
+        for file in guides_seed::read_directory(dir)? {
+            println!("{}", file.summary());
+        }
+        return Ok(());
+    }
+
+    let db_url = invocation
+        .db_url
+        .ok_or("name the database with <db-url> or --db <url>")?;
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(2)
-        .connect(&invocation.db_url)
+        .connect(&db_url)
         .await?;
     let operators = OperatorRepo::new(pool.clone());
     let sessions = SessionRepo::new(pool.clone());
@@ -221,6 +320,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tenants += 1;
             }
             println!("workflow owners backfilled: {linked} anchor(s) across {tenants} tenant(s)");
+        }
+        Command::GuidesSeed {
+            dir,
+            dry_run: _,
+            author,
+        } => {
+            // The dry run returned before the pool was opened, so reaching
+            // here means the corpus is being written.
+            let author = match author {
+                Some(subject) => resolve(&sessions, subject).await?,
+                None => seeding_author(&operators).await?,
+            };
+            let files = guides_seed::read_directory(&dir)?;
+            let guides = GuideRepo::new(pool.clone());
+            let outcomes = guides_seed::seed(&guides, &files, author, wall_now()?).await?;
+            println!("{}", guides_seed::report(&outcomes));
         }
     }
     Ok(())

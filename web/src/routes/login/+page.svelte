@@ -17,7 +17,21 @@
 	import { TURNSTILE_SITE_KEY, captchaOptions, captchaPending } from '$lib/captcha';
 	import { ENABLED_SOCIAL_PROVIDERS, type SocialProvider } from '$lib/social-providers';
 	import { toast } from '$lib/toast';
+	import { page } from '$app/state';
+	import { peekIntent, safeNext, safePrice, writeIntent } from '$lib/pages/account/intent';
 	import '$lib/pages/account/signed-out.css';
+
+	/** What the landing page asked for, if the sign-in link carried it. The
+	 * price is written down before the browser leaves for the console,
+	 * because `/settings/subscription` is the page that spends it and this
+	 * one only passes it on. A social sign-in comes back here with the query
+	 * gone, so the stored record is what answers then. */
+	const intendedNext = $derived(safeNext(page.url.searchParams.get('next')));
+	const intendedPrice = $derived(safePrice(page.url.searchParams.get('price')));
+
+	$effect(() => {
+		writeIntent({ next: intendedNext, price: intendedPrice });
+	});
 
 	/** Named here rather than in the markup: a build with no social provider
 	 * offers no linked account, and saying otherwise sends the human looking
@@ -54,7 +68,11 @@
 		try {
 			await establishSession();
 			await invalidateAll();
-			await goto('/');
+			// The page the landing CTA asked for, from the link where it is
+			// still in the query and from the stored record where a provider
+			// redirect has taken it out. Peeked rather than read: the
+			// checkout in the same record is not this page's to spend.
+			await goto(intendedNext ?? peekIntent()?.next ?? '/');
 		} catch (failure) {
 			if (failure instanceof BridgeFailure && failure.refusal === 'unverified-email') {
 				awaitingVerification = (await identity())?.email ?? fallbackAddress;
@@ -161,10 +179,7 @@
 <div class="auth-card acct-signed-out">
 	{#if awaitingVerification !== null}
 		<h1>Verify your email</h1>
-		<p>
-			We sent a link to <b>{awaitingVerification}</b>. Teachouse opens once that address is
-			confirmed.
-		</p>
+		<p>Open the link we sent to <b>{awaitingVerification}</b>.</p>
 		<div class="actions">
 			<Button
 				tier="primary"

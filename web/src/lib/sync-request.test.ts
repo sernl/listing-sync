@@ -602,9 +602,9 @@ describe('the screen serves an import and says so for anything else', () => {
 
 	it('states where the seller files stay, which is the sentence the screen exists for', () => {
 		expect(FILES_STAY_ON_YOUR_COMPUTER).toMatch(/your own computer/i);
-		expect(FILES_STAY_ON_YOUR_COMPUTER).toMatch(/never reach our servers/i);
-		// Narrower than "we keep nothing", because the thumbnail is kept.
-		expect(FILES_STAY_ON_YOUR_COMPUTER).toMatch(/thumbnail/i);
+		// One sentence, per the wording rule: the qualification about the
+		// thumbnail lives in the `your-files` guide the drawing pages link to.
+		expect(FILES_STAY_ON_YOUR_COMPUTER.split('.').filter((s) => s.trim() !== '')).toHaveLength(1);
 	});
 });
 

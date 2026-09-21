@@ -38,11 +38,18 @@ use serde::{Deserialize, Serialize};
 /// is gated on.
 ///
 /// `Studio` exists in code and is never sold: decisions.md, "Plans,
-/// capabilities and the pricing re-evaluation, 2026-09-12" defers it until a
-/// fifth of subscribers exceed 300 resources or hit the migration cap twice
-/// in a quarter. Declaring it now is what makes that trigger a row in
-/// [`PLANS`] with `sold: false` rather than a second pricing model invented
-/// under pressure.
+/// capabilities and the pricing re-evaluation, 2026-09-12" defers it until
+/// ten paying subscribers exist or one catalogue above the top pack asks for
+/// a quote. Declaring it now is what makes that trigger a row in [`PLANS`]
+/// with `sold: false` rather than a second pricing model invented under
+/// pressure.
+///
+/// `migration_only` is gone, and its absence is the one structural change the
+/// 2026-09-20 pricing re-evaluation makes: a pack buyer is a Free account
+/// carrying a balance of moves rather than a plan of their own, which is one
+/// fewer plan to gate, render and explain. Migration 0084 narrows the `plan`
+/// CHECK to this set and turns every live `migration_only` grant into the
+/// ledger credit it always meant.
 ///
 /// `Free` is the default in every direction a plan can go missing: an
 /// organisation with no grant, a grant that has expired, a device token
@@ -54,7 +61,6 @@ pub enum Plan {
     #[default]
     Free,
     Subscriber,
-    MigrationOnly,
     Studio,
 }
 
@@ -67,21 +73,15 @@ impl Plan {
     /// exhaustive `match` in `all_is_total_over_the_enum`, which fails to
     /// compile when a variant is added. `wildcard_enum_match_arm` is denied
     /// workspace-wide, so that match cannot be silenced with `_`.
-    pub const ALL: [Self; 4] = [
-        Self::Free,
-        Self::MigrationOnly,
-        Self::Subscriber,
-        Self::Studio,
-    ];
+    pub const ALL: [Self; 3] = [Self::Free, Self::Subscriber, Self::Studio];
 
     /// The wire spelling, which is also the spelling the `plan` CHECK
-    /// constraint in migration 0069 enumerates.
+    /// constraint enumerates after migration 0084.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Free => "free",
             Self::Subscriber => "subscriber",
-            Self::MigrationOnly => "migration_only",
             Self::Studio => "studio",
         }
     }
@@ -102,46 +102,52 @@ impl Plan {
     ///
     /// Not `Ord` on the enum, because the derive would key on declaration
     /// order and make the precedence an accident of where a variant was
-    /// typed. Studio outranks Subscriber outranks MigrationOnly outranks
-    /// Free: a one-off import bought by an organisation that later subscribes
-    /// must not hold the subscription down to the one-off's narrower set.
+    /// typed. Studio outranks Subscriber outranks Free: an operator grant of
+    /// Studio made beside a live subscription must not be held down to the
+    /// subscription's narrower set.
     #[must_use]
     pub const fn strength(self) -> u8 {
         match self {
             Self::Free => 0,
-            Self::MigrationOnly => 1,
-            Self::Subscriber => 2,
-            Self::Studio => 3,
+            Self::Subscriber => 1,
+            Self::Studio => 2,
         }
     }
 
-    /// What this plan grants, at the rung it was bought at.
+    /// What this plan grants.
     ///
     /// DECIDED (decisions.md, "Plans, capabilities and the pricing
-    /// re-evaluation, 2026-09-12", against the gating matrix in
-    /// `docs/notes/design/research/2026-09-12-pricing-and-tiers.md` section
-    /// 6): every figure here is the founder's, carried unchanged. The
-    /// migration cap re-opens on the first subscriber who hits it twice in a
-    /// quarter, which is also the trigger that ships `Studio`.
+    /// re-evaluation, 2026-09-12", as amended by
+    /// `docs/notes/design/research/2026-09-20-pricing-model-re-evaluation.md`
+    /// section 3.2): every figure here is that table's, carried unchanged.
+    /// The monthly move allowance re-opens on the first subscriber who
+    /// exhausts the rolling cap twice in a quarter, which is also the trigger
+    /// that ships `Studio`.
     ///
-    /// `rung` is read only by `MigrationOnly`, whose whole product is the
-    /// volume bought; every other plan ignores it. A `MigrationOnly` grant
-    /// with no rung grants nothing, which is the honest reading of a purchase
-    /// whose price we could not map: the buyer is refused and support can see
-    /// why, rather than silently receiving the largest rung.
+    /// `rung` is read only by `Studio`, where it is an operator-set monthly
+    /// move allowance above the published hundred, granted with a reason for
+    /// a founder trial or a large migration; it never lowers one. No other
+    /// plan reads it, because a pack is no longer a plan: it is a credit in
+    /// `move_ledger`, and the balance is a query rather than a capability.
     #[must_use]
     pub const fn capabilities(self, rung: Option<u32>) -> Capabilities {
         match self {
+            // Look: the whole catalogue visible on both marketplaces, and
+            // five moves to watch one listing actually appear on the other
+            // side. There is no other trial, so import is not gated at all
+            // and the only ceiling is the storage one behind `resources_max`.
             Self::Free => Capabilities {
-                resources_max: 20,
-                marketplaces_max: 1,
+                resources_max: 500,
+                marketplaces_max: u32::MAX,
                 storage_bytes_max: 1 << 30,
                 import_spreadsheet: true,
-                import_marketplace: false,
-                duplicate_review: false,
-                publish_marketplaces_max: 1,
-                edit_days_after_purchase: None,
-                migrations_per_month: 0,
+                import_marketplace: true,
+                duplicate_review: true,
+                publish_marketplaces_max: u32::MAX,
+                moves_per_month: 0,
+                moves_accrual_cap: 0,
+                free_moves_lifetime: 5,
+                pack_edit_days: 90,
                 scheduling: false,
                 sync_pull_interval_secs: None,
                 auto_publish_rules: false,
@@ -150,20 +156,22 @@ impl Plan {
                 labels_max: 5,
                 analytics: false,
                 export: true,
-                devices_max: 1,
+                devices_max: 5,
                 ai_fills_per_month: 0,
                 support: Support::Guides,
             },
             Self::Subscriber => Capabilities {
-                resources_max: 400,
+                resources_max: u32::MAX,
                 marketplaces_max: u32::MAX,
                 storage_bytes_max: 20 << 30,
                 import_spreadsheet: true,
                 import_marketplace: true,
                 duplicate_review: true,
                 publish_marketplaces_max: u32::MAX,
-                edit_days_after_purchase: None,
-                migrations_per_month: 20,
+                moves_per_month: 25,
+                moves_accrual_cap: 75,
+                free_moves_lifetime: 0,
+                pack_edit_days: 90,
                 scheduling: true,
                 sync_pull_interval_secs: Some(6 * 3_600),
                 auto_publish_rules: true,
@@ -172,45 +180,10 @@ impl Plan {
                 labels_max: 20,
                 analytics: true,
                 export: true,
-                devices_max: 2,
+                devices_max: 5,
                 ai_fills_per_month: 200,
                 support: Support::Email2Days,
             },
-            // One publish pass over the imported set, and thirty days in
-            // which to correct it. `publish_marketplaces_max` is every
-            // marketplace because a move has two sides; what bounds the pass
-            // is the rung, which is also the migration allowance.
-            Self::MigrationOnly => {
-                let bought = match rung {
-                    Some(bought) => bought,
-                    None => 0,
-                };
-                Capabilities {
-                    resources_max: bought,
-                    marketplaces_max: u32::MAX,
-                    storage_bytes_max: 5 << 30,
-                    import_spreadsheet: true,
-                    import_marketplace: true,
-                    duplicate_review: true,
-                    publish_marketplaces_max: u32::MAX,
-                    edit_days_after_purchase: Some(30),
-                    migrations_per_month: bought,
-                    scheduling: false,
-                    sync_pull_interval_secs: None,
-                    auto_publish_rules: false,
-                    templates_max: 1,
-                    collections_max: 0,
-                    labels_max: 0,
-                    analytics: false,
-                    export: true,
-                    devices_max: 1,
-                    ai_fills_per_month: 0,
-                    support: Support::Email30DaysAfterPurchase,
-                }
-            }
-            // The rung on a Studio grant is an operator-set monthly
-            // allowance above the published hundred, granted with a reason
-            // for a founder trial or a large migration; it never lowers it.
             Self::Studio => Capabilities {
                 resources_max: u32::MAX,
                 marketplaces_max: u32::MAX,
@@ -219,11 +192,13 @@ impl Plan {
                 import_marketplace: true,
                 duplicate_review: true,
                 publish_marketplaces_max: u32::MAX,
-                edit_days_after_purchase: None,
-                migrations_per_month: match rung {
+                moves_per_month: match rung {
                     Some(granted) if granted > 100 => granted,
                     _ => 100,
                 },
+                moves_accrual_cap: 300,
+                free_moves_lifetime: 0,
+                pack_edit_days: 90,
                 scheduling: true,
                 sync_pull_interval_secs: Some(3_600),
                 auto_publish_rules: true,
@@ -232,7 +207,7 @@ impl Plan {
                 labels_max: 50,
                 analytics: true,
                 export: true,
-                devices_max: 3,
+                devices_max: 5,
                 ai_fills_per_month: 600,
                 support: Support::Email1Day,
             },
@@ -251,18 +226,11 @@ pub enum Support {
     Email2Days,
     #[serde(rename = "email_1_day")]
     Email1Day,
-    #[serde(rename = "email_30_days_after_purchase")]
-    Email30DaysAfterPurchase,
 }
 
 impl Support {
     /// Every level, for the same reason [`Plan::ALL`] exists.
-    pub const ALL: [Self; 4] = [
-        Self::Guides,
-        Self::Email2Days,
-        Self::Email1Day,
-        Self::Email30DaysAfterPurchase,
-    ];
+    pub const ALL: [Self; 3] = [Self::Guides, Self::Email2Days, Self::Email1Day];
 
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -270,7 +238,6 @@ impl Support {
             Self::Guides => "guides",
             Self::Email2Days => "email_2_days",
             Self::Email1Day => "email_1_day",
-            Self::Email30DaysAfterPurchase => "email_30_days_after_purchase",
         }
     }
 }
@@ -286,8 +253,8 @@ impl Support {
 /// `u32::MAX` means "no ceiling" on the count fields. A sentinel rather than
 /// an `Option<u32>` because every reader of those fields is a comparison, and
 /// `used >= max` is correct at the sentinel while an `Option` would push a
-/// match into each of the nine gate sites. The two genuinely absent
-/// quantities are `Option`: no edit deadline, and no sync cadence at all.
+/// match into each of the nine gate sites. The one genuinely absent quantity
+/// is an `Option`: no sync cadence at all.
 #[expect(
     clippy::struct_excessive_bools,
     reason = "the eight flags are the price list's own rows, not a state machine; \
@@ -310,12 +277,25 @@ pub struct Capabilities {
     /// How many marketplaces one resource may be published to. `u32::MAX` is
     /// every marketplace; `0` would be none, which no plan holds.
     pub publish_marketplaces_max: u32,
-    /// How long after the purchase a marketplace listing may still be edited
-    /// or deleted. `None` is unlimited, which is every recurring plan.
-    pub edit_days_after_purchase: Option<u32>,
-    /// Resources, not batches: the cap counts the resources a month's copies
-    /// and moves name, because a per-batch cap is gamed by batching.
-    pub migrations_per_month: u32,
+    /// How many moves this plan credits at the start of each billing period,
+    /// which is zero on every plan that is not a subscription. A move is one
+    /// resource committed to the other marketplace, counted at commit after
+    /// duplicate merge, whether it lands as a draft or live.
+    pub moves_per_month: u32,
+    /// The ceiling the monthly credit accrues to. A subscriber who moves
+    /// nothing for four months holds this, not four months of allowance:
+    /// the roll-up is a buffer for an uneven month rather than a balance to
+    /// hoard and then cancel against.
+    pub moves_accrual_cap: u32,
+    /// How many moves an organisation is given once, ever, the first time a
+    /// storefront binds to it. Granted against the storefront rather than
+    /// against the organisation — `storefront_allowance` is the record — so
+    /// a second organisation naming the same shop is given nothing.
+    pub free_moves_lifetime: u32,
+    /// How long after a move the listing it made may still be edited or
+    /// deleted through us. Ninety days on every plan: the window is the
+    /// pack's promise, and a pack is bought on any plan.
+    pub pack_edit_days: u32,
     pub scheduling: bool,
     /// How often the device re-enumerates a shop. `None` is no sync pulls.
     pub sync_pull_interval_secs: Option<u32>,
@@ -335,9 +315,10 @@ pub struct Capabilities {
 
 /// One row of the price list.
 ///
-/// `monthly_cents` and `yearly_cents` are absent for the two plans that carry
-/// no recurring price: Free, which charges nothing, and Catalogue Import,
-/// which is priced by the rung ladder below rather than by the row.
+/// `monthly_cents` and `yearly_cents` are absent for Free, which charges
+/// nothing. Packs are not rows here: a pack buys a balance of moves on
+/// whatever plan the buyer already holds, so it is priced in [`PACKS`] and
+/// keyed by [`PriceKey`] rather than named as a plan.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanRow {
     pub id: Plan,
@@ -351,10 +332,113 @@ pub struct PlanRow {
     pub sold: bool,
 }
 
-/// One rung of the Catalogue Import ladder: a resource ceiling and its price.
+/// Everything a checkout can be opened for, as one closed vocabulary.
+///
+/// The processor's own price identifiers are opaque strings it mints and we
+/// never choose; `--stripe-price-map` maps each of them onto one of these,
+/// so the vocabulary crossing the wire and the vocabulary the server gates
+/// on are the same closed set rather than two string tables that can drift.
+/// A key here is not a plan: `Pack20` and `MoveWithMe` grant no plan at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum PriceKey {
+    #[serde(rename = "sync_monthly")]
+    SyncMonthly,
+    #[serde(rename = "sync_yearly")]
+    SyncYearly,
+    #[serde(rename = "founding_yearly")]
+    FoundingYearly,
+    #[serde(rename = "pack_20")]
+    Pack20,
+    #[serde(rename = "pack_50")]
+    Pack50,
+    #[serde(rename = "pack_100")]
+    Pack100,
+    #[serde(rename = "pack_250")]
+    Pack250,
+    #[serde(rename = "pack_500")]
+    Pack500,
+    #[serde(rename = "move_with_me")]
+    MoveWithMe,
+}
+
+impl PriceKey {
+    /// Every key, in the order a pricing page reads them.
+    pub const ALL: [Self; 9] = [
+        Self::SyncMonthly,
+        Self::SyncYearly,
+        Self::FoundingYearly,
+        Self::Pack20,
+        Self::Pack50,
+        Self::Pack100,
+        Self::Pack250,
+        Self::Pack500,
+        Self::MoveWithMe,
+    ];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SyncMonthly => "sync_monthly",
+            Self::SyncYearly => "sync_yearly",
+            Self::FoundingYearly => "founding_yearly",
+            Self::Pack20 => "pack_20",
+            Self::Pack50 => "pack_50",
+            Self::Pack100 => "pack_100",
+            Self::Pack250 => "pack_250",
+            Self::Pack500 => "pack_500",
+            Self::MoveWithMe => "move_with_me",
+        }
+    }
+
+    /// The key a stored or configured spelling names, or `None` for one this
+    /// build does not know. `None` rather than a fallback, for the reason
+    /// [`Plan::parse`] gives: a price map naming a key we cannot read is a
+    /// deployment behind its own configuration, and guessing which SKU was
+    /// bought is worse than refusing to guess.
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|key| key.as_str() == raw)
+    }
+
+    /// Whether this key bills again by itself. The three recurring keys are
+    /// the ones a billing portal can cancel; the rest are single charges.
+    #[must_use]
+    pub const fn recurring(self) -> bool {
+        match self {
+            Self::SyncMonthly | Self::SyncYearly | Self::FoundingYearly => true,
+            Self::Pack20
+            | Self::Pack50
+            | Self::Pack100
+            | Self::Pack250
+            | Self::Pack500
+            | Self::MoveWithMe => false,
+        }
+    }
+}
+
+/// One pack: a count of moves and what it costs.
+///
+/// `per_move_cents` is carried rather than computed at every render, because
+/// it is the figure the page compares rungs by and three surfaces would
+/// otherwise round it three ways. `packs_are_a_ladder_priced_per_move` pins
+/// it against the division.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Rung {
-    pub up_to: u32,
+pub struct Pack {
+    pub key: PriceKey,
+    pub moves: u32,
+    pub price_cents: u32,
+    pub per_move_cents: u32,
+}
+
+/// One thing sold that is not software: a booking, carrying no entitlement.
+///
+/// Its own table rather than a pack with zero moves, because the difference
+/// is exactly that buying it grants nothing a gate reads. What it buys is an
+/// hour of the founder's time, and the ledger must not be credited for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Service {
+    pub key: PriceKey,
+    pub name: &'static str,
     pub price_cents: u32,
 }
 
@@ -366,7 +450,21 @@ pub struct Founding {
     /// How many years the ongoing discount runs before it lapses, capped by
     /// the founder's decision of 2026-09-12.
     pub ongoing_years: u32,
-    pub free_imports: u32,
+    /// What a founding member pays for the first year, and for each of the
+    /// years the ongoing discount covers. Cents rather than only percentages
+    /// because the page states the dollars and a percentage of a price that
+    /// later moves would silently restate the offer.
+    pub year_one_cents: u32,
+    pub ongoing_cents: u32,
+    /// The day the offer closes whether or not the places have gone, as an
+    /// ISO date. A string rather than an instant: it is a date on a page, it
+    /// crosses to two clients, and this crate takes no calendar dependency.
+    pub closes_at: &'static str,
+    /// Annual only. The offer's whole point is cash in the first year, which
+    /// a monthly founding price would not deliver.
+    pub annual_only: bool,
+    /// Moves granted on top of the subscription's own allowance, once.
+    pub extra_moves: u32,
     pub places: u32,
 }
 
@@ -400,12 +498,18 @@ impl AiStatus {
 /// The price list, in the order a pricing page reads it.
 ///
 /// DECIDED (decisions.md, "Plans, capabilities and the pricing re-evaluation,
-/// 2026-09-12"): every price the founder set on 2026-09-11 stands. Re-opened
-/// by the Studio trigger, which is the only pending pricing decision.
-pub const PLANS: [PlanRow; 4] = [
+/// 2026-09-12", as amended by the 2026-09-20 re-evaluation): the yearly price
+/// is the one already approved and the monthly one is deliberately dearer, so
+/// the page can say "$20 a month, billed yearly" and mean it. Re-opened by
+/// the Studio trigger, which is the only pending pricing decision.
+///
+/// No trial days on any row. Look is the trial, there is no other, and a
+/// 14-day clock beside a free plan that never expires was two offers where
+/// the seller only ever understood one.
+pub const PLANS: [PlanRow; 3] = [
     PlanRow {
         id: Plan::Free,
-        name: "Free",
+        name: "Look",
         monthly_cents: None,
         yearly_cents: None,
         trial_days: 0,
@@ -413,17 +517,9 @@ pub const PLANS: [PlanRow; 4] = [
     },
     PlanRow {
         id: Plan::Subscriber,
-        name: "Teachouse Subscription",
-        monthly_cents: Some(2_400),
+        name: "Sync",
+        monthly_cents: Some(2_900),
         yearly_cents: Some(24_000),
-        trial_days: 14,
-        sold: true,
-    },
-    PlanRow {
-        id: Plan::MigrationOnly,
-        name: "Catalogue Import",
-        monthly_cents: None,
-        yearly_cents: None,
         trial_days: 0,
         sold: true,
     },
@@ -437,46 +533,81 @@ pub const PLANS: [PlanRow; 4] = [
     },
 ];
 
-/// The one-off Catalogue Import ladder, cheapest rung first.
+/// The move packs, smallest first.
 ///
-/// DECIDED (decisions.md, 2026-09-12): the founder's four rungs plus the two
-/// the research added, because the measured dual-lister holds about 764
-/// listings and the published ladder stopped short of its best customer. A
-/// rung counts resources committed to the catalogue after duplicate merges.
-pub const IMPORT_LADDER: [Rung; 5] = [
-    Rung {
-        up_to: 20,
+/// DECIDED (decisions.md, 2026-09-12, semantics amended 2026-09-20): the five
+/// prices are unchanged — they are readable, approved and live on the page —
+/// and what changed is what they buy. A rung was a resource ceiling on a plan
+/// of its own; a pack is a balance of moves on whatever plan the buyer holds,
+/// debited at commit and expiring twelve months after purchase.
+pub const PACKS: [Pack; 5] = [
+    Pack {
+        key: PriceKey::Pack20,
+        moves: 20,
         price_cents: 4_700,
+        per_move_cents: 235,
     },
-    Rung {
-        up_to: 50,
+    Pack {
+        key: PriceKey::Pack50,
+        moves: 50,
         price_cents: 7_700,
+        per_move_cents: 154,
     },
-    Rung {
-        up_to: 100,
+    Pack {
+        key: PriceKey::Pack100,
+        moves: 100,
         price_cents: 12_700,
+        per_move_cents: 127,
     },
-    Rung {
-        up_to: 250,
+    Pack {
+        key: PriceKey::Pack250,
+        moves: 250,
         price_cents: 24_700,
+        per_move_cents: 98,
     },
-    Rung {
-        up_to: 500,
+    Pack {
+        key: PriceKey::Pack500,
+        moves: 500,
         price_cents: 39_700,
+        per_move_cents: 79,
     },
 ];
 
-/// What a catalogue above the top rung is offered: a conversation, not a
+/// How long a bought pack's moves last. Twelve months from purchase, which
+/// is the listing-credit precedent the market pack records.
+pub const PACK_VALID_MONTHS: u32 = 12;
+
+/// What a catalogue above the top pack is offered: a conversation, not a
 /// price. Carried here rather than written into the page's copy so the server
 /// and the two clients say the same words.
-pub const LADDER_ABOVE: &str = "Talk to us";
+pub const PACK_ABOVE: &str = "Talk to us";
 
-/// The Founding 100 offer, whose four numbers the founder kept unchanged.
+/// What is sold beside the software. One row, and it grants nothing.
+///
+/// DECIDED (`2026-09-20-pricing-model-re-evaluation.md` section 3.6): a
+/// 45-minute screen-share in which the founder runs the seller's first import
+/// beside them. It is a booking rather than an entitlement, so no gate reads
+/// it and no ledger is credited for it.
+pub const SERVICES: [Service; 1] = [Service {
+    key: PriceKey::MoveWithMe,
+    name: "Move with me",
+    price_cents: 9_900,
+}];
+
+/// The Founding 100 offer.
+///
+/// DECIDED (`2026-09-20-pricing-model-re-evaluation.md` section 3.4): annual
+/// only, because the offer's whole purpose is cash in the first year, and
+/// closing on a stated date so the page never carries an offer with no end.
 pub const FOUNDING: Founding = Founding {
     discount_year_one_pct: 25,
     discount_ongoing_pct: 20,
     ongoing_years: 3,
-    free_imports: 20,
+    year_one_cents: 18_000,
+    ongoing_cents: 19_200,
+    closes_at: "2026-12-31",
+    annual_only: true,
+    extra_moves: 20,
     places: 100,
 };
 
@@ -658,7 +789,7 @@ const _: () = {
 
 #[cfg(test)]
 mod tests {
-    use super::{http, ingest, job, Plan, Support, IMPORT_LADDER, PLANS};
+    use super::{http, ingest, job, Plan, PriceKey, Support, FOUNDING, PACKS, PLANS, SERVICES};
 
     /// The `UNCALIBRATED` markers are a countdown, not decoration.
     ///
@@ -686,20 +817,30 @@ mod tests {
     fn all_is_total_over_the_enum() {
         for plan in Plan::ALL {
             match plan {
-                Plan::Free | Plan::Subscriber | Plan::MigrationOnly | Plan::Studio => {}
+                Plan::Free | Plan::Subscriber | Plan::Studio => {}
             }
         }
         assert_eq!(
             Plan::ALL.len(),
-            4,
+            3,
             "a variant was added to Plan without being added to Plan::ALL"
         );
         for support in Support::ALL {
             match support {
-                Support::Guides
-                | Support::Email2Days
-                | Support::Email1Day
-                | Support::Email30DaysAfterPurchase => {}
+                Support::Guides | Support::Email2Days | Support::Email1Day => {}
+            }
+        }
+        for key in PriceKey::ALL {
+            match key {
+                PriceKey::SyncMonthly
+                | PriceKey::SyncYearly
+                | PriceKey::FoundingYearly
+                | PriceKey::Pack20
+                | PriceKey::Pack50
+                | PriceKey::Pack100
+                | PriceKey::Pack250
+                | PriceKey::Pack500
+                | PriceKey::MoveWithMe => {}
             }
         }
         assert_eq!(PLANS.len(), Plan::ALL.len(), "every plan needs a price row");
@@ -712,51 +853,160 @@ mod tests {
         }
     }
 
-    /// The recurring ladder has to climb, or the plans are three names for
-    /// one product. `MigrationOnly` is left out on purpose: its allowance is
-    /// the rung bought rather than a place on this ladder.
+    /// The ladder has to climb, or the plans are three names for one
+    /// product. It climbs on moves now rather than on resources: import is
+    /// unlimited above Free, so the resource ceiling stopped being the axis
+    /// that separates the plans the day the free tier became the trial.
     #[test]
-    fn every_recurring_plan_grants_strictly_more_resources_than_the_one_below() {
-        let ladder = [Plan::Free, Plan::Subscriber, Plan::Studio];
-        let allowances: Vec<u32> = ladder
+    fn every_plan_grants_strictly_more_moves_than_the_one_below() {
+        let allowances: Vec<u32> = Plan::ALL
             .iter()
-            .map(|plan| plan.capabilities(None).resources_max)
+            .map(|plan| plan.capabilities(None).moves_per_month)
             .collect();
         for pair in allowances.windows(2) {
             assert!(
                 pair[1] > pair[0],
-                "resource allowances must increase: {pair:?}"
+                "monthly move allowances must increase: {pair:?}"
+            );
+        }
+        let ceilings: Vec<u32> = Plan::ALL
+            .iter()
+            .map(|plan| plan.capabilities(None).resources_max)
+            .collect();
+        for pair in ceilings.windows(2) {
+            assert!(
+                pair[1] >= pair[0],
+                "no plan may hold fewer resources than a weaker one: {pair:?}"
+            );
+        }
+        assert!(
+            Plan::Free.capabilities(None).resources_max
+                < Plan::Subscriber.capabilities(None).resources_max,
+            "the free ceiling is the one resource bound that still separates two plans"
+        );
+    }
+
+    /// Five moves once, on the free plan and nowhere else: a plan that is
+    /// paid for already carries an allowance, and granting the lifetime five
+    /// on top of it would be a second free tier inside a paid one.
+    #[test]
+    fn only_the_free_plan_carries_the_lifetime_moves() {
+        assert_eq!(Plan::Free.capabilities(None).free_moves_lifetime, 5);
+        for plan in [Plan::Subscriber, Plan::Studio] {
+            assert_eq!(
+                plan.capabilities(None).free_moves_lifetime,
+                0,
+                "{} pays for its moves",
+                plan.as_str()
+            );
+        }
+        for plan in Plan::ALL {
+            let caps = plan.capabilities(None);
+            assert_eq!(
+                caps.pack_edit_days,
+                90,
+                "{} must honour the pack's edit window; a pack is bought on any plan",
+                plan.as_str()
+            );
+            assert_eq!(
+                caps.devices_max,
+                5,
+                "{} covers five computers; the figure is the same everywhere and is never shown",
+                plan.as_str()
+            );
+            assert!(
+                caps.moves_accrual_cap >= caps.moves_per_month,
+                "{} accrues to less than one period's allowance, so the credit is lost on \
+                 arrival",
+                plan.as_str()
             );
         }
     }
 
-    /// A rung is the whole product `migration_only` sells, so the capability
-    /// derivation must carry it rather than round it to a tier.
+    /// An operator may lift Studio's monthly allowance and may never lower
+    /// it, which is the whole of what a rung means now that packs are a
+    /// balance rather than a plan.
     #[test]
-    fn a_catalogue_import_grants_exactly_the_rung_it_was_bought_at() {
-        for rung in IMPORT_LADDER {
-            let caps = Plan::MigrationOnly.capabilities(Some(rung.up_to));
+    fn a_studio_rung_only_ever_raises_the_monthly_allowance() {
+        assert_eq!(Plan::Studio.capabilities(None).moves_per_month, 100);
+        assert_eq!(Plan::Studio.capabilities(Some(20)).moves_per_month, 100);
+        assert_eq!(Plan::Studio.capabilities(Some(400)).moves_per_month, 400);
+        for plan in [Plan::Free, Plan::Subscriber] {
             assert_eq!(
-                caps.resources_max, rung.up_to,
-                "the {} rung must grant {} resources",
-                rung.price_cents, rung.up_to
-            );
-            assert_eq!(
-                caps.migrations_per_month, rung.up_to,
-                "the rung is also the one migration pass it pays for"
+                plan.capabilities(Some(500)).moves_per_month,
+                plan.capabilities(None).moves_per_month,
+                "{} reads no rung: a pack is a ledger credit, not a capability",
+                plan.as_str()
             );
         }
+    }
+
+    /// The packs are a ladder, and the per-move figure on each is the one
+    /// the page compares them by rather than a fourth number to maintain.
+    #[test]
+    fn packs_are_a_ladder_priced_per_move() {
+        assert!(
+            PACKS.windows(2).all(|pair| pair[1].moves > pair[0].moves
+                && pair[1].price_cents > pair[0].price_cents
+                && pair[1].per_move_cents < pair[0].per_move_cents),
+            "a ladder whose price does not climb with its volume, or whose per-move rate does \
+             not fall, is not a ladder"
+        );
+        for pack in PACKS {
+            assert_eq!(
+                pack.per_move_cents * pack.moves + pack.price_cents % pack.moves,
+                pack.price_cents,
+                "the {} pack's per-move rate disagrees with its own price",
+                pack.key.as_str()
+            );
+            assert!(
+                !pack.key.recurring(),
+                "a pack is bought once; {} says otherwise",
+                pack.key.as_str()
+            );
+        }
+    }
+
+    /// The founding offer's dollars and its percentages are two renderings
+    /// of one decision, and the page prints both.
+    #[test]
+    fn the_founding_prices_are_the_discounts_off_the_published_yearly() {
+        let yearly = PLANS
+            .iter()
+            .find(|row| row.id == Plan::Subscriber)
+            .and_then(|row| row.yearly_cents)
+            .expect("Sync names a yearly price");
         assert_eq!(
-            Plan::MigrationOnly.capabilities(None).resources_max,
-            0,
-            "a one-off purchase whose price we could not map grants nothing, \
-             rather than silently granting the largest rung"
+            FOUNDING.year_one_cents * 100,
+            yearly * (100 - FOUNDING.discount_year_one_pct)
+        );
+        assert_eq!(
+            FOUNDING.ongoing_cents * 100,
+            yearly * (100 - FOUNDING.discount_ongoing_pct)
+        );
+        assert_eq!(FOUNDING.closes_at, "2026-12-31");
+    }
+
+    /// A service is a booking. Nothing about it may look like an
+    /// entitlement, because nothing a gate reads changes when one is sold.
+    #[test]
+    fn the_service_sku_grants_nothing() {
+        assert_eq!(SERVICES.len(), 1);
+        let service = SERVICES[0];
+        assert_eq!(service.key, PriceKey::MoveWithMe);
+        assert_eq!(service.price_cents, 9_900);
+        assert!(!service.key.recurring());
+        assert!(
+            !PACKS.iter().any(|pack| pack.key == service.key),
+            "a service key that is also a pack key would credit the ledger for an hour of \
+             somebody's time"
         );
     }
 
     /// A plan a checkout can route to must have somewhere to route: either a
-    /// recurring price on its row or the one-off ladder. Studio is the one
-    /// row carrying a price nothing sells, which is what deferring it means.
+    /// recurring price on its row, or Free, which charges nothing. Studio is
+    /// the one row carrying a price nothing sells, which is what deferring
+    /// it means.
     #[test]
     fn every_sold_plan_names_a_price_and_the_only_unsold_one_is_studio() {
         for row in PLANS {
@@ -768,9 +1018,8 @@ mod tests {
                 row.id.as_str()
             );
             if row.sold {
-                let reachable = priced || row.id == Plan::Free || row.id == Plan::MigrationOnly;
                 assert!(
-                    reachable,
+                    priced || row.id == Plan::Free,
                     "{} is sold but no price names it",
                     row.id.as_str()
                 );
@@ -786,13 +1035,6 @@ mod tests {
         assert!(
             PLANS.iter().filter(|row| !row.sold).count() == 1,
             "exactly one plan is deferred"
-        );
-        assert!(
-            IMPORT_LADDER
-                .windows(2)
-                .all(|pair| pair[1].up_to > pair[0].up_to
-                    && pair[1].price_cents > pair[0].price_cents),
-            "a ladder whose price does not climb with its volume is not a ladder"
         );
     }
 
@@ -847,6 +1089,19 @@ mod tests {
                 format!("\"{}\"", support.as_str())
             );
         }
+        for key in PriceKey::ALL {
+            assert_eq!(PriceKey::parse(key.as_str()), Some(key));
+            assert_eq!(
+                serde_json::to_string(&key).expect("a price key serialises"),
+                format!("\"{}\"", key.as_str()),
+                "the price map is keyed on this spelling on both sides of the wire"
+            );
+        }
+        assert_eq!(
+            PriceKey::parse("rung_50"),
+            None,
+            "the ladder's old spelling names nothing this build sells"
+        );
     }
 
     #[test]

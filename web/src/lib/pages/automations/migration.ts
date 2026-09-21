@@ -134,16 +134,14 @@ export function pageSelection(
 
 export const NO_MIGRATION_YET = 'No migration has run yet.';
 
+/** The guide this page deep-links to. */
+export const MIGRATIONS_GUIDE = 'migrations';
+
 /** What a migration does, said once and before anything is chosen.
  *
- * Carried over from the import screen when that screen stopped offering this
- * request, so the explanation a seller met the first time is not lost with the
- * door it stood behind. It names no marketplace: the seller chooses the pair
- * on this page now, and a sentence that said TPT stood above a To select that
- * might say something else. What travels and what does not is
- * `FILES_STAY_ON_YOUR_COMPUTER`, set under the card rather than repeated
- * here. */
+ * It names no marketplace: the seller chooses the pair on this page, and a
+ * sentence that said TPT stood above a To select that might say something
+ * else. Copy against move, when a device picks the work up, what blocks a
+ * row and where files stay are the `migrations` guide's. */
 export const WHAT_A_MIGRATION_IS =
-	'A migration takes resources you already sell on one marketplace and drafts them on ' +
-	'another — nothing is published without you. Your own device does the sending, so it ' +
-	'starts the next time that device checks in.';
+	'Draft resources you already sell on one marketplace onto another.';

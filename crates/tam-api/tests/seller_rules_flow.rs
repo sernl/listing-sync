@@ -43,6 +43,7 @@ async fn call_as(
         .body(Body::from(body.to_string()))
         .expect("request builds");
     let response = router(AppState {
+        telemetry: tam_api::telemetry::Telemetry::default(),
         exchange_rates: None,
         pool: pool.clone(),
         config: Config::default(),

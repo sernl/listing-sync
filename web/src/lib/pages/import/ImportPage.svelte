@@ -19,6 +19,7 @@
 	import { agoLabel } from '$lib/elapsed';
 	import { entitlementRead, featureOf } from '$lib/entitlement-read';
 	import Field from '$lib/Field.svelte';
+	import Note from '$lib/Note.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Pagination from '$lib/Pagination.svelte';
 	import Panel from '$lib/Panel.svelte';
@@ -44,7 +45,6 @@
 		NEEDS_THE_APP,
 		NOTHING_CONNECTED,
 		NO_IMPORT_YET,
-		WHAT_AN_IMPORT_IS,
 		deviceLine,
 		importBlocked,
 		importCards,
@@ -464,9 +464,8 @@
 		icon="download"
 		title="Import"
 		description="Bring your current portfolio to Teachouse from anywhere it is housed."
+		guide="importing"
 	/>
-
-	<p class="import-lead">{WHAT_AN_IMPORT_IS}</p>
 
 	{#if connectionsUnread}
 		<Banner tone="bad" title="We could not read your marketplaces">{CONNECTIONS_UNREAD}</Banner>
@@ -481,10 +480,7 @@
 			<h2>Import from a spreadsheet</h2>
 			<span class="badges"><StatusPill tone="flat" label="Read on our server" /></span>
 		</div>
-		<p>
-			One row per resource in our template. We check every row and show you the result before
-			anything is created. No marketplace login is needed.
-		</p>
+		<p>One row per resource in our template, checked before anything is created.</p>
 		<ol class="sh-steps">
 			<li>Download the template and fill in one row for each resource.</li>
 			<li>Upload it and read the report before anything is created.</li>
@@ -607,21 +603,14 @@
 		{/each}
 	</div>
 
-	<!-- The sentence about where the files are, and the one place they can
-	     actually be looked at. Said here because an import is when a seller
-	     first wonders which of their files we hold and which are still only
-	     on the computer in front of them. -->
 	<div class="import-files-note">
-		<p class="foot-note">{FILES_STAY_ON_YOUR_COMPUTER}</p>
+		<Note icon="lock">{FILES_STAY_ON_YOUR_COMPUTER}</Note>
 		<Button tier="outline" small icon="library-big" href="/resources/files">
 			See which files are on this computer
 		</Button>
 	</div>
 
-	<Panel
-		title="Your imports"
-		description="Every import you have run. Filters and ordering cover all of them, not just this page."
-	>
+	<Panel title="Your imports" description="Every import you have run.">
 		<div class="import-filters">
 			<Field label="Where from" id="imports-source">
 				<select id="imports-source" bind:value={runSource} onchange={narrowRuns}>

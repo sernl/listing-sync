@@ -62,8 +62,9 @@
 <div class="page">
 	<PageHead
 		icon="layout-template"
-		title="Template Manager"
-		description="Saved answers you reuse when you add a resource or list it on a marketplace."
+		title="Templates"
+		description="Saved answers you reuse when you add a resource."
+		guide="templates"
 	>
 		{#snippet aside()}
 			<Button

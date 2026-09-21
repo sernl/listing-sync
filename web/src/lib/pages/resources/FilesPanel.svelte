@@ -7,6 +7,7 @@
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import { api, type FileView } from '$lib/api';
 	import Button from '$lib/Button.svelte';
+	import Note from '$lib/Note.svelte';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import { queryKeys } from '$lib/query';
 	import { toast } from '$lib/toast';
@@ -319,15 +320,9 @@
 		aria-hidden="true"
 	/>
 
-	<p class="res-foot">
-		<span class="block"
-			>Changing a file here changes your Resources. {fileReach ?? reachSentence(inventories)}</span
-		>
-		<span class="block"
-			>The thumbnail is drawn from the first file. Replacing that file redraws it; replacing any
-			other leaves it alone.</span
-		>
-	</p>
+	<Note>Changing a file here changes your Resources.</Note>
+	<Note>{fileReach ?? reachSentence(inventories)}</Note>
+	<Note>The thumbnail is drawn from the first file.</Note>
 </div>
 
 {#if viewing !== null}

@@ -1,229 +1,174 @@
 import { describe, expect, it } from 'vitest';
-import type { Capabilities, EntitlementView, PlanRow } from '$lib/api';
+import type { Founding, Pack } from '$lib/generated/plans';
+import { PACKS } from '$lib/generated/plans';
 import {
-	checkoutLabel,
+	bestValuePack,
+	checkoutOutcome,
+	dayLabel,
 	dollars,
-	monthsFreeOnAnnual,
-	periodLabel,
-	priceOf,
-	rungLabel,
-	soldPlans,
-	standingFor,
-	type EntitlementRead
+	expiryLine,
+	foundingClosesLabel,
+	foundingOpen,
+	moves,
+	packsBySize,
+	perMonth,
+	renewsLine,
+	syncPlan
 } from './plans';
 
-// The price table is `tam-limits`' and arrives generated, so these fixtures
-// stand in for it: what is under test here is the rendering, and a test that
-// read the real table would be asserting the founder's prices twice — once
-// here and once in Rust, where the invariants already live.
-const CAPS: Capabilities = {
-	resources_max: 400,
-	marketplaces_max: 4294967295,
-	storage_bytes_max: 21474836480,
-	import_spreadsheet: true,
-	import_marketplace: true,
-	duplicate_review: true,
-	publish_marketplaces_max: 4294967295,
-	edit_days_after_purchase: null,
-	migrations_per_month: 20,
-	scheduling: true,
-	sync_pull_interval_secs: 21600,
-	auto_publish_rules: true,
-	templates_max: 20,
-	collections_max: 20,
-	labels_max: 20,
-	analytics: true,
-	export: true,
-	devices_max: 2,
-	ai_fills_per_month: 200,
-	support: 'email_2_days'
-};
+// The price table is `tam-limits`' and arrives generated, so the fixtures
+// here stand in for it wherever a figure would otherwise be asserted twice —
+// once in this file and once in Rust, where the invariants already live. The
+// two places the real table is read are the orderings, which are properties
+// of the founder's own prices rather than of this rendering.
 
-function row(over: Partial<PlanRow> = {}): PlanRow {
+function pack(over: Partial<Pack> = {}): Pack {
+	return { key: 'pack_20', moves: 20, price_cents: 4700, per_move_cents: 235, ...over };
+}
+
+function founding(over: Partial<Founding> = {}): Founding {
 	return {
-		id: 'subscriber',
-		name: 'Teachouse Subscription',
-		monthly_cents: 2400,
-		yearly_cents: 24000,
-		trial_days: 14,
-		sold: true,
-		capabilities: CAPS,
+		discount_year_one_pct: 25,
+		discount_ongoing_pct: 20,
+		ongoing_years: 3,
+		year_one_cents: 18000,
+		ongoing_cents: 19200,
+		closes_at: '2026-12-31',
+		annual_only: true,
+		extra_moves: 20,
+		places: 100,
 		...over
 	};
 }
 
-const TABLE: PlanRow[] = [
-	row({ id: 'free', name: 'Free', monthly_cents: null, yearly_cents: null, trial_days: 0 }),
-	row(),
-	row({ id: 'migration_only', name: 'Catalogue Import', monthly_cents: null, yearly_cents: null }),
-	row({
-		id: 'studio',
-		name: 'Studio',
-		monthly_cents: 4400,
-		yearly_cents: 44000,
-		trial_days: 0,
-		sold: false
-	})
-];
-
-function read(over: Partial<EntitlementView> = {}): EntitlementRead {
-	return {
-		state: 'read',
-		entitlement: {
-			plan: 'subscriber',
-			rung: null,
-			granted_by: 'paddle',
-			granted_at: 1_757_000_000_000,
-			expires_at: null,
-			capabilities: CAPS,
-			usage: {
-				resources: 12,
-				marketplaces: 2,
-				migrations_this_month: 0,
-				migrations_reset_at: 1_759_276_800_000,
-				templates: 1,
-				collections: 0,
-				labels: 3,
-				devices: 1
-			},
-			...over
-		}
-	};
-}
+const CLOSING_DAY = Date.parse('2026-12-31T12:00:00Z');
 
 describe('money printed from cents', () => {
-	it('drops the cents where a price is whole dollars', () => {
-		expect(dollars(2400)).toBe('$24');
-		expect(dollars(4700)).toBe('$47');
+	it('drops the decimals on a whole number of dollars', () => {
+		expect(dollars(2900)).toBe('$29');
 	});
 
-	// A card is charged what the table says, so a price with cents in it is
-	// printed with them rather than rounded to the nearest dollar.
-	it('keeps them where it is not', () => {
-		expect(dollars(2499)).toBe('$24.99');
-		expect(dollars(50)).toBe('$0.50');
-	});
-});
-
-describe('a plan’s price', () => {
-	it('reads per month or per year', () => {
-		expect(priceOf(row(), 'monthly')).toEqual({ amount: '$24', per: 'per month' });
-		expect(priceOf(row(), 'annual')).toEqual({ amount: '$240', per: 'per year' });
+	it('keeps them where the price is not whole, so $1.27 is not $1', () => {
+		expect(dollars(127)).toBe('$1.27');
 	});
 
-	it('reads as free, per nothing, on a plan with no price', () => {
-		const free = row({ monthly_cents: null, yearly_cents: null });
-		expect(priceOf(free, 'monthly')).toEqual({ amount: 'Free', per: '' });
-		expect(priceOf(free, 'annual')).toEqual({ amount: 'Free', per: '' });
+	it('states the yearly price as the month it works out at', () => {
+		expect(perMonth(24000)).toBe('$20');
 	});
 });
 
-describe('what paying yearly saves', () => {
-	it('is two months at the founder’s prices', () => {
-		expect(monthsFreeOnAnnual(row())).toBe(2);
+describe('the packs on sale', () => {
+	it('marks the pack that costs least per move', () => {
+		expect(bestValuePack(PACKS)?.key).toBe('pack_500');
 	});
 
-	it('is nothing to state on a plan with no price', () => {
-		expect(monthsFreeOnAnnual(row({ monthly_cents: null, yearly_cents: null }))).toBeNull();
+	it('marks the cheapest even where the table is not ordered', () => {
+		const shuffled = [
+			pack({ key: 'pack_50', moves: 50, per_move_cents: 154 }),
+			pack({ key: 'pack_500', moves: 500, per_move_cents: 79 }),
+			pack({ key: 'pack_20', moves: 20, per_move_cents: 235 })
+		];
+		expect(bestValuePack(shuffled)?.key).toBe('pack_500');
 	});
 
-	// A saving stated as "two months free" has to be exactly that, or it is a
-	// rounded claim about money.
-	it('is withheld rather than rounded when the year is not whole months cheaper', () => {
-		expect(monthsFreeOnAnnual(row({ monthly_cents: 2400, yearly_cents: 25000 }))).toBeNull();
+	it('answers nothing where a deployment sells no packs', () => {
+		expect(bestValuePack([])).toBeNull();
 	});
 
-	it('is withheld where the year costs at least as much as the months', () => {
-		expect(monthsFreeOnAnnual(row({ monthly_cents: 2400, yearly_cents: 28800 }))).toBeNull();
-		expect(monthsFreeOnAnnual(row({ monthly_cents: 2400, yearly_cents: 33600 }))).toBeNull();
+	it('orders by size, and a bigger pack never costs more per move', () => {
+		const ordered = packsBySize(PACKS);
+		expect(ordered.map((row) => row.moves)).toEqual([...ordered.map((row) => row.moves)].sort((one, two) => one - two));
+		for (let index = 1; index < ordered.length; index += 1) {
+			expect(ordered[index]!.per_move_cents).toBeLessThan(ordered[index - 1]!.per_move_cents);
+		}
+	});
+
+	it('leaves the table it was handed alone', () => {
+		const table = [pack({ key: 'pack_50', moves: 50 }), pack({ key: 'pack_20', moves: 20 })];
+		packsBySize(table);
+		expect(table.map((row) => row.moves)).toEqual([50, 20]);
 	});
 });
 
-describe('the plans a deployment offers', () => {
-	// Studio ships priced and unsold because the founder's trigger for selling
-	// it is a measurement. A card for it would offer a plan no checkout buys.
-	it('leaves out a plan that is priced but not sold', () => {
-		expect(soldPlans(TABLE).map((plan) => plan.id)).toEqual([
-			'free',
-			'subscriber',
-			'migration_only'
-		]);
+describe('a count of moves', () => {
+	it('says one move in the singular', () => {
+		expect(moves(1)).toBe('1 move');
+	});
+
+	it('says none in the plural, because "0 move" is not English', () => {
+		expect(moves(0)).toBe('0 moves');
+	});
+
+	it('says the rest in the plural', () => {
+		expect(moves(25)).toBe('25 moves');
 	});
 });
 
-describe('the standing an entitlement proves', () => {
-	// This is the whole point of phase 1 on this page: the grant names the
-	// plan, so the page states which one instead of saying only that a
-	// subscription is running.
-	it('names the plan the grant names', () => {
-		const standing = standingFor(read(), TABLE);
-		expect(standing.kind).toBe('read');
-		expect(standing.plan).toBe('subscriber');
-		expect(standing.name).toBe('Teachouse Subscription');
-		expect(standing.headline).toBe('You are on Teachouse Subscription.');
+describe('the founding offer', () => {
+	it('is on sale on its closing day, because an offer closing on the 31st is sold on the 31st', () => {
+		expect(foundingOpen(founding(), CLOSING_DAY)).toBe(true);
 	});
 
-	it('says a one-off purchase runs out, and a free plan does not', () => {
-		expect(standingFor(read({ plan: 'migration_only', rung: 50 }), TABLE).detail).toContain(
-			'one-off Catalogue Import'
+	it('is gone the day after', () => {
+		expect(foundingOpen(founding(), Date.parse('2027-01-01T00:00:00Z'))).toBe(false);
+	});
+
+	it('is on sale well before', () => {
+		expect(foundingOpen(founding(), Date.parse('2026-01-05T00:00:00Z'))).toBe(true);
+	});
+
+	it('states the day it closes', () => {
+		expect(foundingClosesLabel(founding())).toBe('Closes 31 Dec 2026.');
+	});
+});
+
+describe('what the billing read says in words', () => {
+	it('names the day the soonest moves lapse', () => {
+		expect(expiryLine({ available: 12, expiring_soonest: Date.parse('2027-03-03T00:00:00Z') })).toBe(
+			'Moves start expiring on 3 Mar 2027.'
 		);
-		expect(standingFor(read({ plan: 'free', granted_by: null }), TABLE).detail).toContain(
-			'does not run out'
-		);
 	});
 
-	it('says so when a person set the plan rather than a card', () => {
-		expect(standingFor(read({ granted_by: 'operator' }), TABLE).detail).toContain(
-			'Teachouse set this plan'
-		);
+	it('says nothing where no part of the balance lapses', () => {
+		expect(expiryLine({ available: 12 })).toBeNull();
 	});
 
-	// A plan the served table does not carry still names a plan, and printing
-	// nothing there would hide which one the tenant holds.
-	it('falls back to the wire word for a plan the table does not carry', () => {
-		expect(standingFor(read(), []).headline).toBe('You are on subscriber.');
+	it('names the renewal day', () => {
+		expect(renewsLine(Date.parse('2027-03-03T00:00:00Z'))).toBe('Renews on 3 Mar 2027.');
 	});
 
-	it('claims no plan at all where the read has not answered', () => {
-		const standing = standingFor({ state: 'unread' }, TABLE);
-		expect(standing.kind).toBe('unread');
-		expect(standing.plan).toBeNull();
-		expect(standing.name).toBeNull();
+	it('says nothing where nothing renews', () => {
+		expect(renewsLine(undefined)).toBeNull();
+	});
+
+	it('prints a date in the server’s own zone, so a seller east of UTC reads the enforced day', () => {
+		expect(dayLabel(Date.parse('2027-03-03T23:30:00Z'))).toBe('3 Mar 2027');
 	});
 });
 
-describe('the subscription control’s label', () => {
-	it('offers to start where the plan is not a recurring one', () => {
-		expect(checkoutLabel(read({ plan: 'free' }))).toBe('Subscribe');
-		expect(checkoutLabel(read({ plan: 'migration_only' }))).toBe('Subscribe');
+describe('the plan a deployment sells', () => {
+	it('is Sync, which is the one recurring plan on sale', () => {
+		const plan = syncPlan();
+		expect(plan?.id).toBe('subscriber');
+		expect(plan?.name).toBe('Sync');
 	});
 
-	it('offers to manage where one is already running', () => {
-		expect(checkoutLabel(read())).toBe('Manage');
-		expect(checkoutLabel(read({ plan: 'studio' }))).toBe('Manage');
-	});
-
-	// The guard is the return type rather than a sibling `{#if}` a later edit
-	// could drop: no control can be rendered over a standing that does not
-	// know what it would be changing.
-	it('is nothing at all where the read has not answered', () => {
-		expect(checkoutLabel({ state: 'unread' })).toBeNull();
+	it('is never Studio, which ships priced and unsold', () => {
+		expect(syncPlan()?.id).not.toBe('studio');
 	});
 });
 
-describe('a ladder rung', () => {
-	it('states its price and the volume it covers', () => {
-		expect(rungLabel({ up_to: 50, price_cents: 7700 })).toBe('$77 · up to 50 resources');
-	});
-});
-
-describe('the recorded billing period', () => {
-	it('says so where Paddle recorded none', () => {
-		expect(periodLabel({ current_period_end: null })).toBe('Paddle recorded no billing period');
+describe('what the checkout came back with', () => {
+	it('reads the success return', () => {
+		expect(checkoutOutcome('success')).toBe('success');
 	});
 
-	it('renders a recorded one as a date carrying its year', () => {
-		const at = Date.UTC(2026, 8, 30, 12, 0, 0);
-		expect(periodLabel({ current_period_end: at })).toContain('2026');
+	it('reads the cancelled return', () => {
+		expect(checkoutOutcome('cancel')).toBe('cancel');
+	});
+
+	it('treats a hand-typed value as no return at all', () => {
+		expect(checkoutOutcome('done')).toBeNull();
+		expect(checkoutOutcome(null)).toBeNull();
 	});
 });

@@ -58,16 +58,11 @@ export interface AutomationFacts {
 }
 
 const SCHEDULING_WHAT =
-	'Publish a set of resources to the marketplaces you choose, at a time you choose, without ' +
-	'being at your computer.';
+	'Publish a set of resources to the marketplaces you choose, at a time you choose.';
 
-const MIGRATION_WHAT =
-	'Move a whole shop from one marketplace to another, once. Everything arrives as a draft ' +
-	'for you to check before anything is published.';
+const MIGRATION_WHAT = 'Move a whole shop from one marketplace to another, once.';
 
-const SYNC_WHAT =
-	'Keep every marketplace’s copy of a resource up to date. Change a price or a description ' +
-	'here and it is carried out to each marketplace that has it.';
+const SYNC_WHAT = 'Keep every marketplace’s copy of a resource up to date.';
 
 /** What a rule page's card says about the rules behind it.
  *
@@ -179,7 +174,7 @@ export function cards(facts: AutomationFacts): AutomationCard[] {
 		{
 			id: 'scheduling',
 			href: '/automations/sharing',
-			title: 'Scheduling',
+			title: 'Schedules',
 			icon: 'calendar-clock',
 			what: SCHEDULING_WHAT,
 			state: schedulingState(facts)
@@ -203,7 +198,7 @@ export function cards(facts: AutomationFacts): AutomationCard[] {
 		{
 			id: 'mapping',
 			href: MAPPINGS_HREF,
-			title: 'Mappings',
+			title: 'Target terms',
 			icon: 'tag',
 			what: WHAT_MAPPING_IS,
 			state: mappingState(facts)
@@ -211,7 +206,7 @@ export function cards(facts: AutomationFacts): AutomationCard[] {
 		{
 			id: 'sync',
 			href: '/sync',
-			title: 'Marketplace Sync',
+			title: 'Updates',
 			icon: 'refresh-cw',
 			what: SYNC_WHAT,
 			state: syncState(facts)

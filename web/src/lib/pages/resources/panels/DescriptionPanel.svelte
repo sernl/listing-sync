@@ -2,6 +2,7 @@
 	import type { FormVocabularyView } from '$lib/api';
 	import Field from '$lib/Field.svelte';
 	import FormSection from '$lib/FormSection.svelte';
+	import Note from '$lib/Note.svelte';
 	import { GROUP_HELP, markUp, type MarkKind, type Refusal, type TptDraft } from '$lib/tpt-form';
 
 	// The description band, with its own formatting bar. A component rather
@@ -78,5 +79,5 @@
 			</span>
 		{/if}
 	</Field>
-	<p class="res-foot">Use the buttons to format. Each marketplace shows it in its own style.</p>
+	<Note>Use the buttons to format.</Note>
 </FormSection>

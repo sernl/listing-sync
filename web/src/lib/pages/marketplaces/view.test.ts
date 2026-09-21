@@ -152,12 +152,18 @@ describe('what a returning sign-in tells the seller', () => {
 		}
 	});
 
-	// Every failure says what became of the sign-in and what to press next.
-	it('says what was not saved and how to try again on every failure', () => {
+	// Every failure says what became of the sign-in, and every failure a press
+	// can clear says which press. `bound_elsewhere` is the one that cannot be:
+	// the shop belongs to another account, so pressing Connect again signs in
+	// to the same shop and is refused again, and naming the button there would
+	// send the seller round a loop instead of to a person.
+	it('says what was not saved, and how to try again where trying again works', () => {
 		for (const verdict of CONNECT_VERDICT_CODES.filter((code) => code !== 'captured')) {
 			const answer = said(`connect=${verdict}&marketplace=Tpt`);
 			expect(answer?.message, verdict).toContain('saved');
-			expect(answer?.message, verdict).toContain('Connect TPT');
+			if (verdict !== 'bound_elsewhere') {
+				expect(answer?.message, verdict).toContain('Connect TPT');
+			}
 		}
 	});
 
@@ -717,6 +723,8 @@ describe('what a finished local sign-out says', () => {
 		{ kind: 'opening' },
 		{ kind: 'signedOut' },
 		{ kind: 'refused', detail: REFUSAL },
+		{ kind: 'consentRequired' },
+		{ kind: 'boundElsewhere' },
 		{ kind: 'unsupported' },
 		{ kind: 'unavailable' }
 	];

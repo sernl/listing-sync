@@ -15,7 +15,7 @@
 use axum::extract::{Path, State};
 use axum::http::{header, StatusCode};
 use axum::Json;
-use tam_domain::LEASE_TTL_SECS;
+use tam_domain::{ItemOperation, ItemOutcome, LEASE_TTL_SECS};
 use tam_engine::ledger::{to_storage_lease, to_wire_item, PgLedger};
 use tam_engine::seed::{
     preparation as preparation_for, prepare_and_dispose, reconcile_is_available, Disposed,
@@ -27,7 +27,7 @@ use tam_engine_driver::vocabulary::{
 };
 use tam_storage::{
     describe_files, BlobRepo, Charged, ClaimPolicy, ConnectionFactsRepo, DeviceClaim, DeviceRef,
-    LeaseRepo,
+    EntitlementRepo, LeaseRepo,
 };
 use tam_types::{FailureDetail, FileBytes, FileId, Timestamp};
 
@@ -309,7 +309,66 @@ pub(crate) async fn settle(
             | LedgerError::MappingAlreadyBound
             | LedgerError::Refused { .. } => state.internal(&error.to_string()),
         })?;
+    charge_move(&state, &context, &leased, &body).await;
     Ok(StatusCode::ACCEPTED)
+}
+
+/// One move, spent, where this settle is what committed a resource to the
+/// other marketplace.
+///
+/// A create is the only operation that costs one. A publish moves a listing
+/// the create already paid for from draft to live, a revise edits one that is
+/// already there, and a removal takes one away; charging any of them would
+/// meter the seller for correcting their own catalogue, which is the opposite
+/// of what the price list says a move is.
+///
+/// Charged after the ledger has taken the settle and never before it, and its
+/// failure never fails the settle. The device has done the work and the
+/// listing exists; refusing the receipt because we could not write our own
+/// meter would strand an item the marketplace has already accepted. An
+/// uncharged move is a fact support can reconstruct from `job_item`; a
+/// stranded item is not.
+async fn charge_move(
+    state: &AppState,
+    context: &OrgContext,
+    leased: &tam_storage::LeasedItem,
+    body: &SettleEnvelope,
+) {
+    match leased.operation {
+        ItemOperation::Create => {}
+        ItemOperation::Publish { .. }
+        | ItemOperation::Revise { .. }
+        | ItemOperation::Remove { .. } => return,
+    }
+    // Degraded counts. The listing is live and the seller has it; that it
+    // arrived shorter than intended is a thing to tell them about, not a
+    // reason to give the move back and leave the listing standing.
+    match body.verdict.outcome {
+        ItemOutcome::Succeeded | ItemOutcome::Degraded => {}
+        ItemOutcome::Failed
+        | ItemOutcome::Ambiguous
+        | ItemOutcome::Skipped
+        | ItemOutcome::Blocked => return,
+    }
+    let charged = EntitlementRepo::new(state.pool.clone())
+        .debit_move(context.org, leased.item.0, (state.wall)())
+        .await;
+    match charged {
+        Ok(Some(nth)) => state.telemetry.capture(
+            context.org,
+            "move_committed",
+            serde_json::json!({
+                "target": leased.inventory.marketplace(),
+                "nth_move_lifetime": nth,
+            }),
+        ),
+        // Already charged: a retried settle of the same item, which is the
+        // shape this endpoint absorbs everywhere else too.
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("tam-api: a committed move could not be charged: {error}");
+        }
+    }
 }
 
 /// The bytes of one file the device is about to upload.

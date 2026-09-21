@@ -16,6 +16,7 @@ import type {
 	FailureCode,
 	FileKind,
 	FileRole,
+	GrantedBy,
 	InventoryId,
 	ItemOutcome,
 	ItemState,
@@ -37,6 +38,7 @@ import type {
 	MatchLayer,
 	MigrationVerdict,
 	Plan,
+	PriceKey,
 	ScheduleRepeat,
 	SlugPrompt,
 	StandardsState,
@@ -614,13 +616,17 @@ export interface MigrationPair {
 	reason: string | null;
 }
 
-/** The monthly allowance as the plan sees it, so the figure the seller reads
- *  before confirming is the figure the submit is checked against. */
+/** The balance the plan preview was cut against, so the figure the seller
+ *  reads before confirming is the figure the submit is checked against.
+ *
+ *  Still called `cap` on the wire, and it is a balance: `available` is what
+ *  the seller holds rather than what a month allows, and nothing resets. */
 export interface MigrationCap {
-	limit: number;
-	used: number;
+	available: number;
+	/** What this selection would spend, which is the will-create count. */
+	required: number;
 	remaining: number;
-	resets_at: number;
+	expiring_soonest?: number;
 }
 
 /** One resource's projection. `remote` is the listing already on the target,
@@ -944,24 +950,32 @@ export interface AnalyticsSummary {
 	listings: ListingMetricsView[];
 }
 
-/** One organisation's billing state, as `/v1/billing` serves it.
- *
- *  `status` is Paddle's own vocabulary, passed through by the server rather
- *  than translated, so a value this client does not recognise is displayed
- *  rather than swallowed. */
-export interface SubscriptionView {
-	paddle_subscription_id: string;
-	paddle_customer_id: string;
-	status: string;
-	current_period_end: number | null;
-	occurred_at: number;
+/** How often a subscription renews. */
+export type Cadence = 'monthly' | 'yearly';
+
+/** The moves a tenant can spend, and when the soonest of them lapse. */
+export interface MoveBalance {
+	available: number;
+	expiring_soonest?: number;
 }
 
-/** Absent for an organisation that has never reached checkout, which is a
- *  different fact from a cancelled subscription: that one is present, and
- *  carries Paddle's cancelled status. */
+/** One organisation's billing state, as `/v1/billing` serves it.
+ *
+ *  No provider identifier: the seller has no use for a Stripe subscription
+ *  id, and the portal link is minted per click rather than stored. */
 export interface BillingView {
-	subscription: SubscriptionView | null;
+	plan: Plan;
+	cadence?: Cadence;
+	renews_at?: number;
+	moves: MoveBalance;
+	founding: boolean;
+	portal_available: boolean;
+}
+
+/** Where to send the browser, for a checkout and for the billing portal
+ *  alike. */
+export interface RedirectView {
+	url: string;
 }
 
 // -------------------------------------------------------------- entitlement
@@ -976,19 +990,18 @@ export type {
 	AiOffer,
 	Capabilities,
 	Founding,
+	Pack,
 	PlanRow,
 	PlansView,
-	Rung
+	Service
 } from '$lib/generated/plans';
 
-/** What the seller has used, against the figures above. */
+/** What the seller has used, against the figures above. Moves are not here:
+ *  they are bought and spent rather than counted against a ceiling, so they
+ *  ride beside this block as a balance. */
 export interface EntitlementUsage {
 	resources: number;
 	marketplaces: number;
-	migrations_this_month: number;
-	/** When the monthly migration count returns to zero: the first instant of
-	 *  the next UTC month. */
-	migrations_reset_at: number;
 	templates: number;
 	collections: number;
 	labels: number;
@@ -1002,20 +1015,24 @@ export interface EntitlementUsage {
  *  a different fact from "an operator granted it". */
 export interface Grant {
 	plan: Plan;
-	/** The import ladder rung bought, on a `migration_only` grant alone. */
+	/** The ladder rung a one-off purchase recorded, where a grant carries one. */
 	rung: number | null;
-	granted_by: 'paddle' | 'operator' | null;
+	granted_by: GrantedBy | null;
 	granted_at: number | null;
 	expires_at: number | null;
 }
 
 /** `/v1/entitlement`: the grant, what it allows, and what has been used.
  *
- *  Carries no Paddle identifier — the seller's own page has no use for one
- *  and `/v1/billing` already serves it. */
+ *  Carries no provider identifier — the seller's own page has no use for one
+ *  and `/v1/billing` already answers what they hold. */
 export interface EntitlementView extends Grant {
 	capabilities: Capabilities;
 	usage: EntitlementUsage;
+	/** The balance, which is not a usage figure: it is bought and spent
+	 *  rather than counted against a ceiling, so it sits beside the usage
+	 *  block rather than inside it. */
+	moves: MoveBalance;
 }
 
 // `PlansView` is re-exported above rather than restated: `GET /v1/plans`
@@ -1071,8 +1088,8 @@ export interface HaltView {
 	raised_at: number;
 }
 
-/** What Paddle last said about one tenant's subscription, as the operator
- *  surface serves it: three facts and no Paddle identifier. */
+/** What the billing provider last said about one tenant's subscription, as
+ *  the operator surface serves it: three facts and no identifier. */
 export interface SubscriptionStateView {
 	status: string;
 	current_period_end?: number;
@@ -1086,15 +1103,15 @@ export interface SubscriptionStateView {
  *  the live row could not answer. */
 export interface GrantRowView extends Grant {
 	id: string;
-	granted_by: 'paddle' | 'operator';
+	granted_by: GrantedBy;
 	granted_at: number;
-	/** The operator who wrote a manual grant. Null on a Paddle grant, which
-	 *  no human signed. */
+	/** The operator who wrote a manual grant. Null on a purchased grant,
+	 *  which no human signed. */
 	grantor_user: string | null;
 	/** Why, on a manual grant. Required of the operator writing one. */
 	reason: string | null;
-	/** Paddle's subscription or transaction identifier, where Paddle wrote
-	 *  the grant. */
+	/** The provider's subscription, session or transaction identifier, where
+	 *  a purchase wrote the grant. */
 	source_ref: string | null;
 	revoked_at: number | null;
 }
@@ -1107,6 +1124,10 @@ export interface OrgDetailView {
 	/** The grant in force. Always present: an organisation with no rows reads
 	 *  `free` with null provenance, which is what it is. */
 	plan: Grant & { source_ref: string | null };
+	/** What it can spend now. The operator page states it beside the plan,
+	 *  because a seller asking why a move was refused is as often out of
+	 *  moves as on the wrong plan. */
+	moves: MoveBalance;
 	/** Every grant ever written, newest first. */
 	grants: GrantRowView[];
 }
@@ -3035,6 +3056,17 @@ export const api = {
 
 	billing: () => request<BillingView>('/v1/billing'),
 
+	/** Opens a Stripe Checkout Session for one price key and answers where to
+	 *  send the browser. The key is ours — `sync_monthly`, `pack_100`,
+	 *  `move_with_me` — never a Stripe price id: the server owns that map, and
+	 *  a client that could name a Stripe price could name any Stripe price. */
+	billingCheckout: (priceKey: PriceKey) =>
+		post<RedirectView>('/v1/billing/checkout', { price_key: priceKey }),
+
+	/** Opens the Stripe billing portal. Minted per click: an unused portal
+	 *  link expires in five minutes, so a cached one is already dead. */
+	billingPortal: () => post<RedirectView>('/v1/billing/portal', {}),
+
 	/** The price table and what each plan allows. Public: naming a price needs
 	 *  no session, and the landing build reads the same figures out of the
 	 *  generated module rather than over the wire. */
@@ -3069,10 +3101,16 @@ export const api = {
 	 *  detail so the panel redraws from the server's own record rather than
 	 *  from what the form thought it sent. A reason is required: a plan set by
 	 *  hand with no stated why is an audit row that explains nothing. */
-	grantPlan: (
-		org: string,
-		body: { plan: Plan; rung?: number; expires_at?: number; reason: string }
-	) => post<OrgDetailView>(`/v1/admin/orgs/${org}/plan`, body),
+	grantPlan: (org: string, body: { plan: Plan; expires_at?: number; reason: string }) =>
+		post<OrgDetailView>(`/v1/admin/orgs/${org}/plan`, body),
+	/** Credits or corrects one organisation's move balance, and answers the
+	 *  org detail so the panel redraws from the server's own record. `moves`
+	 *  is signed: an operator reaching for this is as often correcting a
+	 *  balance as giving moves away. The reason is required, and the server
+	 *  is idempotent on operator-and-reason, so a double-clicked form credits
+	 *  once. */
+	creditMoves: (org: string, body: { moves: number; reason: string }) =>
+		post<OrgDetailView>(`/v1/admin/orgs/${org}/moves`, body),
 	/** Revokes one grant. The org falls back to its next strongest unexpired
 	 *  grant, which for most organisations is nothing at all and therefore
 	 *  `free`. */

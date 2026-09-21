@@ -1761,6 +1761,7 @@ pub(crate) async fn bind_mapping(
             | StorageError::AttemptInFlight
             | StorageError::MappingAlreadyBound
             | StorageError::InventoryMappingAlreadyExists
+            | StorageError::StorefrontBoundElsewhere { .. }
             | StorageError::ListingAlreadyBound) => storage_fault(&state, &other),
         })?;
     match outcome {

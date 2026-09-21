@@ -40,14 +40,14 @@ const refusing: DismissalStore = {
 describe('a remembered dismissal', () => {
 	it('reads back what it wrote', () => {
 		const store = fake();
-		expect(remembered('labels.what-are-labels', store)).toBe(false);
-		remember('labels.what-are-labels', store);
-		expect(remembered('labels.what-are-labels', store)).toBe(true);
+		expect(remembered('templates.licence-is-yours', store)).toBe(false);
+		remember('templates.licence-is-yours', store);
+		expect(remembered('templates.licence-is-yours', store)).toBe(true);
 	});
 
 	it('does not answer for a key nobody dismissed', () => {
 		const store = fake();
-		remember('labels.what-are-labels', store);
+		remember('templates.licence-is-yours', store);
 		expect(remembered('analytics.tpt-reports-only', store)).toBe(false);
 	});
 
@@ -72,10 +72,6 @@ describe('the declared keys', () => {
 	it('give no two names the same storage string', () => {
 		const written = DISMISS_NAMES.map((name) => DISMISS_KEYS[name]);
 		expect(new Set(written).size).toBe(written.length);
-	});
-
-	it('keep the string the Labels board wrote before this module existed', () => {
-		expect(DISMISS_KEYS['labels.what-are-labels']).toBe('labels.what-are-labels.dismissed');
 	});
 });
 

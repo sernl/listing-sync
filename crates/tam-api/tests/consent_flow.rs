@@ -31,6 +31,7 @@ const NOW: Timestamp = Timestamp(5_000);
 
 fn state(pool: PgPool) -> AppState {
     AppState {
+        telemetry: tam_api::telemetry::Telemetry::default(),
         exchange_rates: None,
         pool,
         config: Config::default(),
@@ -61,7 +62,7 @@ async fn provision(pool: &PgPool, org: OrgId, user: UserId, token: &SessionToken
                 id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
                 plan: tam_limits::Plan::Subscriber,
                 rung: None,
-                granted_by: tam_storage::GrantedBy::Paddle,
+                granted_by: tam_storage::GrantedBy::Stripe,
                 grantor_user: None,
                 reason: None,
                 source_ref: Some(name),

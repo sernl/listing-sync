@@ -13,13 +13,19 @@ So this site owns `/`, and the console keeps `/app` and every route below it, al
 A page whose first path segment is one the console answers under fails the flake check `served-artefacts`, because tam-server probes this build ahead of the console and such a page would take that path from the seller's board.
 The server computes the landing page's Content-Security-Policy from the files it just read, so a page that grew an inline script would be served under a policy carrying that script's hash rather than under a stale one.
 
-The only script on the site is `public/app-redirect.js`, loaded from our own origin on every page: the desktop app opens this origin too, and `window.__TAURI__` is the one signal available before the console loads, so it sends that window to `/app`.
+Two scripts run here, both from our own origin.
+`public/app-redirect.js` is loaded on every page: the desktop app opens this origin too, and `window.__TAURI__` is the one signal available before the console loads, so it sends that window to `/app`.
+The Tes band calculator in `components/Faq.astro` is the other, bundled by Astro from that component and small enough that Astro inlines it into the page; the server hashes every inline script it reads, so the policy it serves already carries this one's `sha256-` token.
+It imports `src/tes-bands.js` rather than `src/pricing.js`, which keeps the generated plan table out of the browser bundle, and it is the only behaviour on the site that needs script at all: the FAQ's `<details>` and everything else work with script refused.
 Nothing else on the site comes from anywhere but this origin: Poppins and Inter are served from `public/fonts/` rather than from Google's CDN, so the page makes no third-party request at all.
 No inline `style` attribute either, for the same reason there is no inline `<style>`: `style-src 'self'` refuses both, so every shape on the page — the hero's blobs and the handwritten line included — is drawn by a class in `src/styles/site.css` or by SVG presentation attributes.
 The site must keep working under the policy `landing_policy` in `crates/tam-server/src/serving.rs` builds — `default-src 'self'`, `script-src 'self'` plus a `sha256-` token per inline script found in the build, `style-src 'self'`, `font-src 'self'`, `img-src 'self' data:`, `connect-src 'self'`, `frame-ancestors 'none'` — which is why there is no inline event handler and no inline `<style>` on any page.
 The policy admits no third-party origin at all: `style-src` carried `'unsafe-inline'` and `fonts.googleapis.com`, and `font-src` carried `fonts.gstatic.com`, until the console's fonts were bundled and those origins were dropped, so a stylesheet or a font fetched from anywhere but this origin is now refused rather than merely unnecessary.
 
-Every call to action goes to `/login` or to `/pricing/#founding`, and both `/` and `/pricing` carry the same price list because both render `components/Pricing.astro` from `src/pricing.js`.
+Every call to action goes to the console's signup at `https://teachouse.io/signup`, carrying `next=/settings/subscription` and, where the reader picked something, `price=<PriceKey>` — `sync_yearly` from Sync, `pack_100` from the packs card, `founding_yearly` from the founding band, `move_with_me` from the service row, and no `price` at all from "Start free".
+The console's signup is what honours those two: `next` is where to land, and `price` is the checkout to open on arrival.
+Both `/` and `/pricing` carry the same price list because both render `components/Pricing.astro` from `src/pricing.js`.
+The founding band, the hero's founding copy and the founding question are drawn only while `FOUNDING.closes_at` is still ahead of the build, and the band prints that date, because this is a static site and the question is answered once at build time rather than per request.
 Every price and cap on the site comes from `src/plans.generated.js`, which `cargo run -p tam-typegen` emits from the `tam-limits` plan table the server enforces and `just web-check` diffs; `src/pricing.js` holds only the landing's own phrasing of it, in USD.
 Changing a price is an edit in `tam-limits` and a regeneration, never an edit here.
 

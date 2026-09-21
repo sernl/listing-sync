@@ -11,6 +11,8 @@
 	import { TURNSTILE_SITE_KEY, captchaOptions, captchaPending } from '$lib/captcha';
 	import { ENABLED_SOCIAL_PROVIDERS, type SocialProvider } from '$lib/social-providers';
 	import { toast } from '$lib/toast';
+	import { page } from '$app/state';
+	import { safeNext, safePrice, writeIntent } from '$lib/pages/account/intent';
 	import '$lib/pages/account/signed-out.css';
 
 	type Busy = 'register' | 'resend' | SocialProvider;
@@ -18,6 +20,27 @@
 	/** Long enough for any display name a human types, short enough that the
 	 * column is not a free-text sink: `auth.user.name` is unconstrained text. */
 	const NAME_LIMIT = 120;
+
+	/** What the landing page asked for, carried across the account it has to
+	 * create first. `next` is where to land; `price` is the checkout to open
+	 * on arrival. Both are written down as well as carried in the sign-in
+	 * link, because the verification link is often opened in another tab and
+	 * a social sign-up leaves through a provider redirect — see
+	 * `$lib/pages/account/intent`, which `/settings/subscription` spends. */
+	const intendedNext = $derived(safeNext(page.url.searchParams.get('next')));
+	const intendedPrice = $derived(safePrice(page.url.searchParams.get('price')));
+
+	const signInHref = $derived.by(() => {
+		const query = new URLSearchParams();
+		if (intendedNext !== null) query.set('next', intendedNext);
+		if (intendedPrice !== null) query.set('price', intendedPrice);
+		const suffix = query.toString();
+		return suffix === '' ? '/login' : `/login?${suffix}`;
+	});
+
+	$effect(() => {
+		writeIntent({ next: intendedNext, price: intendedPrice });
+	});
 
 	let name = $state('');
 	let email = $state('');
@@ -97,9 +120,7 @@
 <div class="auth-card acct-signed-out">
 	{#if awaitingVerification !== null}
 		<h1>Check your email</h1>
-		<p>
-			We sent a link to <b>{awaitingVerification}</b>. Confirm that address, then sign in.
-		</p>
+		<p>Confirm the address we sent a link to, <b>{awaitingVerification}</b>.</p>
 		<div class="actions">
 			<Button
 				tier="primary"
@@ -109,11 +130,11 @@
 			>
 				{busy === 'resend' ? 'Sending…' : 'Send it again'}
 			</Button>
-			<Button tier="outline" href="/login">Go to sign in</Button>
+			<Button tier="outline" href={signInHref}>Go to sign in</Button>
 		</div>
 	{:else}
 		<h1>Create an account</h1>
-		<p>Signing up creates your organisation. You can invite people to it later.</p>
+		<p>Signing up creates your organisation.</p>
 
 		<form onsubmit={register} class="form">
 			<Field label="Name" id="name" required>

@@ -108,17 +108,6 @@
 	margin-top: 20px;
 }
 
-.export-note {
-	margin: 16px 0 0;
-	font-size: 12px;
-	line-height: 1.5;
-	color: var(--faint);
-}
-
-.export-note + .export-note {
-	margin-top: 8px;
-}
-
 .export-file {
 	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 	font-size: 11.5px;

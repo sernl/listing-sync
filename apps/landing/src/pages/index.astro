@@ -10,7 +10,7 @@ import ResourceCover from '../components/ResourceCover.astro';
 import { markSlot } from '../art.js';
 import { marks } from '../marketplaces.js';
 import { downloadUrl } from '../site.js';
-import { FOUNDING } from '../pricing.js';
+import { dollars, FOUNDING, foundingOpen, signupUrl } from '../pricing.js';
 
 const title = 'Teachouse \u2014 create once, sell everywhere';
 const description =
@@ -54,13 +54,23 @@ const steps = [
 					marketplaces &mdash; all from one place.
 				</p>
 				<div class="actions">
-					<a class="cta large" href="/pricing/#founding">Join the Founding 100</a>
+					{
+						foundingOpen ? (
+							<a class="cta large" href="/pricing/#founding">Join the Founding {FOUNDING.places}</a>
+						) : (
+							<a class="cta large" href={signupUrl()}>Start free</a>
+						)
+					}
 					<a class="btn large" href="#how">See how it works</a>
 				</div>
-				<p class="under">
-					Only {FOUNDING.places} Founding Member places. {FOUNDING.discount_year_one_pct}% off Year 1,
-					plus your first {FOUNDING.free_imports} resources cross-listed free.
-				</p>
+				{
+					foundingOpen && (
+						<p class="under">
+							Only {FOUNDING.places} Founding Member places. {dollars(FOUNDING.year_one_cents)} for
+							your first year, plus {FOUNDING.extra_moves} moves on top.
+						</p>
+					)
+				}
 				<MarketplaceBand />
 			</div>
 
@@ -278,7 +288,13 @@ const steps = [
 					}
 				</div>
 				<div class="actions">
-					<a class="cta" href="/pricing/#founding">Join the Founding 100</a>
+					{
+						foundingOpen ? (
+							<a class="cta" href="/pricing/#founding">Join the Founding {FOUNDING.places}</a>
+						) : (
+							<a class="cta" href={signupUrl()}>Start free</a>
+						)
+					}
 					{/* The mockup's second button reads "See how it works", which is
 					    this section; from here the useful next step is the price. */}
 					<a class="link" href="#pricing">See pricing</a>

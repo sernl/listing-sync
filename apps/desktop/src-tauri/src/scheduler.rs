@@ -802,6 +802,7 @@ mod tests {
         for marketplace in marketplaces {
             store
                 .put(&SessionRecord {
+                    external_id: None,
                     marketplace: *marketplace,
                     account_label: None,
                     captured_at: NOW,

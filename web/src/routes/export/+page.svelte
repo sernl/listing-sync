@@ -3,6 +3,7 @@
 	import { api } from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
+	import Note from '$lib/Note.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import { EMPTINESS_KEY, fetchCatalogueCsv } from '$lib/pages/export/api';
@@ -52,15 +53,11 @@
 		icon="file-down"
 		title="Export"
 		description="A spreadsheet of your Resources, with each marketplace's status, price and link."
+		guide="export"
 	/>
 
 	<Panel title="Export your Resources">
-		<p class="export-lede">
-			One row per resource, with a status, price and link for every marketplace it is listed on.
-		</p>
-		<p class="export-lede">
-			Details only: no file a buyer downloads, and no marketplace login.
-		</p>
+		<p class="export-lede">One row per resource, and no file a buyer downloads.</p>
 
 		<dl class="export-carries">
 			<div>
@@ -113,12 +110,8 @@
 			{/if}
 		</div>
 
-		<p class="export-note">
-			Each file is named <span class="export-file">{FILENAME_PATTERN}</span>, dated in UTC, so the
-			date can read a day behind yours.
-		</p>
-		<p class="export-note">
-			The file is built when you ask for it, so a long list can take a minute.
-		</p>
+		<Note>
+			Each file is named <span class="export-file">{FILENAME_PATTERN}</span>, dated in UTC.
+		</Note>
 	</Panel>
 </div>

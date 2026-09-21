@@ -451,6 +451,18 @@ a.mp-mark:hover {
   max-width: 72ch;
 }
 
+/* The deep link to this section's guide, set inline after the one sentence
+   the section keeps. Inline rather than a control of its own: a section that
+   says one sentence and then draws a button has spent more room on the way
+   out than on the answer. */
+
+.mp-guide {
+  white-space: nowrap;
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .mp-version {
   margin: 8px 0 0;
   font-size: 12px;

@@ -686,6 +686,15 @@ pub(crate) async fn create_run(
         .map_err(|error| storage_fault(&state, &error))?;
     match opening {
         RunOpening::Opened => {
+            state.telemetry.capture(
+                context.org,
+                "import_run_started",
+                serde_json::json!({
+                    "kind": "marketplace",
+                    "source_marketplace": body.source.marketplace(),
+                    "is_first_ever": first_ever(&state, context.org).await,
+                }),
+            );
             let view = view_of(&state, context.org, run).await?;
             Ok((StatusCode::CREATED, Json(view)))
         }
@@ -698,6 +707,26 @@ pub(crate) async fn create_run(
         }
         RunOpening::KeySpent { source } => Err(start_key_spent(source)),
     }
+}
+
+/// Whether the run just opened is this organisation's first ever.
+///
+/// Counted rather than joined later, because it is the property that makes
+/// the activation funnel — signup, first import, first move — one query. The
+/// filter asks for no rows, so this is a count on the tenant's own index; a
+/// count that fails answers `false`, since an analytics property is never
+/// worth failing an import the seller just started.
+async fn first_ever(state: &AppState, org: OrgId) -> bool {
+    let counted = ImportRunRepo::new(state.pool.clone())
+        .history(
+            org,
+            &RunHistoryFilter {
+                limit: 0,
+                ..RunHistoryFilter::default()
+            },
+        )
+        .await;
+    matches!(counted, Ok(page) if page.total <= 1)
 }
 
 /// The run a retry may name: this organisation's, on the same shop, and
@@ -2788,7 +2817,18 @@ pub(crate) async fn run_for_batch(
         .await
         .map_err(|error| storage_fault(state, &error))?;
     match opening {
-        BatchRunOpening::Opened => head_or_missing(state, org, run).await,
+        BatchRunOpening::Opened => {
+            state.telemetry.capture(
+                org,
+                "import_run_started",
+                serde_json::json!({
+                    "kind": "spreadsheet",
+                    "source_marketplace": serde_json::Value::Null,
+                    "is_first_ever": first_ever(state, org).await,
+                }),
+            );
+            head_or_missing(state, org, run).await
+        }
         // A run for this batch appeared between the read above and this
         // write, which is two commit chunks racing on one batch: the answer
         // is that run, because it is the one this batch is reviewed through.
@@ -4018,6 +4058,7 @@ fn claim_refusal(state: &AppState, error: &tam_storage::StorageError) -> APIErro
         | tam_storage::StorageError::Inconsistent { .. }
         | tam_storage::StorageError::StaleLease
         | tam_storage::StorageError::DuplicateIdempotencyKey { .. }
+        | tam_storage::StorageError::StorefrontBoundElsewhere { .. }
         | tam_storage::StorageError::AttemptInFlight) => storage_fault(state, fault),
     }
 }
@@ -4388,6 +4429,57 @@ pub(crate) async fn settled_event(
     head: &ImportRunHead,
     run_state: RunState,
 ) -> Result<(), APIError> {
+    // Completion is counted here rather than at each of the two call sites
+    // that reach it, because this is the one funnel every settle passes
+    // through, and a run that completes twice would be two rows on the
+    // activation chart. The counts are re-read rather than threaded: they
+    // are what the run actually did, and this runs once per run.
+    if run_state == RunState::Complete {
+        let counts = ImportRunRepo::new(state.pool.clone())
+            .counts(org, head.id)
+            .await
+            .unwrap_or_default();
+        let elapsed_ms = (state.wall)().0.saturating_sub(head.created_at.0);
+        // Whole seconds, because the chart this feeds reads a duration in
+        // seconds and a run measured to the millisecond is a run nobody
+        // groups by.
+        #[expect(
+            clippy::integer_division,
+            reason = "whole seconds is the resolution the chart reads"
+        )]
+        let duration_secs = elapsed_ms / 1_000;
+        state.telemetry.capture(
+            org,
+            "import_run_completed",
+            serde_json::json!({
+                "kind": run_kind_word(head.kind),
+                "resources_committed": counts.imported,
+                "duplicates_merged": counts.matched,
+                "duration_secs": duration_secs,
+                "is_first_ever": first_ever(state, org).await,
+            }),
+        );
+    }
+    // Every abandonment reaching here is a stop — the seller's from the
+    // console, or the owning device's own — so the reason is that one word
+    // rather than a parameter every caller would have to be trusted to
+    // spell. The stage is read from the head as it stood before the write,
+    // which is where the run was given up.
+    if run_state == RunState::Abandoned {
+        let counts = ImportRunRepo::new(state.pool.clone())
+            .counts(org, head.id)
+            .await
+            .unwrap_or_default();
+        state.telemetry.capture(
+            org,
+            "import_run_abandoned",
+            serde_json::json!({
+                "stage": stage_of(head),
+                "reason_code": "stopped",
+                "items_listed": counts.listed,
+            }),
+        );
+    }
     emit(
         state,
         org,
@@ -4398,6 +4490,14 @@ pub(crate) async fn settled_event(
         },
     )
     .await
+}
+
+/// How an import's two ways in are spelled on an event.
+const fn run_kind_word(kind: RunKind) -> &'static str {
+    match kind {
+        RunKind::Marketplace => "marketplace",
+        RunKind::Spreadsheet => "spreadsheet",
+    }
 }
 
 async fn emit(

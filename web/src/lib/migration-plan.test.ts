@@ -17,11 +17,9 @@ import {
 } from './migration-plan';
 
 const CAP: MigrationCap = {
-	limit: 20,
-	used: 8,
-	remaining: 12,
-	// 1 October 2026, which is what the sentences below print.
-	resets_at: Date.UTC(2026, 9, 1)
+	available: 12,
+	required: 8,
+	remaining: 4
 };
 
 describe('the pair table', () => {
@@ -110,47 +108,43 @@ describe('the words for a migration', () => {
 });
 
 describe('the cap sentence', () => {
-	it('states what is left, what the selection uses, and when the month turns', () => {
+	it('states the balance and what the selection would spend', () => {
 		expect(capSentence(CAP, 8)).toEqual({
-			line: 'You have 12 of 20 moves left this month; this uses 8. Resets 1 October.',
+			line: 'You have 12 moves. This uses 8.',
 			refusal: null
 		});
 	});
 
 	it('leaves out the selection clause where nothing is selected yet', () => {
-		expect(capSentence(CAP, 0).line).toBe(
-			'You have 12 of 20 moves left this month. Resets 1 October.'
-		);
+		expect(capSentence(CAP, 0).line).toBe('You have 12 moves.');
 		expect(capSentence(CAP, 0).refusal).toBeNull();
 	});
 
-	it('allows a selection that fills the allowance exactly', () => {
+	it('allows a selection that spends the balance exactly', () => {
 		expect(capSentence(CAP, 12).refusal).toBeNull();
 	});
 
-	it('refuses one resource past the allowance', () => {
+	it('refuses one resource past the balance, saying how many would fit', () => {
 		const over = capSentence(CAP, 13);
-		expect(over.refusal).toBe(
-			'Your plan moves 20 resources a month and you have 12 left, so 13 is more than this month can take. It resets 1 October.'
-		);
-		// The figures stay beside the refusal: a seller told they cannot press
-		// still has to know how many would fit and when the rest can go.
-		expect(over.line).toContain('12 of 20');
+		expect(over.refusal).toBe('You have 12 moves and this needs 13. Buy a pack or pick fewer.');
+		// The figure stays beside the refusal: a seller told they cannot press
+		// still has to know how many would fit.
+		expect(over.line).toContain('12 moves');
 	});
 
-	it('says a plan that moves nothing moves nothing, rather than counting to zero', () => {
-		const none = capSentence({ limit: 0, used: 0, remaining: 0, resets_at: CAP.resets_at }, 3);
-		expect(none.line).toBe('Your plan moves no resources between marketplaces.');
-		expect(none.refusal).toContain('Upgrade');
+	it('sends an empty balance to buy rather than to pick fewer', () => {
+		const none = capSentence({ available: 0, required: 3, remaining: 0 }, 3);
+		expect(none.line).toBe('You have no moves. This uses 3.');
+		expect(none.refusal).toBe('You have no moves left. Buy a pack or choose Sync.');
 	});
 
-	// A server that counted a month the console did not would put the seller
-	// over without warning, so the sentence is read off the plan's own block
-	// rather than recomputed from the entitlement read.
-	it('reads the figures it prints off the cap it was handed', () => {
-		const spent = capSentence({ limit: 20, used: 20, remaining: 0, resets_at: CAP.resets_at }, 1);
-		expect(spent.line).toContain('0 of 20');
-		expect(spent.refusal).toContain('you have 0 left');
+	// A balance another tab has spent would put the seller over without
+	// warning, so the sentence is read off the plan's own block rather than
+	// off the entitlement read.
+	it('reads the figure it prints off the cap it was handed', () => {
+		const spent = capSentence({ available: 1, required: 1, remaining: 0 }, 1);
+		expect(spent.line).toBe('You have 1 move. This uses 1.');
+		expect(spent.refusal).toBeNull();
 	});
 });
 

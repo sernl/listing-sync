@@ -16,7 +16,7 @@
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
 	import { anyConnectionStands } from '$lib/connection-standing';
-	import { migrationsReason } from '$lib/entitlement';
+	import { movesReason } from '$lib/entitlement';
 	import { entitlementRead } from '$lib/entitlement-read';
 	import { external } from '$lib/external';
 	import Field from '$lib/Field.svelte';
@@ -37,6 +37,7 @@
 		pairReason,
 		productsFromUrl
 	} from '$lib/migration-plan';
+	import Note from '$lib/Note.svelte';
 	import Pagination from '$lib/Pagination.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
@@ -63,6 +64,7 @@
 	import { heldSelection, marketplaceRows } from '$lib/pages/automations/marketplace-list';
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
 	import {
+		MIGRATIONS_GUIDE,
 		NO_MIGRATION_YET,
 		WHAT_A_MIGRATION_IS,
 		migrationLog,
@@ -288,16 +290,17 @@
 		migrationBody({ source, target, disposition, all, products: [...ticked] })
 	);
 
-	// The allowance before a preview has been taken, read off the entitlement
-	// the shell already holds. It stands whether or not it refuses: a seller
-	// about to move forty resources on a twenty-a-month plan needs the figure
-	// before they press, not after the server refuses them.
+	// The balance before a preview has been taken, read off the entitlement
+	// the shell already holds — the same figure `/v1/billing` serves, from the
+	// read this page was already making. It stands whether or not it refuses:
+	// a seller about to move forty resources on a balance of five needs the
+	// figure before they press, not after the server refuses them.
 	const entitlement = createQuery(() => entitlementRead);
 	const allowance = $derived(
 		entitlement.data === undefined
 			? null
 			: plan === null
-				? migrationsReason(entitlement.data.capabilities, entitlement.data.usage, 0)
+				? movesReason(entitlement.data.moves, 0)
 				: capSentence(plan.cap, plan.counts.will_create)
 	);
 
@@ -491,14 +494,12 @@
 		icon="arrow-right-left"
 		title="Migrations"
 		description="Copy or move resources from one marketplace to another."
+		guide={MIGRATIONS_GUIDE}
 	/>
 
 	{#if nothingConnected}
 		<Banner tone="warn" title="No marketplace is connected" action={toDownloads}>
-			A migration reads a shop you already sell on, so there is nothing to move until one is
-			connected. Connect it in the Teachouse app on your computer: the app opens the
-			marketplace sign-in there and keeps your login on that machine, which is the only
-			place it is kept.
+			Connect a marketplace in the Teachouse app on your computer.
 		</Banner>
 	{/if}
 
@@ -509,10 +510,7 @@
 		<div class="auto-right">
 			{#if connectionsUnread}
 				<Panel title="Set up">
-					<p class="quiet">
-						We could not read your marketplaces, so we cannot tell whether you have a shop to
-						bring across. Nothing has started.
-					</p>
+					<p class="quiet">Your marketplaces could not be read, and nothing has started.</p>
 				</Panel>
 			{:else if nothingConnected}
 				<!-- The banner above already states the blocker and offers the one
@@ -609,19 +607,15 @@
 							<p class="quiet">Loading your resources…</p>
 						{:else if pickUnread && products.length === 0}
 							<Banner tone="bad" action={retryPicks}>
-								Your resources could not be read, so there is nothing to tick. Moving all
-								of {SHORT_NAME[source]} does not need this list and still works.
+								Your resources could not be read, so there is nothing to tick.
 							</Banner>
 						{:else if products.length === 0 && pickPage === 1}
-							<p class="quiet">
-								You have no resources yet, so there is nothing to tick. Import brings your
-								existing shop across first.
-							</p>
+							<p class="quiet">Import brings your existing shop across first.</p>
 						{:else}
 							{#if pickUnread}
 								<Banner tone="bad" action={retryPicks}>
 									That page of your resources could not be read, so the rows below are
-									the last ones that did. Nothing you have ticked has been lost.
+									the last ones that did.
 								</Banner>
 							{/if}
 							<div class="pick-head">
@@ -657,8 +651,8 @@
 							{#if shown.length === 0}
 								<p class="quiet">
 									{products.length === 0
-										? 'There are no resources on this page. Go back for the ones before it.'
-										: 'Nothing on this page matches that. Clear the filter, or try Next for more resources.'}
+										? 'Go back for the resources before this page.'
+										: 'Nothing on this page matches that.'}
 								</p>
 							{:else}
 								<div class="pick-list">
@@ -710,17 +704,17 @@
 							{previewing ? 'Previewing…' : 'Preview'}
 						</Button>
 						{#if allowance !== null}
-							<p class="foot-note">{allowance.line}</p>
+							<Note icon="gift">
+								{allowance.line}
+								<a href="/guides/plans">Where moves come from</a>
+							</Note>
 						{/if}
 					</div>
 
 					{#if planFailure !== null}
 						<Banner tone="bad">{planFailure}</Banner>
 					{:else if plan === null}
-						<p class="quiet">
-							Nothing is queued by a preview. It says, for each resource, whether it would be
-							created on {SHORT_NAME[target]}, is already there, or is blocked and why.
-						</p>
+						<p class="quiet">Take a preview to see what would happen to each resource.</p>
 					{:else}
 						{#if !plan.pair.allowed && plan.pair.reason !== null}
 							<Banner tone="warn" title="This pair cannot be migrated between">
@@ -758,7 +752,7 @@
 									</div>
 								{/each}
 							</div>
-							<p class="foot-note">{countsLine(plan.counts)}</p>
+							<Note>{countsLine(plan.counts)}</Note>
 							<!-- A blocked row is often blocked on what the listing would
 							     cost or land under on the target, which is decided on its
 							     own screen beside a preview of the proposed figures. The
@@ -767,13 +761,11 @@
 							     and guessing which blocker is a pricing one from its
 							     sentence would be this page deciding. -->
 							{#if plan.counts.blocked > 0}
-								<p class="foot-note">
-									Blocked on what a resource would cost or land under on
-									{SHORT_NAME[target]}?
+								<Note icon="circle-alert">
+									Blocked on price or terms?
 									<a href={PRICING_HREF}>Set target prices</a> ·
-									<a href={MAPPINGS_HREF}>Set licence and resource type</a>. Both preview
-									every resource before anything is approved.
-								</p>
+									<a href={MAPPINGS_HREF}>Set target terms</a>
+								</Note>
 							{/if}
 						{/if}
 					{/if}
@@ -796,6 +788,7 @@
 						<div class="set-foot">
 							<Button
 								tier="primary"
+								icon="arrow-right-left"
 								disabled={confirmRefusal !== null || confirming}
 								reason={confirmRefusal ??
 									(confirming ? 'The migration is starting.' : undefined)}
@@ -808,7 +801,10 @@
 						</div>
 					{/if}
 
-					<p class="foot-note">{FILES_STAY_ON_YOUR_COMPUTER}</p>
+					<Note icon="shield-check">
+						{FILES_STAY_ON_YOUR_COMPUTER}
+						<a href="/guides/your-files">Where your files live</a>
+					</Note>
 
 					{#if refusal !== null}
 						<Banner tone="bad">{refusal}</Banner>
@@ -822,7 +818,7 @@
 			     page turns both. -->
 			<Panel
 				title="Your transfers"
-				description="Every transfer you have run, Copy and Move together, newest first."
+				description="Every transfer you have run, newest first."
 			>
 				<!-- The filter is the endpoint's own `disposition` query, not a
 				     sieve over the page: a page of ten filtered in the browser
@@ -840,8 +836,7 @@
 					<p class="quiet">Loading…</p>
 				{:else if requestsUnread && requests.length === 0}
 					<Banner tone="bad" action={retryRequests}>
-						Your transfers could not be read, so this page cannot list them. Any transfer
-						already running is unaffected.
+						Your transfers could not be read, so this page cannot list them.
 					</Banner>
 				{:else}
 					{#if requestsUnread}
@@ -855,9 +850,9 @@
 						     have never transferred a shop" are three different facts. -->
 						<p class="quiet">
 							{requestPage > 1
-								? 'There is nothing left on this page. Go back for the transfers before it.'
+								? 'Go back for the transfers before this page.'
 								: historyKind !== ''
-									? `No ${DISPOSITION_WORD[historyKind].toLocaleLowerCase()} has run yet. Show both to see the rest.`
+									? `No ${DISPOSITION_WORD[historyKind].toLocaleLowerCase()} has run yet.`
 									: NO_MIGRATION_YET}
 						</p>
 					{:else}
@@ -881,10 +876,10 @@
 										: ''}
 								</span>
 								<div class="work-bar-acts">
-									<Button small tier="quiet" onclick={() => (pickedPast = new Map())}>
+									<Button small tier="quiet" icon="circle-x" onclick={() => (pickedPast = new Map())}>
 										Clear selection
 									</Button>
-									<Button small danger onclick={() => (deleting = pickedItems)}>
+									<Button small danger icon="trash-2" onclick={() => (deleting = pickedItems)}>
 										Delete {countWord(pickedPast.size, TRANSFERS)}
 									</Button>
 								</div>
@@ -923,6 +918,7 @@
 									<Button
 										small
 										danger
+										icon="trash-2"
 										disabled={refusal !== null}
 										reason={refusal ?? undefined}
 										onclick={() => (deleting = [{ id: row.request, label: pastLabel(row) }])}
@@ -956,8 +952,8 @@
 					entries={log}
 					bind:query={logQuery}
 					empty={requestPage > 1
-						? 'There is nothing to log on this page. Go back for the transfers before it.'
-						: 'No transfer has run yet, so there is nothing to log.'}
+						? 'Go back for the transfers before this page.'
+						: 'No transfer has run yet.'}
 				/>
 			</Panel>
 		</div>
@@ -975,6 +971,7 @@
 	<Button
 		tier="outline"
 		small
+		icon="refresh-cw"
 		disabled={requestsBusy}
 		reason={requestsBusy ? 'A page is being read.' : undefined}
 		onclick={retryRequestPage}
@@ -987,6 +984,7 @@
 	<Button
 		tier="outline"
 		small
+		icon="refresh-cw"
 		disabled={pickBusy}
 		reason={pickBusy ? 'A page is being read.' : undefined}
 		onclick={retryPickPage}

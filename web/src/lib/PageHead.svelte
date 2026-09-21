@@ -11,13 +11,21 @@
 		icon,
 		title,
 		description,
+		guide,
 		back,
 		search,
 		aside
 	}: {
 		icon: IconName;
 		title: string;
-		description: string;
+		/** The one sentence under the title, where the title alone does not
+		 *  say what to do here. Optional: a page whose name is its own
+		 *  instruction says nothing twice. */
+		description?: string;
+		/** The guide this page's help control opens, by slug. Without one the
+		 *  control opens the guide index, which is where it went before any
+		 *  page named its own. */
+		guide?: string;
 		/** Where the back control goes on a drill-down view. Set only there:
 		 *  Vendoo's own pattern replaces the icon with a back arrow and drops
 		 *  the help control, because a drill-down is reached from one page and
@@ -44,19 +52,27 @@
 	{/if}
 	<div class="head-titles">
 		<h1>{title}</h1>
-		<p>{description}</p>
+		{#if description}<p>{description}</p>{/if}
 	</div>
 	{#if aside}
 		<div class="head-aside">{@render aside()}</div>
 	{/if}
 	<!-- Rendered here rather than by each page, so every header band carries
-	     exactly one and no page has to remember. A drill-down has none: it is
-	     reached from one screen and returns to it, which is Vendoo's own
-	     pattern and the specification's. -->
-	{#if !back}
-		<a class="page-help" href="/guides" aria-label="Help with this page">
+	     exactly one and no page has to remember. A drill-down carries none of
+	     its own accord -- it is reached from one screen and returns to it,
+	     which is Vendoo's own pattern and the specification's -- but a
+	     drill-down that names its guide gets the control anyway, because
+	     naming one is the page asking for it. -->
+	{#if !back || guide !== undefined}
+		<a
+			class="page-help"
+			href={guide === undefined ? '/guides' : `/guides/${guide}`}
+			aria-label={guide === undefined ? 'Help with this page' : 'Read the guide'}
+		>
 			<Icon name="circle-question-mark" size={20} />
 		</a>
+	{/if}
+	{#if !back}
 		<!-- The phone's own two controls, which `app.css` draws only below
 		     620px. Above it the top strip carries the search box and the
 		     account tile and the rail carries the section, so these would be a

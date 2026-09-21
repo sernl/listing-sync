@@ -36,6 +36,7 @@ const MAPPING_2: MappingId = MappingId(Uuid([0x32; 16]));
 
 fn state(pool: PgPool) -> AppState {
     AppState {
+        telemetry: tam_api::telemetry::Telemetry::default(),
         exchange_rates: None,
         pool,
         config: Config::default(),
@@ -120,10 +121,10 @@ async fn provision(pool: &PgPool) {
             .await
             .expect("the org seeds");
         consented(pool, org).await;
-        // Copying and moving is a paid capability, so the fixture tenant is
-        // a subscriber: without a grant every sync in this file would be
-        // answered by the migration cap rather than by the job machinery it
-        // is written to exercise.
+        // Copying and moving spends moves, so the fixture tenant holds a
+        // balance as well as a plan: without one every sync in this file
+        // would be answered by the move gate rather than by the job
+        // machinery it is written to exercise.
         tam_storage::EntitlementRepo::new(pool.clone())
             .grant(
                 org,
@@ -131,7 +132,7 @@ async fn provision(pool: &PgPool) {
                     id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
                     plan: tam_limits::Plan::Subscriber,
                     rung: None,
-                    granted_by: tam_storage::GrantedBy::Paddle,
+                    granted_by: tam_storage::GrantedBy::Stripe,
                     grantor_user: None,
                     reason: None,
                     source_ref: Some(name),
@@ -141,6 +142,19 @@ async fn provision(pool: &PgPool) {
             )
             .await
             .expect("the fixture grant seeds");
+        tam_storage::EntitlementRepo::new(pool.clone())
+            .credit_moves(
+                org,
+                tam_storage::MoveCredit {
+                    delta: 100,
+                    source: tam_storage::MoveSource::Operator,
+                    source_ref: Some("fixture"),
+                    expires_at: None,
+                    at: Timestamp(1_000),
+                },
+            )
+            .await
+            .expect("the fixture balance seeds");
     }
     let sessions = SessionRepo::new(pool.clone());
     for (org, user, email, token) in [
@@ -1664,11 +1678,10 @@ async fn an_outcome_filter_on_the_jobs_list_is_refused_rather_than_dropped(pool:
     );
 }
 
-/// The migration cap, which is the one bound a seller can wait out: the
-/// refusal names the allowance, what is left, and the day the counter
-/// returns to zero.
+/// The move balance, which is the one bound a sync passes: a seller with no
+/// moves is refused, and told the one thing that would let them through.
 #[sqlx::test(migrations = "../tam-storage/migrations")]
-async fn a_tenant_with_no_migration_allowance_is_refused_with_its_reset_date(pool: PgPool) {
+async fn a_tenant_with_no_moves_is_refused_and_told_to_buy_some(pool: PgPool) {
     provision(&pool).await;
     let mut tx = pool.begin().await.expect("the transaction opens");
     sqlx::query("SELECT set_config('app.current_org', $1, true)")
@@ -1676,11 +1689,11 @@ async fn a_tenant_with_no_migration_allowance_is_refused_with_its_reset_date(poo
         .execute(&mut *tx)
         .await
         .expect("the pin applies");
-    sqlx::query("DELETE FROM entitlement_grant WHERE org_id = $1")
+    sqlx::query("DELETE FROM move_ledger WHERE org_id = $1")
         .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
         .execute(&mut *tx)
         .await
-        .expect("the fixture grant is withdrawn");
+        .expect("the fixture balance is withdrawn");
     tx.commit().await.expect("the withdrawal commits");
 
     let answer = call(
@@ -1701,18 +1714,17 @@ async fn a_tenant_with_no_migration_allowance_is_refused_with_its_reset_date(poo
     assert_eq!(
         answer.status,
         StatusCode::UNPROCESSABLE_ENTITY,
-        "a plan that copies nothing refuses the copy rather than enqueuing it"
+        "an empty balance refuses the copy rather than enqueuing it"
     );
     let refusal: APIError = serde_json::from_slice(&answer.body).expect("the refusal parses");
     let detail = refusal.errors[0]
         .detail
         .as_ref()
         .expect("the refusal names the bound it hit");
-    assert_eq!(detail["quota"], "migrations_per_month");
-    assert_eq!(detail["limit"], 0);
-    assert!(
-        refusal.errors[0].message.starts_with("Your plan"),
-        "the sentence is the seller's: {}",
-        refusal.errors[0].message
+    assert_eq!(detail["quota"], "moves");
+    assert_eq!(detail["available"], 0);
+    assert_eq!(
+        refusal.errors[0].message,
+        "You have no moves left. Buy a pack to move more resources."
     );
 }

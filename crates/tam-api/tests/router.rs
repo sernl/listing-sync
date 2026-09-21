@@ -34,6 +34,7 @@ impl Answer {
 )]
 fn test_state() -> AppState {
     AppState {
+        telemetry: tam_api::telemetry::Telemetry::default(),
         exchange_rates: None,
         pool: sqlx::postgres::PgPoolOptions::new()
             .acquire_timeout(core::time::Duration::from_millis(200))

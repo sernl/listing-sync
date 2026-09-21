@@ -153,13 +153,22 @@ pub enum ConnectVerdict {
     /// marketplace, so no login was opened. The remedy is on the Account
     /// page's permissions panel, on any machine, and then the sign-in holds.
     ConsentRequired,
+    /// The shop this sign-in speaks for is already connected to another
+    /// Teachouse account, so the server refused the claim and the capture was
+    /// not kept.
+    ///
+    /// Its own verdict because it is the one refusal no action on this device
+    /// clears: pressing Connect again signs in to the same shop and is
+    /// refused again, and signing this machine back in does nothing for it.
+    /// The remedy is a person.
+    BoundElsewhere,
 }
 
 impl ConnectVerdict {
     /// Every verdict, beside the variants rather than in a test, so a new one
     /// is listed where it is declared. `Marketplace::ALL` is the same shape and
     /// is the reason this is a constant and not an iterator.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Captured,
         Self::Deadline,
         Self::Abandoned,
@@ -167,6 +176,7 @@ impl ConnectVerdict {
         Self::NotKept,
         Self::SignedOut,
         Self::ConsentRequired,
+        Self::BoundElsewhere,
     ];
 
     /// The word this verdict travels as.
@@ -180,6 +190,7 @@ impl ConnectVerdict {
             Self::NotKept => "notkept",
             Self::SignedOut => "signed_out",
             Self::ConsentRequired => "consent",
+            Self::BoundElsewhere => "bound_elsewhere",
         }
     }
 }

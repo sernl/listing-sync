@@ -194,7 +194,7 @@
 <Panel
 	id="machines"
 	title="Machine sign-ins"
-	description="Computers and phones running the Teachouse app. Marketplace sign-ins stay on each machine and are wiped when a signed-out machine next checks in."
+	description="Computers and phones running the Teachouse app."
 >
 	{#snippet more()}
 		{#if invoke !== null}

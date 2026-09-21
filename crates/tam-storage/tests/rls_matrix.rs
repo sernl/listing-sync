@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 
 use sqlx::PgPool;
 
-const TENANT_TABLES: [&str; 72] = [
+const TENANT_TABLES: [&str; 75] = [
     "auto_publish_rule",
     "auto_publish_run",
     "billing_subscription",
@@ -52,6 +52,7 @@ const TENANT_TABLES: [&str; 72] = [
     "marketplace_consent",
     "marketplace_request",
     "marketplace_sync_setting",
+    "move_ledger",
     "native_residue",
     "notification",
     "org_event_counter",
@@ -78,6 +79,8 @@ const TENANT_TABLES: [&str; 72] = [
     "seller_rule_preview",
     "seller_rule_preview_row",
     "seller_rule_reference",
+    "service_booking",
+    "storefront_allowance",
     "sync_request",
     "sync_request_resource",
     "sync_request_rule_choice",
@@ -133,7 +136,7 @@ const GLOBAL_TABLES: [&str; 14] = [
 /// seller's import finished is a support question, and the resources it
 /// described, the sketches of their files and the duplicate questions they
 /// were asked are not.
-const BACKOFFICE_READABLE: [(&str, &str); 14] = [
+const BACKOFFICE_READABLE: [(&str, &str); 15] = [
     ("billing_subscription", "true"),
     ("connection", "true"),
     ("entitlement_grant", "true"),
@@ -147,6 +150,7 @@ const BACKOFFICE_READABLE: [(&str, &str); 14] = [
     ("org_inventory_halt", "true"),
     ("outbox_message", "(state = 'dead'::text)"),
     ("product", "true"),
+    ("service_booking", "true"),
     ("write_attempt", "true"),
 ];
 

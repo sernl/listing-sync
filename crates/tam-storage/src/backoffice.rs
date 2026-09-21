@@ -278,16 +278,16 @@ pub struct HaltRecord {
     pub raised_at: Timestamp,
 }
 
-/// What Paddle last said about one organisation's subscription, narrowed to
+/// What the billing provider last said about one organisation's subscription, narrowed to
 /// the three facts an operator reads.
 ///
-/// Deliberately not [`crate::SubscriptionState`]. That carries Paddle's
+/// Deliberately not [`crate::SubscriptionState`]. That carries the provider's
 /// subscription and customer identifiers, which the tenant's own billing page
 /// needs and a cross-tenant read has no use for; the smallest row that
 /// answers the question is the one this surface carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubscriptionRecord {
-    /// Paddle's own vocabulary, stored verbatim (migration 0038) and passed
+    /// The provider's own vocabulary, stored verbatim (migration 0038) and passed
     /// through here rather than translated.
     pub status: String,
     pub current_period_end: Option<Timestamp>,
@@ -302,7 +302,7 @@ pub struct OrgDetail {
     pub halts: Vec<HaltRecord>,
     /// Absent for a tenant that has never reached checkout, which is a
     /// different fact from a cancelled subscription: that one is present and
-    /// carries Paddle's cancelled status.
+    /// carries the provider's cancelled status.
     pub subscription: Option<SubscriptionRecord>,
 }
 

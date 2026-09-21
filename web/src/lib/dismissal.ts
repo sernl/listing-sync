@@ -4,7 +4,10 @@
 // remembered anything. Two things made it worth lifting rather than copying:
 // the storage key was a bare string, so a second page could take the same one
 // and silently close both banners at once, and the guard against a browser
-// that refuses storage had to be rewritten correctly at every site.
+// that refuses storage had to be rewritten correctly at every site. That
+// board's own explainer has since moved to the `labels-and-collections`
+// guide, so its key is gone; a viewer's stale `labels.what-are-labels.dismissed`
+// is simply never read again.
 //
 // The union below closes the first hole — a key no one declared fails
 // `svelte-check` rather than reaching a seller — and the `Record` over it
@@ -15,18 +18,10 @@
 // machine and on no other.
 
 /** Every explainer a viewer can close for good. */
-export type DismissKey =
-	| 'labels.what-are-labels'
-	| 'templates.licence-is-yours'
-	| 'analytics.tpt-reports-only';
+export type DismissKey = 'templates.licence-is-yours' | 'analytics.tpt-reports-only';
 
-/** Where each dismissal is written.
- *
- * `labels.what-are-labels` keeps the string the Labels board already wrote, so
- * a viewer who dismissed that banner before this module existed does not meet
- * it again. */
+/** Where each dismissal is written. */
 export const DISMISS_KEYS: Record<DismissKey, string> = {
-	'labels.what-are-labels': 'labels.what-are-labels.dismissed',
 	'templates.licence-is-yours': 'templates.licence-is-yours.dismissed',
 	'analytics.tpt-reports-only': 'analytics.tpt-reports-only.dismissed'
 };

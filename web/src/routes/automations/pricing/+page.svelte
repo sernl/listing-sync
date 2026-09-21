@@ -8,18 +8,20 @@
 
 	import PageHead from '$lib/PageHead.svelte';
 	import RuleWorkbench from '$lib/pages/automations/RuleWorkbench.svelte';
-	import { WHAT_PRICING_IS } from '$lib/pages/automations/seller-rules';
+	import { PRICING_GUIDE, WHAT_PRICING_IS } from '$lib/pages/automations/seller-rules';
 	import '$lib/pages/automations/automations.css';
 </script>
 
 <div class="page">
+	<!-- The lead sentence is the header's own description rather than a
+	     paragraph under it: two channels saying the same thing is the second
+	     one a seller stops reading. -->
 	<PageHead
 		icon="credit-card"
 		title="Pricing"
-		description="Convert your prices for another marketplace, and approve every figure before it is used."
+		description={WHAT_PRICING_IS}
+		guide={PRICING_GUIDE}
 	/>
-
-	<p class="migrate-lead">{WHAT_PRICING_IS}</p>
 
 	<RuleWorkbench kind="pricing" />
 </div>

@@ -39,7 +39,7 @@
 
 <fieldset class="res-choices res-stack">
 	<legend class="sr-only">Thumbnails</legend>
-	<p class="res-note">Add up to four pictures. The first is the main cover.</p>
+	<p class="res-note">Add up to four pictures; the first is the main cover.</p>
 
 	<div class="res-choices">
 		{#each form.thumbnail_modes as option (option.id)}
@@ -69,9 +69,7 @@
 				alt="What buyers see at the top of this listing"
 				onerror={() => (unshowable = coverUrl)}
 			/>
-			<p class="res-note">
-				Made from your file when you uploaded it. This is the thumbnail buyers see first.
-			</p>
+			<p class="res-note">This is the thumbnail buyers see first.</p>
 		{:else}
 			<div class="res-thumb-none">
 				<span class="res-thumb-mark">Nothing yet</span>

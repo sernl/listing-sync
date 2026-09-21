@@ -13,6 +13,7 @@
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
 	import StatusPill from '$lib/StatusPill.svelte';
+	import Note from '$lib/Note.svelte';
 	import { sizeWords, type StoredFile } from '$lib/tpt-form';
 
 	let {
@@ -163,10 +164,10 @@
 </label>
 
 {#if limits}
-	<p class="foot-note">
+	<Note>
 		Files up to {sizeWords(limits.product_file.max_size_bytes)}; each thumbnail up to
 		{sizeWords(limits.thumbnail.max_size_bytes)}.
-	</p>
+	</Note>
 {/if}
 
 <div class="inline-choices" style="margin-top: 12px">
@@ -181,7 +182,7 @@
 		Keep this ZIP as one file
 	</label>
 </div>
-<p class="foot-note">TPT takes one file; Tes takes all of them.</p>
+<Note>TPT takes one file; Tes takes all of them.</Note>
 
 {#if sending !== null}
 	<div
@@ -224,14 +225,14 @@
 {/each}
 
 {#if headroom !== null}
-	<p class="foot-note">{headroom}</p>
+	<Note>{headroom}</Note>
 {/if}
 
 <style>
-	/* This control's own rules, in the component. The drop panel, the ZIP
-	   choice and the note under it still take `app.css`'s `.drop`,
-	   `.inline-choices` and `.foot-note` — including the state a drag puts the
-	   panel in — and what is here is the row and the meter. Tokens only. */
+	/* This control's own rules, in the component. The drop panel and the ZIP
+	   choice still take `app.css`'s `.drop` and `.inline-choices` — including
+	   the state a drag puts the panel in — the note under it is `Note.svelte`,
+	   and what is here is the row and the meter. Tokens only. */
 
 	/* One stored file: a name at the left and one figure at the right. Not a
 	   row card — these carry no thumbnail, only the one action. */

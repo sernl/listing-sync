@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(SUM(delta), 0)::bigint AS \"held!\" FROM move_ledger\n                WHERE org_id = $1 AND source = 'subscription'\n                  AND (expires_at IS NULL OR expires_at > $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "held!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "7ca7b106e05f9c206f3a6000204648fcc59f18e6be948dfaea01aacd3a8eac37"
+}

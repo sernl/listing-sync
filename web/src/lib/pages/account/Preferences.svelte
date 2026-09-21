@@ -42,7 +42,7 @@
 
 <Panel
 	title="Appearance"
-	description="Which palette this console is drawn in. Kept on this device; it does not follow you to another computer yet."
+	description="Which palette this console is drawn in, on this device."
 >
 	<!-- Which machine "this device" is, said in plain sight rather than left to
 	     a tooltip. The console is one build served to a browser and to the app

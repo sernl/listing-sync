@@ -9,18 +9,21 @@ import {
 	featureReason,
 	grantNotice,
 	limitReason,
-	migrationsLine,
-	migrationsReason,
+	movesLimit,
+	movesLine,
+	movesReason,
+	packEditLine,
 	sectionAllowed,
 	sectionReason,
+	supportLabel,
 	usageLine,
 	usageLines
 } from './entitlement';
 
 /** The real capability set for one plan. Read off the generated table rather
- *  than retyped, because the whole point of phase 1 is that these figures
- *  have one definition; a fixture here would be a second one, and the drift
- *  it hid is exactly the drift this work removed. */
+ *  than retyped, because the whole point of the plan table is that these
+ *  figures have one definition; a fixture here would be a second one, and the
+ *  drift it hid is exactly the drift that work removed. */
 function caps(plan: Plan): Capabilities {
 	const row = PLANS.find((entry) => entry.id === plan);
 	if (row === undefined) {
@@ -33,9 +36,6 @@ function usage(over: Partial<EntitlementUsage> = {}): EntitlementUsage {
 	return {
 		resources: 0,
 		marketplaces: 0,
-		migrations_this_month: 0,
-		// 1 October 2026, 00:00 UTC.
-		migrations_reset_at: Date.UTC(2026, 9, 1),
 		templates: 0,
 		collections: 0,
 		labels: 0,
@@ -48,7 +48,7 @@ function grant(over: Partial<Grant> = {}): Grant {
 	return {
 		plan: 'subscriber',
 		rung: null,
-		granted_by: 'paddle',
+		granted_by: 'stripe',
 		granted_at: Date.UTC(2026, 8, 1),
 		expires_at: null,
 		...over
@@ -58,26 +58,36 @@ function grant(over: Partial<Grant> = {}): Grant {
 describe('which sections a plan reaches', () => {
 	it('lets a subscriber everywhere', () => {
 		const subscriber = caps('subscriber');
-		for (const section of ['import', 'crosslist', 'automations', 'marketplaces', 'account'] as const) {
+		for (const section of [
+			'import',
+			'crosslist',
+			'automations',
+			'marketplaces',
+			'account'
+		] as const) {
 			expect(sectionAllowed(subscriber, section)).toBe(true);
 		}
 	});
 
-	// The free plan migrates nothing, schedules nothing and pulls nothing, so
-	// the section is three dead pages rather than one the seller can act in.
-	it('withholds Automations from the free plan, with a sentence', () => {
-		expect(sectionAllowed(caps('free'), 'automations')).toBe(false);
-		expect(sectionReason(caps('free'), 'automations')).toContain('Upgrade to schedule');
+	// The free plan schedules nothing and pulls nothing, but it is handed
+	// moves to spend: the section holds a page it can act in, so gating it out
+	// would refuse the seller the moves the plan gave them.
+	it('lets the free plan into Automations for the moves it holds', () => {
+		expect(caps('free').scheduling).toBe(false);
+		expect(caps('free').sync_pull_interval_secs).toBeNull();
+		expect(caps('free').free_moves_lifetime).toBeGreaterThan(0);
+		expect(sectionAllowed(caps('free'), 'automations')).toBe(true);
 	});
 
-	// The product sold at $47–$397 is called Catalogue Import and lives in the
-	// Import section, so a one-off buyer gated out of it would be gated out of
-	// the thing they bought.
-	it('lets a one-off buyer reach Import and Export', () => {
-		const bought = caps('migration_only');
-		expect(sectionAllowed(bought, 'import')).toBe(true);
-		expect(bought.export).toBe(true);
-		expect(sectionAllowed(bought, 'crosslist')).toBe(true);
+	// A plan that neither schedules, pulls nor is handed a move has three dead
+	// pages in the section, and says so rather than showing them.
+	it('withholds Automations from a plan that carries none of it', () => {
+		const barren: Capabilities = {
+			...caps('free'),
+			free_moves_lifetime: 0
+		};
+		expect(sectionAllowed(barren, 'automations')).toBe(false);
+		expect(sectionReason(barren, 'automations')).toContain('Upgrade to schedule');
 	});
 
 	// Account is how a plan is bought, so it can never be the thing a plan
@@ -86,6 +96,15 @@ describe('which sections a plan reaches', () => {
 		for (const plan of PLANS) {
 			expect(sectionAllowed(plan.capabilities, 'account')).toBe(true);
 			expect(sectionAllowed(plan.capabilities, 'admin')).toBe(true);
+		}
+	});
+
+	// Export lives inside Crosslist and export is never gated: a seller who
+	// cannot get their catalogue out will not put one in.
+	it('lets every plan into Crosslist', () => {
+		for (const plan of PLANS) {
+			expect(sectionAllowed(plan.capabilities, 'crosslist')).toBe(true);
+			expect(plan.capabilities.export).toBe(true);
 		}
 	});
 });
@@ -101,52 +120,41 @@ describe('why a control is disabled', () => {
 		expect(featureReason(caps('free'), 'analytics')).toBe(
 			'Your plan does not include analytics. Upgrade to see how your listings are doing.'
 		);
-		expect(featureReason(caps('free'), 'import_marketplace')).toContain('read your shop');
 		expect(featureReason(caps('free'), 'scheduling')).toContain('Upgrade to publish on a timetable');
-	});
-
-	// The free plan reads a spreadsheet and cannot read a shop, so the two
-	// import controls are not one gate.
-	it('separates the two ways in', () => {
-		expect(featureReason(caps('free'), 'import_spreadsheet')).toBeNull();
-		expect(featureReason(caps('free'), 'import_marketplace')).not.toBeNull();
 	});
 
 	// Null rather than an interval: a plan that never pulls is not a plan that
 	// pulls every zero seconds.
 	it('reads a null pull interval as never', () => {
-		expect(featureReason(caps('migration_only'), 'sync')).not.toBeNull();
+		expect(caps('free').sync_pull_interval_secs).toBeNull();
+		expect(featureReason(caps('free'), 'sync')).not.toBeNull();
 	});
 });
 
 describe('why a counted allowance is full', () => {
 	it('is nothing while one more would fit', () => {
-		expect(limitReason(caps('free'), usage({ resources: 19 }), 'resources')).toBeNull();
+		expect(limitReason(caps('free'), usage({ resources: 499 }), 'resources')).toBeNull();
 	});
 
 	// Drawn before the write, so the question is whether one more fits — not
 	// whether the last one did.
 	it('refuses at the cap rather than past it', () => {
-		expect(limitReason(caps('free'), usage({ resources: 20 }), 'resources')).toBe(
-			'Your plan includes 20 resources. Upgrade to add more.'
+		expect(limitReason(caps('free'), usage({ resources: 500 }), 'resources')).toBe(
+			'Your plan includes 500 resources. Upgrade to add more.'
 		);
 	});
 
 	it('agrees its noun with the figure, and names the act', () => {
-		expect(limitReason(caps('free'), usage({ marketplaces: 1 }), 'marketplaces')).toBe(
-			'Your plan includes 1 marketplace. Upgrade to connect more.'
-		);
-		expect(limitReason(caps('free'), usage({ devices: 1 }), 'devices')).toBe(
-			'Your plan includes 1 device. Upgrade to sign in on more.'
+		expect(limitReason(caps('free'), usage({ templates: 1 }), 'templates')).toBe(
+			'Your plan includes 1 template. Upgrade to add more.'
 		);
 	});
 
-	// A one-off buyer's own labels are the marketplaces', which the server
-	// excludes from the count; the seller's own vocabulary is zero and the
-	// sentence says so rather than implying a cap they could reach.
+	// The free plan has no collections of its own, and the sentence says zero
+	// rather than implying a cap the seller could reach.
 	it('states a zero allowance as zero', () => {
-		expect(limitReason(caps('migration_only'), usage(), 'labels')).toBe(
-			'Your plan includes 0 labels. Upgrade to add more.'
+		expect(limitReason(caps('free'), usage(), 'collections')).toBe(
+			'Your plan includes 0 collections. Upgrade to add more.'
 		);
 	});
 
@@ -169,7 +177,7 @@ describe('the allowance lines the Account page reads out', () => {
 	});
 
 	it('lists every counted allowance, marking the full ones', () => {
-		const rows = usageLines(usage({ resources: 20, labels: 2 }), caps('free'));
+		const rows = usageLines(usage({ resources: 500, labels: 2 }), caps('free'));
 		expect(rows.map((row) => row.limit)).toEqual([
 			'resources',
 			'marketplaces',
@@ -183,59 +191,53 @@ describe('the allowance lines the Account page reads out', () => {
 	});
 });
 
-describe('the migration line', () => {
-	it('states the month and when it resets', () => {
-		expect(migrationsLine(usage({ migrations_this_month: 8 }), caps('subscriber'))).toBe(
-			'8 of 20 this month; resets 1 October'
-		);
+describe('the balance a seller holds', () => {
+	it('states the figure, agreeing its noun', () => {
+		expect(movesLine({ available: 12 })).toBe('You have 12 moves.');
+		expect(movesLine({ available: 1 })).toBe('You have 1 move.');
 	});
 
-	// A plan that migrates nothing has no month to reset, so "0 of 0 this
-	// month" would be an allowance the seller could wait for.
-	it('says a plan moves nothing rather than counting to zero', () => {
-		expect(migrationsLine(usage(), caps('free'))).toBe(
-			'Your plan moves no resources between marketplaces.'
-		);
+	// "0 moves" reads as a fault in the count rather than as an empty purse.
+	it('reads an empty balance as none rather than as a zero', () => {
+		expect(movesLine({ available: 0 })).toBe('You have no moves.');
 	});
 });
 
-describe('the allowance a selection is checked against', () => {
-	it('counts what is left rather than what is spent, and names the selection', () => {
-		const standing = migrationsReason(
-			caps('subscriber'),
-			usage({ migrations_this_month: 8 }),
-			8
-		);
-		expect(standing.line).toBe(
-			'You have 12 of 20 moves left this month; this uses 8. Resets 1 October.'
-		);
+describe('the balance a selection is checked against', () => {
+	it('names the selection beside the balance', () => {
+		const standing = movesReason({ available: 12 }, 8);
+		expect(standing.line).toBe('You have 12 moves. This uses 8.');
 		expect(standing.refusal).toBeNull();
 	});
 
-	it('lets a selection fill the allowance exactly', () => {
-		expect(
-			migrationsReason(caps('subscriber'), usage({ migrations_this_month: 8 }), 12).refusal
-		).toBeNull();
+	it('leaves out the selection clause where nothing is selected yet', () => {
+		expect(movesReason({ available: 12 }, 0).line).toBe('You have 12 moves.');
 	});
 
-	it('refuses one past it, saying how many would fit and when the rest can go', () => {
-		const over = migrationsReason(caps('subscriber'), usage({ migrations_this_month: 8 }), 13);
-		expect(over.refusal).toBe(
-			'Your plan moves 20 resources a month and you have 12 left, so 13 is more than this month can take. It resets 1 October.'
+	it('lets a selection spend the balance exactly', () => {
+		expect(movesReason({ available: 12 }, 12).refusal).toBeNull();
+	});
+
+	// Two acts, so two sentences: a seller with some moves may pick fewer, and
+	// a seller with none can only buy.
+	it('sends a short balance to buy or to pick fewer', () => {
+		expect(movesReason({ available: 12 }, 13).refusal).toBe(
+			'You have 12 moves and this needs 13. Buy a pack or pick fewer.'
 		);
 	});
 
-	// A count the server has already moved past the limit is "none left", not a
-	// negative allowance the sentence would print as "-3 of 20".
-	it('never counts below nothing left', () => {
-		const spent = migrationsReason(caps('subscriber'), usage({ migrations_this_month: 25 }), 1);
-		expect(spent.line).toContain('0 of 20');
+	it('sends an empty balance to a pack or to Sync', () => {
+		const none = movesReason({ available: 0 }, 0);
+		expect(none.line).toBe('You have no moves.');
+		expect(none.refusal).toBe('You have no moves left. Buy a pack or choose Sync.');
 	});
 
-	it('refuses a plan that moves nothing before counting anything', () => {
-		const none = migrationsReason(caps('free'), usage(), 0);
-		expect(none.line).toBe('Your plan moves no resources between marketplaces.');
-		expect(none.refusal).toContain('Upgrade to migrate.');
+	// The confirm is drawn before the submit, so a balance of nothing refuses
+	// even where the seller has selected nothing yet.
+	it('refuses an empty balance before anything is selected', () => {
+		expect(movesReason({ available: 0 }, 3).refusal).toBe(
+			'You have no moves left. Buy a pack or choose Sync.'
+		);
 	});
 });
 
@@ -262,8 +264,8 @@ describe('the notice over a plan a person set', () => {
 		);
 	});
 
-	// Paddle's own record is already on the page; a notice over it would be a
-	// second account of one fact.
+	// The provider's own record is already on the page; a notice over it would
+	// be a second account of one fact.
 	it('is nothing for a plan that arrived through checkout, or through nothing', () => {
 		expect(grantNotice(grant())).toBeNull();
 		expect(grantNotice(grant({ plan: 'free', granted_by: null }))).toBeNull();
@@ -271,15 +273,14 @@ describe('the notice over a plan a person set', () => {
 });
 
 describe('what a plan card lists', () => {
-	it('reads the founder’s own table for the subscription', () => {
+	it('reads the plan table for the subscription', () => {
 		const lines = capabilityLines(caps('subscriber'));
-		expect(lines).toContain('400 resources');
+		expect(lines).toContain('Unlimited resources');
 		expect(lines).toContain('All marketplaces');
 		expect(lines).toContain('Import from a spreadsheet or a marketplace');
-		expect(lines).toContain('20 resources copied or moved a month');
+		expect(lines).toContain('25 moves a month, saving up to 75');
 		expect(lines).toContain('Sync every 6 hours');
 		expect(lines).toContain('Analytics');
-		expect(lines).toContain('2 devices');
 		expect(lines).toContain('200 AI auto-fills a month, once AI arrives');
 		expect(lines).toContain('Email support, two business days');
 	});
@@ -288,16 +289,9 @@ describe('what a plan card lists', () => {
 	// would be a comparison table with one column.
 	it('leaves out what a plan does not carry', () => {
 		const lines = capabilityLines(caps('free'));
-		expect(lines).toContain('Import from a spreadsheet');
 		expect(lines).not.toContain('Analytics');
 		expect(lines.some((line) => line.includes('Sync every'))).toBe(false);
-		expect(lines.some((line) => line.includes('copied or moved'))).toBe(false);
-	});
-
-	it('states the one-off plan’s editing window, which is the thing that lapses', () => {
-		expect(capabilityLines(caps('migration_only'))).toContain(
-			'Edit and delete your listings for 30 days'
-		);
+		expect(lines.some((line) => line.includes('a month, saving up to'))).toBe(false);
 	});
 
 	// Export is on every plan, and it is the one line that has to be there:
@@ -306,5 +300,38 @@ describe('what a plan card lists', () => {
 		for (const plan of PLANS) {
 			expect(capabilityLines(plan.capabilities)).toContain('Spreadsheet export');
 		}
+	});
+
+	it('states the editing window every plan gives a moved listing', () => {
+		expect(packEditLine(caps('free'))).toBe('Moved listings can be edited for 90 days.');
+		for (const plan of PLANS) {
+			expect(capabilityLines(plan.capabilities)).toContain(packEditLine(plan.capabilities));
+		}
+	});
+});
+
+describe('what a plan hands out in moves', () => {
+	// The ceiling is part of the offer: a month's moves that lapsed the moment
+	// the next month landed would be a smaller promise than the one made.
+	it('states the monthly run with what it saves up to', () => {
+		expect(movesLimit(caps('subscriber'))).toBe('25 moves a month, saving up to 75');
+	});
+
+	it('states the free plan’s handful as a one-off rather than as a month', () => {
+		expect(movesLimit(caps('free'))).toBe('5 moves to start');
+	});
+
+	it('is nothing where every move has to be bought', () => {
+		expect(
+			movesLimit({ ...caps('free'), moves_per_month: 0, free_moves_lifetime: 0 })
+		).toBeNull();
+	});
+});
+
+describe('what a level of support promises', () => {
+	it('reads out each level the plan table uses', () => {
+		expect(supportLabel('guides')).toBe('Guides');
+		expect(supportLabel('email_2_days')).toBe('Email support, two business days');
+		expect(supportLabel('email_1_day')).toBe('Email support, one business day');
 	});
 });

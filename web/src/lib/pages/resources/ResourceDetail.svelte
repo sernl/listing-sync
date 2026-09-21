@@ -31,6 +31,7 @@
 	import { formatPrice, rowStatus } from '$lib/listings-view';
 	import LabelChip from '$lib/LabelChip.svelte';
 	import Field from '$lib/Field.svelte';
+	import Note from '$lib/Note.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
@@ -378,7 +379,7 @@
 		<Placeholder
 			icon="search"
 			headline="No such resource"
-			body="It may have been deleted. The catalogue still has everything else."
+			body="It may have been deleted."
 		>
 			{#snippet actions()}
 				<Button href="/resources" icon="layout-list">Back to Resources</Button>
@@ -393,7 +394,7 @@
 		<Placeholder
 			icon="triangle-alert"
 			headline="This resource could not be read"
-			body="Nothing has happened to it; the reading failed. Reload to try again."
+			body="Reload to try again."
 		>
 			{#snippet actions()}
 				<Button href="/resources" icon="layout-list">Back to Resources</Button>
@@ -413,7 +414,7 @@
 		<Placeholder
 			icon="triangle-alert"
 			headline="Which marketplaces carry this resource could not be read"
-			body="Nothing below would be true without it, so nothing below is shown. Reload to try again."
+			body="Reload to try again."
 		>
 			{#snippet actions()}
 				<Button href="/resources" icon="layout-list">Back to Resources</Button>
@@ -456,7 +457,7 @@
 
 		<Panel
 			title="Marketplaces"
-			description="Where this resource stands on each one, and what it is waiting on. A marketplace the resource was not created with can be added here."
+			description="Where this resource stands on each one."
 		>
 			{#snippet more()}
 				<!-- Where the listing stands overall, and whether this page is being
@@ -492,7 +493,7 @@
 					<Field
 						label="The listing's address"
 						id={`attach-${attachingTo.mapping}`}
-						hint={`Nothing is sent to ${platformTitle(attachingTo.inventory)}; this records where the listing already is, so later edits reach it.`}
+						hint="Where the listing already is, so later edits reach it."
 					>
 						<input
 							id={`attach-${attachingTo.mapping}`}
@@ -518,19 +519,14 @@
 			{#if addRefusal !== null}
 				<Banner tone="bad">{addRefusal}</Banner>
 			{/if}
-			<p class="res-foot">
-				Cross-listing here adds the marketplace to this resource and opens the send; the add writes
-				your own catalogue and contacts nobody, and nothing reaches the marketplace until that
-				send runs. Etsy cannot be added here, because this console has no create path for it
-				at all.
-			</p>
-			<p class="res-foot">{DISCLAIMER}</p>
+			<Note>Nothing reaches a marketplace until its send runs.</Note>
+			<Note>{DISCLAIMER}</Note>
 		</Panel>
 
 		{#if runs.length > 0}
 			<Panel
 				title="Sends"
-				description="Every run in the recent window that carried this resource. Each opens its own timeline, with the steps, gates and events it recorded."
+				description="Every run in the recent window that carried this resource."
 			>
 				{#each runs as run (run.job)}
 					<a class="res-line" href={`/sync/${run.job}`}>
@@ -541,17 +537,14 @@
 						<span class="res-line-at">{run.state === null ? 'just started' : run.state}</span>
 					</a>
 				{/each}
-				<p class="res-foot">
-					Only the newest runs are read, so a send older than that window is not listed here.
-					Sync holds every run.
-				</p>
+				<Note>Sync holds every run, including those older than this window.</Note>
 			</Panel>
 		{/if}
 
 		{#if (labels.data ?? []).length > 0}
 			<Panel
 				title="Labels"
-				description="What this resource is filed under. A mark an import wrote says which shop it came from and is not one you can take off."
+				description="What this resource is filed under."
 			>
 				<div class="res-chips">
 					{#each labels.data ?? [] as label (label.name)}
@@ -570,7 +563,7 @@
 		{#if (collections.data ?? []).length > 0}
 			<Panel
 				title="Collections"
-				description="The sets this resource is in. A collection is published, templated and exported whole, so a change to one of these reaches this resource."
+				description="The sets this resource is in."
 			>
 				{#each collections.data ?? [] as collection (collection.id)}
 					<a class="res-line" href={`/collections/${collection.id}`}>

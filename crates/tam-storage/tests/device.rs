@@ -53,6 +53,7 @@ fn held(marketplace: Marketplace, label: Option<&str>) -> DeviceSessionReport<'_
     DeviceSessionReport {
         marketplace,
         account_label: label,
+        external_id: None,
         status: DeviceSessionStatus::Connected,
     }
 }

@@ -13,8 +13,12 @@
 #![cfg(feature = "pg-tests")]
 
 use sqlx::PgPool;
-use tam_storage::LeaseRepo;
-use tam_types::{InventoryId, OrgId, Uuid};
+use tam_secrets::Kek;
+use tam_storage::{
+    DeviceRegistration, DeviceRepo, DeviceSessionReport, DeviceSessionStatus, LeaseRepo,
+    StorageError,
+};
+use tam_types::{InventoryId, Marketplace, OrgId, Timestamp, Uuid};
 
 const ORG_A: OrgId = OrgId(Uuid([0xAA; 16]));
 const ORG_B: OrgId = OrgId(Uuid([0xBB; 16]));
@@ -195,5 +199,186 @@ async fn a_linked_connection_is_leasable_through_the_application_role(app: PgPoo
         Some(CONNECTION_A),
         "the device ledger runs on tam_app, so its tenant-scoped connection lookup must pin RLS \
          before reading the linked row"
+    );
+}
+
+/// The storefront a device reports, as TPT spells one.
+const STOREFRONT: &str = "900000001";
+
+/// Any instant; nothing under test compares two.
+const NOW: Timestamp = Timestamp(1_760_000_000_000);
+
+/// The check-in's own claim writer, keyed like the deployment's.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+fn checking_in(app: &PgPool) -> DeviceRepo {
+    DeviceRepo::new(app.clone())
+        .with_account_key(Kek::from_bytes(&[0x11; 32]).expect("a 32-byte key is a key"))
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn enrol(devices: &DeviceRepo, org: OrgId, id: &str) {
+    devices
+        .register(
+            org,
+            &DeviceRegistration {
+                id,
+                name: "a classroom laptop",
+                os: "linux",
+                arch: "x86_64",
+                app_version: "0.10.25",
+            },
+            NOW,
+        )
+        .await
+        .expect("the device registers");
+}
+
+/// One reported TPT session naming a storefront, connected.
+fn holding(storefront: &str) -> DeviceSessionReport<'_> {
+    DeviceSessionReport {
+        marketplace: Marketplace::Tpt,
+        account_label: None,
+        external_id: Some(storefront),
+        status: DeviceSessionStatus::Connected,
+    }
+}
+
+/// The claim's only writer is the check-in, so this is the test that the
+/// standing index refuses a second tenant through the path that actually
+/// reaches it.
+///
+/// The digest is never supplied by the test: the repository derives it from
+/// the deployment's key and the storefront the device reported, which is the
+/// property that matters -- two organisations reporting the same shop produce
+/// the same bytes without either ever seeing them.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_second_organisation_checking_in_for_one_storefront_is_refused(app: PgPool) {
+    seed_orgs(&app).await;
+    let devices = checking_in(&app);
+    enrol(&devices, ORG_A, "machine-a").await;
+    enrol(&devices, ORG_B, "machine-b").await;
+
+    devices
+        .heartbeat(ORG_A, "machine-a", &[holding(STOREFRONT)], NOW)
+        .await
+        .expect("the first organisation's check-in binds the shop it holds")
+        .expect("the device it named is registered");
+
+    let refusal = devices
+        .heartbeat(ORG_B, "machine-b", &[holding(STOREFRONT)], NOW)
+        .await;
+    assert!(
+        matches!(
+            refusal,
+            Err(StorageError::StorefrontBoundElsewhere {
+                marketplace: Marketplace::Tpt
+            })
+        ),
+        "a second organisation reporting a storefront the first holds must be refused by \
+         name, because the API layer owes that seller a sentence naming the marketplace \
+         rather than a 500"
+    );
+
+    let linked = LeaseRepo::new(app)
+        .connection_for(ORG_B, InventoryId::Tpt)
+        .await
+        .expect("the connection lookup runs");
+    assert_eq!(
+        linked, None,
+        "the refused beat must link nothing at all: a connection left `linked` with its \
+         claim refused is exactly the exclusivity hole the claim closes, so the link \
+         derivation and the claim stand or fall together"
+    );
+}
+
+/// Two sellers, two shops, one marketplace: the fence is per storefront.
+#[sqlx::test(migrations = "./migrations")]
+async fn two_organisations_checking_in_for_their_own_storefronts_both_bind(app: PgPool) {
+    seed_orgs(&app).await;
+    let devices = checking_in(&app);
+    enrol(&devices, ORG_A, "machine-a").await;
+    enrol(&devices, ORG_B, "machine-b").await;
+
+    for (org, device, storefront) in [
+        (ORG_A, "machine-a", STOREFRONT),
+        (ORG_B, "machine-b", "90000001"),
+    ] {
+        devices
+            .heartbeat(org, device, &[holding(storefront)], NOW)
+            .await
+            .expect("each seller's own shop binds")
+            .expect("the device it named is registered");
+    }
+
+    let leases = LeaseRepo::new(app);
+    for org in [ORG_A, ORG_B] {
+        let found = leases
+            .connection_for(org, InventoryId::Tpt)
+            .await
+            .expect("the connection lookup runs");
+        assert!(
+            found.is_some(),
+            "exclusivity is per shop, not per marketplace: both sellers must be able to \
+             work their own catalogues"
+        );
+    }
+}
+
+/// Signing out does not hand the free allowance back.
+///
+/// The index predicate releases the *lock* on an unlink, deliberately, so a
+/// seller moving a shop between their own organisations is not stuck. The
+/// allowance is a different fact: it is keyed on the storefront and written
+/// once ever, so the five free moves cannot be minted again by disconnecting
+/// and signing up afresh.
+#[sqlx::test(migrations = "./migrations")]
+async fn signing_out_does_not_return_the_free_allowance(app: PgPool) {
+    seed_orgs(&app).await;
+    let devices = checking_in(&app);
+    enrol(&devices, ORG_A, "machine-a").await;
+    devices
+        .heartbeat(ORG_A, "machine-a", &[holding(STOREFRONT)], NOW)
+        .await
+        .expect("the check-in binds the shop")
+        .expect("the device it named is registered");
+
+    devices
+        .heartbeat(
+            ORG_A,
+            "machine-a",
+            &[DeviceSessionReport {
+                status: DeviceSessionStatus::SignedOut,
+                ..holding(STOREFRONT)
+            }],
+            NOW,
+        )
+        .await
+        .expect("the sign-out check-in runs")
+        .expect("the device it named is registered");
+
+    // Pinned, because `storefront_allowance` carries FORCE ROW LEVEL
+    // SECURITY: an unpinned count under `tam_app` matches nothing and would
+    // pass this test by seeing no rows at all.
+    let mut tx = app.begin().await.expect("the read transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(db_uuid(ORG_A.0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pin sets");
+    let allowances: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM storefront_allowance WHERE marketplace = 'tpt'")
+            .fetch_one(&mut *tx)
+            .await
+            .expect("the allowance count reads");
+    assert_eq!(
+        allowances, 1,
+        "the allowance is keyed on the shop and written once ever, so a seller who signs \
+         out has spent their free moves rather than parked them"
     );
 }

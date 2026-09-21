@@ -1,68 +1,66 @@
 ---
 import Tick from './Tick.astro';
-import { loginUrl, supportEmail } from '../site.js';
 import {
 	dollars,
+	featuredPack,
 	FOUNDING,
-	importLadder,
-	importLadderNote,
+	foundingCloses,
+	foundingOpen,
+	free,
+	moveWithMe,
+	packEditNote,
+	packRows,
 	planFeatures,
-	rungCap,
-	rungPrice,
+	signupUrl,
 	subscription,
-	subscriptionCadence
+	subscriptionPerMonth
 } from '../pricing.js';
 
-/* The two ways to start, and the founding offer beside them. One component
-   draws both `/` and `/pricing`: `detail` is what the fuller page adds, which
-   is the subscription's own figures and a join button in place of the link to
-   itself. Every number comes from the server's plan table by way of
+/* The three ways to start, the founding offer under them, and the one service
+   sold beside them. One component draws both `/` and `/pricing`, which carry
+   the same price list; `level` is only which heading rank the section takes on
+   its page. Every number comes from the server's plan table by way of
    `src/pricing.js`, and the one plan that table holds unsold (`studio`) is
    rendered nowhere. */
 
-const { level = 2, detail = false } = Astro.props;
+const { level = 2 } = Astro.props;
 const Heading = level === 1 ? 'h1' : 'h2';
-
-/* The open rung is an invitation rather than a band, so it is the one rung a
-   reader can act on. It reaches the founder where there is an address to
-   reach, and the founding section where there is not: `supportEmail` is null
-   until the founder monitors one, and a `mailto:` that reaches nobody is
-   worse than a link into the page. */
-const askHref = supportEmail ? `mailto:${supportEmail}` : '/pricing/#founding';
 ---
 
 <section class="section band-pricing" id="pricing">
 	<div class="wrap">
 		<p class="eyebrow">Simple, transparent pricing</p>
-		<Heading>Two ways to get started</Heading>
+		<Heading>Three ways to start</Heading>
 
 		<div class="ways">
 			<div class="way">
-				<h3>1. Catalogue Import <span class="cadence">(one-off)</span></h3>
-				<p>Bring your existing catalogue from your current marketplace into Teachouse.</p>
-				<div class="ladder">
+				<h3>{free.name} <span class="cadence">(free)</span></h3>
+				<p>Bring both shops in. Try {free.capabilities.free_moves_lifetime} moves.</p>
+				<p class="price">Free<span class="per"> for as long as you like</span></p>
+				<div class="chips">
 					{
-						importLadder.map((rung) =>
-							rung.price_cents === undefined ? (
-								<a class="rung ask" href={askHref}>
-									<span class="cap">{rungCap(rung)}</span>
-									<span class="amount">{rungPrice(rung)}</span>
-								</a>
-							) : (
-								<div class="rung">
-									<span class="cap">{rungCap(rung)}</span>
-									<span class="amount">{rungPrice(rung)}</span>
-								</div>
-							)
-						)
+						planFeatures(free).map((feature) => (
+							<span class="chip">
+								<Tick />
+								{feature.text}
+							</span>
+						))
 					}
 				</div>
-				<p class="counts">{importLadderNote}</p>
+				<div class="actions">
+					<a class="btn" href={signupUrl()}>Start free</a>
+				</div>
 			</div>
 
-			<div class="way">
-				<h3>2. {subscription.name} <span class="cadence">({subscriptionCadence})</span></h3>
-				<p>Manage, update and distribute your catalogue across multiple marketplaces.</p>
+			<div class="way lead">
+				<h3>{subscription.name} <span class="cadence">(subscription)</span></h3>
+				<p>List every week. Keep both shops in step.</p>
+				<p class="price">
+					{dollars(subscriptionPerMonth)}<span class="per"> a month, billed yearly</span>
+				</p>
+				<p class="counts">
+					{dollars(subscription.monthly_cents)} a month if you pay monthly.
+				</p>
 				{/* A tick beside a line that is not built yet would claim it is.
 				    The one coming-soon line takes a hollow mark instead. */}
 				<div class="chips">
@@ -85,43 +83,76 @@ const askHref = supportEmail ? `mailto:${supportEmail}` : '/pricing/#founding';
 						))
 					}
 				</div>
-				{
-					detail && (
-						<p class="price">
-							{dollars(subscription.monthly_cents)}
-							<span class="per"> a month, or {dollars(subscription.yearly_cents)} a year</span>
-						</p>
-					)
-				}
 				<div class="actions">
-					{
-						detail ? (
-							<a class="cta" href={loginUrl}>Join the Founding 100</a>
-						) : (
-							<a class="cta" href="/pricing/">View full pricing</a>
-						)
-					}
+					<a class="cta" href={signupUrl('sync_yearly')}>Start Sync</a>
 				</div>
 			</div>
 
-			<div class="founding" id="founding">
-				<div class="head">
-					<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-						<path d="M3.4 7.4l4.3 3.3L12 4.8l4.3 5.9 4.3-3.3-1.6 8.8H5z" />
-						<path d="M5 19.2h14" />
-					</svg>
-					<h3>Founding 100</h3>
+			<div class="way">
+				<h3>Move packs <span class="cadence">(one-off)</span></h3>
+				<p>Moving a shop once? Buy the moves and stay free.</p>
+				<table class="packs">
+					<thead>
+						<tr>
+							<th scope="col">Moves</th>
+							<th scope="col">Price</th>
+							<th scope="col">Per move</th>
+						</tr>
+					</thead>
+					<tbody>
+						{
+							packRows.map((pack) => (
+								<tr>
+									<th scope="row">{pack.moves}</th>
+									<td>{pack.price}</td>
+									<td class="unit">{pack.perMove}</td>
+								</tr>
+							))
+						}
+					</tbody>
+				</table>
+				<p class="counts">{packEditNote}</p>
+				<div class="actions">
+					<a class="btn" href={signupUrl(featuredPack.key)}>Buy a pack</a>
 				</div>
-				<ul>
-					<li><strong>{FOUNDING.discount_year_one_pct}% off Year 1</strong></li>
-					<li>{FOUNDING.discount_ongoing_pct}% off for {FOUNDING.ongoing_years} years after</li>
-					<li>First {FOUNDING.free_imports} resources imported free</li>
-					<li>Only {FOUNDING.places} places available.</li>
-				</ul>
-				<a class="btn" href={detail ? loginUrl : '/pricing/#founding'}>
-					{detail ? 'Join the Founding 100' : 'Learn more'}
-				</a>
 			</div>
 		</div>
+
+		{
+			foundingOpen && (
+				<div class="founding" id="founding">
+					<div class="head">
+						<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+							<path d="M3.4 7.4l4.3 3.3L12 4.8l4.3 5.9 4.3-3.3-1.6 8.8H5z" />
+							<path d="M5 19.2h14" />
+						</svg>
+						<h3>Founding {FOUNDING.places}</h3>
+					</div>
+					<ul>
+						<li>
+							<strong>{dollars(FOUNDING.year_one_cents)} for your first year</strong>
+						</li>
+						<li>
+							{dollars(FOUNDING.ongoing_cents)} a year through year {FOUNDING.ongoing_years}
+						</li>
+						<li>{FOUNDING.extra_moves} moves on top</li>
+						<li>
+							{FOUNDING.annual_only ? 'Annual only. ' : ''}Closes at {FOUNDING.places} members or on{' '}
+							{foundingCloses}.
+						</li>
+					</ul>
+					<a class="btn" href={signupUrl('founding_yearly')}>
+						Join the Founding {FOUNDING.places}
+					</a>
+				</div>
+			)
+		}
+
+		<p class="service">
+			<span class="service-name">{moveWithMe.name}</span>
+			<span class="service-price">{dollars(moveWithMe.price_cents)}</span>
+			<span class="service-copy">Book a session and we do your move with you.</span>
+			<a class="link" href={signupUrl(moveWithMe.key)}>Book a session</a>
+		</p>
 	</div>
 </section>

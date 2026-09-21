@@ -9,6 +9,7 @@
 	import { gateLabel } from '$lib/gates';
 	import { createLedger, type Ledger } from '$lib/ledger';
 	import { segments } from '$lib/outcome';
+	import Note from '$lib/Note.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Pagination from '$lib/Pagination.svelte';
 	import Panel from '$lib/Panel.svelte';
@@ -301,7 +302,8 @@
 		{@const run = job}
 		<PageHead
 			icon="refresh-cw"
-			back={{ href: '/sync', label: 'Back to Marketplace Sync' }}
+			back={{ href: '/sync', label: 'Back to Updates' }}
+			guide="updates"
 			title="Marketplace run"
 			description={`${platformTitle(run.inventory)} · started ${agoLabel(run.created_at, Date.now())}`}
 		>
@@ -320,7 +322,7 @@
 
 		<Panel
 			title="Outcomes"
-			description="Every outcome we recorded, kept apart rather than rolled into one."
+			description="Every outcome we recorded, kept apart."
 		>
 			{#snippet more()}
 				{@const refusal = deleteRefusal(run.deletion_status)}
@@ -330,6 +332,7 @@
 				<Button
 					small
 					danger
+					icon="trash-2"
 					disabled={refusal !== null}
 					reason={refusal ?? undefined}
 					onclick={() =>
@@ -352,13 +355,13 @@
 					></div>
 				{/each}
 			</div>
-			<p class="foot-note">
+			<Note>
 				{#each segments(run.counts) as segment (segment.label)}
 					{segment.label}
 					{segment.count} ·
 				{/each}
 				total {run.counts.total}
-			</p>
+			</Note>
 			<details class="foot-note">
 				<summary>Run reference</summary>
 				<code>{run.job}</code>
@@ -369,13 +372,13 @@
 			{#if itemsUnread}
 				<Banner tone="bad" action={retryItems}>
 					That page of items could not be read, so the items below are the last ones that
-					did. Anything still running is unaffected.
+					did.
 				</Banner>
 			{/if}
 			{#if items.length === 0}
 				<p class="quiet">
 					{itemPage > 1
-						? 'There are no items on this page. Go back for the ones before it.'
+						? 'Go back for the items before this page.'
 						: 'No items recorded on this run yet.'}
 				</p>
 			{/if}
@@ -402,18 +405,18 @@
 					{#if opened[item.item]}
 						{@const steps = opened[item.item]}
 						<div class="run-detail">
-							<p class="foot-note">
+							<Note>
 								Resource reference: <code>{item.item}</code> · Attempts: {item.attempt_count}
 								{#if item.failure_code}
 									· Failure reference: <code>{item.failure_code}</code>
 								{/if}
-							</p>
+							</Note>
 							<div class="head-row">
 								<h3>Step timeline</h3>
 								<span class="grow"></span>
 								{#if steps.detail !== null}
 									{@const held = steps.detail}
-									<Button tier="outline" small onclick={() => download(held)}>
+									<Button tier="outline" small icon="file-down" onclick={() => download(held)}>
 										Download these steps
 									</Button>
 								{/if}

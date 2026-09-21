@@ -398,7 +398,7 @@
 <div class="tpl-pane" hidden={view === SAVED}>
 	<Panel
 		title={editing === null ? 'New template' : 'Change this template'}
-		description="What you fill in here is what a new resource starts with. Leave the rest empty and we will ask as usual."
+		description="What you fill in here is what a new resource starts with."
 	>
 		{#if editing === null}
 			<!-- Two worked examples, above the fields they fill. Cards rather than
@@ -407,10 +407,7 @@
 			     anywhere — the form is unsaved until Save, so neither arriving
 			     here nor trying both spends a template out of the allowance. -->
 			<div class="tpl-examples">
-				<p class="tpl-examples-said">
-					Example — edit before saving. An example fills only what you have not answered yet, and
-					Undo puts back what you had.
-				</p>
+				<p class="tpl-examples-said">Edit an example before saving it.</p>
 				<div class="tpl-example-cards">
 					{#each EXAMPLES as example (example.id)}
 						<div class="tpl-example">
@@ -432,8 +429,7 @@
 
 		{#if undoAsking}
 			<p class="tpl-note">
-				You have written more since. Undo puts back what you had and drops those later
-				changes.
+				Undo puts back what you had and drops those later changes.
 				<Button small tier="quiet" onclick={revertStart}>Undo anyway</Button>
 				<Button small tier="quiet" onclick={() => (undoAsking = false)}>
 					Keep what I have
@@ -473,7 +469,7 @@
 		<Field
 			label="Template note"
 			id="{base}-description"
-			hint="A note to yourself about when to reach for this template. It is not the resource's own description, which is the band below."
+			hint="A note to yourself about when to reach for this template."
 		>
 			<textarea id="{base}-description" rows="2" bind:value={form.description}></textarea>
 			<span class="tpl-count" class:over={form.description.length > DESCRIPTION_MAX}>
@@ -565,7 +561,7 @@
 		<p class="tpl-none">Reading your templates…</p>
 	{:else if store.isError}
 		<Banner tone="bad" title="We could not read your templates">
-			Nothing has been changed. Reload the page to try again.
+			Nothing has been changed.
 		</Banner>
 	{:else if rows.length > 0}
 		<Panel title="Your templates">

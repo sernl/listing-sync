@@ -1,5 +1,5 @@
 //! The billing store: the tenant fence on the subscription row, the ordering
-//! fence that makes a reordered Paddle delivery harmless, and the honest
+//! fence that makes a reordered provider delivery harmless, and the honest
 //! absence a tenant that never reached checkout reads.
 //!
 //! Every property here is a property of the write, not of the route above it;
@@ -36,9 +36,10 @@ async fn provision(pool: &PgPool) {
 
 fn state(subscription: &str, status: &str, occurred_at: Timestamp) -> SubscriptionState {
     SubscriptionState {
-        paddle_subscription_id: subscription.to_owned(),
-        paddle_customer_id: format!("ctm_for_{subscription}"),
+        provider_subscription_id: subscription.to_owned(),
+        provider_customer_id: format!("ctm_for_{subscription}"),
         status: status.to_owned(),
+        provider_price_id: Some(format!("price_for_{subscription}")),
         current_period_end: Some(Timestamp(occurred_at.0 + 30_000)),
         occurred_at,
     }
@@ -116,7 +117,7 @@ async fn an_event_older_than_the_stored_one_does_not_regress_the_state(pool: PgP
         .await
         .expect("the newer event applies");
 
-    // A redelivery of the cancellation that preceded it: Paddle retries, and a
+    // A redelivery of the cancellation that preceded it: Stripe retries, and a
     // retry can overtake. Applying it would leave a paying tenant recorded as
     // cancelled until the next event happened to arrive.
     assert!(
@@ -132,7 +133,7 @@ async fn an_event_older_than_the_stored_one_does_not_regress_the_state(pool: PgP
             .expect("the read runs")
             .map(|stored| stored.status),
         Some("active".to_owned()),
-        "the state Paddle last described is what stands"
+        "the state the provider last described is what stands"
     );
 }
 
@@ -161,15 +162,15 @@ async fn an_event_at_the_stored_instant_is_applied(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn paddles_own_status_vocabulary_is_stored_as_received(pool: PgPool) {
+async fn the_providers_own_status_vocabulary_is_stored_as_received(pool: PgPool) {
     provision(&pool).await;
     let repo = BillingRepo::new(pool);
     // A status this codebase has never heard of, which is the case the open
     // column exists for: it must land in a readable row rather than abort a
-    // webhook Paddle would then retry forever.
+    // webhook Stripe would then retry forever.
     repo.apply(
         ORG_A,
-        &state("sub_a", "some_status_paddle_added_later", EARLY),
+        &state("sub_a", "some_status_stripe_added_later", EARLY),
         WROTE_AT,
     )
     .await
@@ -179,13 +180,13 @@ async fn paddles_own_status_vocabulary_is_stored_as_received(pool: PgPool) {
             .await
             .expect("the read runs")
             .map(|stored| stored.status),
-        Some("some_status_paddle_added_later".to_owned()),
-        "stored verbatim, so an operator reads what Paddle actually said"
+        Some("some_status_stripe_added_later".to_owned()),
+        "stored verbatim, so an operator reads what the provider actually said"
     );
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn one_paddle_subscription_cannot_be_claimed_by_two_tenants(pool: PgPool) {
+async fn one_provider_subscription_cannot_be_claimed_by_two_tenants(pool: PgPool) {
     provision(&pool).await;
     let repo = BillingRepo::new(pool);
     repo.apply(ORG_A, &state("sub_shared", "active", EARLY), WROTE_AT)
@@ -195,7 +196,7 @@ async fn one_paddle_subscription_cannot_be_claimed_by_two_tenants(pool: PgPool) 
         repo.apply(ORG_B, &state("sub_shared", "active", LATER), WROTE_AT)
             .await
             .is_err(),
-        "a second tenant claiming one Paddle subscription is refused by the \
+        "a second tenant claiming one provider subscription is refused by the \
          constraint rather than silently attaching a paying customer twice"
     );
     assert_eq!(

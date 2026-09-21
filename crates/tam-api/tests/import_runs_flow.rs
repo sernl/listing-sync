@@ -101,6 +101,7 @@ fn store_root(name: &str) -> std::path::PathBuf {
 )]
 fn configured(pool: PgPool, root: &std::path::Path) -> AppState {
     AppState {
+        telemetry: tam_api::telemetry::Telemetry::default(),
         exchange_rates: None,
         pool,
         config: Config::default(),
@@ -162,7 +163,7 @@ async fn provision_tenant(pool: &PgPool, tenant: &Tenant) {
     // answered by the plan gate rather than by the machinery under test.
     //
     // One subscription reference per tenant, because
-    // `entitlement_grant_paddle_source_unique` holds a Paddle reference to a
+    // `entitlement_grant_source_unique` holds a provider reference to a
     // single grant across the whole deployment: two tenants seeded from one
     // reference is exactly the double billing that index refuses.
     let subscription = format!("sub_{:02x}", tenant.seed);
@@ -173,7 +174,7 @@ async fn provision_tenant(pool: &PgPool, tenant: &Tenant) {
                 id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
                 plan: tam_limits::Plan::Subscriber,
                 rung: None,
-                granted_by: tam_storage::GrantedBy::Paddle,
+                granted_by: tam_storage::GrantedBy::Stripe,
                 grantor_user: None,
                 reason: None,
                 source_ref: Some(&subscription),

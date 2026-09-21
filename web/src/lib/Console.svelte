@@ -35,6 +35,7 @@
 	import SearchPalette from '$lib/SearchPalette.svelte';
 	import { toast } from '$lib/toast';
 	import { opensPalette } from '$lib/search-palette';
+	import { capture } from '$lib/posthog';
 
 	let { children, onLogout }: { children: Snippet; onLogout: () => void } = $props();
 
@@ -241,6 +242,21 @@
 	const gated = $derived(
 		caps === undefined || section === null ? null : sectionReason(caps, section.id)
 	);
+	// One row per section a seller is refused, not one per render. Plain
+	// rather than `$state` on purpose: nothing renders from it, and writing
+	// reactive state from the effect that reads it re-runs the effect.
+	let gateReported: string | null = null;
+	$effect(() => {
+		const plan = entitlement.data?.plan;
+		if (gated === null || section === null || plan === undefined) {
+			return;
+		}
+		if (gateReported === section.id) {
+			return;
+		}
+		gateReported = section.id;
+		capture('section_gate_hit', { section: section.id, plan });
+	});
 	// The two controls in this shell that start a resource: the section card's
 	// primary and the top strip's own. Crosslist is the only section that
 	// declares a primary, and both land on the create form, so one figure

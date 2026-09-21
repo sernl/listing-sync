@@ -11,6 +11,7 @@
 	import { INVENTORY_ORDER, formatPrice, normaliseQuery } from '$lib/listings-view';
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
 	import { productsFromUrl } from '$lib/migration-plan';
+	import Note from '$lib/Note.svelte';
 	import Pagination from '$lib/Pagination.svelte';
 	import Panel from '$lib/Panel.svelte';
 	import { SHORT_NAME, platformTitle } from '$lib/platforms';
@@ -811,6 +812,7 @@
 		{#snippet more()}
 			<Button
 				tier="primary"
+				icon="circle-plus"
 				small
 				onclick={() =>
 					open({
@@ -870,7 +872,7 @@
 							? 'No rule matches that search. Clear it to see the rest.'
 							: listState !== 'all'
 								? `No ${kindWord} for this direction is ${listState === 'enabled' ? 'on' : 'off'}. Show All to see the rest.`
-								: `You have written no ${kindWord} for ${SHORT_NAME[source]} → ${SHORT_NAME[target]} yet. New rule starts one, or load a preset below.`}
+								: `You have written no ${kindWord} for ${SHORT_NAME[source]} → ${SHORT_NAME[target]} yet.`}
 				</p>
 			{:else}
 				{#each rules as row (row.id)}
@@ -903,6 +905,7 @@
 						<span class="act rule-acts">
 							<Button
 								small
+								icon="pencil"
 								onclick={() =>
 									open({
 										rule: row.id,
@@ -916,6 +919,7 @@
 							<Button
 								small
 								tier="quiet"
+								icon="copy"
 								onclick={() =>
 									open({
 										rule: null,
@@ -929,6 +933,7 @@
 							<Button
 								small
 								danger
+								icon="trash-2"
 								disabled={removing === row.id}
 								reason={removing === row.id ? 'This rule is being deleted.' : undefined}
 								onclick={() => void remove(row)}
@@ -980,7 +985,7 @@
 			<Field
 				label="What this rule is for"
 				id="{base}-description"
-				hint="Shown beside every figure this rule proposes, so a price can be traced to your own words."
+				hint="Shown beside every figure this rule proposes."
 			>
 				<textarea id="{base}-description" rows="2" bind:value={draft.description}></textarea>
 			</Field>
@@ -997,7 +1002,7 @@
 				<Field
 					label="Words in the description"
 					id="{base}-keywords"
-					hint="Separated by commas and matched as plain text, case-insensitively. Any HTML in a source description is stripped before matching, so a tag or class name never matches."
+					hint="Separated by commas, matched as plain text, case-insensitively."
 				>
 					<input
 						id="{base}-keywords"
@@ -1033,8 +1038,8 @@
 					</p>
 				{:else if sourceTypes.kind === 'open'}
 					<p class="quiet" id="{base}-source-types">
-						Teachouse has captured no list of {SHORT_NAME[draft.source]}’s resource types, so
-						there is nothing to pick from. Use the keyword or attribute conditions instead.
+						Teachouse has no list of {SHORT_NAME[draft.source]}’s resource types, so match on
+						a keyword or an attribute instead.
 					</p>
 				{:else}
 					<div class="rule-values" id="{base}-source-types">
@@ -1070,11 +1075,11 @@
 							</select>
 						</Field>
 					</div>
-					<p class="foot-note">{AXIS_MATCH_NOTE[condition.axis]}</p>
+					<Note>{AXIS_MATCH_NOTE[condition.axis]}</Note>
 					{#if choices.length === 0}
 						<p class="quiet">
 							No measured values for {AXIS_WORD[condition.axis].toLowerCase()} have been read,
-							so this condition can name none. Remove it, or match on something else.
+							so remove this condition or match on something else.
 						</p>
 					{:else}
 						<div class="rule-values">
@@ -1091,17 +1096,16 @@
 							{/each}
 						</div>
 					{/if}
-					<Button small tier="quiet" onclick={() => dropCondition(index)}>
+					<Button small tier="quiet" icon="trash-2" onclick={() => dropCondition(index)}>
 						Remove this condition
 					</Button>
 				</div>
 			{/each}
 			<div class="set-foot">
-				<Button small tier="outline" onclick={addCondition}>Add an attribute condition</Button>
-				<p class="foot-note">
-					Every condition has to hold. Leave them all empty and the rule matches every resource
-					on {SHORT_NAME[draft.source]}.
-				</p>
+				<Button small tier="outline" icon="filter" onclick={addCondition}>
+					Add an attribute condition
+				</Button>
+				<Note>Every condition has to hold, and an empty set matches every resource.</Note>
 			</div>
 
 			<h3 class="rule-heading">What it proposes</h3>
@@ -1110,7 +1114,7 @@
 					<Field
 						label="Rate"
 						id="{base}-rate"
-						hint="Multiplied by the source price on the server, never in this browser."
+						hint="Multiplied by the source price on the server."
 					>
 						<input
 							id="{base}-rate"
@@ -1128,7 +1132,7 @@
 						</select>
 					</Field>
 				</div>
-				<p class="foot-note">{ROUNDING_LINE[draft.action.rounding]}</p>
+				<Note>{ROUNDING_LINE[draft.action.rounding]}</Note>
 				<div class="set-foot">
 					<Button small tier="outline" onclick={() => setManualRate(MANUAL_RATE)}>
 						Use the {MANUAL_RATE} estimate
@@ -1143,15 +1147,12 @@
 						{referencing ? 'Asking…' : 'Get the ECB reference rate'}
 					</Button>
 				</div>
-				<p class="foot-note">{MANUAL_RATE_NOTE}</p>
-				<p class="foot-note">{REFERENCE_NOTE}</p>
+				<Note>{MANUAL_RATE_NOTE}</Note>
+				<Note>{REFERENCE_NOTE}</Note>
 				{#if quoteLine !== null}
 					<Banner tone="info" title="Rate taken from a stored quote">{quoteLine}</Banner>
 				{:else if draft.action.reference !== null}
-					<p class="foot-note">
-						This rate cites a stored quote, so the figure your prices were converted at can be
-						shown and re-checked later.
-					</p>
+					<Note icon="clock">This rate cites a stored quote you can re-check later.</Note>
 				{/if}
 				{#if referenceFailure !== null}
 					<Banner tone="bad" title="No rate was filled in">{referenceFailure}</Banner>
@@ -1162,8 +1163,7 @@
 						<p class="quiet" id="{base}-licence">{licenceRefusal}</p>
 					{:else if targetLicences === null}
 						<p class="quiet" id="{base}-licence">
-							{SHORT_NAME[draft.target]}’s licence values have not been read yet, so there is
-							nothing to choose.
+							{SHORT_NAME[draft.target]}’s licence values have not been read yet.
 						</p>
 					{:else}
 						<select
@@ -1209,7 +1209,7 @@
 								? `${SHORT_NAME[draft.target]}’s vocabulary has not been read yet.`
 								: targetTypes.kind === 'unbound'
 									? `${SHORT_NAME[draft.target]} has no resource-type field of its own.`
-									: `Teachouse has captured no list of ${SHORT_NAME[draft.target]}’s resource types, so there is nothing to choose.`}
+									: `Teachouse has no list of ${SHORT_NAME[draft.target]}’s resource types.`}
 						</p>
 					{/if}
 				</Field>
@@ -1231,7 +1231,7 @@
 					</label>
 				{/each}
 			</div>
-			<p class="foot-note">{NO_AUTO_APPLY}</p>
+			<Note>{NO_AUTO_APPLY}</Note>
 
 			<div class="set-foot">
 				<Button
@@ -1244,7 +1244,7 @@
 				</Button>
 				<Button tier="quiet" onclick={close}>Cancel</Button>
 				{#if draftRefusal !== null}
-					<p class="foot-note">{draftRefusal}</p>
+					<Note icon="circle-alert">{draftRefusal}</Note>
 				{/if}
 			</div>
 			{#if saveFailure !== null}
@@ -1253,22 +1253,15 @@
 		</Panel>
 	{/if}
 
-	<Panel
-		title="Presets"
-		description="Suggestions Teachouse has evidence for. Loading one changes nothing."
-	>
+	<Panel title="Presets" description="Suggestions Teachouse has evidence for.">
 		<Banner tone="info">{PRESETS_ARE_SUGGESTIONS}</Banner>
 		{#if presets.isPending}
 			<p class="quiet">Loading the suggestions…</p>
 		{:else if presets.isError}
-			<p class="quiet">
-				The presets could not be read, so none are offered here. Writing a rule yourself is
-				unaffected.
-			</p>
+			<p class="quiet">The presets could not be read, so none are offered here.</p>
 		{:else if offered.length === 0}
 			<p class="quiet">
-				There is no {kindWord} preset for {SHORT_NAME[source]} → {SHORT_NAME[target]}. One is
-				offered only where both marketplaces’ own published terms support it.
+				There is no {kindWord} preset for {SHORT_NAME[source]} → {SHORT_NAME[target]}.
 			</p>
 		{:else}
 			{#each offered as preset (preset.id)}
@@ -1292,7 +1285,7 @@
 						</Button>
 					</div>
 					<p>{preset.definition.description}</p>
-					<p class="foot-note">{ruleMeta(preset.definition)}</p>
+					<Note>{ruleMeta(preset.definition)}</Note>
 					<p class="rule-notice">{preset.notice}</p>
 					{#if freeGrantChosen(licence, targetLicences)}
 						<Banner tone="warn" title="A free grant is not the marketplace’s licence">
@@ -1300,14 +1293,14 @@
 						</Banner>
 					{/if}
 					{#if preset.sources.length > 0}
-						<p class="foot-note">
+						<Note icon="external-link">
 							Read from:
 							{#each preset.sources as href, index (href)}
 								{index > 0 ? ' · ' : ''}<a {href} use:external target="_blank" rel="noreferrer noopener">
 									{href}
 								</a>
 							{/each}
-						</p>
+						</Note>
 					{/if}
 				</div>
 			{/each}
@@ -1325,10 +1318,7 @@
 				onclick={() => (all = true)}
 			>
 				<span class="disp-word">All resources on {SHORT_NAME[source]}</span>
-				<span class="disp-line">
-					The catalogue as it stands when the preview is taken, not a selection that moves
-					under it.
-				</span>
+				<span class="disp-line">The catalogue as it stands when the preview is taken.</span>
 			</button>
 			<button
 				type="button"
@@ -1348,19 +1338,15 @@
 				<p class="quiet">Loading your resources…</p>
 			{:else if pickUnread && products.length === 0}
 				<Banner tone="bad" action={retryPicks}>
-					Your resources could not be read, so there is nothing to tick. Previewing every
-					resource on {SHORT_NAME[source]} does not need this list and still works.
+					Your resources could not be read, so there is nothing to tick.
 				</Banner>
 			{:else if products.length === 0 && pickPage === 1}
-				<p class="quiet">
-					You have no resources yet, so there is nothing to tick. Import brings your existing
-					shop across first.
-				</p>
+				<p class="quiet">Import brings your existing shop across first.</p>
 			{:else}
 				{#if pickUnread}
 					<Banner tone="bad" action={retryPicks}>
 						That page of your resources could not be read, so the rows below are the last ones
-						that did. Nothing you have ticked has been lost.
+						that did.
 					</Banner>
 				{/if}
 				<div class="pick-head">
@@ -1455,16 +1441,14 @@
 				onclick={() => (scopeKind = 'draft')}
 			>
 				<span class="disp-word">Only what is in the editor</span>
-				<span class="disp-line">
-					Previews the rule you are writing on its own, with no saved rule taking part.
-				</span>
+				<span class="disp-line">Previews the rule you are writing on its own.</span>
 			</button>
 		</div>
 
 			<Field
 				label="A rate for this preview only"
 				id="{base}-override-rate"
-				hint="Resolves the rate for this preview and stays visible in it. Leave it empty to use the rules."
+				hint="Leave it empty to use the rules."
 			>
 				<input id="{base}-override-rate" type="text" inputmode="decimal" bind:value={rateOverride} />
 			</Field>
@@ -1517,9 +1501,10 @@
 			{/if}
 	</Panel>
 
-	<Panel title="Preview and approve" description="Resource by resource, before anything applies.">
-		<p class="migrate-lead">{NOTHING_APPLIES_UNTIL_APPROVED}</p>
-
+	<Panel
+		title="Preview and approve"
+		description={NOTHING_APPLIES_UNTIL_APPROVED}
+	>
 		<div class="set-foot preview-foot">
 			<Button
 				tier="outline"
@@ -1532,7 +1517,7 @@
 				{previewing ? 'Previewing…' : 'Preview'}
 			</Button>
 			{#if askRefusal !== null}
-				<p class="foot-note">{askRefusal}</p>
+				<Note icon="circle-alert">{askRefusal}</Note>
 			{/if}
 		</div>
 
@@ -1554,10 +1539,7 @@
 		{/if}
 
 		{#if preview === null}
-			<p class="quiet">
-				No preview is on screen. Take one and every resource will show what the source carries,
-				the current choice for {SHORT_NAME[target]}, and what would be proposed.
-			</p>
+			<p class="quiet">No preview is on screen, so take one.</p>
 		{:else if preview.rows.length === 0}
 			<p class="quiet">This selection names no resources, so there is nothing to preview.</p>
 		{:else}
@@ -1642,19 +1624,19 @@
 							{/each}
 							{#if !acceptable(row) && row.decision === 'pending'}
 								<span class="block rule-blocker">
-									A blocked row cannot be approved. Reject it, or fix what it names and preview
-									again.
+									A blocked row cannot be approved.
 								</span>
 							{/if}
 						</span>
 					</div>
 				{/each}
 			</div>
-			<p class="foot-note">{previewCountsLine(preview.counts)}</p>
+			<Note>{previewCountsLine(preview.counts)}</Note>
 
 			<div class="set-foot">
 				<Button
 					tier="primary"
+					icon="circle-check"
 					disabled={acceptRefusal !== null || deciding !== null}
 					reason={acceptRefusal ?? (deciding !== null ? 'A decision is being sent.' : undefined)}
 					onclick={() => void decide('accept', false)}
@@ -1662,6 +1644,7 @@
 					Approve the selected rows
 				</Button>
 				<Button
+					icon="circle-x"
 					disabled={rejectRefusal !== null || deciding !== null}
 					reason={rejectRefusal ?? (deciding !== null ? 'A decision is being sent.' : undefined)}
 					onclick={() => void decide('reject', false)}
@@ -1670,6 +1653,7 @@
 				</Button>
 				<Button
 					tier="outline"
+					icon="circle-check"
 					disabled={acceptAllRefusal !== null || deciding !== null}
 					reason={acceptAllRefusal ?? (deciding !== null ? 'A decision is being sent.' : undefined)}
 					onclick={() => void decide('accept', true)}
@@ -1678,6 +1662,7 @@
 				</Button>
 				<Button
 					tier="quiet"
+					icon="circle-x"
 					disabled={rejectAllRefusal !== null || deciding !== null}
 					reason={rejectAllRefusal ?? (deciding !== null ? 'A decision is being sent.' : undefined)}
 					onclick={() => void decide('reject', true)}
@@ -1685,10 +1670,7 @@
 					Reject every undecided row
 				</Button>
 			</div>
-			<p class="foot-note">
-				“Every eligible row” is every undecided row that is not blocked; a blocked row stays here
-				with its reason. Approving the same rows twice is not a second approval.
-			</p>
+			<Note>“Every eligible row” is every undecided row that is not blocked.</Note>
 		{/if}
 	</Panel>
 </div>

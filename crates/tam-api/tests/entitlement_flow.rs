@@ -65,6 +65,7 @@ fn key_pair() -> (EntitlementKey, Vec<u8>) {
 /// A deployment that mints, and one that does not.
 fn state(pool: PgPool, key: Option<EntitlementKey>) -> AppState {
     AppState {
+        telemetry: tam_api::telemetry::Telemetry::default(),
         exchange_rates: None,
         pool,
         config: Config {
@@ -362,7 +363,7 @@ async fn a_revoked_device_is_told_so_and_granted_nothing(pool: PgPool) {
     );
 }
 
-// T3. The lapse is read off `entitlement_grant` rather than off Paddle's
+// T3. The lapse is read off `entitlement_grant` rather than off the provider's
 // recorded status: the grace is folded into the grant's own expiry when the
 // webhook writes it, so what the device gate asks is "does this organisation
 // hold a live grant", and an organisation that has held one and holds none
@@ -376,7 +377,7 @@ async fn a_plan_that_lapsed_is_granted_nothing(pool: PgPool) {
         ORG_A,
         "INSERT INTO entitlement_grant \
          (org_id, id, plan, granted_by, source_ref, granted_at, expires_at) \
-         VALUES ($1, gen_random_uuid(), 'subscriber', 'paddle', 'sub_1', \
+         VALUES ($1, gen_random_uuid(), 'subscriber', 'stripe', 'sub_1', \
                  now() - interval '40 days', now() - interval '1 hour')",
     )
     .await;
@@ -400,7 +401,7 @@ async fn a_plan_still_inside_its_expiry_grants(pool: PgPool) {
         ORG_A,
         "INSERT INTO entitlement_grant \
          (org_id, id, plan, granted_by, source_ref, granted_at, expires_at) \
-         VALUES ($1, gen_random_uuid(), 'subscriber', 'paddle', 'sub_1', \
+         VALUES ($1, gen_random_uuid(), 'subscriber', 'stripe', 'sub_1', \
                  now() - interval '10 days', now() + interval '20 days')",
     )
     .await;

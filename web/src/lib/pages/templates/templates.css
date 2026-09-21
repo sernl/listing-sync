@@ -15,17 +15,24 @@
 	display: none;
 }
 
-/* The two controls line up along their top edge, so their labels and inputs
-   share one baseline. Bottom-aligning them instead equalised the whole
-   group's height and pushed the shorter hint's label and input down by the
-   difference between the two hints — which is the misalignment the row is
-   here to avoid. The hints below are free to differ in height. */
+/* Mobile first: one column, because a 220px floor beside a second column
+   overflows a 360px phone. From 721px the two controls line up along their
+   top edge, so their labels and inputs share one baseline. Bottom-aligning
+   them instead equalised the whole group's height and pushed the shorter
+   hint's label and input down by the difference between the two hints —
+   which is the misalignment the row is here to avoid. */
 .tpl-grid {
 	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+	grid-template-columns: 1fr;
 	align-items: start;
 	gap: 16px;
 	margin-bottom: 16px;
+}
+
+@media (min-width: 721px) {
+	.tpl-grid {
+		grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+	}
 }
 
 /* The two example starters, above the fields they fill. One column on a phone
@@ -160,10 +167,13 @@
 	color: var(--muted);
 }
 
+/* Mobile first: a stacked row, so the two trailing controls are a full-width
+   action row rather than two targets squeezed beside the title. */
 .tpl-row {
 	display: flex;
-	align-items: center;
-	gap: 16px;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 10px;
 	padding: 12px 0;
 	min-width: 0;
 }
@@ -201,7 +211,13 @@
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	flex: none;
+	width: 100%;
+}
+
+.tpl-row-acts .btn {
+	flex: 1 1 0;
+	justify-content: center;
+	min-height: 40px;
 }
 
 .tpl-none {
@@ -257,26 +273,19 @@
 	color: var(--bad-ink);
 }
 
-/* A phone shows this console too, so the row's two trailing controls become a
-   full-width action row rather than two targets squeezed beside the title. */
-@media (max-width: 720px) {
-	.tpl-grid {
-		grid-template-columns: 1fr;
-	}
-
+@media (min-width: 721px) {
 	.tpl-row {
-		flex-direction: column;
-		align-items: stretch;
-		gap: 10px;
+		flex-direction: row;
+		align-items: center;
+		gap: 16px;
 	}
 
 	.tpl-row-acts {
-		width: 100%;
+		width: auto;
 	}
 
 	.tpl-row-acts .btn {
-		flex: 1 1 0;
-		justify-content: center;
-		min-height: 40px;
+		flex: 0 0 auto;
+		min-height: 0;
 	}
 }

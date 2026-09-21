@@ -44,6 +44,7 @@ const TERM_2: CanonicalTermId = CanonicalTermId(Uuid([0x78; 16]));
 
 fn state_with(pool: PgPool, config: Config) -> AppState {
     AppState {
+        telemetry: tam_api::telemetry::Telemetry::default(),
         exchange_rates: None,
         pool,
         config,

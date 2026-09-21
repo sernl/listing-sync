@@ -121,8 +121,7 @@
 	<div class="claim-card">
 		<h1 class="claim-title">Name your organisation</h1>
 		<p class="claim-lead">
-			This is the name your organisation is known by. It is yours alone, it appears in your
-			address, and you can change it later.
+			Choose the name your organisation is known by; you can change it later.
 		</p>
 
 		{#if refusal !== null}
@@ -176,7 +175,7 @@
 			<Field
 				label="Display name"
 				id="claim-name"
-				hint="Optional. What we print. Leave it as it is if it reads right."
+				hint="Optional. What we print."
 			>
 				<input
 					id="claim-name"

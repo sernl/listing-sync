@@ -60,6 +60,7 @@ fn store_root(name: &str) -> std::path::PathBuf {
 )]
 fn state(pool: PgPool, root: Option<&std::path::Path>) -> AppState {
     AppState {
+        telemetry: tam_api::telemetry::Telemetry::default(),
         exchange_rates: None,
         pool,
         config: Config::default(),

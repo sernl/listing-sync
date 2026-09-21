@@ -384,9 +384,11 @@ export function signOutHereSay(marketplace: Marketplace, forgotten: SessionOutco
 					`This machine was signed out from the console, which already removed its ${name} ` +
 					'login. Sign the machine back in under Preferences > Machine sign-ins.'
 			};
-		// A forget never asks for consent; the arm exists because the type is
-		// shared with connect, and it is worded as the impossibility it is.
+		// A forget never asks for consent and never reaches the shop the
+		// server binds; both arms exist because the type is shared with
+		// connect, and each is worded as the impossibility it is.
 		case 'consentRequired':
+		case 'boundElsewhere':
 		case 'opening':
 		case 'unavailable':
 			return {
@@ -425,7 +427,8 @@ export const CONNECT_VERDICT_CODES = [
 	'refused',
 	'notkept',
 	'signed_out',
-	'consent'
+	'consent',
+	'bound_elsewhere'
 ] as const;
 
 export type ConnectVerdictCode = (typeof CONNECT_VERDICT_CODES)[number];
@@ -490,6 +493,14 @@ const CONNECT_SAID: Record<ConnectVerdictCode, (name: string) => ConnectReturn> 
 	consent: (name) => ({
 		tone: 'error',
 		message: `${name} needs your permission first, so the sign-in was not opened and nothing was saved. Grant it under Account > Permissions, then press Connect ${name}.`
+	}),
+	// The shop is already bound to another organisation, which the server
+	// refuses at the check-in following the capture. Who holds it is
+	// deliberately not said: the constraint must never become a directory of
+	// the platform's sellers, and the remedy is a person either way.
+	bound_elsewhere: (name) => ({
+		tone: 'error',
+		message: `This ${name} shop is already connected to another Teachouse account, so nothing was saved.`
 	})
 };
 
@@ -536,6 +547,10 @@ const CONNECT_SAID_UNNAMED: Record<ConnectVerdictCode, ConnectReturn> = {
 		tone: 'error',
 		message:
 			'That marketplace needs your permission first, so your marketplace sign-in was not opened and nothing was saved. Grant it under Account > Permissions, then press Connect on the card.'
+	},
+	bound_elsewhere: {
+		tone: 'error',
+		message: 'That shop is already connected to another Teachouse account, so nothing was saved.'
 	}
 };
 
@@ -579,6 +594,13 @@ export function connectSignedOut(marketplace: Marketplace): ConnectReturn {
  *  `connectSignedOut` gives. */
 export function connectConsentRequired(marketplace: Marketplace): ConnectReturn {
 	return CONNECT_SAID.consent(CARD_NAME[marketplace]);
+}
+
+/** The storefront refusal, for a computer's Connect that answered on this
+ *  page. The same sentence the phone's return leg carries, for the reason
+ *  `connectSignedOut` gives. */
+export function connectBoundElsewhere(marketplace: Marketplace): ConnectReturn {
+	return CONNECT_SAID.bound_elsewhere(CARD_NAME[marketplace]);
 }
 
 /** Whether a string off the address is one of the verdicts we word.

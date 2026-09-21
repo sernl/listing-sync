@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE connection SET platform_account_digest = $3, platform_account_seen_at = $4 WHERE org_id = $1 AND marketplace = $2 AND state IN ('linking', 'linked', 'needs_reauth') AND platform_account_digest IS DISTINCT FROM $3 RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Bytea",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5f9798ac2bd29893852c2025d4ec1d9625fe0bc954098ce1fb0c6b23a70eb92b"
+}

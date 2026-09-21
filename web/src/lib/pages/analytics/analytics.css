@@ -39,8 +39,19 @@
 	margin: 0 0 16px;
 }
 
+/* Mobile first: the select fills the row on a phone, and only claims a floor
+   once there is room for a second control beside it. Below ~420px a 220px
+   floor plus the row's own padding pushed the band into a sideways scroll. */
 .an-filters .field {
-	min-width: 220px;
+	min-width: 0;
+	flex: 1 1 100%;
+}
+
+@media (min-width: 480px) {
+	.an-filters .field {
+		flex: 0 1 auto;
+		min-width: 220px;
+	}
 }
 
 .an-why {
@@ -224,11 +235,18 @@
 }
 
 /* The resource column is the only one allowed to wrap, and it is the one that
-   gives way when the table is wider than the panel. */
+   gives way when the table is wider than the panel. Mobile first: no floor on
+   a phone, where 180px plus the figure columns forced a sideways scroll. */
 .an-table .an-what {
 	white-space: normal;
-	min-width: 180px;
+	min-width: 0;
 	max-width: 360px;
+}
+
+@media (min-width: 560px) {
+	.an-table .an-what {
+		min-width: 180px;
+	}
 }
 
 .an-table .an-what .an-t {
@@ -304,12 +322,6 @@
 	margin-top: 3px;
 	padding-left: 10px;
 	border-left: 2px solid var(--line);
-}
-
-.an-note {
-	font-size: 12px;
-	color: var(--faint);
-	margin: 12px 0 0;
 }
 
 .an-quiet {

@@ -39,7 +39,7 @@ export function sectionReason(caps: Capabilities, section: SectionId): string | 
 		case 'crosslist':
 			return null;
 		case 'automations':
-			return caps.scheduling || caps.sync_pull_interval_secs !== null || caps.migrations_per_month > 0
+			return caps.scheduling || caps.sync_pull_interval_secs !== null || movesLimit(caps) !== null
 				? null
 				: 'Your plan does not include automations. Upgrade to schedule, sync, and move resources between marketplaces.';
 		case 'marketplaces':
@@ -259,57 +259,47 @@ export function dayMonth(instant: number): string {
 	return `${at.getUTCDate()} ${MONTHS[at.getUTCMonth()]}`;
 }
 
-/** The migration allowance and when it returns: "8 of 20 this month; resets 1
- *  October".
+/** The moves a seller holds, as a sentence: "You have 12 moves."
  *
- * The reset date is stated rather than implied, because the seller's question
- * at the cap is when they can move the rest and a monthly allowance with no
- * date attached does not answer it. A plan that migrates nothing has no month
- * to reset, and says that instead. */
-export function migrationsLine(usage: EntitlementUsage, caps: Capabilities): string {
-	if (caps.migrations_per_month === 0) {
-		return 'Your plan moves no resources between marketplaces.';
+ * A balance rather than a monthly count, which is why no date appears in it:
+ * moves are bought and spent, and nothing resets. An empty balance reads as
+ * "no moves" rather than "0 moves", which is the figure a seller reads as a
+ * fault in the count rather than as an empty purse. */
+export function movesLine(balance: { available: number }): string {
+	if (balance.available === 0) {
+		return 'You have no moves.';
 	}
-	return `${usage.migrations_this_month} of ${caps.migrations_per_month} this month; resets ${dayMonth(usage.migrations_reset_at)}`;
+	return `You have ${counted(balance.available, 'move', 'moves')}.`;
 }
 
-/** The monthly allowance as a control reads it: the sentence to print, and the
- *  refusal that disables the confirm where the selection does not fit.
+/** The balance as a control reads it: the sentence to print, and the refusal
+ *  that disables the confirm where the selection does not fit.
  *
- * Structural parameters rather than `Capabilities` and `EntitlementUsage`
- * themselves, so the same writer serves both doors this figure arrives
- * through: the entitlement read the shell already holds, and the `cap` block
- * a migration plan answers with. Both satisfy these shapes, and the seller
- * must not be told one figure before the preview and another after it.
+ * A structural parameter rather than `MoveBalance` itself, so the same writer
+ * serves both doors this figure arrives through: the entitlement read the
+ * shell already holds, and the `cap` block a migration plan answers with. The
+ * seller must not be told one figure before the preview and another after it.
  *
  * The refusal is a separate field rather than a null line, because a seller
- * over the cap still needs the figures — how many are left and when the month
- * turns — beside the reason they cannot press the button. */
-export function migrationsReason(
-	caps: { migrations_per_month: number },
-	usage: { migrations_this_month: number; migrations_reset_at: number },
+ * short of moves still needs the figure beside the reason they cannot press
+ * the button. Empty and short are two sentences because they are two acts:
+ * one seller has to buy, the other may also pick fewer. */
+export function movesReason(
+	balance: { available: number },
 	requested: number
 ): { line: string; refusal: string | null } {
-	const limit = caps.migrations_per_month;
-	if (limit === 0) {
-		return {
-			line: 'Your plan moves no resources between marketplaces.',
-			refusal: 'Your plan does not move resources between marketplaces. Upgrade to migrate.'
-		};
+	const { available } = balance;
+	const line = requested === 0 ? movesLine(balance) : `${movesLine(balance)} This uses ${requested}.`;
+	if (available === 0) {
+		return { line, refusal: 'You have no moves left. Buy a pack or choose Sync.' };
 	}
-	const left = Math.max(0, limit - usage.migrations_this_month);
-	const resets = dayMonth(usage.migrations_reset_at);
-	const line =
-		requested === 0
-			? `You have ${left} of ${limit} moves left this month.`
-			: `You have ${left} of ${limit} moves left this month; this uses ${requested}.`;
-	if (requested > left) {
+	if (requested > available) {
 		return {
 			line,
-			refusal: `Your plan moves ${limit} resources a month and you have ${left} left, so ${requested} is more than this month can take. It resets ${resets}.`
+			refusal: `You have ${counted(available, 'move', 'moves')} and this needs ${requested}. Buy a pack or pick fewer.`
 		};
 	}
-	return { line: `${line} Resets ${resets}.`, refusal: null };
+	return { line, refusal: null };
 }
 
 /** Why this organisation is on the plan it is on, where a person put it
@@ -334,9 +324,37 @@ export function grantNotice(grant: Grant): string | null {
 const SUPPORT: Record<SupportLevel, string> = {
 	guides: 'Guides',
 	email_2_days: 'Email support, two business days',
-	email_1_day: 'Email support, one business day',
-	email_30_days_after_purchase: 'Email support for 30 days after your purchase'
+	email_1_day: 'Email support, one business day'
 };
+
+/** What one level of support promises, for a card that lists it on its own. */
+export function supportLabel(support: SupportLevel): string {
+	return SUPPORT[support];
+}
+
+/** What a plan's moves come to, as its card lists them, or null where it
+ *  hands out none and every move is bought.
+ *
+ * The accrual ceiling is stated with the monthly run because they are one
+ * offer: a month's moves that lapsed the moment the next month landed would
+ * be a different and smaller promise. */
+export function movesLimit(caps: Capabilities): string | null {
+	if (caps.moves_per_month > 0) {
+		return caps.moves_accrual_cap > caps.moves_per_month
+			? `${caps.moves_per_month} moves a month, saving up to ${caps.moves_accrual_cap}`
+			: `${caps.moves_per_month} moves a month`;
+	}
+	if (caps.free_moves_lifetime > 0) {
+		return `${counted(caps.free_moves_lifetime, 'move', 'moves')} to start`;
+	}
+	return null;
+}
+
+/** How long a moved listing stays editable, which is what a move buys beyond
+ *  the copy itself. */
+export function packEditLine(caps: Capabilities): string {
+	return `Moved listings can be edited for ${caps.pack_edit_days} days.`;
+}
 
 /** How often a plan pulls, read out. */
 function syncLine(seconds: number): string {
@@ -383,11 +401,12 @@ export function capabilityLines(caps: Capabilities): string[] {
 			? 'Publish to every marketplace you have connected'
 			: `Publish to ${counted(caps.publish_marketplaces_max, 'marketplace', 'marketplaces')}`
 	);
-	if (caps.edit_days_after_purchase !== null) {
-		lines.push(`Edit and delete your listings for ${caps.edit_days_after_purchase} days`);
+	if (caps.pack_edit_days > 0) {
+		lines.push(packEditLine(caps));
 	}
-	if (caps.migrations_per_month > 0) {
-		lines.push(`${caps.migrations_per_month} resources copied or moved a month`);
+	const moves = movesLimit(caps);
+	if (moves !== null) {
+		lines.push(moves);
 	}
 	if (caps.scheduling) {
 		lines.push('Schedule what publishes when');
@@ -417,6 +436,6 @@ export function capabilityLines(caps: Capabilities): string[] {
 	if (caps.ai_fills_per_month > 0) {
 		lines.push(`${caps.ai_fills_per_month} AI auto-fills a month, once AI arrives`);
 	}
-	lines.push(SUPPORT[caps.support]);
+	lines.push(supportLabel(caps.support));
 	return lines;
 }

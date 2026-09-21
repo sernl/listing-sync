@@ -1032,15 +1032,36 @@ main {
 
 /* Pricing */
 
+/* Three cards of equal weight: free, the subscription, and the packs a seller
+   on the free plan buys. Equal columns rather than a wide pair and a rail,
+   because the packs table is a price list in its own right and the reader is
+   choosing between three prices, not reading two and glancing at a third. */
 .ways {
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 288px;
-	gap: 34px;
-	align-items: start;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 24px;
+	align-items: stretch;
+}
+
+.way {
+	display: flex;
+	flex-direction: column;
+	background: var(--surface);
+	border-radius: var(--r-card);
+	padding: 24px;
+	box-shadow: var(--ring);
+}
+
+/* The one card we expect most sellers to want. A ring rather than a scale or
+   a shadow: the three cards stay the same size, so nothing is cropped when
+   they stack. */
+.way.lead {
+	box-shadow: inset 0 0 0 2px var(--accent);
 }
 
 .way h3 {
 	font-size: 19px;
+	margin: 0;
 }
 
 .way .cadence {
@@ -1054,55 +1075,66 @@ main {
 	max-width: 34ch;
 }
 
-/* Six rungs, three across: the fifth and sixth arrived with the 2026-09-12
-   decision, and four across left the last two hanging under a full row. */
-.ladder {
-	display: grid;
-	grid-template-columns: repeat(3, minmax(0, 1fr));
-	gap: 12px;
-	margin-top: 18px;
-}
-
-.rung {
-	background: var(--surface);
-	border: 1px solid var(--line);
-	border-radius: var(--r-panel);
-	padding: 12px 14px;
-}
-
-.rung .cap {
-	display: block;
-	font-size: 12px;
-	color: var(--muted);
-	margin-bottom: 2px;
-	white-space: nowrap;
-}
-
-.rung .amount {
+/* The card's own headline figure. It repeats the `.price` rule below rather
+   than inheriting it, because `.way p` is the more specific selector and
+   would otherwise shrink the price to body copy. */
+.way .price {
 	font-family: var(--display);
 	font-weight: 700;
-	font-size: 25px;
+	font-size: 34px;
+	color: var(--primary);
+	margin: 14px 0 0;
+	max-width: none;
+}
+
+.way .price .per {
+	font-family: var(--sans);
+	font-weight: 400;
+	font-size: 15px;
+	color: var(--muted);
+}
+
+/* Moves, price, per move. The third column is the reason the rungs are worth
+   showing as a table: it is what falls as a pack grows, and a reader cannot
+   divide five pairs in their head. */
+.packs {
+	width: 100%;
+	margin-top: 16px;
+	border-collapse: collapse;
+	font-size: 14px;
+}
+
+.packs th,
+.packs td {
+	padding: 7px 0;
+	text-align: right;
+	font-weight: 400;
+	color: var(--text);
+}
+
+.packs thead th {
+	font-size: 12px;
+	color: var(--muted);
+	border-bottom: 1px solid var(--line);
+}
+
+.packs tbody th {
+	text-align: left;
+	font-family: var(--display);
+	font-weight: 600;
 	color: var(--primary);
 }
 
-/* The open rung is the only one a reader can act on, so it answers a pointer
-   and reads as the invitation it is rather than as a missing price. */
-.rung.ask {
-	display: block;
-	background: var(--accent-soft);
-	border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+.packs tbody tr + tr th,
+.packs tbody tr + tr td {
+	border-top: 1px solid var(--line);
 }
 
-.rung.ask:hover {
-	background: color-mix(in srgb, var(--accent-soft) 70%, var(--surface));
+.packs .unit {
+	color: var(--muted);
 }
 
-.rung.ask .amount {
-	font-size: 21px;
-	color: var(--accent-ink);
-}
-
-/* What the cap counts, said on the card rather than at the invoice. */
+/* The small print a card owes the reader before the checkout says it. */
 .way .counts {
 	margin: 12px 0 0;
 	font-size: 12.5px;
@@ -1111,10 +1143,12 @@ main {
 	max-width: 40ch;
 }
 
+/* One chip per line inside a card a third of the deck wide: two across left
+   "Unused moves stack to 75" wrapping mid-phrase. */
 .chips {
 	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
-	gap: 10px;
+	grid-template-columns: minmax(0, 1fr);
+	gap: 8px;
 	margin-top: 18px;
 }
 
@@ -1144,10 +1178,19 @@ main {
 }
 
 .way .actions {
-	margin-top: 20px;
+	margin-top: auto;
+	padding-top: 20px;
 }
 
+/* The founding offer is a band under the deck rather than a fourth card: it
+   is not a fourth way to start, it is a discount on one of the three, and it
+   is drawn only while its closing date is still ahead of the build. */
 .founding {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 14px 28px;
+	margin-top: 28px;
 	background: var(--additive-soft);
 	border-radius: var(--r-card);
 	padding: 22px 24px;
@@ -1159,7 +1202,6 @@ main {
 	align-items: center;
 	gap: 10px;
 	color: var(--additive);
-	margin-bottom: 14px;
 }
 
 .founding h3 {
@@ -1169,10 +1211,12 @@ main {
 
 .founding ul {
 	list-style: none;
-	margin: 0 0 18px;
+	margin: 0;
 	padding: 0;
-	display: grid;
-	gap: 8px;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 22px;
+	flex: 1 1 360px;
 	font-size: 15px;
 }
 
@@ -1182,6 +1226,7 @@ main {
 }
 
 .founding .btn {
+	margin-left: auto;
 	background: var(--lavender);
 	border-color: var(--additive);
 	color: var(--on-accent-surface);
@@ -1191,7 +1236,30 @@ main {
 	background: color-mix(in srgb, var(--lavender) 75%, var(--surface));
 }
 
-/* The subscription's own figures, which only /pricing draws */
+/* The one service sold beside the plans: a row, because it is a booking
+   rather than a plan and a card would put it in the deck. */
+.service {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 6px 14px;
+	margin: 20px 0 0;
+	font-size: 15px;
+	color: var(--muted);
+}
+
+.service .service-name {
+	font-family: var(--display);
+	font-weight: 600;
+	color: var(--primary);
+}
+
+.service .service-price {
+	font-weight: 600;
+	color: var(--text);
+}
+
+/* The plain figure and its cadence, which only the cards draw */
 
 .price {
 	font-family: var(--display);
@@ -1206,12 +1274,6 @@ main {
 	font-weight: 400;
 	font-size: 15px;
 	color: var(--muted);
-}
-
-.cadence {
-	color: var(--muted);
-	font-size: 14px;
-	margin: 0 0 16px;
 }
 
 /* Testimonials */
@@ -1256,26 +1318,119 @@ main {
 	box-shadow: var(--ring);
 }
 
+/* Twelve answers, closed. The disclosure is the browser's own, so the list
+   works with no script at all and a found-in-page answer opens itself. */
 .faq {
 	margin: 0;
 }
 
 .qa + .qa {
-	margin-top: 18px;
-	padding-top: 18px;
+	margin-top: 4px;
+	padding-top: 4px;
 	border-top: 1px solid var(--line);
 }
 
-.faq dt {
+.qa summary {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 12px 0;
+	font-family: var(--display);
+	font-weight: 600;
+	color: var(--primary);
+	cursor: pointer;
+	list-style: none;
+}
+
+.qa summary::-webkit-details-marker {
+	display: none;
+}
+
+/* The marker is drawn rather than inherited, because the platform triangle
+   sits on the text baseline in one engine and above it in another. */
+.qa summary::before {
+	content: '+';
+	flex: none;
+	width: 20px;
+	height: 20px;
+	border-radius: var(--r-pill);
+	background: var(--accent-soft);
+	color: var(--accent-ink);
+	font-family: var(--sans);
+	font-size: 15px;
+	line-height: 20px;
+	text-align: center;
+}
+
+.qa[open] summary::before {
+	content: '\2212';
+}
+
+.qa p {
+	margin: 0 0 14px 30px;
+	color: var(--text);
+	max-width: 76ch;
+}
+
+/* The Tes band calculator: one input and one sentence. */
+.calc {
+	margin-top: 20px;
+}
+
+.calc h3 {
+	margin: 0;
+	font-size: 18px;
+}
+
+.calc .calc-lede {
+	margin: 6px 0 0;
+	color: var(--muted);
+	font-size: 15px;
+	max-width: 64ch;
+}
+
+.calc-label {
+	display: block;
+	margin-top: 16px;
+	font-size: 14px;
+	color: var(--text);
+}
+
+.calc-input {
+	display: block;
+	margin-top: 8px;
+	width: 200px;
+	max-width: 100%;
+	padding: 10px 12px;
+	border: 1px solid var(--line);
+	border-radius: var(--r-field);
+	background: var(--ground);
+	color: var(--text);
+	font-family: var(--sans);
+	font-size: 16px;
+}
+
+.calc-input:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
+}
+
+/* The answer holds its line whether or not there is one, so typing does not
+   shunt the note under it up and down. */
+.calc-out {
+	min-height: 1.5em;
+	margin: 14px 0 0;
 	font-family: var(--display);
 	font-weight: 600;
 	color: var(--primary);
 }
 
-.faq dd {
+.calc .calc-note {
 	margin: 6px 0 0;
-	color: var(--text);
-	max-width: 76ch;
+	font-size: 12.5px;
+	line-height: 1.5;
+	color: var(--muted);
+	max-width: 64ch;
 }
 
 /* Prose pages */
@@ -1349,21 +1504,21 @@ main {
 	gap: 6px 18px;
 }
 
-@media (max-width: 1040px) {
-	.ways {
-		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-	}
-
-	.founding {
-		grid-column: 1 / -1;
-	}
-}
-
 @media (max-width: 900px) {
 	.hero-grid,
 	.split {
 		grid-template-columns: minmax(0, 1fr);
 		gap: 40px;
+	}
+
+	/* Three price cards in a phone-width column each hold a price and a list;
+	   side by side under 900px they hold a price and a hyphenation. */
+	.ways {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.founding .btn {
+		margin-left: 0;
 	}
 
 	/* Wrapped onto three rows, the header is a fifth of a phone screen; stuck
@@ -1404,19 +1559,10 @@ main {
 		padding: 56px 0;
 	}
 
-	.ways,
-	.chips {
-		grid-template-columns: minmax(0, 1fr);
-	}
-
 	/* The arrows read Import to Distribute to Manage. Once the three stack,
 	   an arrow points at nothing. */
 	.step-arrow {
 		display: none;
-	}
-
-	.ladder {
-		grid-template-columns: repeat(2, minmax(0, 1fr));
 	}
 
 	.site-nav a {

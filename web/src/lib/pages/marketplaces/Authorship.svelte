@@ -70,8 +70,8 @@
 	<div class="mp-sect">
 		<h2>Who made this work</h2>
 		<p>
-			Your own statement of who holds the copyright in what we send. You declare it once per
-			marketplace, and it covers every machine you sign in on.
+			Declare who holds the copyright in your work, once per marketplace.
+			<a class="mp-guide" href="/guides/copyright">Who holds the copyright</a>
 		</p>
 	</div>
 
@@ -79,7 +79,7 @@
 		<p class="quiet">
 			{read === 'pending'
 				? 'Reading your declarations…'
-				: 'Your declarations could not be read just now. Reload to try again.'}
+				: 'Your declarations could not be read, so reload to try again.'}
 		</p>
 	{:else}
 		<div class="mp-card">
@@ -88,7 +88,7 @@
 				<div class="who">
 					<span class="t">{CARD_NAME[row.marketplace]}</span>
 					<span class="act">
-						<Button tier="outline" small onclick={() => open(row)}>
+						<Button tier="outline" small icon="pencil" onclick={() => open(row)}>
 							{standing(row) ? 'Change' : 'Declare'}
 						</Button>
 					</span>
@@ -102,13 +102,11 @@
 					</p>
 				{:else if row.marketplace === 'Tpt'}
 					<p class="mp-warned">
-						Not declared. Anything sent to TPT fails until you declare this, and declaring
-						later does not resend it — you would need to send it again yourself.
+						Not declared, so anything sent to TPT fails until you declare it.
 					</p>
 				{:else}
 					<p class="spec">
-						Not declared. {CARD_NAME[row.marketplace]} does not ask who holds the copyright,
-						so nothing is held up waiting for this.
+						Not declared, and {CARD_NAME[row.marketplace]} does not ask.
 					</p>
 				{/if}
 

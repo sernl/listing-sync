@@ -642,8 +642,7 @@ export function sameForm(held: TemplateForm, taken: TemplateForm): boolean {
 /** The line the editor says after it was cleared with something in it. Its own
  *  sentence rather than [`filledLine`]'s empty case, which reports a template
  *  that filled nothing — the opposite fact. */
-export const CLEARED_LINE =
-	'The editor was cleared. Undo puts back what you had, exactly as you had it.';
+export const CLEARED_LINE = 'The editor was cleared.';
 
 /** The one meta line a listed template shows.
  *

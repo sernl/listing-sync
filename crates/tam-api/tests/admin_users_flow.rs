@@ -59,6 +59,7 @@ async fn backoffice_pool(app: &PgPool) -> PgPool {
 
 fn state(pool: PgPool, backoffice: Option<PgPool>) -> AppState {
     AppState {
+        telemetry: tam_api::telemetry::Telemetry::default(),
         exchange_rates: None,
         pool,
         config: Config::default(),

@@ -34,10 +34,11 @@ use sqlx::PgPool;
 use tam_limits::Plan;
 use tam_storage::{
     BackofficeRepo, DailyCount, EntitlementRepo, Grant, GrantRecord, GrantedBy, IdentityAuditRepo,
-    ItemCounts, NewGrant, SignupsRepo,
+    ItemCounts, MoveCredit, MoveSource, NewGrant, SignupsRepo,
 };
 use tam_types::{FailureCode, InventoryId, MappingId, Marketplace, OrgId, Timestamp, UserId, Uuid};
 
+use crate::billing::MoveBalance;
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::resources::ConnectionView;
 use crate::session::OperatorContext;
@@ -206,15 +207,15 @@ pub struct HaltView {
     pub raised_at: Timestamp,
 }
 
-/// What Paddle last said about this organisation's subscription.
+/// What the billing provider last said about this organisation's subscription.
 ///
-/// Three fields and no identifier. Paddle's subscription and customer ids are
+/// Three fields and no identifier. The provider's subscription and customer ids are
 /// what the tenant's own billing page needs to resume a checkout; an operator
 /// reading every tenant is answering "is this one paying, and as of when",
 /// which these three answer whole.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SubscriptionStateView {
-    /// Paddle's own vocabulary, passed through rather than translated, for
+    /// The provider's own vocabulary, passed through rather than translated, for
     /// the reason `billing::SubscriptionView` gives.
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -305,6 +306,11 @@ pub struct OrgDetailView {
     pub subscription: Option<SubscriptionStateView>,
     /// What the organisation holds now, derived rather than stored.
     pub plan: GrantView,
+    /// The moves it can spend now, read through the application pool with
+    /// the organisation pinned: `move_ledger` grants `tam_backoffice`
+    /// nothing, so the operator surface reads a balance the same fenced way
+    /// it writes one.
+    pub moves: MoveBalance,
     /// Every grant it has ever held, newest first.
     pub grants: Vec<GrantRecordView>,
 }
@@ -338,6 +344,14 @@ async fn detail_view(state: &AppState, org: OrgId) -> Result<OrgDetailView, APIE
         .map_err(|error| storage_fault(state, &error))?;
     let history = entitlements
         .history(org)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    // Not through the backoffice pool: migration 0084 grants that role
+    // nothing on `move_ledger`, so the balance is read through the
+    // application pool with this organisation pinned, exactly as the credit
+    // below writes it.
+    let moves = EntitlementRepo::new(state.pool.clone())
+        .move_balance(org, (state.wall)())
         .await
         .map_err(|error| storage_fault(state, &error))?;
     Ok(OrgDetailView {
@@ -379,6 +393,10 @@ async fn detail_view(state: &AppState, org: OrgId) -> Result<OrgDetailView, APIE
             .collect(),
         subscription: detail.subscription.map(SubscriptionStateView::of),
         plan: GrantView::of(held),
+        moves: MoveBalance {
+            available: moves.available,
+            expiring_soonest: moves.expiring_soonest,
+        },
         grants: history.into_iter().map(GrantRecordView::of).collect(),
     })
 }
@@ -422,7 +440,7 @@ pub(crate) async fn grant_plan(
     let _known = detail_view(&state, org).await?;
     let plan = Plan::parse(&body.plan).ok_or_else(|| {
         validation(&format!(
-            "{} is not a plan; the set is free, subscriber, migration_only and studio",
+            "{} is not a plan; the set is free, subscriber and studio",
             body.plan
         ))
     })?;
@@ -430,12 +448,6 @@ pub(crate) async fn grant_plan(
     if reason.is_empty() || reason.chars().count() > REASON_MAX_CHARS {
         return Err(validation(
             "a manual grant states its reason, in at most five hundred characters",
-        ));
-    }
-    if plan == Plan::MigrationOnly && body.rung.is_none_or(|rung| rung == 0) {
-        return Err(validation(
-            "a migration_only grant names the rung it was bought at, which is its \
-             resource allowance",
         ));
     }
     let now = (state.wall)();
@@ -459,7 +471,87 @@ pub(crate) async fn grant_plan(
     Ok(Json(detail_view(&state, org).await?))
 }
 
-/// The operator withdraws a grant they or Paddle made.
+/// What an operator credit of moves says.
+///
+/// `moves` is signed, because the reason an operator reaches for this is as
+/// often a correction as a gift: a seller charged for a move that never
+/// landed is given it back, and a balance credited twice is taken down. The
+/// reason is required for the same reason a plan grant's is.
+#[derive(Debug, Deserialize)]
+pub struct CreditMovesBody {
+    pub moves: i32,
+    pub reason: String,
+}
+
+/// The operator moves an organisation's balance.
+///
+/// Through the application pool with the organisation pinned, exactly as
+/// `grant_plan` writes: the backoffice role holds SELECT and nothing else,
+/// and a second connection able to write across tenants is the thing no
+/// handler on this surface may acquire.
+///
+/// The entry is idempotent on its reason, so a double-clicked form credits
+/// once. That is deliberate rather than incidental: an operator who genuinely
+/// means to give the same amount twice types a reason that says so, which is
+/// exactly the audit trail this route exists to leave.
+pub(crate) async fn credit_moves(
+    State(state): State<AppState>,
+    operator: OperatorContext,
+    Path((_version, org)): Path<(String, String)>,
+    Json(body): Json<CreditMovesBody>,
+) -> Result<Json<OrgDetailView>, APIError> {
+    let org = OrgId(parse_id(&org)?);
+    let _known = detail_view(&state, org).await?;
+    let reason = body.reason.trim();
+    if reason.is_empty() || reason.chars().count() > REASON_MAX_CHARS {
+        return Err(validation(
+            "an operator credit states its reason, in at most five hundred characters",
+        ));
+    }
+    if body.moves == 0 {
+        return Err(validation("a credit of no moves changes nothing"));
+    }
+    let now = (state.wall)();
+    let reference = operator_reference(operator.user.0, reason);
+    let written = EntitlementRepo::new(state.pool.clone())
+        .credit_moves(
+            org,
+            MoveCredit {
+                delta: body.moves,
+                source: MoveSource::Operator,
+                source_ref: Some(&reference),
+                // No expiry. An operator correcting a balance is not selling
+                // a pack, and a correction that quietly lapses is a
+                // correction that has to be made again.
+                expires_at: None,
+                at: now,
+            },
+        )
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    if !written {
+        return Err(validation(
+            "that operator has already credited this organisation with that reason; \
+             say what is different about this one",
+        ));
+    }
+    Ok(Json(detail_view(&state, org).await?))
+}
+
+/// What an operator credit is idempotent on: who made it and why. A hash
+/// rather than the reason itself, so a five-hundred-character sentence does
+/// not become a five-hundred-character index key.
+fn operator_reference(user: Uuid, reason: &str) -> String {
+    let digest = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, reason.as_bytes());
+    let mut out = String::with_capacity(9 + 36 + 1 + 36);
+    out.push_str("operator:");
+    out.push_str(&uuid::Uuid::from_bytes(user.0).to_string());
+    out.push(':');
+    out.push_str(&digest.to_string());
+    out
+}
+
+/// The operator withdraws a grant they or a purchase made.
 pub(crate) async fn revoke_plan(
     State(state): State<AppState>,
     _operator: OperatorContext,
