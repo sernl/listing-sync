@@ -475,14 +475,48 @@ struct InvoiceLines {
     data: Vec<InvoiceLine>,
 }
 
+/// One invoice line. The price rides in two places across API versions,
+/// like the subscription above: `price` before 2025-03-31, `pricing.
+/// price_details.price` from it, and both are read because the account's
+/// version is a dashboard setting rather than ours.
 #[derive(Debug, Default, Deserialize)]
 struct InvoiceLine {
     #[serde(default)]
     price: Option<stripe::PriceRef>,
     #[serde(default)]
+    pricing: Option<LinePricing>,
+    #[serde(default)]
     period: Option<LinePeriod>,
     #[serde(default)]
     metadata: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct LinePricing {
+    #[serde(default)]
+    price_details: Option<PriceDetails>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PriceDetails {
+    #[serde(default)]
+    price: Option<String>,
+}
+
+impl InvoiceLine {
+    fn price(&self) -> Option<&str> {
+        self.price
+            .as_ref()
+            .and_then(|price| price.id.as_deref())
+            .or_else(|| {
+                self.pricing
+                    .as_ref()?
+                    .price_details
+                    .as_ref()?
+                    .price
+                    .as_deref()
+            })
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -523,10 +557,7 @@ impl InvoiceObject {
     }
 
     fn price(&self) -> Option<&str> {
-        self.lines
-            .data
-            .iter()
-            .find_map(|line| line.price.as_ref()?.id.as_deref())
+        self.lines.data.iter().find_map(InvoiceLine::price)
     }
 }
 
@@ -1146,7 +1177,7 @@ async fn subscription_changed(state: &AppState, event: &Event) -> Result<StatusC
 
 #[cfg(test)]
 mod tests {
-    use super::{identifier, org_from, Cadence, Event, ORG_METADATA_KEY};
+    use super::{identifier, org_from, Cadence, Event, InvoiceObject, ORG_METADATA_KEY};
     use tam_limits::PriceKey;
 
     const ORG: &str = "0a8f6c2e-1d4b-4f3a-9c77-2b5e8d1a4c60";
@@ -1185,6 +1216,24 @@ mod tests {
         assert_eq!(event.kind, "invoice.paid");
         assert_eq!(event.created, 1_800_000_000);
         assert_eq!(event.data.object["id"], "in_01");
+    }
+
+    #[test]
+    fn an_invoice_line_names_its_price_in_either_api_version() {
+        let acacia: InvoiceObject = serde_json::from_value(serde_json::json!({
+            "lines": { "data": [ { "price": { "id": "price_01" } } ] }
+        }))
+        .expect("the pre-basil line reads");
+        let basil: InvoiceObject = serde_json::from_value(serde_json::json!({
+            "lines": { "data": [ { "pricing": { "price_details": { "price": "price_01" } } } ] }
+        }))
+        .expect("the basil line reads");
+        assert_eq!(acacia.price(), Some("price_01"));
+        assert_eq!(
+            basil.price(),
+            Some("price_01"),
+            "a renewal on a newer account version must not blank the price the page reads"
+        );
     }
 
     #[test]
