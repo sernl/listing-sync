@@ -664,10 +664,11 @@ impl Client {
         if let Some(customer) = request.customer {
             form.push(("customer".to_owned(), customer.to_owned()));
             form.push(("customer_update[address]".to_owned(), "auto".to_owned()));
-        } else {
+        } else if request.mode == CheckoutMode::Payment {
             // Without a customer Stripe still needs somewhere to put the
             // address `automatic_tax` resolves from, and `always` is what
             // makes one for a session that would otherwise be guest checkout.
+            // Subscription mode always creates one and refuses the parameter.
             form.push(("customer_creation".to_owned(), "always".to_owned()));
         }
         self.post("/v1/checkout/sessions", &form).await
