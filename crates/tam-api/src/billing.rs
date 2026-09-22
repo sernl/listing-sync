@@ -443,6 +443,9 @@ struct InvoiceObject {
     parent: Option<InvoiceParent>,
     #[serde(default)]
     lines: InvoiceLines,
+    /// The invoice's own window, which for a subscription's first invoice is
+    /// the instant it was created at both ends. The service period lives on
+    /// the lines; these are read only when no line carries one.
     #[serde(default)]
     period_start: Option<i64>,
     #[serde(default)]
@@ -541,19 +544,20 @@ impl InvoiceObject {
         })
     }
 
+    /// The service period this invoice paid for: the widest span the lines
+    /// cover, and the header only where no line states one. The header of a
+    /// subscription's first invoice reads created-to-created, and a grant
+    /// expiring on that would lock the seller out a day after paying.
     fn period(&self) -> (Option<i64>, Option<i64>) {
-        let line = self
-            .lines
-            .data
-            .iter()
-            .filter_map(|line| line.period.as_ref())
-            .next_back();
-        (
-            self.period_start
-                .or_else(|| line.and_then(|period| period.start)),
-            self.period_end
-                .or_else(|| line.and_then(|period| period.end)),
-        )
+        let periods = || {
+            self.lines
+                .data
+                .iter()
+                .filter_map(|line| line.period.as_ref())
+        };
+        let start = periods().filter_map(|period| period.start).min();
+        let end = periods().filter_map(|period| period.end).max();
+        (start.or(self.period_start), end.or(self.period_end))
     }
 
     fn price(&self) -> Option<&str> {
@@ -879,7 +883,18 @@ async fn subscription_started(
     // facts, two rows: the operator can see Stripe reporting `past_due` while
     // the grant still runs to the period end, and neither answer has to be
     // reconstructed from the other.
-    let _applied: bool = BillingRepo::new(state.pool.clone())
+    //
+    // The session carries no period, and `invoice.paid` for the same
+    // subscription routinely lands a second before it: a period end already
+    // recorded is kept rather than blanked by the later-stamped event.
+    let billing = BillingRepo::new(state.pool.clone());
+    let current_period_end = billing
+        .get(org)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?
+        .filter(|stored| stored.provider_subscription_id == subscription)
+        .and_then(|stored| stored.current_period_end);
+    let _applied: bool = billing
         .apply(
             org,
             &SubscriptionState {
@@ -887,7 +902,7 @@ async fn subscription_started(
                 provider_customer_id: customer.to_owned(),
                 status: "active".to_owned(),
                 provider_price_id: Some(price.to_owned()),
-                current_period_end: None,
+                current_period_end,
                 occurred_at,
             },
             (state.wall)(),
@@ -1233,6 +1248,32 @@ mod tests {
             basil.price(),
             Some("price_01"),
             "a renewal on a newer account version must not blank the price the page reads"
+        );
+    }
+
+    #[test]
+    fn the_service_period_is_the_lines_not_the_invoice_header() {
+        // A first subscription invoice as Stripe sends it: the header window
+        // is the creation instant twice, the line carries the month paid for.
+        let first: InvoiceObject = serde_json::from_value(serde_json::json!({
+            "period_start": 1_790_085_745, "period_end": 1_790_085_745,
+            "lines": { "data": [ { "period": { "start": 1_790_085_745, "end": 1_792_677_745 } } ] }
+        }))
+        .expect("the invoice reads");
+        assert_eq!(
+            first.period(),
+            (Some(1_790_085_745), Some(1_792_677_745)),
+            "expiring on the header would lock the seller out a day after paying"
+        );
+
+        let bare: InvoiceObject = serde_json::from_value(serde_json::json!({
+            "period_start": 1, "period_end": 2, "lines": { "data": [ {} ] }
+        }))
+        .expect("the invoice reads");
+        assert_eq!(
+            bare.period(),
+            (Some(1), Some(2)),
+            "no line period, the header stands"
         );
     }
 
