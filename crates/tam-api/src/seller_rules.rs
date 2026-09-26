@@ -618,7 +618,7 @@ pub(crate) async fn preview(
             if declared_source || listed_elsewhere {
                 evaluation
                     .blockers
-                    .push(format!("This resource isn't listed on {:?}.", body.source,));
+                    .push(format!("This resource isn't listed on {:?}.", body.source));
             }
         }
         let patch = evaluation.fields;
