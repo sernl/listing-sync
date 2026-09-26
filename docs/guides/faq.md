@@ -41,7 +41,7 @@ Yes. Within 90 days of a move, you can edit that listing once and send the chang
 
 ## Can I get a refund?
 
-Write to us within 14 days of buying a pack. If you have not used any of its moves, we will refund it. You can cancel a subscription at any time in **Account → Subscription**. The current period is not refunded.
+Write to us within 14 days of buying a pack. If you have not used any of its moves, we will refund it. You can cancel a subscription at any time in **Account → Plan and moves**. The current period is not refunded.
 
 ## What is Founding 100?
 

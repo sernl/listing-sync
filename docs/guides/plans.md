@@ -42,7 +42,7 @@ A move is publishing one imported resource onto one marketplace. Publishing a re
 | 250 | $247 |
 | 500 | $397 |
 
-Pack moves last 12 months from the day you buy them. After you move a listing, you can edit it once within the 90-day edit window without using another move.
+Pack moves last 12 months from the day you buy them.
 
 ## The 90-day edit window
 
@@ -58,7 +58,7 @@ Book a session and we move your shop with you. The booking includes no moves, so
 
 ## Buy, change or cancel
 
-1. Open **Account → Subscription**.
+1. Open **Account → Plan and moves**.
 2. Choose a plan or a pack.
 3. Manage or cancel your subscription on the same page.
 
