@@ -173,7 +173,7 @@ mod tests {
     #[test]
     fn the_recorded_reason_states_what_was_released() {
         assert!(
-            SWEPT_DETAIL.contains("deadline") && SWEPT_DETAIL.contains("released"),
+            SWEPT_DETAIL.contains("in time") && SWEPT_DETAIL.contains("removed"),
             "the line states both why the batch closed and what it cost: {SWEPT_DETAIL}"
         );
     }
