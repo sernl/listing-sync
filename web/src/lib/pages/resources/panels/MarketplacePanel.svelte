@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { FormVocabularyView, NativeValueView } from '$lib/api';
+	import Explain from '$lib/Explain.svelte';
 	import Field from '$lib/Field.svelte';
 	import FormSection from '$lib/FormSection.svelte';
 	import type { Marketplace } from '$lib/generated/vocab';
@@ -39,8 +40,12 @@
 <FormSection group={anchor} mark={MARK_SRC[marketplace]} {refusals}>
 	{#if marketplace === 'Tpt'}
 		{#if form}
+			<!-- TPT's own words, one press away: the choice below is what the
+			     seller answers, and the quoted terms are the fine print. -->
+			<Explain title="TPT’s copyright terms" label="Read TPT’s terms">
+				<p>{form.copyright.preamble}</p>
+			</Explain>
 			<div class="res-picks" role="radiogroup" aria-label="Copyright">
-				<p class="res-lede">{form.copyright.preamble}</p>
 				{#each form.copyright.options as option (option.id)}
 					<label class="res-pick">
 						<input

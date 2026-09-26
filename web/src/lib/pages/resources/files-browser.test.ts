@@ -10,7 +10,8 @@ import {
 	filtersToQuery,
 	filtersToUrl,
 	machineFilesHref,
-	metaLine,
+	keptLine,
+	seenLine,
 	pageWindow,
 	transferLabel
 } from './files-browser';
@@ -134,8 +135,7 @@ describe('the rows', () => {
 			],
 			{ thisDevice: 'laptop', kept: new Map() }
 		);
-		expect(rows[0].holders).toBe(`On ${HERE}, Pixel`);
-		expect(rows[0].holders).not.toContain('founder-pc');
+		expect(rows[0].machines).toEqual([HERE, 'Pixel']);
 	});
 
 	it('shows a kept date only for a file this machine actually keeps', () => {
@@ -143,9 +143,9 @@ describe('the rows', () => {
 			thisDevice: 'laptop',
 			kept: new Map([['a'.repeat(64), entry({ hash: 'a'.repeat(64), kept_at: 1_000 })]])
 		});
-		expect(metaLine(held[0])).toContain('kept');
+		expect(keptLine(held[0])).toContain('Kept here');
 		const remote = fileRows([file()], { thisDevice: 'laptop', kept: new Map() });
-		expect(metaLine(remote[0])).not.toContain('kept');
+		expect(keptLine(remote[0])).toBeNull();
 	});
 
 	it('carries every resource the file belongs to, and says so when none does', () => {
@@ -162,8 +162,32 @@ describe('the rows', () => {
 			{ thisDevice: 'laptop', kept: new Map() }
 		);
 		expect(rows[0].resources.map((one) => one.title)).toEqual(['Fractions', 'Decimals']);
-		expect(metaLine(rows[0])).toContain('2 resources');
-		expect(metaLine(rows[1])).toContain('No resource uses it');
+		expect(rows[1].resources).toEqual([]);
+	});
+
+	it('reads last seen from the latest check-in of the machines holding it', () => {
+		const hour = 60 * 60 * 1000;
+		const seen = new Map([
+			['phone', 10 * hour],
+			['desk', 7 * hour]
+		]);
+		const rows = fileRows(
+			[
+				file({
+					holders: [
+						{ device: 'desk', name: 'Desk', online: false },
+						{ device: 'phone', name: 'Pixel', online: false }
+					]
+				}),
+				file({ hash: 'e'.repeat(64), holders: [{ device: 'phone', name: 'Pixel', online: true }] }),
+				file({ hash: 'f'.repeat(64), holders: [] })
+			],
+			{ thisDevice: null, kept: null, seen }
+		);
+		expect(rows[0].lastSeen).toBe(10 * hour);
+		expect(seenLine(rows[0], 12 * hour)).toBe('2 h ago');
+		expect(seenLine(rows[1], 12 * hour)).toBe('Online now');
+		expect(seenLine(rows[2], 12 * hour)).toBe('No machine');
 	});
 });
 

@@ -13,6 +13,7 @@
 
 import type { LibraryFileView } from '$lib/api';
 import { formatBytes } from '$lib/authoring';
+import { agoLabel } from '$lib/elapsed';
 import type { LibraryEntry } from '$lib/desktop';
 
 /** Where the browser lives, named once for every surface that links to it. */
@@ -242,14 +243,8 @@ export function transferSentence(label: TransferLabel): string | null {
 
 /** Who holds the file, with this machine named by its role rather than by
  *  the name its registration carries. */
-export function holderSentence(file: LibraryFileView, thisDevice: string | null): string {
-	if (file.holders.length === 0) {
-		return 'On none of your machines';
-	}
-	const names = file.holders.map((holder) =>
-		holder.device === thisDevice ? HERE : holder.name
-	);
-	return `On ${names.join(', ')}`;
+export function holderNames(file: LibraryFileView, thisDevice: string | null): string[] {
+	return file.holders.map((holder) => (holder.device === thisDevice ? HERE : holder.name));
 }
 
 export interface FileRow {
@@ -262,7 +257,11 @@ export interface FileRow {
 	anonymous: boolean;
 	size: string;
 	availability: Availability;
-	holders: string;
+	/** The machines holding it, this one named by its role. */
+	machines: readonly string[];
+	/** When the most recently seen of those machines last checked in, or
+	 *  `null` where none holds it or none has been seen. */
+	lastSeen: number | null;
 	resources: readonly { id: string; title: string }[];
 	label: TransferLabel;
 	/** What this machine's own library says about the file, where it keeps
@@ -275,7 +274,12 @@ export interface FileRow {
  *  function only folds in what the machine itself knows. */
 export function fileRows(
 	files: readonly LibraryFileView[],
-	here: { thisDevice: string | null; kept: ReadonlyMap<string, LibraryEntry> | null }
+	here: {
+		thisDevice: string | null;
+		kept: ReadonlyMap<string, LibraryEntry> | null;
+		/** Each machine's last check-in, by device id, from the devices read. */
+		seen?: ReadonlyMap<string, number>;
+	}
 ): FileRow[] {
 	return files.map((file) => {
 		const kept = here.kept?.get(file.hash) ?? null;
@@ -285,7 +289,11 @@ export function fileRows(
 			anonymous: file.file_name === null && kept === null,
 			size: formatBytes(file.byte_len),
 			availability: availabilityOf(file),
-			holders: holderSentence(file, here.thisDevice),
+			machines: holderNames(file, here.thisDevice),
+			lastSeen: file.holders.reduce<number | null>((latest, holder) => {
+				const at = here.seen?.get(holder.device);
+				return at === undefined || (latest !== null && latest >= at) ? latest : at;
+			}, null),
 			resources: file.resources,
 			label: transferLabel(file, here.thisDevice, here.kept === null ? null : kept !== null),
 			kept
@@ -293,19 +301,21 @@ export function fileRows(
 	});
 }
 
-/** What the row says under the name: size, where it is, and what uses it. */
-export function metaLine(row: FileRow): string {
-	const uses =
-		row.resources.length === 0
-			? 'No resource uses it'
-			: row.resources.length === 1
-				? '1 resource'
-				: `${row.resources.length} resources`;
-	const parts = [row.size, row.holders, uses];
-	if (row.kept !== null) {
-		parts.push(`kept ${new Date(row.kept.kept_at).toLocaleDateString()}`);
+/** The Last seen cell: a machine holding it that is online now says so,
+ *  otherwise the age of the latest check-in among its holders. */
+export function seenLine(row: FileRow, now: number): string {
+	if (row.availability === 'online') {
+		return 'Online now';
 	}
-	return parts.join(' · ');
+	if (row.lastSeen === null) {
+		return row.availability === 'missing' ? 'No machine' : 'Not seen yet';
+	}
+	return agoLabel(row.lastSeen, now);
+}
+
+/** When this machine kept its copy, for a file it keeps. */
+export function keptLine(row: FileRow): string | null {
+	return row.kept === null ? null : `Kept here ${new Date(row.kept.kept_at).toLocaleDateString()}`;
 }
 
 // --------------------------------------------------------------- the pager

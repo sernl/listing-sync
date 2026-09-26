@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { createQueries, createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { tick, type Snippet } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import {
@@ -19,11 +20,15 @@
 	import { MARKETPLACE_OF } from '$lib/listings-view';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
+	import Explain from '$lib/Explain.svelte';
 	import Field from '$lib/Field.svelte';
+	import FlowDiagram from '$lib/FlowDiagram.svelte';
+	import FlowStep from '$lib/FlowStep.svelte';
 	import FormSection from '$lib/FormSection.svelte';
 	import PageHead from '$lib/PageHead.svelte';
-	import Panel from '$lib/Panel.svelte';
+	import { DISCLAIMER } from '$lib/pages/marketplaces/catalogue';
 	import StatusPill from '$lib/StatusPill.svelte';
+	import Stepper, { type StepMark } from '$lib/Stepper.svelte';
 	import TabBar from '$lib/TabBar.svelte';
 	import UploadField from '$lib/UploadField.svelte';
 	import { queryKeys } from '$lib/query';
@@ -93,7 +98,22 @@
 	// same fields because they are the same model: TPT's own create and edit
 	// post near-identical bodies, and the edit page's six-field form left
 	// seventeen sidecar fields a seller could set once and never change.
-	let { mode = { kind: 'create' } as FormMode }: { mode?: FormMode } = $props();
+	let {
+		mode = { kind: 'create' } as FormMode,
+		listed,
+		publish,
+		after
+	}: {
+		mode?: FormMode;
+		/** The resource page's own marketplace tiles, drawn in step 3 above the
+		 *  picker: where it is listed now, with each listing's status. */
+		listed?: Snippet;
+		/** The resource page's Publish control, beside Save in the sticky bar. */
+		publish?: Snippet;
+		/** What the resource page shows under the steps: sends, labels,
+		 *  collections. */
+		after?: Snippet;
+	} = $props();
 
 	const editing = $derived(mode.kind === 'edit' ? mode : null);
 	// Read-only where a published listing makes the edit unattemptable. Every
@@ -222,7 +242,8 @@
 	let adding = $state<InventoryId | null>(null);
 	let serverCheck = $state<CheckView | null>(null);
 	let serverRefusal = $state<string | null>(null);
-	let tab = $state<string>('canonical');
+	/** Which marketplace the "what each marketplace shows" fold is reading. */
+	let tab = $state<string>('');
 	// Opened by the act of choosing a marketplace with no file, and by pressing
 	// Create in that state. Not by an effect over the condition: an effect would
 	// reopen it under a seller who had read it and closed it.
@@ -416,24 +437,79 @@
 		AUTHORABLE_PLATFORMS.filter((inventory) => draft.inventories.includes(inventory))
 	);
 
-	/** The rail: the listing, then one segment per marketplace it will reach.
-	 *  A marketplace's count is how many of its values differ from the
-	 *  listing's, which is what the seller would otherwise have to open each
-	 *  tab to discover; the listing itself has nothing to count. */
-	const tabs = $derived([
-		{
-			id: 'canonical',
-			label: 'This listing',
-			count: null,
-			hint: 'Every marketplace uses these, unless you change one.'
-		},
-		...selected.map((inventory) => ({
+	/** One segment per marketplace this listing will reach. A marketplace's
+	 *  count is how many of its values differ from the listing's, which the
+	 *  seller would otherwise have to open each tab to discover. */
+	const overrideTabs = $derived(
+		selected.map((inventory) => ({
 			id: inventory,
 			label: platformTitle(inventory),
 			count: OVERRIDABLE.filter((entry) => diverges(draft, inventory, entry.field)).length,
 			hint: 'How many fields here are different from your main listing.'
 		}))
+	);
+	const overrideTab = $derived<InventoryId | null>(
+		selected.find((inventory) => inventory === tab) ?? selected[0] ?? null
+	);
+	$effect(() => {
+		if (overrideTab !== null && tab !== overrideTab) {
+			tab = overrideTab;
+		}
+	});
+
+	// --- the steps ---------------------------------------------------------
+
+	let openSteps = $state({ files: true, details: true, where: true, publish: true });
+
+	const payloadCount = $derived(
+		editing === null
+			? added.length
+			: editing.product.files.filter((file) => file.role === 'payload').length
+	);
+	const hasPayload = $derived(payloadCount > 0);
+	const filesSummary = $derived(
+		payloadCount === 0 ? 'No file yet' : payloadCount === 1 ? '1 file' : `${payloadCount} files`
+	);
+	const DETAIL_GROUPS: readonly FormAnchor[] = [
+		'name',
+		'description',
+		'price',
+		'categories',
+		'education_standards',
+		'details'
+	];
+	const detailsDone = $derived(
+		draft.name.trim().length > 0 &&
+			refusals.every((refusal) => !DETAIL_GROUPS.includes(refusal.group))
+	);
+	const detailsSummary = $derived(
+		draft.name.trim().length === 0
+			? 'No title yet'
+			: `${draft.name.trim()} · ${draft.free ? 'Free' : draft.price === '' ? 'No price' : draft.price}`
+	);
+	const stepMarks = $derived<StepMark[]>([
+		{ id: 'files', label: 'Files', done: hasPayload },
+		{ id: 'details', label: 'Details', done: detailsDone },
+		{ id: 'where', label: 'Where it is listed', done: selected.length > 0 },
+		{ id: 'publish', label: editing === null ? 'Create' : 'Publish', done: false }
 	]);
+
+	/** The step a band sits in, so an error can open its step before
+	 *  scrolling to it: a closed step draws none of its controls. */
+	function stepOf(group: FormAnchor): keyof typeof openSteps {
+		if (group === 'files' || group === 'preview' || group === 'thumbnails') {
+			return 'files';
+		}
+		if (
+			group === 'marketplaces' ||
+			group === 'tpt_options' ||
+			group === 'tes_options' ||
+			group === 'copyright'
+		) {
+			return 'where';
+		}
+		return group === 'product_status' ? 'publish' : 'details';
+	}
 
 	function set<K extends keyof TptDraft>(field: K, value: TptDraft[K]) {
 		draft = { ...draft, [field]: value };
@@ -706,7 +782,9 @@
 	/** The band a refusal belongs to, scrolled to and its first control
 	 *  focused. Clicking an error is how the founder asked to reach the field,
 	 *  so the page moves and the caret lands rather than only the URL changing. */
-	function goTo(group: FormAnchor) {
+	async function goTo(group: FormAnchor) {
+		openSteps[stepOf(group)] = true;
+		await tick();
 		const band = document.getElementById(`group-${group}`);
 		if (band === null) {
 			return;
@@ -809,18 +887,12 @@
 	}
 </script>
 
-<div class={editing === null ? 'page resources-page' : 'resources-page'}>
+<div
+	class={editing === null ? 'page resources-page flow-page' : 'resources-page'}
+>
 	{#if editing === null}
-		<PageHead
-			icon="circle-plus"
-			title="New resource"
-			description="Fill this in once, then choose where to list it."
-			guide="new-resource"
-		>
-			{#snippet aside()}
-				<Button href="/resources">Cancel</Button>
-			{/snippet}
-		</PageHead>
+		<!-- Cancel is in the sticky bar beside Create, so the head holds none. -->
+		<PageHead icon="circle-plus" title="New resource" guide="new-resource" />
 	{/if}
 
 	{#if vocabulary.isError}
@@ -829,17 +901,12 @@
 		</Banner>
 	{/if}
 
-	<!-- Above the form rather than inside it: a template is where this form
+	<!-- Above the steps rather than inside them: a template is where this form
 	     starts, not one of the things it asks. Only on a new resource, and only
-	     where the seller has saved one — an empty select would advertise a
-	     screen they have not been to. -->
+	     where the seller has saved one. -->
 	{#if editing === null && (templateHeads.data?.length ?? 0) > 0}
 		<div class="res-start">
-			<Field
-				label="Start from a template"
-				id="start-from-template"
-				hint="It fills in any fields you haven’t filled yet."
-			>
+			<Field label="Start from a template" id="start-from-template">
 				<select
 					id="start-from-template"
 					disabled={starting}
@@ -866,297 +933,373 @@
 	{/if}
 
 	<form class="res-form" onsubmit={submit}>
-		<!-- One surface rather than a dozen cards: the tabs are its head strip,
-		     the sections are hairline-separated bands inside it, and the actions
-		     are the band at its foot. The tabs sit outside the lock
-		     deliberately — a published listing holds the fields back, and a
-		     seller who cannot edit can still read what each marketplace
-		     carries. -->
-		<div class="res-card">
-			<TabBar {tabs} bind:current={tab} />
-			<!-- One `disabled` for the whole form rather than one per control. A
-			     published listing on a platform whose edit transition we have not
-			     captured cannot be edited through us, and the server refuses the
-			     request, so every field is shown as stored and none of them takes
-			     an edit. A `fieldset` disables its descendants by the user
-			     agent's own rule, which is why this is the wrapper rather than a
-			     class. -->
-			<fieldset class="res-lock" disabled={locked}>
-				{#if tab === 'canonical'}
-					<!-- Where this goes, first. The founder's rule: the marketplace
-					     is the decision every other field on this page is made
-					     under, so it is asked before them rather than after. -->
-					<FormSection
-						group="marketplaces"
-						icon="store"
-						help={GROUP_HELP.marketplaces}
-						{refusals}
-					>
-						<MarketplacePicker
-							chosen={draft.marketplaces}
-							refusalOf={tileRefusal}
-							heldOf={heldBy}
-							onToggle={toggleTile}
-						/>
-					</FormSection>
+			<div class="flow">
+				<Stepper steps={stepMarks} label="Resource steps" />
 
-					<FormSection group="name" icon="tag" {refusals}>
-						<Field label="Title" id="draft-title" required>
-							<input
-								id="draft-title"
-								type="text"
-								required
-								placeholder="Name your product"
-								maxlength={form === null ? undefined : form.limits.title_max_utf16_units}
-								value={draft.name}
-								oninput={(event) => set('name', event.currentTarget.value)}
-							/>
-							<!-- After the control rather than before it: read in order
-							     this is label, field, count, which is the order a screen
-							     reader and a tab both take it in. -->
+				{#if editing !== null && editing.blockedBy.length > 0}
+					<Banner tone="warn" title="This resource is live, so you can’t edit it here">
+						{editing.blockedBy.map(platformTitle).join(', ')} has a published listing, so this
+						change won’t be sent.
+					</Banner>
+				{/if}
+
+				<FlowStep
+					n={1}
+					id="files"
+					title="Files"
+					hint="Add the file buyers download, a preview and a thumbnail."
+					summary={filesSummary}
+					done={hasPayload}
+					bind:open={openSteps.files}
+				>
+					{#snippet aside()}
+						<Explain title="Files, previews and thumbnails">
+							<p>The file is what buyers download after they buy.</p>
+							<p>The preview is a free sample buyers see first. Make it from a few pages of your PDF.</p>
+							<p>TPT shows up to four thumbnails. The first one is the cover.</p>
 							{#if form}
-								<span
-									class="res-count"
-									class:over={draft.name.length > form.limits.title_max_utf16_units}
-								>
-									{draft.name.length} of {form.limits.title_max_utf16_units} characters
-								</span>
+								<p>
+									A thumbnail can be up to {sizeWords(form.limits.thumbnail.max_size_bytes)}.
+								</p>
 							{/if}
-						</Field>
-					</FormSection>
+						</Explain>
+					{/snippet}
 
-					<FormSection group="files" icon="package" help={GROUP_HELP.files} {refusals}>
-						{#snippet badge()}
-							<!-- A notice and not a control: the feature is not built, so
-							     there is nothing to press. It sits here because this is
-							     where the file the fill would read is chosen, and only on
-							     a new resource, which is the form the fill would start. -->
-							{#if editing === null}
-								<span class="res-soon" title={AI_FILL_SOON_HINT}>{AI_FILL_SOON}</span>
-							{/if}
-						{/snippet}
-						{#if editing === null}
-							<UploadField
-								files={added}
-								{keepWhole}
-								limits={form?.limits ?? null}
-								onFiles={takeFiles}
-								onPdf={(file) => (sourcePdf = file)}
-								onKeepWhole={(whole) => (keepWhole = whole)}
-							/>
-						{:else}
-							<!-- A saved resource's files are a sub-resource with three
-							     routes of their own, and this panel is what drives them.
-							     Not the upload control: before a product exists there is
-							     nothing for those routes to address, and once one does an
-							     upload here would be a second way to change the same
-							     thing. -->
-							<FilesPanel
-								product={editing.product.id}
-								files={editing.product.files}
-								inventories={editing.mapped}
-							/>
-						{/if}
-					</FormSection>
-
-					<FormSection group="preview" icon="eye" help={GROUP_HELP.preview} {refusals}>
-						<PreviewField
-							{previews}
-							limits={form?.limits ?? null}
-							source={sourcePdf ?? keptSource}
-							uploadLabel={sourcePdf === null && keptSource !== null
-								? 'Upload preview to Teachouse'
-								: 'Make preview'}
-							sellerName={organisation.data?.name ?? ''}
-							onAdd={(handle) => void addPreview(handle)}
-							onRemove={(hash) => void dropPreview(hash)}
-						/>
-					</FormSection>
-
-					<FormSection group="thumbnails" icon="image" {refusals}>
-						{#if form}
-							<ThumbnailSlots
-								{form}
-								mode={draft.thumbnailMode}
-								{slots}
-								{coverUrl}
-								onMode={(id) => set('thumbnailMode', id)}
-								onPick={(index, file) => void takeThumbnail(index, file)}
-								onClear={clearThumbnail}
-							/>
-						{:else}
-							<p class="res-note">Loading the thumbnail options…</p>
-						{/if}
-					</FormSection>
-
-					<DescriptionPanel {draft} {form} {refusals} {set} />
-
-					<PricePanel {draft} {form} {refusals} {advisories} {set} />
-
-					<CategoriesPanel
-						{draft}
-						{form}
-						{refusals}
-						{gradeLabels}
-						onLabels={setGradeLabels}
-						{set}
+					<FlowDiagram
+						from={{ icon: 'package', label: payloadCount === 1 ? '1 file' : payloadCount > 0 ? `${payloadCount} files` : 'Your file' }}
+						rule="makes"
+						via={{ icon: 'image', label: 'Thumbnail', image: coverUrl }}
+						viaRule="goes to"
+						to={selected.map((inventory) => ({ inventory }))}
+						pending="Step 3"
+						label="Your file makes the thumbnail, and both go to {selected.length === 0 ? 'the marketplaces you choose in step 3' : selected.map(platformTitle).join(' and ')}"
 					/>
 
-					<StandardsPanel {draft} {form} {refusals} {set} />
+					<!-- One `disabled` per step's controls rather than one per
+					     control: a published listing on a platform whose edit we have
+					     not captured cannot be edited through us, so every field is
+					     shown as stored and takes no edit. The step toggles, the
+					     Explains and the marketplace tiles stay live outside it. -->
+					<fieldset class="res-lock" disabled={locked}>
+						<FormSection group="files" icon="package" {refusals}>
+							{#snippet badge()}
+								<!-- A notice and not a control: the feature is not built. -->
+								{#if editing === null}
+									<span class="res-soon" title={AI_FILL_SOON_HINT}>{AI_FILL_SOON}</span>
+								{/if}
+							{/snippet}
+							{#if editing === null}
+								<UploadField
+									files={added}
+									{keepWhole}
+									limits={form?.limits ?? null}
+									onFiles={takeFiles}
+									onPdf={(file) => (sourcePdf = file)}
+									onKeepWhole={(whole) => (keepWhole = whole)}
+								/>
+							{:else}
+								<!-- A saved resource's files are a sub-resource with three
+								     routes of their own, and this panel is what drives them. -->
+								<FilesPanel
+									product={editing.product.id}
+									files={editing.product.files}
+									inventories={editing.mapped}
+								/>
+							{/if}
+						</FormSection>
 
-					<DetailsPanel {draft} {form} {refusals} {set} />
+						<FormSection group="preview" icon="eye" help={GROUP_HELP.preview} {refusals}>
+							<PreviewField
+								{previews}
+								limits={form?.limits ?? null}
+								source={sourcePdf ?? keptSource}
+								uploadLabel={sourcePdf === null && keptSource !== null
+									? 'Upload preview to Teachouse'
+									: 'Make preview'}
+								sellerName={organisation.data?.name ?? ''}
+								onAdd={(handle) => void addPreview(handle)}
+								onRemove={(hash) => void dropPreview(hash)}
+							/>
+						</FormSection>
 
-					<!-- One panel per marketplace the teacher ticked, headed by its
-					     own mark, holding only what that marketplace asks for. The
-					     founder's rule: a field that belongs to one marketplace has
-					     to say so where it is asked. -->
-					{#each panels as panel (panel.marketplace)}
-						<MarketplacePanel
-							marketplace={panel.marketplace}
+						<FormSection group="thumbnails" icon="image" {refusals}>
+							{#if form}
+								<ThumbnailSlots
+									{form}
+									mode={draft.thumbnailMode}
+									{slots}
+									{coverUrl}
+									onMode={(id) => set('thumbnailMode', id)}
+									onPick={(index, file) => void takeThumbnail(index, file)}
+									onClear={clearThumbnail}
+								/>
+							{:else}
+								<p class="res-note">Loading the thumbnail options…</p>
+							{/if}
+						</FormSection>
+					</fieldset>
+				</FlowStep>
+
+				<FlowStep
+					n={2}
+					id="details"
+					title="Details"
+					hint="Name it, describe it and set the price."
+					summary={detailsSummary}
+					done={detailsDone}
+					bind:open={openSteps.details}
+				>
+					<fieldset class="res-lock" disabled={locked}>
+						<FormSection group="name" icon="tag" {refusals}>
+							<Field label="Title" id="draft-title" required>
+								<input
+									id="draft-title"
+									type="text"
+									required
+									placeholder="Name your resource"
+									maxlength={form === null ? undefined : form.limits.title_max_utf16_units}
+									value={draft.name}
+									oninput={(event) => set('name', event.currentTarget.value)}
+								/>
+								<!-- After the control: label, field, count is the order a
+								     screen reader and a tab both take it in. -->
+								{#if form}
+									<span
+										class="res-count"
+										class:over={draft.name.length > form.limits.title_max_utf16_units}
+									>
+										{draft.name.length} of {form.limits.title_max_utf16_units} characters
+									</span>
+								{/if}
+							</Field>
+						</FormSection>
+
+						<DescriptionPanel {draft} {form} {refusals} {set} />
+
+						<PricePanel {draft} {form} {refusals} {advisories} {set} />
+
+						<CategoriesPanel
 							{draft}
 							{form}
 							{refusals}
-							gatesLicence={gatesLicence(panel.marketplace)}
-							{licences}
+							{gradeLabels}
+							onLabels={setGradeLabels}
 							{set}
 						/>
-					{/each}
 
-					<StatusPanel {draft} {form} {refusals} {set} />
-				{:else}
-					{@const where = tab as InventoryId}
-					{@const view = known.get(where)}
-					{@const projection = projectionOf(draft, where, view ?? null)}
-					<Panel
-						title={platformTitle(where)}
-						description="What this marketplace will show."
-					>
-						{#each projection.rows.filter((row) => row.kind === 'field') as row (row.key)}
-							{@const own = row.values[0]}
-							{@const differs = row.decided_by?.by === 'listing_override'}
-							<div class="res-group">
-								<span class="res-group-label" id={`override-${row.key}`}>
-									{row.label}
-									{#if differs}<StatusPill label="changed here" />{/if}
-								</span>
-								<input
-									type="text"
-									aria-labelledby={`override-${row.key}`}
-									value={own}
-									oninput={(event) =>
-										(draft = withOverride(draft, where, row.key, event.currentTarget.value))}
-								/>
-								{#if differs}
-									<div class="res-acts">
-										<Button small onclick={() => (draft = applyToAll(draft, row.key, own))}>
-											Update all
-										</Button>
-										<Button
-											small
-											onclick={() => (draft = withOverride(draft, where, row.key, null))}
-										>
-											Reset
-										</Button>
-										<span class="res-note">
-											Your main listing still says “{canonicalValue(draft, row.key)}”.
+						<StandardsPanel {draft} {form} {refusals} {set} />
+
+						<DetailsPanel {draft} {form} {refusals} {set} />
+					</fieldset>
+				</FlowStep>
+
+				<FlowStep
+					n={3}
+					id="where"
+					title="Where it is listed"
+					hint="Choose the marketplaces for this resource."
+					summary={selected.length === 0 ? 'No marketplace yet' : selected.map(platformTitle).join(' · ')}
+					done={selected.length > 0}
+					bind:open={openSteps.where}
+				>
+					{#snippet aside()}
+						<Explain title="How listing works">
+							<p>Your catalogue holds the resource once. Each marketplace gets its own listing of it.</p>
+							<p>Nothing changes on a marketplace until you publish.</p>
+							<p>{DISCLAIMER}</p>
+						</Explain>
+					{/snippet}
+
+					<FlowDiagram
+						from={{ icon: 'layout-list', label: 'Your catalogue' }}
+						to={selected.map((inventory) => ({ inventory }))}
+						rule={selected.length === 0 ? null : 'listed on'}
+						empty="Pick below"
+						pending="Not chosen"
+						label={selected.length === 0
+							? 'No marketplace chosen yet'
+							: `Your catalogue is listed on ${selected.map(platformTitle).join(' and ')}`}
+					/>
+
+					{#if listed}{@render listed()}{/if}
+
+					<fieldset class="res-lock" disabled={locked}>
+						<!-- The founder's rule: the marketplace is the decision the
+						     per-marketplace questions below are asked under. -->
+						<FormSection group="marketplaces" icon="store" help={GROUP_HELP.marketplaces} {refusals}>
+							<MarketplacePicker
+								chosen={draft.marketplaces}
+								refusalOf={tileRefusal}
+								heldOf={heldBy}
+								onToggle={toggleTile}
+							/>
+						</FormSection>
+
+						<!-- One panel per marketplace the teacher ticked, headed by its
+						     own mark, holding only what that marketplace asks for. -->
+						{#each panels as panel (panel.marketplace)}
+							<MarketplacePanel
+								marketplace={panel.marketplace}
+								{draft}
+								{form}
+								{refusals}
+								gatesLicence={gatesLicence(panel.marketplace)}
+								{licences}
+								{set}
+							/>
+						{/each}
+
+						{#if selected.length > 0 && overrideTab !== null}
+							{@const where = overrideTab}
+							{@const view = known.get(where)}
+							{@const projection = projectionOf(draft, where, view ?? null)}
+							<!-- What each marketplace will show, folded: most sellers
+							     never change a value for one marketplace alone. -->
+							<details class="flow-more res-shows">
+								<summary>What each marketplace shows</summary>
+								<TabBar tabs={overrideTabs} bind:current={tab} />
+								{#each projection.rows.filter((row) => row.kind === 'field') as row (row.key)}
+									{@const own = row.values[0]}
+									{@const differs = row.decided_by?.by === 'listing_override'}
+									<div class="res-group">
+										<span class="res-group-label" id={`override-${row.key}`}>
+											{row.label}
+											{#if differs}<StatusPill label="changed here" />{/if}
 										</span>
+										<input
+											type="text"
+											aria-labelledby={`override-${row.key}`}
+											value={own}
+											oninput={(event) =>
+												(draft = withOverride(draft, where, row.key, event.currentTarget.value))}
+										/>
+										{#if differs}
+											<div class="res-acts">
+												<Button small onclick={() => (draft = applyToAll(draft, row.key, own))}>
+													Update all
+												</Button>
+												<Button
+													small
+													onclick={() => (draft = withOverride(draft, where, row.key, null))}
+												>
+													Reset
+												</Button>
+												<span class="res-note">
+													Your main listing still says “{canonicalValue(draft, row.key)}”.
+												</span>
+											</div>
+										{/if}
 									</div>
+								{/each}
+
+								{#each projection.rows.filter((row) => row.axis !== undefined) as row (row.key)}
+									{@const facts = row.axis}
+									{#if facts}
+										<div class="res-group">
+											<span class="res-group-label">
+												{row.label}
+												{#if facts.delegable}
+													<StatusPill label="best match, if you turn it on" />
+												{:else}
+													<StatusPill label="you choose" />
+												{/if}
+											</span>
+											<div class="res-note">
+												{#if facts.stated.length > 0}
+													You chose {facts.stated.join(', ')}.
+												{/if}
+												It goes in this marketplace's “{facts.native}” field.
+												{#if facts.cap !== null}
+													It takes up to {facts.cap}.
+												{/if}
+												{#if row.loss}
+													<span class="res-loss">{row.loss}</span>
+												{/if}
+											</div>
+										</div>
+									{/if}
+								{/each}
+
+								{#if view}
+									{#each view.absent_axes as axis (axis)}
+										<p class="res-disclose">
+											This marketplace has no {axis} field, so any {axis} you add here won’t show
+											there.
+										</p>
+									{/each}
 								{/if}
-							</div>
-						{/each}
+							</details>
+						{/if}
+					</fieldset>
+				</FlowStep>
 
-						{#each projection.rows.filter((row) => row.axis !== undefined) as row (row.key)}
-							{@const facts = row.axis}
-							{#if facts}
-								<div class="res-group">
-									<span class="res-group-label">
-										{row.label}
-										{#if facts.delegable}
-											<StatusPill label="best match, if you turn it on" />
-										{:else}
-											<StatusPill label="you choose" />
-										{/if}
-									</span>
-									<div class="res-note">
-										{#if facts.stated.length > 0}
-											You chose {facts.stated.join(', ')}.
-										{/if}
-										It goes in this marketplace's “{facts.native}” field.
-										{#if facts.cap !== null}
-											It takes up to {facts.cap}.
-										{/if}
-										{#if row.loss}
-											<span class="res-loss">{row.loss}</span>
-										{/if}
-									</div>
-								</div>
+				<FlowStep
+					n={4}
+					id="publish"
+					title={editing === null ? 'Create' : 'Publish'}
+					hint={editing === null
+						? 'Choose how it starts, then create it.'
+						: 'Save your changes, then publish them to your marketplaces.'}
+					done={false}
+					bind:open={openSteps.publish}
+				>
+					<fieldset class="res-lock" disabled={locked}>
+						<StatusPanel {draft} {form} {refusals} {set} />
+					</fieldset>
+
+					{#if refusals.length > 0 || (serverCheck !== null && !serverCheck.submittable) || serverRefusal !== null}
+						<section class="res-sec">
+							{#if refusals.length > 0}
+								<p class="res-errs-h">Click an error to go to it.</p>
+								<ul class="res-errs">
+									{#each refusals as refusal, index (`${refusal.group}-${index}`)}
+										<li>
+											<button type="button" class="btn small" onclick={() => void goTo(refusal.group)}>
+												{refusal.message}
+											</button>
+										</li>
+									{/each}
+								</ul>
 							{/if}
-						{/each}
 
-						{#if view}
-							{#each view.absent_axes as axis (axis)}
-								<p class="res-disclose">
-									This marketplace has no {axis} field, so any {axis} you add here won’t show
-									there.
-								</p>
-							{/each}
-						{/if}
-					</Panel>
+							{#if serverCheck !== null && !serverCheck.submittable}
+								<ul class="res-errs">
+									{#each serverCheck.refusals as refusal, index (`server-${index}`)}
+										<li><span class="res-note">{refusal.message}</span></li>
+									{/each}
+								</ul>
+							{/if}
+
+							{#if serverRefusal !== null}
+								<Banner tone="bad">{serverRefusal}</Banner>
+							{/if}
+						</section>
+					{/if}
+				</FlowStep>
+
+				{#if after}{@render after()}{/if}
+			</div>
+
+
+		<!-- Save and Publish where the hand is: stuck to the foot of the
+		     screen while any step is in view, above the phone's tab bar. -->
+		<div class="res-actbar">
+			<!-- A phone leaves by its tab bar, so the bar gives Cancel's room to
+			     the two actions. -->
+			<span class="res-actbar-cancel"><Button href="/resources">Cancel</Button></span>
+			<Button
+				tier={publish === undefined ? 'primary' : 'outline'}
+				type="submit"
+				disabled={!canCreate}
+				reason={blocking}
+			>
+				{#if creating}
+					{editing === null ? 'Creating…' : 'Saving…'}
+				{:else}
+					{editing === null ? 'Create resource' : 'Save changes'}
 				{/if}
-
-				{#if refusals.length > 0 || (serverCheck !== null && !serverCheck.submittable) || serverRefusal !== null || (editing !== null && editing.blockedBy.length > 0)}
-					<section class="res-sec">
-						{#if editing !== null && editing.blockedBy.length > 0}
-							<Banner tone="warn" title="This resource is live, so you can’t edit it here">
-								{editing.blockedBy.map(platformTitle).join(', ')} has a published listing, so
-								this change won’t be sent.
-							</Banner>
-						{/if}
-
-						{#if refusals.length > 0}
-							<p class="res-errs-h">Click an error to go to that section.</p>
-							<ul class="res-errs">
-								{#each refusals as refusal, index (`${refusal.group}-${index}`)}
-									<li>
-										<button
-											type="button"
-											class="btn small"
-											onclick={() => goTo(refusal.group)}
-										>
-											{refusal.message}
-										</button>
-									</li>
-								{/each}
-							</ul>
-						{/if}
-
-						{#if serverCheck !== null && !serverCheck.submittable}
-							<ul class="res-errs">
-								{#each serverCheck.refusals as refusal, index (`server-${index}`)}
-									<li><span class="res-note">{refusal.message}</span></li>
-								{/each}
-							</ul>
-						{/if}
-
-						{#if serverRefusal !== null}
-							<Banner tone="bad">{serverRefusal}</Banner>
-						{/if}
-					</section>
-				{/if}
-
-				<!-- The action band, in flow at the foot of the card: Cancel and
-				     the primary at the right, in the order a tab takes them. -->
-				<div class="res-actbar">
-					<Button href="/resources">Cancel</Button>
-					<Button tier="primary" type="submit" disabled={!canCreate} reason={blocking}>
-						{#if creating}
-							{editing === null ? 'Creating…' : 'Saving…'}
-						{:else}
-							{editing === null ? 'Create listing' : 'Save changes'}
-						{/if}
-					</Button>
-				</div>
-			</fieldset>
+			</Button>
+			{#if publish}{@render publish()}{/if}
 		</div>
 	</form>
 
