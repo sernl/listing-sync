@@ -57,10 +57,9 @@ export interface AutomationFacts {
 	mappingRules: RuleCounts | null;
 }
 
-const SCHEDULING_WHAT =
-	'Publish a set of resources to the marketplaces you choose, at a time you choose.';
+const SCHEDULING_WHAT = 'Send chosen resources to your marketplaces at a set time.';
 
-const MIGRATION_WHAT = 'Move a whole shop from one marketplace to another, once.';
+const MIGRATION_WHAT = 'Copy or move resources from one marketplace to another.';
 
 const SYNC_WHAT = 'Keep every marketplace’s copy of a resource up to date.';
 
@@ -169,16 +168,11 @@ export function migrations(requests: readonly SyncRequestHead[]): SyncRequestHea
 	return requests.filter((row) => row.disposition === 'migrate');
 }
 
+/** The five, in the order a seller meets them: bring a shop across, set what
+ *  it costs and which terms it lands under there, publish on a timetable, and
+ *  keep every copy current. The landing draws them as one numbered path. */
 export function cards(facts: AutomationFacts): AutomationCard[] {
 	return [
-		{
-			id: 'scheduling',
-			href: '/automations/sharing',
-			title: 'Schedules',
-			icon: 'calendar-clock',
-			what: SCHEDULING_WHAT,
-			state: schedulingState(facts)
-		},
 		{
 			id: 'migration',
 			href: '/automations/migration',
@@ -202,6 +196,14 @@ export function cards(facts: AutomationFacts): AutomationCard[] {
 			icon: 'tag',
 			what: WHAT_MAPPING_IS,
 			state: mappingState(facts)
+		},
+		{
+			id: 'scheduling',
+			href: '/automations/sharing',
+			title: 'Schedules',
+			icon: 'calendar-clock',
+			what: SCHEDULING_WHAT,
+			state: schedulingState(facts)
 		},
 		{
 			id: 'sync',

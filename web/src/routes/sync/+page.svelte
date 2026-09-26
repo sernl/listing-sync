@@ -11,6 +11,9 @@
 		type MultiListedRow
 	} from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
+	import Explain from '$lib/Explain.svelte';
+	import FlowDiagram from '$lib/FlowDiagram.svelte';
+	import FlowStep from '$lib/FlowStep.svelte';
 	import Button from '$lib/Button.svelte';
 	import { entitlementRead, featureOf } from '$lib/entitlement-read';
 	import Field from '$lib/Field.svelte';
@@ -20,10 +23,9 @@
 	import Note from '$lib/Note.svelte';
 	import Pagination from '$lib/Pagination.svelte';
 	import PageHead from '$lib/PageHead.svelte';
-	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
 	import StatusPill from '$lib/StatusPill.svelte';
-	import { AUTHORABLE_PLATFORMS, MARK_SRC, platformTitle } from '$lib/platforms';
+	import { AUTHORABLE_PLATFORMS, MARK_SRC, SHORT_NAME, platformTitle } from '$lib/platforms';
 	import TabBar from '$lib/TabBar.svelte';
 	import Toggle from '$lib/Toggle.svelte';
 	import {
@@ -36,7 +38,7 @@
 	} from '$lib/work-delete';
 	import WorkDeleteDialog from '$lib/WorkDeleteDialog.svelte';
 	import MarketplaceList from '$lib/pages/automations/MarketplaceList.svelte';
-	import { heldSelection, marketplaceRows } from '$lib/pages/automations/marketplace-list';
+	import { marketplaceRows } from '$lib/pages/automations/marketplace-list';
 	import { columnCopy, readState } from '$lib/pages/automations/read-state';
 	import {
 		CONNECT_FIRST,
@@ -49,6 +51,7 @@
 		activityEntries,
 		cadenceOptions,
 		heldCadence,
+		intervalPhrase,
 		lastPullLine,
 		openQuestionsLabel,
 		runRows,
@@ -59,6 +62,7 @@
 	} from '$lib/pages/automations/sync';
 	import { templates, type TemplateHead } from '$lib/pages/templates/api';
 	import '$lib/pages/automations/automations.css';
+	import '$lib/flow.css';
 
 	// How many runs one page shows. Ten, because a run is a heading a seller
 	// scans for the one they are looking for, not a row they read.
@@ -78,7 +82,6 @@
 	// call sites, because the tab bar and the panel body both name them.
 	const RUNS_TAB = 'runs';
 	const LOG_TAB = 'activity';
-	let historyTab = $state(RUNS_TAB);
 
 	let jobs = $state<JobHead[]>([]);
 	let runPage = $state(1);
@@ -131,7 +134,6 @@
 	// rather than claiming one.
 	let openQuestions = $state<number | null>(null);
 
-	let held = $state<Marketplace | null>(null);
 	let logQuery = $state('');
 
 	/** One card's unsaved position. Its own shape rather than the wire's,
@@ -168,9 +170,6 @@
 	// never answered.
 	const rows = $derived(marketplaceRows(connections));
 	const read = $derived(readState(connectionsLoaded, connectionsFailed, rows));
-	// The resolved selection rather than the raw click, so the highlighted row
-	// and the card beside it cannot name different marketplaces.
-	const selected = $derived(heldSelection(rows, held));
 	const cards = $derived(syncCards(connections, settings));
 	// `Date.now()` inside the derivation rather than captured at init, so a
 	// label recomputes with its list instead of freezing at mount.
@@ -179,10 +178,6 @@
 	// doubles the document for a panel nobody is reading.
 	const runs = $derived(runRows(jobs, Date.now()));
 	const log = $derived(activityEntries(activity, Date.now()));
-	const historyTabs = $derived([
-		{ id: RUNS_TAB, label: 'Runs', icon: 'refresh-cw' as const, count: null },
-		{ id: LOG_TAB, label: 'Activity', icon: 'layout-list' as const, count: null }
-	]);
 
 	/** What the seller has ticked in the run history: the run's id against the
 	 *  words a confirmation names it by. A map rather than a set of ids,
@@ -398,9 +393,35 @@
 			saving = null;
 		}
 	}
+	// ------------------------------------------------------------ the flow
+
+	const MULTI_TAB = 'multi';
+	let checkTab = $state(MULTI_TAB);
+	const checkTabs = $derived([
+		{
+			id: MULTI_TAB,
+			label: 'On more than one',
+			icon: 'layers' as const,
+			count: multiUnread ? null : multi.length
+		},
+		{ id: RUNS_TAB, label: 'Runs', icon: 'refresh-cw' as const, count: null },
+		{ id: LOG_TAB, label: 'Activity', icon: 'layout-list' as const, count: null }
+	]);
+
+	let pullOpen = $state(true);
+	let checkOpen = $state(true);
+
+	const pullSummary = $derived(
+		cards
+			.map((card) => {
+				const pull = editOf(card);
+				return `${SHORT_NAME[card.inventory]} ${pull.enabled ? intervalPhrase(pull.interval) : 'off'}`;
+			})
+			.join(' · ')
+	);
 </script>
 
-<div class="page">
+<div class="page flow-page">
 	<PageHead
 		icon="refresh-cw"
 		title="Updates"
@@ -414,93 +435,94 @@
 		{/snippet}
 	</PageHead>
 
-	{#if gate !== null}
-		<!-- Said once with the way out. Every control below carries it too,
-		     because a disabled control with no stated reason reads as a
-		     fault. -->
-		<Banner tone="warn" title="Pulling from your marketplaces is not on your plan" action={toPlans}>
-			{gate}
-		</Banner>
-	{/if}
+	<MarketplaceList {rows} empty={columnCopy(read) ?? ''} />
 
-	<div class="auto-body">
-		<MarketplaceList
-			{rows}
-			{selected}
-			onselect={(marketplace) => (held = marketplace)}
-			empty={columnCopy(read) ?? ''}
-		/>
+	<div class="flow">
+		{#if gate !== null}
+			<!-- Said once with the way out. Every control below carries it too. -->
+			<Banner tone="warn" title="Pulling from your marketplaces is not on your plan" action={toPlans}>
+				{gate}
+			</Banner>
+		{/if}
 
-		<div class="auto-right">
-			<Panel
-				title="Pull new resources"
-				description="Anything new your computer finds on this timetable arrives in Import."
-			>
-				{#if settingsUnread}
-					<p class="quiet">Your pull settings could not be read, and any already set still runs.</p>
-				{:else}
+		<FlowStep
+			n={1}
+			id="pull"
+			title="Pull new resources"
+			hint="Choose how often each marketplace is checked, and where new finds go."
+			summary={pullSummary}
+			bind:open={pullOpen}
+		>
+			{#snippet aside()}
+				<Explain title="How pulling works" label="">
+					<p>Anything new your computer finds arrives in Import.</p>
+					<p>{PUBLISHED_WITH_CATALOGUE_WORDS}</p>
+					<p>{FILLS_WHAT_THE_PULL_LEFT_EMPTY}</p>
+				</Explain>
+			{/snippet}
+
+			{#if settingsUnread}
+				<p class="quiet">Your pull settings could not be loaded. Any already set still run.</p>
+			{:else}
+				<div class="flow-cols">
 					{#each cards as card (card.inventory)}
 						{@const pull = editOf(card)}
 						{@const options = cadenceOptions(card.setting.minimum_secs ?? planFloor)}
 						{@const why = card.connected ? gate : CONNECT_FIRST}
-						<div class="pull-card" class:off={why !== null}>
-							<!-- The mark alone names the card, as every other
-							     marketplace heading in this console does: it carries
-							     the full name as its accessible name and its tooltip,
-							     and a title beside it would print the word the mark is
-							     there to replace. -->
-							<div class="pull-head">
+						<div class="flow-card" class:off={why !== null || !pull.enabled}>
+							<div class="flow-card-head">
 								<MarketplaceMark inventory={card.inventory} size={24} />
-								<span class="meta">
-									{lastPullLine(card.setting.last_pull_at, Date.now())}
-								</span>
-							</div>
-
-							<div class="set-toggle">
+								<span class="pull-last">{lastPullLine(card.setting.last_pull_at, Date.now())}</span>
 								<Toggle
-									label="Pull new resources"
+									label={pull.enabled ? 'On' : 'Off'}
 									checked={pull.enabled}
 									disabled={why !== null}
-									onchange={(value) =>
-										change(card.inventory, { ...pull, enabled: value })}
+									onchange={(value) => change(card.inventory, { ...pull, enabled: value })}
 								/>
 							</div>
 
-							<div class="set-grid">
-								<Field
-									label="How often"
-									id={`cadence-${card.inventory}`}
-									hint={options.find((option) => !option.enabled)?.reason ?? undefined}
-								>
-									<select
-										id={`cadence-${card.inventory}`}
-										disabled={why !== null}
-										value={String(pull.interval)}
-										onchange={(event) =>
-											change(card.inventory, {
-												...pull,
-												interval: Number(event.currentTarget.value)
-											})}
-									>
-										{#each options as option (option.secs)}
-											<option
-												value={String(option.secs)}
-												disabled={!option.enabled}
-												title={option.reason ?? undefined}
-											>
-												{option.label}
-											</option>
-										{/each}
-									</select>
-								</Field>
-							</div>
+							<FlowDiagram
+								from={{ inventory: card.inventory }}
+								to={pull.publishTo.length === 0
+									? [{ icon: 'download', label: 'Import' }]
+									: pull.publishTo.map((inventory) => ({ inventory }))}
+								rule={pull.enabled ? intervalPhrase(pull.interval) : null}
+								empty="Off"
+								label="{card.name}: {pull.enabled ? intervalPhrase(pull.interval) : 'off'}"
+							/>
 
-							<p class="pull-label">Publish new pulls to</p>
+							<Field
+								label="How often"
+								id={`cadence-${card.inventory}`}
+								hint={options.find((option) => !option.enabled)?.reason ?? undefined}
+							>
+								<select
+									id={`cadence-${card.inventory}`}
+									disabled={why !== null}
+									value={String(pull.interval)}
+									onchange={(event) =>
+										change(card.inventory, {
+											...pull,
+											interval: Number(event.currentTarget.value)
+										})}
+								>
+									{#each options as option (option.secs)}
+										<option
+											value={String(option.secs)}
+											disabled={!option.enabled}
+											title={option.reason ?? undefined}
+										>
+											{option.label}
+										</option>
+									{/each}
+								</select>
+							</Field>
+
+							<p class="flow-label">Then publish to</p>
 							<div class="mk-tiles" role="group" aria-label={`Publish new ${card.name} pulls to`}>
-								<!-- The authorable set, not every inventory: a rule
-								     publishes by minting a create job, and a marketplace
-								     this console cannot author to would take a tick and
-								     write nothing. -->
+								<!-- The authorable set: a rule publishes by minting a create
+								     job, and a marketplace this console cannot author to would
+								     take a tick and write nothing. -->
 								{#each AUTHORABLE_PLATFORMS.filter((inventory) => inventory !== card.inventory) as target (target)}
 									<label class="mk-tile" title={platformTitle(target)}>
 										<input
@@ -515,272 +537,241 @@
 														: pull.publishTo.filter((one) => one !== target)
 												})}
 										/>
-										<img
-											class="mk-tile-mark"
-											src={MARK_SRC[MARKETPLACE_OF[target]]}
-											alt=""
-										/>
-										<span class="sr-only">
-											Publish new {card.name} pulls to {platformTitle(target)}
-										</span>
+										<img class="mk-tile-mark" src={MARK_SRC[MARKETPLACE_OF[target]]} alt="" />
+										<span class="sr-only">Publish new {card.name} pulls to {platformTitle(target)}</span>
 									</label>
 								{/each}
 							</div>
 							{#if rulesGate !== null}
 								<Note icon="circle-alert">{rulesGate}</Note>
 							{/if}
-							<Note>{PUBLISHED_WITH_CATALOGUE_WORDS}</Note>
 
-							<!-- The template the rule fills a new pull from. Under the
-							     publish targets rather than above them, because which
-							     templates may be chosen is decided by what is ticked
-							     there: a template written for one marketplace fills
-							     fields nothing carries unless the rule publishes to it,
-							     and the server answers 422 for exactly that. -->
+							<!-- Under the publish targets: which templates may be chosen is
+							     decided by what is ticked there. -->
 							{#if headsUnread}
-								<Note icon="circle-alert">
-									Your templates could not be read, and any already set still runs.
-								</Note>
+								<Note icon="circle-alert">Your templates could not be loaded.</Note>
 							{:else if heads.length > 0}
 								{@const choices = templateChoices(heads, pull.publishTo)}
-								<div class="set-grid">
-									<Field label="Fill new pulls from template" id={`template-${card.inventory}`}>
-										<select
-											id={`template-${card.inventory}`}
-											disabled={why !== null || rulesGate !== null}
-											value={pull.template}
-											onchange={(event) =>
-												change(card.inventory, {
-													...pull,
-													template: event.currentTarget.value
-												})}
-										>
-											<option value="">No template</option>
-											{#each choices as choice (choice.id)}
-												<option
-													value={choice.id}
-													disabled={choice.reason !== null}
-													title={choice.reason ?? undefined}
-												>
-													{choice.label}{choice.reason === null
-														? ''
-														: ' — not a target of this rule'}
-												</option>
-											{/each}
-										</select>
-									</Field>
-								</div>
-								<Note>{FILLS_WHAT_THE_PULL_LEFT_EMPTY}</Note>
+								<Field label="Fill gaps from a template" id={`template-${card.inventory}`}>
+									<select
+										id={`template-${card.inventory}`}
+										disabled={why !== null || rulesGate !== null}
+										value={pull.template}
+										onchange={(event) =>
+											change(card.inventory, { ...pull, template: event.currentTarget.value })}
+									>
+										<option value="">No template</option>
+										{#each choices as choice (choice.id)}
+											<option
+												value={choice.id}
+												disabled={choice.reason !== null}
+												title={choice.reason ?? undefined}
+											>
+												{choice.label}{choice.reason === null ? '' : ' — not ticked above'}
+											</option>
+										{/each}
+									</select>
+								</Field>
 							{/if}
 
-							<div class="set-foot">
+							<div class="flow-actions pull-save">
 								<Button
 									tier="primary"
 									icon="circle-check"
 									small
 									disabled={why !== null || saving === card.inventory}
-									reason={why ??
-										(saving === card.inventory ? 'The setting is being saved.' : undefined)}
+									reason={why ?? (saving === card.inventory ? 'The setting is being saved.' : undefined)}
 									onclick={() => void save(card.inventory)}
 								>
-									{saving === card.inventory ? 'Saving…' : 'Save'}
+									{saving === card.inventory ? 'Saving…' : `Save ${SHORT_NAME[card.inventory]}`}
 								</Button>
 								{#if why !== null}
-									<Note icon="circle-alert">{why}</Note>
+									<span class="pull-why">{why}</span>
 								{/if}
 							</div>
 						</div>
 					{/each}
-				{/if}
+				</div>
+			{/if}
 
-				{#if refusal !== null}
-					<Banner tone="bad">{refusal}</Banner>
-				{/if}
-			</Panel>
+			{#if refusal !== null}
+				<Banner tone="bad">{refusal}</Banner>
+			{/if}
+		</FlowStep>
 
-			<Panel
-				title="Listed on more than one marketplace"
-				description="Where a change here has more than one copy to carry out to."
-			>
+		<FlowStep
+			n={2}
+			id="check"
+			title="Check"
+			hint="See what is listed where, and what has run."
+			bind:open={checkOpen}
+		>
+			<TabBar tabs={checkTabs} bind:current={checkTab} />
+
+			{#if checkTab === MULTI_TAB}
 				{#if multiUnread}
-					<p class="quiet">This list could not be read, so it is showing none.</p>
+					<p class="quiet">This list could not be loaded.</p>
 				{:else if multi.length === 0}
 					<p class="quiet">{NOTHING_MULTI_LISTED}</p>
 				{:else}
-					{#each multi as row (row.product)}
-						<a class="multi-row" href={`/resources/${row.product}`}>
-							<span class="t">{row.title}</span>
-							<span class="multi-marks">
-								{#each row.inventories as inventory (inventory)}
-									<MarketplaceMark {inventory} size={16} />
+					<div class="flow-table-wrap multi-wrap">
+						<table class="flow-table">
+							<thead>
+								<tr><th>Resource</th><th>Listed on</th></tr>
+							</thead>
+							<tbody>
+								{#each multi as row (row.product)}
+									<tr>
+										<td><a href={`/resources/${row.product}`}><span class="res-name">{row.title}</span></a></td>
+										<td class="marks">
+											{#each row.inventories as inventory (inventory)}
+												<MarketplaceMark {inventory} size={18} />
+											{/each}
+										</td>
+									</tr>
 								{/each}
-							</span>
-						</a>
-					{/each}
+							</tbody>
+						</table>
+					</div>
 				{/if}
-			</Panel>
-
-			<!-- One history panel with two tabs rather than two panels stacked.
-			     The runs and the log answer the same question — what has this
-			     account been doing — and a seller reading one is not reading
-			     the other, so only the tab in hand is mounted and the page
-			     carries one list's worth of rows instead of two. -->
-			<Panel
-				title="History"
-				description="Every update we have sent, and what each one did."
-			>
-				<TabBar tabs={historyTabs} bind:current={historyTab} />
-
-				{#if historyTab === RUNS_TAB}
-					{#if !runsLoaded}
-						<p class="quiet">Loading…</p>
-					{:else if runsUnread && jobs.length === 0}
-						<Banner tone="bad" action={retryRuns}>
-							Your runs could not be read, so this page cannot list them.
-						</Banner>
-					{:else}
-						{#if runsUnread}
-							<!-- The page below is the last one that read. Said before the
-							     rows, because a seller who has not been told will take
-							     them for the page they asked for. -->
-							<Banner tone="bad" action={retryRuns}>
-								That page of runs could not be read, so the runs below are the last
-								ones that did.
-							</Banner>
-						{/if}
-						{#if runs.length === 0}
-							{#if runPage > 1}
-								<p class="quiet">Go back for the runs before this page.</p>
-							{:else}
-								<Placeholder
-									icon="refresh-cw"
-									headline="No update has run yet"
-									body={NO_RUN_YET}
-								/>
-							{/if}
-						{:else}
-							<!-- The tick for the page in hand and whatever the seller has
-							     ticked elsewhere. In the flow above the rows, because a
-							     bar pinned to a phone's viewport covers the row it is
-							     about to act on. -->
-							<div class="work-bar">
-								<label class="work-pick-all">
-									<input
-										type="checkbox"
-										checked={allPickedHere}
-										disabled={pickable.length === 0}
-										onchange={pickPage}
-									/>
-									Select the {countWord(pickable.length, RUNS)} on this page
-								</label>
-								{#if picked.size > 0}
-									<span class="work-picked">
-										{countWord(picked.size, RUNS)} selected{pickedElsewhere > 0
-											? `, ${pickedElsewhere} of them on another page`
-											: ''}
-									</span>
-									<div class="work-bar-acts">
-										<Button small tier="quiet" icon="circle-x" onclick={() => (picked = new Map())}>
-											Clear selection
-										</Button>
-										<Button small danger icon="trash-2" onclick={() => (deleting = pickedItems)}>
-											Delete {countWord(picked.size, RUNS)}
-										</Button>
-									</div>
-								{/if}
-							</div>
-
-							{#each runs as run (run.job)}
-								{@const going = retainedBadge(run.deletion)}
-								{@const refusal = deleteRefusal(run.deletion)}
-								<!-- A row rather than one whole-row anchor: it carries a
-								     tick and a Delete, and a control nested in a link is
-								     reached by the keyboard as part of the link and a
-								     press activates both. -->
-								<div class="auto-row">
-									<span class="pick">
-										<input
-											type="checkbox"
-											checked={picked.has(run.job)}
-											disabled={refusal !== null}
-											title={refusal ?? undefined}
-											aria-label={`Select the run ${run.meta}`}
-											onchange={(event) => pick(run, event.currentTarget.checked)}
-										/>
-									</span>
-									<span class="who">
-										<a class="t" href={run.href}>
-											<MarketplaceMark inventory={run.inventory} />
-										</a>
-										<span class="meta">{run.meta}</span>
-									</span>
-									<span class="mark">
-										{#if going !== null}
-											<StatusPill tone={going.tone} label={going.label} />
-										{/if}
-									</span>
-									<span class="when">{new Date(run.at).toLocaleString()}</span>
-									<span class="act">
-										<Button
-											small
-											danger
-											icon="trash-2"
-											disabled={refusal !== null}
-											reason={refusal ?? undefined}
-											onclick={() => (deleting = [{ id: run.job, label: run.meta }])}
-										>
-											Delete
-										</Button>
-									</span>
-								</div>
-							{/each}
-						{/if}
-						{#if runs.length > 0 || runPage > 1}
-							<Pagination
-								page={runPage}
-								hasNext={runNext !== null}
-								busy={runsBusy}
-								label="Runs"
-								summary={`${runs.length} runs on this page`}
-								onprevious={() =>
-									void readRuns(runCursors[runPage - 2] ?? null, runPage - 1)}
-								onnext={() => void readRuns(runNext, runPage + 1)}
-							/>
-						{/if}
-					{/if}
-				{:else if activityUnread && activity.length === 0}
-					<Banner tone="bad" action={retryLog}>
-						The activity log could not be read, so it is showing nothing.
-					</Banner>
+			{:else if checkTab === RUNS_TAB}
+				{#if !runsLoaded}
+					<p class="quiet">Loading…</p>
+				{:else if runsUnread && jobs.length === 0}
+					<Banner tone="bad" action={retryRuns}>Your runs could not be loaded.</Banner>
 				{:else}
-					{#if activityUnread}
-						<Banner tone="bad" action={retryLog}>
-							That page of the log could not be read, so the lines below are the last
-							ones that did.
+					{#if runsUnread}
+						<Banner tone="bad" action={retryRuns}>
+							That page could not be loaded. These are the last ones that did.
 						</Banner>
 					{/if}
-					<ActivityLog
-						entries={log}
-						bind:query={logQuery}
-						empty={logPage > 1
-							? 'Go back for the lines before this page.'
-							: NO_ACTIVITY_YET}
-					/>
-					{#if log.length > 0 || logPage > 1}
+					{#if runs.length === 0}
+						{#if runPage > 1}
+							<p class="quiet">Go back a page.</p>
+						{:else}
+							<Placeholder icon="refresh-cw" headline="No update has run yet" body={NO_RUN_YET} />
+						{/if}
+					{:else}
+						<div class="work-bar">
+							<label class="work-pick-all">
+								<input
+									type="checkbox"
+									checked={allPickedHere}
+									disabled={pickable.length === 0}
+									onchange={pickPage}
+								/>
+								Select the {countWord(pickable.length, RUNS)} on this page
+							</label>
+							{#if picked.size > 0}
+								<span class="work-picked">
+									{countWord(picked.size, RUNS)} selected{pickedElsewhere > 0
+										? `, ${pickedElsewhere} on another page`
+										: ''}
+								</span>
+								<div class="work-bar-acts">
+									<Button small tier="quiet" icon="circle-x" onclick={() => (picked = new Map())}>
+										Clear
+									</Button>
+									<Button small danger icon="trash-2" onclick={() => (deleting = pickedItems)}>
+										Delete {countWord(picked.size, RUNS)}
+									</Button>
+								</div>
+							{/if}
+						</div>
+
+						<div class="flow-table-wrap">
+							<table class="flow-table">
+								<thead>
+									<tr>
+										<th><span class="sr-only">Select</span></th>
+										<th>Where</th>
+										<th>What</th>
+										<th>When</th>
+										<th><span class="sr-only">Actions</span></th>
+									</tr>
+								</thead>
+								<tbody>
+									{#each runs as run (run.job)}
+										{@const going = retainedBadge(run.deletion)}
+										{@const refusal = deleteRefusal(run.deletion)}
+										<tr>
+											<td class="marks">
+												<input
+													type="checkbox"
+													checked={picked.has(run.job)}
+													disabled={refusal !== null}
+													title={refusal ?? undefined}
+													aria-label={`Select the run ${run.meta}`}
+													onchange={(event) => pick(run, event.currentTarget.checked)}
+												/>
+											</td>
+											<td class="marks">
+												<a href={run.href}><MarketplaceMark inventory={run.inventory} size={18} /></a>
+											</td>
+											<td>
+												<a href={run.href}>{run.meta}</a>
+												{#if going !== null}
+													<StatusPill tone={going.tone} label={going.label} />
+												{/if}
+											</td>
+											<td class="marks when">{new Date(run.at).toLocaleString()}</td>
+											<td class="marks">
+												<Button
+													small
+													tier="quiet"
+													danger
+													icon="trash-2"
+													disabled={refusal !== null}
+													reason={refusal ?? undefined}
+													onclick={() => (deleting = [{ id: run.job, label: run.meta }])}
+												>
+													Delete
+												</Button>
+											</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+					{/if}
+					{#if runs.length > 0 || runPage > 1}
 						<Pagination
-							page={logPage}
-							hasNext={logNext !== null}
-							busy={logBusy}
-							label="Activity log"
-							summary={`${log.length} lines on this page`}
-							onprevious={() =>
-								void readActivity(logCursors[logPage - 2] ?? null, logPage - 1)}
-							onnext={() => void readActivity(logNext, logPage + 1)}
+							page={runPage}
+							hasNext={runNext !== null}
+							busy={runsBusy}
+							label="Runs"
+							summary={`${runs.length} runs on this page`}
+							onprevious={() => void readRuns(runCursors[runPage - 2] ?? null, runPage - 1)}
+							onnext={() => void readRuns(runNext, runPage + 1)}
 						/>
 					{/if}
 				{/if}
-			</Panel>
-		</div>
+			{:else if activityUnread && activity.length === 0}
+				<Banner tone="bad" action={retryLog}>The activity log could not be loaded.</Banner>
+			{:else}
+				{#if activityUnread}
+					<Banner tone="bad" action={retryLog}>
+						That page could not be loaded. These are the last lines that did.
+					</Banner>
+				{/if}
+				<ActivityLog
+					entries={log}
+					bind:query={logQuery}
+					empty={logPage > 1 ? 'Go back a page.' : NO_ACTIVITY_YET}
+				/>
+				{#if log.length > 0 || logPage > 1}
+					<Pagination
+						page={logPage}
+						hasNext={logNext !== null}
+						busy={logBusy}
+						label="Activity log"
+						summary={`${log.length} lines on this page`}
+						onprevious={() => void readActivity(logCursors[logPage - 2] ?? null, logPage - 1)}
+						onnext={() => void readActivity(logNext, logPage + 1)}
+					/>
+				{/if}
+			{/if}
+		</FlowStep>
 	</div>
 </div>
 
@@ -789,8 +780,7 @@
 {/snippet}
 
 <!-- Each retries the page that failed, which the read remembers apart from
-     the page on screen. Retrying the displayed page instead would clear the
-     failure without ever fetching what the seller pressed Next for. -->
+     the page on screen. -->
 {#snippet retryRuns()}
 	<Button
 		tier="outline"
@@ -817,8 +807,7 @@
 	</Button>
 {/snippet}
 
-<!-- One dialog for a row's own Delete and for the selection's: what a seller
-     has to read before deleting a run is the same either way. -->
+<!-- One dialog for a row's own Delete and for the selection's. -->
 <WorkDeleteDialog
 	open={deleting !== null}
 	items={deleting ?? []}
@@ -827,3 +816,27 @@
 	onClose={() => (deleting = null)}
 	onsettled={settled}
 />
+
+<style>
+	.flow-card-head .pull-last {
+		flex: 1 1 auto;
+		color: var(--muted);
+		font-size: 12.5px;
+	}
+
+	.pull-why {
+		color: var(--muted);
+		font-size: 12.5px;
+		flex: 1 1 12rem;
+	}
+
+	.multi-wrap {
+		max-height: 480px;
+		overflow-y: auto;
+	}
+
+	.when {
+		color: var(--muted);
+		font-size: 12.5px;
+	}
+</style>

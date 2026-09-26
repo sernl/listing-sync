@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { createQuery } from '@tanstack/svelte-query';
+	import { tick } from 'svelte';
 	import {
 		ApiFailure,
 		allPages,
@@ -12,6 +13,10 @@
 		type ScheduleView
 	} from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
+	import Explain from '$lib/Explain.svelte';
+	import FlowActionBar from '$lib/FlowActionBar.svelte';
+	import FlowDiagram from '$lib/FlowDiagram.svelte';
+	import FlowStep from '$lib/FlowStep.svelte';
 	import Button from '$lib/Button.svelte';
 	import { anyConnectionStands, standingMarketplaces } from '$lib/connection-standing';
 	import { entitlementRead, featureOf } from '$lib/entitlement-read';
@@ -21,10 +26,9 @@
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
 	import Note from '$lib/Note.svelte';
 	import PageHead from '$lib/PageHead.svelte';
-	import Panel from '$lib/Panel.svelte';
-	import Placeholder from '$lib/Placeholder.svelte';
 	import { AUTHORABLE_PLATFORMS, MARK_SRC, SHORT_NAME, platformTitle } from '$lib/platforms';
 	import { queryKeys } from '$lib/query';
+	import Stepper, { type StepMark } from '$lib/Stepper.svelte';
 	import Toggle from '$lib/Toggle.svelte';
 	import MarketplaceList from '$lib/pages/automations/MarketplaceList.svelte';
 	import { heldSelection, marketplaceRows } from '$lib/pages/automations/marketplace-list';
@@ -45,6 +49,7 @@
 		draftOf,
 		draftRefusal,
 		lastRunLine,
+		minuteOf,
 		nextRunLine,
 		scheduleBody,
 		selectionLine,
@@ -55,6 +60,7 @@
 		type ScheduleDraft
 	} from '$lib/pages/automations/sharing';
 	import '$lib/pages/automations/automations.css';
+	import '$lib/flow.css';
 
 	let schedules = $state<ScheduleView[]>([]);
 	let schedulesLoaded = $state(false);
@@ -307,9 +313,62 @@
 			runsUnread = true;
 		}
 	}
+
+	// ------------------------------------------------------------ the flow
+
+	/** Whether the builder is on screen. It opens by itself for a seller with
+	 *  no schedule yet, and otherwise from "New schedule" or a row's Edit. */
+	let composing = $state(false);
+	$effect(() => {
+		if (schedulesLoaded && !schedulesUnread && schedules.length === 0) composing = true;
+	});
+
+	let whereOpen = $state(true);
+	let whatOpen = $state(true);
+	let whenOpen = $state(true);
+	let saveOpen = $state(true);
+
+	const draftWhen = $derived(
+		minuteOf(draft.clock) === null
+			? null
+			: whenSentence({
+					repeat: draft.repeat,
+					weekday: draft.repeat === 'weekly' ? draft.weekday : null,
+					at_minute_of_day: minuteOf(draft.clock) ?? 0,
+					timezone: draft.timezone
+				})
+	);
+	const whatSummary = $derived(
+		draft.label !== null
+			? draft.label.length === 0
+				? 'No label chosen'
+				: `Everything labelled ${draft.label}`
+			: `${draft.products.length} chosen`
+	);
+	const steps = $derived<StepMark[]>([
+		{ id: 'where', label: 'Where', done: draft.inventories.length > 0 },
+		{
+			id: 'what',
+			label: 'What',
+			done: draft.label === null ? draft.products.length > 0 : draft.label.trim().length > 0
+		},
+		{ id: 'when', label: 'When', done: draftWhen !== null },
+		{ id: 'save', label: 'Save', done: false }
+	]);
+
+	async function begin(schedule: ScheduleView | null) {
+		if (schedule === null) {
+			cancel();
+		} else {
+			edit(schedule);
+		}
+		composing = true;
+		await tick();
+		document.getElementById('step-where')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+	}
 </script>
 
-<div class="page">
+<div class="page flow-page has-bar">
 	<PageHead
 		icon="calendar-clock"
 		title="Schedules"
@@ -317,76 +376,88 @@
 		guide={SCHEDULES_GUIDE}
 	/>
 
-	{#if gate !== null}
-		<!-- Stated once, with the way out, rather than only as a tooltip on
-		     every dead control. The controls below carry it too, because a
-		     disabled control with no reason reads as a fault. -->
-		<Banner tone="warn" title="Schedules are not on your plan" action={toPlans}>
-			{gate}
-		</Banner>
-	{/if}
+	<div class="flow">
+		{#if gate !== null}
+			<Banner tone="warn" title="Schedules are not on your plan" action={toPlans}>
+				{gate}
+			</Banner>
+		{/if}
+		{#if nothingConnected}
+			<Banner tone="warn" title="No marketplace is connected" action={toMarketplaces}>
+				Connect a marketplace in the Teachouse app on your computer.
+			</Banner>
+		{/if}
+		{#if noDevice}
+			<Banner tone="warn" title={NO_DEVICE_TITLE} action={toMarketplaces}>
+				{NO_DEVICE_BODY}
+			</Banner>
+		{/if}
 
-	{#if nothingConnected}
-		<Banner tone="warn" title="No marketplace is connected" action={toMarketplaces}>
-			Connect a marketplace in the Teachouse app on your computer.
-		</Banner>
-	{/if}
+		<section class="flow-section" aria-labelledby="schedules-title">
+			<div class="flow-section-head">
+				<h2 id="schedules-title">Your schedules</h2>
+				<span class="desk-only">
+					<Button
+						tier="primary"
+						icon="circle-plus"
+						small
+						disabled={gate !== null}
+						reason={gate ?? undefined}
+						onclick={() => void begin(null)}
+					>
+						New schedule
+					</Button>
+				</span>
+			</div>
 
-	{#if noDevice}
-		<Banner tone="warn" title={NO_DEVICE_TITLE} action={toMarketplaces}>
-			{NO_DEVICE_BODY}
-		</Banner>
-	{/if}
+			<MarketplaceList
+				{rows}
+				{selected}
+				onselect={(marketplace) => (held = marketplace)}
+				empty={columnCopy(read) ?? ''}
+				label="Sends to"
+			/>
 
-	<div class="auto-body">
-		<MarketplaceList
-			{rows}
-			{selected}
-			onselect={(marketplace) => (held = marketplace)}
-			empty={columnCopy(read) ?? ''}
-		/>
+			{#if refusal !== null && !composing}
+				<Banner tone="bad">{refusal}</Banner>
+			{/if}
 
-		<div class="auto-right">
-			<Panel title="Your schedules" description="What goes out, where, and when.">
-				{#if schedulesUnread}
-					<p class="quiet">Your schedules could not be read, and any already set still runs.</p>
-				{:else if !schedulesLoaded}
-					<p class="quiet">Loading…</p>
-				{:else if schedules.length === 0}
-					<Placeholder icon="calendar-clock" headline="Nothing is scheduled" body={NO_SCHEDULE_YET} />
-				{:else if shownSchedules.length === 0}
-					<p class="quiet">
-						No schedule sends to {selected === null ? 'this marketplace' : SHORT_NAME[selected]}.
-					</p>
-				{:else}
+			{#if schedulesUnread}
+				<p class="quiet">Your schedules could not be loaded. Any already set still run.</p>
+			{:else if !schedulesLoaded}
+				<p class="quiet">Loading…</p>
+			{:else if schedules.length === 0}
+				<p class="quiet">Nothing is scheduled yet. {NO_SCHEDULE_YET}</p>
+			{:else if shownSchedules.length === 0}
+				<p class="quiet">
+					No schedule sends to {selected === null ? 'this marketplace' : SHORT_NAME[selected]}.
+				</p>
+			{:else}
+				<div class="flow-list">
 					{#each shownSchedules as schedule (schedule.id)}
-						<div class="sched-row" class:off={!schedule.enabled}>
-							<span class="sched-name">
-								<span class="t">{schedule.name}</span>
-								<span class="meta">{selectionLine(schedule.selection)}</span>
-							</span>
-
-							<span class="sched-marks">
-								{#each schedule.inventories as inventory (inventory)}
-									<MarketplaceMark {inventory} size={18} />
-								{/each}
-							</span>
-
-							<span class="sched-when">
-								<span class="t">{whenSentence(schedule)}</span>
-								<span class="meta">
-									Next {nextRunLine(schedule.next_run_at, now)} · last
+						<div class="flow-item" class:off={!schedule.enabled}>
+							<Toggle
+								label={schedule.enabled ? 'On' : 'Off'}
+								checked={schedule.enabled}
+								disabled={gate !== null}
+								onchange={(value) => void setEnabled(schedule, value)}
+							/>
+							<span class="flow-item-main">
+								<span class="flow-item-title">{schedule.name}</span>
+								<span class="sched-line">
+									<span class="sched-what">{selectionLine(schedule.selection)}</span>
+									<span class="sched-arrow" aria-hidden="true">→</span>
+									{#each schedule.inventories as inventory (inventory)}
+										<MarketplaceMark {inventory} size={18} />
+									{/each}
+								</span>
+								<span class="flow-item-line">
+									<span class="sched-at">{whenSentence(schedule)}</span> · next
+									{nextRunLine(schedule.next_run_at, now)} · last
 									{lastRunLine(schedule.last_run_at, now)}
 								</span>
 							</span>
-
-							<span class="sched-acts">
-								<Toggle
-									label="On"
-									checked={schedule.enabled}
-									disabled={gate !== null}
-									onchange={(value) => void setEnabled(schedule, value)}
-								/>
+							<span class="flow-item-acts">
 								<Button tier="quiet" small icon="clock" onclick={() => void openRuns(schedule.id)}>
 									{runsOf === schedule.id ? 'Hide runs' : 'Runs'}
 								</Button>
@@ -396,12 +467,12 @@
 									icon="pencil"
 									disabled={gate !== null}
 									reason={gate ?? undefined}
-									onclick={() => edit(schedule)}
+									onclick={() => void begin(schedule)}
 								>
 									Edit
 								</Button>
 								<Button
-									tier="outline"
+									tier="quiet"
 									small
 									danger
 									icon="trash-2"
@@ -412,297 +483,354 @@
 									Delete
 								</Button>
 							</span>
-						</div>
 
-						{#if deleting === schedule.id}
-							<div class="sched-confirm">
-								<span>{deletePrompt(schedule.name)}</span>
-								<Button tier="outline" small danger icon="trash-2" onclick={() => void remove(schedule.id)}>
-									Delete it
-								</Button>
-								<Button tier="quiet" small onclick={() => (deleting = null)}>Keep it</Button>
-							</div>
-						{/if}
+							{#if deleting === schedule.id}
+								<div class="sched-confirm">
+									<span>{deletePrompt(schedule.name)}</span>
+									<Button tier="outline" small danger icon="trash-2" onclick={() => void remove(schedule.id)}>
+										Delete it
+									</Button>
+									<Button tier="quiet" small onclick={() => (deleting = null)}>Keep it</Button>
+								</div>
+							{/if}
 
-						{#if runsOf === schedule.id}
-							<div class="sched-runs">
-								{#if runsUnread}
-									<p class="quiet">This schedule's runs could not be read.</p>
-								{:else if runs.length === 0}
-									<p class="quiet">This schedule has not run yet.</p>
-								{:else}
-									{#each runs as run (`${run.tick}-${run.inventory}`)}
-										<div class="run-tick">
-											<span class="t">
-												<MarketplaceMark inventory={run.inventory} size={16} />
-												{new Date(run.tick).toLocaleString()}
-											</span>
-											<span class="meta">
-												{run.sent}
-												{run.sent === 1 ? 'resource sent' : 'resources sent'}
-												{#if run.job !== null}
-													· <a href={`/sync/${run.job}`}>Open the run</a>
-												{/if}
-											</span>
-											{#each run.skipped as skip (skip.product)}
-												<span class="skip">
-													<span class="skip-title">{skip.title}</span>
-													<span class="skip-why">{skip.reason}</span>
+							{#if runsOf === schedule.id}
+								<div class="sched-runs">
+									{#if runsUnread}
+										<p class="quiet">This schedule's runs could not be loaded.</p>
+									{:else if runs.length === 0}
+										<p class="quiet">This schedule has not run yet.</p>
+									{:else}
+										{#each runs as run (`${run.tick}-${run.inventory}`)}
+											<div class="run-tick">
+												<span class="t">
+													<MarketplaceMark inventory={run.inventory} size={16} />
+													{new Date(run.tick).toLocaleString()}
 												</span>
-											{/each}
-										</div>
-									{/each}
-								{/if}
-							</div>
-						{/if}
-					{/each}
-				{/if}
-			</Panel>
-
-			<Panel
-				title={editing === null ? 'New schedule' : 'Edit schedule'}
-				description={RUNS_ON_YOUR_COMPUTER}
-			>
-				<div class="set-grid">
-					<Field label="Name" id="sched-name">
-						<input
-							id="sched-name"
-							type="text"
-							maxlength="80"
-							placeholder="Friday drop"
-							disabled={gate !== null}
-							bind:value={draft.name}
-						/>
-					</Field>
-				</div>
-
-				<div class="scope-choice" role="radiogroup" aria-label="What to send">
-					<button
-						type="button"
-						class="disp"
-						class:on={draft.label !== null}
-						role="radio"
-						aria-checked={draft.label !== null}
-						disabled={gate !== null}
-						onclick={() => (draft = { ...draft, label: draft.label ?? '' })}
-					>
-						<span class="disp-word">Everything with a label</span>
-						<span class="disp-line">The label is read again at every run.</span>
-					</button>
-					<button
-						type="button"
-						class="disp"
-						class:on={draft.label === null}
-						role="radio"
-						aria-checked={draft.label === null}
-						disabled={gate !== null}
-						onclick={() => (draft = { ...draft, label: null })}
-					>
-						<span class="disp-word">Choose resources</span>
-						<span class="disp-line">The ones you tick, and no others.</span>
-					</button>
-				</div>
-
-				{#if draft.label !== null}
-					<div class="set-grid">
-						<Field label="Label" id="sched-label">
-							<select
-								id="sched-label"
-								disabled={gate !== null}
-								value={draft.label}
-								onchange={(event) => (draft = { ...draft, label: event.currentTarget.value })}
-							>
-								<option value="">Choose a label</option>
-								{#each labels.data ?? [] as label (label.name)}
-									<option value={label.name}>{label.name}</option>
-								{/each}
-							</select>
-						</Field>
-					</div>
-					{#if labels.isError}
-						<p class="quiet">Your labels could not be read, so tick the resources yourself.</p>
-					{/if}
-				{:else if catalogue.isPending}
-					<p class="quiet">Loading your resources…</p>
-				{:else if catalogue.isError}
-					<p class="quiet">Your resources could not be read, so there is nothing to tick.</p>
-				{:else if products.length === 0}
-					<p class="quiet">You have no resources yet, so there is nothing to schedule.</p>
-				{:else}
-					<div class="pick-head">
-						<input
-							type="search"
-							aria-label="Search your resources"
-							placeholder="Search resources"
-							bind:value={box}
-						/>
-						<span class="pick-count">{draft.products.length} chosen</span>
-					</div>
-					{#if shownProducts.length === 0}
-						<p class="quiet">Nothing matches that search.</p>
-					{:else}
-						<div class="pick-list">
-							{#each shownProducts as product (product.id)}
-								<label class="pick-row">
-									<input
-										type="checkbox"
-										checked={draft.products.includes(product.id)}
-										disabled={gate !== null}
-										onchange={(event) => tickProduct(product.id, event.currentTarget.checked)}
-									/>
-									<span class="pick-title">{product.title}</span>
-								</label>
-							{/each}
+												<span class="meta">
+													{run.sent}
+													{run.sent === 1 ? 'resource sent' : 'resources sent'}
+													{#if run.job !== null}
+														· <a href={`/sync/${run.job}`}>Open the run</a>
+													{/if}
+												</span>
+												{#each run.skipped as skip (skip.product)}
+													<span class="skip">
+														<span class="skip-title">{skip.title}</span>
+														<span class="skip-why">{skip.reason}</span>
+													</span>
+												{/each}
+											</div>
+										{/each}
+									{/if}
+								</div>
+							{/if}
 						</div>
-					{/if}
-				{/if}
-
-				<p class="pull-label">Send to</p>
-				<div class="mk-tiles" role="group" aria-label="Marketplaces to send to">
-					<!-- The authorable set, not every inventory: a tick mints a create
-					     job at the tick, and a marketplace this console cannot author
-					     to would take the schedule and write nothing. -->
-					{#each AUTHORABLE_PLATFORMS as inventory (inventory)}
-						{@const why =
-							gate ??
-							(standing.has(MARKETPLACE_OF[inventory])
-								? null
-								: `Connect ${SHORT_NAME[MARKETPLACE_OF[inventory]]} in the Teachouse app and a schedule can send to it.`)}
-						<!-- The reason is the tooltip and the screen-reader name rather
-						     than a line under the tile: the grid is evenly spaced and a
-						     sentence under one tile would make that column taller than
-						     the rest. -->
-						<label class="mk-tile" title={why ?? platformTitle(inventory)}>
-							<input
-								type="checkbox"
-								checked={draft.inventories.includes(inventory)}
-								disabled={why !== null}
-								onchange={(event) => tickInventory(inventory, event.currentTarget.checked)}
-							/>
-							<img class="mk-tile-mark" src={MARK_SRC[MARKETPLACE_OF[inventory]]} alt="" />
-							<span class="sr-only">
-								{platformTitle(inventory)}{why === null ? '' : ` — ${why}`}
-							</span>
-						</label>
 					{/each}
 				</div>
+			{/if}
+		</section>
 
-				<div class="disp-choice" role="radiogroup" aria-label="Draft or live">
-					{#each INTENTS as option (option.value)}
+		{#if composing}
+			<section class="flow" aria-labelledby="builder-title">
+				<div class="flow-section-head">
+					<h2 id="builder-title">{editing === null ? 'New schedule' : `Edit “${draft.name}”`}</h2>
+					<Explain title="Where a schedule runs" label="How it runs">
+						<p>{RUNS_ON_YOUR_COMPUTER}</p>
+					</Explain>
+				</div>
+				<Stepper {steps} label="Schedule steps" />
+
+				<FlowStep
+					n={1}
+					id="where"
+					title="Where"
+					hint="Choose the marketplaces to send to."
+					summary={draft.inventories.length === 0
+						? 'No marketplace chosen'
+						: draft.inventories.map((one) => SHORT_NAME[one]).join(' · ')}
+					done={draft.inventories.length > 0}
+					bind:open={whereOpen}
+				>
+					<div class="mk-tiles" role="group" aria-label="Marketplaces to send to">
+						<!-- The authorable set, not every inventory: a tick mints a create
+						     job at the tick, and a marketplace this console cannot author
+						     to would take the schedule and write nothing. -->
+						{#each AUTHORABLE_PLATFORMS as inventory (inventory)}
+							{@const why =
+								gate ??
+								(standing.has(MARKETPLACE_OF[inventory])
+									? null
+									: `Connect ${SHORT_NAME[MARKETPLACE_OF[inventory]]} in the Teachouse app first.`)}
+							<label class="mk-tile" title={why ?? platformTitle(inventory)}>
+								<input
+									type="checkbox"
+									checked={draft.inventories.includes(inventory)}
+									disabled={why !== null}
+									onchange={(event) => tickInventory(inventory, event.currentTarget.checked)}
+								/>
+								<img class="mk-tile-mark" src={MARK_SRC[MARKETPLACE_OF[inventory]]} alt="" />
+								<span class="sr-only">
+									{platformTitle(inventory)}{why === null ? '' : ` — ${why}`}
+								</span>
+							</label>
+						{/each}
+					</div>
+
+					<FlowDiagram
+						from={{ icon: 'library-big', label: 'Your resources' }}
+						to={draft.inventories.map((inventory) => ({ inventory }))}
+						rule={draftWhen}
+						empty="Set a time in step 3"
+						label="Your resources to {draft.inventories.map((one) => SHORT_NAME[one]).join(' and ') || 'no marketplace yet'}{draftWhen === null ? '' : `, ${draftWhen}`}"
+					/>
+				</FlowStep>
+
+				<FlowStep
+					n={2}
+					id="what"
+					title="What"
+					hint="Choose what to send."
+					summary={whatSummary}
+					done={draft.label === null ? draft.products.length > 0 : draft.label.trim().length > 0}
+					bind:open={whatOpen}
+				>
+					<div class="flow-choice" role="radiogroup" aria-label="What to send">
 						<button
 							type="button"
-							class="disp"
-							class:on={draft.intent === option.value}
 							role="radio"
-							aria-checked={draft.intent === option.value}
+							aria-checked={draft.label !== null}
 							disabled={gate !== null}
-							onclick={() => (draft = { ...draft, intent: option.value })}
+							onclick={() => (draft = { ...draft, label: draft.label ?? '' })}
 						>
-							<span class="disp-word">{option.word}</span>
-							<span class="disp-line">{option.line}</span>
+							Everything with a label
+							<span class="sub">Checked again at every run.</span>
 						</button>
-					{/each}
-				</div>
-
-				<div class="set-grid">
-					<Field label="Time" id="sched-time" hint={timezoneLine(draft.timezone)}>
-						<input
-							id="sched-time"
-							type="time"
+						<button
+							type="button"
+							role="radio"
+							aria-checked={draft.label === null}
 							disabled={gate !== null}
-							bind:value={draft.clock}
-						/>
-					</Field>
-
-					<Field label="Timezone" id="sched-zone">
-						<select id="sched-zone" disabled={gate !== null} bind:value={draft.timezone}>
-							{#each zones as zone (zone)}
-								<option value={zone}>{zone}</option>
-							{/each}
-						</select>
-					</Field>
-
-					<Field label="Repeat" id="sched-repeat">
-						<select
-							id="sched-repeat"
-							disabled={gate !== null}
-							value={draft.repeat}
-							onchange={(event) =>
-								(draft = {
-									...draft,
-									repeat: event.currentTarget.value as ScheduleRepeat
-								})}
+							onclick={() => (draft = { ...draft, label: null })}
 						>
-							{#each REPEATS as option (option.value)}
-								<option value={option.value}>{option.label}</option>
-							{/each}
-						</select>
-					</Field>
+							Let me choose
+							<span class="sub">Only the ones you tick.</span>
+						</button>
+					</div>
 
-					{#if draft.repeat === 'weekly'}
-						<Field label="Day" id="sched-weekday">
+					{#if draft.label !== null}
+						<div class="set-grid">
+							<Field label="Label" id="sched-label">
+								<select
+									id="sched-label"
+									disabled={gate !== null}
+									value={draft.label}
+									onchange={(event) => (draft = { ...draft, label: event.currentTarget.value })}
+								>
+									<option value="">Choose a label</option>
+									{#each labels.data ?? [] as label (label.name)}
+										<option value={label.name}>{label.name}</option>
+									{/each}
+								</select>
+							</Field>
+						</div>
+						{#if labels.isError}
+							<p class="quiet">Your labels could not be loaded. Tick resources instead.</p>
+						{/if}
+					{:else if catalogue.isPending}
+						<p class="quiet">Loading your resources…</p>
+					{:else if catalogue.isError}
+						<p class="quiet">Your resources could not be loaded.</p>
+					{:else if products.length === 0}
+						<p class="quiet">You have no resources yet.</p>
+					{:else}
+						<div class="flow-pick">
+							<div class="pick-head">
+								<input
+									type="search"
+									aria-label="Search your resources"
+									placeholder="Search resources"
+									bind:value={box}
+								/>
+								<span class="pick-count">{draft.products.length} chosen</span>
+							</div>
+							{#if shownProducts.length === 0}
+								<p class="quiet">Nothing matches that search.</p>
+							{:else}
+								<div class="pick-list">
+									{#each shownProducts as product (product.id)}
+										<label class="pick-row">
+											<input
+												type="checkbox"
+												checked={draft.products.includes(product.id)}
+												disabled={gate !== null}
+												onchange={(event) => tickProduct(product.id, event.currentTarget.checked)}
+											/>
+											<span class="pick-title">{product.title}</span>
+										</label>
+									{/each}
+								</div>
+							{/if}
+						</div>
+					{/if}
+				</FlowStep>
+
+				<FlowStep
+					n={3}
+					id="when"
+					title="When"
+					hint="Pick the time and how often."
+					summary={draftWhen ?? 'No time set'}
+					done={draftWhen !== null}
+					bind:open={whenOpen}
+				>
+					<div class="set-grid">
+						<Field label="Time" id="sched-time">
+							<input id="sched-time" type="time" disabled={gate !== null} bind:value={draft.clock} />
+						</Field>
+						<Field label="Repeat" id="sched-repeat">
 							<select
-								id="sched-weekday"
+								id="sched-repeat"
 								disabled={gate !== null}
-								value={String(draft.weekday)}
+								value={draft.repeat}
 								onchange={(event) =>
-									(draft = { ...draft, weekday: Number(event.currentTarget.value) })}
+									(draft = {
+										...draft,
+										repeat: event.currentTarget.value as ScheduleRepeat
+									})}
 							>
-								{#each WEEKDAYS as day, index (day)}
-									<option value={String(index)}>{day}</option>
+								{#each REPEATS as option (option.value)}
+									<option value={option.value}>{option.label}</option>
 								{/each}
 							</select>
 						</Field>
+						{#if draft.repeat === 'weekly'}
+							<Field label="Day" id="sched-weekday">
+								<select
+									id="sched-weekday"
+									disabled={gate !== null}
+									value={String(draft.weekday)}
+									onchange={(event) =>
+										(draft = { ...draft, weekday: Number(event.currentTarget.value) })}
+								>
+									{#each WEEKDAYS as day, index (day)}
+										<option value={String(index)}>{day}</option>
+									{/each}
+								</select>
+							</Field>
+						{/if}
+						<Field label="Timezone" id="sched-zone" hint={timezoneLine(draft.timezone)}>
+							<select id="sched-zone" disabled={gate !== null} bind:value={draft.timezone}>
+								{#each zones as zone (zone)}
+									<option value={zone}>{zone}</option>
+								{/each}
+							</select>
+						</Field>
+					</div>
+
+					<p class="flow-label">When it arrives</p>
+					<div class="flow-choice" role="radiogroup" aria-label="Draft or live">
+						{#each INTENTS as option (option.value)}
+							<button
+								type="button"
+								role="radio"
+								aria-checked={draft.intent === option.value}
+								disabled={gate !== null}
+								onclick={() => (draft = { ...draft, intent: option.value })}
+							>
+								{option.word}
+								<span class="sub">{option.line}</span>
+							</button>
+						{/each}
+					</div>
+
+					<div class="set-toggle">
+						<Toggle
+							label="Republish when a resource changes"
+							checked={draft.republishOnUpdate}
+							disabled={gate !== null || republishGate !== null}
+							onchange={(value) => (draft = { ...draft, republishOnUpdate: value })}
+						/>
+						<Explain title="Republishing and Tes" label="">
+							<p>{TES_CANNOT_REVISE}</p>
+						</Explain>
+					</div>
+					{#if republishGate !== null}
+						<Note icon="circle-alert">{republishGate}</Note>
 					{/if}
-				</div>
+				</FlowStep>
 
-				<div class="set-toggle">
-					<Toggle
-						label="When a resource changes, republish it"
-						checked={draft.republishOnUpdate}
-						disabled={gate !== null || republishGate !== null}
-						onchange={(value) => (draft = { ...draft, republishOnUpdate: value })}
-					/>
-				</div>
-				{#if republishGate !== null}
-					<Note icon="circle-alert">{republishGate}</Note>
-				{/if}
-				<Note>{TES_CANNOT_REVISE}</Note>
-
-				<div class="set-toggle">
-					<Toggle
-						label="Switched on"
-						checked={draft.enabled}
-						disabled={gate !== null}
-						onchange={(value) => (draft = { ...draft, enabled: value })}
-					/>
-				</div>
-
-				<div class="set-foot">
-					<Button
-						tier="primary"
-						icon="circle-check"
-						disabled={formRefusal !== null || saving}
-						reason={formRefusal ?? (saving ? 'The schedule is being saved.' : undefined)}
-						onclick={() => void save()}
-					>
-						{saving ? 'Saving…' : editing === null ? 'Save schedule' : 'Save changes'}
-					</Button>
-					{#if editing !== null}
-						<Button tier="quiet" onclick={cancel}>Cancel</Button>
+				<FlowStep
+					n={4}
+					id="save"
+					title="Save"
+					hint="Name it and save."
+					bind:open={saveOpen}
+				>
+					<div class="set-grid">
+						<Field label="Name" id="sched-name">
+							<input
+								id="sched-name"
+								type="text"
+								maxlength="80"
+								placeholder="Friday drop"
+								disabled={gate !== null}
+								bind:value={draft.name}
+							/>
+						</Field>
+					</div>
+					<div class="set-toggle">
+						<Toggle
+							label="Switched on"
+							checked={draft.enabled}
+							disabled={gate !== null}
+							onchange={(value) => (draft = { ...draft, enabled: value })}
+						/>
+					</div>
+					{#if refusal !== null}
+						<Banner tone="bad">{refusal}</Banner>
 					{/if}
-					{#if formRefusal !== null}
-						<Note icon="circle-alert">{formRefusal}</Note>
-					{/if}
-				</div>
 
-				{#if refusal !== null}
-					<Banner tone="bad">{refusal}</Banner>
-				{/if}
-			</Panel>
-		</div>
+					{#snippet footer()}
+						<Button
+							tier="primary"
+							icon="circle-check"
+							disabled={formRefusal !== null || saving}
+							reason={formRefusal ?? (saving ? 'The schedule is being saved.' : undefined)}
+							onclick={() => void save()}
+						>
+							{saving ? 'Saving…' : editing === null ? 'Save schedule' : 'Save changes'}
+						</Button>
+						<Button
+							tier="quiet"
+							onclick={() => {
+								cancel();
+								composing = schedules.length === 0;
+							}}
+						>
+							Cancel
+						</Button>
+						{#if formRefusal !== null}
+							<span class="sched-foot-note">{formRefusal}</span>
+						{/if}
+					{/snippet}
+				</FlowStep>
+			</section>
+		{/if}
 	</div>
 </div>
+
+<FlowActionBar>
+	<Button
+		tier="primary"
+		icon="circle-plus"
+		disabled={gate !== null}
+		reason={gate ?? undefined}
+		onclick={() => void begin(null)}
+	>
+		New schedule
+	</Button>
+</FlowActionBar>
 
 {#snippet toMarketplaces()}
 	<Button tier="outline" small href="/marketplaces">Connect on Marketplaces</Button>
@@ -711,3 +839,54 @@
 {#snippet toPlans()}
 	<Button tier="primary" small href="/settings/subscription">See plans</Button>
 {/snippet}
+
+<style>
+	.desk-only {
+		display: inline-flex;
+	}
+
+	@media (max-width: 720px) {
+		.desk-only {
+			display: none;
+		}
+	}
+
+	.sched-line {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 6px;
+		font-size: 13.5px;
+	}
+
+	.sched-what {
+		color: var(--additive);
+		font-weight: 600;
+	}
+
+	.sched-arrow {
+		color: var(--muted);
+	}
+
+	.sched-at {
+		color: var(--primary);
+		font-weight: 500;
+	}
+
+	.sched-confirm,
+	.sched-runs {
+		grid-column: 1 / -1;
+	}
+
+	.sched-foot-note {
+		color: var(--muted);
+		font-size: 13px;
+		flex: 1 1 14rem;
+	}
+
+	.set-toggle {
+		display: flex;
+		align-items: center;
+		gap: var(--s-2);
+	}
+</style>

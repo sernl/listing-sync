@@ -26,8 +26,7 @@ const DAY = 24 * HOUR;
 export const SCHEDULES_GUIDE = 'schedules';
 
 /** What the page is for, said once at the top. */
-export const WHAT_SCHEDULING_IS =
-	'Publish a set of resources to the marketplaces you choose, at a time you choose.';
+export const WHAT_SCHEDULING_IS = 'Send chosen resources to your marketplaces at a set time.';
 
 /** Where the work happens, which is the part a seller has to know: the tick
  *  is ours, the marketplace request is their own machine's. */
@@ -272,12 +271,12 @@ export function draftOf(schedule: ScheduleView): ScheduleDraft {
 
 /** Why the form cannot be saved yet, or null where it can.
  *
- * One sentence naming the one thing to do next, in the order the form is
- * filled: a seller told about the marketplaces before the name would have to
- * scroll back up past the field they had not filled. */
+ * One sentence naming the one thing to do next, in the order the steps are
+ * filled — where, what, when, then the name — so the sentence always points
+ * at the earliest step still missing something. */
 export function draftRefusal(draft: ScheduleDraft): string | null {
-	if (draft.name.trim().length === 0) {
-		return 'Give the schedule a name, so you can tell it from the others.';
+	if (draft.inventories.length === 0) {
+		return 'Choose at least one marketplace to send to.';
 	}
 	if (draft.label === null && draft.products.length === 0) {
 		return 'Choose a label, or tick the resources to send.';
@@ -285,11 +284,11 @@ export function draftRefusal(draft: ScheduleDraft): string | null {
 	if (draft.label !== null && draft.label.trim().length === 0) {
 		return 'Choose a label, or tick the resources to send.';
 	}
-	if (draft.inventories.length === 0) {
-		return 'Choose at least one marketplace to send to.';
-	}
 	if (minuteOf(draft.clock) === null) {
 		return 'Set a time of day for the schedule to run at.';
+	}
+	if (draft.name.trim().length === 0) {
+		return 'Give the schedule a name.';
 	}
 	return null;
 }

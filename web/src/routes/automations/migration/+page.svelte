@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { createQuery } from '@tanstack/svelte-query';
-	import { onMount } from 'svelte';
+	import { onMount, tick as settle } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import ActivityLog from '$lib/ActivityLog.svelte';
@@ -14,6 +14,10 @@
 		type SyncRequestHead
 	} from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
+	import Explain from '$lib/Explain.svelte';
+	import FlowDiagram from '$lib/FlowDiagram.svelte';
+	import FlowStep from '$lib/FlowStep.svelte';
+	import Icon from '$lib/Icon.svelte';
 	import Button from '$lib/Button.svelte';
 	import { anyConnectionStands } from '$lib/connection-standing';
 	import { movesReason } from '$lib/entitlement';
@@ -37,13 +41,13 @@
 		pairReason,
 		productsFromUrl
 	} from '$lib/migration-plan';
-	import Note from '$lib/Note.svelte';
 	import Pagination from '$lib/Pagination.svelte';
 	import PageHead from '$lib/PageHead.svelte';
-	import Panel from '$lib/Panel.svelte';
 	import { SHORT_NAME } from '$lib/platforms';
 	import { queryKeys } from '$lib/query';
 	import StatusPill from '$lib/StatusPill.svelte';
+	import Stepper, { type StepMark } from '$lib/Stepper.svelte';
+	import TabBar from '$lib/TabBar.svelte';
 	import {
 		AUTHORSHIP_FIRST,
 		AUTHORSHIP_HREF,
@@ -61,7 +65,7 @@
 	} from '$lib/work-delete';
 	import WorkDeleteDialog from '$lib/WorkDeleteDialog.svelte';
 	import MarketplaceList from '$lib/pages/automations/MarketplaceList.svelte';
-	import { heldSelection, marketplaceRows } from '$lib/pages/automations/marketplace-list';
+	import { marketplaceRows } from '$lib/pages/automations/marketplace-list';
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
 	import {
 		MIGRATIONS_GUIDE,
@@ -74,6 +78,7 @@
 	} from '$lib/pages/automations/migration';
 	import { MAPPINGS_HREF, PRICING_HREF } from '$lib/pages/automations/seller-rules';
 	import '$lib/pages/automations/automations.css';
+	import '$lib/flow.css';
 
 	// How many migrations one page shows. Ten, because a past migration is a
 	// heading a seller scans for the one they are looking for.
@@ -116,7 +121,6 @@
 	let connections = $state<ConnectionView[]>([]);
 	let connectionsUnread = $state(false);
 
-	let held = $state<Marketplace | null>(null);
 	let logQuery = $state('');
 
 	// The pair, and the two ends are independent: every marketplace is offered
@@ -213,9 +217,6 @@
 	// count taken from it would mean "migrations on the page you are looking
 	// at" and would read as a per-marketplace total.
 	const rows = $derived(marketplaceRows(connections));
-	// The resolved selection rather than the raw click, so the highlighted row
-	// and the card beside it cannot name different marketplaces.
-	const selected = $derived(heldSelection(rows, held));
 	// `Date.now()` inside the derivation rather than captured at init, so a
 	// label recomputes with its list instead of freezing at mount.
 	const past = $derived(migrationRows(requests, Date.now()));
@@ -487,9 +488,43 @@
 			confirming = false;
 		}
 	}
+
+	// ------------------------------------------------------------ the flow
+
+	const HISTORY_TAB = 'transfers';
+	const LOG_TAB = 'log';
+	let historyTab = $state(HISTORY_TAB);
+	const historyTabs = [
+		{ id: HISTORY_TAB, label: 'Transfers', icon: 'arrow-right-left' as const, count: null },
+		{ id: LOG_TAB, label: 'Activity', icon: 'layout-list' as const, count: null }
+	];
+
+	let whereOpen = $state(true);
+	let whatOpen = $state(true);
+	let previewOpen = $state(true);
+	let startOpen = $state(true);
+
+	const planRule = $derived(
+		plan === null
+			? DISPOSITION_WORD[disposition]
+			: `${DISPOSITION_WORD[disposition]} · ${plan.counts.will_create} to add`
+	);
+	const steps = $derived<StepMark[]>([
+		{ id: 'where', label: 'Where', done: pairRefusal === null },
+		{ id: 'what', label: 'What', done: all || ticked.size > 0 },
+		{ id: 'preview', label: 'Preview', done: plan !== null },
+		{ id: 'start', label: 'Start', done: false }
+	]);
+
+	async function previewAndShow() {
+		await preview();
+		if (plan === null) return;
+		await settle();
+		document.getElementById('step-preview')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+	}
 </script>
 
-<div class="page">
+<div class="page flow-page">
 	<PageHead
 		icon="arrow-right-left"
 		title="Migrations"
@@ -497,133 +532,124 @@
 		guide={MIGRATIONS_GUIDE}
 	/>
 
-	{#if nothingConnected}
-		<Banner tone="warn" title="No marketplace is connected" action={toDownloads}>
-			Connect a marketplace in the Teachouse app on your computer.
-		</Banner>
-	{/if}
+	<MarketplaceList
+		{rows}
+		empty="Connect a marketplace in the Teachouse app and it shows here."
+	/>
 
-	<div class="auto-body">
-		<MarketplaceList {rows} {selected} onselect={(marketplace) => (held = marketplace)}
-			empty="Connect a marketplace in the Teachouse app and it appears here." />
+	<div class="flow">
+		{#if nothingConnected}
+			<Banner tone="warn" title="No marketplace is connected" action={toDownloads}>
+				Connect a marketplace in the Teachouse app on your computer.
+			</Banner>
+		{/if}
 
-		<div class="auto-right">
-			{#if connectionsUnread}
-				<Panel title="Set up">
-					<p class="quiet">Your marketplaces could not be read, and nothing has started.</p>
-				</Panel>
-			{:else if nothingConnected}
-				<!-- The banner above already states the blocker and offers the one
-				     remedy, so this column says what the feature is rather than
-				     repeating it: two panels naming the same missing thing read as
-				     two different problems. -->
-				<Panel title="Set up">
-					<p class="quiet">{WHAT_A_MIGRATION_IS}</p>
-				</Panel>
-			{:else}
-				<Panel title="Set up">
-					<p class="migrate-lead">{WHAT_A_MIGRATION_IS}</p>
+		{#if connectionsUnread}
+			<p class="quiet">Your marketplaces could not be loaded. Nothing has started.</p>
+		{:else if !nothingConnected}
+			<Stepper {steps} label="Migration steps" />
 
-					<div class="set-grid">
-						<Field label="From" id="migrate-from">
-							<select id="migrate-from" bind:value={source}>
-								{#each sources as side (side.inventory)}
-									<option
-										value={side.inventory}
-										disabled={!side.enabled}
-										title={side.reason ?? undefined}
-									>
-										{side.label}
-									</option>
-								{/each}
-							</select>
-						</Field>
-						<Field label="To" id="migrate-to">
-							<select id="migrate-to" bind:value={target}>
-								{#each targets as side (side.inventory)}
-									<option
-										value={side.inventory}
-										disabled={!side.enabled}
-										title={side.reason ?? undefined}
-									>
-										{side.label}
-									</option>
-								{/each}
-							</select>
-						</Field>
-					</div>
+			<FlowStep
+				n={1}
+				id="where"
+				title="Where"
+				hint="Choose where from, where to, and copy or move."
+				summary="{SHORT_NAME[source]} → {SHORT_NAME[target]} · {DISPOSITION_WORD[disposition]}"
+				done={pairRefusal === null}
+				bind:open={whereOpen}
+			>
+				{#snippet aside()}
+					<Explain title="What a migration does" label="">
+						<p>{WHAT_A_MIGRATION_IS}</p>
+						<p>{DISPOSITION_LINE.sync}</p>
+						<p>{DISPOSITION_LINE.migrate}</p>
+					</Explain>
+				{/snippet}
+				<div class="set-grid">
+					<Field label="From" id="migrate-from">
+						<select id="migrate-from" bind:value={source}>
+							{#each sources as side (side.inventory)}
+								<option value={side.inventory} disabled={!side.enabled} title={side.reason ?? undefined}>
+									{side.label}
+								</option>
+							{/each}
+						</select>
+					</Field>
+					<Field label="To" id="migrate-to">
+						<select id="migrate-to" bind:value={target}>
+							{#each targets as side (side.inventory)}
+								<option value={side.inventory} disabled={!side.enabled} title={side.reason ?? undefined}>
+									{side.label}
+								</option>
+							{/each}
+						</select>
+					</Field>
+				</div>
+				{#if pairRefusal !== null}
+					<!-- Under the selects rather than only in the option's title: a
+					     `title` reaches neither a thumb nor a screen reader. -->
+					<p class="flow-warn">{pairRefusal}</p>
+				{/if}
 
-					{#if pairRefusal !== null}
-						<!-- Under the selects rather than only in the option's title: a
-						     `title` reaches neither a thumb nor a screen reader, and the
-						     pair a seller has already chosen is the one they need the
-						     reason for. -->
-						<p class="pair-refusal">{pairRefusal}</p>
-					{/if}
-
-					<div class="disp-choice" role="radiogroup" aria-label="Copy or move">
-						{#each DISPOSITIONS as option (option)}
-							<button
-								type="button"
-								class="disp"
-								class:on={disposition === option}
-								role="radio"
-								aria-checked={disposition === option}
-								onclick={() => (disposition = option)}
-							>
-								<span class="disp-word">{DISPOSITION_WORD[option]}</span>
-								<span class="disp-line">{DISPOSITION_LINE[option]}</span>
-							</button>
-						{/each}
-					</div>
-				</Panel>
-
-				<Panel title="What to move">
-					<div class="scope-choice" role="radiogroup" aria-label="What to move">
+				<div class="flow-choice" role="radiogroup" aria-label="Copy or move">
+					{#each DISPOSITIONS as option (option)}
 						<button
 							type="button"
-							class="disp"
-							class:on={all}
 							role="radio"
-							aria-checked={all}
-							onclick={() => (all = true)}
+							aria-checked={disposition === option}
+							onclick={() => (disposition = option)}
 						>
-							<span class="disp-word">All resources on {SHORT_NAME[source]}</span>
+							{DISPOSITION_WORD[option]}
+							<span class="sub">
+								{option === 'sync' ? 'The original stays.' : 'The original is removed.'}
+							</span>
 						</button>
-						<button
-							type="button"
-							class="disp"
-							class:on={!all}
-							role="radio"
-							aria-checked={!all}
-							onclick={() => (all = false)}
-						>
-							<span class="disp-word">Choose</span>
-						</button>
-					</div>
+					{/each}
+				</div>
 
-					{#if !all}
+				<FlowDiagram
+					from={{ inventory: source }}
+					to={[{ inventory: target }]}
+					rule={planRule}
+					label="{DISPOSITION_WORD[disposition]} from {SHORT_NAME[source]} to {SHORT_NAME[target]}"
+				/>
+			</FlowStep>
+
+			<FlowStep
+				n={2}
+				id="what"
+				title="What"
+				hint="Choose the resources to bring across."
+				summary={all ? `Every resource on ${SHORT_NAME[source]}` : `${ticked.size} chosen`}
+				done={all || ticked.size > 0}
+				bind:open={whatOpen}
+			>
+				<div class="flow-choice" role="radiogroup" aria-label="What to move">
+					<button type="button" role="radio" aria-checked={all} onclick={() => (all = true)}>
+						Every resource on {SHORT_NAME[source]}
+					</button>
+					<button type="button" role="radio" aria-checked={!all} onclick={() => (all = false)}>
+						Let me choose
+					</button>
+				</div>
+
+				{#if !all}
+					<div class="flow-pick">
 						{#if !pickLoaded}
 							<p class="quiet">Loading your resources…</p>
 						{:else if pickUnread && products.length === 0}
-							<Banner tone="bad" action={retryPicks}>
-								Your resources could not be read, so there is nothing to tick.
-							</Banner>
+							<Banner tone="bad" action={retryPicks}>Your resources could not be loaded.</Banner>
 						{:else if products.length === 0 && pickPage === 1}
-							<p class="quiet">Import brings your existing shop across first.</p>
+							<p class="quiet">Import your shop first, then add resources here.</p>
 						{:else}
 							{#if pickUnread}
 								<Banner tone="bad" action={retryPicks}>
-									That page of your resources could not be read, so the rows below are
-									the last ones that did.
+									That page could not be loaded. These are the last ones that did.
 								</Banner>
 							{/if}
 							<div class="pick-head">
-								<!-- "on this page", because that is what it does. The
-								     resources endpoint takes a cursor and a label and no
-								     text, so a box labelled "Search resources" would
-								     search twenty-five rows and answer "nothing" about a
-								     resource sitting on page four. -->
+								<!-- "on this page", because that is what it does: the
+								     resources endpoint takes no text. -->
 								<input
 									type="search"
 									aria-label="Filter the resources on this page"
@@ -631,28 +657,17 @@
 									bind:value={box}
 								/>
 								<label class="pick-all">
-									<input
-										type="checkbox"
-										checked={allShownTicked}
-										onchange={toggleAllShown}
-									/>
+									<input type="checkbox" checked={allShownTicked} onchange={toggleAllShown} />
 									Select these {shown.length}
 								</label>
-								<!-- The ticks that are not on this page are counted and
-								     said, because a selection that looks smaller after a
-								     page turn reads as a selection that was dropped. -->
 								<span class="pick-count" role="status" aria-live="polite">
-									{ticked.size} chosen{tickedOffPage > 0
-										? `, including ${tickedOffPage} not on this page`
-										: ''}
+									{ticked.size} chosen{tickedOffPage > 0 ? `, ${tickedOffPage} on other pages` : ''}
 								</span>
 							</div>
 
 							{#if shown.length === 0}
 								<p class="quiet">
-									{products.length === 0
-										? 'Go back for the resources before this page.'
-										: 'Nothing on this page matches that.'}
+									{products.length === 0 ? 'Go back a page.' : 'Nothing on this page matches.'}
 								</p>
 							{:else}
 								<div class="pick-list">
@@ -661,8 +676,7 @@
 											<input
 												type="checkbox"
 												checked={ticked.has(product.id)}
-												onchange={(event) =>
-													tick(product.id, event.currentTarget.checked)}
+												onchange={(event) => tick(product.id, event.currentTarget.checked)}
 											/>
 											<span class="pick-title">{product.title}</span>
 											<span class="pick-marks">
@@ -675,298 +689,318 @@
 									{/each}
 								</div>
 							{/if}
-							<!-- Turning the page changes nothing about the selection:
-							     `ticked` is keyed by resource id and the whole-shop
-							     choice is the separate option above, so neither is
-							     derived from the rows in hand. -->
 							<Pagination
 								page={pickPage}
 								hasNext={pickNext !== null}
 								busy={pickBusy}
 								label="Your resources"
 								summary={`${products.length} resources on this page`}
-								onprevious={() =>
-									void readProducts(pickCursors[pickPage - 2] ?? null, pickPage - 1)}
+								onprevious={() => void readProducts(pickCursors[pickPage - 2] ?? null, pickPage - 1)}
 								onnext={() => void readProducts(pickNext, pickPage + 1)}
 							/>
 						{/if}
-					{/if}
-				</Panel>
+					</div>
+				{/if}
+			</FlowStep>
 
-				<Panel title="Preview" description="What this would do, resource by resource.">
-					<div class="set-foot preview-foot">
-						<Button
-							tier="outline"
-							disabled={previewing || pairRefusal !== null}
-							reason={pairRefusal ?? (previewing ? 'The preview is being taken.' : undefined)}
-							onclick={() => void preview()}
-						>
-							{previewing ? 'Previewing…' : 'Preview'}
-						</Button>
-						{#if allowance !== null}
-							<Note icon="gift">
-								{allowance.line}
-								<a href="/guides/plans">Where moves come from</a>
-							</Note>
+			<FlowStep
+				n={3}
+				id="preview"
+				title="Preview"
+				hint="See what happens to each resource."
+				summary={plan === null ? 'No preview yet' : countsLine(plan.counts)}
+				done={plan !== null}
+				bind:open={previewOpen}
+			>
+				{#if planFailure !== null}
+					<Banner tone="bad">{planFailure}</Banner>
+				{:else if plan === null}
+					<p class="quiet">No preview yet.</p>
+				{:else}
+					{#if !plan.pair.allowed && plan.pair.reason !== null}
+						<Banner tone="warn" title="These two cannot be paired">{plan.pair.reason}</Banner>
+					{/if}
+					{#if plan.rows.length === 0}
+						<p class="quiet">These choices name no resources.</p>
+					{:else}
+						<p class="plan-tally">
+							<span class="tally add">{plan.counts.will_create} to add</span>
+							<span class="tally there">{plan.counts.already_there} already there</span>
+							<span class="tally blocked">{plan.counts.blocked} blocked</span>
+						</p>
+						<div class="flow-table-wrap">
+							<table class="flow-table">
+								<thead>
+									<tr><th>Resource</th><th>Result</th><th>Why</th></tr>
+								</thead>
+								<tbody>
+									{#each plan.rows as resource (resource.product)}
+										<tr>
+											<td><span class="res-name">{resource.title}</span></td>
+											<td>
+												<StatusPill
+													tone={VERDICT_TONE[resource.verdict]}
+													label={VERDICT_WORD[resource.verdict]}
+												/>
+											</td>
+											<td class="why">
+												{#if resource.reason !== null}<span>{resource.reason}</span>{/if}
+												{#if resource.remote !== null}
+													<a href={resource.remote} target="_blank" rel="noreferrer noopener" use:external>
+														Open on {SHORT_NAME[target]}
+													</a>
+												{/if}
+											</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+						<!-- A blocked row is often blocked on price or terms, which are
+						     set on their own pages; the hand-off is offered whenever
+						     anything is blocked rather than parsed out of each reason. -->
+						{#if plan.counts.blocked > 0}
+							<p class="flow-warn">
+								Blocked on price or terms?
+								<a href={PRICING_HREF}>Set prices</a> ·
+								<a href={MAPPINGS_HREF}>Set terms</a>
+							</p>
+						{/if}
+					{/if}
+				{/if}
+
+				{#snippet footer()}
+					<Button
+						tier="primary"
+						icon="eye"
+						disabled={previewing || pairRefusal !== null}
+						reason={pairRefusal ?? (previewing ? 'The preview is being taken.' : undefined)}
+						onclick={() => void previewAndShow()}
+					>
+						{previewing ? 'Previewing…' : plan === null ? 'Preview' : 'Preview again'}
+					</Button>
+					{#if allowance !== null}
+						<span class="mg-foot-note">
+							<Icon name="gift" size={14} />
+							{allowance.line}
+							<a href="/guides/plans">Where moves come from</a>
+						</span>
+					{/if}
+				{/snippet}
+			</FlowStep>
+
+			<FlowStep
+				n={4}
+				id="start"
+				title="Start"
+				hint="Start it when the preview looks right."
+				bind:open={startOpen}
+				footer={pairRefusal !== null || declared ? startFooter : undefined}
+			>
+				{#snippet aside()}
+					<Explain title="Where your files live" label="">
+						<p>{FILES_STAY_ON_YOUR_COMPUTER}</p>
+						<p><a href="/guides/your-files">Read the guide</a></p>
+					</Explain>
+				{/snippet}
+
+				{#if pairRefusal === null && !declared}
+					<!-- Only once the pair itself stands: a declaration is the writing
+					     marketplace's requirement. -->
+					<Banner tone="warn" title="Declare the copyright holder first">
+						Do this once for {SHORT_NAME[target]} before you start.
+						<Explain title="Why declare first" label="Why?" tone="warn">
+							<p>{AUTHORSHIP_FIRST}</p>
+						</Explain>
+						{#snippet action()}
+							<Button href={AUTHORSHIP_HREF} tier="primary" small>
+								Declare for {SHORT_NAME[target]}
+							</Button>
+						{/snippet}
+					</Banner>
+				{:else}
+					<p class="start-line">
+						<MarketplaceMark inventory={source} size={20} />
+						<span aria-hidden="true">→</span>
+						<MarketplaceMark inventory={target} size={20} />
+						<span>
+							{plan === null
+								? 'Preview first.'
+								: `${confirmLabel(disposition, plan.counts.will_create)}, as drafts.`}
+						</span>
+					</p>
+				{/if}
+
+				{#if refusal !== null}
+					<Banner tone="bad">{refusal}</Banner>
+				{/if}
+
+			</FlowStep>
+		{/if}
+
+		<!-- The list and the log are one page of the same read, so turning the
+		     page turns both; each has its own tab. -->
+		<section class="flow-section" aria-labelledby="history-title">
+			<div class="flow-section-head">
+				<h2 id="history-title">History</h2>
+				<!-- The filter is the endpoint's own `disposition` query, not a
+				     sieve over the page. -->
+				<Field label="Show" id="history-kind">
+					<select id="history-kind" bind:value={historyKind} onchange={narrowHistory}>
+						<option value="">Copies and moves</option>
+						<option value="sync">{DISPOSITION_WORD.sync} only</option>
+						<option value="migrate">{DISPOSITION_WORD.migrate} only</option>
+					</select>
+				</Field>
+			</div>
+			<TabBar tabs={historyTabs} bind:current={historyTab} />
+
+			{#if !requestsLoaded}
+				<p class="quiet">Loading…</p>
+			{:else if requestsUnread && requests.length === 0}
+				<Banner tone="bad" action={retryRequests}>Your transfers could not be loaded.</Banner>
+			{:else}
+				{#if requestsUnread}
+					<Banner tone="bad" action={retryRequests}>
+						That page could not be loaded. These are the last ones that did.
+					</Banner>
+				{/if}
+				{#if historyTab === LOG_TAB}
+					<ActivityLog
+						entries={log}
+						bind:query={logQuery}
+						empty={requestPage > 1 ? 'Go back a page.' : 'No transfer has run yet.'}
+					/>
+				{:else if past.length === 0}
+					<p class="quiet">
+						{requestPage > 1
+							? 'Go back a page.'
+							: historyKind !== ''
+								? `No ${DISPOSITION_WORD[historyKind].toLocaleLowerCase()} has run yet.`
+								: NO_MIGRATION_YET}
+					</p>
+				{:else}
+					<div class="work-bar">
+						<label class="work-pick-all">
+							<input
+								type="checkbox"
+								checked={allPickedHere}
+								disabled={pickable.length === 0}
+								onchange={pickPastPage}
+							/>
+							Select the {countWord(pickable.length, TRANSFERS)} on this page
+						</label>
+						{#if pickedPast.size > 0}
+							<span class="work-picked">
+								{countWord(pickedPast.size, TRANSFERS)} selected{pickedElsewhere > 0
+									? `, ${pickedElsewhere} on another page`
+									: ''}
+							</span>
+							<div class="work-bar-acts">
+								<Button small tier="quiet" icon="circle-x" onclick={() => (pickedPast = new Map())}>
+									Clear
+								</Button>
+								<Button small danger icon="trash-2" onclick={() => (deleting = pickedItems)}>
+									Delete {countWord(pickedPast.size, TRANSFERS)}
+								</Button>
+							</div>
 						{/if}
 					</div>
 
-					{#if planFailure !== null}
-						<Banner tone="bad">{planFailure}</Banner>
-					{:else if plan === null}
-						<p class="quiet">Take a preview to see what would happen to each resource.</p>
-					{:else}
-						{#if !plan.pair.allowed && plan.pair.reason !== null}
-							<Banner tone="warn" title="This pair cannot be migrated between">
-								{plan.pair.reason}
-							</Banner>
-						{/if}
-						{#if plan.rows.length === 0}
-							<p class="quiet">
-								This selection names no resources, so there is nothing to preview.
-							</p>
-						{:else}
-							<div class="plan-rows">
-								{#each plan.rows as resource (resource.product)}
-									<div class="plan-row">
-										<span class="plan-title">{resource.title}</span>
-										<StatusPill
-											tone={VERDICT_TONE[resource.verdict]}
-											label={VERDICT_WORD[resource.verdict]}
-										/>
-										<span class="plan-why">
-											{#if resource.remote !== null}
-												<a
-													href={resource.remote}
-													target="_blank"
-													rel="noreferrer noopener"
-													use:external
-												>
-													Open the listing on {SHORT_NAME[target]}
-												</a>
-											{/if}
-											{#if resource.reason !== null}
-												<span class="block">{resource.reason}</span>
-											{/if}
-										</span>
-									</div>
+					<div class="flow-table-wrap">
+						<table class="flow-table">
+							<thead>
+								<tr>
+									<th><span class="sr-only">Select</span></th>
+									<th>Transfer</th>
+									<th>Details</th>
+									<th>Status</th>
+									<th><span class="sr-only">Actions</span></th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each past as row (row.request)}
+									{@const going = retainedBadge(row.deletion)}
+									{@const refusal = deleteRefusal(row.deletion)}
+									<tr>
+										<td class="marks">
+											<input
+												type="checkbox"
+												checked={pickedPast.has(row.request)}
+												disabled={refusal !== null}
+												title={refusal ?? undefined}
+												aria-label={`Select the transfer ${pastLabel(row)}`}
+												onchange={(event) => pickPast(row, event.currentTarget.checked)}
+											/>
+										</td>
+										<td class="marks">
+											<a href={row.href} class="pair-link">
+												<MarketplaceMark inventory={row.source} size={18} />
+												<span aria-hidden="true">→</span>
+												<MarketplaceMark inventory={row.target} size={18} />
+											</a>
+										</td>
+										<td>{row.meta}</td>
+										<td class="marks">
+											<StatusPill tone={going?.tone ?? row.tone} label={going?.label ?? row.label} />
+										</td>
+										<td class="marks">
+											<Button
+												small
+												tier="quiet"
+												danger
+												icon="trash-2"
+												disabled={refusal !== null}
+												reason={refusal ?? undefined}
+												onclick={() => (deleting = [{ id: row.request, label: pastLabel(row) }])}
+											>
+												Delete
+											</Button>
+										</td>
+									</tr>
 								{/each}
-							</div>
-							<Note>{countsLine(plan.counts)}</Note>
-							<!-- A blocked row is often blocked on what the listing would
-							     cost or land under on the target, which is decided on its
-							     own screen beside a preview of the proposed figures. The
-							     hand-off is offered whenever anything is blocked rather
-							     than parsed out of each reason: this page reads verdicts,
-							     and guessing which blocker is a pricing one from its
-							     sentence would be this page deciding. -->
-							{#if plan.counts.blocked > 0}
-								<Note icon="circle-alert">
-									Blocked on price or terms?
-									<a href={PRICING_HREF}>Set target prices</a> ·
-									<a href={MAPPINGS_HREF}>Set target terms</a>
-								</Note>
-							{/if}
-						{/if}
-					{/if}
-
-					{#if pairRefusal === null && !declared}
-						<!-- Only once the pair itself stands. A declaration is the writing
-						     marketplace's requirement, and asking for one on a pair that
-						     cannot be migrated between at all named the wrong cause: the
-						     seller would go and declare, come back, and still be refused
-						     by the sentence under the select. -->
-						<Banner tone="warn" title="Declare the copyright holder first">
-							{AUTHORSHIP_FIRST}
-							{#snippet action()}
-								<Button href={AUTHORSHIP_HREF} tier="primary" small>
-									Declare copyright for {SHORT_NAME[target]}
-								</Button>
-							{/snippet}
-						</Banner>
-					{:else}
-						<div class="set-foot">
-							<Button
-								tier="primary"
-								icon="arrow-right-left"
-								disabled={confirmRefusal !== null || confirming}
-								reason={confirmRefusal ??
-									(confirming ? 'The migration is starting.' : undefined)}
-								onclick={() => void confirm()}
-							>
-								{confirming
-									? 'Starting…'
-									: confirmLabel(disposition, plan?.counts.will_create ?? 0)}
-							</Button>
-						</div>
-					{/if}
-
-					<Note icon="shield-check">
-						{FILES_STAY_ON_YOUR_COMPUTER}
-						<a href="/guides/your-files">Where your files live</a>
-					</Note>
-
-					{#if refusal !== null}
-						<Banner tone="bad">{refusal}</Banner>
-					{/if}
-				</Panel>
-			{/if}
-
-			<!-- The list and the log are one page of the same read: the log is
-			     this page's migrations said as lines, so the two cannot
-			     disagree about what the seller is looking at, and turning the
-			     page turns both. -->
-			<Panel
-				title="Your transfers"
-				description="Every transfer you have run, newest first."
-			>
-				<!-- The filter is the endpoint's own `disposition` query, not a
-				     sieve over the page: a page of ten filtered in the browser
-				     would answer "the Copies among the newest ten". -->
-				{#snippet more()}
-					<Field label="Show" id="history-kind">
-						<select id="history-kind" bind:value={historyKind} onchange={narrowHistory}>
-							<option value="">Copies and Moves</option>
-							<option value="sync">{DISPOSITION_WORD.sync} only</option>
-							<option value="migrate">{DISPOSITION_WORD.migrate} only</option>
-						</select>
-					</Field>
-				{/snippet}
-				{#if !requestsLoaded}
-					<p class="quiet">Loading…</p>
-				{:else if requestsUnread && requests.length === 0}
-					<Banner tone="bad" action={retryRequests}>
-						Your transfers could not be read, so this page cannot list them.
-					</Banner>
-				{:else}
-					{#if requestsUnread}
-						<Banner tone="bad" action={retryRequests}>
-							That page could not be read, so the transfers below are the last ones that
-							did.
-						</Banner>
-					{/if}
-					{#if past.length === 0}
-						<!-- "Nothing on this page", "nothing of this kind" and "you
-						     have never transferred a shop" are three different facts. -->
-						<p class="quiet">
-							{requestPage > 1
-								? 'Go back for the transfers before this page.'
-								: historyKind !== ''
-									? `No ${DISPOSITION_WORD[historyKind].toLocaleLowerCase()} has run yet.`
-									: NO_MIGRATION_YET}
-						</p>
-					{:else}
-						<!-- The tick for the page in hand and whatever the seller has
-						     ticked elsewhere. In the flow above the rows, because a bar
-						     pinned to a phone's viewport covers the row it acts on. -->
-						<div class="work-bar">
-							<label class="work-pick-all">
-								<input
-									type="checkbox"
-									checked={allPickedHere}
-									disabled={pickable.length === 0}
-									onchange={pickPastPage}
-								/>
-								Select the {countWord(pickable.length, TRANSFERS)} on this page
-							</label>
-							{#if pickedPast.size > 0}
-								<span class="work-picked">
-									{countWord(pickedPast.size, TRANSFERS)} selected{pickedElsewhere > 0
-										? `, ${pickedElsewhere} of them on another page`
-										: ''}
-								</span>
-								<div class="work-bar-acts">
-									<Button small tier="quiet" icon="circle-x" onclick={() => (pickedPast = new Map())}>
-										Clear selection
-									</Button>
-									<Button small danger icon="trash-2" onclick={() => (deleting = pickedItems)}>
-										Delete {countWord(pickedPast.size, TRANSFERS)}
-									</Button>
-								</div>
-							{/if}
-						</div>
-
-						{#each past as row (row.request)}
-							{@const going = retainedBadge(row.deletion)}
-							{@const refusal = deleteRefusal(row.deletion)}
-							<!-- A row rather than one whole-row anchor: it carries a tick
-							     and a Delete, and a control nested in a link is reached by
-							     the keyboard as part of the link and a press activates
-							     both. -->
-							<div class="auto-row">
-								<span class="pick">
-									<input
-										type="checkbox"
-										checked={pickedPast.has(row.request)}
-										disabled={refusal !== null}
-										title={refusal ?? undefined}
-										aria-label={`Select the transfer ${pastLabel(row)}`}
-										onchange={(event) => pickPast(row, event.currentTarget.checked)}
-									/>
-								</span>
-								<span class="who">
-									<a class="t" href={row.href}>
-										<MarketplaceMark inventory={row.source} /> →
-										<MarketplaceMark inventory={row.target} />
-									</a>
-									<span class="meta">{row.meta}</span>
-								</span>
-								<span class="mark">
-									<StatusPill tone={going?.tone ?? row.tone} label={going?.label ?? row.label} />
-								</span>
-								<span class="act">
-									<Button
-										small
-										danger
-										icon="trash-2"
-										disabled={refusal !== null}
-										reason={refusal ?? undefined}
-										onclick={() => (deleting = [{ id: row.request, label: pastLabel(row) }])}
-									>
-										Delete
-									</Button>
-								</span>
-							</div>
-						{/each}
-					{/if}
-					{#if past.length > 0 || requestPage > 1}
-						<Pagination
-							page={requestPage}
-							hasNext={requestNext !== null}
-							busy={requestsBusy}
-							label="Your transfers"
-							summary={`${past.length} transfers on this page`}
-							onprevious={() =>
-								void readRequests(requestCursors[requestPage - 2] ?? null, requestPage - 1)}
-							onnext={() => void readRequests(requestNext, requestPage + 1)}
-						/>
-					{/if}
+							</tbody>
+						</table>
+					</div>
 				{/if}
-			</Panel>
-
-			<Panel
-				title="Activity log"
-				description="What each transfer on this page did, newest first."
-			>
-				<ActivityLog
-					entries={log}
-					bind:query={logQuery}
-					empty={requestPage > 1
-						? 'Go back for the transfers before this page.'
-						: 'No transfer has run yet.'}
-				/>
-			</Panel>
-		</div>
+				{#if past.length > 0 || requestPage > 1}
+					<Pagination
+						page={requestPage}
+						hasNext={requestNext !== null}
+						busy={requestsBusy}
+						label="Your transfers"
+						summary={`${past.length} transfers on this page`}
+						onprevious={() =>
+							void readRequests(requestCursors[requestPage - 2] ?? null, requestPage - 1)}
+						onnext={() => void readRequests(requestNext, requestPage + 1)}
+					/>
+				{/if}
+			{/if}
+		</section>
 	</div>
 </div>
+
+{#snippet startFooter()}
+	<Button
+		tier="primary"
+		icon="arrow-right-left"
+		disabled={confirmRefusal !== null || confirming}
+		reason={confirmRefusal ?? (confirming ? 'The migration is starting.' : undefined)}
+		onclick={() => void confirm()}
+	>
+		{confirming ? 'Starting…' : confirmLabel(disposition, plan?.counts.will_create ?? 0)}
+	</Button>
+	{#if confirmRefusal !== null}
+		<span class="mg-foot-note">{confirmRefusal}</span>
+	{/if}
+{/snippet}
 
 {#snippet toDownloads()}
 	<Button tier="outline" small href="/marketplaces">Connect on Marketplaces</Button>
 {/snippet}
 
 <!-- Each retries the page that failed, which the read remembers apart from
-     the page on screen. Retrying the displayed page instead would clear the
-     failure without ever fetching what the seller pressed Next for. -->
+     the page on screen. -->
 {#snippet retryRequests()}
 	<Button
 		tier="outline"
@@ -993,8 +1027,7 @@
 	</Button>
 {/snippet}
 
-<!-- One dialog for a row's own Delete and for the selection's: what a seller
-     has to read before deleting a transfer is the same either way. -->
+<!-- One dialog for a row's own Delete and for the selection's. -->
 <WorkDeleteDialog
 	open={deleting !== null}
 	items={deleting ?? []}
@@ -1003,3 +1036,71 @@
 	onClose={() => (deleting = null)}
 	onsettled={settled}
 />
+
+<style>
+	.mg-foot-note {
+		display: inline-flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 6px;
+		flex: 1 1 14rem;
+		color: var(--muted);
+		font-size: 13px;
+	}
+
+	.start-line {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: var(--s-2);
+		margin: 0;
+		font-weight: 600;
+		color: var(--primary);
+	}
+
+	.plan-tally {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--s-2);
+		margin: 0;
+	}
+
+	.tally {
+		padding: 4px 12px;
+		border-radius: var(--r-pill);
+		font-size: 13px;
+		font-weight: 600;
+	}
+
+	.tally.add {
+		background: var(--accent-soft);
+		color: var(--ok-ink);
+	}
+
+	.tally.there {
+		background: var(--soon-soft);
+		color: var(--soon);
+	}
+
+	.tally.blocked {
+		background: var(--warn-soft);
+		color: var(--warn-ink);
+	}
+
+	.why {
+		color: var(--muted);
+		font-size: 12.5px;
+	}
+
+	.why a {
+		display: block;
+		color: var(--primary);
+	}
+
+	.pair-link {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		color: var(--muted);
+	}
+</style>

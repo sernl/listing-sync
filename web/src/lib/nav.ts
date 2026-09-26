@@ -110,10 +110,10 @@ export const SECTIONS: readonly NavSection[] = [
 	{
 		id: 'automations',
 		label: 'Automations',
-		hint: 'Edit tags, descriptions, titles and files across your listings.',
+		hint: 'Move, price and publish your resources, then keep them up to date.',
 		icon: 'waves-horizontal',
 		// A landing page of its own, unlike the other sections, whose rail glyph
-		// lands on their first page. `/automations` lists the three as cards, so
+		// lands on their first page. `/automations` lists the five as one path, so
 		// it is a destination `SECTION_LANDINGS` names rather than one of the
 		// items below.
 		href: '/automations',
