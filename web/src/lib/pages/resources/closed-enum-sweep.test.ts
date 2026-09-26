@@ -323,8 +323,8 @@ describe('a state this bundle has no word for', () => {
 			status: undefined
 		});
 		expect(faultsIn(chip, 'beyond')).toEqual([]);
-		expect(chip.detail).toContain('does not have a word for yet');
-		expect(chip.action).toEqual({ label: 'Open the run', href: '/sync/j1' });
+		expect(chip.detail).toContain('we do not recognise yet');
+		expect(chip.action).toEqual({ label: 'Open in Updates', href: '/sync/j1' });
 	});
 
 	it('takes one chip down rather than the row it sits in', () => {

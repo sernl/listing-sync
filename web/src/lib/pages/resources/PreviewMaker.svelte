@@ -202,7 +202,7 @@
 								onclick={(event) => event.stopPropagation()}
 								onchange={(event) => toggleMark(page, event.currentTarget.checked)}
 							/>
-							Mark
+							Watermark
 						</span>
 					{/if}
 				</label>

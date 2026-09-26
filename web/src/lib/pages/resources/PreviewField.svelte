@@ -58,7 +58,7 @@
 	 *  answer back after a 30 MB upload is the worse way to learn it. */
 	async function store(file: File) {
 		if (cap !== null && file.size > cap) {
-			refusal = `That preview is ${sizeWords(file.size)} and the limit is ${sizeWords(cap)}.`;
+			refusal = `That preview is ${sizeWords(file.size)}. The limit is ${sizeWords(cap)}.`;
 			return;
 		}
 		sending = true;
@@ -67,7 +67,7 @@
 			const landed = await api.upload(file, 'keep_whole');
 			const handle = landed.payload[0];
 			if (handle === undefined) {
-				refusal = 'That file was stored with no handle to attach.';
+				refusal = 'That file didn’t upload properly. Try again.';
 			} else {
 				onAdd(handle);
 			}
@@ -75,7 +75,7 @@
 			refusal =
 				failure instanceof ApiFailure
 					? (quotaSentence(failure.body?.errors[0]?.detail) ?? failure.message)
-					: 'The upload did not finish. Nothing was stored.';
+					: 'The upload didn’t finish, so nothing was saved. Try again.';
 		} finally {
 			sending = false;
 		}
@@ -121,7 +121,7 @@
 	<Button
 		disabled={source === null || sending}
 		reason={source === null
-			? 'Upload a PDF above and this can make a preview from it.'
+			? 'Upload a PDF first to make a preview from it.'
 			: undefined}
 		onclick={() => (making = true)}
 	>
@@ -136,7 +136,7 @@
 {#each previews as preview (preview.hash)}
 	<div class="res-line">
 		<span class="res-line-what">
-			<StatusPill tone="ok" label="stored" />
+			<StatusPill tone="ok" label="uploaded" />
 			<span class="res-line-t">{preview.name ?? 'Preview'}</span>
 		</span>
 		<Button small danger onclick={() => onRemove(preview.hash)}>Remove</Button>

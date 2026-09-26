@@ -286,11 +286,11 @@
 		void queryClient.invalidateQueries({ queryKey: queryKeys.mappings });
 		void queryClient.invalidateQueries({ queryKey: queryKeys.inventoryWork });
 		if (started.length === 1) {
-			toast('info', 'Send started.');
+			toast('info', 'Sending started.');
 			void goto(`/sync/${started[0].job}`);
 			return;
 		}
-		toast('info', `Send started on ${started.length} marketplaces.`);
+		toast('info', `Started sending to ${started.length} marketplaces.`);
 	}
 
 	/** Adds a marketplace this resource does not reach, then opens the send it is
@@ -303,7 +303,7 @@
 		try {
 			await api.addMapping(id, inventory);
 			await queryClient.invalidateQueries({ queryKey: queryKeys.mappings });
-			toast('info', `${platformTitle(inventory)} added. Choose how it is sent.`);
+			toast('info', `${platformTitle(inventory)} added. Now choose how to send it.`);
 			publishing = true;
 		} catch (failure) {
 			addRefusal =
@@ -351,7 +351,7 @@
 			await queryClient.invalidateQueries({ queryKey: queryKeys.mappings });
 			attaching = null;
 			attachUrl = '';
-			toast('info', 'Listing attached. The next sync reads it back.');
+			toast('info', 'Listing attached. Teachouse checks it on its next update.');
 		} catch (failure) {
 			attachRefusal =
 				failure instanceof ApiFailure
@@ -366,19 +366,19 @@
 		deleting = false;
 		await queryClient.invalidateQueries({ queryKey: queryKeys.products });
 		await queryClient.invalidateQueries({ queryKey: queryKeys.mappings });
-		toast('info', 'Listing deleted.');
+		toast('info', 'Resource deleted.');
 		await goto('/resources');
 	}
 </script>
 
 <div class="page resources-page">
 	{#if product.isPending || allMappings.isPending}
-		<p class="res-note">Loading the resource…</p>
+		<p class="res-note">Loading this resource…</p>
 	{:else if gone}
-		<PageHead icon="layout-list" title="Resource" description="This resource is not here." />
+		<PageHead icon="layout-list" title="Resource" description="We can’t find this resource." />
 		<Placeholder
 			icon="search"
-			headline="No such resource"
+			headline="Resource not found"
 			body="It may have been deleted."
 		>
 			{#snippet actions()}
@@ -390,10 +390,10 @@
 		     500, a dropped connection or the retry backoff all reach here, and
 		     telling a seller their resource was deleted over a bad minute is the
 		     worse of the two wrong answers. -->
-		<PageHead icon="layout-list" title="Resource" description="This resource could not be read." />
+		<PageHead icon="layout-list" title="Resource" description="This resource didn’t load." />
 		<Placeholder
 			icon="triangle-alert"
-			headline="This resource could not be read"
+			headline="This resource didn’t load"
 			body="Reload to try again."
 		>
 			{#snippet actions()}
@@ -413,7 +413,7 @@
 		/>
 		<Placeholder
 			icon="triangle-alert"
-			headline="Which marketplaces carry this resource could not be read"
+			headline="We couldn’t load where this resource is listed"
 			body="Reload to try again."
 		>
 			{#snippet actions()}
@@ -445,8 +445,8 @@
 				title={`${needing.length} ${needing.length === 1 ? 'marketplace needs' : 'marketplaces need'} you`}
 			>
 				{needing.map((chip) => platformTitle(chip.inventory)).join(', ')}. Nothing is sent to
-				{needing.length === 1 ? 'it' : 'them'} until this is cleared, and the listing already there
-				stands where it stood.
+				{needing.length === 1 ? 'it' : 'them'} until you fix this. The listing already there stays
+				as it is.
 				{#snippet action()}
 					{#if needing[0].action}
 						<Button href={needing[0].action.href}>{needing[0].action.label}</Button>
@@ -457,7 +457,7 @@
 
 		<Panel
 			title="Marketplaces"
-			description="Where this resource stands on each one."
+			description="Where this resource is listed."
 		>
 			{#snippet more()}
 				<!-- Where the listing stands overall, and whether this page is being
@@ -491,9 +491,9 @@
 			{#if attachingTo !== undefined}
 				<div class="mk-attach">
 					<Field
-						label="The listing's address"
+						label="Listing link"
 						id={`attach-${attachingTo.mapping}`}
-						hint="Where the listing already is, so later edits reach it."
+						hint="Paste the link to your existing listing so your edits reach it."
 					>
 						<input
 							id={`attach-${attachingTo.mapping}`}
@@ -506,7 +506,7 @@
 					<Button
 						tier="primary"
 						disabled={attachSending || attachUrl.trim().length === 0}
-						reason={attachUrl.trim().length === 0 ? 'Paste the listing address first.' : undefined}
+						reason={attachUrl.trim().length === 0 ? 'Paste the listing link first.' : undefined}
 						onclick={() => void attach(attachingTo.mapping)}
 					>
 						{attachSending ? 'Attaching…' : 'Attach'}
@@ -519,14 +519,14 @@
 			{#if addRefusal !== null}
 				<Banner tone="bad">{addRefusal}</Banner>
 			{/if}
-			<Note>Nothing reaches a marketplace until its send runs.</Note>
+			<Note>Nothing changes on a marketplace until you send it.</Note>
 			<Note>{DISCLAIMER}</Note>
 		</Panel>
 
 		{#if runs.length > 0}
 			<Panel
 				title="Sends"
-				description="Every run in the recent window that carried this resource."
+				description="Recent times this resource was sent."
 			>
 				{#each runs as run (run.job)}
 					<a class="res-line" href={`/sync/${run.job}`}>
@@ -537,14 +537,14 @@
 						<span class="res-line-at">{run.state === null ? 'just started' : run.state}</span>
 					</a>
 				{/each}
-				<Note>Sync holds every run, including those older than this window.</Note>
+				<Note>See older sends on the Updates page.</Note>
 			</Panel>
 		{/if}
 
 		{#if (labels.data ?? []).length > 0}
 			<Panel
 				title="Labels"
-				description="What this resource is filed under."
+				description="The labels on this resource."
 			>
 				<div class="res-chips">
 					{#each labels.data ?? [] as label (label.name)}
@@ -563,7 +563,7 @@
 		{#if (collections.data ?? []).length > 0}
 			<Panel
 				title="Collections"
-				description="The sets this resource is in."
+				description="The collections this resource is in."
 			>
 				{#each collections.data ?? [] as collection (collection.id)}
 					<a class="res-line" href={`/collections/${collection.id}`}>

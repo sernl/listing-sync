@@ -94,22 +94,22 @@ function clauseFor(
 		case 'needs_signin':
 			return 'sign-in needed';
 		case 'stranded':
-			return 'held, waiting';
+			return 'interrupted, on hold';
 		case 'in_flight':
 			return 'sending now';
 		case 'blocked':
 			return 'waiting on an answer';
 		case 'draft':
-			return 'held as a draft';
+			return 'saved as a draft';
 		case 'not_listed':
-			return mapping === undefined ? 'not one of its marketplaces' : 'never sent';
+			return mapping === undefined ? 'not added yet' : 'not sent yet';
 		default: {
 			// A state this bundle has no word for. The `never` binding fails the
 			// build when the vocabulary widens; the clause is what a seller
 			// reads on a console built before that widening, because the bundle
 			// is static and a Rust deploy does not rebuild an open page.
 			const unnamed: never = chip.state;
-			return 'in a state this app has no word for';
+			return 'status unknown, reload to update';
 		}
 	}
 }

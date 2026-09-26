@@ -93,7 +93,7 @@
 				</label>
 			</fieldset>
 		{:else}
-			<p class="res-note">TPT's own questions are still being read.</p>
+			<p class="res-note">Loading TPT’s questions…</p>
 		{/if}
 	{/if}
 

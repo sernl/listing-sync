@@ -67,7 +67,7 @@
 			{#if tile.control === 'crosslist'}
 				<Button
 					disabled={adding}
-					reason={adding ? 'A marketplace is being added.' : undefined}
+					reason={adding ? 'Wait while the marketplace is added.' : undefined}
 					onclick={() => oncrosslist?.()}
 				>
 					{addingHere ? 'Adding…' : 'Cross-list'}
@@ -75,7 +75,7 @@
 			{:else}
 				<Button
 					disabled={attachSending}
-					reason={attachSending ? 'A listing is being attached.' : undefined}
+					reason={attachSending ? 'Wait while the listing is attached.' : undefined}
 					onclick={() => onattach?.()}
 				>
 					{attachOpen ? 'Cancel' : 'Mark listed'}

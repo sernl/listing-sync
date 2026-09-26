@@ -140,7 +140,7 @@
 			fileEvent({ kind: 'stored' });
 			const landed = uploaded.payload[0];
 			if (landed === undefined) {
-				fileEvent({ kind: 'failed', sentence: 'That upload carried no file we can store.' });
+				fileEvent({ kind: 'failed', sentence: 'We couldn’t save that file. Try another one.' });
 				return;
 			}
 			// The name is the client's word: the upload sends a raw body, which
@@ -158,7 +158,7 @@
 			const replaced = await api.replaceProductFile(product, file ?? '', handle);
 			await settleFile(
 				replaced.reaches,
-				replaced.cover === undefined ? 'File replaced.' : 'File replaced, thumbnail redrawn.'
+				replaced.cover === undefined ? 'File replaced.' : 'File replaced and thumbnail updated.'
 			);
 		} catch (failure) {
 			fileEvent({ kind: 'failed', sentence: fileRefusal(failure, verb) });
@@ -172,7 +172,7 @@
 			await settleFile(
 				landed.reaches,
 				landed.thumbnail.state === 'redrawn'
-					? 'File removed, thumbnail redrawn.'
+					? 'File removed and thumbnail updated.'
 					: landed.thumbnail.state === 'retired'
 						? 'File removed, and the thumbnail with it.'
 						: 'File removed.'
@@ -231,7 +231,7 @@
 					small
 					disabled={busy(fileAction) || !swappable.ok}
 					reason={busy(fileAction)
-						? 'One file change runs at a time.'
+						? 'Wait for the current file change to finish.'
 						: swappable.ok
 							? undefined
 							: swappable.reason}
@@ -242,7 +242,7 @@
 					danger
 					disabled={busy(fileAction) || !may.ok}
 					reason={busy(fileAction)
-						? 'One file change runs at a time.'
+						? 'Wait for the current file change to finish.'
 						: may.ok
 							? undefined
 							: may.reason}
@@ -252,7 +252,7 @@
 			</span>
 			{#if mine && fileAction.kind === 'uploading'}
 				<p class="res-file-say" role="status">
-					Replacing {fileWords(file)}… {Math.round(fileAction.fraction * 100)}% sent
+					Replacing {fileWords(file)}… {Math.round(fileAction.fraction * 100)}% uploaded
 				</p>
 			{:else if mine && fileAction.kind === 'writing'}
 				<p class="res-file-say" role="status">Saving…</p>
@@ -264,12 +264,12 @@
 							{#if retiresCover(stored, file.id)}
 								{LAST_FILE_LOSES_THUMBNAIL}
 							{:else if stalesCover(stored, file.id)}
-								The thumbnail is drawn from this file, so it is redrawn from the next one.
+								Your thumbnail comes from this file, so it will be remade from the next one.
 							{/if}
 						{:else}
 							Replace {fileWords(file)} with {fileAction.chosen}?
 							{#if redrawsCover(stored, file.id)}
-								The thumbnail is drawn from this file, so it is redrawn from the new one.
+								Your thumbnail comes from this file, so it will be remade from the new one.
 							{/if}
 						{/if}
 						{reachSentence(inventories)}
@@ -287,7 +287,7 @@
 			{/if}
 		</div>
 	{:else}
-		<p class="res-note">No files recorded.</p>
+		<p class="res-note">No files yet.</p>
 	{/each}
 
 	<div class="res-file-add">
@@ -295,12 +295,12 @@
 			small
 			icon="plus"
 			disabled={busy(fileAction)}
-			reason={busy(fileAction) ? 'One file change runs at a time.' : undefined}
+			reason={busy(fileAction) ? 'Wait for the current file change to finish.' : undefined}
 			onclick={() => choose('add', null)}>Add file</Button
 		>
 		{#if fileAction.kind === 'uploading' && fileAction.file === null}
 			<span class="res-file-say" role="status"
-				>Sending… {Math.round(fileAction.fraction * 100)}%</span
+				>Uploading… {Math.round(fileAction.fraction * 100)}%</span
 			>
 		{:else if fileAction.kind === 'writing' && fileAction.file === null}
 			<span class="res-file-say" role="status">Saving…</span>
@@ -320,9 +320,9 @@
 		aria-hidden="true"
 	/>
 
-	<Note>Changing a file here changes your Resources.</Note>
+	<Note>Changing a file here updates this resource in Teachouse.</Note>
 	<Note>{fileReach ?? reachSentence(inventories)}</Note>
-	<Note>The thumbnail is drawn from the first file.</Note>
+	<Note>Your thumbnail comes from the first file.</Note>
 </div>
 
 {#if viewing !== null}

@@ -23,13 +23,13 @@ export const FILES_HREF = '/resources/files';
 export const FILES_STAY_ON_YOUR_MACHINES = 'Your files stay on your own machines.';
 
 /** What the page says in a browser, where no machine is keeping files. */
-export const BROWSER_SENTENCE = 'Files are kept on the machines running the Teachouse app.';
+export const BROWSER_SENTENCE = 'Your files are kept on the machines that run the Teachouse app.';
 
 /** What the page says when the application keeps no library at all. */
 export const NOT_KEEPING_SENTENCE = 'This machine is not keeping files.';
 
 /** The label on the setting. */
-export const KEEP_LABEL = 'Keep imported originals on this machine';
+export const KEEP_LABEL = 'Keep a copy of imported files on this machine';
 
 /** How a holder that is this very machine is named. By role rather than by
  *  name: the seller knows which machine they are sitting at, and a name read
@@ -44,7 +44,7 @@ export const PAGE_SIZE = 25;
 
 /** The confirmation before a file is removed from this machine. */
 export function removePrompt(name: string): string {
-	return `Remove "${name}" from this machine? Your listing and the marketplace copy are untouched.`;
+	return `Remove "${name}" from this machine? Your listing and the copy on the marketplace stay as they are.`;
 }
 
 /** The usage line above the list, for the machine that is keeping files. */
@@ -174,7 +174,7 @@ export function availabilityOf(file: LibraryFileView): Availability {
 }
 
 export const AVAILABILITY_LABEL: Record<Availability, string> = {
-	online: 'Reachable now',
+	online: 'Available now',
 	offline: 'Machine offline',
 	missing: 'No machine has it'
 };
@@ -228,15 +228,15 @@ export function transferSentence(label: TransferLabel): string | null {
 		case 'held':
 			return null;
 		case 'get':
-			return `${label.from} holds this file.`;
+			return `${label.from} has this file.`;
 		case 'waiting':
-			return label.on === null ? 'Waiting for a machine holding this file.' : `Waiting for ${label.on}.`;
+			return label.on === null ? 'Waiting for a machine that has this file.' : `Waiting for ${label.on} to come online.`;
 		case 'fetching':
 			return `Copying from ${label.from}…`;
 		case 'elsewhere':
-			return `${label.on} holds this file.`;
+			return `${label.on} has this file.`;
 		case 'missing':
-			return 'No machine of yours reports holding this file.';
+			return 'None of your machines has this file.';
 	}
 }
 
@@ -244,7 +244,7 @@ export function transferSentence(label: TransferLabel): string | null {
  *  the name its registration carries. */
 export function holderSentence(file: LibraryFileView, thisDevice: string | null): string {
 	if (file.holders.length === 0) {
-		return 'On no machine of yours';
+		return 'On none of your machines';
 	}
 	const names = file.holders.map((holder) =>
 		holder.device === thisDevice ? HERE : holder.name

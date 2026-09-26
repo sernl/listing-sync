@@ -55,29 +55,29 @@ export interface TabDefinition {
 }
 
 export const RESOURCE_TABS: readonly TabDefinition[] = [
-	{ id: 'all', label: 'All', hint: 'Every resource in the catalogue.', icon: 'layout-list' },
+	{ id: 'all', label: 'All', hint: 'All your resources.', icon: 'layout-list' },
 	{
 		id: 'not_listed',
 		label: 'Not listed',
-		hint: 'No marketplace holds this resource yet.',
+		hint: 'Not on any marketplace yet.',
 		icon: 'minus'
 	},
 	{
 		id: 'draft',
 		label: 'Draft',
-		hint: 'A marketplace holds it and is not showing it to buyers.',
+		hint: 'On a marketplace as a draft, not shown to buyers.',
 		icon: 'pencil'
 	},
 	{
 		id: 'listed',
 		label: 'Listed',
-		hint: 'At least one marketplace is showing it.',
+		hint: 'Shown to buyers on at least one marketplace.',
 		icon: 'circle-check'
 	},
 	{
 		id: 'attention',
 		label: 'Needs you',
-		hint: 'Overlaps the other three on purpose.',
+		hint: 'Resources that need you to act. They also appear in the other tabs.',
 		icon: 'triangle-alert'
 	}
 ];
@@ -162,8 +162,7 @@ export function countsFor(
  *  refused rather than hidden: it is a declared marketplace with no adapter,
  *  and a filter that silently omitted it would read as a marketplace we do not
  *  know about. */
-export const ETSY_REASON =
-	'Etsy is declared but has no adapter yet, so nothing can be sent to it';
+export const ETSY_REASON = 'Etsy is coming soon. You can’t send resources to it yet';
 
 export interface MarketplaceTile {
 	inventory: InventoryId;
@@ -185,7 +184,7 @@ export const MARKETPLACE_TILES: readonly MarketplaceTile[] = TILE_ORDER.map((inv
  *  the chips themselves use, so the filter and the chip never name one state
  *  two ways. */
 export const STANDING_OPTIONS: readonly { value: StandingFilter; label: string }[] = [
-	{ value: 'all', label: 'Any standing' },
+	{ value: 'all', label: 'Any status' },
 	{ value: 'attention', label: 'Needs you' },
 	...(
 		[
@@ -344,7 +343,7 @@ export const VERB_PHRASE: Record<BulkVerb, string> = {
 	delete: 'delete',
 	edit: 'edit',
 	move: 'copy or move to another marketplace',
-	price: 'set the target price for',
+	price: 'set the price on another marketplace for',
 	map_terms: 'set the licence and resource type for'
 };
 

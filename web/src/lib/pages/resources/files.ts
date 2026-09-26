@@ -120,22 +120,22 @@ export type Removable = { ok: true } | { ok: false; reason: string };
 export function replaceable(files: readonly FileView[], id: string): Removable {
 	const file = files.find((one) => one.id === id);
 	if (file === undefined) {
-		return { ok: false, reason: 'This file is no longer part of the resource.' };
+		return { ok: false, reason: 'This file isn’t part of this resource any more.' };
 	}
 	return file.role === 'cover' ? { ok: false, reason: COVER_STAYS } : { ok: true };
 }
 
 export const THUMBNAIL_STAYS =
-	'The thumbnail is drawn from the first file, so it is redrawn rather than removed.';
+	'You can’t remove the thumbnail. It comes from your first file and updates when that file changes.';
 
 export const LAST_PAYLOAD =
-	'A resource a marketplace carries keeps at least one file. Replace this one instead, or add another first.';
+	'A listed resource needs at least one file. Replace this one, or add another file first.';
 
 export const LAST_FILE_LOSES_THUMBNAIL =
-	'This is the last file, so removing it also removes the thumbnail drawn from it.';
+	'This is the last file, so the thumbnail made from it goes too.';
 
 export const COVER_STAYS =
-	'The thumbnail is drawn from the first file. Replace that file to redraw it.';
+	'Your thumbnail comes from the first file. Replace that file to change it.';
 
 /** What removing or replacing a file does to the bytes, which is nothing.
  *
@@ -143,7 +143,7 @@ export const COVER_STAYS =
  *  stored file is removed, and the create form, where an upload is taken back
  *  before the draft is made. One fact, so one wording. */
 export const STORAGE_NOT_RECLAIMED =
-	'Removing or replacing a file does not reclaim storage: the file itself stays in your storage either way.';
+	'The old file stays in your storage, so this won’t free up space.';
 
 /**
  * Whether a row's Remove is offered, and the sentence to state on the control
@@ -161,7 +161,7 @@ export function removable(
 ): Removable {
 	const file = files.find((one) => one.id === id);
 	if (file === undefined) {
-		return { ok: false, reason: 'This file is no longer part of the resource.' };
+		return { ok: false, reason: 'This file isn’t part of this resource any more.' };
 	}
 	if (file.role === 'cover') {
 		return { ok: false, reason: THUMBNAIL_STAYS };
@@ -276,10 +276,10 @@ function megabytes(bytes: number): string {
  */
 export function reachSentence(reaches: readonly InventoryId[]): string {
 	if (reaches.length === 0) {
-		return 'This resource is on no marketplace yet, so nothing else changes.';
+		return 'This resource isn’t on any marketplace yet, so nothing else changes.';
 	}
 	const named = reaches.map((inventory) => platformTitle(inventory)).join(', ');
-	return `The copy on ${named} stays exactly as it is until the next send.`;
+	return `The copy on ${named} stays as it is until you send again.`;
 }
 
 const OWN: Record<FileVerb, string> = {
@@ -296,13 +296,13 @@ export function fileRefusal(failure: unknown, verb: FileVerb): string {
 	const said = sentenceFor(failure, OWN[verb]);
 	switch (failure.code()) {
 		case 'uncaptured_transition':
-			return 'This resource is live on a platform whose edits we have not captured, so its files cannot be changed there.';
+			return 'This resource is live on a marketplace we can’t edit yet, so you can’t change its files there.';
 		case 'payload_missing':
 			return LAST_PAYLOAD;
 		case 'upload_rejected':
 			return `${said} Choose the file again.`;
 		case 'resource_missing':
-			return 'That file is no longer part of this resource. Reload to see what is.';
+			return 'That file isn’t part of this resource any more. Reload to see its current files.';
 		default:
 			return said;
 	}

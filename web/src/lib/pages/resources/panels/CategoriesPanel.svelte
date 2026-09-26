@@ -125,6 +125,6 @@
 			{/if}
 		</Field>
 	{:else}
-		<p class="res-note">The category lists are still being read.</p>
+		<p class="res-note">Loading the categories…</p>
 	{/if}
 </FormSection>

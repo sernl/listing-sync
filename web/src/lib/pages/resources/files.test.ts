@@ -158,13 +158,13 @@ describe('which files a seller may replace', () => {
 describe('what a file change says it does', () => {
 	it('states that a listed marketplace keeps its copy until the next send', () => {
 		expect(reachSentence(['Tpt', 'Tes'])).toBe(
-			'The copy on TPT (Teachers Pay Teachers), TES (Tes.com) stays exactly as it is until the next send.'
+			'The copy on TPT (Teachers Pay Teachers), TES (Tes.com) stays as it is until you send again.'
 		);
 	});
 
 	it('says so plainly when the resource is on no marketplace', () => {
 		expect(reachSentence([])).toBe(
-			'This resource is on no marketplace yet, so nothing else changes.'
+			'This resource isn’t on any marketplace yet, so nothing else changes.'
 		);
 	});
 
@@ -258,7 +258,7 @@ describe('a refused file change', () => {
 			errors: [{ code: 'uncaptured_transition', message: 'uncaptured', detail: undefined }]
 		} as never);
 		expect(fileRefusal(refused, 'replace')).toBe(
-			'This resource is live on a platform whose edits we have not captured, so its files cannot be changed there.'
+			'This resource is live on a marketplace we can’t edit yet, so you can’t change its files there.'
 		);
 	});
 
