@@ -44,6 +44,49 @@ export function stageFrom(run: ImportRunHead): RunStage {
 	}
 }
 
+/** The four steps the run page draws its progress as, in order. */
+export type ProgressStep = 'reading' | 'matching' | 'review' | 'imported';
+
+export const PROGRESS_STEPS: readonly { id: ProgressStep; label: string }[] = [
+	{ id: 'reading', label: 'Reading' },
+	{ id: 'matching', label: 'Matching' },
+	{ id: 'review', label: 'Review' },
+	{ id: 'imported', label: 'Imported' }
+];
+
+/** How many of the four steps a run has finished, from 0 to 4.
+ *
+ * Reading is finding the shop's resources and choosing among them; Matching
+ * is the device reading the chosen ones; Review is the seller's answers and
+ * confirmation; Imported is the catalogue addition. A run that paused or
+ * stopped is placed by what it had actually got through, never further: a
+ * stopped run is not drawn as imported whatever it managed to add. */
+export function progressDone(run: ImportRunHead): number {
+	const stage = stageFrom(run);
+	switch (stage) {
+		case 'waiting':
+		case 'listing':
+		case 'selecting':
+			return 0;
+		case 'reading':
+			return 1;
+		case 'reviewing':
+		case 'confirming':
+			return 2;
+		case 'committing':
+			return 3;
+		case 'done':
+			return 4;
+		case 'interrupted':
+		case 'failed': {
+			const chosen = run.execution.selected_total;
+			if (!run.execution.enumeration_complete || chosen === null) return 0;
+			if (run.execution.processed < chosen) return 1;
+			return run.execution.commit_authorised ? 3 : 2;
+		}
+	}
+}
+
 export interface StageBadge {
 	tone: PillTone;
 	label: string;
@@ -315,10 +358,12 @@ export function reviewCard(pair: ReviewPairView): ReviewCard {
 	};
 }
 
-/** The three answers a card admits, in the order the design names them. */
-export const REVIEW_SAME = 'Same resource, keep one';
-export const REVIEW_DIFFERENT = 'Different resources';
-export const REVIEW_LATER = 'Decide later';
+/** The answers a card admits. "Keep this one" is the merge (the two are the
+ *  same resource and this side survives); "Keep both" says they differ;
+ *  "Skip for now" parks the pair without holding anything else up. */
+export const REVIEW_SAME = 'Keep this one';
+export const REVIEW_DIFFERENT = 'Keep both';
+export const REVIEW_LATER = 'Skip for now';
 
 /** The fields a merge asks about, and what each is called.
  *
@@ -335,8 +380,7 @@ export const MERGE_FIELDS: readonly {
 ];
 
 /** What the merge step says above the field choices. */
-export const WHICH_SIDE_WINS =
-	'You keep one of these. Choose which one, then pick the wording for each field.';
+export const WHICH_SIDE_WINS = 'Pick the wording to keep for each field.';
 
 /** How long a merge can be undone for, said as the deadline the seller was
  *  given rather than as a policy. */

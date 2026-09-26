@@ -6,6 +6,7 @@ import {
 	itemRows,
 	pageCount,
 	pageSummary,
+	progressDone,
 	reasonLine,
 	reviewCard,
 	runBadge,
@@ -314,5 +315,35 @@ describe('the pager', () => {
 		expect(pageSummary(25, 1, 26, 'resources')).toBe('26–26 of 26 resources');
 		expect(pageSummary(0, 10, 143, 'imports')).toBe('1–10 of 143 imports');
 		expect(pageSummary(0, 0, 0, 'imports')).toBe('No imports');
+	});
+});
+
+describe('progressDone', () => {
+	function at(stage: ImportRunHead['execution']['stage'], extra: Partial<ImportRunHead['execution']> = {}, over: Partial<ImportRunHead> = {}) {
+		const run = head(over);
+		run.execution = { ...run.execution, stage, ...extra };
+		return progressDone(run);
+	}
+
+	it('places each live stage on its step', () => {
+		expect(at('discovering')).toBe(0);
+		expect(at('selecting')).toBe(0);
+		expect(at('reading')).toBe(1);
+		expect(at('reviewing')).toBe(2);
+		expect(at('committing')).toBe(2);
+		expect(at('committing', { commit_authorised: true })).toBe(3);
+		expect(at('completed', {}, { state: 'complete' })).toBe(4);
+	});
+
+	it('never draws a stopped run as imported', () => {
+		const chosen = { enumeration_complete: true, selected_total: 10, processed: 10, commit_authorised: true };
+		expect(at('failed', chosen, { state: 'failed' })).toBe(3);
+		expect(at('abandoned', chosen, { state: 'abandoned' })).toBe(3);
+	});
+
+	it('places a paused run by what it had got through', () => {
+		expect(at('interrupted')).toBe(0);
+		expect(at('interrupted', { enumeration_complete: true, selected_total: 10, processed: 4 })).toBe(1);
+		expect(at('interrupted', { enumeration_complete: true, selected_total: 10, processed: 10 })).toBe(2);
 	});
 });

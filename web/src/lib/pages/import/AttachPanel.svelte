@@ -9,6 +9,7 @@
 	import { quotaSentence } from '$lib/authoring';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
+	import Icon from '$lib/Icon.svelte';
 	import Pagination from '$lib/Pagination.svelte';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import {
@@ -245,7 +246,7 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <label
-	class="drop {over ? 'over' : ''}"
+	class="drop sh-drop {over ? 'over' : ''}"
 	for={inputId}
 	ondragover={(event) => {
 		event.preventDefault();
@@ -254,9 +255,11 @@
 	ondragleave={() => (over = false)}
 	ondrop={dropped}
 >
-	<b>{busy ? `Uploading ${sending}…` : 'Drop the files your sheet lists'}</b>
-	Drop them all at once, or choose them. We match each file to its row, and any file we cannot
-	match waits below for you to place.
+	<span class="sh-drop-icon" aria-hidden="true"><Icon name="upload" size={22} /></span>
+	<b>{busy ? `Uploading ${sending}…` : 'Drop the files here, or choose them'}</b>
+	{waiting.length === 0
+		? 'Every row has its file.'
+		: `${waiting.length} ${waiting.length === 1 ? 'row is' : 'rows are'} waiting for a file.`}
 	<input id={inputId} type="file" multiple disabled={busy} onchange={chosen} />
 </label>
 
@@ -318,51 +321,46 @@
 	{/if}
 {/if}
 
-{#each heldShown as row (rowValue(row))}
-	<div class="sh-row">
-		<span class="sh-who">
-			<span class="t">{row.title ?? row.file_name ?? rowLabel(row)}</span>
-			<span class="w">{rowLabel(row)}</span>
-		</span>
-		<span class="sh-at">
-			<StatusPill tone="ok" label="File added" />
-			<Button
-				small
-				danger
-				disabled={busy}
-				reason={busy ? 'A file is being uploaded.' : undefined}
-				onclick={() => void unbind(row)}
-			>
-				Remove
-			</Button>
-		</span>
-	</div>
-{/each}
-
-{#if held.length > PER_PAGE}
-	<Pagination
-		page={heldAt}
-		hasNext={heldAt < heldPages}
-		label="Rows with a file"
-		summary={`${pageSummary((heldAt - 1) * PER_PAGE, heldShown.length, held.length, 'rows with a file')} · Page ${heldAt} of ${heldPages}`}
-		onprevious={() => (heldPage = heldAt - 1)}
-		onnext={() => (heldPage = heldAt + 1)}
-	/>
+{#if held.length > 0 || waiting.length > 0}
+	<ul class="sh-files">
+		{#each waitingShown as row (rowValue(row))}
+			<li>
+				<span class="sh-ord" title={rowLabel(row)}>{row.ordinal}</span>
+				<span class="sh-files-what">
+					<span class="res-name">{row.title ?? row.file_name ?? rowLabel(row)}</span>
+					<span class="sh-file">
+						{row.file_name ?? 'No file named in this row. Place one by hand.'}
+					</span>
+				</span>
+				<StatusPill tone="warn" label="Waiting" />
+			</li>
+		{/each}
+		{#each heldShown as row (rowValue(row))}
+			<li>
+				<span class="sh-ord" title={rowLabel(row)}>{row.ordinal}</span>
+				<span class="sh-files-what">
+					<span class="res-name">{row.title ?? row.file_name ?? rowLabel(row)}</span>
+					{#if row.file_name !== null}<span class="sh-file">{row.file_name}</span>{/if}
+				</span>
+				<span class="sh-files-acts">
+					<StatusPill tone="ok" label="Added" />
+					<Button
+						small
+						tier="quiet"
+						danger
+						icon="x"
+						label="Remove"
+						disabled={busy}
+						reason={busy ? 'A file is being uploaded.' : undefined}
+						onclick={() => void unbind(row)}
+					>
+						Remove
+					</Button>
+				</span>
+			</li>
+		{/each}
+	</ul>
 {/if}
-
-{#each waitingShown as row (rowValue(row))}
-	<div class="sh-row">
-		<span class="sh-who">
-			<span class="t">{row.title ?? row.file_name ?? rowLabel(row)}</span>
-			<span class="w">
-				{rowLabel(row)}{row.file_name === null
-					? ' — no file named in this row, so place one by hand'
-					: ''}
-			</span>
-		</span>
-		<span class="sh-at"><StatusPill tone="warn" label="Waiting for a file" /></span>
-	</div>
-{/each}
 
 {#if waiting.length > PER_PAGE}
 	<Pagination
@@ -372,5 +370,16 @@
 		summary={`${pageSummary((waitingAt - 1) * PER_PAGE, waitingShown.length, waiting.length, 'rows waiting')} · Page ${waitingAt} of ${waitingPages}`}
 		onprevious={() => (waitingPage = waitingAt - 1)}
 		onnext={() => (waitingPage = waitingAt + 1)}
+	/>
+{/if}
+
+{#if held.length > PER_PAGE}
+	<Pagination
+		page={heldAt}
+		hasNext={heldAt < heldPages}
+		label="Rows with a file"
+		summary={`${pageSummary((heldAt - 1) * PER_PAGE, heldShown.length, held.length, 'rows with a file')} · Page ${heldAt} of ${heldPages}`}
+		onprevious={() => (heldPage = heldAt - 1)}
+		onnext={() => (heldPage = heldAt + 1)}
 	/>
 {/if}
