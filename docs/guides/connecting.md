@@ -5,15 +5,15 @@ tags: setup, desktop-app, connections
 
 # Connecting a marketplace
 
-Connect a marketplace once, then Teachouse can read your shop and send listings to it.
+Connect a marketplace once. Teachouse can then read your shop and send listings to it.
 
 ## Install the desktop app
 
 1. Open **Marketplaces** and download the app for your computer.
 2. Install it and sign in with your Teachouse account.
-3. Leave it running while an import, a migration or a schedule is going.
+3. Keep it running while an import, a move or a schedule is in progress.
 
-Tes and TPT are reached through your own browser session on your own machine, which is what the desktop app provides. There is no browser extension.
+Teachouse reaches Tes and TPT through your own browser on your own computer. The desktop app does this for you. There is no browser extension.
 
 <!-- shot: /marketplaces, the downloads panel with the app for this platform -->
 ![Downloading the desktop app](/v1/guides/images/a3a33cd254d0403925091f067c731b7ae8fff81dcafffbdd00346598bb8e4be7)
@@ -21,28 +21,28 @@ Tes and TPT are reached through your own browser session on your own machine, wh
 ## Connect a shop
 
 1. Open **Marketplaces**.
-2. Choose the marketplace and start the connection.
+2. Choose the marketplace and start connecting.
 3. Sign in to that marketplace in the window the app opens.
-4. Come back to **Marketplaces** and check the shop is listed.
+4. Go back to **Marketplaces** and check your shop is listed.
 
 <!-- shot: /marketplaces, a connected shop with its name and status -->
 ![A connected shop](/v1/guides/images/16d27f535f4f49d3533e6a64960406d78a3095be0bbab16a647b10d1b274e4e1)
 
-## Where the sign-in is kept
+## Where your sign-in is kept
 
-Your marketplace sign-in stays on your machine, in the app. Teachouse never holds your marketplace password.
+Your marketplace sign-in stays in the app on your computer. Teachouse never has your marketplace password.
 
 ## One Teachouse account per shop
 
-A shop belongs to one Teachouse account. If a shop is already connected elsewhere, disconnect it there first. See [Signing in and your account](/guides/account).
+Each shop belongs to one Teachouse account. If your shop is already connected to another account, disconnect it there first. See [Signing in and your account](/guides/account).
 
-## Withdraw a connection
+## Disconnect a shop
 
 1. Open **Marketplaces**.
 2. Choose the shop and disconnect it.
 
-Nothing new is started on that marketplace once it is disconnected. Listings already live stay live.
+Once you disconnect, Teachouse starts nothing new on that marketplace. Listings that are already live stay live.
 
 ## Check it is working
 
-Open **Account → Marketplace status** to see whether each marketplace is reachable right now. That page needs no sign-in, so you can send it to us when something looks wrong.
+Open **Account → Marketplace status** to see if each marketplace can be reached right now. You do not need to sign in to see that page, so you can send us the link when something looks wrong.

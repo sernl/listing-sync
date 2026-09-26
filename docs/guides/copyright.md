@@ -5,28 +5,28 @@ tags: setup, publishing
 
 # Who holds the copyright
 
-Tell us who holds the copyright for the work you sell. It is your own statement, and it travels with everything you publish.
+Tell us who owns the copyright for the work you sell. This is your own statement, and it goes with everything you publish.
 
-## Declare it
+## Add it
 
 1. Open **Marketplaces**.
 2. Find the authorship panel.
-3. Name the person or business that holds the copyright.
+3. Enter the person or business that owns the copyright.
 4. Save.
 
 <!-- shot: /marketplaces, the authorship panel with a saved declaration -->
-![Declaring authorship](/v1/guides/images/c9ca8891aef831d13c9b84d65b456e9bf3dc00cc714f0935957892d1f04e93f8)
+![Adding the copyright owner](/v1/guides/images/c9ca8891aef831d13c9b84d65b456e9bf3dc00cc714f0935957892d1f04e93f8)
 
-## Why it has to be there first
+## Add it before you publish
 
-Anything sent to TPT without a declaration fails. Declare it before your first publish and the failure never happens.
+TPT will not accept anything sent without it. Add it before you first publish and this never happens.
 
-## Declaring later does not resend
+## Adding it later does not resend
 
-A declaration applies to what is sent after it. Listings that already failed are not retried on their own.
+Your statement only applies to what you send after saving it. Listings that already failed are not sent again for you.
 
-1. Save the declaration.
-2. Open the failed run.
+1. Save your statement.
+2. Open the send that failed.
 3. Send those resources again.
 
 <!-- shot: /sync, a failed run ready to be sent again -->
@@ -34,8 +34,8 @@ A declaration applies to what is sent after it. Listings that already failed are
 
 ## Changing it
 
-Change the declaration whenever the answer changes, for example when you move your work into a business name. The new statement is used from the next send onward.
+Change it whenever the answer changes, for example when you start selling under a business name. Teachouse uses the new statement from your next send.
 
 ## Work you did not make
 
-Declare the holder honestly. If you sell work licensed from someone else, name the terms you sell under when you create the resource — see [Creating a resource](/guides/new-resource).
+Name the copyright owner honestly. If you sell work licensed from someone else, choose the terms you sell under when you create the resource. See [Creating a resource](/guides/new-resource).

@@ -5,42 +5,42 @@ tags: connections, publishing, desktop-app
 
 # Keeping marketplaces up to date
 
-**Updates** does two things: it pulls what a marketplace holds, and it lists every change you have sent.
+**Updates** does two things. It checks your marketplaces for changes, and it lists every change you have sent.
 
-## Turn on pulling
+## Turn on checking for changes
 
 1. Open **Automations → Updates**.
 2. Choose the marketplace.
-3. Set how often to pull and save.
+3. Choose how often to check and save.
 
-A pull asks your computer to read each listing on the marketplace, so keep the desktop app signed in.
+Checking for changes means your computer reads each listing on the marketplace, so keep the desktop app signed in.
 
 <!-- shot: /sync, the pull settings for one marketplace -->
-![Pull settings](/v1/guides/images/73301eabfaaf766e03a1e6a4f0dfc9e9e0bdcedda3440652bc04093002386a09)
+![Settings for checking changes](/v1/guides/images/73301eabfaaf766e03a1e6a4f0dfc9e9e0bdcedda3440652bc04093002386a09)
 
-## Where pulled resources arrive
+## Where changes arrive
 
-A pulled listing lands in **Catalogue → Resources**. One already in your catalogue is matched and updated rather than added twice.
+Listings brought in this way appear in **Catalogue → Resources**. If a listing is already in your catalogue, Teachouse updates it instead of adding it twice.
 
-## Published with catalogue words
+## Your wording comes first
 
-A resource published from Teachouse carries your catalogue's wording, not the marketplace's. A pull will not overwrite your wording with theirs.
+A resource you publish from Teachouse uses your wording, not the marketplace's. Checking for changes never replaces your wording with theirs.
 
-## Fills what the pull left empty
+## Empty fields are filled from your template
 
-Where a pull finds no value, your template fills the gap. Fields the pull did find are left as the marketplace has them.
+If a listing on the marketplace has a field left empty, your template fills it in. Fields the marketplace does have are kept as the marketplace has them.
 
-## Read a run
+## See what happened
 
-1. Open the run from the history list.
-2. Read the outcome for each resource.
-3. Open a resource to see each step we recorded.
+1. Open an entry from the history list.
+2. Read what happened to each resource.
+3. Open a resource to see each step.
 
-Outcomes are kept apart from steps, so a failure tells you which step it stopped at.
+The result and the steps are shown separately, so if something failed you can see which step it stopped at.
 
 <!-- shot: /sync/[id], one run's timeline with outcomes and steps -->
-![A run's timeline](/v1/guides/images/4b5e71c2bf3d615916dea5900bd8739eba5c1d11ecf0a606109dbf4a4511592b)
+![What happened, step by step](/v1/guides/images/4b5e71c2bf3d615916dea5900bd8739eba5c1d11ecf0a606109dbf4a4511592b)
 
-## When a change has more than one home
+## When a change could go to more than one marketplace
 
-Where a change could apply to more than one marketplace, the run tells you which one it used. Set the rule you want under [Mapping your words to a marketplace's](/guides/target-terms).
+If a change could apply to more than one marketplace, Teachouse tells you which one it used. To choose for yourself, set a rule in [Mapping your words to a marketplace's](/guides/target-terms).
