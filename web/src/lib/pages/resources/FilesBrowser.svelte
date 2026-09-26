@@ -144,7 +144,7 @@
 			const failed = [entries, usage, settings].find((answer) => answer.kind === 'refused');
 			local = {
 				state: 'failed',
-				detail: failed?.kind === 'refused' ? failed.detail : 'The files could not be listed.'
+				detail: failed?.kind === 'refused' ? failed.detail : 'Your files didn’t load.'
 			};
 			return;
 		}
@@ -250,7 +250,7 @@
 			toast(
 				'error',
 				answer.kind === 'refused'
-					? 'This computer would not hand that file to another application.'
+					? 'This machine couldn’t open that file in another app.'
 					: NOT_KEEPING_SENTENCE
 			);
 		}
@@ -261,20 +261,20 @@
 	 *  reads "Waiting for…" until then. */
 	async function get(hash: string, name: string) {
 		if (thisDevice === null) {
-			toast('error', 'This machine has not checked in yet, so it cannot ask for a file.');
+			toast('error', 'This machine isn’t connected yet, so it can’t get files. Try again soon.');
 			return;
 		}
 		if (local.state !== 'read') {
-			toast('error', 'Open this machine’s file library before asking it to receive files.');
+			toast('error', 'This machine’s files haven’t loaded, so it can’t receive files yet.');
 			return;
 		}
 		asking = hash;
 		try {
 			await api.wantFile(thisDevice, hash);
-			toast('info', `"${name}" will be copied to this machine from the one that holds it.`);
+			toast('info', `"${name}" will be copied to this machine.`);
 			await queryClient.invalidateQueries({ queryKey: queryKeys.library });
 		} catch (failure) {
-			toast('error', failure instanceof ApiFailure ? failure.message : 'The copy was not asked for.');
+			toast('error', failure instanceof ApiFailure ? failure.message : 'The copy wasn’t requested. Try again.');
 		} finally {
 			asking = null;
 		}
@@ -289,7 +289,7 @@
 			await api.cancelWantFile(thisDevice, hash);
 			await queryClient.invalidateQueries({ queryKey: queryKeys.library });
 		} catch (failure) {
-			toast('error', failure instanceof ApiFailure ? failure.message : 'The copy was not cancelled.');
+			toast('error', failure instanceof ApiFailure ? failure.message : 'The copy wasn’t cancelled. Try again.');
 		} finally {
 			asking = null;
 		}
@@ -306,7 +306,7 @@
 	<PageHead
 		icon="files"
 		title="Your machines' files"
-		description="Every file your machines hold, and the resources that use them."
+		description="Every file on your machines, and the resources that use it."
 		guide="your-files"
 	/>
 
@@ -318,7 +318,7 @@
 					<input
 						id="file-search"
 						type="search"
-						placeholder="Search by file, resource or digest"
+						placeholder="Search by file name or resource"
 						value={box}
 						oninput={(event) => {
 							box = event.currentTarget.value;
@@ -412,7 +412,7 @@
 			</div>
 			<details class="files-local">
 				<summary>Files saved on this machine ({local.entries.length})</summary>
-				<Note>Read directly from this app, whatever the filters above say.</Note>
+				<Note>The filters above don’t apply to this list.</Note>
 				<Field label="Search saved files" id="local-file-search">
 					<input
 						id="local-file-search"
@@ -473,9 +473,9 @@
 	<div class="res-toolbar">
 		<span class="eyebrow">
 			{#if files.isPending}
-				Reading your files
+				Loading your files
 			{:else if files.isError}
-				Nothing counted
+				Couldn’t count your files
 			{:else}
 				{countSentence(shown)}
 			{/if}
@@ -483,12 +483,12 @@
 	</div>
 
 	{#if files.isPending}
-		<p class="res-note">Reading your files…</p>
+		<p class="res-note">Loading your files…</p>
 	{:else if files.isError}
 		<Note icon="triangle-alert">
 			{files.error instanceof ApiFailure
 				? files.error.message
-				: 'The server’s file records could not be listed.'}
+				: 'Your files didn’t load. Reload to try again.'}
 		</Note>
 	{:else if rows.length === 0}
 		<Placeholder
@@ -498,7 +498,7 @@
 				? 'Go to the previous page to see earlier files.'
 				: filtersActive(filters)
 					? 'Widen the search, or choose another machine.'
-					: 'Files appear here once one of your machines keeps an import, or a resource carries one.'}
+					: 'Files show up here after an import, or when you add a file to a resource.'}
 		/>
 	{:else}
 		<div class="res-rows files-rows">
@@ -529,7 +529,7 @@
 								tier="outline"
 								small
 								disabled={opening === row.hash}
-								reason={opening === row.hash ? 'The file is being handed over.' : undefined}
+								reason={opening === row.hash ? 'Opening the file…' : undefined}
 								onclick={() => void openHere(row.hash)}
 							>
 								{opening === row.hash ? 'Opening…' : 'Open'}
@@ -539,7 +539,7 @@
 								danger
 								small
 								disabled={removing === row.hash}
-								reason={removing === row.hash ? 'The file is being removed.' : undefined}
+								reason={removing === row.hash ? 'Removing the file…' : undefined}
 								onclick={() => void remove(row.hash, row.name)}
 							>
 								{removing === row.hash ? 'Removing…' : 'Remove from this machine'}
@@ -549,17 +549,17 @@
 								tier="outline"
 								small
 								disabled={asking === row.hash}
-								reason={asking === row.hash ? 'The copy is being asked for.' : undefined}
+								reason={asking === row.hash ? 'Requesting a copy…' : undefined}
 								onclick={() => void get(row.hash, row.name)}
 							>
-								{asking === row.hash ? 'Asking…' : 'Get on this machine'}
+								{asking === row.hash ? 'Requesting…' : 'Copy to this machine'}
 							</Button>
 						{:else if row.label.kind === 'waiting' || row.label.kind === 'fetching'}
 							<Button
 								tier="quiet"
 								small
 								disabled={asking === row.hash}
-								reason={asking === row.hash ? 'The copy is being cancelled.' : undefined}
+								reason={asking === row.hash ? 'Cancelling the copy…' : undefined}
 								onclick={() => void cancel(row.hash)}
 							>
 								Cancel

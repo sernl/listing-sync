@@ -946,7 +946,7 @@ fn settled(outcome: GuideRevisionWrite) -> Result<GuideRecord, APIError> {
     match outcome {
         GuideRevisionWrite::Written(stored) => Ok(*stored),
         GuideRevisionWrite::Stale { id, revision } => Err(stale(id, revision)),
-        GuideRevisionWrite::Missing => Err(missing("no such guide")),
+        GuideRevisionWrite::Missing => Err(missing("We can't find that guide.")),
     }
 }
 
@@ -1226,7 +1226,7 @@ pub(crate) async fn delete_guide(
     match deleted {
         GuideDelete::Deleted => Ok(StatusCode::NO_CONTENT),
         GuideDelete::Stale { id, revision } => Err(stale(id, revision)),
-        GuideDelete::Missing => Err(missing("no such guide")),
+        GuideDelete::Missing => Err(missing("We can't find that guide.")),
     }
 }
 
@@ -1324,7 +1324,7 @@ async fn read_guide(state: &AppState, slug: &str) -> Result<GuideView, APIError>
         .get(slug)
         .await
         .map_err(|error| storage_fault(state, &error))?
-        .ok_or_else(|| missing("no such guide"))?;
+        .ok_or_else(|| missing("We can't find that guide."))?;
     Ok(GuideView::of(guide))
 }
 
@@ -1419,13 +1419,13 @@ pub(crate) async fn guide_image(
         .await
         .map_err(|error| storage_fault(&state, &error))?
     else {
-        return Err(missing("no such guide picture"));
+        return Err(missing("We can't find that picture."));
     };
     let bytes = BlobRepo::new(state.pool.clone(), blobs.object_store(), blobs.kek.clone())
         .get(org, hash)
         .await
         .map_err(|error| match error {
-            BlobError::Missing => missing("no such guide picture"),
+            BlobError::Missing => missing("We can't find that picture."),
             // Ours, not the reader's: the row says these bytes exist and we could
             // not produce them, which is a fault to be seen rather than a picture
             // to be reported absent.
@@ -1488,9 +1488,7 @@ pub(crate) async fn published_guides(
         .map(str::trim)
         .filter(|text| !text.is_empty());
     if text.is_some_and(|text| text.chars().count() > SEARCH_MAX_CHARS) {
-        return Err(validation(
-            "a search is at most a hundred and twenty characters",
-        ));
+        return Err(validation("Keep your search to 120 characters or fewer."));
     }
     let pattern = text.map(escape_like);
     let topic = filters
@@ -1510,7 +1508,7 @@ pub(crate) async fn published_guides(
         .map(|id| check_id(id, "a tag filter"))
         .collect::<Result<Vec<Uuid>, APIError>>()?;
     if tags.len() > TAGS_MAX {
-        return Err(validation("a listing filters on at most twenty tags"));
+        return Err(validation("Pick 20 tags or fewer."));
     }
     check_taxa(
         &state,
@@ -1569,7 +1567,7 @@ fn asked_order(sort: Option<&str>) -> Result<(GuideOrder, &'static str), APIErro
     match sort.map(str::trim).filter(|sort| !sort.is_empty()) {
         None | Some(GUIDE_SORT_TITLE) => Ok((GuideOrder::Title, GUIDE_SORT_TITLE)),
         Some(GUIDE_SORT_NEWEST) => Ok((GuideOrder::Newest, GUIDE_SORT_NEWEST)),
-        Some(_) => Err(validation("a listing is ordered by title or by newest")),
+        Some(_) => Err(validation("Sort by title or by newest.")),
     }
 }
 
@@ -1615,7 +1613,7 @@ pub(crate) async fn published_guide(
         .published_page(&slug)
         .await
         .map_err(|error| storage_fault(&state, &error))?
-        .ok_or_else(|| missing("no such guide"))?;
+        .ok_or_else(|| missing("We can't find that guide."))?;
     Ok(Json(PublishedGuideView {
         html: render(&guide.body),
         slug: guide.slug,

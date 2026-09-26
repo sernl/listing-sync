@@ -294,7 +294,7 @@
 {#snippet retryCommit()}
 	<Button
 		disabled={running}
-		reason={running ? 'A batch of rows is being created.' : undefined}
+		reason={running ? 'Adding your resources.' : undefined}
 		onclick={() => void commit()}
 	>
 		Try again
@@ -365,10 +365,10 @@
 				<option value="">Any status</option>
 				<option value="parsed">Ready</option>
 				<option value="attached">File added</option>
-				<option value="creating">Creating</option>
-				<option value="created">Created</option>
+				<option value="creating">Adding</option>
+				<option value="created">Added</option>
 				<option value="published">Published</option>
-				<option value="failed">Refused</option>
+				<option value="failed">Problem</option>
 				<option value="skipped">Left out</option>
 			</select>
 		</Field>
@@ -389,8 +389,8 @@
 	{#if matching.length === 0}
 		<p class="sh-note">
 			{reportFiltered
-				? 'No row matches what you asked for. Clear the filters to see the rest of your sheet.'
-				: 'This import holds no rows.'}
+				? 'No row matches these filters. Clear them to see the rest of your sheet.'
+				: 'This import has no rows.'}
 		</p>
 	{/if}
 {/snippet}
@@ -414,7 +414,7 @@
 			icon="layout-list"
 			back={{ href: '/import', label: 'Back to Import' }}
 			title={detail.source_name}
-			description="What your sheet said and what will be created."
+			description="What your sheet says and what we will add."
 		>
 			{#snippet aside()}
 				<StatusPill tone={shown.tone} label={shown.label} />
@@ -448,8 +448,8 @@
 		<div class="sh-figs">
 			<div class="sh-fig"><b>{detail.row_count}</b><span>rows read</span></div>
 			<div class="sh-fig"><b>{tally.attached}</b><span>files added</span></div>
-			<div class="sh-fig"><b>{detail.failed_count}</b><span>refused when read</span></div>
-			<div class="sh-fig"><b>{detail.live_count}</b><span>asked to go live</span></div>
+			<div class="sh-fig"><b>{detail.failed_count}</b><span>rows with problems</span></div>
+			<div class="sh-fig"><b>{detail.live_count}</b><span>set to publish</span></div>
 		</div>
 
 		{#each detail.warnings as warning, index (`${warning.kind}:${index}`)}
@@ -460,7 +460,7 @@
 
 		{#if stage.kind === 'parsed' && !adding}
 			<Panel
-				title="What your sheet said"
+				title="What your sheet says"
 				description="Your rows, in the order you filled them."
 			>
 				{@render reportControls()}
@@ -484,7 +484,7 @@
 				{#if stage.awaiting > 0}
 					<Button tier="primary" icon="plus" onclick={() => (adding = true)}>
 						Add the {stage.awaiting}
-						{stage.awaiting === 1 ? 'file' : 'files'} it names
+						{stage.awaiting === 1 ? 'file' : 'files'} it lists
 					</Button>
 				{:else}
 					<Button
@@ -501,10 +501,10 @@
 				<Button
 					danger
 					disabled={settling}
-					reason={settling ? 'Giving this import up.' : undefined}
+					reason={settling ? 'Cancelling this import.' : undefined}
 					onclick={() => void abandon()}
 				>
-					Give this import up
+					Cancel this import
 				</Button>
 			</div>
 			<p class="sh-note">
@@ -547,10 +547,10 @@
 				<Button
 					danger
 					disabled={settling}
-					reason={settling ? 'Giving this import up.' : undefined}
+					reason={settling ? 'Cancelling this import.' : undefined}
 					onclick={() => void abandon()}
 				>
-					Give this import up
+					Cancel this import
 				</Button>
 			</div>
 			<p class="sh-note">
@@ -579,15 +579,15 @@
 				<Button
 					danger
 					disabled={settling}
-					reason={settling ? 'Giving this import up.' : undefined}
+					reason={settling ? 'Cancelling this import.' : undefined}
 					onclick={() => void abandon()}
 				>
-					Give this import up
+					Cancel this import
 				</Button>
 			</div>
 			<p class="sh-note">{NOTHING_SENT}</p>
 		{:else if stage.kind === 'importing'}
-			<Panel title="Creating your resources">
+			<Panel title="Adding your resources">
 				<div
 					class="sh-meter"
 					role="progressbar"
@@ -605,7 +605,7 @@
 					<Button
 						tier="primary"
 						disabled={running}
-						reason={running ? 'A batch of rows is being created.' : undefined}
+						reason={running ? 'Adding your resources.' : undefined}
 						onclick={() => void commit()}
 					>
 						{running ? 'Importing…' : 'Carry on importing'}
@@ -614,12 +614,12 @@
 				<p class="sh-note">{NOTHING_SENT}</p>
 			</Panel>
 		{:else if stage.kind === 'unrecognised'}
-			<Panel title="This import is in a state we do not recognise">
+			<Panel title="We cannot show where this import is up to">
 				<p class="sh-note">{shown.line}</p>
 			</Panel>
 		{:else}
 			<Panel
-				title="What was created"
+				title="What was added"
 				description="Your rows and where each ended up."
 			>
 				{@render reportControls()}
@@ -632,18 +632,18 @@
 		<PageHead
 			icon="layout-list"
 			back={{ href: '/import', label: 'Back to Import' }}
-			title="We could not read this import"
+			title="We could not load this import"
 			description="Nothing here has been changed."
 		/>
-		<Banner tone="bad" title="We could not read this import">{BATCH_UNREAD}</Banner>
+		<Banner tone="bad" title="We could not load this import">{BATCH_UNREAD}</Banner>
 	{:else if gone}
 		<PageHead
 			icon="layout-list"
 			back={{ href: '/import', label: 'Back to Import' }}
 			title="No such import"
-			description="It may have been given up, or cleared after it expired."
+			description="It may have been cancelled, or cleared after it expired."
 		/>
 	{:else}
-		<p class="sh-lead">Reading this import…</p>
+		<p class="sh-lead">Loading this import…</p>
 	{/if}
 </div>

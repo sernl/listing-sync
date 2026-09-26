@@ -23,7 +23,7 @@ function counts(partial: Partial<Counts>): Counts {
 describe('the outcome bar', () => {
 	it('shows every present segment and no scalar verdict', () => {
 		const bar = segments(counts({ total: 10, succeeded: 4, failed: 1, queued: 5 }));
-		expect(bar.map((segment) => segment.label)).toEqual(['succeeded', 'failed', 'queued']);
+		expect(bar.map((segment) => segment.label)).toEqual(['done', 'failed', 'waiting']);
 		expect(bar.map((segment) => segment.count)).toEqual([4, 1, 5]);
 	});
 

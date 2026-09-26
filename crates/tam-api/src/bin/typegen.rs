@@ -596,6 +596,7 @@ const CAPABILITIES_TS: &str = "export interface Capabilities {
   readonly export: boolean;
   readonly devices_max: number;
   readonly ai_fills_per_month: number;
+  readonly uploads_in_flight_max: number;
   readonly support: SupportLevel;
 }
 ";

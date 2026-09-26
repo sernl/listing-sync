@@ -23,5 +23,5 @@ export function passkeyLabel(passkey: LabelledPasskey): string {
 export function passkeyReach(passkey: LabelledPasskey): string {
 	return passkey.backedUp
 		? 'Synced by your password manager, so it works on your other devices.'
-		: 'Held on the single device that made it.';
+		: 'Works only on the device that made it.';
 }

@@ -125,16 +125,16 @@
 		},
 		onSuccess: async (done: { deviceEnded: boolean; signInEnded: boolean | null }) => {
 			if (!done.deviceEnded) {
-				toast('error', 'The machine was not signed out, so it still holds its marketplace logins.');
+				toast('error', 'We could not sign this machine out. It still has your marketplace logins.');
 			} else if (done.signInEnded === false) {
 				toast(
 					'error',
-					'The machine was signed out, but its browser sign-in could not be ended. End that sign-in under Browser sign-ins above.'
+					'The machine is signed out, but its browser is still signed in. End that under Browser sign-ins above.'
 				);
 			} else {
 				toast(
 					'info',
-					'Signed out. This machine forgets its marketplace logins when it next checks in.'
+					'Signed out. The machine removes your marketplace logins the next time it goes online.'
 				);
 			}
 			await Promise.all([
@@ -143,17 +143,16 @@
 			]);
 		},
 		onError: () => {
-			toast('error', 'The machine was not signed out.');
+			toast('error', 'We could not sign this machine out. Try again.');
 		}
 	}));
 
 	function signOut(device: DeviceView, session: BrowserSession | null) {
 		const sure = confirm(
 			`Sign "${device.name}" out?\n\n` +
-				'It stops syncing and forgets its marketplace logins the next time it reaches ' +
-				'us. Until then it still holds them, because they are on that machine and ' +
-				'never on our servers. To bring it back, sign it back in from that machine: ' +
-				'signing in to Teachouse there is not enough on its own.'
+				'It stops working for your account and removes your marketplace logins the next ' +
+				'time it goes online. Until then, the logins stay on that machine. To use it again, ' +
+				'choose "Sign this machine back in" on that machine.'
 		);
 		if (sure) {
 			signingOut.mutate({ device, session });
@@ -179,7 +178,7 @@
 	const signingBackIn = createMutation(() => ({
 		mutationFn: () => machineHere.signBackIn(),
 		onSuccess: async () => {
-			toast('info', 'This machine is signed back in. Connect your marketplaces again on it.');
+			toast('info', 'This machine is signed back in. Connect your marketplaces on it again.');
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: queryKeys.devices }),
 				queryClient.invalidateQueries({ queryKey: queryKeys.connections })
@@ -216,12 +215,12 @@
 	{#if pending}
 		<p class="quiet">Loading…</p>
 	{:else if failed}
-		<p class="quiet">We could not list your machines.</p>
+		<p class="quiet">We could not load your machines.</p>
 	{:else if joined.rows.length === 0}
 		<div class="empty">
 			<p class="quiet">
-				No machine is registered yet. Install the Teachouse app on a computer or a phone and
-				sign in on it, and it appears here.
+				No machines yet. Install the Teachouse app on a computer or phone, sign in, and it
+				shows up here.
 			</p>
 			<Button tier="outline" small href="/marketplaces#downloads">Downloads</Button>
 		</div>
@@ -247,7 +246,7 @@
 								danger
 								small
 								disabled={busy(row.device)}
-								reason={busy(row.device) ? 'The sign-out is running.' : undefined}
+								reason={busy(row.device) ? 'Signing this machine out.' : undefined}
 								onclick={() => signOut(row.device, row.session)}
 							>
 								{busy(row.device) ? 'Signing out…' : 'Sign out'}
@@ -313,7 +312,7 @@
 			     seller is standing at, because only somebody at it can perform
 			     it. -->
 			<details class="history">
-				<summary>Earlier installations and sign-outs ({split.history.length})</summary>
+				<summary>Signed-out machines and old installs ({split.history.length})</summary>
 				{#each split.history as row (row.device.id)}
 					{@const here = row.device.id === machineHere.where.device?.id}
 					<div class="machine">
@@ -327,7 +326,7 @@
 										tier="outline"
 										small
 										disabled={machineHere.restoring}
-										reason={machineHere.restoring ? 'The sign-in is running.' : undefined}
+										reason={machineHere.restoring ? 'Signing this machine back in.' : undefined}
 										onclick={() => signingBackIn.mutate()}
 									>
 										{machineHere.restoring ? 'Signing in…' : SIGN_BACK_IN}
@@ -339,10 +338,10 @@
 
 						{#if row.device.wipe_outstanding}
 							<p class="warning">
-								Signed out {agoLabel(row.device.revoked_at ?? now, now)}, and this machine has
-								not checked in since, so it still holds the logins below. If it never checks
-								in again, they stay there until each marketplace expires them — we cannot
-								remove them, because we have never held them.
+								Signed out {agoLabel(row.device.revoked_at ?? now, now)}, but this machine has
+								not been online since, so it still has the logins below. If it never comes
+								back online, they stay until each marketplace ends them. We cannot remove
+								them because we never hold them.
 							</p>
 						{/if}
 

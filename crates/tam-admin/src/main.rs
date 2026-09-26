@@ -20,19 +20,29 @@
 //!        tam-admin <db-url> backfill-workflow-owners
 //!        tam-admin guides seed --dir <path> [--dry-run] [--db <url>]
 //!                              [--user <uuid> | --email <address>]
+//!        tam-admin covers repair --db <url> [--org <uuid>] [--dry-run]
+//!                                [--blob-kek-path <path> (--blob-store-root <dir> |
+//!                                 --blob-store-s3 <endpoint> --blob-store-bucket <name>
+//!                                 --blob-store-credentials <path> [--blob-store-region <r>])]
 //!
 //! The guide seed is the one command whose database is optional: `--dry-run`
 //! reads the corpus, prints what it would write and never connects, so a
 //! build lane can check the files parse without a server.
+//!
+//! `covers repair --dry-run` reads the catalogue and counts; only the real run
+//! needs the key and the object store, because only it reads files and
+//! writes covers.
 
 #![forbid(unsafe_code)]
 
+mod covers_repair;
 mod guides_seed;
 
 use std::path::PathBuf;
 
+use tam_blob_store::BackendFlags;
 use tam_storage::{GuideRepo, OperatorRepo, SessionRepo, SyncRequestRepo};
-use tam_types::{Timestamp, UserId, Uuid};
+use tam_types::{OrgId, Timestamp, UserId, Uuid};
 
 const USAGE: &str =
     "usage: tam-admin <db-url> grant  (--user <uuid> | --email <address>) [--by <who>]\n\
@@ -40,7 +50,9 @@ const USAGE: &str =
                      \x20      tam-admin <db-url> list\n\
                      \x20      tam-admin <db-url> backfill-workflow-owners\n\
                      \x20      tam-admin guides seed --dir <path> [--dry-run] [--db <url>]\n\
-                     \x20                            [--user <uuid> | --email <address>]";
+                     \x20                            [--user <uuid> | --email <address>]\n\
+                     \x20      tam-admin covers repair --db <url> [--org <uuid>] [--dry-run]\n\
+                     \x20                              [--blob-kek-path <path> <blob-store flags>]";
 
 /// What `granted_by` carries when nobody named a granter. The bootstrap grant
 /// is made from the box before any operator exists to attribute it to, and
@@ -110,6 +122,15 @@ enum Command {
         dry_run: bool,
         author: Option<Subject>,
     },
+    /// Redraws every thumbnail that is still a generated card, from the
+    /// resource's first file where this server holds it. See
+    /// [`covers_repair`].
+    CoversRepair {
+        org: Option<OrgId>,
+        dry_run: bool,
+        kek_path: Option<String>,
+        backend: Option<tam_blob_store::BlobBackend>,
+    },
 }
 
 struct Invocation {
@@ -133,8 +154,14 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     let mut dir = None;
     let mut db = None;
     let mut dry_run = false;
+    let mut org = None;
+    let mut kek_path = None;
+    let mut blob_store = BackendFlags::default();
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
+        if blob_store.accept(&argument, &mut arguments)? {
+            continue;
+        }
         match argument.as_str() {
             "--user" => user = Some(arguments.next().ok_or("--user needs a uuid argument")?),
             "--email" => email = Some(arguments.next().ok_or("--email needs an address")?),
@@ -142,6 +169,14 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
             "--dir" => dir = Some(arguments.next().ok_or("--dir needs a directory argument")?),
             "--db" => db = Some(arguments.next().ok_or("--db needs a connection url")?),
             "--dry-run" => dry_run = true,
+            "--org" => org = Some(arguments.next().ok_or("--org needs a uuid argument")?),
+            "--blob-kek-path" => {
+                kek_path = Some(
+                    arguments
+                        .next()
+                        .ok_or("--blob-kek-path needs a path argument")?,
+                );
+            }
             _ => positional.push(argument),
         }
     }
@@ -181,6 +216,34 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
                 dir: PathBuf::from(dir),
                 dry_run,
                 author: optional_subject()?,
+            },
+        });
+    }
+
+    if head == "covers" {
+        let verb = positional.get(1).map_or("", String::as_str);
+        if verb != "repair" {
+            eprintln!("{USAGE}");
+            return Err(format!("unknown covers command {verb:?}").into());
+        }
+        let org = org
+            .map(|raw| uuid::Uuid::parse_str(&raw).map(|parsed| OrgId(Uuid(*parsed.as_bytes()))))
+            .transpose()?;
+        let backend = blob_store.resolve()?;
+        if !dry_run && (kek_path.is_none() || backend.is_none()) {
+            return Err(
+                "a repair reads files and writes covers: give --blob-kek-path and the \
+                        blob-store flags, or --dry-run"
+                    .into(),
+            );
+        }
+        return Ok(Invocation {
+            db_url: db,
+            command: Command::CoversRepair {
+                org,
+                dry_run,
+                kek_path,
+                backend,
             },
         });
     }
@@ -337,6 +400,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let outcomes = guides_seed::seed(&guides, &files, author, wall_now()?).await?;
             println!("{}", guides_seed::report(&outcomes));
         }
+        Command::CoversRepair {
+            org,
+            dry_run,
+            kek_path,
+            backend,
+        } => {
+            let tenants = match org {
+                Some(org) => vec![org],
+                None => tam_storage::OrgRepo::new(pool.clone()).tenants().await?,
+            };
+            let store = match (dry_run, kek_path, backend) {
+                (false, Some(path), Some(backend)) => Some(covers_repair::Store {
+                    kek: load_kek(&path)?,
+                    backend,
+                }),
+                _ => None,
+            };
+            let tally = covers_repair::run(&pool, &tenants, store.as_ref(), wall_now()?).await?;
+            println!("{}", tally.report(dry_run));
+        }
     }
     Ok(())
+}
+
+/// The blob key-encryption key, read from a file the way `tam-server` reads
+/// it.
+fn load_kek(path: &str) -> Result<tam_secrets::Kek, Box<dyn std::error::Error>> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?.read_to_end(&mut bytes)?;
+    Ok(tam_secrets::Kek::from_bytes(&bytes)?)
 }

@@ -439,7 +439,7 @@
 		base = view;
 		if (!keeping) {
 			adopt(view);
-			said = 'This guide changed elsewhere. The stored copy is what you are editing now.';
+			said = 'Someone else changed this guide. You are now editing their saved copy.';
 			return;
 		}
 		pipeline = {
@@ -550,8 +550,8 @@
 		}
 		const leave = confirm(
 			unsaved
-				? 'This guide has changes that are not saved yet. Leave anyway?'
-				: 'The last change to this guide is unresolved. Leave anyway?'
+				? 'This guide has unsaved changes. Leave anyway?'
+				: 'The last change to this guide is not confirmed. Leave anyway?'
 		);
 		if (!leave) {
 			navigation.cancel();
@@ -650,7 +650,7 @@
 			return;
 		}
 		published(target);
-		said = sent.kind === 'publish' ? 'Published.' : 'Unpublished. Sellers now get a 404.';
+		said = sent.kind === 'publish' ? 'Published.' : 'Unpublished. Sellers can no longer see it.';
 	}
 
 	/** What a publication invalidates: every narrowing of the reader's list,
@@ -817,31 +817,31 @@
 			// can: the guide it was sent to is gone, and the revisions of the
 			// guide now at this address count somebody else's writes.
 			const which = sent.kind === 'save' ? 'save' : sent.kind;
-			return `This guide was deleted while that ${which} was in flight, and a different guide now answers to its address. Whether the ${which} reached the deleted guide first cannot be told from here, and it cannot be applied to the guide standing there now. Your text is below, unsaved.`;
+			return `This guide was deleted during that ${which}, and a different guide now uses its address. We cannot tell if the ${which} reached the deleted guide, and it cannot apply to the new one. Your text is below, unsaved.`;
 		}
 		if (sent.kind === 'save') {
 			if (landing === 'landed') {
 				return decided === 'adopt'
-					? 'That save did reach the server; the answer was lost on the way back.'
-					: 'That save reached the server. What you typed since is being saved now.';
+					? 'That save worked. Only the reply was lost.'
+					: 'That save worked. Saving what you typed since.';
 			}
 			if (landing === 'missed') {
-				return 'That save never reached the server. Your text is here and is being sent again.';
+				return 'That save did not reach the server. Sending your text again.';
 			}
 			return decided === 'conflict'
-				? 'Somebody else changed this guide while that save was in flight. Your text is kept below, unsaved.'
-				: 'Somebody else changed this guide; their copy is what you are now editing.';
+				? 'Someone else changed this guide during that save. Your text is below, unsaved.'
+				: 'Someone else changed this guide. You are now editing their copy.';
 		}
 		const what = sent.kind === 'publish' ? 'publish' : 'unpublish';
 		if (landing === 'landed') {
-			return `The ${what} did go through; the answer was lost on the way back.`;
+			return `The ${what} worked. Only the reply was lost.`;
 		}
 		if (landing === 'missed') {
 			// The revision has not moved, and a revision moves on every write,
 			// so this one demonstrably did not happen.
-			return `The ${what} was not applied: this guide is exactly as it was. Press it again when you are ready.`;
+			return `The ${what} did not happen. The guide is unchanged. Press it again when you are ready.`;
 		}
-		return `Whether that ${what} was applied is not known: this guide has changed in some other way since. Read what it holds now before deciding.`;
+		return `We cannot tell if that ${what} worked, because the guide has changed since. Check the guide before trying again.`;
 	}
 
 	/** Which explicit reconciliation press this is.
@@ -886,10 +886,10 @@
 			acknowledge(view, target);
 			adopt(view);
 			pipeline = SETTLED;
-			said = 'The stored copy is what you are editing now.';
+			said = 'You are now editing the saved copy.';
 		} catch {
 			if (press === action) {
-				toast('error', 'The stored copy could not be read, so nothing was replaced.');
+				toast('error', 'We could not load the saved copy, so nothing was replaced.');
 			}
 		} finally {
 			if (press === action) {
@@ -934,7 +934,7 @@
 					at = view.revision;
 				} catch {
 					if (press === action) {
-						toast('error', 'The stored revision could not be read, so nothing was written.');
+						toast('error', 'We could not load the saved version, so nothing was saved.');
 					}
 					return;
 				}
@@ -972,7 +972,7 @@
 		}
 		const target = held.slug;
 		const epoch = lifetime;
-		if (!confirm(`Delete “${held.title}”? The body goes with it.`)) {
+		if (!confirm(`Delete “${held.title}”? Its text is deleted too.`)) {
 			return;
 		}
 		try {
@@ -1002,7 +1002,7 @@
 				const named = refusedIdentity(failure.body);
 				if (named !== null && named.id !== held.id && !stale(epoch, target)) {
 					replaced(named, null);
-					toast('error', 'This address holds a different guide now. Nothing was deleted.');
+					toast('error', 'A different guide uses this address now. Nothing was deleted.');
 					return;
 				}
 			}
@@ -1010,9 +1010,9 @@
 				'error',
 				failure instanceof ApiFailure
 					? failure.status === 409
-						? 'This guide changed since it was read. Reload it before deleting.'
+						? 'This guide changed since you opened it. Reload, then delete it.'
 						: failure.message
-					: 'The guide was not deleted.'
+					: 'The guide was not deleted. Try again.'
 			);
 		}
 	}
@@ -1071,7 +1071,7 @@
 			if (stale(epoch, target)) {
 				// The upload is stored and reusable; what must not happen is
 				// its Markdown landing in another guide's body.
-				toast('info', 'The picture was stored, but this is another guide now.');
+				toast('info', 'The picture was uploaded, but you are on a different guide now.');
 				return;
 			}
 			const written = box;
@@ -1079,11 +1079,11 @@
 			const to = written === null ? body.length : written.selectionEnd;
 			const inserted = insertAt(body, at, to, imageMarkdown(handle));
 			applyMark({ text: inserted.text, start: inserted.caret, end: inserted.caret });
-			toast('info', 'Picture inserted. It publishes with the guide.');
+			toast('info', 'Picture added. It goes live when you publish.');
 		} catch (failure) {
 			toast(
 				'error',
-				failure instanceof ApiFailure ? failure.message : 'The picture was not stored.'
+				failure instanceof ApiFailure ? failure.message : 'The picture was not uploaded. Try again.'
 			);
 		} finally {
 			uploading = false;
@@ -1106,14 +1106,13 @@
 	/>
 
 	{#if guide.isPending}
-		<Panel><p class="quiet">Reading this guide…</p></Panel>
+		<Panel><p class="quiet">Loading this guide…</p></Panel>
 	{:else if guide.isError}
 		<Panel>
 			<Placeholder
 				icon="book-open"
-				headline="This guide could not be read"
-				body="Either nothing holds that address, or the request did not come back with an
-					answer we can act on. The guides list is the place to go from here."
+				headline="We could not load this guide"
+				body="It may not exist, or the server did not answer. Go back to the guides list."
 			/>
 		</Panel>
 	{:else if base !== null}
@@ -1163,7 +1162,7 @@
 										<span class="gd-tax">{tag.name}{tag.retired ? ' (retired)' : ''}</span>
 									</label>
 								{:else}
-									<p class="none">No tag has been made yet. The guides list makes them.</p>
+									<p class="none">No tags yet. Add them on the guides list.</p>
 								{/each}
 							</div>
 						</Menu>
@@ -1201,7 +1200,7 @@
 					</button>
 					<label class="gd-md-b" aria-disabled={uploading}>
 						<Icon name="image" size={14} />
-						{uploading ? 'Storing…' : 'Upload'}
+						{uploading ? 'Uploading…' : 'Upload'}
 						<input
 							class="sr-only"
 							type="file"
@@ -1219,7 +1218,7 @@
 					bind:this={box}
 					bind:value={body}
 					spellcheck="true"
-					placeholder="Markdown. Headings, lists, tables, links and pictures; raw HTML is escaped rather than rendered."
+					placeholder="Write in Markdown: headings, lists, tables, links and pictures. HTML shows as plain text."
 				></textarea>
 
 				{#if halt !== null}
@@ -1229,12 +1228,11 @@
 					     sent twice. -->
 					<div class="gd-halt" class:bad={halt.why === 'conflict' || halt.why === 'replaced'}>
 						{#if halt.why === 'replaced'}
-							<p class="t">This guide is gone; another one holds its address</p>
+							<p class="t">This guide was deleted, and another now uses its address</p>
 							<p>
-								The guide you were editing was deleted, and a different guide was created at
+								The guide you were editing was deleted, and a new guide was created at
 								/guides/{slug}{halt.now === null ? '' : `, now at revision ${halt.now.revision}`}.
-								Nothing of yours has been sent to it and nothing of yours has been overwritten:
-								your text is still in the box above.
+								None of your text was sent to it or overwritten. It is still in the box above.
 							</p>
 							{#if halt.write !== null}
 								<!-- Stated as unknown and left there. The guide that write was
@@ -1242,14 +1240,13 @@
 								     say whether it landed, and the revisions of the guide
 								     standing at this address count somebody else's writes. -->
 								<p>
-									Whether that {halt.write.kind === 'save' ? 'save' : halt.write.kind} reached the
-									deleted guide before it went is not something this page can find out, and it
-									cannot be applied to the guide that is here now.
+									We cannot tell if that {halt.write.kind === 'save' ? 'save' : halt.write.kind}
+									reached the deleted guide, and it cannot apply to the new one.
 								</p>
 							{/if}
 							<p>
-								Copy anything you need out of the box first. Loading what is stored here replaces
-								your text with the other guide's.
+								Copy anything you need from the box first. Loading the new guide replaces your
+								text.
 							</p>
 							<div class="gd-halt-acts">
 								<!-- No "keep mine" here, deliberately: there is no revision of
@@ -1259,20 +1256,20 @@
 								<Button
 									small
 									disabled={acting}
-									reason={acting ? 'Reading this guide.' : undefined}
+									reason={acting ? 'Loading this guide.' : undefined}
 									onclick={() => void takeTheirs()}
 								>
-									Load the guide stored here, discarding mine
+									Load the new guide and discard my text
 								</Button>
 								<Button small tier="outline" onclick={() => void goto('/admin/guides')}>
 									Leave this address
 								</Button>
 							</div>
 						{:else if halt.why === 'conflict'}
-							<p class="t">This guide changed underneath that write</p>
+							<p class="t">Someone else changed this guide</p>
 							<p>
-								The server holds revision {halt.at ?? 'unknown'}, which is not the one that write
-								was sent against. Your text is still here and nothing local has been overwritten.
+								The server has revision {halt.at ?? 'unknown'}, not the one you were editing. Your
+								text is still here and nothing was overwritten.
 							</p>
 							{#if halt.write.kind !== 'save'}
 								<!-- Two different things to say, and only one of them is ever
@@ -1283,9 +1280,9 @@
 									{#if halt.applied === 'refused'}
 										The {halt.write.kind === 'publish' ? 'publish' : 'unpublish'} did not happen.
 									{:else}
-										Whether the {halt.write.kind === 'publish' ? 'publish' : 'unpublish'} applied
-										is not known: this guide has changed in some other way since it was sent.
-										What sellers can read now is what the stored copy says.
+										We cannot tell if the {halt.write.kind === 'publish' ? 'publish' : 'unpublish'}
+										worked, because the guide has changed since. Sellers see what the saved copy
+										says.
 									{/if}
 								</p>
 							{/if}
@@ -1293,10 +1290,10 @@
 								<Button
 									small
 									disabled={acting}
-									reason={acting ? 'Reading this guide.' : undefined}
+									reason={acting ? 'Loading this guide.' : undefined}
 									onclick={() => void takeTheirs()}
 								>
-									Load the stored copy, discarding mine
+									Load the saved copy and discard my text
 								</Button>
 								{#if halt.write.kind === 'save'}
 									<!-- Offered for a save only. Writing a publication over
@@ -1307,45 +1304,43 @@
 										small
 										tier="primary"
 										disabled={acting}
-										reason={acting ? 'Reading this guide.' : undefined}
+										reason={acting ? 'Loading this guide.' : undefined}
 										onclick={() => void keepMine()}
 									>
-										Keep my text, written over theirs
+										Keep my text and overwrite theirs
 									</Button>
 								{/if}
 							</div>
 						{:else if halt.why === 'unconfirmed'}
-							<p class="t">Reading this guide back</p>
+							<p class="t">Checking whether that worked</p>
 							<p>
-								That {halt.write.kind === 'save' ? 'save' : halt.write.kind} did not come back with
-								an answer, so whether it was stored is unknown. Nothing further is sent until the
-								guide itself says. Attempt {halt.reads + 1}.
+								That {halt.write.kind === 'save' ? 'save' : halt.write.kind} got no reply, so we
+								are checking the guide before sending anything else. Attempt {halt.reads + 1}.
 							</p>
 						{:else if halt.why === 'unreachable'}
-							<p class="t">The server cannot be reached</p>
+							<p class="t">We cannot reach the server</p>
 							<p>
 								That {halt.write.kind === 'save' ? 'save' : halt.write.kind} may or may not have
-								been stored, and the read that would settle it failed too. Your text is here and
-								is not saved. Keep this tab open.
+								worked, and we could not check. Your text is here but not saved. Keep this tab
+								open.
 							</p>
 							<div class="gd-halt-acts">
 								<Button
 									small
 									tier="primary"
 									disabled={acting}
-									reason={acting ? 'Reading this guide.' : undefined}
+									reason={acting ? 'Loading this guide.' : undefined}
 									onclick={() => void checkAgain()}
 								>
 									Check again
 								</Button>
 							</div>
 						{:else}
-							<p class="t">The server refused that write</p>
+							<p class="t">The server refused that change</p>
 							<p>{halt.message}</p>
 							{#if halt.write.edit !== null}
 								<p>
-									Change something above and it is sent again; the same text would be refused
-									again.
+									Edit the text above to send it again. The same text would be refused again.
 								</p>
 							{:else}
 								<div class="gd-halt-acts">
@@ -1366,12 +1361,12 @@
 						disabled={refusal !== null || !unsaved || busy || halt !== null}
 						reason={refusal ??
 							(halt !== null
-								? 'The last write is unresolved.'
+								? 'Resolve the message above first.'
 								: busy
-									? 'A write is in flight.'
+									? 'Wait for the current change to finish.'
 									: unsaved
 										? undefined
-										: 'Nothing has changed since the last save.')}
+										: 'No changes to save.')}
 						onclick={() => void write('save')}
 					>
 						{busy && pipeline.flight?.kind === 'save' ? 'Saving…' : 'Save'}
@@ -1380,11 +1375,11 @@
 						<Button
 							disabled={busy || halt !== null || unsaved}
 							reason={unsaved
-								? 'Save first: publishing sends the saved guide, not the buffer.'
+								? 'Save first. Publishing uses the saved version.'
 								: halt !== null
-									? 'The last write is unresolved.'
+									? 'Resolve the message above first.'
 									: busy
-										? 'A write is in flight.'
+										? 'Wait for the current change to finish.'
 										: undefined}
 							onclick={() => void write('publish')}
 						>
@@ -1394,11 +1389,11 @@
 							danger
 							disabled={busy || halt !== null || unsaved}
 							reason={unsaved
-								? 'Save first, so what is withdrawn is what you have.'
+								? 'Save first, then unpublish.'
 								: halt !== null
-									? 'The last write is unresolved.'
+									? 'Resolve the message above first.'
 									: busy
-										? 'A write is in flight.'
+										? 'Wait for the current change to finish.'
 										: undefined}
 							onclick={() => void write('unpublish')}
 						>
@@ -1409,11 +1404,11 @@
 							tier="additive"
 							disabled={busy || halt !== null || unsaved}
 							reason={unsaved
-								? 'Save first: publishing sends the saved guide, not the buffer.'
+								? 'Save first. Publishing uses the saved version.'
 								: halt !== null
-									? 'The last write is unresolved.'
+									? 'Resolve the message above first.'
 									: busy
-										? 'A write is in flight.'
+										? 'Wait for the current change to finish.'
 										: undefined}
 							onclick={() => void write('publish')}
 						>
@@ -1425,15 +1420,15 @@
 				</div>
 				<p class="gd-state">
 					{#if base.status === 'published' && publishedBehind}
-						Published, with saved changes sellers cannot see yet: they read the copy published at
-						{utcInstant(base.published?.published_at ?? base.updated_at)}. Publish this revision to
-						give them the saved one.
+						Published, but sellers cannot see your saved changes yet. They see the version published
+						at {utcInstant(base.published?.published_at ?? base.updated_at)}. Publish this revision to
+						update it.
 					{:else if base.status === 'published'}
-						Published — every signed-in seller reads this at /guides/{slug}.
+						Published. Signed-in sellers read this at /guides/{slug}.
 					{:else}
-						A draft. The reader's routes 404 it, so nobody but an operator can read it.
+						Draft. Only operators can read it.
 					{/if}
-					Revision {base.revision}, last stored {utcInstant(base.updated_at)}.
+					Revision {base.revision}, last saved {utcInstant(base.updated_at)}.
 				</p>
 			</Panel>
 
@@ -1455,7 +1450,7 @@
 				     the published page could disagree. Raw HTML is escaped during
 				     that rendering, which is what makes `{@html}` safe here. -->
 				{#if preview.html === null}
-					<p class="quiet">Rendering this guide…</p>
+					<p class="quiet">Loading preview…</p>
 				{:else}
 					<div class="guide-body" class:gd-stale={!previewing}>
 						{@html preview.html}
@@ -1463,13 +1458,12 @@
 				{/if}
 				<p class="foot-note">
 					{#if previewing}
-						This is the body above, rendered by the server exactly as a seller will see it.
+						This is exactly how sellers will see the text above.
 					{:else if preview.state === 'failed'}
-						The rendering of what is above could not be read, so this is an older one. It is not
-						what the body above says.
+						We could not update the preview, so this is an older version. It does not match the
+						text above.
 					{:else}
-						Rendering what is above. Until it arrives this is an older rendering, not the current
-						one.
+						Updating the preview. Until then, this is an older version.
 					{/if}
 					{#if remoteImages}
 						{IMAGE_PRIVACY}

@@ -130,20 +130,20 @@ export function draftFormOf(draft: DraftInput): TptDraft {
 export function refusalOf(form: TemplateForm): string | null {
 	const name = form.name.trim();
 	if (name.length === 0) {
-		return 'Give the template a name, so you can tell it from the others.';
+		return 'Give the template a name.';
 	}
 	if ([...name].length > NAME_MAX) {
-		return `A name is at most ${NAME_MAX} characters.`;
+		return `Keep the name to ${NAME_MAX} characters or fewer.`;
 	}
 	if (/\p{Cc}/u.test(name)) {
-		return 'A name cannot contain a line break or other hidden character.';
+		return 'Remove the line break or hidden character from the name.';
 	}
 	if ([...form.description.trim()].length > DESCRIPTION_MAX) {
-		return `A description is at most ${DESCRIPTION_MAX} characters.`;
+		return `Keep the template note to ${DESCRIPTION_MAX} characters or fewer.`;
 	}
 	const draft = form.draft;
 	if (!draft.free && draft.price.trim().length > 0 && minorUnitsOf(draft.price) === null) {
-		return 'A price is a number of dollars and cents, like 4.50.';
+		return 'Enter the price in dollars and cents, like 4.50.';
 	}
 	// A name and nothing else saves. `validated_draft` accepts `{}` and the
 	// server's own test calls it the blank template a seller starts from
@@ -448,9 +448,9 @@ function same(held: unknown, taken: unknown): boolean {
  *  plainly when a template had nothing this draft was missing. */
 export function filledLine(name: string, filled: readonly string[]): string {
 	if (filled.length === 0) {
-		return `“${name}” filled nothing: every field it holds was already answered.`;
+		return `“${name}” had nothing new to fill in.`;
 	}
-	return `“${name}” filled ${filled.join(', ')}. Anything you had already answered was left alone.`;
+	return `“${name}” filled in ${filled.join(', ')}. Your own answers were kept.`;
 }
 
 // ------------------------------------------------------- the two examples
@@ -642,7 +642,7 @@ export function sameForm(held: TemplateForm, taken: TemplateForm): boolean {
 /** The line the editor says after it was cleared with something in it. Its own
  *  sentence rather than [`filledLine`]'s empty case, which reports a template
  *  that filled nothing — the opposite fact. */
-export const CLEARED_LINE = 'The editor was cleared.';
+export const CLEARED_LINE = 'You cleared the form.';
 
 /** The one meta line a listed template shows.
  *

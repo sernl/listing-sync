@@ -70,7 +70,7 @@
 				failed[product] =
 					failure instanceof ApiFailure
 						? failure.message
-						: 'That listing could not be attached.';
+						: 'That listing could not be linked.';
 			}
 		}
 		refusals = failed;
@@ -84,12 +84,10 @@
 <dialog bind:this={element} aria-labelledby="mark-listed-title" onclose={onClose}>
 	<div class="dialog-body">
 		<h2 id="mark-listed-title">
-			Mark {rows.length} {rows.length === 1 ? 'item' : 'items'} as listed
+			Mark {rows.length} {rows.length === 1 ? 'resource' : 'resources'} as listed
 		</h2>
 		<p>
-			Paste the address of each listing as it already stands on the marketplace. This records
-			where the listing is so later edits reach it; nothing is sent to the marketplace and no
-			listing is created or changed.
+			Paste the link to each listing on the marketplace. Nothing on the marketplace changes.
 		</p>
 
 		<label class="field">
@@ -105,7 +103,7 @@
 			<div class="choice">
 				<span class="t">{row.product.title}</span>
 				{#if alreadyBound(row)}
-					<span class="why ok">already listed here; nothing to attach</span>
+					<span class="why ok">already linked here</span>
 				{:else}
 					<input
 						type="url"
@@ -121,12 +119,12 @@
 			</div>
 		{/each}
 
-		<Note icon="triangle-alert">Check each address: a wrong link attaches the wrong listing.</Note>
+		<Note icon="triangle-alert">Check each link. A wrong link connects the wrong listing.</Note>
 
 		<div class="actions">
 			<button class="btn" type="button" onclick={onClose} disabled={sending}>Cancel</button>
 			<button class="cta" type="button" onclick={bind} disabled={sending || filled.length === 0}>
-				{sending ? 'Attaching…' : filled.length === 0 ? 'Attach' : `Attach ${filled.length}`}
+				{sending ? 'Linking…' : filled.length === 0 ? 'Link' : `Link ${filled.length}`}
 			</button>
 		</div>
 	</div>

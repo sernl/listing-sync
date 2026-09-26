@@ -10,42 +10,42 @@ A schedule sends resources to a marketplace at a time you choose.
 ## Before you start
 
 1. Connect the marketplace.
-2. Sign in on the desktop app and leave it running at the scheduled time.
+2. Sign in to the desktop app and keep it running at the scheduled time.
 
-A schedule with no connected marketplace, or no signed-in machine, waits instead of sending.
+If the marketplace is not connected, or no computer is signed in, the schedule waits instead of sending.
 
 ## Make a schedule
 
 1. Open **Automations → Schedules**.
 2. Choose the marketplace.
-3. Choose what it sends: a label, a collection, or everything not yet sent.
-4. Set the day, the time and the timezone.
+3. Choose what to send: a label, a collection, or everything not sent yet.
+4. Set the day, the time and the time zone.
 5. Save.
 
 <!-- shot: /automations/sharing, the schedule form with a time and timezone set -->
 ![Creating a schedule](/v1/guides/images/1049fc8e0d90df1b5f017419315ab894f4add6f4901fc57dfa3d507c93364d14)
 
-## Timezone
+## Time zone
 
-The time you set is read in the timezone on the schedule, not in your browser's. Change the timezone on the schedule if you travel.
+The schedule uses the time zone you set on it, not your browser's. If you travel, change the time zone on the schedule.
 
 ## What a schedule sends
 
-Only resources that are ready: a target price, the marketplace's required fields answered, and a file on a signed-in machine. A resource that is not ready is skipped and listed, not failed.
+It only sends resources that are ready. A ready resource has a target price, every field the marketplace needs, and its file on a signed-in computer. A resource that is not ready is skipped and listed, not marked as failed.
 
-## Republishing
+## Sending edits again
 
-A resource already live is only sent again when you have changed it. Turn on republishing if you want edits pushed on the next run.
+A resource that is already live is only sent again if you have changed it. Turn on republishing if you want your edits sent the next time the schedule runs.
 
-## Tes cannot revise
+## Tes cannot take edits
 
-Tes accepts a new listing but will not accept a revision to one already live. Take the listing down on Tes and let the schedule send it again.
+Tes accepts new listings but not changes to a listing that is already live. To update it, take the listing down on Tes and let the schedule send it again.
 
 <!-- shot: /automations/sharing, the schedule list showing the last run's result -->
 ![Schedule results](/v1/guides/images/73ac178bcbfb2dbf1e1d730c20f4f47a24bda1d7430c7abd45e5402b28deaeed)
 
-## Check a run
+## Check what was sent
 
 1. Open **Automations → Schedules**.
-2. Read the last run beside the schedule.
-3. Open it to see each resource and what happened.
+2. Look at the last send next to the schedule.
+3. Open it to see what happened to each resource.

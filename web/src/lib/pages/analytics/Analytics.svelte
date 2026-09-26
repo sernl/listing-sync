@@ -200,9 +200,9 @@
 			</select>
 		</Field>
 		<p class="an-why">
-			There is no date range, because we keep only the newest figure for each listing.
-			{#if labels.isError}We could not read your labels, so the filter
-				is unavailable.{/if}
+			Shows the latest figure for each listing. There is no date range.
+			{#if labels.isError}We could not load your labels, so you can't filter
+				right now.{/if}
 		</p>
 	</div>
 
@@ -237,7 +237,7 @@
 		<Panel title={chart.title} description={chart.description}>
 			{#if chart.counted}
 				{#if catalogueRead === 'failed'}
-					<p class="an-quiet">Your Resources could not be read.</p>
+					<p class="an-quiet">We could not load your resources. Reload the page to try again.</p>
 				{:else if catalogueRead === 'pending'}
 					<p class="an-quiet">Counting…</p>
 				{:else}
@@ -249,14 +249,14 @@
 					/>
 				{/if}
 			{:else if figuresRead === 'failed'}
-				<p class="an-quiet">The analytics could not be read.</p>
+				<p class="an-quiet">We could not load your figures. Reload the page to try again.</p>
 			{:else if figuresRead === 'pending'}
 				<p class="an-quiet">Loading…</p>
 			{:else if chart.bars.length === 0}
 				<Placeholder
 					icon="chart-line"
 					headline="No figures captured yet"
-					body="Your device sends them the next time it checks in."
+					body="They show up the next time the Teachouse app on your device is online."
 				/>
 			{:else}
 				<MetricBars
@@ -273,7 +273,7 @@
 				title="TES (Tes.com) portfolio"
 				description={standingsDescription(
 					catalogueRead,
-					'TES publishes no figures, so this is counted from your own Resources.'
+					"TES doesn't share figures, so we count these from your resources."
 				)}
 			>
 				{#snippet more()}
@@ -282,7 +282,7 @@
 					{/if}
 				{/snippet}
 				{#if catalogueRead === 'failed'}
-					<p class="an-quiet">Your Resources could not be read.</p>
+					<p class="an-quiet">We could not load your resources. Reload the page to try again.</p>
 				{:else if catalogueRead === 'pending'}
 					<p class="an-quiet">Counting…</p>
 				{:else}
@@ -300,7 +300,7 @@
 							</div>
 						{/each}
 					</div>
-					<Note>Each listing shows what we last recorded, not a live check of TES.</Note>
+					<Note>Each listing shows what we last saw on TES, not a live check.</Note>
 				{/if}
 			</Panel>
 		{:else}
@@ -308,7 +308,7 @@
 				title="Where your listings stand"
 				description={standingsDescription(
 					catalogueRead,
-					'Counted from your own Resources, not reported by a marketplace.'
+					'Counted from your resources, not reported by a marketplace.'
 				)}
 			>
 				{#snippet more()}
@@ -317,14 +317,14 @@
 					{/if}
 				{/snippet}
 				{#if catalogueRead === 'failed'}
-					<p class="an-quiet">Your Resources could not be read.</p>
+					<p class="an-quiet">We could not load your resources. Reload the page to try again.</p>
 				{:else if catalogueRead === 'pending'}
 					<p class="an-quiet">Counting…</p>
 				{:else}
 					<div class="an-standings">
 						<div
 							class="an-standing"
-							title="The marketplace was last recorded showing this listing."
+							title="Last seen live on the marketplace."
 						>
 							<div class="an-n">{standing.live}</div>
 							<div class="an-l">Live</div>
@@ -351,7 +351,7 @@
 							<div class="an-l">In another state</div>
 						</div>
 					</div>
-					<Note>Each listing shows what we last recorded, not a live check.</Note>
+					<Note>Each listing shows what we last saw, not a live check.</Note>
 				{/if}
 			</Panel>
 		{/if}
@@ -361,18 +361,18 @@
 		{#if !reports}
 			<Placeholder
 				icon="chart-line"
-				headline="{silent} reports no figures"
+				headline="{silent} doesn't share figures"
 				body="The panels above count your own Resources instead."
 			/>
 		{:else if figuresRead === 'failed'}
-			<p class="an-quiet">The analytics could not be read.</p>
+			<p class="an-quiet">We could not load your figures. Reload the page to try again.</p>
 		{:else if figuresRead === 'pending'}
 			<p class="an-quiet">Loading…</p>
 		{:else if tableRows.length === 0}
 			<Placeholder
 				icon="chart-line"
 				headline="No figures captured yet"
-				body="Your device sends them the next time it checks in."
+				body="They show up the next time the Teachouse app on your device is online."
 			/>
 		{:else}
 			<div class="an-table-wrap">
@@ -384,7 +384,7 @@
 							{#each METRIC_COLUMNS as column (column.key)}
 								<th class="an-num">{column.heading}</th>
 							{/each}
-							<th class="an-num">Captured</th>
+							<th class="an-num">Updated</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -394,7 +394,7 @@
 									{#if row.title === undefined}
 										<span
 											class="an-id"
-											title={`The resource for this listing was not in what we read, so only its reference is shown.`}
+											title={`We could not find the resource for this listing, so we show its reference instead.`}
 										>
 											{row.mapping}
 										</span>
@@ -412,7 +412,7 @@
 					</tbody>
 				</table>
 			</div>
-			<Note>Every figure is a captured total, not a live one.</Note>
+			<Note>Figures are totals from the last time we checked, not live.</Note>
 		{/if}
 	</Panel>
 </div>

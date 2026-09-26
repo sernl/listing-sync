@@ -80,7 +80,7 @@
 			description = '';
 			refusal = null;
 			await queryClient.invalidateQueries({ queryKey: COLLECTIONS_KEY });
-			toast('info', `${stored.name} is one of your collections.`);
+			toast('info', `Created ${stored.name}.`);
 		},
 		onError: (failure: Error) => {
 			// A 422 is about the form, so it is answered beside it. Anything
@@ -89,20 +89,20 @@
 				refusal = { message: failure.message, name };
 				return;
 			}
-			toast('error', 'The collection was not created.');
+			toast('error', 'We couldn’t create the collection.');
 		}
 	}));
 
 	const remove = createMutation(() => ({
 		mutationFn: (id: string) => collectionsApi.remove(id),
 		onSuccess: async (_answer: void, id: string) => {
-			const gone = all.find((collection) => collection.id === id)?.name ?? 'The collection';
+			const gone = all.find((collection) => collection.id === id)?.name ?? 'the collection';
 			confirming = null;
 			await queryClient.invalidateQueries({ queryKey: COLLECTIONS_KEY });
-			toast('info', `${gone} is no longer one of your collections.`);
+			toast('info', `Deleted ${gone}.`);
 		},
 		onError: () => {
-			toast('error', 'The collection was not deleted.');
+			toast('error', 'We couldn’t delete the collection.');
 		}
 	}));
 
@@ -122,7 +122,7 @@
 	 *  control. */
 	const blocked = $derived.by(() => {
 		if (create.isPending) {
-			return 'The collection is being created.';
+			return 'Creating the collection.';
 		}
 		if (!verdict.accepted) {
 			return verdict.message;
@@ -152,7 +152,7 @@
 	<PageHead
 		icon="layers"
 		title="Collections"
-		description="Ordered sets of your resources."
+		description="Group your resources in the order you choose."
 		guide="labels-and-collections"
 	>
 		{#snippet aside()}
@@ -172,7 +172,7 @@
 		<!-- The figure and the way forward, because a refusal with neither reads
 		     as a control we took away. The free plan includes none, so this is
 		     the state most sellers meet this page in. -->
-		<Banner tone="warn" title="Collections are not on your plan">
+		<Banner tone="warn" title="Your plan doesn’t include collections">
 			{capped}
 			{WHY_COLLECTIONS_COST}
 			{#snippet action()}
@@ -182,7 +182,7 @@
 	{/if}
 
 	{#if creating && capped === null}
-		<Panel title="A new collection">
+		<Panel title="New collection">
 			<form class="coll-form" onsubmit={submit}>
 				<Field label="Name" id="new-collection-name" required>
 					<input
@@ -198,7 +198,7 @@
 				<Field
 					label="Description"
 					id="new-collection-description"
-					hint="Yours alone; it reaches no marketplace."
+					hint="Only you see this; it never goes to a marketplace."
 				>
 					<textarea
 						id="new-collection-description"
@@ -232,7 +232,7 @@
 	{#if collections.isPending}
 		<p class="quiet">Loading…</p>
 	{:else if collections.isError}
-		<Banner tone="bad" title="We could not read your collections">
+		<Banner tone="bad" title="We couldn’t load your collections">
 			Nothing has changed.
 			{#snippet action()}
 				<Button onclick={() => collections.refetch()}>Try again</Button>
@@ -311,14 +311,14 @@
 		{#if removing !== null}
 			<Panel title={`Delete ${removing.name}?`}>
 				<p>
-					The {countLine(removing.count)} in it stay in your Resources, on every marketplace
-					they are already on.
+					The {countLine(removing.count)} in it stay in your Resources and on their
+					marketplaces.
 				</p>
 				<div class="coll-form-foot">
 					<Button
 						danger
 						disabled={remove.isPending}
-						reason={remove.isPending ? 'The collection is being deleted.' : undefined}
+						reason={remove.isPending ? 'Deleting the collection.' : undefined}
 						onclick={() => remove.mutate(removing.id)}
 					>
 						{remove.isPending ? 'Deleting…' : 'Delete it'}

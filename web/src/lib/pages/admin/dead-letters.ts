@@ -22,7 +22,7 @@ export function topicLabel(topic: string): string {
 export function deadLetterHeadline(topics: readonly DeadLetterTopicView[]): string {
 	const messages = topics.reduce((sum, topic) => sum + topic.messages, 0);
 	if (messages === 0) {
-		return 'No dead letters: every message the drainer took on was delivered or is still being retried.';
+		return 'No dead letters. Every message was delivered or is still being retried.';
 	}
 	const letters = messages === 1 ? '1 dead letter' : `${messages} dead letters`;
 	const on = topics.length === 1 ? '1 topic' : `${topics.length} topics`;

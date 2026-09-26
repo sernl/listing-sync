@@ -92,10 +92,10 @@
 	 *  control, because a disabled control with no reason reads as a fault. */
 	const blocked = $derived.by(() => {
 		if (sending) {
-			return 'The collection is being written.';
+			return 'Saving the collection.';
 		}
 		if (products.length === 0) {
-			return 'Select at least one resource that is in view.';
+			return 'Select at least one resource on this page.';
 		}
 		if (chosen === null) {
 			return 'Choose a collection, or make one.';
@@ -125,7 +125,7 @@
 						})
 					: collections.find((collection) => collection.id === chosen);
 			if (into === undefined) {
-				refusal = 'That collection is no longer one of yours. Close this and open it again.';
+				refusal = 'That collection is gone. Close this and try again.';
 				return;
 			}
 			// The stored order, read now rather than remembered from the list:
@@ -145,7 +145,7 @@
 			refusal =
 				failure instanceof ApiFailure
 					? failure.message
-					: 'The collection was not written. Nothing has been added.';
+					: 'The collection was not saved. Nothing was added.';
 		} finally {
 			sending = false;
 		}
@@ -162,14 +162,13 @@
 		<h2 id="add-to-collection-title">
 			Add {rows.length} {rows.length === 1 ? 'resource' : 'resources'} to a collection
 		</h2>
-		<p>These join the end of the collection you pick.</p>
+		<p>They go at the end of the collection you pick.</p>
 
 		{#if reading}
-			<Note>Reading your collections…</Note>
+			<Note>Loading your collections…</Note>
 		{:else if unread}
 			<p class="refusal">
-				Your collections could not be read, so there is none to pick. Making one below still
-				works.
+				We couldn't load your collections. You can still make a new one below.
 			</p>
 		{/if}
 
@@ -207,7 +206,7 @@
 				<span aria-hidden="true">{chosen === 'new' ? '●' : '○'}</span>
 				<span>
 					A new collection
-					<span class="mk-tile-why">Named below, holding these resources.</span>
+					<span class="mk-tile-why">Name it below.</span>
 				</span>
 			</button>
 		</div>
@@ -226,7 +225,7 @@
 			<Field
 				label="Description"
 				id="add-collection-description"
-				hint="Yours alone; it reaches no marketplace."
+				hint="Only you see this. It doesn't go to any marketplace."
 			>
 				<textarea
 					id="add-collection-description"
@@ -246,7 +245,7 @@
 		{/if}
 
 		<div class="actions">
-			<Button onclick={onClose} disabled={sending} reason={sending ? 'Writing.' : undefined}>
+			<Button onclick={onClose} disabled={sending} reason={sending ? 'Saving.' : undefined}>
 				Cancel
 			</Button>
 			<Button

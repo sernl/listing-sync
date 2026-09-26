@@ -155,11 +155,11 @@ export function merge(
 export function matchNote(confidence: Confidence): string {
 	switch (confidence) {
 		case 'matched':
-			return 'Matched to a browser sign-in by its reported platform.';
+			return 'Matched to a browser sign-in on the same system.';
 		case 'ambiguous':
-			return 'Several sign-ins report this platform, so we cannot say which belongs to this machine. Signing out here signs the machine out; end a browser sign-in under Browser sign-ins.';
+			return 'Several browser sign-ins are on this system, so we cannot tell which is this machine. Signing out here signs out the machine; to end a browser sign-in, use Browser sign-ins.';
 		case 'unmatched':
-			return 'No browser sign-in reports this platform.';
+			return 'No browser sign-in is on this system.';
 	}
 }
 

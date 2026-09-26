@@ -41,13 +41,13 @@ export function slugify(title: string): string {
 /** Why this slug cannot be used, or null where it can. */
 export function slugRefusal(slug: string): string | null {
 	if (slug.length === 0) {
-		return 'A guide needs a slug: it is the address sellers reach it at.';
+		return 'Enter an address for the guide.';
 	}
 	if (slug.length > SLUG_MAX) {
-		return `A slug is at most ${SLUG_MAX} characters.`;
+		return `Keep the address to ${SLUG_MAX} characters or fewer.`;
 	}
 	if (!SLUG_SHAPE.test(slug)) {
-		return 'A slug is lowercase letters, digits and single hyphens — no spaces, no punctuation, and no hyphen at either end.';
+		return 'Use lowercase letters, numbers and single hyphens only, with no hyphen at the start or end.';
 	}
 	return null;
 }
@@ -55,9 +55,9 @@ export function slugRefusal(slug: string): string | null {
 /** Why this title cannot be saved, or null where it can. */
 export function titleRefusal(title: string): string | null {
 	if (title.trim().length === 0) {
-		return 'A guide needs a title.';
+		return 'Enter a title.';
 	}
-	return title.length > TITLE_MAX ? `A title is at most ${TITLE_MAX} characters.` : null;
+	return title.length > TITLE_MAX ? `Keep the title to ${TITLE_MAX} characters or fewer.` : null;
 }
 
 /** Why this body cannot be saved, or null where it can. Empty is allowed: a
@@ -65,7 +65,7 @@ export function titleRefusal(title: string): string | null {
 export function bodyRefusal(body: string): string | null {
 	const bytes = ENCODER.encode(body).length;
 	return bytes > BODY_MAX_BYTES
-		? `A guide body is at most ${Math.round(BODY_MAX_BYTES / 1024)} KiB; this one is ${Math.round(bytes / 1024)} KiB.`
+		? `Keep the guide to ${Math.round(BODY_MAX_BYTES / 1024)} KiB or less. This one is ${Math.round(bytes / 1024)} KiB.`
 		: null;
 }
 
@@ -135,7 +135,7 @@ export function imageMarkdown(handle: string): string {
  * will not permit degrades to the alt text — so nothing here rewrites its
  * output. */
 export const IMAGE_PRIVACY =
-	'Some pictures in a guide are loaded from the site that hosts them. Your browser fetches those directly, without telling that site which page you are reading.';
+	'Some pictures here load from other websites. Those sites are not told which page you are reading.';
 
 /** Whether a rendering loads a picture from another site, which is the only
  *  case the disclosure above has anything to say about.

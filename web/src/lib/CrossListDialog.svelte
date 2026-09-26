@@ -114,10 +114,10 @@
 
 	function refusalOf(failure: unknown): string {
 		if (!(failure instanceof ApiFailure)) {
-			return 'The send did not start. Nothing was enqueued twice; try again.';
+			return 'Sending did not start. Try again; nothing will be sent twice.';
 		}
 		if (failure.code() === 'mapping_already_exists') {
-			return 'One of these items reaches that marketplace already, which this board did not know when you opened it. Reload and send again.';
+			return 'One of these resources is already on that marketplace. Reload the page and try again.';
 		}
 		return failure.message;
 	}
@@ -125,11 +125,10 @@
 
 <dialog bind:this={element} aria-labelledby="cross-list-title" onclose={onClose}>
 	<div class="dialog-body">
-		<h2 id="cross-list-title">Cross-list {rows.length} {rows.length === 1 ? 'item' : 'items'}</h2>
+		<h2 id="cross-list-title">Cross-list {rows.length} {rows.length === 1 ? 'resource' : 'resources'}</h2>
 		<p>
-			Pick where this send goes. Each line says how many of the selected items that
-			marketplace already carries and how many it will be added to, counted from your own
-			records without contacting anyone.
+			Pick where to send these. Each line shows how many are already set up there and how many
+			will be added.
 		</p>
 
 		<div class="inline-choices">
@@ -152,7 +151,7 @@
 				Publish live
 			</label>
 		</div>
-		<Note icon="triangle-alert">A live publish to a Tes site cannot be undone here.</Note>
+		<Note icon="triangle-alert">You can't undo a live publish to Tes from here.</Note>
 
 		{#each targets as target (target.inventory)}
 			{@const reaches = target.mappings.length + target.unmapped.length}
@@ -166,23 +165,23 @@
 				<span class="t">{platformTitle(target.inventory)}</span>
 				<span class="why {reaches === 0 ? 'bad' : 'ok'}">
 					{#if reaches === 0}
-						nothing is selected
+						nothing selected
 					{:else if target.unmapped.length === 0}
-						{target.mappings.length} of {rows.length}, all mapped here already
+						{target.mappings.length} of {rows.length}, all already set up here
 					{:else if target.mappings.length === 0}
-						{target.unmapped.length} of {rows.length}, each added to this marketplace first
+						{target.unmapped.length} of {rows.length}, each set up here first
 					{:else}
-						{target.mappings.length} of {rows.length} mapped here; {target.unmapped.length} added
-						first
+						{target.mappings.length} of {rows.length} already set up here; {target.unmapped.length}
+						set up first
 					{/if}
 				</span>
 			</label>
 		{/each}
 
-		<Note>A resource this marketplace does not carry is added to it first.</Note>
-		<Note icon="laptop">Tes and TPT sends wait for your own device to be on.</Note>
+		<Note>Any resource not yet set up for a marketplace is set up first.</Note>
+		<Note icon="laptop">Sending to Tes and TPT waits until your computer is on.</Note>
 		<Note icon="files"
-			>Check a file or its machine on <a href="/resources/files">Your machines' files</a>.</Note
+			>See your files and which computer has them on <a href="/resources/files">Your machines' files</a>.</Note
 		>
 		<!-- The price and the terms a listing arrives with are decided on their
 		     own screens, beside a preview of what each resource would get: this
@@ -191,7 +190,7 @@
 		     Cross-list applies here without being approved row by row; nothing
 		     else does. -->
 		<Note icon="tag"
-			>Set what these cost and land under on <a href={PRICING_HREF}>Target prices</a> and
+			>Set prices on <a href={PRICING_HREF}>Target prices</a> and licence and type on
 			<a href={MAPPINGS_HREF}>Target terms</a>.</Note
 		>
 

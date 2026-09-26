@@ -10,9 +10,10 @@
 	import RuleWorkbench from '$lib/pages/automations/RuleWorkbench.svelte';
 	import { PRICING_GUIDE, WHAT_PRICING_IS } from '$lib/pages/automations/seller-rules';
 	import '$lib/pages/automations/automations.css';
+	import '$lib/flow.css';
 </script>
 
-<div class="page">
+<div class="page flow-page has-bar">
 	<!-- The lead sentence is the header's own description rather than a
 	     paragraph under it: two channels saying the same thing is the second
 	     one a seller stops reading. -->

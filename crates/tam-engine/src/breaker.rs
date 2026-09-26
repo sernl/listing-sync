@@ -18,6 +18,13 @@ use tam_types::Timestamp;
 pub const BREAKER_WINDOW_MS: i64 = 30 * 60 * 1000;
 pub const BREAKER_MIN_SAMPLE: i64 = 5;
 pub const BREAKER_TRIP_PERMILLE: i64 = 500;
+/// How many distinct organisations must be among the adverse settlements
+/// before the ratio is read as the marketplace failing rather than one
+/// account failing. One seller's expired session settles every one of their
+/// own items adverse and none of anyone else's; halting the fleet on that
+/// would let any single account, free or paid, stop every other seller
+/// (2026-09-26 re-evaluation, "can free accounts starve paid ones").
+pub const BREAKER_MIN_TENANTS: i64 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BreakerReport {
@@ -35,8 +42,9 @@ pub async fn run_breaker(
         if window.settled < BREAKER_MIN_SAMPLE {
             continue;
         }
-        let trips = window.adverse.saturating_mul(1000)
-            >= BREAKER_TRIP_PERMILLE.saturating_mul(window.settled);
+        let trips = window.adverse_orgs >= BREAKER_MIN_TENANTS
+            && window.adverse.saturating_mul(1000)
+                >= BREAKER_TRIP_PERMILLE.saturating_mul(window.settled);
         if trips {
             halts
                 .raise_fleet_inventory(
@@ -44,8 +52,8 @@ pub async fn run_breaker(
                     &HaltCause {
                         raised_by: "breaker".to_owned(),
                         reason: format!(
-                            "{} of {} settlements ended failed, ambiguous or blocked in the window",
-                            window.adverse, window.settled
+                            "{} of {} settlements across {} organisations ended failed, ambiguous or blocked in the window",
+                            window.adverse, window.settled, window.adverse_orgs
                         ),
                         at: now,
                     },

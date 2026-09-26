@@ -56,7 +56,7 @@
 			refusal =
 				failure instanceof ApiFailure
 					? failure.message
-					: 'Your permission was not recorded. Nothing was connected.';
+					: 'Your permission was not saved, so nothing was connected. Try again.';
 		} finally {
 			saving = false;
 		}
@@ -87,7 +87,7 @@
 		<div class="actions">
 			<button class="btn" type="button" onclick={onClose} disabled={saving}>Cancel</button>
 			<button class="cta" type="button" onclick={agree} disabled={!ticked || saving}>
-				{saving ? 'Recording…' : 'I agree'}
+				{saving ? 'Saving…' : 'I agree'}
 			</button>
 		</div>
 	</div>

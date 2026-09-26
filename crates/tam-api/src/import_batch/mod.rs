@@ -100,7 +100,7 @@ fn validation(message: &str) -> APIError {
 fn missing() -> APIError {
     APIError::new(
         StatusCode::NOT_FOUND,
-        APIErrorEntry::new("no such import")
+        APIErrorEntry::new("We can't find that import.")
             .code(APIErrorCode::ResourceMissing)
             .kind(APIErrorKind::NotFound),
     )
@@ -109,7 +109,7 @@ fn missing() -> APIError {
 fn parse_id(raw: &str) -> Result<Uuid, APIError> {
     uuid::Uuid::parse_str(raw)
         .map(|parsed| Uuid(*parsed.as_bytes()))
-        .map_err(|_| validation("the identifier is not a UUID"))
+        .map_err(|_| validation("We can't find that import."))
 }
 
 /// A sheet that could not be read into rows at all, as the caller's own fault.
@@ -424,17 +424,15 @@ pub(crate) async fn upload(
     if !context.entitlement.caps.import_spreadsheet {
         return Err(feature_refusal(
             "import_spreadsheet",
-            "Your plan does not include spreadsheet import. Upgrade to use it.",
+            "Upgrade your plan to import a spreadsheet.",
         ));
     }
     let source_name = params.name.trim();
     if source_name.is_empty() {
-        return Err(validation(
-            "the upload states the name of the file it carries",
-        ));
+        return Err(validation("Give the file a name, then upload it again."));
     }
     if body.is_empty() {
-        return Err(validation("the upload carried no bytes"));
+        return Err(validation("That file is empty."));
     }
 
     let batches = ImportBatchRepo::new(state.pool.clone());
@@ -558,14 +556,12 @@ fn documents_of(row: &ParsedRow) -> Result<(serde_json::Value, serde_json::Value
 fn already_open(open: &ImportBatchRecord) -> APIError {
     APIError::new(
         StatusCode::CONFLICT,
-        APIErrorEntry::new(
-            "you already have an import open; finish it or abandon it before starting another",
-        )
-        .kind(APIErrorKind::Validation)
-        .detail(serde_json::json!({
-            "open_batch": open.id,
-            "source_name": open.source_name,
-        })),
+        APIErrorEntry::new("You already have an import open. Finish it or cancel it first.")
+            .kind(APIErrorKind::Validation)
+            .detail(serde_json::json!({
+                "open_batch": open.id,
+                "source_name": open.source_name,
+            })),
     )
 }
 

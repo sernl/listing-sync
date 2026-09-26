@@ -471,7 +471,7 @@ fn reason_of(refusal: &APIError) -> String {
 fn batch_settled(state: BatchState) -> APIError {
     APIError::new(
         StatusCode::CONFLICT,
-        APIErrorEntry::new("this import has already finished")
+        APIErrorEntry::new("This import has already finished.")
             .kind(APIErrorKind::Validation)
             .detail(serde_json::json!({
                 "batch_state": BatchStateView::of(state),
@@ -492,10 +492,8 @@ fn awaiting_files(count: u32, rows: &[RowRef]) -> APIError {
         .collect();
     APIError::new(
         StatusCode::CONFLICT,
-        APIErrorEntry::new(
-            "every row that names a marketplace needs its file attached before the import runs",
-        )
-        .kind(APIErrorKind::Validation)
-        .detail(serde_json::json!({ "awaiting": count, "rows": named })),
+        APIErrorEntry::new("Attach a file to every row that names a marketplace, then import.")
+            .kind(APIErrorKind::Validation)
+            .detail(serde_json::json!({ "awaiting": count, "rows": named })),
     )
 }

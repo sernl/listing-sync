@@ -4,32 +4,76 @@
 //! carries distinctly from a best-effort preview failure. Every render is
 //! deterministic so an identical payload dedups to one cover blob.
 //!
-//! Where a picture of the resource exists inside the resource, that picture
-//! is the cover. Three places hold one: an image payload is its own cover; a
-//! bundle carries the seller's own preview images beside the worksheet; and
-//! an OOXML document carries `docProps/thumbnail`, the preview its authoring
-//! tool stored. All three are the resource's own bytes, already in hand on
-//! the device that fetched them, read under the archive rails in
-//! [`crate::archive`] — no marketplace request, no server-side fetch, and no
-//! new dependency is involved in finding them.
+//! Where a picture of the resource exists, that picture is the cover. An
+//! image payload is its own cover; a PDF's first page is rasterised; a bundle
+//! carries the seller's own preview images, or a PDF whose first page is
+//! rasterised; and an OOXML document carries `docProps/thumbnail`, the
+//! preview its authoring tool stored. All of them are the resource's own
+//! bytes, already in hand on the device that fetched them, read under the
+//! archive rails in [`crate::archive`] — no marketplace request and no
+//! server-side fetch is involved in finding them.
 //!
-//! Real first-page PDF rasterisation still needs a native renderer and ships
-//! with deploy, and an OOXML document that stored no thumbnail part cannot be
-//! rasterised either. Those get an honest generated card, and
-//! [`CoverSource`] says so, rather than a fabricated screenshot of content we
-//! did not render.
+//! Pages are rasterised by `hayro`, which is pure Rust, so every client
+//! target still builds without a C toolchain. A PDF is untrusted input, so a
+//! page render runs on its own thread against [`PAGE_RENDER_TIMEOUT`] and is
+//! drawn straight into the cover frame, which bounds the pixmap whatever
+//! page size the file declares.
+//!
+//! A document nothing can be drawn from — an encrypted or unreadable PDF, an
+//! OOXML document that stored no thumbnail — gets an honest generated card,
+//! and [`CoverSource`] says so, rather than a fabricated screenshot of
+//! content we did not render.
 
-use std::sync::LazyLock;
+use std::sync::{mpsc, Arc, LazyLock};
+use std::time::Duration;
 
-use image::{DynamicImage, ImageError, ImageFormat, Rgba, RgbaImage};
+use image::codecs::png::{CompressionType, FilterType as PngFilter, PngEncoder};
+use image::imageops::FilterType;
+use image::{
+    DynamicImage, ExtendedColorType, ImageEncoder, ImageError, ImageFormat, Rgb, RgbImage, Rgba,
+    RgbaImage,
+};
 use tam_types::{ContentHash, FileKind};
 
 use crate::archive::{self, ExtractBudget};
 
-/// The fixed cover dimensions. A single size keeps covers deduplicable and
-/// predictable for the upload flow; the marketplace rescales as it needs.
-pub const COVER_WIDTH: u32 = 512;
-pub const COVER_HEIGHT: u32 = 384;
+/// The cover frame. 4:3 because Tes stores its covers at 4:3; twice Tes's
+/// 800x600 so the marketplace always scales down, never up; and wide enough
+/// that TPT's 1000px square (see [`square_cover`]) is a downscale too.
+pub const COVER_WIDTH: u32 = 1600;
+pub const COVER_HEIGHT: u32 = 1200;
+
+/// The largest cover this renderer produces. It has to fit under two limits:
+/// TPT refuses a thumbnail of 4 MB or more, and the device import carries
+/// covers under `tam_engine_driver::import::COVER_BYTES_MAX`, which is this
+/// same 2 MiB. A cover whose PNG would be larger is redrawn at the next
+/// frame down in [`SMALLER_FRAMES`].
+pub const COVER_BYTES_MAX: usize = 2 * 1024 * 1024;
+
+/// The frames a cover steps down through when its PNG is over
+/// [`COVER_BYTES_MAX`], all 4:3 and none below Tes's own 800x600.
+const SMALLER_FRAMES: [(u32, u32); 3] = [(1280, 960), (1024, 768), (800, 600)];
+
+/// The side of the square TPT displays a thumbnail in. TPT asks for at least
+/// 750px and centre-crops anything rectangular; [`square_cover`] pads to this
+/// square instead so nothing of the cover is cut away.
+pub const TPT_SQUARE_SIDE: u32 = 1000;
+
+/// How long one page render may take before the cover settles for the card.
+/// A hostile PDF can describe unbounded work; the render thread is abandoned
+/// at this deadline rather than joined, so an import never hangs on it.
+pub const PAGE_RENDER_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Below this short side, a stored document thumbnail is a small picture:
+/// shown at its native size rather than stretched, and passed over for a
+/// bundle's PDF page when one can be rasterised.
+const NATIVE_SHORT_SIDE_MIN: u32 = 600;
+
+/// The light ground a picture that does not fill the frame sits on.
+const GROUND: Rgb<u8> = Rgb([0xF4, 0xF4, 0xF5]);
+
+/// The ground [`square_cover`] pads onto.
+const SQUARE_GROUND: Rgb<u8> = Rgb([0xFF, 0xFF, 0xFF]);
 
 /// How many entries a preview search inflates before it settles for a card.
 ///
@@ -43,6 +87,9 @@ const PREVIEW_ATTEMPTS_MAX: usize = 4;
 /// How many nested documents inside a bundle are opened for their stored
 /// thumbnail, once the bundle's own entries have offered no picture.
 const NESTED_ATTEMPTS_MAX: usize = 2;
+
+/// How many PDFs inside a bundle are offered to the page rasteriser.
+const BUNDLE_PDF_ATTEMPTS_MAX: usize = 2;
 
 /// The smallest side a picture must have to be this resource's preview.
 /// Below it, a picture is a logo, a bullet or a rule — decoration the
@@ -65,12 +112,17 @@ pub struct RenderedImage {
 /// make impossible.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoverSource {
-    /// The payload is itself a picture, downscaled into the cover frame.
+    /// The payload is itself a picture, fitted into the cover frame.
     Payload,
+    /// A page of a PDF payload, rasterised into the cover frame. Zero-based.
+    Page { index: u32 },
     /// A picture the resource carries: an image entry in the seller's bundle,
     /// or a document's own stored thumbnail part. The path is archive-relative,
     /// and a nested document's part reads `outer.docx!docProps/thumbnail.jpeg`.
     Embedded { path: String },
+    /// A page of a PDF inside the seller's bundle, rasterised into the cover
+    /// frame. The path is archive-relative; the index is zero-based.
+    EmbeddedPage { path: String, index: u32 },
     /// No picture exists in these bytes, so the cover is the generated card
     /// for this kind and claims nothing about the content.
     Generated { kind: FileKind },
@@ -103,17 +155,305 @@ impl core::fmt::Display for RenderError {
 
 impl core::error::Error for RenderError {}
 
-fn encode_png(canvas: &RgbaImage) -> Result<Vec<u8>, ImageError> {
+/// A cover's PNG. Opaque RGB, because every frame is drawn on a solid ground
+/// and an alpha channel would be a third more bytes saying nothing.
+fn encode_cover(canvas: &RgbImage) -> Result<Vec<u8>, ImageError> {
     let mut png = Vec::new();
-    canvas.write_to(&mut std::io::Cursor::new(&mut png), ImageFormat::Png)?;
+    PngEncoder::new_with_quality(&mut png, CompressionType::Default, PngFilter::Adaptive)
+        .write_image(
+            canvas.as_raw(),
+            canvas.width(),
+            canvas.height(),
+            ExtendedColorType::Rgb8,
+        )?;
     Ok(png)
 }
 
-/// A deterministic placeholder card: a solid ground whose colour is derived
-/// from the payload kind, with a framed border, at the fixed cover size. It
-/// carries no text glyphs because font rendering is a native-closure
-/// dependency deferred to deploy; the card is honest about being generated.
+/// The finished cover: the frame encoded, stepped down through
+/// [`SMALLER_FRAMES`] while the PNG is over [`COVER_BYTES_MAX`]. A drawn page
+/// is nowhere near the cap; a noisy photograph at full frame can be.
+fn finish(canvas: &RgbImage) -> Result<RenderedImage, ImageError> {
+    let mut png = encode_cover(canvas)?;
+    let (mut width, mut height) = canvas.dimensions();
+    for (smaller_width, smaller_height) in SMALLER_FRAMES {
+        if png.len() <= COVER_BYTES_MAX {
+            break;
+        }
+        let smaller =
+            image::imageops::resize(canvas, smaller_width, smaller_height, FilterType::Lanczos3);
+        png = encode_cover(&smaller)?;
+        (width, height) = (smaller_width, smaller_height);
+    }
+    Ok(RenderedImage { png, width, height })
+}
+
+/// One pixel of a picture, composited over an opaque ground.
+#[expect(
+    clippy::integer_division,
+    reason = "a rounded 8-bit blend: the division by 255 is the fixed-point rescale"
+)]
+fn over(pixel: Rgba<u8>, ground: Rgb<u8>) -> Rgb<u8> {
+    let alpha = u16::from(pixel.0[3]);
+    let blend = |source: u8, under: u8| {
+        let mixed = (u16::from(source) * alpha + u16::from(under) * (255 - alpha) + 127) / 255;
+        u8::try_from(mixed).unwrap_or(u8::MAX)
+    };
+    Rgb([
+        blend(pixel.0[0], ground.0[0]),
+        blend(pixel.0[1], ground.0[1]),
+        blend(pixel.0[2], ground.0[2]),
+    ])
+}
+
+/// A picture centred on a `width` by `height` canvas of `ground`. The
+/// picture must already fit.
+fn centred(picture: &RgbaImage, width: u32, height: u32, ground: Rgb<u8>) -> RgbImage {
+    let mut canvas = RgbImage::from_pixel(width, height, ground);
+    // Deliberate flooring: the offset centres the picture, and a half-pixel
+    // bias is invisible and preferable to a float round-trip.
+    #[expect(
+        clippy::integer_division,
+        reason = "centering offset is deliberately floored to an integer pixel"
+    )]
+    let offset_x = width.saturating_sub(picture.width()) / 2;
+    #[expect(
+        clippy::integer_division,
+        reason = "centering offset is deliberately floored to an integer pixel"
+    )]
+    let offset_y = height.saturating_sub(picture.height()) / 2;
+    for (x, y, pixel) in picture.enumerate_pixels() {
+        if let Some(slot) = canvas.get_pixel_mut_checked(offset_x + x, offset_y + y) {
+            *slot = over(*pixel, ground);
+        }
+    }
+    canvas
+}
+
+/// A decoded picture fitted into the cover frame on the light ground.
+///
+/// Larger than the frame, it is downscaled with a Lanczos filter. Smaller, it
+/// is placed at its native size: stretching a 256px stored thumbnail to 1600
+/// shows the seller a blur, where a sharp small picture on a light ground is
+/// the honest look at what the resource carries. Deterministic: the same
+/// picture yields the same cover, whichever caller decoded it.
+fn framed(source: &DynamicImage) -> RgbImage {
+    let picture = if source.width() <= COVER_WIDTH && source.height() <= COVER_HEIGHT {
+        source.to_rgba8()
+    } else {
+        source
+            .resize(COVER_WIDTH, COVER_HEIGHT, FilterType::Lanczos3)
+            .to_rgba8()
+    };
+    centred(&picture, COVER_WIDTH, COVER_HEIGHT, GROUND)
+}
+
+/// Fits an image payload into the cover frame.
+fn cover_from_image(bytes: &[u8]) -> Result<RenderedImage, ImageError> {
+    finish(&framed(&image::load_from_memory(bytes)?))
+}
+
+/// A candidate found inside an archive, decoded, where a failure is an answer
+/// rather than a fault: a picture that will not decode, or is too small to be
+/// a preview of anything, is passed over for the next candidate.
+fn picture_of(bytes: &[u8]) -> Option<DynamicImage> {
+    let source = image::load_from_memory(bytes).ok()?;
+    if source.width() < PREVIEW_MIN_SIDE || source.height() < PREVIEW_MIN_SIDE {
+        return None;
+    }
+    Some(source)
+}
+
+/// The pixel size and scale that fit a page of `width` by `height` points
+/// into the cover frame, or `None` for a page with no drawable extent.
+///
+/// The scale is chosen from the frame, never from the page, so a page that
+/// declares itself a kilometre wide still renders into at most 1600x1200
+/// pixels: the pixmap is bounded by this function, not by the file.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "1600 and 1200 are exactly representable in f32"
+)]
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "both sides are clamped to 1..=frame before the cast, so they fit a u16"
+)]
+fn page_fit(width: f32, height: f32) -> Option<(u16, u16, f32)> {
+    if !(width.is_finite() && height.is_finite()) || width < 1.0 || height < 1.0 {
+        return None;
+    }
+    let (frame_width, frame_height) = (COVER_WIDTH as f32, COVER_HEIGHT as f32);
+    let scale = (frame_width / width).min(frame_height / height);
+    let pixel_width = (width * scale).floor().clamp(1.0, frame_width);
+    let pixel_height = (height * scale).floor().clamp(1.0, frame_height);
+    Some((pixel_width as u16, pixel_height as u16, scale))
+}
+
+/// The first page of a PDF, drawn at the cover frame's scale on white.
+///
+/// `None` for anything `hayro` cannot open — an encrypted file, a damaged
+/// one, a document with no pages — which the caller answers with the card.
+fn first_page(pdf: Vec<u8>) -> Option<RgbImage> {
+    use hayro::hayro_interpret::InterpreterSettings;
+    use hayro::hayro_syntax::Pdf;
+    use hayro::vello_cpu::color::palette::css::WHITE;
+
+    let document = Pdf::new(Arc::new(pdf)).ok()?;
+    let page = document.pages().first()?;
+    let (width, height) = page.render_dimensions();
+    let (pixel_width, pixel_height, scale) = page_fit(width, height)?;
+    let settings = hayro::RenderSettings {
+        x_scale: scale,
+        y_scale: scale,
+        width: Some(pixel_width),
+        height: Some(pixel_height),
+        bg_color: WHITE,
+    };
+    let pixmap = hayro::render(
+        page,
+        &hayro::RenderCache::new(),
+        &InterpreterSettings::default(),
+        &settings,
+    );
+    let (width, height) = (u32::from(pixmap.width()), u32::from(pixmap.height()));
+    let raw: Vec<u8> = pixmap
+        .take_unpremultiplied()
+        .into_iter()
+        .flat_map(|pixel| [pixel.r, pixel.g, pixel.b])
+        .collect();
+    RgbImage::from_raw(width, height, raw)
+}
+
+/// [`first_page`] on its own thread, abandoned at [`PAGE_RENDER_TIMEOUT`].
+///
+/// The rasteriser is synchronous and has no cancellation, so a deadline is
+/// the only bound on time a caller can hold it to. A render that overruns is
+/// left to finish on its detached thread and its answer is dropped; one that
+/// panics drops its sender, which reads here as no page. Either way the
+/// cover falls back to the card and the import moves on.
+fn rasterise_first_page(pdf: Vec<u8>) -> Option<RgbImage> {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("tam-cover-page".to_owned())
+        .spawn(move || {
+            // The receiver has gone only when the deadline passed; the answer
+            // has nobody left to read it.
+            drop(sender.send(first_page(pdf)));
+        })
+        .ok()?;
+    receiver.recv_timeout(PAGE_RENDER_TIMEOUT).ok().flatten()
+}
+
+/// The kind accents on the generated card's page glyph: muted, and never
+/// red, so a card reads as "no picture yet" rather than as an error.
+fn card_accent(kind: FileKind) -> Rgb<u8> {
+    match kind {
+        FileKind::Pdf => Rgb([0x71, 0x71, 0x7A]),
+        FileKind::Pptx => Rgb([0xA8, 0x8B, 0x62]),
+        FileKind::Docx => Rgb([0x5B, 0x7D, 0xB1]),
+        FileKind::Zip => Rgb([0x5E, 0x8C, 0x87]),
+        FileKind::Image => Rgb([0x6B, 0x8F, 0x71]),
+    }
+}
+
+/// Fills the half-open rectangle `[x0, x1) x [y0, y1)`.
+fn fill(canvas: &mut RgbImage, (x0, y0): (u32, u32), (x1, y1): (u32, u32), colour: Rgb<u8>) {
+    for y in y0..y1 {
+        for x in x0..x1 {
+            if let Some(slot) = canvas.get_pixel_mut_checked(x, y) {
+                *slot = colour;
+            }
+        }
+    }
+}
+
+/// The card's page glyph, placed by its top-left corner and sized 3:4.
+const GLYPH_LEFT: u32 = 530;
+const GLYPH_TOP: u32 = 240;
+const GLYPH_WIDTH: u32 = 540;
+const GLYPH_HEIGHT: u32 = 720;
+const GLYPH_FOLD: u32 = 120;
+const _: () = assert!(
+    GLYPH_LEFT * 2 + GLYPH_WIDTH == COVER_WIDTH && GLYPH_TOP * 2 + GLYPH_HEIGHT == COVER_HEIGHT,
+    "the page glyph is centred in the cover frame"
+);
+
+/// A deterministic placeholder card: a neutral light-grey ground with a page
+/// glyph drawn from rectangles — a sheet, its folded corner, a kind-tinted
+/// heading and text lines — at the cover frame. No text, so no font: the card
+/// is honest about being generated and says only that a document is here.
 fn placeholder_card(kind: FileKind) -> Result<RenderedImage, ImageError> {
+    let ground = Rgb([0xEC, 0xEC, 0xEE]);
+    let shadow = Rgb([0xD9, 0xD9, 0xDE]);
+    let edge = Rgb([0xB4, 0xB4, 0xBB]);
+    let sheet = Rgb([0xFF, 0xFF, 0xFF]);
+    let fold = Rgb([0xE2, 0xE2, 0xE6]);
+    let line = Rgb([0xD4, 0xD4, 0xD8]);
+    let (left, top) = (GLYPH_LEFT, GLYPH_TOP);
+    let (right, bottom) = (GLYPH_LEFT + GLYPH_WIDTH, GLYPH_TOP + GLYPH_HEIGHT);
+    let mut canvas = RgbImage::from_pixel(COVER_WIDTH, COVER_HEIGHT, ground);
+    // The shadow falls below and to the right, and starts under the fold so
+    // the cut corner stays clean.
+    fill(
+        &mut canvas,
+        (left + 12, bottom),
+        (right + 12, bottom + 12),
+        shadow,
+    );
+    fill(
+        &mut canvas,
+        (right, top + GLYPH_FOLD),
+        (right + 12, bottom),
+        shadow,
+    );
+    fill(&mut canvas, (left, top), (right, bottom), edge);
+    fill(
+        &mut canvas,
+        (left + 6, top + 6),
+        (right - 6, bottom - 6),
+        sheet,
+    );
+    // The folded corner: above the diagonal is cut back to the ground, below
+    // it is the turned-over flap.
+    for dy in 0..GLYPH_FOLD {
+        for dx in 0..GLYPH_FOLD {
+            let colour = if dx > dy {
+                ground
+            } else if dx + 6 > dy || dx >= GLYPH_FOLD - 6 {
+                edge
+            } else {
+                fold
+            };
+            canvas.put_pixel(right - GLYPH_FOLD + dx, top + dy, colour);
+        }
+    }
+    fill(
+        &mut canvas,
+        (left + 60, top + 150),
+        (left + 300, top + 186),
+        card_accent(kind),
+    );
+    for (row, width) in [420u32, 400, 420, 380, 420, 260].into_iter().enumerate() {
+        let y = top + 250 + u32::try_from(row).unwrap_or(0) * 64;
+        fill(
+            &mut canvas,
+            (left + 60, y),
+            (left + 60 + width, y + 20),
+            line,
+        );
+    }
+    finish(&canvas)
+}
+
+/// The cards the renderer drew before 2026-09-26: a 512x384 kind-coloured
+/// ground (the PDF's red) with a white frame, encoded with the default PNG
+/// settings. Nothing draws them as covers any more; they are kept, byte for
+/// byte, because every resource imported before then still stores one and
+/// [`is_generated_card`] must go on recognising them for a repair to replace
+/// them.
+fn legacy_card(kind: FileKind) -> Result<Vec<u8>, ImageError> {
+    const WIDTH: u32 = 512;
+    const HEIGHT: u32 = 384;
     let (r, g, b) = match kind {
         FileKind::Pdf => (0xC0, 0x39, 0x2B),
         FileKind::Pptx => (0xD3, 0x5F, 0x2B),
@@ -121,22 +461,20 @@ fn placeholder_card(kind: FileKind) -> Result<RenderedImage, ImageError> {
         FileKind::Zip => (0x5B, 0x6B, 0x73),
         FileKind::Image => (0x3C, 0x6E, 0x47),
     };
-    let mut canvas = RgbaImage::from_pixel(COVER_WIDTH, COVER_HEIGHT, Rgba([r, g, b, 0xFF]));
+    let mut canvas = RgbaImage::from_pixel(WIDTH, HEIGHT, Rgba([r, g, b, 0xFF]));
     let border = Rgba([0xFF, 0xFF, 0xFF, 0xFF]);
     let inset = 16u32;
-    for x in inset..COVER_WIDTH - inset {
+    for x in inset..WIDTH - inset {
         canvas.put_pixel(x, inset, border);
-        canvas.put_pixel(x, COVER_HEIGHT - inset - 1, border);
+        canvas.put_pixel(x, HEIGHT - inset - 1, border);
     }
-    for y in inset..COVER_HEIGHT - inset {
+    for y in inset..HEIGHT - inset {
         canvas.put_pixel(inset, y, border);
-        canvas.put_pixel(COVER_WIDTH - inset - 1, y, border);
+        canvas.put_pixel(WIDTH - inset - 1, y, border);
     }
-    Ok(RenderedImage {
-        png: encode_png(&canvas)?,
-        width: COVER_WIDTH,
-        height: COVER_HEIGHT,
-    })
+    let mut png = Vec::new();
+    canvas.write_to(&mut std::io::Cursor::new(&mut png), ImageFormat::Png)?;
+    Ok(png)
 }
 
 /// Every kind whose card this renderer can draw, which is every kind: the
@@ -149,18 +487,23 @@ const CARD_KINDS: [FileKind; 5] = [
     FileKind::Image,
 ];
 
-/// The digests the generated cards are stored under.
+/// The digests the generated cards are stored under: today's cards and the
+/// legacy ones every earlier import stored.
 ///
 /// Drawn and hashed once here rather than written down as constants, so the
-/// classification cannot drift from what [`placeholder_card`] actually
-/// produces: a card whose colours changed would be reclassified by the same
-/// edit that changed it, where a hardcoded digest list would quietly go on
-/// naming pictures nobody draws any more.
+/// classification cannot drift from what [`placeholder_card`] and
+/// [`legacy_card`] actually produce: a card whose colours changed would be
+/// reclassified by the same edit that changed it, where a hardcoded digest
+/// list would quietly go on naming pictures nobody draws any more.
 static CARD_DIGESTS: LazyLock<Vec<ContentHash>> = LazyLock::new(|| {
-    CARD_KINDS
+    let current = CARD_KINDS
         .iter()
         .filter_map(|kind| placeholder_card(*kind).ok())
-        .map(|card| crate::hash::content_hash(&card.png))
+        .map(|card| card.png);
+    let legacy = CARD_KINDS.iter().filter_map(|kind| legacy_card(*kind).ok());
+    current
+        .chain(legacy)
+        .map(|png| crate::hash::content_hash(&png))
         .collect()
 });
 
@@ -175,59 +518,40 @@ static CARD_DIGESTS: LazyLock<Vec<ContentHash>> = LazyLock::new(|| {
 /// a card is a pure function of the kind, so its bytes are the same bytes
 /// every time and no near-miss can be mistaken for one.
 ///
-/// The card renderer's output is therefore load-bearing beyond what it looks
-/// like: changing its colours would leave every cover stored under the old
-/// digests unclassifiable, and those resources would keep a card nothing
-/// could offer to replace.
+/// The card renderers' output is therefore load-bearing beyond what it looks
+/// like: changing a card's drawing leaves every cover stored under the old
+/// digests unclassifiable unless the old drawing is kept, which is why
+/// [`legacy_card`] still exists.
 #[must_use]
 pub fn is_generated_card(hash: ContentHash) -> bool {
     CARD_DIGESTS.contains(&hash)
 }
 
-/// Downscales a decoded picture into the fixed cover frame, letterboxed so
-/// the aspect ratio is preserved. Deterministic: the same picture yields the
-/// same cover, whichever of the two callers decoded it.
-fn letterbox(source: &DynamicImage) -> Result<RenderedImage, ImageError> {
-    let thumbnail = source.thumbnail(COVER_WIDTH, COVER_HEIGHT).to_rgba8();
-    let mut canvas =
-        RgbaImage::from_pixel(COVER_WIDTH, COVER_HEIGHT, Rgba([0x11, 0x11, 0x11, 0xFF]));
-    // Deliberate flooring: the letterbox offset centres the thumbnail, and a
-    // half-pixel bias is invisible and preferable to a float round-trip.
-    #[expect(
-        clippy::integer_division,
-        reason = "centering offset is deliberately floored to an integer pixel"
-    )]
-    let offset_x = (COVER_WIDTH - thumbnail.width()) / 2;
-    #[expect(
-        clippy::integer_division,
-        reason = "centering offset is deliberately floored to an integer pixel"
-    )]
-    let offset_y = (COVER_HEIGHT - thumbnail.height()) / 2;
-    for (x, y, pixel) in thumbnail.enumerate_pixels() {
-        canvas.put_pixel(offset_x + x, offset_y + y, *pixel);
-    }
+/// The square TPT shows a thumbnail in, drawn from a cover.
+///
+/// TPT centre-crops a rectangular thumbnail to a square, which would cut the
+/// sides off a 4:3 cover. This pads instead: the cover is fitted to
+/// [`TPT_SQUARE_SIDE`] and centred on a white square, so a 1600x1200 cover
+/// becomes a 1000x750 band with white above and below, and nothing is lost.
+///
+/// # Errors
+///
+/// A cover that will not decode, or an encode that fails.
+pub fn square_cover(cover_png: &[u8]) -> Result<RenderedImage, RenderError> {
+    let refused = |error: ImageError| RenderError::CoverRequired {
+        detail: error.to_string(),
+    };
+    let source = image::load_from_memory(cover_png).map_err(refused)?;
+    let fitted = source
+        .resize(TPT_SQUARE_SIDE, TPT_SQUARE_SIDE, FilterType::Lanczos3)
+        .to_rgba8();
+    let canvas = centred(&fitted, TPT_SQUARE_SIDE, TPT_SQUARE_SIDE, SQUARE_GROUND);
+    let png = encode_cover(&canvas).map_err(refused)?;
     Ok(RenderedImage {
-        png: encode_png(&canvas)?,
-        width: COVER_WIDTH,
-        height: COVER_HEIGHT,
+        png,
+        width: TPT_SQUARE_SIDE,
+        height: TPT_SQUARE_SIDE,
     })
-}
-
-/// Downscales an image payload into the fixed cover frame.
-fn cover_from_image(bytes: &[u8]) -> Result<RenderedImage, ImageError> {
-    letterbox(&image::load_from_memory(bytes)?)
-}
-
-/// The same downscale for a candidate found inside an archive, where a
-/// failure is an answer rather than a fault: a picture that will not decode,
-/// or is too small to be a preview of anything, is passed over for the next
-/// candidate.
-fn picture_of(bytes: &[u8]) -> Option<RenderedImage> {
-    let source = image::load_from_memory(bytes).ok()?;
-    if source.width() < PREVIEW_MIN_SIDE || source.height() < PREVIEW_MIN_SIDE {
-        return None;
-    }
-    letterbox(&source).ok()
 }
 
 /// Archive junk no seller authored: the AppleDouble sidecars a macOS zip
@@ -296,7 +620,7 @@ fn embedded_preview(
     depth: u8,
     budget: ExtractBudget,
     spent: &mut u64,
-) -> Option<(String, RenderedImage)> {
+) -> Option<(String, DynamicImage)> {
     let paths = archive::file_paths(container)?;
     let mut ranked: Vec<(u8, &str)> = paths
         .iter()
@@ -315,8 +639,8 @@ fn embedded_preview(
         if !crate::probe::is_image(&found.bytes) {
             continue;
         }
-        if let Some(image) = picture_of(&found.bytes) {
-            return Some((found.path, image));
+        if let Some(picture) = picture_of(&found.bytes) {
+            return Some((found.path, picture));
         }
     }
     if depth > 0 {
@@ -341,8 +665,37 @@ fn embedded_preview(
         // directory and at most the parts it chooses — under the same running
         // total. Asking `probe_kind` first would inflate a part nobody
         // counted only to learn what the search establishes anyway.
-        if let Some((inner, image)) = embedded_preview(&found.bytes, depth + 1, budget, spent) {
-            return Some((format!("{path}!{inner}"), image));
+        if let Some((inner, picture)) = embedded_preview(&found.bytes, depth + 1, budget, spent) {
+            return Some((format!("{path}!{inner}"), picture));
+        }
+    }
+    None
+}
+
+/// The first page of the first PDF in a bundle that rasterises, under the
+/// cover attempt's running total. Candidates in path order, so one bundle
+/// always yields one page.
+fn bundle_page(
+    container: &[u8],
+    budget: ExtractBudget,
+    spent: &mut u64,
+) -> Option<(String, RgbImage)> {
+    let paths = archive::file_paths(container)?;
+    let mut pdfs: Vec<&str> = paths
+        .iter()
+        .map(String::as_str)
+        .filter(|path| !is_junk(path) && has_suffix(&path.to_ascii_lowercase(), &[".pdf"]))
+        .collect();
+    pdfs.sort_unstable();
+    for path in pdfs.into_iter().take(BUNDLE_PDF_ATTEMPTS_MAX) {
+        let Some(found) = read_within(container, path, budget, spent) else {
+            continue;
+        };
+        if !found.bytes.starts_with(b"%PDF") {
+            continue;
+        }
+        if let Some(page) = rasterise_first_page(found.bytes) {
+            return Some((found.path, page));
         }
     }
     None
@@ -383,14 +736,59 @@ fn card(kind: FileKind) -> Result<DrawnCover, RenderError> {
         })
 }
 
+/// A drawn frame as the cover, with where it came from.
+fn drawn(canvas: &RgbImage, source: CoverSource) -> Result<DrawnCover, RenderError> {
+    finish(canvas)
+        .map(|image| DrawnCover { image, source })
+        .map_err(|error| RenderError::CoverRequired {
+            detail: error.to_string(),
+        })
+}
+
+/// The cover for a container: a bundle, a `.docx` or a `.pptx`.
+///
+/// The seller's own picture wins when it is sharp enough to fill a good part
+/// of the frame. A bundle whose only picture is small, or which has none, is
+/// offered to the page rasteriser through its first PDF, because a drawn page
+/// at full frame is a better look at a worksheet than a thumbnail-sized
+/// preview. What remains is shown at native size, and then the card.
+fn container_cover(kind: FileKind, payload: &[u8]) -> Result<DrawnCover, RenderError> {
+    // One budget for the whole attempt: every candidate, every nested
+    // document and every bundled PDF draws down the same total.
+    let budget = ExtractBudget::default();
+    let mut spent = 0u64;
+    let found = embedded_preview(payload, 0, budget, &mut spent);
+    let sharp = found
+        .as_ref()
+        .is_some_and(|(_, picture)| picture.width().min(picture.height()) >= NATIVE_SHORT_SIDE_MIN);
+    if !sharp && kind == FileKind::Zip {
+        if let Some((path, page)) = bundle_page(payload, budget, &mut spent) {
+            return drawn(
+                &page_frame(page),
+                CoverSource::EmbeddedPage { path, index: 0 },
+            );
+        }
+    }
+    match found {
+        Some((path, picture)) => drawn(&framed(&picture), CoverSource::Embedded { path }),
+        None => card(kind),
+    }
+}
+
+/// A rasterised page on the cover frame: it already fits exactly on one axis,
+/// so this only centres it on the light ground.
+fn page_frame(page: RgbImage) -> RgbImage {
+    framed(&DynamicImage::ImageRgb8(page))
+}
+
 /// The cover for a payload, and what it is a picture of.
 ///
-/// An image payload is downscaled. A zip container — a Tes bundle, a `.docx`
-/// or a `.pptx` — is searched for the picture it already carries. A PDF, and
-/// a container carrying no picture, gets the generated card: this device has
-/// no page rasteriser, and inventing one pixel of a page we did not render
-/// would be a thumbnail that lies. A failure is `CoverRequired`, which blocks
-/// the publish.
+/// An image payload is fitted into the frame. A PDF's first page is
+/// rasterised into it. A zip container — a Tes bundle, a `.docx` or a
+/// `.pptx` — is searched for the picture it already carries, and a bundle's
+/// PDF is rasterised when that picture is missing or small. A payload nothing
+/// can be drawn from gets the generated card, which [`CoverSource::Generated`]
+/// names as such. A failure is `CoverRequired`, which blocks the publish.
 ///
 /// # Errors
 ///
@@ -405,19 +803,11 @@ pub fn cover(kind: FileKind, payload: &[u8]) -> Result<DrawnCover, RenderError> 
             .map_err(|error| RenderError::CoverRequired {
                 detail: error.to_string(),
             }),
-        FileKind::Zip | FileKind::Docx | FileKind::Pptx => {
-            // One budget for the whole attempt: every candidate and every
-            // nested document draws down the same total.
-            let mut spent = 0u64;
-            match embedded_preview(payload, 0, ExtractBudget::default(), &mut spent) {
-                Some((path, image)) => Ok(DrawnCover {
-                    image,
-                    source: CoverSource::Embedded { path },
-                }),
-                None => card(kind),
-            }
-        }
-        FileKind::Pdf => card(kind),
+        FileKind::Zip | FileKind::Docx | FileKind::Pptx => container_cover(kind, payload),
+        FileKind::Pdf => match rasterise_first_page(payload.to_vec()) {
+            Some(page) => drawn(&page_frame(page), CoverSource::Page { index: 0 }),
+            None => card(kind),
+        },
     }
 }
 
@@ -434,7 +824,10 @@ pub fn preview(kind: FileKind, payload: &[u8]) -> Result<DrawnCover, RenderError
 
 #[cfg(test)]
 mod tests {
-    use super::{cover, is_generated_card, CoverSource, RenderedImage, COVER_HEIGHT, COVER_WIDTH};
+    use super::{
+        cover, is_generated_card, square_cover, CoverSource, RenderedImage, COVER_BYTES_MAX,
+        COVER_HEIGHT, COVER_WIDTH, TPT_SQUARE_SIDE,
+    };
     use image::{ImageFormat, Rgba, RgbaImage};
     use std::io::{Cursor, Write};
     use tam_types::FileKind;
@@ -610,8 +1003,8 @@ mod tests {
             "nothing in these bytes is a picture, and the cover claims nothing else"
         );
 
-        // A PDF payload is the same answer for the same reason: no page
-        // rasteriser ships on the device, so no cover claims to be a page.
+        // A PDF the rasteriser cannot open is the same answer: no cover
+        // claims to be a page nobody rendered.
         let pdf = cover(FileKind::Pdf, b"%PDF-1.7 one page").expect("a pdf card");
         assert_eq!(
             pdf.source,
@@ -813,19 +1206,24 @@ mod tests {
     }
 
     #[test]
-    fn a_card_is_recognised_by_the_digest_the_catalogue_already_stores() {
-        let card = cover(FileKind::Zip, b"not an archive at all").expect("the zip card");
-        let digest = crate::hash::content_hash(&card.image.png);
+    fn a_legacy_card_is_recognised_by_the_digest_the_catalogue_already_stores() {
+        let legacy = super::legacy_card(FileKind::Zip).expect("the legacy zip card");
+        let digest = crate::hash::content_hash(&legacy);
         assert_eq!(
             hex_of(digest),
             LIVE_ZIP_CARD,
-            "the card this renderer draws for a zip is byte-identical to the one already \
-             stored for every Tes bundle imported so far; if this fails, those covers can no \
-             longer be told apart from a picture and become unrepairable"
+            "the legacy zip card is byte-identical to the one already stored for every Tes \
+             bundle imported before 2026-09-26; if this fails, those covers can no longer be \
+             told apart from a picture and become unrepairable"
         );
         assert!(
             is_generated_card(digest),
-            "and the renderer classifies its own card, which is what lets a repair replace it"
+            "a legacy card is still a card, which is what lets a repair replace it"
+        );
+        let current = cover(FileKind::Zip, b"not an archive at all").expect("the zip card");
+        assert!(
+            is_generated_card(crate::hash::content_hash(&current.image.png)),
+            "and so is the card drawn today"
         );
     }
 
@@ -847,6 +1245,306 @@ mod tests {
             assert!(
                 is_generated_card(crate::hash::content_hash(&card.image.png)),
                 "every kind's card is recognisable, not only the zip's"
+            );
+        }
+    }
+
+    /// A one-page PDF, written out with a correct cross-reference table so
+    /// the rasteriser reads it the way it reads a real file rather than
+    /// through its repair path. The page uses Helvetica, one of the standard
+    /// fonts a PDF need not embed, so the text also proves a substitute font
+    /// is reached.
+    fn pdf_with(media_box: &str, content: &str) -> Vec<u8> {
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [{media_box}] /Contents 4 0 R \
+                 /Resources << /Font << /F1 5 0 R >> >> >>"
+            ),
+            format!(
+                "<< /Length {} >>\nstream\n{content}\nendstream",
+                content.len() + 1
+            ),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        ];
+        let mut pdf = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (index, body) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", index + 1).as_bytes());
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(format!("xref\n0 {}\n", objects.len() + 1).as_bytes());
+        pdf.extend_from_slice(b"0000000000 65535 f \n");
+        for offset in offsets {
+            pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .as_bytes(),
+        );
+        pdf
+    }
+
+    /// A US Letter worksheet: a blue heading band and a line of black text.
+    fn worksheet_pdf() -> Vec<u8> {
+        pdf_with(
+            "0 0 612 792",
+            "0.2 0.4 0.8 rg 72 600 468 120 re f\n\
+             BT /F1 36 Tf 0 0 0 rg 72 500 Td (Fractions worksheet) Tj ET",
+        )
+    }
+
+    fn decoded(rendered: &RenderedImage) -> RgbaImage {
+        image::load_from_memory(&rendered.png)
+            .expect("the cover is a valid PNG")
+            .to_rgba8()
+    }
+
+    const GROUND: [u8; 4] = [0xF4, 0xF4, 0xF5, 0xFF];
+
+    #[test]
+    fn a_pdfs_first_page_becomes_its_cover() {
+        let pdf = worksheet_pdf();
+        let drawn = cover(FileKind::Pdf, &pdf).expect("a page cover");
+        assert_eq!(
+            drawn.source,
+            CoverSource::Page { index: 0 },
+            "the cover says it is the first page"
+        );
+        assert_valid_cover(&drawn.image);
+        assert!(
+            !is_generated_card(crate::hash::content_hash(&drawn.image.png)),
+            "a drawn page is a picture of the resource, not a card"
+        );
+        let pixels = decoded(&drawn.image);
+        // Letter at 1200px tall is 927px wide, centred: the heading band
+        // spans roughly y 109..291 and x 445..1154.
+        assert!(
+            is_near(pixels.get_pixel(800, 200).0, [0x33, 0x66, 0xCC, 0xFF]),
+            "the page's own heading band is drawn where the page puts it, found {:?}",
+            pixels.get_pixel(800, 200).0
+        );
+        assert!(
+            is_near(pixels.get_pixel(100, 600).0, GROUND),
+            "the page sits on the light ground, not a dark one"
+        );
+        assert!(
+            is_near(pixels.get_pixel(800, 1000).0, [0xFF, 0xFF, 0xFF, 0xFF]),
+            "the page itself is white"
+        );
+        // The text line sits at y ~ (792 - 500) * 1.515 = 442, above the
+        // baseline; any dark pixel there is a glyph the substitute font drew.
+        let inked = (400..445)
+            .flat_map(|y| (445..1154).map(move |x| (x, y)))
+            .filter(|&(x, y)| pixels.get_pixel(x, y).0[0] < 0x40)
+            .count();
+        assert!(inked > 500, "the text is drawn, found {inked} dark pixels");
+        let again = cover(FileKind::Pdf, &pdf).expect("a second page cover");
+        assert_eq!(drawn, again, "the same PDF yields a byte-identical cover");
+    }
+
+    #[test]
+    fn a_page_of_any_declared_size_renders_inside_the_frame() {
+        let enormous = pdf_with("0 0 2000000 1500000", "0 0 1 rg 0 0 1000000 750000 re f");
+        let drawn = cover(FileKind::Pdf, &enormous).expect("a page cover");
+        assert_eq!(drawn.source, CoverSource::Page { index: 0 });
+        assert_valid_cover(&drawn.image);
+
+        // A sliver a hundred thousand times taller than it is wide still
+        // lands in the frame, at least one pixel wide.
+        let sliver = pdf_with("0 0 1 100000", "0 0 1 rg 0 0 1 100000 re f");
+        let drawn = cover(FileKind::Pdf, &sliver).expect("a page cover");
+        assert_eq!(drawn.source, CoverSource::Page { index: 0 });
+        assert_valid_cover(&drawn.image);
+    }
+
+    #[test]
+    fn a_bundles_pdf_is_drawn_when_the_bundle_carries_no_picture() {
+        let bundle = zip_with(&[
+            ("readme.txt", b"how to use this pack"),
+            ("worksheet.pdf", &worksheet_pdf()),
+        ]);
+        let drawn = cover(FileKind::Zip, &bundle).expect("a bundle cover");
+        assert_eq!(
+            drawn.source,
+            CoverSource::EmbeddedPage {
+                path: "worksheet.pdf".to_owned(),
+                index: 0
+            },
+            "the bundle's PDF is drawn and the cover names which entry it came from"
+        );
+        assert_valid_cover(&drawn.image);
+    }
+
+    #[test]
+    fn a_small_preview_gives_way_to_a_bundled_page_and_a_large_one_does_not() {
+        let small = zip_with(&[
+            ("preview.png", &png_of(300, 200, MAGENTA)),
+            ("worksheet.pdf", &worksheet_pdf()),
+        ]);
+        assert!(
+            matches!(
+                cover(FileKind::Zip, &small).expect("a cover").source,
+                CoverSource::EmbeddedPage { .. }
+            ),
+            "a 300x200 preview is a thumbnail; the full-frame page is the better cover"
+        );
+        let large = zip_with(&[
+            ("preview.png", &png_of(1200, 900, MAGENTA)),
+            ("worksheet.pdf", &worksheet_pdf()),
+        ]);
+        assert_eq!(
+            cover(FileKind::Zip, &large).expect("a cover").source,
+            CoverSource::Embedded {
+                path: "preview.png".to_owned()
+            },
+            "a preview sharp enough for the frame is the seller's chosen picture and wins"
+        );
+    }
+
+    #[test]
+    fn a_small_stored_thumbnail_is_shown_at_native_size_rather_than_stretched() {
+        let document = docx_with(&[("docProps/thumbnail.jpeg", &jpeg_of(240, 180, MAGENTA))]);
+        let drawn = cover(FileKind::Docx, &document).expect("a document cover");
+        let pixels = decoded(&drawn.image);
+        assert!(
+            is_near(pixels.get_pixel(800 + 110, 600).0, MAGENTA),
+            "inside the 240px-wide picture"
+        );
+        assert!(
+            is_near(pixels.get_pixel(800 + 130, 600).0, GROUND),
+            "just outside it is the light ground: the picture was not upscaled"
+        );
+    }
+
+    #[test]
+    fn the_card_is_a_neutral_grey_page_rather_than_a_red_block() {
+        let card = cover(FileKind::Pdf, b"not a pdf").expect("the pdf card");
+        let pixels = decoded(&card.image);
+        assert!(
+            pixels
+                .pixels()
+                .all(|pixel| pixel.0[0].abs_diff(pixel.0[2]) <= 16),
+            "no pixel of the PDF card is red"
+        );
+        assert!(
+            is_near(pixels.get_pixel(20, 20).0, [0xEC, 0xEC, 0xEE, 0xFF]),
+            "the ground is light grey"
+        );
+        assert!(
+            is_near(pixels.get_pixel(800, 900).0, [0xFF, 0xFF, 0xFF, 0xFF]),
+            "a white page glyph sits on it"
+        );
+    }
+
+    #[test]
+    fn a_cover_whose_png_would_break_the_cap_is_stepped_down() {
+        let mut state = 0x2545_F491_u32;
+        let noise = RgbaImage::from_fn(COVER_WIDTH, COVER_HEIGHT, |_, _| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            let [r, g, b, _] = state.to_le_bytes();
+            Rgba([r, g, b, 0xFF])
+        });
+        let mut png = Vec::new();
+        noise
+            .write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+            .expect("encode fixture");
+        let drawn = cover(FileKind::Image, &png).expect("an image cover");
+        assert!(
+            drawn.image.png.len() <= COVER_BYTES_MAX,
+            "the cover is under the cap, found {} bytes",
+            drawn.image.png.len()
+        );
+        assert!(
+            drawn.image.width >= 800 && drawn.image.width * 3 == drawn.image.height * 4,
+            "and still 4:3 and no smaller than Tes's own cover, found {}x{}",
+            drawn.image.width,
+            drawn.image.height
+        );
+    }
+
+    #[test]
+    fn a_busy_page_renders_under_the_cover_cap() {
+        // A worst case a PDF can realistically be: a landscape page tiled with
+        // 4pt cells in unrelated colours, so almost no two neighbouring
+        // pixels match and PNG's filters have nothing to work with.
+        use std::fmt::Write as _;
+        let mut state = 0x9E37_79B9_u32;
+        let mut content = String::new();
+        for row in 0..150u32 {
+            for column in 0..200u32 {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                let [r, g, b, _] = state.to_le_bytes();
+                writeln!(
+                    content,
+                    "{:.3} {:.3} {:.3} rg {} {} 4 4 re f",
+                    f32::from(r) / 255.0,
+                    f32::from(g) / 255.0,
+                    f32::from(b) / 255.0,
+                    column * 4,
+                    row * 4,
+                )
+                .expect("writing to a String cannot fail");
+            }
+        }
+        content.push_str("BT /F1 48 Tf 0 0 0 rg 40 280 Td (Busy page) Tj ET");
+        let drawn = cover(FileKind::Pdf, &pdf_with("0 0 800 600", &content)).expect("a cover");
+        assert_eq!(drawn.source, CoverSource::Page { index: 0 });
+        assert!(
+            drawn.image.png.len() <= COVER_BYTES_MAX,
+            "a busy page is under the 2 MiB cap (and so under TPT's 4 MB), found {} bytes",
+            drawn.image.png.len()
+        );
+        assert!(
+            drawn.image.width >= 800 && drawn.image.width * 3 == drawn.image.height * 4,
+            "downscaled to fit rather than cropped, found {}x{}",
+            drawn.image.width,
+            drawn.image.height
+        );
+    }
+
+    #[test]
+    fn the_tpt_square_pads_the_cover_rather_than_cropping_it() {
+        let cover_png = png_of(COVER_WIDTH, COVER_HEIGHT, MAGENTA);
+        let square = square_cover(&cover_png).expect("a square");
+        assert_eq!(
+            (square.width, square.height),
+            (TPT_SQUARE_SIDE, TPT_SQUARE_SIDE)
+        );
+        let pixels = decoded(&square);
+        assert_eq!(
+            pixels.dimensions(),
+            (TPT_SQUARE_SIDE, TPT_SQUARE_SIDE),
+            "the PNG is the square it claims"
+        );
+        let white = [0xFF, 0xFF, 0xFF, 0xFF];
+        for (x, y, wanted, why) in [
+            (500, 500, MAGENTA, "the centre is the cover"),
+            (
+                0,
+                500,
+                MAGENTA,
+                "the cover reaches the left edge: nothing was cropped",
+            ),
+            (999, 500, MAGENTA, "and the right edge"),
+            (500, 125, MAGENTA, "a 1000x750 band starts at y 125"),
+            (500, 874, MAGENTA, "and ends at y 874"),
+            (500, 124, white, "white above the band"),
+            (500, 875, white, "white below the band"),
+        ] {
+            assert!(
+                is_near(pixels.get_pixel(x, y).0, wanted),
+                "{why}: ({x}, {y}) is {:?}",
+                pixels.get_pixel(x, y).0
             );
         }
     }

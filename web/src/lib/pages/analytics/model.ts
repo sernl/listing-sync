@@ -319,7 +319,7 @@ export function standingBars(standing: Standing): Bar[] {
 	const named = [
 		{
 			label: 'Live',
-			title: 'The marketplace was last recorded showing this listing.',
+			title: 'Last seen live on the marketplace.',
 			value: standing.live
 		},
 		{
@@ -440,22 +440,22 @@ export function tileViews(input: TileInputs): TileView[] {
 		};
 		const none = { ...shell, value: DASH, figure: false };
 		if (!reports) {
-			return { ...none, tag: 'not reported', sub: `${silent} reports no figures` };
+			return { ...none, tag: 'not reported', sub: `${silent} doesn't share figures` };
 		}
 		if (input.summary === 'failed') {
-			return { ...none, tag, sub: 'the analytics could not be read' };
+			return { ...none, tag, sub: 'could not load' };
 		}
 		if (input.summary === 'pending') {
-			return { ...none, tag, sub: 'reading…' };
+			return { ...none, tag, sub: 'loading…' };
 		}
 		if (figure.total === undefined || figure.asAt === null) {
-			return { ...none, tag, sub: 'nothing captured yet' };
+			return { ...none, tag, sub: 'no figures yet' };
 		}
 		// The contributor count is named only where it is short of the scope.
 		// Saying "from 11 of 11" on every tile is noise; saying nothing when it
 		// is 5 of 11 lets a partial total read as a complete one.
 		const partial = figure.from < figure.of;
-		const drawn = `as at ${agoLabel(figure.asAt, input.now)}`;
+		const drawn = `as of ${agoLabel(figure.asAt, input.now)}`;
 		return {
 			...shell,
 			value: input.format(figure.total),
@@ -474,7 +474,7 @@ export function tileViews(input: TileInputs): TileView[] {
 		tag: 'from your Resources',
 		sub:
 			input.catalogue === 'failed'
-				? 'your Resources could not be read'
+				? 'could not load your resources'
 				: input.catalogue === 'pending'
 					? 'counting…'
 					: `of ${input.standing.listings} tracked`,
@@ -507,15 +507,15 @@ export function headerMeta(input: {
 	summary: ReadState;
 	now: number;
 }): HeaderMeta {
-	const key = 'Figures as at';
+	const key = 'Figures as of';
 	if (!scopeReports(input.scope)) {
 		return { key, value: 'not reported', at: null };
 	}
 	if (input.summary === 'failed') {
-		return { key, value: 'could not be read', at: null };
+		return { key, value: 'could not load', at: null };
 	}
 	if (input.summary === 'pending') {
-		return { key, value: 'reading…', at: null };
+		return { key, value: 'loading…', at: null };
 	}
 	const oldest = oldestUpdate(input.listings, input.scope);
 	if (oldest === null) {
@@ -593,11 +593,11 @@ export function chartView(input: {
 		title: 'Where your listings stand',
 		description: saidWhenRead(
 			input.catalogue,
-			`Counted from your own Resources, because ${silent} publishes no figures.`
+			`Counted from your resources, because ${silent} doesn't share figures.`
 		),
 		bars: standingBars(input.standing),
 		counted: true,
-		label: 'How many listings stand in each state'
+		label: 'How many listings are in each state'
 	};
 }
 
@@ -618,14 +618,14 @@ export function tableView(scope: ScopeId, read: ReadState): PanelText {
 		// did, and it is the panel's whole content.
 		return {
 			title: 'Top resources',
-			description: `Nothing here is ranked, because ${silentIn(scope).join(' and ')} reports no figures.`
+			description: `We can't rank these, because ${silentIn(scope).join(' and ')} doesn't share figures.`
 		};
 	}
 	return {
 		title: 'Top resources',
 		description: saidWhenRead(
 			read,
-			`Your listings, best first by ${CHART_HEADING.toLowerCase()}, each with the age of its oldest figure.`
+			`Your listings, best first by ${CHART_HEADING.toLowerCase()}, with how old each figure is.`
 		)
 	};
 }

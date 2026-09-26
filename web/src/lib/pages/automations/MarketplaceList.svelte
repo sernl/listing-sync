@@ -8,51 +8,118 @@
 		rows,
 		selected = $bindable(null),
 		onselect,
-		empty
+		empty,
+		label = 'Your marketplaces'
 	}: {
 		rows: readonly MarketplaceRow[];
+		/** The marketplace the page narrows to, or null where the strip only
+		 *  reports link status and selects nothing. */
 		selected?: Marketplace | null;
 		onselect?: (marketplace: Marketplace) => void;
-		/** What the column says where the seller has connected nothing. */
+		/** What the strip says where the seller has connected nothing. */
 		empty: string;
+		label?: string;
 	} = $props();
 </script>
 
-<!-- Plain buttons under a heading, not a `nav` and not a tablist.
-
-     Not a `nav`, because these controls navigate nowhere: they swap the
-     settings card beside the column, and a landmark called "Marketplaces
-     navigation" lands a screen-reader user on controls that go nowhere.
-     Not a tablist either, because the honest version of that contract needs
-     `aria-controls` onto a `tabpanel` the page and not this component renders,
-     plus roving tabindex and arrow-key selection — and a tablist announced
-     without them tells a screen-reader user arrow keys will work when they
-     will not. `aria-pressed` says what is true of each button on its own and
-     needs no keyboard model beyond the one buttons already have. -->
-<div class="mk-list">
-	<h2 id="mk-list-title">Marketplaces</h2>
+<!-- One chip per connected marketplace: its mark, its link status and the
+     page's figure for it. Plain buttons with `aria-pressed` where the page
+     narrows by marketplace, plain items where it does not: a pressable chip
+     that changes nothing is a control that lies. -->
+<div class="mk-strip" role="group" aria-label={label}>
+	<span class="mk-strip-label">{label}</span>
 	{#if rows.length === 0}
-		<p class="mk-empty">{empty}</p>
+		<span class="mk-strip-empty">{empty}</span>
 	{:else}
-		<div class="mk-rows" aria-labelledby="mk-list-title">
-			{#each rows as row (row.marketplace)}
+		{#each rows as row (row.marketplace)}
+			{#if onselect}
 				<button
 					type="button"
-					class="mk-row"
+					class="mk-chip"
 					aria-pressed={row.marketplace === selected}
 					onclick={() => {
 						selected = row.marketplace;
 						onselect?.(row.marketplace);
 					}}
 				>
-					<span class="edge" aria-hidden="true"></span>
-					<span class="who">
-						<span class="t"><MarketplaceMark marketplace={row.marketplace} /></span>
-						<StatusPill tone={row.tone} label={row.status} />
-					</span>
-					{#if row.count !== null}<span class="count">{row.count}</span>{/if}
+					<MarketplaceMark marketplace={row.marketplace} size={18} />
+					<StatusPill tone={row.tone} label={row.status} />
+					{#if row.count !== null}<span class="mk-count">{row.count}</span>{/if}
 				</button>
-			{/each}
-		</div>
+			{:else}
+				<span class="mk-chip">
+					<MarketplaceMark marketplace={row.marketplace} size={18} />
+					<StatusPill tone={row.tone} label={row.status} />
+					{#if row.count !== null}<span class="mk-count">{row.count}</span>{/if}
+				</span>
+			{/if}
+		{/each}
 	{/if}
 </div>
+
+<style>
+	.mk-strip {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: var(--s-2);
+		margin-bottom: var(--s-5);
+	}
+
+	.mk-strip-label {
+		margin-right: var(--s-1);
+		color: var(--muted);
+		font-size: 12.5px;
+		font-weight: 600;
+	}
+
+	.mk-strip-empty {
+		color: var(--muted);
+		font-size: 13px;
+	}
+
+	.mk-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--s-2);
+		min-height: 34px;
+		padding: 3px 10px 3px 6px;
+		border: 1px solid var(--line);
+		border-radius: var(--r-pill);
+		background: var(--mark-ground);
+		color: var(--text);
+		font: inherit;
+		font-size: 13px;
+	}
+
+	button.mk-chip {
+		cursor: pointer;
+	}
+
+	button.mk-chip:hover {
+		border-color: var(--lavender);
+	}
+
+	button.mk-chip:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
+	}
+
+	.mk-chip[aria-pressed='true'] {
+		border-color: var(--accent);
+		box-shadow: inset 0 0 0 1px var(--accent);
+	}
+
+	.mk-count {
+		display: inline-grid;
+		place-items: center;
+		min-width: 22px;
+		height: 22px;
+		padding: 0 6px;
+		border-radius: var(--r-pill);
+		background: var(--additive-soft);
+		color: var(--additive);
+		font-size: 12px;
+		font-weight: 700;
+	}
+</style>

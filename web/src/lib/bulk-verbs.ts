@@ -41,7 +41,7 @@ const MISSING: Record<BulkVerb, string | null> = {
 	// fields it carries, so applying one chooses nothing across the selection.
 	// The screen that lets a seller say "set the price on these forty to £3" is
 	// what does not exist.
-	edit: 'No screen chooses which fields change across a selection. Editing one resource at a time works; the screen for editing several at once is what does not exist.',
+	edit: 'You cannot edit several resources at once yet. Open each resource to edit it.',
 	apply_template: null,
 	add_to_collection: null,
 	labels: null,

@@ -53,16 +53,16 @@
 
 	function refusalOf(failure: unknown): string {
 		if (!(failure instanceof ApiFailure)) {
-			return 'The upload did not finish. Nothing was stored.';
+			return 'The upload did not finish. Nothing was saved.';
 		}
 		if (failure.status === 0) {
-			return 'The upload did not reach us. Nothing was stored; try again.';
+			return 'The upload did not reach us. Nothing was saved; try again.';
 		}
 		if (failure.code() === 'quota_exceeded') {
 			return quotaSentence(failure.body?.errors[0]?.detail) ?? failure.message;
 		}
 		if (failure.code() === 'blob_store_unavailable') {
-			return 'This deployment cannot store bytes yet, so no file was accepted.';
+			return 'File uploads are not available yet, so nothing was saved.';
 		}
 		return failure.message;
 	}
@@ -196,7 +196,7 @@
 		<div class="uf-fill" style="width: {sending.percent}%"></div>
 	</div>
 	<p class="uf-note">
-		{sending.name} — {sending.percent}% sent{queued > 1 ? `, ${queued - 1} to go` : ''}
+		{sending.name} — {sending.percent}% uploaded{queued > 1 ? `, ${queued - 1} to go` : ''}
 	</p>
 {/if}
 
@@ -207,9 +207,9 @@
 {#each files as file, index (file.name + index)}
 	<div class="uf-row">
 		<span class="uf-what">
-			<StatusPill tone="ok" label="stored" />
+			<StatusPill tone="ok" label="uploaded" />
 			<span class="uf-name" title={file.name}>{file.name}</span>
-			{#if index === 0}<span class="uf-at">the thumbnail is drawn from this one</span>{/if}
+			{#if index === 0}<span class="uf-at">the thumbnail comes from this file</span>{/if}
 		</span>
 		<span class="uf-at">{formatBytes(file.bytes)}</span>
 		<span class="uf-acts">
@@ -217,7 +217,7 @@
 				small
 				danger
 				disabled={sending !== null}
-				reason={sending === null ? undefined : 'A file is being uploaded.'}
+				reason={sending === null ? undefined : 'Wait for the upload to finish.'}
 				onclick={() => onFiles(files.filter((_, at) => at !== index))}>Remove</Button
 			>
 		</span>

@@ -184,9 +184,7 @@ fn availability_of(raw: &str) -> Result<LibraryAvailability, APIError> {
         "online" => Ok(LibraryAvailability::Online),
         "offline" => Ok(LibraryAvailability::Offline),
         "missing" => Ok(LibraryAvailability::Missing),
-        _ => Err(validation(
-            "availability is one of online, offline or missing",
-        )),
+        _ => Err(validation("Choose online, offline or missing.")),
     }
 }
 
@@ -194,7 +192,7 @@ fn linked_of(raw: &str) -> Result<LibraryLinked, APIError> {
     match raw {
         "linked" => Ok(LibraryLinked::Linked),
         "unlinked" => Ok(LibraryLinked::Unlinked),
-        _ => Err(validation("linked is one of linked or unlinked")),
+        _ => Err(validation("Choose linked or unlinked.")),
     }
 }
 
@@ -206,7 +204,7 @@ fn search_of(raw: Option<&String>) -> Result<Option<&str>, APIError> {
         return Ok(None);
     };
     if term.chars().count() > SEARCH_MAX_CHARS {
-        return Err(validation("a search is at most 128 characters"));
+        return Err(validation("Keep your search to 128 characters or fewer."));
     }
     Ok(Some(term))
 }
@@ -301,7 +299,7 @@ pub(crate) async fn want(
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
     if !held {
-        return Err(missing("no other machine of yours holds that file"));
+        return Err(missing("None of your other devices has that file."));
     }
     repo.want(context.org, device, hash, (state.wall)())
         .await

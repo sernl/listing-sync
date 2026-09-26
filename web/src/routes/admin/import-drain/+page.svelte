@@ -32,10 +32,10 @@
 	<PageHead
 		icon="chart-line"
 		title="Import drain"
-		description="The share of canonical terms each import raised a new question for, per tenant: it should fall as a tenant's crosswalk fills in."
+		description="Per account, the share of canonical terms each import raised a new question for. It should fall as the account's crosswalk fills in."
 	>
 		{#snippet aside()}
-			<StatusPill tone="soon" label="every tenant" />
+			<StatusPill tone="soon" label="all accounts" />
 		{/snippet}
 	</PageHead>
 
@@ -44,9 +44,9 @@
 	     operator has no reading for. -->
 	<Panel title="Dead letters">
 		{#if dead.isPending}
-			<p class="quiet">Reading the outbox…</p>
+			<p class="quiet">Loading dead letters…</p>
 		{:else if dead.isError}
-			<p class="quiet">The dead letters could not be read.</p>
+			<p class="quiet">We could not load dead letters.</p>
 		{:else}
 			<p class="s">{deadLetterHeadline(dead.data.topics)}</p>
 			{#if dead.data.topics.length > 0}
@@ -71,19 +71,18 @@
 					</table>
 				</div>
 				<p class="foot-note">
-					A message is dead after twelve failed attempts, or on a refusal the relay called
-					permanent; the drainer never retries one. Many organisations holding one each
-					points at the relay or its key, one organisation holding many at an address the
-					relay refuses.
+					A message is dead after twelve failed attempts, or when the relay refuses it for good.
+					The drainer never retries it. Many organisations with one each points to the relay or
+					its key; one organisation with many points to an address the relay refuses.
 				</p>
 			{/if}
 		{/if}
 	</Panel>
 
 	{#if drain.isPending}
-		<Panel><p class="quiet">Reading the drain measurements…</p></Panel>
+		<Panel><p class="quiet">Loading drain measurements…</p></Panel>
 	{:else if drain.isError}
-		<Panel><p class="quiet">The drain measurements could not be read.</p></Panel>
+		<Panel><p class="quiet">We could not load drain measurements.</p></Panel>
 	{:else if readout.series.length === 0}
 		{@const empty = emptyState(readout.unreadable)}
 		<Panel>
@@ -157,9 +156,8 @@
 		</p>
 		{#if drain.data?.truncated}
 			<p class="foot-note op-unreadable">
-				The read stops at 500 measurements and this one filled it. Rows are ordered by
-				organisation name, so a tenant late in the alphabet may be shown short or missing
-				from this page entirely.
+				The read stops at 500 measurements and hit that limit. Rows are ordered by
+				organisation name, so an account late in the alphabet may be cut short or missing.
 			</p>
 		{/if}
 	{/if}

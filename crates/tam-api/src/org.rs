@@ -214,11 +214,11 @@ pub struct UpdateBody {
 fn validated_name(raw: &str) -> Result<&str, APIError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err(validation("an organisation name cannot be empty"));
+        return Err(validation("Enter a name for your account."));
     }
     if trimmed.chars().count() > NAME_MAX_CHARS {
         return Err(validation(&format!(
-            "an organisation name is at most {NAME_MAX_CHARS} characters"
+            "Keep your account name to {NAME_MAX_CHARS} characters or fewer."
         )));
     }
     Ok(trimmed)
@@ -238,7 +238,7 @@ fn validated_name(raw: &str) -> Result<&str, APIError> {
 fn validated_slug(raw: &str) -> Result<String, APIError> {
     let slug = raw.trim().to_lowercase();
     if slug.is_empty() {
-        return Err(validation("Choose a name for your organisation."));
+        return Err(validation("Choose a name for your account."));
     }
     if !slug.chars().all(|character| {
         character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
@@ -306,7 +306,7 @@ pub(crate) async fn slug_state(
         .get(org)
         .await
         .map_err(|error| storage_fault(state, &error))?
-        .ok_or_else(|| missing("no such organisation"))?;
+        .ok_or_else(|| missing("We can't find that account."))?;
     let prompt = SlugPrompt::of(&record);
     Ok((record.slug, prompt))
 }
@@ -319,7 +319,7 @@ pub(crate) async fn org_view(
         .get(context.org)
         .await
         .map_err(|error| storage_fault(&state, &error))?
-        .ok_or_else(|| missing("no such organisation"))?;
+        .ok_or_else(|| missing("We can't find that account."))?;
     Ok(Json(OrgView::of(record)))
 }
 
@@ -337,9 +337,7 @@ pub(crate) async fn update_org(
     let name = body.name.as_deref().map(validated_name).transpose()?;
     let slug = body.slug.as_deref().map(validated_slug).transpose()?;
     if name.is_none() && slug.is_none() {
-        return Err(validation(
-            "a change must name the organisation's name, its slug, or both",
-        ));
+        return Err(validation("Change at least one of the names."));
     }
     let repo = OrgRepo::new(state.pool.clone());
     match repo
@@ -349,13 +347,13 @@ pub(crate) async fn update_org(
     {
         OrgWrite::Stored => {}
         OrgWrite::SlugTaken => return Err(slug_taken()),
-        OrgWrite::NoSuchOrg => return Err(missing("no such organisation")),
+        OrgWrite::NoSuchOrg => return Err(missing("We can't find that account.")),
     }
     let stored = repo
         .get(context.org)
         .await
         .map_err(|error| storage_fault(&state, &error))?
-        .ok_or_else(|| missing("no such organisation"))?;
+        .ok_or_else(|| missing("We can't find that account."))?;
     Ok(Json(OrgView::of(stored)))
 }
 

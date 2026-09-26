@@ -81,8 +81,8 @@
 			toast(
 				'error',
 				failure instanceof ApiFailure && failure.status === 401
-					? 'Signed in, but the API did not accept the login. Try again.'
-					: 'Signed in, but the session could not be established. Try again.'
+					? 'Your sign-in was not accepted. Try again.'
+					: 'We could not finish signing you in. Try again.'
 			);
 		}
 	}
@@ -136,7 +136,7 @@
 		try {
 			const { error } = await signInWithPasskey();
 			if (error) {
-				toast('error', messageOf(error, 'The passkey sign-in did not complete.'));
+				toast('error', messageOf(error, 'The passkey sign-in did not finish. Try again.'));
 				return;
 			}
 			await finish('');
@@ -152,7 +152,7 @@
 		const { error } = await signInWithProvider(provider);
 		if (error) {
 			busy = null;
-			toast('error', messageOf(error, `Signing in with ${provider} is unavailable.`));
+			toast('error', messageOf(error, `You cannot sign in with ${provider} right now.`));
 		}
 	}
 
@@ -167,7 +167,7 @@
 			toast(
 				error ? 'error' : 'info',
 				error
-					? messageOf(error, 'The verification email could not be sent.')
+					? messageOf(error, 'We could not send the verification email. Try again.')
 					: 'Verification email sent.'
 			);
 		} finally {
@@ -184,7 +184,7 @@
 			<Button
 				tier="primary"
 				disabled={busy !== null}
-				reason={busy !== null ? 'A sign-in step is already running.' : undefined}
+				reason={busy !== null ? 'Wait for the current step to finish.' : undefined}
 				onclick={resend}
 			>
 				{busy === 'resend' ? 'Sending…' : 'Send it again'}
@@ -192,7 +192,7 @@
 			<Button
 				tier="outline"
 				disabled={busy !== null}
-				reason={busy !== null ? 'A sign-in step is already running.' : undefined}
+				reason={busy !== null ? 'Wait for the current step to finish.' : undefined}
 				onclick={() => (awaitingVerification = null)}
 			>
 				Use a different account
@@ -200,7 +200,7 @@
 		</div>
 	{:else}
 		<h1>Sign in</h1>
-		<p>{busy === 'resume' ? 'Completing sign-in…' : SIGN_IN_PROMPT}</p>
+		<p>{busy === 'resume' ? 'Signing you in…' : SIGN_IN_PROMPT}</p>
 
 		<form onsubmit={withPassword} class="form">
 			<Field label="Email" id="email" required>
@@ -222,9 +222,9 @@
 				type="submit"
 				disabled={busy !== null || challengePending}
 				reason={busy !== null
-					? 'A sign-in step is already running.'
+					? 'Wait for the current step to finish.'
 					: challengePending
-						? 'The challenge above has not been answered yet.'
+						? 'Complete the check above first.'
 						: undefined}
 			>
 				{busy === 'password' ? 'Signing in…' : 'Sign in'}
@@ -239,7 +239,7 @@
 			<Button
 				tier="outline"
 				disabled={busy !== null}
-				reason={busy !== null ? 'A sign-in step is already running.' : undefined}
+				reason={busy !== null ? 'Wait for the current step to finish.' : undefined}
 				onclick={withPasskey}
 			>
 				{busy === 'passkey' ? 'Waiting for your passkey…' : 'Sign in with a passkey'}
@@ -248,7 +248,7 @@
 				<Button
 					tier="outline"
 					disabled={busy !== null}
-					reason={busy !== null ? 'A sign-in step is already running.' : undefined}
+					reason={busy !== null ? 'Wait for the current step to finish.' : undefined}
 					onclick={() => withProvider(provider.id)}
 				>
 					{busy === provider.id ? 'Redirecting…' : `Continue with ${provider.label}`}

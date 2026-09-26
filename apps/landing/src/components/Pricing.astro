@@ -8,6 +8,7 @@ import {
 	foundingOpen,
 	free,
 	moveWithMe,
+	moveDefinition,
 	packEditNote,
 	packRows,
 	planFeatures,
@@ -31,11 +32,14 @@ const Heading = level === 1 ? 'h1' : 'h2';
 	<div class="wrap">
 		<p class="eyebrow">Simple, transparent pricing</p>
 		<Heading>Three ways to start</Heading>
+		{/* The founder's own example names two marketplaces, so the line is a
+		    marked band for `just landing-copy-gate`. */}
+		<p class="move-def" data-marketplace-band><strong>What is a move?</strong> {moveDefinition}</p>
 
 		<div class="ways">
 			<div class="way">
-				<h3>{free.name} <span class="cadence">(free)</span></h3>
-				<p>Bring both shops in. Try {free.capabilities.free_moves_lifetime} moves.</p>
+				<h3>{free.name} <span class="cadence">(Trial)</span></h3>
+				<p>Bring your shops in and try {free.capabilities.free_moves_lifetime} moves.</p>
 				<p class="price">Free<span class="per"> for as long as you like</span></p>
 				<div class="chips">
 					{
@@ -53,8 +57,8 @@ const Heading = level === 1 ? 'h1' : 'h2';
 			</div>
 
 			<div class="way lead">
-				<h3>{subscription.name} <span class="cadence">(subscription)</span></h3>
-				<p>List every week. Keep both shops in step.</p>
+				<h3>{subscription.name} <span class="cadence">(Subscription)</span></h3>
+				<p>For teachers who add resources often. Keep every shop up to date.</p>
 				<p class="price">
 					{dollars(subscriptionPerMonth)}<span class="per"> a month, billed yearly</span>
 				</p>
@@ -89,8 +93,8 @@ const Heading = level === 1 ? 'h1' : 'h2';
 			</div>
 
 			<div class="way">
-				<h3>Move packs <span class="cadence">(one-off)</span></h3>
-				<p>Moving a shop once? Buy the moves and stay free.</p>
+				<h3>Move Packs <span class="cadence">(One-Off)</span></h3>
+				<p>Moving your shop once? Buy the moves you need, with no subscription.</p>
 				<table class="packs">
 					<thead>
 						<tr>

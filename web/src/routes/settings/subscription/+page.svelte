@@ -5,8 +5,7 @@
 	import { ApiFailure, api } from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
-	import { movesLimit } from '$lib/entitlement';
-	import { FOUNDING, PACKS, SERVICES } from '$lib/generated/plans';
+	import { FOUNDING, PLANS, SERVICES } from '$lib/generated/plans';
 	import { type PriceKey } from '$lib/generated/vocab';
 	import Icon from '$lib/Icon.svelte';
 	import Note from '$lib/Note.svelte';
@@ -26,6 +25,7 @@
 		moves,
 		packsBySize,
 		perMonth,
+		planBullets,
 		renewsLine,
 		syncPlan
 	} from '$lib/pages/account/plans';
@@ -36,16 +36,18 @@
 	// `tam-limits`' own and the same figures the checkout charges. Nothing
 	// here writes a price as a literal: a number typed into markup is a price
 	// that drifts from the one Stripe takes.
+	const look = PLANS.find((plan) => plan.id === 'free') ?? null;
 	const sync = syncPlan();
 	const packs = packsBySize();
 	const best = bestValuePack();
 	const service = SERVICES[0];
 	const founding = FOUNDING;
 
-	// The allowance sentence is `entitlement.ts`' own, because the plan card
-	// and the gate that refuses a move must promise the same thing in the
-	// same words.
-	const allowance = sync === null ? null : movesLimit(sync.capabilities);
+	// The card lines are the landing page's pricing cards, read off the same
+	// capabilities, so a seller reads one promise on both.
+	const lookBullets = look === null ? [] : planBullets(look.capabilities);
+	const syncBullets = sync === null ? [] : planBullets(sync.capabilities);
+	const editDays = (sync ?? look)?.capabilities.pack_edit_days ?? null;
 
 	// Read once at load rather than in a `$derived`: whether the offer is open
 	// is a fact about today, and re-evaluating it per render would make the
@@ -205,26 +207,53 @@
 		{#if billing.isPending}
 			<p class="quiet">Loading…</p>
 		{:else if billing.isError || balance === undefined}
-			<p class="quiet">We could not read your balance.</p>
+			<p class="quiet">Your balance did not load. Refresh the page to try again.</p>
 		{:else}
 			<p class="moves-count"><span class="n">{balance.available}</span> available</p>
 			{#if expiry !== null}
 				<p class="quiet">{expiry}</p>
 			{/if}
 			<Note icon="info">
-				<a href="/guides/plans">Read how moves are spent.</a>
+				A move is publishing one imported resource onto one marketplace. Publishing a resource to
+				Tes and TPT is 2 moves; to Tes alone is 1 move.
+				<a href="/guides/plans">Read how moves work.</a>
 			</Note>
 		{/if}
 	</Panel>
 
 	<div class="page-grid">
 		<div class="plan-column">
+			{#if look !== null}
+				<div class="acct-plan">
+					<div class="acct-plan-top">
+						<span class="name">
+							<Icon name="eye" size={16} />
+							{look.name}
+							<span class="kind">(Trial)</span>
+						</span>
+						{#if held?.plan === 'free'}
+							<StatusPill tone="ok" label="current" />
+						{/if}
+					</div>
+					<div class="price">
+						<span class="n">{dollars(0)}</span>
+						<span class="per">to start</span>
+					</div>
+					<ul class="bullets">
+						{#each lookBullets as line (line.text)}
+							<li>{line.text}</li>
+						{/each}
+					</ul>
+				</div>
+			{/if}
+
 			{#if sync !== null && sync.yearly_cents !== null && sync.monthly_cents !== null}
 				<div class="acct-plan">
 					<div class="acct-plan-top">
 						<span class="name">
 							<Icon name="credit-card" size={16} />
 							{sync.name}
+							<span class="kind">(Subscription)</span>
 						</span>
 						{#if subscribed}
 							<StatusPill tone="ok" label="current" />
@@ -237,9 +266,11 @@
 					<p class="quiet">
 						{dollars(sync.yearly_cents)} a year, or {dollars(sync.monthly_cents)} a month.
 					</p>
-					{#if allowance !== null}
-						<p>{allowance}.</p>
-					{/if}
+					<ul class="bullets">
+						{#each syncBullets as line (line.text)}
+							<li class:soon={line.soon}>{line.text}</li>
+						{/each}
+					</ul>
 					{#if subscribed}
 						{#if renews !== null}
 							<p class="quiet">{renews}</p>
@@ -251,7 +282,7 @@
 								reason={portalOpening
 									? 'Billing is opening.'
 									: held?.portal_available === false
-										? 'Billing opens once a payment has been taken.'
+										? 'Billing opens after your first payment.'
 										: undefined}
 								onclick={manage}
 							>
@@ -322,7 +353,7 @@
 					</div>
 					<div class="price">
 						<span class="n">{dollars(service.price_cents)}</span>
-						<span class="per">one off</span>
+						<span class="per">one-off</span>
 					</div>
 					<p>We move your back catalogue for you.</p>
 					<div class="actions">
@@ -339,7 +370,12 @@
 		</div>
 	</div>
 
-	<Panel title="Move packs">
+	<Panel title="Move Packs (One-Off)">
+		{#if editDays !== null}
+			<p class="pack-note">
+				Edit a moved listing once within {editDays} days without spending another move.
+			</p>
+		{/if}
 		<div class="pack-grid">
 			{#each packs as pack (pack.key)}
 				<div class="acct-plan">
@@ -371,3 +407,32 @@
 		</div>
 	</Panel>
 </div>
+
+<style>
+	.kind {
+		font-family: var(--sans);
+		font-size: 13px;
+		font-weight: 500;
+		color: var(--muted);
+	}
+
+	.bullets {
+		margin: 0;
+		padding-left: 18px;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		font-size: 13px;
+		line-height: 1.4;
+	}
+
+	.bullets .soon {
+		color: var(--muted);
+	}
+
+	.pack-note {
+		margin: 0 0 12px;
+		font-size: 13px;
+		color: var(--muted);
+	}
+</style>

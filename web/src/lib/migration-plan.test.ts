@@ -41,7 +41,7 @@ describe('the pair table', () => {
 	it('refuses Etsy as a target because nothing writes to it yet', () => {
 		const etsy = migrationTargets().find((side) => side.inventory === 'Etsy');
 		expect(etsy?.enabled).toBe(false);
-		expect(etsy?.reason).toBe('Etsy is not connected to Teachouse yet.');
+		expect(etsy?.reason).toBe("Teachouse can't publish to Etsy yet.");
 		expect(migrationTargets().find((side) => side.inventory === 'Tes')?.enabled).toBe(true);
 	});
 
@@ -58,16 +58,16 @@ describe('the pair table', () => {
 	});
 
 	it('refuses a pair whose two ends are the same marketplace, and says which', () => {
-		expect(pairReason('Tes', 'Tes')).toContain('both ends here are TES');
+		expect(pairReason('Tes', 'Tes')).toContain('Both are set to TES');
 	});
 
 	// The sameness slip is the seller's own and is fixed by changing a select;
 	// a capture gap is not theirs to fix at all. Reading the second when the
 	// first is true sends them looking for a setting that does not exist.
 	it('names the sameness before a capture gap when both hold', () => {
-		expect(pairReason('Etsy', 'Etsy')).toContain('both ends here are Etsy');
-		expect(pairReason('Etsy', 'Tpt')).toContain('cannot yet download');
-		expect(pairReason('Tes', 'Etsy')).toContain('not connected to Teachouse yet');
+		expect(pairReason('Etsy', 'Etsy')).toContain('Both are set to Etsy');
+		expect(pairReason('Etsy', 'Tpt')).toContain("can't copy files from");
+		expect(pairReason('Tes', 'Etsy')).toContain("can't publish to");
 	});
 });
 
@@ -80,8 +80,8 @@ describe('the words for a migration', () => {
 	});
 
 	it('says of each what becomes of the source listing, which is the difference', () => {
-		expect(DISPOSITION_LINE.sync).toContain('leaves the source listing');
-		expect(DISPOSITION_LINE.migrate).toContain('removes it from the source');
+		expect(DISPOSITION_LINE.sync).toContain('keeps the original listing');
+		expect(DISPOSITION_LINE.migrate).toContain('removes the original');
 	});
 
 	it('words the three verdicts as a seller reads them', () => {
@@ -99,10 +99,10 @@ describe('the words for a migration', () => {
 
 	it('prints every count, zeroes included', () => {
 		expect(countsLine({ will_create: 8, already_there: 3, blocked: 1 })).toBe(
-			'8 will be created, 3 already there, 1 blocked'
+			'8 to add, 3 already there, 1 blocked'
 		);
 		expect(countsLine({ will_create: 0, already_there: 0, blocked: 0 })).toBe(
-			'0 will be created, 0 already there, 0 blocked'
+			'0 to add, 0 already there, 0 blocked'
 		);
 	});
 });
@@ -135,7 +135,7 @@ describe('the cap sentence', () => {
 	it('sends an empty balance to buy rather than to pick fewer', () => {
 		const none = capSentence({ available: 0, required: 3, remaining: 0 }, 3);
 		expect(none.line).toBe('You have no moves. This uses 3.');
-		expect(none.refusal).toBe('You have no moves left. Buy a pack or choose Sync.');
+		expect(none.refusal).toBe('You have no moves left. Buy a pack, or choose Sync.');
 	});
 
 	// A balance another tab has spent would put the seller over without

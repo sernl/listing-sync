@@ -86,10 +86,10 @@ export function filenameFrom(disposition: string | null): string {
  * the body is missing or unparseable, which is a sentence for whoever reads a
  * log and not for a seller. */
 export const REFUSED_WITHOUT_REASON =
-	'The export was refused and no reason came back. Try again in a moment.';
+	'The export did not work, and we do not know why. Try again in a moment.';
 
 /** The one refusal whose remedy this page can offer a way to. */
-export const SESSION_ENDED = 'Your sign-in has ended. Sign in again, then export.';
+export const SESSION_ENDED = 'You have been signed out. Sign in again, then export.';
 
 /** Why no file arrived, and whether the page can offer the way out.
  *
@@ -121,7 +121,7 @@ export function failureOf(caught: unknown): Refusal {
 		}
 		if (caught.status >= 500) {
 			return {
-				message: 'The spreadsheet could not be built. Try again in a moment.',
+				message: 'We could not build your spreadsheet. Try again in a moment.',
 				signIn: false
 			};
 		}
@@ -131,7 +131,7 @@ export function failureOf(caught: unknown): Refusal {
 		return { message, signIn: false };
 	}
 	return {
-		message: 'The export could not be reached. Check your connection and try again.',
+		message: 'We could not reach Teachouse. Check your internet connection and try again.',
 		signIn: false
 	};
 }
@@ -148,7 +148,7 @@ export function failureMessage(caught: unknown): string {
  * host that accepts the click and quietly drops the file, which is not
  * observable; see [`saveDocument`]. */
 export const HANDOFF_FAILED =
-	'The spreadsheet was built, but this window could not save it. Try the export in your browser.';
+	'Your spreadsheet is ready, but this window could not save it. Try exporting from your web browser.';
 
 /** Ask for the document and hand it to the host, reporting where that left the
  *  page.

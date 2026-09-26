@@ -119,22 +119,16 @@ describe('what a schedule sends', () => {
 });
 
 describe('the form', () => {
-	it('asks for the one thing missing, in the order the form is filled', () => {
+	it('asks for the one thing missing, in the order the steps are filled', () => {
 		const draft = blankDraft('UTC');
-		expect(draftRefusal(draft)).toContain('name');
-		expect(draftRefusal({ ...draft, name: 'Friday drop' })).toContain('label');
+		expect(draftRefusal(draft)).toContain('marketplace');
+		expect(draftRefusal({ ...draft, inventories: ['Tpt'] })).toContain('label');
 		expect(
-			draftRefusal({ ...draft, name: 'Friday drop', label: 'Maths' })
-		).toContain('marketplace');
-		expect(
-			draftRefusal({
-				...draft,
-				name: 'Friday drop',
-				label: 'Maths',
-				inventories: ['Tpt'],
-				clock: ''
-			})
+			draftRefusal({ ...draft, inventories: ['Tpt'], label: 'Maths', clock: '' })
 		).toContain('time');
+		expect(
+			draftRefusal({ ...draft, inventories: ['Tpt'], label: 'Maths' })
+		).toContain('name');
 	});
 
 	it('passes a schedule that names all four', () => {

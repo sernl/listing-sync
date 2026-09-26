@@ -65,17 +65,17 @@
 	<PageHead
 		icon="heart-pulse"
 		title="Sync health"
-		description="The ledger across every tenant, in the states the database actually stores."
+		description="Every item across all accounts, by the state the database stores."
 	/>
 
 	{#if health.isPending}
-		<Panel><p class="quiet">Reading the ledger…</p></Panel>
+		<Panel><p class="quiet">Loading sync health…</p></Panel>
 	{:else if health.isError}
-		<Panel><p class="quiet">The ledger could not be read.</p></Panel>
+		<Panel><p class="quiet">We could not load sync health.</p></Panel>
 	{:else}
 		<div class="cards">
-			<StatCard icon="refresh-cw" label="Sync runs" sub="every tenant">{count('jobs')}</StatCard>
-			<StatCard icon="layout-list" label="Items" sub="every run, every tenant">
+			<StatCard icon="refresh-cw" label="Sync runs" sub="all accounts">{count('jobs')}</StatCard>
+			<StatCard icon="layout-list" label="Items" sub="all runs, all accounts">
 				{count('items')}
 			</StatCard>
 			<StatCard
@@ -126,8 +126,8 @@
 					</div>
 				{/each}
 				<p class="foot-note">
-					These sum to the settled figure above. Nothing here is collapsed into a single health
-					score: a number that averaged these would hide the one that matters.
+					These add up to the Settled figure above. There is no single health score, because
+					an average would hide the number that matters.
 				</p>
 			</Panel>
 		</div>

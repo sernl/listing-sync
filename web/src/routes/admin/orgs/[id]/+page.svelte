@@ -73,15 +73,15 @@
 		mutationFn: (grant: string) => api.revokeGrant(orgId, grant),
 		onSuccess: async () => {
 			await reload();
-			toast('info', 'Grant revoked. The tenant falls back to their next strongest grant.');
+			toast('info', 'Grant revoked. The account falls back to its next strongest grant.');
 		},
 		onError: (failure: Error) => toast('error', refusalOf(failure, 'The grant was not revoked.'))
 	}));
 
 	function revoke(grant: GrantRowView) {
 		const asked = confirm(
-			`Revoke the ${planName(grant.plan)} grant on this tenant?\n\n` +
-				'They fall back to their next strongest unexpired grant, which for most tenants is nothing at all and therefore Free.'
+			`Revoke the ${planName(grant.plan)} grant on this account?\n\n` +
+				'It falls back to its next strongest unexpired grant. For most accounts that means Free.'
 		);
 		if (asked) {
 			revoking.mutate(grant.id);
@@ -93,7 +93,7 @@
 	<PageHead
 		icon="building-2"
 		title={view?.org.name ?? 'Organisation'}
-		description={view === undefined ? 'Reading this tenant…' : `Tenant ${view.org.org}`}
+		description={view === undefined ? 'Loading…' : `Account ${view.org.org}`}
 	>
 		{#snippet aside()}
 			<Button tier="outline" icon="arrow-left" href="/admin/orgs">All organisations</Button>
@@ -101,9 +101,9 @@
 	</PageHead>
 
 	{#if detail.isPending}
-		<Panel><p class="quiet">Reading this organisation…</p></Panel>
+		<Panel><p class="quiet">Loading this organisation…</p></Panel>
 	{:else if detail.isError}
-		<Panel><p class="quiet">This organisation could not be read.</p></Panel>
+		<Panel><p class="quiet">We could not load this organisation.</p></Panel>
 	{:else if view !== undefined}
 		<div class="cards">
 			<StatCard icon="layout-list" label="Products" sub="not deleted">{view.org.products}</StatCard>
@@ -121,13 +121,13 @@
 		<div class="band">
 			<Panel
 				title="Connections"
-				description="The same status the seller's own page renders, derived the same way."
+				description="The same status the seller sees on their own page."
 			>
 				{#if view.connections.length === 0}
 					<Placeholder
 						icon="store"
-						headline="This tenant has linked no marketplace"
-						body="Nothing can sync for them until one is linked, which only they can do."
+						headline="No marketplace connected"
+						body="Nothing can sync until the seller connects one. Only they can do that."
 					/>
 				{:else}
 					{#each view.connections as link (link.id)}
@@ -144,12 +144,12 @@
 				{/if}
 			</Panel>
 
-			<Panel title="Billing" description="What Paddle last told us, passed through untranslated.">
+			<Panel title="Billing" description="What Paddle last sent us, shown as is.">
 				{#if subscription === undefined}
 					<Placeholder
 						icon="credit-card"
-						headline="This tenant has never reached checkout"
-						body="That is a different fact from a cancelled subscription, which would appear here carrying Paddle's cancelled status."
+						headline="This account has never reached checkout"
+						body="That is not the same as cancelled. A cancelled subscription would show Paddle's cancelled status here."
 					/>
 				{:else}
 					<dl class="acct-detail">
@@ -167,8 +167,7 @@
 						<dd>{instant(subscription.occurred_at)}</dd>
 					</dl>
 					<p class="foot-note">
-						“As of” is the instant Paddle stamped on the notification that produced this state,
-						not the instant we recorded it.
+						“As of” is the time Paddle put on its notification, not the time we recorded it.
 					</p>
 				{/if}
 			</Panel>
@@ -176,7 +175,7 @@
 
 		<Panel
 			title="Plan"
-			description="The grant in force, every grant ever written, and the one control on this page that writes."
+			description="The current grant, every past grant, and the only control on this page that changes anything."
 		>
 			<dl class="acct-detail">
 				<dt>Plan</dt>
@@ -191,7 +190,7 @@
 				<dt>Set by</dt>
 				<dd>
 					{#if view.plan.granted_by === null}
-						<span class="quiet">Nobody — no grant has ever been written, so they are Free</span>
+						<span class="quiet">Nobody. No grant has ever been set, so they are on Free</span>
 					{:else}
 						{view.plan.granted_by}
 					{/if}
@@ -218,7 +217,7 @@
 
 			<h3>History</h3>
 			{#if view.grants.length === 0}
-				<p class="quiet">No grant has ever been written for this tenant.</p>
+				<p class="quiet">No grant has ever been set for this account.</p>
 			{:else}
 				{#each view.grants as grant (grant.id)}
 					<div class="acct-state-row">
@@ -246,7 +245,7 @@
 							reason={!live(grant)
 								? 'This grant is already revoked or expired.'
 								: revoking.isPending
-									? 'A revoke is in flight.'
+									? 'A revoke is in progress.'
 									: undefined}
 							onclick={() => revoke(grant)}
 						>
@@ -260,18 +259,18 @@
 			<GrantPlanForm org={orgId} onGranted={reload} />
 		</Panel>
 
-		<Panel title="Halts" description="Work this tenant is not allowed to perform right now.">
+		<Panel title="Halts" description="Work this account is blocked from doing right now.">
 			{#if view.halts.length === 0}
 				<Placeholder
 					icon="circle-check"
-					headline="Nothing is halted for this tenant"
-					body="Every inventory they sell on is accepting work."
+					headline="Nothing is halted for this account"
+					body="Every inventory they sell on accepts work."
 				/>
 			{:else}
 				{#each view.halts as halt (`${halt.inventory ?? 'tenant'}-${halt.raised_at}`)}
 					<Banner
 						tone="warn"
-						title={`${halt.inventory === undefined ? 'The whole tenant' : halt.inventory} — raised ${agoLabel(halt.raised_at, now)} by ${halt.raised_by}`}
+						title={`${halt.inventory === undefined ? 'The whole account' : halt.inventory} — raised ${agoLabel(halt.raised_at, now)} by ${halt.raised_by}`}
 					>
 						{halt.reason}
 					</Banner>

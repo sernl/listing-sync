@@ -312,7 +312,7 @@
 			undoAsking = false;
 			onview(NEW);
 		} catch (failure) {
-			listRefusal = refusalFor(failure, 'That template could not be opened.');
+			listRefusal = refusalFor(failure, 'We couldn’t open that template.');
 		} finally {
 			opening = null;
 		}
@@ -354,7 +354,7 @@
 			await queryClient.invalidateQueries({ queryKey: templateKeys.all });
 			clear();
 		} catch (failure) {
-			saveRefusal = refusalFor(failure, 'That template was not saved.');
+			saveRefusal = refusalFor(failure, 'We couldn’t save that template.');
 		} finally {
 			saving = false;
 		}
@@ -378,7 +378,7 @@
 				clear();
 			}
 		} catch (failure) {
-			listRefusal = refusalFor(failure, 'That template was not removed.');
+			listRefusal = refusalFor(failure, 'We couldn’t remove that template.');
 		} finally {
 			removing = null;
 		}
@@ -397,8 +397,8 @@
      own spacing. -->
 <div class="tpl-pane" hidden={view === SAVED}>
 	<Panel
-		title={editing === null ? 'New template' : 'Change this template'}
-		description="What you fill in here is what a new resource starts with."
+		title={editing === null ? 'New template' : 'Edit this template'}
+		description="Fill in what a new resource should start with."
 	>
 		{#if editing === null}
 			<!-- Two worked examples, above the fields they fill. Cards rather than
@@ -407,7 +407,7 @@
 			     anywhere — the form is unsaved until Save, so neither arriving
 			     here nor trying both spends a template out of the allowance. -->
 			<div class="tpl-examples">
-				<p class="tpl-examples-said">Edit an example before saving it.</p>
+				<p class="tpl-examples-said">Pick an example, then edit it before you save.</p>
 				<div class="tpl-example-cards">
 					{#each EXAMPLES as example (example.id)}
 						<div class="tpl-example">
@@ -429,7 +429,7 @@
 
 		{#if undoAsking}
 			<p class="tpl-note">
-				Undo puts back what you had and drops those later changes.
+				Undo brings back what you had and removes your later changes.
 				<Button small tier="quiet" onclick={revertStart}>Undo anyway</Button>
 				<Button small tier="quiet" onclick={() => (undoAsking = false)}>
 					Keep what I have
@@ -438,14 +438,14 @@
 		{/if}
 
 		<div class="tpl-grid">
-			<Field label="Name" id="{base}-name" required hint="What you will pick it by.">
+			<Field label="Name" id="{base}-name" required hint="The name you’ll pick it by.">
 				<input id="{base}-name" type="text" bind:value={form.name} />
 			</Field>
 
 			<Field
 				label="Written for"
 				id="{base}-scope"
-				hint="A template written for one marketplace also holds that marketplace's own questions."
+				hint="Pick a marketplace to add its own questions too."
 			>
 				<select id="{base}-scope" bind:value={form.scope}>
 					{#each SCOPE_CHOICES as choice (choice.label)}
@@ -469,7 +469,7 @@
 		<Field
 			label="Template note"
 			id="{base}-description"
-			hint="A note to yourself about when to reach for this template."
+			hint="A note to yourself about when to use it."
 		>
 			<textarea id="{base}-description" rows="2" bind:value={form.description}></textarea>
 			<span class="tpl-count" class:over={form.description.length > DESCRIPTION_MAX}>
@@ -529,8 +529,8 @@
 		{:else}
 			<p class="tpl-none">
 				{vocabulary.isError
-					? 'The lists a template chooses from could not be read.'
-					: 'Reading the lists a template chooses from…'}
+					? 'We couldn’t load the choices for this form.'
+					: 'Loading the choices…'}
 			</p>
 		{/if}
 
@@ -558,10 +558,10 @@
      nothing. -->
 {#if view === SAVED}
 	{#if store.isPending}
-		<p class="tpl-none">Reading your templates…</p>
+		<p class="tpl-none">Loading your templates…</p>
 	{:else if store.isError}
-		<Banner tone="bad" title="We could not read your templates">
-			Nothing has been changed.
+		<Banner tone="bad" title="We couldn’t load your templates">
+			Nothing was changed.
 		</Banner>
 	{:else if rows.length > 0}
 		<Panel title="Your templates">
@@ -586,7 +586,7 @@
 						<Button
 							small
 							disabled={busy}
-							reason={busy ? 'One template at a time.' : undefined}
+							reason={busy ? 'Wait for the other template to finish.' : undefined}
 							onclick={() => void change(head)}
 						>
 							{opening === head.id ? 'Opening…' : 'Change'}
@@ -595,7 +595,7 @@
 							small
 							danger
 							disabled={busy}
-							reason={busy ? 'One template at a time.' : undefined}
+							reason={busy ? 'Wait for the other template to finish.' : undefined}
 							onclick={() => void remove(head)}
 						>
 							{removing === head.id ? 'Removing…' : 'Remove'}

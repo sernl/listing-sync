@@ -144,7 +144,9 @@ fn bounded<'a>(raw: &'a str, max: usize, empty: &str, what: &str) -> Result<&'a 
         return Err(validation(empty));
     }
     if trimmed.chars().count() > max {
-        return Err(validation(&format!("{what} is at most {max} characters")));
+        return Err(validation(&format!(
+            "Keep {what} to {max} characters or fewer."
+        )));
     }
     // Before the column sees it. A zero byte passes every check above -- trim
     // does not strip it and it counts as one character -- and no Postgres
@@ -152,7 +154,7 @@ fn bounded<'a>(raw: &'a str, max: usize, empty: &str, what: &str) -> Result<&'a 
     // rather than as the refusal it is.
     if !is_typed_text(trimmed) {
         return Err(validation(&format!(
-            "{what} cannot contain control characters"
+            "Remove hidden characters from {what}."
         )));
     }
     Ok(trimmed)
@@ -193,25 +195,25 @@ fn validated(body: &CreateBody) -> Result<Validated<'_>, APIError> {
     let name = bounded(
         &body.name,
         NAME_MAX_CHARS,
-        "a request needs the marketplace's name",
-        "a marketplace name",
+        "Enter the marketplace's name.",
+        "the marketplace name",
     )?;
     let url = bounded(
         &body.url,
         URL_MAX_CHARS,
-        "a request needs the marketplace's web address",
-        "a web address",
+        "Enter the marketplace's web address.",
+        "the web address",
     )?;
     if !is_web_address(url) {
         return Err(validation(
-            "a web address starts with https:// or http:// and names a host",
+            "Enter a full web address that starts with https:// or http://.",
         ));
     }
     let reason = bounded(
         &body.reason,
         REASON_MAX_CHARS,
-        "tell us what you sell there",
-        "a description",
+        "Tell us what you sell there.",
+        "your description",
     )?;
     Ok(Validated { name, url, reason })
 }
@@ -259,12 +261,11 @@ pub(crate) async fn create(
         // `APIErrorKind` has no conflict member to branch on that a fourth
         // status code would not duplicate.
         MarketplaceRequestWrite::AlreadyAsked => {
-            Err(validation("you have already asked us about that address"))
+            Err(validation("You've already asked us about that address."))
         }
         MarketplaceRequestWrite::TooMany => Err(validation(&format!(
-            "you have {REQUESTS_PER_ORG_MAX} requests with us already; \
-             we read every one, so tell us about the next in a reply rather \
-             than a new request"
+            "You have {REQUESTS_PER_ORG_MAX} requests with us already. Tell us about the next \
+             one in a reply instead."
         ))),
     }
 }
@@ -285,7 +286,7 @@ pub(crate) async fn list_all(
         None => None,
         Some(raw) => Some(
             decode_cursor(raw)
-                .ok_or_else(|| validation("the cursor is not one this server issued"))?,
+                .ok_or_else(|| validation("This page link has expired. Reload the page."))?,
         ),
     };
     // Clamped here as well as in the repository, and by the same constant, so

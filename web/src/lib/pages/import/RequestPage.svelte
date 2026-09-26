@@ -107,7 +107,7 @@
 			// The page already on screen stays: this is the same distinction
 			// the `refusal`/`view` split has always held, extended to a page.
 			refusal =
-				caught instanceof ApiFailure ? caught.message : 'This import could not be read.';
+				caught instanceof ApiFailure ? caught.message : 'It did not load. Please try again.';
 			listingAttempt = { after, page: wanted };
 		} finally {
 			// Only the newest read owns the busy flag; a superseded one
@@ -222,18 +222,18 @@
 		{/if}
 
 		{#if refusal !== null}
-			<Banner tone="bad" title="We could not read this just now">
-				{refusal} Below is the last state we read.
+			<Banner tone="bad" title="We could not load this just now">
+				{refusal} Below is what we last loaded.
 			</Banner>
 		{/if}
 
 		{#if !isDeviceImport(request)}
-			<Panel title="Not a move we follow here">
+			<Panel title="We cannot show this move here">
 				<p class="quiet">{NOT_AN_IMPORT}</p>
 				<div class="actions">{@render deleteRequest(request)}</div>
 			</Panel>
 		{:else}
-			<Panel title="Where this move stands">
+			<Panel title="How this move is going">
 				<p class="import-stage">{shown.headline}</p>
 				{#if shown.detail !== ''}
 					<p class="quiet">{shown.detail}</p>
@@ -255,11 +255,11 @@
 				{#if request.create_job !== null || request.remove_job !== null}
 					<div class="actions">
 						{#if request.create_job !== null}
-							<Button href={`/sync/${request.create_job}`}>Open the run that creates them</Button>
+							<Button href={`/sync/${request.create_job}`}>See the new listings being made</Button>
 						{/if}
 						{#if request.remove_job !== null}
 							<Button href={`/sync/${request.remove_job}`}>
-								Open the run that removes the originals
+								See the originals being removed
 							</Button>
 						{/if}
 					</div>
@@ -282,19 +282,19 @@
 
 			<Panel
 				title="Listings"
-				description="Each listing the import has reached, in order."
+				description="Every listing this move has reached so far, in order."
 			>
 				{#if refusal !== null}
 					<!-- The page below is the last one that read, and the figures
 					     above it are from that read too. -->
-					<Banner tone="bad" title="That page of listings could not be read" action={retryListings}>
+					<Banner tone="bad" title="We could not load that page of listings" action={retryListings}>
 						{refusal}
 					</Banner>
 				{/if}
 				{#if rows.length === 0}
 					<p class="quiet">
 						{listingPage > 1
-							? 'There are no listings on this page. Go back for the ones before it.'
+							? 'This page is empty. Go back a page to see your listings.'
 							: emptyListingsLine(stageOf(request))}
 					</p>
 				{:else if anyCoverage}
@@ -337,10 +337,10 @@
 			icon="arrow-right-left"
 			back={{ href: MIGRATION_HREF, label: 'Back to Migrations' }}
 			title="Migration"
-			description="We could not read this migration."
+			description="We could not load this migration."
 		/>
 		<Panel>
-			<Placeholder icon="arrow-right-left" headline="We could not read this migration" body={refusal}>
+			<Placeholder icon="arrow-right-left" headline="We could not load this migration" body={refusal}>
 				{#snippet actions()}
 					<Button href={MIGRATION_HREF}>Back to Migrations</Button>
 				{/snippet}
@@ -359,10 +359,10 @@
 		tier="outline"
 		small
 		disabled={listingsBusy}
-		reason={listingsBusy ? 'A page is being read.' : undefined}
+		reason={listingsBusy ? 'Loading the page.' : undefined}
 		onclick={retryListingPage}
 	>
-		Retry
+		Try again
 	</Button>
 {/snippet}
 

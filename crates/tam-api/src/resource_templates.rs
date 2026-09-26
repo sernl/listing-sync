@@ -79,7 +79,7 @@ fn validation(message: &str) -> APIError {
 fn missing() -> APIError {
     APIError::new(
         StatusCode::NOT_FOUND,
-        APIErrorEntry::new("no such template")
+        APIErrorEntry::new("We can't find that template.")
             .code(APIErrorCode::ResourceMissing)
             .kind(APIErrorKind::NotFound),
     )
@@ -88,7 +88,7 @@ fn missing() -> APIError {
 fn parse_id(raw: &str) -> Result<Uuid, APIError> {
     uuid::Uuid::parse_str(raw)
         .map(|parsed| Uuid(*parsed.as_bytes()))
-        .map_err(|_| validation("the identifier is not a UUID"))
+        .map_err(|_| validation("That link is not valid."))
 }
 
 /// One template as the console reads it.
@@ -233,7 +233,7 @@ fn validated_description(raw: Option<&str>) -> Result<Option<&str>, APIError> {
     };
     if trimmed.chars().count() > DESCRIPTION_MAX_CHARS {
         return Err(validation(&format!(
-            "a template note is at most {DESCRIPTION_MAX_CHARS} characters"
+            "Keep the template note to {DESCRIPTION_MAX_CHARS} characters or fewer."
         )));
     }
     if trimmed
@@ -241,7 +241,7 @@ fn validated_description(raw: Option<&str>) -> Result<Option<&str>, APIError> {
         .any(|character| character.is_control() && character != '\n' && character != '\r')
     {
         return Err(validation(
-            "a template note cannot contain control characters",
+            "Remove hidden characters from the template note.",
         ));
     }
     Ok(Some(trimmed))
@@ -254,11 +254,11 @@ fn validated_description(raw: Option<&str>) -> Result<Option<&str>, APIError> {
 fn validated_name(raw: &str) -> Result<&str, APIError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err(validation("a template needs a name"));
+        return Err(validation("Give your template a name."));
     }
     if trimmed.chars().count() > NAME_MAX_CHARS {
         return Err(validation(&format!(
-            "a template name is at most {NAME_MAX_CHARS} characters"
+            "Keep the template name to {NAME_MAX_CHARS} characters or fewer."
         )));
     }
     // Before the column sees it. A zero byte passes both checks above -- trim
@@ -267,7 +267,7 @@ fn validated_name(raw: &str) -> Result<&str, APIError> {
     // rather than as the refusal it is.
     if !is_typed_text(trimmed) {
         return Err(validation(
-            "a template name cannot contain control characters",
+            "Remove line breaks and hidden characters from the template name.",
         ));
     }
     Ok(trimmed)
@@ -506,7 +506,7 @@ fn validated_draft(draft: &serde_json::Value) -> Result<(), APIError> {
         .map_err(|_| validation("the draft is not JSON this server can store"))?;
     if rendered.len() > DRAFT_MAX_BYTES {
         return Err(validation(&format!(
-            "a draft is at most {DRAFT_MAX_BYTES} bytes of JSON, and this one is {}",
+            "This template is too big to save ({} bytes; the limit is {DRAFT_MAX_BYTES}).",
             rendered.len()
         )));
     }
@@ -630,10 +630,9 @@ pub(crate) async fn create(
         // refusal on this surface is: the client renders the sentence, and
         // `APIErrorKind` has no conflict member a fourth status code would not
         // duplicate.
-        TemplateWrite::NameTaken => Err(validation("you already have a template of that name")),
+        TemplateWrite::NameTaken => Err(validation("You already have a template with that name.")),
         TemplateWrite::TooMany => Err(validation(&format!(
-            "you have {TEMPLATES_PER_ORG_MAX} templates already; \
-             remove one before saving another"
+            "You have {TEMPLATES_PER_ORG_MAX} templates already. Delete one to save another."
         ))),
     }
 }
@@ -677,7 +676,7 @@ pub(crate) async fn update(
     // `TemplateEdit` naming no part cannot be built, and so cannot reach a
     // statement that would move `updated_at` for nothing.
     let edit = TemplateEdit::of(name, body.draft.as_ref(), description, body.scope)
-        .ok_or_else(|| validation("an edit names a new name, note, scope or draft"))?;
+        .ok_or_else(|| validation("Change the name, note, marketplace or contents."))?;
     let written = ResourceTemplateRepo::new(state.pool.clone())
         .update(context.org, id, &edit, (state.wall)())
         .await
@@ -685,7 +684,7 @@ pub(crate) async fn update(
     match written {
         TemplateChange::Saved(record) => Ok(Json(ResourceTemplateView::of(record))),
         TemplateChange::Missing => Err(missing()),
-        TemplateChange::NameTaken => Err(validation("you already have a template of that name")),
+        TemplateChange::NameTaken => Err(validation("You already have a template with that name.")),
     }
 }
 

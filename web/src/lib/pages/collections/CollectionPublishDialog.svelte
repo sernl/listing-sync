@@ -50,7 +50,7 @@
 	/** Why nothing can be sent to this marketplace, or null where it can. The
 	 *  tile is offered and refused rather than hidden: a marketplace left out
 	 *  reads as one this console has never heard of. */
-	const CANNOT_WRITE = 'No adapter writes to Etsy, so nothing can be sent to it.';
+	const CANNOT_WRITE = 'You can’t publish to Etsy yet.';
 
 	let element = $state<HTMLDialogElement | null>(null);
 	let inventory = $state<InventoryId>('Tpt');
@@ -92,10 +92,10 @@
 			return tileRefusal;
 		}
 		if (plan === null) {
-			return 'Preview the publish first, so you can see what it would do.';
+			return 'Preview first to see what will happen.';
 		}
 		if (plan.counts.will_create === 0) {
-			return `Nothing here would be created: every resource in this collection is already on ${SHORT_NAME[inventory]} or blocked.`;
+			return `Nothing to publish: every resource here is already on ${SHORT_NAME[inventory]} or can’t be published yet.`;
 		}
 		return null;
 	});
@@ -110,7 +110,7 @@
 			planFailure =
 				caught instanceof ApiFailure
 					? caught.message
-					: 'The preview could not be taken, so nothing is shown rather than a guess.';
+					: 'We couldn’t load the preview. Try again.';
 		} finally {
 			previewing = false;
 		}
@@ -128,7 +128,7 @@
 			refusal =
 				caught instanceof ApiFailure
 					? caught.message
-					: 'The publish could not be started.';
+					: 'We couldn’t start publishing.';
 		} finally {
 			sending = false;
 		}
@@ -144,11 +144,10 @@
 	<div class="dialog-body">
 		<h2 id="coll-publish-title">Publish {name} to a marketplace</h2>
 		<p>
-			Every resource in this collection that is not already on the marketplace is added to it
-			and sent, in the collection's own order. {count === 1 ? 'It holds 1 resource' : `It holds ${count} resources`}.
+			Publishes every resource not already on the marketplace, in the collection's order. {count === 1 ? 'It holds 1 resource' : `It holds ${count} resources`}.
 		</p>
 
-		<div class="mk-tiles" role="radiogroup" aria-label="Which marketplace">
+		<div class="mk-tiles" role="radiogroup" aria-label="Choose a marketplace">
 			{#each INVENTORY_ORDER as one (one)}
 				{@const why = AUTHORABLE[one] ? null : CANNOT_WRITE}
 				<button
@@ -194,12 +193,12 @@
 				Live
 			</label>
 		</div>
-		<Note icon="triangle-alert">A live publish on a Tes site cannot be reversed by us.</Note>
+		<Note icon="triangle-alert">We can’t undo a live publish on Tes.</Note>
 
 		<div class="coll-verb-foot">
 			<Button
 				disabled={previewing || tileRefusal !== null}
-				reason={tileRefusal ?? (previewing ? 'The preview is being taken.' : undefined)}
+				reason={tileRefusal ?? (previewing ? 'Loading the preview.' : undefined)}
 				onclick={() => void preview()}
 			>
 				{previewing ? 'Previewing…' : 'Preview'}
@@ -209,9 +208,9 @@
 		{#if planFailure !== null}
 			<Banner tone="bad">{planFailure}</Banner>
 		{:else if plan === null}
-			<Note>A preview queues nothing.</Note>
+			<Note>Previewing doesn’t publish anything.</Note>
 		{:else if plan.rows.length === 0}
-			<Note>This collection holds no resources, so there is nothing to send.</Note>
+			<Note>This collection is empty, so there’s nothing to publish.</Note>
 		{:else}
 			<div class="plan-rows">
 				{#each plan.rows as row (row.product)}
@@ -245,18 +244,22 @@
 		{/if}
 
 		<div class="actions">
-			<Button onclick={onClose} disabled={sending} reason={sending ? 'Starting.' : undefined}>
+			<Button
+				onclick={onClose}
+				disabled={sending}
+				reason={sending ? 'Starting to publish.' : undefined}
+			>
 				Cancel
 			</Button>
 			<Button
 				tier="primary"
 				disabled={confirmRefusal !== null || sending}
-				reason={confirmRefusal ?? (sending ? 'The publish is starting.' : undefined)}
+				reason={confirmRefusal ?? (sending ? 'Starting to publish.' : undefined)}
 				onclick={() => void confirm()}
 			>
 				{sending
 					? 'Starting…'
-					: `Confirm ${plan?.counts.will_create ?? 0}`}
+					: `Publish ${plan?.counts.will_create ?? 0}`}
 			</Button>
 		</div>
 	</div>

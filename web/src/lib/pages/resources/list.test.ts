@@ -216,7 +216,7 @@ describe('the filter card', () => {
 	it('offers Etsy and refuses it, with the reason on the tile', () => {
 		const etsy = MARKETPLACE_TILES.find((tile) => tile.inventory === 'Etsy');
 		expect(etsy?.disabled).toBe(true);
-		expect(etsy?.reason).toContain('no adapter');
+		expect(etsy?.reason).toContain('coming soon');
 		expect(MARKETPLACE_TILES.filter((tile) => tile.disabled)).toHaveLength(1);
 	});
 

@@ -54,7 +54,7 @@ describe('the four read states this page draws', () => {
 	it('carries the rows once there are rows', () => {
 		const state = readState(true, false, rows([view()], NOW));
 		expect(state.kind).toBe('rows');
-		expect(state.kind === 'rows' && state.rows[0]?.title).toBe('TES sync finished');
+		expect(state.kind === 'rows' && state.rows[0]?.title).toBe('TES update finished');
 	});
 });
 
@@ -85,10 +85,10 @@ describe('the counts, in the outcome bar’s own words', () => {
 			blocked: 5
 		});
 		expect(drawn.map((one) => one.label)).toEqual([
-			'succeeded',
-			'degraded',
+			'done',
+			'done with warnings',
 			'failed',
-			'ambiguous',
+			'unclear',
 			'skipped',
 			'blocked'
 		]);
@@ -101,7 +101,7 @@ describe('the counts, in the outcome bar’s own words', () => {
 	});
 
 	it('leaves out every zero, so a clean run reads as one line', () => {
-		expect(outcomes({ ...NONE, succeeded: 3 }).map((one) => one.label)).toEqual(['succeeded']);
+		expect(outcomes({ ...NONE, succeeded: 3 }).map((one) => one.label)).toEqual(['done']);
 	});
 
 	it("counts a notification's blocked through the segment that renders it", () => {
@@ -113,8 +113,8 @@ describe('the counts, in the outcome bar’s own words', () => {
 
 describe('what a row says and where it opens', () => {
 	it('names the marketplace the run wrote to', () => {
-		expect(title(view({ inventory: 'Tes' }))).toBe('TES sync finished');
-		expect(title(view({ inventory: 'Tpt' }))).toBe('TPT sync finished');
+		expect(title(view({ inventory: 'Tes' }))).toBe('TES update finished');
+		expect(title(view({ inventory: 'Tpt' }))).toBe('TPT update finished');
 	});
 
 	it('names no platform for an import, which writes to none', () => {
@@ -151,7 +151,7 @@ describe('a kind this bundle has no word for', () => {
 	});
 
 	it('says a run finished rather than rendering a blank noun', () => {
-		expect(title(unknown)).toBe('TES run finished');
+		expect(title(unknown)).toBe('TES task finished');
 	});
 
 	it('offers no link rather than inventing a path', () => {

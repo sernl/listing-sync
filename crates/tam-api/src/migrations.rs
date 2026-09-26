@@ -229,8 +229,7 @@ pub(crate) async fn create_migration(
         .saturating_add(plan.view.counts.blocked);
     if queued == 0 {
         return Err(validation(
-            "nothing in this selection can be created on that marketplace: every resource is \
-             either already there or blocked, and the reasons are on each row",
+            "None of these resources can move to that marketplace. Each row says why.",
         ));
     }
     // Counted in moves and re-checked here rather than trusted from the
@@ -668,7 +667,7 @@ async fn plan(
             rows.push(blocked(
                 product,
                 format!(
-                    "already on its way to {}; it will show as there once your device has sent it",
+                    "already on its way to {}, and will show there once your device sends it",
                     name_of(body.target)
                 ),
             ));
@@ -758,15 +757,15 @@ fn blocked(product: &ProductSummary, reason: String) -> MigrationRow {
 /// option and has nowhere else to put an explanation.
 fn pair_view(source: InventoryId, target: InventoryId) -> PairView {
     let reason = if source == target {
-        Some("a migration's source and target are two different marketplaces".to_owned())
+        Some("Choose two different marketplaces.".to_owned())
     } else if let Some(capability) = uncaptured_source(source) {
         Some(format!(
-            "We cannot download files from {} yet ({capability}), so it cannot be a \
-             migration's source.",
+            "Teachouse can't download files from {} yet ({capability}), so you can't move \
+             resources from it.",
             name_of(source),
         ))
     } else if target == InventoryId::Etsy {
-        Some("Etsy is not connected to Teachouse yet".to_owned())
+        Some("Teachouse doesn't work with Etsy yet.".to_owned())
     } else {
         None
     };
@@ -821,7 +820,7 @@ fn currency_refusal(price: PriceIntent, target: InventoryId) -> Option<String> {
     };
     let CurrencyRule::Fixed(sells) = target.currency_rule() else {
         return Some(format!(
-            "{} does not have a verified selling currency yet",
+            "We don't know which currency {} sells in yet.",
             name_of(target)
         ));
     };
@@ -829,7 +828,7 @@ fn currency_refusal(price: PriceIntent, target: InventoryId) -> Option<String> {
         return None;
     }
     Some(format!(
-        "the price is in {} but {} sells in {}; edit the price to {} before migrating",
+        "the price is in {}, but {} sells in {}. Change the price to {} before you move it.",
         money.currency().code(),
         name_of(target),
         sells.code(),
@@ -851,7 +850,8 @@ mod tests {
         assert_eq!(
             currency_refusal(paid(450, Currency::Gbp), InventoryId::Tpt).as_deref(),
             Some(
-                "the price is in GBP but TPT sells in USD; edit the price to USD before migrating"
+                "the price is in GBP, but TPT sells in USD. Change the price to USD before you \
+                 move it."
             ),
         );
     }

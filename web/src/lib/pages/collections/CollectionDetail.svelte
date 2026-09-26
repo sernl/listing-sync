@@ -143,7 +143,7 @@
 	const verdict = $derived(checkName(name));
 	const headerBlocked = $derived.by(() => {
 		if (saving) {
-			return 'The collection is being saved.';
+			return 'Saving the collection.';
 		}
 		return verdict.accepted ? undefined : verdict.message;
 	});
@@ -184,7 +184,7 @@
 			headerRefusal =
 				failure instanceof ApiFailure
 					? failure.message
-					: 'The collection was not saved.';
+					: 'We couldn’t save the collection.';
 		} finally {
 			saving = false;
 		}
@@ -203,7 +203,7 @@
 			memberRefusal =
 				failure instanceof ApiFailure
 					? failure.message
-					: 'The collection was not changed.';
+					: 'We couldn’t change the collection.';
 		} finally {
 			writing = false;
 		}
@@ -260,7 +260,7 @@
 			labelRefusal =
 				failure instanceof ApiFailure
 					? failure.message
-					: 'The labels were not added.';
+					: 'We couldn’t add the labels.';
 		} finally {
 			labelling = false;
 		}
@@ -292,7 +292,7 @@
 				filename: filenameFrom(response.headers.get('content-disposition'))
 			};
 			saveDocument(csv);
-			toast('info', `Sent to this window as ${csv.filename}.`);
+			toast('info', `Saved as ${csv.filename}.`);
 		} catch (failure) {
 			exportFailure = failureMessage(failure);
 		} finally {
@@ -308,10 +308,13 @@
 			queryClient.invalidateQueries({ queryKey: queryKeys.inventoryWork })
 		]);
 		if (queued === 0 || job === null) {
-			toast('info', 'Nothing was queued: every resource was already there or blocked.');
+			toast(
+				'info',
+				'Nothing to publish: every resource is already there or can’t be published yet.'
+			);
 			return;
 		}
-		toast('info', `${queued} ${queued === 1 ? 'resource' : 'resources'} queued.`);
+		toast('info', `Publishing ${queued} ${queued === 1 ? 'resource' : 'resources'}.`);
 	}
 
 	async function applied() {
@@ -330,12 +333,12 @@
 		<PageHead
 			icon="layers"
 			title="Collection"
-			description="This collection is not here."
+			description="We can’t find this collection."
 			back={{ href: '/collections', label: 'Back to Collections' }}
 		/>
 		<Placeholder
 			icon="search"
-			headline="No such collection"
+			headline="Collection not found"
 			body="It may have been deleted."
 		>
 			{#snippet actions()}
@@ -346,13 +349,13 @@
 		<PageHead
 			icon="layers"
 			title="Collection"
-			description="This collection could not be read."
+			description="We couldn’t load this collection."
 			back={{ href: '/collections', label: 'Back to Collections' }}
 		/>
 		<Placeholder
 			icon="triangle-alert"
-			headline="This collection could not be read"
-			body="Reload to try again."
+			headline="We couldn’t load this collection"
+			body="Reload the page to try again."
 		>
 			{#snippet actions()}
 				<Button href="/collections" icon="layers">Back to Collections</Button>
@@ -386,7 +389,7 @@
 					<Field
 						label="Description"
 						id="collection-description"
-						hint="Yours alone; it reaches no marketplace."
+						hint="Only you see this; it never goes to a marketplace."
 					>
 						<textarea
 							id="collection-description"
@@ -417,8 +420,8 @@
 		<div class="coll-body">
 			<div>
 				<Panel
-					title="What is in it"
-					description="The order every verb uses."
+					title="Resources in this collection"
+					description="Publishing, templates, labels and export all follow this order."
 				>
 					{#snippet more()}
 						<!-- Which marketplaces this set reaches, as one strip rather than
@@ -450,9 +453,9 @@
 										small
 										disabled={index === 0 || writing}
 										reason={index === 0
-											? 'This is already the first resource in the collection.'
+											? 'This resource is already first.'
 											: writing
-												? 'The order is being saved.'
+												? 'Saving the order.'
 												: undefined}
 										onclick={() =>
 											void writeOrder(moved(order, member.product, 'up'), 'Order saved.')}
@@ -464,9 +467,9 @@
 										small
 										disabled={index === members.length - 1 || writing}
 										reason={index === members.length - 1
-											? 'This is already the last resource in the collection.'
+											? 'This resource is already last.'
 											: writing
-												? 'The order is being saved.'
+												? 'Saving the order.'
 												: undefined}
 										onclick={() =>
 											void writeOrder(moved(order, member.product, 'down'), 'Order saved.')}
@@ -478,11 +481,11 @@
 										small
 										danger
 										disabled={writing}
-										reason={writing ? 'The collection is being saved.' : undefined}
+										reason={writing ? 'Saving the collection.' : undefined}
 										onclick={() =>
 											void writeOrder(
 												order.filter((product) => product !== member.product),
-												`${member.title} is no longer in this collection.`
+												`Removed ${member.title} from this collection.`
 											)}
 									>
 										Remove
@@ -496,7 +499,7 @@
 						<Banner tone="bad">{memberRefusal}</Banner>
 					{/if}
 
-					<Note>Removing a resource takes it out of this collection and nothing else.</Note>
+					<Note>Removing a resource only takes it out of this collection.</Note>
 				</Panel>
 
 				<Panel title="Add resources">
@@ -507,9 +510,9 @@
 					{:else if catalogue.isPending || mappings.isPending}
 						<p class="quiet">Loading your resources…</p>
 					{:else if catalogue.isError || mappings.isError}
-						<p class="quiet">Your resources could not be read; reload to try again.</p>
+						<p class="quiet">We couldn’t load your resources. Reload the page to try again.</p>
 					{:else if products.length === 0}
-						<p class="quiet">Import brings your existing shop across first.</p>
+						<p class="quiet">Import your shop first, then add resources here.</p>
 					{:else}
 						<div class="pick-head">
 							<input
@@ -527,9 +530,9 @@
 											? new Set()
 											: new Set(offerable.map((product) => product.id)))}
 								/>
-								Select the {offerable.length} shown
+								Select all {offerable.length} shown
 							</label>
-							<span class="pick-count">{ticked.size} chosen</span>
+							<span class="pick-count">{ticked.size} selected</span>
 						</div>
 
 						{#if offerable.length === 0}
@@ -563,9 +566,9 @@
 								tier="additive"
 								disabled={ticked.size === 0 || writing}
 								reason={ticked.size === 0
-									? 'Tick at least one resource.'
+									? 'Select at least one resource.'
 									: writing
-										? 'The collection is being saved.'
+										? 'Saving the collection.'
 										: undefined}
 								onclick={() => void addTicked()}
 							>
@@ -580,29 +583,29 @@
 			<div class="coll-right">
 				<Panel
 					title="Publish to a marketplace"
-					description="Every resource in the collection that is not already there, in this order."
+					description="Publishes every resource not already on that marketplace, in this order."
 				>
 					<Button
 						tier="primary"
 						disabled={stored.count === 0}
 						reason={stored.count === 0
-							? 'This collection is empty, so there is nothing to publish.'
+							? 'Add resources to this collection first.'
 							: undefined}
 						onclick={() => (publishing = true)}
 					>
 						Publish…
 					</Button>
-					<Note>A resource already on the marketplace is left alone rather than published twice.</Note>
+					<Note>Resources already on that marketplace are skipped, not published twice.</Note>
 				</Panel>
 
 				<Panel
 					title="Apply a template and labels"
-					description="One template's fields across the whole set."
+					description="Fill every resource here from one template."
 				>
 					<Button
 						disabled={stored.count === 0}
 						reason={stored.count === 0
-							? 'This collection is empty, so there is nothing to apply a template to.'
+							? 'Add resources to this collection first.'
 							: undefined}
 						onclick={() => (applying = true)}
 					>
@@ -612,7 +615,7 @@
 					<Field
 						label="Add labels"
 						id="collection-labels"
-						hint="Several at once, separated by commas."
+						hint="Separate labels with commas."
 					>
 						<input
 							id="collection-labels"
@@ -627,11 +630,11 @@
 							tier="additive"
 							disabled={labels.trim().length === 0 || labelling || stored.count === 0}
 							reason={stored.count === 0
-								? 'This collection is empty, so there is nothing to label.'
+								? 'Add resources to this collection first.'
 								: labels.trim().length === 0
 									? 'Type a label first.'
 									: labelling
-										? 'The labels are being added.'
+										? 'Adding the labels.'
 										: undefined}
 							onclick={() => void addLabels()}
 						>
@@ -645,24 +648,24 @@
 
 				<Panel
 					title="Export"
-					description="A spreadsheet of this collection alone."
+					description="Download a spreadsheet of just this collection."
 				>
 					<Button
 						icon="file-down"
 						disabled={stored.count === 0 || exporting}
 						reason={stored.count === 0
-							? 'This collection is empty, so there is nothing to export.'
+							? 'Add resources to this collection first.'
 							: exporting
-								? 'The spreadsheet is being built.'
+								? 'Preparing the spreadsheet.'
 								: undefined}
 						onclick={() => void exportCollection()}
 					>
-						{exporting ? 'Building…' : 'Export CSV'}
+						{exporting ? 'Preparing…' : 'Export CSV'}
 					</Button>
 					{#if exportFailure !== null}
 						<Banner tone="bad">{exportFailure}</Banner>
 					{/if}
-					<Note>Details only: no file a buyer downloads, and no marketplace login.</Note>
+					<Note>Includes resource details only, not your files or marketplace logins.</Note>
 				</Panel>
 			</div>
 		</div>

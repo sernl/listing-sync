@@ -5,22 +5,22 @@ tags: labels, publishing
 
 # Labels and collections
 
-Labels are your own words for grouping resources. A collection is an ordered set of resources you act on as one.
+Labels are your own words for grouping resources. A collection is a set of resources, in an order you choose, that you can act on all at once.
 
 ## Add a label
 
 1. Open **Catalogue → Labels**.
 2. Add the word you want.
-3. Open a resource and apply it.
+3. Open a resource and add the label to it.
 
-A label is at most 30 characters. A resource carries at most 20 labels.
+A label can be up to 30 characters. A resource can have up to 20 labels.
 
 <!-- shot: /labels, the label list with counts -->
 ![Your labels](/v1/guides/images/ce49ab69f75c95c88303068aadeb44f0ab6fb1f9fca3df22d8b661f86f4657ce)
 
-## Marks an import wrote
+## Labels added by an import
 
-An import writes its own marks so you can find what it brought in. Those marks cannot be removed; add your own labels beside them.
+An import adds its own labels so you can find what it brought in. You cannot remove these, but you can add your own labels next to them.
 
 ## Make a collection
 
@@ -33,16 +33,16 @@ An import writes its own marks so you can find what it brought in. Those marks c
 
 ## The order matters
 
-Every action uses the collection's order: a publish sends in that order, a template applies in that order, an export writes rows in that order.
+Everything you do to a collection follows its order. Publishing sends resources in that order, a template fills them in that order, and an export lists them in that order.
 
-## Act on the whole set
+## Act on the whole collection
 
 - **Publish** sends every resource in the collection that is ready.
-- **Apply a template** fills one template's fields across the whole set.
-- **Export** writes a spreadsheet of that collection alone.
+- **Apply a template** fills in one template's fields for every resource in the collection.
+- **Export** makes a spreadsheet of just that collection.
 
-A collection is acted on whole. Take a resource out first if you want it left alone.
+Actions always apply to the whole collection. To leave a resource out, take it out of the collection first.
 
 ## Which to use
 
-Use a label to find things. Use a collection when you want the same thing done to several resources in a set order.
+Use a label to find things. Use a collection when you want to do the same thing to several resources in a set order.

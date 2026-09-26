@@ -226,7 +226,7 @@ export const APP_TOO_OLD =
  * neither: either the console is served from an origin
  * `apps/desktop/src-tauri/capabilities/default.json` does not name, which is
  * ours to fix and not theirs, or the window is holding a development server. */
-export const ORIGIN_NOT_GRANTED = 'This page is not one the Teachouse app accepts commands from.';
+export const ORIGIN_NOT_GRANTED = 'The Teachouse app does not take commands from this page.';
 
 /** Ask this computer to read the shop one run names.
  *
@@ -599,7 +599,7 @@ export type LibraryOutcome<T> =
 	| { kind: 'unavailable' };
 
 const NOT_KEEPING = 'this machine is not keeping files';
-const LIBRARY_REFUSED_SILENTLY = 'This computer could not read its files and gave no reason.';
+const LIBRARY_REFUSED_SILENTLY = 'This computer could not read its files and did not say why.';
 
 async function libraryCall<T>(
 	invoke: Invoke | null,
@@ -862,11 +862,11 @@ function refusalText(caught: unknown, fallback: string): string {
  *  readable. Named per verb rather than written once and generalised, because
  *  a sentence that says "the command" names a thing the seller has no concept
  *  of. */
-const IMPORT_REFUSED_SILENTLY = 'This computer refused to start the import and gave no reason.';
-const CONNECT_REFUSED_SILENTLY = 'This computer refused to open the sign-in and gave no reason.';
+const IMPORT_REFUSED_SILENTLY = 'This computer could not start the import and did not say why.';
+const CONNECT_REFUSED_SILENTLY = 'This computer could not open the sign-in and did not say why.';
 const FORGET_REFUSED_SILENTLY =
-	'This computer refused to remove the marketplace login and gave no reason.';
-const OPEN_REFUSED_SILENTLY = 'This computer refused to open the link and gave no reason.';
-const STOP_REFUSED_SILENTLY = 'This computer refused to stop the import and gave no reason.';
+	'This computer could not remove the marketplace login and did not say why.';
+const OPEN_REFUSED_SILENTLY = 'This computer could not open the link and did not say why.';
+const STOP_REFUSED_SILENTLY = 'This computer could not stop the import and did not say why.';
 const SESSION_UNREADABLE =
 	'This computer could not say whether it is signed in to that marketplace.';

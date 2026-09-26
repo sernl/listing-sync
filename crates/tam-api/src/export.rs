@@ -149,10 +149,8 @@ async fn selected(
         let named = uuid::Uuid::parse_str(collection.trim()).map_err(|_unused| {
             APIError::new(
                 axum::http::StatusCode::UNPROCESSABLE_ENTITY,
-                crate::error::APIErrorEntry::new(
-                    "the collection parameter is a collection identifier",
-                )
-                .kind(crate::error::APIErrorKind::Validation),
+                crate::error::APIErrorEntry::new("We can't find that collection.")
+                    .kind(crate::error::APIErrorKind::Validation),
             )
         })?;
         let members = ResourceCollectionRepo::new(state.pool.clone())
@@ -177,8 +175,7 @@ async fn selected(
                     APIError::new(
                         axum::http::StatusCode::UNPROCESSABLE_ENTITY,
                         crate::error::APIErrorEntry::new(
-                            "the products parameter is a comma-separated list of resource \
-                             identifiers",
+                            "We can't read that list of resources. Choose them again.",
                         )
                         .kind(crate::error::APIErrorKind::Validation),
                     )

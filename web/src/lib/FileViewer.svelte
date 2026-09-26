@@ -102,7 +102,7 @@
 			canvases = Array.from({ length: pageCount }, () => null);
 			await draw();
 		} catch {
-			refusal = 'Teachouse could not open that file on this machine.';
+			refusal = 'Teachouse could not open that file on this computer.';
 		}
 	}
 

@@ -492,7 +492,7 @@
 						{#if orgName !== undefined}
 							{orgName}
 						{:else if organisation.isError}
-							Organisation unavailable
+							Account unavailable
 						{:else}
 							Loading…
 						{/if}
@@ -557,7 +557,7 @@
 				     like it. -->
 				{#snippet failed(error)}
 					<div class="page">
-						<p>This page could not be drawn. Reload to try again.</p>
+						<p>This page didn't load. Reload to try again.</p>
 						<p class="drew-why">{renderFailureCause(error)}</p>
 						<button class="btn" type="button" onclick={() => location.reload()}>Reload</button>
 					</div>

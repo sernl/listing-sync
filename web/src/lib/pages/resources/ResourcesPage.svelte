@@ -71,8 +71,7 @@
 	 *  `FileHandle` per file and `GET /v1/products/{id}` serves a `FileView`,
 	 *  which carries the identifier and not the hash, so a copy made from what
 	 *  this client can read would be a resource with no payload. */
-	const DUPLICATE_MISSING =
-		'Copying a resource needs each file’s hash, which the product view does not serve.';
+	const DUPLICATE_MISSING = 'You can’t copy a resource yet.';
 
 	const queryClient = useQueryClient();
 
@@ -207,10 +206,10 @@
 		catalogue.isPending || mappings.isPending || connections.isPending || halts.isPending
 	);
 	const unread = $derived([
-		catalogue.isError ? 'your Resources' : null,
-		mappings.isError ? 'which marketplaces carry each resource' : null,
+		catalogue.isError ? 'your resources' : null,
+		mappings.isError ? 'where each resource is listed' : null,
 		connections.isError ? 'which marketplaces you are signed in to' : null,
-		halts.isError ? 'whether sending is paused anywhere' : null
+		halts.isError ? 'whether any marketplace is paused' : null
 	].filter((what): what is string => what !== null));
 	const read = $derived(!reading && unread.length === 0);
 
@@ -393,7 +392,7 @@
 		toast(
 			'info',
 			count === 0
-				? `${into} already held every one of those resources.`
+				? `Those resources are already in ${into}.`
 				: `${count} ${count === 1 ? 'resource' : 'resources'} added to ${into}.`
 		);
 		await queryClient.invalidateQueries({ queryKey: COLLECTIONS_KEY });
@@ -419,17 +418,17 @@
 			return;
 		}
 		if (runs.length === 1) {
-			toast('info', `Send started on ${platformTitle(runs[0].inventory)}.`);
+			toast('info', `Started sending to ${platformTitle(runs[0].inventory)}.`);
 			void goto(`/sync/${runs[0].job}`);
 			return;
 		}
-		toast('info', `Send started on ${runs.length} marketplaces.`);
+		toast('info', `Started sending to ${runs.length} marketplaces.`);
 	}
 
 	async function labelled(count: number) {
 		labelling = false;
 		cancelBulk();
-		toast('info', `${count} ${count === 1 ? 'resource' : 'resources'} relabelled.`);
+		toast('info', `Labels updated on ${count} ${count === 1 ? 'resource' : 'resources'}.`);
 		await Promise.all([
 			queryClient.invalidateQueries({ queryKey: queryKeys.products }),
 			queryClient.invalidateQueries({ queryKey: queryKeys.labels })
@@ -523,7 +522,7 @@
 			tone="warn"
 			title={`${counts.attention} ${counts.attention === 1 ? 'resource needs' : 'resources need'} you`}
 		>
-			Work for Tes and TPT runs on your own device, so nothing moves while that device is off.
+			Tes and TPT work runs on your own device, so nothing happens while it is off.
 			{#snippet action()}
 				<Button
 					onclick={() => {
@@ -582,9 +581,9 @@
 					     not the same answer as a seller who has made no labels. -->
 					<div class="label-menu">
 						{#if labels.isPending}
-							<p class="none">Reading your labels…</p>
+							<p class="none">Loading your labels…</p>
 						{:else if labels.isError}
-							<p class="none">Your labels could not be read, so none can be chosen here.</p>
+							<p class="none">We couldn’t load your labels. Reload to try again.</p>
 						{:else}
 							{#each labels.data ?? [] as one (one.name)}
 								<!-- Every label the organisation holds, the marks an import
@@ -599,14 +598,14 @@
 									<LabelChip name={one.name} colour={one.colour} system={one.system} />
 								</label>
 							{:else}
-								<p class="none">No resource carries a label yet.</p>
+								<p class="none">None of your resources has a label yet.</p>
 							{/each}
 						{/if}
 					</div>
 				</Menu>
 			</div>
 
-			<Field label="Standing" id="resource-standing">
+			<Field label="Status" id="resource-standing">
 				<select
 					id="resource-standing"
 					value={standing}
@@ -637,13 +636,13 @@
 				Viewing {rows.length}
 				{rows.length === 1 ? 'resource' : 'resources'}
 			{:else if reading}
-				Reading your Resources
+				Loading your resources
 			{:else}
-				Nothing counted
+				Couldn’t count your resources
 			{/if}
 		</span>
 		<span>
-			<label class="sr-only" for="resource-sort">Order</label>
+			<label class="sr-only" for="resource-sort">Sort by</label>
 			<select
 				class="res-sort"
 				id="resource-sort"
@@ -665,7 +664,7 @@
 				checked={allShownSelected}
 				onchange={toggleAllShown}
 			/>
-			<Menu bind:open={scopeMenu} label="Selection scope" align="start">
+			<Menu bind:open={scopeMenu} label="Select" align="start">
 				{#snippet trigger()}
 					<Button
 						tier="quiet"
@@ -673,7 +672,7 @@
 						icon="ellipsis-vertical"
 						onclick={() => (scopeMenu = !scopeMenu)}
 					>
-						Scope
+						Select
 					</Button>
 				{/snippet}
 				<MenuItem
@@ -709,20 +708,20 @@
 	{/if}
 
 	{#if reading}
-		<p class="res-note">Loading the catalogue…</p>
+		<p class="res-note">Loading your resources…</p>
 	{:else if unread.length > 0}
 		<!-- Named rather than summarised, and the rows withheld rather than
 		     drawn from what did arrive: a row built without the connections says
 		     every marketplace needs a sign-in, and one built without the statuses
 		     says a paused marketplace is running. -->
-		<Banner tone="bad" title={`Some of this page could not be loaded: ${unread.join(', ')}`}>
+		<Banner tone="bad" title={`Part of this page didn’t load: ${unread.join(', ')}`}>
 			Reload to try again.
 		</Banner>
 	{:else if allRows.length === 0 && !anythingSet}
 		<Placeholder
 			icon="layout-list"
-			headline="Nothing in your Resources yet."
-			body="Import brings your existing shop across as drafts you review."
+			headline="You have no resources yet."
+			body="Import your shop to bring your resources in as drafts to review."
 		>
 			{#snippet actions()}
 				<Button
@@ -749,7 +748,7 @@
 		<Placeholder
 			icon="search"
 			headline="Nothing matches these filters."
-			body="Your Resources are not empty; these filters are what is hiding them."
+			body="Clear the filters to see all your resources."
 		>
 			{#snippet actions()}
 				<Button tier="quiet" onclick={clearFilters}>Clear filters</Button>
@@ -801,7 +800,7 @@
 
 		{#if work.isError}
 			<Note icon="triangle-alert">
-				The chips show the last state recorded rather than a live one.
+				The marketplace status on each resource may be out of date.
 			</Note>
 		{/if}
 	{/if}

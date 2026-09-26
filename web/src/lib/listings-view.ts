@@ -61,7 +61,7 @@ export interface RowStatus {
  * calling that simply live would overstate what any one marketplace shows. */
 export function rowStatus(mappings: readonly MappingHead[]): RowStatus {
 	if (mappings.length === 0) {
-		return { label: 'No mapping', tone: 'mut' };
+		return { label: 'No marketplace', tone: 'mut' };
 	}
 	const standings = mappings.map(standingOf);
 	const count = (standing: ListingStanding) =>

@@ -30,6 +30,6 @@
 			onChange={(standards) => set('standards', standards)}
 		/>
 	{:else}
-		<p class="res-note">The standards frameworks are still being read.</p>
+		<p class="res-note">Loading the standards…</p>
 	{/if}
 </FormSection>

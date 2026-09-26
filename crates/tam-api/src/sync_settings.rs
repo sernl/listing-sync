@@ -27,12 +27,10 @@ use crate::{AppState, OrgContext};
 
 /// The console's own sentence for a plan that pulls nothing, matching
 /// `entitlement.ts::featureReason('sync')`.
-const NO_SYNC: &str = "Your plan does not include marketplace sync. Upgrade to pull changes from \
-                       your marketplaces.";
+const NO_SYNC: &str = "Upgrade your plan to check your marketplaces for changes.";
 
 /// And for the rules, which are the second capability.
-const NO_RULES: &str = "Your plan does not include publishing a pulled resource automatically. \
-                        Upgrade to use it.";
+const NO_RULES: &str = "Upgrade your plan to republish a listing when its resource changes.";
 
 /// What a seller may choose: six-hourly, daily, weekly.
 ///
@@ -136,8 +134,8 @@ pub(crate) async fn update_setting(
     Path((_version, inventory)): Path<(String, String)>,
     Json(body): Json<SyncSettingBody>,
 ) -> Result<Json<SyncSettingView>, APIError> {
-    let inventory = parse_inventory(&inventory)
-        .ok_or_else(|| validation("that is not a marketplace this server knows"))?;
+    let inventory =
+        parse_inventory(&inventory).ok_or_else(|| validation("We can't find that marketplace."))?;
     let caps = context.entitlement.caps;
     // The capability before the value: a plan that pulls nothing is not
     // choosing badly between six hours and a day, it does not pull at all,
@@ -147,22 +145,19 @@ pub(crate) async fn update_setting(
     };
     if inventory.marketplace().transport_class() != TransportClass::SellerDevice {
         return Err(validation(
-            "this marketplace publishes an official API, so its catalogue is read on our own \
-             infrastructure rather than on a cadence set here",
+            "Teachouse checks this marketplace for you, so there is nothing to set here.",
         ));
     }
     if !INTERVAL_CHOICES.contains(&body.interval_secs) {
-        return Err(validation(
-            "a sync interval is every six hours, every day, or every week",
-        ));
+        return Err(validation("Choose how often to check from the list."));
     }
     if !body.publish_to.is_empty() && !caps.auto_publish_rules {
         return Err(feature_refusal("auto_publish_rules", NO_RULES));
     }
     if body.publish_to.contains(&inventory) {
         return Err(validation(
-            "a resource pulled from a marketplace is already on it; a rule publishes to a \
-             different one",
+            "Resources you bring in from a marketplace are already on it. Choose a different \
+             marketplace to publish to.",
         ));
     }
     // A template the rule cannot honestly apply is refused rather than
@@ -178,15 +173,15 @@ pub(crate) async fn update_setting(
             .get(context.org, template)
             .await
             .map_err(|error| storage_fault(&state, &error))?
-            .ok_or_else(|| validation("that template is not one of yours"))?;
+            .ok_or_else(|| validation("We can't find that template."))?;
         if body.publish_to.is_empty() {
             return Err(validation(
-                "a template fills what a rule publishes; add a marketplace to publish to first",
+                "Choose a marketplace to publish to before you pick a template.",
             ));
         }
         if let Some(scope) = held.scope.filter(|scope| !body.publish_to.contains(scope)) {
             return Err(validation(&format!(
-                "\"{}\" is written for {}, which this shop does not publish to",
+                "\"{}\" is set up for {}, and you don't publish there.",
                 held.name,
                 name_of(scope),
             )));

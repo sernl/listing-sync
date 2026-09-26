@@ -65,7 +65,7 @@
 		busy = item.id;
 		try {
 			await api.resolve(item.id, segments);
-			toast('info', 'Saved. Every later resource with this word will use it.');
+			toast('info', 'Saved. We will use this for every new resource with this word.');
 			await refetch();
 		} catch {
 			toast('error', 'That answer was not saved. Something else may already use it.');
@@ -107,7 +107,7 @@
 		{/snippet}
 	</PageHead>
 
-	<Panel title="Every question waiting" description="Each one you answer stays answered.">
+	<Panel title="Questions waiting" description="You only answer each one once.">
 		{#if !loaded}
 			<p class="quiet">Loading…</p>
 		{:else if questions.length === 0}
@@ -129,7 +129,7 @@
 							tier="primary"
 							icon="circle-check"
 							disabled={busy === question.id}
-							reason={busy === question.id ? 'This answer is being saved.' : undefined}
+							reason={busy === question.id ? 'Saving your answer.' : undefined}
 							onclick={() => void resolve(question.item)}
 						>
 							Save answer
@@ -138,7 +138,7 @@
 							tier="outline"
 							icon="circle-x"
 							disabled={busy === question.id}
-							reason={busy === question.id ? 'This answer is being saved.' : undefined}
+							reason={busy === question.id ? 'Saving your answer.' : undefined}
 							onclick={() => void noCounterpart(question.item)}
 						>
 							Leave it out

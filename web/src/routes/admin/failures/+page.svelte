@@ -22,7 +22,7 @@
 	<PageHead
 		icon="circle-x"
 		title="Failed and stranded writes"
-		description="Write attempts that recorded a failure, and attempts stranded in flight whose run is gone. Stranded first, then newest, across every tenant."
+		description="Write attempts that failed, and attempts stranded after their run ended. Stranded first, then newest, across all accounts."
 	>
 		{#snippet aside()}
 			<StatusPill tone="soon" label="newest 100" />
@@ -31,14 +31,14 @@
 
 	<Panel>
 		{#if failures.isPending}
-			<p class="quiet">Reading the failed attempts…</p>
+			<p class="quiet">Loading failed writes…</p>
 		{:else if failures.isError}
-			<p class="quiet">The failed attempts could not be read.</p>
+			<p class="quiet">We could not load failed writes.</p>
 		{:else if rows.length === 0}
 			<Placeholder
 				icon="circle-check"
-				headline="No write attempt has recorded a failure"
-				body="Nothing on the platform is stranded in flight either. This page fills itself the moment one is."
+				headline="No failed writes"
+				body="Nothing is stranded in flight either. New ones appear here as they happen."
 			/>
 		{:else}
 			<div class="op-table op-tall">
@@ -49,7 +49,7 @@
 							<th>Attempt</th>
 							<th>Failure</th>
 							<th>Item</th>
-							<th>Tenant</th>
+							<th>Account</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -87,7 +87,7 @@
 										</span>
 									{/if}
 								</td>
-								<td class="op-cell" data-label="Tenant">
+								<td class="op-cell" data-label="Account">
 									<span class="t">
 										<a class="link" title={write.org} href={`/admin/orgs/${write.org}`}
 											>{write.org.slice(0, 8)}…</a
@@ -102,8 +102,8 @@
 			</div>
 			<p class="foot-note">
 				{rows.length}
-				{rows.length === 1 ? 'attempt' : 'attempts'}. The attempt's own failure code sits beside the
-				owning item's, which can differ: an attempt can fail without the item settling failed.
+				{rows.length === 1 ? 'attempt' : 'attempts'}. Each attempt's failure code is shown beside its
+				item's. They can differ: an attempt can fail while its item does not.
 			</p>
 		{/if}
 	</Panel>

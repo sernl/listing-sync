@@ -46,7 +46,7 @@ fn missing(what: &str) -> APIError {
 }
 
 fn no_such_user() -> APIError {
-    missing("no such user in this organisation")
+    missing("We can't find that person in your account.")
 }
 
 /// The signed-in user's own profile as the console reads it.
@@ -104,7 +104,7 @@ pub(crate) async fn set_avatar(
     Json(body): Json<AvatarBody>,
 ) -> Result<Json<ProfileView>, APIError> {
     let hash = parse_hash(&body.hash)
-        .ok_or_else(|| validation("a handle is the file's 64-character hex hash"))?;
+        .ok_or_else(|| validation("We can't read that picture. Upload it again."))?;
     let lengths: HashMap<ContentHash, i64> = ProductRepo::new(state.pool.clone())
         .stored_hashes(context.org, &[hash])
         .await
@@ -140,7 +140,7 @@ fn settled(user: UserId, written: AvatarWrite) -> Result<Json<ProfileView>, APIE
         // arbiter, and its answer is the one the unheld check gives.
         AvatarWrite::NotHeld => Err(APIError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
-            APIErrorEntry::new("a file handle names bytes this organisation has not uploaded")
+            APIErrorEntry::new("We can't find that upload. Upload the file again.")
                 .code(APIErrorCode::UploadRejected)
                 .kind(APIErrorKind::Validation),
         )),
@@ -163,11 +163,11 @@ pub(crate) async fn avatar(
         .await
         .map_err(|error| storage_fault(&state, &error))?
         .ok_or_else(no_such_user)?
-        .ok_or_else(|| missing("no picture is set"))?;
+        .ok_or_else(|| missing("You haven't set a picture."))?;
     let Some(blobs) = state.blobs.clone() else {
         return Err(APIError::new(
             StatusCode::SERVICE_UNAVAILABLE,
-            APIErrorEntry::new("this deployment holds no object store")
+            APIErrorEntry::new("File storage isn't available right now. Try again later.")
                 .kind(APIErrorKind::Internal),
         ));
     };

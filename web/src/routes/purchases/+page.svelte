@@ -7,7 +7,7 @@
 	<PageHead icon="shopping-bag" title="Purchases" description="Resources you have bought." />
 	<Placeholder
 		icon="shopping-bag"
-		headline="Purchases are not built yet"
-		body="This is where the resources you buy will be, with their files and their updates."
+		headline="Purchases are coming soon"
+		body="The resources you buy will appear here, with their files and updates."
 	/>
 </div>

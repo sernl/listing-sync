@@ -54,7 +54,7 @@ pub fn token_from_cookie_header(header: &str) -> Option<SessionToken> {
 fn unauthenticated() -> APIError {
     APIError::new(
         StatusCode::UNAUTHORIZED,
-        APIErrorEntry::new("a valid session is required")
+        APIErrorEntry::new("Sign in to continue.")
             .code(APIErrorCode::SessionRequired)
             .kind(APIErrorKind::Unauthenticated),
     )

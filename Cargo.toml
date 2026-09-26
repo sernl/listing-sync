@@ -127,6 +127,46 @@ indexing_slicing            = "allow"
 [patch.crates-io]
 wry = { path = "vendor/wry-0.55.1" }
 
+# The cover pipeline's pixel work, optimised in dev and test builds too.
+# Unoptimised, rasterising one PDF page, a Lanczos downscale and a PNG
+# encode at the 1600x1200 cover frame take seconds each, which slowed a
+# debug desktop import and stretched the render tests to minutes. Only these
+# dependencies are affected; workspace crates keep the dev profile.
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+[profile.dev.package.flate2]
+opt-level = 3
+[profile.dev.package.crc32fast]
+opt-level = 3
+[profile.dev.package.hayro]
+opt-level = 3
+[profile.dev.package.hayro-interpret]
+opt-level = 3
+[profile.dev.package.hayro-syntax]
+opt-level = 3
+[profile.dev.package.vello_cpu]
+opt-level = 3
+[profile.dev.package.vello_common]
+opt-level = 3
+[profile.dev.package.fearless_simd]
+opt-level = 3
+[profile.dev.package.kurbo]
+opt-level = 3
+[profile.dev.package.skrifa]
+opt-level = 3
+[profile.dev.package.read-fonts]
+opt-level = 3
+[profile.dev.package.pic-scale]
+opt-level = 3
+[profile.dev.package.moxcms]
+opt-level = 3
+
 [profile.release]
 overflow-checks = true
 debug-assertions = true

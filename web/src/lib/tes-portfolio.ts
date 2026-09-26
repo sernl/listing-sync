@@ -143,18 +143,18 @@ export const PORTFOLIO_ROWS: readonly PortfolioRow[] = [
 	{
 		key: 'live',
 		label: 'Live on TES',
-		explanation: 'TES was last recorded showing this listing.'
+		explanation: 'Live on TES when we last checked.'
 	},
 	{
 		key: 'livePriced',
 		label: 'with a price in your Resources',
-		explanation: 'Of the live listings, those whose resource carries a price here.',
+		explanation: 'Live listings whose resource has a price here.',
 		breakdown: true
 	},
 	{
 		key: 'liveFree',
 		label: 'free in your Resources',
-		explanation: 'Of the live listings, those whose resource is recorded as free here.',
+		explanation: 'Live listings whose resource is free here.',
 		breakdown: true
 	},
 	{

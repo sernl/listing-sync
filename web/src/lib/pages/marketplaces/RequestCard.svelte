@@ -40,22 +40,22 @@
 			return 'Name the marketplace first.';
 		}
 		if (nameCount > NAME_MAX_CHARS) {
-			return `A marketplace name is at most ${NAME_MAX_CHARS} characters.`;
+			return `Keep the name to ${NAME_MAX_CHARS} characters or fewer.`;
 		}
 		if (url.trim().length === 0) {
-			return 'Give the marketplace a web address.';
+			return "Add the marketplace's web address.";
 		}
 		if (charCount(url.trim()) > URL_MAX_CHARS) {
-			return `A web address is at most ${URL_MAX_CHARS} characters.`;
+			return `Keep the web address to ${URL_MAX_CHARS} characters or fewer.`;
 		}
 		if (!isWebAddress(url.trim())) {
-			return 'A web address starts with https:// or http:// and names a host.';
+			return 'Enter a full web address, starting with https://.';
 		}
 		if (reasonCount === 0) {
 			return 'Tell us what you sell there.';
 		}
 		if (reasonCount > REASON_MAX_CHARS) {
-			return `A description is at most ${REASON_MAX_CHARS} characters.`;
+			return `Keep this to ${REASON_MAX_CHARS} characters or fewer.`;
 		}
 		return null;
 	});
@@ -78,7 +78,7 @@
 			refusal =
 				failure instanceof ApiFailure
 					? failure.message
-					: 'That request was not sent. Try it again in a moment.';
+					: 'Your request was not sent. Try again in a moment.';
 		} finally {
 			sending = false;
 		}
@@ -132,14 +132,14 @@
 					tier="additive"
 					type="submit"
 					disabled={sending || blocked !== null}
-					reason={sending ? 'The request is being sent.' : (blocked ?? undefined)}
+					reason={sending ? 'Sending your request…' : (blocked ?? undefined)}
 				>
 					{sending ? 'Sending…' : 'Send request'}
 				</Button>
 				<Button
 					tier="outline"
 					disabled={sending}
-					reason={sending ? 'The request is being sent.' : undefined}
+					reason={sending ? 'Sending your request…' : undefined}
 					onclick={onclose}
 				>
 					Cancel

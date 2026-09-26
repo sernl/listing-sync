@@ -112,7 +112,7 @@
 						item,
 						failure instanceof ApiFailure
 							? failure.message
-							: 'The response was lost. Check the refreshed history before retrying.'
+							: "We didn't hear back. Check your history before you try again."
 					);
 				}
 				done += 1;

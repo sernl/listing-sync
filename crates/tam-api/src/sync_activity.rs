@@ -123,7 +123,7 @@ pub(crate) async fn activity(
         None | Some("") => None,
         Some(raw) => Some(
             decode_activity_cursor(raw)
-                .ok_or_else(|| validation("the cursor is not one this server issued"))?,
+                .ok_or_else(|| validation("This page link has expired. Reload the page."))?,
         ),
     };
     let limit = match params.limit.as_deref() {
@@ -194,7 +194,7 @@ fn line_of(row: &tam_storage::ActivityRow) -> ActivityLineView {
             source,
             product: _,
         } => (
-            format!("\"{title}\" pulled from {}", name_of(*source)),
+            format!("\"{title}\" brought in from {}", name_of(*source)),
             Some(format!("/imports/runs/{}", run.to_hyphenated())),
         ),
         ActivityKind::Published {

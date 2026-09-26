@@ -26,7 +26,7 @@ export function checkOrgName(raw: string): NameVerdict {
 		return {
 			accepted: false,
 			problem: 'empty',
-			message: 'An organisation name cannot be empty.'
+			message: 'Enter a name for your account.'
 		};
 	}
 	// Spread rather than `.length`: the string iterator yields code points, so
@@ -35,7 +35,7 @@ export function checkOrgName(raw: string): NameVerdict {
 		return {
 			accepted: false,
 			problem: 'too-long',
-			message: `An organisation name is at most ${NAME_MAX_CHARS} characters.`
+			message: `Keep your account name to ${NAME_MAX_CHARS} characters or fewer.`
 		};
 	}
 	return { accepted: true, name };

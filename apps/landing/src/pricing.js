@@ -106,44 +106,41 @@ export const foundingCloses = spellDate(FOUNDING.closes_at);
  */
 export const foundingOpen = Date.parse(`${FOUNDING.closes_at}T23:59:59Z`) > Date.now();
 
-/** "every 6 hours", from the interval the plan table carries in seconds. */
-const cadenceOf = (secs) => {
-	if (secs % 86400 === 0) return secs === 86400 ? 'daily' : `every ${secs / 86400} days`;
-	if (secs % 3600 === 0) return secs === 3600 ? 'hourly' : `every ${secs / 3600} hours`;
-	return `every ${Math.round(secs / 60)} minutes`;
-};
-
 /**
  * A plan card's lines, read off `capabilities` rather than typed out beside
  * them.
  *
  * A hand-written chip is a second price list: it goes stale the day a cap
  * moves in `tam-limits` and nothing fails. These are the capabilities a
- * teacher is choosing between, in the order they matter, and `soon` marks the
- * one line that is sold before it is built so a tick cannot claim otherwise.
+ * teacher is choosing between, in the order they matter, worded for a
+ * teacher rather than for whoever built them (the founder's 2026-09-26
+ * review: no "pulls every 6 hours"), and `soon` marks the one line that is
+ * sold before it is built so a tick cannot claim otherwise. The console's
+ * plan page (`web/src/lib/pages/account/plans.ts`) says the same lines.
+ *
+ * A cap that is not there is not a line: an unlimited catalogue says nothing
+ * rather than "No limit on resources", which the review asked to remove.
  */
 export const planFeatures = (plan) => {
 	const caps = plan.capabilities;
 	const lines = [];
+	if (caps.free_moves_lifetime > 0)
+		lines.push({ text: `${caps.free_moves_lifetime} moves onto a marketplace of your choice` });
 	if (caps.moves_per_month > 0) lines.push({ text: `${caps.moves_per_month} moves a month` });
 	if (caps.moves_accrual_cap > 0)
 		lines.push({ text: `Unused moves stack to ${caps.moves_accrual_cap}` });
-	if (caps.free_moves_lifetime > 0)
-		lines.push({ text: `${caps.free_moves_lifetime} free moves for each shop` });
-	lines.push({
-		text:
-			caps.resources_max >= UNCAPPED ? 'No limit on resources' : `Up to ${caps.resources_max} resources`
-	});
-	if (caps.import_spreadsheet && caps.import_marketplace) lines.push({ text: 'Import included' });
-	if (caps.scheduling) lines.push({ text: 'Scheduling' });
+	if (caps.import_spreadsheet && caps.import_marketplace)
+		lines.push({ text: 'Import all your resources from wherever you sell' });
+	if (caps.resources_max < UNCAPPED) lines.push({ text: `Up to ${caps.resources_max} resources` });
 	if (caps.sync_pull_interval_secs !== null)
-		lines.push({ text: `Pulls ${cadenceOf(caps.sync_pull_interval_secs)}` });
+		lines.push({ text: 'Edit resources in Teachouse and sync the edits across all platforms' });
+	if (caps.scheduling) lines.push({ text: 'Scheduling' });
 	if (caps.templates_max > 1) lines.push({ text: `${caps.templates_max} templates` });
 	if (caps.collections_max > 0) lines.push({ text: `${caps.collections_max} collections` });
-	if (caps.analytics) lines.push({ text: 'Figures on every shop' });
+	if (caps.analytics) lines.push({ text: 'Statistics on every shop' });
 	if (caps.ai_fills_per_month > 0 && AI.status === 'coming_soon')
 		lines.push({
-			text: `AI fill \u2014 coming soon (${caps.ai_fills_per_month} a month)`,
+			text: `AI fill, coming soon (${caps.ai_fills_per_month} a month)`,
 			soon: true
 		});
 	return lines;
@@ -162,15 +159,20 @@ export const packRows = PACKS.map((pack) => ({
 }));
 
 /** The edit window, said on the packs card rather than at the first re-edit. */
-export const packEditNote = `Edit a moved listing for ${free.capabilities.pack_edit_days} days without spending another move.`;
+export const packEditNote = `Edit a moved listing once within ${free.capabilities.pack_edit_days} days without spending another move.`;
+
+/** What a move is, said once under the heading of the cards that sell them. */
+export const moveDefinition =
+	'A move is publishing one imported resource onto one marketplace. Publishing a resource to Tes and TPT is 2 moves; to Tes alone is 1 move.';
 
 /**
  * The questions, and the only place the site answers one.
  *
  * Every figure in an answer is interpolated from the plan table above, so the
- * price list and the questions about it cannot disagree. The answers are the
- * ones in `docs/guides/faq.md`, cut to two sentences: a reader on this page
- * is deciding, not learning the product.
+ * price list and the questions about it cannot disagree. The answers follow
+ * `docs/guides/faq.md`, cut to two short sentences and written the way a
+ * teacher would say them, not the way the system counts them: a reader on
+ * this page is deciding, not learning the product.
  *
  * The founding question rides on the same gate as the band: once the offer
  * has closed, answering a question about how to take it is an advertisement
@@ -179,54 +181,54 @@ export const packEditNote = `Edit a moved listing for ${free.capabilities.pack_e
 export const faqs = [
 	{
 		q: 'What is a move?',
-		a: 'One resource committed to the other marketplace. It is counted when you commit it, after duplicates are merged, and a draft costs the same as a live listing.'
+		a: 'Publishing one imported resource onto one marketplace. Publishing it to two marketplaces is 2 moves; to one is 1 move. A draft counts the same as a live listing.'
 	},
 	{
-		q: 'What does not cost a move?',
-		a: 'Importing, reading, editing in Teachouse, exporting and previewing all cost nothing. Only committing a resource to a marketplace does.'
+		q: 'What is free?',
+		a: 'Importing your resources, editing them in Teachouse, previewing and exporting never use a move. You only use a move when you publish a resource onto a marketplace.'
 	},
 	{
 		q: 'What do the free moves get me?',
-		a: `${free.capabilities.free_moves_lifetime} moves for each shop, given once when the shop first connects. A shop never gets a second set.`
+		a: `When you connect your first shop, you get ${free.capabilities.free_moves_lifetime} free moves to publish onto a marketplace of your choice. Every account gets them once.`
 	},
 	{
-		q: 'Packs or Sync \u2014 which do I want?',
-		a: `Buy a pack if you are moving a shop once. Take Sync if you list every week and want schedules, pulls and figures as well as ${subscription.capabilities.moves_per_month} moves a month.`
+		q: 'Move Packs or Sync \u2014 which is right for me?',
+		a: `Buy a Move Pack if you are moving your shop once. Choose Sync if you add new resources often: you get ${subscription.capabilities.moves_per_month} moves a month, scheduling and statistics, and your edits stay in step on every marketplace.`
 	},
 	{
-		q: 'Do moves expire?',
-		a: `Pack moves are good for 12 months from the day you buy them. Sync's monthly moves stack up to ${subscription.capabilities.moves_accrual_cap}; above that, a new month adds none.`
+		q: 'Do moves run out?',
+		a: `Move Pack moves last 12 months from the day you buy them. With Sync, moves you do not use carry over, up to ${subscription.capabilities.moves_accrual_cap}.`
 	},
 	{
-		q: 'Can I edit a listing after I move it?',
-		a: `Yes. For ${free.capabilities.pack_edit_days} days after a move you can edit that listing and send the change without spending another move.`
+		q: 'Can I change a listing after I move it?',
+		a: `Yes. Within ${free.capabilities.pack_edit_days} days of a move you can edit that listing once and send the change without using another move.`
 	},
 	{
 		q: 'Can I get a refund?',
-		a: 'Write to us within 14 days of buying a pack and we will refund it if the moves are unspent. Cancel a subscription at any time from Account \u2192 Subscription; the current period is not refunded.'
+		a: 'Yes, for a Move Pack you have not used: write to us within 14 days of buying it. You can cancel Sync at any time in Account \u2192 Subscription, and it runs until the end of the period you paid for.'
 	},
 	...(foundingOpen
 		? [
 				{
 					q: `What is the Founding ${FOUNDING.places}?`,
-					a: `Annual only: ${dollars(FOUNDING.year_one_cents)} for the first year, ${dollars(FOUNDING.ongoing_cents)} a year through year ${FOUNDING.ongoing_years}, and ${FOUNDING.extra_moves} moves on top. It closes at ${FOUNDING.places} members or on ${foundingCloses}.`
+					a: `Our launch offer, paid yearly: ${dollars(FOUNDING.year_one_cents)} for your first year, then ${dollars(FOUNDING.ongoing_cents)} a year until year ${FOUNDING.ongoing_years}, plus ${FOUNDING.extra_moves} extra moves. It closes when ${FOUNDING.places} teachers have joined, or on ${foundingCloses}.`
 				}
 			]
 		: []),
 	{
 		q: 'What is "Move with me"?',
-		a: `A ${dollars(moveWithMe.price_cents)} session where we do your move with you. It is a booking, so buy a pack for the moves themselves.`
+		a: `A ${dollars(moveWithMe.price_cents)} session where we move your shop together with you. The moves themselves come from a Move Pack.`
 	},
 	{
 		q: 'Which marketplaces can I use?',
-		a: 'Tes and Teachers Pay Teachers, in both directions.'
+		a: 'Tes and Teachers Pay Teachers. You can move resources either way between them.'
 	},
 	{
 		q: 'Why do I need the desktop app?',
-		a: 'Tes and TPT are reached through your own signed-in browser session on your own machine. The app provides that session and keeps your marketplace password on your machine.'
+		a: 'The app signs in to your marketplaces for you, on your own computer. That way your marketplace passwords never leave it.'
 	},
 	{
 		q: 'Do my files get uploaded to Teachouse?',
-		a: 'No. Files stay on your machines and are sent to a marketplace only when you publish. The thumbnail is the one exception, stored so the console can show it.'
+		a: 'No. Your files stay on your computer and go straight to a marketplace when you publish. We keep only the cover picture, so you can see your resources in Teachouse.'
 	}
 ];

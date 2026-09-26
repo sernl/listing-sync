@@ -43,7 +43,7 @@ describe('the permission rows', () => {
 		);
 		const tpt = rows.find((row) => row.marketplace === 'Tpt');
 		expect(tpt?.standing).toBe('outdated');
-		expect(tpt?.pill).toEqual({ label: 'Needs re-confirmation', tone: 'warn' });
+		expect(tpt?.pill).toEqual({ label: 'Confirm again', tone: 'warn' });
 		expect(tpt?.action).toBe('grant');
 	});
 });
@@ -52,8 +52,8 @@ describe('the withdrawal prompt', () => {
 	it('says what stops and what does not', () => {
 		const prompt = withdrawPrompt('TPT');
 		expect(prompt).toContain('Withdraw permission for TPT?');
-		expect(prompt).toContain('stops starting new TPT work on every machine');
-		expect(prompt).toContain('Logins already on your machines stay');
+		expect(prompt).toContain('stops all new TPT work on your machines');
+		expect(prompt).toContain('logins stay on each machine');
 	});
 });
 

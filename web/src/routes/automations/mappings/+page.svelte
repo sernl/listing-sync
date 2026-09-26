@@ -7,9 +7,10 @@
 	import RuleWorkbench from '$lib/pages/automations/RuleWorkbench.svelte';
 	import { MAPPING_GUIDE, WHAT_MAPPING_IS } from '$lib/pages/automations/seller-rules';
 	import '$lib/pages/automations/automations.css';
+	import '$lib/flow.css';
 </script>
 
-<div class="page">
+<div class="page flow-page has-bar">
 	<PageHead
 		icon="tag"
 		title="Target terms"

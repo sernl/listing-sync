@@ -68,27 +68,25 @@
 		icon="book-open"
 		title={view?.title ?? 'Guide'}
 		description={view === undefined
-			? 'Reading this guide…'
+			? 'Loading guide…'
 			: `Updated ${agoLabel(view.updated_at, now)}`}
 		back={{ href: '/guides', label: 'All guides' }}
 	/>
 
 	<Panel>
 		{#if guide.isPending}
-			<p class="quiet">Reading this guide…</p>
+			<p class="quiet">Loading guide…</p>
 		{:else if missing}
 			<Placeholder
 				icon="book-open"
-				headline="There is no guide at this address"
-				body="It may have been renamed, or it may never have been published. The guides list
-					has everything that has been."
+				headline="We could not find this guide"
+				body="It may have been renamed or removed. See all guides for what is available."
 			/>
 		{:else if guide.isError}
 			<Placeholder
 				icon="book-open"
-				headline="This guide could not be read"
-				body="The request did not come back with an answer we can act on. Reloading is the
-					only thing worth trying from here."
+				headline="We could not load this guide"
+				body="Try reloading the page."
 			/>
 		{:else if view !== undefined}
 			{#if view.topic !== null || view.tags.length > 0}

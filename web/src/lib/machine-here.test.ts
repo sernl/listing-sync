@@ -49,7 +49,7 @@ describe('the banner over a machine that was signed out', () => {
 		// act, and the seller's own act is what the sentence is about.
 		const said = signedOutHere(null);
 		expect(said).toBe(
-			'This machine was signed out from the console. Sign it back in to hold marketplace logins here.'
+			'This machine was signed out of your account. Sign it back in to use marketplace logins here.'
 		);
 		expect(said).not.toMatch(/ on /);
 	});

@@ -7,50 +7,50 @@ tags: account, setup, privacy
 
 ## One Teachouse account per shop
 
-A marketplace shop belongs to one Teachouse account. A second account trying to connect the same shop is refused.
+Each marketplace shop can belong to only one Teachouse account. If a second account tries to connect the same shop, Teachouse will not allow it.
 
 1. Decide which account the shop belongs to.
 2. Disconnect the shop from any other account first.
-3. Connect it where you want it.
+3. Connect it to the account you want.
 
-Free moves are given once per shop, ever. Moving a shop to a new account does not bring a second set.
+Every account gets its free moves once. Moving a shop to a new account does not give it a second set.
 
-## Your organisation name
+## Your account name
 
 1. Open **Account → Account settings**.
-2. Set the name your organisation is called.
+2. Type the name you want for your account.
 
-Neither this name nor your address is shown to buyers. What buyers see is what you publish.
+Buyers never see this name or your email address. Buyers only see what you publish.
 
 <!-- shot: /settings, the organisation and profile panels -->
 ![Your account settings](/v1/guides/images/2127cb8e461cc1905542ea642cfdc31d0898d14542e0ab6426b97217c7d5a02b)
 
 ## Passkeys
 
-A passkey signs you in with the lock your device already uses.
+A passkey lets you sign in with the lock your device already uses, such as your fingerprint, face or PIN.
 
 1. Open **Account → Account settings**.
 2. Add a passkey.
 3. Confirm on your device.
 
-If your browser does not support passkeys, sign in with your password and add one later from a browser that does.
+If your browser does not support passkeys, sign in with your password. You can add a passkey later from a browser that does.
 
-## Where notices go
+## Where emails go
 
-Set the address notices go to under **Account settings**. It can differ from the address you sign in with.
+Choose the email address for notices in **Account settings**. It can be different from the one you sign in with.
 
-## Machines
+## Computers
 
-1. Open **Account → Account settings** to see the machines signed in.
-2. Sign a machine out when you stop using it.
+1. Open **Account → Account settings** to see the computers that are signed in.
+2. Sign a computer out when you stop using it.
 
-Signing a machine out stops it doing work. It does not delete anything already stored, and space already used is not reclaimed.
+A signed-out computer stops working for Teachouse. Nothing already saved is deleted, and space already used is not freed up.
 
 <!-- shot: /settings, the machines panel with one machine signed in -->
-![Machines signed in](/v1/guides/images/f3eb740ea53f9456926b63cd6a0597059a57126d10807223b1738820c1d5765c)
+![Computers signed in](/v1/guides/images/f3eb740ea53f9456926b63cd6a0597059a57126d10807223b1738820c1d5765c)
 
 ## Forgotten password
 
-1. Open the sign-in page and ask for a reset link.
-2. Follow the link in the email.
+1. On the sign-in page, ask for a reset link.
+2. Open the link in the email.
 3. Choose a new password.

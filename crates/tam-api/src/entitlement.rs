@@ -131,9 +131,15 @@ impl QuotaKind {
             Self::Listings => {
                 format!("Your plan includes {limit} resources. Upgrade to add more.")
             }
-            Self::StorageBytes => format!(
+            // Whole gigabytes where the ceiling has them, whole megabytes
+            // below that: Look's 256 MiB would otherwise read as "0 GB".
+            Self::StorageBytes if limit >= 1 << 30 => format!(
                 "Your plan includes {} GB of files. Upgrade to add more.",
                 limit >> 30
+            ),
+            Self::StorageBytes => format!(
+                "Your plan includes {} MB of files. Upgrade to add more.",
+                limit >> 20
             ),
             Self::Marketplaces if limit == 1 => {
                 "Your plan connects one marketplace. Upgrade to connect more.".to_owned()
@@ -249,7 +255,7 @@ impl MoveRefusal {
     #[must_use]
     pub fn sentence(self) -> String {
         if self.available == 0 {
-            "You have no moves left. Buy a pack to move more resources.".to_owned()
+            "You have no moves left. Buy a pack, or choose Sync.".to_owned()
         } else if self.available == 1 {
             format!(
                 "You have one move left and asked to move {}. Buy a pack or pick fewer.",
@@ -523,7 +529,14 @@ mod tests {
         );
         assert_eq!(
             QuotaKind::StorageBytes.sentence(free.storage_bytes_max),
-            "Your plan includes 1 GB of files. Upgrade to add more."
+            "Your plan includes 256 MB of files. Upgrade to add more."
+        );
+        assert_eq!(
+            QuotaKind::StorageBytes.sentence(Plan::Subscriber.capabilities(None).storage_bytes_max),
+            format!(
+                "Your plan includes {} GB of files. Upgrade to add more.",
+                Plan::Subscriber.capabilities(None).storage_bytes_max >> 30
+            )
         );
     }
 
@@ -539,7 +552,7 @@ mod tests {
         };
         assert_eq!(
             empty.sentence(),
-            "You have no moves left. Buy a pack to move more resources."
+            "You have no moves left. Buy a pack, or choose Sync."
         );
         let short = MoveRefusal {
             available: 3,

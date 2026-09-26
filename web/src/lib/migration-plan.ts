@@ -45,9 +45,9 @@ export const DISPOSITION_WORD: Record<Disposition, string> = {
 /** What each one does to the source listing, which is the whole difference and
  *  the only thing a seller has to decide. */
 export const DISPOSITION_LINE: Record<Disposition, string> = {
-	sync: 'Copy leaves the source listing where it is.',
+	sync: 'Copy keeps the original listing where it is.',
 	migrate:
-		'Move creates the listing on the target, then removes it from the source once it is there.'
+		'Move adds the listing to the new marketplace, then removes the original.'
 };
 
 /** Both, in the order the segmented control shows them: the safe one first. */
@@ -87,13 +87,13 @@ export interface MigrationSide {
 function sourceReason(inventory: InventoryId): string | null {
 	return UNCAPTURED_SOURCE[inventory] === null
 		? null
-		: `Teachouse cannot yet download files from ${SHORT_NAME[inventory]}, so it cannot be a source.`;
+		: `Teachouse can't copy files from ${SHORT_NAME[inventory]} yet, so you can't move from it.`;
 }
 
 function targetReason(inventory: InventoryId): string | null {
 	return AUTHORABLE[inventory]
 		? null
-		: `${SHORT_NAME[inventory]} is not connected to Teachouse yet.`;
+		: `Teachouse can't publish to ${SHORT_NAME[inventory]} yet.`;
 }
 
 function sidesBy(reason: (inventory: InventoryId) => string | null): MigrationSide[] {
@@ -133,7 +133,7 @@ export const MIGRATION_SOURCES: readonly InventoryId[] = INVENTORY_ORDER.filter(
  * cause and the seller fixes one thing at a time. */
 export function pairReason(source: InventoryId, target: InventoryId): string | null {
 	if (source === target) {
-		return `A migration moves resources between two marketplaces, and both ends here are ${SHORT_NAME[source]}.`;
+		return `Pick two different marketplaces. Both are set to ${SHORT_NAME[source]}.`;
 	}
 	return sourceReason(source) ?? targetReason(target);
 }
@@ -145,7 +145,7 @@ export function pairReason(source: InventoryId, target: InventoryId): string | n
  *  clause reads as a category the preview did not look at. */
 export function countsLine(counts: MigrationCounts): string {
 	return (
-		`${counts.will_create} will be created, ` +
+		`${counts.will_create} to add, ` +
 		`${counts.already_there} already there, ` +
 		`${counts.blocked} blocked`
 	);

@@ -637,7 +637,7 @@ describe('the axis rows on a marketplace tab', () => {
 		};
 		const row = axisRow(projectionOf(draft, 'Tes', vocabularyWithSubjectCap(2)), 'subject');
 		expect(row?.loss).toContain('takes 2');
-		expect(row?.loss).toContain('chosen 3');
+		expect(row?.loss).toContain('chose 3');
 		// The whole point: the seller's three survive on the row and the row
 		// carries no two-element value that a later reader could mistake for
 		// what they chose. A truncating implementation passes every other

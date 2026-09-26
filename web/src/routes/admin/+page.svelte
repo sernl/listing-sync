@@ -46,11 +46,11 @@
 	<PageHead
 		icon="layout-dashboard"
 		title="Platform overview"
-		description="Every tenant at once. Read-only: nothing on this page writes anything."
+		description="All accounts at a glance. This page only reads and changes nothing."
 	/>
 
 	<div class="cards">
-		<StatCard icon="refresh-cw" label="Sync runs" sub="across every tenant">
+		<StatCard icon="refresh-cw" label="Sync runs" sub="across all accounts">
 			{ledger?.jobs ?? '—'}
 		</StatCard>
 		<StatCard
@@ -66,7 +66,7 @@
 			tone={parkedTile.tone}
 			label="Parked items"
 			sub={ledger === undefined
-				? 'the ledger has not been read'
+				? 'not loaded yet'
 				: `${ledger.parked_live} live, ${ledger.parked_cold} cold`}
 		>
 			{parked ?? '—'}
@@ -76,7 +76,7 @@
 			tone={failedTile.tone}
 			label="Failed items"
 			sub={ledger === undefined
-				? 'the ledger has not been read'
+				? 'not loaded yet'
 				: `${ledger.settled} settled in all`}
 		>
 			{failed ?? '—'}
@@ -85,21 +85,21 @@
 
 	<Panel
 		title="Signups over time"
-		description="The newest {SIGNUP_DAYS} days each plane recorded, by UTC day."
+		description="The newest {SIGNUP_DAYS} days each system recorded, by UTC day."
 	>
 		{#snippet more()}
 			<Button tier="quiet" icon="heart-pulse" href="/admin/health">Sync health</Button>
 		{/snippet}
 
 		{#if signups.isPending}
-			<p class="quiet">Reading the signup series…</p>
+			<p class="quiet">Loading signups…</p>
 		{:else if signups.isError}
-			<p class="quiet">The signup series could not be read.</p>
+			<p class="quiet">We could not load signups.</p>
 		{:else if rows.length === 0}
 			<Placeholder
 				icon="users"
 				headline="Nobody has signed up yet"
-				body="Neither the identity plane nor the platform's own user table holds a row."
+				body="Neither the identity service nor the app's user table has any rows."
 			/>
 		{:else}
 			<div class="op-plane-key">
@@ -130,12 +130,10 @@
 			<p class="foot-note">
 				Identity signups are <span class="mono">user_signed_up</span> events in the identity
 				service's audit trail. Provisioned platform users are rows in
-				<span class="mono">app_user</span>, which the session exchange writes the first time a
-				subject signs in — so a human who registered and never came back appears in the first
-				series and not the second.
+				<span class="mono">app_user</span>, written on first sign-in. Someone who registered but
+				never signed in shows in the first series only.
 				{#if !identityVisible}
-					This database carries no identity schema, so the first series is absent rather than
-					zero.
+					This database has no identity schema, so the first series is missing, not zero.
 				{/if}
 			</p>
 		{/if}

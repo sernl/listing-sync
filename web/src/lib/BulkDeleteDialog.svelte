@@ -103,8 +103,8 @@
 		} catch (failure) {
 			refusal =
 				failure instanceof ApiFailure
-					? `${failure.message} Confirmed deletions: ${deleted} of ${rows.length}.`
-					: `Confirmed deletions: ${deleted} of ${rows.length}. Check Resources and Sync before retrying the last resource; its result could not be confirmed.`;
+					? `${failure.message} Deleted ${deleted} of ${rows.length}.`
+					: `Deleted ${deleted} of ${rows.length}. We couldn't confirm the last one, so check Resources and Updates before you try it again.`;
 			onPartial(deleted);
 		} finally {
 			sending = false;
@@ -123,7 +123,7 @@
 	<div class="dialog-body">
 		<h2 id="bulk-delete-title">
 			{#if refusal !== null}
-				Resource deletion stopped
+				Deleting stopped
 			{:else}
 				Delete {rows.length} {rows.length === 1 ? 'resource' : 'resources'}
 			{/if}
@@ -132,7 +132,7 @@
 
 		{#if refusal === null}
 		{#if withListings === 0}
-			<Note>None of the selected resources has a marketplace listing to remove.</Note>
+			<Note>None of these resources is listed on a marketplace.</Note>
 		{:else}
 			<Note>
 				{withListings} of {rows.length}
@@ -159,19 +159,19 @@
 			</div>
 			{#if leftStanding.length > 0}
 				<div class="notice">
-					Listings on {leftStanding.map(platformTitle).join(', ')} will remain unchanged.
-					Teachouse will no longer track them after these resources are deleted.
+					Your listings on {leftStanding.map(platformTitle).join(', ')} stay as they are.
+					Teachouse stops tracking them once these resources are deleted.
 				</div>
 				<div class="inline-choices">
 					<label>
 						<input type="checkbox" bind:checked={leaveLive} disabled={sending} />
-						Leave unselected marketplace listings unchanged
+						Leave your other marketplace listings as they are
 					</label>
 				</div>
 			{/if}
 			<Note icon="refresh-cw">
-				Check Updates for the {removalCount}
-				{removalCount === 1 ? 'removal' : 'removals'} this queues.
+				Follow the {removalCount}
+				{removalCount === 1 ? 'removal' : 'removals'} on Updates.
 			</Note>
 		{/if}
 		{/if}

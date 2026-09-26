@@ -59,7 +59,7 @@
 			openOn = null;
 		} catch (failure) {
 			refusal =
-				failure instanceof ApiFailure ? failure.message : 'That declaration was not saved.';
+				failure instanceof ApiFailure ? failure.message : 'Your name was not saved. Try again.';
 		} finally {
 			saving = false;
 		}
@@ -78,8 +78,8 @@
 	{#if read !== 'read'}
 		<p class="quiet">
 			{read === 'pending'
-				? 'Reading your declarations…'
-				: 'Your declarations could not be read, so reload to try again.'}
+				? 'Loading…'
+				: 'We could not load this. Reload the page to try again.'}
 		</p>
 	{:else}
 		<div class="mp-card">
@@ -102,11 +102,11 @@
 					</p>
 				{:else if row.marketplace === 'Tpt'}
 					<p class="mp-warned">
-						Not declared, so anything sent to TPT fails until you declare it.
+						Not declared. Nothing you publish to TPT will go through until you declare it.
 					</p>
 				{:else}
 					<p class="spec">
-						Not declared, and {CARD_NAME[row.marketplace]} does not ask.
+						Not declared. {CARD_NAME[row.marketplace]} does not need this.
 					</p>
 				{/if}
 
@@ -131,7 +131,7 @@
 								small
 								disabled={saving || typed.trim().length === 0}
 								reason={saving
-									? 'The declaration is being saved.'
+									? 'Saving…'
 									: typed.trim().length === 0
 										? 'Type the name first.'
 										: undefined}
@@ -143,7 +143,7 @@
 								tier="outline"
 								small
 								disabled={saving}
-								reason={saving ? 'The declaration is being saved.' : undefined}
+								reason={saving ? 'Saving…' : undefined}
 								onclick={() => (openOn = null)}
 							>
 								Cancel

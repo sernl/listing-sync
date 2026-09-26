@@ -347,9 +347,9 @@
 					{/snippet}
 					<div class="gd-tag-menu" role="group" aria-labelledby="guide-tags">
 						{#if taxonomy.isPending}
-							<p class="none">Reading the tags…</p>
+							<p class="none">Loading tags…</p>
 						{:else if taxonomy.isError}
-							<p class="none">The tags could not be read, so none can be chosen here.</p>
+							<p class="none">We could not load the tags.</p>
 						{:else}
 							{#each tags as tag (tag.id)}
 								<label>
@@ -366,7 +366,7 @@
 									<span class="gd-tax">{taxonLabel(tag)}</span>
 								</label>
 							{:else}
-								<p class="none">No published guide carries a tag yet.</p>
+								<p class="none">No guides have tags yet.</p>
 							{/each}
 						{/if}
 					</div>
@@ -389,7 +389,7 @@
 			     cell and none in the next is what puts two controls out of
 			     line, and this sentence is about the row in any case. -->
 			<p class="gd-filter-hint">
-				Searching and filtering cover every published guide, not just the page below.
+				Search and filters cover every guide, not just this page.
 			</p>
 		</div>
 
@@ -407,9 +407,9 @@
 					{shown.total === 1 ? 'guide' : 'guides'}
 					{narrowed ? 'match' : 'published'}
 				{:else if guides.isPending}
-					{narrowed ? 'Searching…' : 'Reading the guides…'}
+					{narrowed ? 'Searching…' : 'Loading guides…'}
 				{:else}
-					Nothing counted
+					No count yet
 				{/if}
 			</span>
 			{#if narrowed}
@@ -429,9 +429,9 @@
 			     than the one that was asked for. -->
 			<Placeholder
 				icon="book-open"
-				headline="Those filters cannot be read"
-				body="The address names a topic or tag this site does not hold. Clearing the filters
-					shows every published guide."
+				headline="Those filters do not work"
+				body="This link names a topic or tag we do not have. Clear the filters to see every
+					guide."
 			/>
 			<div class="gd-filter-foot">
 				<Button tier="outline" small onclick={reset}>
@@ -439,13 +439,12 @@
 				</Button>
 			</div>
 		{:else if shown === null && guides.isPending}
-			<p class="quiet">Reading the guides…</p>
+			<p class="quiet">Loading guides…</p>
 		{:else if shown === null}
 			<Placeholder
 				icon="book-open"
-				headline="The guides could not be read"
-				body="The request did not come back with an answer we can act on. Clearing the filters
-					or reloading are the things worth trying from here."
+				headline="We could not load the guides"
+				body="Try clearing the filters or reloading the page."
 			/>
 			{#if narrowed}
 				<div class="gd-filter-foot">
@@ -461,14 +460,13 @@
 				     the screen with the pager and the filters as they were, so
 				     Retry is one press rather than a reader's reconstruction of
 				     where they had got to. -->
-				<Banner tone="bad" title="That page could not be read">
+				<Banner tone="bad" title="That page did not load">
 					{#snippet action()}
 						<Button tier="outline" small onclick={() => guides.refetch()}>
 							Retry
 						</Button>
 					{/snippet}
-					Page {filters.page} did not come back. Below is page {shown.page}, which is the last
-					one that did.
+					Page {filters.page} did not load. You are still seeing page {shown.page}.
 				</Banner>
 			{/if}
 			{#if shown.rows.length === 0 && shown.total > 0}
@@ -477,9 +475,8 @@
 				     guides are there and the way to them is backwards. -->
 				<Placeholder
 					icon="book-open"
-					headline="That page is past the end"
-					body="There is no page {shown.page} of these guides. The first page is where this
-						narrowing starts."
+					headline="That page does not exist"
+					body="There is no page {shown.page} for this search. Go back to the first page."
 				/>
 				<div class="gd-filter-foot">
 					<Button
@@ -495,9 +492,9 @@
 				     first one has something to do about it. -->
 				<Placeholder
 					icon="book-open"
-					headline="No guide matches those filters"
-					body="Nothing published matches that search, topic and tag together. Widening any one
-						of them is the way back to the full list."
+					headline="No guides match"
+					body="No guide matches that search, topic and tag together. Try removing one of
+						them."
 				/>
 				<div class="gd-filter-foot">
 					<Button tier="outline" small onclick={reset}>
@@ -507,9 +504,9 @@
 			{:else if shown.rows.length === 0}
 				<Placeholder
 					icon="book-open"
-					headline="No guide is published yet"
-					body="This is where the guides will be: connecting a marketplace, importing your
-						portfolio, and listing a resource everywhere."
+					headline="No guides yet"
+					body="Guides will appear here: connecting a marketplace, importing your resources,
+						and listing a resource everywhere."
 				/>
 			{:else}
 				<div class="guide-list" class:gd-stale={stale} aria-busy={guides.isFetching}>

@@ -143,12 +143,12 @@ export function previewOf(tally: RowTally): Preview {
  * left alone" reads as a fault the seller then goes looking for. */
 export function previewSentence(preview: Preview): string {
 	const resources = preview.create === 1 ? '1 resource' : `${preview.create} resources`;
-	const head = `${resources} will be created in your catalogue.`;
+	const head = `${resources} will be added to Resources.`;
 	if (preview.leave === 0) {
 		return head;
 	}
 	const rows = preview.leave === 1 ? '1 row was' : `${preview.leave} rows were`;
-	return `${head} ${rows} refused when the sheet was read, and will be left alone.`;
+	return `${head} ${rows} left out because of problems.`;
 }
 
 // -------------------------------------------------------------------- gating
@@ -258,12 +258,12 @@ export interface StageCopy extends StageBadge {
  * sentence: a row that computed a sentence about rows it never read would be
  * discarding a claim rather than not making one. */
 const BADGE: Record<BatchStateView, StageBadge> = {
-	parsed: { tone: 'run', label: 'Read' },
+	parsed: { tone: 'run', label: 'Checked' },
 	attaching: { tone: 'run', label: 'Adding files' },
 	importing: { tone: 'run', label: 'Importing' },
 	imported: { tone: 'ok', label: 'Imported' },
 	failed: { tone: 'bad', label: 'Finished with problems' },
-	abandoned: { tone: 'soon', label: 'Abandoned' }
+	abandoned: { tone: 'soon', label: 'Cancelled' }
 };
 
 export interface StageBadge {
@@ -282,8 +282,8 @@ export function presentStage(stage: SheetStage): StageCopy {
 				...BADGE.parsed,
 				line:
 					stage.awaiting === 0
-						? 'Your sheet has been read. Check the report below, then import it.'
-						: 'Your sheet has been read. Check the report below, then add the files it names.'
+						? 'We checked your sheet. Read the report below, then import it.'
+						: 'We checked your sheet. Read the report below, then add the files it lists.'
 			};
 		case 'attaching':
 			return {
@@ -302,7 +302,7 @@ export function presentStage(stage: SheetStage): StageCopy {
 		case 'importing':
 			return {
 				...BADGE.importing,
-				line: 'Creating your resources, a batch at a time. You can leave this page.'
+				line: 'Adding your resources a few at a time. You can leave this page.'
 			};
 		case 'imported':
 			return { ...BADGE.imported, line: NOTHING_SENT };
@@ -314,12 +314,12 @@ export function presentStage(stage: SheetStage): StageCopy {
 		case 'abandoned':
 			return {
 				...BADGE.abandoned,
-				line: 'You gave this import up. Nothing from it was created.'
+				line: 'You cancelled this import. Nothing from it was added.'
 			};
 		case 'unrecognised':
 			return {
 				...badgeOf(stage.state),
-				line: `This import is in a state this page does not know: ${stage.state}. Nothing has been changed.`
+				line: `We cannot show where this import is up to (${stage.state}). Nothing has been changed.`
 			};
 	}
 }
@@ -329,8 +329,8 @@ export function presentStage(stage: SheetStage): StageCopy {
  *  marketplace request on the seller's own device, and this phase mints no job
  *  at all. */
 export const NOTHING_SENT =
-	'Nothing has been sent to a marketplace. These resources are in your catalogue here; ' +
-	'publishing them runs later, from your own device.';
+	'Nothing has been sent to a marketplace. These resources are in Teachouse, and you ' +
+	'publish them later from your own computer.';
 
 // -------------------------------------------------------------------- report
 
@@ -372,10 +372,10 @@ const ROW_TONE: Record<RowStateView, PillTone> = {
 const ROW_LABEL: Record<RowStateView, string> = {
 	parsed: 'Ready',
 	attached: 'File added',
-	creating: 'Creating',
-	created: 'Created',
+	creating: 'Adding',
+	created: 'Added',
 	published: 'Published',
-	failed: 'Refused',
+	failed: 'Problem',
 	skipped: 'Left out'
 };
 
@@ -444,11 +444,11 @@ export function warningLine(warning: ImportWarning): string {
 	switch (warning.kind) {
 		case 'new_label': {
 			const rows = warning.rows === 1 ? '1 row' : `${warning.rows} rows`;
-			return `“${warning.name}” is a new label, on ${rows}. It will be created.`;
+			return `“${warning.name}” is a new label, used on ${rows}. We will create it.`;
 		}
 		case 'no_connection': {
 			const rows = warning.rows === 1 ? '1 row asks' : `${warning.rows} rows ask`;
-			return `${MARKETPLACE_NAME[warning.marketplace]} is not connected, and ${rows} to go live there. They will be created here and can be published once it is connected.`;
+			return `${MARKETPLACE_NAME[warning.marketplace]} is not connected, but ${rows} to publish there. We will add them here, and you can publish once you connect it.`;
 		}
 	}
 }
@@ -477,13 +477,13 @@ export type FileMatch =
 	| { name: string; kind: 'matched'; row: RowRef; pass: MatchPass }
 	| { name: string; kind: 'unplaced'; reason: string };
 
-export const NO_ROW_NAMED_IT = 'No row named this file. Place it by hand, or leave it out.';
+export const NO_ROW_NAMED_IT = 'No row lists this file. Place it by hand, or leave it out.';
 
 export const SEVERAL_ROWS_NAMED_IT =
-	'More than one row names this file, so it was not placed for you. Place it by hand.';
+	'More than one row lists this file, so we did not place it. Place it by hand.';
 
 export const ROW_ALREADY_TAKEN =
-	'Another file in this drop was already placed on the row this one names.';
+	'Another file you dropped already went to the row that lists this one.';
 
 /** What the passes compare. Exact first, then case, then the name without its
  *  extension: each is looser than the one before, and the first that finds
@@ -619,7 +619,7 @@ export function progressFrom(ack: CommitAck | null): CommitProgress {
  * `remaining` where it found it and did not report the batch complete is a
  * server that cannot be helped by being asked a second time. */
 export const COMMIT_STALLED =
-	'The import stopped making progress. Nothing further was created; try again in a moment.';
+	'The import got stuck. Nothing more was added. Try again in a moment.';
 
 export function progressLine(progress: CommitProgress): string {
 	switch (progress.kind) {
@@ -642,13 +642,11 @@ export function progressLine(progress: CommitProgress): string {
 export function listCopy<Row>(state: ReadState<Row>): { title: string; body: string } | null {
 	switch (state.kind) {
 		case 'pending':
-			return { title: 'Reading your spreadsheet imports…', body: '' };
+			return { title: 'Loading your spreadsheet imports…', body: '' };
 		case 'failed':
 			return {
-				title: 'Your spreadsheet imports could not be read',
-				body:
-					'This panel cannot say which imports you have, so it is showing none. ' +
-					'Nothing has been changed.'
+				title: 'We could not load your spreadsheet imports',
+				body: 'We cannot show your imports right now. Nothing has been changed.'
 			};
 		case 'empty':
 			return {
@@ -690,7 +688,7 @@ export function batchRows(batches: readonly ImportBatchView[]): BatchRow[] {
 		const badge = badgeOf(batch.state);
 		const rows = batch.row_count === 1 ? '1 row' : `${batch.row_count} rows`;
 		const refused =
-			batch.failed_count === 0 ? '' : `, ${batch.failed_count} refused when it was read`;
+			batch.failed_count === 0 ? '' : `, ${batch.failed_count} with problems`;
 		return {
 			id: batch.id,
 			href: batchHref(batch.id),
@@ -714,16 +712,15 @@ export function batchHref(batch: string): string {
  * button reads as a fault, and the one thing the seller can do about this is
  * reach the batch that is in the way. */
 export const IMPORT_ALREADY_OPEN =
-	'You already have an import open. Finish it or give it up before starting another.';
+	'You already have an import open. Finish it or cancel it before starting another.';
 
 /** What the seller is told when a read or a write came back with nothing to
  *  say for itself. */
 export const REFUSED_WITHOUT_REASON =
-	'That was refused and no reason came back. Try again in a moment.';
+	'That did not work, and we do not know why. Try again in a moment.';
 
 export const BATCH_UNREAD =
-	'This import could not be read, so this page is showing none of it. ' +
-	'Nothing has been changed.';
+	'This page cannot show any of it right now. Nothing has been changed.';
 
 /** The batch state a refusal carried, where it carried one this console knows.
  *
@@ -755,11 +752,11 @@ export function batchClosedSay(detail: unknown): string | null {
 	}
 	switch (state) {
 		case 'importing':
-			return 'This import is being created right now, so no more files can be added. Reload the page to watch it finish.';
+			return 'This import is being added right now, so you cannot add more files. Reload the page to watch it finish.';
 		case 'imported':
 		case 'failed':
 		case 'abandoned':
-			return 'This import has been finished or given up, so no more files can be added.';
+			return 'This import is finished or cancelled, so you cannot add more files.';
 		case 'parsed':
 		case 'attaching':
 			return null;

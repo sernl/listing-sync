@@ -259,7 +259,7 @@ export function passkeysSupported(): boolean {
 export async function listPasskeys(): Promise<PasskeyRecord[]> {
 	const { data, error } = await authClient.passkey.listUserPasskeys();
 	if (error) {
-		throw refused(error, 'Your passkeys could not be listed.');
+		throw refused(error, 'We could not load your passkeys.');
 	}
 	return (data ?? []) as PasskeyRecord[];
 }
@@ -277,7 +277,7 @@ export async function registerPasskey(label: string): Promise<void> {
 	const name = label.trim();
 	const { error } = await authClient.passkey.addPasskey(name.length > 0 ? { name } : {});
 	if (error) {
-		throw refused(error, 'The passkey was not registered.');
+		throw refused(error, 'The passkey was not added.');
 	}
 }
 

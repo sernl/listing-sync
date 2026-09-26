@@ -307,6 +307,76 @@ export function rateRefusal(rate: string): string | null {
 	return null;
 }
 
+// ------------------------------------------------------------- the example
+
+/** The currency each marketplace prices in, where exactly one is measured.
+ *  The server's `InventoryId::currency_rule`; Etsy's is the seller's own and
+ *  so is not known here. */
+export const PRICE_CURRENCY: Record<InventoryId, 'Usd' | 'Gbp' | null> = {
+	Tpt: 'Usd',
+	Tes: 'Gbp',
+	Etsy: null
+};
+
+const MICROS = 1_000_000n;
+
+/** What one rule would make of one price, for the worked example the page
+ *  draws on the rule's arrow.
+ *
+ *  The server's own arithmetic (`convert_price`): the exact product in
+ *  micro-minor-units, then half-up to a penny, or up to the smallest `.99`
+ *  not below the unrounded value. Null wherever the server would refuse
+ *  rather than convert — a bad rate, a price in the wrong currency, a paid
+ *  price that lands on nothing — so the example never shows a figure the
+ *  preview would not. The target's accepted range is the preview's to say. */
+export function examplePrice(
+	price: unknown,
+	rate: string,
+	rounding: Rounding,
+	source: InventoryId,
+	target: InventoryId
+): PriceIntent | null {
+	if (rateRefusal(rate) !== null) {
+		return null;
+	}
+	if (price === 'Free') {
+		return 'Free';
+	}
+	const into = PRICE_CURRENCY[target];
+	if (
+		into === null ||
+		typeof price !== 'object' ||
+		price === null ||
+		!('Paid' in price) ||
+		typeof price.Paid !== 'object' ||
+		price.Paid === null
+	) {
+		return null;
+	}
+	const paid = price.Paid as { minor_units?: unknown; currency?: unknown };
+	if (
+		paid.currency !== PRICE_CURRENCY[source] ||
+		typeof paid.minor_units !== 'number' ||
+		!Number.isInteger(paid.minor_units)
+	) {
+		return null;
+	}
+	const [whole, fraction = ''] = rate.trim().split('.');
+	const micros = BigInt(whole) * MICROS + BigInt(fraction.padEnd(6, '0'));
+	const exact = BigInt(paid.minor_units) * micros;
+	let minor: bigint;
+	if (rounding === 'Nearest') {
+		minor = (exact + MICROS / 2n) / MICROS;
+	} else {
+		const ceiling = exact % MICROS === 0n ? exact / MICROS : exact / MICROS + 1n;
+		minor = ceiling - (ceiling % 100n) + 99n;
+	}
+	if (minor <= 0n) {
+		return null;
+	}
+	return { Paid: { minor_units: Number(minor), currency: into } };
+}
+
 // ------------------------------------------------------------ the refusals
 
 /** Why this pair cannot carry a rule, or null where it can. */

@@ -160,7 +160,7 @@ describe('merge', () => {
 describe('the words beside a row', () => {
 	it('never claims certainty the join does not have', () => {
 		expect(matchNote('matched')).toMatch(/Matched/);
-		expect(matchNote('ambiguous')).toMatch(/cannot say which/);
+		expect(matchNote('ambiguous')).toMatch(/cannot tell which/);
 		expect(matchNote('unmatched')).toMatch(/No browser sign-in/);
 	});
 

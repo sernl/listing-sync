@@ -88,16 +88,15 @@ pub(crate) async fn import_page(
     if !context.entitlement.caps.import_marketplace {
         return Err(feature_refusal(
             "import_marketplace",
-            "Your plan does not include reading your shop. Upgrade to import from a \
-             marketplace.",
+            "Upgrade your plan to import from a marketplace.",
         ));
     }
     let blobs = state.blobs.clone().ok_or_else(|| {
         APIError::new(
             StatusCode::SERVICE_UNAVAILABLE,
             APIErrorEntry::new(
-                "this deployment holds no key-encryption key or object-store root, so no cover \
-                 could be stored; no part of this page was applied",
+                "Teachouse can't save covers right now, so nothing from this page was saved. Try \
+                 again later.",
             )
             .code(APIErrorCode::BlobStoreUnavailable)
             .kind(APIErrorKind::Internal),
@@ -128,12 +127,9 @@ pub(crate) async fn import_page(
     if page.attempt.is_none() {
         return Err(APIError::new(
             StatusCode::CONFLICT,
-            APIErrorEntry::new(
-                "this app is too old to import into your catalogue: update it and start the \
-                 import again",
-            )
-            .code(APIErrorCode::ImportClientUpdateRequired)
-            .kind(APIErrorKind::Validation),
+            APIErrorEntry::new("Update the Teachouse app, then start the import again.")
+                .code(APIErrorCode::ImportClientUpdateRequired)
+                .kind(APIErrorKind::Validation),
         ));
     }
     crate::import_runs::run_page(&state, &context, &device, &page, now).await
@@ -170,7 +166,7 @@ async fn legacy_page(
         // Another organisation's request is missing rather than forbidden: the
         // caller learns nothing about whether the id exists, which is the
         // posture every other org-scoped read here takes.
-        .ok_or_else(|| missing("no such sync request"))?;
+        .ok_or_else(|| missing("We can't find that request."))?;
     let device_enumerated = record.source.marketplace().transport_class()
         == TransportClass::SellerDevice
         && record.disposition == Disposition::Migrate;
@@ -203,7 +199,7 @@ async fn legacy_page(
             .get(context.org, request)
             .await
             .map_err(|error| storage_fault(&state, &error))?
-            .ok_or_else(|| missing("no such sync request"))?;
+            .ok_or_else(|| missing("We can't find that request."))?;
         return Ok((StatusCode::OK, Json(ack(&settled, 0, 0, true))));
     }
 
@@ -255,8 +251,8 @@ async fn legacy_page(
         return Err(APIError::new(
             StatusCode::CONFLICT,
             APIErrorEntry::new(
-                "this import has already completed, and this page brings a resource it never \
-                 described; a completed import is not extended",
+                "This import has already finished, so it can't take more resources. Start a new \
+                 import.",
             )
             .kind(APIErrorKind::Validation),
         ));
@@ -360,8 +356,7 @@ async fn legacy_page(
             None => Err(APIError::new(
                 StatusCode::CONFLICT,
                 APIErrorEntry::new(
-                    "this migration was deleted while its import was running, so nothing \
-                     further was imported for it",
+                    "You deleted this move while it was importing, so nothing more was imported.",
                 )
                 .kind(APIErrorKind::Validation),
             )),
@@ -372,7 +367,7 @@ async fn legacy_page(
             .get(context.org, request)
             .await
             .map_err(|error| storage_fault(&state, &error))?
-            .ok_or_else(|| missing("no such sync request"))?;
+            .ok_or_else(|| missing("We can't find that request."))?;
         return Ok((StatusCode::OK, Json(ack(&after, applied, skipped, false))));
     }
     complete(&state, &run, request, anchor).await
@@ -390,7 +385,7 @@ async fn complete(
         .get(run.org, request)
         .await
         .map_err(|error| storage_fault(state, &error))?
-        .ok_or_else(|| missing("no such sync request"))?;
+        .ok_or_else(|| missing("We can't find that request."))?;
     let mappings: Vec<tam_types::MappingId> = record
         .resources
         .iter()
@@ -452,7 +447,7 @@ async fn complete(
         .get(run.org, request)
         .await
         .map_err(|error| storage_fault(state, &error))?
-        .ok_or_else(|| missing("no such sync request"))?;
+        .ok_or_else(|| missing("We can't find that request."))?;
     let described = u32::try_from(
         settled
             .resources
@@ -542,7 +537,7 @@ async fn apply_one(
         let why = refusal
             .errors
             .first()
-            .map_or("this resource could not be imported", |entry| {
+            .map_or("This resource couldn't be imported.", |entry| {
                 entry.message.as_str()
             });
         requests
@@ -571,8 +566,8 @@ async fn prepare_resource(
     let (Some(file), Some(cover_png)) = (resource.file.as_ref(), resource.cover_png.as_ref())
     else {
         return Err(validation(
-            "this resource carries no file, so there is nothing to move to another \
-             marketplace; import it to your catalogue instead",
+            "This resource has no file, so it can't move to another marketplace. Import it into \
+             your catalogue instead.",
         ));
     };
     let connection = source_connection(state, run.org, run.source, run.now).await?;
@@ -711,10 +706,7 @@ pub(crate) async fn source_connection(
         .find(|row| row.marketplace == marketplace && row.state == "linked")
         .map(|row| row.id)
         .ok_or_else(|| {
-            validation(
-                "this seller has no linked connection for the source marketplace, so a file \
-                 named in it could never be fetched back",
-            )
+            validation("Connect that marketplace first so Teachouse can fetch your files from it.")
         })
 }
 
@@ -776,7 +768,7 @@ pub(crate) async fn admissible_device(
     let known = devices
         .iter()
         .find(|candidate| candidate.id == device)
-        .ok_or_else(|| missing("no such device"))?;
+        .ok_or_else(|| missing("We can't find that device."))?;
     if known.revoked_at.is_some() {
         return Err(APIError::new(
             StatusCode::FORBIDDEN,
@@ -791,8 +783,7 @@ pub(crate) async fn admissible_device(
 fn bounded_copy(resource: &ObservedResource) -> Result<(), APIError> {
     if resource.listing.title.len() > COPY_MAX || resource.listing.body.len() > COPY_MAX {
         return Err(validation(
-            "a listing's title and body are the seller's own copy and are bounded: this page \
-             carries one beyond that bound",
+            "A listing's title or description is too long to import.",
         ));
     }
     if let Some(ScanOutcome::Infected { signature }) = resource.file.as_ref().map(|file| &file.scan)

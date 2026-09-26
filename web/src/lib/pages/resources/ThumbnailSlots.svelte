@@ -39,7 +39,7 @@
 
 <fieldset class="res-choices res-stack">
 	<legend class="sr-only">Thumbnails</legend>
-	<p class="res-note">Add up to four pictures; the first is the main cover.</p>
+	<p class="res-note">Add up to four pictures. The first one is the main cover.</p>
 
 	<div class="res-choices">
 		{#each form.thumbnail_modes as option (option.id)}
@@ -81,7 +81,7 @@
 		<div class="res-slots">
 			{#each slots as slot, index (index)}
 				<div class="res-slot">
-					<b>{index === 0 ? 'Main Cover' : 'Thumbnail (Optional)'}</b>
+					<b>{index === 0 ? 'Main cover' : 'Thumbnail (optional)'}</b>
 					{#if slot.local !== null}
 						<!-- The picture the seller can be shown. For a slot seeded from
 						     a stored hash this is that blob's own route, which serves
@@ -98,7 +98,7 @@
 						{#if slot.sending}
 							<span class="res-note">Uploading…</span>
 						{:else if slot.handle !== null}
-							<StatusPill tone="ok" label="stored" />
+							<StatusPill tone="ok" label="uploaded" />
 						{/if}
 						<button type="button" class="res-slot-drop" onclick={() => onClear(index)}>
 							Remove

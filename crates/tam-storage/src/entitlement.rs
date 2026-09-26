@@ -747,6 +747,20 @@ pub(crate) async fn grant_storefront_allowance_in(
     if claimed == 0 || moves == 0 {
         return Ok(false);
     }
+    // The shop is claimed either way, so a second organisation can never be
+    // granted for it; but the moves land once per organisation, not once per
+    // shop. Five moves are the free tier's whole offer, "onto a marketplace
+    // of your choice", and a seller binding both TPT and Tes would otherwise
+    // hold half a Pack 20 for nothing (2026-09-26 re-evaluation).
+    let prior = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "n!" FROM storefront_allowance WHERE org_id = $1"#,
+        uuid_to_db(org.0),
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    if prior > 1 {
+        return Ok(false);
+    }
     let reference = storefront_reference(marketplace, digest);
     write_move(
         tx,

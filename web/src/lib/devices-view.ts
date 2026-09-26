@@ -162,9 +162,9 @@ export const SIGN_IN_LABEL: Record<SignInState, string> = {
 	needs_signin: 'Sign in',
 	unverified: 'Not verified',
 	no_account: 'Not linked',
-	no_device: 'No device',
+	no_device: 'No machine',
 	all_signed_out: 'No machine signed in',
-	served_here: 'Served here'
+	served_here: 'Connected directly'
 };
 
 /** What each stored connection status means for a marketplace served from our
@@ -220,7 +220,7 @@ function servedHere(
 		return {
 			...base,
 			state: 'no_account',
-			line: 'Runs on our own infrastructure under a token this marketplace issues. No account is linked yet.',
+			line: 'Teachouse connects to this marketplace directly. You have not connected an account yet.',
 			tone: 'mut'
 		};
 	}
@@ -233,7 +233,7 @@ function servedHere(
 		state,
 		line:
 			state === 'served_here'
-				? `${shown.explanation} No device is needed: this marketplace's automation is sanctioned and runs on our own infrastructure.`
+				? `${shown.explanation} No machine is needed: Teachouse connects to this marketplace directly.`
 				: shown.explanation,
 		tone: shown.tone
 	};
@@ -275,8 +275,8 @@ export function signInStates(
 				accountLabel: session?.account_label ?? null,
 				line:
 					holder.standing === 'checking_in'
-						? `Signed in on ${holder.device.name}. Your login never leaves that device.`
-						: `Signed in on ${holder.device.name}, which has not checked in lately, so scheduled work for this marketplace is not running.`,
+						? `Signed in on ${holder.device.name}. Your login stays on that machine.`
+						: `Signed in on ${holder.device.name}, but it has not been online lately, so scheduled work for this marketplace is not running.`,
 				tone: holder.standing === 'checking_in' ? 'ok' : 'run'
 			};
 		}
@@ -285,7 +285,7 @@ export function signInStates(
 			return {
 				...base,
 				state: 'no_device' as const,
-				line: 'No machine of yours is registered, and this marketplace is signed into on your own device rather than here.',
+				line: 'You have no machines set up yet. You sign in to this marketplace in the Teachouse app on your own machine.',
 				tone: 'mut' as const
 			};
 		}
@@ -293,14 +293,14 @@ export function signInStates(
 			return {
 				...base,
 				state: 'all_signed_out' as const,
-				line: 'Every machine of yours is signed out, so nothing holds a login for this marketplace. Sign in on a machine again to let its work run.',
+				line: 'Every machine of yours is signed out. Sign in on a machine again so this marketplace can run.',
 				tone: 'run' as const
 			};
 		}
 		return {
 			...base,
 			state: 'needs_signin' as const,
-			line: 'No machine of yours holds a login for this marketplace. Sign in on the device that runs your syncs; your login never leaves it.',
+			line: 'None of your machines is signed in to this marketplace. Sign in on one; your login stays on that machine.',
 			tone: 'bad' as const
 		};
 	});
@@ -481,7 +481,7 @@ export function bandNotice(summary: DeviceSummary, running: boolean): BandNotice
 			kind: 'all_signed_out',
 			tone: 'warn',
 			headline: 'Every machine is signed out',
-			body: 'Nothing scheduled runs until you sign in on a machine again. Queued work waits; nothing is lost.'
+			body: 'Nothing scheduled runs until you sign in on a machine again. Nothing is lost; waiting items go out then.'
 		};
 	}
 	if (running) {
@@ -492,14 +492,14 @@ export function bandNotice(summary: DeviceSummary, running: boolean): BandNotice
 			kind: 'nothing_checking_in',
 			tone: 'attn',
 			headline: 'Nothing scheduled is running',
-			body: 'No machine of yours has checked in for half an hour, and a machine that is running checks in every few minutes. Queued work waits until one does; nothing is lost.'
+			body: 'None of your machines has been online for half an hour. Waiting items go out once one is back; nothing is lost.'
 		};
 	}
 	return {
 		kind: 'no_login',
 		tone: 'attn',
 		headline: 'Nothing scheduled is running',
-		body: 'A machine is checking in, and none holds a marketplace login yet, so there is nothing for it to run.'
+		body: 'A machine is online, but none is signed in to a marketplace yet, so there is nothing for it to run.'
 	};
 }
 
@@ -540,17 +540,17 @@ export function deviceFootnote(summary: DeviceSummary): string {
 					summary.wipesOutstanding,
 					'has',
 					'have'
-				)} not been heard from since, so ${count(
+				)} not been online since, so ${count(
 					summary.wipesOutstanding,
 					'it',
 					'they'
-				)} may still hold the marketplace logins listed against ${count(
+				)} may still hold the marketplace logins listed for ${count(
 					summary.wipesOutstanding,
 					'it',
 					'them'
 				)}.`;
 	if (live === 0) {
-		return `Every machine you have registered is signed out.${wipes}`;
+		return `All your machines are signed out.${wipes}`;
 	}
 	const signedOut =
 		summary.signedOut === 0
@@ -571,12 +571,12 @@ export function deviceFootnote(summary: DeviceSummary): string {
 					summary.needingUpdateForSourcedFiles,
 					'it',
 					'they'
-				)} can publish or refetch a file from a marketplace. Everything else runs there as normal.`;
+				)} can publish or re-download a file from a marketplace. Everything else works there as normal.`;
 	return (
 		`${summary.checkingIn} of ${live} ${count(
 			live,
 			'machine has',
 			'machines have'
-		)} checked in in the last half hour.${stale}${signedOut}${wipes}`
+		)} been online in the last half hour.${stale}${signedOut}${wipes}`
 	);
 }

@@ -61,7 +61,7 @@ export const SIGN_BACK_IN = 'Sign this machine back in';
 export function signedOutHere(at: number | null): string {
 	const when = at === null ? '' : ` on ${dayMonth(at)}`;
 	return (
-		`This machine was signed out from the console${when}. Sign it back in to hold ` +
+		`This machine was signed out of your account${when}. Sign it back in to use ` +
 		'marketplace logins here.'
 	);
 }

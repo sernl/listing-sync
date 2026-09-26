@@ -118,12 +118,12 @@
 	--mark-ground: var(--surface);
 	--on-fill: #ffffff;
 
-	/* The icon rail, which is the one band on the page that is a brand colour
-	   rather than a neutral. It needs its own three names because the dark
-	   block moves `--primary` to Lavender -- an indigo button vanishes on an
-	   indigo ground -- and the rail is the one place indigo has to stay: a
-	   lavender rail would read as the page's loudest surface. On light these
-	   are exactly what the rule said before, spelled as aliases. */
+	/* The icon rail, which on light is the one band on the page that is a
+	   brand colour rather than a neutral. It needs its own three names
+	   because the dark block moves `--primary` to Lavender -- a lavender rail
+	   would read as the page's loudest surface -- and draws the rail as a
+	   charcoal band instead. On light these are exactly what the rule said
+	   before, spelled as aliases. */
 	--rail-fill: var(--primary);
 	--rail-ink: var(--on-fill);
 	--rail-edge: transparent;
@@ -205,33 +205,42 @@
 	--control-h-sm: 30px;
 }
 
-/* The same kit, re-grounded on the kit's own Indigo.
+/* The same kit on charcoal, 2026-09-26.
  *
- * Dark is not the light palette inverted: it is the brand's darkest colour
- * promoted to the page, with the grounds stepping *up* towards the content
- * rather than down, which is what keeps a card reading as a card. `--surface`
- * is Indigo itself, the colour the rail and every solid button wear on light,
- * so the console's own frame colour becomes the paper.
+ * The founder's review of 0.11 found the previous dark block -- the kit's
+ * Indigo promoted to the page -- read as blue everywhere, and asked for
+ * darker blacks and greys. So the grounds are neutral greys with no hue at
+ * all, and the brand's colours are what sits on them rather than what they
+ * are made of.
  *
- * Two roles have to move, and both are arithmetic rather than taste. Indigo
- * cannot be the action colour on an Indigo ground -- a solid button would
- * vanish into the card -- so Lavender, already the kit's, carries `--primary`
- * and `--on-fill` becomes Indigo under it. And the four ink names split: the
- * kit's one Slate is 2.1 against this ground, so secondary text takes a
- * lighter Slate and the tertiary names take a lighter one still, which is the
- * distinction the light block did not need because there Slate cleared the
- * bar under all three names.
+ * Chosen against the logo (`apps/landing/public/brand/logo.svg`), which is
+ * two colours: Indigo #1E2A5A for the lettering and Teal #00B894 for the
+ * house and the tagline. Indigo is a near-black blue, so a neutral charcoal
+ * page sits beside it without competing, and Teal is the one saturated
+ * colour a dark page lets carry the brand -- it stays the accent, unchanged.
+ * The warm accent is Teal's complement: Peach, muted to #E3A878 so it reads
+ * as a highlight on charcoal rather than as a lamp, and it is what dark draws
+ * wherever light draws Peach.
  *
- * Teal, Success, Warning, Danger, Lavender and Peach are the kit's own values
- * unchanged; only the `-soft` grounds under them are re-mixed for this page,
+ * Dark is still not the light palette inverted: the grounds step *up*
+ * towards the content, the page at #141414 and the card at #1C1C1E, which is
+ * what keeps a card reading as a card. Lavender, already the kit's, carries
+ * `--primary`, because the kit's Indigo is too dark to be read on this page,
+ * and `--on-fill` becomes Indigo under it, which is where the logo's own
+ * colour survives on this theme. The rail becomes a charcoal band with an
+ * edge: an Indigo rail on a grey page was the blue the review named.
+ *
+ * The four ink names split as before: secondary text takes a light grey and
+ * the tertiary names a mid grey, each measured on the lightest ground here.
+ * Teal, Success, Warning, Danger and Lavender are the kit's own values
+ * unchanged; only the `-soft` grounds under them are re-mixed towards grey,
  * and the three derived `-ink` tokens fall out of the same `color-mix` the
  * light block writes, now against a near-white `--text`.
  *
  * The seven label hues are the one scale that does not follow the theme, and
- * they move here for the same reason they were darkened on light: hue and
- * saturation are the seller's choice and untouched, and only lightness moves,
- * each to where it measures about 5.6 on the card -- so the seven read at one
- * weight rather than teal shouting and red whispering.
+ * they keep the lightness they were given for the dark card: hue and
+ * saturation are the seller's choice, and on these darker grounds each
+ * clears the bar with more room than before.
  *
  * `tokens.test.ts` measures every pair below on both grounds and grants this
  * block no trade: unlike light, where the kit's Slate on the navigation card
@@ -241,10 +250,10 @@
 
 	/* grounds, darkest to the card the content sits on: the step runs upward
 	   here, which is the one structural inversion in this block */
-	--ground: #141c3a;
-	--nav: #1a2347;
-	--surface: #1e2a5a;
-	--hover: #26335f;
+	--ground: #141414;
+	--nav: #1a1a1b;
+	--surface: #1c1c1e;
+	--hover: #26262a;
 
 	/* action tiers. Lavender is the kit's own accent surface taking the
 	   primary role, and Indigo is what a word on it is set in. */
@@ -252,40 +261,42 @@
 	--on-fill: #1e2a5a;
 	--accent: #00b894;
 	--accent-ink: #00bb97;
-	--accent-soft: #103f3a;
+	--accent-soft: #11302b;
 	--additive: #ab91fb;
-	--additive-soft: #2a2456;
+	--additive-soft: #272336;
+	/* The warm accent: the kit's Peach, muted for a charcoal page. */
+	--peach: #e3a878;
 
 	/* ink: three weights where light had one, because the kit's single Slate
 	   is unreadable on this ground */
-	--text: #f8faf8;
-	--muted: #b4bcd0;
-	--faint: #9aa3b8;
-	--line: #33406b;
+	--text: #f4f4f5;
+	--muted: #b9b9c0;
+	--faint: #a1a1aa;
+	--line: #333337;
 
 	/* state: the kit's four colours unchanged, on grounds mixed for this page */
 	--ok: #10b981;
-	--ok-soft: #0f3d33;
+	--ok-soft: #11302a;
 	--warn: #f59e0b;
-	--warn-soft: #3d2f0e;
+	--warn-soft: #332a12;
 	--bad: #ef4444;
-	--bad-soft: #4a1a1a;
-	--soon: #9aa3b8;
-	--soon-soft: #26335f;
+	--bad-soft: #3a1d1f;
+	--soon: #a1a1aa;
+	--soon-soft: #26262a;
 
-	/* the outcome bar's own two, kept at the weights they carry on light:
-	   `--queued` measures 1.48 against the card there and 1.48 here */
+	/* the outcome bar's own two. `--queued` is a step above `--line`, so a
+	   queued segment is a segment and not a hairline. */
 	--blocked: #f59e0b;
-	--queued: #36495e;
+	--queued: #3d3d42;
 
-	--tint: #1a2347;
-	--tint-edge: #232c52;
+	--tint: #1e1c23;
+	--tint-edge: #232128;
 	--mark-ground: #f8faf8;
 
-	/* Indigo stays the rail, which on this page is the card colour, so the
-	   band needs an edge to be a band at all. */
-	--rail-fill: #1e2a5a;
-	--rail-ink: #f8faf8;
+	/* The rail is a charcoal band a step above the page, so it needs an
+	   edge to be a band at all. */
+	--rail-fill: #1a1a1b;
+	--rail-ink: #f4f4f5;
 	--rail-edge: var(--line);
 
 	--label-red: #e38e99;
@@ -296,13 +307,13 @@
 	--label-violet: #ae9dd6;
 	--label-pink: #d790b7;
 
-	/* Off the ink and onto a near-black, and deeper than light's 8 per cent:
-	   a shadow separates two surfaces by darkening the lower one, and there
-	   is less room to darken below #141C3A than below Cream. */
-	--sh-1: 0 1px 2px color-mix(in srgb, #05070f 45%, transparent);
-	--sh-2: 0 4px 14px color-mix(in srgb, #05070f 55%, transparent);
-	--sh-3: 0 6px 20px color-mix(in srgb, #05070f 65%, transparent);
-	--scrim: color-mix(in srgb, #05070f 62%, transparent);
+	/* Off the ink and onto black, and deeper than light's 8 per cent: a
+	   shadow separates two surfaces by darkening the lower one, and there is
+	   less room to darken below #141414 than below Cream. */
+	--sh-1: 0 1px 2px color-mix(in srgb, #000000 45%, transparent);
+	--sh-2: 0 4px 14px color-mix(in srgb, #000000 55%, transparent);
+	--sh-3: 0 6px 20px color-mix(in srgb, #000000 65%, transparent);
+	--scrim: color-mix(in srgb, #000000 62%, transparent);
 }
 
 /* Named rather than left to `:root`'s `light dark`, because `app.html` writes

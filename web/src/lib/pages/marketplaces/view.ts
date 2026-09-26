@@ -247,18 +247,18 @@ export function signOutHereLabel(marketplace: Marketplace): string {
 export function disconnectPrompt(marketplace: Marketplace, heldOnAMachine: boolean): string {
 	const name = CARD_NAME[marketplace];
 	const shared =
-		`Scheduled work for ${name} stops. Nothing is removed from ${name} itself, and your ` +
-		'listings stay here as records. Connecting again is the same button.';
+		`Teachouse stops all work on ${name}. Nothing is removed from ${name} itself, and your ` +
+		'listings stay here. You can connect again at any time.';
 	if (!heldOnAMachine) {
 		return `Disconnect ${name} from your account?\n\n${shared}`;
 	}
 	return (
 		`Disconnect ${name} from your account?\n\n` +
 		shared +
-		`\n\nThis removes no machine's login: your logins are never on our servers, so the ` +
-		`${name} login is still on the machine that holds it. While that machine keeps checking ` +
-		`in it reconnects ${name} by itself. To remove the login, sign out of ${name} in the ` +
-		'Teachouse app on that machine, or sign the machine out under Preferences > Machine sign-ins.'
+		`\n\nThis signs no machine out. Your ${name} login is still on the machine that has it, ` +
+		`and while that machine is online it reconnects ${name} by itself. To stop that, sign out ` +
+		`of ${name} in the Teachouse app on that machine, or sign the machine out under ` +
+		'Preferences > Machine sign-ins.'
 	);
 }
 
@@ -294,11 +294,10 @@ export function signOutHereAsk(marketplace: Marketplace, inPlace = false): strin
 	const name = CARD_NAME[marketplace];
 	return (
 		`Sign out of ${name} on this device?\n\n` +
-		`The ${name} login is removed from this machine. Nothing is removed from ${name} ` +
-		'itself, your listings stay here as records, and your other machines keep their own ' +
-		`${name} logins. Your account stays connected while a machine still reports a ${name} ` +
-		'login, so if this was the only one the connection falls away on its next check-in. ' +
-		'Signing in again is the same button.' +
+		`Your ${name} login is removed from this machine. Nothing is removed from ${name} ` +
+		'itself, your listings stay here, and your other machines keep their own ' +
+		`${name} logins. If no other machine is signed in to ${name}, your account shows it ` +
+		'as disconnected soon after. You can sign in again at any time.' +
 		(inPlace ? `\n\n${STAYS_IN_THE_PHONES_BROWSER(name)}` : '')
 	);
 }
@@ -318,8 +317,8 @@ export function signOutHereAsk(marketplace: Marketplace, inPlace = false): strin
  * and reasonably concludes the sign-out did nothing.
  */
 const STAYS_IN_THE_PHONES_BROWSER = (name: string) =>
-	`Your ${name} sign-in stays in this phone's browser, where we cannot remove it, so ` +
-	`connecting ${name} again may not ask for your password.`;
+	`Your ${name} sign-in stays in this phone's browser, and we cannot remove it. ` +
+	`Connecting ${name} again may not ask for your password.`;
 
 /** What the control plane answered when asked to disconnect.
  *
@@ -346,13 +345,13 @@ export interface DisconnectSay {
 export function disconnectSay(marketplace: Marketplace, server: DisconnectServer): DisconnectSay {
 	const name = CARD_NAME[marketplace];
 	if (server.kind === 'refused') {
-		return { tone: 'error', message: `${name} could not be disconnected.` };
+		return { tone: 'error', message: `We could not disconnect ${name}. Try again.` };
 	}
 	return server.moved === 0
 		? { tone: 'info', message: `${name} was already disconnected.` }
 		: {
 				tone: 'info',
-				message: `${name} is disconnected from your account. Connecting again is the same button.`
+				message: `${name} is disconnected from your account. You can connect it again at any time.`
 			};
 }
 
@@ -371,7 +370,7 @@ export function signOutHereSay(marketplace: Marketplace, forgotten: SessionOutco
 		case 'done':
 			return {
 				tone: 'info',
-				message: `The ${name} login is removed from this machine.`
+				message: `Your ${name} login is removed from this machine.`
 			};
 		case 'unsupported':
 			return { tone: 'error', message: APP_CANNOT_FORGET };
@@ -381,8 +380,8 @@ export function signOutHereSay(marketplace: Marketplace, forgotten: SessionOutco
 			return {
 				tone: 'error',
 				message:
-					`This machine was signed out from the console, which already removed its ${name} ` +
-					'login. Sign the machine back in under Preferences > Machine sign-ins.'
+					`This machine was signed out of Teachouse, which already removed its ${name} ` +
+					'login. Sign it back in under Preferences > Machine sign-ins.'
 			};
 		// A forget never asks for consent and never reaches the shop the
 		// server binds; both arms exist because the type is shared with
@@ -393,7 +392,7 @@ export function signOutHereSay(marketplace: Marketplace, forgotten: SessionOutco
 		case 'unavailable':
 			return {
 				tone: 'error',
-				message: `The ${name} login can only be removed in the Teachouse app on this machine.`
+				message: `You can only remove the ${name} login in the Teachouse app on this machine.`
 			};
 	}
 }
@@ -468,7 +467,7 @@ const CONNECT_SAID: Record<ConnectVerdictCode, (name: string) => ConnectReturn> 
 	}),
 	deadline: (name) => ({
 		tone: 'error',
-		message: `The ${name} sign-in was not finished in time, so nothing was saved. Press Connect ${name} to try again.`
+		message: `The ${name} sign-in took too long, so nothing was saved. Press Connect ${name} to try again.`
 	}),
 	abandoned: (name) => ({
 		tone: 'error',
@@ -484,7 +483,7 @@ const CONNECT_SAID: Record<ConnectVerdictCode, (name: string) => ConnectReturn> 
 	}),
 	signed_out: (name) => ({
 		tone: 'error',
-		message: `This machine was signed out from the console, so the ${name} sign-in was not opened and nothing was saved. Sign this machine back in under Preferences > Machine sign-ins, then press Connect ${name}.`
+		message: `This machine was signed out of Teachouse, so the ${name} sign-in did not open and nothing was saved. Sign this machine back in under Preferences > Machine sign-ins, then press Connect ${name}.`
 	}),
 	// The seller has not agreed to the seller-device notice for this
 	// marketplace, so the application refused in front of the password.
@@ -492,7 +491,7 @@ const CONNECT_SAID: Record<ConnectVerdictCode, (name: string) => ConnectReturn> 
 	// leg both read it through `connectConsentRequired`.
 	consent: (name) => ({
 		tone: 'error',
-		message: `${name} needs your permission first, so the sign-in was not opened and nothing was saved. Grant it under Account > Permissions, then press Connect ${name}.`
+		message: `${name} needs your permission first, so nothing was saved. Grant it under Account > Permissions, then press Connect ${name}.`
 	}),
 	// The shop is already bound to another organisation, which the server
 	// refuses at the check-in following the capture. Who holds it is
@@ -521,7 +520,7 @@ const CONNECT_SAID_UNNAMED: Record<ConnectVerdictCode, ConnectReturn> = {
 	deadline: {
 		tone: 'error',
 		message:
-			'Your marketplace sign-in was not finished in time, so nothing was saved. Press Connect on the card to try again.'
+			'Your marketplace sign-in took too long, so nothing was saved. Press Connect on the card to try again.'
 	},
 	abandoned: {
 		tone: 'error',
@@ -541,12 +540,12 @@ const CONNECT_SAID_UNNAMED: Record<ConnectVerdictCode, ConnectReturn> = {
 	signed_out: {
 		tone: 'error',
 		message:
-			'This machine was signed out from the console, so your marketplace sign-in was not opened and nothing was saved. Sign this machine back in under Preferences > Machine sign-ins, then press Connect on the card.'
+			'This machine was signed out of Teachouse, so your marketplace sign-in did not open and nothing was saved. Sign this machine back in under Preferences > Machine sign-ins, then press Connect on the card.'
 	},
 	consent: {
 		tone: 'error',
 		message:
-			'That marketplace needs your permission first, so your marketplace sign-in was not opened and nothing was saved. Grant it under Account > Permissions, then press Connect on the card.'
+			'That marketplace needs your permission first, so nothing was saved. Grant it under Account > Permissions, then press Connect on the card.'
 	},
 	bound_elsewhere: {
 		tone: 'error',
@@ -733,13 +732,13 @@ export function liveFace(
 			return {
 				status: { tone: 'soon', label: 'Checking' },
 				handle: null,
-				body: 'Reading what this marketplace is doing.'
+				body: 'Checking this marketplace…'
 			};
 		case 'failed':
 			return {
 				status: { tone: 'soon', label: 'Not known' },
 				handle: null,
-				body: 'We could not read this one just now. Reload to try again.'
+				body: 'We could not check this marketplace. Reload the page to try again.'
 			};
 	}
 }
@@ -776,18 +775,18 @@ export function hereFace(
 	}
 	const name = CARD_NAME[marketplace];
 	if (local.kind === 'refused') {
-		return { tone: 'warn', label: 'This device not known', line: local.detail };
+		return { tone: 'warn', label: 'Could not check this device', line: local.detail };
 	}
 	return local.connected
 		? {
 				tone: 'ok',
 				label: 'Signed in on this device',
-				line: `The ${name} login is on this machine.`
+				line: `This machine is signed in to ${name}.`
 			}
 		: {
 				tone: 'soon',
 				label: 'Not on this device',
-				line: `This machine holds no ${name} login.`
+				line: `This machine is not signed in to ${name}.`
 			};
 }
 

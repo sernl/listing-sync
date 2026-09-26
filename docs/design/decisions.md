@@ -942,3 +942,23 @@ Shape: Checkout for both packs and subscriptions, Billing for renewals, the cust
 Fulfilment is idempotent on the Stripe object — the session, the subscription, the billing period — rather than on the event id, because one purchase produces more than one event and a retry must not pay out twice.
 The price map lives on the server alone and is keyed by Stripe's identifier; the console names only our own price keys, so a browser cannot name a price.
 The console loads no third-party billing script, and `cdn.paddle.com` leaves the content-security policy rather than being exchanged for another host.
+
+## Proposed, 2026-09-26: Look stays free, no plan priority, two plan-blind faults fixed first
+
+Status: **proposed, 2026-09-26**; not adopted until the founder accepts it. Evidence: [`2026-09-26-pricing-re-evaluation.md`](../notes/design/research/2026-09-26-pricing-re-evaluation.md), with [`-evidence-capacity.md`](../notes/design/research/2026-09-26-pricing-evidence-capacity.md) and [`-evidence-competitors.md`](../notes/design/research/2026-09-26-pricing-evidence-competitors.md).
+
+Every price stands: Sync $29 a month or $240 a year with 25 moves a month rolling to 75; packs $47/20, $77/50, $127/100, $247/250, $397/500 and a conversation above; Founding 100 at $180 then $192, annual only, closing at 100 places or 2026-12-31; Move with me $99; Studio unsold.
+The reason is that Sync sits on the category's monthly midpoint, a move costs 5–25× less than the VA it replaces, no competitor serves TPT↔Tes, and revenue in the first year is bounded by reach rather than by price.
+Four triggers replace guessing: raise the 250 and 500 packs by 20% if ≥30% of the first 30 pack buyers choose them; raise Pack 20 to $57 if Look→pack conversion within 90 days exceeds 15% over the first 100 Look accounts; switch to paid-first with a 14-day money-back window if it is below 3%; sell Studio on its existing trigger.
+
+Look stays free forever, labelled "(Trial)" on the page. A Look account costs about US$0.0003 a month on this infrastructure, because every marketplace request and every import-time cover render runs on the seller's device.
+Its caps become: 500 resources imported, 256 MiB storage (from 1 GiB), 5 free moves per seller (from 5 per bound storefront, still once-ever per platform-account digest), and one upload in flight.
+
+Free accounts cannot starve paid ones through the job ledger. A device claims only its own organisation's work (`jobs.rs:1546`), and leases, the rate budget and outbound pacing are all per organisation and connection. No plan-based priority is added.
+Two shared paths let any one account, free or paid, stop every seller. Both are fixed before any marketing push:
+
+- The fleet breaker trips only when adverse settlements span at least three organisations (`BREAKER_MIN_TENANTS = 3`). This is what design line 649 always required.
+- `UPLOAD_BODY_BYTES_MAX` drops to 64 MiB until uploads stream to the object store, because a 256Mi pod holds about three copies of an upload.
+
+Operational changes go with them: the tam-server memory limit rises to 512Mi, Postgres gets requests and limits and stops being BestEffort, and `job::CONCURRENT_JOBS_GLOBAL_MAX` is deleted because nothing reads it.
+Per-plan priority is reconsidered only when a marketplace's official-API automation runs on the server. That is the one cross-tenant queue (`LeaseRepo::acquire`) where it could apply.

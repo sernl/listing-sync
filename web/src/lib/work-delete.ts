@@ -108,22 +108,20 @@ export function countWord(count: number, noun: WorkNoun): string {
  *  has every reason to expect the same here, and the two are not the same
  *  act. */
 export const WORK_DELETE_KEEPS =
-	'Everything this work already did stays as it is: resources already imported, the files ' +
-	'on your computer and every marketplace listing are untouched. Deleting stops work that ' +
-	'has not started yet and takes the record out of your history.';
+	'This removes it from your history and cancels anything not started yet. Your imported ' +
+	'resources, the files on your computer and your marketplace listings stay as they are.';
 
 /** The one caveat that is not about what is kept: a resource already in
  *  flight is not snatched back mid-write. */
 export const WORK_DELETE_IN_FLIGHT =
-	'Anything already being sent may finish before the stop takes effect. Nothing new starts ' +
-	'after that.';
+	'Anything already being sent may still finish. Nothing new will start.';
 
 /** What each of the server's three answers means, said as the seller reads
  *  it rather than as the wire spells it. */
 const STATUS_LINE: Record<JobDeletionStatus, string> = {
-	deleted: 'gone from your history',
-	stopping: 'stopping and will leave your history once the work already running has stopped',
-	needs_review: 'kept for review until the marketplace results are confirmed'
+	deleted: 'removed from your history',
+	stopping: 'stopping, and will leave your history once it stops',
+	needs_review: 'kept for review until we confirm what happened on the marketplace'
 };
 
 /** What happened, one sentence per arm that has anything in it.
@@ -143,7 +141,7 @@ export function outcomeLines(outcome: WorkDeleteOutcome, noun: WorkNoun): string
 		lines.push(`${countWord(outcome.needsReview.length, noun)} ${outcome.needsReview.length === 1 ? 'is' : 'are'} ${STATUS_LINE.needs_review}.`);
 	}
 	for (const failure of outcome.failed) {
-		lines.push(`Deletion of ${failure.label} is not confirmed. ${failure.message}`);
+		lines.push(`We couldn't confirm that ${failure.label} was deleted. ${failure.message}`);
 	}
 	return lines;
 }
@@ -172,10 +170,10 @@ export function retainedBadge(
  *  first press did nothing. */
 export function deleteRefusal(status: JobDeletionStatus | null | undefined): string | null {
 	if (status === 'stopping') {
-		return 'This is already stopping. It leaves your history once the work already running has stopped.';
+		return 'This is already stopping. It leaves your history once it stops.';
 	}
 	if (status === 'needs_review') {
-		return 'This is kept for review until we can confirm what it wrote on a marketplace.';
+		return 'This is kept for review until we confirm what it changed on a marketplace.';
 	}
 	return null;
 }

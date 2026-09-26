@@ -52,12 +52,12 @@
 	<PageHead
 		icon="file-down"
 		title="Export"
-		description="A spreadsheet of your Resources, with each marketplace's status, price and link."
+		description="A spreadsheet of your resources, with each marketplace's status, price and link."
 		guide="export"
 	/>
 
-	<Panel title="Export your Resources">
-		<p class="export-lede">One row per resource, and no file a buyer downloads.</p>
+	<Panel title="Export your resources">
+		<p class="export-lede">One row per resource. Your resource files are not included.</p>
 
 		<dl class="export-carries">
 			<div>
@@ -96,7 +96,7 @@
 				</p>
 			{:else if state.kind === 'handed'}
 				<Banner tone="ok" title="Your spreadsheet is ready">
-					Sent to this window as <span class="export-file">{state.filename}</span>.
+					Downloading as <span class="export-file">{state.filename}</span>.
 					{HANDOFF_ADVICE}
 				</Banner>
 			{:else if state.kind === 'failed'}

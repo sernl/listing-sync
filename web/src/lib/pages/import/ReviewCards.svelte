@@ -93,7 +93,7 @@
 
 <Panel
 	title="These look like resources you already have"
-	description="Answer each one. Nothing is merged or created until you do, and anything you leave for later is not in the way."
+	description="Answer each one. Nothing is merged or added until you do, and Decide later holds nothing up."
 >
 	{#each cards as card (key(card.lo, card.hi))}
 		{@const open = merging === key(card.lo, card.hi)}

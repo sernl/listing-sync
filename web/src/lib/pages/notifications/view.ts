@@ -13,8 +13,8 @@ import { SHORT_NAME } from '$lib/platforms';
  *  kind added to the closed set in Rust stops this file type-checking instead
  *  of rendering a blank where the noun goes. */
 const KIND_WORD: Record<NotificationKind, string> = {
-	sync: 'sync',
-	migration: 'migration',
+	sync: 'update',
+	migration: 'move',
 	import: 'import'
 };
 
@@ -90,7 +90,7 @@ function sentence(word: string): string {
  * two runs apart in a list. An import names no platform: it commits to the
  * catalogue and writes to none. */
 export function title(row: NotificationView): string {
-	const word = Object.hasOwn(KIND_WORD, row.kind) ? KIND_WORD[row.kind] : 'run';
+	const word = Object.hasOwn(KIND_WORD, row.kind) ? KIND_WORD[row.kind] : 'task';
 	if (row.inventory === null || !Object.hasOwn(SHORT_NAME, row.inventory)) {
 		return `${sentence(word)} finished`;
 	}

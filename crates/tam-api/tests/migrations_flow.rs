@@ -695,7 +695,7 @@ async fn an_empty_balance_refuses_the_confirm(pool: PgPool) {
     let error: APIError = refused.json();
     assert_eq!(
         error.errors[0].message,
-        "You have no moves left. Buy a pack to move more resources."
+        "You have no moves left. Buy a pack, or choose Sync."
     );
     let detail = error.errors[0]
         .detail

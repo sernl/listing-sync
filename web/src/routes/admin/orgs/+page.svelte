@@ -21,19 +21,19 @@
 	<PageHead
 		icon="building-2"
 		title="Organisations"
-		description="Every tenant on the platform, newest first, with what each holds."
+		description="Every account on the platform, newest first, with what each holds."
 	/>
 
 	<Panel>
 		{#if orgs.isPending}
-			<p class="quiet">Reading the tenant list…</p>
+			<p class="quiet">Loading accounts…</p>
 		{:else if orgs.isError}
-			<p class="quiet">The tenant list could not be read.</p>
+			<p class="quiet">We could not load accounts.</p>
 		{:else if rows.length === 0}
 			<Placeholder
 				icon="building-2"
-				headline="No organisation has been provisioned yet"
-				body="A tenant appears here the first time somebody signs in and the session exchange provisions them one."
+				headline="No organisations yet"
+				body="One appears here the first time someone signs in."
 			/>
 		{:else}
 			<div class="op-table">
@@ -76,8 +76,8 @@
 			</div>
 			<p class="foot-note">
 				{rows.length}
-				{rows.length === 1 ? 'organisation' : 'organisations'}. Counts are read across the tenant
-				fence on the backoffice connection, so they include rows no single tenant can see.
+				{rows.length === 1 ? 'organisation' : 'organisations'}. Counts come from the backoffice
+				connection, so they include rows no single account can see.
 			</p>
 		{/if}
 	</Panel>

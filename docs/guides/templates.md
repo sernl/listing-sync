@@ -5,35 +5,35 @@ tags: templates, publishing
 
 # Templates
 
-A template is a set of saved answers a new resource starts from.
+A template is a set of saved answers that a new resource starts with.
 
 ## Make one
 
 1. Open **Catalogue → Templates**.
 2. Add a template and name it.
-3. Fill the fields you answer the same way every time.
+3. Fill in the fields you always answer the same way.
 4. Save.
 
 <!-- shot: /templates, the template list with one saved template -->
 ![A saved template](/v1/guides/images/33f4383deca621b4d28adb59f80b6f78a98279f96da5aff238422955ccc51cd5)
 
-## What a template fills and what it leaves
+## What a template fills in
 
-A template fills the fields you saved and leaves the rest empty. The title, the description of the resource itself and the file are always yours to write.
+A template fills in the fields you saved and leaves the rest empty. You always write the title, the resource's description and the file yourself.
 
-A template's own description says what the template is for. It is not the description buyers read.
+A template's own description is a note about what the template is for. Buyers never see it.
 
-## Scope
+## Which marketplaces it covers
 
-Set what a template covers: one marketplace, or all of them. A marketplace-only template fills that marketplace's fields and touches nothing else.
+Choose whether a template covers one marketplace or all of them. A template for one marketplace only fills in that marketplace's fields and changes nothing else.
 
 ## Examples
 
-A field marked as an example is there to be edited before you save. Replace the words with your own; an example left in place is published as written.
+A field marked as an example is meant to be edited. Replace it with your own words. If you leave an example in, it is published exactly as written.
 
 ## Undo
 
-**Undo** puts back the last saved version of the template. If you have written more since, Undo loses it, so save first if you want to keep it.
+**Undo** brings back the last saved version of the template. Anything you wrote since then is lost, so save first if you want to keep it.
 
 <!-- shot: /templates, the editor with the Undo action visible -->
 ![Undoing a template edit](/v1/guides/images/76e4c2d7d984c6ddefca7e4a5e3bb214e0a757ff03e7dffb872bdc7d4195cfdd)
@@ -41,5 +41,5 @@ A field marked as an example is there to be edited before you save. Replace the 
 ## Use one
 
 1. Open **Catalogue → New resource**.
-2. Choose the template in the first band.
-3. Check every filled field before you save.
+2. Choose the template in the first section.
+3. Check every filled-in field before you save.

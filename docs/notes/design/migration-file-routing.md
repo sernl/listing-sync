@@ -180,7 +180,7 @@ It must never be a `Failed` at submit time, because that is terminal and the sel
 
 `project_listing` blocks on a missing cover for every inventory (`crates/tam-taxonomy/src/listing.rs:292-294`), and the comment says the requirement is Tes's while the code is unconditional.
 A device-ingested product has no cover on our side unless the device sends one.
-The recommendation is that the device generates it with `tam_pipeline::render::cover` — a fixed 512 by 384 PNG, tens of kilobytes — and uploads only that through the existing `POST /{version}/uploads`, which already returns exactly the file handle the create path wants.
+The recommendation is that the device generates it with `tam_pipeline::render::cover` — a fixed 1600 by 1200 PNG (a few hundred kilobytes for a drawn page, never over 4 MB) — and uploads only that through the existing `POST /{version}/uploads`, which already returns exactly the file handle the create path wants.
 The sellable bytes stay off our servers and a derived thumbnail does not, which is a deliberate exception to the rule rather than an oversight, and therefore a founder decision.
 
 ### The scan

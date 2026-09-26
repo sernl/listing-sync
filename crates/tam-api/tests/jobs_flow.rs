@@ -1725,6 +1725,6 @@ async fn a_tenant_with_no_moves_is_refused_and_told_to_buy_some(pool: PgPool) {
     assert_eq!(detail["available"], 0);
     assert_eq!(
         refusal.errors[0].message,
-        "You have no moves left. Buy a pack to move more resources."
+        "You have no moves left. Buy a pack, or choose Sync."
     );
 }

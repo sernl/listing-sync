@@ -137,12 +137,12 @@ export type NameVerdict =
 export function checkName(typed: string, taken: readonly string[] = []): NameVerdict {
 	const name = typed.trim();
 	if (name.length === 0) {
-		return { accepted: false, message: 'A collection needs a name.' };
+		return { accepted: false, message: 'Give the collection a name.' };
 	}
 	if (name.length > NAME_MAX_CHARS) {
 		return {
 			accepted: false,
-			message: `A name is at most ${NAME_MAX_CHARS} characters. That one is ${name.length}.`
+			message: `Keep the name to ${NAME_MAX_CHARS} characters or fewer. This one has ${name.length}.`
 		};
 	}
 	if (taken.some((held) => held.toLocaleLowerCase() === name.toLocaleLowerCase())) {
@@ -157,11 +157,12 @@ export function checkName(typed: string, taken: readonly string[] = []): NameVer
  * page's own lede say the same thing, and two copies are how they come to
  * disagree. One sentence: what the three verbs do to a whole set is the
  * `labels-and-collections` guide's. */
-export const WHAT_A_COLLECTION_IS = 'A collection is an ordered set of your resources.';
+export const WHAT_A_COLLECTION_IS =
+	'A collection is a group of your resources, in the order you choose.';
 
 /** What the free plan's seller reads under the New collection control.
  *
  * `limitReason` already says the plan includes none and to upgrade; this is
  * the sentence that says what they would be for, because a refusal with no
  * stated benefit reads as a control we took away. */
-export const WHY_COLLECTIONS_COST = 'Collections are on the subscription.';
+export const WHY_COLLECTIONS_COST = 'Collections come with the subscription.';

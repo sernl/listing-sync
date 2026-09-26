@@ -98,7 +98,7 @@
 			key = null;
 		} catch (failure) {
 			plan = null;
-			refusal = sentence(failure, 'That preview could not be read, so nothing was changed.');
+			refusal = sentence(failure, 'The preview did not load. Nothing was changed.');
 		} finally {
 			previewing = false;
 		}
@@ -118,7 +118,7 @@
 			key = null;
 			onDone();
 		} catch (failure) {
-			refusal = sentence(failure, 'The apply did not finish. Nothing was written twice; try again.');
+			refusal = sentence(failure, 'The template was not applied. Try again; nothing will be done twice.');
 		} finally {
 			applying = false;
 		}
@@ -133,7 +133,7 @@
 			`${unchanged} left as ${unchanged === 1 ? 'it was' : 'they were'}`
 		];
 		if (blocked > 0) {
-			parts.push(`${blocked} refused`);
+			parts.push(`${blocked} skipped`);
 		}
 		return `${parts.join(', ')}.`;
 	}
@@ -150,13 +150,11 @@
 			{products.length === 1 ? 'resource' : 'resources'}
 		</h2>
 		<p>
-			A template fills the fields these resources have left empty. The title is never one of
-			them: a template names none, and two resources sharing a title is not something we would
-			write for you.
+			A template fills in the empty fields on these resources. It never sets the title.
 		</p>
 
 		{#if headsUnread}
-			<p class="refusal">Your templates could not be read, so there is nothing to apply.</p>
+			<p class="refusal">We couldn't load your templates, so there is nothing to apply.</p>
 		{:else}
 			<label class="apply-pick">
 				<span class="t">Template</span>
@@ -172,7 +170,7 @@
 				</select>
 			</label>
 			{#if scopedTo !== null}
-				<Note>This template is written for {scopeLabel(scopedTo)}.</Note>
+				<Note>This template is for {scopeLabel(scopedTo)}.</Note>
 			{/if}
 
 			<label class="choice">
@@ -185,12 +183,12 @@
 						retire();
 					}}
 				/>
-				<span class="t">Overwrite what these resources already say</span>
+				<span class="t">Replace what these resources already have</span>
 			</label>
-			<Note>Left off, a template fills only the fields a resource leaves empty.</Note>
+			<Note>Leave this off to fill only the empty fields.</Note>
 
 			{#if plan !== null}
-				<div class="apply-rows" role="table" aria-label="What the apply would do">
+				<div class="apply-rows" role="table" aria-label="What the template will change">
 					{#each plan.rows as row (row.product)}
 						<div class="apply-row" role="row">
 							<span class="t" role="cell">{row.title}</span>
@@ -203,15 +201,15 @@
 								{:else if row.fields.length > 0}
 									{row.fields.map(fieldWordsOf).join(', ')}
 								{:else}
-									Every field this template holds is already answered.
+									Every field in this template is already filled in.
 								{/if}
 							</span>
 						</div>
 					{/each}
 				</div>
 				<Note>
-					{plan.counts.will_change} to change, {plan.counts.unchanged} already as the template says,
-					{plan.counts.blocked} refused.
+					{plan.counts.will_change} to change, {plan.counts.unchanged} already match the template,
+					{plan.counts.blocked} skipped.
 				</Note>
 			{/if}
 
@@ -232,7 +230,7 @@
 				onclick={() => void preview()}
 				disabled={chosen === '' || previewing || applying}
 			>
-				{previewing ? 'Reading…' : 'Preview'}
+				{previewing ? 'Loading…' : 'Preview'}
 			</button>
 			<button
 				class="cta"

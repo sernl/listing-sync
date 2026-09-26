@@ -38,11 +38,11 @@ describe('why a picture was not saved', () => {
 				limit: 5_368_709_120
 			})
 		);
-		expect(said).toMatch(/stores up to/);
+		expect(said).toMatch(/holds up to/);
 	});
 
 	it('says the deployment cannot store pictures where there is no store', () => {
-		expect(avatarRefusal(refused('blob_store_unavailable', 'no store'))).toMatch(/cannot store/);
+		expect(avatarRefusal(refused('blob_store_unavailable', 'no store'))).toMatch(/not available yet/);
 	});
 
 	it('says the upload never arrived for a transport failure', () => {

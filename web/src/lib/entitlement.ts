@@ -35,17 +35,17 @@ export function sectionReason(caps: Capabilities, section: SectionId): string | 
 		case 'import':
 			return caps.import_spreadsheet || caps.import_marketplace
 				? null
-				: 'Your plan does not include import. Upgrade to bring your portfolio in.';
+				: 'Upgrade your plan to import resources.';
 		case 'crosslist':
 			return null;
 		case 'automations':
 			return caps.scheduling || caps.sync_pull_interval_secs !== null || movesLimit(caps) !== null
 				? null
-				: 'Your plan does not include automations. Upgrade to schedule, sync, and move resources between marketplaces.';
+				: 'Upgrade your plan to schedule, check for changes, and move resources.';
 		case 'marketplaces':
 			return caps.marketplaces_max > 0
 				? null
-				: 'Your plan connects no marketplaces. Upgrade to connect one.';
+				: 'Upgrade your plan to connect a marketplace.';
 		// Account is how a plan is bought, so it is never the thing a plan
 		// withholds. Admin is the operator's own section and answers to the
 		// operator probe, not to a plan.
@@ -84,31 +84,31 @@ export function featureReason(caps: Capabilities, feature: Feature): string | nu
 		case 'import_spreadsheet':
 			return caps.import_spreadsheet
 				? null
-				: 'Your plan does not include spreadsheet import. Upgrade to bring a spreadsheet in.';
+				: 'Upgrade your plan to import a spreadsheet.';
 		case 'import_marketplace':
 			return caps.import_marketplace
 				? null
-				: 'Your plan cannot read your shop from a marketplace. Upgrade to import from one.';
+				: 'Upgrade your plan to import from a marketplace.';
 		case 'duplicate_review':
 			return caps.duplicate_review
 				? null
-				: 'Your plan does not include duplicate review. Upgrade to merge duplicates before they are committed.';
+				: 'Upgrade your plan to review duplicates before they are added.';
 		case 'scheduling':
 			return caps.scheduling
 				? null
-				: 'Your plan does not include scheduling. Upgrade to publish on a timetable.';
+				: 'Upgrade your plan to schedule when things publish.';
 		case 'sync':
 			return caps.sync_pull_interval_secs !== null
 				? null
-				: 'Your plan does not include marketplace sync. Upgrade to pull changes from your marketplaces.';
+				: 'Upgrade your plan to check your marketplaces for changes.';
 		case 'auto_publish_rules':
 			return caps.auto_publish_rules
 				? null
-				: 'Your plan does not include auto-publish rules. Upgrade to republish a listing when its resource changes.';
+				: 'Upgrade your plan to republish a listing when its resource changes.';
 		case 'analytics':
 			return caps.analytics
 				? null
-				: 'Your plan does not include analytics. Upgrade to see how your listings are doing.';
+				: 'Upgrade your plan to see how your listings are doing.';
 	}
 }
 
@@ -205,7 +205,7 @@ export function limitReason(
 export function usageLine(used: number, max: number, limit: Limit): string {
 	const { one, many } = LIMITS[limit];
 	if (unlimited(max)) {
-		return `${counted(used, one, many)}, with no limit on your plan`;
+		return `${counted(used, one, many)}, no limit`;
 	}
 	return `${used} of ${counted(max, one, many)}`;
 }
@@ -291,7 +291,7 @@ export function movesReason(
 	const { available } = balance;
 	const line = requested === 0 ? movesLine(balance) : `${movesLine(balance)} This uses ${requested}.`;
 	if (available === 0) {
-		return { line, refusal: 'You have no moves left. Buy a pack or choose Sync.' };
+		return { line, refusal: 'You have no moves left. Buy a pack, or choose Sync.' };
 	}
 	if (requested > available) {
 		return {
@@ -314,8 +314,8 @@ export function grantNotice(grant: Grant): string | null {
 		return null;
 	}
 	return grant.expires_at === null
-		? 'Set by Teachouse, with no end date.'
-		: `Set by Teachouse until ${dayMonth(grant.expires_at)}.`;
+		? 'Teachouse gave you this plan, with no end date.'
+		: `Teachouse gave you this plan until ${dayMonth(grant.expires_at)}.`;
 }
 
 // --------------------------------------------------------- the plan's offer
@@ -341,11 +341,11 @@ export function supportLabel(support: SupportLevel): string {
 export function movesLimit(caps: Capabilities): string | null {
 	if (caps.moves_per_month > 0) {
 		return caps.moves_accrual_cap > caps.moves_per_month
-			? `${caps.moves_per_month} moves a month, saving up to ${caps.moves_accrual_cap}`
+			? `${caps.moves_per_month} moves a month, and unused moves carry over up to ${caps.moves_accrual_cap}`
 			: `${caps.moves_per_month} moves a month`;
 	}
 	if (caps.free_moves_lifetime > 0) {
-		return `${counted(caps.free_moves_lifetime, 'move', 'moves')} to start`;
+		return `${counted(caps.free_moves_lifetime, 'free move', 'free moves')} to start`;
 	}
 	return null;
 }
@@ -354,15 +354,6 @@ export function movesLimit(caps: Capabilities): string | null {
  *  the copy itself. */
 export function packEditLine(caps: Capabilities): string {
 	return `Moved listings can be edited for ${caps.pack_edit_days} days.`;
-}
-
-/** How often a plan pulls, read out. */
-function syncLine(seconds: number): string {
-	const hours = Math.round(seconds / 3600);
-	if (hours <= 1) {
-		return 'Sync every hour';
-	}
-	return `Sync every ${hours} hours`;
 }
 
 /**
@@ -394,11 +385,11 @@ export function capabilityLines(caps: Capabilities): string[] {
 		lines.push('Import from a marketplace');
 	}
 	if (caps.duplicate_review) {
-		lines.push('Duplicate review before anything is committed');
+		lines.push('Review duplicates before they are added');
 	}
 	lines.push(
 		unlimited(caps.publish_marketplaces_max)
-			? 'Publish to every marketplace you have connected'
+			? 'Publish to every marketplace you connect'
 			: `Publish to ${counted(caps.publish_marketplaces_max, 'marketplace', 'marketplaces')}`
 	);
 	if (caps.pack_edit_days > 0) {
@@ -409,10 +400,10 @@ export function capabilityLines(caps: Capabilities): string[] {
 		lines.push(moves);
 	}
 	if (caps.scheduling) {
-		lines.push('Schedule what publishes when');
+		lines.push('Schedule when things publish');
 	}
 	if (caps.sync_pull_interval_secs !== null) {
-		lines.push(syncLine(caps.sync_pull_interval_secs));
+		lines.push('Edit resources in Teachouse and sync the edits across all platforms');
 	}
 	if (caps.auto_publish_rules) {
 		lines.push('Republish a listing when its resource changes');
@@ -434,7 +425,7 @@ export function capabilityLines(caps: Capabilities): string[] {
 	}
 	lines.push(counted(caps.devices_max, 'device', 'devices'));
 	if (caps.ai_fills_per_month > 0) {
-		lines.push(`${caps.ai_fills_per_month} AI auto-fills a month, once AI arrives`);
+		lines.push(`${caps.ai_fills_per_month} AI form fills a month, coming soon`);
 	}
 	lines.push(supportLabel(caps.support));
 	return lines;

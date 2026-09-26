@@ -78,7 +78,7 @@ describe('what the claim screen says about the slug in the field', () => {
 describe('when the claim can be submitted', () => {
 	it('blocks on an empty, malformed or taken name and says why', () => {
 		expect(claimBlockedReason(claimStatus('', NO_PROBE), false)).toBe(
-			'Choose a name for your organisation.'
+			'Choose a name for your account.'
 		);
 		expect(claimBlockedReason(claimStatus('ab_c', NO_PROBE), false)).toBe(
 			'Use letters, numbers and hyphens only.'
@@ -108,7 +108,7 @@ describe('when the claim can be submitted', () => {
 
 	it('blocks while the claim is being saved, whatever the status', () => {
 		expect(claimBlockedReason(claimStatus('riverbend', settled('riverbend', true)), true)).toBe(
-			'The name is being saved.'
+			'Saving your name.'
 		);
 	});
 });

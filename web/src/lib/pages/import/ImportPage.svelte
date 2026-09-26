@@ -421,7 +421,7 @@
 		raised = null;
 		try {
 			if (org === undefined) {
-				declined = 'Your account could not be read. Reload before starting.';
+				declined = 'We could not load your account. Reload the page, then start.';
 				return;
 			}
 			const card = cards.find((candidate) => candidate.sites.includes(inventory));
@@ -450,7 +450,7 @@
 			if (active()) {
 				declined = failure instanceof ApiFailure
 					? failure.message
-					: 'The start request was not acknowledged. Retry here to reconcile the same attempt.';
+					: 'We did not hear back. Try again here and it will pick up the same import.';
 			}
 		} finally {
 			starting = new Set([...starting].filter((source) => source !== inventory));
@@ -463,14 +463,14 @@
 	<PageHead
 		icon="download"
 		title="Import"
-		description="Bring your current portfolio to Teachouse from anywhere it is housed."
+		description="Bring your resources into Teachouse from a spreadsheet or a marketplace."
 		guide="importing"
 	/>
 
 	{#if connectionsUnread}
-		<Banner tone="bad" title="We could not read your marketplaces">{CONNECTIONS_UNREAD}</Banner>
+		<Banner tone="bad" title="We could not load your marketplaces">{CONNECTIONS_UNREAD}</Banner>
 	{:else if nothingHeld}
-		<Banner tone="info" title="No marketplace connection is recorded" action={toMarketplaces}>
+		<Banner tone="info" title="No marketplace connected yet" action={toMarketplaces}>
 			{NOTHING_CONNECTED}
 		</Banner>
 	{/if}
@@ -478,13 +478,13 @@
 	<section class="sh-card">
 		<div class="head">
 			<h2>Import from a spreadsheet</h2>
-			<span class="badges"><StatusPill tone="flat" label="Read on our server" /></span>
+			<span class="badges"><StatusPill tone="flat" label="Checked online" /></span>
 		</div>
-		<p>One row per resource in our template, checked before anything is created.</p>
+		<p>Fill in our template, one row per resource. We check it before adding anything.</p>
 		<ol class="sh-steps">
 			<li>Download the template and fill in one row for each resource.</li>
-			<li>Upload it and read the report before anything is created.</li>
-			<li>Add the files your rows named, then import.</li>
+			<li>Upload it and read our check. Nothing is added yet.</li>
+			<li>Add the files your sheet lists, then import.</li>
 		</ol>
 
 		{#if sheetRefusal !== null}
@@ -495,10 +495,10 @@
 			<Button
 				icon="file-down"
 				disabled={downloading}
-				reason={downloading ? 'Building the template.' : undefined}
+				reason={downloading ? 'Getting the template ready.' : undefined}
 				onclick={() => void downloadTemplate()}
 			>
-				{downloading ? 'Building the template…' : 'Download the template'}
+				{downloading ? 'Getting the template ready…' : 'Download the template'}
 			</Button>
 			{#if uploadRefusal !== null}
 				<Button disabled reason={uploadRefusal}>Upload a filled sheet</Button>
@@ -518,13 +518,13 @@
 				</label>
 			{:else}
 				<Button disabled reason={IMPORT_ALREADY_OPEN}>Upload a filled sheet</Button>
-				<Button tier="primary" href={batchHref(openBatch)}>Open the import you have</Button>
+				<Button tier="primary" href={batchHref(openBatch)}>Open your current import</Button>
 			{/if}
 		</div>
 	</section>
 
 	{#if declined !== null}
-		<Banner tone="bad" title="The reading did not start">
+		<Banner tone="bad" title="Your import did not start">
 			{declined}
 			{#snippet action()}
 				{#if raised !== null}
@@ -554,7 +554,7 @@
 						{/if}
 						<StatusPill
 							tone={!inApp ? 'soon' : local?.kind === 'known' ? local.connected ? 'ok' : 'warn' : 'soon'}
-							label={!inApp ? 'Waiting for the app' : local?.kind === 'known' ? local.connected ? 'Login on this device' : 'Not signed in here' : 'This device: not known'}
+							label={!inApp ? 'Waiting for the app' : local?.kind === 'known' ? local.connected ? 'Signed in on this device' : 'Not signed in here' : 'Sign-in here unknown'}
 						/>
 					</span>
 				</div>
@@ -610,7 +610,7 @@
 		</Button>
 	</div>
 
-	<Panel title="Your imports" description="Every import you have run.">
+	<Panel title="Your imports" description="All the imports you have started.">
 		<div class="import-filters">
 			<Field label="Where from" id="imports-source">
 				<select id="imports-source" bind:value={runSource} onchange={narrowRuns}>
@@ -630,7 +630,7 @@
 					<option value="reviewing">Waiting on you</option>
 					<option value="complete">Finished</option>
 					<option value="failed">Stopped with a problem</option>
-					<option value="abandoned">Given up</option>
+					<option value="abandoned">Cancelled</option>
 				</select>
 			</Field>
 			<Field label="Order by" id="imports-order">
@@ -648,17 +648,17 @@
 		     rows already read are still true, and replacing them with a
 		     sentence would take away what the seller came for. -->
 		{#if runsUnread}
-			<Banner tone="bad" title="We could not read your imports">
+			<Banner tone="bad" title="We could not load your imports">
 				{IMPORTS_UNREAD}
 				{runsFailedFor === null
 					? ''
-					: `Page ${runsFailedFor} did not arrive; below is the page we last read.`}
+					: `We could not load page ${runsFailedFor}. Below is the last page we loaded.`}
 				{#snippet action()}
 					<Button
 						tier="outline"
 						small
 						disabled={runsBusy}
-						reason={runsBusy ? 'Reading your imports.' : undefined}
+						reason={runsBusy ? 'Loading your imports.' : undefined}
 						onclick={() => void loadRuns()}
 					>
 						Try again
@@ -677,7 +677,7 @@
 				<p class="quiet">No import matches these filters. Clear them to see the rest.</p>
 			{:else if shownRunPage > 1}
 				<p class="quiet">
-					There is nothing left on this page. Go back for the imports before it.
+					This page is empty. Go back a page to see your imports.
 				</p>
 			{:else}
 				<Placeholder

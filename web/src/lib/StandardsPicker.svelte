@@ -81,14 +81,14 @@
 	{/if}
 
 	{#if frameworks.length === 0}
-		<p class="std-note">No standards are offered here yet. You can add them later.</p>
+		<p class="std-note">No standards are available yet. You can add them later.</p>
 	{:else if found.isPending}
-		<p class="std-note">Reading the standards…</p>
+		<p class="std-note">Loading standards…</p>
 	{:else if found.isError}
-		<Banner tone="bad">We could not read the standards. You can still create the listing.</Banner>
+		<Banner tone="bad">We couldn't load the standards. You can still create the listing.</Banner>
 	{:else if found.data?.state === 'not_ingested'}
-		<Banner tone="warn" title="This framework is not loaded yet">
-			{showing} cannot be searched yet. Standards are optional, so you can add them later.
+		<Banner tone="warn" title="This framework isn't ready yet">
+			You can't search {showing} yet. Standards are optional, so you can add them later.
 		</Banner>
 	{:else if query.trim() === ''}
 		<p class="std-note">Type a code or a few words to search.</p>

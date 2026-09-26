@@ -87,7 +87,7 @@ describe('which sections a plan reaches', () => {
 			free_moves_lifetime: 0
 		};
 		expect(sectionAllowed(barren, 'automations')).toBe(false);
-		expect(sectionReason(barren, 'automations')).toContain('Upgrade to schedule');
+		expect(sectionReason(barren, 'automations')).toContain('Upgrade your plan to schedule');
 	});
 
 	// Account is how a plan is bought, so it can never be the thing a plan
@@ -118,9 +118,9 @@ describe('why a control is disabled', () => {
 
 	it('names the capability and what to do about it where it does not', () => {
 		expect(featureReason(caps('free'), 'analytics')).toBe(
-			'Your plan does not include analytics. Upgrade to see how your listings are doing.'
+			'Upgrade your plan to see how your listings are doing.'
 		);
-		expect(featureReason(caps('free'), 'scheduling')).toContain('Upgrade to publish on a timetable');
+		expect(featureReason(caps('free'), 'scheduling')).toContain('Upgrade your plan to schedule when things publish');
 	});
 
 	// Null rather than an interval: a plan that never pulls is not a plan that
@@ -172,7 +172,7 @@ describe('the allowance lines the Account page reads out', () => {
 	// `4294967295` is the sentinel and not a promise, so it is never printed.
 	it('says an unlimited allowance is unlimited rather than printing the sentinel', () => {
 		expect(usageLine(3, UNLIMITED, 'marketplaces')).toBe(
-			'3 marketplaces, with no limit on your plan'
+			'3 marketplaces, no limit'
 		);
 	});
 
@@ -229,14 +229,14 @@ describe('the balance a selection is checked against', () => {
 	it('sends an empty balance to a pack or to Sync', () => {
 		const none = movesReason({ available: 0 }, 0);
 		expect(none.line).toBe('You have no moves.');
-		expect(none.refusal).toBe('You have no moves left. Buy a pack or choose Sync.');
+		expect(none.refusal).toBe('You have no moves left. Buy a pack, or choose Sync.');
 	});
 
 	// The confirm is drawn before the submit, so a balance of nothing refuses
 	// even where the seller has selected nothing yet.
 	it('refuses an empty balance before anything is selected', () => {
 		expect(movesReason({ available: 0 }, 3).refusal).toBe(
-			'You have no moves left. Buy a pack or choose Sync.'
+			'You have no moves left. Buy a pack, or choose Sync.'
 		);
 	});
 });
@@ -254,13 +254,13 @@ describe('a date in a sentence', () => {
 describe('the notice over a plan a person set', () => {
 	it('names Teachouse and the date it ends', () => {
 		expect(grantNotice(grant({ granted_by: 'operator', expires_at: Date.UTC(2026, 11, 1) }))).toBe(
-			'Set by Teachouse until 1 December.'
+			'Teachouse gave you this plan until 1 December.'
 		);
 	});
 
 	it('says so where a manual grant has no end', () => {
 		expect(grantNotice(grant({ granted_by: 'operator' }))).toBe(
-			'Set by Teachouse, with no end date.'
+			'Teachouse gave you this plan, with no end date.'
 		);
 	});
 
@@ -278,10 +278,10 @@ describe('what a plan card lists', () => {
 		expect(lines).toContain('Unlimited resources');
 		expect(lines).toContain('All marketplaces');
 		expect(lines).toContain('Import from a spreadsheet or a marketplace');
-		expect(lines).toContain('25 moves a month, saving up to 75');
-		expect(lines).toContain('Sync every 6 hours');
+		expect(lines).toContain('25 moves a month, and unused moves carry over up to 75');
+		expect(lines).toContain('Edit resources in Teachouse and sync the edits across all platforms');
 		expect(lines).toContain('Analytics');
-		expect(lines).toContain('200 AI auto-fills a month, once AI arrives');
+		expect(lines).toContain('200 AI form fills a month, coming soon');
 		expect(lines).toContain('Email support, two business days');
 	});
 
@@ -290,8 +290,8 @@ describe('what a plan card lists', () => {
 	it('leaves out what a plan does not carry', () => {
 		const lines = capabilityLines(caps('free'));
 		expect(lines).not.toContain('Analytics');
-		expect(lines.some((line) => line.includes('Sync every'))).toBe(false);
-		expect(lines.some((line) => line.includes('a month, saving up to'))).toBe(false);
+		expect(lines.some((line) => line.includes('for changes every'))).toBe(false);
+		expect(lines.some((line) => line.includes('carry over up to'))).toBe(false);
 	});
 
 	// Export is on every plan, and it is the one line that has to be there:
@@ -314,11 +314,11 @@ describe('what a plan hands out in moves', () => {
 	// The ceiling is part of the offer: a month's moves that lapsed the moment
 	// the next month landed would be a smaller promise than the one made.
 	it('states the monthly run with what it saves up to', () => {
-		expect(movesLimit(caps('subscriber'))).toBe('25 moves a month, saving up to 75');
+		expect(movesLimit(caps('subscriber'))).toBe('25 moves a month, and unused moves carry over up to 75');
 	});
 
 	it('states the free plan’s handful as a one-off rather than as a month', () => {
-		expect(movesLimit(caps('free'))).toBe('5 moves to start');
+		expect(movesLimit(caps('free'))).toBe('5 free moves to start');
 	});
 
 	it('is nothing where every move has to be bought', () => {

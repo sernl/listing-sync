@@ -1,8 +1,9 @@
 <!-- Appearance, which is the whole of Preferences for now.
 
-     Three choices and not a toggle, because System is a real answer: a seller
-     whose machine turns dark at sunset has already made this decision once and
-     should not have to make it again here.
+     Three choices and not a toggle. Light comes first because it is what a
+     console with no choice paints (`DEFAULT_CHOICE` in `$lib/theme`); "Match
+     this device" is the System choice, for a seller whose machine turns dark
+     at sunset and who wants the console to follow it.
 
      The choice lives in `localStorage` and nowhere else. Carrying it on the
      account, so a seller who signs in on a second machine finds the palette
@@ -17,9 +18,9 @@
 	import { DARK_QUERY, commitThemeChoice, themeChoice, type ThemeChoice } from '$lib/theme';
 
 	const OPTIONS: ReadonlyArray<{ id: ThemeChoice; label: string }> = [
-		{ id: 'system', label: 'System' },
 		{ id: 'light', label: 'Light' },
 		{ id: 'dark', label: 'Dark' },
+		{ id: 'system', label: 'Match this device' },
 	];
 
 	// Read once at construction from the same key `app.html` painted from, so
@@ -40,10 +41,7 @@
 	}
 </script>
 
-<Panel
-	title="Appearance"
-	description="Which palette this console is drawn in, on this device."
->
+<Panel title="Appearance" description="Choose how the console looks on this device.">
 	<!-- Which machine "this device" is, said in plain sight rather than left to
 	     a tooltip. The console is one build served to a browser and to the app
 	     window around it, and until this line nothing on any screen told the

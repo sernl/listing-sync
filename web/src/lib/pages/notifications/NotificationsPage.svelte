@@ -97,8 +97,8 @@
 	{#if read.kind === 'pending'}
 		<p class="ntf-said">Loading…</p>
 	{:else if read.kind === 'failed'}
-		<Banner tone="bad" title="We could not read your notifications">
-			We could not load the list, and nothing has changed.
+		<Banner tone="bad" title="We could not load your notifications">
+			Nothing is lost. Try again in a moment.
 			{#snippet action()}
 				<Button
 					icon="refresh-cw"
@@ -114,7 +114,7 @@
 		<Placeholder
 			icon="bell"
 			headline="Nothing has finished yet"
-			body="An import or an update is listed here when it finishes."
+			body="Each import or update shows here when it finishes."
 		>
 			{#snippet actions()}
 				<Button tier="outline" href="/sync" icon="refresh-cw">Go to Updates</Button>
@@ -163,8 +163,8 @@
 		</ul>
 
 		{#if moreFailed}
-			<Banner tone="bad" title="The next page could not be read">
-				Only the page after the runs above failed to load.
+			<Banner tone="bad" title="We could not load more notifications">
+				The ones above are still here.
 				{#snippet action()}
 					<Button icon="refresh-cw" disabled={loadingMore} onclick={loadMore}>Try again</Button>
 				{/snippet}
@@ -174,7 +174,7 @@
 				<Button
 					icon="chevron-down"
 					disabled={loadingMore}
-					reason={loadingMore ? 'The next page is loading.' : undefined}
+					reason={loadingMore ? 'Loading more…' : undefined}
 					onclick={loadMore}
 				>
 					{loadingMore ? 'Loading…' : 'Load more'}

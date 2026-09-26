@@ -153,7 +153,7 @@
 			startRefusal =
 				failure instanceof ApiFailure
 					? failure.message
-					: 'That template could not be read, so nothing was filled.';
+					: 'That template didn’t load, so nothing was filled in.';
 		} finally {
 			starting = false;
 		}
@@ -301,7 +301,7 @@
 				local,
 				handle,
 				sending: false,
-				refusal: handle === null ? 'That file was stored with no handle to attach.' : null
+				refusal: handle === null ? 'That file didn’t upload properly. Try again.' : null
 			};
 		} catch (failure) {
 			slots[index] = {
@@ -368,7 +368,7 @@
 	const RULES_UNREAD: Refusal = {
 		group: 'name',
 		control: null,
-		message: 'The form’s own rules could not be loaded, so nothing can be submitted yet.'
+		message: 'The form didn’t load properly. Reload the page before you save.'
 	};
 
 	const refusals = $derived.by(() => {
@@ -392,22 +392,22 @@
 	 *  class of thing rather than repeating one of them. */
 	const blocking = $derived.by(() => {
 		if (locked) {
-			return 'A published listing cannot be edited through us.';
+			return 'You can’t edit a published listing here.';
 		}
 		if (creating) {
-			return editing === null ? 'The listing is being created.' : 'The change is being saved.';
+			return editing === null ? 'Creating your listing…' : 'Saving your changes…';
 		}
 		if (slotsSettling(slots)) {
 			return 'A thumbnail is still uploading.';
 		}
 		if (rulesFailed) {
-			return 'The form’s own rules could not be loaded, so nothing can be created.';
+			return 'The form didn’t load properly. Reload the page to try again.';
 		}
 		if (vocabulary.isError) {
-			return "The form's own vocabulary could not be read, so nothing can be created.";
+			return 'The form didn’t load properly. Reload the page to try again.';
 		}
 		if (form === null) {
-			return "The form's own vocabulary has not been read yet.";
+			return 'The form is still loading.';
 		}
 		return canCreate ? undefined : 'Fix the errors listed above.';
 	});
@@ -425,13 +425,13 @@
 			id: 'canonical',
 			label: 'This listing',
 			count: null,
-			hint: 'The values every marketplace takes unless one is changed.'
+			hint: 'Every marketplace uses these, unless you change one.'
 		},
 		...selected.map((inventory) => ({
 			id: inventory,
 			label: platformTitle(inventory),
 			count: OVERRIDABLE.filter((entry) => diverges(draft, inventory, entry.field)).length,
-			hint: 'How many values here differ from the listing.'
+			hint: 'How many fields here are different from your main listing.'
 		}))
 	]);
 
@@ -504,8 +504,8 @@
 		} catch (failure) {
 			serverRefusal =
 				failure instanceof ApiFailure
-					? sentenceFor(failure, 'The preview was not added.')
-					: 'The preview was not added.';
+					? sentenceFor(failure, 'The preview wasn’t added.')
+					: 'The preview wasn’t added.';
 		}
 	}
 
@@ -529,8 +529,8 @@
 		} catch (failure) {
 			serverRefusal =
 				failure instanceof ApiFailure
-					? sentenceFor(failure, 'The preview was not removed.')
-					: 'The preview was not removed.';
+					? sentenceFor(failure, 'The preview wasn’t removed.')
+					: 'The preview wasn’t removed.';
 		}
 	}
 
@@ -543,7 +543,7 @@
 	function heldBy(marketplace: Marketplace): string | null {
 		const mapped = editing?.mapped ?? [];
 		const held = mapped.some((inventory) => MARKETPLACE_OF[inventory] === marketplace);
-		return held ? 'Already listed here. Remove it from Delete, not from this form.' : null;
+		return held ? 'Already listed here. Use Delete to remove it.' : null;
 	}
 
 	/** The tile one marketplace is drawn as, or undefined for a marketplace a
@@ -788,8 +788,8 @@
 			toast(
 				'info',
 				patched.reaches.length === 0
-					? 'Saved. This listing is on no marketplace yet.'
-					: `Saved. It reaches ${patched.reaches.map(platformTitle).join(', ')} on the next send.`
+					? 'Saved. This listing isn’t on any marketplace yet.'
+					: `Saved. Your changes go to ${patched.reaches.map(platformTitle).join(', ')} next time you send.`
 			);
 		} catch (failure) {
 			serverRefusal = editRefusalOf(failure);
@@ -800,12 +800,12 @@
 
 	function editRefusalOf(failure: unknown): string {
 		if (!(failure instanceof ApiFailure)) {
-			return 'The edit was not saved.';
+			return 'Your changes weren’t saved.';
 		}
 		if (failure.code() === 'uncaptured_transition') {
-			return 'This listing is live on a marketplace whose edits we cannot make yet, so the change was not sent.';
+			return 'This listing is live on a marketplace we can’t edit yet, so your change wasn’t sent.';
 		}
-		return sentenceFor(failure, 'The edit was not saved.');
+		return sentenceFor(failure, 'Your changes weren’t saved.');
 	}
 </script>
 
@@ -814,7 +814,7 @@
 		<PageHead
 			icon="circle-plus"
 			title="New resource"
-			description="Fill this in once, then choose where it goes."
+			description="Fill this in once, then choose where to list it."
 			guide="new-resource"
 		>
 			{#snippet aside()}
@@ -824,7 +824,7 @@
 	{/if}
 
 	{#if vocabulary.isError}
-		<Banner tone="bad" title="The form's own vocabulary could not be read">
+		<Banner tone="bad" title="The form didn’t load properly">
 			Reload to try again.
 		</Banner>
 	{/if}
@@ -838,14 +838,14 @@
 			<Field
 				label="Start from a template"
 				id="start-from-template"
-				hint="It fills the fields you have not answered yet."
+				hint="It fills in any fields you haven’t filled yet."
 			>
 				<select
 					id="start-from-template"
 					disabled={starting}
 					onchange={(event) => void startFrom(event.currentTarget.value)}
 				>
-					<option value="">{starting ? 'Reading the template…' : 'None'}</option>
+					<option value="">{starting ? 'Loading the template…' : 'None'}</option>
 					{#each templateHeads.data ?? [] as head (head.id)}
 						<option value={head.id}>
 							{head.name}{head.scope === null ? '' : ` — ${MARKETPLACE_WORD[head.scope]}`}
@@ -985,7 +985,7 @@
 								onClear={clearThumbnail}
 							/>
 						{:else}
-							<p class="res-note">The thumbnail slots are still being read.</p>
+							<p class="res-note">Loading the thumbnail options…</p>
 						{/if}
 					</FormSection>
 
@@ -1029,7 +1029,7 @@
 					{@const projection = projectionOf(draft, where, view ?? null)}
 					<Panel
 						title={platformTitle(where)}
-						description="What this marketplace will carry."
+						description="What this marketplace will show."
 					>
 						{#each projection.rows.filter((row) => row.kind === 'field') as row (row.key)}
 							{@const own = row.values[0]}
@@ -1037,7 +1037,7 @@
 							<div class="res-group">
 								<span class="res-group-label" id={`override-${row.key}`}>
 									{row.label}
-									{#if differs}<StatusPill label="differs" />{/if}
+									{#if differs}<StatusPill label="changed here" />{/if}
 								</span>
 								<input
 									type="text"
@@ -1058,7 +1058,7 @@
 											Reset
 										</Button>
 										<span class="res-note">
-											The listing still reads “{canonicalValue(draft, row.key)}”.
+											Your main listing still says “{canonicalValue(draft, row.key)}”.
 										</span>
 									</div>
 								{/if}
@@ -1072,18 +1072,18 @@
 									<span class="res-group-label">
 										{row.label}
 										{#if facts.delegable}
-											<StatusPill label="best fit, once you opt in" />
+											<StatusPill label="best match, if you turn it on" />
 										{:else}
-											<StatusPill label="yours to decide" />
+											<StatusPill label="you choose" />
 										{/if}
 									</span>
 									<div class="res-note">
 										{#if facts.stated.length > 0}
 											You chose {facts.stated.join(', ')}.
 										{/if}
-										It lands in this marketplace's “{facts.native}” field.
+										It goes in this marketplace's “{facts.native}” field.
 										{#if facts.cap !== null}
-											It takes {facts.cap}.
+											It takes up to {facts.cap}.
 										{/if}
 										{#if row.loss}
 											<span class="res-loss">{row.loss}</span>
@@ -1096,8 +1096,8 @@
 						{#if view}
 							{#each view.absent_axes as axis (axis)}
 								<p class="res-disclose">
-									This marketplace has no {axis} field at all, so a {axis} you state here does
-									not reach it.
+									This marketplace has no {axis} field, so any {axis} you add here won’t show
+									there.
 								</p>
 							{/each}
 						{/if}
@@ -1107,9 +1107,9 @@
 				{#if refusals.length > 0 || (serverCheck !== null && !serverCheck.submittable) || serverRefusal !== null || (editing !== null && editing.blockedBy.length > 0)}
 					<section class="res-sec">
 						{#if editing !== null && editing.blockedBy.length > 0}
-							<Banner tone="warn" title="This resource is live and cannot be edited through us">
+							<Banner tone="warn" title="This resource is live, so you can’t edit it here">
 								{editing.blockedBy.map(platformTitle).join(', ')} has a published listing, so
-								this change is held back.
+								this change won’t be sent.
 							</Banner>
 						{/if}
 
@@ -1172,7 +1172,7 @@
 		<div class="dialog-body">
 			<h2 id="file-first-title">Add your file first</h2>
 			<p>
-				Add the file, and then this listing can go to
+				Once your file is added, this listing can go to
 				{draft.marketplaces.length === 1
 					? MARKETPLACE_WORD[draft.marketplaces[0]]
 					: 'the marketplaces you chose'}.

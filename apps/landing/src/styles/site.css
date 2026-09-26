@@ -215,88 +215,94 @@
 	--ring: inset 0 0 0 1px color-mix(in srgb, var(--primary) 8%, transparent);
 }
 
-/* The same kit re-grounded on Indigo, transcribed from the console's
-   `web/src/lib/styles/tokens.css` and compared against it name-for-name by
-   `web/src/lib/styles/tokens.test.ts`, which also refuses a shared name that
-   one sheet re-grounds here and the other does not.
+/* The same kit on charcoal, transcribed from the console's
+   `web/src/lib/styles/tokens.css` (whose note records why: the Indigo-ground
+   dark palette read as blue everywhere, and the logo's Indigo #1E2A5A and
+   Teal #00B894 sit best on neutral greys) and compared against it
+   name-for-name by `web/src/lib/styles/tokens.test.ts`, which also refuses a
+   shared name that one sheet re-grounds here and the other does not.
 
-   A visitor reaches this block one of two ways: their machine prefers dark
-   and they have chosen nothing, or they are a signed-in seller whose console
-   choice is in `localStorage` under `teachouse.theme` and whose page the
-   script in `Base.astro` painted before the stylesheet. */
+   A visitor reaches this block only by choosing it: the console's choice is
+   in `localStorage` under `teachouse.theme`, and the script in `Base.astro`
+   painted it before the stylesheet. With no choice the site is light. */
 [data-theme=dark] {
 	color-scheme: dark;
 
 	/* grounds, the step running upward towards the content */
-	--ground: #141C3A;
-	--nav: #1A2347;
-	--surface: #1E2A5A;
-	--hover: #26335F;
+	--ground: #141414;
+	--nav: #1A1A1B;
+	--surface: #1C1C1E;
+	--hover: #26262A;
 
-	/* brand: Lavender carries the primary role, because an Indigo button
-	   cannot be seen on an Indigo card */
+	/* brand: Lavender carries the primary role, because the kit's Indigo is
+	   too dark to read on charcoal; Indigo is the word on a Lavender fill */
 	--primary: #C8B4FF;
 	--on-fill: #1E2A5A;
 	--accent: #00B894;
 	--accent-ink: #00BB97;
-	--accent-soft: #103F3A;
+	--accent-soft: #11302B;
 	--additive: #AB91FB;
-	--additive-soft: #2A2456;
+	--additive-soft: #272336;
+	/* the warm accent: the kit's Peach, muted for a charcoal page */
+	--peach: #E3A878;
 
 	/* ink and lines: three weights where light had one Slate */
-	--text: #F8FAF8;
-	--muted: #B4BCD0;
-	--faint: #9AA3B8;
-	--line: #33406B;
+	--text: #F4F4F5;
+	--muted: #B9B9C0;
+	--faint: #A1A1AA;
+	--line: #333337;
 
 	/* state */
 	--ok: #10B981;
-	--ok-soft: #0F3D33;
+	--ok-soft: #11302A;
 	--warn: #F59E0B;
-	--warn-soft: #3D2F0E;
+	--warn-soft: #332A12;
 	--bad: #EF4444;
-	--bad-soft: #4A1A1A;
-	--soon: #9AA3B8;
-	--soon-soft: #26335F;
+	--bad-soft: #3A1D1F;
+	--soon: #A1A1AA;
+	--soon-soft: #26262A;
 	--blocked: #F59E0B;
-	--queued: #36495E;
-	--tint: #1A2347;
-	--tint-edge: #232C52;
+	--queued: #3D3D42;
+	--tint: #1E1C23;
+	--tint-edge: #232128;
 
 	/* This site's own. The quiet strip takes the navigation ground, and the
 	   two shadows are pushed off the ink: on a dark page `--primary` is
 	   Lavender and a lift drawn with it is a halo rather than a shadow. The
-	   drawn compositions keep their cream, at a lighter hand -- 18 per cent of
-	   Peach over a dark Indigo reads as mud -- and their hairline is drawn
-	   with the ink rather than with the brand, because Lavender at 20 per cent
-	   on this ground is a colour and not a line. */
-	--rail: #1A2347;
-	--lift: 0 24px 70px -45px color-mix(in srgb, #05070F 75%, transparent);
+	   drawn compositions' cream becomes the hover grey -- any Peach mixed
+	   into a charcoal reads as the brown the founder's review ruled out, so
+	   the Peach is kept for the backing card behind a cover -- and their
+	   hairline is drawn with the ink rather than with the brand, because
+	   Lavender at 20 per cent on this ground is a colour and not a line. */
+	--rail: #1A1A1B;
+	--lift: 0 24px 70px -45px color-mix(in srgb, #000000 75%, transparent);
 	--ring: inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent);
-	--cream: color-mix(in srgb, var(--peach) 12%, var(--surface));
+	--cream: var(--hover);
 	--mark-ground: #f8faf8;
 	--art-line: color-mix(in srgb, var(--text) 22%, transparent);
 
 	/* The three band grounds, and the ink that goes on an accent surface.
 
-	   A band ground inverts with the page: it is the kit's Peach or Lavender
-	   over the paper, so on this ground it is a deep warm brown or a deep
-	   violet rather than a pale wash. `--quote-warm` stays a step lighter
-	   than `--band-warm` because the pull-quote sits inside the band it has
-	   to separate from. Measured against `--text` and `--muted`: the warm
-	   band 14.2 and 7.8, the quote 12.9 and 7.1, the violet band 13.5 and
-	   7.4.
+	   On light a band is the kit's Peach or Lavender washed over the paper.
+	   On dark a warm wash turns brown, which the founder's review of the
+	   Challenge band ruled out, so the warm band is a graphite a step above
+	   the page and its warmth is carried by the muted Peach in the quote's
+	   rule and the drawing's bracket instead. The violet band keeps a trace
+	   of Lavender in its grey. `--quote-warm` stays a step lighter than
+	   `--band-warm` because the pull-quote sits inside the band it has to
+	   separate from. Measured against `--text` and `--muted`: the warm band
+	   14.8 and 8.3, the quote 13.0 and 7.3, the violet band 15.1 and 8.5.
 
 	   `--on-accent-surface` does not invert, and that is the point of the
 	   name: it is the ink for a surface that is Lavender or Peach on both
 	   themes, which is the founding button's fill. Indigo there measures
-	   7.45 on Lavender, and `--primary` cannot be it on this ground because
-	   `--primary` is Lavender here. It is not the quote's ink -- the quote's
-	   ground does invert, so its word follows the theme; `--primary` on
-	   `--quote-warm` is 11.4 on light and 7.36 here. */
-	--band-warm: #33241A;
-	--quote-warm: #3E2A1C;
-	--band-violet: #2A2456;
+	   7.45 on Lavender and 6.61 on the muted Peach, and `--primary` cannot be
+	   it on this ground because `--primary` is Lavender here. It is not the
+	   quote's ink -- the quote's ground does invert, so its word follows the
+	   theme; `--primary` on `--quote-warm` is 7.79 here. */
+	--band-warm: #202022;
+	--quote-warm: #2A2A2D;
+	--band-violet: #1F1D26;
 	--on-accent-surface: #1E2A5A;
 }
 
@@ -578,6 +584,12 @@ main {
 
 .band-solution {
 	background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+/* A tenth of Teal over charcoal reads as a green room rather than a band, so
+   dark takes half the share: still the brand's colour, as a trace. */
+[data-theme=dark] .band-solution {
+	background: color-mix(in srgb, var(--accent) 5%, var(--surface));
 }
 
 .band-pricing {
@@ -935,33 +947,50 @@ main {
 
 /* The solution */
 
+/* Import, Distribute, Manage: three columns with an arrow between each pair,
+   every column centred on its own icon and each arrow centred on the icons'
+   middle line, which is what the founder's review asked for. A grid rather
+   than a wrapping row, so the three stay one line down to a phone and an
+   arrow never points at the end of a row. */
 .steps {
-	display: flex;
-	align-items: flex-start;
-	flex-wrap: wrap;
-	gap: 16px;
-	margin: 30px 0 28px;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr);
+	align-items: start;
+	justify-items: center;
+	gap: 12px;
+	margin: 34px 0 30px;
+	text-align: center;
 }
 
 .step {
-	min-width: 116px;
-	flex: 0 1 auto;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
 }
 
 /* White rather than `--accent-soft`: this band is the kit's Teal at 10% on
    white, which lands within a shade of `--accent-soft`, so a soft-teal tile on
    it is invisible. */
 .step .glyph {
-	width: 44px;
-	height: 44px;
-	border-radius: var(--r-panel);
+	width: 72px;
+	height: 72px;
+	border-radius: var(--r-card);
 	background: var(--surface);
 	box-shadow: var(--ring);
 	color: var(--primary);
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	margin-bottom: 12px;
+	margin-bottom: 14px;
+}
+
+.step .glyph svg {
+	width: 34px;
+	height: 34px;
+}
+
+.step h3 {
+	margin: 0 0 4px;
 }
 
 .step p {
@@ -970,10 +999,12 @@ main {
 	color: var(--muted);
 }
 
+/* Centred on the icon tiles: half the tile's height less half its own. */
 .step-arrow {
-	margin-top: 12px;
+	width: 36px;
+	height: 36px;
+	margin-top: 18px;
 	color: var(--accent-ink);
-	flex: none;
 }
 
 /* The small app that some marketplace work needs, and the platforms it is
@@ -1022,15 +1053,33 @@ main {
 	width: auto;
 }
 
+/* The licence lines the Android robot's Creative Commons grant requires
+   (`docs/notes/design/marketplace-logo-sources.md`), so they stay, but as
+   fine print: small and in the faintest ink, which the founder's review
+   asked for rather than body-weight text. */
 .platform-note {
-	margin: 12px 0 0;
-	font-size: 12.5px;
-	line-height: 1.5;
-	color: var(--muted);
+	margin: 10px 0 0;
+	font-size: 11px;
+	line-height: 1.45;
+	color: var(--faint);
 	max-width: 72ch;
 }
 
 /* Pricing */
+
+/* What a move is, said once under the heading so every card below can count
+   in moves without explaining them. */
+.move-def {
+	margin: 10px 0 30px;
+	max-width: 68ch;
+	font-size: 16px;
+	color: var(--text);
+}
+
+.move-def strong {
+	font-weight: 600;
+	color: var(--primary);
+}
 
 /* Three cards of equal weight: free, the subscription, and the packs a seller
    on the free plan buys. Equal columns rather than a wide pair and a rail,
@@ -1559,10 +1608,25 @@ main {
 		padding: 56px 0;
 	}
 
-	/* The arrows read Import to Distribute to Manage. Once the three stack,
-	   an arrow points at nothing. */
+	/* The three steps stay one row on a phone, a size down. */
+	.steps {
+		gap: 6px;
+	}
+
+	.step .glyph {
+		width: 56px;
+		height: 56px;
+	}
+
+	.step .glyph svg {
+		width: 28px;
+		height: 28px;
+	}
+
 	.step-arrow {
-		display: none;
+		width: 24px;
+		height: 24px;
+		margin-top: 16px;
 	}
 
 	.site-nav a {

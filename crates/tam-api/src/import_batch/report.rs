@@ -236,15 +236,17 @@ fn parse_row(grid: &Grid, held: &[Column], places: &[usize], row: &GridRow) -> P
                     STATUS_LIVE => {
                         problems.push(Problem::new(
                             &column.title,
-                            "this tab has no marketplace, so a row here cannot be live; leave the \
-                             status blank or write \"draft\"",
+                            "This tab has no marketplace, so rows here can't be live. Leave the \
+                             status blank or write \"draft\".",
                         ));
                         RowIntent::Draft
                     }
                     _ => {
                         problems.push(Problem::new(
                             &column.title,
-                            format!("a status is \"{STATUS_DRAFT}\", \"{STATUS_LIVE}\" or blank"),
+                            format!(
+                                "Write \"{STATUS_DRAFT}\", \"{STATUS_LIVE}\" or leave it blank."
+                            ),
                         ));
                         RowIntent::Draft
                     }
@@ -254,8 +256,8 @@ fn parse_row(grid: &Grid, held: &[Column], places: &[usize], row: &GridRow) -> P
                 if !raw.is_empty() {
                     problems.push(Problem::new(
                         &column.title,
-                        "this import creates new resources only; leave the resource ID blank. \
-                         Editing an existing resource from a spreadsheet is not supported yet",
+                        "Leave the resource ID blank. A spreadsheet import can only create new \
+                         resources for now.",
                     ));
                 }
             }
@@ -271,7 +273,7 @@ fn parse_row(grid: &Grid, held: &[Column], places: &[usize], row: &GridRow) -> P
                             problems.push(Problem::new(
                                 &column.title,
                                 format!(
-                                    "this marketplace holds a title to {} {}",
+                                    "This marketplace allows titles up to {} {}.",
                                     cap.limit,
                                     unit_name(cap.unit)
                                 ),
@@ -290,7 +292,7 @@ fn parse_row(grid: &Grid, held: &[Column], places: &[usize], row: &GridRow) -> P
                         problems.push(Problem::new(
                             &column.title,
                             format!(
-                                "this marketplace holds a description to {} {}",
+                                "This marketplace allows descriptions up to {} {}.",
                                 cap.limit,
                                 unit_name(cap.unit)
                             ),
@@ -321,7 +323,7 @@ fn parse_row(grid: &Grid, held: &[Column], places: &[usize], row: &GridRow) -> P
                     if column.required {
                         problems.push(Problem::new(
                             &column.title,
-                            "this marketplace refuses a resource without this field",
+                            "This marketplace needs this field.",
                         ));
                     }
                     continue;
@@ -379,8 +381,8 @@ fn parse_row(grid: &Grid, held: &[Column], places: &[usize], row: &GridRow) -> P
             .map_or("File", |column| column.title.as_str());
         problems.push(Problem::new(
             column,
-            "a resource on a marketplace needs a file buyers can download; name the file here \
-             and attach it after the upload",
+            "Buyers need a file to download. Write the file name here and attach the file after \
+             you upload the spreadsheet.",
         ));
     }
 
@@ -437,15 +439,13 @@ const fn minor_units_per_major(currency: Currency) -> i64 {
 fn parse_price(raw: &str, currency: Result<Currency, ()>) -> Result<PriceIntent, String> {
     let text = raw.trim();
     if text.is_empty() {
-        return Err("every row states a price, or the word \"free\"".to_owned());
+        return Err("Write a price, or the word \"free\".".to_owned());
     }
     if text.eq_ignore_ascii_case("free") {
         return Ok(PriceIntent::Free);
     }
     let Ok(currency) = currency else {
-        return Err(
-            "a paid row states the currency its price is in, in the Currency column".to_owned(),
-        );
+        return Err("Write the currency in the Currency column.".to_owned());
     };
     let (whole, fraction) = text.split_once('.').unwrap_or((text, ""));
     if whole.is_empty()
@@ -453,16 +453,16 @@ fn parse_price(raw: &str, currency: Result<Currency, ()>) -> Result<PriceIntent,
         || !fraction.chars().all(|character| character.is_ascii_digit())
     {
         return Err(
-            "a price is a number like 3.50, or the word \"free\"; write no currency symbol"
+            "Write a price as a number like 3.50, or the word \"free\", with no currency symbol."
                 .to_owned(),
         );
     }
     if fraction.len() > 2 {
-        return Err("a price is stated to at most two decimal places".to_owned());
+        return Err("Use at most two decimal places in a price.".to_owned());
     }
     let per_major = minor_units_per_major(currency);
     let Ok(major) = whole.parse::<i64>() else {
-        return Err("that price is larger than any price this system holds".to_owned());
+        return Err("That price is too large.".to_owned());
     };
     let padded = format!("{fraction:0<2}");
     let minor: i64 = padded.parse().unwrap_or(0);
@@ -470,15 +470,16 @@ fn parse_price(raw: &str, currency: Result<Currency, ()>) -> Result<PriceIntent,
         .checked_mul(per_major)
         .and_then(|at| at.checked_add(minor))
     else {
-        return Err("that price is larger than any price this system holds".to_owned());
+        return Err("That price is too large.".to_owned());
     };
-    Money::new(amount, currency).map(PriceIntent::Paid).map_err(|_| {
-        // `Money::new` refuses zero and below, and its own error carries no
-        // seller-facing rendering; the console states the same rule in the
-        // same words on its edit form.
-        "a paid price is a positive amount, written in the currency's own units, or the word \"free\""
-            .to_owned()
-    })
+    Money::new(amount, currency)
+        .map(PriceIntent::Paid)
+        .map_err(|_| {
+            // `Money::new` refuses zero and below, and its own error carries no
+            // seller-facing rendering; the console states the same rule in the
+            // same words on its edit form.
+            "Write a price above zero in the currency's own units, or the word \"free\".".to_owned()
+        })
 }
 
 /// Whether a value is one this column admits, and the spelling it is stored
@@ -497,7 +498,7 @@ fn admissible(column: &Column, value: &str) -> Result<String, String> {
             .map(|member| (*member).to_owned())
             .ok_or_else(|| {
                 format!(
-                    "\"{value}\" is not one of the values this column offers: {}",
+                    "\"{value}\" is not a choice for this column. Choose from: {}",
                     members.join(", ")
                 )
             }),
@@ -505,7 +506,7 @@ fn admissible(column: &Column, value: &str) -> Result<String, String> {
             if value.chars().all(|character| character.is_ascii_digit()) {
                 Ok(value.to_owned())
             } else {
-                Err(format!("\"{value}\" is not a number"))
+                Err(format!("\"{value}\" is not a number."))
             }
         }
         Values::ClosedUncaptured | Values::Text { .. } => Ok(value.to_owned()),
@@ -575,7 +576,7 @@ fn parse_labels(raw: &str) -> Result<Vec<String>, String> {
     }
     if names.len() > LABELS_PER_PRODUCT_MAX {
         return Err(format!(
-            "a resource carries at most {LABELS_PER_PRODUCT_MAX} labels, and this row names {}",
+            "A resource can have up to {LABELS_PER_PRODUCT_MAX} labels, and this row has {}.",
             names.len()
         ));
     }
@@ -1014,7 +1015,7 @@ mod tests {
         for cell in ["Autumn Term; ; Spring", "; Autumn Term", "Autumn Term;"] {
             assert_eq!(
                 parse_labels(cell).err(),
-                Some("a label needs a word in it".to_owned()),
+                Some("Give the label a name.".to_owned()),
                 "\"{cell}\" names a label with no word in it, and the label route refuses that"
             );
         }
@@ -1032,10 +1033,7 @@ mod tests {
     fn a_label_is_refused_by_the_same_rules_the_label_route_applies() {
         assert_eq!(
             parse_labels("a/b").err(),
-            Some(
-                "a label cannot contain a slash, because a label is addressed by its own name"
-                    .to_owned()
-            ),
+            Some("Labels can't contain a slash (/).".to_owned()),
             "the slash rule is the address path's, and the wording is the label route's"
         );
         let long = "x".repeat(61);
