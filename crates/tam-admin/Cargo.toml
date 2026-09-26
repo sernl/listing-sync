@@ -6,6 +6,12 @@ publish = false
 
 [dependencies]
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
+# `covers repair`: the object store and the flags that name it, the key its
+# objects are sealed under, and the renderer the covers are redrawn with —
+# the same crates `tam-pipeline-worker` reads them through.
+tam-blob-store = { path = "../tam-blob-store" }
+tam-pipeline = { path = "../tam-pipeline" }
+tam-secrets = { path = "../tam-secrets" }
 tam-storage = { path = "../tam-storage" }
 tam-types = { path = "../tam-types" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
