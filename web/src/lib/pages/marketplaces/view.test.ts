@@ -6,6 +6,7 @@ import type { Marketplace } from '$lib/generated/vocab';
 import { osLabel, sessionLabel, sessionTone, sessionWords } from '../account/machines';
 import {
 	CARD_NAME,
+	attentionAsk,
 	CONNECT_VERDICT_CODES,
 	DOWNLOADS_ANCHOR,
 	MACHINES_ANCHOR,
@@ -777,3 +778,35 @@ describe('what a finished local sign-out says', () => {
 	});
 });
 
+
+describe('what the attention banner asks for', () => {
+	function quietOn(marketplace: Marketplace, machine: string): MarketplaceRow {
+		const held = row('signed_in', 'run', marketplace);
+		return {
+			...held,
+			quiet: true,
+			signIn: { ...held.signIn, device: { name: machine } as MarketplaceSignIn['device'] }
+		};
+	}
+
+	it('asks for nothing when nothing is waiting', () => {
+		expect(attentionAsk([])).toBeNull();
+	});
+
+	it('names the quiet machine once, however many logins it holds, rather than asking for a sign-in', () => {
+		const ask = attentionAsk([quietOn('Tpt', 'Galaxy Tab'), quietOn('Tes', 'Galaxy Tab')]);
+		expect(ask?.title).toBe('TPT and TES need you');
+		expect(ask?.say).toBe('Open the Teachouse app on Galaxy Tab so scheduled work runs again.');
+	});
+
+	it('asks for a sign-in where no machine holds the login', () => {
+		const ask = attentionAsk([row('needs_signin', 'bad', 'Tes')]);
+		expect(ask?.title).toBe('TES needs you');
+		expect(ask?.say).toContain('Sign in to TES');
+	});
+
+	it('names both acts when one login is quiet and another is unheld', () => {
+		const ask = attentionAsk([quietOn('Tpt', 'Galaxy Tab'), row('all_signed_out', 'run', 'Tes')]);
+		expect(ask?.say).toBe('Open the Teachouse app on Galaxy Tab, and sign in to TES there.');
+	});
+});
