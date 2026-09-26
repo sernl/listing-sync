@@ -44,20 +44,78 @@
 	visibility: hidden;
 }
 
-/* Identifiers, attempts and instants: true, and not what the page is for. */
-.run-tech {
-	margin-top: 10px;
-	font-size: 13px;
+/* --- where the run is now ----------------------------------------------- */
+
+.run-now {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-3);
+	padding: var(--s-5);
+	border: 1px solid var(--line);
+	border-radius: var(--r-card);
+	background: var(--card);
+	box-shadow: var(--sh-1);
+	scroll-margin-top: var(--s-5);
 }
 
-.run-tech summary {
-	cursor: pointer;
-	color: var(--muted);
-	font-size: 12.5px;
+.run-now-head {
+	display: flex;
+	align-items: center;
+	gap: var(--s-2);
 }
 
-.run-tech p {
-	margin: 6px 0 0;
+.run-now-line {
+	margin: 0;
+	font-family: var(--display);
+	font-size: 19px;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+}
+
+.run-tech-line {
+	margin: 0;
+}
+
+.run-now progress {
+	width: 100%;
+	accent-color: var(--accent);
+}
+
+.run-now .run-bar {
+	margin: 0;
+}
+
+.run-all {
+	justify-content: space-between;
+}
+
+/* The run's own controls, pinned to the bottom of the screen above the
+   phone's tab bar. */
+.run-foot {
+	position: sticky;
+	bottom: calc(var(--flow-bar-h, 0px) + var(--s-3));
+	z-index: 3;
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	flex-wrap: wrap;
+	gap: var(--s-2);
+	padding: var(--s-3) var(--s-4);
+	border: 1px solid var(--line);
+	border-radius: var(--r-panel);
+	background: color-mix(in srgb, var(--card) 94%, transparent);
+	box-shadow: var(--sh-3);
+	backdrop-filter: blur(6px);
+}
+
+@media (max-width: 720px) {
+	.run-now {
+		padding: var(--s-4);
+	}
+
+	.run-foot {
+		display: none;
+	}
 }
 
 /* --- the tick list ------------------------------------------------------- */
@@ -67,7 +125,6 @@
 	align-items: center;
 	gap: 10px;
 	flex-wrap: wrap;
-	margin: 10px 0 14px;
 }
 
 .run-chosen {
@@ -123,8 +180,6 @@
 .run-pick .p {
 	flex: none;
 	font-size: 13px;
-	color: var(--muted);
-	font-variant-numeric: tabular-nums;
 }
 
 /* --- the item list ------------------------------------------------------- */
@@ -135,9 +190,7 @@
 
 .run-price {
 	flex: none;
-	font-size: 12.5px;
-	color: var(--muted);
-	font-variant-numeric: tabular-nums;
+	font-size: 13px;
 }
 
 .run-open {
@@ -147,11 +200,16 @@
 
 /* --- the review cards ---------------------------------------------------- */
 
+.rv-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-4);
+}
+
 .rv-card {
 	border: 1px solid var(--line);
-	border-radius: var(--r-card);
-	padding: 16px;
-	margin-top: 14px;
+	border-radius: var(--r-panel);
+	padding: var(--s-4);
 	background: var(--surface);
 }
 
@@ -165,15 +223,35 @@
 
 .rv-sides {
 	display: grid;
-	grid-template-columns: 1fr 1fr;
-	gap: 14px;
+	grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+	align-items: stretch;
+	gap: var(--s-3);
+}
+
+/* The word between the two listings: the choice is this one or that one. */
+.rv-or {
+	align-self: center;
+	color: var(--muted);
+	font-size: 12px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
 }
 
 .rv-side {
-	border: 1px solid var(--line);
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: var(--s-2);
+	border: 1.5px solid var(--line);
 	border-radius: var(--r-panel);
-	padding: 12px;
+	padding: var(--s-3);
 	min-width: 0;
+	background: var(--card);
+}
+
+.rv-side > .rv-cover {
+	max-width: 140px;
 }
 
 /* The side that would survive, marked while the seller is choosing. The
@@ -188,7 +266,6 @@
 	align-items: center;
 	gap: 8px;
 	flex-wrap: wrap;
-	margin-bottom: 10px;
 }
 
 .rv-cover {
@@ -209,14 +286,13 @@
 }
 
 .rv-title {
-	margin: 10px 0 0;
-	font-size: 13.5px;
-	font-weight: 600;
-	overflow-wrap: anywhere;
+	margin: 0;
+	font-size: 14px;
 }
 
 .rv-facts {
-	margin: 4px 0 0;
+	margin: 0 0 var(--s-2);
+	align-items: baseline;
 	display: flex;
 	gap: 10px;
 	flex-wrap: wrap;
@@ -225,9 +301,14 @@
 }
 
 .rv-merge {
-	margin-top: 14px;
-	padding-top: 14px;
-	border-top: 1px solid var(--line);
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-3);
+	margin-top: var(--s-4);
+}
+
+.rv-rest {
+	margin-top: var(--s-3);
 }
 
 .rv-field {
@@ -267,6 +348,14 @@
 		grid-template-columns: 1fr;
 	}
 
+	.rv-or {
+		justify-self: center;
+	}
+
+	.rv-side > .rv-cover {
+		max-width: 96px;
+	}
+
 	.run-chosen {
 		margin-left: 0;
 		flex: 1 1 100%;
@@ -283,5 +372,18 @@
 	.run-pick .t {
 		flex: 1 1 100%;
 		order: 3;
+	}
+}
+
+.flow-table-wrap > .import-listing {
+	align-items: center;
+	padding: 10px 14px;
+}
+
+/* On a phone the title takes the line beside its cover; price, status and
+   number wrap under it rather than squeezing it to a word a line. */
+@media (max-width: 720px) {
+	.flow-table-wrap > .import-listing .what {
+		flex: 1 1 calc(100% - 90px);
 	}
 }

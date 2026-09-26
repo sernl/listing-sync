@@ -15,7 +15,7 @@ import {
 	labelsFromUrl,
 	listedOn,
 	matchesResource,
-	metaLine,
+	rowFacts,
 	needsYou,
 	sortRows,
 	standingOfRow,
@@ -229,21 +229,30 @@ describe('the filter card', () => {
 });
 
 describe('the row', () => {
-	it('reads its meta line as age, price and who is showing it', () => {
+	it('reads its age, its price and where it shows, each on its own', () => {
 		const now = 4 * 24 * 60 * 60 * 1000;
 		const showing = row([chip('Tes', 'listed'), chip('Tpt', 'listed'), chip('Etsy', 'draft')], {
 			updated_at: now - 3 * 24 * 60 * 60 * 1000,
 			price: { Paid: { minor_units: 450, currency: 'Gbp' } }
 		});
-		expect(metaLine(showing.product, showing, now)).toBe(
-			'Updated 3 days ago · £4.50 · TES, TPT'
-		);
+		expect(rowFacts(showing.product, showing, now)).toEqual({
+			updated: 'Updated 3 days ago',
+			price: '£4.50',
+			status: { label: 'Listed on TES, TPT', tone: 'ok' }
+		});
 	});
 
-	it('says nothing about marketplaces when none is showing it', () => {
-		const quiet = row([chip('Tpt', 'draft')], { updated_at: 0, price: 'Free' });
-		expect(metaLine(quiet.product, quiet, 0)).toBe('Updated just now · Free');
-		expect(listedOn(quiet)).toEqual([]);
+	it('says Draft or Not listed by the same standing the tabs file it under', () => {
+		const drafted = row([chip('Tpt', 'draft')], { updated_at: 0, price: 'Free' });
+		expect(rowFacts(drafted.product, drafted, 0).status).toEqual({ label: 'Draft', tone: 'run' });
+		expect(listedOn(drafted)).toEqual([]);
+		const bare = row([chip('Tpt', 'not_listed')], { updated_at: 0, price: 'Free' });
+		expect(rowFacts(bare.product, bare, 0).status).toEqual({ label: 'Not listed', tone: 'soon' });
+	});
+
+	it('says Needs you over any standing, listed included', () => {
+		const failing = row([chip('Tes', 'listed'), chip('Tpt', 'failed')], { updated_at: 0 });
+		expect(rowFacts(failing.product, failing, 0).status).toEqual({ label: 'Needs you', tone: 'bad' });
 	});
 });
 

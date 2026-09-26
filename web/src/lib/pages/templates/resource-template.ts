@@ -321,6 +321,37 @@ export function fieldWordsOf(field: string): string {
 	return WIRE_WORDS[field] ?? field.replace(/_/g, ' ');
 }
 
+/** The fields a saved draft answers, in the words the form asks them in.
+ *
+ *  Read off the wire draft rather than a form, so the Templates page can say
+ *  what a saved template sets without loading it into the editor. Only the
+ *  fields a template can hold are named (`WIRE_WORDS`): the title, files and
+ *  pictures are per resource. A field counts as answered when it carries a
+ *  value — a number, a non-empty text or list, `free` ticked, or the
+ *  localisation tick answered either way — and each word is named once, so
+ *  the price and its free tick read as one "price". */
+export function fieldsSet(draft: DraftInput): string[] {
+	const words: string[] = [];
+	for (const [field, value] of Object.entries(draft)) {
+		if (!Object.hasOwn(WIRE_WORDS, field)) {
+			continue;
+		}
+		const answered =
+			field === 'free'
+				? value === true
+				: Array.isArray(value)
+					? value.length > 0
+					: typeof value === 'string'
+						? value.trim().length > 0
+						: value !== null && value !== undefined;
+		const word = WIRE_WORDS[field];
+		if (answered && !words.includes(word)) {
+			words.push(word);
+		}
+	}
+	return words;
+}
+
 /** What a verdict is called on screen, in the three words the seller reads. */
 export const VERDICT_WORDS: Record<string, string> = {
 	will_change: 'Will change',

@@ -1,6 +1,6 @@
 [package]
 name        = "tam-desktop"
-version     = "0.12.0"
+version     = "0.13.0"
 edition     = "2021"
 publish     = false
 description = "Teachouse cross-lists your teaching resources to the marketplaces you sell on. Marketplace work for Tes and TPT runs on your own device."

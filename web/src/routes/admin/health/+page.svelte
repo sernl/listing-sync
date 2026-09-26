@@ -1,12 +1,12 @@
 <script lang="ts">
 	import { createQuery } from '@tanstack/svelte-query';
 	import { api, type SyncHealthView } from '$lib/api';
+	import Explain from '$lib/Explain.svelte';
 	import PageHead from '$lib/PageHead.svelte';
-	import Panel from '$lib/Panel.svelte';
-	import StatCard from '$lib/StatCard.svelte';
-	import StatusPill, { type Tone } from '$lib/StatusPill.svelte';
+	import StatusPill from '$lib/StatusPill.svelte';
 	import { queryKeys } from '$lib/query';
-	import { tileFor } from '$lib/pages/admin/ledger-tile';
+	import { HEALTH_FILTERS, HEALTH_ROWS, type HealthGroup } from '$lib/pages/admin/admin-view';
+	import '$lib/flow.css';
 	import '$lib/pages/admin/admin.css';
 
 	const health = createQuery(() => ({
@@ -15,121 +15,114 @@
 	}));
 
 	const ledger = $derived(health.data);
-
-	// Three answers rather than two: an unread figure is neither raised nor
-	// clear, and `count` below already prints an em dash for it.
-	const settledTile = $derived(
-		tileFor(ledger?.settled, { icon: 'circle-check', tone: 'ok' }, { icon: 'minus', tone: 'ok' })
+	let filter = $state<HealthGroup | 'all'>('all');
+	const shown = $derived(
+		HEALTH_ROWS.filter((row) => filter === 'all' || row.group === filter)
 	);
-	const failedTile = $derived(
-		tileFor(ledger?.failed, { icon: 'circle-x', tone: 'bad' }, { icon: 'circle-check', tone: 'ok' })
-	);
-
-	/** The stored state vocabulary, uncollapsed. A seller's job page folds
-	 *  leased, running and verifying into one figure and both park states into
-	 *  another; that is the right rendering there and the wrong one here, since
-	 *  parked-live against parked-cold is the distinction an operator opened
-	 *  this page to find. */
-	const STATES: readonly { key: keyof SyncHealthView; label: string; note: string }[] = [
-		{ key: 'queued', label: 'Queued', note: 'waiting for a worker to take them' },
-		{ key: 'leased', label: 'Leased', note: 'claimed by a worker, not yet started' },
-		{ key: 'running', label: 'Running', note: 'a write is in progress' },
-		{ key: 'verifying', label: 'Verifying', note: 'written, reading back to confirm' },
-		{ key: 'blocked', label: 'Blocked', note: 'waiting on something else to settle first' },
-		{ key: 'parked_live', label: 'Parked (live)', note: 'held with the connection still usable' },
-		{ key: 'parked_cold', label: 'Parked (cold)', note: 'held with nothing usable stored' },
-		{ key: 'settled', label: 'Settled', note: 'finished, with an outcome below' }
-	];
-
-	const OUTCOMES: readonly { key: keyof SyncHealthView; label: string; tone: Tone }[] = [
-		{ key: 'succeeded', label: 'Succeeded', tone: 'ok' },
-		{ key: 'degraded', label: 'Degraded', tone: 'run' },
-		{ key: 'failed', label: 'Failed', tone: 'bad' },
-		{ key: 'ambiguous', label: 'Ambiguous', tone: 'bad' },
-		{ key: 'skipped', label: 'Skipped', tone: 'soon' },
-		{ key: 'outcome_blocked', label: 'Blocked', tone: 'soon' }
-	];
 
 	/** One figure from the ledger, or an em dash.
 	 *
 	 *  Guarded on the figure rather than on the ledger: a body that arrived
 	 *  without a field leaves the ledger defined and the field undefined, and
-	 *  guarding only the ledger printed the string "undefined" into the card. */
+	 *  guarding only the ledger printed the string "undefined". */
 	function count(key: keyof SyncHealthView): string {
 		const figure = ledger?.[key];
 		return figure === undefined ? '—' : String(figure);
 	}
+
+	/** A group's total, for its chip. */
+	function groupTotal(group: HealthGroup | 'all'): string {
+		if (ledger === undefined) {
+			return '—';
+		}
+		if (group === 'all') {
+			return String(ledger.items);
+		}
+		if (group === 'outcome') {
+			return String(ledger.settled);
+		}
+		return String(
+			HEALTH_ROWS.filter((row) => row.group === group).reduce(
+				(total, row) => total + (ledger[row.key] ?? 0),
+				0
+			)
+		);
+	}
 </script>
 
-<div class="page">
+<div class="page flow-page">
 	<PageHead
 		icon="heart-pulse"
 		title="Sync health"
-		description="Every item across all accounts, by the state the database stores."
+		description="Every sync item across all accounts, by state."
 	/>
 
-	{#if health.isPending}
-		<Panel><p class="quiet">Loading sync health…</p></Panel>
-	{:else if health.isError}
-		<Panel><p class="quiet">We could not load sync health.</p></Panel>
-	{:else}
-		<div class="cards">
-			<StatCard icon="refresh-cw" label="Sync runs" sub="all accounts">{count('jobs')}</StatCard>
-			<StatCard icon="layout-list" label="Items" sub="all runs, all accounts">
-				{count('items')}
-			</StatCard>
-			<StatCard
-				icon={settledTile.icon}
-				tone={settledTile.tone}
-				label="Settled"
-				sub="finished, with an outcome"
-			>
-				{count('settled')}
-			</StatCard>
-			<StatCard
-				icon={failedTile.icon}
-				tone={failedTile.tone}
-				label="Failed"
-				sub="settled with a failure"
-			>
-				{count('failed')}
-			</StatCard>
-		</div>
+	<div class="flow">
+		{#if health.isPending}
+			<p class="quiet">Loading sync health…</p>
+		{:else if health.isError}
+			<p class="quiet">We could not load sync health.</p>
+		{:else}
+			<p class="op-facts-line">
+				<span><b>{count('jobs')}</b> sync runs</span>
+				<span><b>{count('items')}</b> items</span>
+				<span><b>{count('settled')}</b> settled</span>
+				<span><b class:op-bad={ledger?.failed !== undefined && ledger.failed > 0}>{count('failed')}</b> failed</span>
+			</p>
 
-		<div class="band">
-			<Panel title="Items by state" description="Where every item in the ledger currently sits.">
-				<div class="op-table">
-					<table>
+			<section class="flow-section">
+				<div class="op-filters" role="group" aria-label="Show">
+					{#each HEALTH_FILTERS as chip (chip.id)}
+						<button
+							type="button"
+							class="op-chip"
+							aria-pressed={filter === chip.id}
+							onclick={() => (filter = chip.id)}
+						>
+							{chip.label}
+							<span class="c">{groupTotal(chip.id)}</span>
+						</button>
+					{/each}
+				</div>
+
+				<div class="flow-table-wrap op-table op-keep">
+					<table class="flow-table">
 						<thead>
-							<tr><th>State</th><th>What it means</th><th class="num">Items</th></tr>
+							<tr>
+								<th>
+									<span class="op-th">
+										State
+										<Explain title="What each state means" label="">
+											{#each HEALTH_ROWS as row (row.key)}
+												<p><b>{row.label}</b>: {row.note}</p>
+											{/each}
+											<p>
+												The settled outcomes add up to the Settled figure. There is no single
+												health score, because an average would hide the number that matters.
+											</p>
+										</Explain>
+									</span>
+								</th>
+								<th class="num">Items</th>
+							</tr>
 						</thead>
 						<tbody>
-							{#each STATES as state (state.key)}
+							{#each shown as row (row.key)}
 								<tr>
-									<td class="op-cell" data-label="State">
-										<span class="t" title={state.label}>{state.label}</span>
+									<td data-label="State"><StatusPill tone={row.tone} label={row.label} /></td>
+									<td
+										class="num"
+										class:op-flag={row.tone === 'bad' && (ledger?.[row.key] ?? 0) > 0}
+										data-label="Items"
+									>
+										{count(row.key)}
 									</td>
-									<td data-label="What it means"><span class="s">{state.note}</span></td>
-									<td class="num" data-label="Items">{count(state.key)}</td>
 								</tr>
 							{/each}
 						</tbody>
 					</table>
 				</div>
-			</Panel>
-
-			<Panel title="Settled outcomes" description="How the finished items finished.">
-				{#each OUTCOMES as outcome (outcome.key)}
-					<div class="op-tally">
-						<StatusPill tone={outcome.tone} label={outcome.label} />
-						<span class="n">{count(outcome.key)}</span>
-					</div>
-				{/each}
-				<p class="foot-note">
-					These add up to the Settled figure above. There is no single health score, because
-					an average would hide the number that matters.
-				</p>
-			</Panel>
-		</div>
-	{/if}
+			</section>
+		{/if}
+	</div>
 </div>

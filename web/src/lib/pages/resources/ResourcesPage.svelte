@@ -11,8 +11,10 @@
 	import Button from '$lib/Button.svelte';
 	import CrossListDialog from '$lib/CrossListDialog.svelte';
 	import DeleteDialog from '$lib/DeleteDialog.svelte';
-	import Field from '$lib/Field.svelte';
 	import { entitlementRead, featureOf, limitOf } from '$lib/entitlement-read';
+	import Explain from '$lib/Explain.svelte';
+	import FlowActionBar from '$lib/FlowActionBar.svelte';
+	import FlowDiagram from '$lib/FlowDiagram.svelte';
 	import Icon from '$lib/Icon.svelte';
 	import {
 		WORK_RUNS,
@@ -26,21 +28,20 @@
 	import LabelsDialog from '$lib/LabelsDialog.svelte';
 	import { normaliseQuery } from '$lib/listings-view';
 	import MarketplaceChips from '$lib/MarketplaceChips.svelte';
+	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
 	import MarkListedDialog from '$lib/MarkListedDialog.svelte';
 	import Menu from '$lib/Menu.svelte';
 	import MenuItem from '$lib/MenuItem.svelte';
 	import Note from '$lib/Note.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import { palette } from '$lib/palette.svelte';
-	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
 	import { platformTitle } from '$lib/platforms';
 	import { COLLECTIONS_KEY } from '$lib/pages/collections/collections';
 	import { queryKeys } from '$lib/query';
-	import RowCard from '$lib/RowCard.svelte';
 	import { MIGRATION_HREF } from '$lib/sync-request';
 	import { MAPPINGS_HREF, PRICING_HREF } from '$lib/pages/automations/seller-rules';
-	import TabBar from '$lib/TabBar.svelte';
+	import StatusPill from '$lib/StatusPill.svelte';
 	import { toast } from '$lib/toast';
 	import type { InventoryId } from '$lib/generated/vocab';
 	import { FILES_HREF } from './files-browser';
@@ -52,13 +53,12 @@
 		RESOURCE_TABS,
 		SORTS,
 		STANDING_OPTIONS,
-		VERB_PHRASE,
 		countsFor,
 		filterSearch,
 		filtersActive,
 		labelsFromUrl,
 		matchesResource,
-		metaLine,
+		rowFacts,
 		sortRows,
 		unionById,
 		type ResourceFilters,
@@ -154,17 +154,16 @@
 	let marketplaces = $state<InventoryId[]>([]);
 	let standing = $state<StandingFilter>('all');
 	let sort = $state<SortId>('updated_desc');
-	// The board opens on the segment that hides nothing. Choosing the open tab
-	// again returns here, so the bar always has a selected tab and the state the
+	// The board opens on the chip that hides nothing. Pressing the chosen chip
+	// again returns here, so one chip is always pressed and the state the
 	// board is in is always named.
 	let tab = $state<TabId>(DEFAULT_TAB);
-	let lastTab: TabId = DEFAULT_TAB;
 	let drawn = $state(PAGE_STEP);
 
 	let bulkMenu = $state(false);
-	let scopeMenu = $state(false);
-	let labelMenu = $state(false);
-	let mode = $state<BulkVerb | null>(null);
+	let moreMenu = $state(false);
+	// The row whose kebab is open: one at a time, like every menu here.
+	let rowMenu = $state<string | null>(null);
 	let selected = $state<Set<string>>(new Set());
 	let removing = $state<InventoryRow | null>(null);
 
@@ -241,10 +240,12 @@
 			id: entry.id,
 			label: entry.label,
 			count: counts[entry.id],
-			hint: entry.hint,
-			icon: entry.icon
+			hint: entry.hint
 		}))
 	);
+	/** How many of the filters behind "More" are set, so the chip says so
+	 *  while they are out of sight. */
+	const moreSet = $derived(chosenLabels.length + (standing === 'all' ? 0 : 1));
 
 	const rows = $derived(
 		sortRows(
@@ -275,24 +276,24 @@
 	const allShownSelected = $derived(
 		shown.length > 0 && shown.every((row) => selected.has(row.product.id))
 	);
-	const verb = $derived(BULK_ACTIONS.find((action) => action.verb === mode) ?? null);
+	/** The verb the bar offers first, the one a selection is most often made
+	 *  for; the rest sit in its menu. */
+	const firstVerb = BULK_ACTIONS[0];
+	const otherVerbs = BULK_ACTIONS.slice(1);
+	// Covers that failed to load, drawn as the placeholder rather than a
+	// broken image.
+	let brokenCovers = $state<Set<string>>(new Set());
 
 	function clearFilters() {
 		marketplaces = [];
 		standing = 'all';
 		tab = DEFAULT_TAB;
-		lastTab = DEFAULT_TAB;
 		box = '';
 		narrow('', []);
 	}
 
-	function chooseTab(id: string) {
-		if (lastTab === id) {
-			tab = DEFAULT_TAB;
-			lastTab = DEFAULT_TAB;
-			return;
-		}
-		lastTab = id as TabId;
+	function chooseTab(id: TabId) {
+		tab = tab === id ? DEFAULT_TAB : id;
 	}
 
 	function toggleMarketplace(inventory: InventoryId) {
@@ -333,7 +334,7 @@
 	}
 
 	function cancelBulk() {
-		mode = null;
+		bulkMenu = false;
 		selected = new Set();
 	}
 
@@ -479,41 +480,29 @@
 	}
 </script>
 
-<div class="page resources-page" class:bulk-open={mode !== null}>
-	<PageHead
-		icon="layout-list"
-		title="Resources"
-		description="Every resource you have, and where each one is listed."
-		guide="labels-and-collections"
-		search={() => palette.show()}
-	>
+<div class="page resources-page" class:bulk-open={selected.size > 0}>
+	<PageHead icon="layout-list" title="Resources" guide="labels-and-collections" search={() => palette.show()}>
 		{#snippet aside()}
+			<Explain title="How resources reach a marketplace" label="How it works">
+				<FlowDiagram
+					from={{ icon: 'package', label: 'Your resource' }}
+					to={[{ icon: 'store', label: 'Marketplaces' }]}
+					rule="Publish"
+					label="Your resource is published to your marketplaces"
+				/>
+				<p>1. Add the file and the details once.</p>
+				<p>2. Choose the marketplaces it goes to.</p>
+				<p>3. Publish. Nothing changes on a marketplace until you do.</p>
+				<p>
+					TES and TPT work runs in the Teachouse app on your own computer, so nothing is sent
+					while it is off.
+				</p>
+			</Explain>
 			<!-- The way to the seller's own files, which are a property of the
-			     catalogue rather than of the marketplaces they came from: one
-			     file can belong to several resources, and the browser is where
-			     that is visible. -->
+			     catalogue rather than of the marketplaces they came from. New
+			     resource is the shell's own primary at the top right, and the
+			     action bar's on a phone, so the head does not draw a third. -->
 			<Button tier="outline" icon="files" href={FILES_HREF}>Files</Button>
-			<Menu bind:open={bulkMenu} label="Bulk actions">
-				{#snippet trigger()}
-					<Button tier="primary" icon="ellipsis-vertical" onclick={() => (bulkMenu = !bulkMenu)}>
-						Bulk actions
-					</Button>
-				{/snippet}
-				{#each BULK_ACTIONS as action (action.verb)}
-					<MenuItem
-						icon={BULK_ICON[action.verb]}
-						disabled={action.missing !== null}
-						reason={action.missing ?? undefined}
-						onclick={() => {
-							bulkMenu = false;
-							mode = action.verb;
-							selected = new Set();
-						}}
-					>
-						{action.label}…
-					</MenuItem>
-				{/each}
-			</Menu>
 		{/snippet}
 	</PageHead>
 
@@ -522,118 +511,120 @@
 			tone="warn"
 			title={`${counts.attention} ${counts.attention === 1 ? 'resource needs' : 'resources need'} you`}
 		>
-			Tes and TPT work runs on your own device, so nothing happens while it is off.
+			Check the Teachouse app is running.
 			{#snippet action()}
-				<Button
-					onclick={() => {
-						tab = 'attention';
-						lastTab = 'attention';
-					}}
-				>
-					Show only those
-				</Button>
+				<Button onclick={() => (tab = 'attention')}>Show them</Button>
 			{/snippet}
 		</Banner>
 	{/if}
 
-	<Panel>
-		<div class="res-filters">
-			<Field label="Search" id="resource-search">
-				<span class="res-search">
-					<Icon name="search" size={16} />
-					<input
-						id="resource-search"
-						type="search"
-						placeholder="Search by title"
-						value={box}
-						oninput={(event) => typed(event.currentTarget.value)}
-					/>
-				</span>
-			</Field>
+	<!-- Search and every filter in one row: the state chips carry their
+	     counts, the marketplace chips their marks, and the two filters a
+	     seller rarely needs sit behind More. -->
+	<div class="res-bar">
+		<label class="res-search">
+			<Icon name="search" size={16} />
+			<span class="sr-only">Search</span>
+			<input
+				id="resource-search"
+				type="search"
+				placeholder="Search by title"
+				value={box}
+				oninput={(event) => typed(event.currentTarget.value)}
+			/>
+		</label>
 
-			<div class="res-group">
-				<span class="res-group-label" id="resource-marketplaces">Marketplaces</span>
-				<div class="mk-tiles" role="group" aria-labelledby="resource-marketplaces">
-					{#each MARKETPLACE_TILES as tile (tile.inventory)}
-						<button
-							class="mk-tile"
-							type="button"
-							disabled={tile.disabled}
-							aria-pressed={marketplaces.includes(tile.inventory)}
-							title={tile.reason ?? platformTitle(tile.inventory)}
-							onclick={() => toggleMarketplace(tile.inventory)}
-						>
-							{tile.label}
-						</button>
-					{/each}
-				</div>
-			</div>
-
-			<div class="res-group">
-				<span class="res-group-label" id="resource-labels">Labels</span>
-				<Menu bind:open={labelMenu} label="Filter by label">
-					{#snippet trigger()}
-						<Button onclick={() => (labelMenu = !labelMenu)}>
-							{chosenLabels.length === 0 ? 'Any label' : `${chosenLabels.length} chosen`}
-						</Button>
-					{/snippet}
-					<!-- Three arms, because a read in flight and a read that failed are
-					     not the same answer as a seller who has made no labels. -->
-					<div class="label-menu">
-						{#if labels.isPending}
-							<p class="none">Loading your labels…</p>
-						{:else if labels.isError}
-							<p class="none">We couldn’t load your labels. Reload to try again.</p>
-						{:else}
-							{#each labels.data ?? [] as one (one.name)}
-								<!-- Every label the organisation holds, the marks an import
-								     wrote among them: a seller looking for what they just
-								     imported filters by the shop's own chip. -->
-								<label>
-									<input
-										type="checkbox"
-										checked={chosenLabels.includes(one.name)}
-										onchange={() => toggleLabel(one.name)}
-									/>
-									<LabelChip name={one.name} colour={one.colour} system={one.system} />
-								</label>
-							{:else}
-								<p class="none">None of your resources has a label yet.</p>
-							{/each}
-						{/if}
-					</div>
-				</Menu>
-			</div>
-
-			<Field label="Status" id="resource-standing">
-				<select
-					id="resource-standing"
-					value={standing}
-					onchange={(event) => (standing = event.currentTarget.value as StandingFilter)}
+		<div class="res-fchips" role="group" aria-label="Filter resources">
+			{#each tabs as one (one.id)}
+				<button
+					type="button"
+					class="res-fchip"
+					aria-pressed={tab === one.id}
+					title={one.hint}
+					onclick={() => chooseTab(one.id)}
 				>
-					{#each STANDING_OPTIONS as option (option.value)}
-						<option value={option.value}>{option.label}</option>
-					{/each}
-				</select>
-			</Field>
+					{one.label}
+					{#if one.count !== null && one.count !== undefined}
+						<span class="res-fchip-n">{one.count}</span>
+					{/if}
+				</button>
+			{/each}
+			<span class="res-fchip-sep" aria-hidden="true"></span>
+			{#each MARKETPLACE_TILES as tile (tile.inventory)}
+				<!-- The mark alone: a teacher knows the logo, and the words would
+				     push the row past one line. The title and the name still say it. -->
+				<button
+					type="button"
+					class="res-fchip res-fchip-mark"
+					disabled={tile.disabled}
+					aria-pressed={marketplaces.includes(tile.inventory)}
+					aria-label={tile.reason ?? platformTitle(tile.inventory)}
+					title={tile.reason ?? platformTitle(tile.inventory)}
+					onclick={() => toggleMarketplace(tile.inventory)}
+				>
+					<MarketplaceMark inventory={tile.inventory} size={18} />
+				</button>
+			{/each}
 		</div>
-
-		{#if anythingSet}
-			<div class="res-clear">
-				<Button tier="quiet" small onclick={clearFilters}>Clear filters</Button>
+		<Menu bind:open={moreMenu} label="More filters" align="end">
+			{#snippet trigger()}
+				<button
+					type="button"
+					class="res-fchip"
+					aria-pressed={moreSet > 0}
+					aria-expanded={moreMenu}
+					onclick={() => (moreMenu = !moreMenu)}
+				>
+					<Icon name="sliders-horizontal" size={14} />
+					More
+					{#if moreSet > 0}<span class="res-fchip-n">{moreSet}</span>{/if}
+				</button>
+			{/snippet}
+			<div class="label-menu">
+				<label class="res-more-status">
+					<span>Status on a marketplace</span>
+					<select
+						id="resource-standing"
+						value={standing}
+						onchange={(event) => (standing = event.currentTarget.value as StandingFilter)}
+					>
+						{#each STANDING_OPTIONS as option (option.value)}
+							<option value={option.value}>{option.label}</option>
+						{/each}
+					</select>
+				</label>
+				<p class="none">Labels</p>
+				<!-- Three arms, because a read in flight and a read that failed are
+				     not the same answer as a seller who has made no labels. -->
+				{#if labels.isPending}
+					<p class="none">Loading your labels…</p>
+				{:else if labels.isError}
+					<p class="none">We couldn’t load your labels. Reload to try again.</p>
+				{:else}
+					{#each labels.data ?? [] as one (one.name)}
+						<label>
+							<input
+								type="checkbox"
+								checked={chosenLabels.includes(one.name)}
+								onchange={() => toggleLabel(one.name)}
+							/>
+							<LabelChip name={one.name} colour={one.colour} system={one.system} />
+						</label>
+					{:else}
+						<p class="none">None of your resources has a label yet.</p>
+					{/each}
+				{/if}
 			</div>
-		{/if}
-	</Panel>
-
-	<TabBar {tabs} bind:current={tab} onselect={chooseTab} />
+		</Menu>
+	</div>
 
 	<div class="res-toolbar">
-		<!-- No figure until the reads are in: "viewing 0 resources" is what a
-		     seller with an empty catalogue sees, so standing it in for a read that
+		<!-- No figure until the reads are in: "0 resources" is what a seller
+		     with an empty catalogue sees, so standing it in for a read that
 		     failed states something false in a number nobody would doubt. -->
 		<span class="eyebrow">
 			{#if read}
-				Viewing {rows.length}
+				{rows.length}
 				{rows.length === 1 ? 'resource' : 'resources'}
 			{:else if reading}
 				Loading your resources
@@ -641,7 +632,10 @@
 				Couldn’t count your resources
 			{/if}
 		</span>
-		<span>
+		{#if anythingSet}
+			<Button tier="quiet" small icon="x" onclick={clearFilters}>Clear filters</Button>
+		{/if}
+		<span class="res-sort-at">
 			<label class="sr-only" for="resource-sort">Sort by</label>
 			<select
 				class="res-sort"
@@ -655,57 +649,6 @@
 			</select>
 		</span>
 	</div>
-
-	{#if mode !== null && verb !== null}
-		<div class="select-all">
-			<input
-				type="checkbox"
-				aria-label="Select every resource shown"
-				checked={allShownSelected}
-				onchange={toggleAllShown}
-			/>
-			<Menu bind:open={scopeMenu} label="Select" align="start">
-				{#snippet trigger()}
-					<Button
-						tier="quiet"
-						small
-						icon="ellipsis-vertical"
-						onclick={() => (scopeMenu = !scopeMenu)}
-					>
-						Select
-					</Button>
-				{/snippet}
-				<MenuItem
-					icon="check"
-					onclick={() => {
-						scopeMenu = false;
-						selectAllShown();
-					}}
-				>
-					Select the {shown.length} shown
-				</MenuItem>
-				<MenuItem
-					icon="layers"
-					onclick={() => {
-						scopeMenu = false;
-						selected = new Set(rows.map((row) => row.product.id));
-					}}
-				>
-					Select all {rows.length} matching
-				</MenuItem>
-				<MenuItem
-					icon="x"
-					onclick={() => {
-						scopeMenu = false;
-						selected = new Set();
-					}}
-				>
-					Select none
-				</MenuItem>
-			</Menu>
-			<span>Select the resources to {VERB_PHRASE[verb.verb]}</span>
-		</div>
-	{/if}
 
 	{#if reading}
 		<p class="res-note">Loading your resources…</p>
@@ -721,11 +664,19 @@
 		<Placeholder
 			icon="layout-list"
 			headline="You have no resources yet."
-			body="Import your shop to bring your resources in as drafts to review."
+			body="Make your first one, or bring your shop in."
 		>
 			{#snippet actions()}
 				<Button
 					tier="primary"
+					href="/resources/new"
+					icon="circle-plus"
+					disabled={createRefusal !== null}
+					reason={createRefusal ?? undefined}
+				>
+					New resource
+				</Button>
+				<Button
 					href="/import"
 					icon="download"
 					disabled={importRefusal !== null}
@@ -733,60 +684,103 @@
 				>
 					Import from a marketplace
 				</Button>
-				<span class="res-note">or</span>
-				<Button
-					href="/resources/new"
-					icon="plus"
-					disabled={createRefusal !== null}
-					reason={createRefusal ?? undefined}
-				>
-					Create a resource
-				</Button>
 			{/snippet}
 		</Placeholder>
 	{:else if rows.length === 0}
-		<Placeholder
-			icon="search"
-			headline="Nothing matches these filters."
-			body="Clear the filters to see all your resources."
-		>
+		<Placeholder icon="search" headline="Nothing matches these filters.">
 			{#snippet actions()}
 				<Button tier="quiet" onclick={clearFilters}>Clear filters</Button>
 			{/snippet}
 		</Placeholder>
 	{:else}
-		<div class="res-rows">
+		<div class="res-list">
+			<div class="res-list-head">
+				<input
+					type="checkbox"
+					class="res-item-tick"
+					aria-label="Select every resource shown"
+					checked={allShownSelected}
+					onchange={toggleAllShown}
+				/>
+				<span>Resource</span>
+				<span>Price</span>
+				<span>Marketplaces</span>
+				<span>Status</span>
+				<span></span>
+			</div>
 			{#each shown as row (row.product.id)}
-				<RowCard
-					href={`/resources/${row.product.id}`}
-					title={row.product.title}
-					meta={metaLine(row.product, row, now)}
-					cover={row.product.cover ?? null}
-					selectable={mode !== null}
-					bind:selected={
-						() => selected.has(row.product.id), (value) => setSelected(row.product.id, value)
-					}
-				>
-					{#snippet strip()}
-						<MarketplaceChips chips={row.chips} />
-					{/snippet}
-					{#snippet menu(close: () => void)}
-						<a class="res-menu-link menu-item" href={`/resources/${row.product.id}`}>
-							<Icon name="eye" size={14} />Open
-						</a>
-						<MenuItem icon="copy" disabled reason={DUPLICATE_MISSING}>Duplicate</MenuItem>
-						<MenuItem
-							icon="trash-2"
-							danger
-							onclick={() => {
-								close();
-								removing = row;
-							}}
+				{@const facts = rowFacts(row.product, row, now)}
+				{@const cover = row.product.cover ?? null}
+				<div class="res-item" class:picked={selected.has(row.product.id)}>
+					<input
+						type="checkbox"
+						class="res-item-tick"
+						aria-label={`Select ${row.product.title}`}
+						checked={selected.has(row.product.id)}
+						onchange={(event) => setSelected(row.product.id, event.currentTarget.checked)}
+					/>
+					<a class="res-item-main" href={`/resources/${row.product.id}`}>
+						<!-- The alt is empty on purpose: the title beside it names the
+						     resource. Lazily loaded, because a catalogue draws sixty. -->
+						<span class="res-item-cover">
+							{#if cover !== null && !brokenCovers.has(cover)}
+								<img
+									src={cover}
+									alt=""
+									loading="lazy"
+									decoding="async"
+									onerror={() => (brokenCovers = new Set([...brokenCovers, cover]))}
+								/>
+							{:else}
+								<Icon name="image" size={18} />
+							{/if}
+						</span>
+						<span class="res-item-text">
+							<span class="res-name">{row.product.title}</span>
+							<span class="res-item-meta">{facts.updated}</span>
+						</span>
+					</a>
+					<span class="price res-item-price">{facts.price}</span>
+					<span class="res-item-marks"><MarketplaceChips chips={row.chips} /></span>
+					<span class="res-item-status">
+						<StatusPill tone={facts.status.tone} label={facts.status.label} />
+					</span>
+					<span class="res-item-menu">
+						<Menu
+							bind:open={
+								() => rowMenu === row.product.id,
+								(value) => (rowMenu = value ? row.product.id : null)
+							}
+							label={`Actions for ${row.product.title}`}
 						>
-							Delete
-						</MenuItem>
-					{/snippet}
-				</RowCard>
+							{#snippet trigger()}
+								<button
+									type="button"
+									class="res-kebab"
+									aria-label={`Actions for ${row.product.title}`}
+									onclick={() =>
+										(rowMenu = rowMenu === row.product.id ? null : row.product.id)}
+								>
+									<Icon name="ellipsis-vertical" size={16} />
+								</button>
+							{/snippet}
+							<a class="res-menu-link menu-item" href={`/resources/${row.product.id}`}>
+								<Icon name="eye" size={14} />Open
+							</a>
+							<MenuItem icon="copy" disabled reason={DUPLICATE_MISSING}>Duplicate</MenuItem>
+							<MenuItem
+								icon="trash-2"
+								danger
+								onclick={() => {
+									rowMenu = null;
+									removing = row;
+								}}
+							>
+								Delete
+							</MenuItem>
+						</Menu>
+					</span>
+				</div>
 			{/each}
 		</div>
 
@@ -805,27 +799,66 @@
 		{/if}
 	{/if}
 
-	{#if mode !== null && verb !== null}
-		<div class="bulk-bar">
-			<!-- `chosen.length` rather than `selected.size`: a selection survives a
-			     filter change, and the label filter narrows the server's own query,
-			     so a resource can be selected and no longer among the rows this
-			     page holds. The dialog acts on `chosen`, so the figure beside the
-			     verb is the one it will act on. -->
+	{#if selected.size > 0}
+		<!-- `chosen.length` rather than `selected.size`: a selection survives a
+		     filter change, and the label filter narrows the server's own query,
+		     so a resource can be selected and no longer among the rows this
+		     page holds. The dialogs act on `chosen`, so the figure is the one
+		     they will act on. -->
+		<div class="bulk-bar" role="region" aria-label="Selected resources">
+			<span class="bulk-count"><strong>{chosen.length}</strong> selected</span>
+			{#if chosen.length < rows.length}
+				<Button
+					tier="quiet"
+					small
+					onclick={() => (selected = new Set(rows.map((row) => row.product.id)))}
+				>
+					Select all {rows.length}
+				</Button>
+			{/if}
 			<Button
-				tier="additive"
-				icon={BULK_ICON[verb.verb]}
+				tier="primary"
+				icon={BULK_ICON[firstVerb.verb]}
 				disabled={chosen.length === 0}
-				reason={chosen.length === 0
-					? 'Select at least one resource that is in view.'
-					: undefined}
-				onclick={() => run(verb.verb)}
+				reason={chosen.length === 0 ? 'Select at least one resource that is in view.' : undefined}
+				onclick={() => run(firstVerb.verb)}
 			>
-				{verb.label} ({chosen.length})
+				{firstVerb.label}
 			</Button>
-			<Button tier="quiet" icon="x" onclick={() => (selected = new Set())}>Unselect all</Button>
-			<Button icon="chevron-left" onclick={cancelBulk}>Cancel</Button>
+			<Menu bind:open={bulkMenu} label="More actions">
+				{#snippet trigger()}
+					<Button icon="ellipsis-vertical" onclick={() => (bulkMenu = !bulkMenu)}>More</Button>
+				{/snippet}
+				{#each otherVerbs as action (action.verb)}
+					<MenuItem
+						icon={BULK_ICON[action.verb]}
+						danger={action.verb === 'delete'}
+						disabled={action.missing !== null || chosen.length === 0}
+						reason={action.missing ??
+							(chosen.length === 0 ? 'Select at least one resource that is in view.' : undefined)}
+						onclick={() => {
+							bulkMenu = false;
+							run(action.verb);
+						}}
+					>
+						{action.label}…
+					</MenuItem>
+				{/each}
+			</Menu>
+			<Button tier="quiet" icon="x" onclick={cancelBulk}>Clear</Button>
 		</div>
+	{:else}
+		<FlowActionBar>
+			<Button
+				tier="primary"
+				icon="circle-plus"
+				href="/resources/new"
+				disabled={createRefusal !== null}
+				reason={createRefusal ?? undefined}
+			>
+				New resource
+			</Button>
+		</FlowActionBar>
 	{/if}
 </div>
 

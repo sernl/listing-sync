@@ -1,85 +1,349 @@
-/* The operator backoffice's own rules.
+/* The operator backoffice's own rules, on top of `flow.css`.
  *
- * These five screens are the console's only genuinely tabular ones: a failed
- * write is five facts about one attempt, and folding them into row cards would
- * lose the column an operator scans down. So the table survives here where the
- * catalogue board retired it, and what is below is that table drawn in the
- * palette, plus the signup chart and the account search the pages already had.
+ * The admin is the founder's back office, so it takes the flow pages' look at
+ * an operator's density: a row of linked figures, compact tables with filter
+ * chips and a status colour, and the fine print behind Explain.
  *
- * Below the phone breakpoint each row becomes a card and each cell states its
- * own column name, because the console is also the Android app and a
- * five-column table there is a horizontal scroll nobody can read.
+ * Every table is `.flow-table-wrap.op-table > table.flow-table`. Below 900px
+ * each row becomes a card and each cell states its own column name from its
+ * `data-label`, because the console is also the Android app and a five-column
+ * table there is a horizontal scroll nobody can read.
  */
+
+/* --- the figures ---------------------------------------------------------- */
+
+/* Figures that each open their page. Five across a desktop, two on a phone. */
+.op-stats {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+	gap: var(--s-3);
+}
+
+.op-stats > a {
+	display: block;
+	min-width: 0;
+	color: inherit;
+	text-decoration: none;
+	border-radius: var(--r-card);
+}
+
+.op-stats > a:hover .stat {
+	border-color: var(--lavender);
+}
+
+.op-stats > a:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.op-stats .stat {
+	padding: var(--s-4);
+	height: 100%;
+}
+
+.op-stats .stat .n {
+	font-size: 28px;
+}
+
+@media (max-width: 620px) {
+	.op-stats {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+
+/* --- the filter row ------------------------------------------------------- */
+
+.op-filters {
+	display: flex;
+	align-items: center;
+	gap: var(--s-2);
+	flex-wrap: wrap;
+}
+
+.op-filters input[type='search'] {
+	flex: 1 1 220px;
+	min-width: 0;
+	min-height: var(--control-h);
+	border: 1px solid var(--line);
+	background: var(--card);
+	border-radius: var(--r-pill);
+	padding-inline: 14px;
+	font: inherit;
+	color: var(--text);
+}
+
+.op-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--s-2);
+	min-height: 34px;
+	padding: 4px 6px 4px 12px;
+	border: 1px solid var(--line);
+	border-radius: var(--r-pill);
+	background: var(--surface);
+	color: var(--text);
+	font: inherit;
+	font-size: 13px;
+	font-weight: 500;
+	cursor: pointer;
+}
+
+.op-chip:hover {
+	border-color: var(--lavender);
+}
+
+.op-chip:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.op-chip[aria-pressed='true'] {
+	border-color: var(--accent);
+	background: var(--accent-soft);
+	box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.op-chip .c {
+	display: inline-grid;
+	place-items: center;
+	min-width: 22px;
+	height: 22px;
+	padding: 0 6px;
+	border-radius: var(--r-pill);
+	background: var(--additive-soft);
+	color: var(--additive);
+	font-size: 12px;
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+}
+
+/* --- an organisation's facts --------------------------------------------- */
+
+/* The figures under an organisation's name: one quiet line. */
+.op-facts-line {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: var(--s-2) var(--s-4);
+	margin: 0;
+	color: var(--muted);
+	font-size: 13.5px;
+}
+
+.op-facts-line b {
+	color: var(--text);
+	font-variant-numeric: tabular-nums;
+}
+
+/* Label over value, in tiles across the step. */
+.op-facts {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+	gap: var(--s-3);
+	margin: 0;
+}
+
+.op-facts > div {
+	min-width: 0;
+	padding: var(--s-2) var(--s-3);
+	border: 1px solid var(--line);
+	border-radius: var(--r-field);
+	background: var(--surface);
+}
+
+.op-facts dt {
+	color: var(--muted);
+	font-size: 11.5px;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+
+.op-facts dd {
+	margin: 4px 0 0;
+	font-size: 13.5px;
+	overflow-wrap: anywhere;
+}
+
+.op-mark,
+.op-pills {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--s-2);
+	flex-wrap: wrap;
+}
+
+/* --- guide cards ----------------------------------------------------------- */
+
+.op-guides {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+	gap: var(--s-3);
+}
+
+.op-guide {
+	gap: var(--s-3);
+}
+
+.op-guide-acts {
+	margin-top: auto;
+}
+
+.op-spacer {
+	flex: 1;
+}
+
+/* --- the guide editor ------------------------------------------------------ */
+
+.op-images {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+	gap: var(--s-3);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.op-images li {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-2);
+	min-width: 0;
+	padding: var(--s-2);
+	border: 1px solid var(--line);
+	border-radius: var(--r-field);
+	background: var(--surface);
+}
+
+.op-images .thumb {
+	display: grid;
+	place-items: center;
+	aspect-ratio: 4 / 3;
+	overflow: hidden;
+	border-radius: var(--r-field);
+	background: var(--hover);
+	color: var(--muted);
+	font-size: 12px;
+	text-align: center;
+}
+
+.op-images img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+.op-images .status {
+	align-self: flex-start;
+}
+
+.op-images .s {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 12px;
+	color: var(--muted);
+}
+
+.op-write {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	gap: var(--s-4);
+}
+
+@media (min-width: 1100px) {
+	.op-write {
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	}
+}
+
+.op-preview {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-2);
+	min-width: 0;
+	padding: var(--s-4);
+	border: 1px solid var(--line);
+	border-radius: var(--r-panel);
+	background: var(--surface);
+	max-height: 70vh;
+	overflow: auto;
+}
 
 /* --- the operator table --------------------------------------------------- */
 
-.op-table {
-	overflow-x: auto;
-}
-
-.op-table table {
-	width: 100%;
-	border-collapse: collapse;
-	font-size: 13px;
-}
-
-.op-table th {
-	text-align: left;
-	font-size: 10.5px;
-	letter-spacing: 0.08em;
-	text-transform: uppercase;
-	color: var(--muted);
-	font-weight: 600;
-	padding: 8px 10px;
-	border-bottom: 1px solid var(--line);
-	white-space: nowrap;
-}
-
-.op-table td {
-	padding: 11px 10px;
-	border-bottom: 1px solid var(--line);
-	vertical-align: middle;
-}
-
-.op-table tr:last-child td {
-	border-bottom: 0;
-}
-
-.op-table td.num,
-.op-table th.num {
+.op-table .flow-table td.num,
+.op-table .flow-table th.num {
 	text-align: right;
 	font-variant-numeric: tabular-nums;
 }
 
-/* A long list is scrolled inside itself with its header pinned, so the page
+/* A column heading carrying its Explain. */
+.op-table th .op-th {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.op-table th .op-th .explain-trigger {
+	text-transform: none;
+	letter-spacing: 0;
+}
+
+/* A long list scrolls inside itself with its header pinned, so the page
    header and the footnote below stay where the operator left them. */
 .op-table.op-tall {
 	max-height: 70vh;
 	overflow: auto;
 }
 
-.op-table.op-tall thead th {
-	position: sticky;
-	top: 0;
-	background: var(--surface);
-	z-index: 1;
-}
-
-/* The two cell modifiers the import-drain table carries. The gate row is the
-   first and the tenth migration of one tenant's series, which is the pair the
-   kill gate compares; the flag marks a run that saw a term the crosswalk had
-   no match for, which is the column that falsifies a falling share. */
-
-.op-table .op-gate-row td {
+/* The row an operator acts on first: the gate rows of a drain series, a live
+   impersonation. */
+.op-table tr.op-strong td {
 	font-weight: 600;
 }
 
 .op-table td.op-flag {
 	color: var(--warn-ink);
+	font-weight: 600;
+}
+
+.op-bad {
+	color: var(--bad-ink);
 }
 
 .op-unreadable {
 	color: var(--warn-ink);
+}
+
+/* An organisation's name, in the resource colour: the thing the row is
+   about. */
+.op-name {
+	color: var(--additive);
+	font-weight: 600;
+}
+
+.op-table a.op-name {
+	color: var(--additive);
+}
+
+a.op-name:hover {
+	text-decoration: underline;
+}
+
+.op-table a.op-open {
+	color: var(--primary);
+	font-weight: 600;
+}
+
+.op-table a.op-open:hover {
+	text-decoration: underline;
+}
+
+.op-foot {
+	margin: 0;
+	color: var(--muted);
+	font-size: 12.5px;
 }
 
 /* A cell of two lines: a name over an identifier, each clipped rather than
@@ -159,6 +423,28 @@
 	border-top: 1px solid var(--line);
 	margin: 4px 0;
 	width: 100%;
+}
+
+/* Expiry and reason side by side where there is room. */
+.op-grant-fields {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+	gap: 12px;
+}
+
+/* The Apply bar sticks to the bottom of the screen while the form scrolls,
+   in a step and in the users page's dialog alike. */
+.op-grant-foot {
+	position: sticky;
+	bottom: var(--flow-bar-h, 0px);
+	z-index: 2;
+	display: flex;
+	align-items: center;
+	gap: var(--s-3);
+	padding: var(--s-3) 0;
+	background: color-mix(in srgb, var(--card) 94%, transparent);
+	border-top: 1px solid var(--line);
+	backdrop-filter: blur(6px);
 }
 
 .op-table select {
@@ -316,13 +602,19 @@
 	   console. The column name comes from each cell's `data-label`, so a
 	   column added without one shows a cell with no name rather than the wrong
 	   one. */
-	.op-table,
-	.op-table.op-tall {
+	.op-table:not(.op-keep),
+	.op-table.op-tall:not(.op-keep) {
 		overflow: visible;
 		max-height: none;
+		border: 0;
+		border-radius: 0;
 	}
 
-	.op-table thead {
+	.op-table:not(.op-keep) tbody tr:hover {
+		background: var(--surface);
+	}
+
+	.op-table:not(.op-keep) thead {
 		position: absolute;
 		width: 1px;
 		height: 1px;
@@ -331,7 +623,7 @@
 		white-space: nowrap;
 	}
 
-	.op-table tr {
+	.op-table:not(.op-keep) tr {
 		display: block;
 		border: 1px solid var(--line);
 		border-radius: var(--r-panel);
@@ -340,8 +632,9 @@
 		background: var(--surface);
 	}
 
-	.op-table td,
-	.op-table tr:last-child td {
+	.op-table:not(.op-keep) td,
+	.op-table:not(.op-keep) tr:last-child td {
+		border-top: 0;
 		display: flex;
 		flex-wrap: wrap;
 		align-items: baseline;
@@ -353,17 +646,22 @@
 	/* A two-line cell keeps its first line beside the column name and drops
 	   the second to a row of its own: side by side they read as two columns
 	   the table does not have. */
-	.op-table td.op-cell > .t {
+	.op-table:not(.op-keep) td.op-cell > .t {
 		flex: 1 1 0;
 		min-width: 0;
 	}
 
-	.op-table td.op-cell > .s {
+	.op-table:not(.op-keep) td.op-cell > .s {
 		flex: 1 1 100%;
 	}
 
-	.op-table tr td:last-child {
+	.op-table:not(.op-keep) tr td:last-child {
 		border-bottom: 0;
+	}
+
+	/* A cell with nothing in it (no action on this row) is no line at all. */
+	.op-table:not(.op-keep) td:empty {
+		display: none;
 	}
 
 	/* The column name, which has to be the same word the `<th>` uses. Sized to
@@ -371,7 +669,7 @@
 	   `overflow-wrap: break-word`, so a name wider than the box — ORGANISATION,
 	   CONNECTIONS — was broken mid-word into a second line. It wraps between
 	   words or not at all. */
-	.op-table td::before {
+	.op-table:not(.op-keep) td::before {
 		content: attr(data-label);
 		flex: 0 0 auto;
 		min-width: 84px;
@@ -385,14 +683,14 @@
 		font-weight: 600;
 	}
 
-	.op-table td.num,
-	.op-table th.num {
+	.op-table:not(.op-keep) td.num,
+	.op-table:not(.op-keep) th.num {
 		text-align: left;
 	}
 
 	.op-cell .t,
 	.op-cell .s,
-	.op-table .s {
+	.op-table:not(.op-keep) .s {
 		max-width: none;
 		white-space: normal;
 		overflow-wrap: anywhere;

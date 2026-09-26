@@ -1,4 +1,4 @@
-// The three tabs this page carries, and the sentences a test pins.
+// The two tabs this page carries, and the sentences a test pins.
 //
 // The sentences below are held as constants rather than written into the
 // markup so that a test reads them and the lane fails when one is reworded by
@@ -9,20 +9,15 @@
 
 import type { Tab } from '$lib/TabBar.svelte';
 
-export type TabId = 'new' | 'saved' | 'mapping';
+export type TabId = 'templates' | 'mapping';
 
-export const NEW: TabId = 'new';
-export const SAVED: TabId = 'saved';
+export const TEMPLATES: TabId = 'templates';
 export const MAPPING: TabId = 'mapping';
 
-/** The three tabs, counted from what each list actually holds.
+/** The two tabs, counted from what each list actually holds.
  *
- *  New template is first and is where the page lands: writing one is the task
- *  a seller comes here for, and its editor is open on arrival, so the landing
- *  tab is the work rather than a list to press past.
- *
- *  It carries no count because it holds no rows — an editor is one form, and a
- *  parenthesis beside it would be a figure standing for nothing.
+ *  Resource templates first, and where the page lands: picking, writing and
+ *  applying a template is one guided flow on that tab.
  *
  *  A count is null until a read has produced one, which covers both the first
  *  read and one that failed: a tab that reported zero in either case would say
@@ -35,17 +30,10 @@ export const MAPPING: TabId = 'mapping';
 export function tabsOf(counts: { templates: number | null; mappings: number | null }): Tab[] {
 	return [
 		{
-			id: NEW,
-			label: 'New template',
-			count: null,
-			hint: 'Set what a new resource starts with.',
-			icon: 'circle-plus'
-		},
-		{
-			id: SAVED,
-			label: 'Saved templates',
+			id: TEMPLATES,
+			label: 'Resource templates',
 			count: counts.templates,
-			hint: 'Templates you have saved.',
+			hint: 'Pick a template, see what it sets, apply it.',
 			icon: 'layout-template'
 		},
 		{
@@ -63,8 +51,3 @@ export function tabsOf(counts: { templates: number | null; mappings: number | nu
  *  licence override. */
 export const LICENCE_REFUSAL =
 	'You always choose the licence yourself. We never pick it for you.';
-
-export const EMPTY_HEADING = "Save a resource's details to reuse on your next one.";
-
-export const EMPTY_BODY =
-	'A template fills in what you set the same way each time: subject, year levels, licence and price.';

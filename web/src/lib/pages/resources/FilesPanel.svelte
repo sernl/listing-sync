@@ -6,8 +6,9 @@
 	// file machinery.
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import { api, type FileView } from '$lib/api';
+	import { formatBytes } from '$lib/authoring';
 	import Button from '$lib/Button.svelte';
-	import Note from '$lib/Note.svelte';
+	import Explain from '$lib/Explain.svelte';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import { queryKeys } from '$lib/query';
 	import { toast } from '$lib/toast';
@@ -222,7 +223,7 @@
 				>
 				<span class="res-line-id">{file.kind} · {file.scan}</span>
 			</span>
-			<span class="res-line-at">{file.byte_len.toLocaleString('en-GB')} bytes</span>
+			<span class="res-line-at">{formatBytes(file.byte_len)}</span>
 			<span class="res-file-acts">
 				{#if kept.has(file.hash)}
 					<Button small onclick={() => (viewing = file)}>View</Button>
@@ -320,9 +321,14 @@
 		aria-hidden="true"
 	/>
 
-	<Note>Changing a file here updates this resource in Teachouse.</Note>
-	<Note>{fileReach ?? reachSentence(inventories)}</Note>
-	<Note>Your thumbnail comes from the first file.</Note>
+	{#if fileReach !== null}
+		<p class="res-file-say" role="status">{fileReach}</p>
+	{/if}
+	<Explain title="What changing a file does" label="What changes?">
+		<p>Changing a file here updates this resource in Teachouse.</p>
+		<p>{reachSentence(inventories)}</p>
+		<p>Your thumbnail comes from the first file.</p>
+	</Explain>
 </div>
 
 {#if viewing !== null}

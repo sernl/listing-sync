@@ -380,6 +380,21 @@ export function combineReads(left: ReadState, right: ReadState): ReadState {
  *  reported nothing and one that reported zero are different facts. */
 const DASH = '—';
 
+/** What each captured metric is called on this page: one plain word a
+ *  teacher reads at a glance, rather than the column heading the table in
+ *  `analytics-view` shares with the export. */
+export const PLAIN_WORD: Readonly<Record<string, string>> = {
+	sales_count: 'Sold',
+	resource_views: 'Views',
+	earnings: 'Earned'
+};
+
+/** The plain word for a metric, falling back to its heading for one this
+ *  page has not named yet. */
+export function plainWord(key: string, heading: string): string {
+	return PLAIN_WORD[key] ?? heading;
+}
+
 const TILE_ICON: Partial<Record<string, IconName>> = {
 	sales_count: 'shopping-bag',
 	earnings: 'credit-card',
@@ -435,7 +450,7 @@ export function tileViews(input: TileInputs): TileView[] {
 		const shell = {
 			key: figure.key,
 			icon: TILE_ICON[figure.key] ?? ('chart-line' as IconName),
-			label: figure.heading,
+			label: plainWord(figure.key, figure.heading),
 			counted: false
 		};
 		const none = { ...shell, value: DASH, figure: false };
@@ -468,7 +483,7 @@ export function tileViews(input: TileInputs): TileView[] {
 	const live: TileView = {
 		key: 'live_listings',
 		icon: 'store',
-		label: 'Live listings',
+		label: 'Live',
 		value: input.catalogue === 'read' ? input.format(input.standing.live) : DASH,
 		figure: input.catalogue === 'read',
 		tag: 'from your Resources',

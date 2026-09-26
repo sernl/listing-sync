@@ -3,9 +3,12 @@
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { AuthFailure, listUserSessions, revokeUserSessions } from '$lib/auth-client';
 	import Button from '$lib/Button.svelte';
+	import Explain from '$lib/Explain.svelte';
 	import { agoLabel, utcInstant } from '$lib/elapsed';
 	import { queryKeys } from '$lib/query';
 	import { toast } from '$lib/toast';
+	import '$lib/flow.css';
+	import './admin.css';
 
 	// One account's live sign-ins, and the one control that ends them all.
 	//
@@ -104,42 +107,61 @@
 		{#if sessions.isPending}
 			<p class="quiet">Loading sign-ins…</p>
 		{:else if sessions.isError}
-			<p class="refusal">
+			<p class="flow-warn">
 				{sessions.error instanceof AuthFailure
 					? sessions.error.message
 					: "We could not load this account's sign-ins."}
 			</p>
 		{:else if rows.length === 0}
-			<p class="quiet">
-				This account is not signed in anywhere. That is not a ban: a ban also blocks the next
-				sign-in.
-			</p>
+			<p class="quiet">Not signed in anywhere. That is not a ban.</p>
 		{:else}
-			{#each rows as session (session.id)}
-				{@const started = when(session.createdAt)}
-				<div class="acct-state-row">
-					<span class="who">
-						<span class="t">{session.ipAddress || 'no address recorded'}</span>
-						<span class="why" title={session.userAgent ?? undefined}>
-							{session.userAgent || 'no user agent recorded'}
-						</span>
-					</span>
-					<span class="why" title={started === null ? undefined : utcInstant(started)}>
-						{started === null ? 'started at an unrecorded time' : `started ${agoLabel(started, now)}`}
-					</span>
-				</div>
-			{/each}
+			<div class="flow-table-wrap op-table op-keep">
+				<table class="flow-table">
+					<thead>
+						<tr>
+							<th>
+								<span class="op-th">
+									Device
+									<Explain title="What a sign-in records" label="">
+										<p>
+											The identity service keeps these, not the app. It records only an IP address
+											and user agent, with no device name.
+										</p>
+									</Explain>
+								</span>
+							</th>
+							<th class="num">Started</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each rows as session (session.id)}
+							{@const started = when(session.createdAt)}
+							<tr>
+								<td class="op-cell" data-label="Device">
+									<span class="t">{session.ipAddress || 'no address recorded'}</span>
+									<span class="s" title={session.userAgent ?? undefined}>
+										{session.userAgent || 'no user agent recorded'}
+									</span>
+								</td>
+								<td
+									class="num"
+									data-label="Started"
+									title={started === null ? undefined : utcInstant(started)}
+								>
+									{started === null ? '—' : agoLabel(started, now)}
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
 		{/if}
-
-		<p class="foot-note">
-			The identity service keeps these, not the app. It records only an IP address and user
-			agent, with no device name.
-		</p>
 
 		<div class="actions">
 			<Button tier="outline" onclick={onClose} disabled={ending}>Close</Button>
 			<Button
 				danger
+				icon="log-out"
 				disabled={ending || rows.length === 0}
 				reason={rows.length === 0 ? 'This account is not signed in anywhere.' : undefined}
 				onclick={endAll}

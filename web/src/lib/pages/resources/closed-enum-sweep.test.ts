@@ -37,7 +37,7 @@ import {
 	NO_RESOURCE_FILTERS,
 	listedOn,
 	matchesResource,
-	metaLine,
+	rowFacts,
 	needsYou,
 	sortRows,
 	SORTS,
@@ -502,7 +502,7 @@ describe('the board functions over every row the sweep builds', () => {
 	});
 });
 
-describe('the meta line over every price shape the wire can carry', () => {
+describe('the row facts over every price shape the wire can carry', () => {
 	// The three `PriceIntent` serialises as, then five it never does: the
 	// products endpoint types this field `unknown` on purpose, so the shapes
 	// below are what a drifted server, a partial response or a null column
@@ -533,11 +533,12 @@ describe('the meta line over every price shape the wire can carry', () => {
 		for (const price of PRICES) {
 			for (const cover of COVERS) {
 				const head = productOf({ price, ...(cover === undefined ? {} : { cover }) });
-				lines.push(metaLine(head, row, 1_000_000));
+				const facts = rowFacts(head, row, 1_000_000);
+				lines.push(facts.price, facts.updated);
 			}
 		}
-		expect(lines.length).toBe(PRICES.length * COVERS.length);
+		expect(lines.length).toBe(PRICES.length * COVERS.length * 2);
 		expect(lines.filter((line) => line.trim().length === 0)).toEqual([]);
-		expect(lines.every((line) => line.startsWith('Updated '))).toBe(true);
+		expect(lines.filter((_, index) => index % 2 === 1).every((line) => line.startsWith('Updated '))).toBe(true);
 	});
 });

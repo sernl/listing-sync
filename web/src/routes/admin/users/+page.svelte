@@ -17,17 +17,16 @@
 	} from '$lib/auth-client';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
-	import { PLANS } from '$lib/generated/plans';
-	import type { Plan } from '$lib/generated/vocab';
+	import Explain from '$lib/Explain.svelte';
 	import PageHead from '$lib/PageHead.svelte';
-	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
 	import { queryKeys } from '$lib/query';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import { toast } from '$lib/toast';
 	import GrantPlanForm from '$lib/pages/admin/GrantPlanForm.svelte';
+	import { planName } from '$lib/pages/admin/admin-view';
 	import SessionsDialog from '$lib/pages/admin/SessionsDialog.svelte';
-	import '$lib/pages/account/account.css';
+	import '$lib/flow.css';
 	import '$lib/pages/admin/admin.css';
 
 	/** How many accounts one listing carries. A rendering bound, not a policy
@@ -97,6 +96,28 @@
 	const appUsers = $derived(platform.data?.users ?? []);
 	const merged = $derived(mergeUsers(users.data ?? [], appUsers));
 	const rows = $derived(merged.rows);
+
+	type UserFilter = 'all' | 'unverified' | 'banned' | 'no-platform';
+	const USER_FILTERS: readonly { id: UserFilter; label: string }[] = [
+		{ id: 'all', label: 'All' },
+		{ id: 'unverified', label: 'Unverified' },
+		{ id: 'banned', label: 'Banned' },
+		{ id: 'no-platform', label: 'No app user' }
+	];
+	let filter = $state<UserFilter>('all');
+	function inFilter(row: (typeof rows)[number], chip: UserFilter): boolean {
+		switch (chip) {
+			case 'all':
+				return true;
+			case 'unverified':
+				return !row.identity.emailVerified && !row.identity.banned;
+			case 'banned':
+				return row.identity.banned === true;
+			case 'no-platform':
+				return row.platform === null;
+		}
+	}
+	const shown = $derived(rows.filter((row) => inFilter(row, filter)));
 	const trailVisible = $derived(signInTrailVisible(appUsers));
 	const listRefusal = $derived(
 		users.error instanceof AuthFailure ? identityAdminRefusal(users.error.status) : null
@@ -108,12 +129,6 @@
 
 	function refusalOf(failure: Error, fallback: string): string {
 		return failure instanceof AuthFailure ? failure.message : fallback;
-	}
-
-	/** The plan's own name where the price table carries it, and the wire word
-	 *  otherwise, exactly as the organisation page reads one. */
-	function planName(plan: Plan): string {
-		return PLANS.find((row) => row.id === plan)?.name ?? plan;
 	}
 
 	const banning = createMutation(() => ({
@@ -232,7 +247,7 @@
 	}
 </script>
 
-<div class="page">
+<div class="page flow-page">
 	<PageHead
 		icon="users"
 		title="Identity users"
@@ -243,9 +258,8 @@
 		<Placeholder
 			icon="users"
 			headline="You are not an identity admin"
-			body="Operator access and identity admin are granted separately, by hand. You have
-				operator access; this list also needs identity admin. Ask the person who runs the
-				identity service."
+			body="Operator access and identity admin are granted separately, by hand. This list also needs
+				identity admin. Ask the person who runs the identity service."
 		/>
 	{:else if listRefusal === 'unreadable'}
 		<Placeholder
@@ -254,220 +268,235 @@
 			body="The identity service did not answer. Try reloading the page."
 		/>
 	{:else}
-		<Panel>
-			<form class="op-search" role="search" onsubmit={search}>
-				<label class="sr-only" for="identity-search">Search accounts by email address</label>
-				<input
-					id="identity-search"
-					name="q"
-					type="search"
-					placeholder="Search by email address…"
-					bind:value={typed}
-				/>
-				<Button tier="additive" type="submit" icon="search">Search</Button>
-				{#if applied.length > 0}
-					<Button tier="outline" onclick={clearSearch}>Clear</Button>
-				{/if}
-			</form>
-
-			{#if refusal}
-				<Banner tone="bad" title="The impersonation was refused">{refusal}</Banner>
-			{/if}
-
-			{#if platform.isError}
-				<!-- The identity list still draws: an operator who cannot read
-				     the platform's half can still ban and impersonate, and a
-				     page that refused entirely would take those away too. -->
-				<Banner tone="warn" title="We could not load the app side of this list">
-					Organisation, plan and last sign-in are missing below. Identity details are still
-					shown.
-				</Banner>
-			{/if}
-
-			<!-- `rows.length` here, not just `users.isPending`: see the comment on
-			     `appUsers`. It also keeps a table on screen through a refetch
-			     rather than flashing this line over rows that are still good. -->
-			{#if users.isPending && rows.length === 0}
-				<p class="quiet">Loading accounts…</p>
-			{:else if users.isError}
-				<!-- Before the empty arm, and not folded into it: `listRefusal`
-				     is null for anything that is not an `AuthFailure`, and
-				     without this the page reported an empty identity service
-				     from a read that failed, with `retry: false` so it never
-				     corrected itself. -->
-				<Placeholder
-					icon="users"
-					headline="We could not load the accounts"
-					body="We cannot tell whether any accounts exist. Try reloading the page."
-				/>
-			{:else if rows.length === 0}
-				<Placeholder
-					icon="users"
-					headline={applied.length === 0
-						? 'No accounts yet'
-						: 'No account matches that search'}
-					body={applied.length === 0
-						? 'The first account appears here when someone signs up.'
-						: `No account's address contains “${applied}”.`}
-				/>
-			{:else}
-				<div class="op-table op-tall op-users">
-					<table>
-						<thead>
-							<tr>
-								<th>Account</th>
-								<th>Organisation and plan</th>
-								<th>Identity</th>
-								<th class="num">Seen</th>
-								<th class="num">Actions</th>
-							</tr>
-						</thead>
-						<tbody>
-							{#each rows as row (row.identity.id)}
-								{@const user = row.identity}
-								{@const joinedAt = joined(user.createdAt)}
-								{@const signedIn = row.platform?.last_sign_in_at ?? null}
-								<tr>
-									<td class="op-cell" data-label="Account">
-										<span class="t" title={user.name || user.email}>{user.name || user.email}</span>
-										<span class="s" title={user.email}>{user.email}</span>
-									</td>
-									<!-- The plan sits under the organisation rather than in a
-									     column of its own, because that is whose it is: an
-									     entitlement belongs to the tenant, and a tenant with two
-									     members has one plan rather than two. -->
-									<td class="op-cell" data-label="Organisation and plan">
-										{#if row.platform === null}
-											<span class="s">no platform user yet</span>
-										{:else}
-											{@const platformRow = row.platform}
-											<a
-												class="t"
-												href={`/admin/orgs/${platformRow.organisation.org}`}
-												title={platformRow.organisation.name}
-											>
-												{platformRow.organisation.name}
-											</a>
-											<span class="s">{platformRow.organisation.slug ?? 'no slug claimed'}</span>
-											<div class="op-plan">
-												<StatusPill
-													tone={platformRow.plan === 'free' ? 'soon' : 'ok'}
-													label={planName(platformRow.plan)}
-												/>
-												<Button
-													tier="outline"
-													small
-													onclick={() =>
-														(grantingFor = {
-															org: platformRow.organisation.org,
-															name: platformRow.organisation.name,
-															email: user.email
-														})}
-												>
-													Set plan
-												</Button>
-											</div>
-										{/if}
-									</td>
-									<td class="op-cell" data-label="Identity">
-										{#if user.banned}
-											<StatusPill tone="bad" label="banned" />
-											{#if user.banReason}<span class="s">{user.banReason}</span>{/if}
-										{:else if user.emailVerified}
-											<StatusPill tone="ok" label="verified" />
-										{:else}
-											<StatusPill tone="run" label="unverified" />
-										{/if}
-										<!-- The role sits under the verification pill rather than in a
-										     column of its own: both are the identity plane's word about
-										     this account, and the platform's three columns to the left
-										     are already as wide as the band allows. -->
-										<label class="sr-only" for={`role-${user.id}`}>Role for {user.email}</label>
-										<select
-											id={`role-${user.id}`}
-											value={user.role ?? 'user'}
-											disabled={settingRole.isPending}
-											onchange={(event) => changeRole(user, event)}
-										>
-											{#each IDENTITY_ROLES as role (role)}
-												<option value={role}>{role}</option>
-											{/each}
-										</select>
-									</td>
-									<td class="op-cell num" data-label="Seen">
-										<span class="t" title={joinedAt === null ? undefined : utcInstant(joinedAt)}>
-											{joinedAt === null ? '—' : `joined ${agoLabel(joinedAt, now)}`}
-										</span>
-										<span class="s" title={signedIn === null ? undefined : utcInstant(signedIn)}>
-											{signedIn === null
-												? 'no sign-in recorded'
-												: `signed in ${agoLabel(signedIn, now)}`}
-										</span>
-										<span class="s">{sessionWords(counted[user.id] ?? null)}</span>
-									</td>
-									<td data-label="Actions">
-										<div class="op-acts">
-											<Button tier="outline" small onclick={() => (sessionsFor = user)}>
-												Sign-ins
-											</Button>
-											{#if user.banned}
-												<Button
-													tier="outline"
-													small
-													disabled={unbanning.isPending}
-													reason={unbanning.isPending ? 'Unbanning.' : undefined}
-													onclick={() => unbanning.mutate(user.id)}
-												>
-													Unban
-												</Button>
-											{:else}
-												<Button
-													tier="outline"
-													small
-													danger
-													disabled={banning.isPending}
-													reason={banning.isPending ? 'Banning.' : undefined}
-													onclick={() => ban(user)}
-												>
-													Ban
-												</Button>
-											{/if}
-											<Button
-												tier="outline"
-												small
-												disabled={impersonating !== null}
-												reason={impersonating !== null
-													? 'An impersonation is already starting.'
-													: undefined}
-												onclick={() => impersonate(user)}
-											>
-												{impersonating === user.id ? 'Starting…' : 'Impersonate'}
-											</Button>
-										</div>
-									</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
+		<div class="flow">
+			<section class="flow-section">
+				<form class="op-filters" role="search" onsubmit={search}>
+					<label class="sr-only" for="identity-search">Search accounts by email address</label>
+					<input
+						id="identity-search"
+						name="q"
+						type="search"
+						placeholder="Search by email address…"
+						bind:value={typed}
+					/>
+					<Button tier="additive" type="submit" icon="search">Search</Button>
+					{#if applied.length > 0}
+						<Button tier="outline" onclick={clearSearch}>Clear</Button>
+					{/if}
+				</form>
+				<div class="op-filters" role="group" aria-label="Show">
+					{#each USER_FILTERS as chip (chip.id)}
+						<button
+							type="button"
+							class="op-chip"
+							aria-pressed={filter === chip.id}
+							onclick={() => (filter = chip.id)}
+						>
+							{chip.label}
+							<span class="c">{rows.filter((row) => inFilter(row, chip.id)).length}</span>
+						</button>
+					{/each}
 				</div>
-				<p class="foot-note">
-					{rows.length}
-					{rows.length === 1 ? 'account' : 'accounts'}, newest first, at most {PAGE_SIZE}. You
-					cannot impersonate an unverified account; the attempt is undone, not left half-done.
-					{#if merged.unlinked > 0}
-						{merged.unlinked} platform
-						{merged.unlinked === 1 ? 'user is' : 'users are'} not on this page. Either the
-						search does not match, or they have no identity account because they were created
-						outside sign-up.
-					{/if}
-					Sign-ins load one account at a time. The count fills in when you open a row.
-					{#if !trailVisible && appUsers.length > 0}
-						No row shows a last sign-in. Most likely this server cannot see the identity schema,
-						not that nobody has signed in.
-					{/if}
-				</p>
-			{/if}
-		</Panel>
+
+				{#if refusal}
+					<Banner tone="bad" title="The impersonation was refused">{refusal}</Banner>
+				{/if}
+
+				{#if platform.isError}
+					<!-- The identity list still draws: an operator who cannot read
+					     the platform's half can still ban and impersonate. -->
+					<p class="flow-warn">Organisation, plan and last sign-in could not be loaded.</p>
+				{/if}
+
+				<!-- `rows.length` here, not just `users.isPending`: see the comment on
+				     `appUsers`. It also keeps a table on screen through a refetch. -->
+				{#if users.isPending && rows.length === 0}
+					<p class="quiet">Loading accounts…</p>
+				{:else if users.isError}
+					<!-- Before the empty arm: `listRefusal` is null for anything that
+					     is not an `AuthFailure`, and without this a failed read
+					     reported an empty identity service. -->
+					<Placeholder
+						icon="users"
+						headline="We could not load the accounts"
+						body="We cannot tell whether any accounts exist. Try reloading the page."
+					/>
+				{:else if rows.length === 0}
+					<Placeholder
+						icon="users"
+						headline={applied.length === 0 ? 'No accounts yet' : 'No account matches that search'}
+						body={applied.length === 0
+							? 'The first account appears here when someone signs up.'
+							: `No account's address contains “${applied}”.`}
+					/>
+				{:else}
+					<div class="flow-table-wrap op-table op-tall op-users">
+						<table class="flow-table">
+							<thead>
+								<tr>
+									<th>Account</th>
+									<th>Organisation and plan</th>
+									<th>
+										<span class="op-th">
+											Identity
+											<Explain title="Identity and sign-ins" label="">
+												<p>
+													Verification, ban and role are the identity service's. You cannot
+													impersonate an unverified account; the attempt is undone, not left
+													half-done.
+												</p>
+												<p>
+													Sign-ins load one account at a time. The count fills in when you open a
+													row.
+												</p>
+												{#if !trailVisible && appUsers.length > 0}
+													<p>
+														No row shows a last sign-in. Most likely this server cannot see the
+														identity schema, not that nobody has signed in.
+													</p>
+												{/if}
+											</Explain>
+										</span>
+									</th>
+									<th class="num">Seen</th>
+									<th class="num">Actions</th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each shown as row (row.identity.id)}
+									{@const user = row.identity}
+									{@const joinedAt = joined(user.createdAt)}
+									{@const signedIn = row.platform?.last_sign_in_at ?? null}
+									<tr>
+										<td class="op-cell" data-label="Account">
+											<span class="t" title={user.name || user.email}>{user.name || user.email}</span>
+											<span class="s" title={user.email}>{user.email}</span>
+										</td>
+										<!-- The plan sits under the organisation because that is whose
+										     it is: a tenant with two members has one plan. -->
+										<td class="op-cell" data-label="Organisation and plan">
+											{#if row.platform === null}
+												<span class="s">no platform user yet</span>
+											{:else}
+												{@const platformRow = row.platform}
+												<a
+													class="t op-name"
+													href={`/admin/orgs/${platformRow.organisation.org}`}
+													title={platformRow.organisation.name}
+												>
+													{platformRow.organisation.name}
+												</a>
+												<div class="op-plan">
+													<StatusPill
+														tone={platformRow.plan === 'free' ? 'soon' : 'ok'}
+														label={planName(platformRow.plan)}
+													/>
+													<Button
+														tier="quiet"
+														small
+														onclick={() =>
+															(grantingFor = {
+																org: platformRow.organisation.org,
+																name: platformRow.organisation.name,
+																email: user.email
+															})}
+													>
+														Set plan
+													</Button>
+												</div>
+											{/if}
+										</td>
+										<td class="op-cell" data-label="Identity">
+											<div class="op-plan">
+												{#if user.banned}
+													<StatusPill tone="bad" label="banned" />
+												{:else if user.emailVerified}
+													<StatusPill tone="ok" label="verified" />
+												{:else}
+													<StatusPill tone="warn" label="unverified" />
+												{/if}
+												{#if user.banned && user.banReason}<span class="s">{user.banReason}</span>{/if}
+												<label class="sr-only" for={`role-${user.id}`}>Role for {user.email}</label>
+												<select
+													id={`role-${user.id}`}
+													value={user.role ?? 'user'}
+													disabled={settingRole.isPending}
+													onchange={(event) => changeRole(user, event)}
+												>
+													{#each IDENTITY_ROLES as role (role)}
+														<option value={role}>{role}</option>
+													{/each}
+												</select>
+											</div>
+										</td>
+										<td class="op-cell num" data-label="Seen">
+											<span class="t" title={joinedAt === null ? undefined : utcInstant(joinedAt)}>
+												{joinedAt === null ? '—' : `joined ${agoLabel(joinedAt, now)}`}
+											</span>
+											<span class="s" title={signedIn === null ? undefined : utcInstant(signedIn)}>
+												{signedIn === null ? 'no sign-in recorded' : `signed in ${agoLabel(signedIn, now)}`}
+											</span>
+											<span class="s">{sessionWords(counted[user.id] ?? null)}</span>
+										</td>
+										<td data-label="Actions">
+											<div class="op-acts">
+												<Button
+													tier="primary"
+													small
+													icon="log-out"
+													disabled={impersonating !== null}
+													reason={impersonating !== null
+														? 'An impersonation is already starting.'
+														: undefined}
+													onclick={() => impersonate(user)}
+												>
+													{impersonating === user.id ? 'Starting…' : 'Impersonate'}
+												</Button>
+												<Button tier="outline" small icon="laptop" onclick={() => (sessionsFor = user)}>
+													Sign-ins
+												</Button>
+												{#if user.banned}
+													<Button
+														tier="outline"
+														small
+														disabled={unbanning.isPending}
+														reason={unbanning.isPending ? 'Unbanning.' : undefined}
+														onclick={() => unbanning.mutate(user.id)}
+													>
+														Unban
+													</Button>
+												{:else}
+													<Button
+														tier="outline"
+														small
+														danger
+														disabled={banning.isPending}
+														reason={banning.isPending ? 'Banning.' : undefined}
+														onclick={() => ban(user)}
+													>
+														Ban
+													</Button>
+												{/if}
+											</div>
+										</td>
+									</tr>
+								{:else}
+									<tr><td colspan="5" class="quiet">None under this filter.</td></tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+					<p class="op-foot">
+						{shown.length} of {rows.length}
+						{rows.length === 1 ? 'account' : 'accounts'}, newest first, at most {PAGE_SIZE}.
+						{#if merged.unlinked > 0}
+							{merged.unlinked} platform {merged.unlinked === 1 ? 'user is' : 'users are'} not on
+							this page: the search does not match, or they were created outside sign-up.
+						{/if}
+					</p>
+				{/if}
+			</section>
+		</div>
 	{/if}
 </div>
 

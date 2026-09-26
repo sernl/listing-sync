@@ -134,3 +134,47 @@ describe('counting the carriers of one label', () => {
 		expect(calls).toHaveLength(1);
 	});
 });
+
+describe('creating a label on resources', () => {
+	it('adds the name to each resource and keeps the labels it already carries, minus system ones', async () => {
+		const { labelResources } = await import('./api');
+		const written: [string, string[]][] = [];
+		const held: Record<string, { name: string; colour: string; system: boolean }[]> = {
+			a: [
+				{ name: 'Maths', colour: 'blue', system: false },
+				{ name: 'From TPT', colour: 'green', system: true }
+			],
+			b: [{ name: 'autumn term', colour: 'red', system: false }]
+		};
+		const done = await labelResources(['a', 'b'], 'Autumn term', {
+			read: (product) => Promise.resolve({ labels: held[product] }),
+			write: (product, labels) => {
+				written.push([product, labels]);
+				return Promise.resolve();
+			}
+		});
+		expect(done).toEqual({ count: 2, refusal: null });
+		expect(written).toEqual([
+			['a', ['Maths', 'Autumn term']],
+			['b', ['autumn term']]
+		]);
+	});
+
+	it('stops at the first refusal and says how many were labelled before it', async () => {
+		const { labelResources } = await import('./api');
+		let at = 0;
+		const done = await labelResources(['a', 'b', 'c'], 'Bundle', {
+			read: () => Promise.resolve({ labels: [] }),
+			write: () => {
+				at += 1;
+				return at === 2
+					? Promise.reject(
+							new ApiFailure(422, { errors: [{ message: 'Twenty is the most.' }] } as never)
+						)
+					: Promise.resolve();
+			}
+		});
+		expect(done.count).toBe(1);
+		expect(done.refusal).toBe('Twenty is the most.');
+	});
+});

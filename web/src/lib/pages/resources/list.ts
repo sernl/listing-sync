@@ -1,5 +1,5 @@
 // The Resources board's own view logic: which tab a resource falls in, which
-// rows survive the filter card, how a row's one meta line reads, and the order
+// rows survive the filter card, what each row says, and the order
 // the stack is shown in. Pure, so it tests without a component.
 //
 // The marketplace and standing semantics are `$lib/inventory`'s own
@@ -259,21 +259,32 @@ export function listedOn(row: InventoryRow): string[] {
 		.map((chip) => SHORT_NAME[chip.inventory]);
 }
 
-/**
- * The row's single meta line.
- *
- * Three facts at most, because a row that lists four is read as none: how long
- * ago it changed, what it costs, and who is showing it. A resource no
- * marketplace shows says nothing rather than saying "nowhere", which the chip
- * strip directly beneath already says in full.
- */
-export function metaLine(product: ProductHead, row: InventoryRow, now: number): string {
-	const parts = [`Updated ${agoLabel(product.updated_at, now)}`, formatPrice(product.price)];
-	const showing = listedOn(row);
-	if (showing.length > 0) {
-		parts.push(showing.join(', '));
-	}
-	return parts.join(' · ');
+/** What one row of the board says, each fact in its own column so each can
+ *  carry its own colour: the age, the price (teal), and one status word read
+ *  from the same chips the tabs are read from, so a row filed under Listed
+ *  never says Draft. */
+export interface RowFacts {
+	updated: string;
+	price: string;
+	status: { label: string; tone: Tone };
+}
+
+/** The row's facts. "Needs you" outranks the standing, because it is the one
+ *  a seller has to act on; a listed resource names where it shows. */
+export function rowFacts(product: ProductHead, row: InventoryRow, now: number): RowFacts {
+	const standing = standingOfRow(row);
+	const status: RowFacts['status'] = needsYou(row)
+		? { label: 'Needs you', tone: 'bad' }
+		: standing === 'listed'
+			? { label: `Listed on ${listedOn(row).join(', ')}`, tone: 'ok' }
+			: standing === 'draft'
+				? { label: 'Draft', tone: 'run' }
+				: { label: 'Not listed', tone: 'soon' };
+	return {
+		updated: `Updated ${agoLabel(product.updated_at, now)}`,
+		price: formatPrice(product.price),
+		status
+	};
 }
 
 export type SortId = 'updated_desc' | 'updated_asc' | 'created_desc' | 'title_asc';

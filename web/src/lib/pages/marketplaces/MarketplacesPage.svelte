@@ -3,9 +3,14 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { api } from '$lib/api';
-	import AddCard from '$lib/AddCard.svelte';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
+	import Explain from '$lib/Explain.svelte';
+	import FlowActionBar from '$lib/FlowActionBar.svelte';
+	import FlowDiagram from '$lib/FlowDiagram.svelte';
+	import FlowStep from '$lib/FlowStep.svelte';
+	import PageHead from '$lib/PageHead.svelte';
+	import Stepper, { type StepMark } from '$lib/Stepper.svelte';
 	import type { Marketplace } from '$lib/generated/vocab';
 	import { entitlementRead, limitOf } from '$lib/entitlement-read';
 	import {
@@ -27,6 +32,7 @@
 	import { blockedBanner, needsConsent, standingFor } from './consent';
 	import Downloads from './Downloads.svelte';
 	import MarketplaceCard from './MarketplaceCard.svelte';
+	import MarkLink from './MarkLink.svelte';
 	import RequestCard from './RequestCard.svelte';
 	import { fetchManifest } from './api';
 	import { DISCLAIMER, EXTENSIONS, LISTED, LIVE, MARK_ATTRIBUTION, PLANNED } from './catalogue';
@@ -39,6 +45,7 @@
 		type LiveRead,
 		MACHINES_ANCHOR,
 		TRANSPORT_BADGE,
+		attentionAsk,
 		busyAt,
 		connectReturn,
 		connectSignedOut,
@@ -61,6 +68,7 @@
 		transportLine,
 		withBusy
 	} from './view';
+	import '$lib/flow.css';
 	import './marketplaces.css';
 
 	$effect(() => {
@@ -506,33 +514,52 @@
 					(row.authorship === undefined || row.authorship.state === 'undeclared')
 			)
 	);
+
+	/** The attention banner's title and its one sentence of what to do. */
+	const ask = $derived(attentionAsk(waiting));
+
+	/** The flow's three steps, ticked once each holds its answer: both shops
+	 *  signed in with nothing waiting, a machine of the seller's registered (or this page open in
+	 *  the app, which is one), and TPT's copyright declared. */
+	const shopsDone = $derived(
+		read === 'read' &&
+			waiting.length === 0 &&
+			LIVE.every(
+				(tile) =>
+					rows.find((row) => row.marketplace === tile.marketplace)?.signIn.state === 'signed_in'
+			)
+	);
+	const appDone = $derived(
+		host === 'app' || devices.some((device) => device.revoked_at === null)
+	);
+	const steps = $derived<StepMark[]>([
+		{ id: 'shops', label: 'Your shops', done: shopsDone },
+		{ id: 'app', label: 'Get the app', done: appDone },
+		{ id: 'authorship', label: 'Who made this work', done: read === 'read' && !undeclared }
+	]);
 </script>
 
-<div class="page">
-	<div class="mp-title">
-		<div>
-			<h1>Marketplaces</h1>
-			<p>
-				Connect the places you sell.
-				<a class="mp-guide" href="/guides/connecting">How connecting works</a>
-			</p>
-		</div>
-		<span class="act">
-			<Button
-				tier={host === 'app' ? 'outline' : 'primary'}
-				icon="circle-plus"
-				href={header.href}>{header.label}</Button
-			>
-		</span>
-	</div>
+<div class="page flow-page has-bar">
+	<PageHead
+		icon="shopping-bag"
+		title="Marketplaces"
+		description="Connect the places you sell."
+		guide="connecting"
+	>
+		{#snippet aside()}
+			<!-- On a phone the same action is in the sticky bar below. -->
+			<span class="mp-head-act">
+				<Button
+					tier={host === 'app' ? 'outline' : 'primary'}
+					icon="circle-plus"
+					href={header.href}>{header.label}</Button
+				>
+			</span>
+		{/snippet}
+	</PageHead>
 
-	{#if waiting.length > 0}
-		<Banner
-			tone="warn"
-			title="{waiting.length} {waiting.length === 1 ? 'marketplace needs' : 'marketplaces need'} your attention"
-		>
-			{waiting.map((row) => CARD_NAME[row.marketplace]).join(', ')}.
-		</Banner>
+	{#if ask !== null}
+		<Banner tone="warn" title={ask.title}>{ask.say}</Banner>
 	{/if}
 
 	{#if undeclared}
@@ -554,121 +581,152 @@
 		</Banner>
 	{/if}
 
-	<div class="mp-grid">
-		{#each liveCards as card (card.tile.marketplace)}
-			<MarketplaceCard
-				mark={card.tile.mark}
-				name={card.tile.name}
-				home={card.tile.home}
-				handle={card.face.handle}
-				status={card.face.status}
-				body={card.face.body}
-				here={card.here}
-				about={card.tile.about}
-				transport={{
-					badge: TRANSPORT_BADGE[TRANSPORT_OF[card.tile.marketplace]],
-					line: transportLine(TRANSPORT_OF[card.tile.marketplace], card.tile.name)
-				}}
-				action={card.face.action}
-				disconnect={disconnectable(connectionFor(card.tile.marketplace))
-					? {
-							label: disconnectLabel(card.tile.marketplace),
-							marketplace: card.tile.marketplace
-						}
-					: undefined}
-				signOut={card.heldHere
-					? {
-							label: signOutHereLabel(card.tile.marketplace),
-							marketplace: card.tile.marketplace
-						}
-					: undefined}
-				running={busyAt(busy, card.tile.marketplace)}
-				refusal={connectionFor(card.tile.marketplace) === undefined
-					? (connectRefusal ?? consentRefusal(card.tile.marketplace))
-					: consentRefusal(card.tile.marketplace)}
-				onrun={connect}
-				ondisconnect={disconnect}
-				onsignout={signOutOfHere}
-			/>
-		{/each}
+	<div class="flow">
+		<Stepper {steps} label="Marketplace steps" />
 
-		{#each PLANNED as tile (tile.slug)}
-			<MarketplaceCard
-				mark={tile.mark}
-				name={tile.name}
-				home={tile.home}
-				status={{ tone: 'soon', label: 'Coming soon' }}
-				body={tile.body}
-				about={tile.about}
-				transport={tile.marketplace === undefined
-					? undefined
-					: {
-							badge: TRANSPORT_BADGE[TRANSPORT_OF[tile.marketplace]],
-							line: transportLine(TRANSPORT_OF[tile.marketplace], tile.name)
+		<FlowStep
+			n={1}
+			id="shops"
+			title="Your shops"
+			hint="Connect each shop once, from the Teachouse app."
+			done={shopsDone}
+		>
+			{#snippet aside()}
+				<Explain title="How connecting works">
+					<p>
+						Teachouse signs in to TPT and TES from the Teachouse app on your own computer or
+						phone. Your login stays on that machine, and your scheduled work runs there.
+					</p>
+					<p><a href="/guides/connecting">Read the guide on connecting</a></p>
+				</Explain>
+			{/snippet}
+
+			<FlowDiagram
+				from={{ icon: 'library-big', label: 'Teachouse' }}
+				to={LIVE.map((tile) => ({ inventory: tile.marketplace }))}
+				rule="lists your resources"
+				label="Teachouse lists your resources on {LIVE.map((tile) => tile.name).join(' and ')}"
+			/>
+
+			<div class="mp-tiles">
+				{#each liveCards as card (card.tile.marketplace)}
+					<MarketplaceCard
+						mark={card.tile.mark}
+						name={card.tile.name}
+						home={card.tile.home}
+						handle={card.face.handle}
+						status={card.face.status}
+						body={card.face.body}
+						here={card.here}
+						about={card.tile.about}
+						transport={{
+							badge: TRANSPORT_BADGE[TRANSPORT_OF[card.tile.marketplace]],
+							line: transportLine(TRANSPORT_OF[card.tile.marketplace], card.tile.name)
 						}}
-				pending
-			/>
-		{/each}
+						action={card.face.action}
+						disconnect={disconnectable(connectionFor(card.tile.marketplace))
+							? {
+									label: disconnectLabel(card.tile.marketplace),
+									marketplace: card.tile.marketplace
+								}
+							: undefined}
+						signOut={card.heldHere
+							? {
+									label: signOutHereLabel(card.tile.marketplace),
+									marketplace: card.tile.marketplace
+								}
+							: undefined}
+						running={busyAt(busy, card.tile.marketplace)}
+						refusal={connectionFor(card.tile.marketplace) === undefined
+							? (connectRefusal ?? consentRefusal(card.tile.marketplace))
+							: consentRefusal(card.tile.marketplace)}
+						onrun={connect}
+						ondisconnect={disconnect}
+						onsignout={signOutOfHere}
+					/>
+				{/each}
+			</div>
+		</FlowStep>
 
-		{#each LISTED as tile (tile.slug)}
-			<MarketplaceCard
-				mark={tile.mark}
-				name={tile.name}
-				home={tile.home}
-				status={{ tone: 'soon', label: 'On our list' }}
-				body={tile.body}
-				about={tile.about}
-				pending
-			/>
-		{/each}
+		<FlowStep
+			n={2}
+			id="app"
+			title="Get the app"
+			hint="Install it on the computer or phone you sell from."
+			done={appDone}
+		>
+			<Downloads manifest={releases.data ?? null}>
+				{#snippet soon()}
+					<!-- The browser extensions: the desktop app does everything one
+					     would. Each mark opens its owner's page, which is Mozilla's
+					     condition for its logo. -->
+					{#each EXTENSIONS as tile (tile.slug)}
+						<MarkLink mark={tile.mark} name={tile.name} home={tile.home} about={tile.body} />
+					{/each}
+				{/snippet}
+			</Downloads>
+		</FlowStep>
 
-		{#if requesting}
-			<RequestCard onclose={() => (requesting = false)} />
-		{:else}
-			<AddCard
-				title="Request a marketplace"
-				why="Tell us where else you sell."
-				onclick={() => (requesting = true)}
-			/>
-		{/if}
-	</div>
+		<FlowStep
+			n={3}
+			id="authorship"
+			title="Who made this work"
+			hint="Say who holds the copyright, once per shop."
+			done={read === 'read' && !undeclared}
+		>
+			{#snippet aside()}
+				<Explain title="Who holds the copyright">
+					<p>
+						This is your own statement of who owns the copyright in the work you sell, and it
+						goes with everything you publish. TPT asks for it on every listing.
+					</p>
+					<p><a href="/guides/copyright">Read the guide on copyright</a></p>
+				</Explain>
+			{/snippet}
+			<Authorship rows={declarable} {now} {read} />
+		</FlowStep>
 
-	<section class="mp-part">
-		<div class="mp-sect">
-			<h2>Browser extension</h2>
-			<p>The desktop app does everything a browser extension would.</p>
+		<details class="flow-more mp-planned">
+			<summary>More marketplaces we plan to add</summary>
+			<!-- Twenty-one names as marks: each opens the marketplace's own site,
+			     which is the condition some owners attach to showing their mark,
+			     and says what it is on hover. -->
+			<div class="mp-plan-grid">
+				{#each PLANNED as tile (tile.slug)}
+					<MarkLink mark={tile.mark} name={tile.name} home={tile.home} about={tile.about} />
+				{/each}
+				{#each LISTED as tile (tile.slug)}
+					<MarkLink mark={tile.mark} name={tile.name} home={tile.home} about={tile.about} />
+				{/each}
+			</div>
+			{#if requesting}
+				<RequestCard onclose={() => (requesting = false)} />
+			{:else}
+				<div class="flow-actions">
+					<Button tier="outline" icon="circle-plus" onclick={() => (requesting = true)}>
+						Request a marketplace
+					</Button>
+				</div>
+			{/if}
+		</details>
+
+		<!-- The legal notice, verbatim, one press away. The licence conditions are
+		     each their own paragraph rather than run together: Google's Creative
+		     Commons line is a condition of drawing the Android robot on this page. -->
+		<div class="mp-legal">
+			<Explain title="Names and logos" label="Names and logos">
+				<p>{DISCLAIMER}</p>
+				{#each MARK_ATTRIBUTION as sentence (sentence)}
+					<p>{sentence}</p>
+				{/each}
+			</Explain>
 		</div>
-
-		<div class="mp-grid">
-			{#each EXTENSIONS as tile (tile.slug)}
-				<MarketplaceCard
-					mark={tile.mark}
-					name={tile.name}
-					home={tile.home}
-					status={{ tone: 'soon', label: 'Coming soon' }}
-					body={tile.body}
-					pending
-				/>
-			{/each}
-		</div>
-	</section>
-
-	<div class="mp-part">
-		<Downloads manifest={releases.data ?? null} />
 	</div>
-
-	<div class="mp-part">
-		<Authorship rows={declarable} {now} {read} />
-	</div>
-
-	<p class="mp-disclaimer">{DISCLAIMER}</p>
-	<!-- The licence conditions themselves, each its own line rather than run into
-	     the paragraph above: Google asks for its Creative Commons line "in the
-	     creative", and the creative is the page drawing the robot. -->
-	{#each MARK_ATTRIBUTION as sentence (sentence)}
-		<p class="mp-disclaimer mp-attribution">{sentence}</p>
-	{/each}
 </div>
+
+<FlowActionBar>
+	<Button tier="primary" icon="circle-plus" href={header.href}>{header.label}</Button>
+</FlowActionBar>
 
 {#if consentFor !== null}
 	<ConsentDialog

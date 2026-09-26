@@ -3,6 +3,7 @@
 	import { ApiFailure, api } from '$lib/api';
 	import Button from '$lib/Button.svelte';
 	import Field from '$lib/Field.svelte';
+	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
 	import type { MarketplaceRow } from '$lib/devices-view';
 	import { agoLabel } from '$lib/elapsed';
 	import type { Marketplace } from '$lib/generated/vocab';
@@ -66,15 +67,7 @@
 	}
 </script>
 
-<section id="copyright">
-	<div class="mp-sect">
-		<h2>Who made this work</h2>
-		<p>
-			Declare who holds the copyright in your work, once per marketplace.
-			<a class="mp-guide" href="/guides/copyright">Who holds the copyright</a>
-		</p>
-	</div>
-
+<div id="copyright" class="mp-authors">
 	{#if read !== 'read'}
 		<p class="quiet">
 			{read === 'pending'
@@ -82,78 +75,78 @@
 				: 'We could not load this. Reload the page to try again.'}
 		</p>
 	{:else}
-		<div class="mp-card">
+		<div class="flow-list">
 			{#each rows as row (row.marketplace)}
-			<div class="mp-machine">
-				<div class="who">
-					<span class="t">{CARD_NAME[row.marketplace]}</span>
-					<span class="act">
-						<Button tier="outline" small icon="pencil" onclick={() => open(row)}>
-							{standing(row) ? 'Change' : 'Declare'}
+				{@const held = standing(row)}
+				<div class="flow-item mp-author" class:mp-owed={held === null && row.marketplace === 'Tpt'}>
+					<MarketplaceMark marketplace={row.marketplace} size={24} />
+					<span class="flow-item-main">
+						{#if held}
+							<span class="flow-item-title">{held.name}</span>
+							<span class="flow-item-line">Declared {agoLabel(held.attested_at, now)}</span>
+						{:else if row.marketplace === 'Tpt'}
+							<span class="flow-item-title mp-warned">Not declared</span>
+							<span class="flow-item-line">TPT refuses anything you publish until you declare it.</span>
+						{:else}
+							<span class="flow-item-title">Not declared</span>
+							<span class="flow-item-line">{CARD_NAME[row.marketplace]} does not need this.</span>
+						{/if}
+					</span>
+					<span class="flow-item-acts">
+						<Button
+							tier={held === null && row.marketplace === 'Tpt' ? 'primary' : 'outline'}
+							small
+							icon="pencil"
+							onclick={() => open(row)}
+						>
+							{held ? 'Change' : 'Declare'}
 						</Button>
 					</span>
-				</div>
-				{#if standing(row)}
-					<p class="spec">
-						Declared by {standing(row)?.name}, {agoLabel(
-							standing(row)?.attested_at ?? now,
-							now
-						)}.
-					</p>
-				{:else if row.marketplace === 'Tpt'}
-					<p class="mp-warned">
-						Not declared. Nothing you publish to TPT will go through until you declare it.
-					</p>
-				{:else}
-					<p class="spec">
-						Not declared. {CARD_NAME[row.marketplace]} does not need this.
-					</p>
-				{/if}
 
-				{#if openOn === row.marketplace}
-					<div class="mp-held">
-						<Field
-							label="Your name, as the copyright holder"
-							id="mp-authorship-{row.marketplace}"
-						>
-							<input
+					{#if openOn === row.marketplace}
+						<div class="mp-held">
+							<Field
+								label="Your name, as the copyright holder"
 								id="mp-authorship-{row.marketplace}"
-								type="text"
-								maxlength="200"
-								placeholder="The name to show as the copyright holder"
-								disabled={saving}
-								bind:value={typed}
-							/>
-						</Field>
-						<div class="one">
-							<Button
-								tier="additive"
-								small
-								disabled={saving || typed.trim().length === 0}
-								reason={saving
-									? 'Saving…'
-									: typed.trim().length === 0
-										? 'Type the name first.'
-										: undefined}
-								onclick={() => void declare(row.marketplace)}
 							>
-								{saving ? 'Saving…' : 'Save'}
-							</Button>
-							<Button
-								tier="outline"
-								small
-								disabled={saving}
-								reason={saving ? 'Saving…' : undefined}
-								onclick={() => (openOn = null)}
-							>
-								Cancel
-							</Button>
+								<input
+									id="mp-authorship-{row.marketplace}"
+									type="text"
+									maxlength="200"
+									placeholder="The name to show as the copyright holder"
+									disabled={saving}
+									bind:value={typed}
+								/>
+							</Field>
+							<div class="flow-actions">
+								<Button
+									tier="additive"
+									small
+									disabled={saving || typed.trim().length === 0}
+									reason={saving
+										? 'Saving…'
+										: typed.trim().length === 0
+											? 'Type the name first.'
+											: undefined}
+									onclick={() => void declare(row.marketplace)}
+								>
+									{saving ? 'Saving…' : 'Save'}
+								</Button>
+								<Button
+									tier="outline"
+									small
+									disabled={saving}
+									reason={saving ? 'Saving…' : undefined}
+									onclick={() => (openOn = null)}
+								>
+									Cancel
+								</Button>
+							</div>
+							{#if refusal !== null}<p class="mp-warned">{refusal}</p>{/if}
 						</div>
-						{#if refusal !== null}<p class="mp-warned">{refusal}</p>{/if}
-					</div>
-				{/if}
-			</div>
+					{/if}
+				</div>
 			{/each}
 		</div>
 	{/if}
-</section>
+</div>

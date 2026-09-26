@@ -381,3 +381,33 @@ describe('a request to clear the editor', () => {
 		expect(consumeBlankRequest(first.pending).open).toBe(false);
 	});
 });
+
+describe('what a saved template sets', () => {
+	it('names each answered field once, in the form’s words, and skips what it leaves open', async () => {
+		const { fieldsSet } = await import('./resource-template');
+		expect(
+			fieldsSet({
+				name: 'Maths pack',
+				description: 'A worksheet pack.',
+				free: false,
+				price_minor_units: 300,
+				grades: ['5', '6'],
+				subject_areas: [],
+				tags: ['fractions'],
+				teaching_duration_id: null,
+				appropriate_for_country: false,
+				thumbnail_hashes: ['abc']
+			})
+		).toEqual(['description', 'price', 'year levels', 'tags', 'localization']);
+	});
+
+	it('reads a free template as setting the price', async () => {
+		const { fieldsSet } = await import('./resource-template');
+		expect(fieldsSet({ free: true, price_minor_units: null })).toEqual(['price']);
+	});
+
+	it('says nothing for an empty draft', async () => {
+		const { fieldsSet } = await import('./resource-template');
+		expect(fieldsSet({})).toEqual([]);
+	});
+});

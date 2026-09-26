@@ -5,214 +5,312 @@
  * token.
  */
 
-/* The note closes the cards above it and is not the chrome of the panel
-   below, so it carries the page's own card gap. */
-.import-cards + .note {
-	margin-bottom: 24px;
-}
+/* --- the landing flow ---------------------------------------------------- */
 
-.import-cards {
+/* Where from: one tile per way in, the chosen one in the accent. A tile is a
+   radio button with, for the sheet, a secondary control under it; a button
+   cannot hold a button, so the tile is the wrapper and the radio fills it. */
+.imp-tiles {
 	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-	gap: 20px;
-	margin-bottom: 22px;
+	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+	gap: var(--s-3);
 }
 
-.import-card {
-	background: var(--surface);
-	border: 1px solid var(--line);
-	border-radius: var(--r-card);
-	box-shadow: var(--sh-2);
-	padding: 22px;
+.imp-tile {
 	display: flex;
 	flex-direction: column;
-	gap: 12px;
+	border: 1.5px solid var(--line);
+	border-radius: var(--r-panel);
+	background: var(--surface);
 	min-width: 0;
 }
 
-.import-card .head {
+.imp-tile:hover {
+	border-color: var(--lavender);
+}
+
+.imp-tile.on {
+	border-color: var(--accent);
+	background: var(--accent-soft);
+	box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.imp-tile-pick {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr);
+	grid-template-areas:
+		'mark name'
+		'mark pill';
+	align-items: center;
+	gap: 4px var(--s-3);
+	width: 100%;
+	padding: var(--s-3) var(--s-4);
+	border: 0;
+	border-radius: var(--r-panel);
+	background: none;
+	color: var(--text);
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+
+.imp-tile-pick:disabled {
+	opacity: 0.55;
+	cursor: not-allowed;
+}
+
+.imp-tile-pick:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.imp-tile-pick > .status {
+	grid-area: pill;
+	justify-self: start;
+}
+
+.imp-tile-mark {
+	grid-area: mark;
+	display: grid;
+	place-items: center;
+	width: 44px;
+	height: 44px;
+	border-radius: 12px;
+	background: var(--mark-ground);
+	border: 1.5px solid var(--lavender);
+}
+
+.imp-tile-mark.sheet {
+	color: var(--additive);
+}
+
+.imp-tile-name {
+	grid-area: name;
+	font-family: var(--display);
+	font-size: 16px;
+	font-weight: 600;
+}
+
+.imp-tile-more {
+	padding: 0 var(--s-3) var(--s-3) calc(var(--s-4) + 44px + var(--s-3) - 10px);
+}
+
+/* The start step's one line, with this device's sign-in beside it. */
+.imp-line {
 	display: flex;
 	align-items: center;
-	gap: 10px;
 	flex-wrap: wrap;
-}
-
-.import-card h2 {
+	gap: var(--s-2) var(--s-3);
 	margin: 0;
-	font-family: var(--display);
-	font-size: 20px;
-	font-weight: 600;
-	margin-right: auto;
+	font-size: 14px;
+	color: var(--text);
 }
 
-.import-card .badges {
+.imp-explain-steps {
+	margin: 0;
+	padding-left: 1.2em;
 	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+/* The sheet's file input, reached through the labels that stand for it. */
+.imp-file {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	opacity: 0;
+	pointer-events: none;
+}
+
+.imp-upload {
+	cursor: pointer;
+}
+
+.imp-upload[aria-disabled='true'] {
+	opacity: 0.6;
+	pointer-events: none;
+}
+
+/* The history's filters, as pills a thumb can press. */
+.imp-filters {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-2);
+}
+
+.imp-chips {
+	display: flex;
+	flex-wrap: wrap;
 	align-items: center;
 	gap: 6px;
-	flex-wrap: wrap;
 }
 
-/* The child combinator is load-bearing: as a descendant this has the same
-   specificity as `.banner p` and loads later, so it flattened the gap under a
-   refusal banner's title wherever one is rendered inside a card. */
-.import-card > p {
-	margin: 0;
-}
-
-.import-card .field {
-	max-width: 280px;
-}
-
-/* The reason a marketplace cannot be read is the card's whole content, so it
-   is set as body text rather than as a footnote under something. */
-.import-card .why {
-	font-size: 13px;
-	color: var(--muted);
-}
-
-/* A card is about 420px wide at 1280 and narrower in one column, so a banner
-   inside one is always in the condition the catalogue already treats as the
-   phone case: its action takes the right half and the sentence is left in a
-   column a few words wide. Same treatment as `components.css` gives at 620px,
-   applied by container rather than by viewport. */
-.import-card .banner {
-	flex-wrap: wrap;
-}
-
-.import-card .banner .say {
-	flex: 1 1 100%;
-}
-
-.import-card .banner .act {
-	flex: 1 1 100%;
-	align-self: stretch;
-}
-
-/* --- the import list ----------------------------------------------------- */
-
-/* A row card without the catalogue's cover thumbnail: an import has no image,
-   and the component's placeholder glyph would claim a missing one.
-
-   A grid rather than a flex row, and that is the fix for the overlap this
-   list used to have on a wide screen. The stage badge sat in a fixed 152px
-   slot, which is narrower than "Nothing imported" renders at: the label
-   overflowed its own slot and ran under the shop's name and, at the other
-   end, under the row's controls. Grid columns cannot overlap — the badge
-   column is as wide as the widest badge in the list and every other column
-   is measured after it — so the alignment the fixed width was for survives
-   and the collision cannot recur at any viewport. */
-.import-row {
-	display: grid;
-	grid-template-columns: auto minmax(0, 1fr) auto auto auto;
-	grid-template-areas: 'pick who mark at act';
+.imp-chip {
+	display: inline-flex;
 	align-items: center;
-	gap: 4px 14px;
-	background: var(--surface);
+	min-height: 30px;
+	padding: 3px 12px;
 	border: 1px solid var(--line);
-	border-radius: var(--r-card);
-	padding: 14px 16px;
-	box-shadow: var(--sh-1);
-	min-width: 0;
+	border-radius: var(--r-pill);
+	background: var(--surface);
+	color: var(--muted);
+	font: inherit;
+	font-size: 12.5px;
+	font-weight: 600;
+	white-space: nowrap;
+	cursor: pointer;
 }
 
-.import-row + .import-row {
-	margin-top: 10px;
-}
-
-.import-row:hover {
+.imp-chip:hover {
 	background: var(--hover);
 }
 
-.import-row .pick {
-	grid-area: pick;
-	display: flex;
+.imp-chip[aria-pressed='true'] {
+	border-color: var(--accent);
+	background: var(--accent-soft);
+	color: var(--primary);
+}
+
+.imp-chip:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.imp-chip.order {
+	color: var(--primary);
+}
+
+/* The history table. */
+.imp-name {
+	display: inline-flex;
 	align-items: center;
-}
-
-.import-row .mark {
-	grid-area: mark;
-	display: flex;
-	flex-wrap: wrap;
-	gap: 6px;
-	justify-content: flex-end;
-}
-
-.import-row .who {
-	grid-area: who;
+	gap: 8px;
+	font-weight: 600;
 	min-width: 0;
 }
 
-/* The title is the link, and the only one: the row used to be one whole-row
-   anchor, which cannot carry the tick and the Delete this list now needs —
-   a control inside a link is reached by the keyboard as part of the link and
-   a press activates both. */
-.import-row .who .t {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-	font-size: 15.5px;
-	font-weight: 600;
-	line-height: 1.25;
-	overflow-wrap: anywhere;
-	color: inherit;
-	text-decoration: none;
+.imp-name-word {
+	white-space: nowrap;
 }
 
-.import-row .who .t:hover,
-.import-row .who .t:focus-visible {
+.imp-name:hover .imp-name-word {
 	text-decoration: underline;
 }
 
-.import-row .who .w {
-	display: block;
-	font-size: 12.5px;
+.imp-sheet-mark {
+	display: inline-grid;
+	place-items: center;
+	width: 18px;
+	height: 18px;
+	color: var(--additive);
+}
+
+.imp-table .imp-counts-col {
 	color: var(--muted);
-	margin-top: 3px;
+	font-size: 13px;
 }
 
-.import-row .at {
-	grid-area: at;
-	font-size: 12px;
-	color: var(--faint);
-	white-space: nowrap;
-	font-variant-numeric: tabular-nums;
+.imp-counts-inline {
+	display: none;
+	color: var(--muted);
+	font-size: 12.5px;
 }
 
-.import-row .act {
-	grid-area: act;
+.imp-table .imp-when {
+	color: var(--muted);
+	font-size: 12.5px;
+}
+
+.imp-work-bar {
+	flex: 1 1 auto;
+	padding: 0;
+}
+
+@media (max-width: 720px) {
+	.imp-tiles {
+		grid-template-columns: 1fr;
+	}
+
+	.imp-table .imp-counts-col,
+	.imp-table .imp-when {
+		display: none;
+	}
+
+	/* A phone reads each import as a card-less row: the tick, the name with
+	   its counts and status under it, and Delete at the end. */
+	.imp-head {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip: rect(0 0 0 0);
+	}
+
+	.imp-table tr {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr) auto;
+		grid-template-areas:
+			'pick main act'
+			'pick state act';
+		align-items: center;
+		gap: 4px var(--s-3);
+		padding: var(--s-3);
+	}
+
+	.imp-table tbody tr + tr {
+		border-top: 1px solid var(--line);
+	}
+
+	.imp-table td {
+		padding: 0;
+		border: 0;
+		width: auto;
+	}
+
+	.imp-table .imp-pick {
+		grid-area: pick;
+	}
+
+	.imp-table .imp-main {
+		grid-area: main;
+	}
+
+	.imp-table .imp-state {
+		grid-area: state;
+	}
+
+	.imp-table .imp-act {
+		grid-area: act;
+	}
+
+	.imp-counts-inline {
+		display: block;
+		margin-top: 2px;
+	}
+
+	.imp-name-word {
+		white-space: normal;
+		overflow-wrap: anywhere;
+	}
+
+	/* One swipeable line per filter rather than a wall of wrapped pills. */
+	.imp-chips {
+		flex-wrap: nowrap;
+		overflow-x: auto;
+		scrollbar-width: none;
+		margin: 0 calc(-1 * var(--s-4));
+		padding: 2px var(--s-4);
+	}
+}
+
+/* --- the run and request pages ---------------------------------------------------- */
+
+/* The coverage figures' heading, with its fine print beside it. */
+.req-words {
 	display: flex;
-	justify-content: flex-end;
-}
-
-/* The footnote about where the files are, beside the one place they can be
-   looked at. Wraps rather than shrinking the sentence, because on a phone the
-   control would otherwise take half the measure. */
-.import-files-note {
-	display: flex;
-	align-items: baseline;
-	flex-wrap: wrap;
-	gap: 10px 14px;
-	margin: 14px 0 24px;
-}
-
-.import-files-note .note {
-	flex: 1 1 320px;
-	margin: 0;
-	min-width: 0;
-}
-
-/* --- the request page ---------------------------------------------------- */
-
-/* The panel's own bottom gap lives on its description, which this panel does
-   not carry, so the stage line supplies it. */
-.import-stage {
-	margin: 10px 0 0;
-	font-size: 15px;
-	font-weight: 600;
-}
-
-.import-stage + p {
-	margin: 5px 0 0;
+	align-items: center;
+	gap: var(--s-2);
 }
 
 /* The coverage figures, which are read as a set rather than one at a time. */
@@ -333,42 +431,6 @@
 }
 
 @media (max-width: 620px) {
-	.import-cards {
-		grid-template-columns: 1fr;
-		gap: 14px;
-	}
-
-	.import-card {
-		padding: 18px;
-	}
-
-	/* The badge gets its own band: long status labels must not share the
-	   timestamp's shrinking track. */
-	.import-row {
-		grid-template-columns: auto minmax(0, 1fr);
-		grid-template-areas:
-			'pick at'
-			'who who'
-			'mark mark'
-			'act act';
-		align-items: center;
-		gap: 8px 10px;
-	}
-
-	.import-row .mark {
-		justify-content: flex-start;
-	}
-
-	.import-row .at {
-		text-align: right;
-	}
-
-	.import-row .act {
-		justify-content: flex-start;
-	}
-}
-
-@media (max-width: 620px) {
 	/* Search first and full width, then each dropdown under it: at 390px a
 	   row of three controls puts every label on two lines and every select
 	   under a thumb's width. */
@@ -381,4 +443,10 @@
 	.import-filters .wide {
 		flex: 1 1 auto;
 	}
+}
+
+/* Why a listing did not move, in warn ink. */
+.import-listing .what .w.req-why {
+	color: var(--warn-ink);
+	font-weight: 500;
 }

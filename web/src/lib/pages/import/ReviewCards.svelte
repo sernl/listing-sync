@@ -9,12 +9,13 @@
 	// reads "94%" starts arguing with the number instead of looking at the
 	// two listings.
 
-	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
+	import Explain from '$lib/Explain.svelte';
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
 	import Pagination from '$lib/Pagination.svelte';
-	import Panel from '$lib/Panel.svelte';
 	import StatusPill from '$lib/StatusPill.svelte';
+	import '$lib/flow.css';
+	import './run.css';
 	import type { PairFieldChoice, PairSide, ReviewPairView } from '$lib/api';
 	import {
 		MERGE_FIELDS,
@@ -70,9 +71,11 @@
 		return `${lo}:${hi}`;
 	}
 
-	function openMerge(lo: string, hi: string) {
+	/** "Keep this one": the pair is one resource and this side survives. The
+	 *  field choices open under the card, defaulting to the kept side. */
+	function openMerge(lo: string, hi: string, side: PairSide) {
 		merging = key(lo, hi);
-		keeping = 'lo';
+		keeping = side;
 		fields = {};
 	}
 
@@ -91,17 +94,17 @@
 	}
 </script>
 
-<Panel
-	title="These look like resources you already have"
-	description="Answer each one. Nothing is merged or added until you do, and Decide later holds nothing up."
->
+<!-- The duplicate questions, as a list the parent's step titles. Each card
+     puts the two listings side by side with one decision under each. -->
+<div class="rv-list">
 	{#each cards as card (key(card.lo, card.hi))}
 		{@const open = merging === key(card.lo, card.hi)}
 		<article class="rv-card">
 			<p class="rv-say">{card.sentence}</p>
 
 			<div class="rv-sides">
-				{#each card.sides as side (side.side)}
+				{#each card.sides as side, index (side.side)}
+					{#if index === 1}<span class="rv-or" aria-hidden="true">or</span>{/if}
 					<div class="rv-side" class:win={open && keeping === side.side}>
 						<div class="rv-head">
 							{#if side.marketplace !== null}
@@ -114,71 +117,68 @@
 						{:else}
 							<div class="rv-cover rv-none" aria-hidden="true"></div>
 						{/if}
-						<p class="rv-title">{side.title}</p>
+						<p class="rv-title res-name">{side.title}</p>
 						<p class="rv-facts">
-							<span>{side.price}</span>
+							<span class="price">{side.price}</span>
 							{#if side.grades !== ''}<span>{side.grades}</span>{/if}
 						</p>
+						{#if !open}
+							<Button
+								small
+								tier="primary"
+								icon="check"
+								onclick={() => openMerge(card.lo, card.hi, side.side)}
+							>
+								{REVIEW_SAME}
+							</Button>
+						{:else if keeping === side.side}
+							<StatusPill tone="ok" label="Keeping this one" />
+						{/if}
 					</div>
 				{/each}
 			</div>
 
 			{#if open}
 				<div class="rv-merge">
-					<p class="rv-say">{WHICH_SIDE_WINS}</p>
-
-					<fieldset class="rv-field">
-						<legend>Which one stays</legend>
-						{#each card.sides as side (side.side)}
-							<label>
-								<input
-									type="radio"
-									name={`keep-${key(card.lo, card.hi)}`}
-									checked={keeping === side.side}
-									onchange={() => (keeping = side.side)}
-								/>
-								{side.title}
-							</label>
+					<details class="flow-more">
+						<summary>Mix the wording</summary>
+						<p class="rv-say">{WHICH_SIDE_WINS}</p>
+						{#each MERGE_FIELDS as field (field.field)}
+							<fieldset class="rv-field">
+								<legend>{field.label}</legend>
+								{#each card.sides as side (side.side)}
+									<label>
+										<input
+											type="radio"
+											name={`${field.field}-${key(card.lo, card.hi)}`}
+											checked={(fields[field.field] ?? keeping) === side.side}
+											onchange={() => chooseField(field.field, side.side)}
+										/>
+										{side.title}
+									</label>
+								{/each}
+							</fieldset>
 						{/each}
-					</fieldset>
+					</details>
 
-					{#each MERGE_FIELDS as field (field.field)}
-						<fieldset class="rv-field">
-							<legend>{field.label}</legend>
-							{#each card.sides as side (side.side)}
-								<label>
-									<input
-										type="radio"
-										name={`${field.field}-${key(card.lo, card.hi)}`}
-										checked={(fields[field.field] ?? keeping) === side.side}
-										onchange={() => chooseField(field.field, side.side)}
-									/>
-									{side.title}
-								</label>
-							{/each}
-						</fieldset>
-					{/each}
-
-					<Banner tone="warn">{MERGE_IS_REVERSIBLE}</Banner>
-
-					<div class="actions">
+					<div class="flow-actions">
 						<Button
 							tier="primary"
 							icon="check"
 							onclick={() => onsame(card.lo, card.hi, survivor(card.lo, card.hi), fields)}
 						>
-							Confirm
+							Merge them
 						</Button>
 						<Button tier="quiet" onclick={() => (merging = null)}>Cancel</Button>
+						<Explain title="Undoing a merge" label="">
+							<p>{MERGE_IS_REVERSIBLE}</p>
+						</Explain>
 					</div>
 				</div>
 			{:else}
-				<div class="actions">
-					<Button tier="primary" icon="check" onclick={() => openMerge(card.lo, card.hi)}>
-						{REVIEW_SAME}
-					</Button>
-					<Button onclick={() => ondifferent(card.lo, card.hi)}>{REVIEW_DIFFERENT}</Button>
-					<Button tier="quiet" onclick={() => onlater(card.lo, card.hi)}>{REVIEW_LATER}</Button>
+				<div class="flow-actions rv-rest">
+					<Button small onclick={() => ondifferent(card.lo, card.hi)}>{REVIEW_DIFFERENT}</Button>
+					<Button small tier="quiet" onclick={() => onlater(card.lo, card.hi)}>{REVIEW_LATER}</Button>
 				</div>
 			{/if}
 		</article>
@@ -193,4 +193,4 @@
 			onnext={() => (page = at + 1)}
 		/>
 	{/if}
-</Panel>
+</div>

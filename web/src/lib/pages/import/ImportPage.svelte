@@ -18,15 +18,18 @@
 	import { desktopInvoker, sessionStatusHere, startImportHere, type LocalSessionOutcome } from '$lib/desktop';
 	import { agoLabel } from '$lib/elapsed';
 	import { entitlementRead, featureOf } from '$lib/entitlement-read';
-	import Field from '$lib/Field.svelte';
-	import Note from '$lib/Note.svelte';
+	import Explain from '$lib/Explain.svelte';
+	import FlowActionBar from '$lib/FlowActionBar.svelte';
+	import FlowDiagram, { type FlowEnd } from '$lib/FlowDiagram.svelte';
+	import FlowStep from '$lib/FlowStep.svelte';
+	import Icon from '$lib/Icon.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Pagination from '$lib/Pagination.svelte';
-	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
 	import { saveDocument } from '$lib/pages/export/download';
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
 	import StatusPill from '$lib/StatusPill.svelte';
+	import Stepper, { type StepMark } from '$lib/Stepper.svelte';
 	import { FILES_STAY_ON_YOUR_COMPUTER } from '$lib/sync-request';
 	import {
 		countWord,
@@ -53,13 +56,14 @@
 		importRunLabel,
 		startRefusal,
 		standingBadge,
-		type ImportRow
+		type ImportCard,
+		type ImportRow,
+		type PillTone
 	} from './import-view';
 	import { fetchTemplate, openBatchFrom, uploadSheet } from './api';
 	import { IMPORT_ALREADY_OPEN, batchHref } from './sheet-view';
-	import { pageCount, pageSummary } from './run-view';
+	import { READING_HAPPENS_ON_YOUR_COMPUTER, pageCount, pageSummary } from './run-view';
 	import './import.css';
-	import './sheet.css';
 
 	// Null until the list has actually been read. An empty array is a seller
 	// with no marketplace, which is a claim; not having read the list is not.
@@ -111,6 +115,10 @@
 	// rather than a search of a list.
 	let openBatch = $state<string | null>(null);
 	let sheetRefusal = $state<string | null>(null);
+	// The template's own failure, apart from the upload's: the two controls
+	// sit in different steps, and each says what went wrong where it was
+	// pressed.
+	let templateRefusal = $state<string | null>(null);
 	let sending = $state(false);
 	let downloading = $state(false);
 
@@ -364,11 +372,11 @@
 			return;
 		}
 		downloading = true;
-		sheetRefusal = null;
+		templateRefusal = null;
 		try {
 			saveDocument(await fetchTemplate());
 		} catch (failure) {
-			sheetRefusal = sheetRefusalOf(failure);
+			templateRefusal = sheetRefusalOf(failure);
 		} finally {
 			downloading = false;
 		}
@@ -457,331 +465,531 @@
 			if (active()) await loadRuns();
 		}
 	}
+
+	// ------------------------------------------------------------ the flow
+
+	/** Where an import comes from: a marketplace's card, or the sheet. */
+	type Source = Marketplace | 'sheet';
+
+	/** The seller's own pick, or null while they have not made one. */
+	let picked_source = $state<Source | null>(null);
+
+	/** Where the page starts before a pick: the shop a retry link names, else
+	 *  the first shop the seller has connected, else the sheet — the one way
+	 *  in that needs no connection. */
+	const firstSource = $derived.by((): Source => {
+		const asked = page.url.searchParams.get('source');
+		const named = cards.find((card) => asked !== null && card.sites.some((site) => site === asked));
+		if (named !== undefined) return named.marketplace;
+		const held = cards.find((card) => card.unreadable === null && card.standing === 'held');
+		return held?.marketplace ?? 'sheet';
+	});
+	const source = $derived(picked_source ?? firstSource);
+	const chosenCard = $derived(
+		source === 'sheet' ? null : (cards.find((card) => card.marketplace === source) ?? null)
+	);
+
+	/** The open run for a card's shop, from the open-run read rather than the
+	 *  history page: an open import that has scrolled off page one is still
+	 *  open. */
+	function openRunOf(card: ImportCard): ImportRunHead | undefined {
+		const site = card.sites[0];
+		return openRuns.find((run) => run.source === site);
+	}
+
+	/** The one pill a tile carries: the thing most worth knowing before
+	 *  choosing it. */
+	function tilePill(card: ImportCard): { tone: PillTone; label: string } {
+		if (card.unreadable !== null) return { tone: 'soon', label: 'Not yet' };
+		if (openRunOf(card) !== undefined) return { tone: 'run', label: 'Import running' };
+		const local = localSessions.get(card.marketplace);
+		if (inApp && local?.kind === 'known' && !local.connected) {
+			return { tone: 'warn', label: 'Not signed in here' };
+		}
+		return standingBadge(card);
+	}
+
+	const sheetPill = $derived<{ tone: PillTone; label: string }>(
+		uploadRefusal !== null
+			? { tone: 'soon', label: 'Not on your plan' }
+			: openBatch !== null
+				? { tone: 'run', label: 'Import open' }
+				: { tone: 'flat', label: 'Checked online' }
+	);
+
+	/** This device's own sign-in, as the start step states it beside the
+	 *  line about keeping the app open. */
+	function devicePill(card: ImportCard): { tone: PillTone; label: string } {
+		const local = localSessions.get(card.marketplace);
+		if (!inApp) return { tone: 'soon', label: 'Waiting for the app' };
+		if (local?.kind !== 'known') return { tone: 'soon', label: 'Sign-in here unknown' };
+		return local.connected
+			? { tone: 'ok', label: 'Signed in on this device' }
+			: { tone: 'warn', label: 'Not signed in here' };
+	}
+
+	const diagramFrom = $derived<FlowEnd>(
+		chosenCard !== null && chosenCard.sites[0] !== undefined
+			? { inventory: chosenCard.sites[0] }
+			: { icon: 'layout-list', label: 'Your sheet' }
+	);
+	const CATALOGUE: FlowEnd = { icon: 'library-big', label: 'Catalogue' };
+
+	const startHeld = $derived(
+		chosenCard === null ? openBatch !== null : openRunOf(chosenCard) !== undefined
+	);
+	const sourceWord = $derived(chosenCard?.name ?? 'Spreadsheet');
+
+	const steps = $derived<StepMark[]>([
+		{ id: 'where', label: 'Where from', done: true },
+		{ id: 'start', label: 'Start', done: startHeld },
+		{ id: 'imports', label: 'Your imports', done: false }
+	]);
+
+	let whereOpen = $state(true);
+	let startOpen = $state(true);
+	let importsOpen = $state(true);
+
+	/** The history's filters as chips: the value each sends to the server
+	 *  and the word it shows. */
+	const sourceChips = $derived([
+		{ value: '', label: 'Anywhere' },
+		{ value: 'spreadsheet', label: 'Spreadsheet' },
+		...cards.flatMap((card) => card.sites.map((site) => ({ value: site as string, label: card.name })))
+	]);
+	const STATE_CHIPS: readonly { value: ImportRunFilterState | ''; label: string }[] = [
+		{ value: '', label: 'Any status' },
+		{ value: 'open', label: 'Still running' },
+		{ value: 'reviewing', label: 'Waiting on you' },
+		{ value: 'complete', label: 'Finished' },
+		{ value: 'failed', label: 'Stopped with a problem' },
+		{ value: 'abandoned', label: 'Cancelled' }
+	];
+
+	function chooseSource(value: string) {
+		runSource = value;
+		narrowRuns();
+	}
+
+	function chooseState(value: ImportRunFilterState | '') {
+		runState = value;
+		narrowRuns();
+	}
+
+	function flipOrder() {
+		runOrder = runOrder === 'newest' ? 'oldest' : 'newest';
+		narrowRuns();
+	}
 </script>
 
-<div class="page">
+<div class="page flow-page has-bar">
 	<PageHead
 		icon="download"
 		title="Import"
-		description="Bring your resources into Teachouse from a spreadsheet or a marketplace."
+		description="Bring your resources into Teachouse."
 		guide="importing"
 	/>
 
-	{#if connectionsUnread}
-		<Banner tone="bad" title="We could not load your marketplaces">{CONNECTIONS_UNREAD}</Banner>
-	{:else if nothingHeld}
-		<Banner tone="info" title="No marketplace connected yet" action={toMarketplaces}>
-			{NOTHING_CONNECTED}
-		</Banner>
-	{/if}
-
-	<section class="sh-card">
-		<div class="head">
-			<h2>Import from a spreadsheet</h2>
-			<span class="badges"><StatusPill tone="flat" label="Checked online" /></span>
-		</div>
-		<p>Fill in our template, one row per resource. We check it before adding anything.</p>
-		<ol class="sh-steps">
-			<li>Download the template and fill in one row for each resource.</li>
-			<li>Upload it and read our check. Nothing is added yet.</li>
-			<li>Add the files your sheet lists, then import.</li>
-		</ol>
-
-		{#if sheetRefusal !== null}
-			<Banner tone="bad" title="Your sheet was not accepted">{sheetRefusal}</Banner>
-		{/if}
-
-		<div class="sh-acts">
-			<Button
-				icon="file-down"
-				disabled={downloading}
-				reason={downloading ? 'Getting the template ready.' : undefined}
-				onclick={() => void downloadTemplate()}
-			>
-				{downloading ? 'Getting the template ready…' : 'Download the template'}
-			</Button>
-			{#if uploadRefusal !== null}
-				<Button disabled reason={uploadRefusal}>Upload a filled sheet</Button>
-			{:else if openBatch === null}
-				<!-- A label rather than a Button, because the control has to be the
-				     file input's own: a button that then clicks a hidden input is a
-				     second control the keyboard reaches separately. -->
-				<label class="btn sh-pick" for={sheetInputId}>
-					{sending ? 'Reading your sheet…' : 'Upload a filled sheet'}
-					<input
-						id={sheetInputId}
-						type="file"
-						accept=".xlsx,.csv"
-						disabled={sending}
-						onchange={sheetChosen}
-					/>
-				</label>
-			{:else}
-				<Button disabled reason={IMPORT_ALREADY_OPEN}>Upload a filled sheet</Button>
-				<Button tier="primary" href={batchHref(openBatch)}>Open your current import</Button>
-			{/if}
-		</div>
-	</section>
-
-	{#if declined !== null}
-		<Banner tone="bad" title="Your import did not start">
-			{declined}
-			{#snippet action()}
-				{#if raised !== null}
-					<Button tier="outline" small href={`/imports/runs/${raised}`}>
-						Open the import
-					</Button>
-				{/if}
-			{/snippet}
-		</Banner>
-	{/if}
-
-	<div class="import-cards">
-		{#each cards as card (card.marketplace)}
-			{@const site = card.sites[0]}
-			{@const local = localSessions.get(card.marketplace)}
-			{@const blocked = importBlocked(card, shopRefusal, local, inApp)}
-			<!-- From the open-run read rather than from the history page: an
-			     open import that has scrolled off page one is still open. -->
-			{@const open = openRuns.find((run) => run.source === site)}
-			<section class="import-card">
-				<div class="head">
-					<h2><MarketplaceMark marketplace={card.marketplace} size={22} /></h2>
-					<span class="badges">
-						{#if card.unreadable === null}
-							{@const badge = standingBadge(card)}
-							<StatusPill tone={badge.tone} label={badge.label} />
-						{/if}
-						<StatusPill
-							tone={!inApp ? 'soon' : local?.kind === 'known' ? local.connected ? 'ok' : 'warn' : 'soon'}
-							label={!inApp ? 'Waiting for the app' : local?.kind === 'known' ? local.connected ? 'Signed in on this device' : 'Not signed in here' : 'Sign-in here unknown'}
-						/>
-					</span>
-				</div>
-
-				{#if card.unreadable !== null}
-					<p class="why">{card.unreadable}</p>
-				{:else}
-					<p class="quiet">{deviceLine(card)}</p>
-
-					{#if local?.kind === 'known' && !local.connected}
-						<Banner tone="warn">
-							{card.name} is not signed in on this device.
-							{#snippet action()}
-								<Button href={CONNECT_HREF}>{CONNECT_LABEL}</Button>
-							{/snippet}
-						</Banner>
-					{/if}
-
-					{#if !inApp}
-						<p class="why">{NEEDS_THE_APP}</p>
-					{/if}
-
-					<div class="actions">
-						{#if open !== undefined}
-							<Button tier="primary" href={`/imports/runs/${open.id}`}>Open this import</Button>
-						{:else if blocked === null && site !== undefined}
-							<Button
-								tier="primary"
-								icon="download"
-								disabled={starting.has(site)}
-								reason={starting.has(site) ? 'This import is starting.' : undefined}
-								onclick={() => void startImport(site)}
-							>
-								{starting.has(site) ? 'Starting…' : importLabel(card)}
-							</Button>
-						{:else}
-							<!-- Disabled rather than absent, so the card still shows what
-							     the seller would do here and says what stands in the way. -->
-							<Button tier="primary" icon="download" disabled reason={blocked ?? undefined}>
-								{importLabel(card)}
-							</Button>
-						{/if}
-					</div>
-				{/if}
-			</section>
-		{/each}
-	</div>
-
-	<div class="import-files-note">
-		<Note icon="lock">{FILES_STAY_ON_YOUR_COMPUTER}</Note>
-		<Button tier="outline" small icon="library-big" href="/resources/files">
-			See which files are on this computer
-		</Button>
-	</div>
-
-	<Panel title="Your imports" description="All the imports you have started.">
-		<div class="import-filters">
-			<Field label="Where from" id="imports-source">
-				<select id="imports-source" bind:value={runSource} onchange={narrowRuns}>
-					<option value="">Anywhere</option>
-					<option value="spreadsheet">Spreadsheet</option>
-					{#each cards as card (card.marketplace)}
-						{#each card.sites as site (site)}
-							<option value={site}>{card.name}</option>
-						{/each}
-					{/each}
-				</select>
-			</Field>
-			<Field label="Status" id="imports-state">
-				<select id="imports-state" bind:value={runState} onchange={narrowRuns}>
-					<option value="">Any status</option>
-					<option value="open">Still running</option>
-					<option value="reviewing">Waiting on you</option>
-					<option value="complete">Finished</option>
-					<option value="failed">Stopped with a problem</option>
-					<option value="abandoned">Cancelled</option>
-				</select>
-			</Field>
-			<Field label="Order by" id="imports-order">
-				<select id="imports-order" bind:value={runOrder} onchange={narrowRuns}>
-					<option value="newest">Newest first</option>
-					<option value="oldest">Oldest first</option>
-				</select>
-			</Field>
-			{#if runsFiltered}
-				<Button small tier="quiet" onclick={clearRunFilters}>Clear filters</Button>
-			{/if}
-		</div>
-
-		<!-- A failed read is a banner over the history, not instead of it: the
-		     rows already read are still true, and replacing them with a
-		     sentence would take away what the seller came for. -->
-		{#if runsUnread}
-			<Banner tone="bad" title="We could not load your imports">
-				{IMPORTS_UNREAD}
-				{runsFailedFor === null
-					? ''
-					: `We could not load page ${runsFailedFor}. Below is the last page we loaded.`}
-				{#snippet action()}
-					<Button
-						tier="outline"
-						small
-						disabled={runsBusy}
-						reason={runsBusy ? 'Loading your imports.' : undefined}
-						onclick={() => void loadRuns()}
-					>
-						Try again
-					</Button>
-				{/snippet}
+	<div class="flow">
+		{#if connectionsUnread}
+			<Banner tone="bad" title="We could not load your marketplaces">{CONNECTIONS_UNREAD}</Banner>
+		{:else if nothingHeld}
+			<Banner tone="info" title="No marketplace connected yet" action={toMarketplaces}>
+				{NOTHING_CONNECTED}
 			</Banner>
 		{/if}
-		{#if !runsLoaded}
-			<p class="quiet">Loading…</p>
-		{:else if rows.length === 0}
-			<!-- "Nothing matches what you asked for", "there is nothing left on
-			     this page" and "you have never run an import" are three
-			     different facts. A seller who filtered, or who deleted the last
-			     run on page three, must not be told they have no imports. -->
-			{#if runsFiltered}
-				<p class="quiet">No import matches these filters. Clear them to see the rest.</p>
-			{:else if shownRunPage > 1}
-				<p class="quiet">
-					This page is empty. Go back a page to see your imports.
-				</p>
-			{:else}
-				<Placeholder
-					icon="download"
-					headline={NO_IMPORT_YET}
-					body="Upload a spreadsheet or choose a marketplace above to start one."
-				/>
-			{/if}
-		{:else}
-			<!-- The tick for the page in hand and whatever the seller has ticked
-			     elsewhere. Above the rows rather than floating over them,
-			     because on a phone a bar pinned to the bottom of the viewport
-			     covers the row it is about to act on. -->
-			<div class="work-bar">
-				<label class="work-pick-all">
-					<input
-						type="checkbox"
-						checked={allPickedHere}
-						disabled={pickable.length === 0}
-						onchange={pickPage}
-					/>
-					Select the {countWord(pickable.length, IMPORTS)} on this page
-				</label>
-				{#if picked.size > 0}
-					<span class="work-picked">
-						{countWord(picked.size, IMPORTS)} selected{pickedElsewhere > 0
-							? `, ${pickedElsewhere} of them on another page`
-							: ''}
-					</span>
-					<div class="work-bar-acts">
-						<Button small tier="quiet" onclick={() => (picked = new Map())}>
-							Clear selection
-						</Button>
-						<Button small danger onclick={() => (deleting = pickedItems)}>
-							Delete {countWord(picked.size, IMPORTS)}
-						</Button>
-					</div>
-				{/if}
-			</div>
 
-			{#each rows as row (row.id)}
-				{@const going = retainedBadge(row.deletion)}
-				{@const refusal = deleteRefusal(row.deletion)}
-				<!-- A row rather than one whole-row anchor: it carries a tick and
-				     a Delete, and a control nested inside a link is reached by
-				     the keyboard as part of the link and activates both. The
-				     title is the link, which is what the seller is aiming at. -->
-				<div class="import-row">
-					<span class="pick">
-						<input
-							type="checkbox"
-							checked={picked.has(row.id)}
-							disabled={refusal !== null}
-							title={refusal ?? undefined}
-							aria-label={`Select the import ${importRunLabel(row, Date.now())}`}
-							onchange={(event) => pick(row, event.currentTarget.checked)}
-						/>
-					</span>
-					<span class="who">
-						<a class="t" href={row.href}>
-							{#if row.source !== null}
-								<MarketplaceMark inventory={row.source} />
-							{/if}
-							{row.name}
-						</a>
-						<span class="w">{row.line}</span>
-					</span>
-					<!-- Its own grid column of its natural width. It used to sit in
-					     a fixed 152px slot, which on a wide screen was narrower
-					     than the longest stage word and ran the label under the
-					     shop's name. -->
-					<span class="mark">
-						<StatusPill tone={going?.tone ?? row.tone} label={going?.label ?? row.label} />
-					</span>
-					<span class="at">{agoLabel(row.created_at, Date.now())}</span>
-					<span class="act">
+		<Stepper {steps} label="Import steps" />
+
+		<FlowStep
+			n={1}
+			id="where"
+			title="Where from"
+			hint="Choose where your resources are now."
+			summary="{sourceWord} → Teachouse catalogue"
+			done
+			bind:open={whereOpen}
+		>
+			<div class="imp-tiles" role="radiogroup" aria-label="Where from">
+				{#each cards as card (card.marketplace)}
+					{@const pill = tilePill(card)}
+					<div class="imp-tile" class:on={source === card.marketplace}>
+						<button
+							type="button"
+							role="radio"
+							class="imp-tile-pick"
+							aria-checked={source === card.marketplace}
+							disabled={card.unreadable !== null}
+							title={card.unreadable ?? undefined}
+							onclick={() => (picked_source = card.marketplace)}
+						>
+							<span class="imp-tile-mark"><MarketplaceMark marketplace={card.marketplace} size={28} /></span>
+							<span class="imp-tile-name">{card.name}</span>
+							<StatusPill tone={pill.tone} label={pill.label} />
+						</button>
+					</div>
+				{/each}
+				<div class="imp-tile" class:on={source === 'sheet'}>
+					<button
+						type="button"
+						role="radio"
+						class="imp-tile-pick"
+						aria-checked={source === 'sheet'}
+						onclick={() => (picked_source = 'sheet')}
+					>
+						<span class="imp-tile-mark sheet"><Icon name="layout-list" size={22} /></span>
+						<span class="imp-tile-name">Spreadsheet</span>
+						<StatusPill tone={sheetPill.tone} label={sheetPill.label} />
+					</button>
+					<div class="imp-tile-more">
 						<Button
 							small
-							danger
-							disabled={refusal !== null}
-							reason={refusal ?? undefined}
-							onclick={() =>
-								(deleting = [{ id: row.id, label: importRunLabel(row, Date.now()) }])}
+							tier="quiet"
+							icon="file-down"
+							disabled={downloading}
+							reason={downloading ? 'Getting the template ready.' : undefined}
+							onclick={() => void downloadTemplate()}
 						>
-							Delete
+							{downloading ? 'Getting it ready…' : 'Download the template'}
 						</Button>
-					</span>
+					</div>
 				</div>
-			{/each}
-		{/if}
+			</div>
 
-		{#if runsLoaded && (runsTotal > 0 || shownRunPage > 1)}
-			<Pagination
-				page={shownRunPage}
-				hasNext={shownRunPage < runPages}
-				busy={runsBusy}
-				label="Your imports"
-				summary={`${pageSummary((shownRunPage - 1) * RUNS_PER_PAGE, rows.length, runsTotal, 'imports')} · Page ${shownRunPage} of ${runPages}`}
-				onprevious={() => showRuns(shownRunPage - 1)}
-				onnext={() => showRuns(shownRunPage + 1)}
+			{#if templateRefusal !== null}
+				<Banner tone="bad" title="The template did not download">{templateRefusal}</Banner>
+			{/if}
+
+			<FlowDiagram
+				from={diagramFrom}
+				to={[CATALOGUE]}
+				rule={chosenCard === null ? 'Checked first' : 'You pick'}
+				label="From {sourceWord} into your Teachouse catalogue"
 			/>
-		{/if}
-	</Panel>
+		</FlowStep>
+
+		<FlowStep
+			n={2}
+			id="start"
+			title="Start"
+			hint={chosenCard === null ? 'Upload your filled template.' : `Read your ${chosenCard.name} shop.`}
+			summary={startHeld ? 'An import is open' : 'Not started'}
+			done={startHeld}
+			action={startAction}
+			actionInBar
+			bind:open={startOpen}
+		>
+			{#snippet aside()}
+				<Explain title="How importing works" label="How importing works">
+					{#if chosenCard === null}
+						<ol class="imp-explain-steps">
+							<li>Download the template and fill in one row for each resource.</li>
+							<li>Upload it and read our check. Nothing is added yet.</li>
+							<li>Add the files your sheet lists, then import.</li>
+						</ol>
+					{:else}
+						<p>{READING_HAPPENS_ON_YOUR_COMPUTER}</p>
+						<p>You choose which resources come in, then confirm before anything is added.</p>
+						<p>{NEEDS_THE_APP}</p>
+					{/if}
+					<p>{FILES_STAY_ON_YOUR_COMPUTER}</p>
+					<p><a href="/resources/files">See which files are on this computer</a></p>
+				</Explain>
+			{/snippet}
+
+			{#if chosenCard === null}
+				<p class="imp-line">Fill in the template, then upload it. We check it before adding anything.</p>
+				{#if uploadRefusal !== null}
+					<p class="flow-warn">{uploadRefusal}</p>
+				{:else if openBatch !== null}
+					<p class="flow-warn">{IMPORT_ALREADY_OPEN}</p>
+				{/if}
+				{#if sheetRefusal !== null}
+					<Banner tone="bad" title="Your sheet was not accepted">{sheetRefusal}</Banner>
+				{/if}
+			{:else if chosenCard.unreadable !== null}
+				<p class="flow-warn">{chosenCard.unreadable}</p>
+			{:else}
+				{@const card = chosenCard}
+				{@const device = devicePill(card)}
+				{@const blocked = importBlocked(card, shopRefusal, localSessions.get(card.marketplace), inApp)}
+				<p class="imp-line">
+					<span>{deviceLine(card)}</span>
+					<StatusPill tone={device.tone} label={device.label} />
+				</p>
+				{#if blocked !== null && openRunOf(card) === undefined}
+					<p class="flow-warn">
+						{blocked}
+						{#if localSessions.get(card.marketplace)?.kind === 'known'}
+							<Button small tier="outline" href={CONNECT_HREF}>{CONNECT_LABEL}</Button>
+						{/if}
+					</p>
+				{/if}
+			{/if}
+
+			{#if declined !== null}
+				<Banner tone="bad" title="Your import did not start">
+					{declined}
+					{#snippet action()}
+						{#if raised !== null}
+							<Button tier="outline" small href={`/imports/runs/${raised}`}>
+								Open the import
+							</Button>
+						{/if}
+					{/snippet}
+				</Banner>
+			{/if}
+
+			<!-- The sheet's one file input. Every upload control on the page is a
+			     label for it, so the keyboard reaches one control and the phone's
+			     action bar and the step's own button open the same picker. -->
+			<input
+				id={sheetInputId}
+				class="imp-file"
+				type="file"
+				accept=".xlsx,.csv"
+				disabled={sending || uploadRefusal !== null || openBatch !== null}
+				onchange={sheetChosen}
+			/>
+		</FlowStep>
+
+		<FlowStep
+			n={3}
+			id="imports"
+			title="Your imports"
+			summary={runsTotal === 0 ? 'None yet' : countWord(runsTotal, IMPORTS)}
+			footer={runsLoaded && rows.length > 0 ? workBar : undefined}
+			bind:open={importsOpen}
+		>
+			<div class="imp-filters">
+				<div class="imp-chips" role="group" aria-label="Where from">
+					{#each sourceChips as chip (chip.value)}
+						<button
+							type="button"
+							class="imp-chip"
+							aria-pressed={runSource === chip.value}
+							onclick={() => chooseSource(chip.value)}
+						>
+							{chip.label}
+						</button>
+					{/each}
+				</div>
+				<div class="imp-chips" role="group" aria-label="Status">
+					{#each STATE_CHIPS as chip (chip.value)}
+						<button
+							type="button"
+							class="imp-chip"
+							aria-pressed={runState === chip.value}
+							onclick={() => chooseState(chip.value)}
+						>
+							{chip.label}
+						</button>
+					{/each}
+					<button type="button" class="imp-chip order" onclick={flipOrder} aria-label="Order: {runOrder === 'newest' ? 'newest first' : 'oldest first'}. Press to flip.">
+						{runOrder === 'newest' ? 'Newest first' : 'Oldest first'} ⇅
+					</button>
+					{#if runsFiltered}
+						<Button small tier="quiet" icon="x" onclick={clearRunFilters}>Clear</Button>
+					{/if}
+				</div>
+			</div>
+
+			<!-- A failed read is a banner over the history, not instead of it: the
+			     rows already read are still true. -->
+			{#if runsUnread}
+				<Banner tone="bad" title="We could not load your imports">
+					{IMPORTS_UNREAD}
+					{runsFailedFor === null
+						? ''
+						: `We could not load page ${runsFailedFor}. Below is the last page we loaded.`}
+					{#snippet action()}
+						<Button
+							tier="outline"
+							small
+							disabled={runsBusy}
+							reason={runsBusy ? 'Loading your imports.' : undefined}
+							onclick={() => void loadRuns()}
+						>
+							Try again
+						</Button>
+					{/snippet}
+				</Banner>
+			{/if}
+			{#if !runsLoaded}
+				<p class="quiet">Loading…</p>
+			{:else if rows.length === 0}
+				<!-- "Nothing matches", "nothing left on this page" and "never ran an
+				     import" are three different facts. -->
+				{#if runsFiltered}
+					<p class="quiet">No import matches these filters.</p>
+				{:else if shownRunPage > 1}
+					<p class="quiet">This page is empty. Go back a page.</p>
+				{:else}
+					<Placeholder
+						icon="download"
+						headline={NO_IMPORT_YET}
+						body="Choose where from above to start one."
+					/>
+				{/if}
+			{:else}
+				<div class="flow-table-wrap">
+					<table class="flow-table imp-table">
+						<thead class="imp-head">
+							<tr>
+								<th><span class="sr-only">Select</span></th>
+								<th>Import</th>
+								<th class="imp-counts-col">Counts</th>
+								<th>Status</th>
+								<th class="imp-when">When</th>
+								<th><span class="sr-only">Actions</span></th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each rows as row (row.id)}
+								{@const going = retainedBadge(row.deletion)}
+								{@const refusal = deleteRefusal(row.deletion)}
+								<tr>
+									<td class="marks imp-pick">
+										<input
+											type="checkbox"
+											checked={picked.has(row.id)}
+											disabled={refusal !== null}
+											title={refusal ?? undefined}
+											aria-label={`Select the import ${importRunLabel(row, Date.now())}`}
+											onchange={(event) => pick(row, event.currentTarget.checked)}
+										/>
+									</td>
+									<td class="imp-main">
+										<a class="imp-name" href={row.href}>
+											{#if row.source !== null}
+												<MarketplaceMark inventory={row.source} size={18} />
+											{:else}
+												<span class="imp-sheet-mark" aria-hidden="true"><Icon name="layout-list" size={15} /></span>
+											{/if}
+											<span class="imp-name-word">{row.name}</span>
+										</a>
+										<span class="imp-counts-inline">{row.line}</span>
+									</td>
+									<td class="imp-counts-col">{row.line}</td>
+									<td class="marks imp-state">
+										<StatusPill tone={going?.tone ?? row.tone} label={going?.label ?? row.label} />
+									</td>
+									<td class="marks imp-when">{agoLabel(row.created_at, Date.now())}</td>
+									<td class="marks imp-act">
+										<Button
+											small
+											tier="quiet"
+											danger
+											icon="trash-2"
+											label="Delete"
+											disabled={refusal !== null}
+											reason={refusal ?? undefined}
+											onclick={() =>
+												(deleting = [{ id: row.id, label: importRunLabel(row, Date.now()) }])}
+										>
+											Delete
+										</Button>
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
+
+			{#if runsLoaded && (runsTotal > 0 || shownRunPage > 1)}
+				<Pagination
+					page={shownRunPage}
+					hasNext={shownRunPage < runPages}
+					busy={runsBusy}
+					label="Your imports"
+					summary={`${pageSummary((shownRunPage - 1) * RUNS_PER_PAGE, rows.length, runsTotal, 'imports')} · Page ${shownRunPage} of ${runPages}`}
+					onprevious={() => showRuns(shownRunPage - 1)}
+					onnext={() => showRuns(shownRunPage + 1)}
+				/>
+			{/if}
+		</FlowStep>
+	</div>
 </div>
+
+<FlowActionBar>
+	{@render startAction()}
+</FlowActionBar>
+
+<!-- The start step's one primary control, for whichever source is chosen.
+     Drawn at the step's top right, and again in the phone's action bar. -->
+{#snippet startAction()}
+	{#if chosenCard === null}
+		{#if uploadRefusal !== null}
+			<Button tier="primary" icon="upload" disabled reason={uploadRefusal}>Upload your sheet</Button>
+		{:else if openBatch !== null}
+			<Button tier="primary" href={batchHref(openBatch)}>Open your current import</Button>
+		{:else}
+			<!-- A label for the step's one file input rather than a button that
+			     clicks it, so the file input stays the accessible control. -->
+			<label class="cta imp-upload" for={sheetInputId} aria-disabled={sending}>
+				<Icon name="upload" size={16} />
+				<span class="btn-word">{sending ? 'Reading your sheet…' : 'Upload your sheet'}</span>
+			</label>
+		{/if}
+	{:else}
+		{@const card = chosenCard}
+		{@const site = card.sites[0]}
+		{@const open = openRunOf(card)}
+		{@const blocked = importBlocked(card, shopRefusal, localSessions.get(card.marketplace), inApp)}
+		{#if open !== undefined}
+			<Button tier="primary" href={`/imports/runs/${open.id}`}>Open this import</Button>
+		{:else if blocked === null && site !== undefined}
+			<Button
+				tier="primary"
+				icon="download"
+				disabled={starting.has(site)}
+				reason={starting.has(site) ? 'This import is starting.' : undefined}
+				onclick={() => void startImport(site)}
+			>
+				{starting.has(site) ? 'Starting…' : importLabel(card)}
+			</Button>
+		{:else}
+			<!-- Disabled rather than absent, so the step still shows what the
+			     seller would do here; the line above it says what stands in the
+			     way. -->
+			<Button tier="primary" icon="download" disabled reason={blocked ?? undefined}>
+				{importLabel(card)}
+			</Button>
+		{/if}
+	{/if}
+{/snippet}
+
+<!-- Select-all and Delete, stuck to the bottom of the history while it
+     scrolls, so the act stays in reach of the rows it acts on. -->
+{#snippet workBar()}
+	<div class="work-bar imp-work-bar">
+		<label class="work-pick-all">
+			<input
+				type="checkbox"
+				checked={allPickedHere}
+				disabled={pickable.length === 0}
+				onchange={pickPage}
+			/>
+			Select all {pickable.length} here
+		</label>
+		{#if picked.size > 0}
+			<span class="work-picked">
+				{countWord(picked.size, IMPORTS)} selected{pickedElsewhere > 0
+					? `, ${pickedElsewhere} on another page`
+					: ''}
+			</span>
+			<div class="work-bar-acts">
+				<Button small tier="quiet" icon="circle-x" onclick={() => (picked = new Map())}>
+					Clear
+				</Button>
+				<Button small danger icon="trash-2" onclick={() => (deleting = pickedItems)}>
+					Delete {countWord(picked.size, IMPORTS)}
+				</Button>
+			</div>
+		{/if}
+	</div>
+{/snippet}
 
 {#snippet toMarketplaces()}
 	<Button tier="outline" small href={CONNECT_HREF}>{CONNECT_LABEL}</Button>

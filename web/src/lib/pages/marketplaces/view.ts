@@ -816,3 +816,45 @@ export function deviceBranchInTileOrder(
 		.slice()
 		.sort((left, right) => rank(left.marketplace) - rank(right.marketplace));
 }
+
+/** A list of names as a sentence writes them: "TPT", "TPT and TES",
+ *  "TPT, TES and Etsy". */
+function spoken(names: readonly string[]): string {
+	return names.length <= 1
+		? (names[0] ?? '')
+		: `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+/** The attention banner, as a title naming the marketplaces and one sentence
+ *  saying what to do about them.
+ *
+ *  The remedy follows the reason, because the reasons want different hands: a
+ *  login held on a machine that has gone quiet needs that machine's app opened,
+ *  not a fresh sign-in, and a marketplace no machine holds needs a sign-in, not
+ *  a machine woken. A mixed set names both acts in the one sentence. Null where
+ *  nothing is waiting. */
+export function attentionAsk(
+	rows: readonly MarketplaceRow[]
+): { title: string; say: string } | null {
+	if (rows.length === 0) {
+		return null;
+	}
+	const names = spoken(rows.map((row) => CARD_NAME[row.marketplace]));
+	const title = `${names} ${rows.length === 1 ? 'needs' : 'need'} you`;
+	const quiet = rows.filter((row) => row.quiet && row.signIn.device !== null);
+	const signIn = rows.filter((row) => !quiet.includes(row));
+	const machines = spoken([
+		...new Set(quiet.map((row) => row.signIn.device?.name ?? ''))
+	]);
+	if (signIn.length === 0) {
+		return { title, say: `Open the Teachouse app on ${machines} so scheduled work runs again.` };
+	}
+	const unheld = spoken(signIn.map((row) => CARD_NAME[row.marketplace]));
+	if (quiet.length === 0) {
+		return { title, say: `Sign in to ${unheld} in the Teachouse app on your computer or phone.` };
+	}
+	return {
+		title,
+		say: `Open the Teachouse app on ${machines}, and sign in to ${unheld} there.`
+	};
+}

@@ -21,11 +21,15 @@
 		startImportHere,
 		stopImportHere
 	} from '$lib/desktop';
+	import Explain from '$lib/Explain.svelte';
 	import Field from '$lib/Field.svelte';
+	import FlowDiagram, { type FlowEnd } from '$lib/FlowDiagram.svelte';
+	import FlowActionBar from '$lib/FlowActionBar.svelte';
+	import FlowStep from '$lib/FlowStep.svelte';
+	import Stepper, { type StepMark } from '$lib/Stepper.svelte';
 	import { createLedger, type Ledger } from '$lib/ledger';
 	import { machineHere } from '$lib/machine.svelte';
 	import { SIGN_BACK_IN, signedOutHere } from '$lib/machine-here';
-	import Note from '$lib/Note.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Pagination from '$lib/Pagination.svelte';
 	import Panel from '$lib/Panel.svelte';
@@ -43,6 +47,7 @@
 	import ReviewCards from './ReviewCards.svelte';
 	import {
 		NO_ITEM_MATCHES,
+		PROGRESS_STEPS,
 		READING_HAPPENS_ON_YOUR_COMPUTER,
 		RUN_UNREAD,
 		countsLine,
@@ -52,6 +57,7 @@
 		itemRows,
 		pageCount,
 		pageSummary,
+		progressDone,
 		reasonLine,
 		runBadge,
 		runName,
@@ -61,6 +67,7 @@
 		stageCopy,
 		stageFrom
 	} from './run-view';
+	import '$lib/flow.css';
 	import './import.css';
 	import './run.css';
 
@@ -484,13 +491,47 @@
 	function sideOf(value: string): PairSide {
 		return value === 'lo' ? 'lo' : 'hi';
 	}
+
+	// ------------------------------------------------------------ the flow
+
+	/** How many of Reading → Matching → Review → Imported the run has done. */
+	const doneSteps = $derived(view === null ? 0 : progressDone(view));
+	const steps = $derived<StepMark[]>(
+		PROGRESS_STEPS.map((step, index) => ({ id: step.id, label: step.label, done: index < doneSteps }))
+	);
+	const settled = $derived(stage === 'done' || stage === 'failed');
+
+	/** The source end of the diagram: the shop, or the sheet. */
+	const diagramFrom = $derived<FlowEnd>(
+		view?.source != null ? { inventory: view.source } : { icon: 'layout-list', label: 'Your sheet' }
+	);
+	const CATALOGUE: FlowEnd = { icon: 'library-big', label: 'Catalogue' };
+
+	/** The counts the arrow carries: what is ready to go across, and what is
+	 *  waiting on the seller. */
+	function arrowCounts(run: ImportRunView): string | null {
+		const said: string[] = [];
+		if (run.counts.imported > 0) said.push(`${run.counts.imported} in`);
+		if (run.counts.matched > 0) said.push(`${run.counts.matched} ready`);
+		if (run.counts.review > 0) said.push(`${run.counts.review} to check`);
+		if (said.length === 0 && run.read_total !== null) said.push(`${run.read_total} found`);
+		return said.length === 0 ? null : said.join(' · ');
+	}
+
+	/** The first sentence of a longer reason: what the page says in warn ink,
+	 *  with the whole of it one press away. */
+	function firstSentence(text: string): string {
+		const cut = text.search(/[.!?]\s/);
+		return cut === -1 ? text : text.slice(0, cut + 1);
+	}
 </script>
 
-<div class="page">
+<div class="page flow-page has-bar">
 	{#if view !== null && stage !== null}
 		{@const run = view}
 		{@const badge = runBadge(run)}
 		{@const copy = stageCopy(stage)}
+		{@const why = deviceConditionIsCurrent(run) ? reasonLine(run.execution.reason_code, run.execution.reason) : null}
 		<PageHead
 			icon="download"
 			back={{ href: '/import', label: 'Back to Import' }}
@@ -500,269 +541,244 @@
 			{#snippet aside()}
 				{@const going = retainedBadge(run.deletion_status)}
 				<StatusPill tone={going?.tone ?? badge.tone} label={going?.label ?? badge.label} />
-				<StatusPill tone={live ? 'ok' : 'soon'} label={live ? 'Live updates on' : 'Reconnecting'} />
+				<StatusPill tone={live ? 'ok' : 'soon'} label={live ? 'Live' : 'Reconnecting'} />
 			{/snippet}
 		</PageHead>
 
-		{#if refusal !== null}
-			<Banner tone="bad" title="We could not load this import just now">
-				{refusal}
-				{failedFor === null
-					? 'Below is what we last loaded.'
-					: `We could not load ${failedFor}. Below are the resources we last loaded.`}
-				{#snippet action()}
-					<Button tier="outline" small disabled={itemsBusy} reason={itemsBusy ? 'Loading.' : undefined} onclick={() => void refetch()}>
-						Try again
-					</Button>
-				{/snippet}
-			</Banner>
-		{/if}
-		{#if declined !== null}
-			<Banner tone={stopPending ? 'info' : 'bad'} title={stopPending ? 'Stopped on this device' : 'This device did not carry on'}>{declined}</Banner>
-		{/if}
+		<div class="flow">
+			<Stepper {steps} label="How far this import is" />
 
-		<Panel title="How this import is going">
-			<p class="import-stage">{copy.headline}</p>
-			<p class="quiet">{copy.detail}</p>
-
-			<p class="quiet">{countsLine(run.counts, run.read_total)}</p>
-			{@const why = deviceConditionIsCurrent(run) ? reasonLine(run.execution.reason_code, run.execution.reason) : null}
-			{#if why !== null}
-				<p class="run-bar">{why}</p>
-			{/if}
-			{#if machineHere.revoked}
-				<Banner tone="warn" title="This computer is signed out">
-					{signedOutHere(null)}
+			{#if refusal !== null}
+				<Banner tone="bad" title="We could not load this import just now">
+					{refusal}
+					{failedFor === null
+						? 'Below is what we last loaded.'
+						: `We could not load ${failedFor}. Below are the resources we last loaded.`}
 					{#snippet action()}
-						<Button tier="outline" small href="/marketplaces">{SIGN_BACK_IN}</Button>
+						<Button tier="outline" small disabled={itemsBusy} reason={itemsBusy ? 'Loading.' : undefined} onclick={() => void refetch()}>
+							Try again
+						</Button>
 					{/snippet}
 				</Banner>
 			{/if}
-
-			<!-- Identifiers, attempts and timestamps are diagnostics, not the
-			     answer to "what is happening": they sit behind a disclosure so
-			     the sentences above are what the page says. -->
-			{#if run.execution.owner_device !== null || run.execution.last_contact_at !== null || run.execution.last_progress_at !== null || run.execution.reason_code !== null}
-				<details class="run-tech">
-					<summary>Technical details</summary>
-					{#if !deviceConditionIsCurrent(run) && run.execution.reason_code !== null}
-						<p class="quiet">Earlier device issue: {run.execution.reason_code}.</p>
-					{/if}
-					{#if run.execution.owner_device !== null}
-						<p class="quiet">Importing on: {run.execution.owner_device} · try {run.execution.attempt}.</p>
-					{/if}
-					{#if run.execution.last_contact_at !== null}
-						<p class="quiet">Last heard from the device: {new Date(run.execution.last_contact_at).toLocaleString('en-GB')}.</p>
-					{/if}
-					{#if run.execution.last_progress_at !== null}
-						<p class="quiet">Last progress: {new Date(run.execution.last_progress_at).toLocaleString('en-GB')}.</p>
-					{/if}
-				</details>
-			{/if}
-			{#if (stage === 'reading' || stage === 'committing') && run.execution.selected_total !== null && run.execution.selected_total > 0}
-				{@const total = run.execution.selected_total}
-				{@const progressed = stage === 'committing' ? run.counts.imported : run.execution.processed}
-				<progress value={progressed} max={total} aria-label={stage === 'committing' ? 'Resources added' : 'Resources read'}></progress>
-				<p class="run-bar">
-					{progressed} of {total} selected resources {stage === 'committing' ? 'added' : 'read'}
-					({Math.round(progressed / total * 100)}%).
-				</p>
+			{#if declined !== null}
+				<Banner tone={stopPending ? 'info' : 'bad'} title={stopPending ? 'Stopped on this device' : 'This device did not carry on'}>{declined}</Banner>
 			{/if}
 
-			{#if stage === 'done' || stage === 'failed'}
-				<p class="run-bar">{settledLine(run.counts)}</p>
-				<div class="actions">
-					<Button tier="primary" icon="layout-list" href={importedHref(run.source)}>
-						Open them in Resources
-					</Button>
-					{#if stage === 'failed' && run.source !== null}
-						<Button href={`/import?source=${encodeURIComponent(run.source)}&retry=${encodeURIComponent(run.id)}`}>Try again</Button>
-					{/if}
-					{@render deleteRun(run)}
+			<!-- Where the run is now, in one line, with the source → catalogue
+			     picture and its counts on the arrow. -->
+			<section class="run-now" id="step-matching" aria-labelledby="run-now-title">
+				<div class="run-now-head">
+					<h2 id="run-now-title" class="run-now-line">{copy.headline}</h2>
+					<Explain title="What happens now" label="">
+						<p>{copy.detail}</p>
+						<p>{READING_HAPPENS_ON_YOUR_COMPUTER}</p>
+						<p>{FILES_STAY_ON_YOUR_COMPUTER}</p>
+					</Explain>
 				</div>
-			{:else}
-				<div class="actions">
-					<!-- Resume is offered only where it could work. A computer the
-					     seller signed out cannot take this run, so the control is
-					     absent rather than disabled-with-an-excuse or, worse,
-					     offered and refused on press. -->
-					{#if (stage === 'waiting' || stage === 'interrupted') && invoke !== null && !machineHere.revoked && !signedOut}
-						<Button tier="primary" disabled={sending} onclick={() => void resume()}>Resume on this device</Button>
-					{/if}
-					<!-- Stop and Delete are different acts and both are offered.
-					     Stop leaves the import in the history to be read or
-					     resumed; Delete takes the record away once new work has
-					     been fenced. Neither touches what was already imported. -->
-					<Button
-						danger
-						disabled={sending}
-						reason={sending ? 'An answer is on its way.' : undefined}
-						onclick={() => void abandon()}
-					>
-						Stop this import
-					</Button>
-					{@render deleteRun(run)}
-				</div>
-			{/if}
-		</Panel>
 
-		{#if stage === 'selecting'}
-			<Panel title="Choose what to import">
-				{@render filterRow('Search resources')}
-
-				{#if wholeRun}
-					<Banner tone="info" title="All resources selected">
-						All {listedTotal} resources in this shop will be imported.
+				{#if why !== null}
+					<p class="flow-warn">
+						{firstSentence(why)}
+						<Explain title="What happened" label="Why?" tone="warn">
+							<p>{why}</p>
+							{@render tech(run)}
+						</Explain>
+					</p>
+				{:else if run.execution.owner_device !== null || run.execution.last_contact_at !== null || run.execution.reason_code !== null}
+					<p class="run-tech-line">
+						<Explain title="Technical details" label="Technical details">
+							{@render tech(run)}
+						</Explain>
+					</p>
+				{/if}
+				{#if machineHere.revoked}
+					<Banner tone="warn" title="This computer is signed out">
+						{signedOutHere(null)}
 						{#snippet action()}
-							<Button tier="outline" small onclick={() => (wholeRun = false)}>
-								Choose individually instead
-							</Button>
+							<Button tier="outline" small href="/marketplaces">{SIGN_BACK_IN}</Button>
 						{/snippet}
 					</Banner>
-				{:else}
-					<div class="run-picks">
-						<Button
-							small
-							onclick={selectPage}
-							disabled={offeredHere.length === 0}
-							reason={offeredHere.length === 0 ? 'Nothing on this page can be chosen.' : undefined}
-						>
-							Select this page
+				{/if}
+
+				<FlowDiagram
+					from={diagramFrom}
+					to={[CATALOGUE]}
+					rule={arrowCounts(run)}
+					empty="Not counted yet"
+					label="From {runName(run)} into your catalogue: {countsLine(run.counts, run.read_total)}"
+				/>
+
+				{#if (stage === 'reading' || stage === 'committing') && run.execution.selected_total !== null && run.execution.selected_total > 0}
+					{@const total = run.execution.selected_total}
+					{@const progressed = stage === 'committing' ? run.counts.imported : run.execution.processed}
+					<progress value={progressed} max={total} aria-label={stage === 'committing' ? 'Resources added' : 'Resources read'}></progress>
+					<p class="run-bar">
+						{progressed} of {total} {stage === 'committing' ? 'added' : 'read'}
+						({Math.round(progressed / total * 100)}%)
+					</p>
+				{/if}
+			</section>
+
+			{#if stage === 'selecting'}
+				<FlowStep
+					n={1}
+					id="reading"
+					title="Choose what to import"
+					hint="Tick the resources you want. We skip the rest."
+					footer={chooseFooter}
+				>
+					{@render filterRow('Search resources')}
+
+					{#if wholeRun}
+						<p class="flow-warn run-all">
+							All {listedTotal} resources in this shop are chosen.
+							<Button tier="outline" small onclick={() => (wholeRun = false)}>
+								Choose individually
+							</Button>
+						</p>
+					{:else}
+						<div class="run-picks">
+							<Button
+								small
+								onclick={selectPage}
+								disabled={offeredHere.length === 0}
+								reason={offeredHere.length === 0 ? 'Nothing on this page can be chosen.' : undefined}
+							>
+								Select this page
+							</Button>
+							<Button
+								small
+								tier="quiet"
+								onclick={() => (wholeRun = true)}
+								disabled={listedTotal === 0}
+								reason={listedTotal === 0 ? 'No resources found yet.' : undefined}
+							>
+								Select all {listedTotal}
+							</Button>
+							<Button small tier="quiet" onclick={clearSelection} disabled={chosen.size === 0} reason={chosen.size === 0 ? 'Nothing is chosen yet.' : undefined}>
+								Clear
+							</Button>
+						</div>
+					{/if}
+
+					{#if rows.length === 0}
+						<p class="quiet">{filtered ? NO_ITEM_MATCHES : emptyItemsLine(stage)}</p>
+					{:else}
+						<ul class="run-list">
+							{#each rows as item (item.locator)}
+								<li>
+									<label class="run-pick">
+										<input
+											type="checkbox"
+											checked={wholeRun || chosen.has(item.locator)}
+											disabled={wholeRun || item.state !== 'listed'}
+											onchange={() => toggle(item.locator)}
+										/>
+										{@render cover(item.coverUrl, item.name)}
+										<span class="t res-name">{item.name}</span>
+										<span class="p price">{item.price ?? '—'}</span>
+										<StatusPill tone={item.tone} label={item.label} />
+									</label>
+								</li>
+							{/each}
+						</ul>
+					{/if}
+
+					{@render pager('Resources to choose from')}
+				</FlowStep>
+			{/if}
+
+			{#if run.review_pairs.length > 0 || stage === 'reviewing' || stage === 'confirming' || stage === 'committing'}
+				<FlowStep
+					n={3}
+					id="review"
+					title="Review"
+					hint={run.review_pairs.length > 0
+						? 'These look like resources you already have. Keep one, or keep both.'
+						: 'Nothing to check. Add the ready ones to your catalogue.'}
+					done={doneSteps > 2}
+					footer={stage === 'reviewing' || stage === 'confirming' || stage === 'committing' ? commitFooter : undefined}
+				>
+					{#if run.review_pairs.length > 0}
+						<ReviewCards
+							pairs={run.review_pairs}
+							onsame={(lo, hi, keep, fields) => void decide(lo, hi, merged(keep, fields))}
+							ondifferent={(lo, hi) => void decide(lo, hi, { verdict: 'different' })}
+							onlater={(lo, hi) => void decide(lo, hi, { verdict: 'parked' })}
+						/>
+					{/if}
+					{#if commitRefusal !== null}
+						<Banner tone="bad" title="That did not finish">{commitRefusal}</Banner>
+					{/if}
+				</FlowStep>
+			{/if}
+
+			{#if settled}
+				<FlowStep
+					n={4}
+					id="imported"
+					title="Imported"
+					summary={settledLine(run.counts)}
+					done={stage === 'done'}
+				>
+					{#snippet action()}
+						<Button tier="primary" icon="layout-list" href={importedHref(run.source)}>
+							Open in Resources
 						</Button>
-						<Button
-							small
-							tier="quiet"
-							onclick={() => (wholeRun = true)}
-							disabled={listedTotal === 0}
-							reason={listedTotal === 0 ? 'No resources found yet.' : undefined}
-						>
-							Select all resources in this import
-						</Button>
-						<Button small tier="quiet" onclick={clearSelection} disabled={chosen.size === 0} reason={chosen.size === 0 ? 'Nothing is chosen yet.' : undefined}>
-							Clear selection
-						</Button>
-						<span class="run-chosen" role="status" aria-live="polite">
-							{chosen.size} selected{elsewhere > 0 ? `, ${elsewhere} of them not shown here` : ''}
-						</span>
+					{/snippet}
+					<p class="imp-line">{settledLine(run.counts)}</p>
+				</FlowStep>
+			{/if}
+
+			<!-- While the seller is choosing, the tick list above is this list:
+			     drawing it twice would be two pagers over one set of rows. -->
+			{#if stage !== 'selecting'}
+				<section class="flow-section" aria-labelledby="run-list-title">
+					<div class="flow-section-head">
+						<h2 id="run-list-title">Resources in this import</h2>
 					</div>
-				{/if}
+					{@render filterRow('Search resources')}
+					{#if rows.length === 0}
+						<p class="quiet">{filtered ? NO_ITEM_MATCHES : emptyItemsLine(stage)}</p>
+					{:else}
+						<div class="flow-table-wrap">
+							{#each rows as row (row.locator)}
+								<div class="import-listing">
+									{@render cover(row.coverUrl, row.name)}
+									<span class="what">
+										<span class="t res-name">{row.name}</span>
+										{#if row.reason !== ''}
+											<span class="w">{row.reason}</span>
+										{/if}
+									</span>
+									{#if row.price !== null}
+										<span class="price run-price">{row.price}</span>
+									{/if}
+									<span class="mark"><StatusPill tone={row.tone} label={row.label} /></span>
+									{#if row.product !== null}
+										<a class="run-open" href={`/resources/${row.product}`}>Open</a>
+									{/if}
+									<span class="ord">#{row.ordinal}</span>
+								</div>
+							{/each}
+						</div>
+					{/if}
+					{@render pager('Resources')}
+				</section>
+			{/if}
 
-				{#if rows.length === 0}
-					<p class="quiet">{filtered ? NO_ITEM_MATCHES : emptyItemsLine(stage)}</p>
-				{/if}
-				<ul class="run-list">
-					{#each rows as item (item.locator)}
-						<li>
-							<label class="run-pick">
-								<input
-									type="checkbox"
-									checked={wholeRun || chosen.has(item.locator)}
-									disabled={wholeRun || item.state !== 'listed'}
-									onchange={() => toggle(item.locator)}
-								/>
-								{@render cover(item.coverUrl, item.name)}
-								<span class="t">{item.name}</span>
-								<span class="p">{item.price ?? '—'}</span>
-								<StatusPill tone={item.tone} label={item.label} />
-							</label>
-						</li>
-					{/each}
-				</ul>
+			<!-- The run's own controls, pinned to the bottom while the page
+			     scrolls: carry on, try again, stop, delete. A phone draws them in
+			     its fixed action bar instead. -->
+			<div class="run-foot" role="region" aria-label="This import's controls">
+				{@render runControls(run)}
+			</div>
+		</div>
 
-				{@render pager('Resources to choose from')}
-
-				{@const blocked = wholeRun
-					? sending ? 'Sending your choice.' : null
-					: selectionBlocked(chosen.size, sending)}
-				<div class="actions">
-					<Button
-						tier="primary"
-						icon="download"
-						disabled={blocked !== null}
-						reason={blocked ?? undefined}
-						onclick={() => void continueHere()}
-					>
-						{sending
-							? 'Sending your choice…'
-							: wholeRun
-								? `Import all ${listedTotal} resources`
-								: `Import ${chosen.size} ${chosen.size === 1 ? 'resource' : 'resources'}`}
-					</Button>
-				</div>
-				<Note icon="lock">{READING_HAPPENS_ON_YOUR_COMPUTER}</Note>
-			</Panel>
-		{/if}
-
-		{#if run.review_pairs.length > 0}
-			<ReviewCards
-				pairs={run.review_pairs}
-				onsame={(lo, hi, keep, fields) => void decide(lo, hi, merged(keep, fields))}
-				ondifferent={(lo, hi) => void decide(lo, hi, { verdict: 'different' })}
-				onlater={(lo, hi) => void decide(lo, hi, { verdict: 'parked' })}
-			/>
-		{/if}
-
-		{#if stage === 'reviewing' || stage === 'confirming' || stage === 'committing'}
-			<Panel
-				title="Add them to Resources"
-				description="Every resource that is ready gets added."
-			>
-				{#if commitRefusal !== null}
-					<Banner tone="bad" title="That did not finish">{commitRefusal}</Banner>
-				{/if}
-				{@const ready = run.counts.matched}
-				<div class="actions">
-					<Button
-						tier="primary"
-						icon="circle-plus"
-						disabled={committing || run.execution.commit_authorised || ready === 0}
-						reason={run.execution.commit_authorised
-							? 'Already confirmed. We carry on once you answer any questions left.'
-							: committing ? 'Sending your confirmation.'
-								: ready === 0 ? 'Answer the pairs above first.' : undefined}
-						onclick={() => void commit()}
-					>
-						{run.execution.commit_authorised ? 'Confirmed' : committing ? 'Confirming…' : 'Add to Resources'}
-					</Button>
-				</div>
-			</Panel>
-		{/if}
-
-		<!-- While the seller is choosing, the tick list above is this list:
-		     every resource is still listed, so drawing it twice would be two
-		     pagers over one set of rows. -->
-		{#if stage !== 'selecting'}
-			<Panel
-				title="Resources"
-				description="Every resource in this import."
-			>
-				{@render filterRow('Search resources')}
-				{#if rows.length === 0}
-					<p class="quiet">{filtered ? NO_ITEM_MATCHES : emptyItemsLine(stage)}</p>
-				{/if}
-				{#each rows as row (row.locator)}
-					<div class="import-listing">
-						<span class="mark"><StatusPill tone={row.tone} label={row.label} /></span>
-						{@render cover(row.coverUrl, row.name)}
-						<span class="what">
-							<span class="t">{row.name}</span>
-							{#if row.reason !== ''}
-								<span class="w">{row.reason}</span>
-							{/if}
-						</span>
-						{#if row.price !== null}
-							<span class="run-price">{row.price}</span>
-						{/if}
-						{#if row.product !== null}
-							<a class="run-open" href={`/resources/${row.product}`}>Open</a>
-						{/if}
-						<span class="ord">#{row.ordinal}</span>
-					</div>
-				{/each}
-				{@render pager('Resources')}
-				<Note icon="lock">{FILES_STAY_ON_YOUR_COMPUTER}</Note>
-			</Panel>
-		{/if}
+		<FlowActionBar>
+			{@render runControls(run)}
+		</FlowActionBar>
 	{:else if refusal !== null}
 		<PageHead
 			icon="download"
@@ -782,17 +798,104 @@
 	{/if}
 </div>
 
+{#snippet runControls(run: ImportRunView)}
+	{#if stage === 'failed' && run.source !== null}
+		<Button tier="primary" icon="refresh-cw" href={`/import?source=${encodeURIComponent(run.source)}&retry=${encodeURIComponent(run.id)}`}>Try again</Button>
+	{/if}
+	<!-- Resume is offered only where it could work. A computer the
+	     seller signed out cannot take this run, so the control is
+	     absent rather than offered and refused on press. -->
+	{#if (stage === 'waiting' || stage === 'interrupted') && invoke !== null && !machineHere.revoked && !signedOut}
+		<Button tier="primary" disabled={sending} reason={sending ? 'An answer is on its way.' : undefined} onclick={() => void resume()}>Resume on this device</Button>
+	{/if}
+	<!-- Stop and Delete are different acts and both are offered. Stop
+	     leaves the import in the history to be read or resumed; Delete
+	     takes the record away. Neither touches what was imported. -->
+	{#if !settled}
+		<Button
+			danger
+			disabled={sending}
+			reason={sending ? 'An answer is on its way.' : undefined}
+			onclick={() => void abandon()}
+		>
+			Stop
+		</Button>
+	{/if}
+	{@render deleteRun(run)}
+{/snippet}
+
+<!-- Identifiers, attempts and timestamps are diagnostics, not the answer to
+     "what is happening": they live in the fine print. -->
+{#snippet tech(run: ImportRunView)}
+	{#if !deviceConditionIsCurrent(run) && run.execution.reason_code !== null}
+		<p>Earlier device issue: {run.execution.reason_code}.</p>
+	{/if}
+	{#if run.execution.owner_device !== null}
+		<p>Importing on: {run.execution.owner_device} · try {run.execution.attempt}.</p>
+	{/if}
+	{#if run.execution.last_contact_at !== null}
+		<p>Last heard from the device: {new Date(run.execution.last_contact_at).toLocaleString('en-GB')}.</p>
+	{/if}
+	{#if run.execution.last_progress_at !== null}
+		<p>Last progress: {new Date(run.execution.last_progress_at).toLocaleString('en-GB')}.</p>
+	{/if}
+{/snippet}
+
+{#snippet chooseFooter()}
+	{@const blocked = wholeRun
+		? sending ? 'Sending your choice.' : null
+		: selectionBlocked(chosen.size, sending)}
+	<Button
+		tier="primary"
+		icon="download"
+		disabled={blocked !== null}
+		reason={blocked ?? undefined}
+		onclick={() => void continueHere()}
+	>
+		{sending
+			? 'Sending your choice…'
+			: wholeRun
+				? `Import all ${listedTotal}`
+				: `Import ${chosen.size} ${chosen.size === 1 ? 'resource' : 'resources'}`}
+	</Button>
+	<span class="run-chosen" role="status" aria-live="polite">
+		{wholeRun ? `All ${listedTotal} chosen` : `${chosen.size} chosen`}{!wholeRun && elsewhere > 0 ? `, ${elsewhere} not shown here` : ''}
+	</span>
+{/snippet}
+
+{#snippet commitFooter()}
+	{@const run = view}
+	{#if run !== null}
+		{@const ready = run.counts.matched}
+		<Button
+			tier="primary"
+			icon="circle-plus"
+			disabled={committing || run.execution.commit_authorised || ready === 0}
+			reason={run.execution.commit_authorised
+				? 'Already confirmed. We carry on once you answer any questions left.'
+				: committing ? 'Sending your confirmation.'
+					: ready === 0 ? 'Answer the pairs above first.' : undefined}
+			onclick={() => void commit()}
+		>
+			{run.execution.commit_authorised ? 'Confirmed' : committing ? 'Confirming…' : `Add ${ready} to Resources`}
+		</Button>
+		{#if run.review_pairs.length > 0 && !run.execution.commit_authorised}
+			<span class="run-chosen">{run.review_pairs.length} still to check</span>
+		{/if}
+	{/if}
+{/snippet}
+
 <!-- One filter row and one pager, rendered by both lists, so the tick list
      and the resource list are the same list with the same controls. -->
 {#snippet filterRow(label: string)}
 	<div class="import-filters">
 		<div class="wide">
-			<Field label={label} id="run-search" hint="Title or web address.">
+			<Field label={label} id="run-search">
 				<input
 					id="run-search"
 					type="search"
 					value={search}
-					placeholder="Search by title"
+					placeholder="Title or web address"
 					oninput={(event) => typed(event.currentTarget.value)}
 				/>
 			</Field>
@@ -817,7 +920,7 @@
 			</select>
 		</Field>
 		{#if filtered || itemOrder !== 'title'}
-			<Button small tier="quiet" onclick={clearFilters}>Clear filters</Button>
+			<Button small tier="quiet" icon="x" onclick={clearFilters}>Clear</Button>
 		{/if}
 	</div>
 {/snippet}
@@ -836,8 +939,7 @@
 
 <!-- A real cover where the read produced one, and a neutral slot where it
      did not. The slot is also what a broken image collapses to, so a cover
-     that fails to load is an empty frame rather than a torn icon — and never
-     a claim that the marketplace supplied nothing. -->
+     that fails to load is an empty frame rather than a torn icon. -->
 {#snippet cover(url: string | null, name: string)}
 	{#if url !== null}
 		<img
@@ -855,18 +957,18 @@
 {/snippet}
 
 <!-- Delete, offered wherever the run's own actions are. Withdrawn as a
-     press once the run is already on its way out: the server would accept
-     the call and nothing the seller can see would change, which reads as a
-     control that does nothing. -->
+     press once the run is already on its way out. -->
 {#snippet deleteRun(run: ImportRunView)}
 	{@const refusal = deleteRefusal(run.deletion_status)}
 	<Button
 		danger
+		tier="quiet"
+		icon="trash-2"
 		disabled={refusal !== null}
 		reason={refusal ?? undefined}
 		onclick={() => (deleting = [{ id: run.id, label: runName(run) }])}
 	>
-		Delete this import
+		Delete
 	</Button>
 {/snippet}
 

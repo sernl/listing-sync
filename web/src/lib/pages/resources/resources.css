@@ -1,6 +1,6 @@
-/* The Resources board's own rules: the filter card's four groups, the
- * marketplace tiles, the toolbar strip, the two bulk bars and the stack of row
- * cards. Everything scoped under `.resources-page`, because every page-level
+/* The Resources pages' own rules: the board's search and filter chips, the
+ * list, the selection bar, the resource form and the files table.
+ * Everything scoped under `.resources-page`, because every page-level
  * sheet in this console is loaded globally and a class named here must not be
  * able to reach another page's markup.
  *
@@ -9,27 +9,17 @@
  * draft, and a second copy of their rules is a second copy to keep in step.
  */
 
-/* --- the filter card ----------------------------------------------------- */
+/* --- the board: search and filter chips in one row ------------------------ */
 
-/* Four groups across one row, in the order the specification names them: what
-   you type, where it goes, how you group it, how it stands. They fall to two
-   columns before they fall to one, because the marketplace tiles and the
-   standing select are both wider than half a phone. */
-.resources-page .res-filters {
-	display: grid;
-	grid-template-columns: minmax(180px, 1fr) max-content minmax(120px, auto) minmax(150px, auto);
-	gap: 18px;
-	align-items: start;
+.resources-page .res-bar {
+	display: flex;
+	align-items: center;
+	gap: var(--s-3);
+	margin: 0 0 var(--s-4);
 }
 
-.resources-page .res-filters > .field,
-.resources-page .res-filters > .res-group {
-	min-width: 0;
-}
-
-/* A filter whose control is a composite — a row of tiles, a menu — and so has
-   no single element for `Field`'s label to point at. The group is named by an
-   `aria-labelledby` on the composite instead. */
+/* A composite control named by its own label, where the override tab of the
+   form lays a label over an input rather than using `Field`. */
 .resources-page .res-group {
 	display: flex;
 	flex-direction: column;
@@ -42,29 +32,18 @@
 	color: var(--text);
 }
 
-@media (max-width: 1180px) {
-	.resources-page .res-filters {
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-	}
-}
-
-@media (max-width: 620px) {
-	.resources-page .res-filters {
-		grid-template-columns: minmax(0, 1fr);
-		gap: 14px;
-	}
-}
-
-/* The search box carries its glyph inside the control rather than beside it,
-   so the four groups keep one control height between them. */
+/* The search box carries its glyph inside the control rather than beside it. */
 .resources-page .res-search {
+	flex: 1 1 160px;
+	min-width: 140px;
+	max-width: 280px;
 	display: flex;
 	align-items: center;
 	gap: 8px;
 	border: 1px solid var(--line);
 	background: var(--surface);
-	border-radius: var(--r-field);
-	padding: 0 11px;
+	border-radius: var(--r-pill);
+	padding: 0 14px;
 	min-height: var(--control-h);
 	color: var(--muted);
 }
@@ -88,72 +67,101 @@
 	outline: none;
 }
 
-/* --- the marketplace tiles ----------------------------------------------- */
-
-.resources-page .mk-tiles {
+.resources-page .res-fchips {
+	flex: 0 1 auto;
 	display: flex;
-	flex-wrap: wrap;
+	align-items: center;
 	gap: 6px;
+	min-width: 0;
+	overflow-x: auto;
+	scrollbar-width: none;
 }
 
-.resources-page .mk-tile {
-	min-width: 52px;
-	min-height: var(--control-h);
-	padding: 0 9px;
-	border-radius: var(--r-field);
+/* One filter as a pill that is pressed or not. */
+.resources-page .res-fchip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-height: 34px;
+	padding: 0 11px;
+	border-radius: var(--r-pill);
 	border: 1px solid var(--line);
 	background: var(--surface);
-	color: var(--muted);
-	font-size: 11.5px;
-	font-weight: 600;
-	white-space: nowrap;
-}
-
-.resources-page .mk-tile:hover:not(:disabled) {
-	background: var(--hover);
 	color: var(--text);
+	font: inherit;
+	font-size: 13px;
+	font-weight: 500;
+	white-space: nowrap;
+	cursor: pointer;
 }
 
-.resources-page .mk-tile[aria-pressed='true'] {
+.resources-page .res-fchip-mark {
+	padding: 0 9px;
+}
+
+.resources-page .res-fchip:hover:not(:disabled) {
+	border-color: var(--lavender);
+}
+
+.resources-page .res-fchip[aria-pressed='true'] {
 	background: var(--accent-soft);
-	border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+	border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
 	color: var(--primary);
+	font-weight: 600;
 }
 
-/* Declared, refused and legible: a tile that cannot be chosen keeps its word
-   and states the reason, which is the discipline the bulk verbs already use. */
-.resources-page .mk-tile:disabled {
+/* Declared, refused and legible: Etsy keeps its word and states the reason. */
+.resources-page .res-fchip:disabled {
 	background: var(--soon-soft);
 	color: var(--soon);
 	cursor: not-allowed;
 }
 
-/* On a phone the tiles are a grid rather than a wrapping flex row, and 44px
-   tall, because a 36px target beside four others is a mis-tap. Grid because
-   there are five tiles and four fit across at 390: growing flex items share
-   out each line separately, so the fifth took the whole of the second line.
-   Column widths belong to the container, so the last row matches every other
-   row. */
-@media (max-width: 620px) {
-	.resources-page .mk-tiles {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(66px, 1fr));
+.resources-page .res-fchip-n {
+	min-width: 20px;
+	padding: 0 6px;
+	border-radius: var(--r-pill);
+	background: var(--hover);
+	color: var(--muted);
+	font-size: 11.5px;
+	font-weight: 600;
+	text-align: center;
+	font-variant-numeric: tabular-nums;
+}
+
+.resources-page .res-fchip-sep {
+	width: 1px;
+	height: 20px;
+	margin: 0 4px;
+	background: var(--line);
+}
+
+/* The chips scroll sideways in one line rather than stacking into a wall of
+   pills; More sits outside the scroller so its menu is not clipped. */
+@media (max-width: 720px) {
+	.resources-page .res-search {
+		flex-basis: 100%;
 	}
 
-	.resources-page .mk-tile {
-		height: 44px;
+	.resources-page .res-bar {
+		flex-wrap: wrap;
+	}
+
+	.resources-page .res-search {
+		max-width: none;
+	}
+
+	.resources-page .res-fchips {
+		flex: 1 1 0;
 	}
 }
 
-/* --- the label multi-select ---------------------------------------------- */
-
-/* A menu of checkboxes rather than a `<select multiple>`: the label list is as
-   long as the seller has made it, and a native multiple select shows three
-   rows and no count of what is chosen. */
+/* The label and status filters, behind More. A menu of checkboxes rather than
+   a `<select multiple>`: the label list is as long as the seller has made it. */
 .resources-page .label-menu {
-	max-height: 280px;
+	max-height: 340px;
 	overflow-y: auto;
-	min-width: 220px;
+	min-width: 240px;
 }
 
 .resources-page .label-menu label {
@@ -172,6 +180,18 @@
 	background: var(--hover);
 }
 
+.resources-page .label-menu .res-more-status {
+	flex-direction: column;
+	align-items: stretch;
+	gap: 4px;
+	font-weight: 600;
+	font-size: 12.5px;
+}
+
+.resources-page .label-menu .res-more-status:hover {
+	background: none;
+}
+
 .resources-page .label-menu .none {
 	padding: 8px 10px;
 	font-size: 12.5px;
@@ -179,21 +199,24 @@
 	color: var(--muted);
 }
 
-.resources-page .res-clear {
-	display: flex;
-	justify-content: flex-end;
-	margin-top: 12px;
+/* The Menu hangs off a bottom bar, so its panel opens upward. */
+.resources-page .bulk-bar .menu {
+	top: auto;
+	bottom: calc(100% + 6px);
 }
 
-/* --- the toolbar strip --------------------------------------------------- */
+/* --- the count and the sort ---------------------------------------------- */
 
 .resources-page .res-toolbar {
 	display: flex;
 	align-items: center;
-	justify-content: space-between;
 	gap: 12px;
 	flex-wrap: wrap;
-	margin: 0 0 12px;
+	margin: 0 0 var(--s-3);
+}
+
+.resources-page .res-sort-at {
+	margin-left: auto;
 }
 
 .resources-page .eyebrow {
@@ -220,35 +243,207 @@
 	border-color: var(--accent);
 }
 
-/* --- bulk selection ------------------------------------------------------ */
+/* --- the list: a table on a desk, a card on a phone ---------------------- */
 
-/* The bar naming the verb the selection is being made for. Its own bar above
-   the stack rather than a line inside the first card, because it belongs to
-   the whole selection. */
-.resources-page .select-all {
+.resources-page .res-list {
 	display: flex;
-	align-items: center;
-	gap: 10px;
+	flex-direction: column;
 	background: var(--surface);
 	border: 1px solid var(--line);
 	border-radius: var(--r-panel);
-	padding: 10px 14px;
-	margin-bottom: 10px;
-	font-size: 13.5px;
-	font-weight: 600;
 	box-shadow: var(--sh-1);
+	overflow: hidden;
 }
 
-.resources-page .select-all input[type='checkbox'] {
+.resources-page .res-list-head,
+.resources-page .res-item {
+	display: grid;
+	grid-template-columns: 20px minmax(0, 1fr) 84px minmax(150px, auto) 150px 36px;
+	align-items: center;
+	gap: var(--s-4);
+	padding: 10px var(--s-4);
+}
+
+.resources-page .res-list-head {
+	padding-top: 8px;
+	padding-bottom: 8px;
+	background: var(--hover);
+	border-bottom: 1px solid var(--line);
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+
+.resources-page .res-item + .res-item {
+	border-top: 1px solid var(--line);
+}
+
+.resources-page .res-item:hover {
+	background: var(--hover);
+}
+
+.resources-page .res-item.picked {
+	background: var(--accent-soft);
+}
+
+.resources-page .res-item-tick {
 	width: 16px;
 	height: 16px;
-	flex: none;
+	margin: 0;
 }
 
+.resources-page .res-item-main {
+	display: flex;
+	align-items: center;
+	gap: var(--s-3);
+	min-width: 0;
+	color: inherit;
+	text-decoration: none;
+}
+
+.resources-page .res-item-main:hover .res-name {
+	text-decoration: underline;
+}
+
+.resources-page .res-item-cover {
+	flex: none;
+	display: grid;
+	place-items: center;
+	width: 48px;
+	height: 48px;
+	border-radius: 10px;
+	overflow: hidden;
+	background: var(--hover);
+	border: 1px solid var(--line);
+	color: var(--muted);
+}
+
+.resources-page .res-item-cover img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+.resources-page .res-item-text {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.resources-page .res-item-text .res-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	line-height: 1.3;
+}
+
+.resources-page .res-item-meta {
+	font-size: 12px;
+	color: var(--muted);
+}
+
+.resources-page .res-item-price {
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.resources-page .res-item-marks,
+.resources-page .res-item-status {
+	min-width: 0;
+}
+
+.resources-page .res-kebab {
+	display: grid;
+	place-items: center;
+	width: 32px;
+	height: 32px;
+	border: 0;
+	border-radius: 8px;
+	background: none;
+	color: var(--muted);
+	cursor: pointer;
+}
+
+.resources-page .res-kebab:hover {
+	background: var(--hover);
+	color: var(--text);
+}
+
+/* A card per resource on a phone: the cover and the name across the top,
+   price, status and marks on the line under them. */
+@media (max-width: 900px) {
+	.resources-page .res-list-head {
+		display: none;
+	}
+
+	.resources-page .res-item {
+		grid-template-columns: 20px minmax(0, 1fr) auto 32px;
+		grid-template-areas:
+			'tick main main menu'
+			'. price status status'
+			'. marks marks marks';
+		row-gap: var(--s-2);
+		column-gap: var(--s-3);
+	}
+
+	.resources-page .res-item-tick {
+		grid-area: tick;
+	}
+
+	.resources-page .res-item-main {
+		grid-area: main;
+	}
+
+	.resources-page .res-item-price {
+		grid-area: price;
+	}
+
+	.resources-page .res-item-status {
+		grid-area: status;
+		justify-self: end;
+	}
+
+	.resources-page .res-item-marks {
+		grid-area: marks;
+	}
+
+	.resources-page .res-item-menu {
+		grid-area: menu;
+	}
+}
+
+.resources-page .res-more {
+	display: flex;
+	justify-content: center;
+	margin: var(--s-4) 0;
+}
+
+/* A menu item that navigates is an anchor, so it keeps middle-click. */
+.resources-page .res-menu-link {
+	display: flex;
+	align-items: center;
+	gap: var(--s-2);
+	padding: 9px 10px;
+	border-radius: 6px;
+	font-size: 14px;
+	color: var(--text);
+	text-decoration: none;
+}
+
+.resources-page .res-menu-link:hover {
+	background: var(--hover);
+}
+
+/* --- the selection bar ---------------------------------------------------- */
+
 /* Floating rather than sticky: the content region sets `overflow: hidden`, so
-   a sticky descendant sticks inside a box that never scrolls and simply sits
-   still. Centred on the viewport rather than inset from the rail, so the bar
-   does not have to know which columns the shell is drawing at this width. */
+   a sticky descendant sticks inside a box that never scrolls. Centred on the
+   viewport rather than inset from the rail. */
 .resources-page .bulk-bar {
 	position: fixed;
 	bottom: 18px;
@@ -265,14 +460,30 @@
 	background: var(--surface);
 	border: 1px solid var(--line);
 	border-radius: var(--r-pill);
-	box-shadow: var(--sh-2);
+	box-shadow: var(--sh-3);
 	padding: 10px 14px;
 }
 
-/* The bar floats over the foot of the page, so the page grows a foot for it to
-   float over. */
+.resources-page .bulk-count {
+	font-size: 13.5px;
+	color: var(--muted);
+	padding: 0 4px;
+}
+
+.resources-page .bulk-count strong {
+	color: var(--primary);
+	font-size: 15px;
+}
+
+/* The bar floats over the foot of the page, so the page grows a foot for it. */
 .page.resources-page.bulk-open {
 	padding-bottom: 110px;
+}
+
+@media (max-width: 720px) {
+	.page.resources-page {
+		padding-bottom: 96px;
+	}
 }
 
 @media (max-width: 620px) {
@@ -283,9 +494,10 @@
 		width: auto;
 		max-width: none;
 		border-radius: var(--r-card);
-		bottom: calc(62px + env(safe-area-inset-bottom));
+		bottom: calc(88px + env(safe-area-inset-bottom, 0px));
 	}
 
+	.page.resources-page,
 	.page.resources-page.bulk-open {
 		padding-bottom: 190px;
 	}
@@ -421,30 +633,6 @@
 	color: var(--muted);
 }
 
-/* One surface holding every section, rather than one card per section. Nine
-   cards abutting inside a form draw no ground between them, so the radius is
-   invisible and all the eye finds between two sections is a shadow smear;
-   `overflow: hidden` is what lets a band's own hairline reach this radius. The
-   top margin is stated here rather than inherited from the page rhythm because
-   in neither mode is this a `.page >` child: create nests it inside the form,
-   edit inside the detail page's own panels. */
-.resources-page .res-card {
-	background: var(--surface);
-	border-radius: var(--r-card);
-	box-shadow: var(--sh-2);
-	margin-top: 24px;
-	overflow: hidden;
-	min-width: 0;
-}
-
-/* The destination tabs as the card's head strip: the bar already draws the
-   hairline under itself, so it only needs the band's gutters and none of its
-   own trailing space. */
-.resources-page .res-card > .tab-bar {
-	padding-inline: 24px;
-	margin-bottom: 0;
-}
-
 /* One section of the form. A hairline separates it from the next and nothing
    else does; the scroll margin is what keeps a refusal's anchor landing below
    the console's head rather than under it. */
@@ -537,18 +725,73 @@
 	align-items: start;
 }
 
-/* The card's last band: Cancel and the primary at its right. In flow rather
-   than fixed — the reference pins its footer to a modal, and a bar fixed here
-   would float over the whole resource page while the seller reads the panels
-   above the form. */
+/* Save and Publish, stuck to the foot of the screen while the form is in
+   view: the hand is at the bottom after an edit, whichever step it was in.
+   Above the phone's tab bar, whose height the flow page names. */
 .resources-page .res-actbar {
-	border-top: 1px solid var(--line);
-	padding: 16px 24px;
+	position: sticky;
+	bottom: calc(var(--flow-bar-h, 0px) + var(--s-3));
+	z-index: 12;
+	margin-top: var(--s-5);
+	padding: var(--s-3) var(--s-4);
 	display: flex;
 	align-items: center;
 	justify-content: flex-end;
-	gap: 14px;
+	gap: var(--s-3);
 	flex-wrap: wrap;
+	background: color-mix(in srgb, var(--surface) 94%, transparent);
+	border: 1px solid var(--line);
+	border-radius: var(--r-panel);
+	box-shadow: var(--sh-3);
+	backdrop-filter: blur(8px);
+}
+
+@media (max-width: 620px) {
+	.resources-page .res-actbar {
+		flex-wrap: nowrap;
+	}
+
+	.resources-page .res-actbar > * {
+		flex: 1;
+		justify-content: center;
+		white-space: nowrap;
+	}
+
+	.resources-page .res-actbar > .res-actbar-cancel {
+		display: none;
+	}
+}
+
+/* Inside a step the bands lose their gutters: the step card already has
+   them, and a second inset reads as a card inside a card. */
+.resources-page .flow-step .res-sec {
+	padding: var(--s-4) 0;
+}
+
+.resources-page .flow-step .res-sec:first-of-type {
+	padding-top: var(--s-2);
+}
+
+/* The stepper is the flow's first row, so the flow's own gap spaces it. */
+.resources-page .flow > .stepper {
+	margin-bottom: 0;
+}
+
+/* The fold holding what each marketplace shows. */
+.resources-page .res-shows > .tab-bar {
+	margin-bottom: var(--s-4);
+}
+
+.resources-page .res-shows .res-group + .res-group {
+	margin-top: var(--s-4);
+}
+
+/* A short list of lines on the page's own ground: sends, collections. */
+.resources-page .res-lines {
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: var(--r-panel);
+	padding: 0 var(--s-4);
 }
 
 /* The upload target inside a band rather than inside a card of its own. Radius
@@ -557,15 +800,6 @@
 .resources-page .drop {
 	border-radius: var(--r-panel);
 	padding: 20px 16px;
-}
-
-/* The per-marketplace tab renders a `Panel`, and inside the surface a panel is
-   a band like every other rather than a card drawn inside a card. */
-.resources-page .res-card .panel {
-	background: none;
-	border-radius: 0;
-	box-shadow: none;
-	padding: 20px 24px;
 }
 
 /* The marketplace grid at the top of the form: evenly spaced tiles, each one
@@ -670,26 +904,8 @@
 }
 
 @media (max-width: 620px) {
-	.resources-page .res-card > .tab-bar {
-		padding-inline: 18px;
-	}
-
-	.resources-page .res-sec,
-	.resources-page .res-card .panel {
+	.resources-page .res-sec {
 		padding: 16px 18px;
-	}
-
-	.resources-page .res-actbar {
-		padding: 16px 18px;
-		flex-direction: column;
-		align-items: stretch;
-	}
-
-	/* The sentence first and the two actions filling the row: `margin-right`
-	   is what ordered them across, and it orders nothing in a column. */
-	.resources-page .res-actbar .res-note {
-		margin-right: 0;
-		order: -1;
 	}
 
 	.resources-page .res-row {
@@ -868,14 +1084,6 @@
 	cursor: not-allowed;
 }
 
-/* The sentence a marketplace states before its own options, quoted from them
-   rather than written by us. */
-.resources-page .res-lede {
-	margin: 0 0 10px;
-	font-size: 13px;
-	color: var(--text);
-}
-
 .resources-page .res-loss {
 	display: block;
 	margin-top: 4px;
@@ -919,34 +1127,6 @@
 	font-size: 12.5px;
 	color: var(--muted);
 	margin: 0;
-}
-
-/* --- the stack ----------------------------------------------------------- */
-
-.resources-page .res-rows {
-	display: flex;
-	flex-direction: column;
-}
-
-.resources-page .res-more {
-	display: flex;
-	justify-content: center;
-	margin-top: 14px;
-}
-
-/* A menu item that navigates is an anchor, so it keeps middle-click and
-   open-in-new-tab; the shared menu styles its buttons only. */
-.resources-page .res-menu-link {
-	display: block;
-	border-radius: 6px;
-	padding: 9px 10px;
-	font-size: 14px;
-	color: var(--text);
-	min-height: 38px;
-}
-
-.resources-page .res-menu-link:hover {
-	background: var(--hover);
 }
 
 /* --- the thumbnail preview ----------------------------------------------- */
@@ -1161,92 +1341,164 @@
 
 /* --- the file browser at /resources/files -------------------------------- */
 
+.resources-page .res-files-hint {
+	margin: calc(-1 * var(--s-3)) 0 var(--s-4);
+}
+
 /* The keep-files setting and the usage line it applies to, side by side on a
-   desktop and stacked on a phone. Only ever drawn inside the application:
-   a browser keeps no files and is told so in a sentence instead. */
+   desk and stacked on a phone. */
 .resources-page .files-keep {
 	display: flex;
 	align-items: center;
-	justify-content: space-between;
 	flex-wrap: wrap;
-	gap: 10px;
+	gap: var(--s-2) var(--s-4);
+	margin-bottom: var(--s-3);
 }
 
 .resources-page .files-local {
-	margin-top: 14px;
-}
-
-.resources-page .files-local summary {
-	cursor: pointer;
-	font-weight: 600;
+	margin-bottom: var(--s-5);
 }
 
 .resources-page .files-local input {
 	width: 100%;
 }
 
-/* One row per file. A grid rather than a row of flexed cells, because the
-   name, what uses it and the controls are three bands that must each keep
-   their own line on a phone: the old marketplace list put the status and the
-   actions on one line and they collided at 390px. */
-.resources-page .files-row {
-	display: grid;
-	gap: 6px;
-	padding: 14px 0;
-	border-top: 1px solid var(--line);
-}
-
-.resources-page .files-rows .files-row:first-of-type {
-	border-top: 0;
-}
-
-.resources-page .files-what {
-	display: flex;
-	align-items: center;
-	flex-wrap: wrap;
-	gap: 10px;
+.resources-page .files-table td {
+	vertical-align: middle;
 }
 
 .resources-page .files-name {
-	font-size: 13.5px;
 	font-weight: 600;
 	overflow-wrap: anywhere;
+	min-width: 180px;
 }
 
-.resources-page .files-uses {
-	margin: 0;
-	font-size: 12.5px;
-	display: flex;
-	flex-wrap: wrap;
+.resources-page .files-num {
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+	color: var(--muted);
+}
+
+.resources-page .files-where {
+	display: inline-flex;
+	align-items: center;
 	gap: 6px;
 }
 
-.resources-page .files-sep {
-	color: var(--faint);
+.resources-page .files-dot {
+	flex: none;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--ok);
 }
 
-/* The controls and the sentence that explains them share a line where there
-   is room and stack where there is not. The sentence comes first in the
-   markup, so a seller reading down the row knows why the control says what
-   it says before they reach it. */
-.resources-page .files-acts {
-	display: flex;
-	align-items: center;
+.resources-page .files-dot.offline {
+	background: var(--warn);
+}
+
+.resources-page .files-dot.missing {
+	background: var(--bad);
+}
+
+/* The files page has two selects beside the chips, so its bar wraps them
+   under the search rather than squeezing the search to nothing. */
+.resources-page .files-bar {
 	flex-wrap: wrap;
-	gap: 10px;
 }
 
-.resources-page .files-acts .res-note {
-	margin: 0;
+.resources-page .files-bar .res-search {
+	flex: 1 1 260px;
+	max-width: 360px;
 }
 
-.resources-page .files-pager {
-	gap: 10px;
+.resources-page .files-bar .res-fchips {
+	flex: 1 1 auto;
 }
 
-@media (max-width: 620px) {
+.resources-page .files-selects {
+	display: flex;
+	gap: var(--s-2);
+	flex: 0 1 auto;
+	min-width: 0;
+}
+
+.resources-page .files-sub {
+	display: block;
+	margin-top: 2px;
+	font-size: 12px;
+	color: var(--muted);
+}
+
+.resources-page .files-uses {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.resources-page .files-acts {
+	text-align: right;
+	white-space: nowrap;
+}
+
+.resources-page .files-acts .files-sub {
+	margin: 0 0 4px;
+	white-space: normal;
+}
+
+/* A card per file on a phone: each cell on its own line under its column's
+   name, so nothing scrolls sideways at 390px. */
+@media (max-width: 720px) {
+	.resources-page .files-table thead {
+		display: none;
+	}
+
+	.resources-page .files-table,
+	.resources-page .files-table tbody,
+	.resources-page .files-table tr,
+	.resources-page .files-table td {
+		display: block;
+	}
+
+	.resources-page .files-table tr {
+		padding: var(--s-3) var(--s-4);
+		border-bottom: 1px solid var(--line);
+	}
+
+	.resources-page .files-table td {
+		padding: 3px 0;
+		border: 0;
+	}
+
+	.resources-page .files-table td[data-label]:not(.files-name)::before {
+		content: attr(data-label);
+		display: inline-block;
+		min-width: 88px;
+		font-size: 11.5px;
+		font-weight: 600;
+		color: var(--muted);
+	}
+
+	.resources-page .files-uses {
+		display: inline-flex;
+	}
+
+	.resources-page .files-bar .res-search {
+		max-width: none;
+	}
+
+	.resources-page .files-selects {
+		flex: 1 1 100%;
+	}
+
+	.resources-page .files-bar .res-sort {
+		flex: 1 1 0;
+		min-width: 0;
+	}
+
 	.resources-page .files-acts {
-		align-items: stretch;
-		flex-direction: column;
+		text-align: left;
+		white-space: normal;
+		padding-top: var(--s-2);
 	}
 }

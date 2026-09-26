@@ -3,8 +3,11 @@
 	import type { IconName } from '$lib/icons';
 
 	/** One end of the arrow: a marketplace, or something of the seller's own
-	 *  ("Your resources") drawn with a glyph. */
-	export type FlowEnd = { inventory: InventoryId } | { icon: IconName; label: string };
+	 *  ("Your resources") drawn with a glyph, or with its picture where it has
+	 *  one (a resource's thumbnail). */
+	export type FlowEnd =
+		| { inventory: InventoryId }
+		| { icon: IconName; label: string; image?: string | null };
 
 	/** One real resource put through the rule, so the seller sees what it
 	 *  does before previewing everything. */
@@ -41,6 +44,8 @@
 		example = null,
 		exampleLabel = 'For example',
 		pairs = [],
+		via = null,
+		viaRule = null,
 		label
 	}: {
 		from: FlowEnd;
@@ -54,16 +59,23 @@
 		example?: FlowExample | null;
 		exampleLabel?: string;
 		pairs?: readonly FlowPair[];
+		/** A stop between the two ends, for a flow with two steps in it
+		 *  (file → thumbnail → marketplaces): `rule` sits on the first arrow
+		 *  and `viaRule` on the second. */
+		via?: FlowEnd | null;
+		viaRule?: string | null;
 		/** The whole diagram in words, for a screen reader. */
 		label: string;
 	} = $props();
 </script>
 
-{#snippet end(one: FlowEnd, side: 'from' | 'to')}
+{#snippet end(one: FlowEnd, side: 'from' | 'via' | 'to')}
 	<span class="fd-end {side}">
-		<span class="fd-tile">
+		<span class="fd-tile" class:pictured={'icon' in one && one.image}>
 			{#if 'inventory' in one}
 				<MarketplaceMark inventory={one.inventory} size={30} />
+			{:else if one.image}
+				<img src={one.image} alt="" />
 			{:else}
 				<Icon name={one.icon} size={24} />
 			{/if}
@@ -72,12 +84,20 @@
 	</span>
 {/snippet}
 
-<figure class="flow-diagram" aria-label={label}>
+{#snippet arrow(text: string | null)}
+	<span class="fd-arrow" class:empty={text === null} aria-hidden="true">
+		<span class="fd-rule">{text ?? empty}</span>
+	</span>
+{/snippet}
+
+<figure class="flow-diagram" class:has-via={via !== null} aria-label={label}>
 	<div class="fd-row">
 		{@render end(from, 'from')}
-		<span class="fd-arrow" class:empty={rule === null} aria-hidden="true">
-			<span class="fd-rule">{rule ?? empty}</span>
-		</span>
+		{@render arrow(rule)}
+		{#if via !== null}
+			{@render end(via, 'via')}
+			{@render arrow(viaRule)}
+		{/if}
 		<span class="fd-targets">
 			{#each to as one, index (index)}
 				{@render end(one, 'to')}
@@ -162,6 +182,22 @@
 	.fd-end.to .fd-tile {
 		border-color: var(--accent);
 		color: var(--ok-ink);
+	}
+
+	.fd-tile.pictured {
+		overflow: hidden;
+		background: var(--surface);
+	}
+
+	.fd-tile img {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+	}
+
+	.fd-end.via .fd-tile {
+		border-color: var(--label-teal);
+		color: var(--label-teal);
 	}
 
 	.fd-end.pending .fd-tile {
@@ -350,6 +386,36 @@
 		.fd-rule {
 			font-size: 12px;
 			padding: 4px 8px;
+		}
+
+		/* Three stops on a phone: the targets stack so the row still fits
+		   390px. */
+		.has-via .fd-row {
+			align-items: flex-start;
+		}
+
+		.has-via .fd-end {
+			min-width: 48px;
+		}
+
+		.has-via .fd-arrow {
+			min-width: 40px;
+		}
+
+		/* Three stops leave no room for words on the arrows at 390px: the
+		   arrows alone read file → thumbnail → marketplace, and the figure's
+		   label still says it in words. */
+		.has-via .fd-rule {
+			display: none;
+		}
+
+		.has-via .fd-name {
+			font-size: 11.5px;
+		}
+
+		.has-via .fd-targets {
+			flex-direction: column;
+			gap: var(--s-2);
 		}
 	}
 </style>

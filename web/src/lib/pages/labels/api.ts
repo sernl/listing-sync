@@ -147,3 +147,45 @@ export async function countAll(
 	await Promise.all(Array.from({ length: Math.min(width, names.length) }, worker));
 	return { counts, failed };
 }
+
+/** What putting a new label on resources did: how many carry it now, and the
+ *  refusal that stopped it part way, if one did. */
+export interface Labelled {
+	count: number;
+	refusal: string | null;
+}
+
+/** Puts one label on each of `products`, keeping what each already carries.
+ *
+ *  There is no empty label to create — a label exists while a resource carries
+ *  it — so creating one is adding it to resources. Each resource's own labels
+ *  are read and the new one appended, because the route replaces the whole
+ *  set, and a system label is left out of what is written back because the
+ *  route refuses a set that names one (it keeps those itself). Stops at the
+ *  first refusal and says how far it got, since the writes before it stand. */
+export async function labelResources(
+	products: readonly string[],
+	name: string,
+	io: {
+		read: (product: string) => Promise<{ labels: LabelView[] }>;
+		write: (product: string, labels: string[]) => Promise<unknown>;
+	}
+): Promise<Labelled> {
+	let count = 0;
+	for (const product of products) {
+		try {
+			const held = await io.read(product);
+			const own = held.labels.filter((label) => !label.system).map((label) => label.name);
+			if (!own.some((one) => one.toLowerCase() === name.toLowerCase())) {
+				own.push(name);
+			}
+			await io.write(product, own);
+			count += 1;
+		} catch (failure) {
+			const reason =
+				failure instanceof ApiFailure ? failure.message : 'That resource could not be labelled.';
+			return { count, refusal: reason };
+		}
+	}
+	return { count, refusal: null };
+}

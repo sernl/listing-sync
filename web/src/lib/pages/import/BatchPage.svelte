@@ -13,11 +13,15 @@
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
 	import { utcInstant } from '$lib/elapsed';
+	import Explain from '$lib/Explain.svelte';
 	import Field from '$lib/Field.svelte';
+	import FlowActionBar from '$lib/FlowActionBar.svelte';
+	import FlowStep from '$lib/FlowStep.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Pagination from '$lib/Pagination.svelte';
-	import Panel from '$lib/Panel.svelte';
 	import StatusPill from '$lib/StatusPill.svelte';
+	import Stepper, { type StepMark } from '$lib/Stepper.svelte';
+	import { tick } from 'svelte';
 	import AttachPanel from './AttachPanel.svelte';
 	import ReviewCards from './ReviewCards.svelte';
 	import {
@@ -40,6 +44,7 @@
 		warningLine
 	} from './sheet-view';
 	import { pageCount, pageSummary } from './run-view';
+	import '$lib/flow.css';
 	import './import.css';
 	import './sheet.css';
 
@@ -287,6 +292,33 @@
 		}
 		await refetch();
 	}
+
+	// ------------------------------------------------------------ the flow
+
+	/** Whether the batch has moved past each of Check → Attach files →
+	 *  Import. */
+	const steps = $derived.by((): StepMark[] => {
+		const kind = stage?.kind ?? 'unrecognised';
+		const early = kind === 'parsed' || kind === 'attaching';
+		const awaiting = stage !== null && 'awaiting' in stage ? stage.awaiting : 0;
+		return [
+			{ id: 'check', label: 'Check', done: kind !== 'parsed' || adding || awaiting === 0 },
+			{ id: 'attach', label: 'Attach files', done: !early || awaiting === 0 },
+			{ id: 'import', label: 'Import', done: kind === 'imported' || kind === 'failed' || kind === 'abandoned' }
+		];
+	});
+
+	/** Whether the sheet had more than one tab, which is when a row number
+	 *  needs its tab's name beside it. */
+	const manySheets = $derived(new Set(rows.map((row) => row.sheet)).size > 1);
+
+	/** Open the attach step and bring it into view. */
+	async function openAttach() {
+		missingFiles = null;
+		adding = true;
+		await tick();
+		document.getElementById('step-attach')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+	}
 </script>
 
 <!-- Both actions are declared here and handed to the banner as a prop, so a
@@ -302,60 +334,72 @@
 {/snippet}
 
 {#snippet addFiles()}
-	<Button
-		tier="primary"
-		icon="plus"
-		onclick={() => {
-			missingFiles = null;
-			adding = true;
-		}}
-	>
-		Add the files
-	</Button>
+	<Button tier="primary" icon="plus" onclick={() => void openAttach()}>Add the files</Button>
 {/snippet}
 
-{#snippet reportList(entries: ReturnType<typeof reportRows>)}
-	{#each entries as entry (entry.key)}
-		<div class="sh-row">
-			<span class="sh-who">
-				<span class="t">{entry.name ?? entry.label}</span>
-				<span class="w">
-					{entry.label}{entry.marketplace === null ? '' : ` — ${entry.marketplace}`}
-				</span>
-			</span>
-			<span class="sh-at">
-				{#if entry.attached}<StatusPill tone="flat" label="File added" />{/if}
-				<StatusPill tone={entry.tone} label={entry.stateLabel} />
-				{#if entry.href !== null}
-					<Button small href={entry.href}>Open</Button>
-				{/if}
-			</span>
-			{#if entry.problems.length > 0 || entry.failureDetail !== null}
-				<ul class="sh-probs">
-					{#each entry.problems as problem, index (`${entry.key}:${index}`)}
-						<li><span class="col">{problem.column}:</span> {problem.problem}</li>
-					{/each}
-					{#if entry.failureDetail !== null}
-						<li>{entry.failureDetail}</li>
-					{/if}
-				</ul>
-			{/if}
-		</div>
-	{/each}
+<!-- The sheet's findings as a compact table: the seller's own row number,
+     what the row is, where it is going, and where it stands. A row's
+     problems sit under it in warn ink. -->
+{#snippet reportTable(entries: ReturnType<typeof reportRows>)}
+	<div class="flow-table-wrap">
+		<table class="flow-table sh-table">
+			<thead>
+				<tr>
+					<th>Row</th>
+					<th>Resource</th>
+					<th class="sh-where">To</th>
+					<th>Status</th>
+				</tr>
+			</thead>
+			<tbody>
+				{#each entries as entry (entry.key)}
+					{@const troubled = entry.problems.length > 0 || entry.failureDetail !== null}
+					<tr class:troubled>
+						<td class="marks sh-num" title={entry.label}>
+							<span class="sh-ord">{entry.ordinal}</span>
+							{#if manySheets}<span class="sh-tab">{entry.sheet}</span>{/if}
+						</td>
+						<td>
+							{#if entry.href !== null}
+								<a href={entry.href}><span class="res-name">{entry.name ?? entry.label}</span></a>
+							{:else}
+								<span class="res-name">{entry.name ?? entry.label}</span>
+							{/if}
+							{#if entry.fileName !== null}
+								<span class="sh-file">{entry.fileName}{entry.attached ? ' · added' : ''}</span>
+							{/if}
+							{#if troubled}
+								<ul class="sh-probs">
+									{#each entry.problems as problem, index (`${entry.key}:${index}`)}
+										<li><span class="col">{problem.column}:</span> {problem.problem}</li>
+									{/each}
+									{#if entry.failureDetail !== null}
+										<li>{entry.failureDetail}</li>
+									{/if}
+								</ul>
+							{/if}
+						</td>
+						<td class="marks sh-where">{entry.marketplace ?? '—'}</td>
+						<td class="marks"><StatusPill tone={entry.tone} label={entry.stateLabel} /></td>
+					</tr>
+				{/each}
+			</tbody>
+		</table>
+	</div>
 {/snippet}
 
 <!-- The controls above the report. They narrow and page what is drawn; the
-     figures above them, the preview sentence and the file matcher all still
-     read every row of the batch. -->
+     figures, the preview sentence and the file matcher all still read every
+     row of the batch. -->
 {#snippet reportControls()}
 	<div class="import-filters">
 		<div class="wide">
-			<Field label="Search rows" id="sheet-search" hint="Title, filename, or the tab and row number.">
+			<Field label="Search rows" id="sheet-search">
 				<input
 					id="sheet-search"
 					type="search"
 					bind:value={reportSearch}
-					placeholder="Search your sheet"
+					placeholder="Title, filename or row"
 					oninput={() => (reportPage = 1)}
 				/>
 			</Field>
@@ -376,27 +420,26 @@
 			<Button
 				small
 				tier="quiet"
+				icon="x"
 				onclick={() => {
 					reportSearch = '';
 					reportState = '';
 					reportPage = 1;
 				}}
 			>
-				Clear filters
+				Clear
 			</Button>
 		{/if}
 	</div>
 	{#if matching.length === 0}
-		<p class="sh-note">
-			{reportFiltered
-				? 'No row matches these filters. Clear them to see the rest of your sheet.'
-				: 'This import has no rows.'}
+		<p class="quiet">
+			{reportFiltered ? 'No row matches these filters.' : 'This import has no rows.'}
 		</p>
 	{/if}
 {/snippet}
 
 {#snippet reportPager()}
-	{#if matching.length > 0}
+	{#if matching.length > PER_PAGE}
 		<Pagination
 			page={reportAt}
 			hasNext={reportAt < reportPages}
@@ -408,225 +451,209 @@
 	{/if}
 {/snippet}
 
-<div class="page">
+<!-- Cancel, beside the step's primary wherever the batch is still open. -->
+{#snippet cancelButton()}
+	<Button
+		danger
+		tier="quiet"
+		disabled={settling}
+		reason={settling ? 'Cancelling this import.' : undefined}
+		onclick={() => void abandon()}
+	>
+		Cancel import
+	</Button>
+{/snippet}
+
+<!-- The import step's controls, for whichever stage the batch is in. Drawn
+     in the step's sticky footer and in the phone's action bar. -->
+{#snippet importControls()}
+	{#if stage !== null}
+		{#if stage.kind === 'parsed' || stage.kind === 'attaching'}
+			{#if confirming}
+				<Button tier="primary" icon="circle-check" disabled={running} reason={running ? 'Adding your resources.' : undefined} onclick={() => void commit()}>
+					{running ? 'Importing…' : 'Import them'}
+				</Button>
+				<Button tier="quiet" onclick={() => (confirming = false)}>Not yet</Button>
+			{:else if stage.awaiting > 0 && stage.kind === 'parsed' && !adding}
+				<Button tier="primary" icon="plus" onclick={() => void openAttach()}>
+					Add the {stage.awaiting} {stage.awaiting === 1 ? 'file' : 'files'}
+				</Button>
+			{:else}
+				<Button
+					tier="primary"
+					icon="circle-check"
+					disabled={stage.awaiting > 0 || running}
+					reason={stage.awaiting > 0
+						? `${stage.awaiting} ${stage.awaiting === 1 ? 'row is' : 'rows are'} still waiting for a file.`
+						: undefined}
+					onclick={() => (confirming = true)}
+				>
+					Import {stage.preview.create} {stage.preview.create === 1 ? 'resource' : 'resources'}
+				</Button>
+			{/if}
+			{@render cancelButton()}
+		{:else if stage.kind === 'review'}
+			<Button
+				tier="primary"
+				icon="circle-check"
+				disabled
+				reason={`${stage.pairs} ${stage.pairs === 1 ? 'pair is' : 'pairs are'} waiting on your answer above.`}
+			>
+				Carry on importing
+			</Button>
+			{@render cancelButton()}
+		{:else if stage.kind === 'importing'}
+			<Button
+				tier="primary"
+				disabled={running}
+				reason={running ? 'Adding your resources.' : undefined}
+				onclick={() => void commit()}
+			>
+				{running ? 'Importing…' : 'Carry on importing'}
+			</Button>
+		{/if}
+	{/if}
+{/snippet}
+
+<div class="page flow-page has-bar">
 	{#if detail !== null && shown !== null && stage !== null}
+		{@const early = stage.kind === 'parsed' || stage.kind === 'attaching'}
+		{@const open = early || stage.kind === 'review' || stage.kind === 'importing'}
 		<PageHead
 			icon="layout-list"
 			back={{ href: '/import', label: 'Back to Import' }}
 			title={detail.source_name}
-			description="What your sheet says and what we will add."
+			description={shown.line}
 		>
 			{#snippet aside()}
 				<StatusPill tone={shown.tone} label={shown.label} />
 			{/snippet}
 		</PageHead>
 
-		<p class="sh-lead">{shown.line}</p>
+		<div class="flow">
+			<Stepper {steps} label="Spreadsheet import steps" />
 
-		{#if missingFiles !== null}
-			<!-- The way out is offered only from the report face, because it is
-			     the one face the attach panel is not already on. -->
-			<Banner
-				tone="warn"
-				title={AWAITING_TITLE}
-				action={stage.kind === 'parsed' ? addFiles : undefined}
+			{#if missingFiles !== null}
+				<Banner
+					tone="warn"
+					title={AWAITING_TITLE}
+					action={stage.kind === 'parsed' && !adding ? addFiles : undefined}
+				>
+					{awaitingSay(missingFiles)}
+				</Banner>
+			{/if}
+
+			{#if refusal !== null}
+				<Banner
+					tone="bad"
+					title="That did not go through"
+					action={resumable ? retryCommit : undefined}
+				>
+					{refusal}
+				</Banner>
+			{/if}
+
+			<FlowStep
+				n={1}
+				id="check"
+				title="Check"
+				hint={early ? 'Read what we found in your sheet.' : 'Your rows and where each ended up.'}
+				summary="{detail.row_count} rows · {detail.failed_count} with problems"
+				done={steps[0].done}
+				open={!(early && adding)}
 			>
-				{awaitingSay(missingFiles)}
-			</Banner>
-		{/if}
+				<p class="sh-tally">
+					<span><b>{detail.row_count}</b> rows</span>
+					<span><b>{tally.attached}</b> files added</span>
+					<span class:sh-warn={detail.failed_count > 0}><b>{detail.failed_count}</b> with problems</span>
+					<span><b>{detail.live_count}</b> to publish</span>
+				</p>
+				{#each detail.warnings as warning, index (`${warning.kind}:${index}`)}
+					<p class="flow-warn">{warningLine(warning)}</p>
+				{/each}
+				{@render reportControls()}
+				{#if matching.length > 0}
+					{@render reportTable(reportSlice)}
+				{/if}
+				{@render reportPager()}
+			</FlowStep>
 
-		{#if refusal !== null}
-			<Banner
-				tone="bad"
-				title="That did not go through"
-				action={resumable ? retryCommit : undefined}
+			{#if early}
+				<FlowStep
+					n={2}
+					id="attach"
+					title="Attach files"
+					hint="Drop the files your sheet lists. We match each one to its row."
+					summary={stage.awaiting === 0
+						? 'Every file is added'
+						: `${stage.awaiting} ${stage.awaiting === 1 ? 'file' : 'files'} to add`}
+					done={steps[1].done}
+					open={stage.kind === 'attaching' || adding}
+				>
+					<AttachPanel batch={batchId} {rows} onRow={applyRow} onRefresh={refetch} />
+				</FlowStep>
+			{/if}
+
+			<FlowStep
+				n={3}
+				id="import"
+				title="Import"
+				hint={stage.kind === 'review'
+					? shown.line
+					: stage.kind === 'importing'
+						? 'Adding your resources a few at a time. You can leave this page.'
+						: early
+							? confirming
+								? previewSentence(stage.preview)
+								: 'Add them to your catalogue. Nothing goes to a marketplace.'
+							: shown.line}
+				done={steps[2].done}
+				footer={open ? importControls : undefined}
 			>
-				{refusal}
-			</Banner>
-		{/if}
+				{#snippet aside()}
+					<Explain title="What importing does" label="">
+						<p>{NOTHING_SENT}</p>
+						{#if early}
+							<p>An import left unfinished is cleared on {expiryDay}, along with the files added to it.</p>
+						{/if}
+					</Explain>
+				{/snippet}
 
-		<div class="sh-figs">
-			<div class="sh-fig"><b>{detail.row_count}</b><span>rows read</span></div>
-			<div class="sh-fig"><b>{tally.attached}</b><span>files added</span></div>
-			<div class="sh-fig"><b>{detail.failed_count}</b><span>rows with problems</span></div>
-			<div class="sh-fig"><b>{detail.live_count}</b><span>set to publish</span></div>
+				{#if stage.kind === 'review'}
+					<ReviewCards
+						pairs={detail.run?.review_pairs ?? []}
+						onsame={(lo, hi, keep, fields) =>
+							void decide(lo, hi, { verdict: 'same', keep, fields })}
+						ondifferent={(lo, hi) => void decide(lo, hi, { verdict: 'different' })}
+						onlater={(lo, hi) => void decide(lo, hi, { verdict: 'parked' })}
+					/>
+				{:else if stage.kind === 'importing'}
+					<div
+						class="sh-meter"
+						role="progressbar"
+						aria-label="Import progress"
+						aria-valuenow={progress.kind === 'unstarted' ? undefined : progress.settled}
+						aria-valuemin={0}
+						aria-valuemax={progress.kind === 'unstarted' ? undefined : progress.total}
+					>
+						{#if progress.kind === 'running' && progress.fraction !== null}
+							<div class="sh-fill" style="width: {Math.round(progress.fraction * 100)}%"></div>
+						{/if}
+					</div>
+					<p class="sh-note">{progressLine(progress)}</p>
+				{:else if early}
+					<p class="imp-line">
+						<span class="sh-big">{stage.preview.create}</span>
+						{stage.preview.create === 1 ? 'resource' : 'resources'} ready to add
+					</p>
+				{/if}
+			</FlowStep>
 		</div>
 
-		{#each detail.warnings as warning, index (`${warning.kind}:${index}`)}
-			<Banner tone="warn" title={warning.kind === 'new_label' ? 'A new label' : 'Not connected'}>
-				{warningLine(warning)}
-			</Banner>
-		{/each}
-
-		{#if stage.kind === 'parsed' && !adding}
-			<Panel
-				title="What your sheet says"
-				description="Your rows, in the order you filled them."
-			>
-				{@render reportControls()}
-				{@render reportList(reportSlice)}
-				{@render reportPager()}
-			</Panel>
-
-			{#if confirming}
-				<Banner tone="info" title="Ready to import">
-					{previewSentence(stage.preview)}
-					{NOTHING_SENT}
-					{#snippet action()}
-						<Button tier="primary" disabled={running} onclick={() => void commit()}>
-							Import them
-						</Button>
-					{/snippet}
-				</Banner>
-			{/if}
-
-			<div class="sh-acts">
-				{#if stage.awaiting > 0}
-					<Button tier="primary" icon="plus" onclick={() => (adding = true)}>
-						Add the {stage.awaiting}
-						{stage.awaiting === 1 ? 'file' : 'files'} it lists
-					</Button>
-				{:else}
-					<Button
-						tier="primary"
-						icon="circle-check"
-						disabled={running || confirming}
-						reason={confirming ? 'Confirm above.' : undefined}
-						onclick={() => (confirming = true)}
-					>
-						Import {stage.preview.create}
-						{stage.preview.create === 1 ? 'resource' : 'resources'}
-					</Button>
-				{/if}
-				<Button
-					danger
-					disabled={settling}
-					reason={settling ? 'Cancelling this import.' : undefined}
-					onclick={() => void abandon()}
-				>
-					Cancel this import
-				</Button>
-			</div>
-			<p class="sh-note">
-				An import left unfinished is cleared on {expiryDay}, along with the files added to it.
-			</p>
-		{:else if stage.kind === 'attaching' || (stage.kind === 'parsed' && adding)}
-			<Panel
-				title="Add the files"
-				description="Every row that names a marketplace needs the file buyers download."
-			>
-				<AttachPanel batch={batchId} {rows} onRow={applyRow} onRefresh={refetch} />
-			</Panel>
-
-			{#if confirming}
-				<Banner tone="info" title="Ready to import">
-					{previewSentence(stage.preview)}
-					{NOTHING_SENT}
-					{#snippet action()}
-						<Button tier="primary" disabled={running} onclick={() => void commit()}>
-							Import them
-						</Button>
-					{/snippet}
-				</Banner>
-			{/if}
-
-			<div class="sh-acts">
-				<Button
-					tier="primary"
-					icon="circle-check"
-					disabled={stage.awaiting > 0 || running || confirming}
-					reason={stage.awaiting > 0
-						? `${stage.awaiting} ${stage.awaiting === 1 ? 'row is' : 'rows are'} still waiting for a file.`
-						: confirming
-							? 'Confirm above.'
-							: undefined}
-					onclick={() => (confirming = true)}
-				>
-					Import these resources
-				</Button>
-				<Button
-					danger
-					disabled={settling}
-					reason={settling ? 'Cancelling this import.' : undefined}
-					onclick={() => void abandon()}
-				>
-					Cancel this import
-				</Button>
-			</div>
-			<p class="sh-note">
-				An import left unfinished is cleared on {expiryDay}, along with the files added to it.
-			</p>
-		{:else if stage.kind === 'review'}
-			<!-- The matcher runs inside the commit, so a batch with pairs open is
-			     a commit that has stopped and is waiting: the cards come first
-			     and the control below states why it cannot carry on. -->
-			<ReviewCards
-				pairs={detail.run?.review_pairs ?? []}
-				onsame={(lo, hi, keep, fields) =>
-					void decide(lo, hi, { verdict: 'same', keep, fields })}
-				ondifferent={(lo, hi) => void decide(lo, hi, { verdict: 'different' })}
-				onlater={(lo, hi) => void decide(lo, hi, { verdict: 'parked' })}
-			/>
-			<div class="sh-acts">
-				<Button
-					tier="primary"
-					icon="circle-check"
-					disabled
-					reason={`${stage.pairs} ${stage.pairs === 1 ? 'pair is' : 'pairs are'} waiting on your answer above.`}
-				>
-					Carry on importing
-				</Button>
-				<Button
-					danger
-					disabled={settling}
-					reason={settling ? 'Cancelling this import.' : undefined}
-					onclick={() => void abandon()}
-				>
-					Cancel this import
-				</Button>
-			</div>
-			<p class="sh-note">{NOTHING_SENT}</p>
-		{:else if stage.kind === 'importing'}
-			<Panel title="Adding your resources">
-				<div
-					class="sh-meter"
-					role="progressbar"
-					aria-label="Import progress"
-					aria-valuenow={progress.kind === 'unstarted' ? undefined : progress.settled}
-					aria-valuemin={0}
-					aria-valuemax={progress.kind === 'unstarted' ? undefined : progress.total}
-				>
-					{#if progress.kind === 'running' && progress.fraction !== null}
-						<div class="sh-fill" style="width: {Math.round(progress.fraction * 100)}%"></div>
-					{/if}
-				</div>
-				<p class="sh-note">{progressLine(progress)}</p>
-				<div class="sh-acts">
-					<Button
-						tier="primary"
-						disabled={running}
-						reason={running ? 'Adding your resources.' : undefined}
-						onclick={() => void commit()}
-					>
-						{running ? 'Importing…' : 'Carry on importing'}
-					</Button>
-				</div>
-				<p class="sh-note">{NOTHING_SENT}</p>
-			</Panel>
-		{:else if stage.kind === 'unrecognised'}
-			<Panel title="We cannot show where this import is up to">
-				<p class="sh-note">{shown.line}</p>
-			</Panel>
-		{:else}
-			<Panel
-				title="What was added"
-				description="Your rows and where each ended up."
-			>
-				{@render reportControls()}
-				{@render reportList(reportSlice)}
-				{@render reportPager()}
-			</Panel>
-			<p class="sh-note">{NOTHING_SENT}</p>
+		{#if open}
+			<FlowActionBar>
+				{@render importControls()}
+			</FlowActionBar>
 		{/if}
 	{:else if unread}
 		<PageHead
@@ -644,6 +671,6 @@
 			description="It may have been cancelled, or cleared after it expired."
 		/>
 	{:else}
-		<p class="sh-lead">Loading this import…</p>
+		<p class="quiet">Loading this import…</p>
 	{/if}
 </div>

@@ -1,4 +1,8 @@
 <script lang="ts">
+	// Marketplace words as a guided flow: where (the marketplace and the
+	// field), then the match — your term on the left, the marketplace's option
+	// on the right — with Save in the step's sticky footer. Saved matches
+	// below, each drawn as the same pair of term chips.
 	import { createQueries, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import {
 		ApiFailure,
@@ -7,14 +11,16 @@
 		type TermView,
 		type VocabularyView
 	} from '$lib/api';
-	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
 	import Field from '$lib/Field.svelte';
-	import Panel from '$lib/Panel.svelte';
+	import Explain from '$lib/Explain.svelte';
+	import FlowDiagram from '$lib/FlowDiagram.svelte';
+	import FlowStep from '$lib/FlowStep.svelte';
+	import Stepper, { type StepMark } from '$lib/Stepper.svelte';
+	import { SHORT_NAME } from '$lib/platforms';
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
 	import { AUTHORABLE_PLATFORMS, platformTitle } from '$lib/platforms';
 	import { queryKeys } from '$lib/query';
-	import { remember, remembered } from '$lib/dismissal';
 	import { AXES, AXIS_LABEL, draftOf, isComplete } from '$lib/templates';
 	import { chosenOf, destinationsOf } from './destinations';
 	import type { InventoryId, TermKind } from '$lib/generated/vocab';
@@ -122,6 +128,7 @@
 		toNative = draft.toNative;
 		kind = draft.kind;
 		refusal = null;
+		document.getElementById('step-map-match')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 	}
 
 	let saving = $state(false);
@@ -176,186 +183,207 @@
 		}
 	}
 
-	/** Closed for good once closed: the sentence is about the product and
-	 *  does not change, so meeting it again on every visit is noise. */
-	let licenceShown = $state(!remembered('templates.licence-is-yours'));
+	const KIND_WORD = { exact: 'same as', broader: 'belongs under' } as const;
+
+	const destinationWord = $derived(chosen === '' ? null : destinationLabel());
+	const termWord = $derived(chosenTerm?.label ?? null);
+
+	let whereOpen = $state(true);
+	let matchOpen = $state(true);
+
+	const steps = $derived<StepMark[]>([
+		{ id: 'map-where', label: 'Where', done: true },
+		{ id: 'map-match', label: 'Match', done: complete }
+	]);
 </script>
 
-{#if licenceShown}
-	<Banner
-		tone="info"
-		title="You choose the licence"
-		onDismiss={() => {
-			licenceShown = false;
-			remember('templates.licence-is-yours');
-		}}
+<Stepper {steps} label="Match steps" />
+
+<div class="flow">
+	<FlowStep
+		n={1}
+		id="map-where"
+		title="Where"
+		hint="Choose the marketplace and the field."
+		summary="{SHORT_NAME[inventory]} · {AXIS_LABEL[axis]}"
+		done
+		bind:open={whereOpen}
 	>
-		{LICENCE_REFUSAL}
-	</Banner>
-{/if}
+		{#snippet aside()}
+			<Explain title="What a match does" label="">
+				<p>
+					A match says which of a marketplace’s own options one of your words should use. When
+					you publish there, the resource carries that option.
+				</p>
+				<p>{LICENCE_REFUSAL}</p>
+			</Explain>
+		{/snippet}
 
-<Panel
-	title="Add a match"
-	description="Choose which marketplace option each of your words should use."
->
-	<div class="tpl-grid">
-		<Field label="Marketplace" id="{base}-inventory">
-			<select
-				id="{base}-inventory"
-				bind:value={inventory}
-				onchange={() => (toNative = '')}
-			>
-				{#each AUTHORABLE_PLATFORMS as one (one)}
-					<option value={one}>{platformTitle(one)}</option>
-				{/each}
-			</select>
-		</Field>
+		<div class="flow-choice" role="radiogroup" aria-label="Marketplace">
+			{#each AUTHORABLE_PLATFORMS as one (one)}
+				<button
+					type="button"
+					role="radio"
+					aria-checked={inventory === one}
+					onclick={() => {
+						inventory = one;
+						toNative = '';
+					}}
+				>
+					<span class="tpl-mk-line"><MarketplaceMark inventory={one} size={20} />{platformTitle(one)}</span>
+				</button>
+			{/each}
+		</div>
 
-		<Field label="Field" id="{base}-axis">
-			<select
-				id="{base}-axis"
-				bind:value={axis}
-				onchange={() => {
-					from = '';
-					toNative = '';
-				}}
-			>
-				{#each AXES as one (one)}
-					<option value={one}>{AXIS_LABEL[one]}</option>
-				{/each}
-			</select>
-		</Field>
+		<div class="chip-row" role="radiogroup" aria-label="Field">
+			{#each AXES as one (one)}
+				<button
+					type="button"
+					role="radio"
+					class="choice-chip solo tpl-pick"
+					aria-checked={axis === one}
+					onclick={() => {
+						axis = one;
+						from = '';
+						toNative = '';
+					}}
+				>
+					{AXIS_LABEL[one]}
+				</button>
+			{/each}
+		</div>
+	</FlowStep>
 
-		<Field label="Your term" id="{base}-term">
-			<select id="{base}-term" bind:value={from} disabled={terms.isPending}>
-				<option value="">
-					{terms.isPending ? 'Loading your terms…' : 'Pick one of your terms'}
-				</option>
-				{#each terms.data ?? [] as term (term.id)}
-					<option value={term.id}>{term.label}</option>
-				{/each}
-			</select>
-		</Field>
+	<FlowStep
+		n={2}
+		id="map-match"
+		title="Match"
+		hint="Pick your term, then the option it uses."
+		summary={termWord === null ? 'Not chosen' : `${termWord} → ${destinationWord ?? '?'}`}
+		done={complete}
+		bind:open={matchOpen}
+		footer={saveFooter}
+	>
+		{#snippet aside()}
+			<Explain title="Same as, or belongs under" label="">
+				<p>Same as: buyers on this marketplace see your term as that option.</p>
+				<p>Belongs under: buyers on this marketplace see the broader heading, not your term.</p>
+				<p>Saving again replaces your choice for the same marketplace, field and term.</p>
+			</Explain>
+		{/snippet}
 
-		{#if destinations.kind === 'values'}
-			<Field label="Use on {platformTitle(inventory)}" id="{base}-destination">
-				<select id="{base}-destination" bind:value={toNative}>
-					<option value="">Pick an option</option>
-					{#each destinations.values as value (value.id)}
-						<option value={value.id}>{value.label}</option>
+		<div class="tpl-grid">
+			<Field label="Your term" id="{base}-term">
+				<select id="{base}-term" bind:value={from} disabled={terms.isPending}>
+					<option value="">
+						{terms.isPending ? 'Loading your terms…' : 'Pick one of your terms'}
+					</option>
+					{#each terms.data ?? [] as term (term.id)}
+						<option value={term.id}>{term.label}</option>
 					{/each}
 				</select>
 			</Field>
-		{:else if destinations.kind === 'unread'}
-			<div class="tpl-absent">
-				<b>Use on {platformTitle(inventory)}</b>
-				<span>{platformTitle(inventory)}’s options haven’t loaded yet.</span>
-			</div>
-		{:else if destinations.kind === 'unbound'}
-			<div class="tpl-absent">
-				<b>Use on {platformTitle(inventory)}</b>
-				<span>
-					{platformTitle(inventory)} has no {AXIS_LABEL[
-						axis
-					].toLowerCase()} field to choose from.
-				</span>
-			</div>
-		{:else}
-			<div class="tpl-absent">
-				<b>Use on {platformTitle(inventory)}</b>
-				<span>
-					{platformTitle(inventory)} has no list of {AXIS_LABEL[
-						axis
-					].toLowerCase()} options to pick from.
-				</span>
-			</div>
-		{/if}
-	</div>
 
-	<fieldset class="tpl-choices">
-		<legend>How it matches</legend>
-		<div class="picks">
-			<label>
-				<input
-					type="radio"
-					name="{base}-kind"
-					checked={kind === 'exact'}
-					onchange={() => (kind = 'exact')}
-				/>
-				Same as
-			</label>
-			<label>
-				<input
-					type="radio"
-					name="{base}-kind"
-					checked={kind === 'broader'}
-					onchange={() => (kind = 'broader')}
-				/>
-				Belongs under
-			</label>
-		</div>
-	</fieldset>
-	<p class="tpl-note">
-		Belongs under: buyers on this marketplace see the broader heading, not your term.
-	</p>
-
-	{#if refusal !== null}
-		<p class="tpl-refusal">{refusal}</p>
-	{/if}
-
-	<p class="tpl-note">
-		Saving again replaces your choice for the same marketplace, field and term.
-	</p>
-
-	<div class="tpl-actions">
-		<Button
-			tier="additive"
-			icon="circle-plus"
-			disabled={saving || !complete}
-			reason={complete
-				? saving
-					? 'Saving now.'
-					: undefined
-				: 'Pick your term and the marketplace option it matches.'}
-			onclick={() => void save()}
-		>
-			{saving
-				? 'Saving…'
-				: chosenTerm === undefined
-					? 'Save match'
-					: `Save match for ${chosenTerm.label}`}
-		</Button>
-	</div>
-</Panel>
-
-<Panel title="Your matches">
-	{#each byMarketplace as group (group.inventory)}
-		<div class="tpl-group">
-			<h3><MarketplaceMark inventory={group.inventory} size={16} /></h3>
-			{#each group.rows as row (`${row.axis}:${row.from_term}`)}
-				<div class="tpl-row">
-					<span class="who">
-						<span class="t">{termsByAxis.label.get(row.from_term) ?? row.from_term}</span>
-						<span class="meta">
-							{AXIS_LABEL[row.axis]} · matches {row.segments.join(' › ')}{row.kind === 'broader'
-								? ' · belongs under'
-								: ''}
-						</span>
-					</span>
-					<span class="tpl-row-acts">
-						<Button small onclick={() => change(row)}>Change</Button>
-						<Button small danger onclick={() => void withdraw(row)}>Remove</Button>
+			{#if destinations.kind === 'values'}
+				<Field label="Use on {platformTitle(inventory)}" id="{base}-destination">
+					<select id="{base}-destination" bind:value={toNative}>
+						<option value="">Pick an option</option>
+						{#each destinations.values as value (value.id)}
+							<option value={value.id}>{value.label}</option>
+						{/each}
+					</select>
+				</Field>
+			{:else}
+				<div class="tpl-absent">
+					<b>Use on {platformTitle(inventory)}</b>
+					<span>
+						{#if destinations.kind === 'unread'}
+							{platformTitle(inventory)}’s options haven’t loaded yet.
+						{:else if destinations.kind === 'unbound'}
+							{platformTitle(inventory)} has no {AXIS_LABEL[axis].toLowerCase()} field to choose from.
+						{:else}
+							{platformTitle(inventory)} has no list of {AXIS_LABEL[axis].toLowerCase()} options to pick from.
+						{/if}
 					</span>
 				</div>
-			{/each}
+			{/if}
 		</div>
-	{:else}
-		<p class="tpl-none">
-			{overrides.isPending
-				? 'Loading your matches…'
-				: overrides.isError
-					? 'We couldn’t load your matches.'
-					: 'No matches yet.'}
-		</p>
-	{/each}
-</Panel>
+
+		<div class="flow-choice" role="radiogroup" aria-label="How it matches">
+			<button type="button" role="radio" aria-checked={kind === 'exact'} onclick={() => (kind = 'exact')}>
+				Same as
+				<span class="sub">Your term, as that option.</span>
+			</button>
+			<button type="button" role="radio" aria-checked={kind === 'broader'} onclick={() => (kind = 'broader')}>
+				Belongs under
+				<span class="sub">Shown under the broader heading.</span>
+			</button>
+		</div>
+
+		<FlowDiagram
+			from={{ icon: 'tag', label: 'Your term' }}
+			to={[{ inventory }]}
+			rule={termWord === null ? null : KIND_WORD[kind]}
+			empty="pick a term"
+			pairs={termWord === null ? [] : [{ from: [termWord], to: [destinationWord ?? '?'] }]}
+			label="{termWord ?? 'Your term'} {KIND_WORD[kind]} {destinationWord ?? 'an option'} on {SHORT_NAME[inventory]}"
+		/>
+
+		{#if refusal !== null}
+			<p class="tpl-refusal">{refusal}</p>
+		{/if}
+	</FlowStep>
+
+	<section class="flow-section" aria-labelledby="{base}-matches">
+		<div class="flow-section-head">
+			<h2 id="{base}-matches">Your matches</h2>
+		</div>
+		{#each byMarketplace as group (group.inventory)}
+			<div class="flow-card">
+				<div class="flow-card-head">
+					<h3 class="flow-label tpl-mk-line">
+						<MarketplaceMark inventory={group.inventory} size={18} />{platformTitle(group.inventory)}
+					</h3>
+				</div>
+				<ul class="tpl-matches">
+					{#each group.rows as row (`${row.axis}:${row.from_term}`)}
+						<li>
+							<span class="tpl-axis">{AXIS_LABEL[row.axis]}</span>
+							<span class="term-chip from">{termsByAxis.label.get(row.from_term) ?? row.from_term}</span>
+							<span class="tpl-arrow" aria-label={KIND_WORD[row.kind]}>{row.kind === 'broader' ? '⊂' : '→'}</span>
+							<span class="term-chip to">{row.segments.join(' › ')}</span>
+							<span class="tpl-row-acts">
+								<Button small tier="quiet" icon="pencil" onclick={() => change(row)}>Change</Button>
+								<Button small tier="quiet" danger icon="trash-2" onclick={() => void withdraw(row)}>Remove</Button>
+							</span>
+						</li>
+					{/each}
+				</ul>
+			</div>
+		{:else}
+			<p class="tpl-none">
+				{overrides.isPending
+					? 'Loading your matches…'
+					: overrides.isError
+						? 'We couldn’t load your matches.'
+						: 'No matches yet.'}
+			</p>
+		{/each}
+	</section>
+</div>
+
+{#snippet saveFooter()}
+	<Button
+		tier="primary"
+		icon="circle-plus"
+		disabled={saving || !complete}
+		reason={complete
+			? saving
+				? 'Saving now.'
+				: undefined
+			: 'Pick your term and the marketplace option it matches.'}
+		onclick={() => void save()}
+	>
+		{saving ? 'Saving…' : chosenTerm === undefined ? 'Save match' : `Save match for ${chosenTerm.label}`}
+	</Button>
+{/snippet}

@@ -1,4 +1,7 @@
 <script lang="ts">
+	import Button from '$lib/Button.svelte';
+	import Explain from '$lib/Explain.svelte';
+	import Icon from '$lib/Icon.svelte';
 	import StatusPill, { type Tone } from '$lib/StatusPill.svelte';
 	import { external } from '$lib/external';
 	import { cardAnchor } from '$lib/platforms';
@@ -50,9 +53,8 @@
 		status?: { tone: Tone; label: string };
 		body: string;
 		/** What the marketplace is, for a seller who does not recognise the name.
-		 *  Shown rather than hidden behind a disclosure, because the reader it is
-		 *  for is exactly the one who would not open a disclosure to find out.
-		 *  Absent on the two browser tiles, which are not marketplaces. */
+		 *  Behind the tile's (i) since 0.13: the tile says what to do, and the
+		 *  description is one press away for the seller who needs it. */
 		about?: string;
 		/** The transport class D1 requires on every marketplace row, as a badge
 		 *  and as the sentence that says the same thing. Absent on a tile for a
@@ -106,18 +108,19 @@
      the name and not the list entry it came from, and every caller would
      otherwise have to remember to pass an anchor for a link it does not itself
      write. `platforms.test.ts` holds the three marketplaces the console links
-     into to the ids it links at. -->
-<article id={cardAnchor(name)} class="mp-card" class:pending>
+     into to the ids it links at.
+
+     One large tile per shop: the mark, the state, the machine it runs on and
+     the one thing to press. What the marketplace is sits behind the (i), for
+     the seller who does not recognise the name. -->
+<article id={cardAnchor(name)} class="mp-tile" class:pending>
 	<div class="mp-cap">
 		<!-- The mark and the name lead to the same place, so only the name is a
-		     tab stop and only the name is announced: a second link saying the
-		     same thing is noise to anyone reading with a screen reader. Hiding a
-		     focusable element from assistive technology is wrong, so where the mark
-		     is a link `aria-hidden` and `tabindex="-1"` go together and neither
-		     appears without the other. -->
+		     tab stop and only the name is announced. Where the mark is a link
+		     `aria-hidden` and `tabindex="-1"` go together. -->
 		{#if home}
 			<a
-				class="mp-mark"
+				class="mp-mark mp-big"
 				class:mp-square={isSquare(mark)}
 				href={home}
 				target="_blank"
@@ -129,7 +132,7 @@
 				<TileMark {mark} />
 			</a>
 		{:else}
-			<span class="mp-mark" class:mp-square={isSquare(mark)} aria-hidden="true">
+			<span class="mp-mark mp-big" class:mp-square={isSquare(mark)} aria-hidden="true">
 				<TileMark {mark} />
 			</span>
 		{/if}
@@ -143,63 +146,57 @@
 			{/if}
 			{#if handle !== undefined}<span class="handle">{handle ?? '—'}</span>{/if}
 		</span>
-		{#if status}
-			<StatusPill tone={status.tone} label={status.label} />
+		{#if about}
+			<Explain title="What {name} is" label="">
+				<p>{about}</p>
+				{#if transport}<p>{transport.line}</p>{/if}
+			</Explain>
 		{/if}
 	</div>
 
-	<!-- What the marketplace is, before what is happening with it. Fifteen of
-	     these cards carry the identical transport sentence in `body`, so leading
-	     with that gives a seller who does not recognise the name the one line
-	     that tells them nothing, and buries the line written for them under it. -->
-	{#if about}
-		<p class="mp-about">{about}</p>
-	{/if}
-
-	<p class="mp-body">{body}</p>
-
-	{#if transport}
-		<div class="mp-transport">
-			<span>{transport.line}</span>
-			<StatusPill tone="flat" label={transport.badge} />
+	{#if status}
+		<div class="mp-state">
+			<StatusPill tone={status.tone} label={status.label} />
+			{#if transport}<StatusPill tone="flat" label={transport.badge} />{/if}
 		</div>
 	{/if}
 
-	<!-- What this machine holds, under what the account holds. Its own line
-	     rather than a second pill in the header, because the header pill is the
-	     organisation's and the two disagree exactly when it matters: a
-	     marketplace connected on the seller's other computer, and absent from
-	     this one. -->
+	<!-- The machine the marketplace runs on, which is what the sign-in line
+	     names. -->
+	<p class="mp-device">
+		<Icon name="laptop" size={16} />
+		<span>{body}</span>
+	</p>
+
+	<!-- What this machine holds, beside what the account holds: the two disagree
+	     exactly when it matters, a marketplace connected on the seller's other
+	     computer and absent from this one. -->
 	{#if here}
-		<div class="mp-here">
-			<span>{here.line}</span>
+		<p class="mp-here">
 			<StatusPill tone={here.tone} label={here.label} />
-		</div>
+			<span>{here.line}</span>
+		</p>
 	{/if}
 
 	{#if action || disconnect || signOut}
 		<div class="mp-foot">
 			{#if action}
 				{#if action.kind === 'link'}
-					<a class="go" href={action.href}>{action.label} <span aria-hidden="true">→</span></a>
+					<Button tier="primary" href={action.href}>{action.label}</Button>
 				{:else}
 					{@const marketplace = action.marketplace}
-					<button
-						class="go"
-						type="button"
+					<Button
+						tier="primary"
 						disabled={running !== undefined || refusal !== null}
-						title={refusal ?? undefined}
+						reason={refusal ?? (running !== undefined ? 'Working on it…' : undefined)}
 						onclick={() => onrun?.(marketplace)}
 					>
 						{running === 'action' ? `Signing in to ${name}…` : action.label}
-						<span aria-hidden="true">→</span>
-					</button>
+					</Button>
 				{/if}
 			{/if}
-			<!-- The two ways out, grouped so the foot stays one action on one side
-			     and the ways out on the other however many of them a card has. The
-			     local sign-out leads, because it is the smaller act of the two and
-			     the one a seller on a shared machine wants. -->
+			<!-- The two ways out, the smaller act first: signing this machine out
+			     touches this machine alone; disconnecting stops work everywhere. -->
 			{#if signOut || disconnect}
 				<span class="mp-offs">
 					{#if signOut}
@@ -232,14 +229,12 @@
 
 <style>
 	/* A card arrived at by a link from somewhere else says so for a moment, and
-	   clears the header band that would otherwise sit over it. Nothing moves
-	   focus: the browser's own hash navigation scrolls, and a scripted focus
-	   move would be behaviour with no way to test it here. */
-	.mp-card {
+	   clears the header band that would otherwise sit over it. */
+	.mp-tile {
 		scroll-margin-top: 90px;
 	}
 
-	.mp-card:target {
+	.mp-tile:target {
 		outline: 2px solid var(--accent);
 		outline-offset: 3px;
 	}

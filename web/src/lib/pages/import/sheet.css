@@ -1,167 +1,85 @@
-/* The spreadsheet import: the card on the Import page, and the batch page it
- * opens.
+/* The spreadsheet import's batch page: its check table, the attach step and
+ * the import meter.
  *
- * Under `sh-` rather than `import-`, which is the shop-migration screen's
- * namespace (`import.css`): the two render on one page and a shared prefix
- * would make one screen's rule reach the other's markup. Only what the
- * component catalogue does not already carry; every colour is a token.
+ * Under `sh-` rather than `imp-`/`import-`, which are the landing screen's
+ * and the run page's: a shared prefix would make one screen's rule reach the
+ * other's markup. Only what the flow components do not already carry; every
+ * colour is a token.
  */
 
-/* ------------------------------------------------------- the Import page card */
+/* --- step 1: the check ------------------------------------------------- */
 
-.sh-card {
-	background: var(--surface);
-	border: 1px solid var(--line);
-	border-radius: var(--r-card);
-	box-shadow: var(--sh-2);
-	padding: 22px;
+/* The four figures over every row of the batch, as one line of text rather
+   than four boxes. */
+.sh-tally {
 	display: flex;
-	flex-direction: column;
-	gap: 12px;
-	margin-bottom: 22px;
-	min-width: 0;
-}
-
-.sh-card .head {
-	display: flex;
-	align-items: center;
-	gap: 10px;
 	flex-wrap: wrap;
+	gap: var(--s-2) var(--s-4);
+	margin: 0;
+	font-size: 13.5px;
+	color: var(--muted);
 }
 
-.sh-card h2 {
-	margin: 0;
-	font-family: var(--display);
-	font-size: 20px;
+.sh-tally b {
+	color: var(--text);
+	font-variant-numeric: tabular-nums;
+}
+
+.sh-tally .sh-warn,
+.sh-tally .sh-warn b {
+	color: var(--warn-ink);
+}
+
+/* The seller's own row number, as they read it in their sheet's margin, with
+   the tab's name under it. */
+.sh-num {
+	vertical-align: top;
+}
+
+.sh-ord {
+	display: inline-grid;
+	place-items: center;
+	min-width: 28px;
+	height: 24px;
+	padding: 0 6px;
+	border-radius: var(--r-pill);
+	background: var(--nav);
+	color: var(--text);
+	font-size: 12px;
 	font-weight: 600;
-	margin-right: auto;
+	font-variant-numeric: tabular-nums;
 }
 
-.sh-card p {
-	margin: 0;
-	font-size: 13px;
-	color: var(--muted);
-	max-width: 62ch;
-}
-
-.sh-steps {
-	margin: 0;
-	padding-left: 20px;
-	font-size: 13px;
-	color: var(--muted);
-	display: grid;
-	gap: 4px;
-}
-
-.sh-acts {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	flex-wrap: wrap;
-}
-
-/* The picker sits behind its own label so the file input is never drawn: the
-   user agent's own control cannot be styled to the console's button, and a
-   second visible control beside it would read as two ways to do one thing. */
-.sh-pick input[type='file'] {
-	position: absolute;
-	width: 1px;
-	height: 1px;
-	opacity: 0;
-	pointer-events: none;
-}
-
-.sh-pick {
-	position: relative;
-	display: inline-flex;
-}
-
-/* ------------------------------------------------------------ the batch page */
-
-.sh-figs {
-	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-	gap: 12px;
-	margin-bottom: 16px;
-}
-
-.sh-fig {
-	background: var(--surface);
-	border: 1px solid var(--line);
-	border-radius: var(--r-card);
-	padding: 14px 16px;
-	min-width: 0;
-}
-
-.sh-fig b {
+.sh-tab {
 	display: block;
-	font-family: var(--display);
-	font-size: 24px;
-	font-weight: 600;
-	line-height: 1.2;
-	color: var(--ink);
+	margin-top: 2px;
+	color: var(--faint);
+	font-size: 11px;
 }
 
-.sh-fig span {
+.sh-table td {
+	vertical-align: top;
+}
+
+.sh-table tr.troubled {
+	background: color-mix(in srgb, var(--warn-soft) 45%, transparent);
+}
+
+.sh-file {
+	display: block;
+	color: var(--muted);
 	font-size: 12px;
-	color: var(--muted);
-}
-
-.sh-lead {
-	margin: 0 0 16px;
-	max-width: 68ch;
-	font-size: 13.5px;
-	color: var(--muted);
-}
-
-/* One row of the report or of the attach list: what it is at the left, its
-   badge and figures at the right, and the refusals underneath. */
-.sh-row {
-	display: grid;
-	grid-template-columns: 1fr auto;
-	align-items: baseline;
-	gap: 6px 12px;
-	padding: 11px 2px;
-	border-top: 1px solid var(--line);
-	min-width: 0;
-}
-
-.sh-row:first-of-type {
-	border-top: 0;
-}
-
-.sh-who {
-	min-width: 0;
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-}
-
-.sh-who .t {
-	font-size: 13.5px;
-	color: var(--ink);
 	overflow-wrap: anywhere;
 }
 
-.sh-who .w {
-	font-size: 12px;
+.sh-where {
 	color: var(--muted);
-	overflow-wrap: anywhere;
+	font-size: 13px;
 }
 
-.sh-at {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	flex-wrap: wrap;
-	justify-content: flex-end;
-}
-
-/* The refusals belong to the row above them and span both its columns, so a
-   long problem never squeezes the badge into a column one word wide. */
+/* A row's problems, in warn ink under the row they are about. */
 .sh-probs {
-	grid-column: 1 / -1;
-	margin: 2px 0 0;
+	margin: 4px 0 0;
 	padding: 0;
 	list-style: none;
 	display: grid;
@@ -169,12 +87,69 @@
 }
 
 .sh-probs li {
-	font-size: 12px;
-	color: var(--bad-ink);
+	font-size: 12.5px;
+	font-weight: 500;
+	color: var(--warn-ink);
 }
 
 .sh-probs .col {
-	color: var(--muted);
+	font-weight: 700;
+}
+
+/* --- step 2: attach files ---------------------------------------------- */
+
+.sh-drop {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 4px;
+	padding: var(--s-6) var(--s-4);
+	border-width: 2px;
+	border-radius: var(--r-panel);
+}
+
+.sh-drop-icon {
+	display: grid;
+	place-items: center;
+	width: 44px;
+	height: 44px;
+	margin-bottom: 4px;
+	border-radius: 50%;
+	background: var(--additive-soft);
+	color: var(--additive);
+}
+
+/* Every row that takes a file: waiting ones first, then the ones holding
+   theirs. */
+.sh-files {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	border: 1px solid var(--line);
+	border-radius: var(--r-panel);
+}
+
+.sh-files li {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr) auto;
+	align-items: center;
+	gap: var(--s-3);
+	padding: var(--s-2) var(--s-3);
+}
+
+.sh-files li + li {
+	border-top: 1px solid var(--line);
+}
+
+.sh-files-what {
+	min-width: 0;
+}
+
+.sh-files-acts {
+	display: flex;
+	align-items: center;
+	gap: var(--s-2);
 }
 
 /* The strip of files no row named. It is a list rather than a grid because
@@ -182,7 +157,6 @@
 .sh-strip {
 	display: grid;
 	gap: 8px;
-	margin-top: 12px;
 }
 
 .sh-unplaced {
@@ -214,12 +188,21 @@
 	max-width: 100%;
 }
 
+/* --- step 3: import ---------------------------------------------------- */
+
+.sh-big {
+	color: var(--ok-ink);
+	font-family: var(--display);
+	font-size: 22px;
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+}
+
 .sh-meter {
 	height: 8px;
 	border-radius: var(--r-pill);
 	background: var(--nav);
 	overflow: hidden;
-	margin: 12px 0 6px;
 }
 
 .sh-fill {
@@ -229,75 +212,14 @@
 }
 
 .sh-note {
-	margin: 10px 0 0;
+	margin: 0;
 	font-size: 12.5px;
 	color: var(--muted);
 	max-width: 68ch;
 }
 
-/* The batch listing on the Import page. One link per batch, so the badge and
-   the line are announced together: two of the labels differ only by tone. */
-.sh-listed {
-	display: grid;
-	grid-template-columns: auto 1fr auto;
-	align-items: center;
-	gap: 12px;
-	padding: 12px 2px;
-	border-top: 1px solid var(--line);
-	color: inherit;
-	text-decoration: none;
-	min-width: 0;
-}
-
-.sh-listed:first-of-type {
-	border-top: 0;
-}
-
-.sh-listed:hover {
-	background: var(--hover);
-}
-
-.sh-listed .who {
-	min-width: 0;
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-}
-
-.sh-listed .t {
-	font-size: 13.5px;
-	color: var(--ink);
-	overflow-wrap: anywhere;
-}
-
-.sh-listed .w {
-	font-size: 12px;
-	color: var(--muted);
-}
-
-.sh-listed .at {
-	font-size: 12px;
-	color: var(--faint);
-	white-space: nowrap;
-}
-
-@media (max-width: 560px) {
-	/* The badge column moves above the line at phone width rather than
-	   shrinking: the row's own words are what the seller reads, and a
-	   three-column grid at 390px leaves them two words wide. */
-	.sh-listed {
-		grid-template-columns: 1fr auto;
-	}
-
-	.sh-listed .mark {
-		grid-column: 1 / -1;
-	}
-
-	.sh-row {
-		grid-template-columns: 1fr;
-	}
-
-	.sh-at {
-		justify-content: flex-start;
+@media (max-width: 720px) {
+	.sh-table .sh-where {
+		display: none;
 	}
 }

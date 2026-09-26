@@ -1,13 +1,12 @@
 /* The Analytics page's own styles.
  *
  * Every colour, radius and shadow comes from `tokens.css`; nothing here names
- * a literal. The `an-` prefix is the page's, so the final sweep can tell a
- * page rule from a catalogue one by its name alone. */
+ * a literal. The `an-` prefix is the page's. Cards, columns, the compact table
+ * and the colour code come from `flow.css`. */
 
-/* The header's two-line meta block, in Vendoo's own place at the right of the
-   page head. No refresh control sits beside it: the read runs on the seller's
-   own device on its own schedule, so a console button that appeared to fetch
-   would claim something D1 forbids. */
+/* The header's freshness line beside the Explain. No refresh control: the
+   read runs on the seller's own device on its own schedule, so a button that
+   appeared to fetch would claim something that is not so. */
 .an-meta {
 	text-align: right;
 	line-height: 1.35;
@@ -27,21 +26,13 @@
 	font-variant-numeric: tabular-nums;
 }
 
-/* The filter row. One control rather than the specification's card of three:
-   the marketplace select became the scope selector, and no date range exists
-   to offer, which the sentence beside the control says on screen rather than
-   leaving a reader to wonder. */
 .an-filters {
 	display: flex;
-	align-items: flex-start;
-	gap: 20px;
+	align-items: flex-end;
+	gap: var(--s-4);
 	flex-wrap: wrap;
-	margin: 0 0 16px;
 }
 
-/* Mobile first: the select fills the row on a phone, and only claims a floor
-   once there is room for a second control beside it. Below ~420px a 220px
-   floor plus the row's own padding pushed the band into a sideways scroll. */
 .an-filters .field {
 	min-width: 0;
 	flex: 1 1 100%;
@@ -55,110 +46,86 @@
 }
 
 .an-why {
-	flex: 1 1 260px;
-	align-self: center;
 	margin: 0;
 	font-size: 12px;
-	color: var(--faint);
-}
-
-.an-tiles {
-	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-	gap: 24px;
-	margin: 0 0 24px;
-}
-
-/* A tile is a card of the catalogue's own kind, sitting on the page beside
-   the panels rather than inside one, so it takes the card's radius, padding
-   and shadow rather than a treatment of its own. The 190px floor is what that
-   padding leaves room for: the widest tag, "from your Resources", and the
-   widest figure both have to clear it. */
-.an-tile {
-	background: var(--card);
-	border: 1px solid transparent;
-	border-radius: var(--r-card);
-	box-shadow: var(--sh-2);
-	padding: 28px;
-	position: relative;
-	min-width: 0;
-}
-
-.an-tile .an-tag {
-	position: absolute;
-	top: 16px;
-	right: 16px;
-	font-size: 10.5px;
 	color: var(--muted);
-	background: var(--ground);
-	border: 1px solid var(--line);
-	border-radius: var(--r-pill);
-	padding: 2px 8px;
-	white-space: nowrap;
-}
-
-.an-tile .an-ico {
-	width: 30px;
-	height: 30px;
-	border-radius: 9px;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	background: var(--accent-soft);
-	color: var(--primary);
-	margin-bottom: 12px;
-}
-
-.an-tile.an-counted .an-ico {
-	background: var(--additive-soft);
-	color: var(--additive);
-}
-
-.an-tile .an-n {
-	font-family: var(--display);
-	font-weight: 500;
-	font-size: 32px;
-	line-height: 1;
-	letter-spacing: -0.01em;
-	font-variant-numeric: tabular-nums;
-	overflow-wrap: anywhere;
 }
 
 /* An em dash is not a figure, so it is drawn at the weight of the words
    around it rather than at the weight of a number. */
-.an-tile .an-n.an-none {
+.an-stats .an-none {
 	font-size: 22px;
 	color: var(--muted);
 }
 
-.an-tile .an-lbl {
-	margin-top: 7px;
-	font-size: 10.5px;
+/* Counted from the seller's own catalogue, not reported by a shop: the
+   additive ink says so beside the words. */
+.an-stats .an-counted-n {
+	color: var(--additive);
+}
+
+.an-shop {
+	gap: var(--s-4);
+}
+
+.an-shop .flow-label {
+	display: flex;
+	align-items: center;
+	gap: var(--s-2);
+	font-size: 14px;
+}
+
+/* A shop's three figures in a row under its arrow. */
+.an-figs {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: var(--s-3);
+	margin: 0;
+}
+
+.an-figs > div {
+	padding: var(--s-3);
+	border: 1px solid var(--line);
+	border-radius: var(--r-panel);
+	background: var(--card);
+	min-width: 0;
+}
+
+.an-figs dt {
+	font-size: 12px;
 	font-weight: 600;
-	letter-spacing: 0.1em;
-	text-transform: uppercase;
 	color: var(--muted);
 }
 
-.an-tile .an-sub {
-	font-size: 12px;
-	color: var(--faint);
-	margin-top: 3px;
+.an-figs dd {
+	margin: 4px 0 0;
+	font-family: var(--display);
+	font-size: 22px;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+	overflow-wrap: anywhere;
 }
 
-/* The chart beside the standings. One column below the tablet width, where
-   two would leave the bars too narrow to compare. */
-.an-band {
-	display: grid;
-	grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
-	gap: 24px;
-	margin: 0 0 24px;
+.an-table .an-num {
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
 }
 
-@media (max-width: 980px) {
-	.an-band {
-		grid-template-columns: minmax(0, 1fr);
-	}
+.an-table .an-t {
+	display: inline-block;
+	max-width: 420px;
+}
+
+.an-table .an-age {
+	color: var(--muted);
+}
+
+.an-table .an-id {
+	font-family: ui-monospace, 'SFMono-Regular', 'Menlo', monospace;
+	font-size: 11.5px;
+	color: var(--muted);
+	overflow-wrap: anywhere;
 }
 
 /* The bars are drawn without a viewBox on purpose: the SVG's user units are
@@ -195,93 +162,8 @@
 	fill: var(--additive);
 }
 
-/* A table wide enough to need scrolling scrolls inside its own panel; the
-   page itself never scrolls sideways. */
-.an-table-wrap {
-	overflow-x: auto;
-}
-
-.an-table {
-	width: 100%;
-	border-collapse: collapse;
-	font-size: 13px;
-}
-
-.an-table th,
-.an-table td {
-	text-align: left;
-	padding: 9px 12px 9px 0;
-	border-bottom: 1px solid var(--line);
-	white-space: nowrap;
-}
-
-.an-table th {
-	font-size: 10.5px;
-	font-weight: 600;
-	letter-spacing: 0.08em;
-	text-transform: uppercase;
-	color: var(--muted);
-}
-
-.an-table tbody tr:last-child td {
-	border-bottom: none;
-}
-
-.an-table .an-num {
-	text-align: right;
-	font-variant-numeric: tabular-nums;
-	padding-right: 0;
-	padding-left: 12px;
-}
-
-/* The resource column is the only one allowed to wrap, and it is the one that
-   gives way when the table is wider than the panel. Mobile first: no floor on
-   a phone, where 180px plus the figure columns forced a sideways scroll. */
-.an-table .an-what {
-	white-space: normal;
-	min-width: 0;
-	max-width: 360px;
-}
-
-@media (min-width: 560px) {
-	.an-table .an-what {
-		min-width: 180px;
-	}
-}
-
-.an-table .an-what .an-t {
-	font-weight: 600;
-	overflow-wrap: anywhere;
-}
-
-.an-table .an-id {
-	font-family: ui-monospace, 'SFMono-Regular', 'Menlo', monospace;
-	font-size: 11.5px;
-	color: var(--muted);
-	overflow-wrap: anywhere;
-}
-
-/* A panel's head row is a flex line, and `margin-left: auto` is what pushes an
-   adjunct to its right end; without it the chip sits against the heading at one
-   width and wraps under the description at another. The catalogue supplies that
-   through `.head-row .more`, which this deliberately does not use: `.more` also
-   paints `--accent-deep`, and every chip on this page carries a figure counted
-   from the seller's own catalogue, which this page colours additive precisely
-   so it is never read as one a marketplace reported. */
-.head-row .an-chip {
-	margin-left: auto;
-}
-
 .an-chip {
-	display: inline-block;
-	font-size: 11px;
-	font-weight: 600;
-	border-radius: var(--r-pill);
-	padding: 2px 9px;
-	background: var(--ground);
-	border: 1px solid var(--line);
-	color: var(--muted);
-	white-space: nowrap;
+	margin-left: auto;
 }
 
 /* The standings, counted from the seller's own catalogue. Each figure sits
@@ -328,4 +210,30 @@
 	color: var(--muted);
 	font-size: 13px;
 	margin: 0;
+}
+
+/* Four figures in two pairs on a phone, rather than four screen-tall cards. */
+@media (max-width: 620px) {
+	.an-stats.cards {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: var(--s-3);
+	}
+
+	.an-stats .stat {
+		padding: 16px 14px 14px;
+	}
+
+	.an-stats .stat .n {
+		font-size: 26px;
+	}
+
+	.an-stats .stat .tag {
+		display: none;
+	}
+}
+
+/* The resource column keeps a readable width; the table scrolls inside its
+   own frame rather than wrapping a title one syllable per line. */
+.an-table td:first-child {
+	min-width: 14rem;
 }

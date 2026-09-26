@@ -208,7 +208,9 @@
 	display: flex;
 	flex-direction: column;
 	min-width: 0;
-	overflow: hidden;
+	/* clip, not hidden: hidden makes this the sticky containing block
+	   without being the scroller, so no `position: sticky` inside ever sticks. */
+	overflow: clip;
 }
 
 /* The strip above the page's own header band: what the shell owns rather than

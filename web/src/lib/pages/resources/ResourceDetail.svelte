@@ -12,7 +12,6 @@
 	import { editBlockedBy } from '$lib/authoring';
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
 	import { AUTHORABLE_PLATFORMS, platformTitle } from '$lib/platforms';
-	import { DISCLAIMER } from '$lib/pages/marketplaces/catalogue';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
 	import DeleteDialog from '$lib/DeleteDialog.svelte';
@@ -31,9 +30,8 @@
 	import { formatPrice, rowStatus } from '$lib/listings-view';
 	import LabelChip from '$lib/LabelChip.svelte';
 	import Field from '$lib/Field.svelte';
-	import Note from '$lib/Note.svelte';
+	import Icon from '$lib/Icon.svelte';
 	import PageHead from '$lib/PageHead.svelte';
-	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
 	import MarketplaceTile from './MarketplaceTile.svelte';
 	import { tileFor } from './marketplace-tile';
@@ -371,7 +369,7 @@
 	}
 </script>
 
-<div class="page resources-page">
+<div class="page resources-page flow-page">
 	{#if product.isPending || allMappings.isPending}
 		<p class="res-note">Loading this resource…</p>
 	{:else if gone}
@@ -429,13 +427,9 @@
 			description={`${formatPrice(stored.price)} · updated ${agoLabel(stored.updated_at, Date.now())}`}
 		>
 			{#snippet aside()}
-				<!-- Actions only. The two badges that used to sit here moved into the
-				     Marketplaces panel, which is what they describe: four unshrinkable
-				     pills in a row that does not wrap ran off the right edge of a
-				     390px viewport, and the specification's header band carries
-				     right-aligned page actions and no badges. -->
-				<Button tier="primary" onclick={() => (publishing = true)}>Publish…</Button>
-				<Button danger onclick={() => (deleting = true)}>Delete…</Button>
+				<!-- Publish is beside Save in the form's sticky bar, where the hand
+				     is after an edit; only the destructive action stays up here. -->
+				<Button danger icon="trash-2" onclick={() => (deleting = true)}>Delete…</Button>
 			{/snippet}
 		</PageHead>
 
@@ -444,9 +438,8 @@
 				tone="warn"
 				title={`${needing.length} ${needing.length === 1 ? 'marketplace needs' : 'marketplaces need'} you`}
 			>
-				{needing.map((chip) => platformTitle(chip.inventory)).join(', ')}. Nothing is sent to
-				{needing.length === 1 ? 'it' : 'them'} until you fix this. The listing already there stays
-				as it is.
+				{needing.map((chip) => platformTitle(chip.inventory)).join(', ')}: nothing is sent until you
+				fix this.
 				{#snippet action()}
 					{#if needing[0].action}
 						<Button href={needing[0].action.href}>{needing[0].action.label}</Button>
@@ -455,136 +448,123 @@
 			</Banner>
 		{/if}
 
-		<Panel
-			title="Marketplaces"
-			description="Where this resource is listed."
-		>
-			{#snippet more()}
-				<!-- Where the listing stands overall, and whether this page is being
-				     told about changes as they happen. Two different facts, so the
-				     second says "connected" rather than "live": side by side in one
-				     tone they read as one fact stated twice. -->
-				<span class="panel-badges">
-					<StatusPill tone={PILL_TONE[status.tone]} label={status.label} />
-					<StatusPill tone={live ? 'ok' : 'soon'} label={live ? 'connected' : 'reconnecting'} />
-				</span>
+		<!-- The same form the create route renders, in its second mode, with
+		     this page's own pieces handed into its steps: the marketplace tiles
+		     into step 3, Publish beside Save, and the history under the steps. -->
+		<ResourceForm mode={{ kind: 'edit', product: stored, mapped: inventories, blockedBy }}>
+			{#snippet listed()}
+				<div class="flow-section">
+					<div class="flow-section-head">
+						<h3>Listed now</h3>
+						<!-- Where the listing stands overall, and whether this page is
+						     being told about changes as they happen: two facts, so the
+						     second says "connected" rather than "live". -->
+						<span class="panel-badges">
+							<StatusPill tone={PILL_TONE[status.tone]} label={status.label} />
+							<StatusPill tone={live ? 'ok' : 'soon'} label={live ? 'connected' : 'reconnecting'} />
+						</span>
+					</div>
+					<div class="res-mk-grid">
+						{#each tiles as tile (tile.inventory)}
+							<MarketplaceTile
+								{tile}
+								adding={adding !== null}
+								addingHere={adding === tile.inventory}
+								attachOpen={tile.mapping !== null && attaching === tile.mapping}
+								{attachSending}
+								oncrosslist={() => void crossListTo(tile.inventory)}
+								onattach={() => toggleAttach(tile.mapping)}
+							/>
+						{/each}
+					</div>
+
+					<!-- One attach form below the grid rather than one inside each
+					     tile, naming the marketplace it writes against. -->
+					{#if attachingTo !== undefined}
+						<div class="mk-attach">
+							<Field
+								label="Listing link"
+								id={`attach-${attachingTo.mapping}`}
+								hint="Paste the link to your existing listing."
+							>
+								<input
+									id={`attach-${attachingTo.mapping}`}
+									type="url"
+									placeholder="https://…"
+									disabled={attachSending}
+									bind:value={attachUrl}
+								/>
+							</Field>
+							<Button
+								tier="primary"
+								disabled={attachSending || attachUrl.trim().length === 0}
+								reason={attachUrl.trim().length === 0 ? 'Paste the listing link first.' : undefined}
+								onclick={() => void attach(attachingTo.mapping)}
+							>
+								{attachSending ? 'Attaching…' : 'Attach'}
+							</Button>
+						</div>
+						{#if attachRefusal !== null}
+							<Banner tone="bad">{attachRefusal}</Banner>
+						{/if}
+					{/if}
+					{#if addRefusal !== null}
+						<Banner tone="bad">{addRefusal}</Banner>
+					{/if}
+				</div>
 			{/snippet}
-			<div class="res-mk-grid">
-				{#each tiles as tile (tile.inventory)}
-					<MarketplaceTile
-						{tile}
-						adding={adding !== null}
-						addingHere={adding === tile.inventory}
-						attachOpen={tile.mapping !== null && attaching === tile.mapping}
-						{attachSending}
-						oncrosslist={() => void crossListTo(tile.inventory)}
-						onattach={() => toggleAttach(tile.mapping)}
-					/>
-				{/each}
-			</div>
 
-			<!-- One form below the grid rather than one inside each tile. The page
-			     already allowed only one at a time, so the second and third were
-			     never drawn; putting it here keeps every tile the same height and
-			     names the marketplace it writes against, which the tile it used to
-			     open under no longer does. -->
-			{#if attachingTo !== undefined}
-				<div class="mk-attach">
-					<Field
-						label="Listing link"
-						id={`attach-${attachingTo.mapping}`}
-						hint="Paste the link to your existing listing so your edits reach it."
-					>
-						<input
-							id={`attach-${attachingTo.mapping}`}
-							type="url"
-							placeholder="https://…"
-							disabled={attachSending}
-							bind:value={attachUrl}
-						/>
-					</Field>
-					<Button
-						tier="primary"
-						disabled={attachSending || attachUrl.trim().length === 0}
-						reason={attachUrl.trim().length === 0 ? 'Paste the listing link first.' : undefined}
-						onclick={() => void attach(attachingTo.mapping)}
-					>
-						{attachSending ? 'Attaching…' : 'Attach'}
-					</Button>
-				</div>
-				{#if attachRefusal !== null}
-					<Banner tone="bad">{attachRefusal}</Banner>
+			{#snippet publish()}
+				<Button tier="primary" icon="share-2" onclick={() => (publishing = true)}>Publish…</Button>
+			{/snippet}
+
+			{#snippet after()}
+				{#if runs.length > 0}
+					<section class="flow-section">
+						<div class="flow-section-head"><h2>Recent sends</h2></div>
+						<div class="res-lines">
+							{#each runs as run (run.job)}
+								<a class="res-line" href={`/sync/${run.job}`}>
+									<span class="res-line-what">
+										<span class="res-line-t"><MarketplaceMark inventory={run.inventory} size={18} /></span>
+										<span class="res-line-id">{run.job.slice(0, 8)}…</span>
+									</span>
+									<span class="res-line-at">{run.state === null ? 'just started' : run.state}</span>
+								</a>
+							{/each}
+						</div>
+					</section>
 				{/if}
-			{/if}
-			{#if addRefusal !== null}
-				<Banner tone="bad">{addRefusal}</Banner>
-			{/if}
-			<Note>Nothing changes on a marketplace until you send it.</Note>
-			<Note>{DISCLAIMER}</Note>
-		</Panel>
 
-		{#if runs.length > 0}
-			<Panel
-				title="Sends"
-				description="Recent times this resource was sent."
-			>
-				{#each runs as run (run.job)}
-					<a class="res-line" href={`/sync/${run.job}`}>
-						<span class="res-line-what">
-							<span class="res-line-t"><MarketplaceMark inventory={run.inventory} size={18} /></span>
-							<span class="res-line-id">{run.job.slice(0, 8)}…</span>
-						</span>
-						<span class="res-line-at">{run.state === null ? 'just started' : run.state}</span>
-					</a>
-				{/each}
-				<Note>See older sends on the Updates page.</Note>
-			</Panel>
-		{/if}
-
-		{#if (labels.data ?? []).length > 0}
-			<Panel
-				title="Labels"
-				description="The labels on this resource."
-			>
-				<div class="res-chips">
-					{#each labels.data ?? [] as label (label.name)}
-						<LabelChip name={label.name} colour={label.colour} system={label.system} />
-					{/each}
-				</div>
-			</Panel>
-		{/if}
-
-		<!-- Which sets this resource is picked by. Its own read rather than a
-		     field of the aggregate: a collection is an ordered set of resources
-		     and the product knows nothing about being in one, so the reverse
-		     read is what answers it. Drawn only where there is one, like the
-		     Labels panel above: an empty panel on every resource page would be a
-		     heading standing in for a fact. -->
-		{#if (collections.data ?? []).length > 0}
-			<Panel
-				title="Collections"
-				description="The collections this resource is in."
-			>
-				{#each collections.data ?? [] as collection (collection.id)}
-					<a class="res-line" href={`/collections/${collection.id}`}>
-						<span class="res-line-what">
-							<span class="res-line-t">{collection.name}</span>
-						</span>
-						<span class="res-line-at">{countLine(collection.count)}</span>
-					</a>
-				{/each}
-			</Panel>
-		{/if}
-
-		<!-- The same form the create route renders, in its second mode. Not a
-		     second form: the edit used to collect six fields of a model with
-		     twenty-four, so seventeen sidecar fields were set once at create and
-		     could never be changed. The live-listing banner, the files panel and
-		     the marketplace ticks are all inside it, because each belongs beside
-		     the fields it constrains. -->
-		<ResourceForm
-			mode={{ kind: 'edit', product: stored, mapped: inventories, blockedBy }}
-		/>
+				{#if (labels.data ?? []).length > 0 || (collections.data ?? []).length > 0}
+					<!-- Drawn only where there is one: an empty section on every
+					     resource page would be a heading standing in for a fact. -->
+					<section class="flow-section">
+						<div class="flow-section-head"><h2>Filed under</h2></div>
+						{#if (labels.data ?? []).length > 0}
+							<div class="res-chips">
+								{#each labels.data ?? [] as label (label.name)}
+									<LabelChip name={label.name} colour={label.colour} system={label.system} />
+								{/each}
+							</div>
+						{/if}
+						{#if (collections.data ?? []).length > 0}
+							<div class="res-lines">
+								{#each collections.data ?? [] as collection (collection.id)}
+									<a class="res-line" href={`/collections/${collection.id}`}>
+										<span class="res-line-what">
+											<Icon name="layers" size={16} />
+											<span class="res-line-t">{collection.name}</span>
+										</span>
+										<span class="res-line-at">{countLine(collection.count)}</span>
+									</a>
+								{/each}
+							</div>
+						{/if}
+					</section>
+				{/if}
+			{/snippet}
+		</ResourceForm>
 
 		<PublishDialog
 			open={publishing}

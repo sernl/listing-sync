@@ -15,17 +15,15 @@
 		libraryUsage,
 		setLibrarySettings
 	} from '$lib/desktop';
+	import Explain from '$lib/Explain.svelte';
 	import Field from '$lib/Field.svelte';
 	import Icon from '$lib/Icon.svelte';
 	import { machineHere } from '$lib/machine.svelte';
 	import Note from '$lib/Note.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Pagination from '$lib/Pagination.svelte';
-	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
 	import { queryKeys } from '$lib/query';
-	import StatusPill from '$lib/StatusPill.svelte';
-	import TabBar from '$lib/TabBar.svelte';
 	import { toast } from '$lib/toast';
 	import Toggle from '$lib/Toggle.svelte';
 	import {
@@ -46,12 +44,14 @@
 		filtersFromUrl,
 		filtersToQuery,
 		filtersToUrl,
-		metaLine,
+		keptLine,
 		pageWindow,
 		removePrompt,
+		seenLine,
 		transferSentence,
 		usageLine
 	} from './files-browser';
+	import '$lib/flow.css';
 	import './resources.css';
 
 	// Read once: whether this console runs inside the application does not
@@ -167,7 +167,16 @@
 	const kept = $derived(
 		local.state === 'read' ? new Map(local.entries.map((entry) => [entry.hash, entry])) : null
 	);
-	const rows = $derived(fileRows(files.data?.files ?? [], { thisDevice, kept }));
+	/** Each machine's last check-in, which is what the Last seen column reads. */
+	const seen = $derived(
+		new Map((devices.data?.devices ?? []).map((device) => [device.id, device.last_seen_at]))
+	);
+	const rows = $derived(fileRows(files.data?.files ?? [], { thisDevice, kept, seen }));
+	// Re-read with the files, so the ages are written against the read.
+	const now = $derived.by(() => {
+		void files.dataUpdatedAt;
+		return Date.now();
+	});
 	const shown = $derived(
 		pageWindow(
 			files.data?.files.length ?? 0,
@@ -294,180 +303,182 @@
 			asking = null;
 		}
 	}
-
-	const PILL_TONE: Record<Availability, 'ok' | 'warn' | 'bad'> = {
-		online: 'ok',
-		offline: 'warn',
-		missing: 'bad'
-	};
 </script>
 
 <div class="page resources-page files-page">
-	<PageHead
-		icon="files"
-		title="Your machines' files"
-		description="Every file on your machines, and the resources that use it."
-		guide="your-files"
-	/>
+	<PageHead icon="files" title="Your machines' files" guide="your-files">
+		{#snippet aside()}
+			<Explain title="What “on your computer” means" label="Where are they?">
+				<p>{FILES_STAY_ON_YOUR_MACHINES}</p>
+				<p>
+					The Teachouse app on each of your computers keeps the files you import there. This page
+					shows which computer holds each file and which resources use it.
+				</p>
+				<p>A computer that is off can’t hand its files over. Copy a file to this machine to use it here.</p>
+				<p>{BROWSER_SENTENCE}</p>
+			</Explain>
+		{/snippet}
+	</PageHead>
 
-	<Panel>
-		<div class="res-filters">
-			<Field label="Search" id="file-search">
-				<span class="res-search">
-					<Icon name="search" size={16} />
-					<input
-						id="file-search"
-						type="search"
-						placeholder="Search by file name or resource"
-						value={box}
-						oninput={(event) => {
-							box = event.currentTarget.value;
-							narrow({ q: event.currentTarget.value.trim() });
-						}}
-					/>
-				</span>
-			</Field>
+	<p class="flow-hint res-files-hint">Every file your resources use, and the machine it is on.</p>
 
-			<Field label="Where it is" id="file-availability">
-				<select
-					id="file-availability"
-					value={filters.availability ?? 'any'}
-					onchange={(event) =>
-						narrow({
-							availability:
-								event.currentTarget.value === 'any'
-									? null
-									: (event.currentTarget.value as Availability)
-						})}
-				>
-					<option value="any">Anywhere</option>
-					<option value="online">On a machine that is online</option>
-					<option value="offline">On a machine that is offline</option>
-					<option value="missing">On no machine</option>
-				</select>
-			</Field>
+	<div class="res-bar files-bar">
+		<label class="res-search">
+			<Icon name="search" size={16} />
+			<span class="sr-only">Search</span>
+			<input
+				id="file-search"
+				type="search"
+				placeholder="Search by file or resource"
+				value={box}
+				oninput={(event) => {
+					box = event.currentTarget.value;
+					narrow({ q: event.currentTarget.value.trim() });
+				}}
+			/>
+		</label>
 
-			<Field label="Resources" id="file-linked">
-				<select
-					id="file-linked"
-					value={filters.linked ?? 'any'}
-					onchange={(event) =>
-						narrow({
-							linked:
-								event.currentTarget.value === 'any' ? null : (event.currentTarget.value as Linked)
-						})}
-				>
-					<option value="any">Used or not</option>
-					<option value="linked">Used by a resource</option>
-					<option value="unlinked">Used by none</option>
-				</select>
-			</Field>
-		</div>
-
-		{#if filtersActive(filters)}
-			<div class="res-clear">
-				<Button
-					tier="quiet"
-					small
+		<!-- The machines as chips. A machine that could not be read has no chip
+		     rather than an empty one, so the row never offers a filter that can
+		     only answer nothing. -->
+		<div class="res-fchips" role="group" aria-label="Machine">
+			{#each tabs as one (one.id)}
+				<button
+					type="button"
+					class="res-fchip"
+					aria-pressed={tab === one.id}
 					onclick={() => {
-						box = '';
-						void goto(filtersToUrl(EMPTY_FILTERS), { replaceState: true, noScroll: true });
+						tab = one.id;
+						narrow({ device: one.id === 'all' ? null : one.id });
 					}}
 				>
-					Clear filters
-				</Button>
-			</div>
-		{/if}
-	</Panel>
+					{#if one.id !== 'all'}<Icon name="laptop" size={14} />{/if}
+					{one.label}
+				</button>
+			{/each}
+		</div>
 
-	<!-- The machines, as tabs. A machine that could not be read has no tab
-	     rather than an empty one, so the bar never offers a filter that can
-	     only answer nothing. -->
-	{#if tabs.length > 1}
-		<TabBar
-			{tabs}
-			bind:current={tab}
-			onselect={(id) => narrow({ device: id === 'all' ? null : id })}
-		/>
-	{/if}
+		<span class="files-selects">
+			<label class="sr-only" for="file-availability">Where it is</label>
+			<select
+				class="res-sort"
+				id="file-availability"
+				value={filters.availability ?? 'any'}
+				onchange={(event) =>
+					narrow({
+						availability:
+							event.currentTarget.value === 'any'
+								? null
+								: (event.currentTarget.value as Availability)
+					})}
+			>
+				<option value="any">Anywhere</option>
+				<option value="online">On a machine that is online</option>
+				<option value="offline">On a machine that is offline</option>
+				<option value="missing">On no machine</option>
+			</select>
+
+			<label class="sr-only" for="file-linked">Resources</label>
+			<select
+				class="res-sort"
+				id="file-linked"
+				value={filters.linked ?? 'any'}
+				onchange={(event) =>
+					narrow({
+						linked:
+							event.currentTarget.value === 'any' ? null : (event.currentTarget.value as Linked)
+					})}
+			>
+				<option value="any">Used or not</option>
+				<option value="linked">Used by a resource</option>
+				<option value="unlinked">Used by none</option>
+			</select>
+		</span>
+	</div>
 
 	<!-- This machine's own library, which only exists inside the application.
-	     A browser is told where files live rather than shown an empty one. -->
-	{#if local.state === 'unavailable'}
-		<p class="res-note">{BROWSER_SENTENCE}</p>
-	{:else if local.state === 'notKeeping'}
+	     A browser is told where files live, behind the Explain, rather than
+	     shown an empty one. -->
+	{#if local.state === 'notKeeping'}
 		<p class="res-note">{NOT_KEEPING_SENTENCE}</p>
 	{:else if local.state === 'failed'}
 		<p class="res-note">{local.detail}</p>
 	{:else if local.state === 'read'}
-		<Panel>
-			<div class="files-keep">
-				<Toggle
-					label={KEEP_LABEL}
-					checked={local.keep}
-					disabled={saving}
-					onchange={(value) => void setKeep(value)}
+		<div class="files-keep">
+			<Toggle
+				label={KEEP_LABEL}
+				checked={local.keep}
+				disabled={saving}
+				onchange={(value) => void setKeep(value)}
+			/>
+			<p class="res-note">{usageLine(local.entries, local.usage)}</p>
+		</div>
+		<details class="flow-more files-local">
+			<summary>Files saved on this machine ({local.entries.length})</summary>
+			<p class="res-note">The filters above don’t apply to this list.</p>
+			<Field label="Search saved files" id="local-file-search">
+				<input
+					id="local-file-search"
+					type="search"
+					value={localSearch}
+					oninput={(event) => {
+						localSearch = event.currentTarget.value;
+						localPage = 1;
+					}}
 				/>
-				<p class="res-note">{usageLine(local.entries, local.usage)}</p>
+			</Field>
+			<div class="flow-table-wrap">
+				<table class="flow-table files-table">
+					<thead>
+						<tr><th>File</th><th>Size</th><th><span class="sr-only">Actions</span></th></tr>
+					</thead>
+					<tbody>
+						{#each localShown as entry (entry.hash)}
+							<tr>
+								<td class="files-name" data-label="File">{entry.file_name}</td>
+								<td data-label="Size">{formatBytes(entry.byte_len)}</td>
+								<td class="files-acts">
+									<Button
+										tier="outline"
+										small
+										disabled={opening === entry.hash}
+										onclick={() => void openHere(entry.hash)}
+									>
+										{opening === entry.hash ? 'Opening…' : 'Open'}
+									</Button>
+									<Button
+										tier="outline"
+										danger
+										small
+										disabled={removing === entry.hash}
+										onclick={() => void remove(entry.hash, entry.file_name)}
+									>
+										{removing === entry.hash ? 'Removing…' : 'Remove from this machine'}
+									</Button>
+								</td>
+							</tr>
+						{:else}
+							<tr>
+								<td colspan="3" class="res-note">
+									{localSearch.trim() ? 'No saved file matches this search.' : 'No files are saved here.'}
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
 			</div>
-			<details class="files-local">
-				<summary>Files saved on this machine ({local.entries.length})</summary>
-				<Note>The filters above don’t apply to this list.</Note>
-				<Field label="Search saved files" id="local-file-search">
-					<input
-						id="local-file-search"
-						type="search"
-						value={localSearch}
-						oninput={(event) => {
-							localSearch = event.currentTarget.value;
-							localPage = 1;
-						}}
-					/>
-				</Field>
-				<div class="files-rows">
-					{#each localShown as entry (entry.hash)}
-						<div class="files-row">
-							<span class="files-name">{entry.file_name}</span>
-							<p class="res-note">{formatBytes(entry.byte_len)}</p>
-							<div class="files-acts">
-								<Button
-									tier="outline"
-									small
-									disabled={opening === entry.hash}
-									onclick={() => void openHere(entry.hash)}
-								>
-									{opening === entry.hash ? 'Opening…' : 'Open'}
-								</Button>
-								<Button
-									tier="outline"
-									danger
-									small
-									disabled={removing === entry.hash}
-									onclick={() => void remove(entry.hash, entry.file_name)}
-								>
-									{removing === entry.hash ? 'Removing…' : 'Remove from this machine'}
-								</Button>
-							</div>
-						</div>
-					{:else}
-						<p class="res-note">
-							{localSearch.trim() ? 'No saved file matches this search.' : 'No files are saved here.'}
-						</p>
-					{/each}
-				</div>
-				{#if localMatches.length > PAGE_SIZE}
-					<Pagination
-						page={localShownPage}
-						hasNext={localShownPage * PAGE_SIZE < localMatches.length}
-						busy={false}
-						label="Saved files"
-						summary={`${localMatches.length} saved files`}
-						onprevious={() => (localPage = localShownPage - 1)}
-						onnext={() => (localPage = localShownPage + 1)}
-					/>
-				{/if}
-			</details>
-		</Panel>
+			{#if localMatches.length > PAGE_SIZE}
+				<Pagination
+					page={localShownPage}
+					hasNext={localShownPage * PAGE_SIZE < localMatches.length}
+					busy={false}
+					label="Saved files"
+					summary={`${localMatches.length} saved files`}
+					onprevious={() => (localPage = localShownPage - 1)}
+					onnext={() => (localPage = localShownPage + 1)}
+				/>
+			{/if}
+		</details>
 	{/if}
 
 	<div class="res-toolbar">
@@ -480,6 +491,19 @@
 				{countSentence(shown)}
 			{/if}
 		</span>
+		{#if filtersActive(filters)}
+			<Button
+				tier="quiet"
+				small
+				icon="x"
+				onclick={() => {
+					box = '';
+					void goto(filtersToUrl(EMPTY_FILTERS), { replaceState: true, noScroll: true });
+				}}
+			>
+				Clear filters
+			</Button>
+		{/if}
 	</div>
 
 	{#if files.isPending}
@@ -501,76 +525,100 @@
 					: 'Files show up here after an import, or when you add a file to a resource.'}
 		/>
 	{:else}
-		<div class="res-rows files-rows">
-			{#each rows as row (row.hash)}
-				<div class="files-row">
-					<div class="files-what">
-						<span class="files-name" class:res-file-anon={row.anonymous}>{row.name}</span>
-						<StatusPill
-							tone={PILL_TONE[row.availability]}
-							label={AVAILABILITY_LABEL[row.availability]}
-						/>
-					</div>
-					<p class="res-note">{metaLine(row)}</p>
-					{#if row.resources.length > 0}
-						<p class="files-uses">
-							{#each row.resources as resource, index (resource.id)}
-								{#if index > 0}<span class="files-sep">·</span>{/if}
-								<a href={`/resources/${resource.id}`}>{resource.title}</a>
-							{/each}
-						</p>
-					{/if}
-					<div class="files-acts">
-						{#if transferSentence(row.label) !== null}
-							<span class="res-note">{transferSentence(row.label)}</span>
-						{/if}
-						{#if row.kept !== null}
-							<Button
-								tier="outline"
-								small
-								disabled={opening === row.hash}
-								reason={opening === row.hash ? 'Opening the file…' : undefined}
-								onclick={() => void openHere(row.hash)}
-							>
-								{opening === row.hash ? 'Opening…' : 'Open'}
-							</Button>
-							<Button
-								tier="outline"
-								danger
-								small
-								disabled={removing === row.hash}
-								reason={removing === row.hash ? 'Removing the file…' : undefined}
-								onclick={() => void remove(row.hash, row.name)}
-							>
-								{removing === row.hash ? 'Removing…' : 'Remove from this machine'}
-							</Button>
-						{:else if row.label.kind === 'get'}
-							<Button
-								tier="outline"
-								small
-								disabled={asking === row.hash}
-								reason={asking === row.hash ? 'Requesting a copy…' : undefined}
-								onclick={() => void get(row.hash, row.name)}
-							>
-								{asking === row.hash ? 'Requesting…' : 'Copy to this machine'}
-							</Button>
-						{:else if row.label.kind === 'waiting' || row.label.kind === 'fetching'}
-							<Button
-								tier="quiet"
-								small
-								disabled={asking === row.hash}
-								reason={asking === row.hash ? 'Cancelling the copy…' : undefined}
-								onclick={() => void cancel(row.hash)}
-							>
-								Cancel
-							</Button>
-						{/if}
-					</div>
-				</div>
-			{/each}
+		<div class="flow-table-wrap">
+			<table class="flow-table files-table">
+				<thead>
+					<tr>
+						<th>File</th>
+						<th>Size</th>
+						<th>Machine</th>
+						<th>Last seen</th>
+						<th>Used by</th>
+						<th><span class="sr-only">Actions</span></th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each rows as row (row.hash)}
+						<tr>
+							<td class="files-name" data-label="File">
+								<span class:res-file-anon={row.anonymous}>{row.name}</span>
+							</td>
+							<td class="files-num" data-label="Size">{row.size}</td>
+							<td data-label="Machine">
+								<!-- The dot says whether it can be reached now; the names say
+								     where, in the seller's own words for their machines. -->
+								<span class="files-where" title={AVAILABILITY_LABEL[row.availability]}>
+									<span class="files-dot {row.availability}" aria-hidden="true"></span>
+									{row.machines.length === 0 ? 'None' : row.machines.join(', ')}
+									<span class="sr-only">({AVAILABILITY_LABEL[row.availability]})</span>
+								</span>
+								{#if keptLine(row) !== null}<span class="files-sub">{keptLine(row)}</span>{/if}
+							</td>
+							<td class="files-num" data-label="Last seen">{seenLine(row, now)}</td>
+							<td data-label="Used by">
+								{#if row.resources.length === 0}
+									<span class="files-sub">None</span>
+								{:else}
+									<span class="files-uses">
+										{#each row.resources as resource (resource.id)}
+											<a href={`/resources/${resource.id}`}><span class="res-name">{resource.title}</span></a>
+										{/each}
+									</span>
+								{/if}
+							</td>
+							<td class="files-acts">
+								<!-- Only a copy under way needs a sentence: who holds the file
+								     is already the Machine column. -->
+								{#if row.label.kind === 'waiting' || row.label.kind === 'fetching'}
+									<span class="files-sub">{transferSentence(row.label)}</span>
+								{/if}
+								{#if row.kept !== null}
+									<Button
+										tier="outline"
+										small
+										disabled={opening === row.hash}
+										reason={opening === row.hash ? 'Opening the file…' : undefined}
+										onclick={() => void openHere(row.hash)}
+									>
+										{opening === row.hash ? 'Opening…' : 'Open'}
+									</Button>
+									<Button
+										tier="outline"
+										danger
+										small
+										disabled={removing === row.hash}
+										reason={removing === row.hash ? 'Removing the file…' : undefined}
+										onclick={() => void remove(row.hash, row.name)}
+									>
+										{removing === row.hash ? 'Removing…' : 'Remove'}
+									</Button>
+								{:else if row.label.kind === 'get'}
+									<Button
+										tier="outline"
+										small
+										disabled={asking === row.hash}
+										reason={asking === row.hash ? 'Requesting a copy…' : undefined}
+										onclick={() => void get(row.hash, row.name)}
+									>
+										{asking === row.hash ? 'Requesting…' : 'Copy here'}
+									</Button>
+								{:else if row.label.kind === 'waiting' || row.label.kind === 'fetching'}
+									<Button
+										tier="quiet"
+										small
+										disabled={asking === row.hash}
+										reason={asking === row.hash ? 'Cancelling the copy…' : undefined}
+										onclick={() => void cancel(row.hash)}
+									>
+										Cancel
+									</Button>
+								{/if}
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
 		</div>
-
-		<Note icon="lock">{FILES_STAY_ON_YOUR_MACHINES}</Note>
 	{/if}
 	{#if !files.isPending && !files.isError && (shown.hasPrev || shown.hasNext)}
 		<Pagination
