@@ -214,8 +214,8 @@
 				<p class="quiet">{expiry}</p>
 			{/if}
 			<Note icon="info">
-				A move is when you publish a resource that was imported into Teachouse onto another
-				marketplace. Publishing one resource to Tes and TPT is 2 moves; to Tes alone is 1 move.
+				A move is publishing one imported resource onto one marketplace. Publishing a resource to
+				Tes and TPT is 2 moves; to Tes alone is 1 move.
 				<a href="/guides/plans">Read how moves work.</a>
 			</Note>
 		{/if}
