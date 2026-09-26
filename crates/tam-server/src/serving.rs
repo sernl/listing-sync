@@ -652,9 +652,27 @@ pub(crate) fn content_type(file: &str) -> &'static str {
     }
 }
 
+/// Whether this user agent's engine needs `'unsafe-eval'` to run WebAssembly.
+///
+/// Chromium learned `'wasm-unsafe-eval'` in 97; every earlier build ignores
+/// the word and falls back to requiring `'unsafe-eval'`. `Chrome/NN` is the
+/// one token the Android System WebView, Chrome and every Chromium-based
+/// browser share, and a version under 97 is the answer. Firefox and WebKit
+/// never carry that token and are left on the narrow policy: Firefox has
+/// honoured `'wasm-unsafe-eval'` since 102 and Safari since 16, and the
+/// console does not run on anything older of either.
+pub(crate) fn needs_unsafe_eval(user_agent: &str) -> bool {
+    user_agent
+        .split(" Chrome/")
+        .nth(1)
+        .and_then(|rest| rest.split(['.', ' ']).next())
+        .and_then(|major| major.parse::<u32>().ok())
+        .is_some_and(|major| major < 97)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{route, Answer};
+    use super::{needs_unsafe_eval, route, Answer};
 
     /// A fixture in the shape of a landing build: enough names to reach every
     /// arm of `route` without a directory to read.
@@ -1247,5 +1265,27 @@ mod tests {
                 "{file} is served as {expected}"
             );
         }
+    }
+
+    #[test]
+    fn only_a_chromium_older_than_97_widens_the_wasm_grant() {
+        let webview_91 = "Mozilla/5.0 (Linux; Android 12; SM-N975F Build/SP1A.210812.016; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/91.0.4472.114 Mobile Safari/537.36";
+        let chrome_153 = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.52 Safari/537.36";
+        let firefox = "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0";
+        let webkitgtk = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
+        assert!(
+            needs_unsafe_eval(webview_91),
+            "an old System WebView is the case this exists for"
+        );
+        assert!(!needs_unsafe_eval(chrome_153));
+        assert!(!needs_unsafe_eval(firefox), "no Chrome token, no widening");
+        assert!(
+            !needs_unsafe_eval(webkitgtk),
+            "the desktop app's own engine stays narrow"
+        );
+        assert!(
+            !needs_unsafe_eval("Chrome/97.0.0.0"),
+            "97 is the first version that knows the word"
+        );
     }
 }
