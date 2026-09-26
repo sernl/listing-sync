@@ -150,7 +150,7 @@ fn validation(message: &str) -> APIError {
 fn missing() -> APIError {
     APIError::new(
         StatusCode::NOT_FOUND,
-        APIErrorEntry::new("no such device")
+        APIErrorEntry::new("We can't find that device.")
             .code(APIErrorCode::ResourceMissing)
             .kind(APIErrorKind::NotFound),
     )
@@ -193,10 +193,12 @@ fn bound_elsewhere(marketplace: Marketplace) -> APIError {
 fn bounded<'a>(field: &str, raw: &'a str, max: usize) -> Result<&'a str, APIError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err(validation(&format!("{field} cannot be empty")));
+        return Err(validation(&format!("Enter {field}.")));
     }
     if trimmed.chars().count() > max {
-        return Err(validation(&format!("{field} is at most {max} characters")));
+        return Err(validation(&format!(
+            "Keep {field} to {max} characters or fewer."
+        )));
     }
     Ok(trimmed)
 }
@@ -456,15 +458,15 @@ pub(crate) async fn declare_authorship(
     let marketplace = marketplace_of(&marketplace).ok_or_else(|| {
         APIError::new(
             StatusCode::NOT_FOUND,
-            APIErrorEntry::new("no such marketplace")
+            APIErrorEntry::new("We can't find that marketplace.")
                 .code(APIErrorCode::ResourceMissing)
                 .kind(APIErrorKind::NotFound),
         )
     })?;
     if marketplace.transport_class() == TransportClass::OfficialApi {
         return Err(validation(&format!(
-            "{marketplace:?} publishes an official API, so its automation runs \
-             server-side and no device composes a write to declare authorship on"
+            "Teachouse connects to {marketplace:?} directly, so you don't need to confirm your \
+             author name here."
         )));
     }
     // The plan's marketplace allowance binds here, because this is the act
@@ -497,7 +499,7 @@ pub(crate) async fn declare_authorship(
             u64::from(caps.marketplaces_max),
         ));
     }
-    let name = bounded("an authorship name", &body.name, AUTHORSHIP_MAX_CHARS)?;
+    let name = bounded("your author name", &body.name, AUTHORSHIP_MAX_CHARS)?;
     let record = ConnectionFactsRepo::new(state.pool.clone())
         .declare_authorship(context.org, marketplace, name, (state.wall)())
         .await

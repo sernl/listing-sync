@@ -33,13 +33,11 @@ use crate::{AppState, OrgContext};
 /// own words -- `entitlement.ts::featureReason` carries the same one, so the
 /// refusal a route makes and the hint a disabled control shows are one
 /// sentence rather than two that drifted.
-const NO_SCHEDULING: &str = "Your plan does not include scheduling. Upgrade to publish on a \
-                             timetable.";
+const NO_SCHEDULING: &str = "Upgrade your plan to schedule when things publish.";
 
 /// And the one for republishing, which is the auto-publish capability rather
 /// than the timetable: a seller may hold the clock and not the rewrite.
-const NO_REPUBLISH: &str = "Your plan does not include republishing a listing when its resource \
-                            changes. Upgrade to use it.";
+const NO_REPUBLISH: &str = "Upgrade your plan to republish a listing when its resource changes.";
 
 // ------------------------------------------------------------------- wire
 
@@ -205,7 +203,7 @@ pub(crate) async fn create_schedule(
         .map_err(|error| storage_fault(&state, &error))?
     {
         return Err(validation(
-            "a schedule of that name already exists; give this one a different name",
+            "You already have a schedule with that name. Choose another name.",
         ));
     }
     Ok((
@@ -338,23 +336,19 @@ fn parse(context: &OrgContext, body: &ScheduleBody) -> Result<ScheduleWrite, API
     let name = body.name.trim().to_owned();
     if name.is_empty() || name.chars().count() > 120 {
         return Err(validation(
-            "a schedule needs a name, and a name is at most 120 characters",
+            "Give the schedule a name of up to 120 characters.",
         ));
     }
     if body.inventories.is_empty() {
-        return Err(validation(
-            "a schedule sends to at least one marketplace; this one names none",
-        ));
+        return Err(validation("Choose at least one marketplace."));
     }
     let intent = match body.intent.as_str() {
         "draft" => SyncIntent::Draft,
         "live" => SyncIntent::Live,
-        _ => return Err(validation("intent is \"draft\" or \"live\"")),
+        _ => return Err(validation("Choose \"draft\" or \"live\".")),
     };
     if body.at_minute_of_day > 1439 {
-        return Err(validation(
-            "a time of day is minutes past midnight, so it is between 0 and 1439",
-        ));
+        return Err(validation("Choose a time between 00:00 and 23:59."));
     }
     // Against the compiled-in zone database rather than a pattern: a name
     // that looks like a zone and is not one would store fine and then fire at
@@ -364,18 +358,13 @@ fn parse(context: &OrgContext, body: &ScheduleBody) -> Result<ScheduleWrite, API
     let weekday = match (repeat, body.weekday) {
         (ScheduleRepeat::Weekly, Some(weekday)) if weekday <= 6 => Some(weekday),
         (ScheduleRepeat::Weekly, _) => {
-            return Err(validation(
-                "a weekly schedule names the day it runs on, as 0 for Sunday through 6 for \
-                 Saturday",
-            ))
+            return Err(validation("Choose the day a weekly schedule runs on."))
         }
         // Refused rather than dropped: a body carrying a weekday under
         // `daily` is a client that thinks it set one, and storing the row
         // without it would fire every day while the form showed Friday.
         (ScheduleRepeat::Once | ScheduleRepeat::Daily, Some(_)) => {
-            return Err(validation(
-                "only a weekly schedule has a weekday; this one repeats otherwise",
-            ))
+            return Err(validation("Only weekly schedules have a day of the week."))
         }
         (ScheduleRepeat::Once | ScheduleRepeat::Daily, None) => None,
     };
@@ -383,17 +372,13 @@ fn parse(context: &OrgContext, body: &ScheduleBody) -> Result<ScheduleWrite, API
         ScheduleSelectionView::Label { label } => {
             let label = label.trim().to_owned();
             if label.is_empty() || label.chars().count() > 120 {
-                return Err(validation(
-                    "a label selection names a label, and a label is at most 120 characters",
-                ));
+                return Err(validation("Choose a label of up to 120 characters."));
             }
             ScheduleSelection::Label(label)
         }
         ScheduleSelectionView::Products { products } => {
             if products.is_empty() {
-                return Err(validation(
-                    "a selection is either a label or a list of resources; this list is empty",
-                ));
+                return Err(validation("Choose a label or at least one resource."));
             }
             ScheduleSelection::Products(products.clone())
         }
@@ -460,7 +445,7 @@ fn group(rows: &[ScheduleRunRow]) -> Vec<ScheduleRunView> {
 }
 
 fn parse_id(raw: &str) -> Result<Uuid, APIError> {
-    Uuid::parse_hyphenated(raw).ok_or_else(|| validation("that is not a schedule identifier"))
+    Uuid::parse_hyphenated(raw).ok_or_else(|| validation("We can't find that schedule."))
 }
 
 /// Another organisation's schedule is missing rather than forbidden, which is
@@ -468,7 +453,7 @@ fn parse_id(raw: &str) -> Result<Uuid, APIError> {
 fn missing() -> APIError {
     APIError::new(
         StatusCode::NOT_FOUND,
-        crate::error::APIErrorEntry::new("no such schedule")
+        crate::error::APIErrorEntry::new("We can't find that schedule.")
             .kind(crate::error::APIErrorKind::Validation),
     )
 }

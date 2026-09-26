@@ -66,7 +66,7 @@ fn missing(what: &str) -> APIError {
 fn parse_id(raw: &str) -> Result<Uuid, APIError> {
     uuid::Uuid::parse_str(raw)
         .map(|parsed| Uuid(*parsed.as_bytes()))
-        .map_err(|_| validation("the identifier is not a UUID"))
+        .map_err(|_| validation("That link is not valid."))
 }
 
 const PAGE_LIMIT_DEFAULT: i64 = 50;
@@ -163,7 +163,7 @@ pub(crate) async fn list_products(
         None => None,
         Some(raw) => Some(
             decode_cursor(raw)
-                .ok_or_else(|| validation("the cursor is not one this server issued"))?,
+                .ok_or_else(|| validation("This page link has expired. Reload the page."))?,
         ),
     };
     let limit = params
@@ -283,8 +283,7 @@ pub(crate) fn image_answer(
     let Some(kind) = image_type(&bytes) else {
         return Err(APIError::new(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            APIErrorEntry::new("these bytes are not an image, and this route serves images only")
-                .kind(APIErrorKind::Validation),
+            APIErrorEntry::new("This file is not a picture.").kind(APIErrorKind::Validation),
         ));
     };
     Ok((
@@ -322,12 +321,11 @@ pub(crate) async fn uploaded_image(
     context: OrgContext,
     Path((_version, handle)): Path<(String, String)>,
 ) -> Result<([(header::HeaderName, &'static str); 3], Vec<u8>), APIError> {
-    let hash = parse_hash(&handle)
-        .ok_or_else(|| validation("a handle is the file's 64-character hex hash"))?;
+    let hash = parse_hash(&handle).ok_or_else(|| validation("We can't find that file."))?;
     let Some(blobs) = state.blobs.clone() else {
         return Err(APIError::new(
             StatusCode::SERVICE_UNAVAILABLE,
-            APIErrorEntry::new("this deployment holds no object store")
+            APIErrorEntry::new("File storage isn't available right now. Try again later.")
                 .kind(APIErrorKind::Internal),
         ));
     };
@@ -335,7 +333,7 @@ pub(crate) async fn uploaded_image(
         .get(context.org, hash)
         .await
         .map_err(|error| match error {
-            BlobError::Missing => missing("no such handle in this organisation"),
+            BlobError::Missing => missing("We can't find that file."),
             // Ours, not theirs: the row says these bytes exist and we could not
             // produce them, which is a fault to be seen rather than a resource to
             // be reported absent.
@@ -377,11 +375,11 @@ pub(crate) async fn product_cover(
         .map_err(|error| storage_fault(&state, &error))?
         .into_iter()
         .next()
-        .ok_or_else(|| missing("this product has no stored cover"))?;
+        .ok_or_else(|| missing("This resource has no cover yet."))?;
     let Some(blobs) = state.blobs.clone() else {
         return Err(APIError::new(
             StatusCode::SERVICE_UNAVAILABLE,
-            APIErrorEntry::new("this deployment holds no object store")
+            APIErrorEntry::new("File storage isn't available right now. Try again later.")
                 .kind(APIErrorKind::Internal),
         ));
     };
@@ -710,7 +708,7 @@ pub(crate) async fn product_view(
         .get(context.org, product)
         .await
         .map_err(|error| storage_fault(&state, &error))?
-        .ok_or_else(|| missing("no such product"))?;
+        .ok_or_else(|| missing("We can't find that resource."))?;
     let tpt_base = tam_storage::TptBaseRepo::new(state.pool.clone())
         .get(context.org, product)
         .await
@@ -1043,7 +1041,7 @@ pub(crate) async fn resolve_item(
     let target = open
         .into_iter()
         .find(|candidate| candidate.id == item_id)
-        .ok_or_else(|| missing("no such open item"))?;
+        .ok_or_else(|| missing("That item is no longer waiting for an answer."))?;
     let edge = ProjectionEdge {
         from: target.term,
         to: VocabularyPath {
@@ -1109,7 +1107,7 @@ pub(crate) async fn no_counterpart_item(
         .await
         .map_err(|error| {
             if matches!(error, tam_storage::StorageError::Inconsistent { .. }) {
-                missing("no such open item")
+                missing("That item is no longer waiting for an answer.")
             } else {
                 storage_fault(&state, &error)
             }
@@ -1301,14 +1299,15 @@ pub(crate) async fn upsert_override(
     })
     .map_err(|error| match error {
         ProjectionOverrideError::LicenceNeverOverridden => validation(
-            "a licence is a legal statement about the work rather than a mapping choice, so it is never overridden",
+            "A licence is a legal statement about your work, so you can't change how it is \
+             matched.",
         ),
         ProjectionOverrideError::EmptyPath => {
             validation("an override names at least one path segment")
         }
-        ProjectionOverrideError::UnboundAxis => validation(
-            "this marketplace carries no field for that axis, so an override for it would reach nothing",
-        ),
+        ProjectionOverrideError::UnboundAxis => {
+            validation("This marketplace has no field for that, so there is nothing to change.")
+        }
     })?;
 
     // The same check the reconciliation queue's resolution runs, over the one
@@ -1329,7 +1328,7 @@ pub(crate) async fn upsert_override(
         APIError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             APIErrorEntry::new(
-                "that value's identifier is not one this marketplace issues, so a listing carrying it would be refused",
+                "This marketplace doesn't recognise that value, so it would refuse the listing.",
             )
             .kind(APIErrorKind::Validation)
             .detail(serde_json::json!({
@@ -1364,7 +1363,7 @@ fn unknown_term_or_fault(state: &AppState, error: &StorageError) -> APIError {
     if let StorageError::Db(sqlx::Error::Database(database)) = error {
         if database.constraint() == Some(FROM_TERM_FKEY) {
             return validation(
-                "that term is not in the taxonomy any more; reload and pick it again",
+                "That choice is no longer available. Reload the page and pick again.",
             );
         }
     }
@@ -1483,19 +1482,18 @@ fn validated_label(raw: &str) -> Result<String, APIError> {
 pub(crate) fn label_refusal(raw: &str) -> Result<String, String> {
     let name = tam_storage::labels::normalise(raw);
     if name.is_empty() {
-        return Err("a label needs a word in it".to_owned());
+        return Err("Give the label a name.".to_owned());
     }
     if name.chars().count() > LABEL_MAX_CHARS {
-        return Err(format!("a label is at most {LABEL_MAX_CHARS} characters"));
+        return Err(format!(
+            "Keep labels to {LABEL_MAX_CHARS} characters or fewer."
+        ));
     }
     if !crate::text::is_typed_text(&name) {
-        return Err("a label cannot contain control characters".to_owned());
+        return Err("Remove line breaks and hidden characters from the label.".to_owned());
     }
     if name.contains('/') {
-        return Err(
-            "a label cannot contain a slash, because a label is addressed by its own name"
-                .to_owned(),
-        );
+        return Err("Labels can't contain a slash (/).".to_owned());
     }
     Ok(name)
 }
@@ -1540,9 +1538,7 @@ pub(crate) async fn set_product_labels(
     // the deduplication below is quadratic, so checking the bound afterwards
     // would let an unbounded array do unbounded work to earn its refusal.
     if body.labels.len() > LABELS_PER_PRODUCT_MAX {
-        return Err(validation(
-            "an item carries at most twenty labels; labels file a catalogue rather than describe one item",
-        ));
+        return Err(validation("A resource can have up to twenty labels."));
     }
 
     // Trimmed, emptied and deduplicated here rather than in the repository,
@@ -1583,7 +1579,8 @@ pub(crate) async fn set_product_labels(
             .any(|record| record.system && record.name.eq_ignore_ascii_case(name))
     }) {
         return Err(validation(&format!(
-            "{claimed} is the label of a marketplace you imported from; it is set for you and              cannot be typed or removed"
+            "Teachouse adds the {claimed} label when you import from that marketplace, so you \
+             can't type it or remove it."
         )));
     }
     let held: Vec<&tam_storage::LabelRecord> =
@@ -1660,12 +1657,12 @@ pub(crate) async fn rename_label(
             colour: record.colour.as_str().to_owned(),
             system: record.system,
         })),
-        LabelRename::Missing => Err(missing("no label of that name")),
+        LabelRename::Missing => Err(missing("You don't have a label with that name.")),
         // A refusal rather than a merge. Folding the two labels together
         // would take every item off one of them, which is a bulk edit of the
         // catalogue rather than the rename that was asked for, and no call
         // here says whether that is what the seller meant.
-        LabelRename::Taken => Err(validation("that name is already one of your labels")),
+        LabelRename::Taken => Err(validation("You already have a label with that name.")),
     }
 }
 
@@ -1687,7 +1684,7 @@ pub(crate) async fn delete_label(
     if removed {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(missing("no label of that name"))
+        Err(missing("You don't have a label with that name."))
     }
 }
 
@@ -1702,7 +1699,7 @@ async fn product_or_missing(
         .get(org, product)
         .await
         .map_err(|error| storage_fault(state, &error))?
-        .ok_or_else(|| missing("no such product"))?;
+        .ok_or_else(|| missing("We can't find that resource."))?;
     Ok(())
 }
 
@@ -1739,7 +1736,7 @@ pub(crate) async fn bind_mapping(
         .head(context.org, mapping)
         .await
         .map_err(|error| storage_fault(&state, &error))?
-        .ok_or_else(|| missing("no such mapping"))?;
+        .ok_or_else(|| missing("We can't find that listing."))?;
 
     let listing = parse_listing_url(head.inventory.marketplace(), body.listing_url.trim())
         .map_err(|refusal| unusable_url(head.inventory, refusal))?;
@@ -1750,7 +1747,7 @@ pub(crate) async fn bind_mapping(
         .map_err(|error| match error {
             // The guarded UPDATE reports a vanished mapping this way, which is
             // a race with a delete rather than a fault of ours.
-            StorageError::Inconsistent { .. } => missing("no such mapping"),
+            StorageError::Inconsistent { .. } => missing("We can't find that listing."),
             other @ (StorageError::Db(_)
             | StorageError::TimestampOutOfRange { .. }
             | StorageError::CorruptRow { .. }
@@ -1770,11 +1767,12 @@ pub(crate) async fn bind_mapping(
             return Err(APIError::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 APIErrorEntry::new(match binding.as_str() {
-                    "bound" => "this item is already listed on that marketplace",
+                    "bound" => "This resource is already listed on that marketplace.",
                     "severed" => {
-                        "this item's listing there was cut loose, which reconciliation reattaches rather than a paste"
+                        "This resource's listing there was unlinked, so pasting a link can't \
+                         relink it."
                     }
-                    _ => "a send is already out for this item on that marketplace",
+                    _ => "This resource is already being sent to that marketplace.",
                 })
                 .code(APIErrorCode::MappingNotBindable)
                 .kind(APIErrorKind::Validation)
@@ -1784,7 +1782,7 @@ pub(crate) async fn bind_mapping(
         PastedBind::ListingClaimed => {
             return Err(APIError::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
-                APIErrorEntry::new("another of your items already claims that listing")
+                APIErrorEntry::new("Another of your resources is already linked to that listing.")
                     .code(APIErrorCode::ListingAlreadyClaimed)
                     .kind(APIErrorKind::Validation),
             ));
@@ -1802,10 +1800,10 @@ pub(crate) async fn bind_mapping(
 fn unusable_url(inventory: InventoryId, refusal: UrlRefusal) -> APIError {
     let (message, named) = match refusal {
         UrlRefusal::WrongMarketplace { named } => (
-            "that link is a listing on a different marketplace",
+            "That link is for a listing on a different marketplace.",
             Some(named),
         ),
-        UrlRefusal::Unrecognised => ("that link is not a listing page we can read", None),
+        UrlRefusal::Unrecognised => ("We can't read a listing from that link.", None),
     };
     APIError::new(
         StatusCode::UNPROCESSABLE_ENTITY,
@@ -2133,7 +2131,12 @@ pub(crate) async fn list_decisions(
         .inventory
         .as_deref()
         .map(|raw| {
-            crate::vocabulary::parse_inventory(raw).ok_or_else(|| validation("no such inventory"))
+            crate::vocabulary::parse_inventory(raw).ok_or_else(|| {
+                validation(
+                    "We can't find that \
+             marketplace.",
+                )
+            })
         })
         .transpose()?;
     let repo = ElectionRepo::new(state.pool.clone());
@@ -2332,7 +2335,7 @@ pub(crate) async fn answer_decision(
     Json(body): Json<AnswerBody>,
 ) -> Result<Json<AnswerAck>, APIError> {
     if body.answers.is_empty() {
-        return Err(validation("an answered election names at least one value"));
+        return Err(validation("Choose at least one value."));
     }
     let item_id = parse_id(&item)?;
     let repo = ElectionRepo::new(state.pool.clone());
@@ -2343,7 +2346,7 @@ pub(crate) async fn answer_decision(
     let target = open
         .into_iter()
         .find(|candidate| candidate.id == item_id)
-        .ok_or_else(|| missing("no such open election"))?;
+        .ok_or_else(|| missing("That question is no longer waiting for an answer."))?;
     let vocabulary = VocabularyId(target.inventory, target.axis);
     let paths: Vec<VocabularyPath> = body
         .answers
@@ -2422,12 +2425,9 @@ fn standing_rule(
     })
     .map_err(|error| match error {
         ElectionRuleError::NotDelegable(_) => validation(
-            "this axis is the seller's own: choosing a rights grant is issuing one, \
-             so no opt-in delegates it to a computation",
+            "Only you can choose the rights you grant, so Teachouse can't choose them for you.",
         ),
-        ElectionRuleError::UnboundAxis => {
-            validation("this inventory declares no such equivalence axis")
-        }
+        ElectionRuleError::UnboundAxis => validation("This marketplace has no such field."),
     })
 }
 
@@ -2504,12 +2504,9 @@ pub(crate) async fn upsert_rule(
     })
     .map_err(|error| match error {
         ElectionRuleError::NotDelegable(_) => validation(
-            "this axis is the seller's own: choosing a rights grant is issuing one, \
-             so no opt-in delegates it to a computation",
+            "Only you can choose the rights you grant, so Teachouse can't choose them for you.",
         ),
-        ElectionRuleError::UnboundAxis => {
-            validation("this inventory declares no such equivalence axis")
-        }
+        ElectionRuleError::UnboundAxis => validation("This marketplace has no such field."),
     })?;
     ElectionRepo::new(state.pool.clone())
         .upsert_rule(&rule)
@@ -2684,12 +2681,9 @@ fn delegation_rule(
     })
     .map_err(|error| match error {
         ElectionRuleError::NotDelegable(_) => validation(
-            "this axis is the seller's own: choosing a rights grant is issuing one, \
-             so no opt-in delegates it to a computation",
+            "Only you can choose the rights you grant, so Teachouse can't choose them for you.",
         ),
-        ElectionRuleError::UnboundAxis => {
-            validation("this inventory declares no such equivalence axis")
-        }
+        ElectionRuleError::UnboundAxis => validation("This marketplace has no such field."),
     })
 }
 

@@ -202,13 +202,13 @@ pub struct CollectionPublishAck {
 fn parse_id(raw: &str) -> Result<Uuid, APIError> {
     uuid::Uuid::parse_str(raw.trim())
         .map(|parsed| Uuid(*parsed.as_bytes()))
-        .map_err(|_unused| validation("that is not a collection identifier"))
+        .map_err(|_unused| validation("We can't find that collection."))
 }
 
 fn missing() -> APIError {
     crate::error::APIError::new(
         StatusCode::NOT_FOUND,
-        crate::error::APIErrorEntry::new("no such collection")
+        crate::error::APIErrorEntry::new("We can't find that collection.")
             .kind(crate::error::APIErrorKind::NotFound),
     )
 }
@@ -223,16 +223,16 @@ fn missing() -> APIError {
 fn validated_name(raw: &str) -> Result<&str, APIError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err(validation("a collection needs a name"));
+        return Err(validation("Give your collection a name."));
     }
     if trimmed.chars().count() > NAME_MAX_CHARS {
         return Err(validation(&format!(
-            "a collection name is at most {NAME_MAX_CHARS} characters"
+            "Keep the collection name to {NAME_MAX_CHARS} characters or fewer."
         )));
     }
     if !is_typed_text(trimmed) {
         return Err(validation(
-            "a collection name cannot contain control characters",
+            "Remove line breaks and hidden characters from the collection name.",
         ));
     }
     Ok(trimmed)
@@ -247,7 +247,7 @@ fn validated_description(raw: Option<&str>) -> Result<Option<&str>, APIError> {
     };
     if trimmed.chars().count() > DESCRIPTION_MAX_CHARS {
         return Err(validation(&format!(
-            "a collection note is at most {DESCRIPTION_MAX_CHARS} characters"
+            "Keep the collection note to {DESCRIPTION_MAX_CHARS} characters or fewer."
         )));
     }
     if trimmed
@@ -255,7 +255,7 @@ fn validated_description(raw: Option<&str>) -> Result<Option<&str>, APIError> {
         .any(|character| character.is_control() && character != '\n' && character != '\r')
     {
         return Err(validation(
-            "a collection note cannot contain control characters",
+            "Remove hidden characters from the collection note.",
         ));
     }
     Ok(Some(trimmed))
@@ -293,7 +293,7 @@ pub(crate) async fn for_product(
     Path((_version, product)): Path<(String, String)>,
 ) -> Result<Json<CollectionsView>, APIError> {
     let product = ProductId(
-        parse_id(&product).map_err(|_unused| validation("that is not a resource identifier"))?,
+        parse_id(&product).map_err(|_unused| validation("We can't find that resource."))?,
     );
     let repo = ResourceCollectionRepo::new(state.pool.clone());
     let holding: Vec<Uuid> = repo
@@ -377,11 +377,10 @@ pub(crate) async fn create(
         // Validation rather than a conflict status, for the reason every other
         // refusal on this surface is: the client renders the sentence.
         tam_storage::CollectionWrite::NameTaken => {
-            Err(validation("you already have a collection of that name"))
+            Err(validation("You already have a collection with that name."))
         }
         tam_storage::CollectionWrite::TooMany => Err(validation(&format!(
-            "you have {COLLECTIONS_PER_ORG_MAX} collections already; \
-             remove one before making another"
+            "You have {COLLECTIONS_PER_ORG_MAX} collections already. Delete one to make another."
         ))),
     }
 }
@@ -404,7 +403,7 @@ pub(crate) async fn update(
         Given::Set(note) => Given::Set(validated_description(note.as_deref())?),
     };
     let edit = CollectionEdit::of(name, description)
-        .ok_or_else(|| validation("an edit names a new name, a new note, or both"))?;
+        .ok_or_else(|| validation("Change the name, the note, or both."))?;
     let written = ResourceCollectionRepo::new(state.pool.clone())
         .update(context.org, id, &edit, (state.wall)())
         .await
@@ -413,7 +412,7 @@ pub(crate) async fn update(
         CollectionChange::Saved(record) => view_of(&state, &context, &record).await,
         CollectionChange::Missing => Err(missing()),
         CollectionChange::NameTaken => {
-            Err(validation("you already have a collection of that name"))
+            Err(validation("You already have a collection with that name."))
         }
     }
 }
@@ -452,7 +451,7 @@ pub(crate) async fn set_members(
     let id = parse_id(&collection)?;
     if body.products.len() > MEMBERS_MAX {
         return Err(validation(&format!(
-            "a collection holds at most {MEMBERS_MAX} resources"
+            "A collection can hold up to {MEMBERS_MAX} resources."
         )));
     }
     let held = ProductRepo::new(state.pool.clone())
@@ -511,7 +510,7 @@ pub(crate) async fn add_labels(
         .filter(|name| !name.is_empty())
         .collect();
     if names.is_empty() {
-        return Err(validation("name at least one label to add"));
+        return Err(validation("Choose at least one label to add."));
     }
     let labels = LabelRepo::new(state.pool.clone());
     let every = labels
@@ -524,8 +523,8 @@ pub(crate) async fn add_labels(
             .any(|record| record.system && record.name.eq_ignore_ascii_case(name))
     }) {
         return Err(validation(&format!(
-            "{claimed} is the label of a marketplace you imported from; it is set for you and \
-             cannot be typed or removed"
+            "Teachouse adds the {claimed} label when you import from that marketplace, so you \
+             can't type it or remove it."
         )));
     }
     let own: Vec<&tam_storage::LabelRecord> =
@@ -719,7 +718,7 @@ async fn publish_plan(
     let intent = match body.intent.as_deref() {
         None | Some("draft") => "draft".to_owned(),
         Some("live") => "live".to_owned(),
-        Some(_) => return Err(validation("intent is \"draft\" or \"live\"")),
+        Some(_) => return Err(validation("Choose \"draft\" or \"live\".")),
     };
     let members = ResourceCollectionRepo::new(state.pool.clone())
         .members(context.org, id)
@@ -838,7 +837,7 @@ async fn publish_plan(
                 MigrationVerdict::Blocked,
                 None,
                 Some(format!(
-                    "already on its way to {}; it will show as there once your device has sent it",
+                    "already on its way to {}, and will show there once your device sends it",
                     name_of(body.inventory)
                 )),
             ));

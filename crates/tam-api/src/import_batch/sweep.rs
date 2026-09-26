@@ -88,8 +88,7 @@ const _: () = assert!(
 /// batch that closed without the seller closing it, and "abandoned" with no
 /// reason reads as something having gone wrong.
 pub const SWEPT_DETAIL: &str =
-    "this import was not finished before its deadline, so it was closed and the files attached \
-     to it were released";
+    "This import wasn't finished in time, so it was closed and its files were removed.";
 
 /// What one pass did, across both of its rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

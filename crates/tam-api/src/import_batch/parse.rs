@@ -189,64 +189,58 @@ pub enum Malformed {
 impl core::fmt::Display for Malformed {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::UnknownFormat => {
-                f.write_str("this is neither a workbook (.xlsx) nor a comma-separated file (.csv)")
-            }
+            Self::UnknownFormat => f.write_str("Upload an .xlsx or .csv file."),
             Self::Unreadable { .. } => f.write_str(
-                "this workbook could not be opened; if it opens in your spreadsheet program, \
-                 save it again as .xlsx and upload the new file",
+                "We can't open this file. If it opens in your spreadsheet program, save it again \
+                 as .xlsx and upload that.",
             ),
             Self::DeclaresTooLarge { declared, limit } => write!(
                 f,
-                "the workbook says it unpacks to {declared} bytes, and this import reads at most \
-                 {limit}"
+                "This file is too big: it opens to {declared} bytes, and an import takes at most \
+                 {limit}."
             ),
             Self::ExpandsTooFar { limit } => write!(
                 f,
-                "the workbook unpacks to more than {limit} bytes, which is more than this import \
-                 reads"
+                "This file is too big: it opens to more than {limit} bytes."
             ),
             Self::NoKnownTab { held } => write!(
                 f,
-                "none of this workbook's tabs is one the template writes; it holds {}",
+                "None of this file's tabs match the template. It has {}.",
                 held.join(", ")
             ),
             Self::UnnamedCsv { stem } => write!(
                 f,
-                "a .csv is one tab, named by its own filename, and \"{stem}\" is not a tab the \
-                 template writes"
+                "Name your .csv after a template tab. \"{stem}\" is not one."
             ),
             Self::HeaderMissing { sheet } => {
-                write!(f, "the {sheet} tab has no column names in its first row")
+                write!(f, "The {sheet} tab needs column names in its first row.")
             }
             Self::ColumnMissing { sheet, column } => write!(
                 f,
-                "the {sheet} tab has no \"{column}\" column; download the template again and \
-                 copy your rows into it"
+                "The {sheet} tab has no \"{column}\" column. Download the template again and \
+                 copy your rows into it."
             ),
             Self::ColumnUnknown { sheet, column } => write!(
                 f,
-                "the {sheet} tab has a \"{column}\" column, which this import does not read; \
-                 remove it and upload again"
+                "The {sheet} tab has a \"{column}\" column that the import doesn't use. Remove \
+                 it and upload again."
             ),
             Self::TooManyRows { rows, limit } => write!(
                 f,
-                "this upload carries {rows} rows and at most {limit} may be imported at once"
+                "This file has {rows} rows. You can import up to {limit} at once."
             ),
             Self::TooManyCells { limit } => write!(
                 f,
-                "this upload carries more than {limit} filled cells, which is more than one \
-                 import reads"
+                "This file has more than {limit} filled cells, which is too many for one import."
             ),
             Self::TooManyColumns { sheet, limit } => write!(
                 f,
-                "the {sheet} tab reaches past column {limit}, which is further than any template \
-                 tab goes"
+                "The {sheet} tab goes past column {limit}. Delete anything beyond it."
             ),
             Self::RowOutOfRange { sheet, row, limit } => write!(
                 f,
-                "the {sheet} tab has something in row {row}, and this import reads to row \
-                 {limit}; delete whatever is below that row and upload again"
+                "The {sheet} tab has something in row {row}, but the import stops at row \
+                 {limit}. Delete everything below that row and upload again."
             ),
             Self::CellTooLong {
                 sheet,
@@ -256,10 +250,10 @@ impl core::fmt::Display for Malformed {
                 limit,
             } => write!(
                 f,
-                "the {sheet} tab holds {bytes} bytes in row {row}, column {column}, and a cell \
-                 holds at most {limit}"
+                "In the {sheet} tab, row {row}, column {column} is too long: {bytes} bytes, and \
+                 a cell holds at most {limit}."
             ),
-            Self::NoRows => f.write_str("every tab in this upload is empty"),
+            Self::NoRows => f.write_str("Every tab in this file is empty."),
         }
     }
 }

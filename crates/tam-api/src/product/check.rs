@@ -48,7 +48,7 @@ pub(crate) fn record_of(draft: &DraftInput) -> Result<TptBaseRecord, APIError> {
         thumbnail_mode: match draft.thumbnail_mode {
             None => ThumbnailMode::AutoGenerate,
             Some(id) => member_of(id, ThumbnailMode::from_wire_id).ok_or_else(|| {
-                validation_refusal(&format!("{id} is not a thumbnail mode this form offers"))
+                validation_refusal("That thumbnail choice isn't available. Choose another.")
             })?,
         },
         thumbnails: handles(&draft.thumbnail_hashes)?,
@@ -83,7 +83,7 @@ pub(crate) fn record_of(draft: &DraftInput) -> Result<TptBaseRecord, APIError> {
                     })
                     .ok_or_else(|| {
                         validation_refusal(&format!(
-                            "jurisdiction {} is not one the create form offers",
+                            "Standards set {} isn't available. Choose another.",
                             input.framework
                         ))
                     })
@@ -106,7 +106,7 @@ pub(crate) fn record_of(draft: &DraftInput) -> Result<TptBaseRecord, APIError> {
         status: match draft.status_user {
             None => ListingStatus::Draft,
             Some(id) => member_of(id, ListingStatus::from_wire_id).ok_or_else(|| {
-                validation_refusal(&format!("{id} is not a listing status this form offers"))
+                validation_refusal("That listing status isn't available. Choose another.")
             })?,
         },
     })
@@ -124,9 +124,9 @@ fn member<T>(
 ) -> Result<Option<T>, APIError> {
     match held {
         None => Ok(None),
-        Some(id) => member_of(id, of)
-            .map(Some)
-            .ok_or_else(|| validation_refusal(&format!("{id} is not a {what} this form offers"))),
+        Some(id) => member_of(id, of).map(Some).ok_or_else(|| {
+            validation_refusal(&format!("That {what} isn't available. Choose another."))
+        }),
     }
 }
 

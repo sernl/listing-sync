@@ -33,8 +33,7 @@ fn validation(message: &str) -> APIError {
 fn missing() -> APIError {
     APIError::new(
         StatusCode::NOT_FOUND,
-        APIErrorEntry::new("The requested rule or proposal is unavailable.")
-            .kind(APIErrorKind::NotFound),
+        APIErrorEntry::new("We can't find that rule or proposal.").kind(APIErrorKind::NotFound),
     )
 }
 
@@ -46,7 +45,7 @@ fn conflict(message: &str) -> APIError {
 }
 
 fn parse_id(raw: &str) -> Result<uuid::Uuid, APIError> {
-    uuid::Uuid::parse_str(raw).map_err(|_| validation("The identifier is not a UUID."))
+    uuid::Uuid::parse_str(raw).map_err(|_| validation("That link is not valid."))
 }
 
 fn fresh_id() -> Uuid {
@@ -162,14 +161,17 @@ async fn validate_rule(
             .await
             .map_err(|error| state.internal(&error.to_string()))?
             .ok_or_else(|| {
-                validation("The reference quote is unavailable. Refresh it or enter a manual rate.")
+                validation("The exchange rate isn't available. Refresh it or enter your own rate.")
             })?;
         let expected = rules::parse_rate(rate).map_err(|error| validation(&error.to_string()))?;
         if quote.rate_micros != expected
             || definition.source.currency_rule() != tam_types::CurrencyRule::Fixed(quote.source)
             || definition.target.currency_rule() != tam_types::CurrencyRule::Fixed(quote.target)
         {
-            return Err(validation("The reference quote does not match this rate and currency direction. Clear the reference when entering your own rate."));
+            return Err(validation(
+                "That exchange rate doesn't match these currencies. Clear it \
+             when you enter your own rate.",
+            ));
         }
     }
     Ok(())
@@ -294,7 +296,15 @@ pub(crate) async fn reference(
         return Err(validation("Choose different source and target currencies."));
     }
     let unavailable = || {
-        APIError::new(StatusCode::SERVICE_UNAVAILABLE, APIErrorEntry::new("The ECB reference is unavailable. Your accepted prices are unchanged; retry or enter a manual estimate.").kind(APIErrorKind::Internal))
+        APIError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            APIErrorEntry::new(
+                "The exchange rate \
+         isn't available right now, and your accepted prices haven't changed. Try again or enter \
+         your own rate.",
+            )
+            .kind(APIErrorKind::Internal),
+        )
     };
     let source = state.exchange_rates.as_ref().ok_or_else(unavailable)?;
     let observation = source
@@ -488,7 +498,7 @@ async fn selected_rules(
         }
         page = page
             .checked_add(1)
-            .ok_or_else(|| validation("The rule selection is too large."))?;
+            .ok_or_else(|| validation("You picked too many rules."))?;
     }
     Ok(records)
 }
@@ -606,10 +616,9 @@ pub(crate) async fn preview(
                 .into_iter()
                 .any(|held| matches!(held.mapping.binding, tam_domain::Binding::Bound { .. }));
             if declared_source || listed_elsewhere {
-                evaluation.blockers.push(format!(
-                    "This resource is not listed in the selected {:?} source catalogue.",
-                    body.source,
-                ));
+                evaluation
+                    .blockers
+                    .push(format!("This resource isn't listed on {:?}.", body.source,));
             }
         }
         let patch = evaluation.fields;
@@ -637,7 +646,7 @@ pub(crate) async fn preview(
     }
     if !missing_products.is_empty() {
         return Err(validation(&format!(
-            "These selected resources are unavailable; refresh the selection: {}",
+            "Some resources you picked are gone. Pick them again: {}",
             missing_products
                 .iter()
                 .map(|id| id.0.to_hyphenated())

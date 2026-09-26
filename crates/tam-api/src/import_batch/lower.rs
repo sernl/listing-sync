@@ -53,8 +53,9 @@ pub(crate) struct Lowered {
 
 /// Builds the create one claimed row asks for.
 pub(crate) fn lower(row: &ClaimedRow) -> Result<Lowered, APIError> {
-    let draft: RowDraft = serde_json::from_value(row.draft.clone())
-        .map_err(|_| validation("this row's parsed draft can no longer be read"))?;
+    let draft: RowDraft = serde_json::from_value(row.draft.clone()).map_err(|_| {
+        validation("We can't read this row any more. Upload the spreadsheet again.")
+    })?;
     let RowDraft {
         title,
         body: copy,
@@ -183,9 +184,8 @@ fn place_natives(
 /// The kind is the column's, which the bind already wrote in the vocabulary's
 /// own spelling, so nothing is re-derived here from a caller's word.
 fn handle_of(file: &RowFile, name: Option<String>) -> Result<FileHandle, APIError> {
-    let byte_len = u64::try_from(file.byte_len).map_err(|_| {
-        validation("this row's file handle states a length no stored file can have")
-    })?;
+    let byte_len = u64::try_from(file.byte_len)
+        .map_err(|_| validation("This row's file is too big to store."))?;
     Ok(FileHandle {
         hash: hex_encode(&file.hash.0),
         kind: file.kind.clone(),

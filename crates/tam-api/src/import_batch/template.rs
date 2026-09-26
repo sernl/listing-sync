@@ -238,9 +238,8 @@ fn write_read_me(sheet: &mut Worksheet) -> Result<(), XlsxError> {
     write(sheet, "Row 1 is the column name.", false)?;
     write(
         sheet,
-        "Row 2 says whether the column must be filled. \"seller only\" means a legal \
-         declaration that only you may make: we never fill it for you, from a default, a \
-         template or a computation.",
+        "Row 2 says whether the column must be filled. \"seller only\" means a legal statement \
+         only you can make, so we never fill it in for you.",
         false,
     )?;
     write(
@@ -275,11 +274,10 @@ fn write_read_me(sheet: &mut Worksheet) -> Result<(), XlsxError> {
     write(sheet, "File", true)?;
     write(
         sheet,
-        "The filename of the resource this row publishes, as it is saved on your computer. \
-         Every row on a marketplace tab needs one, whether it lists as a draft or live: a \
-         resource on a marketplace needs a file buyers can download either way. A row on the \
-         Teachouse tab needs none. You attach the files themselves after the upload, on the \
-         batch page, where they are matched to rows by that filename.",
+        "The file name of this row's resource, as it is saved on your computer. Every row on a \
+         marketplace tab needs one, draft or live, because buyers need a file to download. Rows \
+         on the Teachouse tab don't need one. After you upload the spreadsheet, you attach the \
+         files on the import page, and we match them to rows by file name.",
         false,
     )?;
     write(
@@ -313,8 +311,8 @@ fn write_read_me(sheet: &mut Worksheet) -> Result<(), XlsxError> {
     write(sheet, "Labels", true)?;
     write(
         sheet,
-        "Separated by \"; \". A label with a semicolon in its own name writes that semicolon \
-         twice. A label you have not used before is created.",
+        "Separate labels with \"; \". If a label has a semicolon in its name, type that \
+         semicolon twice. New labels are created for you.",
         false,
     )?;
     write(sheet, "", false)?;
@@ -322,9 +320,8 @@ fn write_read_me(sheet: &mut Worksheet) -> Result<(), XlsxError> {
     write(sheet, "Resource ID", true)?;
     write(
         sheet,
-        "Leave blank. The column exists so an exported catalogue can be edited and uploaded \
-         later; this version creates new resources only, and a row with a resource ID in it is \
-         refused rather than quietly ignored.",
+        "Leave blank. For now an import only creates new resources, and a row with a resource ID \
+         is refused.",
         false,
     )?;
     write(sheet, "", false)?;
@@ -332,9 +329,8 @@ fn write_read_me(sheet: &mut Worksheet) -> Result<(), XlsxError> {
     write(sheet, "Saving one tab at a time", true)?;
     write(
         sheet,
-        "Upload the whole .xlsx and every tab is read at once. If you save a single tab as a \
-         .csv instead, name the file after the tab — \"TES.csv\", \"Teachouse.csv\" — because \
-         a .csv carries no tab name of its own and that filename is the only thing that says \
+        "Upload the whole .xlsx to bring in every tab at once. If you save one tab as a .csv \
+         instead, name the file after the tab, like \"TES.csv\" or \"Teachouse.csv\", so we know \
          which tab it is.",
         false,
     )?;
@@ -344,7 +340,7 @@ fn write_read_me(sheet: &mut Worksheet) -> Result<(), XlsxError> {
     write(
         sheet,
         &format!(
-            "{} rows across every tab, and {} MiB per file uploaded here.",
+            "Up to {} rows across all tabs, and {} MiB per file.",
             tam_limits::import::ROWS_PER_UPLOAD_MAX,
             tam_limits::import::SPREADSHEET_BYTES_MAX.div_euclid(1024 * 1024),
         ),
@@ -353,10 +349,9 @@ fn write_read_me(sheet: &mut Worksheet) -> Result<(), XlsxError> {
     write(
         sheet,
         &format!(
-            "If any row is refused, nothing is created. You get a list of what to fix, and you \
-             can either correct the sheet and upload it again or import only the rows that \
-             passed. An unfinished batch is cleared after {} days, along with the files \
-             attached to it.",
+            "If any row has a problem, nothing is created. You get a list of what to fix: fix \
+             the sheet and upload it again, or import only the rows that passed. An unfinished \
+             import is cleared after {} days, along with its files.",
             tam_limits::import::BATCH_EXPIRY_DAYS,
         ),
         false,
@@ -366,8 +361,8 @@ fn write_read_me(sheet: &mut Worksheet) -> Result<(), XlsxError> {
     write(sheet, "Marketplace columns", true)?;
     write(
         sheet,
-        "Named the way the marketplace's own form names them, with the name it uses on the wire \
-         in brackets. Columns with a dropdown accept only what the dropdown offers.",
+        "Named as on the marketplace's own form, with the marketplace's internal name in \
+         brackets. Columns with a dropdown accept only what the dropdown offers.",
         false,
     )?;
     write(sheet, "", false)?;
@@ -390,8 +385,7 @@ fn write_read_me(sheet: &mut Worksheet) -> Result<(), XlsxError> {
                 // members, and an unlisted value is refused by the platform
                 // rather than by us.
                 Values::ClosedUncaptured => {
-                    "the marketplace accepts a fixed set of values here and we do not hold the \
-                     list; a value outside it is refused by the marketplace"
+                    "the marketplace accepts only certain values here, and we don't have the list"
                 }
                 Values::Numeric => "a number",
                 Values::Text { .. } => "free text",
@@ -422,7 +416,7 @@ fn currency_of(inventory: InventoryId) -> &'static str {
         // build can publish to, and both are stated rather than defaulted: a
         // tab whose currency we do not know says so instead of naming one.
         CurrencyRule::SellerScoped => "the currency your shop is set to",
-        CurrencyRule::Unmeasured => "a currency we have not established",
+        CurrencyRule::Unmeasured => "a currency we don't know yet",
     }
 }
 

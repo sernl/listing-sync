@@ -249,7 +249,7 @@ impl MoveRefusal {
     #[must_use]
     pub fn sentence(self) -> String {
         if self.available == 0 {
-            "You have no moves left. Buy a pack to move more resources.".to_owned()
+            "You have no moves left. Buy a pack, or choose Sync.".to_owned()
         } else if self.available == 1 {
             format!(
                 "You have one move left and asked to move {}. Buy a pack or pick fewer.",
@@ -539,7 +539,7 @@ mod tests {
         };
         assert_eq!(
             empty.sentence(),
-            "You have no moves left. Buy a pack to move more resources."
+            "You have no moves left. Buy a pack, or choose Sync."
         );
         let short = MoveRefusal {
             available: 3,

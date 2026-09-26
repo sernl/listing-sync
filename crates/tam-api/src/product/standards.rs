@@ -332,10 +332,8 @@ pub(crate) async fn standards_search(
         StandardsFramework::from_jurisdiction_id(params.framework).ok_or_else(|| {
             APIError::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
-                APIErrorEntry::new(
-                    "no such standards framework; the create form offers 3054, 3055, 3326 and 5785",
-                )
-                .kind(APIErrorKind::Validation),
+                APIErrorEntry::new("Choose a standards set from the list.")
+                    .kind(APIErrorKind::Validation),
             )
         })?;
     let wanted = framework_of(framework);
@@ -466,19 +464,15 @@ fn check_query(query: &str) -> Result<(), APIError> {
     if query.chars().count() > QUERY_CHARS_MAX {
         return Err(APIError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
-            APIErrorEntry::new(
-                "that search is longer than any standard's code or title; shorten it and try again",
-            )
-            .kind(APIErrorKind::Validation),
+            APIErrorEntry::new("Your search is too long. Shorten it and try again.")
+                .kind(APIErrorKind::Validation),
         ));
     }
     if query.split_whitespace().count() > QUERY_TERMS_MAX {
         return Err(APIError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
-            APIErrorEntry::new(
-                "that search carries more words than a standard's title holds; use fewer",
-            )
-            .kind(APIErrorKind::Validation),
+            APIErrorEntry::new("Your search has too many words. Use fewer.")
+                .kind(APIErrorKind::Validation),
         ));
     }
     Ok(())

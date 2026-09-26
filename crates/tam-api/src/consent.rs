@@ -123,7 +123,7 @@ fn marketplace_of(raw: &str) -> Result<Marketplace, APIError> {
         .ok_or_else(|| {
             APIError::new(
                 StatusCode::NOT_FOUND,
-                APIErrorEntry::new("no such marketplace")
+                APIErrorEntry::new("We can't find that marketplace.")
                     .code(APIErrorCode::ResourceMissing)
                     .kind(APIErrorKind::NotFound),
             )
@@ -166,18 +166,18 @@ pub(crate) async fn grant_consent(
     let marketplace = marketplace_of(&marketplace)?;
     if marketplace.transport_class() == TransportClass::OfficialApi {
         return Err(validation(&format!(
-            "{} publishes an official API and needs no seller-device consent",
+            "{} does not need your permission here.",
             wire_name(marketplace)
         )));
     }
     if !body.agreed {
         return Err(validation(
-            "the grant is recorded only from an explicit agreement",
+            "Tick the box to agree before you give permission.",
         ));
     }
     if body.notice_version != CONSENT_NOTICE_VERSION {
         return Err(validation(
-            "this notice is out of date; reload and read the current one",
+            "This notice has changed. Reload the page and read the new one.",
         ));
     }
     let record = ConsentRepo::new(state.pool.clone())

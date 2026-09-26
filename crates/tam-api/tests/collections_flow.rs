@@ -481,10 +481,7 @@ async fn a_seller_files_resources_and_acts_on_the_set(pool: PgPool) {
             .iter()
             .find(|row| row.title == "Fixture 1")
             .and_then(|row| row.reason.clone()),
-        Some(
-            "already on its way to TPT; it will show as there once your device has sent it"
-                .to_owned()
-        ),
+        Some("already on its way to TPT, and will show there once your device sends it".to_owned()),
         "the second preview says so in the seller's own words: {again:?}"
     );
     let replayed: CollectionPublishAck = call(

@@ -577,7 +577,7 @@ pub(crate) async fn vocabulary_view(
     let inventory = parse_inventory(&inventory).ok_or_else(|| {
         APIError::new(
             axum::http::StatusCode::NOT_FOUND,
-            APIErrorEntry::new("no such inventory")
+            APIErrorEntry::new("We can't find that marketplace.")
                 .code(APIErrorCode::ResourceMissing)
                 .kind(APIErrorKind::NotFound),
         )

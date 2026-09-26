@@ -78,7 +78,7 @@ pub(crate) async fn analytics_summary(
     if !context.entitlement.caps.analytics {
         return Err(feature_refusal(
             "analytics",
-            "Your plan does not include analytics. Upgrade to see how your listings do.",
+            "Upgrade your plan to see how your listings are doing.",
         ));
     }
     let rows = AnalyticsRepo::new(state.pool.clone())

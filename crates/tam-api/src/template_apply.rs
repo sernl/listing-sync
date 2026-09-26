@@ -201,12 +201,12 @@ async fn plan(
 ) -> Result<Plan, APIError> {
     let id = uuid::Uuid::parse_str(template.trim())
         .map(|parsed| tam_types::Uuid(*parsed.as_bytes()))
-        .map_err(|_unused| validation("that is not a template identifier"))?;
+        .map_err(|_unused| validation("We can't find that template."))?;
     let held = ResourceTemplateRepo::new(state.pool.clone())
         .get(context.org, id)
         .await
         .map_err(|error| storage_fault(state, &error))?
-        .ok_or_else(|| validation("that template is not one of yours"))?;
+        .ok_or_else(|| validation("We can't find that template."))?;
     // The column holds what the template route validated as a draft, so a
     // document that will not read back as one is this tree's fault rather
     // than the caller's.

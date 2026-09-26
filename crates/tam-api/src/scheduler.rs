@@ -349,7 +349,7 @@ async fn send(
             rows.push(skipped(
                 *product,
                 inventory,
-                "already on its way; a write to this listing is still queued",
+                "already on its way; an earlier change to this listing is still waiting to send",
             ));
             continue;
         }
@@ -637,8 +637,8 @@ async fn maintain(state: &AppState, org: OrgId, report: &mut PassReport) -> Resu
 /// failure with no sentence reads as something having gone wrong on our side
 /// rather than as an import no device answered.
 const ACTIVATION_EXPIRED: &str =
-    "no device picked this import up, so it was stopped. Open the app on the phone that has \
-     your shop signed in, then start it again.";
+    "No device started this import, so it was stopped. Open the Teachouse app where your shop is \
+     signed in, then start it again.";
 
 /// Sends what a pull brought in on to the seller's chosen marketplaces,
 /// filling each resource from the rule's template first.

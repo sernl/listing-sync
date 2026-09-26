@@ -85,7 +85,7 @@ fn parse_page(params: &PageParams) -> Result<Page, APIError> {
         None => None,
         Some(raw) => Some(
             decode_cursor(raw)
-                .ok_or_else(|| validation("the cursor is not one this server issued"))?,
+                .ok_or_else(|| validation("This page link has expired. Reload the page."))?,
         ),
     };
     let limit = params
@@ -100,7 +100,7 @@ fn parse_page(params: &PageParams) -> Result<Page, APIError> {
                 .map(outcome_str)
                 .find(|name| *name == raw)
                 .map(str::to_owned)
-                .ok_or_else(|| validation("that is not an outcome an item can settle on"))?,
+                .ok_or_else(|| validation("Choose an outcome from the list."))?,
         ),
     };
     Ok(Page {
@@ -129,7 +129,7 @@ pub(crate) fn missing(what: &str) -> APIError {
 fn parse_id(raw: &str) -> Result<Uuid, APIError> {
     uuid::Uuid::parse_str(raw)
         .map(|parsed| Uuid(*parsed.as_bytes()))
-        .map_err(|_| validation("the identifier is not a UUID"))
+        .map_err(|_| validation("That link is not valid."))
 }
 
 // --------------------------------------------------------- idempotency key
@@ -426,7 +426,7 @@ impl EventView {
 pub(crate) fn storage_fault(state: &AppState, error: &StorageError) -> APIError {
     match error {
         StorageError::SellerRuleBlocked { product, reasons } => validation(&format!(
-            "Resource {} needs a pricing or mapping choice: {}",
+            "Resource {} needs a price or a matching choice: {}",
             product.0.to_hyphenated(),
             reasons.join("; "),
         )),
@@ -444,8 +444,8 @@ pub(crate) fn storage_fault(state: &AppState, error: &StorageError) -> APIError 
         StorageError::DuplicateIdempotencyKey { key } => APIError::new(
             StatusCode::CONFLICT,
             APIErrorEntry::new(
-                "this resource already has that exact write queued or completed, so it was \
-                 not queued a second time",
+                "This change is already waiting or done for this resource, so it wasn't sent \
+                 again.",
             )
             .code(APIErrorCode::DuplicateSyncItem)
             .kind(APIErrorKind::Validation)
@@ -498,7 +498,7 @@ pub(crate) async fn create_sync_request(
     Json(body): Json<SyncRequestBody>,
 ) -> Result<Response, APIError> {
     if body.source == body.target {
-        return Err(validation("a sync's source and target are two inventories"));
+        return Err(validation("Choose two different marketplaces."));
     }
     // The same registry `lower` refuses an uncaptured transition through, and
     // the same one the drain refuses on. Refusing here means the seller is
@@ -506,7 +506,7 @@ pub(crate) async fn create_sync_request(
     // while the drain re-leases a gateway for it every poll.
     if let Some(capability) = tam_storage::uncaptured_source(body.source) {
         return Err(validation(&format!(
-            "{:?} has no captured {capability}, so it cannot be a sync's source yet",
+            "Teachouse can't bring resources in from {:?} yet ({capability}).",
             body.source
         )));
     }
@@ -544,7 +544,7 @@ pub(crate) async fn create_sync_request(
         ));
     }
     if !device_enumerated && body.resources.is_empty() {
-        return Err(validation("a sync names at least one resource"));
+        return Err(validation("Choose at least one resource."));
     }
     // The move balance, counted in resources rather than in requests: a move
     // is one resource committed to the other marketplace, and the figure the
@@ -788,7 +788,7 @@ pub(crate) async fn list_sync_requests(
         None | Some("") => None,
         Some(raw) => {
             let cursor = decode_cursor(raw)
-                .ok_or_else(|| validation("the cursor is not one this server issued"))?;
+                .ok_or_else(|| validation("This page link has expired. Reload the page."))?;
             Some((cursor.created_at, cursor.id))
         }
     };
@@ -875,7 +875,7 @@ pub(crate) async fn sync_request_view(
         .detail(context.org, request, params.after, limit)
         .await
         .map_err(|error| storage_fault(&state, &error))?
-        .ok_or_else(|| missing("no such sync request"))?;
+        .ok_or_else(|| missing("We can't find that request."))?;
     let head = detail.head;
     // Coverage is measured only where a device enumerated the catalogue, and
     // the source's transport class is what says so — the same predicate the
@@ -971,7 +971,7 @@ pub(crate) async fn delete_sync_request(
         .delete(context.org, request, context.stamp((state.wall)()))
         .await
         .map_err(|error| storage_fault(&state, &error))?
-        .ok_or_else(|| missing("no such sync request"))?;
+        .ok_or_else(|| missing("We can't find that request."))?;
     Ok(JobDeletionView::answer(status))
 }
 
@@ -1045,7 +1045,7 @@ pub(crate) async fn create_job(
     Json(body): Json<CreateJobBody>,
 ) -> Result<Response, APIError> {
     if body.mappings.is_empty() {
-        return Err(validation("a sync needs at least one mapping"));
+        return Err(validation("Choose at least one listing."));
     }
     let reads = JobReadRepo::new(state.pool.clone());
     let seeds = reads
@@ -1062,7 +1062,7 @@ pub(crate) async fn create_job(
             .collect();
         return Err(APIError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
-            APIErrorEntry::new("some mappings are unknown or not of the requested inventory")
+            APIErrorEntry::new("Some of those listings can't be found on that marketplace.")
                 .code(APIErrorCode::SyncMappingsInvalid)
                 .kind(APIErrorKind::Validation)
                 .detail(serde_json::json!({ "mappings": unknown })),
@@ -1231,16 +1231,16 @@ pub(crate) fn workflow_deleted(workflow: tam_storage::WorkflowKind) -> APIError 
         // rather than failing the whole tick. `ImportRunSettled` is the
         // existing name for "this import is over, a late write changes
         // nothing", which is exactly what a deletion makes it.
-        tam_storage::WorkflowKind::ImportRun => APIErrorEntry::new(
-            "this import has been deleted, so nothing further is published from it",
-        )
-        .code(APIErrorCode::ImportRunSettled),
+        tam_storage::WorkflowKind::ImportRun => {
+            APIErrorEntry::new("You deleted this import, so nothing more is published from it.")
+                .code(APIErrorCode::ImportRunSettled)
+        }
         // Uncoded: nothing branches on it. The drain reads the refusal as the
         // end of the request and stops, and no client reaches this arm,
         // because the enqueue routes that take a request key fence
         // themselves before they mint.
         tam_storage::WorkflowKind::SyncRequest => {
-            APIErrorEntry::new("this request has been deleted, so no further leg is queued for it")
+            APIErrorEntry::new("You deleted this request, so nothing more is sent from it.")
         }
     };
     APIError::new(StatusCode::CONFLICT, entry.kind(APIErrorKind::Validation))
@@ -1318,7 +1318,7 @@ pub(crate) async fn job_view(
         .snapshot(context.org, job)
         .await
         .map_err(|error| storage_fault(&state, &error))?
-        .ok_or_else(|| missing("no such job"))?;
+        .ok_or_else(|| missing("We can't find that request."))?;
     let phase = phase_of(&snapshot.counts);
     Ok(Json(JobView {
         job: snapshot.job,
@@ -1364,7 +1364,7 @@ pub(crate) async fn delete_job(
         .owner(context.org, job)
         .await
         .map_err(|error| storage_fault(&state, &error))?
-        .ok_or_else(|| missing("no such job"))?;
+        .ok_or_else(|| missing("We can't find that request."))?;
     let status = match owner {
         tam_storage::JobOwner::SyncRequest(request) => {
             tam_storage::SyncRequestRepo::new(state.pool.clone())
@@ -1397,8 +1397,7 @@ pub(crate) fn deleted_key_conflict(status: DeletionStatus) -> APIError {
     APIError::new(
         StatusCode::CONFLICT,
         APIErrorEntry::new(
-            "this request was deleted, so it cannot be started again under the same \
-             idempotency key; start a new one",
+            "You deleted this request, so it can't be started again. Start a new one.",
         )
         .kind(APIErrorKind::Validation)
         .detail(serde_json::json!({ "deletion_status": status.as_str() })),
@@ -1418,7 +1417,7 @@ pub(crate) async fn job_items(
         .snapshot(context.org, job)
         .await
         .map_err(|error| storage_fault(&state, &error))?
-        .ok_or_else(|| missing("no such job"))?;
+        .ok_or_else(|| missing("We can't find that request."))?;
     let rows = reads
         .items_page(
             context.org,
@@ -1484,7 +1483,7 @@ pub(crate) async fn item_detail(
         .item(context.org, job, item)
         .await
         .map_err(|error| storage_fault(&state, &error))?
-        .ok_or_else(|| missing("no such item"))?;
+        .ok_or_else(|| missing("We can't find that resource."))?;
     let events = reads
         .item_events(context.org, item, params.after, limit)
         .await

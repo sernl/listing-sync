@@ -601,8 +601,7 @@ pub(crate) async fn create_run(
     if !context.entitlement.caps.import_marketplace {
         return Err(feature_refusal(
             "import_marketplace",
-            "Your plan does not include reading your shop. Upgrade to import from a \
-             marketplace.",
+            "Upgrade your plan to import from a marketplace.",
         ));
     }
     // A shop a device reads, which is what a marketplace run is. An official
@@ -610,8 +609,7 @@ pub(crate) async fn create_run(
     // console button.
     if body.source.marketplace().transport_class() != TransportClass::SellerDevice {
         return Err(validation(
-            "this marketplace publishes an official API, so its catalogue is read on our own \
-             infrastructure rather than by a run started here",
+            "Teachouse reads this marketplace for you, so you don't need to start an import here.",
         ));
     }
     // The seller's explicit permission, read before anything is minted: a
@@ -745,12 +743,12 @@ async fn retryable(
     let head = head_or_missing(state, org, parent).await?;
     if head.source != Some(source) {
         return Err(validation(
-            "a retry reads the same shop the import it retries read",
+            "Try again with the same shop as the first import.",
         ));
     }
     if head.state.open() {
         return Err(validation(
-            "that import has not finished, so there is nothing to retry yet",
+            "That import hasn't finished yet, so there is nothing to try again.",
         ));
     }
     Ok(())
@@ -831,7 +829,7 @@ fn run_history_filter(params: &RunPageParams) -> Result<RunHistoryFilter, APIErr
             "complete" => filter.state = Some(RunState::Complete),
             "failed" => filter.state = Some(RunState::Failed),
             "abandoned" => filter.state = Some(RunState::Abandoned),
-            _ => return Err(validation("no such import state to filter by")),
+            _ => return Err(validation("Choose a status from the list.")),
         }
     }
     if let Some(raw) = params.source.as_deref().filter(|raw| !raw.is_empty()) {
@@ -840,14 +838,14 @@ fn run_history_filter(params: &RunPageParams) -> Result<RunHistoryFilter, APIErr
         } else {
             filter.source = Some(
                 crate::vocabulary::parse_inventory(raw)
-                    .ok_or_else(|| validation("no such inventory to filter by"))?,
+                    .ok_or_else(|| validation("Choose a marketplace from the list."))?,
             );
         }
     }
     match params.order.as_deref().filter(|raw| !raw.is_empty()) {
         None | Some("newest") => {}
         Some("oldest") => filter.oldest = true,
-        Some(_) => return Err(validation("imports are ordered newest or oldest")),
+        Some(_) => return Err(validation("Sort by newest or oldest.")),
     }
     Ok(filter)
 }
@@ -869,12 +867,12 @@ fn item_window(params: &ItemPageParams) -> Result<ItemWindow, APIError> {
         Some("imported") => Some(RunItemState::Imported),
         Some("skipped") => Some(RunItemState::Skipped),
         Some("failed") => Some(RunItemState::Failed),
-        Some(_) => return Err(validation("no such resource state to filter by")),
+        Some(_) => return Err(validation("Choose a status from the list.")),
     };
     let order = match params.order.as_deref().filter(|raw| !raw.is_empty()) {
         None | Some("title") => ItemOrder::Title,
         Some("listed") => ItemOrder::Listed,
-        Some(_) => return Err(validation("resources are ordered by title or as listed")),
+        Some(_) => return Err(validation("Sort by title or in listing order.")),
     };
     Ok(ItemWindow {
         state,
@@ -947,8 +945,7 @@ pub(crate) async fn select(
         SelectBody::All { all } => {
             if !*all {
                 return Err(validation(
-                    "a selection is either every resource or a list of them; `all: false` names \
-                     neither",
+                    "Choose all resources, or pick the ones you want.",
                 ));
             }
             Selection::All
@@ -968,11 +965,13 @@ pub(crate) async fn select(
         tam_storage::SelectionOutcome::Taken { .. } => {}
         tam_storage::SelectionOutcome::Discovering => {
             return Err(validation(
-                "this import is still reading your shop; the list is not complete yet",
+                "This import is still reading your shop, so the list isn't complete yet.",
             ))
         }
         tam_storage::SelectionOutcome::Settled(state) => return Err(run_settled(state)),
-        tam_storage::SelectionOutcome::Missing => return Err(missing("no such import")),
+        tam_storage::SelectionOutcome::Missing => {
+            return Err(missing("We can't find that import."))
+        }
     }
     Ok(Json(view_of(&state, context.org, run).await?))
 }
@@ -1079,8 +1078,7 @@ pub(crate) async fn claim(
     if !context.entitlement.caps.import_marketplace {
         return Err(feature_refusal(
             "import_marketplace",
-            "Your plan does not include reading your shop. Upgrade to import from a \
-             marketplace.",
+            "Upgrade your plan to import from a marketplace.",
         ));
     }
     crate::import::admissible_device(&state, context.org, &device).await?;
@@ -1486,7 +1484,7 @@ pub(crate) async fn delete_run(
         .delete(context.org, run, context.stamp((state.wall)()))
         .await
         .map_err(|error| storage_fault(&state, &error))?
-        .ok_or_else(|| missing("no such import"))?;
+        .ok_or_else(|| missing("We can't find that import."))?;
     Ok(JobDeletionView::answer(status))
 }
 
@@ -1534,7 +1532,7 @@ pub(crate) async fn device_stop(
         .stop_owned(context.org, run, &device, body.attempt, (state.wall)())
         .await
         .map_err(|error| storage_fault(&state, &error))?
-        .ok_or_else(|| missing("no such import"))?;
+        .ok_or_else(|| missing("We can't find that import."))?;
     match outcome {
         tam_storage::StopOutcome::Stopped => {
             settled_event(&state, context.org, &head, RunState::Abandoned).await?;
@@ -1559,19 +1557,19 @@ pub(crate) async fn item_cover(
     let run = parse_id(&run)?;
     let ordinal: u32 = ordinal
         .parse()
-        .map_err(|_| missing("no such item of this import"))?;
+        .map_err(|_| missing("We can't find that resource in this import."))?;
     let record = ImportRunRepo::new(state.pool.clone())
         .get(context.org, run)
         .await
         .map_err(|error| storage_fault(&state, &error))?
-        .ok_or_else(|| missing("no such import"))?;
+        .ok_or_else(|| missing("We can't find that import."))?;
     let hash = record
         .items
         .iter()
         .find(|item| item.ordinal == ordinal)
-        .ok_or_else(|| missing("no such item of this import"))?
+        .ok_or_else(|| missing("We can't find that resource in this import."))?
         .cover_hash
-        .ok_or_else(|| missing("this resource produced no cover"))?;
+        .ok_or_else(|| missing("This resource has no cover."))?;
     let bytes = cover_bytes(&state, context.org, hash).await?;
     crate::resources::image_answer(bytes)
 }
@@ -1589,7 +1587,7 @@ pub(crate) async fn head_or_missing(
         .await
         .map_err(|error| storage_fault(state, &error))?
         .map(|record| record.head)
-        .ok_or_else(|| missing("no such import"))
+        .ok_or_else(|| missing("We can't find that import."))
 }
 
 /// The run's head for a device's own post, a deleted import included.
@@ -1615,7 +1613,7 @@ pub(crate) async fn device_head(
         .head_internal(org, run)
         .await
         .map_err(|error| storage_fault(state, &error))?
-        .ok_or_else(|| missing("no such import"))
+        .ok_or_else(|| missing("We can't find that import."))
 }
 
 /// The same lookup, refusing a deleted import outright.
@@ -1702,7 +1700,7 @@ pub(crate) async fn view_of_windowed(
         .head(org, run)
         .await
         .map_err(|error| storage_fault(state, &error))?
-        .ok_or_else(|| missing("no such import"))?;
+        .ok_or_else(|| missing("We can't find that import."))?;
     let page = repo
         .items_page(
             org,
@@ -1863,7 +1861,7 @@ pub(crate) async fn run_page(
         let outcome = tam_storage::fenced(&mut tx, context.org, page.run, device, attempt)
             .await
             .map_err(|error| storage_fault(state, &error))?
-            .ok_or_else(|| missing("no such import"))?;
+            .ok_or_else(|| missing("We can't find that import."))?;
         // A terminal run is not reopened and its reason is not overwritten: a
         // late failure from a device that has already been taken over or
         // cancelled says nothing about the run as it stands.
@@ -1937,7 +1935,7 @@ pub(crate) async fn run_page(
     let outcome = tam_storage::fenced(&mut tx, context.org, page.run, device, attempt)
         .await
         .map_err(|error| storage_fault(state, &error))?
-        .ok_or_else(|| missing("no such import"))?;
+        .ok_or_else(|| missing("We can't find that import."))?;
     if outcome != FenceOutcome::Current {
         tx.rollback()
             .await
@@ -2850,8 +2848,8 @@ fn batch_import_deleted(deletion: tam_storage::DeletionStatus) -> APIError {
     APIError::new(
         StatusCode::CONFLICT,
         APIErrorEntry::new(
-            "you deleted the import this spreadsheet was committed through, so its rows create \
-             nothing more; upload it again to import it",
+            "You deleted the import for this spreadsheet, so its rows won't be created. Upload \
+             it again to import it.",
         )
         .code(APIErrorCode::ImportRunSettled)
         .kind(APIErrorKind::Validation)
@@ -3305,7 +3303,7 @@ async fn commit_one(
     let guard = tam_storage::guard_run(&mut tx, org, head.id)
         .await
         .map_err(|error| storage_fault(state, &error))?
-        .ok_or_else(|| missing("no such import"))?;
+        .ok_or_else(|| missing("We can't find that import."))?;
     // The cancellation ordering, stated once: a cancellation that committed
     // before this transaction took the row's lock is visible here and rejects
     // the commit; one that arrives after this transaction commits finds the
@@ -3879,7 +3877,7 @@ async fn survivor_of(
     {
         if !walked.insert(standing) {
             return Err(validation(
-                "The saved merge history contains a cycle. This resource could not be imported.",
+                "This resource couldn't be imported because its merge history is broken.",
             ));
         }
         standing = kept;
@@ -4272,9 +4270,9 @@ async fn repair_cover(
 /// first.
 fn skip_sentence(title: &str, supplied: Supplied) -> String {
     match (supplied.file, supplied.thumbnail) {
-        (true, true) => format!("same as {title}, whose file and thumbnail this read supplied"),
-        (true, false) => format!("same as {title}, whose file this read supplied"),
-        (false, true) => format!("same as {title}, whose thumbnail this read supplied"),
+        (true, true) => format!("same as {title}; this import added its file and thumbnail"),
+        (true, false) => format!("same as {title}; this import added its file"),
+        (false, true) => format!("same as {title}; this import added its thumbnail"),
         (false, false) => format!("same as {title}"),
     }
 }
@@ -4303,12 +4301,9 @@ async fn cover_bytes(state: &AppState, org: OrgId, hash: ContentHash) -> Result<
 pub(crate) fn blob_store_unavailable() -> APIError {
     APIError::new(
         StatusCode::SERVICE_UNAVAILABLE,
-        APIErrorEntry::new(
-            "this deployment holds no key-encryption key or object-store root, so no cover \
-             could be stored or read",
-        )
-        .code(APIErrorCode::BlobStoreUnavailable)
-        .kind(APIErrorKind::Internal),
+        APIErrorEntry::new("Teachouse can't save or show covers right now. Try again later.")
+            .code(APIErrorCode::BlobStoreUnavailable)
+            .kind(APIErrorKind::Internal),
     )
 }
 
@@ -4591,7 +4586,7 @@ async fn refused_fence(
         .fence(org, run, device, attempt)
         .await
         .map_err(|error| storage_fault(state, &error))?
-        .ok_or_else(|| missing("no such import"))?;
+        .ok_or_else(|| missing("We can't find that import."))?;
     Ok(fence_refusal(&outcome))
 }
 
@@ -4600,16 +4595,16 @@ fn fence_refusal(outcome: &FenceOutcome) -> APIError {
         // Reachable when the row moved between the write and this read; the
         // honest answer is still "not yours to write".
         FenceOutcome::Current | FenceOutcome::Stale { .. } => conflict(
-            "this import has moved on to a later attempt, so this one writes nothing more",
+            "This import was restarted, so this attempt stops here.",
             APIErrorCode::ImportRunFenced,
         ),
         FenceOutcome::NotOwner { owner } => match owner {
             Some(owner) => conflict(
-                &format!("another device ({owner}) is running this import"),
+                &format!("Another device ({owner}) is running this import."),
                 APIErrorCode::ImportRunFenced,
             ),
             None => conflict(
-                "no device holds this import; claim it before reporting on it",
+                "No device is running this import. Take it over first.",
                 APIErrorCode::ImportRunFenced,
             ),
         },
@@ -4617,7 +4612,7 @@ fn fence_refusal(outcome: &FenceOutcome) -> APIError {
         // its own: claim again, and the device's readiness is fresh rather
         // than assumed from before it stopped answering.
         FenceOutcome::Expired => conflict(
-            "this import's hold has lapsed; claim it again before writing to it",
+            "This device stopped running the import. Take it over again to continue.",
             APIErrorCode::ImportRunFenced,
         ),
         FenceOutcome::Settled(state) => run_settled(*state),
@@ -4629,8 +4624,7 @@ fn held_by(device: &str, lease_expires_at: Option<Timestamp>) -> APIError {
     APIError::new(
         StatusCode::CONFLICT,
         APIErrorEntry::new(&format!(
-            "another device ({device}) is running this import. Take it over from this one to \
-             continue here."
+            "Another device ({device}) is running this import. Take it over to continue here."
         ))
         .code(APIErrorCode::ImportRunFenced)
         .kind(APIErrorKind::Validation)
@@ -4645,10 +4639,10 @@ fn held_by(device: &str, lease_expires_at: Option<Timestamp>) -> APIError {
 fn run_settled(state: RunState) -> APIError {
     conflict(
         match state {
-            RunState::Abandoned => "this import was stopped, so it creates nothing more",
-            RunState::Failed => "this import failed, so it creates nothing more",
+            RunState::Abandoned => "This import was stopped, so nothing more will be created.",
+            RunState::Failed => "This import failed, so nothing more will be created.",
             RunState::Reading | RunState::Reviewing | RunState::Committing | RunState::Complete => {
-                "this import has settled, and a settled import is not extended"
+                "This import has finished, so it can't take more."
             }
         },
         APIErrorCode::ImportRunSettled,
@@ -4658,8 +4652,7 @@ fn run_settled(state: RunState) -> APIError {
 /// The page carries no fence, which only an old client sends.
 fn client_update_required() -> APIError {
     conflict(
-        "this app is too old to import into your catalogue: update it and start the import \
-         again",
+        "Update the Teachouse app, then start the import again.",
         APIErrorCode::ImportClientUpdateRequired,
     )
 }
@@ -4667,8 +4660,8 @@ fn client_update_required() -> APIError {
 /// The same receipt, different content.
 fn receipt_conflict() -> APIError {
     conflict(
-        "this page has already been accepted with different contents, so it was not applied \
-         again",
+        "This part of the import was already received with different contents, so it was not \
+         saved again.",
         APIErrorCode::ImportReceiptConflict,
     )
 }
@@ -4678,7 +4671,7 @@ fn start_key_spent(source: InventoryId) -> APIError {
     APIError::new(
         StatusCode::CONFLICT,
         APIErrorEntry::new(
-            "this import was already started for a different shop; start a new import instead",
+            "This import was started for a different shop. Start a new import instead.",
         )
         .code(APIErrorCode::ImportStartKeySpent)
         .kind(APIErrorKind::Validation)
@@ -4693,7 +4686,7 @@ fn start_key_spent(source: InventoryId) -> APIError {
 /// available — and the sentence is what differs.
 fn start_key_deleted() -> APIError {
     conflict(
-        "you deleted the import this start belongs to; start a new import instead",
+        "You deleted this import. Start a new one instead.",
         APIErrorCode::ImportStartKeySpent,
     )
 }
@@ -4717,7 +4710,7 @@ fn reason_of(refusal: &APIError) -> String {
 fn parse_id(raw: &str) -> Result<Uuid, APIError> {
     uuid::Uuid::parse_str(raw)
         .map(|id| Uuid(*id.as_bytes()))
-        .map_err(|_| missing("no such import"))
+        .map_err(|_| missing("We can't find that import."))
 }
 
 fn uuid_text(id: Uuid) -> String {

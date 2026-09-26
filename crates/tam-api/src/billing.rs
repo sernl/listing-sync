@@ -291,10 +291,8 @@ pub(crate) async fn portal(
     else {
         return Err(APIError::new(
             StatusCode::CONFLICT,
-            APIErrorEntry::new(
-                "this organisation has never reached checkout, so there is nothing to manage",
-            )
-            .kind(APIErrorKind::Validation),
+            APIErrorEntry::new("You have not bought a plan yet, so there is nothing to manage.")
+                .kind(APIErrorKind::Validation),
         ));
     };
     let origin = origin_of(&headers);
@@ -589,7 +587,7 @@ fn org_from<'a>(candidates: impl IntoIterator<Item = Option<&'a str>>) -> Option
 fn unconfigured() -> APIError {
     APIError::new(
         StatusCode::SERVICE_UNAVAILABLE,
-        APIErrorEntry::new("no billing provider is configured; nothing was recorded")
+        APIErrorEntry::new("Payments are not available right now. Nothing was charged.")
             .kind(APIErrorKind::Internal),
     )
 }
@@ -601,7 +599,7 @@ fn unconfigured() -> APIError {
 fn unsellable(key: &str) -> APIError {
     APIError::new(
         StatusCode::UNPROCESSABLE_ENTITY,
-        APIErrorEntry::new(&format!("{key} is not on sale here")).kind(APIErrorKind::Validation),
+        APIErrorEntry::new(&format!("{key} is not for sale.")).kind(APIErrorKind::Validation),
     )
 }
 

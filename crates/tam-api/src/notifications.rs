@@ -34,7 +34,7 @@ fn validation(message: &str) -> APIError {
 fn missing() -> APIError {
     APIError::new(
         StatusCode::NOT_FOUND,
-        APIErrorEntry::new("no such notification")
+        APIErrorEntry::new("We can't find that notification.")
             .code(APIErrorCode::ResourceMissing)
             .kind(APIErrorKind::NotFound),
     )
@@ -144,7 +144,7 @@ pub(crate) async fn list(
         None => None,
         Some(raw) => Some(
             decode_cursor(raw)
-                .ok_or_else(|| validation("the cursor is not one this server issued"))?,
+                .ok_or_else(|| validation("This page link has expired. Reload the page."))?,
         ),
     };
     let limit = params

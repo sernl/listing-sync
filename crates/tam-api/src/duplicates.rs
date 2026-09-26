@@ -140,8 +140,7 @@ pub(crate) async fn decide(
     if !context.entitlement.caps.duplicate_review {
         return Err(feature_refusal(
             "duplicate_review",
-            "Your plan does not include the duplicate review. Nothing is blocked: your import \
-             brings everything in and nothing is merged.",
+            "Upgrade your plan to review duplicates before they are added.",
         ));
     }
     let (lo, hi) = tam_storage::ordered_pair(ProductId(parse_id(&lo)?), ProductId(parse_id(&hi)?));
@@ -152,9 +151,7 @@ pub(crate) async fn decide(
         VerdictBody::Same { keep, .. } => {
             let keep = ProductId(*keep);
             if keep != lo && keep != hi {
-                return Err(validation(
-                    "the resource you keep has to be one of the two this question is about",
-                ));
+                return Err(validation("Choose one of these two resources to keep."));
             }
             Some(keep)
         }
@@ -179,11 +176,11 @@ pub(crate) async fn decide(
         return Err(match standing {
             Some(_) => APIError::new(
                 StatusCode::CONFLICT,
-                APIErrorEntry::new("this pair has been answered already")
+                APIErrorEntry::new("You already answered this one.")
                     .code(APIErrorCode::DuplicatePairSettled)
                     .kind(APIErrorKind::Validation),
             ),
-            None => missing("no such duplicate question"),
+            None => missing("We can't find that question."),
         });
     };
 
@@ -251,7 +248,7 @@ pub(crate) async fn undo(
     if !context.entitlement.caps.duplicate_review {
         return Err(feature_refusal(
             "duplicate_review",
-            "Your plan does not include the duplicate review.",
+            "Upgrade your plan to review duplicates before they are added.",
         ));
     }
     let (lo, hi) = tam_storage::ordered_pair(ProductId(parse_id(&lo)?), ProductId(parse_id(&hi)?));
@@ -270,8 +267,8 @@ pub(crate) async fn undo(
             state.internal(&format!("the database refused a transaction: {error}"))
         })?;
         return Err(match standing {
-            Some(_) => validation("only a merge can be undone, and this pair was not merged"),
-            None => missing("no such duplicate question"),
+            Some(_) => validation("These two were not merged, so there is nothing to undo."),
+            None => missing("We can't find that question."),
         });
     };
     if now.0 > until.0 {
@@ -279,7 +276,7 @@ pub(crate) async fn undo(
             state.internal(&format!("the database refused a transaction: {error}"))
         })?;
         return Err(validation(
-            "the thirty days to undo this merge have passed; the two are one resource now",
+            "It has been more than thirty days, so this merge can't be undone.",
         ));
     }
     let loser = if kept == lo { hi } else { lo };
@@ -667,7 +664,7 @@ async fn marketplace_of(
 fn parse_id(raw: &str) -> Result<Uuid, APIError> {
     uuid::Uuid::parse_str(raw)
         .map(|id| Uuid(*id.as_bytes()))
-        .map_err(|_| missing("no such duplicate question"))
+        .map_err(|_| missing("We can't find that question."))
 }
 
 fn uuid_text(id: Uuid) -> String {

@@ -148,11 +148,11 @@ pub(crate) async fn unbind(
 fn parse_ordinal(raw: &str) -> Result<u32, APIError> {
     let parsed: i32 = raw
         .parse()
-        .map_err(|_| validation("a row is addressed by its spreadsheet row number"))?;
+        .map_err(|_| validation("Say which spreadsheet row this file is for."))?;
     u32::try_from(parsed)
         .ok()
         .filter(|ordinal| *ordinal > 0)
-        .ok_or_else(|| validation("a spreadsheet row number counts from one"))
+        .ok_or_else(|| validation("Spreadsheet rows start at 1."))
 }
 
 /// One handle as the row holds it, refusing what the create route refuses.
@@ -165,11 +165,11 @@ fn parse_ordinal(raw: &str) -> Result<u32, APIError> {
 /// stored blob, which is the create route's own position on it.
 fn handle_of(handle: &FileHandle) -> Result<RowFile, APIError> {
     let hash = parse_hash(&handle.hash)
-        .ok_or_else(|| validation("a file handle's hash is not a 64-character hex digest"))?;
+        .ok_or_else(|| validation("We can't read that file. Upload it again."))?;
     let kind = kind_from_str(&handle.kind)
-        .ok_or_else(|| validation("a file handle names a kind this server does not store"))?;
-    let byte_len = i64::try_from(handle.byte_len)
-        .map_err(|_| validation("a file handle states a length no stored file can have"))?;
+        .ok_or_else(|| validation("Teachouse can't store that kind of file."))?;
+    let byte_len =
+        i64::try_from(handle.byte_len).map_err(|_| validation("That file is too big to store."))?;
     Ok(RowFile {
         hash,
         // The vocabulary's own spelling rather than the caller's, so the column
@@ -211,7 +211,7 @@ async fn held_bytes(
     }
     Err(APIError::new(
         StatusCode::UNPROCESSABLE_ENTITY,
-        APIErrorEntry::new("a file handle names bytes this organisation has not uploaded")
+        APIErrorEntry::new("We can't find that upload. Upload the file again.")
             .code(APIErrorCode::UploadRejected)
             .kind(APIErrorKind::Validation)
             .detail(serde_json::json!({ "hashes": unknown })),
@@ -226,7 +226,7 @@ async fn held_bytes(
 fn batch_closed(state: BatchState) -> APIError {
     APIError::new(
         StatusCode::CONFLICT,
-        APIErrorEntry::new("this import is no longer taking files")
+        APIErrorEntry::new("This import can't take more files.")
             .kind(APIErrorKind::Validation)
             .detail(serde_json::json!({
                 "batch_state": BatchStateView::of(state),
@@ -236,17 +236,15 @@ fn batch_closed(state: BatchState) -> APIError {
 
 fn row_closed(state: RowState) -> APIError {
     let sentence = match state {
-        RowState::Failed => {
-            "this row was refused by the parse and cannot be created, so it takes no file"
-        }
-        RowState::Skipped => "this row was left out of this import, so it takes no file",
+        RowState::Failed => "This row has a problem to fix, so it can't take a file.",
+        RowState::Skipped => "You left this row out of the import, so it can't take a file.",
         RowState::Creating | RowState::Created | RowState::Published => {
-            "this row has already been created, so it takes no more files"
+            "This row is already created, so it can't take more files."
         }
         // Screened out by `RowState::admits_attachment` before this is
         // reached. Stated rather than wildcarded, so a state added in storage
         // is a compile error here rather than a sentence chosen by omission.
-        RowState::Parsed | RowState::Attached => "this row takes no file",
+        RowState::Parsed | RowState::Attached => "This row doesn't need a file.",
     };
     APIError::new(
         StatusCode::UNPROCESSABLE_ENTITY,
