@@ -78,7 +78,7 @@ describe('what the seller is told when no file arrives', () => {
 
 	it('asks for another try when the server faulted', () => {
 		expect(failureMessage(new ApiFailure(500, null))).toBe(
-			'The spreadsheet could not be built. Try again in a moment.'
+			'We could not build your spreadsheet. Try again in a moment.'
 		);
 	});
 
@@ -103,7 +103,7 @@ describe('what the seller is told when no file arrives', () => {
 
 	it('says the request never landed when nothing answered', () => {
 		expect(failureMessage(new TypeError('failed to fetch'))).toBe(
-			'The export could not be reached. Check your connection and try again.'
+			'We could not reach Teachouse. Check your internet connection and try again.'
 		);
 	});
 

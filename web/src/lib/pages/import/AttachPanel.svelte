@@ -98,7 +98,7 @@
 	 *  choosing one of several would be this page picking the seller's file for
 	 *  them. */
 	const SEVERAL_PARTS =
-		'That upload came back as several files, and a row holds one. Zip them together and drop the zip.';
+		'That upload turned into several files, but each row takes one. Zip them together and drop the zip.';
 
 	function waitingOf(row: ImportRowView): WaitingRow {
 		return { sheet: row.sheet, ordinal: row.ordinal, fileName: row.file_name };
@@ -124,13 +124,13 @@
 			return 'That did not finish. Nothing was changed.';
 		}
 		if (failure.status === 0) {
-			return 'That did not reach us. Nothing was stored; try again.';
+			return 'That did not reach us. Nothing was saved. Try again.';
 		}
 		if (failure.code() === 'quota_exceeded') {
 			return quotaSentence(failure.body?.errors[0]?.detail) ?? failure.message;
 		}
 		if (failure.code() === 'blob_store_unavailable') {
-			return 'This deployment cannot store bytes yet, so no file was accepted.';
+			return 'We cannot store files right now, so nothing was added.';
 		}
 		if (failure.status === 404) {
 			return 'That row is no longer part of this import. Reload the page.';
@@ -254,9 +254,9 @@
 	ondragleave={() => (over = false)}
 	ondrop={dropped}
 >
-	<b>{busy ? `Uploading ${sending}…` : 'Drop the files your sheet named'}</b>
-	Drop them all at once, or choose them. Each one goes to the row that named it; anything that
-	names no row, or more than one, waits below for you to place.
+	<b>{busy ? `Uploading ${sending}…` : 'Drop the files your sheet lists'}</b>
+	Drop them all at once, or choose them. We match each file to its row, and any file we cannot
+	match waits below for you to place.
 	<input id={inputId} type="file" multiple disabled={busy} onchange={chosen} />
 </label>
 
@@ -356,7 +356,7 @@
 			<span class="t">{row.title ?? row.file_name ?? rowLabel(row)}</span>
 			<span class="w">
 				{rowLabel(row)}{row.file_name === null
-					? ' — this row named no file, so place one by hand'
+					? ' — no file named in this row, so place one by hand'
 					: ''}
 			</span>
 		</span>

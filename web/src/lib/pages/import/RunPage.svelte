@@ -374,7 +374,7 @@
 		} catch (caught) {
 			if (current(target)) {
 				declined = caught instanceof ApiFailure
-					? caught.message : 'Your choice was not acknowledged. Check this import before retrying.';
+					? caught.message : 'We did not hear back about your choice. Check this import before you try again.';
 			}
 		} finally {
 			if (current(target)) {
@@ -395,7 +395,7 @@
 		} catch (caught) {
 			if (current(target)) {
 				commitRefusal = caught instanceof ApiFailure
-					? caught.message : 'The confirmation was not acknowledged. Check the import before retrying.';
+					? caught.message : 'We did not hear back. Check this import before you try again.';
 			}
 		} finally {
 			if (current(target)) {
@@ -412,7 +412,7 @@
 			if (current(target)) commitRefusal = null;
 		} catch (caught) {
 			if (current(target)) {
-				commitRefusal = caught instanceof ApiFailure ? caught.message : 'That answer was not acknowledged.';
+				commitRefusal = caught instanceof ApiFailure ? caught.message : 'We did not hear back about that answer.';
 			}
 		}
 		if (current(target)) await refetch();
@@ -422,7 +422,7 @@
 		if (sending || view === null) return;
 		const target = { id: runId, epoch: runEpoch };
 		const enumerated = view.execution.enumeration_complete;
-		if (!window.confirm('Resume this import on this device? Any previous device will lose ownership.')) return;
+		if (!window.confirm('Resume this import on this device? It will stop on any other device.')) return;
 		sending = true;
 		declined = null;
 		try {
@@ -466,8 +466,8 @@
 		} catch (caught) {
 			if (current(target)) {
 				declined = locallyStopped
-					? 'Stopped on this device; server confirmation pending.'
-					: caught instanceof ApiFailure ? caught.message : 'The stop request was not acknowledged.';
+					? 'Stopped on this device. We are still confirming it.'
+					: caught instanceof ApiFailure ? caught.message : 'We did not hear back about stopping.';
 			}
 		} finally {
 			if (current(target)) {
@@ -500,28 +500,28 @@
 			{#snippet aside()}
 				{@const going = retainedBadge(run.deletion_status)}
 				<StatusPill tone={going?.tone ?? badge.tone} label={going?.label ?? badge.label} />
-				<StatusPill tone={live ? 'ok' : 'soon'} label={live ? 'Updates connected' : 'Updates reconnecting'} />
+				<StatusPill tone={live ? 'ok' : 'soon'} label={live ? 'Live updates on' : 'Reconnecting'} />
 			{/snippet}
 		</PageHead>
 
 		{#if refusal !== null}
-			<Banner tone="bad" title="We could not read this import just now">
+			<Banner tone="bad" title="We could not load this import just now">
 				{refusal}
 				{failedFor === null
-					? 'Below is the last state we read.'
-					: `Below are the resources we last read; ${failedFor} did not arrive.`}
+					? 'Below is what we last loaded.'
+					: `We could not load ${failedFor}. Below are the resources we last loaded.`}
 				{#snippet action()}
-					<Button tier="outline" small disabled={itemsBusy} reason={itemsBusy ? 'Reading.' : undefined} onclick={() => void refetch()}>
+					<Button tier="outline" small disabled={itemsBusy} reason={itemsBusy ? 'Loading.' : undefined} onclick={() => void refetch()}>
 						Try again
 					</Button>
 				{/snippet}
 			</Banner>
 		{/if}
 		{#if declined !== null}
-			<Banner tone={stopPending ? 'info' : 'bad'} title={stopPending ? 'Stopped locally' : 'This device did not carry on'}>{declined}</Banner>
+			<Banner tone={stopPending ? 'info' : 'bad'} title={stopPending ? 'Stopped on this device' : 'This device did not carry on'}>{declined}</Banner>
 		{/if}
 
-		<Panel title="Where this import stands">
+		<Panel title="How this import is going">
 			<p class="import-stage">{copy.headline}</p>
 			<p class="quiet">{copy.detail}</p>
 
@@ -546,13 +546,13 @@
 				<details class="run-tech">
 					<summary>Technical details</summary>
 					{#if !deviceConditionIsCurrent(run) && run.execution.reason_code !== null}
-						<p class="quiet">Earlier device condition: {run.execution.reason_code}.</p>
+						<p class="quiet">Earlier device issue: {run.execution.reason_code}.</p>
 					{/if}
 					{#if run.execution.owner_device !== null}
-						<p class="quiet">Reading device: {run.execution.owner_device} · attempt {run.execution.attempt}.</p>
+						<p class="quiet">Importing on: {run.execution.owner_device} · try {run.execution.attempt}.</p>
 					{/if}
 					{#if run.execution.last_contact_at !== null}
-						<p class="quiet">Last device contact: {new Date(run.execution.last_contact_at).toLocaleString('en-GB')}.</p>
+						<p class="quiet">Last heard from the device: {new Date(run.execution.last_contact_at).toLocaleString('en-GB')}.</p>
 					{/if}
 					{#if run.execution.last_progress_at !== null}
 						<p class="quiet">Last progress: {new Date(run.execution.last_progress_at).toLocaleString('en-GB')}.</p>
@@ -562,9 +562,9 @@
 			{#if (stage === 'reading' || stage === 'committing') && run.execution.selected_total !== null && run.execution.selected_total > 0}
 				{@const total = run.execution.selected_total}
 				{@const progressed = stage === 'committing' ? run.counts.imported : run.execution.processed}
-				<progress value={progressed} max={total} aria-label={stage === 'committing' ? 'Resources added' : 'Resources processed'}></progress>
+				<progress value={progressed} max={total} aria-label={stage === 'committing' ? 'Resources added' : 'Resources read'}></progress>
 				<p class="run-bar">
-					{progressed} of {total} selected resources {stage === 'committing' ? 'added' : 'processed'}
+					{progressed} of {total} selected resources {stage === 'committing' ? 'added' : 'read'}
 					({Math.round(progressed / total * 100)}%).
 				</p>
 			{/if}
@@ -576,7 +576,7 @@
 						Open them in Resources
 					</Button>
 					{#if stage === 'failed' && run.source !== null}
-						<Button href={`/import?source=${encodeURIComponent(run.source)}&retry=${encodeURIComponent(run.id)}`}>Start a new attempt</Button>
+						<Button href={`/import?source=${encodeURIComponent(run.source)}&retry=${encodeURIComponent(run.id)}`}>Try again</Button>
 					{/if}
 					{@render deleteRun(run)}
 				</div>
@@ -607,12 +607,12 @@
 		</Panel>
 
 		{#if stage === 'selecting'}
-			<Panel title="Choose what to bring across">
+			<Panel title="Choose what to import">
 				{@render filterRow('Search resources')}
 
 				{#if wholeRun}
-					<Banner tone="info" title="Every resource in this import">
-						All {listedTotal} resources found in this shop will be brought across.
+					<Banner tone="info" title="All resources selected">
+						All {listedTotal} resources in this shop will be imported.
 						{#snippet action()}
 							<Button tier="outline" small onclick={() => (wholeRun = false)}>
 								Choose individually instead
@@ -634,15 +634,15 @@
 							tier="quiet"
 							onclick={() => (wholeRun = true)}
 							disabled={listedTotal === 0}
-							reason={listedTotal === 0 ? 'Nothing has been listed yet.' : undefined}
+							reason={listedTotal === 0 ? 'No resources found yet.' : undefined}
 						>
-							Select every resource in this import
+							Select all resources in this import
 						</Button>
 						<Button small tier="quiet" onclick={clearSelection} disabled={chosen.size === 0} reason={chosen.size === 0 ? 'Nothing is chosen yet.' : undefined}>
 							Clear selection
 						</Button>
 						<span class="run-chosen" role="status" aria-live="polite">
-							{chosen.size} selected{elsewhere > 0 ? `, including ${elsewhere} outside this view` : ''}
+							{chosen.size} selected{elsewhere > 0 ? `, ${elsewhere} of them not shown here` : ''}
 						</span>
 					</div>
 				{/if}
@@ -672,7 +672,7 @@
 				{@render pager('Resources to choose from')}
 
 				{@const blocked = wholeRun
-					? sending ? 'Your choice is being sent.' : null
+					? sending ? 'Sending your choice.' : null
 					: selectionBlocked(chosen.size, sending)}
 				<div class="actions">
 					<Button
@@ -704,8 +704,8 @@
 
 		{#if stage === 'reviewing' || stage === 'confirming' || stage === 'committing'}
 			<Panel
-				title="Add them to your catalogue"
-				description="Everything that is ready is created here."
+				title="Add them to Resources"
+				description="Every resource that is ready gets added."
 			>
 				{#if commitRefusal !== null}
 					<Banner tone="bad" title="That did not finish">{commitRefusal}</Banner>
@@ -717,12 +717,12 @@
 						icon="circle-plus"
 						disabled={committing || run.execution.commit_authorised || ready === 0}
 						reason={run.execution.commit_authorised
-							? 'Already confirmed. The server will continue when any remaining questions are answered.'
+							? 'Already confirmed. We carry on once you answer any questions left.'
 							: committing ? 'Sending your confirmation.'
-								: ready === 0 ? 'Answer the pairs above before adding these resources.' : undefined}
+								: ready === 0 ? 'Answer the pairs above first.' : undefined}
 						onclick={() => void commit()}
 					>
-						{run.execution.commit_authorised ? 'Confirmed' : committing ? 'Confirming…' : 'Add to catalogue'}
+						{run.execution.commit_authorised ? 'Confirmed' : committing ? 'Confirming…' : 'Add to Resources'}
 					</Button>
 				</div>
 			</Panel>
@@ -734,7 +734,7 @@
 		{#if stage !== 'selecting'}
 			<Panel
 				title="Resources"
-				description="Each resource this import reached."
+				description="Every resource in this import."
 			>
 				{@render filterRow('Search resources')}
 				{#if rows.length === 0}
@@ -768,10 +768,10 @@
 			icon="download"
 			back={{ href: '/import', label: 'Back to Import' }}
 			title="Import"
-			description="We could not read this import."
+			description="We could not load this import."
 		/>
 		<Panel>
-			<Placeholder icon="download" headline="We could not read this import" body={refusal}>
+			<Placeholder icon="download" headline="We could not load this import" body={refusal}>
 				{#snippet actions()}
 					<Button href="/import">Back to Import</Button>
 				{/snippet}
@@ -787,7 +787,7 @@
 {#snippet filterRow(label: string)}
 	<div class="import-filters">
 		<div class="wide">
-			<Field label={label} id="run-search" hint="Title, or the address it was read from.">
+			<Field label={label} id="run-search" hint="Title or web address.">
 				<input
 					id="run-search"
 					type="search"
@@ -813,7 +813,7 @@
 		<Field label="Order by" id="run-order">
 			<select id="run-order" bind:value={itemOrder} onchange={narrow}>
 				<option value="title">Title A–Z</option>
-				<option value="listed">As your shop listed them</option>
+				<option value="listed">Shop order</option>
 			</select>
 		</Field>
 		{#if filtered || itemOrder !== 'title'}

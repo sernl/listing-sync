@@ -69,7 +69,7 @@ const ACRONYM: Record<Marketplace, string> = {
 const UNREADABLE: Record<Marketplace, string | null> = {
 	Tes: null,
 	Tpt: null,
-	Etsy: 'Etsy is not built yet, so nothing here can read a shop on it.'
+	Etsy: 'You cannot import from Etsy yet.'
 };
 
 /** What this console knows about the seller's connection for a marketplace.
@@ -177,12 +177,12 @@ export function importBlocked(
 	}
 	if (!inApp) return null;
 	if (local === undefined || local.kind === 'unavailable') {
-		return 'This device’s marketplace login is not known. Open the current Teachouse app and check its connection.';
+		return 'We cannot tell if you are signed in on this device. Open the latest Teachouse app and check your marketplace.';
 	}
 	if (local.kind === 'refused') return local.detail;
 	return local.connected
 		? null
-		: `${card.name} is not signed in on this device. Connect it on Marketplaces here.`;
+		: `You are not signed in to ${card.name} on this device. Connect it on Marketplaces.`;
 }
 
 /** What the card's own control says. Names the shop, because a page offering
@@ -198,16 +198,16 @@ export function importLabel(card: ImportCard): string {
  * either way, so the sentence names where to carry on rather than telling
  * them nothing happened. */
 export const NEEDS_THE_APP =
-	'This import waits for an eligible device. Open the current Teachouse app on a device ' +
-	'signed in to this marketplace to begin reading.';
+	'To start this import, open the latest Teachouse app on a computer signed in to this ' +
+	'marketplace.';
 
 /** What the card says while this console could not read the connections list.
  *
  * Says that we do not know, never that the marketplace is disconnected. */
 export function connectionUnknown(card: ImportCard): string {
 	return (
-		`We could not read your marketplaces, so we cannot say whether ${card.name} is ` +
-		'connected. Nothing has changed — reload to try again.'
+		`We could not load your marketplaces, so we cannot tell if ${card.name} is ` +
+		'connected. Nothing has changed. Reload to try again.'
 	);
 }
 
@@ -218,9 +218,9 @@ export function connectionUnknown(card: ImportCard): string {
  * being omitted: a card with no badge at all reads as connected by default,
  * which is the claim this whole type exists to avoid making. */
 const STANDING_BADGE: Record<ConnectionStanding, { tone: PillTone; label: string }> = {
-	held: { tone: 'ok', label: 'Connection recorded' },
-	absent: { tone: 'soon', label: 'No connection recorded' },
-	unread: { tone: 'soon', label: 'Server standing not known' }
+	held: { tone: 'ok', label: 'Connected' },
+	absent: { tone: 'soon', label: 'Not connected' },
+	unread: { tone: 'soon', label: 'Connection unknown' }
 };
 
 export function standingBadge(card: ImportCard): {
@@ -239,15 +239,15 @@ export function standingBadge(card: ImportCard): {
  * could connect anything. */
 export function notConnected(card: ImportCard): string {
 	return (
-		`No ${card.name} connection is currently recorded by the server. ` +
-		'Check the login on this device in Marketplaces; a login held on another device is not available here.'
+		`${card.name} is not connected. Sign in on this device in Marketplaces. ` +
+		'A sign-in on another computer does not count here.'
 	);
 }
 
 /** The permanent line under the site choice, which says where the work runs
  *  and therefore what has to be open for it to run at all. */
 export function deviceLine(card: ImportCard): string {
-	return `Keep the Teachouse app open on this device while ${card.name} is read.`;
+	return `Keep the Teachouse app open on this device while we import from ${card.name}.`;
 }
 
 /** Where a connection is made, which is the marketplaces screen.
@@ -270,9 +270,8 @@ export const CONNECT_LABEL = 'Connect on Marketplaces';
  * complete: the founder's own reading of this screen was that there was no
  * option to connect anywhere on it. */
 export const NOTHING_CONNECTED =
-	'You have no marketplace connected, so there is nothing to import yet. Connect one on ' +
-	'Marketplaces: you sign in through the Teachouse app on your computer, and that login ' +
-	'stays on that machine.';
+	'Connect a marketplace to import from it. You sign in through the Teachouse app on your ' +
+	'computer, and your sign-in stays there.';
 
 /** What the seller is told after asking this computer to run the import, or
  *  null where there is nothing to say.
@@ -357,18 +356,15 @@ export function importRunLabel(row: ImportRow, now: number): string {
 
 /** What the list says while it holds nothing, which is not the same as what it
  *  says when it could not be read. */
-export const NO_IMPORT_YET = 'No import has run yet.';
+export const NO_IMPORT_YET = 'You have no imports yet.';
 
 /** An import list that could not be read is not a seller who has brought no
  *  shop across. Told the second when the first is true, they start the import
  *  again. */
-export const IMPORTS_UNREAD =
-	'We could not read your imports, so this page cannot list them. Any import already ' +
-	'running carries on.';
+export const IMPORTS_UNREAD = 'Any import already running carries on.';
 
 /** A marketplace list that could not be read is not a seller with no
  *  marketplace, so the page says which of the two it is looking at rather than
  *  letting an outage read as "you have no shop". */
 export const CONNECTIONS_UNREAD =
-	'We could not read your marketplaces, so this page cannot list what you can import. ' +
-	'Nothing has started.';
+	'We cannot show what you can import right now. Nothing has started.';

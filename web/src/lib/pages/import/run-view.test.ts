@@ -206,7 +206,7 @@ describe('selectionBlocked', () => {
 	});
 
 	it('states the send in flight, so a second press has a stated reason', () => {
-		expect(selectionBlocked(3, true)).toBe('Your choice is being sent.');
+		expect(selectionBlocked(3, true)).toBe('Sending your choice.');
 	});
 });
 
@@ -223,7 +223,7 @@ describe('reviewCard', () => {
 	it('says which side is already a resource and which was only just read', () => {
 		const [lo, hi] = reviewCard(pair()).sides;
 		expect(lo.standing).toBe('Already in Resources');
-		expect(hi.standing).toBe('Just read from your shop');
+		expect(hi.standing).toBe('New from your shop');
 		expect(hi.product).toBeNull();
 	});
 
@@ -265,7 +265,7 @@ describe('the settled summary', () => {
 	// arrive; on a settled run it contradicts the stage directly above it.
 	it('says why the list is empty differently once the run has settled', () => {
 		expect(emptyItemsLine('reading')).toBe('Nothing has arrived yet.');
-		expect(emptyItemsLine('done')).toBe('Your shop had nothing in it to bring across.');
+		expect(emptyItemsLine('done')).toBe('Your shop had nothing to import.');
 		expect(emptyItemsLine('failed')).toContain('before this import stopped');
 	});
 });

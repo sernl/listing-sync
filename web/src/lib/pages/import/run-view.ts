@@ -53,18 +53,18 @@ const BADGE: Record<RunStage, StageBadge> = {
 	waiting: { tone: 'soon', label: 'Waiting for a device' },
 	listing: { tone: 'run', label: 'Finding resources' },
 	selecting: { tone: 'warn', label: 'Choose resources' },
-	reading: { tone: 'run', label: 'Reading resources' },
+	reading: { tone: 'run', label: 'Importing' },
 	reviewing: { tone: 'warn', label: 'Needs you' },
-	confirming: { tone: 'warn', label: 'Ready for your confirmation' },
-	committing: { tone: 'run', label: 'Adding to your catalogue' },
-	interrupted: { tone: 'warn', label: 'Reading paused' },
+	confirming: { tone: 'warn', label: 'Ready to confirm' },
+	committing: { tone: 'run', label: 'Adding to Resources' },
+	interrupted: { tone: 'warn', label: 'Paused' },
 	done: { tone: 'ok', label: 'Imported' },
 	failed: { tone: 'bad', label: 'Stopped' }
 };
 
 export function runBadge(run: ImportRunHead): StageBadge {
 	if (run.state === 'complete' && (run.counts.failed > 0 || run.counts.skipped > 0)) {
-		return { tone: 'warn', label: 'Finished with items left out' };
+		return { tone: 'warn', label: 'Finished, some left out' };
 	}
 	return BADGE[stageFrom(run)];
 }
@@ -78,47 +78,43 @@ export interface StageCopy {
 const STAGE_COPY: Record<RunStage, StageCopy> = {
 	waiting: {
 		headline: 'Waiting for the Teachouse app.',
-		detail: 'Open the app on a connected device to begin reading. No device is reading this shop yet.'
+		detail: 'Open the app on a computer signed in to this marketplace. Nothing has started yet.'
 	},
 	interrupted: {
-		headline: 'Reading has paused.',
-		detail: 'Reconnect on the device that was reading, then resume. Resources already added stay in your catalogue.'
+		headline: 'This import has paused.',
+		detail: 'Open the app on the computer that was importing, then resume. Resources already added stay in Resources.'
 	},
 	confirming: {
-		headline: 'Ready to add to your catalogue.',
-		detail: 'Check the results below, then confirm. Nothing is published to a marketplace by importing.'
+		headline: 'Ready to add to Resources.',
+		detail: 'Check the results below, then confirm. Importing does not publish anything.'
 	},
 	listing: {
-		headline: 'Reading what is in your shop.',
-		detail:
-			'Your computer is listing every resource it can see. Nothing is copied yet, and you ' +
-			'choose what to bring across next.'
+		headline: 'Finding what is in your shop.',
+		detail: 'Your computer is finding every resource in your shop. Next, you choose what to import.'
 	},
 	selecting: {
-		headline: 'Choose what to bring across.',
-		detail: 'Tick the resources you want in Resources. Anything you leave is not read at all.'
+		headline: 'Choose what to import.',
+		detail: 'Tick the resources you want in Resources. We skip the rest.'
 	},
 	reading: {
-		headline: 'Reading the resources you chose.',
-		detail:
-			'Your computer opens each one and sends us what describes it. You can leave this page: ' +
-			'the reading carries on and this list fills as it goes.'
+		headline: 'Importing the resources you chose.',
+		detail: 'You can leave this page. The import carries on and this list fills in as it goes.'
 	},
 	reviewing: {
 		headline: 'Check these resources before adding them.',
 		detail: 'Answer any duplicate questions below, then confirm what is ready.'
 	},
 	committing: {
-		headline: 'Adding them to your catalogue.',
-		detail: 'The server is adding the resources you approved. You can close this page.'
+		headline: 'Adding them to Resources.',
+		detail: 'We are adding the resources you approved. You can close this page.'
 	},
 	done: {
 		headline: 'This import is finished.',
-		detail: 'Everything below is in Resources, apart from what the list says was left out.'
+		detail: 'Everything below is now in Resources, except the ones marked Left out.'
 	},
 	failed: {
 		headline: 'This import did not finish.',
-		detail: 'What it did bring across is in Resources. Each resource below says what happened.'
+		detail: 'What it did import is in Resources. Each resource below shows what happened.'
 	}
 };
 
@@ -134,7 +130,7 @@ export function stageCopy(stage: RunStage): StageCopy {
  * and says so in words rather than in a zero. */
 export function countsLine(counts: ImportRunCounts, readTotal: number | null): string {
 	if (readTotal === null) {
-		return 'No resource count yet.';
+		return 'Not counted yet.';
 	}
 	const said: string[] = [`${readTotal} found`];
 	if (counts.imported > 0) {
@@ -250,9 +246,9 @@ export function selectionRows(items: readonly ImportRunItemView[]): ItemRow[] {
  * thing that is wrong, so it reads as an instruction. */
 export function selectionBlocked(chosen: number, sending: boolean): string | null {
 	if (sending) {
-		return 'Your choice is being sent.';
+		return 'Sending your choice.';
 	}
-	return chosen === 0 ? 'Tick at least one resource to bring across.' : null;
+	return chosen === 0 ? 'Tick at least one resource to import.' : null;
 }
 
 // -------------------------------------------------------------------- review
@@ -289,7 +285,7 @@ export interface ReviewCard {
  *  side that is only a read is asking for it to be created, and a seller
  *  keeping the other is asking for nothing to be. */
 const IN_RESOURCES = 'Already in Resources';
-const JUST_READ = 'Just read from your shop';
+const JUST_READ = 'New from your shop';
 
 function sideOf(view: ReviewSideView, side: 'lo' | 'hi'): ReviewSide {
 	return {
@@ -340,14 +336,12 @@ export const MERGE_FIELDS: readonly {
 
 /** What the merge step says above the field choices. */
 export const WHICH_SIDE_WINS =
-	'One of these stays and the other goes. Choose which one to keep, then which wording it ' +
-	'keeps for each field.';
+	'You keep one of these. Choose which one, then pick the wording for each field.';
 
 /** How long a merge can be undone for, said as the deadline the seller was
  *  given rather than as a policy. */
 export const MERGE_IS_REVERSIBLE =
-	'You can undo a merge for thirty days. Until then both listings stay linked and nothing is ' +
-	'deleted from your marketplaces.';
+	'You can undo a merge for thirty days. Nothing is deleted from your marketplaces.';
 
 // ------------------------------------------------------------------- settled
 
@@ -384,11 +378,11 @@ export function settledLine(counts: ImportRunCounts): string {
 export function emptyItemsLine(stage: RunStage): string {
 	switch (stage) {
 		case 'waiting':
-			return 'Waiting for a device to find the first resource.';
+			return 'Waiting for the app to find your first resource.';
 		case 'interrupted':
-			return 'No resources were recorded before reading paused.';
+			return 'No resources were found before this import paused.';
 		case 'listing':
-			return 'Nothing has been listed yet.';
+			return 'No resources found yet.';
 		case 'selecting':
 		case 'reading':
 		case 'reviewing':
@@ -396,9 +390,9 @@ export function emptyItemsLine(stage: RunStage): string {
 		case 'committing':
 			return 'Nothing has arrived yet.';
 		case 'done':
-			return 'Your shop had nothing in it to bring across.';
+			return 'Your shop had nothing to import.';
 		case 'failed':
-			return 'Nothing was recorded before this import stopped.';
+			return 'Nothing was found before this import stopped.';
 	}
 }
 
@@ -408,7 +402,7 @@ export function emptyItemsLine(stage: RunStage): string {
  * a seller who searched and found nothing has narrowed a list that still has
  * things in it, and telling them the import is empty would be false. */
 export const NO_ITEM_MATCHES =
-	'No resource here matches what you searched for. Clear the search to see the rest.';
+	'No resource matches your search. Clear it to see the rest.';
 
 /** Why an import stopped, in words that name what the seller does next.
  *
@@ -420,29 +414,29 @@ export const NO_ITEM_MATCHES =
 export function reasonLine(code: ImportReasonCode | null, reason: string | null): string | null {
 	switch (code) {
 		case 'missing_session':
-			return 'This computer is not signed in to that marketplace, so it could not read your shop. Sign in from Marketplaces and start the import again.';
+			return 'This computer is not signed in to that marketplace. Sign in from Marketplaces, then start the import again.';
 		case 'not_permitted':
-			return 'Your plan does not cover reading this marketplace. Nothing was changed.';
+			return 'Your plan does not include importing from this marketplace. Nothing was changed.';
 		case 'unsupported_source':
-			return 'We cannot read this marketplace yet. Nothing was changed.';
+			return 'You cannot import from this marketplace yet. Nothing was changed.';
 		case 'enumeration_failed':
-			return 'Your shop could not be listed. This is usually the marketplace being slow or signing you out; try again from Import.';
+			return 'We could not find the resources in your shop. The marketplace may be slow or may have signed you out. Try again from Import.';
 		case 'description_failed':
-			return 'Some resources could not be opened and read. What was read is below; the rest can be brought across in a new import.';
+			return 'Some resources could not be opened. What we got is below; bring in the rest with a new import.';
 		case 'submission_failed':
-			return 'What this computer read did not reach us. Nothing was created; start the import again.';
+			return 'What this computer found did not reach us. Nothing was added. Start the import again.';
 		case 'activation_expired':
-			return 'Nothing picked this import up in time, so it was not started. Start it again from Import.';
+			return 'No computer started this import in time. Start it again from Import.';
 		case 'lease_expired':
-			return 'The computer running this import stopped reporting — usually a closed app or a sleeping machine. Resume it here, or start a new import.';
+			return 'The computer running this import stopped responding. The app may be closed or the computer asleep. Resume it here, or start a new import.';
 		case 'stopped':
 			// Never "nothing was created": a stop during the commit leaves the
 			// resources already added standing, and telling a seller otherwise
 			// would send them looking for a catalogue they do have. The summary
 			// beside this line is what says how many.
-			return 'You stopped this import. Anything already added to your catalogue stays; nothing further was brought across.';
+			return 'You stopped this import. Anything already added stays in Resources, and nothing more will be imported.';
 		case 'client_update_required':
-			return 'The Teachouse app on this computer is too old to run this import. Update it, then start the import again.';
+			return 'The Teachouse app on this computer is too old for this import. Update it, then start the import again.';
 		case null:
 			return reason;
 	}
@@ -510,7 +504,7 @@ export function pageSummary(
 
 /** What a run that could not be read says. A read that failed is not a run
  *  with nothing in it, and the page holds those two apart. */
-export const RUN_UNREAD = 'We could not read this import. Anything already running carries on.';
+export const RUN_UNREAD = 'We could not load this import. Anything already running carries on.';
 
 /** What the seller is told while the reading happens somewhere else. One
  *  sentence; which bytes travel is the `your-files` guide's to hold. */

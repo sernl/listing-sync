@@ -325,13 +325,13 @@ describe('what a commit would do', () => {
 		);
 		expect(preview).toEqual({ create: 2, leave: 1, done: 1, unknown: 0 });
 		expect(previewSentence(preview)).toBe(
-			'2 resources will be created in your catalogue. 1 row was refused when the sheet was read, and will be left alone.'
+			'2 resources will be added to Resources. 1 row was left out because of problems.'
 		);
 	});
 
 	it('drops the refusal clause rather than claiming zero of them', () => {
 		const preview = previewOf(tallyRows([row(), row()]));
-		expect(previewSentence(preview)).toBe('2 resources will be created in your catalogue.');
+		expect(previewSentence(preview)).toBe('2 resources will be added to Resources.');
 	});
 
 	it('keeps a row in an unknown state out of both figures', () => {
@@ -412,7 +412,7 @@ describe('a list that has not been read', () => {
 		expect(unread).not.toBeNull();
 		expect(empty).not.toBeNull();
 		expect(unread?.title).not.toBe(empty?.title);
-		expect(unread?.title).toContain('could not be read');
+		expect(unread?.title).toContain('could not load');
 		expect(unread?.body).toContain('Nothing has been changed');
 		expect(empty?.title).toContain('No spreadsheet import yet');
 	});
@@ -422,14 +422,14 @@ describe('a list that has not been read', () => {
 	});
 
 	it('is still reading before it has either', () => {
-		expect(listCopy(readState(false, false, []))?.title).toContain('Reading');
+		expect(listCopy(readState(false, false, []))?.title).toContain('Loading');
 	});
 
 	it('renders a batch row from the counts it read', () => {
 		const [only] = batchRows([batch({ row_count: 3, failed_count: 1 })]);
-		expect(only.line).toBe('3 rows, 1 refused when it was read');
+		expect(only.line).toBe('3 rows, 1 with problems');
 		expect(only.href).toBe('/imports/b1');
-		expect(only.label).toBe('Read');
+		expect(only.label).toBe('Checked');
 		expect(only.open).toBe(true);
 	});
 
@@ -441,14 +441,14 @@ describe('a list that has not been read', () => {
 describe('why a bind was refused 409', () => {
 	it('says the import is still running when the refusal names importing', () => {
 		const said = batchClosedSay({ batch_state: 'importing' });
-		expect(said).toContain('being created right now');
-		expect(said).not.toContain('given up');
+		expect(said).toContain('being added right now');
+		expect(said).not.toContain('cancelled');
 	});
 
 	it('says the import is over when the refusal names a settled state', () => {
 		for (const state of ['imported', 'failed', 'abandoned']) {
 			expect(batchClosedSay({ batch_state: state })).toBe(
-				'This import has been finished or given up, so no more files can be added.'
+				'This import is finished or cancelled, so you cannot add more files.'
 			);
 		}
 	});

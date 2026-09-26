@@ -1,1 +1,1 @@
-<p class="quiet">Taking you to Sync…</p>
+<p class="quiet">Taking you to Updates…</p>
