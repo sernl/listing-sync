@@ -495,7 +495,9 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/{version}/products/{product}/files/{file}",
-            put(catalogue::replace_file).delete(catalogue::remove_file),
+            put(catalogue::replace_file)
+                .patch(catalogue::rename_file)
+                .delete(catalogue::remove_file),
         )
         // The one read that hands a browser a resource's picture. Its own
         // route rather than a field of bytes on the product view: a thumbnail

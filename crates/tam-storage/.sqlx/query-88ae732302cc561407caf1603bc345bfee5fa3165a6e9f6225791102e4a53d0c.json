@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE product_file SET name = $4 WHERE org_id = $1 AND product_id = $2 AND id = $3 AND deleted_at IS NULL AND role <> 'cover' AND hash IS NOT NULL RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "88ae732302cc561407caf1603bc345bfee5fa3165a6e9f6225791102e4a53d0c"
+}

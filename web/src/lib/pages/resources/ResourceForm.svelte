@@ -39,6 +39,7 @@
 	import { desktopInvoker, libraryEntries } from '$lib/desktop';
 	import { keptPdfSource } from './file-viewer';
 	import ThumbnailSlots from './ThumbnailSlots.svelte';
+	import { coverUrlOf } from './files';
 	import CategoriesPanel from './panels/CategoriesPanel.svelte';
 	import DescriptionPanel from './panels/DescriptionPanel.svelte';
 	import DetailsPanel from './panels/DetailsPanel.svelte';
@@ -68,6 +69,7 @@
 		payloadOf,
 		projectionOf,
 		refusalsOf,
+		verdictOf,
 		shouldLandOnCreated,
 		sizeWords,
 		slotsFrom,
@@ -386,24 +388,41 @@
 		);
 	});
 
-	const RULES_UNREAD: Refusal = {
-		group: 'name',
-		control: null,
-		message: 'The form didn’t load properly. Reload the page before you save.'
-	};
-
-	const refusals = $derived.by(() => {
-		// Read so this recomputes when the rules land; `refusalsOf` asks `core()`
+	// The server's verdict on the draft, kept only where the module could not
+	// load: an Android System WebView years behind Chrome refuses to compile
+	// it, and a form that answered "reload the page" to that could never be
+	// submitted from such a phone. `POST /v1/authoring/check` is the function
+	// the module was compiled from, so the sentences are the same; they arrive
+	// a round trip later, after the seller pauses typing.
+	let serverVerdict = $state<CheckView | null>(null);
+	let serverVerdictTurn = 0;
+	$effect(() => {
+		if (!rulesFailed) {
+			return;
+		}
+		const asked = draftInputOf(draft);
+		const mine = ++serverVerdictTurn;
+		const timer = setTimeout(() => {
+			void api.checkDraft(asked).then(
+				(verdict) => {
+					if (mine === serverVerdictTurn) {
+						serverVerdict = verdict;
+					}
+				},
+				() => undefined
+			);
+		}, 400);
+		return () => clearTimeout(timer);
+	});
+	const verdict = $derived.by(() => {
+		// Read so this recomputes when the rules land; `verdictOf` asks `core()`
 		// for them and `core()` cannot say when it changed.
 		void rulesReady;
-		return rulesFailed ? [RULES_UNREAD] : refusalsOf(draft, form, known);
+		return rulesFailed ? serverVerdict : verdictOf(draft);
 	});
-	// Same reason as `refusals`: `advisoriesOf` reads the same non-reactive
-	// `core()`, so without this it stays empty until a field is touched.
-	const advisories = $derived.by(() => {
-		void rulesReady;
-		return advisoriesOf(draft, form);
-	});
+
+	const refusals = $derived(refusalsOf(draft, form, known, verdict));
+	const advisories = $derived(advisoriesOf(draft, form, verdict));
 	const canCreate = $derived(
 		submittable(refusals) && form !== null && !creating && !slotsSettling(slots) && !locked
 	);
@@ -544,12 +563,14 @@
 	 *  its own upload answered with, and a saved resource reads its own cover
 	 *  route. Neither is the seller's chosen bytes: the cover is drawn on the
 	 *  server at the listing's own size, so drawing the local file here would
-	 *  show something other than what buyers get. */
+	 *  show something other than what buyers get.
+	 *
+	 *  Both are content-addressed: the upload route by its handle, the saved
+	 *  route by `?v=<digest>`, so a replaced first file (a redraw on the
+	 *  server, a re-derived `draft.cover` here) is a new URL the `<img>` loads. */
 	const coverUrl = $derived.by(() => {
 		if (editing !== null) {
-			return editing.product.files.some((file) => file.role === 'cover')
-				? `/v1/products/${editing.product.id}/cover`
-				: null;
+			return coverUrlOf(editing.product.id, editing.product.files);
 		}
 		return draft.cover === null ? null : `/v1/uploads/${draft.cover.hash}`;
 	});
@@ -607,6 +628,60 @@
 				failure instanceof ApiFailure
 					? sentenceFor(failure, 'The preview wasn’t removed.')
 					: 'The preview wasn’t removed.';
+		}
+	}
+
+	/** A changed preview takes the old one's place. A draft swaps the handle
+	 *  where it stood; a saved resource swaps the file in one write, which keeps
+	 *  its role and never leaves the listing with both or neither. */
+	async function replacePreview(hash: string, handle: FileHandle) {
+		if (editing === null) {
+			set(
+				'previews',
+				draft.previews.map((held) => (held.hash === hash ? handle : held))
+			);
+			return;
+		}
+		const stored = editing.product.files.find(
+			(file) => file.role === 'preview' && file.hash === hash
+		);
+		try {
+			if (stored === undefined) {
+				await api.addProductFile(editing.product.id, 'preview', handle);
+			} else {
+				await api.replaceProductFile(editing.product.id, stored.id, handle);
+			}
+			await queryClient.invalidateQueries({ queryKey: queryKeys.product(editing.product.id) });
+		} catch (failure) {
+			serverRefusal =
+				failure instanceof ApiFailure
+					? sentenceFor(failure, 'The preview wasn’t changed.')
+					: 'The preview wasn’t changed.';
+		}
+	}
+
+	async function renamePreview(hash: string, name: string) {
+		if (editing === null) {
+			set(
+				'previews',
+				draft.previews.map((held) => (held.hash === hash ? { ...held, name } : held))
+			);
+			return;
+		}
+		const stored = editing.product.files.find(
+			(file) => file.role === 'preview' && file.hash === hash
+		);
+		if (stored === undefined) {
+			return;
+		}
+		try {
+			await api.renameProductFile(editing.product.id, stored.id, name);
+			await queryClient.invalidateQueries({ queryKey: queryKeys.product(editing.product.id) });
+		} catch (failure) {
+			serverRefusal =
+				failure instanceof ApiFailure
+					? sentenceFor(failure, 'The preview wasn’t renamed.')
+					: 'The preview wasn’t renamed.';
 		}
 	}
 
@@ -1018,6 +1093,8 @@
 									: 'Make preview'}
 								sellerName={organisation.data?.name ?? ''}
 								onAdd={(handle) => void addPreview(handle)}
+								onReplace={(hash, handle) => void replacePreview(hash, handle)}
+								onRename={(hash, name) => void renamePreview(hash, name)}
 								onRemove={(hash) => void dropPreview(hash)}
 							/>
 						</FormSection>

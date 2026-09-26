@@ -13,6 +13,11 @@
 	// frames this can render in — the signed-out screen, which supplies `.auth`
 	// and the wordmark around it, and the console, which supplies its own shell.
 	const missing = $derived(page.status === 404);
+	/** What the load threw, in the words it carried. Shown for the reason
+	 *  `render-failure.ts` gives: a phone has no devtools pane, and a sentence
+	 *  the seller can read out is the difference between a bug we can find
+	 *  and one we cannot. */
+	const cause = $derived(missing ? null : (page.error?.message?.trim() || null));
 </script>
 
 <div class="page">
@@ -25,6 +30,9 @@
 				Something went wrong. Try opening it again.
 			{/if}
 		</p>
+		{#if cause !== null}
+			<p class="drew-why">{cause}</p>
+		{/if}
 		<!-- One destination, not a branch on the session: a signed-out visitor
 		     never reaches this page, because the root layout sends a session-less
 		     visit to any address it does not list as public to `/login` and
@@ -32,3 +40,13 @@
 		<Button href="/resources" tier="primary">Back to your resources</Button>
 	</div>
 </div>
+
+<style>
+	.drew-why {
+		margin: 0 0 12px;
+		color: var(--muted);
+		font-size: 12px;
+		line-height: 1.5;
+		overflow-wrap: break-word;
+	}
+</style>

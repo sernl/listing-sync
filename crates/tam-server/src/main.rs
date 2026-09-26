@@ -1327,7 +1327,26 @@ async fn console_security_headers(
     let guide_page = matches!(request.uri().path(), "/guides" | "/admin/guides")
         || request.uri().path().starts_with("/guides/")
         || request.uri().path().starts_with("/admin/guides/");
+    // Chromium before 97 does not know `'wasm-unsafe-eval'` and, ignoring
+    // it, refuses to compile the console's core module unless the policy
+    // says `'unsafe-eval'`; the create form then waits for rules that never
+    // arrive. The Android System WebView is such an engine on phones whose
+    // owners never updated it, so the grant is widened for exactly those user
+    // agents and for nothing newer. `serving::needs_unsafe_eval` reads the
+    // version; a browser that lies about it gets the older, wider grant.
+    let widen_eval = request
+        .headers()
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(serving::needs_unsafe_eval);
     let mut response = next.run(request).await;
+    let policy: std::sync::Arc<str> = if widen_eval {
+        policy
+            .replacen("'wasm-unsafe-eval'", "'wasm-unsafe-eval' 'unsafe-eval'", 1)
+            .into()
+    } else {
+        policy
+    };
     // A page carries a fresh nonce beside the hashes and an asset carries the
     // policy as built; see `serving::fresh_nonce` for the script it admits.
     let is_page = response

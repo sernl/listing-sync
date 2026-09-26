@@ -130,11 +130,19 @@ describe('the first-paint scripts agree with this module', () => {
 	const html = new URL('../app.html', import.meta.url).pathname;
 	const base = new URL('../../../apps/landing/src/layouts/Base.astro', import.meta.url).pathname;
 
-	/** The body of the first inline script in a file. */
+	/** The body of the inline script that names the theme key: the shell
+	 *  carries a polyfill block before it, and the landing may too. */
 	const firstScript = (path: string, opener: string): string => {
 		const body = readFileSync(path, 'utf8');
-		const start = body.indexOf(opener) + opener.length;
-		return body.slice(start, body.indexOf('</script>', start));
+		let from = 0;
+		for (;;) {
+			const start = body.indexOf(opener, from);
+			if (start === -1) throw new Error(`no inline theme script in ${path}`);
+			const end = body.indexOf('</script>', start);
+			const script = body.slice(start + opener.length, end);
+			if (script.includes(THEME_KEY)) return script;
+			from = end;
+		}
 	};
 
 	/** Run one copy on a stub page: what it painted, and what it told the

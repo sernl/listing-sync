@@ -1235,13 +1235,56 @@
 	margin-left: 0;
 }
 
-.resources-page .res-file-add {
+/* One row under the list, right-aligned: the band's own action at the edge
+   and the fine print beside it, quieter, so neither crowds the other. A
+   status sentence takes the free space on the left. */
+.resources-page .res-file-foot {
 	display: flex;
 	align-items: center;
-	gap: 10px;
+	justify-content: flex-end;
+	gap: var(--s-3);
 	flex-wrap: wrap;
-	padding-top: 12px;
+	padding-top: var(--s-3);
 	border-top: 1px solid var(--line);
+}
+
+.resources-page .res-file-foot .res-file-say {
+	flex-basis: auto;
+	margin: 0 auto 0 0;
+}
+
+.resources-page .res-file-foot .explain-trigger {
+	border-color: transparent;
+	background: transparent;
+	color: var(--muted);
+	font-weight: 500;
+}
+
+.resources-page .res-file-foot .explain-trigger:hover {
+	background: var(--hover);
+	color: var(--text);
+}
+
+/* A rename is typed in place, under the row it renames. */
+.resources-page .res-file-rename {
+	flex-basis: 100%;
+	display: flex;
+	align-items: center;
+	gap: var(--s-2);
+	flex-wrap: wrap;
+	margin-top: var(--s-2);
+}
+
+.resources-page .res-file-name {
+	flex: 1 1 16rem;
+	min-width: 0;
+	min-height: var(--control-h-sm);
+	padding: 0 var(--s-2);
+	border: 1px solid var(--line);
+	border-radius: var(--r-field);
+	background: var(--surface);
+	color: var(--text);
+	font: inherit;
 }
 
 /* Off-screen rather than display:none: an input that is not rendered cannot be

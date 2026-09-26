@@ -1759,6 +1759,12 @@ export interface RemovedFileView {
 	reaches: InventoryId[];
 }
 
+/** A rename keeps the row, its bytes and its role; only `file.name` moved. */
+export interface RenamedFileView {
+	product: string;
+	file: FileView;
+}
+
 export interface PathView {
 	inventory: InventoryId;
 	kind: TermKind;
@@ -2698,6 +2704,10 @@ export const api = {
 	 *  payload file the resource has: a resource keeps at least one. */
 	removeProductFile: (product: string, file: string) =>
 		request<RemovedFileView>(`/v1/products/${product}/files/${file}`, { method: 'DELETE' }),
+	/** Rename one payload or preview file. Refused for the cover, which is
+	 *  drawn rather than chosen, and for a blank name. */
+	renameProductFile: (product: string, file: string, name: string) =>
+		patch<RenamedFileView>(`/v1/products/${product}/files/${file}`, { name }),
 
 	/** The body is mandatory in practice even though the server defaults it:
 	 *  a delete that removes nothing remotely has to say so, and `leave_live`

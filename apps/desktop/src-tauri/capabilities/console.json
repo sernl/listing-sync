@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "console",
-  "description": "The main window's application commands, allowed for the configured production origin and local development content. Keep remote.urls aligned with control_plane::DEFAULT_BASE_URL. Marketplace login windows receive no grant.",
+  "description": "The main window's application commands, allowed for the configured production origin and local development content. Keep remote.urls aligned with control_plane::DEFAULT_BASE_URL. Marketplace login windows receive no grant. notification:default is here rather than in default.json because on Android the main window is this remote origin, and the notification plugin's own page script asks is_permission_granted on every load; without the grant that call is a rejected promise in every page's log.",
   "windows": [
     "main"
   ],
@@ -26,6 +26,7 @@
     "allow-library-remove",
     "allow-library-settings",
     "allow-set-library-settings",
-    "allow-library-open-external"
+    "allow-library-open-external",
+    "notification:default"
   ]
 }

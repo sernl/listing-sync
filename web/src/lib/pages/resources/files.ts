@@ -26,7 +26,7 @@ export const ROLE_WORD: Record<FileRole, string> = {
 	cover: 'Thumbnail'
 };
 
-export type FileVerb = 'add' | 'replace' | 'remove';
+export type FileVerb = 'add' | 'replace' | 'remove' | 'rename';
 
 /**
  * What the panel is doing.
@@ -86,9 +86,9 @@ export function advance(action: FileAction, event: FileEvent): FileAction {
 			if (busy(action)) {
 				return action;
 			}
-			// A removal sends no bytes, so it starts at the write.
-			return event.verb === 'remove'
-				? { kind: 'writing', verb: 'remove', file: event.file }
+			// A removal or a rename sends no bytes, so it starts at the write.
+			return event.verb === 'remove' || event.verb === 'rename'
+				? { kind: 'writing', verb: event.verb, file: event.file }
 				: { kind: 'uploading', verb: event.verb, file: event.file, fraction: 0 };
 		case 'progress':
 			return action.kind === 'uploading' ? { ...action, fraction: event.fraction } : action;
@@ -258,6 +258,18 @@ export function retiresCover(files: readonly FileView[], id: string): boolean {
 	return payloads.length === 1 && payloads[0]?.id === id && files.some((one) => one.role === 'cover');
 }
 
+/**
+ * Where a saved resource's thumbnail is fetched, or `null` where it has none.
+ *
+ * Versioned by the cover's own digest, exactly as the server mints the list's
+ * URL: a redraw writes new bytes under a new digest, so the URL changes with
+ * the picture and an `<img>` that cached the old one cannot keep showing it.
+ */
+export function coverUrlOf(product: string, files: readonly FileView[]): string | null {
+	const cover = files.find((file) => file.role === 'cover');
+	return cover === undefined ? null : `/v1/products/${product}/cover?v=${cover.hash}`;
+}
+
 function megabytes(bytes: number): string {
 	if (bytes < 1024) {
 		return `${bytes} bytes`;
@@ -285,7 +297,8 @@ export function reachSentence(reaches: readonly InventoryId[]): string {
 const OWN: Record<FileVerb, string> = {
 	add: 'The file was not added.',
 	replace: 'The file was not replaced.',
-	remove: 'The file was not removed.'
+	remove: 'The file was not removed.',
+	rename: 'The file was not renamed.'
 };
 
 /** Why a file change was refused, in the seller's words. */
