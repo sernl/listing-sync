@@ -83,9 +83,12 @@ pub const REASON_MAX: usize = 500;
 
 /// The largest cover this vocabulary will carry.
 ///
-/// The device's renderer produces a fixed 512 by 384 image, so anything
-/// approaching this is not a cover.
-pub const COVER_BYTES_MAX: usize = 512 * 1024;
+/// The device's renderer draws a 1600 by 1200 cover and steps it down until
+/// its PNG fits `tam_pipeline::render::COVER_BYTES_MAX`, which is this same
+/// 2 MiB; a drawn page is a few hundred kilobytes. Twenty-five of these per
+/// page, base64-encoded, stay well inside the import route's upload body
+/// limit.
+pub const COVER_BYTES_MAX: usize = 2 * 1024 * 1024;
 
 /// A PNG's first eight bytes.
 ///

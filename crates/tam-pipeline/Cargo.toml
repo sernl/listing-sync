@@ -9,6 +9,12 @@ publish = false
 # paths, so every client target compiles without a C toolchain. Measured
 # cost 2.47 to 1.71 GiB/s single-core, accepted.
 blake3 = { version = "1", features = ["pure"] }
+# The first-page rasteriser for PDF covers, 2026-09-26: pure Rust with
+# `forbid(unsafe_code)` at its own root, so the no-C rule above holds. The
+# default features embed PDFium's substitutes for the 14 standard fonts
+# (BSD-3-Clause) and the predefined CMaps; the licences are recorded in
+# docs/notes/design/cover-rasteriser-licences.md.
+hayro = "0.7.1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 tam-limits = { path = "../tam-limits" }
 tam-types = { path = "../tam-types" }
