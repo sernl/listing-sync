@@ -12,7 +12,6 @@
 	import Menu from '$lib/Menu.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Pagination from '$lib/Pagination.svelte';
-	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
 	import { queryKeys } from '$lib/query';
 	import {
@@ -27,6 +26,8 @@
 		type GuideFilters,
 		type GuideSort
 	} from '$lib/pages/guides/filters';
+	import { SECTIONS, groupBySection } from '$lib/pages/guides/article';
+	import '$lib/flow.css';
 	import '$lib/pages/guides/guides.css';
 
 	const now = Date.now();
@@ -298,100 +299,98 @@
 		description="Find a guide: search by title or topic."
 	/>
 
-	<Panel>
-		<div class="gd-filters">
-			<Field label="Search guides" id="guide-search">
-				<!-- The console's search idiom: a bare input inside a decorated
-				     wrapper that carries the border and the control height,
-				     with the magnifier inside the control rather than beside
-				     it. `app.css` deliberately leaves `type=search` out of the
-				     `.field` decoration for exactly this reason, so an
-				     undecorated input here read as a missing field next to the
-				     two selects. -->
-				<span class="gd-search">
-					<Icon name="search" size={16} />
-					<input
-						id="guide-search"
-						type="search"
-						placeholder="Search by title or topic"
-						value={box}
-						oninput={(event) => typed(event.currentTarget.value)}
-					/>
-				</span>
-			</Field>
+	<div class="gd-find">
+		<Field label="Search guides" id="guide-search">
+			<!-- The console's search idiom: a bare input inside a decorated
+			     wrapper that carries the border and the control height, with the
+			     magnifier inside the control. -->
+			<span class="gd-search">
+				<Icon name="search" size={16} />
+				<input
+					id="guide-search"
+					type="search"
+					placeholder="Search by title or topic"
+					value={box}
+					oninput={(event) => typed(event.currentTarget.value)}
+				/>
+			</span>
+		</Field>
 
-			<Field label="Topic" id="guide-topic">
-				<select
-					id="guide-topic"
-					value={filters.topic ?? ''}
+		<!-- The sections as chips: one press narrows to one, and the chosen one
+		     reads as chosen. The same `topic` the address carries. -->
+		<div class="chip-row gd-topics" role="group" aria-label="Section">
+			<button
+				type="button"
+				class="gd-topic-chip"
+				aria-pressed={filters.topic === null}
+				onclick={() => choose({ topic: null })}>All</button
+			>
+			{#each topics as topic (topic.id)}
+				<button
+					type="button"
+					class="gd-topic-chip"
+					aria-pressed={filters.topic === topic.id}
 					disabled={taxonomy.isError}
-					onchange={(event) =>
-						choose({
-							topic: event.currentTarget.value.length === 0 ? null : event.currentTarget.value
-						})}
+					onclick={() => choose({ topic: filters.topic === topic.id ? null : topic.id })}
 				>
-					<option value="">Every topic</option>
-					{#each topics as topic (topic.id)}
-						<option value={topic.id}>{taxonLabel(topic)}</option>
-					{/each}
-				</select>
-			</Field>
-
-			<div class="gd-filters-group">
-				<span class="gd-group-label" id="guide-tags">Tags</span>
-				<Menu bind:open={tagMenu} label="Filter by tag" align="start">
-					{#snippet trigger()}
-						<Button onclick={() => (tagMenu = !tagMenu)}>
-							{filters.tags.length === 0 ? 'Any tag' : `${filters.tags.length} chosen`}
-						</Button>
-					{/snippet}
-					<div class="gd-tag-menu" role="group" aria-labelledby="guide-tags">
-						{#if taxonomy.isPending}
-							<p class="none">Loading tags…</p>
-						{:else if taxonomy.isError}
-							<p class="none">We could not load the tags.</p>
-						{:else}
-							{#each tags as tag (tag.id)}
-								<label>
-									<input
-										type="checkbox"
-										checked={filters.tags.includes(tag.id)}
-										onchange={(event) =>
-											choose({
-												tags: event.currentTarget.checked
-													? [...filters.tags, tag.id]
-													: filters.tags.filter((id) => id !== tag.id)
-											})}
-									/>
-									<span class="gd-tax">{taxonLabel(tag)}</span>
-								</label>
-							{:else}
-								<p class="none">No guides have tags yet.</p>
-							{/each}
-						{/if}
-					</div>
-				</Menu>
-			</div>
-
-			<Field label="Order by" id="guide-sort">
-				<select
-					id="guide-sort"
-					value={filters.sort}
-					onchange={(event) => choose({ sort: event.currentTarget.value as GuideSort })}
-				>
-					{#each SORTS as order (order.id)}
-						<option value={order.id}>{order.label}</option>
-					{/each}
-				</select>
-			</Field>
-
-			<!-- Under the row rather than under one control: a hint inside one
-			     cell and none in the next is what puts two controls out of
-			     line, and this sentence is about the row in any case. -->
-			<p class="gd-filter-hint">
-				Search and filters cover every guide, not just this page.
-			</p>
+					<Icon name={SECTIONS.find((section) => section.slug === topic.slug)?.icon ?? 'book-open'} size={14} />
+					{taxonLabel(topic)}
+				</button>
+			{/each}
 		</div>
+
+		<details class="flow-more gd-more" open={filters.tags.length > 0}>
+			<summary>Tags and order</summary>
+			<div class="gd-filters">
+				<div class="gd-filters-group">
+					<span class="gd-group-label" id="guide-tags">Tags</span>
+					<Menu bind:open={tagMenu} label="Filter by tag" align="start">
+						{#snippet trigger()}
+							<Button onclick={() => (tagMenu = !tagMenu)}>
+								{filters.tags.length === 0 ? 'Any tag' : `${filters.tags.length} chosen`}
+							</Button>
+						{/snippet}
+						<div class="gd-tag-menu" role="group" aria-labelledby="guide-tags">
+							{#if taxonomy.isPending}
+								<p class="none">Loading tags…</p>
+							{:else if taxonomy.isError}
+								<p class="none">We could not load the tags.</p>
+							{:else}
+								{#each tags as tag (tag.id)}
+									<label>
+										<input
+											type="checkbox"
+											checked={filters.tags.includes(tag.id)}
+											onchange={(event) =>
+												choose({
+													tags: event.currentTarget.checked
+														? [...filters.tags, tag.id]
+														: filters.tags.filter((id) => id !== tag.id)
+												})}
+										/>
+										<span class="gd-tax">{taxonLabel(tag)}</span>
+									</label>
+								{:else}
+									<p class="none">No guides have tags yet.</p>
+								{/each}
+							{/if}
+						</div>
+					</Menu>
+				</div>
+
+				<Field label="Order by" id="guide-sort">
+					<select
+						id="guide-sort"
+						value={filters.sort}
+						onchange={(event) => choose({ sort: event.currentTarget.value as GuideSort })}
+					>
+						{#each SORTS as order (order.id)}
+							<option value={order.id}>{order.label}</option>
+						{/each}
+					</select>
+				</Field>
+			</div>
+		</details>
 
 		<div class="gd-filter-foot">
 			<!-- The count is the server's count over the whole narrowing, not
@@ -418,9 +417,9 @@
 				</Button>
 			{/if}
 		</div>
-	</Panel>
+	</div>
 
-	<Panel>
+	<div class="gd-results">
 		{#if refusedFilters}
 			<!-- A hand-edited address, or a link written against a topic or tag id
 			     that never existed. The server refuses the ids rather than
@@ -509,22 +508,24 @@
 						and listing a resource everywhere."
 				/>
 			{:else}
-				<div class="guide-list" class:gd-stale={stale} aria-busy={guides.isFetching}>
-					{#each shown.rows as guide (guide.slug)}
-						<a href={`/guides/${guide.slug}`}>
-							<span class="t">{guide.title}</span>
-							<span class="gd-row-tax">
-								{#if guide.topic !== null}
-									<span class="gd-tax gd-tax-topic">{taxonLabel(guide.topic)}</span>
-								{/if}
-								{#each guide.tags as tag (tag.id)}
-									<span class="gd-tax">{taxonLabel(tag)}</span>
+				<div class="gd-sections" class:gd-stale={stale} aria-busy={guides.isFetching}>
+					{#each groupBySection(shown.rows) as section (section.id)}
+						<section class="gd-section">
+							<h2 class="gd-section-head">
+								<span class="gd-section-icon"><Icon name={section.icon} size={18} /></span>
+								{section.name}
+							</h2>
+							<div class="gd-cards">
+								{#each section.guides as guide (guide.slug)}
+									<a class="gd-card" href={`/guides/${guide.slug}`}>
+										<span class="gd-card-title">{guide.title}</span>
+										<span class="when" title={utcInstant(guide.updated_at)}>
+											Updated {agoLabel(guide.updated_at, now)}
+										</span>
+									</a>
 								{/each}
-							</span>
-							<span class="when" title={utcInstant(guide.updated_at)}>
-								updated {agoLabel(guide.updated_at, now)}
-							</span>
-						</a>
+							</div>
+						</section>
 					{/each}
 				</div>
 				<!-- The range is the rows on the screen and the total is the
@@ -541,5 +542,5 @@
 				/>
 			{/if}
 		{/if}
-	</Panel>
+	</div>
 </div>

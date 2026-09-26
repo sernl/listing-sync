@@ -624,3 +624,288 @@ a.gd-tax:hover {
 		min-height: 300px;
 	}
 }
+
+/* --- the reader's index: search, sections, a card grid -------------------- */
+
+.gd-find {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-3);
+	margin-bottom: var(--s-6);
+}
+
+.gd-find .gd-search {
+	max-width: 560px;
+}
+
+.gd-topic-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-height: 34px;
+	padding: 4px 14px;
+	border: 1px solid var(--line);
+	border-radius: var(--r-pill);
+	background: var(--surface);
+	color: var(--text);
+	font: inherit;
+	font-size: 13.5px;
+	font-weight: 500;
+	cursor: pointer;
+}
+
+.gd-topic-chip:hover:not(:disabled) {
+	background: var(--hover);
+}
+
+.gd-topic-chip[aria-pressed='true'] {
+	border-color: var(--accent);
+	background: var(--accent-soft);
+	color: var(--primary);
+	font-weight: 600;
+}
+
+.gd-topic-chip:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.gd-more .gd-filters {
+	margin: 0;
+}
+
+.gd-find .gd-filter-foot {
+	margin-top: 0;
+}
+
+.gd-sections {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-6);
+}
+
+.gd-section-head {
+	display: flex;
+	align-items: center;
+	gap: var(--s-3);
+	margin: 0 0 var(--s-3);
+	font-family: var(--display);
+	font-size: 19px;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+}
+
+.gd-section-icon {
+	display: inline-grid;
+	place-items: center;
+	width: 34px;
+	height: 34px;
+	border-radius: 10px;
+	background: var(--additive-soft);
+	color: var(--additive);
+}
+
+.gd-cards {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+	gap: var(--s-3);
+}
+
+.gd-card {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-2);
+	padding: var(--s-4);
+	border: 1px solid var(--line);
+	border-radius: var(--r-panel);
+	background: var(--card);
+	box-shadow: var(--sh-1);
+	color: var(--text);
+	text-decoration: none;
+	min-width: 0;
+}
+
+.gd-card:hover {
+	border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+
+.gd-card:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.gd-card-title {
+	font-size: 15.5px;
+	font-weight: 600;
+	line-height: 1.3;
+}
+
+.gd-card .when {
+	margin-top: auto;
+	font-size: 12px;
+	color: var(--muted);
+}
+
+/* --- the reader's article: contents beside the prose ---------------------- */
+
+.gd-article {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 220px;
+	gap: var(--s-6);
+	align-items: start;
+}
+
+.gd-article-main {
+	min-width: 0;
+	padding: var(--s-6);
+	border: 1px solid var(--line);
+	border-radius: var(--r-card);
+	background: var(--card);
+	box-shadow: var(--sh-1);
+}
+
+.gd-toc {
+	position: sticky;
+	top: var(--s-5);
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-2);
+	font-size: 13px;
+}
+
+.gd-toc-label {
+	color: var(--muted);
+	font-size: 11.5px;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+
+.gd-toc ol {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	border-left: 2px solid var(--line);
+}
+
+.gd-toc a {
+	display: block;
+	margin-left: -2px;
+	padding: 4px 10px;
+	border-left: 2px solid transparent;
+	color: var(--muted);
+	text-decoration: none;
+	line-height: 1.35;
+}
+
+.gd-toc a:hover {
+	color: var(--text);
+	border-left-color: var(--accent);
+}
+
+.guide-body h2[id] {
+	scroll-margin-top: var(--s-5);
+}
+
+/* A picture on its own line: the column's full width, captioned. */
+.gd-figure {
+	margin: 1.4em 0;
+}
+
+.gd-figure img {
+	width: 100%;
+	border: 1px solid var(--line);
+}
+
+.gd-figure figcaption {
+	margin-top: var(--s-2);
+	color: var(--muted);
+	font-size: 13px;
+	text-align: center;
+}
+
+.gd-next {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	margin-top: var(--s-6);
+	padding: var(--s-4) var(--s-5);
+	border: 1px solid var(--line);
+	border-radius: var(--r-panel);
+	background: var(--additive-soft);
+	color: var(--text);
+	text-decoration: none;
+}
+
+.gd-next:hover {
+	border-color: var(--additive);
+}
+
+.gd-next-label {
+	color: var(--additive);
+	font-size: 12px;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+
+.gd-next-title {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--s-3);
+	font-family: var(--display);
+	font-size: 17px;
+	font-weight: 600;
+}
+
+/* The contents go on a phone: a sticky column beside 390px of prose is
+   neither column. */
+@media (max-width: 980px) {
+	.gd-article {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.gd-toc {
+		display: none;
+	}
+}
+
+@media (max-width: 720px) {
+	.gd-article-main {
+		padding: var(--s-4);
+	}
+}
+
+.gd-article.gd-no-toc {
+	grid-template-columns: minmax(0, 1fr);
+}
+
+.gd-reader {
+	max-width: 1120px;
+}
+
+.gd-toc-phone {
+	display: none;
+	margin-bottom: var(--s-4);
+}
+
+.gd-toc-phone ol {
+	margin: 0;
+	padding-left: 1.2em;
+	font-size: 14px;
+	line-height: 1.7;
+}
+
+.gd-toc-phone a {
+	color: var(--primary);
+}
+
+@media (max-width: 980px) {
+	.gd-toc-phone {
+		display: block;
+	}
+}
