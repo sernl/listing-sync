@@ -169,6 +169,19 @@ Under the ladder, in both pages, "Counted as resources added to your catalogue a
 `subscription.ai` carries the packaging the founder adopted — `{ status: 'coming-soon', includedFills: 200, addOn: { fills: 100, price: 5 } }` — and the card's line reads "AI fill — coming soon (200 a month)" against a hollow grey mark rather than a tick, because a tick beside a line that is not built yet claims it is.
 Two questions join the FAQ: "Do I pay for import?", which says the subscription includes it and the one-off price is for a seller who does not subscribe, and "What does AI fill do?", which promises that it fills the form from the seller's own file for them to check, that it never writes to a marketplace on its own, and no date and no accuracy figure.
 
+## Amended 2026-09-26: the founder's landing feedback and the charcoal theme
+
+The site opens light whatever the visitor's machine prefers, as the console does; only a stored `system` follows the machine, and `web/src/lib/theme.test.ts` runs the script in `Base.astro` against the same stub store as the console's own.
+Dark is re-grounded on neutral charcoal greys (page `#141414`, card `#1C1C1E`) instead of Indigo, which read as blue everywhere; the Challenge band is graphite rather than brown, and the kit's Peach survives on dark as a muted `#E3A878` in the quote's rule, the bracket and the cover backing.
+The drawn covers' cream becomes the hover grey on dark, because any Peach mixed into charcoal reads brown.
+
+Import, Distribute and Manage are a five-column grid: three centred columns with 72px icon tiles and 36px arrows centred on the tiles' middle line, one row down to a phone.
+The platform row's licence lines stay, because the Android robot's Creative Commons grant makes its attribution line a condition (`marketplace-logo-sources.md`), but as 11px fine print in `--faint`.
+"Three ways to start" is followed by a definition of a move; it names Tes and TPT as the founder's example does, so the line carries `data-marketplace-band`.
+The plan cards read "(Trial)", "(Subscription)" and "Move Packs (One-Off)", and their lines are the founder's wording, matched line for line by the console's plan page: "Import all your resources from wherever you sell" for "Import included", "5 moves onto a marketplace of your choice" for the per-shop free moves, "Statistics on every shop" for "Figures on every shop", and a new Sync line, "Edit resources in Teachouse and sync the edits across all platforms"; "No limit on resources" and "Pulls every 6 hours" are gone. Every FAQ answer was rewritten in a teacher's words.
+
+The screenshot was retaken from production `/resources` at 1440×900 and 390×844, light theme, at 2x. Both captures stop above the first resource card, because production still showed the placeholder covers the pure-Rust page rasteriser replaces; retake the full list once real covers are live.
+
 ## Where the code holds each decision
 
 Amended 2026-09-12, phase 1: the prices are no longer the landing's own.

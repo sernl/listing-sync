@@ -252,7 +252,7 @@ const steps = [
 						steps.map((step, index) => (
 							<>
 								{index > 0 && (
-									<svg class="step-arrow" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+									<svg class="step-arrow" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
 										<path d="M4 12h15" />
 										<path d="M13 6l6 6-6 6" />
 									</svg>
@@ -260,21 +260,21 @@ const steps = [
 								<div class="step">
 									<span class="glyph">
 										{index === 0 && (
-											<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+											<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
 												<path d="M12 3v10" />
 												<path d="M8 9l4 4 4-4" />
 												<path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
 											</svg>
 										)}
 										{index === 1 && (
-											<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+											<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
 												<path d="M7 17h9a4 4 0 0 0 .6-7.95A5.5 5.5 0 0 0 6.3 9.2A3.9 3.9 0 0 0 7 17z" />
 												<path d="M12 21v-7" />
 												<path d="M9.5 16.5 12 14l2.5 2.5" />
 											</svg>
 										)}
 										{index === 2 && (
-											<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+											<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
 												<circle cx="12" cy="12" r="2.9" />
 												<path d="M10.4 3.4h3.2l.4 2 1.7 1 2-.7 1.6 2.8-1.6 1.4v2.2l1.6 1.4-1.6 2.8-2-.7-1.7 1-.4 2h-3.2l-.4-2-1.7-1-2 .7-1.6-2.8 1.6-1.4v-2.2L4.4 8.5 6 5.7l2 .7 1.7-1z" />
 											</svg>
@@ -318,24 +318,33 @@ const steps = [
 				<PlatformRow />
 			</div>
 			{/* The proof, and the one photograph-shaped thing on the page: a
-			    capture of the console's own Resources board holding the three
-			    resources the covers above draw. It is framed rather than
-			    bled, under the house mark, because a screenshot with no edge
-			    reads as part of the page rather than as the product.
+			    capture of the console's own Resources page, taken from
+			    production on 2026-09-26 in the light theme. It is framed
+			    rather than bled, under the house mark, because a screenshot
+			    with no edge reads as part of the page rather than as the
+			    product.
 
-			    Two files: the desktop capture at 2x, and a 390-wide crop of
-			    the same board, because scaling the wide shot down to a phone
-			    column makes a row of resources unreadable. */}
+			    Two files: the desktop capture at 2x (1440 wide), and the 390
+			    phone layout at 2x, because scaling the wide shot down to a
+			    phone column makes the page unreadable. Both stop above the
+			    first resource card: the covers on production were still the
+			    placeholder cards the cover renderer is replacing, and a proof
+			    shot of placeholders sells the wrong thing. */}
 			<figure class="art console-shot">
 				<img class="house" src="/brand/house.svg" alt="" width="30" height="30" />
 				<div class="frame">
 					<picture>
-						<source media="(max-width: 720px)" srcset="/images/console-resources-phone.webp" />
+						<source
+							media="(max-width: 720px)"
+							srcset="/images/console-resources-phone.webp"
+							width="390"
+							height="690"
+						/>
 						<img
 							src="/images/console-resources.webp"
-							alt="The Teachouse Resources board, with Fractions practice, Reading response and Classroom routines in one catalogue"
-							width="1264"
-							height="832"
+							alt="The Teachouse Resources page: search, marketplace and label filters, and every resource sorted by where it is listed"
+							width="1440"
+							height="398"
 							loading="lazy"
 							decoding="async"
 						/>
