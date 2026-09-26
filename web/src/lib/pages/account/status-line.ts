@@ -88,7 +88,7 @@ function haltLine(halted: readonly InventoryStatus[], now: number): string {
 /** A marketplace this console cannot write to yet says so instead of claiming
  *  to be working: nothing is sent there, so "working" would be a claim about
  *  a path that does not exist. */
-const NOT_BUILT_YET = 'Not built yet, so nothing is sent there.';
+const NOT_BUILT_YET = 'Teachouse cannot send resources here yet.';
 
 export function statusRows(
 	entries: readonly InventoryStatus[],
@@ -100,7 +100,7 @@ export function statusRows(
 		const halted = mine.filter((entry) => entry.halted);
 		const built = mine.some((entry) => AUTHORABLE[entry.inventory]);
 		const at = lastChecked(devices, marketplace);
-		const checked = at === null ? '' : `Last checked from your device ${agoLabel(at, now)}`;
+		const checked = at === null ? '' : `Last used by your Teachouse app ${agoLabel(at, now)}`;
 		if (!built) {
 			return {
 				marketplace,

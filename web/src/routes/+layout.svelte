@@ -245,8 +245,8 @@
 				<img src="/brand/logo.svg" alt="Teachouse" width="220" />
 			</div>
 			<div class="auth-card">
-				<h1>Signing you in</h1>
-				<p>Sign in to reach this page.</p>
+				<h1>Taking you to sign in</h1>
+				<p>Sign in to see this page.</p>
 				<Button href="/login" tier="primary">Sign in</Button>
 			</div>
 		</div>

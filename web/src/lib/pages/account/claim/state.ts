@@ -52,7 +52,7 @@ export function claimStatus(draft: string, probe: Probe): ClaimStatus {
 		return {
 			kind: 'unknown',
 			slug,
-			message: 'That name could not be checked. You can still try to save it.'
+			message: 'We could not check that name. You can still save it.'
 		};
 	}
 	return probe.available
@@ -68,11 +68,11 @@ export function claimStatus(draft: string, probe: Probe): ClaimStatus {
  * and would strand a seller whose network dropped one request. */
 export function claimBlockedReason(status: ClaimStatus, saving: boolean): string | null {
 	if (saving) {
-		return 'The name is being saved.';
+		return 'Saving your name.';
 	}
 	switch (status.kind) {
 		case 'empty':
-			return 'Choose a name for your organisation.';
+			return 'Choose a name for your account.';
 		case 'invalid':
 			return status.message;
 		case 'taken':

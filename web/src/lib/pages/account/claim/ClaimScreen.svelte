@@ -119,9 +119,9 @@
 
 <div class="claim-page page">
 	<div class="claim-card">
-		<h1 class="claim-title">Name your organisation</h1>
+		<h1 class="claim-title">Name your account</h1>
 		<p class="claim-lead">
-			Choose the name your organisation is known by; you can change it later.
+			Choose a name for your account. You can change it later.
 		</p>
 
 		{#if refusal !== null}
@@ -175,7 +175,7 @@
 			<Field
 				label="Display name"
 				id="claim-name"
-				hint="Optional. What we print."
+				hint="Optional. How your name is shown."
 			>
 				<input
 					id="claim-name"

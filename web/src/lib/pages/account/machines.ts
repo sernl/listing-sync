@@ -68,9 +68,9 @@ export function sessionWords(session: DeviceSessionView): string {
 				? `signed in as ${session.account_label}`
 				: 'signed in';
 		case 'signed_out':
-			return 'disconnected on the device';
+			return 'signed out in the app on that machine';
 		case 'wiped':
-			return 'forgotten when this device was signed out';
+			return 'removed when you signed this machine out';
 	}
 }
 
@@ -107,7 +107,7 @@ export const CONNECTED_WITHIN_MS = 2 * CHECK_IN_CADENCE_MS;
  */
 export function machineWords(device: DeviceView, now: number): string {
 	if (device.revoked_at !== null) {
-		return `Signed out from the console ${agoLabel(device.revoked_at, now)}`;
+		return `You signed it out ${agoLabel(device.revoked_at, now)}`;
 	}
 	return now - device.last_seen_at <= CONNECTED_WITHIN_MS
 		? `Checked in ${agoLabel(device.last_seen_at, now)}`
@@ -126,7 +126,7 @@ export function loginWords(device: DeviceView): string {
 		return 'No marketplace login saved on this machine.';
 	}
 	const plural = saved === 1 ? 'login' : 'logins';
-	return `${saved} saved marketplace ${plural} on this machine. A saved login is not proof it still works.`;
+	return `${saved} marketplace ${plural} saved on this machine. A saved login may no longer work.`;
 }
 
 /** What this installation's version does and does not allow, in the seller's
@@ -146,9 +146,8 @@ export function loginWords(device: DeviceView): string {
 export function sourcedFileWords(device: DeviceView): string | null {
 	return device.runs_sourced_payloads
 		? null
-		: 'The Teachouse app here is too old to publish or refetch a file from a marketplace. ' +
-				'Everything else — importing your catalogue, your own uploaded files — runs on it as ' +
-				'normal. Update it there when convenient.';
+		: 'Update the Teachouse app on this machine to publish or download files from a marketplace. ' +
+				'Importing your catalogue and using your own uploaded files still work.';
 }
 
 /** The list split in two, in the order the seller needs it.
@@ -213,10 +212,10 @@ export function checkInNote(answer: Pick<CheckInHere, 'reached' | 'detail'>): st
 		return null;
 	}
 	if (answer.detail === null) {
-		return 'This machine could not tell us it is here, and did not say why.';
+		return 'This machine could not reach Teachouse, and did not say why.';
 	}
 	const stop = /[.!?]$/.test(answer.detail) ? '' : '.';
-	return `This machine could not tell us it is here: ${answer.detail}${stop}`;
+	return `This machine could not reach Teachouse: ${answer.detail}${stop}`;
 }
 
 /** How the check-in control reads, pressed and unpressed.
@@ -232,6 +231,6 @@ export interface CheckInControl {
 
 export function checkInControl(pending: boolean): CheckInControl {
 	return pending
-		? { label: 'Checking in…', reason: 'The check-in is running.', disabled: true }
-		: { label: 'Check in now', reason: undefined, disabled: false };
+		? { label: 'Refreshing…', reason: 'Refreshing this machine.', disabled: true }
+		: { label: 'Refresh this machine', reason: undefined, disabled: false };
 }

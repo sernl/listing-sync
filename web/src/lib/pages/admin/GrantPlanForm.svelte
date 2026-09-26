@@ -32,10 +32,10 @@
 	/** Why the grant form cannot be submitted, or null where it can. */
 	const formRefusal = $derived.by(() => {
 		if (trimmedWhy.length === 0) {
-			return 'A reason is required: a plan set by hand with no stated why is an audit row that explains nothing.';
+			return 'Enter a reason. It goes in the audit log.';
 		}
 		if (expiry !== '' && Number.isNaN(Date.parse(`${expiry}T00:00:00Z`))) {
-			return 'That expiry is not a date.';
+			return 'Enter a valid expiry date.';
 		}
 		return null;
 	});
@@ -54,7 +54,7 @@
 			await onGranted();
 			why = '';
 			expiry = '';
-			toast('info', 'Plan set. The tenant sees it on their next request.');
+			toast('info', 'Plan set. The account sees it on its next request.');
 		},
 		onError: (failure: Error) =>
 			toast('error', failure instanceof ApiFailure ? failure.message : 'The plan was not set.')
@@ -71,10 +71,10 @@
 	/** Why the credit cannot be submitted, or null where it can. */
 	const creditRefusal = $derived.by(() => {
 		if (!Number.isInteger(delta) || delta === 0) {
-			return 'A credit of no moves changes nothing.';
+			return 'Enter a number of moves other than zero.';
 		}
 		if (trimmedCreditWhy.length === 0) {
-			return 'A reason is required: the server is idempotent on it, and an unreasoned credit explains nothing.';
+			return 'Enter a reason. The same reason twice counts as one credit.';
 		}
 		return null;
 	});
@@ -85,7 +85,7 @@
 			await onGranted();
 			delta = 0;
 			creditWhy = '';
-			toast('info', 'Balance set. The tenant sees it on their next request.');
+			toast('info', 'Balance set. The account sees it on its next request.');
 		},
 		onError: (failure: Error) =>
 			toast(
@@ -97,8 +97,8 @@
 
 <div class="op-grant">
 	<p class="foot-note">
-		This writes an operator grant against your own operator account. It does not touch Stripe,
-		so a tenant who is also paying keeps whichever grant is stronger.
+		This sets an operator grant under your operator account. It does not touch Stripe, so an
+		account that also pays keeps whichever grant is stronger.
 	</p>
 	<Field label="Plan" id={`grant-plan-${org}`}>
 		<select id={`grant-plan-${org}`} bind:value={chosen}>
@@ -119,14 +119,14 @@
 			id={`grant-reason-${org}`}
 			type="text"
 			bind:value={why}
-			placeholder="Why this tenant is being given this plan"
+			placeholder="Why this account gets this plan"
 		/>
 	</Field>
 	<div class="actions">
 		<Button
 			tier="primary"
 			disabled={formRefusal !== null || granting.isPending}
-			reason={formRefusal ?? (granting.isPending ? 'The grant is being written.' : undefined)}
+			reason={formRefusal ?? (granting.isPending ? 'Setting the plan.' : undefined)}
 			onclick={() => granting.mutate()}
 		>
 			{granting.isPending ? 'Setting…' : 'Set plan'}
@@ -135,7 +135,7 @@
 
 	<hr />
 
-	<p class="foot-note">Credit moves this tenant can spend, or take back moves credited twice.</p>
+	<p class="foot-note">Give this account moves to spend, or take back moves credited twice.</p>
 	<Field label="Moves" id={`credit-moves-${org}`} hint="Negative takes moves back.">
 		<input id={`credit-moves-${org}`} type="number" step="1" bind:value={delta} />
 	</Field>
@@ -150,7 +150,7 @@
 	<div class="actions">
 		<Button
 			disabled={creditRefusal !== null || crediting.isPending}
-			reason={creditRefusal ?? (crediting.isPending ? 'The credit is being written.' : undefined)}
+			reason={creditRefusal ?? (crediting.isPending ? 'Crediting moves.' : undefined)}
 			onclick={() => crediting.mutate()}
 		>
 			{crediting.isPending ? 'Crediting…' : 'Credit moves'}

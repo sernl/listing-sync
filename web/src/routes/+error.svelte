@@ -20,10 +20,9 @@
 		<h1>{missing ? 'That page is not here' : 'That page could not be opened'}</h1>
 		<p>
 			{#if missing}
-				The address does not match anything in Teachouse. It may have been a typed slip, or a
-				link to something that has since moved.
+				We could not find this page. Check the address, or the page may have moved.
 			{:else}
-				Something went wrong while opening it. Opening it again usually clears it.
+				Something went wrong. Try opening it again.
 			{/if}
 		</p>
 		<!-- One destination, not a branch on the session: a signed-out visitor

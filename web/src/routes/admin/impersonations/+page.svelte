@@ -38,14 +38,14 @@
 	</PageHead>
 
 	{#if trail.isPending}
-		<Panel><p class="quiet">Reading the audit trail…</p></Panel>
+		<Panel><p class="quiet">Loading the audit trail…</p></Panel>
 	{:else if trail.isError}
-		<Panel><p class="quiet">The audit trail could not be read.</p></Panel>
+		<Panel><p class="quiet">We could not load the audit trail.</p></Panel>
 	{:else if events === undefined}
 		<Placeholder
 			icon="copy"
-			headline="The identity audit trail is not visible from here"
-			body="This database carries no identity schema, so there is no record to read. That is not the same as nobody having been impersonated."
+			headline="The identity audit trail is not available here"
+			body="This database has no identity schema, so there is nothing to read. That does not mean nobody was impersonated."
 		/>
 	{:else}
 		<Panel>
@@ -53,7 +53,7 @@
 				<Placeholder
 					icon="circle-check"
 					headline="Nobody has been impersonated"
-					body="The trail is readable and empty, which is the fact this page is here to establish."
+					body="The audit trail loaded and shows no impersonations."
 				/>
 			{:else}
 				<div class="op-table op-tall">
@@ -90,10 +90,10 @@
 					</table>
 				</div>
 				<p class="foot-note">
-					Actor and target are identity-plane subject ids, not platform user ids: the two planes
-					number their users separately. Reading this trail needs the operator marking, which the
-					identity admin role does not confer — so the party who can impersonate and the party who
-					can read this page are not the same party by construction.
+					Actor and target are identity-service subject ids, not app user ids; the two number
+					users separately. Reading this page needs operator access, which the identity admin
+					role does not give, so the people who can impersonate and the people who can read this
+					page are kept apart.
 				</p>
 			{/if}
 		</Panel>

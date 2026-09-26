@@ -28,34 +28,31 @@
 	{@render children()}
 {:else if verdict === 'checking'}
 	<div class="page">
-		<p class="quiet">Checking whether this account operates the platform…</p>
+		<p class="quiet">Checking admin access…</p>
 	</div>
 {:else if reason === 'unconfigured'}
 	<div class="page">
 		<Placeholder
 			icon="layout-dashboard"
-			headline="This deployment serves no operator surface"
-			body="It was started without a backoffice database, so it serves none of it rather
-				than half of it. Nothing is wrong with your account."
+			headline="Admin pages are off on this server"
+			body="This server runs without a backoffice database. Nothing is wrong with your account."
 		/>
 	</div>
 {:else if reason === 'not-an-operator'}
 	<div class="page">
 		<Placeholder
 			icon="layout-dashboard"
-			headline="This account does not operate the platform"
-			body="The operator marking is granted on the box by hand and is separate from
-				anything inside the product. If you should have it, ask the person who runs
-				the deployment."
+			headline="This account is not an admin"
+			body="Admin access is set by hand on the server, not in the app. If you need it, ask
+				the person who runs Teachouse."
 		/>
 	</div>
 {:else}
 	<div class="page">
 		<Placeholder
 			icon="layout-dashboard"
-			headline="The operator surface could not be read"
-			body="The request did not come back with an answer we can act on. Reloading is
-				the only thing worth trying from here."
+			headline="We could not load the admin pages"
+			body="Try reloading the page."
 		/>
 	</div>
 {/if}

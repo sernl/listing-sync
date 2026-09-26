@@ -51,7 +51,7 @@ export function permissionRows(view: ConsentsView | undefined): PermissionRow[] 
 					marketplace,
 					name,
 					standing,
-					pill: { label: 'Needs re-confirmation', tone: 'warn' },
+					pill: { label: 'Confirm again', tone: 'warn' },
 					action: 'grant'
 				};
 			case 'missing':
@@ -64,8 +64,8 @@ export function permissionRows(view: ConsentsView | undefined): PermissionRow[] 
 export function withdrawPrompt(name: string): string {
 	return (
 		`Withdraw permission for ${name}?\n\n` +
-		`Teachouse stops starting new ${name} work on every machine. ` +
-		'Logins already on your machines stay until you sign them out there.'
+		`Teachouse stops all new ${name} work on your machines. ` +
+		`Your ${name} logins stay on each machine until you sign out there.`
 	);
 }
 

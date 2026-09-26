@@ -72,9 +72,8 @@
 	async function endAll() {
 		const sure = confirm(
 			`Sign ${email} out everywhere?\n\n` +
-				'Every browser and device they are signed in on is signed out at once, immediately: ' +
-				'the session cookie cache is off, so there is no window in which a revoked session ' +
-				'still works. They can sign in again straight away.'
+				'Every browser and device they use is signed out right away, with no delay. ' +
+				'They can sign in again at once.'
 		);
 		if (!sure) {
 			return;
@@ -90,7 +89,7 @@
 		} catch (failure) {
 			toast(
 				'error',
-				failure instanceof AuthFailure ? failure.message : 'Those sign-ins were not ended.'
+				failure instanceof AuthFailure ? failure.message : 'Those sign-ins were not ended. Try again.'
 			);
 		} finally {
 			ending = false;
@@ -103,17 +102,17 @@
 		<h2 id="sessions-title">Sign-ins for {email}</h2>
 
 		{#if sessions.isPending}
-			<p class="quiet">Reading their sign-ins…</p>
+			<p class="quiet">Loading sign-ins…</p>
 		{:else if sessions.isError}
 			<p class="refusal">
 				{sessions.error instanceof AuthFailure
 					? sessions.error.message
-					: "That account's sign-ins could not be listed."}
+					: "We could not load this account's sign-ins."}
 			</p>
 		{:else if rows.length === 0}
 			<p class="quiet">
-				This account has no live sign-in. There is nothing to sign out of, which is a different
-				fact from a banned account: a ban stops the next sign-in as well.
+				This account is not signed in anywhere. That is not a ban: a ban also blocks the next
+				sign-in.
 			</p>
 		{:else}
 			{#each rows as session (session.id)}
@@ -133,8 +132,8 @@
 		{/if}
 
 		<p class="foot-note">
-			The identity service holds these, not the platform: an IP address and a user agent is the
-			whole of what it records about a sign-in, and it has no device name to give.
+			The identity service keeps these, not the app. It records only an IP address and user
+			agent, with no device name.
 		</p>
 
 		<div class="actions">
@@ -142,7 +141,7 @@
 			<Button
 				danger
 				disabled={ending || rows.length === 0}
-				reason={rows.length === 0 ? 'This account has no live sign-in.' : undefined}
+				reason={rows.length === 0 ? 'This account is not signed in anywhere.' : undefined}
 				onclick={endAll}
 			>
 				{ending ? 'Signing out…' : 'Sign out everywhere'}

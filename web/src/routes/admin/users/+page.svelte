@@ -120,9 +120,9 @@
 		mutationFn: (input: { id: string; reason: string }) => banIdentityUser(input.id, input.reason),
 		onSuccess: async () => {
 			await reload();
-			toast('info', 'Account banned. Their sessions no longer sign in.');
+			toast('info', 'Account banned. They can no longer sign in.');
 		},
-		onError: (failure: Error) => toast('error', refusalOf(failure, 'The account was not banned.'))
+		onError: (failure: Error) => toast('error', refusalOf(failure, 'The account was not banned. Try again.'))
 	}));
 
 	const unbanning = createMutation(() => ({
@@ -131,7 +131,7 @@
 			await reload();
 			toast('info', 'Account unbanned.');
 		},
-		onError: (failure: Error) => toast('error', refusalOf(failure, 'The account was not unbanned.'))
+		onError: (failure: Error) => toast('error', refusalOf(failure, 'The account was not unbanned. Try again.'))
 	}));
 
 	const settingRole = createMutation(() => ({
@@ -141,7 +141,7 @@
 			await reload();
 			toast('info', 'Role changed.');
 		},
-		onError: (failure: Error) => toast('error', refusalOf(failure, 'The role was not changed.'))
+		onError: (failure: Error) => toast('error', refusalOf(failure, 'The role was not changed. Try again.'))
 	}));
 
 	function search(event: SubmitEvent) {
@@ -156,8 +156,8 @@
 
 	function ban(user: IdentityUser) {
 		const reason = prompt(
-			`Ban ${user.email}? They stop being able to sign in immediately.\n\n` +
-				'Why (stored on the account and shown here afterwards):'
+			`Ban ${user.email}? They can no longer sign in, starting now.\n\n` +
+				'Reason (saved on the account and shown here):'
 		);
 		if (reason === null) {
 			return;
@@ -194,8 +194,8 @@
 	async function impersonate(user: IdentityUser) {
 		const sure = confirm(
 			`Sign in as ${user.email}?\n\n` +
-				'Every page you then open is their workspace, and anything you do is done as ' +
-				'them. It is recorded in the impersonation trail either way.'
+				'Every page you open is their account, and anything you do is done as them. ' +
+				'It is logged in the impersonation trail.'
 		);
 		if (!sure) {
 			return;
@@ -236,24 +236,22 @@
 	<PageHead
 		icon="users"
 		title="Identity users"
-		description="Accounts in the identity service, joined to the platform users they provisioned."
+		description="Sign-in accounts, matched to the app users they created."
 	/>
 
 	{#if listRefusal === 'not-identity-admin'}
 		<Placeholder
 			icon="users"
-			headline="Your identity account is not an identity admin"
-			body="Operating the platform and administering the identity service are two markings,
-				granted separately and by hand. You hold the first, which is what let you reach
-				this page; this list needs the second. Nothing here can grant it to you — ask the
-				person who runs the identity service."
+			headline="You are not an identity admin"
+			body="Operator access and identity admin are granted separately, by hand. You have
+				operator access; this list also needs identity admin. Ask the person who runs the
+				identity service."
 		/>
 	{:else if listRefusal === 'unreadable'}
 		<Placeholder
 			icon="users"
-			headline="The identity accounts could not be listed"
-			body="The identity service did not answer with something we can act on. Reloading is
-				the only thing worth trying from here."
+			headline="We could not load the accounts"
+			body="The identity service did not answer. Try reloading the page."
 		/>
 	{:else}
 		<Panel>
@@ -280,9 +278,9 @@
 				<!-- The identity list still draws: an operator who cannot read
 				     the platform's half can still ban and impersonate, and a
 				     page that refused entirely would take those away too. -->
-				<Banner tone="warn" title="The platform's half of this list could not be read">
-					Organisation, plan and last sign-in are missing from every row below. The identity
-					service's own facts are unaffected.
+				<Banner tone="warn" title="We could not load the app side of this list">
+					Organisation, plan and last sign-in are missing below. Identity details are still
+					shown.
 				</Banner>
 			{/if}
 
@@ -290,7 +288,7 @@
 			     `appUsers`. It also keeps a table on screen through a refetch
 			     rather than flashing this line over rows that are still good. -->
 			{#if users.isPending && rows.length === 0}
-				<p class="quiet">Reading the identity accounts…</p>
+				<p class="quiet">Loading accounts…</p>
 			{:else if users.isError}
 				<!-- Before the empty arm, and not folded into it: `listRefusal`
 				     is null for anything that is not an `AuthFailure`, and
@@ -299,19 +297,17 @@
 				     corrected itself. -->
 				<Placeholder
 					icon="users"
-					headline="The identity accounts could not be read"
-					body="The request did not come back with an answer we can act on, so this page
-						cannot say whether the service holds any accounts. Reloading is the only
-						thing worth trying from here."
+					headline="We could not load the accounts"
+					body="We cannot tell whether any accounts exist. Try reloading the page."
 				/>
 			{:else if rows.length === 0}
 				<Placeholder
 					icon="users"
 					headline={applied.length === 0
-						? 'The identity service holds no accounts'
+						? 'No accounts yet'
 						: 'No account matches that search'}
 					body={applied.length === 0
-						? 'The first account appears here the moment somebody registers.'
+						? 'The first account appears here when someone signs up.'
 						: `No account's address contains “${applied}”.`}
 				/>
 			{:else}
@@ -419,7 +415,7 @@
 													tier="outline"
 													small
 													disabled={unbanning.isPending}
-													reason={unbanning.isPending ? 'An unban is in flight.' : undefined}
+													reason={unbanning.isPending ? 'Unbanning.' : undefined}
 													onclick={() => unbanning.mutate(user.id)}
 												>
 													Unban
@@ -430,7 +426,7 @@
 													small
 													danger
 													disabled={banning.isPending}
-													reason={banning.isPending ? 'A ban is in flight.' : undefined}
+													reason={banning.isPending ? 'Banning.' : undefined}
 													onclick={() => ban(user)}
 												>
 													Ban
@@ -456,20 +452,18 @@
 				</div>
 				<p class="foot-note">
 					{rows.length}
-					{rows.length === 1 ? 'account' : 'accounts'}, newest first, at most {PAGE_SIZE}. An
-					unverified account cannot be impersonated: the session exchange refuses one, and the
-					impersonation is undone rather than left half-applied.
+					{rows.length === 1 ? 'account' : 'accounts'}, newest first, at most {PAGE_SIZE}. You
+					cannot impersonate an unverified account; the attempt is undone, not left half-done.
 					{#if merged.unlinked > 0}
 						{merged.unlinked} platform
-						{merged.unlinked === 1 ? 'user is' : 'users are'} not on this page — either their
-						search does not match, or they carry no identity subject at all, which a user
-						provisioned outside the sign-up flow does.
+						{merged.unlinked === 1 ? 'user is' : 'users are'} not on this page. Either the
+						search does not match, or they have no identity account because they were created
+						outside sign-up.
 					{/if}
-					Sign-ins are read one account at a time, because the identity service lists them per
-					account; the count fills in when you open a row.
+					Sign-ins load one account at a time. The count fills in when you open a row.
 					{#if !trailVisible && appUsers.length > 0}
-						No row carries a last sign-in, which most likely means this deployment's API cannot
-						see the identity schema rather than that nobody has ever signed in.
+						No row shows a last sign-in. Most likely this server cannot see the identity schema,
+						not that nobody has signed in.
 					{/if}
 				</p>
 			{/if}
@@ -497,8 +491,8 @@
 		<div class="dialog-body">
 			<h2 id="grant-title">Set the plan for {target.name}</h2>
 			<p>
-				An entitlement belongs to the organisation, not to the person: this grant applies to
-				{target.name}, which is {target.email}'s tenant and anybody else's in it.
+				A plan belongs to the organisation, not the person. This applies to {target.name},
+				the account {target.email} and everyone else in it share.
 			</p>
 			<GrantPlanForm org={target.org} onGranted={granted} />
 			<div class="actions">

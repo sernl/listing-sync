@@ -12,6 +12,6 @@
 	}
 </script>
 
-<svelte:head><title>Name your organisation</title></svelte:head>
+<svelte:head><title>Name your account</title></svelte:head>
 
 <ClaimScreen dismissable onDone={done} />

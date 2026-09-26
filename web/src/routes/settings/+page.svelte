@@ -95,7 +95,7 @@
 			queryClient.setQueryData(queryKeys.org, stored);
 			orgDraft = stored.name;
 			orgRefusal = null;
-			toast('info', 'Organisation name saved.');
+			toast('info', 'Account name saved.');
 		},
 		onError: (failure: Error) => {
 			// A 422 is about the name in the field, so it is answered beside the
@@ -104,17 +104,17 @@
 				orgRefusal = failure.message;
 				return;
 			}
-			toast('error', 'The organisation name was not saved.');
+			toast('error', 'Your account name was not saved. Try again.');
 		}
 	}));
 
 	const orgBlocked = $derived(
 		renaming.isPending
-			? 'The name is being saved.'
+			? 'Saving your name.'
 			: !orgVerdict.accepted
 				? orgVerdict.message
 				: orgUnchanged
-					? 'The name has not changed.'
+					? 'Change the name to save it.'
 					: null
 	);
 
@@ -193,7 +193,7 @@
 			queryClient.setQueryData(queryKeys.org, stored);
 			slugDraft = stored.slug ?? '';
 			slugRefusal = null;
-			toast('info', 'Organisation name saved.');
+			toast('info', 'Account name saved.');
 		},
 		onError: (failure: Error) => {
 			// A 409 says another organisation holds the name and a 422 says the
@@ -204,17 +204,17 @@
 				slugRefusal = failure.message;
 				return;
 			}
-			toast('error', 'The organisation name was not saved.');
+			toast('error', 'Your account name was not saved. Try again.');
 		}
 	}));
 
 	const slugBlocked = $derived(
 		claiming.isPending
-			? 'The name is being saved.'
+			? 'Saving your name.'
 			: !slugVerdict.accepted
 				? slugVerdict.message
 				: slugUnchanged
-					? 'The name has not changed.'
+					? 'Change the name to save it.'
 					: null
 	);
 
@@ -269,11 +269,11 @@
 
 	const nameBlocked = $derived(
 		renamingUser.isPending
-			? 'The name is being saved.'
+			? 'Saving your name.'
 			: nameBlank
-				? 'A display name cannot be empty.'
+				? 'Enter a display name.'
 				: nameUnchanged
-					? 'The name has not changed.'
+					? 'Change the name to save it.'
 					: null
 	);
 
@@ -325,7 +325,7 @@
 			const landed = await api.upload(file, 'keep_whole', undefined, 'image');
 			const handle = landed.payload[0]?.hash;
 			if (handle === undefined) {
-				avatarRefused = 'That file was stored with no handle to attach.';
+				avatarRefused = 'That picture could not be attached. Try again.';
 				return;
 			}
 			const stored = await api.setAvatar(handle);
@@ -367,20 +367,20 @@
 		onSuccess: async () => {
 			newPasskeyLabel = '';
 			await queryClient.invalidateQueries({ queryKey: queryKeys.passkeys });
-			toast('info', 'Passkey registered.');
+			toast('info', 'Passkey added.');
 		},
 		onError: (failure: Error) => {
 			const code = failure instanceof AuthFailure ? failure.code : undefined;
 			if (code === CEREMONY_ABORTED) {
 				// Dismissing the browser's prompt is a decision, not a fault.
-				toast('info', 'Passkey registration cancelled. Nothing changed.');
+				toast('info', 'Passkey not added. Nothing changed.');
 				return;
 			}
 			if (code === ALREADY_REGISTERED) {
-				toast('error', 'That authenticator is already registered on this account.');
+				toast('error', 'That device already has a passkey for this account.');
 				return;
 			}
-			toast('error', refusalOf(failure, 'The passkey was not registered.'));
+			toast('error', refusalOf(failure, 'The passkey was not added. Try again.'));
 		}
 	}));
 
@@ -391,7 +391,7 @@
 			toast('info', 'Passkey removed.');
 		},
 		onError: (failure: Error) => {
-			toast('error', refusalOf(failure, 'The passkey was not removed.'));
+			toast('error', refusalOf(failure, 'The passkey was not removed. Try again.'));
 		}
 	}));
 
@@ -402,8 +402,8 @@
 
 	function remove(passkey: PasskeyRecord) {
 		const sure = confirm(
-			`Remove "${passkeyLabel(passkey)}"? Signing in with that passkey stops ` +
-				'working immediately. Your password and any other passkeys are unaffected.'
+			`Remove "${passkeyLabel(passkey)}"? You can no longer sign in with it. ` +
+				'Your password and other passkeys still work.'
 		);
 		if (!sure) {
 			return;
@@ -435,11 +435,11 @@
 	const endingSignIn = createMutation(() => ({
 		mutationFn: (token: string) => revokeBrowserSession(token),
 		onSuccess: async () => {
-			toast('info', 'That browser sign-in was ended.');
+			toast('info', 'That browser is signed out.');
 			await queryClient.invalidateQueries({ queryKey: queryKeys.browserSessions });
 		},
 		onError: () => {
-			toast('error', 'That sign-in was not ended.');
+			toast('error', 'That browser was not signed out. Try again.');
 		}
 	}));
 
@@ -454,11 +454,11 @@
 	function endSignIn(session: BrowserSession, isCurrent: boolean) {
 		const sure = confirm(
 			isCurrent
-				? 'End this sign-in? You are using it right now, so you will be signed out of this browser.'
+				? 'End this sign-in? You are using it now, so you will be signed out of this browser.'
 				: currentKnown
-					? 'End this browser sign-in? That browser will have to sign in again.'
-					: 'End this browser sign-in? We could not tell which of these is the browser you are ' +
-						'using, so if it is this one you will be signed out here.'
+					? 'End this browser sign-in? That browser will need to sign in again.'
+					: 'End this browser sign-in? We cannot tell if it is this browser, so you may be ' +
+						'signed out here.'
 		);
 		if (sure) {
 			endingSignIn.mutate(session.token);
@@ -488,7 +488,7 @@
 			]);
 		},
 		onError: (failure: Error) => {
-			toast('error', failure instanceof ApiFailure ? failure.message : 'The permission was not withdrawn.');
+			toast('error', failure instanceof ApiFailure ? failure.message : 'The permission was not withdrawn. Try again.');
 		}
 	}));
 
@@ -504,7 +504,7 @@
 	<PageHead
 		icon="sliders-horizontal"
 		title="Account settings"
-		description="Your organisation, your profile, and the ways you sign in."
+		description="Your account name, profile and ways to sign in."
 		guide="account"
 	>
 		{#snippet aside()}
@@ -517,13 +517,13 @@
 	</PageHead>
 
 	<Panel
-		title="Organisation"
-		description="What this account is called."
+		title="Account name"
+		description="What your account is called."
 	>
 		{#if organisation.isPending}
 			<p class="quiet">Loading…</p>
 		{:else if organisation.isError}
-			<p class="quiet">We could not read your organisation.</p>
+			<p class="quiet">We could not load your account name.</p>
 		{:else}
 			<form onsubmit={rename} class="form">
 				<!-- No `maxlength`: it counts UTF-16 code units, so it would silently
@@ -621,7 +621,7 @@
 								? 'Choose a different picture'
 								: 'Choose a picture'}
 					</b>
-					A JPEG, PNG or GIF, shown to you beside your organisation's name.
+					A JPEG, PNG or GIF, shown beside your account name.
 					<input
 						id="avatar-file"
 						type="file"
@@ -642,9 +642,9 @@
 							small
 							disabled={avatarSending || removingAvatar.isPending}
 							reason={avatarSending
-								? 'A picture is being uploaded.'
+								? 'Wait for the upload to finish.'
 								: removingAvatar.isPending
-									? 'The picture is being removed.'
+									? 'Removing the picture.'
 									: undefined}
 							onclick={() => removingAvatar.mutate()}
 						>
@@ -661,14 +661,14 @@
 		{#if profile.isPending}
 			<p class="quiet">Loading…</p>
 		{:else if profile.isError || !profile.data}
-			<p class="quiet">We could not read your profile.</p>
+			<p class="quiet">We could not load your profile.</p>
 		{:else}
 			<dl class="acct-detail">
 				<dt>Email</dt>
 				<dd>
 					{profile.data.email}
 					{#if !profile.data.emailVerified}
-						<StatusPill tone="run" label="unverified" />
+						<StatusPill tone="run" label="not verified" />
 					{/if}
 				</dd>
 			</dl>
@@ -699,15 +699,15 @@
 
 	<Panel
 		title="Notifications"
-		description="What we email you when something finishes."
+		description="Choose when we email you."
 	>
 		{#if notifyPrefs.isPending}
 			<p class="quiet">Loading…</p>
 		{:else if notifyPrefs.isError || !notifyPrefs.data}
-			<p class="quiet">We could not read your notification settings.</p>
+			<p class="quiet">We could not load your email settings.</p>
 		{:else}
 			<Toggle
-				label="Email me when a run finishes"
+				label="Email me when an import or move finishes"
 				checked={notifyDraft ?? notifyPrefs.data.notify_email}
 				disabled={settingNotifyEmail.isPending}
 				onchange={(value) => settingNotifyEmail.mutate(value)}
@@ -718,9 +718,9 @@
 			     that knows one. -->
 			<Note icon="circle-user">
 				{#if profile.data}
-					Mail goes to {profile.data.email}.
+					Emails go to {profile.data.email}.
 				{:else}
-					Mail goes to the address you signed up with.
+					Emails go to the address you signed up with.
 				{/if}
 			</Note>
 		{/if}
@@ -732,15 +732,15 @@
 	>
 		{#if !supported}
 			<p class="quiet">
-				This browser does not support passkeys, so use your password instead.
+				This browser does not support passkeys. Use your password instead.
 			</p>
 		{:else}
 			{#if passkeys.isPending}
 				<p class="quiet">Loading…</p>
 			{:else if passkeys.isError}
-				<p class="quiet">We could not list your passkeys.</p>
+				<p class="quiet">We could not load your passkeys.</p>
 			{:else if passkeys.data.length === 0}
-				<p class="quiet">No passkeys registered yet.</p>
+				<p class="quiet">No passkeys yet.</p>
 			{:else}
 				{#each passkeys.data as passkey (passkey.id)}
 					<div class="acct-state-row">
@@ -760,7 +760,7 @@
 							small
 							disabled={removing.isPending && removing.variables === passkey.id}
 							reason={removing.isPending && removing.variables === passkey.id
-								? 'This passkey is being removed.'
+								? 'Removing this passkey.'
 								: undefined}
 							onclick={() => remove(passkey)}
 						>
@@ -786,9 +786,9 @@
 						icon="shield-check"
 						type="submit"
 						disabled={registering.isPending}
-						reason={registering.isPending ? 'Your device is being asked for a passkey.' : undefined}
+						reason={registering.isPending ? 'Follow the prompt on your device.' : undefined}
 					>
-						{registering.isPending ? 'Waiting for your device…' : 'Register a passkey'}
+						{registering.isPending ? 'Waiting for your device…' : 'Add a passkey'}
 					</Button>
 				</div>
 			</form>
@@ -797,14 +797,14 @@
 
 	<Panel
 		title="Browser sign-ins"
-		description="Browser sessions for this Teachouse account."
+		description="Browsers signed in to your Teachouse account."
 	>
 		{#if signIns.isPending || current.isPending}
 			<p class="quiet">Loading…</p>
 		{:else if signIns.isError}
-			<p class="quiet">We could not list your browser sign-ins.</p>
+			<p class="quiet">We could not load your browser sign-ins.</p>
 		{:else if (signIns.data ?? []).length === 0}
-			<p class="quiet">No browser sign-ins were found.</p>
+			<p class="quiet">No browser sign-ins.</p>
 		{:else}
 			{#each signIns.data ?? [] as session (session.token)}
 				{@const isCurrent = session.token === current.data}
@@ -827,7 +827,7 @@
 						small
 						disabled={endingSignIn.isPending && endingSignIn.variables === session.token}
 						reason={endingSignIn.isPending && endingSignIn.variables === session.token
-							? 'This sign-in is being ended.'
+							? 'Ending this sign-in.'
 							: undefined}
 						onclick={() => endSignIn(session, isCurrent)}
 					>
@@ -840,7 +840,7 @@
 		{/if}
 		<Note>
 			{currentKnown
-				? 'Ending a sign-in takes effect the next time that browser asks us for anything.'
+				? 'An ended sign-in stops working the next time that browser opens Teachouse.'
 				: 'We could not tell which of these is the browser you are using.'}
 		</Note>
 	</Panel>
@@ -856,10 +856,10 @@
 	<Panel
 		id="permissions"
 		title="Marketplace permissions"
-		description="Each machine you use needs your permission, once, per marketplace."
+		description="Give Teachouse permission to use each marketplace on your machines. You only do this once."
 	>
 		{#if consents.isError}
-			<p class="quiet">We could not read your permissions.</p>
+			<p class="quiet">We could not load your permissions.</p>
 		{/if}
 		{#each permissions as row (row.marketplace)}
 			<div class="acct-state-row">

@@ -78,7 +78,7 @@
 			);
 			if (error) {
 				captcha?.reset();
-				toast('error', messageOf(error, 'That account could not be created.'));
+				toast('error', messageOf(error, 'We could not create that account. Try again.'));
 				return;
 			}
 			password = '';
@@ -93,7 +93,7 @@
 		const { error } = await signInWithProvider(provider);
 		if (error) {
 			busy = null;
-			toast('error', messageOf(error, `Signing up with ${provider} is unavailable.`));
+			toast('error', messageOf(error, `You cannot sign up with ${provider} right now.`));
 		}
 	}
 
@@ -108,7 +108,7 @@
 			toast(
 				error ? 'error' : 'info',
 				error
-					? messageOf(error, 'The verification email could not be sent.')
+					? messageOf(error, 'We could not send the verification email. Try again.')
 					: 'Verification email sent.'
 			);
 		} finally {
@@ -120,12 +120,12 @@
 <div class="auth-card acct-signed-out">
 	{#if awaitingVerification !== null}
 		<h1>Check your email</h1>
-		<p>Confirm the address we sent a link to, <b>{awaitingVerification}</b>.</p>
+		<p>Open the link we sent to <b>{awaitingVerification}</b>.</p>
 		<div class="actions">
 			<Button
 				tier="primary"
 				disabled={busy !== null}
-				reason={busy !== null ? 'A sign-up step is already running.' : undefined}
+				reason={busy !== null ? 'Wait for the current step to finish.' : undefined}
 				onclick={resend}
 			>
 				{busy === 'resend' ? 'Sending…' : 'Send it again'}
@@ -134,7 +134,7 @@
 		</div>
 	{:else}
 		<h1>Create an account</h1>
-		<p>Signing up creates your organisation.</p>
+		<p>Set up your Teachouse account.</p>
 
 		<form onsubmit={register} class="form">
 			<Field label="Name" id="name" required>
@@ -167,9 +167,9 @@
 				type="submit"
 				disabled={busy !== null || challengePending}
 				reason={busy !== null
-					? 'A sign-up step is already running.'
+					? 'Wait for the current step to finish.'
 					: challengePending
-						? 'The challenge above has not been answered yet.'
+						? 'Complete the check above first.'
 						: undefined}
 			>
 				{busy === 'register' ? 'Creating…' : 'Create account'}
@@ -183,7 +183,7 @@
 					<Button
 						tier="outline"
 						disabled={busy !== null}
-						reason={busy !== null ? 'A sign-up step is already running.' : undefined}
+						reason={busy !== null ? 'Wait for the current step to finish.' : undefined}
 						onclick={() => withProvider(provider.id)}
 					>
 						{busy === provider.id ? 'Redirecting…' : `Continue with ${provider.label}`}

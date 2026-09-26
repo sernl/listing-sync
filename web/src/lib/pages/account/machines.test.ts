@@ -42,7 +42,7 @@ describe('what one machine is doing', () => {
 			machine({ revoked_at: NOW - 3 * 60 * MINUTE, last_seen_at: NOW - MINUTE }),
 			NOW
 		);
-		expect(said).toBe('Signed out from the console 3 h ago');
+		expect(said).toBe('You signed it out 3 h ago');
 		expect(said).not.toContain('Connected');
 		expect(said).not.toContain('just now');
 	});
@@ -80,7 +80,7 @@ describe('what one machine is doing', () => {
 				}),
 				NOW
 			)
-		).toBe('Signed out from the console 2 days ago');
+		).toBe('You signed it out 2 days ago');
 	});
 });
 
@@ -103,8 +103,8 @@ describe('the facts about a machine, kept apart', () => {
 		});
 		expect(machineWords(stale, NOW)).toBe('Last seen 3 h ago');
 		const login = loginWords(stale);
-		expect(login).toContain('1 saved marketplace login');
-		expect(login).toContain('not proof it still works');
+		expect(login).toContain('1 marketplace login saved');
+		expect(login).toContain('may no longer work');
 		expect(login).not.toContain('Checked in');
 		expect(login).not.toContain('Ready');
 	});
@@ -120,8 +120,8 @@ describe('the facts about a machine, kept apart', () => {
 	it('names only the sourced-file limitation and never calls a machine unable to import', () => {
 		expect(sourcedFileWords(machine({ runs_sourced_payloads: true }))).toBeNull();
 		const older = sourcedFileWords(machine({ app_version: '0.8.0', runs_sourced_payloads: false }));
-		expect(older).toContain('publish or refetch a file from a marketplace');
-		expect(older).toContain('importing your catalogue');
+		expect(older).toContain('publish or download files from a marketplace');
+		expect(older).toContain('Importing your catalogue');
 		// The sentence the server does not support, in either direction.
 		expect(older).not.toContain('cannot run imports');
 		expect(older).not.toContain('too old to run imports');
@@ -188,13 +188,13 @@ describe('what the panel says about a check-in it asked for', () => {
 		];
 		for (const detail of sentences) {
 			const said = checkInNote({ reached: false, detail });
-			expect(said).toBe(`This machine could not tell us it is here: ${detail}.`);
+			expect(said).toBe(`This machine could not reach Teachouse: ${detail}.`);
 		}
 	});
 
 	it('does not add a second full stop to a sentence that has one', () => {
 		expect(checkInNote({ reached: false, detail: 'the control plane refused: no route.' })).toBe(
-			'This machine could not tell us it is here: the control plane refused: no route.'
+			'This machine could not reach Teachouse: the control plane refused: no route.'
 		);
 	});
 
@@ -202,15 +202,15 @@ describe('what the panel says about a check-in it asked for', () => {
 		// An application older than the field, and a rejection, both land here. A
 		// substituted cause would read as something the machine actually said.
 		const said = checkInNote({ reached: false, detail: null });
-		expect(said).toBe('This machine could not tell us it is here, and did not say why.');
+		expect(said).toBe('This machine could not reach Teachouse, and did not say why.');
 		expect(said).not.toContain(':');
 	});
 });
 
 describe('the check-in control', () => {
 	it('reads as the act while it is idle and as the running act while it is not', () => {
-		expect(checkInControl(false).label).toBe('Check in now');
-		expect(checkInControl(true).label).toBe('Checking in…');
+		expect(checkInControl(false).label).toBe('Refresh this machine');
+		expect(checkInControl(true).label).toBe('Refreshing…');
 	});
 
 	it('is pressable only when nothing is running', () => {

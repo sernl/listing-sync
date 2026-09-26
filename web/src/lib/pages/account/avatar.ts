@@ -5,7 +5,7 @@
 import { ApiFailure } from '$lib/api';
 import { quotaSentence } from '$lib/authoring';
 
-export const PICTURE_ONLY = 'A profile picture has to be a JPEG, a PNG or a GIF.';
+export const PICTURE_ONLY = 'Choose a JPEG, PNG or GIF picture.';
 export const NOT_SAVED = 'The picture was not saved.';
 export const NOT_REMOVED = 'The picture was not removed.';
 
@@ -34,14 +34,14 @@ export function avatarRefusal(failure: unknown): string {
 		return NOT_SAVED;
 	}
 	if (failure.status === 0) {
-		return 'The upload did not reach us. Nothing was stored; try again.';
+		return 'The upload did not reach us, so nothing was saved. Try again.';
 	}
 	const entry = failure.body?.errors?.[0];
 	switch (failure.code()) {
 		case 'quota_exceeded':
 			return quotaSentence(entry?.detail) ?? entry?.message ?? NOT_SAVED;
 		case 'blob_store_unavailable':
-			return 'This deployment cannot store pictures yet, so nothing was saved.';
+			return 'Picture uploads are not available yet, so nothing was saved.';
 		case 'upload_rejected':
 			return entry?.message ?? PICTURE_ONLY;
 		default:

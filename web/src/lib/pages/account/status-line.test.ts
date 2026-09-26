@@ -86,14 +86,14 @@ describe('the marketplace status rows', () => {
 		const etsy = statusRows(EVERY, [], NOW).find((row) => row.marketplace === 'Etsy');
 		expect(etsy?.label).toBe('Coming soon');
 		expect(etsy?.tone).toBe('soon');
-		expect(etsy?.why).toContain('Not built yet');
+		expect(etsy?.why).toContain('cannot send resources here yet');
 	});
 });
 
 describe('when the seller’s own device last worked with a marketplace', () => {
 	it('names it where a device holds a live session', () => {
 		const [row] = statusRows([entry()], [device('Tes', NOW - 2 * 3_600_000)], NOW);
-		expect(row.checked).toBe('Last checked from your device 2 h ago');
+		expect(row.checked).toBe('Last used by your Teachouse app 2 h ago');
 	});
 
 	it('answers the newest across the seller’s devices', () => {
@@ -105,7 +105,7 @@ describe('when the seller’s own device last worked with a marketplace', () => 
 			],
 			NOW
 		);
-		expect(rows[0].checked).toBe('Last checked from your device 1 h ago');
+		expect(rows[0].checked).toBe('Last used by your Teachouse app 1 h ago');
 	});
 
 	// A machine the seller signed out of, and a session that ended, both

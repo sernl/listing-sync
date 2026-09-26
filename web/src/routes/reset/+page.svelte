@@ -36,7 +36,7 @@
 			const { error } = await requestPasswordReset(email.trim(), captchaOptions(captchaToken));
 			if (error) {
 				captcha?.reset();
-				toast('error', messageOf(error, 'The reset link could not be requested.'));
+				toast('error', messageOf(error, 'We could not send a reset link. Try again.'));
 				return;
 			}
 			sent = true;
@@ -53,7 +53,7 @@
 		<div class="actions"><Button tier="outline" href="/login">Go to sign in</Button></div>
 	{:else}
 		<h1>Reset your password</h1>
-		<p>Give the address you signed up with.</p>
+		<p>Enter the email you signed up with.</p>
 
 		<form onsubmit={request} class="form">
 			<Field label="Email" id="email" required>
@@ -65,9 +65,9 @@
 				type="submit"
 				disabled={busy || challengePending}
 				reason={busy
-					? 'The link is being sent.'
+					? 'Sending the link.'
 					: challengePending
-						? 'The challenge above has not been answered yet.'
+						? 'Complete the check above first.'
 						: undefined}
 			>
 				{busy ? 'Sending…' : 'Send the link'}

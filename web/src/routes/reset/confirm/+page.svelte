@@ -38,7 +38,7 @@
 			return;
 		}
 		if (password !== confirmation) {
-			toast('error', 'Those two passwords are not the same.');
+			toast('error', 'The two passwords do not match.');
 			return;
 		}
 		busy = true;
@@ -49,7 +49,7 @@
 					spent = true;
 					return;
 				}
-				toast('error', messageOf(error, 'The password could not be changed.'));
+				toast('error', messageOf(error, 'Your password was not changed. Try again.'));
 				return;
 			}
 			password = '';
@@ -65,11 +65,11 @@
 <div class="auth-card acct-signed-out">
 	{#if unusable}
 		<h1>That link no longer works</h1>
-		<p>Ask for a fresh link.</p>
+		<p>Ask for a new link.</p>
 		<div class="actions"><Button tier="primary" href="/reset">Send a new link</Button></div>
 	{:else}
 		<h1>Choose a new password</h1>
-		<p>Type the new password twice.</p>
+		<p>Type your new password twice.</p>
 
 		<form onsubmit={choose} class="form">
 			<Field label="New password" id="password" required>
@@ -96,7 +96,7 @@
 				tier="primary"
 				type="submit"
 				disabled={busy}
-				reason={busy ? 'The new password is being saved.' : undefined}
+				reason={busy ? 'Saving your new password.' : undefined}
 			>
 				{busy ? 'Saving…' : 'Change password'}
 			</Button>

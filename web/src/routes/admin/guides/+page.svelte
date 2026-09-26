@@ -137,9 +137,9 @@
 				'error',
 				failure instanceof ApiFailure
 					? failure.status === 409
-						? 'Somebody changed this guide while the list was open. Reload before deleting it.'
+						? 'Someone changed this guide while the list was open. Reload, then delete it.'
 						: failure.message
-					: 'The guide was not deleted.'
+					: 'The guide was not deleted. Try again.'
 			)
 	}));
 
@@ -147,9 +147,9 @@
 		const sure = confirm(
 			`Delete “${guide.title}”?\n\n` +
 				(guide.status === 'published'
-					? 'It is published, so every link to it in this console stops resolving. '
+					? 'It is published, so every link to it stops working. '
 					: '') +
-				'The body is gone with it, and any picture it used stays stored.'
+				'Its text is deleted too. Any pictures it used stay stored.'
 		);
 		if (sure) {
 			deleting.mutate(guide);
@@ -216,7 +216,7 @@
 	<PageHead
 		icon="book-open"
 		title="Guides"
-		description="The help pages every seller reads. Written here, rendered by the server, and published one at a time."
+		description="The help pages sellers read. Write them here and publish them one at a time."
 	/>
 
 	<Panel title="Write a new guide" description="A title and an address. The body comes next.">
@@ -281,7 +281,7 @@
 								<span class="gd-tax">{tag.name}</span>
 							</label>
 						{:else}
-							<p class="none">No tag has been made yet.</p>
+							<p class="none">No tags yet.</p>
 						{/each}
 					</div>
 				</Menu>
@@ -291,7 +291,7 @@
 					tier="primary"
 					icon="plus"
 					disabled={createRefusal !== null || creating.isPending}
-					reason={createRefusal ?? (creating.isPending ? 'The guide is being created.' : undefined)}
+					reason={createRefusal ?? (creating.isPending ? 'Creating the guide.' : undefined)}
 					onclick={() => creating.mutate()}
 				>
 					{creating.isPending ? 'Creating…' : 'Create draft'}
@@ -299,20 +299,20 @@
 			</div>
 		</div>
 		<p class="gd-head-hint">
-			Sellers reach it at /guides/{suggested.length === 0 ? '…' : suggested}. The address is fixed
-			once the guide exists, because every link to it is that address.
+			Sellers reach it at /guides/{suggested.length === 0 ? '…' : suggested}. You cannot change
+			the address after you create the guide.
 		</p>
 	</Panel>
 
 	<Panel
 		title="Topics and tags"
-		description="One topic per guide and any number of tags. Retiring one keeps it on the guides that carry it and takes it out of the pickers."
+		description="One topic per guide and any number of tags. Retiring one hides it from the pickers but keeps it on existing guides."
 	>
 		{#if taxonomy.isPending}
-			<p class="quiet">Reading the topics and tags…</p>
+			<p class="quiet">Loading topics and tags…</p>
 		{:else if taxonomy.isError}
 			<p class="quiet">
-				The topics and tags could not be read, so nothing here can be chosen or changed.
+				We could not load topics and tags, so you cannot choose or change them.
 			</p>
 		{:else}
 			<div class="gd-tax-cols">
@@ -351,7 +351,7 @@
 										titleRefusal(draft) !== null ||
 										changing.isPending}
 									reason={titleRefusal(draft) ??
-										(draft.trim() === taxon.name ? 'The name is unchanged.' : undefined)}
+										(draft.trim() === taxon.name ? 'Change the name to rename it.' : undefined)}
 									onclick={() =>
 										changing.mutate({
 											kind: group.kind,
@@ -383,7 +383,7 @@
 								icon="plus"
 								disabled={addRefusal(newName[group.kind]) !== null || adding.isPending}
 								reason={addRefusal(newName[group.kind]) ??
-									(adding.isPending ? 'One is being added.' : undefined)}
+									(adding.isPending ? 'Adding.' : undefined)}
 								onclick={() => adding.mutate({ kind: group.kind, name: newName[group.kind] })}
 							>
 								Add
@@ -397,20 +397,19 @@
 
 	<Panel>
 		{#if guides.isPending}
-			<p class="quiet">Reading the guides…</p>
+			<p class="quiet">Loading guides…</p>
 		{:else if guides.isError}
 			<Placeholder
 				icon="book-open"
-				headline="The guides could not be read"
-				body="The request did not come back with an answer we can act on, so this page cannot
-					say whether any guide exists. Reloading is the only thing worth trying from here."
+				headline="We could not load the guides"
+				body="We cannot tell whether any guides exist. Try reloading the page."
 			/>
 		{:else if rows.length === 0}
 			<Placeholder
 				icon="book-open"
-				headline="No guide has been written yet"
-				body="Sellers see an empty Help and guides page until the first one is published. A
-					draft is invisible to them, so there is no harm in starting one."
+				headline="No guides yet"
+				body="Sellers see an empty Help and guides page until you publish one. Drafts are hidden
+					from them, so start one any time."
 			/>
 		{:else}
 			<div class="op-table">
@@ -467,7 +466,7 @@
 											small
 											danger
 											disabled={deleting.isPending}
-											reason={deleting.isPending ? 'A delete is in flight.' : undefined}
+											reason={deleting.isPending ? 'Deleting.' : undefined}
 											onclick={() => remove(guide)}
 										>
 											Delete
@@ -480,8 +479,8 @@
 				</table>
 			</div>
 			<p class="foot-note">
-				A draft is a 404 on the reader's side rather than an unpublished page: nobody but an
-				operator can read one, and no link to it resolves until it is published.
+				Sellers get a 404 for a draft. Only operators can read one, and links to it work only
+				after it is published.
 			</p>
 		{/if}
 	</Panel>
