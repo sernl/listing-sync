@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import Button from '$lib/Button.svelte';
+	import { LOST_CHUNK_SAID } from '$lib/lost-chunk';
 
 	// SvelteKit's own fallback draws the status at 3rem beside the raw message
 	// on a bare white page, with no wordmark and nothing to press. This replaces
@@ -17,7 +18,11 @@
 	 *  `render-failure.ts` gives: a phone has no devtools pane, and a sentence
 	 *  the seller can read out is the difference between a bug we can find
 	 *  and one we cannot. */
-	const cause = $derived(missing ? null : (page.error?.message?.trim() || null));
+	const cause = $derived(missing ? null : page.error?.message?.trim() || null);
+	/** A chunk that did not download: `hooks.client.ts` already reloaded
+	 *  once for it, so this is the second failure in a row, and what helps
+	 *  is the seller's own reload when the connection is back. */
+	const lost = $derived(cause === LOST_CHUNK_SAID);
 </script>
 
 <div class="page">
@@ -26,18 +31,24 @@
 		<p>
 			{#if missing}
 				We could not find this page. Check the address, or the page may have moved.
+			{:else if lost}
+				{LOST_CHUNK_SAID}
 			{:else}
 				Something went wrong. Try opening it again.
 			{/if}
 		</p>
-		{#if cause !== null}
+		{#if cause !== null && !lost}
 			<p class="drew-why">{cause}</p>
 		{/if}
-		<!-- One destination, not a branch on the session: a signed-out visitor
-		     never reaches this page, because the root layout sends a session-less
-		     visit to any address it does not list as public to `/login` and
-		     renders its own interstitial in place of this one while it goes. -->
-		<Button href="/resources" tier="primary">Back to your resources</Button>
+		{#if lost}
+			<Button tier="primary" onclick={() => location.reload()}>Reload</Button>
+		{:else}
+			<!-- One destination, not a branch on the session: a signed-out visitor
+			     never reaches this page, because the root layout sends a session-less
+			     visit to any address it does not list as public to `/login` and
+			     renders its own interstitial in place of this one while it goes. -->
+			<Button href="/resources" tier="primary">Back to your resources</Button>
+		{/if}
 	</div>
 </div>
 
