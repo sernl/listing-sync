@@ -13,7 +13,7 @@ Each marketplace shop can belong to only one Teachouse account. If a second acco
 2. Disconnect the shop from any other account first.
 3. Connect it to the account you want.
 
-Each shop gets free moves once only. Moving a shop to a new account does not give it a second set.
+Every account gets its free moves once. Moving a shop to a new account does not give it a second set.
 
 ## Your account name
 

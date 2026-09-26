@@ -18,7 +18,7 @@ A move is publishing one imported resource onto one marketplace. Publishing a re
 - Import from both marketplaces and see everything you have.
 - Keep up to 500 resources.
 - Connect as many marketplaces as you like.
-- Get five free moves for each shop, once only.
+- Get five free moves, once only.
 - Publishing uses moves.
 
 ## Sync (Subscription) — $29 a month, or $240 a year

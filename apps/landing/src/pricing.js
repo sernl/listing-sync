@@ -189,7 +189,7 @@ export const faqs = [
 	},
 	{
 		q: 'What do the free moves get me?',
-		a: `When you connect a shop for the first time, you get ${free.capabilities.free_moves_lifetime} free moves to publish onto a marketplace of your choice. Each shop gets them once.`
+		a: `When you connect your first shop, you get ${free.capabilities.free_moves_lifetime} free moves to publish onto a marketplace of your choice. Every account gets them once.`
 	},
 	{
 		q: 'Move Packs or Sync \u2014 which is right for me?',

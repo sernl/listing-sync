@@ -25,7 +25,7 @@ Buy a Move Pack if you are moving a shop once. Choose Sync if you list every wee
 
 ## What do the free moves give me?
 
-You get five moves for each shop, once, when the shop first connects. They stay yours for as long as you keep your account. A shop never gets a second set.
+You get five moves, once, when your first shop connects. They stay yours for as long as you keep your account. Connecting another shop does not add more.
 
 ## Do moves expire?
 
