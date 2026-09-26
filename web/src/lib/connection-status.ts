@@ -30,19 +30,19 @@ const PRESENTATION: Record<ConnectionStatus, Omit<StatusPresentation, 'label'>> 
 	},
 	checking: {
 		tone: 'mut',
-		explanation: 'Linked, and not checked just now. Nothing for you to do.',
+		explanation: 'Connected. Nothing for you to do.',
 		alert: null
 	},
 	unstable: {
 		tone: 'run',
 		explanation:
-			'We are having trouble reaching this marketplace. We keep trying, and signing in again may not be the fix.',
+			'We are having trouble reaching this marketplace. We keep trying; signing in again may not be the fix.',
 		alert: 'needs a look'
 	},
 	disconnected: {
 		tone: 'bad',
 		explanation:
-			'You are signed out here. Sign in again on your computer to let waiting work continue.',
+			'You are signed out. Sign in again on your computer so waiting items can go out.',
 		alert: 'signed out'
 	}
 };

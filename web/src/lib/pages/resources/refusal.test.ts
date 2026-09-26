@@ -51,7 +51,7 @@ describe('a marketplace refusing a field this listing does not carry', () => {
 	it('names the marketplace and the field instead of the server sentence', () => {
 		const said = createRefusal(refusedFor({ missing: [{ inventory: 'Tes', field: 'licence' }] }));
 		expect(said).toContain('needs a licence');
-		expect(said).toContain('does not carry one yet');
+		expect(said).toContain('does not have one yet');
 		expect(said).not.toContain('a selected platform requires a field');
 	});
 

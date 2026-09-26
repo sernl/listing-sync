@@ -25,7 +25,7 @@ function refused(message: string | undefined, fallback: string): SessionFailure 
 export async function listBrowserSessions(): Promise<BrowserSession[]> {
 	const { data, error } = await authClient.listSessions();
 	if (error) {
-		throw refused(error.message, 'Your browser sign-ins could not be listed.');
+		throw refused(error.message, 'We could not load your browser sign-ins.');
 	}
 	return (data ?? []) as BrowserSession[];
 }
@@ -41,6 +41,6 @@ export async function currentSessionToken(): Promise<string | null> {
 export async function revokeBrowserSession(token: string): Promise<void> {
 	const { error } = await authClient.revokeSession({ token });
 	if (error) {
-		throw refused(error.message, 'That sign-in was not ended.');
+		throw refused(error.message, 'We could not sign out that browser.');
 	}
 }

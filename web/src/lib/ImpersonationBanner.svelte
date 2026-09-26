@@ -19,8 +19,7 @@
 <div class="impersonating" role="alert">
 	<span class="mark"><Icon name="copy" size={14} /></span>
 	<span class="said">
-		Signed in as <b>{who}</b>. Everything on this screen is their workspace, and every
-		action you take is taken as them.
+		You are signed in as <b>{who}</b>. Anything you do here is done as them.
 	</span>
 	{#if refusal}<span class="refused">{refusal}</span>{/if}
 	<button type="button" onclick={onStop} disabled={stopping}>

@@ -128,11 +128,11 @@
 			const reason =
 				failure instanceof ApiFailure
 					? failure.message
-					: 'That item could not be relabelled.';
+					: 'That resource could not be labelled.';
 			refusal =
 				count === 0
 					? reason
-					: `${count} of ${rows.length} ${count === 1 ? 'item was' : 'items were'} relabelled, then: ${reason}`;
+					: `Labelled ${count} of ${rows.length}, then it stopped: ${reason}`;
 			if (count > 0) {
 				onPartial(count);
 			}
@@ -145,11 +145,10 @@
 <dialog bind:this={element} aria-labelledby="labels-title" onclose={onClose}>
 	<div class="dialog-body">
 		<h2 id="labels-title">
-			Label {rows.length} {rows.length === 1 ? 'item' : 'items'}
+			Label {rows.length} {rows.length === 1 ? 'resource' : 'resources'}
 		</h2>
 		<p>
-			Labels are your own words for filing a catalogue: a term, a bundle, a sale. They are yours
-			alone and reach no marketplace.
+			Use labels to sort your resources, like a term, a bundle or a sale. Only you see them.
 		</p>
 
 		<label class="field">
@@ -196,7 +195,7 @@
 			</div>
 		{/if}
 
-		<Note>Open an item to take a label off it.</Note>
+		<Note>To remove a label, open the resource.</Note>
 
 		{#if refusal !== null}
 			<p class="refusal">{refusal}</p>

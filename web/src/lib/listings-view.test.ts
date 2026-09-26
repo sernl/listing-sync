@@ -63,7 +63,7 @@ describe("a row's platform badges", () => {
 
 describe("a row's status", () => {
 	it('says nothing is mapped rather than inventing a state', () => {
-		expect(rowStatus([])).toEqual({ label: 'No mapping', tone: 'mut' });
+		expect(rowStatus([])).toEqual({ label: 'No marketplace', tone: 'mut' });
 	});
 
 	it('is live only when every mapping is', () => {

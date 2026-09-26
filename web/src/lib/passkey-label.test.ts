@@ -21,7 +21,7 @@ describe('the passkey reach', () => {
 	it('distinguishes a synced credential from one held on a single device', () => {
 		expect(passkeyReach({ backedUp: true })).not.toBe(passkeyReach({ backedUp: false }));
 		expect(passkeyReach({ backedUp: true })).toMatch(/other devices/i);
-		expect(passkeyReach({ backedUp: false })).toMatch(/single device/i);
+		expect(passkeyReach({ backedUp: false })).toMatch(/only on the device/i);
 	});
 
 	it('treats an absent backup state as not synced, which is the safe reading', () => {

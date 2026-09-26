@@ -9,10 +9,10 @@ import type { BlockedGate } from '$lib/generated/vocab';
  * the web lane fails when it drifts.
  */
 const LABELS: Record<BlockedGate, string> = {
-	reconciliation: 'reconciliation',
+	reconciliation: 'your review in Reconciliation',
 	election: 'your answer',
 	currency_unknown: 'an unknown currency',
-	currency_mismatch: 'a price in another currency than this marketplace sells in',
+	currency_mismatch: 'a price in the currency this marketplace uses',
 	cover_missing: 'a missing thumbnail',
 	scan_incomplete: 'a scan that is still running',
 	awaiting_counterpart: 'the other marketplace',

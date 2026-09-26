@@ -177,7 +177,7 @@ export const WAITING_FOR_DEVICE =
  * do — the only button there creates a further import. So the row points at
  * the request instead, which is where starting actually lives. */
 export const WAITING_IN_LIST =
-	'Waiting for your device. Open this import to start it on the computer ' +
+	'Waiting for your computer. Open this import to start it on the computer ' +
 	'where you are signed in to Tes.';
 
 /** The one line a list row shows for a request.
@@ -213,8 +213,8 @@ export function canStartHere(view: SyncRequestView): boolean {
  * than a thing refused, because nothing about this seller or this request is
  * what stands in the way. */
 export const MIGRATION_NOT_ON_THIS_COMPUTER_YET =
-	'Moving a shop to another marketplace is not something the Teachouse app can run yet. ' +
-	'Bringing a shop into Resources is, on the Import screen.';
+	'The Teachouse app cannot move a shop to another marketplace yet. ' +
+	'You can bring a shop into Resources on the Import screen.';
 
 export interface StagePresentation {
 	/** The pill's word. */
@@ -241,8 +241,8 @@ export function presentStage(stage: SyncStage): StagePresentation {
 			};
 		case 'queued':
 			return {
-				label: 'Queued',
-				headline: `${listings(stage.tally.total)} named.`,
+				label: 'Not started',
+				headline: `${listings(stage.tally.total)} to import.`,
 				detail: 'Nothing has started yet.',
 				tone: 'mut'
 			};
@@ -250,7 +250,7 @@ export function presentStage(stage: SyncStage): StagePresentation {
 			return {
 				label: 'Importing',
 				headline: `Importing, ${stage.tally.total} so far.`,
-				detail: 'Your device is reading your shop and sending what it finds.',
+				detail: 'Your computer is reading your shop and sending what it finds.',
 				tone: 'run'
 			};
 		case 'nothing_to_import':
@@ -263,7 +263,7 @@ export function presentStage(stage: SyncStage): StagePresentation {
 				// founder probe on that is still open, so a claim that the shop
 				// held no listings would be exactly the claim that run makes
 				// unsafe. The device is the one that read; we report its report.
-				detail: 'Your device completed its pass and reported no listings.',
+				detail: 'Your computer finished and reported no listings.',
 				tone: 'ok'
 			};
 		case 'imported':
@@ -279,8 +279,8 @@ export function presentStage(stage: SyncStage): StagePresentation {
 						headline: nothingImportedHeadline(stage.tally),
 						detail:
 							stage.tally.skipped > 0
-								? 'Open this import to see what was recorded against each one.'
-								: 'Nothing was recorded against them.',
+								? 'Open this import to see why each one was skipped.'
+								: 'We have no details for them.',
 						tone: 'run'
 					}
 				: {
@@ -293,14 +293,14 @@ export function presentStage(stage: SyncStage): StagePresentation {
 			return {
 				label: 'Failed',
 				headline: 'The import failed.',
-				detail: stage.detail ?? 'No reason was recorded against the request.',
+				detail: stage.detail ?? 'We did not get a reason.',
 				tone: 'bad'
 			};
 		case 'unrecognised':
 			return {
 				label: 'Unrecognised',
-				headline: 'This import is in a state this page does not recognise.',
-				detail: `The server calls it "${stage.state}". Nothing here is lost; this page is behind.`,
+				headline: 'This import is in a state we do not recognise yet.',
+				detail: `It is marked "${stage.state}". Nothing is lost; reload the page to catch up.`,
 				tone: 'mut'
 			};
 	}
@@ -325,10 +325,10 @@ function nothingImportedHeadline(counted: ResourceTally): string {
 		parts.push(`${listings(counted.skipped)} skipped`);
 	}
 	if (counted.unsettled > 0) {
-		parts.push(`${listings(counted.unsettled)} still unsettled`);
+		parts.push(`${listings(counted.unsettled)} still in progress`);
 	}
 	if (counted.unrecognised > 0) {
-		parts.push(`${listings(counted.unrecognised)} in a state this page does not recognise`);
+		parts.push(`${listings(counted.unrecognised)} in a state we do not recognise`);
 	}
 	return parts.length === 0
 		? 'Nothing was imported.'
@@ -341,10 +341,10 @@ function skippedSentence(counted: ResourceTally): string {
 		parts.push(`${listings(counted.skipped)} skipped, each with its reason below.`);
 	}
 	if (counted.unsettled > 0) {
-		parts.push(`${listings(counted.unsettled)} still unsettled.`);
+		parts.push(`${listings(counted.unsettled)} still in progress.`);
 	}
 	if (counted.unrecognised > 0) {
-		parts.push(`${listings(counted.unrecognised)} in a state this page does not recognise.`);
+		parts.push(`${listings(counted.unrecognised)} in a state we do not recognise.`);
 	}
 	return parts.join(' ');
 }
@@ -370,8 +370,8 @@ export function deviceUpdateNotice(view: SyncRequestView): string | null {
 		return null;
 	}
 	return (
-		`Update the Teachouse app on your device to ${version.trim()} or later. ` +
-		'None of your machines can run this import until one of them is at that version.'
+		`Update the Teachouse app on your computer to ${version.trim()} or later. ` +
+		'None of your machines can run this import until one is on that version.'
 	);
 }
 
@@ -405,10 +405,10 @@ export interface CoverageRow {
  * ones with no counterpart on the target, which is the loss a seller feels. */
 export function termCoverageRows(coverage: SyncTermCoverage): CoverageRow[] {
 	return [
-		{ label: 'Terms seen', value: coverage.terms_seen },
+		{ label: 'Terms found', value: coverage.terms_seen },
 		{ label: 'Recognised', value: coverage.terms_mapped },
 		{ label: 'Not recognised', value: coverage.terms_unmapped },
-		{ label: 'No counterpart on the target', value: coverage.terms_uncovered }
+		{ label: 'No match on the new marketplace', value: coverage.terms_uncovered }
 	];
 }
 
@@ -438,7 +438,7 @@ export function termCoverageStrip(coverage: SyncTermCoverage): string {
 /** The request's figures: how many listings the sum is over, then the terms. */
 export function coverageRows(coverage: SyncCoverageView): CoverageRow[] {
 	return [
-		{ label: 'Listings measured', value: coverage.rows },
+		{ label: 'Listings checked', value: coverage.rows },
 		...termCoverageRows(coverage)
 	];
 }
@@ -584,9 +584,9 @@ export function mayMigrate(standing: AuthorshipStanding): boolean {
  *  it says nothing is on record rather than that the seller failed to
  *  declare. */
 export const AUTHORSHIP_FIRST =
-	'Declare who holds the copyright in what you send to TPT before bringing a shop across. ' +
-	'With no declaration on record, every listing this import creates is refused and settles ' +
-	'failed for good, and declaring afterwards does not bring them back.';
+	'Declare who owns the copyright in what you send to TPT before you bring a shop across. ' +
+	'With no declaration on record, TPT refuses every listing this import creates, and ' +
+	'declaring later does not bring them back.';
 
 /** Where the declaration is made: the marketplaces screen, which carries the
  *  per-marketplace declaration form. */
@@ -629,7 +629,7 @@ export function isDeviceImport(view: SyncRequestView): boolean {
  *  was when it does not know. */
 export const NOT_AN_IMPORT =
 	'This page follows a shop brought across from a marketplace your own computer reads. ' +
-	'This request is not one of those, so its progress is on its run rather than here.';
+	'This request is not one of those, so follow it in Updates instead.';
 
 /** What the listings list says while it holds nothing, which depends on why it
  *  holds nothing.
@@ -644,11 +644,11 @@ export function emptyListingsLine(stage: SyncStage): string {
 		case 'importing':
 			return 'Nothing has arrived yet.';
 		case 'nothing_to_import':
-			return 'Your device reported no listings.';
+			return 'Your computer reported no listings.';
 		case 'failed':
-			return 'No listings were recorded before the import failed.';
+			return 'No listings came in before the import failed.';
 		case 'imported':
 		case 'unrecognised':
-			return 'No listings are recorded against this import.';
+			return 'This import has no listings.';
 	}
 }

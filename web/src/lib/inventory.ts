@@ -103,7 +103,7 @@ function signInGate(gate: string | undefined): boolean {
  *  item always carries a gate; a parked one may not, and inventing a cause
  *  would be worse than naming that we do not hold it. */
 function waitingOn(gate: string | undefined): string {
-	return gate === undefined ? 'a check we have not been told the name of' : gateLabel(gate);
+	return gate === undefined ? 'a check we cannot name yet' : gateLabel(gate);
 }
 
 /** How many of the newest runs the inventory reads items from.
@@ -230,7 +230,7 @@ function gateAction(
 	product: string,
 	job: string
 ): ChipAction {
-	const run: ChipAction = { label: 'Open the run', href: `/sync/${job}` };
+	const run: ChipAction = { label: 'Open in Updates', href: `/sync/${job}` };
 	if (gate === undefined) {
 		return run;
 	}
@@ -240,7 +240,7 @@ function gateAction(
 		case 'connections':
 			return { label: 'Open Marketplaces', href: marketplacesHref(inventory) };
 		case 'listing':
-			return { label: 'Open the item', href: `/resources/${product}` };
+			return { label: 'Open the resource', href: `/resources/${product}` };
 		default:
 			return run;
 	}
@@ -254,7 +254,7 @@ function gateAction(
  * them would be two sentences for one fact. */
 function ofWork(input: ChipInput, entry: WorkItem): Verdict | null {
 	const gate = entry.item.blocked_on;
-	const run: ChipAction = { label: 'Open the run', href: `/sync/${entry.job}` };
+	const run: ChipAction = { label: 'Open in Updates', href: `/sync/${entry.job}` };
 	switch (entry.item.state) {
 		case 'queued':
 		case 'leased':
@@ -263,8 +263,8 @@ function ofWork(input: ChipInput, entry: WorkItem): Verdict | null {
 			return {
 				state: 'in_flight',
 				detail: onSellerDevice(input.inventory)
-					? 'A send is under way, and it runs while your own device is on.'
-					: 'A send is under way.',
+					? 'Sending now. This runs while your computer is on.'
+					: 'Sending now.',
 				action: run
 			};
 		case 'parked_live':
@@ -277,8 +277,8 @@ function ofWork(input: ChipInput, entry: WorkItem): Verdict | null {
 				// retried blind. Every other cause keeps that sentence.
 				detail:
 					gate === 'awaiting_marketplace_answer'
-						? 'We sent the listing, did not get an answer we could trust, and are going back to look for it.'
-						: `A send reached this marketplace and was interrupted, so it is held rather than retried blind. It is waiting on ${waitingOn(gate)}.`,
+						? 'We sent the listing but did not get a clear answer, so we are checking again.'
+						: `Sending was interrupted, so we paused it instead of trying again. It is waiting on ${waitingOn(gate)}.`,
 				action: signInGate(gate)
 					? { label: 'Open Marketplaces', href: marketplacesHref(input.inventory) }
 					: gateAction(gate, input.inventory, input.product, entry.job)
@@ -288,14 +288,14 @@ function ofWork(input: ChipInput, entry: WorkItem): Verdict | null {
 				return {
 					state: 'needs_signin',
 					detail: onSellerDevice(input.inventory)
-						? 'This is waiting on you signing in to the marketplace on your own device.'
-						: 'This is waiting on you signing in to the marketplace again.',
+						? 'Sign in to the marketplace on your computer to continue.'
+						: 'Sign in to the marketplace again to continue.',
 					action: { label: 'Open Marketplaces', href: marketplacesHref(input.inventory) }
 				};
 			}
 			return {
 				state: 'blocked',
-				detail: `Nothing is being sent while this waits on ${waitingOn(gate)}.`,
+				detail: `Waiting on ${waitingOn(gate)}. Nothing is sent until then.`,
 				action: gateAction(gate, input.inventory, input.product, entry.job)
 			};
 		case 'settled':
@@ -306,7 +306,7 @@ function ofWork(input: ChipInput, entry: WorkItem): Verdict | null {
 				state: 'failed',
 				detail:
 					entry.item.failure_detail ??
-					'The last send to this marketplace failed. The run keeps its own reason.',
+					'Sending to this marketplace failed. Open it in Updates to see why.',
 				action: run
 			};
 		default: {
@@ -323,7 +323,7 @@ function ofWork(input: ChipInput, entry: WorkItem): Verdict | null {
 			return {
 				state: 'in_flight',
 				detail:
-					'This run is in a state this app does not have a word for yet. Open the run to see what it says.',
+					'This is in a state we do not recognise yet. Open it in Updates to see more.',
 				action: run
 			};
 		}
@@ -338,34 +338,34 @@ function ofMapping(input: ChipInput, mapping: MappingHead): Verdict {
 		case 'live':
 			return {
 				state: 'listed',
-				detail: 'This marketplace is showing the listing.',
+				detail: 'Live on this marketplace.',
 				// The listing's own page is what a seller wants from a listed
 				// chip, and it is the affordance Vendoo's strip is most used
 				// for. Falls back to the item where the server serves no URL:
 				// a marketplace whose page shape it has not observed.
 				action:
 					mapping.listing_url === null
-						? { label: 'Open the item', href: `/resources/${input.product}` }
+						? { label: 'Open the resource', href: `/resources/${input.product}` }
 						: { label: 'Open the listing', href: mapping.listing_url, external: true }
 			};
 		case 'draft':
 			return {
 				state: 'draft',
-				detail: 'This marketplace holds the listing and is not showing it to buyers yet.',
-				action: { label: 'Open the item', href: `/resources/${input.product}` }
+				detail: 'A draft on this marketplace. Buyers cannot see it yet.',
+				action: { label: 'Open the resource', href: `/resources/${input.product}` }
 			};
 		case 'unsent':
 			return {
 				state: 'not_listed',
-				detail: 'Chosen for this item and never sent.',
-				action: { label: 'Open the item', href: `/resources/${input.product}` }
+				detail: 'Picked for this resource, but not sent yet.',
+				action: { label: 'Open the resource', href: `/resources/${input.product}` }
 			};
 		case 'other':
 			return {
 				state: 'in_flight',
 				detail:
-					'A send is out and we have not recorded what came of it. Nothing else is sent until it settles.',
-				action: { label: 'Open the item', href: `/resources/${input.product}` }
+					'We are waiting to hear how the last send went. Nothing else is sent until then.',
+				action: { label: 'Open the resource', href: `/resources/${input.product}` }
 			};
 		default: {
 			// `standingOf` is total over its four answers today, so this arm is
@@ -378,8 +378,8 @@ function ofMapping(input: ChipInput, mapping: MappingHead): Verdict {
 			return {
 				state: 'in_flight',
 				detail:
-					'This listing is in a state this app does not have a word for yet. Open the item to see what it says.',
-				action: { label: 'Open the item', href: `/resources/${input.product}` }
+					'This listing is in a state we do not recognise yet. Open the resource to see more.',
+				action: { label: 'Open the resource', href: `/resources/${input.product}` }
 			};
 		}
 	}
@@ -399,7 +399,7 @@ export function chipFor(input: ChipInput): MarketplaceChip {
 	const paused =
 		input.status?.halted === true
 			? (input.status.reason ??
-				'Sending is paused for this marketplace. Nothing is lost; queued work waits.')
+				'Sending to this marketplace is paused. Nothing is lost; waiting items go out later.')
 			: null;
 	const onDevice = onSellerDevice(input.inventory);
 	// The parameter admits `undefined` only so the refusal below can be
@@ -431,7 +431,7 @@ export function chipFor(input: ChipInput): MarketplaceChip {
 		return dressed({
 			state: 'not_listed',
 			detail:
-				'This marketplace has never seen this item, and marketplaces are chosen when the draft is created.',
+				'This resource is not set up for this marketplace. You pick marketplaces when you create the draft.',
 			action: null
 		});
 	}
@@ -445,8 +445,8 @@ export function chipFor(input: ChipInput): MarketplaceChip {
 	if (input.connection === undefined) {
 		return dressed({
 			state: 'needs_signin',
-			detail: `No account is linked for this marketplace yet.${
-				standing.state === 'listed' ? ' The listing itself is still up.' : ''
+			detail: `You have not connected this marketplace yet.${
+				standing.state === 'listed' ? ' Your listing is still up.' : ''
 			}`,
 			action: { label: 'Open Marketplaces', href: marketplacesHref(input.inventory) }
 		});
@@ -455,10 +455,10 @@ export function chipFor(input: ChipInput): MarketplaceChip {
 		return dressed({
 			state: 'needs_signin',
 			detail: onDevice
-				? `Nothing usable is stored for this marketplace; sign in again on your own device.${
-						standing.state === 'listed' ? ' The listing itself is still up.' : ''
+				? `Sign in to this marketplace again on your computer.${
+						standing.state === 'listed' ? ' Your listing is still up.' : ''
 					}`
-				: 'Nothing usable is stored for this marketplace; re-link it to let queued work continue.',
+				: 'Reconnect this marketplace so waiting items can go out.',
 			action: { label: 'Open Marketplaces', href: marketplacesHref(input.inventory) }
 		});
 	}

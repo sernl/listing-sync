@@ -115,8 +115,8 @@ export function payloadRefusal(rule: PayloadFileRule, files: number): string | n
 		return null;
 	}
 	return files === 0
-		? 'takes exactly one file, and this product carries none yet'
-		: `takes exactly one file, and this product carries ${files} — upload one file, or keep the ZIP whole`;
+		? 'takes exactly one file, and this resource has none yet'
+		: `takes exactly one file, and this resource has ${files}. Upload one file, or keep the ZIP as one file`;
 }
 
 // ---------------------------------------------------------------- the licence
@@ -305,10 +305,10 @@ export function quotaSentence(detail: unknown): string | null {
 		return null;
 	}
 	if (quota === 'storage_bytes_max') {
-		return `Your plan stores up to ${formatBytes(limit)} and ${formatBytes(used)} is in use.`;
+		return `Your plan holds up to ${formatBytes(limit)} of files, and you are using ${formatBytes(used)}.`;
 	}
 	if (quota === 'listings_max') {
-		return `Your plan carries up to ${limit} resources and ${used} are in your catalogue.`;
+		return `Your plan allows up to ${limit} resources, and you have ${used}.`;
 	}
 	return null;
 }
@@ -387,7 +387,7 @@ export function requiredFieldSentence(detail: unknown): string | null {
 		({ inventory, field, label }) => `${platformTitle(inventory)} needs ${fieldWords(field, label)}`
 	);
 	const named = asked.length === 1 ? asked[0] : `${asked.slice(0, -1).join(', ')} and ${asked.at(-1)}`;
-	return `${named}, and this listing does not carry one yet.`;
+	return `${named}, and this listing does not have one yet.`;
 }
 
 const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'] as const;

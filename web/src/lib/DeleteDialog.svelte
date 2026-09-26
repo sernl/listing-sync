@@ -76,7 +76,7 @@
 			refusal =
 				failure instanceof ApiFailure
 					? failure.message
-					: 'Deletion could not be confirmed. Check Resources and Sync before trying again.';
+					: "We couldn't confirm the delete. Check Resources and Updates before you try again.";
 		} finally {
 			sending = false;
 		}
@@ -94,13 +94,13 @@
 	<div class="dialog-body">
 		<h2 id="delete-title">Delete “{title}”</h2>
 		<p>
-			Deleting removes it from your Resources here. Whether it also disappears from a marketplace
-			is a separate choice, and it is the irreversible one.
+			This removes it from your Resources. Removing it from a marketplace is a separate choice, and
+			it can't be undone.
 		</p>
 
 		{#if bound.length === 0}
 			<p class="quiet">
-				Only the Teachouse resource is removed. No marketplace listing will be changed.
+				Only the Teachouse resource is deleted. Your marketplace listings stay as they are.
 			</p>
 		{:else}
 			{#each bound as mapping (mapping.id)}
@@ -113,15 +113,15 @@
 					/>
 					<span class="t">Also remove from {platformTitle(mapping.inventory)}</span>
 					<span class="why bad">
-						Removes the marketplace listing, including a live listing. This cannot be undone.
+						Removes the listing there, even if it is live. This can't be undone.
 					</span>
 				</label>
 			{/each}
 
 			{#if needsConfirmation}
 				<div class="notice">
-					Listings on {leftStanding.map(platformTitle).join(', ')} will remain unchanged.
-					After deleting this resource, Teachouse will no longer track them.
+					Your listings on {leftStanding.map(platformTitle).join(', ')} stay as they are.
+					Teachouse stops tracking them once this resource is deleted.
 				</div>
 				<div class="inline-choices" style="margin-top: 10px">
 					<label>
@@ -131,13 +131,13 @@
 							disabled={sending}
 							onchange={(event) => (leaveLive = event.currentTarget.checked)}
 						/>
-						Leave unselected marketplace listings unchanged
+						Leave your other marketplace listings as they are
 					</label>
 				</div>
 			{/if}
 		{/if}
 
-		<Note icon="refresh-cw">Check Updates for each marketplace removal.</Note>
+		<Note icon="refresh-cw">Follow each marketplace removal on Updates.</Note>
 
 		{#if refusal !== null}
 			<p class="refusal">{refusal}</p>

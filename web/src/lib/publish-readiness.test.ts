@@ -121,20 +121,20 @@ describe('the lowering, mirrored', () => {
 
 	it('refuses a binding state that means a write is already in flight', () => {
 		expect(loweringRefusal(mapping({ binding_state: 'binding' }), 'draft')).toMatch(
-			/already in flight/
+			/already sending here/
 		);
 	});
 
 	it('refuses a bound mapping whose lifecycle nobody has recorded', () => {
 		expect(
 			loweringRefusal(mapping({ binding_state: 'bound', lifecycle_state: 'absent' }), 'draft')
-		).toMatch(/have not recorded/);
+		).toMatch(/do not know where this listing stands/);
 	});
 
 	it('refuses editing a Tes listing that is already live', () => {
 		const live = mapping({ binding_state: 'bound', lifecycle_state: 'live' });
 		expect(loweringRefusal(live, 'live')).toMatch(/already live here/);
-		expect(loweringRefusal(live, 'draft')).toMatch(/back to draft is uncaptured/);
+		expect(loweringRefusal(live, 'draft')).toMatch(/cannot turn it back into a draft/);
 	});
 
 	it('lets the same live listing be revised on TPT', () => {
@@ -161,12 +161,12 @@ describe('the readiness line', () => {
 		const verdict = readinessOf(
 			input({ connection: undefined, hasRights: false, payloadFiles: 0 })
 		);
-		expect(verdict.line).toMatch(/no account is linked/);
+		expect(verdict.line).toMatch(/have not connected this marketplace/);
 	});
 
 	it('names a disconnected link with the action that fixes it', () => {
 		const verdict = readinessOf(input({ connection: connection({ status: 'disconnected' }) }));
-		expect(verdict.line).toMatch(/re-link it first/);
+		expect(verdict.line).toMatch(/reconnect it first/);
 	});
 
 	it('reports a halt with the reason the status endpoint recorded', () => {
@@ -175,7 +175,7 @@ describe('the readiness line', () => {
 				status: { inventory: 'Tes', marketplace: 'Tes', halted: true, reason: 'upstream outage' }
 			})
 		);
-		expect(verdict.line).toBe('sending is paused for this platform: upstream outage');
+		expect(verdict.line).toBe('sending is paused here: upstream outage');
 		expect(verdict.tone).toBe('run');
 	});
 
@@ -211,20 +211,20 @@ describe('the readiness line', () => {
 				payloadFiles: 3
 			})
 		);
-		expect(verdict.line).toBe('takes exactly one file, and this product carries 3');
+		expect(verdict.line).toBe('takes exactly one file, and this resource has 3');
 		expect(verdict.tone).toBe('bad');
 	});
 
 	it('says a platform is not one of this product’s when no mapping carries it', () => {
 		const verdict = readinessOf(input({ mapping: undefined }));
-		expect(verdict.line).toMatch(/chosen when the draft is created/);
+		expect(verdict.line).toMatch(/pick marketplaces when you create the draft/);
 	});
 
 	it('warns about an unstable link only once nothing else stands in the way', () => {
 		const verdict = readinessOf(input({ connection: connection({ status: 'unstable' }) }));
 		expect(verdict.ready).toBe(false);
 		expect(verdict.tone).toBe('run');
-		expect(verdict.line).toMatch(/failing verification/);
+		expect(verdict.line).toMatch(/trouble reaching your account/);
 	});
 });
 

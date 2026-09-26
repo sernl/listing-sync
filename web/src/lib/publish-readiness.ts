@@ -51,18 +51,18 @@ export function loweringRefusal(
 		return null;
 	}
 	if (mapping.binding_state !== 'bound') {
-		return 'a send is already in flight for this platform; wait for it to settle';
+		return 'already sending here; wait for it to finish';
 	}
 	if (mapping.lifecycle_state !== 'draft' && mapping.lifecycle_state !== 'live') {
-		return 'we have not recorded what this listing currently is, so nothing can be sent yet';
+		return 'we do not know where this listing stands yet, so nothing can be sent';
 	}
 	const capability = uncapturedTransition(mapping.inventory, mapping.lifecycle_state, to);
 	if (capability === null) {
 		return null;
 	}
 	return to === 'live'
-		? 'this listing is already live here, and editing a published listing is uncaptured'
-		: 'this listing is live here, and taking a published listing back to draft is uncaptured';
+		? 'this listing is already live here, and Teachouse cannot edit a live listing here yet'
+		: 'this listing is live here, and Teachouse cannot turn it back into a draft yet';
 }
 
 /** Everything one readiness line is computed from. Each field is a fact this
@@ -121,23 +121,23 @@ function unansweredRequired(view: VocabularyView, hasRights: boolean): string | 
 function blocker(input: ReadinessInput): { line: string; tone: 'bad' | 'run' } | null {
 	if (input.mapping === undefined) {
 		return {
-			line: 'not one of this product’s platforms; platforms are chosen when the draft is created',
+			line: 'not set up for this resource; you pick marketplaces when you create the draft',
 			tone: 'bad'
 		};
 	}
 	if (input.connection === undefined) {
-		return { line: 'no account is linked for this marketplace yet', tone: 'bad' };
+		return { line: 'you have not connected this marketplace yet', tone: 'bad' };
 	}
 	if (input.connection.status === 'disconnected') {
-		return { line: 'the linked account holds nothing usable; re-link it first', tone: 'bad' };
+		return { line: 'you are signed out here; reconnect it first', tone: 'bad' };
 	}
 	if (input.status?.halted === true) {
 		const reason = input.status.reason;
 		return {
 			line:
 				reason === undefined
-					? 'sending is paused for this platform'
-					: `sending is paused for this platform: ${reason}`,
+					? 'sending is paused here'
+					: `sending is paused here: ${reason}`,
 			tone: 'run'
 		};
 	}
@@ -149,7 +149,7 @@ function blocker(input: ReadinessInput): { line: string; tone: 'bad' | 'run' } |
 		const rule = input.vocabulary.authoring.payload_files;
 		if (rule === 'exactly_one' && input.payloadFiles !== 1) {
 			return {
-				line: `takes exactly one file, and this product carries ${input.payloadFiles}`,
+				line: `takes exactly one file, and this resource has ${input.payloadFiles}`,
 				tone: 'bad'
 			};
 		}
@@ -160,7 +160,7 @@ function blocker(input: ReadinessInput): { line: string; tone: 'bad' | 'run' } |
 	}
 	if (input.connection.status === 'unstable') {
 		return {
-			line: 'the linked account is failing verification; work may sit queued',
+			line: 'we are having trouble reaching your account here; sending may wait',
 			tone: 'run'
 		};
 	}
@@ -179,7 +179,7 @@ export function readinessOf(input: ReadinessInput): Readiness {
 			inventory: input.inventory,
 			title,
 			ready: false,
-			line: 'checking what this platform requires…',
+			line: 'checking what this marketplace needs…',
 			tone: 'mut'
 		};
 	}

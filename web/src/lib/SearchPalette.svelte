@@ -286,26 +286,26 @@
 		{#if view.kind === 'blank'}
 			<p class="pal-said">Type to find a resource by its title.</p>
 		{:else if view.kind === 'reading'}
-			<p class="pal-said">Reading your resources…</p>
+			<p class="pal-said">Loading your resources…</p>
 		{:else if view.kind === 'failed'}
 			<!-- The console's own sentence. What the transport said belongs on the
 			     board, which can offer a retry; a palette that reported a status
 			     code would be asking the seller to act on something they cannot. -->
-			<p class="pal-said pal-bad">Your resources could not be read, so this cannot search them.</p>
+			<p class="pal-said pal-bad">We couldn't load your resources, so search isn't working.</p>
 		{:else if view.kind === 'none'}
 			<p class="pal-said">No resource matches “{view.query}”.</p>
 		{:else if overflow !== null}
 			<a class="pal-more" href={searchHref(query)} onclick={dismiss}>
-				Showing {rows.length} of {overflow} matches — open them all in Resources
+				Showing {rows.length} of {overflow} matches. See them all in Resources
 			</a>
 		{:else if view.total !== null}
 			<p class="pal-said">
-				{view.total === 1 ? '1 match' : `${view.total} matches`} · Enter opens the highlighted one
+				{view.total === 1 ? '1 match' : `${view.total} matches`} · Press Enter to open the highlighted one
 			</p>
 		{:else}
 			<!-- A source serving one page at a time knows of no total, and the
 			     page's own length is not one, so nothing is counted here. -->
-			<p class="pal-said">Enter opens the highlighted one.</p>
+			<p class="pal-said">Press Enter to open the highlighted one.</p>
 		{/if}
 
 		{#if stale}
@@ -313,7 +313,7 @@
 			     searchable and worth showing, and what they cannot account for is
 			     anything added since the read that failed. -->
 			<p class="pal-said pal-stale">
-				This is the copy last read — the newest read failed, so anything added since is missing.
+				These results may be out of date. Anything added since the last load is missing.
 			</p>
 		{/if}
 	</div>

@@ -89,7 +89,7 @@
 		{/each}
 	</div>
 	{#if full}
-		<span class="hint">That is the limit. Clear one to choose another.</span>
+		<span class="hint">That is the most you can pick. Untick one to choose another.</span>
 	{/if}
 </div>
 

@@ -245,7 +245,7 @@ describe('coverage, where absent and zero are different facts', () => {
 
 	it("a resource's coverage counts terms only, not the row it is already on", () => {
 		expect(termCoverageRows(TERM_ZEROS)).toHaveLength(4);
-		expect(termCoverageRows(TERM_ZEROS).map((row) => row.label)).not.toContain('Listings measured');
+		expect(termCoverageRows(TERM_ZEROS).map((row) => row.label)).not.toContain('Listings checked');
 	});
 
 	it('every counter is written out, with its own label', () => {
@@ -522,7 +522,7 @@ describe('the branches a settled import can end in', () => {
 			})
 		);
 		const shown = presentStage(stage);
-		expect(shown.detail).toContain('1 listing still unsettled.');
+		expect(shown.detail).toContain('1 listing still in progress.');
 		expect(shown.tone).toBe('run');
 	});
 
@@ -696,7 +696,7 @@ describe('the list of a seller own imports', () => {
 		// The head counts; it does not carry any resource's reason, so the row
 		// points at the page that does rather than implying it has read them.
 		expect(shown.headline).toBe('Nothing was imported: 2 listings skipped.');
-		expect(shown.detail).toBe('Open this import to see what was recorded against each one.');
+		expect(shown.detail).toBe('Open this import to see why each one was skipped.');
 	});
 
 	it('degrades on a state it does not know, exactly as the page does', () => {

@@ -106,7 +106,7 @@
 			refusal =
 				failure instanceof ApiFailure
 					? failure.message
-					: 'The send did not start. Nothing was enqueued twice; try again.';
+					: 'Sending did not start. Try again; nothing will be sent twice.';
 			if (runs.length > 0) {
 				onPublished(runs);
 			}
@@ -120,8 +120,7 @@
 	<div class="dialog-body">
 		<h2 id="publish-title">Send to marketplaces</h2>
 		<p>
-			Pick the platforms this send covers. Each line below is what your own records say, checked
-			without contacting any marketplace.
+			Pick where to send this listing.
 		</p>
 
 		<div class="inline-choices">
@@ -144,7 +143,7 @@
 				Publish live
 			</label>
 		</div>
-		<Note icon="triangle-alert">A live publish to a Tes site cannot be undone here.</Note>
+		<Note icon="triangle-alert">You can't undo a live publish to Tes from here.</Note>
 
 		{#each rows as row (row.mapping.id)}
 			<label class="choice">
@@ -158,10 +157,10 @@
 				<span class="why {row.readiness.tone}">{row.readiness.line}</span>
 			</label>
 		{:else}
-			<p class="quiet">This listing carries no marketplace mapping, so there is nothing to send.</p>
+			<p class="quiet">This listing isn't set up for any marketplace, so there is nothing to send.</p>
 		{/each}
 
-		<Note>An unready marketplace stays selectable, and is checked again when the work runs.</Note>
+		<Note>You can still pick a marketplace that isn't ready. We check it again before sending.</Note>
 
 		{#if refusal !== null}
 			<p class="refusal">{refusal}</p>

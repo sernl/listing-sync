@@ -97,7 +97,7 @@ export function checkOrgSlug(raw: string): SlugVerdict {
 		return {
 			accepted: false,
 			problem: 'empty',
-			message: 'Choose a name for your organisation.'
+			message: 'Choose a name for your account.'
 		};
 	}
 	if (!SHAPE.test(slug)) {

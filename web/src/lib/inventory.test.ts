@@ -100,7 +100,7 @@ describe('the transport branch', () => {
 			mapping: mapping({ inventory: 'Tpt', binding_state: 'unbound' }),
 			work: work({ mapping: 'm-Tpt', state: 'running' })
 		});
-		expect(onDevice.detail).toContain('your own device');
+		expect(onDevice.detail).toContain('your computer');
 		const served = chip('Etsy', {
 			mapping: mapping({ id: 'm-Etsy', inventory: 'Etsy', binding_state: 'unbound' }),
 			work: work({ mapping: 'm-Etsy', state: 'running' }),
@@ -146,7 +146,7 @@ describe('a chip with no run touching it', () => {
 			connection: connection('Etsy')
 		});
 		expect(listed.state).toBe('listed');
-		expect(listed.action).toEqual({ label: 'Open the item', href: '/resources/p1' });
+		expect(listed.action).toEqual({ label: 'Open the resource', href: '/resources/p1' });
 		expect(listed.action?.external).toBeUndefined();
 	});
 
@@ -194,7 +194,7 @@ describe('a chip the newest run speaks for', () => {
 		});
 		expect(held.state).toBe('stranded');
 		expect(held.detail).toBe(
-			'We sent the listing, did not get an answer we could trust, and are going back to look for it.'
+			'We sent the listing but did not get a clear answer, so we are checking again.'
 		);
 		expect(held.detail).not.toContain('interrupted');
 		expect(held.detail).not.toContain('waiting on');
@@ -210,13 +210,13 @@ describe('a chip the newest run speaks for', () => {
 		});
 		expect(held.state).toBe('stranded');
 		expect(held.detail).toContain('interrupted');
-		expect(held.detail).toContain('held rather than retried blind');
-		expect(held.detail).toContain('waiting on reconciliation');
+		expect(held.detail).toContain('paused it instead of trying again');
+		expect(held.detail).toContain('waiting on your review in Reconciliation');
 	});
 
 	it('names a parked item with no gate rather than inventing one', () => {
 		const held = chip('Tpt', { mapping: bound, work: work({ state: 'parked_cold' }) });
-		expect(held.detail).toContain('not been told the name of');
+		expect(held.detail).toContain('a check we cannot name yet');
 	});
 
 	it('separates a sign-in gate from every other blocked gate', () => {

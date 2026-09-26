@@ -212,7 +212,7 @@
 			<div class="fp-acts" aria-live="polite">
 				<Button tier="primary" onclick={done}>{doneLabel(chosen.length)}</Button>
 				{#if full}
-					<span class="hint">That is the limit TPT's own form states.</span>
+					<span class="hint">That's as many as TPT allows.</span>
 				{/if}
 			</div>
 		</div>

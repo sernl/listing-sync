@@ -104,7 +104,7 @@
 	<div bind:this={host}></div>
 	{#if unavailable}
 		<p class="refusal">
-			The challenge could not be loaded. Reload the page to try again.
+			The security check didn't load. Reload the page to try again.
 		</p>
 	{/if}
 {/if}

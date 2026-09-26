@@ -208,12 +208,12 @@ describe('the multi-file rule', () => {
 
 	it('refuses more than one file where the create takes exactly one', () => {
 		expect(payloadRefusal('exactly_one', 4)).toMatch(/exactly one file/);
-		expect(payloadRefusal('exactly_one', 4)).toMatch(/keep the ZIP whole/);
+		expect(payloadRefusal('exactly_one', 4)).toMatch(/keep the ZIP as one file/);
 	});
 
 	it('accepts exactly one, and says so distinctly when there are none', () => {
 		expect(payloadRefusal('exactly_one', 1)).toBeNull();
-		expect(payloadRefusal('exactly_one', 0)).toMatch(/carries none/);
+		expect(payloadRefusal('exactly_one', 0)).toMatch(/has none/);
 	});
 
 });
@@ -313,13 +313,13 @@ describe('the price', () => {
 describe('the quota refusal', () => {
 	it('renders the storage sentence the detail was composed to allow', () => {
 		expect(quotaSentence({ quota: 'storage_bytes_max', used: 1024, limit: 2048 })).toBe(
-			'Your plan stores up to 2.0 KB and 1.0 KB is in use.'
+			'Your plan holds up to 2.0 KB of files, and you are using 1.0 KB.'
 		);
 	});
 
 	it('renders the catalogue sentence in the word the console uses for one', () => {
 		expect(quotaSentence({ quota: 'listings_max', used: 100, limit: 100 })).toMatch(
-			/up to 100 resources and 100 are/
+			/up to 100 resources, and you have 100/
 		);
 	});
 
@@ -344,7 +344,7 @@ describe('the refusal that a marketplace wants a field this listing lacks', () =
 
 	it('names the marketplace and the field in words a seller reads', () => {
 		expect(requiredFieldSentence({ missing: [{ inventory: 'Tes', field: 'licence' }] })).toBe(
-			`${platformTitle('Tes')} needs a licence, and this listing does not carry one yet.`
+			`${platformTitle('Tes')} needs a licence, and this listing does not have one yet.`
 		);
 	});
 

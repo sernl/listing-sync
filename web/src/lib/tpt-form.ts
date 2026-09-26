@@ -606,7 +606,7 @@ export function refusalsOf(
 		found.push({
 			group: 'name',
 			control: null,
-			message: 'The form’s rules are still loading; nothing can be submitted yet.'
+			message: 'The form is still loading. Wait a moment, then try again.'
 		});
 	} else {
 		for (const refusal of rules.checkDraft(draftInputOf(draft)).refusals) {
@@ -1006,9 +1006,9 @@ export function standardsLoss(picks: readonly StandardPick[]): string | null {
 	}
 	const codes = dropped.map((pick) => pick.code).join(', ');
 	const which = dropped.length === 1 ? 'it' : 'they';
-	return `${dropped.length} of ${picks.length} will not reach this platform: ${codes}. ${
+	return `${dropped.length} of ${picks.length} will not go to this marketplace: ${codes}. ${
 		dropped.length === 1 ? 'It stays' : 'They stay'
-	} in your own catalogue, and ${which} can be sent once we have confirmed how this platform names ${
+	} in your Resources, and ${which} can be sent once we know how this marketplace names ${
 		dropped.length === 1 ? 'it' : 'them'
 	}.`;
 }
@@ -1020,7 +1020,7 @@ function capLoss(cap: number | null, chosen: number): string | null {
 	if (cap === null || chosen <= cap) {
 		return null;
 	}
-	return `This platform takes ${cap} and you have chosen ${chosen}; the rest will not reach it.`;
+	return `This marketplace takes ${cap} and you chose ${chosen}; the rest will not go to it.`;
 }
 
 /** The registry's own name for one of this form's overridable fields. The two

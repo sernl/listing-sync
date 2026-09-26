@@ -21,7 +21,7 @@ export function describeUnreachable(failure: unknown): Unreachable {
 			return {
 				status: failure.status,
 				kind: 'protocol',
-				sentence: `The request returned an unexpected response (${failure.status}), not the data this page needs. Reload; if it happens again, report these details.`,
+				sentence: `Something went wrong loading this page (error ${failure.status}). Reload; if it happens again, send us the details below.`,
 				detail: response === null
 					? `${failure.status} without a Teachouse error body`
 					: [
@@ -36,14 +36,14 @@ export function describeUnreachable(failure: unknown): Unreachable {
 			return {
 				status: failure.status,
 				kind: 'server',
-				sentence: `Teachouse answered with an error (${failure.status}). Reloading is the first thing to try; if it keeps happening, tell us the time it happened.`,
+				sentence: `Something went wrong on our side (error ${failure.status}). Reload; if it keeps happening, tell us when it happened.`,
 				detail: `${failure.status} ${failure.message}`
 			};
 		}
 		return {
 			status: failure.status,
 			kind: 'refused',
-			sentence: `Teachouse refused the request (${failure.status}): ${failure.message}`,
+			sentence: `Teachouse could not do that (error ${failure.status}): ${failure.message}`,
 			detail: `${failure.status} ${failure.code() ?? ''}`.trim()
 		};
 	}
@@ -51,7 +51,7 @@ export function describeUnreachable(failure: unknown): Unreachable {
 		return {
 			status: null,
 			kind: 'protocol',
-			sentence: 'A response could not be read. Reload; if it happens again, report the time and page.',
+			sentence: 'Something went wrong loading this page. Reload; if it happens again, tell us the time and page.',
 			detail: 'SyntaxError: response parsing failed'
 		};
 	}
@@ -59,7 +59,7 @@ export function describeUnreachable(failure: unknown): Unreachable {
 		status: null,
 		kind: 'network',
 		sentence:
-			'The request did not finish. Check this device’s connection, then reload; if it keeps happening, report the time and page.',
+			'We could not reach Teachouse. Check your internet connection, then reload; if it keeps happening, tell us the time and page.',
 		detail: failure instanceof Error ? `${failure.name}: ${failure.message}` : String(failure)
 	};
 }

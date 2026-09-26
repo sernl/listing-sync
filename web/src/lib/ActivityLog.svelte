@@ -33,7 +33,7 @@
 <div class="log-head">
 	<span class="log-search">
 		<Icon name="search" size={15} />
-		<label class="sr-only" for="log-search">Filter the lines on this page</label>
+		<label class="sr-only" for="log-search">Search this page</label>
 		<!-- "on this page" in the label and the placeholder, and not by
 		     accident. The lines are worded by the server from three different
 		     event kinds, so a search the server could answer would have to
@@ -45,7 +45,7 @@
 		<input
 			id="log-search"
 			type="search"
-			placeholder="Filter the lines on this page…"
+			placeholder="Search this page…"
 			bind:value={query}
 		/>
 	</span>
@@ -61,7 +61,7 @@
 
 {#if shown.length === 0}
 	<p class="quiet">
-		{entries.length === 0 ? empty : 'No line on this page matches that. Clear the filter, or try Previous and Next for older lines.'}
+		{entries.length === 0 ? empty : 'Nothing on this page matches. Clear the search, or use Previous and Next.'}
 	</p>
 {:else}
 	{#each shown as entry (entry.id)}

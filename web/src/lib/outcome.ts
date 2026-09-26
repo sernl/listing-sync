@@ -12,15 +12,15 @@ export interface Segment {
 }
 
 const SEGMENTS: Array<{ label: string; pick: (c: Counts) => number; tone: string }> = [
-	{ label: 'succeeded', pick: (c) => c.succeeded, tone: 'seg-ok' },
-	{ label: 'degraded', pick: (c) => c.degraded, tone: 'seg-warn' },
+	{ label: 'done', pick: (c) => c.succeeded, tone: 'seg-ok' },
+	{ label: 'done with warnings', pick: (c) => c.degraded, tone: 'seg-warn' },
 	{ label: 'failed', pick: (c) => c.failed, tone: 'seg-bad' },
-	{ label: 'ambiguous', pick: (c) => c.ambiguous, tone: 'seg-odd' },
+	{ label: 'unclear', pick: (c) => c.ambiguous, tone: 'seg-odd' },
 	{ label: 'skipped', pick: (c) => c.skipped, tone: 'seg-mut' },
 	{ label: 'blocked', pick: (c) => c.outcome_blocked + c.blocked, tone: 'seg-block' },
-	{ label: 'in flight', pick: (c) => c.in_flight, tone: 'seg-run' },
-	{ label: 'parked', pick: (c) => c.parked, tone: 'seg-park' },
-	{ label: 'queued', pick: (c) => c.queued, tone: 'seg-queue' }
+	{ label: 'sending', pick: (c) => c.in_flight, tone: 'seg-run' },
+	{ label: 'held', pick: (c) => c.parked, tone: 'seg-park' },
+	{ label: 'waiting', pick: (c) => c.queued, tone: 'seg-queue' }
 ];
 
 export function segments(counts: Counts): Segment[] {

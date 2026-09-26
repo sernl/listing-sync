@@ -133,7 +133,7 @@ describe('where each login lives', () => {
 		expect(tpt.state).toBe('signed_in');
 		expect(tpt.device?.name).toBe('staffroom-laptop');
 		expect(tpt.accountLabel).toBe('Miss Cooper');
-		expect(tpt.line).toContain('never leaves that device');
+		expect(tpt.line).toContain('stays on that machine');
 	});
 
 	it('says a schedule is not running when the holder has gone quiet', () => {
@@ -179,7 +179,7 @@ describe('where each login lives', () => {
 	it('never asks for a device for a marketplace with a sanctioned API', () => {
 		const etsy = of(signInStates([], [connection('Etsy')], NOW), 'Etsy');
 		expect(etsy.state).toBe('served_here');
-		expect(etsy.line).toContain('No device is needed');
+		expect(etsy.line).toContain('No machine is needed');
 	});
 
 	it('does not call an unverified server-side connection served', () => {
@@ -282,7 +282,7 @@ describe('what the band says when nothing is running', () => {
 		]);
 		const notice = bandNotice(summary, running);
 		expect(notice?.kind).toBe('nothing_checking_in');
-		expect(notice?.body).toContain('checked in for half an hour');
+		expect(notice?.body).toContain('online for half an hour');
 	});
 
 	it('says a current machine has nothing to run when it holds no login', () => {
@@ -317,13 +317,13 @@ describe('the footnote under the marketplace rows', () => {
 				device({ id: 'b', revoked_at: NOW - 5 })
 			])
 		);
-		expect(line).toContain('1 of 1 machine has checked in');
+		expect(line).toContain('1 of 1 machine has been online');
 		expect(line).toContain('1 other is signed out and kept in history.');
 	});
 
 	it('never divides by a registry that is entirely signed out', () => {
 		const line = deviceFootnote(summaryOf([device({ revoked_at: NOW - 5 })]));
-		expect(line).toBe('Every machine you have registered is signed out.');
+		expect(line).toBe('All your machines are signed out.');
 		expect(line).not.toContain('0 of');
 	});
 
@@ -334,7 +334,7 @@ describe('the footnote under the marketplace rows', () => {
 				device({ id: 'b', last_seen_at: NOW - QUIET_AFTER_MS - 1 })
 			])
 		);
-		expect(line).toBe('1 of 2 machines have checked in in the last half hour.');
+		expect(line).toBe('1 of 2 machines have been online in the last half hour.');
 	});
 
 	it('carries the outstanding wipe wherever it lands', () => {
@@ -535,8 +535,8 @@ describe('readiness, as facts that are kept apart', () => {
 		// as narrow.
 		expect(bandNotice(summary, schedulesRunning(rows))).toBeNull();
 		const line = deviceFootnote(summary);
-		expect(line).toContain('publish or refetch a file from a marketplace');
-		expect(line).toContain('Everything else runs there as normal');
+		expect(line).toContain('publish or re-download a file from a marketplace');
+		expect(line).toContain('Everything else works there as normal');
 	});
 
 	it('counts a current machine and runs the schedule on it', () => {
@@ -560,6 +560,6 @@ describe('readiness, as facts that are kept apart', () => {
 		const summary = deviceSummary(rows);
 		expect(summary.current).toBe(1);
 		expect(summary.signedOut).toBe(3);
-		expect(deviceFootnote(summary)).toContain('1 of 1 machine has checked in');
+		expect(deviceFootnote(summary)).toContain('1 of 1 machine has been online');
 	});
 });

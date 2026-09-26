@@ -85,10 +85,10 @@ describe('the counts, in the outcome bar’s own words', () => {
 			blocked: 5
 		});
 		expect(drawn.map((one) => one.label)).toEqual([
-			'succeeded',
-			'degraded',
+			'done',
+			'done with warnings',
 			'failed',
-			'ambiguous',
+			'unclear',
 			'skipped',
 			'blocked'
 		]);
@@ -101,7 +101,7 @@ describe('the counts, in the outcome bar’s own words', () => {
 	});
 
 	it('leaves out every zero, so a clean run reads as one line', () => {
-		expect(outcomes({ ...NONE, succeeded: 3 }).map((one) => one.label)).toEqual(['succeeded']);
+		expect(outcomes({ ...NONE, succeeded: 3 }).map((one) => one.label)).toEqual(['done']);
 	});
 
 	it("counts a notification's blocked through the segment that renders it", () => {

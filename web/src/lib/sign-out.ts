@@ -22,7 +22,7 @@ export async function signOut(queryClient: QueryClient): Promise<void> {
 	setLedgerScope(null);
 	const complete = await signOutEverywhere();
 	if (!complete) {
-		toast('error', 'Signed out here, but one of the two sessions may still be open.');
+		toast('error', 'You are signed out here, but part of your sign-in may still be open.');
 	}
 	queryClient.clear();
 	await invalidateAll();
