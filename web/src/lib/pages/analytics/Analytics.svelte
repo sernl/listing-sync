@@ -1,25 +1,28 @@
 <script lang="ts">
+	// Analytics: one row of figures across every shop, then a panel per shop
+	// side by side — each headed by the shop's arrow to what it reports — and
+	// the ranked table under them. How the figures are read and how old they
+	// are sits behind the header's Explain; the page itself says the numbers.
+
 	import { createQuery } from '@tanstack/svelte-query';
 	import './analytics.css';
+	import '$lib/flow.css';
 	import { formatMetric, METRIC_COLUMNS, titlesByMapping } from '$lib/analytics-view';
 	import { allPages, api } from '$lib/api';
-	import Banner from '$lib/Banner.svelte';
-	import { remember, remembered } from '$lib/dismissal';
 	import { agoLabel } from '$lib/elapsed';
+	import Explain from '$lib/Explain.svelte';
 	import Field from '$lib/Field.svelte';
-	import Note from '$lib/Note.svelte';
+	import type { IconName } from '$lib/icons';
+	import FlowDiagram from '$lib/FlowDiagram.svelte';
 	import PageHead from '$lib/PageHead.svelte';
-	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
 	import { queryKeys } from '$lib/query';
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
-	import TabBar from '$lib/TabBar.svelte';
+	import StatCard from '$lib/StatCard.svelte';
 	import { PORTFOLIO_ROWS, tesPortfolio } from '$lib/tes-portfolio';
 	import { ticker } from './clock.svelte';
-	import FigureTile from './FigureTile.svelte';
 	import MetricBars from './MetricBars.svelte';
 	import {
-		asScope,
 		chartView,
 		combineReads,
 		figures,
@@ -27,6 +30,7 @@
 		headerMeta,
 		listingsForMappings,
 		mappingsForProducts,
+		plainWord,
 		readState,
 		resourceRows,
 		SCOPES,
@@ -34,30 +38,25 @@
 		scopeReports,
 		silentIn,
 		standings,
-		standingsDescription,
-		tableView,
-		tileViews
+		tileViews,
+		type ScopeId
 	} from './model';
 
 	const clock = ticker();
 
-	let selected = $state('all');
+	const FIGURE_ICON: Partial<Record<string, IconName>> = {
+		sales_count: 'shopping-bag',
+		resource_views: 'eye',
+		earnings: 'credit-card'
+	};
+
 	let label = $state<string | null>(null);
-	const scope = $derived(asScope(selected));
 
 	const summary = createQuery(() => ({
 		queryKey: queryKeys.analytics,
 		queryFn: () => api.analytics()
 	}));
 
-	// The titles are read separately on purpose: the figures render as soon as
-	// the summary lands, so a catalogue that is slow or unreadable costs a row
-	// its title rather than costing the page its numbers. The counted figures
-	// come from these same two reads and share their cache entries.
-	//
-	// The label narrows this read at the server, which is why it has a cache
-	// entry of its own: a filtered catalogue is a different answer, not a view
-	// over the whole one.
 	const catalogue = createQuery(() => ({
 		queryKey: queryKeys.catalogue(label),
 		queryFn: () => allPages((cursor) => api.products(cursor, label), (page) => page.products)
@@ -77,342 +76,286 @@
 
 	const summaryRead = $derived(readState(summary.isSuccess, summary.isError));
 	const catalogueRead = $derived(
-		readState(
-			catalogue.isSuccess && mappings.isSuccess,
-			catalogue.isError || mappings.isError
-		)
+		readState(catalogue.isSuccess && mappings.isSuccess, catalogue.isError || mappings.isError)
 	);
 
-	// A narrowed page depends on the catalogue for its figures as well as for
-	// its counts, so its figures are only as sound as the weaker of the two
-	// reads. Unnarrowed, the capture read stands alone.
+	// A label narrows the figures through the catalogue, so while one is set
+	// the figures are only as read as the catalogue is.
 	const narrowing = $derived(label !== null);
-	const figuresRead = $derived(
-		narrowing ? combineReads(summaryRead, catalogueRead) : summaryRead
-	);
+	const figuresRead = $derived(narrowing ? combineReads(summaryRead, catalogueRead) : summaryRead);
 
-	const bindings = $derived(
-		narrowing ? mappingsForProducts(allMappings, products) : allMappings
-	);
+	const bindings = $derived(narrowing ? mappingsForProducts(allMappings, products) : allMappings);
 	const shown = $derived(narrowing ? listingsForMappings(listings, bindings) : listings);
 	const titles = $derived(titlesByMapping(products, bindings));
-
 	const counts = $derived(scopeCounts(bindings));
-	const tabs = $derived(
-		SCOPES.map((entry) => ({
-			id: entry.id,
-			label: entry.label,
-			// No number until the read behind it lands, and none at all if it
-			// fails: a zero here is a counted figure like any other, and it is
-			// the plausible wrong answer rather than an obviously missing one.
-			count: catalogueRead === 'read' ? counts[entry.id] : null,
-			hint: entry.hint,
-			mark: entry.mark === null ? undefined : entry.mark
-		}))
-	);
 
-	const reports = $derived(scopeReports(scope));
-	const silent = $derived(silentIn(scope).join(' and '));
-	const standing = $derived(standings(bindings, scope));
-	const rows = $derived(resourceRows(shown, titles, scope));
-
-	/** How many bars the chart draws. Eight is what fits the panel at the
-	 *  phone width without the drawing becoming a second table. */
+	/** How many bars a shop's chart draws: what fits a half-width panel. */
 	const TOP = 8;
-	const chart = $derived(
-		chartView({
-			scope,
-			rows,
-			standing,
-			limit: TOP,
-			summary: figuresRead,
-			catalogue: catalogueRead
-		})
-	);
 
-	const table = $derived(tableView(scope, figuresRead));
-
-	const meta = $derived(
-		headerMeta({ scope, listings: shown, summary: figuresRead, now: clock.now })
-	);
+	const meta = $derived(headerMeta({ scope: 'all', listings: shown, summary: figuresRead, now: clock.now }));
 
 	const tiles = $derived(
 		tileViews({
-			figures: figures(shown, scope),
-			scope,
+			figures: figures(shown, 'all'),
+			scope: 'all',
 			summary: figuresRead,
 			catalogue: catalogueRead,
-			standing,
+			standing: standings(bindings, 'all'),
 			now: clock.now,
 			format: (value) => formatMetric(value)
+		})
+	);
+
+	/** One panel per shop. */
+	const shops = $derived(
+		SCOPES.filter((entry) => entry.mark !== null).map((entry) => {
+			const scope: ScopeId = entry.id;
+			const standing = standings(bindings, scope);
+			const reports = scopeReports(scope);
+			return {
+				scope,
+				inventory: entry.mark!,
+				reports,
+				tracked: counts[scope],
+				standing,
+				figures: figures(shown, scope),
+				chart: chartView({
+					scope,
+					rows: resourceRows(shown, titles, scope),
+					standing,
+					limit: TOP,
+					summary: figuresRead,
+					catalogue: catalogueRead
+				})
+			};
 		})
 	);
 
 	const groups = $derived(groupPortfolioRows(PORTFOLIO_ROWS));
 	const portfolio = $derived(tesPortfolio(products, bindings));
 
-	// The age alone, not `capturedAgo`'s "captured 1 day ago": the column is
-	// headed Captured, so the word in every cell only costs the table width it
-	// has none of at the tablet size.
 	const tableRows = $derived(
-		rows.map((row) => ({
+		resourceRows(shown, titles, 'all').map((row) => ({
 			...row,
 			age: agoLabel(row.observedAt, clock.now),
 			captured: new Date(row.observedAt).toLocaleString()
 		}))
 	);
-
-	/** Closed for good once closed: the sentence is about the product and
-	 *  does not change, so meeting it again on every visit is noise. It carries
-	 *  no title, so the close control is named here rather than after one. */
-	let tptOnlyShown = $state(!remembered('analytics.tpt-reports-only'));
+	const reporting = $derived(SCOPES.filter((entry) => entry.mark !== null && scopeReports(entry.id)));
+	const silent = $derived(silentIn('all').join(' and '));
 </script>
 
-<div class="page">
+<div class="page flow-page an-page">
 	<PageHead
 		icon="chart-line"
 		title="Analytics"
-		description="What each marketplace reports about your resources."
+		description="What your shops report about your resources."
 		guide="analytics"
 	>
 		{#snippet aside()}
 			<div class="an-meta">
 				<div class="an-meta-k">{meta.key}</div>
-				<div
-					class="an-meta-v"
-					title={meta.at === null ? undefined : new Date(meta.at).toLocaleString()}
-				>
+				<div class="an-meta-v" title={meta.at === null ? undefined : new Date(meta.at).toLocaleString()}>
 					{meta.value}
 				</div>
 			</div>
+			<Explain title="How these figures are read" label="How it works">
+				<p>
+					The Teachouse app on your computer reads each shop’s own figures when it is online.
+					Nothing here is live: each figure is the latest the app saw.
+				</p>
+				<p>
+					There is no date range. Sold, Views and Earned are totals as the shop reports them.
+					Earned is the number the shop gave, in its own currency.
+				</p>
+				<p>
+					“Figures as of” is the oldest reading on the page, so nothing looks fresher than it
+					is. A figure drawn from only some of your listings says how many.
+				</p>
+				<p>
+					Only {reporting.map((entry) => entry.label).join(' and ')} reports figures today. {silent}
+					doesn’t share any, so its panel counts your own resources instead: what is live, in
+					draft, or not sent yet.
+				</p>
+			</Explain>
 		{/snippet}
 	</PageHead>
 
-	<TabBar {tabs} bind:current={selected} />
+	<div class="flow">
+		<div class="an-filters">
+			<Field label="Label" id="an-label">
+				<select id="an-label" bind:value={label} disabled={labels.isError}>
+					<option value={null}>Every resource</option>
+					{#each labels.data ?? [] as one (one.name)}
+						<option value={one.name}>{one.name}</option>
+					{/each}
+				</select>
+			</Field>
+			{#if labels.isError}
+				<p class="an-why">We could not load your labels, so you can’t filter right now.</p>
+			{/if}
+		</div>
 
-	<div class="an-filters">
-		<Field label="Labels" id="an-label">
-			<select id="an-label" bind:value={label} disabled={labels.isError}>
-				<option value={null}>Every resource</option>
-				{#each labels.data ?? [] as one (one.name)}
-					<option value={one.name}>{one.name}</option>
-				{/each}
-			</select>
-		</Field>
-		<p class="an-why">
-			Shows the latest figure for each listing. There is no date range.
-			{#if labels.isError}We could not load your labels, so you can't filter
-				right now.{/if}
-		</p>
-	</div>
+		<div class="cards an-stats">
+			{#each tiles as tile (tile.key)}
+				<StatCard icon={tile.icon} label={tile.label} sub={tile.sub} tag={tile.tag}>
+					<span
+						class:an-none={!tile.figure}
+						class:price={tile.figure && tile.key === 'earnings'}
+						class:an-counted-n={tile.counted}>{tile.value}</span
+					>
+				</StatCard>
+			{/each}
+		</div>
 
-	{#if tptOnlyShown}
-		<Banner
-			tone="info"
-			dismissLabel="Dismiss: only TPT reports figures"
-			onDismiss={() => {
-				tptOnlyShown = false;
-				remember('analytics.tpt-reports-only');
-			}}
-		>
-			Only TPT reports figures today.
-		</Banner>
-	{/if}
-
-	<div class="an-tiles">
-		{#each tiles as tile (tile.key)}
-			<FigureTile
-				icon={tile.icon}
-				label={tile.label}
-				value={tile.value}
-				figure={tile.figure}
-				tag={tile.tag}
-				sub={tile.sub}
-				counted={tile.counted}
-			/>
-		{/each}
-	</div>
-
-	<div class="an-band">
-		<Panel title={chart.title} description={chart.description}>
-			{#if chart.counted}
-				{#if catalogueRead === 'failed'}
-					<p class="an-quiet">We could not load your resources. Reload the page to try again.</p>
-				{:else if catalogueRead === 'pending'}
-					<p class="an-quiet">Counting…</p>
-				{:else}
-					<MetricBars
-						bars={chart.bars}
-						counted={chart.counted}
-						label={chart.label}
-						format={(value) => formatMetric(value)}
+		<div class="flow-cols an-shops">
+			{#each shops as shop (shop.scope)}
+				<section class="flow-card an-shop" aria-label="{shop.inventory} figures">
+					<FlowDiagram
+						from={{ inventory: shop.inventory }}
+						to={shop.reports
+							? METRIC_COLUMNS.map((column) => ({
+									icon: FIGURE_ICON[column.key] ?? 'chart-line',
+									label: plainWord(column.key, column.heading)
+								}))
+							: [{ icon: 'layout-list', label: 'Your count' }]}
+						rule={shop.reports ? 'reports' : 'shares nothing'}
+						label={shop.reports
+							? `${shop.inventory} reports sold, views and earned`
+							: `${shop.inventory} shares no figures; these are counted from your resources`}
 					/>
-				{/if}
-			{:else if figuresRead === 'failed'}
+
+					{#if shop.reports}
+						<dl class="an-figs">
+							{#each shop.figures as figure (figure.key)}
+								<div>
+									<dt>{plainWord(figure.key, figure.heading)}</dt>
+									<dd class:price={figure.key === 'earnings' && figure.total !== undefined}>
+										{figuresRead === 'read' ? formatMetric(figure.total) : '—'}
+									</dd>
+								</div>
+							{/each}
+						</dl>
+
+						<h3 class="flow-label">{shop.chart.title}</h3>
+						{#if figuresRead === 'failed'}
+							<p class="an-quiet">We could not load your figures. Reload the page to try again.</p>
+						{:else if figuresRead === 'pending'}
+							<p class="an-quiet">Loading…</p>
+						{:else if shop.chart.bars.length === 0}
+							<p class="an-quiet">No figures yet. They show up when the app is next online.</p>
+						{:else}
+							<MetricBars
+								bars={shop.chart.bars}
+								counted={shop.chart.counted}
+								label={shop.chart.label}
+								format={(value) => formatMetric(value)}
+							/>
+						{/if}
+					{/if}
+
+					<h3 class="flow-label">
+						Where they stand
+						{#if catalogueRead === 'read'}<span class="an-chip">{shop.tracked} tracked</span>{/if}
+					</h3>
+					{#if catalogueRead === 'failed'}
+						<p class="an-quiet">We could not load your resources. Reload the page to try again.</p>
+					{:else if catalogueRead === 'pending'}
+						<p class="an-quiet">Counting…</p>
+					{:else if shop.scope === 'tes'}
+						<div class="an-standings">
+							{#each groups as group (group.row.key)}
+								<div class="an-standing" title={group.row.explanation}>
+									<div class="an-n">{portfolio[group.row.key]}</div>
+									<div class="an-l">{group.row.label}</div>
+									{#each group.under as sub (sub.key)}
+										<div class="an-l an-under" title={sub.explanation}>
+											{portfolio[sub.key]}
+											{sub.label}
+										</div>
+									{/each}
+								</div>
+							{/each}
+						</div>
+					{:else}
+						<div class="an-standings">
+							<div class="an-standing" title="Last seen live on the marketplace.">
+								<div class="an-n">{shop.standing.live}</div>
+								<div class="an-l">Live</div>
+							</div>
+							<div class="an-standing" title="Created on the marketplace and not published yet.">
+								<div class="an-n">{shop.standing.drafts}</div>
+								<div class="an-l">Drafts</div>
+							</div>
+							<div class="an-standing" title="Set up for a marketplace, with nothing created there yet.">
+								<div class="an-n">{shop.standing.unsent}</div>
+								<div class="an-l">Not sent yet</div>
+							</div>
+							<div
+								class="an-standing"
+								title="Sent for review, in review, rejected, withdrawn, being created, or removed."
+							>
+								<div class="an-n">{shop.standing.other}</div>
+								<div class="an-l">Other</div>
+							</div>
+						</div>
+					{/if}
+				</section>
+			{/each}
+		</div>
+
+		<section class="flow-section" aria-labelledby="an-top-title">
+			<div class="flow-section-head">
+				<h2 id="an-top-title">Top resources</h2>
+			</div>
+			{#if figuresRead === 'failed'}
 				<p class="an-quiet">We could not load your figures. Reload the page to try again.</p>
 			{:else if figuresRead === 'pending'}
 				<p class="an-quiet">Loading…</p>
-			{:else if chart.bars.length === 0}
+			{:else if tableRows.length === 0}
 				<Placeholder
 					icon="chart-line"
-					headline="No figures captured yet"
-					body="They show up the next time the Teachouse app on your device is online."
+					headline="No figures yet"
+					body="They show up the next time the Teachouse app on your computer is online."
 				/>
 			{:else}
-				<MetricBars
-					bars={chart.bars}
-					counted={chart.counted}
-					label={chart.label}
-					format={(value) => formatMetric(value)}
-				/>
-			{/if}
-		</Panel>
-
-		{#if scope === 'tes'}
-			<Panel
-				title="TES (Tes.com) portfolio"
-				description={standingsDescription(
-					catalogueRead,
-					"TES doesn't share figures, so we count these from your resources."
-				)}
-			>
-				{#snippet more()}
-					{#if catalogueRead === 'read'}
-						<span class="an-chip">{portfolio.listings} tracked for Tes</span>
-					{/if}
-				{/snippet}
-				{#if catalogueRead === 'failed'}
-					<p class="an-quiet">We could not load your resources. Reload the page to try again.</p>
-				{:else if catalogueRead === 'pending'}
-					<p class="an-quiet">Counting…</p>
-				{:else}
-					<div class="an-standings">
-						{#each groups as group (group.row.key)}
-							<div class="an-standing" title={group.row.explanation}>
-								<div class="an-n">{portfolio[group.row.key]}</div>
-								<div class="an-l">{group.row.label}</div>
-								{#each group.under as sub (sub.key)}
-									<div class="an-l an-under" title={sub.explanation}>
-										{portfolio[sub.key]}
-										{sub.label}
-									</div>
-								{/each}
-							</div>
-						{/each}
-					</div>
-					<Note>Each listing shows what we last saw on TES, not a live check.</Note>
-				{/if}
-			</Panel>
-		{:else}
-			<Panel
-				title="Where your listings stand"
-				description={standingsDescription(
-					catalogueRead,
-					'Counted from your resources, not reported by a marketplace.'
-				)}
-			>
-				{#snippet more()}
-					{#if catalogueRead === 'read'}
-						<span class="an-chip">{standing.listings} tracked</span>
-					{/if}
-				{/snippet}
-				{#if catalogueRead === 'failed'}
-					<p class="an-quiet">We could not load your resources. Reload the page to try again.</p>
-				{:else if catalogueRead === 'pending'}
-					<p class="an-quiet">Counting…</p>
-				{:else}
-					<div class="an-standings">
-						<div
-							class="an-standing"
-							title="Last seen live on the marketplace."
-						>
-							<div class="an-n">{standing.live}</div>
-							<div class="an-l">Live</div>
-						</div>
-						<div
-							class="an-standing"
-							title="Created on the marketplace and not published yet."
-						>
-							<div class="an-n">{standing.drafts}</div>
-							<div class="an-l">Drafts waiting to go live</div>
-						</div>
-						<div
-							class="an-standing"
-							title="Set up for a marketplace, with nothing created there yet."
-						>
-							<div class="an-n">{standing.unsent}</div>
-							<div class="an-l">Not sent yet</div>
-						</div>
-						<div
-							class="an-standing"
-							title="Sent for review, in review, rejected, withdrawn, being created, or removed."
-						>
-							<div class="an-n">{standing.other}</div>
-							<div class="an-l">In another state</div>
-						</div>
-					</div>
-					<Note>Each listing shows what we last saw, not a live check.</Note>
-				{/if}
-			</Panel>
-		{/if}
-	</div>
-
-	<Panel title={table.title} description={table.description}>
-		{#if !reports}
-			<Placeholder
-				icon="chart-line"
-				headline="{silent} doesn't share figures"
-				body="The panels above count your own Resources instead."
-			/>
-		{:else if figuresRead === 'failed'}
-			<p class="an-quiet">We could not load your figures. Reload the page to try again.</p>
-		{:else if figuresRead === 'pending'}
-			<p class="an-quiet">Loading…</p>
-		{:else if tableRows.length === 0}
-			<Placeholder
-				icon="chart-line"
-				headline="No figures captured yet"
-				body="They show up the next time the Teachouse app on your device is online."
-			/>
-		{:else}
-			<div class="an-table-wrap">
-				<table class="an-table">
-					<thead>
-						<tr>
-							<th class="an-what">Resource</th>
-							<th>Marketplace</th>
-							{#each METRIC_COLUMNS as column (column.key)}
-								<th class="an-num">{column.heading}</th>
-							{/each}
-							<th class="an-num">Updated</th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each tableRows as row (row.mapping)}
+				<div class="flow-table-wrap">
+					<table class="flow-table an-table">
+						<thead>
 							<tr>
-								<td class="an-what">
-									{#if row.title === undefined}
-										<span
-											class="an-id"
-											title={`We could not find the resource for this listing, so we show its reference instead.`}
-										>
-											{row.mapping}
-										</span>
-									{:else}
-										<div class="an-t" title={row.title}>{row.title}</div>
-									{/if}
-								</td>
-								<td><MarketplaceMark inventory={row.inventory} size={18} /></td>
+								<th>Resource</th>
+								<th>Shop</th>
 								{#each METRIC_COLUMNS as column (column.key)}
-									<td class="an-num">{formatMetric(row.metrics[column.key])}</td>
+									<th class="an-num">{plainWord(column.key, column.heading)}</th>
 								{/each}
-								<td class="an-num" title={row.captured}>{row.age}</td>
+								<th class="an-num">Read</th>
 							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
-			<Note>Figures are totals from the last time we checked, not live.</Note>
-		{/if}
-	</Panel>
+						</thead>
+						<tbody>
+							{#each tableRows as row (row.mapping)}
+								<tr>
+									<td>
+										{#if row.title === undefined}
+											<span class="an-id" title="We could not find the resource for this listing, so we show its reference instead.">
+												{row.mapping}
+											</span>
+										{:else}
+											<span class="res-name an-t" title={row.title}>{row.title}</span>
+										{/if}
+									</td>
+									<td class="marks"><MarketplaceMark inventory={row.inventory} size={18} /></td>
+									{#each METRIC_COLUMNS as column (column.key)}
+										<td class="an-num" class:price={column.key === 'earnings' && row.metrics[column.key] !== undefined}>
+											{formatMetric(row.metrics[column.key])}
+										</td>
+									{/each}
+									<td class="an-num an-age" title={row.captured}>{row.age}</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
+		</section>
+	</div>
 </div>
