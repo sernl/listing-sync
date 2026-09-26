@@ -142,7 +142,7 @@
 				refusal = { message: failure.message, draft };
 				return;
 			}
-			toast('error', 'The label was not renamed.');
+			toast('error', 'We couldn’t rename the label.');
 		}
 	}));
 
@@ -151,10 +151,10 @@
 		onSuccess: async (_answer: void, name: string) => {
 			confirming = null;
 			await refresh();
-			toast('info', `${name} is no longer one of your labels.`);
+			toast('info', `Deleted ${name}.`);
 		},
 		onError: () => {
-			toast('error', 'The label was not deleted.');
+			toast('error', 'We couldn’t delete the label.');
 		}
 	}));
 
@@ -192,12 +192,12 @@
 	/** Why Save is greyed when nothing is wrong with the name: it is the name
 	 *  the label already has. Muted rather than red, because nothing has failed
 	 *  and there is nothing to correct. */
-	const note = $derived(problem === null && stale ? 'That is the name it already has.' : null);
+	const note = $derived(problem === null && stale ? 'The label already has this name.' : null);
 
 	/** Why Save cannot run, which the tier requires of any disabled control. */
 	const blocked = $derived.by(() => {
 		if (renaming.isPending) {
-			return 'The rename is being saved.';
+			return 'Saving the new name.';
 		}
 		if (note !== null) {
 			return note;
@@ -210,7 +210,7 @@
 	<PageHead
 		icon="tag"
 		title="Labels"
-		description="Your own words for grouping resources, up to twenty on each one."
+		description="Group resources with your own words. Add up to twenty to each resource."
 		guide="labels-and-collections"
 	>
 		{#snippet aside()}
@@ -235,9 +235,9 @@
 	     shared button with no room for `aria-expanded`. -->
 	<div role="status" aria-live="polite">
 		{#if newAsked}
-			<Banner title="A label starts on a resource">
-				You make a label by putting it on a resource: open one, or pick several on the
-				Resources list, and add it there.
+			<Banner title="Add labels on a resource">
+				To make a label, add it to a resource: open one, or select several on the
+				Resources list.
 				{#snippet action()}
 					<Button href="/resources" icon="layout-list">Go to Resources</Button>
 				{/snippet}
@@ -248,7 +248,7 @@
 	{#if labels.isPending}
 		<p class="quiet">Loading…</p>
 	{:else if labels.isError}
-		<Banner tone="bad" title="We could not read your labels">
+		<Banner tone="bad" title="We couldn’t load your labels">
 			Nothing has changed.
 			{#snippet action()}
 				<Button onclick={() => labels.refetch()}>Try again</Button>
@@ -257,8 +257,8 @@
 	{:else if all.length === 0}
 		<Placeholder
 			icon="tag"
-			headline="Create your first label to get started."
-			body="Add one on a resource and it appears here."
+			headline="Add your first label to a resource."
+			body="Your labels show up here."
 		>
 			{#snippet actions()}
 				<Button tier="additive" href="/resources" icon="layout-list">Go to Resources</Button>
@@ -283,10 +283,10 @@
 		{#if uncounted && uncountedShown}
 			<Banner
 				tone="warn"
-				title="Some counts are missing"
+				title="We couldn’t count every label"
 				onDismiss={() => (uncountedShown = false)}
 			>
-				Every label is listed below.
+				All your labels are still listed below.
 				{#snippet action()}
 					<Button onclick={() => counts.refetch()}>Try again</Button>
 				{/snippet}
@@ -346,7 +346,7 @@
 								<Field
 									label="New name"
 									id="label-rename"
-									hint={`At most ${LABEL_MAX_CHARS} characters.`}
+									hint={`Up to ${LABEL_MAX_CHARS} characters.`}
 								>
 									<!-- No `maxlength`: it counts UTF-16 code units, so a name
 									     written in astral characters would be cut at thirty while
@@ -403,7 +403,7 @@
 										danger
 										disabled={deleting.isPending}
 										reason={deleting.isPending
-											? 'The label is being deleted.'
+											? 'Deleting the label.'
 											: undefined}
 										onclick={() => deleting.mutate(row.name)}
 									>

@@ -38,21 +38,21 @@ export function tabsOf(counts: { templates: number | null; mappings: number | nu
 			id: NEW,
 			label: 'New template',
 			count: null,
-			hint: 'What a new resource starts out with.',
+			hint: 'Set what a new resource starts with.',
 			icon: 'circle-plus'
 		},
 		{
 			id: SAVED,
 			label: 'Saved templates',
 			count: counts.templates,
-			hint: 'The starting points you have already saved.',
+			hint: 'Templates you have saved.',
 			icon: 'layout-template'
 		},
 		{
 			id: MAPPING,
 			label: 'Marketplace words',
 			count: counts.mappings,
-			hint: 'How your own words land on each marketplace.',
+			hint: 'Choose how your words show on each marketplace.',
 			icon: 'sliders-horizontal'
 		}
 	];
@@ -62,9 +62,9 @@ export function tabsOf(counts: { templates: number | null; mappings: number | nu
  *  errors: `ProjectionOverride::new` and a database CHECK both refuse a
  *  licence override. */
 export const LICENCE_REFUSAL =
-	'We never pick a marketplace’s licence for you: a licence has legal effect, so that choice stays yours.';
+	'You always choose the licence yourself. We never pick it for you.';
 
-export const EMPTY_HEADING = "Save a resource's details as a starting point for the next one.";
+export const EMPTY_HEADING = "Save a resource's details to reuse on your next one.";
 
 export const EMPTY_BODY =
-	'A template fills in the things you set the same way every time: subject, year levels, licence and price.';
+	'A template fills in what you set the same way each time: subject, year levels, licence and price.';

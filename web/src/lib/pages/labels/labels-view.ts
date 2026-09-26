@@ -39,7 +39,7 @@ export function checkRename(
 ): NameVerdict {
 	const name = raw.trim();
 	if (name.length === 0) {
-		return { accepted: false, problem: 'empty', message: 'A label needs a word in it.' };
+		return { accepted: false, problem: 'empty', message: 'Type a name for the label.' };
 	}
 	// Spread rather than `.length`: the string iterator yields code points, so
 	// this counts what the server counts.
@@ -47,14 +47,14 @@ export function checkRename(
 		return {
 			accepted: false,
 			problem: 'too-long',
-			message: `A label is at most ${LABEL_MAX_CHARS} characters.`
+			message: `Keep the label to ${LABEL_MAX_CHARS} characters or fewer.`
 		};
 	}
 	if (name.includes('/')) {
 		return {
 			accepted: false,
 			problem: 'slash',
-			message: 'A label cannot contain a slash.'
+			message: 'Labels can’t contain a slash.'
 		};
 	}
 	const folded = name.toLowerCase();
@@ -63,7 +63,7 @@ export function checkRename(
 		return {
 			accepted: false,
 			problem: 'taken',
-			message: 'That name is already one of your labels.'
+			message: 'You already have a label with that name.'
 		};
 	}
 	return { accepted: true, name };

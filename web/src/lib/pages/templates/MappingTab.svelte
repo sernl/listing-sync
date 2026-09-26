@@ -145,7 +145,7 @@
 			from = '';
 			toNative = '';
 		} catch (failure) {
-			refusal = failure instanceof ApiFailure ? failure.message : 'That override was not saved.';
+			refusal = failure instanceof ApiFailure ? failure.message : 'We couldn’t save that match.';
 		} finally {
 			saving = false;
 		}
@@ -172,7 +172,7 @@
 			await queryClient.invalidateQueries({ queryKey: queryKeys.overrides });
 		} catch (failure) {
 			refusal =
-				failure instanceof ApiFailure ? failure.message : 'That override was not withdrawn.';
+				failure instanceof ApiFailure ? failure.message : 'We couldn’t remove that match.';
 		}
 	}
 
@@ -184,7 +184,7 @@
 {#if licenceShown}
 	<Banner
 		tone="info"
-		title="Licence is yours alone"
+		title="You choose the licence"
 		onDismiss={() => {
 			licenceShown = false;
 			remember('templates.licence-is-yours');
@@ -195,8 +195,8 @@
 {/if}
 
 <Panel
-	title="Add an override"
-	description="Pick which of a marketplace's own choices one of your words should use."
+	title="Add a match"
+	description="Choose which marketplace option each of your words should use."
 >
 	<div class="tpl-grid">
 		<Field label="Marketplace" id="{base}-inventory">
@@ -211,7 +211,7 @@
 			</select>
 		</Field>
 
-		<Field label="Axis" id="{base}-axis">
+		<Field label="Field" id="{base}-axis">
 			<select
 				id="{base}-axis"
 				bind:value={axis}
@@ -238,9 +238,9 @@
 		</Field>
 
 		{#if destinations.kind === 'values'}
-			<Field label="Lands in, on {platformTitle(inventory)}" id="{base}-destination">
+			<Field label="Use on {platformTitle(inventory)}" id="{base}-destination">
 				<select id="{base}-destination" bind:value={toNative}>
-					<option value="">Pick a value</option>
+					<option value="">Pick an option</option>
 					{#each destinations.values as value (value.id)}
 						<option value={value.id}>{value.label}</option>
 					{/each}
@@ -248,32 +248,32 @@
 			</Field>
 		{:else if destinations.kind === 'unread'}
 			<div class="tpl-absent">
-				<b>Lands in, on {platformTitle(inventory)}</b>
-				<span>What {platformTitle(inventory)} offers has not been read yet.</span>
+				<b>Use on {platformTitle(inventory)}</b>
+				<span>{platformTitle(inventory)}’s options haven’t loaded yet.</span>
 			</div>
 		{:else if destinations.kind === 'unbound'}
 			<div class="tpl-absent">
-				<b>Lands in, on {platformTitle(inventory)}</b>
+				<b>Use on {platformTitle(inventory)}</b>
 				<span>
-					{platformTitle(inventory)} has no field of its own for {AXIS_LABEL[
+					{platformTitle(inventory)} has no {AXIS_LABEL[
 						axis
-					].toLowerCase()}, so there is nothing to choose here.
+					].toLowerCase()} field to choose from.
 				</span>
 			</div>
 		{:else}
 			<div class="tpl-absent">
-				<b>Lands in, on {platformTitle(inventory)}</b>
+				<b>Use on {platformTitle(inventory)}</b>
 				<span>
-					{platformTitle(inventory)} publishes no list of values for {AXIS_LABEL[
+					{platformTitle(inventory)} has no list of {AXIS_LABEL[
 						axis
-					].toLowerCase()}, so there is nothing to pick from here.
+					].toLowerCase()} options to pick from.
 				</span>
 			</div>
 		{/if}
 	</div>
 
 	<fieldset class="tpl-choices">
-		<legend>How it reads</legend>
+		<legend>How it matches</legend>
 		<div class="picks">
 			<label>
 				<input
@@ -296,7 +296,7 @@
 		</div>
 	</fieldset>
 	<p class="tpl-note">
-		Belongs under: buyers on this marketplace see the heading, not your own term.
+		Belongs under: buyers on this marketplace see the broader heading, not your term.
 	</p>
 
 	{#if refusal !== null}
@@ -304,7 +304,7 @@
 	{/if}
 
 	<p class="tpl-note">
-		Saving again replaces your answer for the same marketplace, field and term.
+		Saving again replaces your choice for the same marketplace, field and term.
 	</p>
 
 	<div class="tpl-actions">
@@ -316,19 +316,19 @@
 				? saving
 					? 'Saving now.'
 					: undefined
-				: 'Pick one of your terms and the value it lands in.'}
+				: 'Pick your term and the marketplace option it matches.'}
 			onclick={() => void save()}
 		>
 			{saving
 				? 'Saving…'
 				: chosenTerm === undefined
-					? 'Save override'
-					: `Save override for ${chosenTerm.label}`}
+					? 'Save match'
+					: `Save match for ${chosenTerm.label}`}
 		</Button>
 	</div>
 </Panel>
 
-<Panel title="Your overrides">
+<Panel title="Your matches">
 	{#each byMarketplace as group (group.inventory)}
 		<div class="tpl-group">
 			<h3><MarketplaceMark inventory={group.inventory} size={16} /></h3>
@@ -337,7 +337,7 @@
 					<span class="who">
 						<span class="t">{termsByAxis.label.get(row.from_term) ?? row.from_term}</span>
 						<span class="meta">
-							{AXIS_LABEL[row.axis]} · lands in {row.segments.join(' › ')}{row.kind === 'broader'
+							{AXIS_LABEL[row.axis]} · matches {row.segments.join(' › ')}{row.kind === 'broader'
 								? ' · belongs under'
 								: ''}
 						</span>
@@ -352,10 +352,10 @@
 	{:else}
 		<p class="tpl-none">
 			{overrides.isPending
-				? 'Reading your overrides…'
+				? 'Loading your matches…'
 				: overrides.isError
-					? 'Your overrides could not be read.'
-					: 'No overrides here yet.'}
+					? 'We couldn’t load your matches.'
+					: 'No matches yet.'}
 		</p>
 	{/each}
 </Panel>

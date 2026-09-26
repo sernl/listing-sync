@@ -63,7 +63,7 @@
 	<PageHead
 		icon="layout-template"
 		title="Templates"
-		description="Saved answers you reuse when you add a resource."
+		description="Save answers you reuse each time you add a resource."
 		guide="templates"
 	>
 		{#snippet aside()}
