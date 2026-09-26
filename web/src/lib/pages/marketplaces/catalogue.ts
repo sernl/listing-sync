@@ -150,7 +150,7 @@ export const PLANNED: readonly MarketplaceTile[] = [
 		name: 'Etsy',
 		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/etsy.svg' },
 		home: 'https://www.etsy.com/',
-		body: 'Etsy has an official API, so this one would run on our servers.',
+		body: 'Etsy lets us connect directly, so this one would run on our servers.',
 		about:
 			'A general marketplace for handmade, vintage and digital goods, where digital downloads ' +
 			'including teaching resources sell alongside everything else.',
@@ -161,7 +161,7 @@ export const PLANNED: readonly MarketplaceTile[] = [
 		name: 'Shopify',
 		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/shopify.png' },
 		home: 'https://www.shopify.com/',
-		body: 'Shopify has an official API, so this one would run on our servers.',
+		body: 'Shopify lets us connect directly, so this one would run on our servers.',
 		about:
 			'Not a marketplace but a shop of your own: Shopify hosts the storefront and takes the ' +
 			'payments, and there is no shared catalogue for buyers to find you in.'
@@ -180,7 +180,7 @@ export const LISTED: readonly MarketplaceTile[] = [
 		name: 'Made By Teachers',
 		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/made-by-teachers.jpg' },
 		home: 'https://madebyteachers.com/',
-		body: 'This one has no official API, so it would run on your own computer.',
+		body: 'This one would run on your own computer.',
 		about:
 			'A marketplace for teaching resources, which says its listings are all digital ' +
 			'downloads from independent teacher-sellers and that those sellers keep 80 per cent ' +
@@ -191,7 +191,7 @@ export const LISTED: readonly MarketplaceTile[] = [
 		name: 'Classful',
 		mark: { kind: 'image', shape: 'wordmark', src: '/marketplaces/classful.svg' },
 		home: 'https://classful.com/',
-		body: 'This one has no official API, so it would run on your own computer.',
+		body: 'This one would run on your own computer.',
 		about:
 			'An American marketplace for digital classroom resources, which collects and remits US ' +
 			"sales tax on the seller's behalf."
@@ -206,7 +206,7 @@ export const LISTED: readonly MarketplaceTile[] = [
 		name: 'Boom Learning',
 		mark: { kind: 'wordmark', text: 'Boom' },
 		home: 'https://www.boomlearning.com/',
-		body: 'This one has no official API, so it would run on your own computer.',
+		body: 'This one would run on your own computer.',
 		about:
 			"Sells interactive decks authored in Boom's own studio rather than uploaded files, so " +
 			"what you sell there is a deck rather than a file."
@@ -223,7 +223,7 @@ export const LISTED: readonly MarketplaceTile[] = [
 		// other icon on this page to.
 		mark: { kind: 'image', shape: 'wordmark', src: '/marketplaces/teach-simple.svg' },
 		home: 'https://teachsimple.com/',
-		body: 'This one has no official API, so it would run on your own computer.',
+		body: 'This one would run on your own computer.',
 		about:
 			'An American marketplace whose buyers pay a membership rather than a price per item, ' +
 			'and which states that half of all revenue goes to the teachers who made the materials.'
@@ -233,7 +233,7 @@ export const LISTED: readonly MarketplaceTile[] = [
 		name: 'Amped Up Learning',
 		mark: { kind: 'image', shape: 'wordmark', src: '/marketplaces/amped-up-learning.png' },
 		home: 'https://ampeduplearning.com/',
-		body: 'This one has no official API, so it would run on your own computer.',
+		body: 'This one would run on your own computer.',
 		about:
 			'Sells teacher-made digital resources alongside apparel, through curated contributor ' +
 			'stores rather than one open catalogue.'
@@ -243,7 +243,7 @@ export const LISTED: readonly MarketplaceTile[] = [
 		name: 'Teacha!',
 		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/teacha.svg' },
 		home: 'https://www.teacharesources.com/',
-		body: 'This one has no official API, so it would run on your own computer.',
+		body: 'This one would run on your own computer.',
 		about:
 			'A South African marketplace for teaching resources, which says its sellers keep 65 per ' +
 			'cent of each sale.'
@@ -253,7 +253,7 @@ export const LISTED: readonly MarketplaceTile[] = [
 		name: 'TeachShare',
 		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/teachshare.svg' },
 		home: 'https://www.teachshare.com/',
-		body: 'This one has no official API, so it would run on your own computer.',
+		body: 'This one would run on your own computer.',
 		about:
 			'An American marketplace, run from San Francisco, carrying listings from many sellers ' +
 			'at prices from nothing to a few dollars.'
@@ -273,7 +273,7 @@ export const LISTED: readonly MarketplaceTile[] = [
 		// note records the crop.
 		mark: { kind: 'image', shape: 'wordmark', src: '/marketplaces/eduki.png' },
 		home: 'https://eduki.com/',
-		body: 'This one has no official API, so it would run on your own computer.',
+		body: 'This one would run on your own computer.',
 		about:
 			'A European marketplace for teaching material, started in Germany and priced in euros, ' +
 			'whose German-language site is labelled for Germany, Austria and Switzerland.'
@@ -283,7 +283,7 @@ export const LISTED: readonly MarketplaceTile[] = [
 		name: 'TeachBuySell',
 		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/teachbuysell.png' },
 		home: 'https://teachbuysell.com.au/',
-		body: 'This one has no official API, so it would run on your own computer.',
+		body: 'This one would run on your own computer.',
 		about:
 			'An Australian marketplace for primary and early-childhood resources, priced in ' +
 			'Australian dollars.'
@@ -297,7 +297,7 @@ export const LISTED: readonly MarketplaceTile[] = [
 		// illegible says less than the wordmark does.
 		mark: { kind: 'image', shape: 'wordmark', src: '/marketplaces/teach-mzantsi.png' },
 		home: 'https://teachmzantsi.com/',
-		body: 'This one has no official API, so it would run on your own computer.',
+		body: 'This one would run on your own computer.',
 		about:
 			'A South African marketplace for teaching and learning resources, priced in rand, where ' +
 			'the seller keeps 65 per cent of each sale.'
@@ -307,7 +307,7 @@ export const LISTED: readonly MarketplaceTile[] = [
 		name: 'Lesson Planned',
 		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/lesson-planned.png' },
 		home: 'https://lessonplanned.co.uk/',
-		body: 'This one has no official API, so it would run on your own computer.',
+		body: 'This one would run on your own computer.',
 		about:
 			'A British marketplace where teachers buy and sell original learning resources, priced ' +
 			'in pounds and organised around the National Curriculum.'
@@ -317,7 +317,7 @@ export const LISTED: readonly MarketplaceTile[] = [
 		name: 'School Ninja',
 		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/school-ninja.png' },
 		home: 'https://schoolninja.au/',
-		body: 'This one has no official API, so it would run on your own computer.',
+		body: 'This one would run on your own computer.',
 		about:
 			'An Australian marketplace where the seller keeps 70 per cent of each sale and must ' +
 			'hold an Australian business number to sell at all.'
@@ -327,7 +327,7 @@ export const LISTED: readonly MarketplaceTile[] = [
 		name: 'TPD',
 		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/tpd.jpg' },
 		home: 'https://tpd.edu.au/',
-		body: 'This one has no official API, so it would run on your own computer.',
+		body: 'This one would run on your own computer.',
 		about:
 			'An Australian site trading as Teacher Professional Development, whose payout rises ' +
 			'from 60 to 75 per cent as the seller pays for a higher tier.'
@@ -337,7 +337,7 @@ export const LISTED: readonly MarketplaceTile[] = [
 		name: 'Gumroad',
 		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/gumroad.svg' },
 		home: 'https://gumroad.com/',
-		body: 'Gumroad has an official API, so this one would run on our servers.',
+		body: 'Gumroad lets us connect directly, so this one would run on our servers.',
 		about:
 			'A storefront for creators of every kind, selling digital files direct to your own ' +
 			'audience, with a discovery feed rather than a marketplace for teaching resources.'
@@ -347,7 +347,7 @@ export const LISTED: readonly MarketplaceTile[] = [
 		name: 'Payhip',
 		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/payhip.png' },
 		home: 'https://payhip.com/',
-		body: "Payhip's API does not cover products yet, so we are waiting on it.",
+		body: "Payhip doesn't let us connect products yet, so we're waiting on them.",
 		about:
 			'A British platform for selling digital downloads, courses and memberships, running ' +
 			'both a shop of your own and a marketplace of its own.'
@@ -357,7 +357,7 @@ export const LISTED: readonly MarketplaceTile[] = [
 		name: 'Sellfy',
 		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/sellfy.svg' },
 		home: 'https://sellfy.com/',
-		body: 'Sellfy has no product API, so this one would run on your own computer.',
+		body: "Sellfy doesn't let us connect products directly, so this one would run on your own computer.",
 		about:
 			'A general storefront for selling digital products from a shop page of your own rather ' +
 			'than as a marketplace listing.'
@@ -367,7 +367,7 @@ export const LISTED: readonly MarketplaceTile[] = [
 		name: 'Lemon Squeezy',
 		mark: { kind: 'image', shape: 'icon', src: '/marketplaces/lemon-squeezy.jpg' },
 		home: 'https://www.lemonsqueezy.com/',
-		body: 'Lemon Squeezy has an official API, so this one would run on our servers.',
+		body: 'Lemon Squeezy lets us connect directly, so this one would run on our servers.',
 		about:
 			'A general store for digital products, owned by Stripe since 2024, which handles the ' +
 			'payment and the sales tax on your behalf.'

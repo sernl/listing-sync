@@ -105,7 +105,7 @@ describe('the banner that says work has stopped', () => {
 		const rows = [row('Tpt', 'signed_in'), row('Tes', 'signed_in')];
 		expect(blockedBanner(rows, view())).toEqual({
 			marketplace: 'Tpt',
-			title: 'TPT needs your permission before work continues'
+			title: 'TPT needs your permission to keep working'
 		});
 		expect(blockedBanner(rows, view(grant('Tpt')))?.marketplace).toBe('Tes');
 		expect(blockedBanner(rows, view(grant('Tpt'), grant('Tes')))).toBeNull();

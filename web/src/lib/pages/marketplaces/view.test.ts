@@ -396,7 +396,7 @@ describe('disconnecting a marketplace from the account', () => {
 			const prompt = disconnectPrompt('Tpt', heldOnAMachine);
 			expect(prompt).toContain('Nothing is removed from TPT itself');
 			expect(prompt).toContain('listings stay here');
-			expect(prompt).toContain('Scheduled work for TPT stops');
+			expect(prompt).toContain('Teachouse stops all work on TPT');
 		}
 	});
 
@@ -415,7 +415,7 @@ describe('disconnecting a marketplace from the account', () => {
 	it('claims no reconnection where no machine holds the login', () => {
 		const prompt = disconnectPrompt('Tes', false);
 		expect(prompt).not.toContain('reconnects TES by itself');
-		expect(prompt).toContain('Scheduled work for TES stops');
+		expect(prompt).toContain('Teachouse stops all work on TES');
 	});
 
 	// The boundary this control has, stated rather than papered over: it asks
@@ -440,7 +440,7 @@ describe('signing this machine out of a marketplace', () => {
 	it('promises the other machines keep their logins, and stops scheduled work nowhere', () => {
 		const prompt = signOutHereAsk('Tes');
 		expect(prompt).toContain('other machines keep their own TES logins');
-		expect(prompt).not.toContain('Scheduled work for TES stops');
+		expect(prompt).not.toContain('Teachouse stops all work on TES');
 	});
 
 	// The failure this prevents: a seller disconnects on a phone, presses
@@ -575,7 +575,7 @@ describe('what a live tile says when the read has not landed or failed', () => {
 		expect(liveFace({ state: 'pending' }, 'app', null).body).not.toBe(
 			liveFace({ state: 'failed' }, 'app', null).body
 		);
-		expect(liveFace({ state: 'failed' }, 'app', null).body).toContain('could not read');
+		expect(liveFace({ state: 'failed' }, 'app', null).body).toContain('could not check');
 	});
 
 	it('carries the server’s marketplace standing through once the read lands', () => {
@@ -672,7 +672,7 @@ describe('one machine and the logins on it', () => {
 
 	it('says a wiped login is the sign-out working, not something failing', () => {
 		expect(sessionWords({ status: 'wiped', account_label: null } as never)).toBe(
-			'forgotten when this device was signed out'
+			'removed when you signed this machine out'
 		);
 	});
 });

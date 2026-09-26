@@ -98,7 +98,7 @@ export function blockedBanner(
 		if (standing === 'missing' || standing === 'outdated') {
 			return {
 				marketplace: row.marketplace,
-				title: `${CARD_NAME[row.marketplace]} needs your permission before work continues`
+				title: `${CARD_NAME[row.marketplace]} needs your permission to keep working`
 			};
 		}
 	}

@@ -271,12 +271,12 @@
 				// Unreachable from this page, which offers the command only where
 				// there is an invoker. Said rather than swallowed, because a
 				// silent button is the failure this whole change is fixing.
-				toast('error', `${name} is connected from the Teachouse app on your computer.`);
+				toast('error', `Connect ${name} from the Teachouse app on your computer.`);
 			}
 			await Promise.all([loadLocalSessions(), refetchConnections()]);
 		},
 		onError: () => {
-			toast('error', 'The sign-in could not be opened on this machine.');
+			toast('error', 'We could not open the sign-in on this machine. Try again.');
 		},
 		onSettled: (outcome: SessionOutcome | undefined, _error, marketplace: Marketplace) => {
 			// Left busy on `opening`, which is the one outcome where the page
@@ -311,7 +311,7 @@
 			await Promise.all([loadLocalSessions(), refetchConnections()]);
 		},
 		onError: () => {
-			toast('error', 'The login could not be removed from this machine.');
+			toast('error', 'We could not remove the login from this machine. Try again.');
 		},
 		onSettled: (_data, _error, marketplace: Marketplace) => {
 			busy = withBusy(busy, marketplace, null);
@@ -351,7 +351,7 @@
 		// The one call it makes catches its own refusal, so this is left for a
 		// genuinely unexpected failure.
 		onError: () => {
-			toast('error', 'The marketplace could not be disconnected.');
+			toast('error', 'We could not disconnect this marketplace. Try again.');
 		},
 		onSettled: (_data, _error, marketplace: Marketplace) => {
 			busy = withBusy(busy, marketplace, null);
@@ -529,7 +529,7 @@
 	{#if waiting.length > 0}
 		<Banner
 			tone="warn"
-			title="{waiting.length} {waiting.length === 1 ? 'marketplace needs' : 'marketplaces need'} you"
+			title="{waiting.length} {waiting.length === 1 ? 'marketplace needs' : 'marketplaces need'} your attention"
 		>
 			{waiting.map((row) => CARD_NAME[row.marketplace]).join(', ')}.
 		</Banner>
@@ -537,13 +537,13 @@
 
 	{#if undeclared}
 		<Banner tone="warn" title="TPT needs to know who holds the copyright" action={toCopyright}>
-			Tell us who holds the copyright before you send anything to TPT.
+			Tell us who holds the copyright before you publish anything to TPT.
 		</Banner>
 	{/if}
 
 	{#if blocked !== null}
 		<Banner tone="warn" title={blocked.title} action={toPermissions}>
-			Nothing new is started on {CARD_NAME[blocked.marketplace]} until you grant it.
+			We can't start anything new on {CARD_NAME[blocked.marketplace]} until you give permission.
 		</Banner>
 	{/if}
 
@@ -684,5 +684,5 @@
 {/snippet}
 
 {#snippet toPermissions()}
-	<Button tier="outline" small href="/settings#permissions">Grant it</Button>
+	<Button tier="outline" small href="/settings#permissions">Give permission</Button>
 {/snippet}

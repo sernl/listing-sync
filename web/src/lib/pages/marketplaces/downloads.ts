@@ -89,10 +89,10 @@ const NOTHING_YET = 'Not available yet.';
 /** What each card says once a build is published. */
 const OFFERED: Record<Platform, string> = {
 	windows:
-		'The desktop app: it keeps your marketplace logins on your own computer and runs the schedule there.',
+		'The desktop app. It keeps your marketplace logins on your own computer and runs your automations there.',
 	linux: 'AppImage for 64-bit Linux. A .deb package is on the same GitHub release.',
 	android:
-		'It holds marketplace logins on the phone itself and runs your queued work when you open it, with no schedule of its own.',
+		'Keeps your marketplace logins on your phone. Waiting work runs when you open the app, not on a schedule.',
 	apple: 'The desktop app.'
 };
 

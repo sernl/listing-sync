@@ -14,7 +14,7 @@
 	<div class="mp-sect">
 		<h2>Downloads</h2>
 		<p>
-			The desktop app does the TES and TPT work on your own computer.
+			The desktop app connects TES and TPT from your own computer.
 			<a class="mp-guide" href="/guides/connecting">How connecting works</a>
 		</p>
 	</div>

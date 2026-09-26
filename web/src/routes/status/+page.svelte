@@ -55,7 +55,7 @@
 			     page matters most when other things are broken, so it must not
 			     be the one describing a finished failure as still in flight. -->
 			{#if status.isError}
-				<StatusPill tone="bad" label="not read" />
+				<StatusPill tone="bad" label="could not check" />
 			{:else if status.isSuccess}
 				<StatusPill
 					tone={paused === 0 ? 'ok' : 'warn'}
@@ -71,12 +71,12 @@
 		{#if status.isPending}
 			<p class="quiet">Loading…</p>
 		{:else if status.isError}
-			<p class="quiet">We could not read the status.</p>
+			<p class="quiet">We could not check your marketplaces. Reload the page to try again.</p>
 		{:else if rows.length === 0}
 			<Placeholder
 				icon="activity"
 				headline="No marketplace to show yet"
-				body="Every marketplace we work with appears here."
+				body="Each marketplace we work with shows here."
 			/>
 		{:else}
 			{#each rows as row (row.marketplace)}

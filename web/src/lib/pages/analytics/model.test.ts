@@ -420,7 +420,7 @@ describe('the figure tiles', () => {
 			expect(tile.value).toBe('—');
 			expect(tile.figure).toBe(false);
 			expect(tile.tag).toBe('not reported');
-			expect(tile.sub).toBe('TES reports no figures');
+			expect(tile.sub).toBe("TES doesn't share figures");
 		}
 	});
 
@@ -453,7 +453,7 @@ describe('the figure tiles', () => {
 		for (const tile of tiles({ summary: 'failed' }).slice(0, 3)) {
 			expect(tile.value).toBe('—');
 			expect(tile.figure).toBe(false);
-			expect(tile.sub).toBe('the analytics could not be read');
+			expect(tile.sub).toBe('could not load');
 		}
 	});
 
@@ -461,7 +461,7 @@ describe('the figure tiles', () => {
 		for (const tile of tiles({ summary: 'pending' }).slice(0, 3)) {
 			expect(tile.value).toBe('—');
 			expect(tile.figure).toBe(false);
-			expect(tile.sub).toBe('reading…');
+			expect(tile.sub).toBe('loading…');
 		}
 	});
 
@@ -469,19 +469,19 @@ describe('the figure tiles', () => {
 		for (const tile of tiles({ figures: threeFigures(undefined, null) }).slice(0, 3)) {
 			expect(tile.value).toBe('—');
 			expect(tile.figure).toBe(false);
-			expect(tile.sub).toBe('nothing captured yet');
+			expect(tile.sub).toBe('no figures yet');
 		}
 	});
 
 	it('lets a marketplace that reports nothing speak before the read state does', () => {
 		const tile = tiles({ scope: 'tes', summary: 'failed' })[0];
-		expect(tile.sub).toBe('TES reports no figures');
+		expect(tile.sub).toBe("TES doesn't share figures");
 	});
 
 	it('dates a reported figure by its own oldest contributor', () => {
 		const tile = tiles({ figures: threeFigures(10, HOUR) })[0];
 		expect(tile.value).toBe('10');
-		expect(tile.sub).toBe('as at 1 h ago');
+		expect(tile.sub).toBe('as of 1 h ago');
 	});
 
 	it('tags the combined scope so a TPT-only total is not read as every marketplace', () => {
@@ -499,7 +499,7 @@ describe('the figure tiles', () => {
 		expect(tiles({ catalogue: 'failed', standing })[3]).toMatchObject({
 			value: '—',
 			figure: false,
-			sub: 'your Resources could not be read'
+			sub: 'could not load your resources'
 		});
 		expect(tiles({ catalogue: 'read', standing })[3]).toMatchObject({
 			value: '4',
@@ -530,10 +530,10 @@ describe('the header freshness', () => {
 	it('states a failed or in-flight read rather than an absence of figures', () => {
 		expect(
 			headerMeta({ scope: 'tpt', listings: [], summary: 'failed', now: 0 }).value
-		).toBe('could not be read');
+		).toBe('could not load');
 		expect(
 			headerMeta({ scope: 'tpt', listings: [], summary: 'pending', now: 0 }).value
-		).toBe('reading…');
+		).toBe('loading…');
 		expect(headerMeta({ scope: 'tpt', listings: [], summary: 'read', now: 0 }).value).toBe(
 			'nothing yet'
 		);
@@ -702,10 +702,10 @@ describe('a panel says nothing until its read lands', () => {
 describe('the contributor count', () => {
 	it('is named only where the total is short of the scope', () => {
 		const partial = tiles({ figures: threeFigures(10, HOUR, 4) })[0];
-		expect(partial.sub).toBe('as at 1 h ago, from 1 of 4 listings');
+		expect(partial.sub).toBe('as of 1 h ago, from 1 of 4 listings');
 
 		const whole = tiles({ figures: threeFigures(10, HOUR, 1) })[0];
-		expect(whole.sub).toBe('as at 1 h ago');
+		expect(whole.sub).toBe('as of 1 h ago');
 	});
 
 	it('is counted over the listings the scope covers, not the whole read', () => {
