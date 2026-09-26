@@ -14,6 +14,7 @@
 // request bodies. None of those is a rule, and the core answers none of them.
 
 import type {
+	CheckView,
 	CreateProductBody,
 	DraftInput,
 	FacetView,
@@ -43,9 +44,24 @@ import { MARKETPLACE_OF } from '$lib/listings-view';
 import { MARKETPLACE_TILES, MARKETPLACE_WORD, platformTitle } from '$lib/platforms';
 
 // Started at module scope so the rules are ready before the seller has typed
-// anything; guarded because there is no asset to fetch while prerendering.
+// anything; guarded because there is no asset to fetch while prerendering. A
+// failure is not unhandled here: the form awaits the same promise and, when
+// it rejects, asks the server for each verdict instead (`verdictOf`).
 if (typeof window !== 'undefined') {
-	void loadCore();
+	loadCore().catch(() => undefined);
+}
+
+/** The core's verdict on a draft, or null while the module is not here.
+ *
+ *  The one place the form's rules read the compiled module. The form passes
+ *  this result into `refusalsOf` and `advisoriesOf` by default; on an engine
+ *  that cannot run the module (an Android System WebView years behind Chrome
+ *  refuses to compile it) it passes the server's answer to the same question,
+ *  `POST /v1/authoring/check`, which is the function the module was compiled
+ *  from. */
+export function verdictOf(draft: TptDraft): CheckView | null {
+	const rules = core();
+	return rules === null ? null : rules.checkDraft(draftInputOf(draft));
 }
 
 /** Where a section of the form sits, and what a refusal about it scrolls to.
@@ -594,12 +610,12 @@ export function anchorOf(group: FormGroup, control: string | null): FormAnchor {
 export function refusalsOf(
 	draft: TptDraft,
 	vocabulary: FormVocabularyView | null,
-	known: ReadonlyMap<InventoryId, VocabularyView> = new Map()
+	known: ReadonlyMap<InventoryId, VocabularyView> = new Map(),
+	verdict: CheckView | null = verdictOf(draft)
 ): Refusal[] {
 	void vocabulary;
 	const found: Refusal[] = [];
-	const rules = core();
-	if (rules === null) {
+	if (verdict === null) {
 		// Fail closed. An unloaded module has not decided that there is nothing
 		// to refuse, and treating it as though it had would let a blank form
 		// submit in the moment before the rules arrive.
@@ -609,7 +625,7 @@ export function refusalsOf(
 			message: 'The form is still loading. Wait a moment, then try again.'
 		});
 	} else {
-		for (const refusal of rules.checkDraft(draftInputOf(draft)).refusals) {
+		for (const refusal of verdict.refusals) {
 			found.push({
 				group: anchorOf(refusal.group, refusal.control ?? null),
 				control: refusal.control ?? null,
@@ -689,13 +705,16 @@ export interface Advisory {
 
 /** The advisories the core raises. Nothing is added here: every one of them is
  *  guidance the model already states. */
-export function advisoriesOf(draft: TptDraft, vocabulary: FormVocabularyView | null): Advisory[] {
+export function advisoriesOf(
+	draft: TptDraft,
+	vocabulary: FormVocabularyView | null,
+	verdict: CheckView | null = verdictOf(draft)
+): Advisory[] {
 	void vocabulary;
-	const rules = core();
-	if (rules === null) {
+	if (verdict === null) {
 		return [];
 	}
-	return rules.checkDraft(draftInputOf(draft)).advisories.map((advisory) => ({
+	return verdict.advisories.map((advisory) => ({
 		group: advisory.group,
 		message: advisory.message
 	}));

@@ -69,6 +69,7 @@
 		payloadOf,
 		projectionOf,
 		refusalsOf,
+		verdictOf,
 		shouldLandOnCreated,
 		sizeWords,
 		slotsFrom,
@@ -387,24 +388,41 @@
 		);
 	});
 
-	const RULES_UNREAD: Refusal = {
-		group: 'name',
-		control: null,
-		message: 'The form didn’t load properly. Reload the page before you save.'
-	};
-
-	const refusals = $derived.by(() => {
-		// Read so this recomputes when the rules land; `refusalsOf` asks `core()`
+	// The server's verdict on the draft, kept only where the module could not
+	// load: an Android System WebView years behind Chrome refuses to compile
+	// it, and a form that answered "reload the page" to that could never be
+	// submitted from such a phone. `POST /v1/authoring/check` is the function
+	// the module was compiled from, so the sentences are the same; they arrive
+	// a round trip later, after the seller pauses typing.
+	let serverVerdict = $state<CheckView | null>(null);
+	let serverVerdictTurn = 0;
+	$effect(() => {
+		if (!rulesFailed) {
+			return;
+		}
+		const asked = draftInputOf(draft);
+		const mine = ++serverVerdictTurn;
+		const timer = setTimeout(() => {
+			void api.checkDraft(asked).then(
+				(verdict) => {
+					if (mine === serverVerdictTurn) {
+						serverVerdict = verdict;
+					}
+				},
+				() => undefined
+			);
+		}, 400);
+		return () => clearTimeout(timer);
+	});
+	const verdict = $derived.by(() => {
+		// Read so this recomputes when the rules land; `verdictOf` asks `core()`
 		// for them and `core()` cannot say when it changed.
 		void rulesReady;
-		return rulesFailed ? [RULES_UNREAD] : refusalsOf(draft, form, known);
+		return rulesFailed ? serverVerdict : verdictOf(draft);
 	});
-	// Same reason as `refusals`: `advisoriesOf` reads the same non-reactive
-	// `core()`, so without this it stays empty until a field is touched.
-	const advisories = $derived.by(() => {
-		void rulesReady;
-		return advisoriesOf(draft, form);
-	});
+
+	const refusals = $derived(refusalsOf(draft, form, known, verdict));
+	const advisories = $derived(advisoriesOf(draft, form, verdict));
 	const canCreate = $derived(
 		submittable(refusals) && form !== null && !creating && !slotsSettling(slots) && !locked
 	);
