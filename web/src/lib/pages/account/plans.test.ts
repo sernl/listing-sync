@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Founding, Pack } from '$lib/generated/plans';
-import { PACKS } from '$lib/generated/plans';
+import { AI, PACKS, PLANS } from '$lib/generated/plans';
 import {
 	bestValuePack,
 	checkoutOutcome,
@@ -12,6 +12,7 @@ import {
 	moves,
 	packsBySize,
 	perMonth,
+	planBullets,
 	renewsLine,
 	syncPlan
 } from './plans';
@@ -155,6 +156,26 @@ describe('the plan a deployment sells', () => {
 
 	it('is never Studio, which ships priced and unsold', () => {
 		expect(syncPlan()?.id).not.toBe('studio');
+	});
+});
+
+describe('the lines on a plan card', () => {
+	const caps = (id: string) => PLANS.find((plan) => plan.id === id)!.capabilities;
+	const texts = (id: string) => planBullets(caps(id)).map((line) => line.text);
+
+	it('states a resource ceiling only where the plan has one', () => {
+		expect(texts('free')).toContain(`Up to ${caps('free').resources_max} resources`);
+		expect(texts('subscriber').some((text) => /^Up to \d+ resources$/.test(text))).toBe(false);
+	});
+
+	it('never prints the no-limit sentinel as a count', () => {
+		expect(texts('studio').some((text) => text.includes('4294967295'))).toBe(false);
+	});
+
+	it('marks AI fill as not yet built only while it is coming soon', () => {
+		expect(planBullets(caps('subscriber'), AI).some((line) => line.soon)).toBe(true);
+		const live = { ...AI, status: 'live' } as unknown as typeof AI;
+		expect(planBullets(caps('subscriber'), live).some((line) => line.soon)).toBe(false);
 	});
 });
 

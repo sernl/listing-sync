@@ -8,10 +8,14 @@
 // and whether the founding offer is still open.
 
 import type { EntitlementView, MoveBalance } from '$lib/api';
+import { unlimited } from '$lib/entitlement';
 import {
+	AI,
 	FOUNDING,
 	PACKS,
 	PLANS,
+	type AiOffer,
+	type Capabilities,
 	type Founding,
 	type Pack,
 	type PlanRow
@@ -40,6 +44,41 @@ export function perMonth(yearlyCents: number): string {
  *  offer a plan no checkout can buy. */
 export function syncPlan(plans: readonly PlanRow[] = PLANS): PlanRow | null {
 	return plans.find((plan) => plan.id === 'subscriber' && plan.sold) ?? null;
+}
+
+/** One line on a plan card; `soon` marks a line sold before it is built. */
+export interface PlanBullet {
+	text: string;
+	soon?: boolean;
+}
+
+/** A plan card's lines, read off `capabilities` so no figure is typed twice.
+ *
+ *  The wording is the landing page's pricing cards, so a seller reads the
+ *  same promise on both. */
+export function planBullets(caps: Capabilities, ai: AiOffer = AI): PlanBullet[] {
+	const lines: PlanBullet[] = [];
+	if (caps.moves_per_month > 0) lines.push({ text: `${caps.moves_per_month} moves a month` });
+	if (caps.moves_accrual_cap > caps.moves_per_month)
+		lines.push({ text: `Unused moves stack to ${caps.moves_accrual_cap}` });
+	if (caps.free_moves_lifetime > 0)
+		lines.push({ text: `${moves(caps.free_moves_lifetime)} onto a marketplace of your choice` });
+	if (caps.import_spreadsheet && caps.import_marketplace)
+		lines.push({ text: 'Import all your resources from wherever you sell' });
+	if (!unlimited(caps.resources_max)) lines.push({ text: `Up to ${caps.resources_max} resources` });
+	if (caps.sync_pull_interval_secs !== null)
+		lines.push({ text: 'Edit resources in Teachouse and sync the edits across all platforms' });
+	if (caps.scheduling) lines.push({ text: 'Scheduling' });
+	if (caps.templates_max > 1)
+		lines.push({ text: `${unlimited(caps.templates_max) ? 'Unlimited' : caps.templates_max} templates` });
+	if (caps.collections_max > 0)
+		lines.push({
+			text: `${unlimited(caps.collections_max) ? 'Unlimited' : caps.collections_max} collections`
+		});
+	if (caps.analytics) lines.push({ text: 'Statistics on every shop' });
+	if (caps.ai_fills_per_month > 0 && ai.status === 'coming_soon')
+		lines.push({ text: `AI fill, coming soon (${caps.ai_fills_per_month} a month)`, soon: true });
+	return lines;
 }
 
 /** A count of moves as a sentence says it. */
