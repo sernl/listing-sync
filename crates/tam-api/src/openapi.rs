@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 174] = [
+pub const ROUTES: [Route; 175] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -416,6 +416,11 @@ pub const ROUTES: [Route; 174] = [
         method: "put",
         path: "/{version}/products/{product}/files/{file}",
         summary: "Swap one file's bytes, keeping its role and redrawing the thumbnail here",
+    },
+    Route {
+        method: "patch",
+        path: "/{version}/products/{product}/files/{file}",
+        summary: "Rename one payload or preview file, leaving its bytes and role alone",
     },
     Route {
         method: "delete",

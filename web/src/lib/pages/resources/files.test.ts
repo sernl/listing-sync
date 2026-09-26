@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ApiFailure, type FileView } from '$lib/api';
 import {
 	COVER_STAYS,
+	coverUrlOf,
 	IDLE,
 	LAST_PAYLOAD,
 	advance,
@@ -43,6 +44,28 @@ function file(
 const TWO_PAYLOADS = [file('a', 'payload'), file('b', 'payload'), file('c', 'cover')];
 const ONE_PAYLOAD = [file('a', 'payload'), file('c', 'cover')];
 
+describe('the thumbnail’s URL', () => {
+	// The founder's stale thumbnail: the cover route answered with a cache
+	// lifetime, and the form asked for it under one constant URL, so a
+	// replaced first file kept drawing the old picture.
+	it('changes when the server redraws the cover after a replace', () => {
+		const before = coverUrlOf('p', ONE_PAYLOAD);
+		const redrawn = [file('d', 'payload'), file('e', 'cover')];
+		const after = coverUrlOf('p', redrawn);
+		expect(before).toBe(`/v1/products/p/cover?v=${'c'.repeat(64)}`);
+		expect(after).toBe(`/v1/products/p/cover?v=${'e'.repeat(64)}`);
+		expect(after).not.toBe(before);
+	});
+
+	it('is the same URL while the cover is the same bytes, so the browser keeps it', () => {
+		expect(coverUrlOf('p', ONE_PAYLOAD)).toBe(coverUrlOf('p', [...TWO_PAYLOADS]));
+	});
+
+	it('is absent where the resource has no cover', () => {
+		expect(coverUrlOf('p', [file('a', 'payload')])).toBeNull();
+	});
+});
+
 describe('the panel’s state machine', () => {
 	it('asks before it destroys, and the question names the row', () => {
 		const asked = advance(IDLE, { kind: 'ask', verb: 'remove', file: 'a', chosen: null });
@@ -52,6 +75,11 @@ describe('the panel’s state machine', () => {
 	it('starts a removal at the write, because a removal sends no bytes', () => {
 		const writing = advance(IDLE, { kind: 'send', verb: 'remove', file: 'a' });
 		expect(writing).toEqual({ kind: 'writing', verb: 'remove', file: 'a' });
+	});
+
+	it('starts a rename at the write, because a rename sends no bytes either', () => {
+		const writing = advance(IDLE, { kind: 'send', verb: 'rename', file: 'a' });
+		expect(writing).toEqual({ kind: 'writing', verb: 'rename', file: 'a' });
 	});
 
 	it('carries a replacement through upload, progress and write', () => {

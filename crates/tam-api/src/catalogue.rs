@@ -142,20 +142,7 @@ impl FileHandle {
     /// column. Checked here rather than at each caller so the create, the add
     /// and the replace cannot come to different conclusions about one field.
     fn checked_name(&self) -> Result<Option<&str>, APIError> {
-        let Some(name) = self
-            .name
-            .as_deref()
-            .map(str::trim)
-            .filter(|n| !n.is_empty())
-        else {
-            return Ok(None);
-        };
-        if name.chars().count() > FILE_NAME_MAX {
-            return Err(validation(
-                "a file's name is longer than the 255 characters a listing can carry",
-            ));
-        }
-        Ok(Some(name))
+        self.name.as_deref().map_or(Ok(None), trimmed_file_name)
     }
 
     fn resolve(&self, role: FileRole, now: Timestamp) -> Result<ProductFile, APIError> {
@@ -179,6 +166,29 @@ impl FileHandle {
             },
         })
     }
+}
+
+/// A file name as the seller typed it, trimmed, or `None` where nothing is
+/// left; refused where it would not fit `product_file_name_length`. The one
+/// rule every door that writes a name goes through — the create, the add, the
+/// replace and the rename.
+fn trimmed_file_name(raw: &str) -> Result<Option<&str>, APIError> {
+    let name = raw.trim();
+    if name.is_empty() {
+        return Ok(None);
+    }
+    if name.chars().count() > FILE_NAME_MAX {
+        return Err(validation(
+            "a file's name is longer than the 255 characters a listing can carry",
+        ));
+    }
+    Ok(Some(name))
+}
+
+/// The name a rename writes. Unlike a handle's, it may not be blank: a rename
+/// that cleared the name would be a removal the route does not offer.
+fn renamed_to(raw: &str) -> Result<&str, APIError> {
+    trimmed_file_name(raw)?.ok_or_else(|| validation("Type a name for this file."))
 }
 
 /// Resolves one handle and records what the seller called it, keyed by the
@@ -2480,6 +2490,19 @@ pub struct ReplacedFileView {
     pub reaches: Vec<InventoryId>,
 }
 
+/// What a file is to be called from now on. A name alone: the bytes and the
+/// role are the replace's to change.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RenameFileBody {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenamedFileView {
+    pub product: ProductId,
+    pub file: FileView,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemovedFileView {
     pub product: ProductId,
@@ -2910,6 +2933,62 @@ pub(crate) async fn remove_file(
     }))
 }
 
+/// Renames one payload or preview file.
+///
+/// No marketplace is contacted and none is gated: the name is how the seller
+/// tells their own files apart here, and the bytes a buyer downloads are the
+/// same bytes after the write as before it. The cover is refused by name,
+/// because it is drawn rather than chosen and a name on it would say otherwise.
+pub(crate) async fn rename_file(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, product, file)): Path<(String, String, String)>,
+    Json(body): Json<RenameFileBody>,
+) -> Result<Json<RenamedFileView>, APIError> {
+    let product = parse_product_id(&product)?;
+    let target = parse_file_id(&file)?;
+    let name = renamed_to(&body.name)?;
+    let repo = ProductRepo::new(state.pool.clone());
+    let record = repo
+        .get(context.org, product)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+        .ok_or_else(|| missing("no such product"))?;
+    if record
+        .product
+        .cover
+        .as_ref()
+        .is_some_and(|cover| cover.id == target)
+    {
+        return Err(validation(
+            "the thumbnail is drawn from the resource's first file and has no name to change",
+        ));
+    }
+    let stored = record
+        .product
+        .payload_files()
+        .chain(record.product.previews.iter())
+        .find(|held| held.id == target)
+        .cloned()
+        .ok_or_else(|| missing("no such file"))?;
+    repo.rename_file(
+        context.org,
+        tam_storage::FileTarget {
+            product,
+            file: target,
+        },
+        name,
+        (state.wall)(),
+    )
+    .await
+    .map_err(|error| storage_fault(&state, &error))?
+    .map_err(|refusal| file_refusal(&state, refusal))?;
+    Ok(Json(RenamedFileView {
+        product,
+        file: file_view(&stored, Some(name)),
+    }))
+}
+
 // ------------------------------------------------------------------- mount
 
 /// The upload route's own body ceiling, which is the one route that carries
@@ -3205,6 +3284,31 @@ mod tests {
             parse_hash(&"zz".repeat(32)),
             None,
             "a non-hex digest is refused rather than silently zeroed"
+        );
+    }
+
+    #[test]
+    fn a_rename_takes_a_trimmed_name_and_refuses_a_blank_or_overlong_one() {
+        assert_eq!(
+            super::renamed_to("  Answer key  ").expect("a short name is admitted"),
+            "Answer key",
+            "the space around a typed name is not part of it"
+        );
+        assert!(
+            super::renamed_to("   ").is_err(),
+            "a rename to nothing is refused rather than clearing the name"
+        );
+        assert_eq!(
+            super::renamed_to(&"é".repeat(FILE_NAME_MAX))
+                .expect("255 characters fit")
+                .chars()
+                .count(),
+            FILE_NAME_MAX,
+            "the ceiling counts characters, so 255 accented letters still fit"
+        );
+        assert!(
+            super::renamed_to(&"x".repeat(FILE_NAME_MAX + 1)).is_err(),
+            "a name longer than the column is refused before the write"
         );
     }
 

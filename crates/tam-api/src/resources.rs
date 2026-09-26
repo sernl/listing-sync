@@ -125,7 +125,8 @@ pub struct ProductHead {
     pub title: String,
     pub price: PriceIntent,
     /// Where this resource's cover can be fetched, or absent where it has no
-    /// stored cover.
+    /// stored cover. Versioned by the cover's own digest (`?v=<hash>`), so a
+    /// redrawn cover is a different URL and no browser keeps the old picture.
     ///
     /// A URL rather than a flag, because the client renders it directly and a
     /// client that had to compose the path would be a second place the route
@@ -197,20 +198,20 @@ pub(crate) async fn list_products(
     // keyed by their product, and a row whose product is absent from that set
     // has no stored cover to name.
     let ids: Vec<ProductId> = rows.iter().map(|row| row.id).collect();
-    let covered: HashSet<ProductId> = ProductRepo::new(state.pool.clone())
+    let covered: HashMap<ProductId, tam_types::ContentHash> = ProductRepo::new(state.pool.clone())
         .covers(context.org, &ids)
         .await
         .map_err(|error| storage_fault(&state, &error))?
         .into_iter()
-        .map(|cover| cover.product)
+        .map(|cover| (cover.product, cover.hash))
         .collect();
     Ok(Json(ProductsPage {
         products: rows
             .into_iter()
             .map(|row| ProductHead {
                 cover: covered
-                    .contains(&row.id)
-                    .then(|| cover_url(&version, row.id)),
+                    .get(&row.id)
+                    .map(|hash| cover_url(&version, row.id, *hash)),
                 id: row.id,
                 title: row.title.0,
                 price: row.price,
@@ -223,13 +224,39 @@ pub(crate) async fn list_products(
 }
 
 /// Where one product's cover is fetched from, under the version the caller
-/// asked this catalogue for.
+/// asked this catalogue for, versioned by the cover's digest.
 ///
 /// Built from the request's own version rather than from a constant, so a
 /// client speaking `/v1` is never handed a `/v2` URL by a server that serves
-/// both.
-fn cover_url(version: &str, product: ProductId) -> String {
-    format!("/{version}/products/{}/cover", product.0.to_hyphenated())
+/// both. The `v` query is the cover's content hash: a redraw writes new bytes
+/// under a new digest, so the URL changes with the picture and the old one can
+/// be cached for good.
+pub(crate) fn cover_url(version: &str, product: ProductId, hash: tam_types::ContentHash) -> String {
+    format!(
+        "/{version}/products/{}/cover?v={}",
+        product.0.to_hyphenated(),
+        crate::catalogue::hash_hex(hash)
+    )
+}
+
+/// How long a browser may keep an image it was answered with, where the URL
+/// does not pin the bytes: briefly, and only in its own cache.
+const CACHE_BRIEF: &str = "private, max-age=300";
+
+/// A cover whose URL names its own digest: those bytes can never change.
+const CACHE_PINNED: &str = "private, max-age=31536000, immutable";
+
+/// A cover asked for without its digest, or with a digest it no longer has:
+/// the answer is the current picture, which the next redraw replaces.
+const CACHE_REVALIDATE: &str = "private, no-cache";
+
+/// The cache policy for one cover answer, from the `v` the request named and
+/// the digest the cover has now.
+fn cover_cache(asked: Option<&str>, current: tam_types::ContentHash) -> &'static str {
+    match asked {
+        Some(v) if parse_hash(v) == Some(current) => CACHE_PINNED,
+        _ => CACHE_REVALIDATE,
+    }
 }
 
 /// The eight bytes every PNG begins with.
@@ -280,6 +307,18 @@ fn image_type(bytes: &[u8]) -> Option<&'static str> {
 pub(crate) fn image_answer(
     bytes: Vec<u8>,
 ) -> Result<([(header::HeaderName, &'static str); 3], Vec<u8>), APIError> {
+    // Derived from bytes that are already sealed and never rewritten in
+    // place, so it is safe to hold briefly; private because it is one
+    // seller's own file and no shared cache may keep it.
+    image_answer_cached(bytes, CACHE_BRIEF)
+}
+
+/// [`image_answer`] under a cache policy the caller chose, for the one route
+/// whose URL can pin the bytes it names.
+fn image_answer_cached(
+    bytes: Vec<u8>,
+    cache: &'static str,
+) -> Result<([(header::HeaderName, &'static str); 3], Vec<u8>), APIError> {
     let Some(kind) = image_type(&bytes) else {
         return Err(APIError::new(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
@@ -290,10 +329,7 @@ pub(crate) fn image_answer(
         [
             (header::CONTENT_TYPE, kind),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-            // A cover is derived from bytes that are already sealed and never
-            // rewritten in place, so it is safe to hold; private because it is
-            // one seller's own file and no shared cache may keep it.
-            (header::CACHE_CONTROL, "private, max-age=300"),
+            (header::CACHE_CONTROL, cache),
         ],
         bytes,
     ))
@@ -359,10 +395,15 @@ pub(crate) async fn uploaded_image(
 /// ingest and the import stores one — so the check passes in every case we
 /// write, and anything outside [`image_type`]'s four is refused rather than
 /// served under a type nobody has to believe.
+///
+/// Cached for good only where `?v=` names the digest the cover has now, which
+/// is what [`cover_url`] hands out; anything else is the current picture under
+/// a URL that will outlive it, so the browser is told to ask again.
 pub(crate) async fn product_cover(
     State(state): State<AppState>,
     context: OrgContext,
     Path((_version, product)): Path<(String, String)>,
+    Query(query): Query<CoverQuery>,
 ) -> Result<([(header::HeaderName, &'static str); 3], Vec<u8>), APIError> {
     let product = ProductId(parse_id(&product)?);
     // The row before the store, so a resource that has no cover answers the
@@ -397,7 +438,14 @@ pub(crate) async fn product_cover(
                 state.internal(&format!("{fault}"))
             }
         })?;
-    image_answer(bytes)
+    image_answer_cached(bytes, cover_cache(query.v.as_deref(), cover.hash))
+}
+
+/// The one query a cover URL carries: the digest it was minted for.
+#[derive(Debug, Default, Deserialize)]
+pub struct CoverQuery {
+    #[serde(default)]
+    pub v: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -2726,6 +2774,33 @@ mod tests {
             segments: vec![segment.to_owned()],
             native_id: Some(segment.to_owned()),
         }
+    }
+
+    // The URL a list row carries is the one the cover route pins: a redraw
+    // makes a new digest, so the old URL may be kept for good and the new
+    // one is fetched fresh. A URL naming a digest the cover no longer has,
+    // or none, is answered with the current picture and never pinned.
+    #[test]
+    fn a_cover_is_pinned_only_under_the_digest_it_has_now() {
+        use super::{cover_cache, cover_url, CACHE_PINNED, CACHE_REVALIDATE};
+        use tam_types::{ContentHash, ProductId};
+        let now = ContentHash([0xAB; 32]);
+        let before = ContentHash([0xCD; 32]);
+        let url = cover_url("v1", ProductId(Uuid([0x02; 16])), now);
+        let (path, v) = url.split_once("?v=").expect("the URL carries its digest");
+        assert_eq!(
+            path,
+            "/v1/products/02020202-0202-0202-0202-020202020202/cover"
+        );
+        assert_eq!(cover_cache(Some(v), now), CACHE_PINNED);
+        assert_ne!(
+            cover_url("v1", ProductId(Uuid([0x02; 16])), before),
+            url,
+            "a redrawn cover is a different URL"
+        );
+        assert_eq!(cover_cache(Some(&"cd".repeat(32)), now), CACHE_REVALIDATE);
+        assert_eq!(cover_cache(None, now), CACHE_REVALIDATE);
+        assert_eq!(cover_cache(Some("not-a-digest"), now), CACHE_REVALIDATE);
     }
 
     fn rule(answer: ElectionAnswer) -> ElectionRule {

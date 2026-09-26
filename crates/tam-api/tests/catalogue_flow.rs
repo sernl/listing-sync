@@ -15,8 +15,8 @@ use axum::{
 use http_body_util::BodyExt;
 use sqlx::PgPool;
 use tam_api::catalogue::{
-    AddedFileView, CreatedProductView, DeletedProductView, RemovedFileView, ReplacedFileView,
-    ThumbnailView, UploadedView,
+    AddedFileView, CreatedProductView, DeletedProductView, RemovedFileView, RenamedFileView,
+    ReplacedFileView, ThumbnailView, UploadedView,
 };
 use tam_api::resources::{FileView, ProductView, ProductsPage};
 use tam_api::taxonomy::TermsView;
@@ -2545,6 +2545,151 @@ async fn a_replace_swaps_the_bytes_keeps_the_role_and_retires_the_old_row(pool: 
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_rename_changes_the_name_alone_and_refuses_the_cover(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    provision(&pool, ORG_B, USER_B, &TOKEN_B, "org-b").await;
+    let root = store_root("file-rename");
+    let state = configured(pool.clone(), &root);
+    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "named", &["Tes"]).await;
+    let target = format!("{}/{first}", files_path(product));
+
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::PATCH,
+        &target,
+        &serde_json::json!({"name": "  Answer key.pdf  "}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the rename lands: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let renamed: RenamedFileView = parse(&body);
+    assert_eq!(
+        renamed.file.id.to_hyphenated(),
+        first,
+        "the same row, not a new one"
+    );
+    assert_eq!(renamed.file.name.as_deref(), Some("Answer key.pdf"));
+
+    let (_, body) = get(
+        state.clone(),
+        &TOKEN_A,
+        &format!("/v1/products/{}", product.0.to_hyphenated()),
+    )
+    .await;
+    let view: ProductView = parse(&body);
+    let payload = view
+        .files
+        .iter()
+        .find(|file| file.role == "payload")
+        .expect("the payload is still there");
+    assert_eq!(
+        (payload.id.to_hyphenated(), payload.name.as_deref()),
+        (first.clone(), Some("Answer key.pdf")),
+        "the product reads the new name back on the row it had"
+    );
+    let cover = view
+        .files
+        .iter()
+        .find(|file| file.role == "cover")
+        .expect("the ingest drew a cover");
+
+    let (status, _) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::PATCH,
+        &format!("{}/{}", files_path(product), cover.id.to_hyphenated()),
+        &serde_json::json!({"name": "cover.png"}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a cover has no name to change"
+    );
+
+    let (status, _) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::PATCH,
+        &target,
+        &serde_json::json!({"name": "   "}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a blank name is refused"
+    );
+
+    let (status, _) = json_call(
+        state,
+        &TOKEN_B,
+        Method::PATCH,
+        &target,
+        &serde_json::json!({"name": "mine now"}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "another tenant's file answers as one that does not exist"
+    );
+}
+
+// The list's cover URL names the digest of the cover that is live, so a
+// redraw moves it. (The fixture PDFs draw identical pictures, so the digest
+// itself may not change here; what is checked is that the URL follows the
+// cover the replace reported rather than a constant.)
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_list_names_the_cover_by_the_digest_it_has_after_a_replace(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("cover-version");
+    let state = configured(pool.clone(), &root);
+    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "old", &["Tes"]).await;
+
+    let revised = upload(state.clone(), &TOKEN_A, pdf("a-different-first-page"), "").await;
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::PUT,
+        &format!("{}/{first}", files_path(product)),
+        &serde_json::json!({"handle": revised.payload[0]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let replaced: ReplacedFileView = parse(&body);
+    let drawn = replaced
+        .cover
+        .expect("replacing the first file redraws the cover");
+
+    let (_, body) = get(state.clone(), &TOKEN_A, "/v1/products").await;
+    let page: ProductsPage = parse(&body);
+    let named = page
+        .products
+        .into_iter()
+        .find(|entry| entry.id == product)
+        .and_then(|entry| entry.cover)
+        .expect("the resource has a cover");
+    assert_eq!(
+        named,
+        format!(
+            "/v1/products/{}/cover?v={}",
+            product.0.to_hyphenated(),
+            drawn.hash
+        ),
+        "the list's URL is versioned by the redrawn cover's own digest"
+    );
+
+    let (status, _) = get(state, &TOKEN_A, &named).await;
+    assert_eq!(status, StatusCode::OK, "the versioned URL serves the cover");
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_removal_takes_one_file_and_leaves_the_rest(pool: PgPool) {
     provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
     let root = store_root("file-remove");
@@ -3147,11 +3292,18 @@ async fn a_cover_is_named_on_the_catalogue_and_served_only_to_its_own_tenant(poo
         .find(|entry| entry.id == product)
         .expect("the created resource is on the page");
     let path = format!("/v1/products/{}/cover", product.0.to_hyphenated());
+    let named = head
+        .cover
+        .as_deref()
+        .expect("a resource whose ingest generated a cover names where to fetch it");
+    let (named_path, digest) = named
+        .split_once("?v=")
+        .expect("the cover URL is versioned by the cover's digest");
     assert_eq!(
-        head.cover.as_deref(),
-        Some(path.as_str()),
-        "a resource whose ingest generated a cover names where to fetch it"
+        named_path, path,
+        "the versioned URL addresses the cover route"
     );
+    assert_eq!(digest.len(), 64, "the version is the cover's hex digest");
 
     let (status, bytes) = get(state.clone(), &TOKEN_A, &path).await;
     assert_eq!(status, StatusCode::OK, "the owner reads their own cover");

@@ -20,6 +20,7 @@
 		type LibraryEntry
 	} from '$lib/desktop';
 	import FileViewer from '$lib/FileViewer.svelte';
+	import FileRename from './FileRename.svelte';
 	import { OPEN_UNAVAILABLE, sourceOfKept } from './file-viewer';
 	import {
 		IDLE,
@@ -183,6 +184,22 @@
 		}
 	}
 
+	/** The row whose name is being typed. */
+	let renaming = $state<string | null>(null);
+
+	async function renameFile(file: string, name: string) {
+		fileEvent({ kind: 'send', verb: 'rename', file });
+		try {
+			await api.renameProductFile(product, file, name);
+			renaming = null;
+			fileEvent({ kind: 'settled' });
+			await queryClient.invalidateQueries({ queryKey: queryKeys.product(product) });
+			toast('info', 'File renamed.');
+		} catch (failure) {
+			fileEvent({ kind: 'failed', sentence: fileRefusal(failure, 'rename') });
+		}
+	}
+
 	async function settleFile(reaches: InventoryId[], said: string) {
 		fileReach = reachSentence(reaches);
 		fileEvent({ kind: 'settled' });
@@ -228,6 +245,14 @@
 				{#if kept.has(file.hash)}
 					<Button small onclick={() => (viewing = file)}>View</Button>
 				{/if}
+				{#if file.role !== 'cover'}
+					<Button
+						small
+						disabled={busy(fileAction)}
+						reason={busy(fileAction) ? 'Wait for the current file change to finish.' : undefined}
+						onclick={() => (renaming = file.id)}>Rename</Button
+					>
+				{/if}
 				<Button
 					small
 					disabled={busy(fileAction) || !swappable.ok}
@@ -251,6 +276,15 @@
 					>Remove…</Button
 				>
 			</span>
+			{#if renaming === file.id}
+				<FileRename
+					name={file.name ?? ''}
+					what={fileWords(file)}
+					busy={busy(fileAction)}
+					onSave={(name) => void renameFile(file.id, name)}
+					onCancel={() => (renaming = null)}
+				/>
+			{/if}
 			{#if mine && fileAction.kind === 'uploading'}
 				<p class="res-file-say" role="status">
 					Replacing {fileWords(file)}… {Math.round(fileAction.fraction * 100)}% uploaded
@@ -291,14 +325,7 @@
 		<p class="res-note">No files yet.</p>
 	{/each}
 
-	<div class="res-file-add">
-		<Button
-			small
-			icon="plus"
-			disabled={busy(fileAction)}
-			reason={busy(fileAction) ? 'Wait for the current file change to finish.' : undefined}
-			onclick={() => choose('add', null)}>Add file</Button
-		>
+	<div class="res-file-foot">
 		{#if fileAction.kind === 'uploading' && fileAction.file === null}
 			<span class="res-file-say" role="status"
 				>Uploading… {Math.round(fileAction.fraction * 100)}%</span
@@ -308,6 +335,18 @@
 		{:else if fileAction.kind === 'refused' && fileAction.file === null}
 			<span class="res-file-say res-file-no" role="alert">{fileAction.sentence}</span>
 		{/if}
+		<Explain title="What changing a file does" label="What changes?">
+			<p>Changing a file here updates this resource in Teachouse.</p>
+			<p>{reachSentence(inventories)}</p>
+			<p>Your thumbnail comes from the first file.</p>
+		</Explain>
+		<Button
+			small
+			icon="plus"
+			disabled={busy(fileAction)}
+			reason={busy(fileAction) ? 'Wait for the current file change to finish.' : undefined}
+			onclick={() => choose('add', null)}>Add file</Button
+		>
 	</div>
 
 	<!-- Off-screen rather than hidden: a display:none input cannot be
@@ -324,11 +363,6 @@
 	{#if fileReach !== null}
 		<p class="res-file-say" role="status">{fileReach}</p>
 	{/if}
-	<Explain title="What changing a file does" label="What changes?">
-		<p>Changing a file here updates this resource in Teachouse.</p>
-		<p>{reachSentence(inventories)}</p>
-		<p>Your thumbnail comes from the first file.</p>
-	</Explain>
 </div>
 
 {#if viewing !== null}

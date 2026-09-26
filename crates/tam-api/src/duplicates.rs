@@ -588,7 +588,7 @@ async fn side_of(
                 .product
                 .cover
                 .as_ref()
-                .map(|_| format!("/v1/products/{}/cover", uuid_text(product.0))),
+                .map(|cover| crate::resources::cover_url("v1", product, cover.bytes.digest())),
         });
     }
 
@@ -665,8 +665,4 @@ fn parse_id(raw: &str) -> Result<Uuid, APIError> {
     uuid::Uuid::parse_str(raw)
         .map(|id| Uuid(*id.as_bytes()))
         .map_err(|_| missing("We can't find that question."))
-}
-
-fn uuid_text(id: Uuid) -> String {
-    uuid::Uuid::from_bytes(id.0).to_string()
 }

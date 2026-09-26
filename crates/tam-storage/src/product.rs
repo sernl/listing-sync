@@ -758,6 +758,52 @@ impl ProductRepo {
         Ok(Ok(outcome))
     }
 
+    /// Renames one file the seller chose, leaving its bytes and role alone.
+    ///
+    /// Only a payload or preview row whose bytes this deployment holds: a
+    /// cover is drawn rather than chosen and carries no name, and a sourced
+    /// row already has its marketplace's name, which
+    /// `product_file_name_is_blob_backed` keeps the column from shadowing.
+    /// Either answers as no such file, exactly as another product's row does.
+    pub async fn rename_file(
+        &self,
+        org: OrgId,
+        target: FileTarget,
+        name: &str,
+        at: Timestamp,
+    ) -> Result<Result<(), FileRefusal>, StorageError> {
+        let org_db = uuid_to_db(org.0);
+        let product_db = uuid_to_db(target.product.0);
+        let file_db = uuid_to_db(target.file.0);
+        let at_db = timestamp_to_db(at)?;
+
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        if !lock_product(&mut tx, org_db, product_db).await? {
+            tx.rollback().await?;
+            return Ok(Err(FileRefusal::NoProduct));
+        }
+        let renamed = sqlx::query_scalar!(
+            "UPDATE product_file SET name = $4 \
+             WHERE org_id = $1 AND product_id = $2 AND id = $3 AND deleted_at IS NULL \
+               AND role <> 'cover' AND hash IS NOT NULL \
+             RETURNING id",
+            org_db,
+            product_db,
+            file_db,
+            name,
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        if renamed.is_none() {
+            tx.rollback().await?;
+            return Ok(Err(FileRefusal::NoFile));
+        }
+        touch(&mut tx, org_db, product_db, at_db).await?;
+        tx.commit().await?;
+        Ok(Ok(()))
+    }
+
     /// Marks a product deleted without erasing it. Every catalogue read
     /// already filters on `deleted_at`, so this is the whole local removal.
     ///
