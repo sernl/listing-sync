@@ -142,3 +142,16 @@ Neither of these is required, and neither is a substitute for the screenshots ab
 `adb -s SERIAL logcat -s RustStdoutStderr` carries this application's own stdout and stderr, including the `starting <version> android aarch64` line that every launch writes.
 `adb -s SERIAL shell run-as io.teachouse.desktop cat startup.log` is the same log as it sits on disk, in the app's private storage.
 No directory prefix: `run-as` starts in the app's data directory, which is where Tauri resolves `app_data_dir` to on Android (`activity.dataDir`, tauri 2.11.5 `PathPlugin.kt`), and the log sits directly in it.
+
+## When a page says "That page could not be opened"
+
+That sentence is the console's own error page, so the cause is in the phone's WebView, not the app. The page now prints what was thrown under the sentence; read it out. To see the whole console log, the debug build's WebView takes Chrome's devtools protocol over adb:
+
+```sh
+adb shell cat /proc/net/unix | grep -o 'webview_devtools_remote_[0-9]*'   # once the app is open
+adb forward tcp:9444 localabstract:webview_devtools_remote_<pid>
+curl -s 127.0.0.1:9444/json/version    # "Browser": the WebView's Chrome version
+curl -s 127.0.0.1:9444/json            # pages and their websocket URLs
+```
+
+Any CDP client on that websocket (`Runtime.enable`, then `Runtime.exceptionThrown` and `Runtime.consoleAPICalled`) shows the exception behind the page. The 0.13.0 error on a Galaxy Note10+ was found this way on the `api31` emulator, whose System WebView is Chrome 91: `Object.hasOwn is not a function`, a method that engine lacks. `web/src/app.html` now defines each such method and `web/src/lib/polyfills.test.ts` keeps the list against the source; a new one shows here first.
