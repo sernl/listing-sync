@@ -1,0 +1,430 @@
+/* The guided-flow pages: the Automations flows and anything else built from
+ * `FlowStep`, `FlowDiagram`, `Stepper` and `Explain`.
+ *
+ * Colour carries meaning here and only through tokens: a resource's name is
+ * the violet `--additive`, a price is `--label-teal`, a warning is the warn
+ * pair. The same three are used on every flow page so a teacher learns them
+ * once. */
+
+/* --- the page ------------------------------------------------------------ */
+
+.flow-page {
+	--flow-bar-h: 0px;
+	max-width: 1040px;
+}
+
+.flow {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-6);
+	min-width: 0;
+}
+
+/* A section of the page that is not a step: the seller's saved things above
+   the flow, the history below it. */
+.flow-section {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-4);
+	min-width: 0;
+}
+
+.flow-section-head {
+	display: flex;
+	align-items: center;
+	gap: var(--s-3);
+	flex-wrap: wrap;
+}
+
+.flow-section-head h2 {
+	margin: 0;
+	flex: 1 1 auto;
+	font-family: var(--display);
+	font-size: 19px;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+}
+
+.flow-section-head h3 {
+	margin: 0;
+	font-size: 15px;
+	font-weight: 600;
+	color: var(--text);
+}
+
+@media (max-width: 720px) {
+	.flow-page.has-bar {
+		--flow-bar-h: 64px;
+		padding-bottom: calc(40px + 72px);
+	}
+
+	.flow {
+		gap: var(--s-5);
+	}
+}
+
+@media (max-width: 620px) {
+	.flow-page {
+		--flow-bar-h: calc(80px + env(safe-area-inset-bottom, 0px));
+	}
+
+	.flow-page.has-bar {
+		--flow-bar-h: calc(80px + 64px + env(safe-area-inset-bottom, 0px));
+		padding-bottom: calc(96px + 72px + env(safe-area-inset-bottom, 0px));
+	}
+}
+
+/* --- the colour code ----------------------------------------------------- */
+
+.res-name {
+	color: var(--additive);
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+.price {
+	color: var(--label-teal);
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.term-chip {
+	display: inline-flex;
+	align-items: center;
+	padding: 3px 10px;
+	border-radius: var(--r-pill);
+	font-size: 12.5px;
+	font-weight: 600;
+	line-height: 1.3;
+	white-space: nowrap;
+}
+
+.term-chip.from {
+	background: var(--additive-soft);
+	color: var(--additive);
+}
+
+.term-chip.to {
+	background: var(--accent-soft);
+	color: var(--primary);
+	box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
+.flow-warn {
+	display: flex;
+	align-items: center;
+	gap: var(--s-2);
+	flex-wrap: wrap;
+	margin: 0;
+	padding: var(--s-2) var(--s-3);
+	border-radius: var(--r-field);
+	background: var(--warn-soft);
+	color: var(--warn-ink);
+	font-size: 13px;
+	font-weight: 500;
+}
+
+/* --- choices ------------------------------------------------------------- */
+
+/* A row of pill-shaped choices: the seller's rules, the presets, a scope. */
+.chip-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--s-2);
+}
+
+.choice-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--s-2);
+	min-height: 36px;
+	padding: 4px 6px 4px 14px;
+	border: 1px solid var(--line);
+	border-radius: var(--r-pill);
+	background: var(--surface);
+	color: var(--text);
+	font-size: 13.5px;
+	font-weight: 500;
+}
+
+.choice-chip.solo {
+	padding-right: 14px;
+}
+
+.choice-chip strong {
+	color: var(--primary);
+	font-weight: 600;
+}
+
+/* On a phone a chip holding a sentence becomes a full-width row: a pill
+   squeezed to 390px wraps its title into a column of single words. */
+@media (max-width: 720px) {
+	.choice-chip {
+		width: 100%;
+		flex-wrap: wrap;
+		border-radius: var(--r-panel);
+		padding: var(--s-2) var(--s-3);
+	}
+}
+
+/* Two big tiles side by side, one of them chosen. */
+.flow-choice {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+	gap: var(--s-3);
+}
+
+.flow-choice > button {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 2px;
+	padding: var(--s-3) var(--s-4);
+	border: 1.5px solid var(--line);
+	border-radius: var(--r-panel);
+	background: var(--surface);
+	color: var(--text);
+	font: inherit;
+	font-size: 14px;
+	font-weight: 600;
+	text-align: left;
+	cursor: pointer;
+}
+
+.flow-choice > button:hover:not(:disabled) {
+	border-color: var(--lavender);
+}
+
+.flow-choice > button[aria-checked='true'] {
+	border-color: var(--accent);
+	background: var(--accent-soft);
+	box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.flow-choice > button:disabled {
+	opacity: 0.55;
+	cursor: not-allowed;
+}
+
+.flow-choice > button:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.flow-choice .sub {
+	color: var(--muted);
+	font-size: 12.5px;
+	font-weight: 400;
+}
+
+/* --- a saved thing in a list --------------------------------------------- */
+
+.flow-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-3);
+}
+
+.flow-item {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr) auto;
+	align-items: center;
+	gap: var(--s-3) var(--s-4);
+	padding: var(--s-4);
+	border: 1px solid var(--line);
+	border-radius: var(--r-panel);
+	background: var(--surface);
+}
+
+.flow-item.off {
+	background: color-mix(in srgb, var(--hover) 60%, var(--surface));
+}
+
+.flow-item.picked {
+	border-color: var(--accent);
+	box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.flow-item-main {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.flow-item-title {
+	font-weight: 600;
+	color: var(--text);
+	overflow-wrap: anywhere;
+}
+
+.flow-item-line {
+	color: var(--muted);
+	font-size: 13px;
+}
+
+.flow-item-acts {
+	display: flex;
+	align-items: center;
+	gap: var(--s-2);
+	flex-wrap: wrap;
+	justify-content: flex-end;
+}
+
+/* Everything past the first column goes under the title on a phone. */
+@media (max-width: 720px) {
+	.flow-item {
+		grid-template-columns: auto minmax(0, 1fr);
+	}
+
+	.flow-item-acts {
+		grid-column: 1 / -1;
+		justify-content: flex-start;
+	}
+}
+
+/* --- a compact table ----------------------------------------------------- */
+
+.flow-table-wrap {
+	overflow-x: auto;
+	border: 1px solid var(--line);
+	border-radius: var(--r-panel);
+}
+
+.flow-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 13.5px;
+}
+
+.flow-table th {
+	position: sticky;
+	top: 0;
+	padding: var(--s-2) var(--s-3);
+	background: var(--nav);
+	color: var(--muted);
+	font-size: 12px;
+	font-weight: 600;
+	text-align: left;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	white-space: nowrap;
+}
+
+.flow-table td {
+	padding: var(--s-2) var(--s-3);
+	border-top: 1px solid var(--line);
+	vertical-align: middle;
+}
+
+.flow-table tbody tr:hover {
+	background: var(--hover);
+}
+
+.flow-table td.marks {
+	white-space: nowrap;
+	width: 1%;
+}
+
+.flow-table td.marks :where(.mpmark) + :where(.mpmark) {
+	margin-left: 6px;
+}
+
+.flow-table a {
+	color: inherit;
+	text-decoration: none;
+}
+
+.flow-table a:hover .res-name {
+	text-decoration: underline;
+}
+
+/* --- the tick list ------------------------------------------------------- */
+
+.flow-pick {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-3);
+}
+
+.flow-pick .pick-list {
+	max-height: 360px;
+}
+
+.flow-pick .pick-title {
+	color: var(--additive);
+	font-weight: 500;
+}
+
+.flow-pick .pick-price {
+	color: var(--label-teal);
+	font-weight: 600;
+}
+
+/* A run of controls under a step's body. */
+.flow-actions {
+	display: flex;
+	align-items: center;
+	gap: var(--s-2);
+	flex-wrap: wrap;
+}
+
+/* The folded "more options" of a step: the controls a seller rarely needs. */
+.flow-more {
+	border: 1px dashed var(--line);
+	border-radius: var(--r-panel);
+	padding: var(--s-3) var(--s-4);
+}
+
+.flow-more > summary {
+	cursor: pointer;
+	color: var(--primary);
+	font-size: 13.5px;
+	font-weight: 600;
+}
+
+.flow-more[open] > summary {
+	margin-bottom: var(--s-4);
+}
+
+.flow-more > :not(summary) + :not(summary) {
+	margin-top: var(--s-4);
+}
+
+/* A marketplace's card inside a step, several side by side. */
+.flow-cols {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+	gap: var(--s-4);
+}
+
+.flow-card {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-4);
+	padding: var(--s-4);
+	border: 1px solid var(--line);
+	border-radius: var(--r-panel);
+	background: var(--surface);
+	min-width: 0;
+}
+
+.flow-card.off {
+	background: color-mix(in srgb, var(--hover) 60%, var(--surface));
+}
+
+.flow-card-head {
+	display: flex;
+	align-items: center;
+	gap: var(--s-3);
+	justify-content: space-between;
+	flex-wrap: wrap;
+}
+
+.flow-label {
+	margin: 0;
+	font-size: 12.5px;
+	font-weight: 600;
+	color: var(--text);
+}
