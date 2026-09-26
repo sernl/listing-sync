@@ -3188,11 +3188,10 @@ pub async fn retry_console<R: tauri::Runtime>(app: AppHandle<R>) -> Result<(), C
 /// a dark console inside a light window. `None` hands the window back to the
 /// system, which is what the console's System choice means.
 ///
-/// `tauri.conf.json` names no `theme` for the window, deliberately: unset is
-/// "follow the system", which is exactly the console's own default choice, so
-/// the window is already right for every seller who has chosen nothing and is
-/// corrected by this command within one page load for everyone else. Pinning
-/// a theme there would instead make the startup window wrong for half of them.
+/// `tauri.conf.json` names no `theme` for the window: the console's first-paint
+/// script in `web/src/app.html` sends the stored choice, or the Light default,
+/// on every page load, so the window follows the system only until the first
+/// page arrives and whatever is pinned there would be overwritten anyway.
 ///
 /// A word rather than a boolean, and the same three the console stores, so
 /// System survives the trip instead of being resolved on the way and pinned

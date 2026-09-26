@@ -46,23 +46,35 @@
          This is `web/src/lib/theme.ts` run early, and it cannot import it:
          the module graph is what this script exists to get ahead of.
          `theme.test.ts` compares the key and the query written here against
-         that module's constants, so a rename cannot land in one of them. -->
+         that module's constants and runs this script against a stub store,
+         so a rename or a different default cannot land in one of them.
+
+         Light is the default: nothing stored, or a word this build does not
+         know, paints light whatever the machine prefers. Only an explicit
+         System follows the machine.
+
+         In the desktop app the window's own title bar is outside the page,
+         so the choice is handed to it here, on every load, rather than only
+         when the seller next opens Preferences; without this a dark machine
+         draws a dark title bar over the light default. -->
     <script>
       (function () {
         var key = 'teachouse.theme';
         var query = '(prefers-color-scheme: dark)';
         var media = window.matchMedia ? window.matchMedia(query) : null;
-        var paint = function () {
-          var chosen;
+        var choice = function () {
+          var stored;
           try {
-            chosen = localStorage.getItem(key);
+            stored = localStorage.getItem(key);
           } catch (refused) {
             // Storage disabled, which is a browser setting and not a fault.
-            chosen = null;
+            stored = null;
           }
-          if (chosen !== 'light' && chosen !== 'dark') {
-            chosen = media && media.matches ? 'dark' : 'light';
-          }
+          return stored === 'system' || stored === 'dark' ? stored : 'light';
+        };
+        var paint = function () {
+          var chosen = choice();
+          if (chosen === 'system') chosen = media && media.matches ? 'dark' : 'light';
           document.documentElement.dataset.theme = chosen;
         };
         paint();
@@ -72,6 +84,12 @@
         if (media) {
           if (media.addEventListener) media.addEventListener('change', paint);
           else if (media.addListener) media.addListener(paint);
+        }
+        var tauri = window.__TAURI__;
+        if (tauri && tauri.core && typeof tauri.core.invoke === 'function') {
+          // An older application refuses the command by name; the page is
+          // already painted, so the refusal is not worth a message.
+          tauri.core.invoke('set_theme', { theme: choice() }).catch(function () {});
         }
       })();
     </script>

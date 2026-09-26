@@ -24,10 +24,13 @@ const posthogKey = import.meta.env.PUBLIC_POSTHOG_KEY;
 		{/* The palette, decided before the stylesheet so the first paint is the
 		    right colour. `teachouse.theme` is the console's own key, so a
 		    signed-in seller who chose Dark there finds the marketing site dark
-		    too; a visitor who chose nothing follows their machine. The
-		    attribute on `<html>` is the no-script answer, and it is why
-		    `site.css` pins `color-scheme` per theme. `tam-server` hashes every
-		    inline block of the page it serves into the policy it sends
+		    too. Light is the default, as in the console: a visitor who chose
+		    nothing sees light whatever their machine prefers, and only an
+		    explicit System follows it. The attribute on `<html>` is the
+		    no-script answer, and it is why `site.css` pins `color-scheme` per
+		    theme. `web/src/lib/theme.test.ts` runs this block and the console's
+		    against the same stub store. `tam-server` hashes every inline block
+		    of the page it serves into the policy it sends
 		    (`serving::inline_script_hashes`), so this needs no grant. */}
 		<script is:inline>
 			(function () {
@@ -37,8 +40,10 @@ const posthogKey = import.meta.env.PUBLIC_POSTHOG_KEY;
 				} catch (refused) {
 					chosen = null;
 				}
-				if (chosen !== 'light' && chosen !== 'dark') {
+				if (chosen === 'system') {
 					chosen = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+				} else if (chosen !== 'dark') {
+					chosen = 'light';
 				}
 				document.documentElement.dataset.theme = chosen;
 			})();

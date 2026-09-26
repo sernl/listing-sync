@@ -36,11 +36,12 @@
    -- the same pairing the navigation card below uses, so one active state is
    learned once.
 
-   Indigo through `--rail-fill` rather than through `--primary`, because on
-   dark the two part company: `--primary` moves to Lavender so that a solid
-   button is visible on an Indigo card, and the rail stays Indigo. There the
-   rail and the card are the same colour, so `--rail-edge` is what makes it a
-   band; on light it is `transparent` and the rule costs nothing. */
+   Through `--rail-fill` rather than through `--primary`, because on dark the
+   two part company: `--primary` moves to Lavender, and the rail becomes a
+   charcoal band a step above the page rather than an Indigo one, which is
+   the blue the 2026-09-26 review asked to lose. There the rail is close to
+   the card's colour, so `--rail-edge` is what makes it a band; on light it
+   is `transparent` and the rule costs nothing. */
 .rail {
 	display: flex;
 	flex-direction: column;
@@ -52,7 +53,7 @@
 	border-radius: var(--r-card);
 }
 
-/* The house alone, drawn in teal on the rail's own indigo, so this sets only
+/* The house alone, drawn in teal on the rail's own ground, so this sets only
    the size. */
 .rail .mark {
 	display: block;
@@ -102,10 +103,10 @@
 }
 
 /* The wordmark's lettering is the kit's Indigo inside the file, so on the
-   dark navigation card it is Indigo on Indigo and only the Teal house
+   dark navigation card it is near-black on charcoal and only the Teal house
    survives. An `<img>` cannot inherit `currentColor`, so the marketing site
-   ships a second file with the lettering recoloured to `--text` and the
-   house left Teal, and the console reads the same one from
+   ships a second file with the lettering recoloured to the kit's near-white
+   and the house left Teal, and the console reads the same one from
    `web/static/brand/`.
 
    `content` on a replaced element rather than a second `<img>`, because the
