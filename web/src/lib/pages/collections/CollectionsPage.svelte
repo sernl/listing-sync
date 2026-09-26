@@ -1,11 +1,8 @@
 <script lang="ts">
-	// Every collection the seller has, and the one form that makes another.
-	//
-	// The New collection control is gated on `collections_max` rather than on
-	// the create failing: the free plan includes none, so a seller on it would
-	// otherwise fill a name and a description before being refused. The reason
-	// is stated on the control and again beside it, because a disabled control
-	// with no stated reason reads as a fault.
+	// The seller's collections as cards: the name in the resource violet, how
+	// many it holds, and the marketplaces its members are on. "New collection"
+	// opens the form at the top of the list; the fine print about what a
+	// collection is and why it costs sits behind the header's Explain.
 
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { ApiFailure, collectionsApi, type CollectionBody } from '$lib/api';
@@ -13,15 +10,15 @@
 	import Button from '$lib/Button.svelte';
 	import { agoLabel } from '$lib/elapsed';
 	import { entitlementRead, limitOf } from '$lib/entitlement-read';
+	import Explain from '$lib/Explain.svelte';
 	import Field from '$lib/Field.svelte';
+	import FlowActionBar from '$lib/FlowActionBar.svelte';
 	import Icon from '$lib/Icon.svelte';
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
+	import Menu from '$lib/Menu.svelte';
 	import MenuItem from '$lib/MenuItem.svelte';
-	import Note from '$lib/Note.svelte';
 	import PageHead from '$lib/PageHead.svelte';
-	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
-	import RowCard from '$lib/RowCard.svelte';
 	import { toast } from '$lib/toast';
 	import {
 		COLLECTIONS_KEY,
@@ -33,6 +30,7 @@
 		countLine,
 		matching
 	} from './collections';
+	import '$lib/flow.css';
 	import './collections.css';
 
 	const queryClient = useQueryClient();
@@ -42,9 +40,6 @@
 		queryFn: () => collectionsApi.list().then((view) => view.collections)
 	}));
 
-	// The cap, from the plan the shell already read. A pending or failed read
-	// refuses nothing: `limitOf` answers null for both, so an outage never
-	// disables a paying seller's own control.
 	const plan = createQuery(() => entitlementRead);
 	const capped = $derived(limitOf(plan.data, 'collections'));
 
@@ -53,12 +48,11 @@
 	let name = $state('');
 	let description = $state('');
 	/** The server's refusal and the name it was raised against, held together
-	 *  so the sentence leaves the moment the seller edits the field: a refusal
-	 *  about a name no longer in the form is worse than none, because Create is
-	 *  live underneath it. */
+	 *  so the sentence leaves the moment the seller edits the field. */
 	let refusal = $state<{ message: string; name: string } | null>(null);
 	let confirming = $state<string | null>(null);
 	let nameField = $state<HTMLInputElement | null>(null);
+	let menus = $state<Record<string, boolean>>({});
 
 	$effect(() => {
 		if (creating) {
@@ -83,8 +77,6 @@
 			toast('info', `Created ${stored.name}.`);
 		},
 		onError: (failure: Error) => {
-			// A 422 is about the form, so it is answered beside it. Anything
-			// else is about the request and goes to the toasts.
 			if (failure instanceof ApiFailure && failure.status === 422) {
 				refusal = { message: failure.message, name };
 				return;
@@ -107,10 +99,8 @@
 	}));
 
 	/** What is wrong with the name in the form, whether this page decided it or
-	 *  the server did. Shown rather than left in the disabled control's
-	 *  tooltip: a greyed Create with a hidden reason is a page that will not
-	 *  say what it wants. An empty field says nothing at all -- a form the
-	 *  seller has not filled yet has nothing wrong with it. */
+	 *  the server did. An empty field says nothing: a form the seller has not
+	 *  filled yet has nothing wrong with it. */
 	const problem = $derived.by(() => {
 		if (refusal !== null && refusal.name === name) {
 			return refusal.message;
@@ -130,8 +120,6 @@
 		return problem ?? undefined;
 	});
 
-	/** The create, from either door: the form's own submit, and the button in
-	 *  the footer beside Cancel, which is outside the form. */
 	function run() {
 		if (!verdict.accepted || create.isPending) {
 			return;
@@ -146,188 +134,222 @@
 		event.preventDefault();
 		run();
 	}
+
+	function openNew() {
+		creating = true;
+		nameField?.focus();
+	}
 </script>
 
-<div class="page collections-page">
+<div class="page flow-page has-bar collections-page">
 	<PageHead
 		icon="layers"
 		title="Collections"
-		description="Group your resources in the order you choose."
+		description="Group resources in the order you choose."
 		guide="labels-and-collections"
 	>
 		{#snippet aside()}
+			<Explain title="What a collection is" label="">
+				<p>{WHAT_A_COLLECTION_IS}</p>
+				<p>
+					Publish a collection to a marketplace, apply a template or labels to all of it, or
+					export it as a spreadsheet. Each follows the collection’s order.
+				</p>
+				<p>{WHY_COLLECTIONS_COST}</p>
+			</Explain>
 			<Button
-				tier="additive"
+				tier="primary"
 				icon="plus"
 				disabled={capped !== null}
 				reason={capped ?? undefined}
-				onclick={() => (creating = !creating)}
+				onclick={openNew}
 			>
 				New collection
 			</Button>
 		{/snippet}
 	</PageHead>
 
-	{#if capped !== null}
-		<!-- The figure and the way forward, because a refusal with neither reads
-		     as a control we took away. The free plan includes none, so this is
-		     the state most sellers meet this page in. -->
-		<Banner tone="warn" title="Your plan doesn’t include collections">
-			{capped}
-			{WHY_COLLECTIONS_COST}
-			{#snippet action()}
-				<Button tier="primary" small href="/settings/subscription">See plans</Button>
-			{/snippet}
-		</Banner>
-	{/if}
-
-	{#if creating && capped === null}
-		<Panel title="New collection">
-			<form class="coll-form" onsubmit={submit}>
-				<Field label="Name" id="new-collection-name" required>
-					<input
-						id="new-collection-name"
-						type="text"
-						maxlength={NAME_MAX_CHARS}
-						placeholder="Autumn term"
-						bind:this={nameField}
-						bind:value={name}
-						disabled={create.isPending}
-					/>
-				</Field>
-				<Field
-					label="Description"
-					id="new-collection-description"
-					hint="Only you see this; it never goes to a marketplace."
-				>
-					<textarea
-						id="new-collection-description"
-						rows="2"
-						maxlength={DESCRIPTION_MAX_CHARS}
-						bind:value={description}
-						disabled={create.isPending}
-					></textarea>
-				</Field>
-			</form>
-			{#if problem !== null}
-				<p class="refusal">{problem}</p>
-			{/if}
-			<div class="coll-form-foot">
-				<Button tier="additive" disabled={blocked !== undefined} reason={blocked} onclick={run}>
-					{create.isPending ? 'Creating…' : 'Create'}
-				</Button>
-				<Button
-					tier="quiet"
-					onclick={() => {
-						creating = false;
-						refusal = null;
-					}}
-				>
-					Cancel
-				</Button>
-			</div>
-		</Panel>
-	{/if}
-
-	{#if collections.isPending}
-		<p class="quiet">Loading…</p>
-	{:else if collections.isError}
-		<Banner tone="bad" title="We couldn’t load your collections">
-			Nothing has changed.
-			{#snippet action()}
-				<Button onclick={() => collections.refetch()}>Try again</Button>
-			{/snippet}
-		</Banner>
-	{:else if all.length === 0}
-		<Placeholder icon="layers" headline="No collections yet." body={WHAT_A_COLLECTION_IS}>
-			{#snippet actions()}
-				<Button
-					tier="additive"
-					icon="plus"
-					disabled={capped !== null}
-					reason={capped ?? undefined}
-					onclick={() => (creating = true)}
-				>
-					New collection
-				</Button>
-				<Button href="/resources" icon="layout-list">Go to Resources</Button>
-			{/snippet}
-		</Placeholder>
-	{:else}
-		<div class="coll-toolbar">
-			<Field label="Search" id="collections-search">
-				<span class="coll-search">
-					<Icon name="search" size={16} />
-					<input
-						id="collections-search"
-						type="search"
-						placeholder="Search collections"
-						bind:value={search}
-					/>
-				</span>
-			</Field>
-			<span class="coll-total">
-				{all.length === 1 ? '1 collection' : `${all.length} collections`}
-			</span>
-		</div>
-
-		{#if shown.length === 0}
-			<p class="quiet">Nothing matches that search.</p>
-		{:else}
-			{#each shown as collection (collection.id)}
-				<RowCard
-					href={`/collections/${collection.id}`}
-					title={collection.name}
-					meta={collection.description ??
-						`updated ${agoLabel(collection.updated_at, Date.now())}`}
-				>
-					{#snippet strip()}
-						<span class="coll-marks">
-							<span class="coll-total">{countLine(collection.count)}</span>
-							{#each collection.inventories as inventory (inventory)}
-								<MarketplaceMark {inventory} size={16} />
-							{/each}
-						</span>
-					{/snippet}
-					{#snippet menu(close: () => void)}
-						<a class="coll-menu-link menu-item" href={`/collections/${collection.id}`}>
-							<Icon name="eye" size={14} />Open
-						</a>
-						<MenuItem
-							icon="trash-2"
-							danger
-							onclick={() => {
-								close();
-								confirming = collection.id;
-							}}
-						>
-							Delete
-						</MenuItem>
-					{/snippet}
-				</RowCard>
-			{/each}
+	<div class="flow">
+		{#if capped !== null}
+			<!-- The figure and the way forward, because a refusal with neither
+			     reads as a control we took away. -->
+			<Banner tone="warn" title="Your plan doesn’t include collections">
+				{capped}
+				{#snippet action()}
+					<Button tier="primary" small href="/settings/subscription">See plans</Button>
+				{/snippet}
+			</Banner>
 		{/if}
 
-		{#if removing !== null}
-			<Panel title={`Delete ${removing.name}?`}>
-				<p>
-					The {countLine(removing.count)} in it stay in your Resources and on their
-					marketplaces.
-				</p>
-				<div class="coll-form-foot">
-					<Button
-						danger
-						disabled={remove.isPending}
-						reason={remove.isPending ? 'Deleting the collection.' : undefined}
-						onclick={() => remove.mutate(removing.id)}
-					>
-						{remove.isPending ? 'Deleting…' : 'Delete it'}
+		{#if creating && capped === null}
+			<section class="flow-card coll-new" aria-labelledby="coll-new-title">
+				<h2 id="coll-new-title" class="coll-new-title">New collection</h2>
+				<form class="coll-form" onsubmit={submit}>
+					<Field label="Name" id="new-collection-name" required>
+						<input
+							id="new-collection-name"
+							type="text"
+							maxlength={NAME_MAX_CHARS}
+							placeholder="Autumn term"
+							bind:this={nameField}
+							bind:value={name}
+							disabled={create.isPending}
+						/>
+					</Field>
+					<Field label="Note to yourself" id="new-collection-description">
+						<textarea
+							id="new-collection-description"
+							rows="2"
+							maxlength={DESCRIPTION_MAX_CHARS}
+							bind:value={description}
+							disabled={create.isPending}
+						></textarea>
+					</Field>
+				</form>
+				{#if problem !== null}
+					<p class="refusal">{problem}</p>
+				{/if}
+				<div class="flow-actions">
+					<Button tier="primary" disabled={blocked !== undefined} reason={blocked} onclick={run}>
+						{create.isPending ? 'Creating…' : 'Create'}
 					</Button>
-					<Button tier="quiet" onclick={() => (confirming = null)}>Keep it</Button>
+					<Button
+						tier="quiet"
+						onclick={() => {
+							creating = false;
+							refusal = null;
+						}}
+					>
+						Cancel
+					</Button>
 				</div>
-			</Panel>
+			</section>
 		{/if}
 
-		<Note>{WHAT_A_COLLECTION_IS}</Note>
-	{/if}
+		{#if collections.isPending}
+			<p class="quiet">Loading…</p>
+		{:else if collections.isError}
+			<Banner tone="bad" title="We couldn’t load your collections">
+				Nothing has changed.
+				{#snippet action()}
+					<Button onclick={() => collections.refetch()}>Try again</Button>
+				{/snippet}
+			</Banner>
+		{:else if all.length === 0}
+			<Placeholder icon="layers" headline="No collections yet." body="Make one, then add resources to it.">
+				{#snippet actions()}
+					<Button href="/resources" icon="layout-list">Go to Resources</Button>
+				{/snippet}
+			</Placeholder>
+		{:else}
+			<section class="flow-section" aria-labelledby="coll-yours-title">
+				<div class="flow-section-head">
+					<h2 id="coll-yours-title">Your collections</h2>
+					<span class="coll-total">
+						{all.length === 1 ? '1 collection' : `${all.length} collections`}
+					</span>
+				</div>
+
+				{#if all.length > 6}
+					<span class="coll-search">
+						<Icon name="search" size={16} />
+						<input
+							id="collections-search"
+							type="search"
+							aria-label="Search collections"
+							placeholder="Search collections"
+							bind:value={search}
+						/>
+					</span>
+				{/if}
+
+				{#if shown.length === 0}
+					<p class="quiet">Nothing matches that search.</p>
+				{:else}
+					<ul class="coll-cards">
+						{#each shown as collection (collection.id)}
+							<li class="coll-card">
+								<a class="coll-card-main" href={`/collections/${collection.id}`}>
+									<span class="res-name coll-card-name">{collection.name}</span>
+									<span class="coll-card-count">{countLine(collection.count)}</span>
+									{#if collection.description !== null}
+										<span class="coll-card-said">{collection.description}</span>
+									{/if}
+								</a>
+								<div class="coll-card-foot">
+									<span class="coll-marks" aria-label="On these marketplaces">
+										{#each collection.inventories as inventory (inventory)}
+											<MarketplaceMark {inventory} size={20} />
+										{:else}
+											<span class="coll-card-none">Not on a marketplace yet</span>
+										{/each}
+									</span>
+									<span class="coll-card-when">{agoLabel(collection.updated_at, Date.now())}</span>
+									<Menu label="Actions for {collection.name}" bind:open={menus[collection.id]}>
+										{#snippet trigger()}
+											<button
+												class="coll-kebab"
+												type="button"
+												aria-haspopup="menu"
+												aria-expanded={menus[collection.id] ?? false}
+												aria-label="Actions for {collection.name}"
+												onclick={() => (menus[collection.id] = !menus[collection.id])}
+											>
+												<Icon name="ellipsis-vertical" size={16} />
+											</button>
+										{/snippet}
+										<a class="coll-menu-link menu-item" href={`/collections/${collection.id}`}>
+											<Icon name="eye" size={14} />Open
+										</a>
+										<MenuItem
+											icon="trash-2"
+											danger
+											onclick={() => {
+												menus[collection.id] = false;
+												confirming = collection.id;
+											}}
+										>
+											Delete
+										</MenuItem>
+									</Menu>
+								</div>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+
+				{#if removing !== null}
+					<div class="flow-card coll-confirm" role="alertdialog" tabindex="-1" aria-label={`Delete ${removing.name}`}>
+						<p>
+							Delete <span class="res-name">{removing.name}</span>? The {countLine(removing.count)}
+							in it stay in Resources and on their marketplaces.
+						</p>
+						<div class="flow-actions">
+							<Button
+								danger
+								disabled={remove.isPending}
+								reason={remove.isPending ? 'Deleting the collection.' : undefined}
+								onclick={() => remove.mutate(removing.id)}
+							>
+								{remove.isPending ? 'Deleting…' : 'Delete it'}
+							</Button>
+							<Button tier="quiet" onclick={() => (confirming = null)}>Keep it</Button>
+						</div>
+					</div>
+				{/if}
+			</section>
+		{/if}
+	</div>
 </div>
+
+<FlowActionBar>
+	<Button
+		tier="primary"
+		icon="plus"
+		disabled={capped !== null}
+		reason={capped ?? undefined}
+		onclick={openNew}
+	>
+		New collection
+	</Button>
+</FlowActionBar>
