@@ -10,7 +10,7 @@
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tam_domain::{Binding, FieldPolicies, FieldPolicy, ItemOperation, JobItemId, PublishMode};
-use tam_engine::breaker::{run_breaker, BREAKER_MIN_SAMPLE};
+use tam_engine::breaker::{run_breaker, BREAKER_MIN_SAMPLE, BREAKER_MIN_TENANTS};
 use tam_marketplace::{IdempotencyKey, RemoteLifecycle};
 use tam_storage::{HaltRepo, JobRepo, MappingRepo, NewJob, NewJobItem, ProductRepo};
 use tam_types::{
@@ -20,7 +20,12 @@ use tam_types::{
 };
 
 const T0: Timestamp = Timestamp(1_756_000_000_000);
-const ORG: OrgId = OrgId(Uuid([0xAA; 16]));
+
+/// The organisations a window is spread over, by seed. Every id the fixture
+/// mints is derived from the seed so two organisations never collide.
+const fn org_of(seed: u8) -> OrgId {
+    OrgId(Uuid([seed; 16]))
+}
 
 #[expect(
     clippy::expect_used,
@@ -40,28 +45,42 @@ async fn engine_pool(app: &PgPool) -> PgPool {
         .expect("the engine role connects")
 }
 
-/// One tenant's window: an item per named outcome, all settled at `T0` on
-/// Tes. The breaker groups by inventory and never by tenant, so one tenant
-/// standing in for the fleet is the same arithmetic the cross-tenant case
-/// performs — what these tests vary is the outcome mix, not who owns it.
+/// One organisation's window: an item per named outcome, all settled at `T0`
+/// on Tes. The breaker groups by inventory and reads how many organisations
+/// the adverse settlements span, so a fleet-wide event is seeded by calling
+/// this once per organisation and a single account's bad day by calling it
+/// once.
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
 )]
-async fn seed_window(app: &PgPool, engine: &PgPool, outcomes: &[&str], failure_code: Option<&str>) {
-    let product = ProductId(Uuid([0x01; 16]));
-    let mapping = MappingId(Uuid([0x02; 16]));
-    sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, 'org-a', now())")
-        .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+async fn seed_window(
+    app: &PgPool,
+    engine: &PgPool,
+    seed: u8,
+    outcomes: &[&str],
+    failure_code: Option<&str>,
+) {
+    let org = org_of(seed);
+    let tag = |byte: u8| -> [u8; 16] {
+        let mut id = [byte; 16];
+        id[0] = seed;
+        id
+    };
+    let product = ProductId(Uuid(tag(0x01)));
+    let mapping = MappingId(Uuid(tag(0x02)));
+    sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, $2, now())")
+        .bind(uuid::Uuid::from_bytes(org.0 .0))
+        .bind(format!("org-{seed:02x}"))
         .execute(app)
         .await
         .expect("the org inserts");
     ProductRepo::new(app.clone())
         .insert(
-            ORG,
+            org,
             &tam_domain::CanonicalProduct {
                 id: product,
-                org: ORG,
+                org,
                 title: Title("Fixture".to_owned()),
                 body: ListingCopy {
                     body: "Fixture".to_owned(),
@@ -69,7 +88,7 @@ async fn seed_window(app: &PgPool, engine: &PgPool, outcomes: &[&str], failure_c
                 },
                 payload: Some(PayloadSet::new(
                     ProductFile {
-                        id: FileId(Uuid([0x03; 16])),
+                        id: FileId(Uuid(tag(0x03))),
                         role: FileRole::Payload,
                         kind: FileKind::Pdf,
                         bytes: FileBytes::Held {
@@ -98,10 +117,10 @@ async fn seed_window(app: &PgPool, engine: &PgPool, outcomes: &[&str], failure_c
         .expect("the product inserts");
     MappingRepo::new(app.clone())
         .insert(
-            ORG,
+            org,
             &tam_domain::Mapping {
                 id: mapping,
-                org: ORG,
+                org,
                 product,
                 inventory: InventoryId::Tes,
                 binding: Binding::Unbound,
@@ -127,18 +146,18 @@ async fn seed_window(app: &PgPool, engine: &PgPool, outcomes: &[&str], failure_c
     let items: Vec<NewJobItem> = plan
         .iter()
         .map(|(byte, _)| NewJobItem {
-            item: JobItemId(Uuid([*byte; 16])),
+            item: JobItemId(Uuid(tag(*byte))),
             mapping,
-            idempotency_key: IdempotencyKey(Uuid([byte.wrapping_add(0x40); 16])),
+            idempotency_key: IdempotencyKey(Uuid(tag(byte.wrapping_add(0x40)))),
             operation: ItemOperation::Create,
             requires_bound_on: None,
         })
         .collect();
     JobRepo::new(engine.clone())
         .enqueue(
-            ORG,
+            org,
             &NewJob {
-                job: JobId(Uuid([0x06; 16])),
+                job: JobId(Uuid(tag(0x06))),
                 inventory: InventoryId::Tes,
                 stamp: Stamp {
                     at: T0,
@@ -158,11 +177,29 @@ async fn seed_window(app: &PgPool, engine: &PgPool, outcomes: &[&str], failure_c
         )
         .bind(outcome)
         .bind(T0.0)
-        .bind(uuid::Uuid::from_bytes([byte; 16]))
+        .bind(uuid::Uuid::from_bytes(tag(byte)))
         .bind(failure_code)
         .execute(engine)
         .await
         .expect("the item settles");
+    }
+}
+
+/// The same outcomes on every organisation the tenant floor asks for, which
+/// is what a marketplace-wide event looks like in the ledger.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not a free helper in an integration-test crate; a broken fixture should panic"
+)]
+async fn seed_fleet_window(
+    app: &PgPool,
+    engine: &PgPool,
+    outcomes: &[&str],
+    failure_code: Option<&str>,
+) {
+    let tenants = u8::try_from(BREAKER_MIN_TENANTS).expect("the tenant floor is small");
+    for seed in 0xA0..0xA0 + tenants {
+        seed_window(app, engine, seed, outcomes, failure_code).await;
     }
 }
 
@@ -174,7 +211,7 @@ async fn seed_window(app: &PgPool, engine: &PgPool, outcomes: &[&str], failure_c
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_window_of_blocked_settlements_trips_the_breaker(app: PgPool) {
     let engine = engine_pool(&app).await;
-    seed_window(&app, &engine, &["blocked"; 6], None).await;
+    seed_fleet_window(&app, &engine, &["blocked"; 2], None).await;
     let report = run_breaker(
         &JobRepo::new(engine.clone()),
         &HaltRepo::new(engine.clone()),
@@ -185,7 +222,7 @@ async fn a_window_of_blocked_settlements_trips_the_breaker(app: PgPool) {
     assert_eq!(
         report.tripped,
         vec!["Tes".to_owned()],
-        "six of six settlements blocked is a marketplace that has stopped working"
+        "six of six settlements blocked, across three organisations, is a marketplace that has stopped working"
     );
     let halt: (String, String) =
         sqlx::query_as("SELECT raised_by, reason FROM inventory_halt LIMIT 1")
@@ -222,7 +259,7 @@ async fn one_blocked_settlement_among_healthy_ones_does_not(app: PgPool) {
         i64::try_from(outcomes.len()).unwrap_or(i64::MAX) > BREAKER_MIN_SAMPLE,
         "the window has to clear the sample floor or this proves nothing"
     );
-    seed_window(&app, &engine, &outcomes, None).await;
+    seed_window(&app, &engine, 0xAA, &outcomes, None).await;
     let report = run_breaker(
         &JobRepo::new(engine.clone()),
         &HaltRepo::new(engine.clone()),
@@ -251,7 +288,7 @@ async fn one_blocked_settlement_among_healthy_ones_does_not(app: PgPool) {
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_window_of_challenge_blocked_settlements_trips_the_breaker(app: PgPool) {
     let engine = engine_pool(&app).await;
-    seed_window(&app, &engine, &["blocked"; 6], Some("ChallengePresented")).await;
+    seed_fleet_window(&app, &engine, &["blocked"; 2], Some("ChallengePresented")).await;
     let report = run_breaker(
         &JobRepo::new(engine.clone()),
         &HaltRepo::new(engine.clone()),
@@ -277,4 +314,31 @@ async fn a_window_of_challenge_blocked_settlements_trips_the_breaker(app: PgPool
         "and the rows carry the challenge code, so narrowing the breaker's filter by \
          failure_code later would have to break this test to do it"
     );
+}
+
+/// One account whose every item fails is one account's session gone stale,
+/// however many items it has, and the fleet must keep working around it. The
+/// ratio alone reads six of six as an outage; the tenant floor is what tells
+/// the two apart.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn one_organisations_failures_do_not_halt_the_fleet(app: PgPool) {
+    let engine = engine_pool(&app).await;
+    seed_window(&app, &engine, 0xAA, &["failed"; 6], None).await;
+    let report = run_breaker(
+        &JobRepo::new(engine.clone()),
+        &HaltRepo::new(engine.clone()),
+        T0,
+    )
+    .await
+    .expect("the breaker runs");
+    assert_eq!(
+        report.tripped,
+        Vec::<String>::new(),
+        "six of six from one organisation is that organisation's problem, not the marketplace's"
+    );
+    let halted: i64 = sqlx::query_scalar("SELECT count(*) FROM inventory_halt")
+        .fetch_one(&engine)
+        .await
+        .expect("the halt table reads");
+    assert_eq!(halted, 0, "nothing halted");
 }

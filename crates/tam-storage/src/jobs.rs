@@ -383,6 +383,12 @@ pub struct InventoryFailureWindow {
     /// denominator it does the opposite of its job, driving the ratio down
     /// precisely as the fleet-wide event this breaker exists for unfolds.
     pub adverse: i64,
+    /// How many distinct organisations the adverse settlements belong to.
+    /// The breaker's question is whether the marketplace is failing everyone,
+    /// and one account with an expired session fails every item of its own
+    /// while every other account succeeds; counting accounts is what tells
+    /// the two apart.
+    pub adverse_orgs: i64,
 }
 
 impl JobRepo {
@@ -394,7 +400,9 @@ impl JobRepo {
             r#"SELECT j.inventory AS "inventory!",
                  count(*) AS "settled!",
                  count(*) FILTER (WHERE ji.outcome IN ('failed', 'ambiguous', 'blocked'))
-                     AS "adverse!"
+                     AS "adverse!",
+                 count(DISTINCT ji.org_id) FILTER (WHERE ji.outcome IN ('failed', 'ambiguous', 'blocked'))
+                     AS "adverse_orgs!"
              FROM job_item ji
              JOIN job j ON j.org_id = ji.org_id AND j.id = ji.job_id
              WHERE ji.state = 'settled' AND ji.settled_at >= $1
@@ -409,6 +417,7 @@ impl JobRepo {
                     inventory: inventory_from_db(&row.inventory)?,
                     settled: row.settled,
                     adverse: row.adverse,
+                    adverse_orgs: row.adverse_orgs,
                 })
             })
             .collect()

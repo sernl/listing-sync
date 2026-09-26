@@ -139,7 +139,10 @@ impl Plan {
             Self::Free => Capabilities {
                 resources_max: 500,
                 marketplaces_max: u32::MAX,
-                storage_bytes_max: 1 << 30,
+                // DECIDED (2026-09-26 re-evaluation): Look stores covers, not
+                // bundles, so 500 resources fit in ~150 MiB; the cut quadruples
+                // the Look accounts Garage holds at quota.
+                storage_bytes_max: 256 << 20,
                 import_spreadsheet: true,
                 import_marketplace: true,
                 duplicate_review: true,
@@ -158,6 +161,7 @@ impl Plan {
                 export: true,
                 devices_max: 5,
                 ai_fills_per_month: 0,
+                uploads_in_flight_max: 1,
                 support: Support::Guides,
             },
             Self::Subscriber => Capabilities {
@@ -182,6 +186,7 @@ impl Plan {
                 export: true,
                 devices_max: 5,
                 ai_fills_per_month: 200,
+                uploads_in_flight_max: 3,
                 support: Support::Email2Days,
             },
             Self::Studio => Capabilities {
@@ -209,6 +214,7 @@ impl Plan {
                 export: true,
                 devices_max: 5,
                 ai_fills_per_month: 600,
+                uploads_in_flight_max: 3,
                 support: Support::Email1Day,
             },
         }
@@ -310,6 +316,12 @@ pub struct Capabilities {
     pub export: bool,
     pub devices_max: u32,
     pub ai_fills_per_month: u32,
+    /// Uploads one organisation may have open at once. The upload route is
+    /// the one server path that is memory-heavy and holds a pool connection
+    /// across the object-store write, so this is the fairness bound between
+    /// accounts sharing a replica (2026-09-26 re-evaluation, "can free
+    /// accounts starve paid ones").
+    pub uploads_in_flight_max: u32,
     pub support: Support,
 }
 
@@ -627,10 +639,13 @@ pub mod http {
     /// Revisit once the spike records real listing-metadata payload sizes.
     pub const REQUEST_BODY_BYTES_MAX: u64 = 2 * 1024 * 1024;
 
-    /// MEASURED against the Tes per-file ceiling recorded in the M-1 outcomes
-    /// (decisions.md): supported files up to 200 MB. 256 MB admits the largest
-    /// Tes-legal file with multipart headroom.
-    pub const UPLOAD_BODY_BYTES_MAX: u64 = 256 * 1024 * 1024;
+    /// BOUNDED by the edge, not the marketplace: Cloudflare's free plan
+    /// refuses request bodies over 100 MB, so a larger ceiling here is
+    /// unreachable through teachouse.io and only sizes the buffers a replica
+    /// holds (the upload path keeps ~3 copies). 96 MiB is the largest body
+    /// the edge passes, with multipart headroom. Tes-legal files up to 200 MB
+    /// still reach Tes: the desktop sends bundles from the seller's own disk.
+    pub const UPLOAD_BODY_BYTES_MAX: u64 = 96 * 1024 * 1024;
 }
 
 pub mod ingest {
@@ -661,12 +676,6 @@ pub mod job {
     /// small attempt count, so this deadline is enforced alongside the count
     /// rather than derived from it.
     pub const WALL_CLOCK_MAX: Duration = Duration::from_mins(30);
-
-    /// DECIDED (decisions.md, "Limits calibration, 2026-08-28"): held at the
-    /// serialised end until the per-job RAM footprint alongside the connection
-    /// pool is measured, which re-opens it. Automation runs here, on our own
-    /// infrastructure, so it is inside this bound rather than outside it.
-    pub const CONCURRENT_JOBS_GLOBAL_MAX: u32 = 8;
 }
 
 pub mod import {
