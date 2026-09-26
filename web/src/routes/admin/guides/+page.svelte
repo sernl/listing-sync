@@ -12,8 +12,8 @@
 	import { agoLabel, utcInstant } from '$lib/elapsed';
 	import Field from '$lib/Field.svelte';
 	import Menu from '$lib/Menu.svelte';
+	import Explain from '$lib/Explain.svelte';
 	import PageHead from '$lib/PageHead.svelte';
-	import Panel from '$lib/Panel.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
 	import { queryKeys } from '$lib/query';
 	import StatusPill from '$lib/StatusPill.svelte';
@@ -21,6 +21,7 @@
 	import { toast } from '$lib/toast';
 	import { slugRefusal, slugify, titleRefusal } from '$lib/pages/guides/editor';
 	import { taxonLabel } from '$lib/pages/guides/filters';
+	import '$lib/flow.css';
 	import '$lib/pages/admin/admin.css';
 	import '$lib/pages/guides/guides.css';
 
@@ -40,6 +41,13 @@
 	}));
 
 	const rows = $derived(guides.data?.guides ?? []);
+	let filter = $state<'all' | 'published' | 'draft'>('all');
+	const FILTERS = [
+		{ id: 'all', label: 'All' },
+		{ id: 'published', label: 'Published' },
+		{ id: 'draft', label: 'Drafts' }
+	] as const;
+	const shown = $derived(rows.filter((guide) => filter === 'all' || guide.status === filter));
 	const topics = $derived(taxonomy.data?.topics ?? []);
 	const tags = $derived(taxonomy.data?.tags ?? []);
 	/** The two kinds, in the order the panel reads them. One shape for both,
@@ -212,14 +220,15 @@
 	}
 </script>
 
-<div class="page">
-	<PageHead
-		icon="book-open"
-		title="Guides"
-		description="The help pages sellers read. Write them here and publish them one at a time."
-	/>
+<div class="page flow-page">
+	<PageHead icon="book-open" title="Guides" description="The help pages sellers read." />
 
-	<Panel title="Write a new guide" description="A title and an address. The body comes next.">
+	<div class="flow">
+
+	<section class="flow-card" aria-labelledby="new-guide-title">
+		<div class="flow-card-head">
+			<h2 class="flow-label" id="new-guide-title">New guide</h2>
+		</div>
 		<!-- One row of controls, aligned on the controls themselves rather than
 		     on the bottom of each field: the address field carries a hint and
 		     the others do not, and a flex row ending at `flex-end` put the
@@ -299,15 +308,15 @@
 			</div>
 		</div>
 		<p class="gd-head-hint">
-			Sellers reach it at /guides/{suggested.length === 0 ? '…' : suggested}. You cannot change
-			the address after you create the guide.
+			/guides/{suggested.length === 0 ? '…' : suggested} · fixed once created.
 		</p>
-	</Panel>
+	</section>
 
-	<Panel
-		title="Topics and tags"
-		description="One topic per guide and any number of tags. Retiring one hides it from the pickers but keeps it on existing guides."
-	>
+	<details class="flow-more">
+		<summary>Topics and tags</summary>
+		<p class="op-foot">
+			One topic per guide, any number of tags. Retired ones leave the pickers but stay on guides.
+		</p>
 		{#if taxonomy.isPending}
 			<p class="quiet">Loading topics and tags…</p>
 		{:else if taxonomy.isError}
@@ -393,9 +402,18 @@
 				{/each}
 			</div>
 		{/if}
-	</Panel>
+	</details>
 
-	<Panel>
+	<section class="flow-section" aria-labelledby="guides-title">
+		<div class="flow-section-head">
+			<h2 id="guides-title">All guides</h2>
+			<Explain title="Drafts and published guides" label="">
+				<p>
+					Sellers get a 404 for a draft. Only operators can read one, and links to it work only
+					after it is published.
+				</p>
+			</Explain>
+		</div>
 		{#if guides.isPending}
 			<p class="quiet">Loading guides…</p>
 		{:else if guides.isError}
@@ -408,80 +426,77 @@
 			<Placeholder
 				icon="book-open"
 				headline="No guides yet"
-				body="Sellers see an empty Help and guides page until you publish one. Drafts are hidden
-					from them, so start one any time."
+				body="Sellers see an empty Help page until you publish one."
 			/>
 		{:else}
-			<div class="op-table">
-				<table>
-					<thead>
-						<tr>
-							<th>Guide</th>
-							<th>Filed under</th>
-							<th>State</th>
-							<th class="num">Updated</th>
-							<th class="num">Actions</th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each rows as guide (guide.slug)}
-							<tr>
-								<td class="op-cell" data-label="Guide">
-									<a class="t" href={`/admin/guides/${guide.slug}`} title={guide.title}>
-										{guide.title}
-									</a>
-									<span class="s">/guides/{guide.slug}</span>
-								</td>
-								<td data-label="Filed under">
-									<span class="gd-row-tax">
-										{#if guide.topic !== null}
-											<span class="gd-tax gd-tax-topic">{taxonLabel(guide.topic)}</span>
-										{/if}
-										{#each guide.tags as tag (tag.id)}
-											<span class="gd-tax">{taxonLabel(tag)}</span>
-										{/each}
-										{#if guide.topic === null && guide.tags.length === 0}
-											<span class="quiet">—</span>
-										{/if}
-									</span>
-								</td>
-								<td data-label="State">
-									{#if guide.status === 'published'}
-										<StatusPill tone="ok" label="published" />
-									{:else}
-										<StatusPill tone="soon" label="draft" />
-									{/if}
-								</td>
-								<td class="num" data-label="Updated" title={utcInstant(guide.updated_at)}>
-									{agoLabel(guide.updated_at, now)}
-								</td>
-								<td data-label="Actions">
-									<div class="op-acts">
-										<Button tier="outline" small href={`/admin/guides/${guide.slug}`}>Edit</Button>
-										{#if guide.status === 'published'}
-											<Button tier="outline" small href={`/guides/${guide.slug}`}>View</Button>
-										{/if}
-										<Button
-											tier="outline"
-											small
-											danger
-											disabled={deleting.isPending}
-											reason={deleting.isPending ? 'Deleting.' : undefined}
-											onclick={() => remove(guide)}
-										>
-											Delete
-										</Button>
-									</div>
-								</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
+			<div class="op-filters" role="group" aria-label="Show">
+				{#each FILTERS as chip (chip.id)}
+					<button
+						type="button"
+						class="op-chip"
+						aria-pressed={filter === chip.id}
+						onclick={() => (filter = chip.id)}
+					>
+						{chip.label}
+						<span class="c">
+							{rows.filter((guide) => chip.id === 'all' || guide.status === chip.id).length}
+						</span>
+					</button>
+				{/each}
 			</div>
-			<p class="foot-note">
-				Sellers get a 404 for a draft. Only operators can read one, and links to it work only
-				after it is published.
-			</p>
+			<div class="op-guides">
+				{#each shown as guide (guide.slug)}
+					<article class="flow-card op-guide">
+						<div class="flow-card-head">
+							{#if guide.status === 'published'}
+								<StatusPill tone="ok" label="published" />
+							{:else}
+								<StatusPill tone="soon" label="draft" />
+							{/if}
+							<span class="op-foot" title={utcInstant(guide.updated_at)}>
+								{agoLabel(guide.updated_at, now)}
+							</span>
+						</div>
+						<div class="flow-item-main">
+							<a class="flow-item-title op-name" href={`/admin/guides/${guide.slug}`}>{guide.title}</a>
+							<span class="flow-item-line mono">/guides/{guide.slug}</span>
+						</div>
+						{#if guide.topic !== null || guide.tags.length > 0}
+							<span class="gd-row-tax">
+								{#if guide.topic !== null}
+									<span class="gd-tax gd-tax-topic">{taxonLabel(guide.topic)}</span>
+								{/if}
+								{#each guide.tags as tag (tag.id)}
+									<span class="gd-tax">{taxonLabel(tag)}</span>
+								{/each}
+							</span>
+						{/if}
+						<div class="flow-actions op-guide-acts">
+							<Button tier="primary" small icon="pencil" href={`/admin/guides/${guide.slug}`}>
+								Edit
+							</Button>
+							{#if guide.status === 'published'}
+								<Button tier="outline" small icon="eye" href={`/guides/${guide.slug}`}>View</Button>
+							{/if}
+							<span class="op-spacer"></span>
+							<Button
+								tier="quiet"
+								small
+								danger
+								icon="trash-2"
+								disabled={deleting.isPending}
+								reason={deleting.isPending ? 'Deleting.' : undefined}
+								onclick={() => remove(guide)}
+							>
+								Delete
+							</Button>
+						</div>
+					</article>
+				{:else}
+					<p class="quiet">None under this filter.</p>
+				{/each}
+			</div>
 		{/if}
-	</Panel>
+	</section>
+	</div>
 </div>

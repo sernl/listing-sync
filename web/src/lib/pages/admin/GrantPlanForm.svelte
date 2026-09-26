@@ -2,6 +2,7 @@
 	import { createMutation } from '@tanstack/svelte-query';
 	import { ApiFailure, api } from '$lib/api';
 	import Button from '$lib/Button.svelte';
+	import Explain from '$lib/Explain.svelte';
 	import Field from '$lib/Field.svelte';
 	import { PLANS } from '$lib/generated/plans';
 	import type { Plan } from '$lib/generated/vocab';
@@ -14,9 +15,12 @@
 	// two forms to keep in step with what the server requires.
 	let {
 		org,
+		current,
 		onGranted
 	}: {
 		org: string;
+		/** The plan in force, marked on its tile. */
+		current?: Plan;
 		/** Re-read whatever the host draws from. The server answers the whole
 		 *  org detail back, but each host renders a different part of it, so
 		 *  the host invalidates rather than this taking the answer apart. */
@@ -93,62 +97,80 @@
 				failure instanceof ApiFailure ? failure.message : 'The balance was not changed.'
 			)
 	}));
+
+	/** What a plan gives in moves, the figure an operator is choosing on. */
+	function allowance(plan: (typeof PLANS)[number]): string {
+		const { moves_per_month: monthly, free_moves_lifetime: once } = plan.capabilities;
+		return monthly > 0 ? `${monthly} moves a month` : `${once} moves once`;
+	}
 </script>
 
 <div class="op-grant">
-	<p class="foot-note">
-		This sets an operator grant under your operator account. It does not touch Stripe, so an
-		account that also pays keeps whichever grant is stronger.
-	</p>
-	<Field label="Plan" id={`grant-plan-${org}`}>
-		<select id={`grant-plan-${org}`} bind:value={chosen}>
-			{#each PLANS as row (row.id)}
-				<option value={row.id}>{row.name}{row.sold ? '' : ' (not sold)'}</option>
-			{/each}
-		</select>
-	</Field>
-	<Field
-		label="Expires"
-		id={`grant-expiry-${org}`}
-		hint="Midnight UTC on this day. Leave empty for a grant that does not lapse."
-	>
-		<input id={`grant-expiry-${org}`} type="date" bind:value={expiry} />
-	</Field>
-	<Field label="Reason" id={`grant-reason-${org}`} required>
-		<input
-			id={`grant-reason-${org}`}
-			type="text"
-			bind:value={why}
-			placeholder="Why this account gets this plan"
-		/>
-	</Field>
-	<div class="actions">
+	<div class="flow-choice" role="radiogroup" aria-label="Plan">
+		{#each PLANS as row (row.id)}
+			<button
+				type="button"
+				role="radio"
+				aria-checked={chosen === row.id}
+				onclick={() => (chosen = row.id)}
+			>
+				{row.name}
+				<span class="sub">
+					{allowance(row)}{row.sold ? '' : ' · not sold'}{row.id === current ? ' · current' : ''}
+				</span>
+			</button>
+		{/each}
+	</div>
+	<div class="op-grant-fields">
+		<Field label="Expires" id={`grant-expiry-${org}`} hint="Empty never lapses.">
+			<input id={`grant-expiry-${org}`} type="date" bind:value={expiry} />
+		</Field>
+		<Field label="Reason" id={`grant-reason-${org}`} required>
+			<input
+				id={`grant-reason-${org}`}
+				type="text"
+				bind:value={why}
+				placeholder="Why this account gets this plan"
+			/>
+		</Field>
+	</div>
+	<div class="op-grant-foot">
 		<Button
 			tier="primary"
+			icon="check"
 			disabled={formRefusal !== null || granting.isPending}
 			reason={formRefusal ?? (granting.isPending ? 'Setting the plan.' : undefined)}
 			onclick={() => granting.mutate()}
 		>
-			{granting.isPending ? 'Setting…' : 'Set plan'}
+			{granting.isPending ? 'Applying…' : 'Apply plan'}
 		</Button>
+		<Explain title="What applying a plan does" label="">
+			<p>
+				This writes an operator grant under your operator account. It does not touch the billing
+				provider, so an account that also pays keeps whichever grant is stronger.
+			</p>
+			<p>The expiry is midnight UTC on the day you pick.</p>
+		</Explain>
 	</div>
 
 	<hr />
 
-	<p class="foot-note">Give this account moves to spend, or take back moves credited twice.</p>
-	<Field label="Moves" id={`credit-moves-${org}`} hint="Negative takes moves back.">
-		<input id={`credit-moves-${org}`} type="number" step="1" bind:value={delta} />
-	</Field>
-	<Field label="Reason" id={`credit-reason-${org}`} required>
-		<input
-			id={`credit-reason-${org}`}
-			type="text"
-			bind:value={creditWhy}
-			placeholder="Why this balance is being changed"
-		/>
-	</Field>
-	<div class="actions">
+	<div class="op-grant-fields">
+		<Field label="Moves" id={`credit-moves-${org}`} hint="Negative takes moves back.">
+			<input id={`credit-moves-${org}`} type="number" step="1" bind:value={delta} />
+		</Field>
+		<Field label="Reason" id={`credit-reason-${org}`} required>
+			<input
+				id={`credit-reason-${org}`}
+				type="text"
+				bind:value={creditWhy}
+				placeholder="Why this balance is being changed"
+			/>
+		</Field>
+	</div>
+	<div class="flow-actions">
 		<Button
+			icon="gift"
 			disabled={creditRefusal !== null || crediting.isPending}
 			reason={creditRefusal ?? (crediting.isPending ? 'Crediting moves.' : undefined)}
 			onclick={() => crediting.mutate()}
