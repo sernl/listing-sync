@@ -211,3 +211,29 @@
 	font-size: 13px;
 	margin: 0;
 }
+
+/* Four figures in two pairs on a phone, rather than four screen-tall cards. */
+@media (max-width: 620px) {
+	.an-stats.cards {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: var(--s-3);
+	}
+
+	.an-stats .stat {
+		padding: 16px 14px 14px;
+	}
+
+	.an-stats .stat .n {
+		font-size: 26px;
+	}
+
+	.an-stats .stat .tag {
+		display: none;
+	}
+}
+
+/* The resource column keeps a readable width; the table scrolls inside its
+   own frame rather than wrapping a title one syllable per line. */
+.an-table td:first-child {
+	min-width: 14rem;
+}

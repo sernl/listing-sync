@@ -612,7 +612,7 @@
 				<div class="flow-cols">
 					<div class="flow-card">
 						<div class="flow-card-head">
-							<h3 class="flow-label"><Icon name="layout-template" size={15} /> Template</h3>
+							<h3 class="flow-label coll-more-title"><Icon name="layout-template" size={15} /> Template</h3>
 						</div>
 						<p class="coll-card-said">Fill every resource here from one template.</p>
 						<div class="flow-actions">
@@ -628,7 +628,7 @@
 
 					<div class="flow-card">
 						<div class="flow-card-head">
-							<h3 class="flow-label"><Icon name="tag" size={15} /> Labels</h3>
+							<h3 class="flow-label coll-more-title"><Icon name="tag" size={15} /> Labels</h3>
 						</div>
 						<Field label="Add labels" id="collection-labels" hint="Separate labels with commas.">
 							<input
@@ -662,7 +662,7 @@
 
 					<div class="flow-card">
 						<div class="flow-card-head">
-							<h3 class="flow-label"><Icon name="file-down" size={15} /> Spreadsheet</h3>
+							<h3 class="flow-label coll-more-title"><Icon name="file-down" size={15} /> Spreadsheet</h3>
 							<Explain title="What the spreadsheet holds" label="">
 								<p>One row per resource in this collection, with each marketplace’s status, price and link.</p>
 								<p>Resource details only, not your files or marketplace logins.</p>

@@ -497,7 +497,7 @@
 								     routes answer 404 for one. No menu rather than an empty
 								     one. -->
 								{#if !row.system}
-									<Menu label="Actions for {row.name}" bind:open={menus[row.name]} align="end">
+									<Menu label="Actions for {row.name}" bind:open={() => menus[row.name] ?? false, (value) => (menus[row.name] = value)} align="end">
 										{#snippet trigger()}
 											<button
 												class="lb-kebab"

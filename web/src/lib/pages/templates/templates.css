@@ -369,3 +369,9 @@
 	gap: 4px;
 	margin-left: auto;
 }
+
+/* The preview keeps a readable resource column and scrolls inside its frame
+   on a phone rather than wrapping each title a syllable per line. */
+.tpl-page .flow-table td:first-child {
+	min-width: 12rem;
+}

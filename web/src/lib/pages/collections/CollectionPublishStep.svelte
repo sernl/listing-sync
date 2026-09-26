@@ -206,7 +206,7 @@
 		{:else}
 			<p class="coll-tally">{countsLine(plan.counts)}</p>
 			<div class="flow-table-wrap">
-				<table class="flow-table">
+				<table class="flow-table coll-plan">
 					<thead>
 						<tr><th>Resource</th><th>Result</th><th>Why</th></tr>
 					</thead>

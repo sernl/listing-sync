@@ -727,11 +727,11 @@
 
 		{#if composing || chosen !== null}
 			<FlowDiagram
-				from={{ icon: 'layout-template', label: setsName }}
+				from={{ icon: 'layout-template', label: 'Template' }}
 				to={[{ icon: 'layout-list', label: 'Your resource' }]}
 				rule={setsFields.length === 0
 					? null
-					: `fills ${setsFields.length} ${setsFields.length === 1 ? 'field' : 'fields'}`}
+					: `fills ${setsFields.length}`}
 				empty="fills nothing yet"
 				pairs={setsFields.length === 0 ? [] : [{ from: [setsName], to: setsFields }]}
 				label="{setsName} fills {setsFields.length === 0 ? 'nothing yet' : setsFields.join(', ')}"

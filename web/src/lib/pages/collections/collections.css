@@ -332,3 +332,16 @@
 	color: var(--muted);
 	font-size: 13px;
 }
+
+.collections-page .coll-more-title {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--s-2);
+	font-size: 14px;
+}
+
+/* A readable resource column; the table scrolls inside its frame on a phone. */
+.collections-page .coll-table td:nth-child(2),
+.collections-page .coll-plan td:first-child {
+	min-width: 12rem;
+}

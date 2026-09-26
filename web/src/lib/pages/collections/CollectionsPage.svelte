@@ -285,7 +285,7 @@
 										{/each}
 									</span>
 									<span class="coll-card-when">{agoLabel(collection.updated_at, Date.now())}</span>
-									<Menu label="Actions for {collection.name}" bind:open={menus[collection.id]}>
+									<Menu label="Actions for {collection.name}" bind:open={() => menus[collection.id] ?? false, (value) => (menus[collection.id] = value)}>
 										{#snippet trigger()}
 											<button
 												class="coll-kebab"

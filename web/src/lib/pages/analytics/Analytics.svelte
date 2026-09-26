@@ -12,7 +12,6 @@
 	import { agoLabel } from '$lib/elapsed';
 	import Explain from '$lib/Explain.svelte';
 	import Field from '$lib/Field.svelte';
-	import type { IconName } from '$lib/icons';
 	import FlowDiagram from '$lib/FlowDiagram.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
@@ -44,11 +43,7 @@
 
 	const clock = ticker();
 
-	const FIGURE_ICON: Partial<Record<string, IconName>> = {
-		sales_count: 'shopping-bag',
-		resource_views: 'eye',
-		earnings: 'credit-card'
-	};
+
 
 	let label = $state<string | null>(null);
 
@@ -106,29 +101,31 @@
 		})
 	);
 
-	/** One panel per shop. */
+	/** One panel per shop, the ones that report figures first. */
 	const shops = $derived(
-		SCOPES.filter((entry) => entry.mark !== null).map((entry) => {
-			const scope: ScopeId = entry.id;
-			const standing = standings(bindings, scope);
-			const reports = scopeReports(scope);
-			return {
-				scope,
-				inventory: entry.mark!,
-				reports,
-				tracked: counts[scope],
-				standing,
-				figures: figures(shown, scope),
-				chart: chartView({
+		SCOPES.filter((entry) => entry.mark !== null)
+			.sort((a, b) => Number(scopeReports(b.id)) - Number(scopeReports(a.id)))
+			.map((entry) => {
+				const scope: ScopeId = entry.id;
+				const standing = standings(bindings, scope);
+				const reports = scopeReports(scope);
+				return {
 					scope,
-					rows: resourceRows(shown, titles, scope),
+					inventory: entry.mark!,
+					reports,
+					tracked: counts[scope],
 					standing,
-					limit: TOP,
-					summary: figuresRead,
-					catalogue: catalogueRead
-				})
-			};
-		})
+					figures: figures(shown, scope),
+					chart: chartView({
+						scope,
+						rows: resourceRows(shown, titles, scope),
+						standing,
+						limit: TOP,
+						summary: figuresRead,
+						catalogue: catalogueRead
+					})
+				};
+			})
 	);
 
 	const groups = $derived(groupPortfolioRows(PORTFOLIO_ROWS));
@@ -213,12 +210,11 @@
 				<section class="flow-card an-shop" aria-label="{shop.inventory} figures">
 					<FlowDiagram
 						from={{ inventory: shop.inventory }}
-						to={shop.reports
-							? METRIC_COLUMNS.map((column) => ({
-									icon: FIGURE_ICON[column.key] ?? 'chart-line',
-									label: plainWord(column.key, column.heading)
-								}))
-							: [{ icon: 'layout-list', label: 'Your count' }]}
+						to={[
+							shop.reports
+								? { icon: 'chart-line', label: 'Figures' }
+								: { icon: 'layout-list', label: 'Your count' }
+						]}
 						rule={shop.reports ? 'reports' : 'shares nothing'}
 						label={shop.reports
 							? `${shop.inventory} reports sold, views and earned`
