@@ -553,7 +553,7 @@ async fn a_resource_imported_without_a_thumbnail_gains_one_on_the_next_read(pool
     );
     assert_eq!(
         row.skip_reason.as_deref(),
-        Some("same as Fractions pack, whose thumbnail this read supplied"),
+        Some("same as Fractions pack; this import added its thumbnail"),
         "and the seller is told the one thing that changed"
     );
     assert_eq!(
@@ -753,7 +753,7 @@ async fn a_generated_card_gives_way_to_a_picture_and_a_picture_never_does(pool: 
             .iter()
             .find(|item| item.locator == LOCATOR)
             .and_then(|item| item.skip_reason.as_deref()),
-        Some("same as Fractions pack, whose thumbnail this read supplied"),
+        Some("same as Fractions pack; this import added its thumbnail"),
         "the resource is bound onto rather than created twice, and the repair is said out loud"
     );
     assert_eq!(
