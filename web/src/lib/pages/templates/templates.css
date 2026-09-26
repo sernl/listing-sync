@@ -75,42 +75,6 @@
 	margin-bottom: 2px;
 }
 
-.tpl-stack {
-	display: flex;
-	flex-direction: column;
-	gap: 16px;
-	margin-bottom: 16px;
-}
-
-.tpl-choices {
-	border: 0;
-	margin: 0;
-	padding: 0;
-}
-
-.tpl-choices legend {
-	padding: 0;
-	margin-bottom: 6px;
-	font-size: 13px;
-	font-weight: 600;
-	color: var(--text);
-}
-
-.tpl-choices .picks {
-	display: flex;
-	align-items: center;
-	gap: 20px;
-	flex-wrap: wrap;
-}
-
-.tpl-choices label {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	font-size: 14px;
-	min-height: 28px;
-}
-
 .tpl-absent {
 	display: flex;
 	flex-direction: column;
@@ -139,85 +103,7 @@
 .tpl-refusal {
 	color: var(--bad-ink);
 	font-size: 13px;
-	margin: 12px 0 0;
-}
-
-.tpl-actions {
-	display: flex;
-	align-items: center;
-	gap: 12px;
-	flex-wrap: wrap;
-	margin-top: 16px;
-}
-
-.tpl-group {
-	margin-top: 14px;
-}
-
-.tpl-group + .tpl-group {
-	margin-top: 20px;
-}
-
-.tpl-group h3 {
-	margin: 0 0 4px;
-	font-size: 10.5px;
-	font-weight: 600;
-	text-transform: uppercase;
-	letter-spacing: 0.08em;
-	color: var(--muted);
-}
-
-/* Mobile first: a stacked row, so the two trailing controls are a full-width
-   action row rather than two targets squeezed beside the title. */
-.tpl-row {
-	display: flex;
-	flex-direction: column;
-	align-items: stretch;
-	gap: 10px;
-	padding: 12px 0;
-	min-width: 0;
-}
-
-/* The separator belongs between two rows, not above the first. Keyed on the
-   pair rather than on `:first-of-type`, which counts every preceding element
-   of the same tag: `Panel` emits its heading in a `div`, so the first row of
-   an ungrouped list is the second `div` and would draw a rule under the
-   card's title. */
-.tpl-row + .tpl-row {
-	border-top: 1px solid var(--line);
-}
-
-.tpl-row .who {
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-	min-width: 0;
-	flex: 1 1 auto;
-}
-
-.tpl-row .t {
-	font-size: 15px;
-	font-weight: 600;
-	overflow-wrap: anywhere;
-}
-
-.tpl-row .meta {
-	font-size: 13px;
-	color: var(--muted);
-	overflow-wrap: anywhere;
-}
-
-.tpl-row-acts {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	width: 100%;
-}
-
-.tpl-row-acts .btn {
-	flex: 1 1 0;
-	justify-content: center;
-	min-height: 40px;
+	margin: 0;
 }
 
 .tpl-none {
@@ -273,19 +159,213 @@
 	color: var(--bad-ink);
 }
 
-@media (min-width: 721px) {
-	.tpl-row {
-		flex-direction: row;
-		align-items: center;
-		gap: 16px;
-	}
+/* --- the guided flow ----------------------------------------------------- */
 
-	.tpl-row-acts {
-		width: auto;
-	}
+.tpl-page .flow {
+	margin-top: var(--s-5);
+}
 
-	.tpl-row-acts .btn {
-		flex: 0 0 auto;
-		min-height: 0;
-	}
+.tpl-page .stepper {
+	margin-top: var(--s-5);
+}
+
+/* A picked template chip, drawn as the flow's other chosen tiles are. */
+.tpl-pick {
+	cursor: pointer;
+	font: inherit;
+	font-size: 13.5px;
+}
+
+.tpl-pick:hover:not(:disabled) {
+	border-color: var(--lavender);
+}
+
+.tpl-pick[aria-checked='true'] {
+	border-color: var(--accent);
+	background: var(--accent-soft);
+	box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.tpl-pick:disabled {
+	opacity: 0.55;
+	cursor: not-allowed;
+}
+
+.tpl-pick:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.tpl-pick strong {
+	color: var(--additive);
+}
+
+.tpl-pick-new {
+	border-style: dashed;
+	color: var(--additive);
+	font-weight: 600;
+}
+
+.tpl-editor {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-4);
+	padding-top: var(--s-4);
+	border-top: 1px solid var(--line);
+}
+
+.tpl-editor[hidden] {
+	display: none;
+}
+
+.tpl-editor .tpl-grid {
+	margin-bottom: 0;
+}
+
+.tpl-mk-line {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--s-2);
+}
+
+/* The tick list of step 3. */
+.tpl-pick-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--s-3);
+	flex-wrap: wrap;
+}
+
+.tpl-pick-all {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--muted);
+	font-size: 13px;
+	cursor: pointer;
+}
+
+.tpl-pick-count {
+	font-size: 13px;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+
+.tpl-ticks .pick-list {
+	border: 1px solid var(--line);
+	border-radius: var(--r-field);
+	overflow-y: auto;
+	background: var(--card);
+}
+
+.tpl-ticks .pick-row {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr) auto;
+	align-items: center;
+	gap: var(--s-3);
+	padding: 10px 14px;
+	border-bottom: 1px solid var(--line);
+	font-size: 14px;
+	cursor: pointer;
+}
+
+.tpl-ticks .pick-row:last-child {
+	border-bottom: 0;
+}
+
+.tpl-ticks .pick-row:hover {
+	background: var(--hover);
+}
+
+.tpl-ticks .pick-title {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.tpl-ticks .pick-price {
+	white-space: nowrap;
+}
+
+.tpl-tally,
+.tpl-done {
+	margin: 0;
+	font-size: 13.5px;
+	font-weight: 600;
+}
+
+.tpl-done {
+	color: var(--ok-ink);
+}
+
+.tpl-why {
+	color: var(--muted);
+	font-size: 13px;
+}
+
+.tpl-verdict {
+	display: inline-block;
+	padding: 1px 8px;
+	border-radius: var(--r-pill);
+	font-size: 11px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.02em;
+	background: var(--soon-soft);
+	color: var(--muted);
+}
+
+.tpl-verdict.will_change {
+	background: var(--accent-soft);
+	color: var(--ok-ink);
+}
+
+.tpl-verdict.blocked {
+	background: var(--warn-soft);
+	color: var(--warn-ink);
+}
+
+.tpl-foot-note {
+	color: var(--muted);
+	font-size: 13px;
+}
+
+/* A saved match: your term → the marketplace's option, as term chips. */
+.tpl-matches {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-2);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.tpl-matches li {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: var(--s-2);
+	padding: var(--s-2) var(--s-3);
+	border: 1px solid var(--line);
+	border-radius: var(--r-field);
+	background: var(--card);
+}
+
+.tpl-axis {
+	min-width: 7em;
+	color: var(--muted);
+	font-size: 12px;
+	font-weight: 600;
+}
+
+.tpl-arrow {
+	color: var(--muted);
+	font-weight: 600;
+}
+
+.tpl-row-acts {
+	display: inline-flex;
+	gap: 4px;
+	margin-left: auto;
 }
