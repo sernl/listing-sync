@@ -31,7 +31,7 @@ use tam_api::{
 };
 use tam_blob_store::{BackendFlags, BlobBackend, STORE_ROOT_FLAG, STORE_S3_FLAG};
 use tam_engine::outbox::{drain, Deliverer, LoggingDeliverer};
-use tam_storage::{ImportBatchRepo, NotificationRepo, OutboxRepo, PruneRepo};
+use tam_storage::{ImportBatchRepo, NotificationRepo, OperatorRepo, OutboxRepo, PruneRepo};
 use tam_types::Timestamp;
 use tokio_util::sync::CancellationToken;
 
@@ -634,6 +634,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     OutboxRepo::new(engine.clone()),
                     notify::EmailDeliverer::new(
                         NotificationRepo::new(engine.clone()),
+                        // The application pool, because the operator marking
+                        // is readable there and not on the engine's.
+                        OperatorRepo::new(state.pool.clone()),
                         notify::AuthAddresses::new(
                             &mail.auth_internal_url,
                             &mail.auth_internal_secret,

@@ -24,7 +24,7 @@
 //! the visible cost: the organisation is read through the backoffice pool
 //! before the write, so a grant cannot conjure a tenant by naming one.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -33,8 +33,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tam_limits::Plan;
 use tam_storage::{
-    BackofficeRepo, DailyCount, EntitlementRepo, Grant, GrantRecord, GrantedBy, IdentityAuditRepo,
-    ItemCounts, MoveCredit, MoveSource, NewGrant, SignupsRepo,
+    BackofficeRepo, DailyCount, EntitlementRepo, ErasureRefusal, ErasureRepo, Grant, GrantRecord, GrantedBy, IdentityAuditRepo,
+    ItemCounts, MoveCredit, MoveSource, NewGrant, OperatorRepo, SignupsRepo,
 };
 use tam_types::{FailureCode, InventoryId, MappingId, Marketplace, OrgId, Timestamp, UserId, Uuid};
 
@@ -616,6 +616,10 @@ pub struct PlatformUserView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_sign_in_at: Option<Timestamp>,
     pub created_at: Timestamp,
+    /// Whether this user holds an operator marking nobody has withdrawn. Read
+    /// on the application pool, as the marking always is: the backoffice role
+    /// is granted nothing on `platform_operator`.
+    pub operator: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -660,6 +664,14 @@ pub(crate) async fn list_users(
         .unwrap_or_default()
         .into_iter()
         .collect();
+    let operators: HashSet<UserId> = OperatorRepo::new(state.pool.clone())
+        .list()
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+        .into_iter()
+        .filter(|record| record.revoked_at.is_none())
+        .map(|record| record.user)
+        .collect();
     Ok(Json(UsersView {
         users: users
             .into_iter()
@@ -677,9 +689,101 @@ pub(crate) async fn list_users(
                 },
                 plan: user.plan,
                 created_at: user.created_at,
+                operator: operators.contains(&user.user),
             })
             .collect(),
     }))
+}
+
+/// What a deletion removed, for the console's confirmation.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DeletedUserView {
+    pub user: UserId,
+    pub organisation: UserOrgView,
+}
+
+/// The operator deletes a seller: their platform user, and the organisation
+/// that was theirs alone, with everything in it.
+///
+/// Keyed on the identity subject because that is what the console's user
+/// list holds. The identity account itself is the identity service's to
+/// delete (better-auth's admin `remove-user`, which records `user_removed` in
+/// `auth.auth_event`); the console calls this first, so a refusal here stops
+/// both halves.
+///
+/// Refused with 409 and a `refusal` detail — `operator`, `shared_organisation`
+/// or `live_subscription` — for the reasons [`tam_storage::erasure`] gives,
+/// each worded as what the operator does next. A subject with no platform
+/// user is 404: there is nothing on this side to delete, and the console
+/// goes straight to the identity half.
+///
+/// Through the application pool with the organisation pinned, as every
+/// write on this surface is: the backoffice role holds SELECT and nothing
+/// else.
+pub(crate) async fn delete_user(
+    State(state): State<AppState>,
+    operator: OperatorContext,
+    Path((_version, subject)): Path<(String, String)>,
+) -> Result<Json<DeletedUserView>, APIError> {
+    let subject = parse_id(&subject)?;
+    let outcome = ErasureRepo::new(state.pool.clone())
+        .erase_account(subject)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    match outcome {
+        Ok(erased) => {
+            eprintln!(
+                "tam-api: operator {} deleted user {} and organisation {} ({} rows)",
+                operator.user.0.to_hyphenated(),
+                erased.user.0.to_hyphenated(),
+                erased.org.0.to_hyphenated(),
+                erased.rows,
+            );
+            Ok(Json(DeletedUserView {
+                user: erased.user,
+                organisation: UserOrgView {
+                    org: erased.org,
+                    name: erased.org_name,
+                    slug: None,
+                },
+            }))
+        }
+        Err(refusal) => Err(erasure_refused(&refusal)),
+    }
+}
+
+fn erasure_refused(refusal: &ErasureRefusal) -> APIError {
+    let (message, detail) = match refusal {
+        ErasureRefusal::NoPlatformUser => {
+            return missing("no platform user has that identity; there is nothing here to delete")
+        }
+        ErasureRefusal::ActiveOperator => (
+            "This person is an operator. Withdraw the marking with tam-admin on the server first."
+                .to_owned(),
+            serde_json::json!({ "refusal": "operator" }),
+        ),
+        ErasureRefusal::SharedOrganisation { other_members } => (
+            format!(
+                "Their organisation has {other_members} other {}, and deleting it would delete \
+                 their work too. Nothing was deleted.",
+                if *other_members == 1 { "member" } else { "members" }
+            ),
+            serde_json::json!({ "refusal": "shared_organisation", "other_members": other_members }),
+        ),
+        ErasureRefusal::LiveSubscription { status } => (
+            format!(
+                "Their subscription is still {status} at Stripe. Cancel it there first, \
+                 then delete the account."
+            ),
+            serde_json::json!({ "refusal": "live_subscription", "status": status }),
+        ),
+    };
+    APIError::new(
+        StatusCode::CONFLICT,
+        APIErrorEntry::new(&message)
+            .kind(APIErrorKind::Validation)
+            .detail(detail),
+    )
 }
 
 // --------------------------------------------------------------- sync health

@@ -20,8 +20,10 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tam_api::marketplace_requests::{MarketplaceRequestView, MarketplaceRequestsPage};
 use tam_api::{router, APIError, APIErrorCode, APIErrorKind, AppState, Config, SESSION_COOKIE};
-use tam_storage::{OperatorRepo, SessionRepo, SessionToken, REQUESTS_PER_ORG_MAX};
-use tam_types::{OrgId, Timestamp, UserId, Uuid};
+use tam_storage::{
+    OperatorRepo, SessionRepo, SessionToken, MARKETPLACE_REQUESTED_TOPIC, REQUESTS_PER_ORG_MAX,
+};
+use tam_types::{MarketplaceRequestedNotice, OrgId, Timestamp, UserId, Uuid};
 use tower::ServiceExt;
 
 const ORG_A: OrgId = OrgId(Uuid([0xAA; 16]));
@@ -303,6 +305,94 @@ async fn each_tenant_writes_its_own_request_and_the_operator_reads_both(pool: Pg
         ),
         "the operator reads every tenant's requests with the person to answer \
          at, the oldest is last, and a page that did not fill offers no next one"
+    );
+}
+
+/// Every outbox message one tenant's pin sees, oldest first.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn outbox_under_pin(pool: &PgPool, org: OrgId) -> Vec<(String, serde_json::Value)> {
+    let mut tx = pool.begin().await.expect("the read transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(org.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pins");
+    let rows: Vec<(String, serde_json::Value)> =
+        sqlx::query_as("SELECT topic, payload FROM outbox_message ORDER BY created_at, id")
+            .fetch_all(&mut *tx)
+            .await
+            .expect("the pinned read runs");
+    tx.commit().await.expect("the read transaction commits");
+    rows
+}
+
+/// The operators hear about a request in the same transaction that stores it:
+/// one message on the request topic carrying exactly who asked, from where,
+/// for what and why — and a refused request, which stores nothing, tells
+/// nobody.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_stored_request_enqueues_one_operator_mail_and_a_refused_one_none(pool: PgPool) {
+    provision(&pool).await;
+    let subject = Uuid([0x5A; 16]);
+    sqlx::query("UPDATE app_user SET auth_subject = $1 WHERE id = $2")
+        .bind(uuid::Uuid::from_bytes(subject.0))
+        .bind(uuid::Uuid::from_bytes(USER_A.0 .0))
+        .execute(&pool)
+        .await
+        .expect("the requester has an identity-service subject");
+
+    let body = request_body(
+        "  Amped Up Learning  ",
+        "https://ampeduplearning.com/shop",
+        "  Science units, mostly middle school.  ",
+    );
+    let created = call(
+        state(pool.clone(), None),
+        Method::POST,
+        "/v1/marketplace-requests",
+        Some(&TOKEN_A),
+        Some(body.clone()),
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::CREATED);
+
+    let expected = serde_json::to_value(MarketplaceRequestedNotice {
+        requester_subject: Some(subject),
+        org: ORG_A,
+        org_name: "org-a".to_owned(),
+        marketplace_name: "Amped Up Learning".to_owned(),
+        note: "Science units, mostly middle school.".to_owned(),
+    })
+    .expect("a notice serialises");
+    assert_eq!(
+        (
+            names_under_pin(&pool, ORG_A).await,
+            outbox_under_pin(&pool, ORG_A).await
+        ),
+        (
+            vec!["Amped Up Learning".to_owned()],
+            vec![(MARKETPLACE_REQUESTED_TOPIC.to_owned(), expected.clone())]
+        ),
+        "the row is stored beside exactly one message, whose payload is the \
+         trimmed request and nothing else: no address, no web address"
+    );
+
+    let again = call(
+        state(pool.clone(), None),
+        Method::POST,
+        "/v1/marketplace-requests",
+        Some(&TOKEN_A),
+        Some(body),
+    )
+    .await;
+    assert_eq!(again.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        outbox_under_pin(&pool, ORG_A).await,
+        vec![(MARKETPLACE_REQUESTED_TOPIC.to_owned(), expected)],
+        "a request refused as already asked tells the operators nothing new"
     );
 }
 

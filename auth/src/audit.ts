@@ -13,7 +13,8 @@ export type AuthEventName =
   | 'password_reset_requested'
   | 'password_reset_completed'
   | 'user_impersonated'
-  | 'user_impersonation_stopped';
+  | 'user_impersonation_stopped'
+  | 'user_removed';
 
 /**
  * One row of the identity audit trail.
@@ -25,8 +26,9 @@ export type AuthEventName =
  * boundary would otherwise have kept from it.
  *
  * `userId` is the actor throughout. `targetUserId` is the party the act was
- * performed upon, which only the impersonation pair has; everywhere else the
- * actor is the subject and it stays absent.
+ * performed upon, which only the impersonation pair and an administrator's
+ * removal of an account have; everywhere else the actor is the subject and it
+ * stays absent.
  */
 export interface AuthEvent {
   readonly event: AuthEventName;

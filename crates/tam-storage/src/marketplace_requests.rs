@@ -14,11 +14,16 @@
 //! Nothing reads these rows to decide anything. Which marketplaces exist is
 //! the closed `Marketplace` enum's answer; this is a message to a human.
 
-use sqlx::PgPool;
-use tam_types::{OrgId, Timestamp, UserId, Uuid};
+use sqlx::{PgPool, Postgres, Transaction};
+use tam_types::{MarketplaceRequestedNotice, OrgId, Timestamp, UserId, Uuid};
 
 use crate::codec::{timestamp_from_db, timestamp_to_db, uuid_from_db, uuid_to_db};
+use crate::jobs::{NewOutboxMessage, OutboxRepo};
 use crate::{pin_org, StorageError};
+
+/// The topic the operators' mail about a new request is drained from, beside
+/// [`crate::JOB_SETTLED_TOPIC`] and in its `email.` family.
+pub const MARKETPLACE_REQUESTED_TOPIC: &str = "email.marketplace_requested";
 
 /// The most rows one operator page may carry, whatever it asks for. A ceiling
 /// on this answer's own size rather than a page size: the caller chooses the
@@ -118,6 +123,12 @@ impl MarketplaceRequestRepo {
     /// bounds the flood it exists to bound, because a caller repeating the
     /// race has to win it every time to gain a row.
     ///
+    /// The operators' mail is an outbox message on
+    /// [`MARKETPLACE_REQUESTED_TOPIC`] written in this same transaction, so a
+    /// stored request and the mail about it commit together or not at all. A
+    /// refused write enqueues nothing: a seller told they have already asked
+    /// has not asked again.
+    ///
     /// The answer is the row as stored rather than as sent, because the API
     /// trims what a seller typed and a client echoing its own request would
     /// render values this row does not hold.
@@ -158,6 +169,7 @@ impl MarketplaceRequestRepo {
         )
         .fetch_one(&mut *tx)
         .await?;
+        enqueue_notice(&mut tx, org, request).await?;
         tx.commit().await?;
         Ok(MarketplaceRequestWrite::Recorded(
             MarketplaceRequestRecord {
@@ -172,6 +184,56 @@ impl MarketplaceRequestRepo {
             },
         ))
     }
+}
+
+/// The operators' mail about one new request, as an outbox message.
+///
+/// The organisation's name and the requester's subject are read here rather
+/// than at delivery, so the mail states who asked as they were when they
+/// asked, and so the drainer needs no read on either table. Both are global
+/// tables `tam_app` reads without a pin. The dedupe key is the request's own
+/// identifier: one request, one message, whatever retries the insert.
+async fn enqueue_notice(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    request: &NewMarketplaceRequest<'_>,
+) -> Result<(), StorageError> {
+    let org_name = sqlx::query_scalar!(
+        "SELECT name FROM organisation WHERE id = $1",
+        uuid_to_db(org.0),
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    let requester_subject = sqlx::query_scalar!(
+        "SELECT auth_subject FROM app_user WHERE id = $1",
+        uuid_to_db(request.requested_by.0),
+    )
+    .fetch_optional(&mut **tx)
+    .await?
+    .flatten()
+    .map(uuid_from_db);
+    let notice = MarketplaceRequestedNotice {
+        requester_subject,
+        org,
+        org_name,
+        marketplace_name: request.name.to_owned(),
+        note: request.reason.to_owned(),
+    };
+    let payload = serde_json::to_value(&notice).map_err(|error| StorageError::Inconsistent {
+        reason: format!("a marketplace-request notice must serialise: {error}"),
+    })?;
+    OutboxRepo::append(
+        tx,
+        &NewOutboxMessage {
+            org,
+            id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
+            topic: MARKETPLACE_REQUESTED_TOPIC.to_owned(),
+            dedupe_key: uuid_to_db(request.id).to_string(),
+            payload,
+            at: request.created_at,
+        },
+    )
+    .await
 }
 
 /// Every tenant's requests, for the operator surface only.

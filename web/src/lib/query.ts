@@ -134,6 +134,10 @@ export const queryKeys = {
 	adminPricing: ['admin-pricing'] as const,
 	/** The identity plane's user list, keyed by the search that produced it. */
 	identityUsers: (search: string) => ['identity-users', search] as const,
+	/** The identity accounts the impersonation trail names, read unsearched
+	 *  and wider than the users page's listing so the trail's parties resolve
+	 *  to people. Its own key: the users page's listing is bounded differently. */
+	identityDirectory: ['identity-directory'] as const,
 	/** One account's live sign-ins, as better-auth's admin plugin lists them.
 	 *  Keyed by the account, because the identity service lists sessions one
 	 *  account at a time and the page reads them only for the row an operator

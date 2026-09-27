@@ -23,6 +23,7 @@ pub mod device_library;
 pub mod discount;
 pub mod duplicates;
 pub mod entitlement;
+pub mod erasure;
 pub mod file_source;
 pub mod fingerprints;
 pub mod guide;
@@ -88,6 +89,7 @@ pub use duplicates::{
     DecidedBy, DuplicateRepo, Evidence, EvidenceUnit, MatchLayer, NewVerdict, Polarity, Verdict,
     VerdictRecord, REVERSIBLE_MS,
 };
+pub use erasure::{Erased, ErasureRefusal, ErasureRepo};
 pub use entitlement::{
     Accrual, EntitlementRepo, Grant, GrantRecord, GrantedBy, MoveBalance, MoveCredit, MoveSource,
     NewGrant, StorefrontAllowance, Usage,
@@ -155,8 +157,8 @@ pub use mapping::{
 };
 pub use marketplace_requests::{
     MarketplaceRequestBackofficeRepo, MarketplaceRequestRecord, MarketplaceRequestRepo,
-    MarketplaceRequestWrite, NewMarketplaceRequest, PAGE_LIMIT_MAX as REQUEST_PAGE_LIMIT_MAX,
-    REQUESTS_PER_ORG_MAX,
+    MarketplaceRequestWrite, NewMarketplaceRequest, MARKETPLACE_REQUESTED_TOPIC,
+    PAGE_LIMIT_MAX as REQUEST_PAGE_LIMIT_MAX, REQUESTS_PER_ORG_MAX,
 };
 pub use notifications::{
     NotificationCursor, NotificationRecord, NotificationRepo, Recipient, JOB_SETTLED_TOPIC,

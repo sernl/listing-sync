@@ -191,7 +191,8 @@ describe('the two planes joined on auth_subject', () => {
 		...(subject === undefined ? {} : { auth_subject: subject }),
 		organisation: { org: `org-${user}`, name: `Org ${user}`, slug: user },
 		plan: 'free',
-		created_at: 0
+		created_at: 0,
+		operator: false
 	});
 
 	it('attaches each app user to the account whose subject it carries', () => {
@@ -272,7 +273,8 @@ describe('the sign-in trail', () => {
 		organisation: { org: 'o', name: 'O' },
 		plan: 'free',
 		...(at === undefined ? {} : { last_sign_in_at: at }),
-		created_at: 0
+		created_at: 0,
+		operator: false
 	});
 
 	it('is visible as soon as one row carries a sign-in', () => {
