@@ -1,6 +1,6 @@
 //! Stripe's wire concerns: the webhook signature, the price map, the two
-//! secrets, and the handful of outbound calls checkout and the billing page
-//! need.
+//! secrets, the outbound calls the checkout needs, and the coupon and
+//! promotion-code calls the admin pricing page makes.
 //!
 //! The signature half is pure. Nothing in it opens a socket, reads a clock or
 //! touches a database: the caller supplies the raw bytes, the header, the
@@ -15,9 +15,9 @@
 //! re-serialised body is a different message.
 //!
 //! The client half is plain HTTP over `reqwest` rather than a vendor crate.
-//! A few calls are needed and the official Rust binding is still a release
-//! candidate; a form-encoded POST and a JSON read are less code than the
-//! dependency and no less correct.
+//! A handful of calls are needed and the official Rust binding is still a
+//! release candidate; a form-encoded POST and a JSON read are less code than
+//! the dependency and no less correct.
 
 use std::collections::BTreeMap;
 
@@ -384,6 +384,22 @@ pub struct CheckoutRequest<'a> {
     pub customer: Option<&'a str>,
     pub success_url: &'a str,
     pub cancel_url: &'a str,
+    /// The discount the session opens with. Absent, Stripe's own page offers
+    /// the promotion-code field instead: Stripe refuses a session carrying
+    /// both, so a checkout either has its discount decided or lets the seller
+    /// type one.
+    pub discount: Option<CheckoutDiscount<'a>>,
+}
+
+/// A discount a Checkout Session is opened with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckoutDiscount<'a> {
+    /// A coupon applied without the seller doing anything: a sale or a
+    /// one-off discount that is open.
+    Coupon(&'a str),
+    /// A promotion code the seller typed in the console, already resolved to
+    /// Stripe's identifier for it.
+    PromotionCode(&'a str),
 }
 
 /// A Checkout Session as this code reads it.
@@ -655,7 +671,100 @@ struct ApiRefusalBody {
     code: Option<String>,
 }
 
-/// The outbound calls checkout and the billing page need, and nothing else.
+/// Which invoices a coupon reaches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CouponDuration {
+    /// The first invoice of a subscription, or the one payment.
+    Once,
+    /// The first `n` monthly invoices of a subscription.
+    Repeating(u32),
+}
+
+/// What a coupon takes off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CouponAmount<'a> {
+    Percent(u32),
+    /// Cents, in the named currency.
+    Cents { cents: u32, currency: &'a str },
+}
+
+/// One coupon to create. `id` is ours: naming the coupon after the discount
+/// row makes a retried create collide with the first rather than mint a
+/// second coupon, and makes the Stripe dashboard say which row it belongs to.
+#[derive(Debug, Clone)]
+pub struct CouponRequest<'a> {
+    pub id: &'a str,
+    pub name: &'a str,
+    pub amount: CouponAmount<'a>,
+    pub duration: CouponDuration,
+    /// The last instant it may be redeemed. Stripe then refuses it on its own
+    /// page as well as ours.
+    pub redeem_by: Option<Timestamp>,
+    /// Stripe products it is restricted to. Empty means any.
+    pub products: &'a [String],
+}
+
+/// A coupon as this code reads it.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Coupon {
+    pub id: String,
+    /// False once redeem_by has passed, max redemptions are used up, or the
+    /// coupon was deleted.
+    #[serde(default)]
+    pub valid: bool,
+    #[serde(default)]
+    pub times_redeemed: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct CouponList {
+    data: Vec<Coupon>,
+    #[serde(default)]
+    has_more: bool,
+}
+
+/// One promotion code to create over an existing coupon.
+#[derive(Debug, Clone)]
+pub struct PromotionCodeRequest<'a> {
+    pub coupon: &'a str,
+    pub code: &'a str,
+    pub expires_at: Option<Timestamp>,
+    pub max_redemptions: Option<u32>,
+}
+
+/// A promotion code as this code reads it.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PromotionCode {
+    pub id: String,
+    #[serde(default)]
+    pub code: String,
+    #[serde(default)]
+    pub active: bool,
+    #[serde(default)]
+    pub times_redeemed: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct Price {
+    #[serde(deserialize_with = "expandable")]
+    product: Option<String>,
+}
+
+/// The API version promotion codes are created under.
+///
+/// Pinned per request rather than inherited from the account, because this
+/// is the one call whose shape the account's version changes under us: from
+/// `2025-09-30.clover` a promotion code names its coupon as
+/// `promotion[coupon]`, and before it as a top-level `coupon`. Pinning the
+/// newer version makes the request one shape whatever the dashboard is set
+/// to.
+pub const PROMOTION_CODE_API_VERSION: &str = "2025-09-30.clover";
+
+/// Coupons read per page when listing; Stripe's maximum.
+const LIST_PAGE: usize = 100;
+
+/// The outbound calls checkout, the billing page and the admin pricing page
+/// need, and nothing else.
 #[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
@@ -748,6 +857,17 @@ impl Client {
         Self::read(response).await
     }
 
+    async fn delete<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, StripeError> {
+        let response = self
+            .http
+            .delete(format!("{}{path}", self.base))
+            .bearer_auth(self.key.expose())
+            .send()
+            .await
+            .map_err(|error| StripeError::Transport(error.to_string()))?;
+        Self::read(response).await
+    }
+
     async fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, StripeError> {
         let response = self
             .http
@@ -826,6 +946,15 @@ impl Client {
             // makes one for a session that would otherwise be guest checkout.
             // Subscription mode always creates one and refuses the parameter.
             form.push(("customer_creation".to_owned(), "always".to_owned()));
+        }
+        match request.discount {
+            Some(CheckoutDiscount::Coupon(coupon)) => {
+                form.push(("discounts[0][coupon]".to_owned(), coupon.to_owned()));
+            }
+            Some(CheckoutDiscount::PromotionCode(code)) => {
+                form.push(("discounts[0][promotion_code]".to_owned(), code.to_owned()));
+            }
+            None => form.push(("allow_promotion_codes".to_owned(), "true".to_owned())),
         }
         self.post("/v1/checkout/sessions", &form).await
     }
@@ -935,6 +1064,138 @@ impl Client {
         };
         self.post(&format!("/v1/subscriptions/{}", current.id), &form)
             .await
+    }
+
+    /// Creates one coupon, answering it.
+    ///
+    /// The request carries an `Idempotency-Key` derived from the coupon's own
+    /// identifier, so a retry after a lost reply answers the coupon the first
+    /// attempt created instead of refusing a duplicate identifier.
+    pub async fn create_coupon(&self, request: &CouponRequest<'_>) -> Result<Coupon, StripeError> {
+        let mut form = vec![
+            ("id".to_owned(), request.id.to_owned()),
+            ("name".to_owned(), request.name.to_owned()),
+            ("metadata[source]".to_owned(), "teachouse-admin".to_owned()),
+        ];
+        match request.amount {
+            CouponAmount::Percent(percent) => {
+                form.push(("percent_off".to_owned(), percent.to_string()));
+            }
+            CouponAmount::Cents { cents, currency } => {
+                form.push(("amount_off".to_owned(), cents.to_string()));
+                form.push(("currency".to_owned(), currency.to_owned()));
+            }
+        }
+        match request.duration {
+            CouponDuration::Once => form.push(("duration".to_owned(), "once".to_owned())),
+            CouponDuration::Repeating(months) => {
+                form.push(("duration".to_owned(), "repeating".to_owned()));
+                form.push(("duration_in_months".to_owned(), months.to_string()));
+            }
+        }
+        if let Some(redeem_by) = request.redeem_by {
+            form.push((
+                "redeem_by".to_owned(),
+                redeem_by.0.div_euclid(MILLIS_PER_SEC).to_string(),
+            ));
+        }
+        for (index, product) in request.products.iter().enumerate() {
+            form.push((format!("applies_to[products][{index}]"), product.clone()));
+        }
+        let response = self
+            .http
+            .post(format!("{}/v1/coupons", self.base))
+            .bearer_auth(self.key.expose())
+            .header("Idempotency-Key", format!("coupon-{}", request.id))
+            .form(&form)
+            .send()
+            .await
+            .map_err(|error| StripeError::Transport(error.to_string()))?;
+        Self::read(response).await
+    }
+
+    /// Deletes one coupon, which stops any new redemption of it — on our
+    /// checkout and on Stripe's page — while subscriptions already carrying
+    /// it keep their discount. A coupon Stripe no longer has is the outcome
+    /// asked for, so its 404 is success.
+    pub async fn delete_coupon(&self, id: &str) -> Result<(), StripeError> {
+        match self
+            .delete::<serde_json::Value>(&format!("/v1/coupons/{id}"))
+            .await
+        {
+            Ok(_) | Err(StripeError::Api { status: 404, .. }) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Every coupon on the account, followed across pages.
+    pub async fn list_coupons(&self) -> Result<Vec<Coupon>, StripeError> {
+        let mut coupons = Vec::new();
+        loop {
+            let after = coupons
+                .last()
+                .map(|coupon: &Coupon| format!("&starting_after={}", coupon.id))
+                .unwrap_or_default();
+            let page: CouponList = self
+                .get(&format!("/v1/coupons?limit={LIST_PAGE}{after}"))
+                .await?;
+            let more = page.has_more && !page.data.is_empty();
+            coupons.extend(page.data);
+            if !more {
+                return Ok(coupons);
+            }
+        }
+    }
+
+    /// Creates one promotion code over an existing coupon, under the pinned
+    /// [`PROMOTION_CODE_API_VERSION`].
+    pub async fn create_promotion_code(
+        &self,
+        request: &PromotionCodeRequest<'_>,
+    ) -> Result<PromotionCode, StripeError> {
+        let mut form = vec![
+            ("promotion[type]".to_owned(), "coupon".to_owned()),
+            ("promotion[coupon]".to_owned(), request.coupon.to_owned()),
+            ("code".to_owned(), request.code.to_owned()),
+        ];
+        if let Some(expires_at) = request.expires_at {
+            form.push((
+                "expires_at".to_owned(),
+                expires_at.0.div_euclid(MILLIS_PER_SEC).to_string(),
+            ));
+        }
+        if let Some(max) = request.max_redemptions {
+            form.push(("max_redemptions".to_owned(), max.to_string()));
+        }
+        let response = self
+            .http
+            .post(format!("{}/v1/promotion_codes", self.base))
+            .bearer_auth(self.key.expose())
+            .header("Stripe-Version", PROMOTION_CODE_API_VERSION)
+            .form(&form)
+            .send()
+            .await
+            .map_err(|error| StripeError::Transport(error.to_string()))?;
+        Self::read(response).await
+    }
+
+    /// Stops one promotion code being accepted. Promotion codes cannot be
+    /// deleted; `active=false` is Stripe's only way to withdraw one.
+    pub async fn deactivate_promotion_code(&self, id: &str) -> Result<PromotionCode, StripeError> {
+        self.post(
+            &format!("/v1/promotion_codes/{id}"),
+            &[("active".to_owned(), "false".to_owned())],
+        )
+        .await
+    }
+
+    /// The product one price sells, which is what a coupon is restricted by:
+    /// Stripe scopes coupons to products, never to prices.
+    pub async fn product_of_price(&self, price: &str) -> Result<String, StripeError> {
+        let price: Price = self.get(&format!("/v1/prices/{price}")).await?;
+        price
+            .product
+            .ok_or_else(|| StripeError::Malformed("a price carried no product".to_owned()))
     }
 }
 

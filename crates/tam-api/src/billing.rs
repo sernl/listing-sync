@@ -227,6 +227,11 @@ pub struct RedirectView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckoutBody {
     pub price_key: String,
+    /// A discount code the seller typed, if any. Checked here rather than
+    /// passed to Stripe as typed, so a code that does not reach this price
+    /// is refused on our page with our wording.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
 }
 
 pub(crate) async fn billing_view(
@@ -339,6 +344,8 @@ pub(crate) async fn checkout(
         .map(|state| state.provider_customer_id.as_str())
         .filter(|customer| !customer.is_empty());
 
+    let discount = crate::pricing::checkout_discount(&state, key, body.code.as_deref()).await?;
+
     let origin = origin_of(&headers);
     let org = context.org.0.to_hyphenated();
     let session = client
@@ -349,6 +356,7 @@ pub(crate) async fn checkout(
             customer,
             success_url: &format!("{origin}{CONSOLE_RETURN_PATH}?checkout=success"),
             cancel_url: &format!("{origin}{CONSOLE_RETURN_PATH}?checkout=cancel"),
+            discount: discount.as_ref().map(crate::pricing::ChosenDiscount::as_checkout),
         })
         .await
         .map_err(|error| state.internal(&error.to_string()))?;

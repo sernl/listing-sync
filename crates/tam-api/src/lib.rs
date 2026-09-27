@@ -47,6 +47,7 @@ pub mod matcher;
 pub mod migrations;
 pub mod notifications;
 pub mod openapi;
+pub mod pricing;
 pub mod org;
 pub mod product;
 pub mod profile;
@@ -875,6 +876,20 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/{version}/admin/guides/_taxonomy/{kind}/{id}",
             put(guides::update_guide_taxon),
+        )
+        // Sales, one-off discounts and discount codes. Each write creates a
+        // Stripe object before it records the row, which is why these are
+        // operator routes on the application pool and never tenant ones.
+        .route("/{version}/admin/pricing", get(pricing::admin_view))
+        .route("/{version}/admin/pricing/sales", post(pricing::create_sale))
+        .route(
+            "/{version}/admin/pricing/discounts",
+            post(pricing::create_one_off),
+        )
+        .route("/{version}/admin/pricing/codes", post(pricing::create_code))
+        .route(
+            "/{version}/admin/pricing/{id}/end",
+            post(pricing::end_discount),
         )
         .route(
             "/{version}/admin/guides/{slug}",

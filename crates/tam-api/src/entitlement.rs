@@ -324,17 +324,37 @@ pub struct PlansView {
     pub packs: Vec<Pack>,
     pub pack_above: String,
     pub ai: AiOffer,
+    /// The sale open now, which every plan's checkout applies by itself.
+    /// Absent outside a sale, and whenever the sale could not be read: the
+    /// price list stays readable at list prices rather than failing.
+    pub sale: Option<crate::pricing::SaleView>,
 }
+
+/// How long a shared cache may keep the price list. A sale opens or closes
+/// at midnight and an operator may end one early; a minute is the most a
+/// struck price may lag either.
+const PLANS_MAX_AGE_SECS: u32 = 60;
 
 /// The price list. Unauthenticated, because the pricing page is public and a
 /// price a seller cannot read before signing up is not a price list.
-pub(crate) async fn plans_view(_version: APIVersion) -> Json<PlansView> {
-    Json(PlansView {
+pub(crate) async fn plans_view(
+    _version: APIVersion,
+    State(state): State<AppState>,
+) -> impl axum::response::IntoResponse {
+    let sale = crate::pricing::current_sale(&state, (state.wall)())
+        .await
+        .unwrap_or_else(|error| {
+            eprintln!("tam-api: the price list could not read the current sale: {error}");
+            None
+        });
+    let cache = format!("public, max-age={PLANS_MAX_AGE_SECS}");
+    ([(axum::http::header::CACHE_CONTROL, cache)], Json(PlansView {
         plans: PLANS.into_iter().map(PlanRowView::of).collect(),
         packs: PACKS.to_vec(),
         pack_above: PACK_ABOVE.to_owned(),
         ai: AI,
-    })
+        sale,
+    }))
 }
 
 // ------------------------------------------------------- GET /v1/entitlement

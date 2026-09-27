@@ -53,6 +53,7 @@ use tam_storage::{
 use tam_types::{Currency, InventoryId, Money, OrgId, PriceIntent, ProductId, Timestamp, Uuid};
 
 use crate::error::APIError;
+use crate::time::civil_from_days;
 use crate::{AppState, OrgContext};
 
 /// How many resources one turn of the page walk reads. The whole document is
@@ -462,33 +463,11 @@ fn civil_date(at: Timestamp) -> String {
     format!("{year:04}-{month:02}-{date:02}")
 }
 
-/// Hinnant's `civil_from_days`, the inverse of the `days_from_civil` the
-/// instant parser in `time.rs` reads with, exact over the range a stored timestamp
-/// can hold.
-const fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let shifted = days + 719_468;
-    let era = shifted.div_euclid(146_097);
-    let day_of_era = shifted - era * 146_097;
-    let year_of_era = (day_of_era - day_of_era.div_euclid(1_460) + day_of_era.div_euclid(36_524)
-        - day_of_era.div_euclid(146_096))
-    .div_euclid(365);
-    let year = year_of_era + era * 400;
-    let day_of_year =
-        day_of_era - (365 * year_of_era + year_of_era.div_euclid(4) - year_of_era.div_euclid(100));
-    let month_phase = (5 * day_of_year + 2).div_euclid(153);
-    let date = day_of_year - (153 * month_phase + 2).div_euclid(5) + 1;
-    let month = if month_phase < 10 {
-        month_phase + 3
-    } else {
-        month_phase - 9
-    };
-    (if month <= 2 { year + 1 } else { year }, month, date)
-}
-
 #[cfg(test)]
 mod tests {
+    use crate::time::civil_from_days;
     use super::{
-        amount, civil_date, civil_from_days, field, header_row, labels, major_units, rfc3339,
+        amount, civil_date, field, header_row, labels, major_units, rfc3339,
         standing, write_row, EXPORT_ORDER,
     };
     use tam_types::{Currency, InventoryId, Money, PriceIntent, Timestamp};

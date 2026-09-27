@@ -131,6 +131,7 @@ export const queryKeys = {
   adminImportDrain: ["admin-import-drain"] as const,
   adminDeadLetters: ["admin-dead-letters"] as const,
   adminImpersonations: ["admin-impersonations"] as const,
+  adminPricing: ["admin-pricing"] as const,
   /** The identity plane's user list, keyed by the search that produced it. */
   identityUsers: (search: string) => ["identity-users", search] as const,
   /** One account's live sign-ins, as better-auth's admin plugin lists them.

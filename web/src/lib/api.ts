@@ -44,6 +44,13 @@ import type {
   StandardsState,
   TermKind,
 } from "$lib/generated/vocab";
+import type {
+  CodeBody,
+  DiscountView,
+  PricingAdminView,
+  SaleBody,
+  TermsBody,
+} from "$lib/pages/admin/pricing";
 import type { Capabilities, PlansView } from "$lib/generated/plans";
 
 export interface APIErrorEntry {
@@ -3195,8 +3202,11 @@ export const api = {
    *  send the browser. The key is ours — `sync_monthly`, `pack_100`,
    *  `studio_yearly` — never a Stripe price id: the server owns that map, and
    *  a client that could name a Stripe price could name any Stripe price. */
-  billingCheckout: (priceKey: PriceKey) =>
-    post<RedirectView>("/v1/billing/checkout", { price_key: priceKey }),
+  billingCheckout: (priceKey: PriceKey, code?: string) =>
+    post<RedirectView>("/v1/billing/checkout", {
+      price_key: priceKey,
+      ...(code === undefined || code.trim() === "" ? {} : { code: code.trim() }),
+    }),
 
   /** Opens the Stripe billing portal. Minted per click: an unused portal
    *  link expires in five minutes, so a cached one is already dead. */
@@ -3251,6 +3261,19 @@ export const api = {
    *  and the two are joined on `auth_subject` in the browser because no one
    *  role can read both. */
   adminUsers: () => request<AdminUsersView>("/v1/admin/users"),
+
+  /** Sales, one-off discounts and discount codes. Every create makes the
+   *  Stripe coupon (and promotion code) before it answers, so a 201 means
+   *  Stripe holds it too. */
+  adminPricing: () => request<PricingAdminView>("/v1/admin/pricing"),
+  createSale: (body: SaleBody) =>
+    post<DiscountView>("/v1/admin/pricing/sales", body),
+  createOneOff: (body: TermsBody) =>
+    post<DiscountView>("/v1/admin/pricing/discounts", body),
+  createCode: (body: CodeBody) =>
+    post<DiscountView>("/v1/admin/pricing/codes", body),
+  endDiscount: (id: string) =>
+    post<DiscountView>(`/v1/admin/pricing/${id}/end`, {}),
 
   /** Writes an operator grant on one organisation, and answers the org
    *  detail so the panel redraws from the server's own record rather than
