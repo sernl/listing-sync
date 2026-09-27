@@ -51,7 +51,6 @@ export type APIErrorCode =
   | "payload_missing"
   | "required_field_missing"
   | "quota_exceeded"
-  | "uncaptured_transition"
   | "listing_still_bound"
   | "mapping_already_exists"
   | "listing_url_unusable"
@@ -84,7 +83,6 @@ export const API_ERROR_CODES: readonly APIErrorCode[] = [
   "payload_missing",
   "required_field_missing",
   "quota_exceeded",
-  "uncaptured_transition",
   "listing_still_bound",
   "mapping_already_exists",
   "listing_url_unusable",

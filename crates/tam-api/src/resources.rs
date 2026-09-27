@@ -448,6 +448,112 @@ pub struct CoverQuery {
     pub v: Option<String>,
 }
 
+/// The bytes of one of a resource's own files, for the console to read back.
+///
+/// What makes a stored PDF usable again on a later visit: the preview maker
+/// cuts pages out of it and the viewer draws it, and neither could before,
+/// because the only copies were the one chosen in the session that uploaded it
+/// and the one the desktop app keeps. Fenced exactly as the cover is: the
+/// caller's organisation pins the product read, so another tenant's file
+/// answers as a file that does not exist; the file must be one this product
+/// holds, so a file id is not a key to the organisation's whole store.
+///
+/// The body is the whole file. The blob is sealed as one envelope and opens
+/// only whole, so there is no ranged read to offer; nothing here caps it,
+/// because every byte it serves already passed the upload's own ceiling.
+/// `private, no-store`, because it is a seller's sellable file and no cache
+/// anywhere has a reason to keep it.
+pub(crate) async fn product_file_content(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, product, file)): Path<(String, String, String)>,
+) -> Result<axum::response::Response, APIError> {
+    let product = ProductId(parse_id(&product)?);
+    let file = tam_types::FileId(parse_id(&file)?);
+    let record = ProductRepo::new(state.pool.clone())
+        .get(context.org, product)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+        .ok_or_else(|| missing("We can't find that resource."))?;
+    let held = record
+        .product
+        .payload_files()
+        .chain(record.product.cover.iter())
+        .chain(record.product.previews.iter())
+        .find(|held| held.id == file)
+        .ok_or_else(|| missing("We can't find that file."))?;
+    // A file read from a marketplace and never brought here has no bytes on
+    // this server; its copy is on the seller's device.
+    let tam_types::FileBytes::Held { hash, .. } = held.bytes else {
+        return Err(missing(
+            "This file is kept on your marketplace, not in Teachouse, so it can't be opened here.",
+        ));
+    };
+    let described = tam_storage::describe_files(&state.pool, context.org, &[file])
+        .await
+        .map_err(|error| storage_fault(&state, &error))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| missing("We can't find that file."))?;
+    let name = record
+        .file_names
+        .get(&file)
+        .cloned()
+        .unwrap_or(described.file_name);
+    let Some(blobs) = state.blobs.clone() else {
+        return Err(APIError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            APIErrorEntry::new("File storage isn't available right now. Try again later.")
+                .kind(APIErrorKind::Internal),
+        ));
+    };
+    let bytes = BlobRepo::new(state.pool.clone(), blobs.object_store(), blobs.kek.clone())
+        .get(context.org, hash)
+        .await
+        .map_err(|error| match error {
+            BlobError::Missing => {
+                state.internal("a product file row names a blob this store does not hold")
+            }
+            fault @ (BlobError::Storage(_) | BlobError::Store(_) | BlobError::Crypto(_)) => {
+                state.internal(&format!("{fault}"))
+            }
+        })?;
+    axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, described.content_type)
+        .header(header::CONTENT_DISPOSITION, inline_disposition(&name))
+        .header(header::CACHE_CONTROL, "private, no-store")
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .body(axum::body::Body::from(bytes))
+        .map_err(|error| state.internal(&format!("the file answer did not build: {error}")))
+}
+
+/// `inline` with the seller's own file name, in both spellings RFC 6266
+/// allows: an ASCII fallback with anything a quoted string cannot carry
+/// replaced, and the exact name percent-encoded as UTF-8.
+fn inline_disposition(name: &str) -> String {
+    let fallback: String = name
+        .chars()
+        .map(|c| {
+            if c == ' ' || (c.is_ascii_graphic() && c != '"' && c != '\\') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let mut encoded = String::with_capacity(name.len());
+    for byte in name.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            // Writing to a `String` cannot fail.
+            let _ = std::fmt::Write::write_fmt(&mut encoded, format_args!("%{byte:02X}"));
+        }
+    }
+    format!("inline; filename=\"{fallback}\"; filename*=UTF-8''{encoded}")
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProductView {
     pub id: ProductId,

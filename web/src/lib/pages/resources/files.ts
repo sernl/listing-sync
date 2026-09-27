@@ -284,14 +284,35 @@ function megabytes(bytes: number): string {
  * Nothing on this path contacts a marketplace, so the copy already on one
  * stands until the next send lowers a revise onto it. Said in full rather
  * than implied, because a seller who reads "removed" and does not read this
- * believes the file is gone from their storefront.
+ * believes the file is gone from their storefront. A live listing the send
+ * cannot revise is `kept`, and says so in its own sentence.
  */
-export function reachSentence(reaches: readonly InventoryId[]): string {
-	if (reaches.length === 0) {
+export function reachSentence(
+	reaches: readonly InventoryId[],
+	kept: readonly InventoryId[] = []
+): string {
+	if (reaches.length === 0 && kept.length === 0) {
 		return 'This resource isn’t on any marketplace yet, so nothing else changes.';
 	}
-	const named = reaches.map((inventory) => platformTitle(inventory)).join(', ');
-	return `The copy on ${named} stays as it is until you send again.`;
+	const said: string[] = [];
+	if (reaches.length > 0) {
+		const named = reaches.map((inventory) => platformTitle(inventory)).join(', ');
+		said.push(`The copy on ${named} stays as it is until you send again.`);
+	}
+	if (kept.length > 0) {
+		said.push(keptSentence(kept));
+	}
+	return said.join(' ');
+}
+
+/** The one sentence a change to a resource with a live listing we cannot
+ *  update says about that listing. The change itself is saved; the "why"
+ *  lives in an Explain beside it, not in this sentence. */
+export function keptSentence(kept: readonly InventoryId[]): string {
+	const named = kept.map((inventory) => platformTitle(inventory)).join(', ');
+	return kept.length === 1
+		? `${named} keeps the copy it has for now.`
+		: `${named} keep the copies they have for now.`;
 }
 
 const OWN: Record<FileVerb, string> = {
@@ -308,8 +329,6 @@ export function fileRefusal(failure: unknown, verb: FileVerb): string {
 	}
 	const said = sentenceFor(failure, OWN[verb]);
 	switch (failure.code()) {
-		case 'uncaptured_transition':
-			return 'This resource is live on a marketplace we can’t edit yet, so you can’t change its files there.';
 		case 'payload_missing':
 			return LAST_PAYLOAD;
 		case 'upload_rejected':
