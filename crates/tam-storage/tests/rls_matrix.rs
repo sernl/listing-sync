@@ -100,13 +100,16 @@ const TENANT_TABLES: [&str; 75] = [
 /// is the same kind of fact in the other direction: one document set the
 /// platform writes and every tenant reads. site_setting is the site-wide
 /// switches (maintenance, seasonal theme, banner), read by every visitor
-/// signed in or not. The rest are genuinely global:
+/// signed in or not. discount and discount_code are the platform's offers to
+/// every tenant at once, written by operators. The rest are genuinely global:
 /// reference data, the canonical taxonomy, the fleet kill switch, and sqlx's
 /// migration bookkeeping.
-const GLOBAL_TABLES: [&str; 15] = [
+const GLOBAL_TABLES: [&str; 17] = [
     "_sqlx_migrations",
     "app_user",
     "canonical_term",
+    "discount",
+    "discount_code",
     "guide",
     "guide_tag_assignment",
     "guide_taxon",
