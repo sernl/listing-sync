@@ -62,7 +62,12 @@ async fn provision(pool: &PgPool) {
     }
     let sessions = SessionRepo::new(pool.clone());
     for (org, user, email, token) in [
-        (ORG_OPERATOR, USER_OPERATOR, "operator@example.test", TOKEN_OPERATOR),
+        (
+            ORG_OPERATOR,
+            USER_OPERATOR,
+            "operator@example.test",
+            TOKEN_OPERATOR,
+        ),
         (ORG_SELLER, USER_SELLER, "seller@example.test", TOKEN_SELLER),
     ] {
         sessions
@@ -165,8 +170,19 @@ async fn only_an_operator_reads_uncached_or_writes(pool: PgPool) {
     provision(&pool).await;
     let patch = serde_json::json!({"maintenance": {"on": true, "message": null}});
     for token in [None, Some(&TOKEN_SELLER)] {
-        let read = call(state(pool.clone()), Method::GET, "/v1/admin/site", token, None).await;
-        assert_eq!(read.status, StatusCode::UNAUTHORIZED, "a non-operator cannot read");
+        let read = call(
+            state(pool.clone()),
+            Method::GET,
+            "/v1/admin/site",
+            token,
+            None,
+        )
+        .await;
+        assert_eq!(
+            read.status,
+            StatusCode::UNAUTHORIZED,
+            "a non-operator cannot read"
+        );
         let write = call(
             state(pool.clone()),
             Method::PATCH,
@@ -175,7 +191,11 @@ async fn only_an_operator_reads_uncached_or_writes(pool: PgPool) {
             Some(patch.clone()),
         )
         .await;
-        assert_eq!(write.status, StatusCode::UNAUTHORIZED, "a non-operator cannot write");
+        assert_eq!(
+            write.status,
+            StatusCode::UNAUTHORIZED,
+            "a non-operator cannot write"
+        );
     }
     let view = site(&call(state(pool.clone()), Method::GET, "/v1/site", None, None).await);
     assert!(!view.maintenance.on, "the refused writes changed nothing");
@@ -226,13 +246,22 @@ async fn an_operator_patch_changes_only_what_it_names(pool: PgPool) {
             Method::PATCH,
             "/v1/admin/site",
             Some(&TOKEN_OPERATOR),
-            Some(serde_json::json!({"maintenance": {"on": true, "message": "  Back by 3pm UTC. "}})),
+            Some(
+                serde_json::json!({"maintenance": {"on": true, "message": "  Back by 3pm UTC. "}}),
+            ),
         )
         .await,
     );
     assert!(second.maintenance.on);
-    assert_eq!(second.maintenance.message.as_deref(), Some("Back by 3pm UTC."));
-    assert_eq!(second.theme.name, ThemeName::Halloween, "an absent theme is left alone");
+    assert_eq!(
+        second.maintenance.message.as_deref(),
+        Some("Back by 3pm UTC.")
+    );
+    assert_eq!(
+        second.theme.name,
+        ThemeName::Halloween,
+        "an absent theme is left alone"
+    );
     assert!(second.banner.is_some(), "an absent banner is left alone");
 
     let third = site(
@@ -264,7 +293,10 @@ async fn a_patch_with_one_bad_field_writes_nothing(pool: PgPool) {
     .await;
     assert_eq!(answer.status, StatusCode::UNPROCESSABLE_ENTITY);
     let view = site(&call(state(pool), Method::GET, "/v1/site", None, None).await);
-    assert!(!view.maintenance.on, "the valid half was not written either");
+    assert!(
+        !view.maintenance.on,
+        "the valid half was not written either"
+    );
     assert_eq!(view.theme.name, ThemeName::None);
 }
 

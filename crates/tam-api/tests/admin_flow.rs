@@ -38,10 +38,8 @@ const NOW: Timestamp = Timestamp(5_000);
 /// Every operator route, with the organisation path already concrete. Used
 /// whole by the refusal tests, so a route added to the router and forgotten
 /// here is a gap a reviewer can see rather than one the suite hides.
-const ADMIN_PATHS: [&str; 11] = [
+const ADMIN_PATHS: [&str; 9] = [
     "/v1/admin/signups",
-    "/v1/admin/pricing",
-    "/v1/admin/site",
     "/v1/admin/orgs",
     "/v1/admin/orgs/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
     "/v1/admin/sync-health",
@@ -65,10 +63,13 @@ const ADMIN_PATHS: [&str; 11] = [
 /// loops would be testing method routing rather than the operator fence.
 /// Their own refusal is asserted by `a_seller_cannot_grant_themselves_a_plan`
 /// and `an_operator_credits_moves_once_per_reason`.
-const ADMIN_PATHS_UNCOVERED: [&str; 18] = [
+const ADMIN_PATHS_UNCOVERED: [&str; 21] = [
     "/{version}/admin/marketplace-requests",
-    // Writes: their operator fence and their own refusals are asserted in
-    // `discounts_flow`.
+    // Pricing and the site switches read the application pool, like the
+    // guides below, so they serve with no backoffice database; their
+    // operator fence is asserted in `discounts_flow` and `site_flow`.
+    "/{version}/admin/pricing",
+    "/{version}/admin/site",
     "/{version}/admin/pricing/sales",
     "/{version}/admin/pricing/discounts",
     "/{version}/admin/pricing/codes",

@@ -193,7 +193,9 @@ const MAINTENANCE_OPEN: [&str; 5] = ["_app", "login", "reset", "status", "api"];
 /// and fonts. The API and the downloads directory are never gated here.
 pub(crate) fn gated(path: &str, answer: &Answer) -> bool {
     match answer {
-        Answer::Landing(file) => file.ends_with(".html"),
+        Answer::Landing(file) => std::path::Path::new(file)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("html")),
         Answer::Console => {
             let decoded =
                 percent_decoded(path.trim_start_matches('/')).unwrap_or_else(|| path.to_owned());
@@ -216,16 +218,24 @@ pub(crate) fn with_message(page: &str, message: Option<&str>) -> String {
     let Some(message) = message else {
         return page.to_owned();
     };
-    let spliced = page.find("data-maintenance-message").and_then(|at| {
-        let open = at + page[at..].find('>')? + 1;
-        let close = open + page[open..].find("</")?;
-        Some((open, close))
-    });
-    let Some((open, close)) = spliced else {
+    // Split at the attribute, then at the tag's close, then at the element's
+    // close: three `split_once` calls, so no index ever lands inside a
+    // character.
+    let spliced = page.split_once("data-maintenance-message").and_then(
+        |(before_attribute, from_attribute)| {
+            let (tag_rest, from_open) = from_attribute.split_once('>')?;
+            let (_, from_close) = from_open.split_once("</")?;
+            Some((before_attribute, tag_rest, from_close))
+        },
+    );
+    let Some((before_attribute, tag_rest, from_close)) = spliced else {
         return page.to_owned();
     };
     let mut out = String::with_capacity(page.len() + message.len());
-    out.push_str(&page[..open]);
+    out.push_str(before_attribute);
+    out.push_str("data-maintenance-message");
+    out.push_str(tag_rest);
+    out.push('>');
     for character in message.chars() {
         match character {
             '&' => out.push_str("&amp;"),
@@ -236,7 +246,8 @@ pub(crate) fn with_message(page: &str, message: Option<&str>) -> String {
             other => out.push(other),
         }
     }
-    out.push_str(&page[close..]);
+    out.push_str("</");
+    out.push_str(from_close);
     out
 }
 
@@ -1433,8 +1444,18 @@ mod tests {
     #[test]
     fn maintenance_stands_in_for_pages_and_never_for_assets_or_sign_in() {
         let gate = |path: &str| gated(path, &route(path, built, true));
-        for path in ["/", "/pricing/", "/privacy", "/app", "/resources", "/settings/billing"] {
-            assert!(gate(path), "{path} is a page, so maintenance stands in for it");
+        for path in [
+            "/",
+            "/pricing/",
+            "/privacy",
+            "/app",
+            "/resources",
+            "/settings/billing",
+        ] {
+            assert!(
+                gate(path),
+                "{path} is a page, so maintenance stands in for it"
+            );
         }
         for path in [
             "/login",
@@ -1465,7 +1486,11 @@ mod tests {
             "<main><p class=\"back\" data-maintenance-message>Back by &lt;b&gt;3pm&lt;/b&gt; \
              &amp; &quot;soon&quot;</p><p>Status</p></main>"
         );
-        assert_eq!(with_message(page, None), page, "no message keeps the default");
+        assert_eq!(
+            with_message(page, None),
+            page,
+            "no message keeps the default"
+        );
         assert_eq!(
             with_message("<p>no marker</p>", Some("x")),
             "<p>no marker</p>",

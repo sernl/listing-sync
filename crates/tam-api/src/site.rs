@@ -104,18 +104,30 @@ pub struct SitePatch {
     pub maintenance: Option<Maintenance>,
     #[serde(default)]
     pub theme: Option<ThemeSetting>,
-    #[serde(default, deserialize_with = "present")]
-    pub banner: Option<Option<Banner>>,
+    #[serde(default, deserialize_with = "banner_patch")]
+    pub banner: BannerPatch,
 }
 
-/// A field that is present, even as null, is `Some`; `#[serde(default)]`
-/// makes an absent one `None`.
-fn present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+/// The three things a patch can say about the banner: nothing, take it
+/// down, or put this one up.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum BannerPatch {
+    #[default]
+    Keep,
+    Remove,
+    Set(Banner),
+}
+
+/// A field that is present, even as null, is a change; `#[serde(default)]`
+/// makes an absent one `Keep`.
+fn banner_patch<'de, D>(deserializer: D) -> Result<BannerPatch, D::Error>
 where
     D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
 {
-    Option::<T>::deserialize(deserializer).map(Some)
+    Ok(match Option::<Banner>::deserialize(deserializer)? {
+        None => BannerPatch::Remove,
+        Some(banner) => BannerPatch::Set(banner),
+    })
 }
 
 fn validation(message: &str) -> APIError {
@@ -241,10 +253,7 @@ fn checked_theme(theme: ThemeSetting) -> Result<ThemeSetting, APIError> {
     Ok(theme)
 }
 
-fn checked_banner(banner: Option<Banner>) -> Result<Option<Banner>, APIError> {
-    let Some(banner) = banner else {
-        return Ok(None);
-    };
+fn checked_banner(banner: &Banner) -> Result<Banner, APIError> {
     let text = banner.text.trim().to_owned();
     let href = banner.href.trim().to_owned();
     if text.is_empty() || text.chars().count() > BANNER_TEXT_MAX_CHARS {
@@ -254,13 +263,14 @@ fn checked_banner(banner: Option<Banner>) -> Result<Option<Banner>, APIError> {
     }
     // A path on this origin or an https link. Anything else -- `javascript:`
     // above all -- is refused, because the landing page renders this as a link.
-    let linkable = (href.starts_with('/') && !href.starts_with("//")) || href.starts_with("https://");
+    let linkable =
+        (href.starts_with('/') && !href.starts_with("//")) || href.starts_with("https://");
     if !linkable || href.chars().count() > BANNER_HREF_MAX_CHARS {
         return Err(validation(
             "a banner links to a path on this site or to an https address",
         ));
     }
-    Ok(Some(Banner { text, href }))
+    Ok(Banner { text, href })
 }
 
 /// `PATCH /{version}/admin/site`: change any of the three settings, answering
@@ -276,7 +286,11 @@ pub(crate) async fn update_site(
 ) -> Result<Response, APIError> {
     let maintenance = patch.maintenance.map(checked_maintenance).transpose()?;
     let theme = patch.theme.map(checked_theme).transpose()?;
-    let banner = patch.banner.map(checked_banner).transpose()?;
+    let banner = match patch.banner {
+        BannerPatch::Keep => None,
+        BannerPatch::Remove => Some(None),
+        BannerPatch::Set(banner) => Some(Some(checked_banner(&banner)?)),
+    };
     let repo = SiteSettingRepo::new(state.pool.clone());
     let now = (state.wall)();
     let encode = |value: serde_json::Result<serde_json::Value>| {
@@ -367,11 +381,7 @@ mod tests {
     /// Both ends are included, by UTC day.
     #[test]
     fn a_theme_shows_from_its_first_day_through_its_last() {
-        let october = theme(
-            ThemeName::Halloween,
-            Some("2026-10-01"),
-            Some("2026-10-31"),
-        );
+        let october = theme(ThemeName::Halloween, Some("2026-10-01"), Some("2026-10-31"));
         assert!(!theme_active(&october, day("2026-09-30")));
         assert!(theme_active(&october, day("2026-10-01")));
         assert!(theme_active(&october, day("2026-10-31")));
@@ -399,10 +409,10 @@ mod tests {
     #[test]
     fn a_banner_links_only_to_this_site_or_https() {
         let banner = |href: &str| {
-            checked_banner(Some(Banner {
+            checked_banner(&Banner {
                 text: "Sale on".to_owned(),
                 href: href.to_owned(),
-            }))
+            })
         };
         assert!(banner("/pricing/").is_ok());
         assert!(banner("https://teachouse.io/pricing/").is_ok());
@@ -413,11 +423,7 @@ mod tests {
 
     #[test]
     fn a_theme_cannot_end_before_it_starts_or_name_a_day_that_does_not_exist() {
-        let backwards = theme(
-            ThemeName::Halloween,
-            Some("2026-10-31"),
-            Some("2026-10-01"),
-        );
+        let backwards = theme(ThemeName::Halloween, Some("2026-10-31"), Some("2026-10-01"));
         assert!(checked_theme(backwards).is_err());
         let impossible = theme(ThemeName::Halloween, Some("2026-02-30"), None);
         assert!(checked_theme(impossible).is_err());
