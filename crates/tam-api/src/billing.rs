@@ -22,8 +22,7 @@
 //! second arrival a no-op. Every write below therefore lands through a
 //! `source_ref` the provider owns: the partial unique index migration 0086
 //! makes vendor-agnostic is the fence under the grants, and
-//! `EntitlementRepo::credit_moves` and `BillingRepo::record_booking` carry
-//! their own.
+//! `EntitlementRepo::credit_moves` carries its own.
 
 use std::collections::BTreeMap;
 
@@ -32,10 +31,10 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use tam_limits::{Plan, PriceKey, FOUNDING, PACKS};
+use tam_limits::{Plan, PriceKey, PACKS};
 use tam_storage::{
     Accrual, BillingRepo, EntitlementRepo, GrantedBy, MoveCredit, MoveSource, NewGrant,
-    ServiceBooking, SubscriptionState,
+    SubscriptionState,
 };
 use tam_types::{OrgId, Timestamp, Uuid};
 
@@ -93,7 +92,12 @@ const MILLIS_PER_DAY: i64 = 86_400_000;
 /// of its own. Same-origin by construction otherwise: the console posts from
 /// the page the seller is standing on, and that page's origin is the one they
 /// must come back to.
-const CONSOLE_RETURN_PATH: &str = "/settings/subscription";
+const CONSOLE_RETURN_PATH: &str = "/settings/billing";
+
+/// The Stripe statuses after which a subscription can neither renew nor be
+/// kept: it is over, and the page says when it ended rather than offering to
+/// cancel it.
+const ENDED: [&str; 2] = ["canceled", "incomplete_expired"];
 
 // -------------------------------------------------------------------- views
 
@@ -110,14 +114,17 @@ impl Cadence {
     #[must_use]
     const fn of(key: PriceKey) -> Option<Self> {
         match key {
-            PriceKey::SyncMonthly => Some(Self::Monthly),
-            PriceKey::SyncYearly | PriceKey::FoundingYearly => Some(Self::Yearly),
+            PriceKey::StarterMonthly | PriceKey::SyncMonthly | PriceKey::StudioMonthly => {
+                Some(Self::Monthly)
+            }
+            PriceKey::StarterYearly | PriceKey::SyncYearly | PriceKey::StudioYearly => {
+                Some(Self::Yearly)
+            }
             PriceKey::Pack20
             | PriceKey::Pack50
             | PriceKey::Pack100
             | PriceKey::Pack250
-            | PriceKey::Pack500
-            | PriceKey::MoveWithMe => None,
+            | PriceKey::Pack500 => None,
         }
     }
 }
@@ -151,17 +158,56 @@ pub struct BillingView {
     pub plan: Plan,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cadence: Option<Cadence>,
+    /// When the subscription next charges. Absent where it will not: no
+    /// subscription, or one the seller has cancelled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub renews_at: Option<Timestamp>,
+    /// When a cancelled subscription stops entitling. Absent while it renews,
+    /// and absent once that instant has passed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ends_at: Option<Timestamp>,
+    /// Whether the seller has cancelled a subscription that is still running,
+    /// which is the one state "Keep my plan" can undo.
+    pub cancel_at_period_end: bool,
     pub moves: MoveBalance,
-    /// Whether this tenant holds a founding-member price. It changes what
-    /// they are charged for the next two years, so it is a fact the page
-    /// states rather than infers.
-    pub founding: bool,
     /// Whether "Manage billing" will open. False where this deployment holds
     /// no Stripe key, and where the tenant has never reached checkout and so
     /// has no customer to manage.
     pub portal_available: bool,
+}
+
+/// One invoice as the billing page lists it. The links are Stripe's hosted
+/// page and PDF, which is where a seller reads or downloads the invoice; we
+/// keep no copy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvoiceView {
+    pub id: String,
+    pub created_at: Timestamp,
+    /// In the currency's minor unit, tax included.
+    pub total: i64,
+    /// ISO 4217, lower case, as Stripe writes it.
+    pub currency: String,
+    /// `open`, `paid`, `uncollectible` or `void`. Drafts are not listed.
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hosted_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pdf_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvoicesView {
+    pub invoices: Vec<InvoiceView>,
+}
+
+/// The card the subscription is charged to, or none where there is no
+/// customer yet or the payment method is not a card.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaymentMethodView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub card: Option<stripe::Card>,
 }
 
 /// Where to send the browser. One field, because a checkout and a portal
@@ -181,6 +227,11 @@ pub struct RedirectView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckoutBody {
     pub price_key: String,
+    /// A discount code the seller typed, if any. Checked here rather than
+    /// passed to Stripe as typed, so a code that does not reach this price
+    /// is refused on our page with our wording.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
 }
 
 pub(crate) async fn billing_view(
@@ -188,17 +239,24 @@ pub(crate) async fn billing_view(
     State(state): State<AppState>,
     context: OrgContext,
 ) -> Result<Json<BillingView>, APIError> {
+    view_of(&state, context.org).await.map(Json)
+}
+
+/// The billing read, shared by the page's `GET` and by the cancel and resume
+/// routes, which answer the page as it now stands.
+async fn view_of(state: &AppState, org: OrgId) -> Result<BillingView, APIError> {
     let stored = BillingRepo::new(state.pool.clone())
-        .get(context.org)
+        .get(org)
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
+    let now = (state.wall)();
     let entitlements = EntitlementRepo::new(state.pool.clone());
     let held = entitlements
-        .current(context.org, (state.wall)())
+        .current(org, now)
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
     let moves = entitlements
-        .move_balance(context.org, (state.wall)())
+        .move_balance(org, now)
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
 
@@ -206,15 +264,37 @@ pub(crate) async fn billing_view(
         .as_ref()
         .and_then(|state| state.provider_price_id.as_deref())
         .and_then(|price| state.config.stripe_price_map.key_for(price));
-    Ok(Json(BillingView {
+    let (renews_at, ends_at, cancel_at_period_end) = stored
+        .as_ref()
+        .map_or((None, None, false), |stored| term(stored, now));
+    Ok(BillingView {
         plan: held.plan,
         cadence: sold.and_then(Cadence::of),
-        renews_at: stored.as_ref().and_then(|state| state.current_period_end),
+        renews_at,
+        ends_at,
+        cancel_at_period_end,
         moves: MoveBalance::of(moves),
-        founding: sold == Some(PriceKey::FoundingYearly),
         portal_available: state.config.stripe.is_some()
             && stored.is_some_and(|state| !state.provider_customer_id.is_empty()),
-    }))
+    })
+}
+
+/// Whether the subscription renews or ends, and when: `(renews_at, ends_at,
+/// cancel_at_period_end)`. Exactly one of the two instants is present while
+/// the period runs, and neither once an ended subscription's period is past.
+fn term(
+    stored: &SubscriptionState,
+    now: Timestamp,
+) -> (Option<Timestamp>, Option<Timestamp>, bool) {
+    let end = stored.current_period_end;
+    if ENDED.contains(&stored.status.as_str()) {
+        return (None, end.filter(|end| end.0 > now.0), false);
+    }
+    if stored.cancel_at_period_end.unwrap_or(false) {
+        (None, end, true)
+    } else {
+        (end, None, false)
+    }
 }
 
 // ------------------------------------------------------------------ outbound
@@ -245,10 +325,26 @@ pub(crate) async fn checkout(
         .get(context.org)
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
+    // A second subscription beside a live one would bill the seller twice for
+    // one organisation. Changing tier is a change to the subscription they
+    // already hold, which the billing portal makes and `hold_plan` follows.
+    if key.recurring()
+        && held
+            .as_ref()
+            .is_some_and(|stored| ENTITLING.contains(&stored.status.as_str()))
+    {
+        return Err(APIError::new(
+            StatusCode::CONFLICT,
+            APIErrorEntry::new("You already have a plan. Change it from Manage billing.")
+                .kind(APIErrorKind::Validation),
+        ));
+    }
     let customer = held
         .as_ref()
         .map(|state| state.provider_customer_id.as_str())
         .filter(|customer| !customer.is_empty());
+
+    let discount = crate::pricing::checkout_discount(&state, key, body.code.as_deref()).await?;
 
     let origin = origin_of(&headers);
     let org = context.org.0.to_hyphenated();
@@ -260,6 +356,9 @@ pub(crate) async fn checkout(
             customer,
             success_url: &format!("{origin}{CONSOLE_RETURN_PATH}?checkout=success"),
             cancel_url: &format!("{origin}{CONSOLE_RETURN_PATH}?checkout=cancel"),
+            discount: discount
+                .as_ref()
+                .map(crate::pricing::ChosenDiscount::as_checkout),
         })
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
@@ -279,44 +378,231 @@ pub(crate) async fn portal(
     context: OrgContext,
     headers: HeaderMap,
 ) -> Result<Json<RedirectView>, APIError> {
+    open_portal(&state, context.org, &headers, None).await
+}
+
+/// Opens the portal straight onto "update your card", which is what the
+/// billing page's Payment row asks for. The card itself is entered on
+/// Stripe's page and never crosses this server.
+pub(crate) async fn update_payment_method(
+    _version: APIVersion,
+    State(state): State<AppState>,
+    context: OrgContext,
+    headers: HeaderMap,
+) -> Result<Json<RedirectView>, APIError> {
+    open_portal(
+        &state,
+        context.org,
+        &headers,
+        Some(stripe::PortalFlow::PaymentMethodUpdate),
+    )
+    .await
+}
+
+async fn open_portal(
+    state: &AppState,
+    org: OrgId,
+    headers: &HeaderMap,
+    flow: Option<stripe::PortalFlow>,
+) -> Result<Json<RedirectView>, APIError> {
+    let client = state.config.stripe.as_ref().ok_or_else(unconfigured)?;
+    let held = BillingRepo::new(state.pool.clone())
+        .get(org)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?;
+    let Some(customer) = customer_of(held.as_ref()) else {
+        return Err(nothing_bought());
+    };
+    let origin = origin_of(headers);
+    let url = client
+        .create_portal_session(customer, &format!("{origin}{CONSOLE_RETURN_PATH}"), flow)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?;
+    Ok(Json(RedirectView { url }))
+}
+
+/// This tenant's recent invoices, read from Stripe per request.
+///
+/// A tenant with no customer has no invoices, which is an empty list rather
+/// than a refusal: the page shows the table's empty state either way.
+pub(crate) async fn invoices(
+    _version: APIVersion,
+    State(state): State<AppState>,
+    context: OrgContext,
+) -> Result<Json<InvoicesView>, APIError> {
     let client = state.config.stripe.as_ref().ok_or_else(unconfigured)?;
     let held = BillingRepo::new(state.pool.clone())
         .get(context.org)
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
-    let Some(customer) = held
-        .as_ref()
-        .map(|state| state.provider_customer_id.as_str())
-        .filter(|customer| !customer.is_empty())
-    else {
-        return Err(APIError::new(
-            StatusCode::CONFLICT,
-            APIErrorEntry::new("You have not bought a plan yet, so there is nothing to manage.")
-                .kind(APIErrorKind::Validation),
-        ));
+    let Some(customer) = customer_of(held.as_ref()) else {
+        return Ok(Json(InvoicesView {
+            invoices: Vec::new(),
+        }));
     };
-    let origin = origin_of(&headers);
-    let url = client
-        .create_portal_session(customer, &format!("{origin}{CONSOLE_RETURN_PATH}"))
+    let listed = client
+        .list_invoices(customer)
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
-    Ok(Json(RedirectView { url }))
+    Ok(Json(InvoicesView {
+        invoices: listed.into_iter().filter_map(invoice_view).collect(),
+    }))
+}
+
+/// One Stripe invoice as the page lists it, or none for a draft: a draft is
+/// not yet a bill, has no hosted page, and may still change.
+fn invoice_view(invoice: stripe::Invoice) -> Option<InvoiceView> {
+    let status = invoice.status.clone().filter(|status| status != "draft")?;
+    Some(InvoiceView {
+        description: invoice.description().map(str::to_owned),
+        id: invoice.id,
+        created_at: at(invoice.created),
+        total: invoice.total,
+        currency: invoice.currency,
+        status,
+        hosted_url: invoice.hosted_invoice_url,
+        pdf_url: invoice.invoice_pdf,
+    })
+}
+
+/// The card this tenant's subscription is charged to: the subscription's
+/// own default where it names one, and the customer's otherwise.
+pub(crate) async fn payment_method(
+    _version: APIVersion,
+    State(state): State<AppState>,
+    context: OrgContext,
+) -> Result<Json<PaymentMethodView>, APIError> {
+    let client = state.config.stripe.as_ref().ok_or_else(unconfigured)?;
+    let held = BillingRepo::new(state.pool.clone())
+        .get(context.org)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?;
+    let Some(customer) = customer_of(held.as_ref()) else {
+        return Ok(Json(PaymentMethodView { card: None }));
+    };
+    let own = match held
+        .as_ref()
+        .map(|held| held.provider_subscription_id.as_str())
+        .filter(|subscription| !subscription.is_empty())
+    {
+        Some(subscription) => client
+            .retrieve_subscription(subscription)
+            .await
+            .map_err(|error| state.internal(&error.to_string()))?
+            .card(),
+        None => None,
+    };
+    let card = match own {
+        Some(card) => Some(card),
+        None => client
+            .customer_card(customer)
+            .await
+            .map_err(|error| state.internal(&error.to_string()))?,
+    };
+    Ok(Json(PaymentMethodView { card }))
+}
+
+/// Cancels the subscription at the close of the period already paid for.
+///
+/// Never an immediate cancellation: the seller has paid for the period, and
+/// the plan keeps entitling until it ends. Answers the billing read as it now
+/// stands, so the page can say "ends on" without a second request.
+pub(crate) async fn cancel(
+    _version: APIVersion,
+    State(state): State<AppState>,
+    context: OrgContext,
+) -> Result<Json<BillingView>, APIError> {
+    set_ending(&state, context.org, true).await.map(Json)
+}
+
+/// Undoes a cancellation while the period still runs: the subscription
+/// renews as it would have.
+pub(crate) async fn resume(
+    _version: APIVersion,
+    State(state): State<AppState>,
+    context: OrgContext,
+) -> Result<Json<BillingView>, APIError> {
+    set_ending(&state, context.org, false).await.map(Json)
+}
+
+async fn set_ending(state: &AppState, org: OrgId, ending: bool) -> Result<BillingView, APIError> {
+    let client = state.config.stripe.as_ref().ok_or_else(unconfigured)?;
+    let billing = BillingRepo::new(state.pool.clone());
+    let held = billing
+        .get(org)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?;
+    let Some(subscription) = held
+        .as_ref()
+        .map(|held| held.provider_subscription_id.as_str())
+        .filter(|subscription| !subscription.is_empty())
+    else {
+        return Err(nothing_bought());
+    };
+    let current = client
+        .retrieve_subscription(subscription)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?;
+    if current
+        .status
+        .as_deref()
+        .is_some_and(|status| ENDED.contains(&status))
+    {
+        return Err(APIError::new(
+            StatusCode::CONFLICT,
+            APIErrorEntry::new("This plan has already ended, so there is nothing to change.")
+                .kind(APIErrorKind::Validation),
+        ));
+    }
+    // Asked for what already holds: a double click, or a second tab. The
+    // answer is the same page, and Stripe is not asked twice.
+    let now_ending = if current.ending() == ending {
+        current.ending()
+    } else {
+        client
+            .update_subscription(&current, ending)
+            .await
+            .map_err(|error| state.internal(&error.to_string()))?
+            .ending()
+    };
+    let _matched: bool = billing
+        .set_cancel_at_period_end(org, subscription, now_ending, (state.wall)())
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?;
+    state.telemetry.capture(
+        org,
+        if ending {
+            "subscription_cancel_requested"
+        } else {
+            "subscription_resumed"
+        },
+        serde_json::json!({}),
+    );
+    view_of(state, org).await
+}
+
+/// The Stripe customer a stored subscription row names, where it names one.
+fn customer_of(held: Option<&SubscriptionState>) -> Option<&str> {
+    held.map(|held| held.provider_customer_id.as_str())
+        .filter(|customer| !customer.is_empty())
+}
+
+fn nothing_bought() -> APIError {
+    APIError::new(
+        StatusCode::CONFLICT,
+        APIErrorEntry::new("You have not bought a plan yet, so there is nothing to manage.")
+            .kind(APIErrorKind::Validation),
+    )
 }
 
 /// Which Checkout mode a price key needs. A recurring price refuses
 /// `payment` and a one-off price refuses `subscription`, so this is a fact
 /// about the price list rather than a preference.
 const fn mode_for(key: PriceKey) -> CheckoutMode {
-    match key {
-        PriceKey::SyncMonthly | PriceKey::SyncYearly | PriceKey::FoundingYearly => {
-            CheckoutMode::Subscription
-        }
-        PriceKey::Pack20
-        | PriceKey::Pack50
-        | PriceKey::Pack100
-        | PriceKey::Pack250
-        | PriceKey::Pack500
-        | PriceKey::MoveWithMe => CheckoutMode::Payment,
+    if key.recurring() {
+        CheckoutMode::Subscription
+    } else {
+        CheckoutMode::Payment
     }
 }
 
@@ -384,6 +670,13 @@ struct SubscriptionObject {
     /// fallback, which is what makes one reader serve both shapes.
     #[serde(default)]
     current_period_end: Option<i64>,
+    /// The seller's instruction to end at the period's close. Read with
+    /// `cancel_at`, which is how a portal cancellation arrives on newer API
+    /// versions: either one means the subscription ends rather than renews.
+    #[serde(default)]
+    cancel_at_period_end: Option<bool>,
+    #[serde(default)]
+    cancel_at: Option<i64>,
     #[serde(default)]
     metadata: BTreeMap<String, String>,
     #[serde(default)]
@@ -413,6 +706,15 @@ impl SubscriptionObject {
                 .filter_map(|item| item.current_period_end)
                 .max()
         })
+    }
+
+    /// Whether the subscription ends rather than renews, where the event
+    /// says; absent where it carries neither field.
+    fn ending(&self) -> Option<bool> {
+        match (self.cancel_at_period_end, self.cancel_at) {
+            (None, None) => None,
+            (flag, at) => Some(flag.unwrap_or(false) || at.is_some()),
+        }
     }
 
     fn price(&self) -> Option<&str> {
@@ -724,27 +1026,6 @@ async fn checkout_completed(state: &AppState, event: &Event) -> Result<StatusCod
             continue;
         };
         match key {
-            PriceKey::MoveWithMe => {
-                let booked = BillingRepo::new(state.pool.clone())
-                    .record_booking(
-                        org,
-                        &ServiceBooking {
-                            id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
-                            key: key.as_str().to_owned(),
-                            provider_ref: expanded.id.clone(),
-                            created_at: occurred_at,
-                        },
-                    )
-                    .await
-                    .map_err(|error| state.internal(&error.to_string()))?;
-                if booked {
-                    state.telemetry.capture(
-                        org,
-                        "service_booked",
-                        serde_json::json!({ "price_key": key.as_str() }),
-                    );
-                }
-            }
             PriceKey::Pack20
             | PriceKey::Pack50
             | PriceKey::Pack100
@@ -783,7 +1064,12 @@ async fn checkout_completed(state: &AppState, event: &Event) -> Result<StatusCod
                     );
                 }
             }
-            PriceKey::SyncMonthly | PriceKey::SyncYearly | PriceKey::FoundingYearly => {
+            PriceKey::StarterMonthly
+            | PriceKey::StarterYearly
+            | PriceKey::SyncMonthly
+            | PriceKey::SyncYearly
+            | PriceKey::StudioMonthly
+            | PriceKey::StudioYearly => {
                 let Some(subscription) = expanded.subscription.as_deref() else {
                     // A subscription mode session with no subscription is a
                     // shape Stripe does not send; refusing keeps the drift
@@ -806,8 +1092,8 @@ async fn checkout_completed(state: &AppState, event: &Event) -> Result<StatusCod
     Ok(StatusCode::OK)
 }
 
-/// The first period of a new subscription: the grant, the founding bonus and
-/// the first month's moves.
+/// The first period of a new subscription: the grant for the plan the key
+/// sells, and the first month's moves.
 ///
 /// Every write is keyed on the subscription identifier or the period, so a
 /// redelivery of the session and the `invoice.paid` that follows it land the
@@ -822,6 +1108,9 @@ async fn subscription_started(
     key: PriceKey,
     occurred_at: Timestamp,
 ) -> Result<(), APIError> {
+    let Some(plan) = key.plan() else {
+        return Err(state.internal("a subscription was started for a key that sells no plan"));
+    };
     let entitlements = EntitlementRepo::new(state.pool.clone());
     let held = entitlements
         .provider_grant(org, subscription)
@@ -833,7 +1122,7 @@ async fn subscription_started(
                 org,
                 &NewGrant {
                     id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
-                    plan: Plan::Subscriber,
+                    plan,
                     rung: None,
                     granted_by: GrantedBy::Stripe,
                     grantor_user: None,
@@ -859,22 +1148,7 @@ async fn subscription_started(
             serde_json::json!({ "price_key": key.as_str() }),
         );
     }
-    if key == PriceKey::FoundingYearly {
-        let _credited: bool = entitlements
-            .credit_moves(
-                org,
-                MoveCredit {
-                    delta: i32::try_from(FOUNDING.extra_moves).unwrap_or(i32::MAX),
-                    source: MoveSource::Founding,
-                    source_ref: Some(&format!("{subscription}:founding")),
-                    expires_at: None,
-                    at: occurred_at,
-                },
-            )
-            .await
-            .map_err(|error| state.internal(&error.to_string()))?;
-    }
-    accrue(state, org, occurred_at, occurred_at).await?;
+    accrue(state, org, plan, occurred_at, occurred_at).await?;
 
     // The subscription row is recorded last, because it is the record of what
     // Stripe said and the grant beside it is what the product reads. Two
@@ -901,6 +1175,7 @@ async fn subscription_started(
                 status: "active".to_owned(),
                 provider_price_id: Some(price.to_owned()),
                 current_period_end,
+                cancel_at_period_end: None,
                 occurred_at,
             },
             (state.wall)(),
@@ -910,15 +1185,17 @@ async fn subscription_started(
     Ok(())
 }
 
-/// One billing period's moves, capped so a balance accumulated from
-/// subscription periods never climbs past the plan's accrual ceiling.
+/// One billing period's moves for the plan the subscription sells, capped so
+/// a balance accumulated from subscription periods never climbs past that
+/// plan's accrual ceiling.
 async fn accrue(
     state: &AppState,
     org: OrgId,
+    plan: Plan,
     period_start: Timestamp,
     at: Timestamp,
 ) -> Result<(), APIError> {
-    let capabilities = Plan::Subscriber.capabilities(None);
+    let capabilities = plan.capabilities(None);
     let _accrued: bool = EntitlementRepo::new(state.pool.clone())
         .accrue_subscription_moves(
             org,
@@ -970,7 +1247,6 @@ async fn invoice_paid(state: &AppState, event: &Event) -> Result<StatusCode, API
     let (period_start, period_end) = invoice.period();
     let occurred_at = at(event.created);
 
-    let entitlements = EntitlementRepo::new(state.pool.clone());
     let expires_at = period_end.map(|end| {
         Timestamp(
             at(end)
@@ -978,45 +1254,31 @@ async fn invoice_paid(state: &AppState, event: &Event) -> Result<StatusCode, API
                 .saturating_add(SUBSCRIPTION_GRACE_HOURS * MILLIS_PER_HOUR),
         )
     });
-    match entitlements
-        .provider_grant(org, subscription)
-        .await
-        .map_err(|error| state.internal(&error.to_string()))?
-    {
-        Some(grant) => {
-            let _moved: bool = entitlements
-                .set_expiry(org, grant, expires_at)
-                .await
-                .map_err(|error| state.internal(&error.to_string()))?;
-        }
-        // A renewal for a subscription we never recorded is a subscription
-        // started outside our checkout or one whose session event was lost.
-        // Granting here is what keeps a paying seller entitled either way.
-        None => entitlements
-            .grant(
-                org,
-                &NewGrant {
-                    id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
-                    plan: Plan::Subscriber,
-                    rung: None,
-                    granted_by: GrantedBy::Stripe,
-                    grantor_user: None,
-                    reason: None,
-                    source_ref: Some(subscription),
-                    granted_at: occurred_at,
-                    expires_at,
-                },
-            )
-            .await
-            .map_err(|error| state.internal(&error.to_string()))?,
-    }
-    accrue(
+    // A renewal for a subscription we never recorded is a subscription
+    // started outside our checkout or one whose session event was lost, and
+    // granting here is what keeps a paying seller entitled either way.
+    let plan = hold_plan(
         state,
         org,
-        period_start.map_or(occurred_at, at),
-        occurred_at,
+        subscription,
+        Hold {
+            plan: plan_sold(state, invoice.price()),
+            expires_at,
+            occurred_at,
+            create: true,
+        },
     )
     .await?;
+    if let Some(plan) = plan {
+        accrue(
+            state,
+            org,
+            plan,
+            period_start.map_or(occurred_at, at),
+            occurred_at,
+        )
+        .await?;
+    }
 
     let _applied: bool = BillingRepo::new(state.pool.clone())
         .apply(
@@ -1029,6 +1291,7 @@ async fn invoice_paid(state: &AppState, event: &Event) -> Result<StatusCode, API
                 status: "active".to_owned(),
                 provider_price_id: invoice.price().map(str::to_owned),
                 current_period_end: period_end.map(at),
+                cancel_at_period_end: None,
                 occurred_at,
             },
             (state.wall)(),
@@ -1114,11 +1377,6 @@ async fn subscription_changed(state: &AppState, event: &Event) -> Result<StatusC
     let ended = event.kind == SUBSCRIPTION_DELETED;
     let entitling = !ended && ENTITLING.contains(&status);
 
-    let entitlements = EntitlementRepo::new(state.pool.clone());
-    let held = entitlements
-        .provider_grant(org, subscription)
-        .await
-        .map_err(|error| state.internal(&error.to_string()))?;
     let expires_at = if entitling {
         period_end.map(|end| {
             Timestamp(
@@ -1132,34 +1390,20 @@ async fn subscription_changed(state: &AppState, event: &Event) -> Result<StatusC
         // day they did not ask for.
         period_end
     };
-    match held {
-        Some(grant) => {
-            let _moved: bool = entitlements
-                .set_expiry(org, grant, expires_at)
-                .await
-                .map_err(|error| state.internal(&error.to_string()))?;
-        }
-        None if entitling => {
-            entitlements
-                .grant(
-                    org,
-                    &NewGrant {
-                        id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
-                        plan: Plan::Subscriber,
-                        rung: None,
-                        granted_by: GrantedBy::Stripe,
-                        grantor_user: None,
-                        reason: None,
-                        source_ref: Some(subscription),
-                        granted_at: occurred_at,
-                        expires_at,
-                    },
-                )
-                .await
-                .map_err(|error| state.internal(&error.to_string()))?;
-        }
-        None => {}
-    }
+    // A price change on a live subscription is a plan switch made in the
+    // billing portal, and `hold_plan` moves the grant to the new plan.
+    let _held: Option<Plan> = hold_plan(
+        state,
+        org,
+        subscription,
+        Hold {
+            plan: plan_sold(state, object.price()),
+            expires_at,
+            occurred_at,
+            create: entitling,
+        },
+    )
+    .await?;
     if ended {
         state.telemetry.capture(
             org,
@@ -1179,6 +1423,7 @@ async fn subscription_changed(state: &AppState, event: &Event) -> Result<StatusC
                 status: status.to_owned(),
                 provider_price_id: object.price().map(str::to_owned),
                 current_period_end: period_end,
+                cancel_at_period_end: object.ending(),
                 occurred_at,
             },
             (state.wall)(),
@@ -1188,9 +1433,122 @@ async fn subscription_changed(state: &AppState, event: &Event) -> Result<StatusC
     Ok(StatusCode::OK)
 }
 
+/// The plan a Stripe price sells, or `None` for a price this deployment's
+/// map does not carry, which is said on the log rather than guessed at.
+fn plan_sold(state: &AppState, price: Option<&str>) -> Option<Plan> {
+    let price = price?;
+    let plan = state
+        .config
+        .stripe_price_map
+        .key_for(price)
+        .and_then(PriceKey::plan);
+    if plan.is_none() {
+        eprintln!(
+            "tam-api: stripe price {price} sells no plan in the price map, so the subscription \
+             keeps whatever plan its grant already names"
+        );
+    }
+    plan
+}
+
+/// What one Stripe event asks of a subscription's grant.
+struct Hold {
+    /// The plan the subscription's price sells; `None` for a price the map
+    /// does not carry.
+    plan: Option<Plan>,
+    expires_at: Option<Timestamp>,
+    occurred_at: Timestamp,
+    /// Whether a subscription with no grant yet is given one.
+    create: bool,
+}
+
+/// Keeps one live grant for a subscription, naming the plan it now sells and
+/// running to `expires_at`, and answers the plan the grant names afterwards.
+///
+/// The same plan moves the existing grant's expiry, so a stream of renewals
+/// renews one row. A different plan is a switch made in the billing portal:
+/// the old grant is revoked and a new one written under the same
+/// subscription, which is what the partial unique index on a live
+/// `source_ref` allows. An unknown `plan` (a price missing from the map)
+/// keeps the grant's own plan. No grant is written where `create` is false
+/// or no plan is known, because an ended subscription is not a new one.
+async fn hold_plan(
+    state: &AppState,
+    org: OrgId,
+    subscription: &str,
+    Hold {
+        plan,
+        expires_at,
+        occurred_at,
+        create,
+    }: Hold,
+) -> Result<Option<Plan>, APIError> {
+    let entitlements = EntitlementRepo::new(state.pool.clone());
+    let held = entitlements
+        .provider_grant(org, subscription)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?;
+    let held_plan = match held {
+        Some(grant) => entitlements
+            .history(org)
+            .await
+            .map_err(|error| state.internal(&error.to_string()))?
+            .into_iter()
+            .find(|record| record.id == grant)
+            .map(|record| record.plan),
+        None => None,
+    };
+    let write = |plan: Plan| NewGrant {
+        id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
+        plan,
+        rung: None,
+        granted_by: GrantedBy::Stripe,
+        grantor_user: None,
+        reason: None,
+        source_ref: Some(subscription),
+        granted_at: occurred_at,
+        expires_at,
+    };
+    match (held, held_plan, plan) {
+        (Some(grant), Some(was), Some(now)) if was != now => {
+            let _revoked: bool = entitlements
+                .revoke(org, grant, occurred_at)
+                .await
+                .map_err(|error| state.internal(&error.to_string()))?;
+            entitlements
+                .grant(org, &write(now))
+                .await
+                .map_err(|error| state.internal(&error.to_string()))?;
+            state.telemetry.capture(
+                org,
+                "subscription_plan_changed",
+                serde_json::json!({ "from": was.as_str(), "to": now.as_str() }),
+            );
+            Ok(Some(now))
+        }
+        (Some(grant), was, _) => {
+            let _moved: bool = entitlements
+                .set_expiry(org, grant, expires_at)
+                .await
+                .map_err(|error| state.internal(&error.to_string()))?;
+            Ok(was)
+        }
+        (None, _, Some(now)) if create => {
+            entitlements
+                .grant(org, &write(now))
+                .await
+                .map_err(|error| state.internal(&error.to_string()))?;
+            Ok(Some(now))
+        }
+        (None, _, _) => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{identifier, org_from, Cadence, Event, InvoiceObject, ORG_METADATA_KEY};
+    use super::{
+        identifier, org_from, Cadence, Event, InvoiceObject, SubscriptionObject, ORG_METADATA_KEY,
+    };
     use tam_limits::PriceKey;
 
     const ORG: &str = "0a8f6c2e-1d4b-4f3a-9c77-2b5e8d1a4c60";
@@ -1277,17 +1635,50 @@ mod tests {
 
     #[test]
     fn only_the_recurring_keys_carry_a_cadence() {
-        assert_eq!(Cadence::of(PriceKey::SyncMonthly), Some(Cadence::Monthly));
-        assert_eq!(Cadence::of(PriceKey::SyncYearly), Some(Cadence::Yearly));
+        for key in PriceKey::ALL {
+            assert_eq!(
+                Cadence::of(key).is_some(),
+                key.recurring(),
+                "{} carries a cadence exactly when it renews",
+                key.as_str()
+            );
+        }
         assert_eq!(
-            Cadence::of(PriceKey::FoundingYearly),
-            Some(Cadence::Yearly),
-            "founding is an annual price, and the page says so"
+            Cadence::of(PriceKey::StarterMonthly),
+            Some(Cadence::Monthly)
         );
+        assert_eq!(Cadence::of(PriceKey::StudioYearly), Some(Cadence::Yearly));
         assert_eq!(
             Cadence::of(PriceKey::Pack100),
             None,
             "a pack renews nothing, so it has no cadence to state"
+        );
+    }
+
+    #[test]
+    fn a_scheduled_end_is_a_cancellation_whichever_field_carries_it() {
+        let read = |object: serde_json::Value| {
+            serde_json::from_value::<SubscriptionObject>(object)
+                .expect("the subscription reads")
+                .ending()
+        };
+        assert_eq!(
+            read(serde_json::json!({ "cancel_at_period_end": true })),
+            Some(true)
+        );
+        assert_eq!(
+            read(serde_json::json!({ "cancel_at_period_end": false, "cancel_at": 1_800_000_000 })),
+            Some(true),
+            "a portal cancellation on a newer API version schedules `cancel_at` instead"
+        );
+        assert_eq!(
+            read(serde_json::json!({ "cancel_at_period_end": false, "cancel_at": null })),
+            Some(false)
+        );
+        assert_eq!(
+            read(serde_json::json!({})),
+            None,
+            "an event that says nothing keeps what is stored"
         );
     }
 

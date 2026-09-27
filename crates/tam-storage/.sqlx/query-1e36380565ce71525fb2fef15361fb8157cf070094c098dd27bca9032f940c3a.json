@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT tour_state, tour_settled_at FROM app_user WHERE id = $1 AND org_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "tour_state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "tour_settled_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "1e36380565ce71525fb2fef15361fb8157cf070094c098dd27bca9032f940c3a"
+}

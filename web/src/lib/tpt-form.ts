@@ -147,14 +147,15 @@ export interface StandardPick {
 export interface TptDraft {
 	name: string;
 	description: string;
-	/** How `description` is written.
+	/** How `description` is written: `Html` from the rich-text editor, which
+	 *  is where a new resource starts, or `Markdown`.
 	 *
-	 *  Carried rather than asserted at the wire. A create writes Markdown and
-	 *  no control changes it, but an edit is seeded from a product that may
-	 *  already be `Html` — the Tes import writes those — and a save that
-	 *  relabelled it would leave the markup unchanged under a declaration that
-	 *  is now wrong, which is how a listing acquires escaped markup on its next
-	 *  send. The format only ever travels beside the body it describes. */
+	 *  Carried rather than asserted at the wire. An edit is seeded from the
+	 *  product's own format, and a save that relabelled it would leave the
+	 *  markup unchanged under a declaration that is now wrong, which is how a
+	 *  listing acquires escaped markup on its next send. The seller changes it
+	 *  only through the description's format choice, which converts the text
+	 *  with it. The format only ever travels beside the body it describes. */
 	bodyFormat: CopyFormat;
 	payload: FileHandle[];
 	cover: FileHandle | null;
@@ -235,18 +236,17 @@ export type FormMode =
 			/** The marketplaces this resource already reaches. Add-only: no
 			 *  route unmaps one, so these render ticked and disabled. */
 			mapped: readonly InventoryId[];
-			/** The live listings that make this whole form read-only, or empty.
-			 *  A published listing on a platform whose edit transition we have
-			 *  not captured cannot be edited through us, and the server refuses
-			 *  the request, so the fields are shown as stored and held back. */
-			blockedBy: readonly InventoryId[];
+			/** The live listings an edit here is saved past rather than sent
+			 *  to, or empty: a published listing on a platform whose edit
+			 *  transition we have not captured keeps the copy it has. */
+			keeps: readonly InventoryId[];
 	  };
 
 export function emptyTptDraft(): TptDraft {
 	return {
 		name: '',
 		description: '',
-		bodyFormat: 'Markdown',
+		bodyFormat: 'Html',
 		payload: [],
 		cover: null,
 		previews: [],
@@ -472,11 +472,10 @@ export interface MarkedUp {
 
 const WRAP: Record<'bold' | 'italic', string> = { bold: '**', italic: '*' };
 
-/** The description with Markdown written around what the teacher selected.
- *
- *  Markdown rather than the marketplace's own markup: the body already travels
- *  as `CopyFormat::Markdown` and each adapter renders it in its own way, so a
- *  toolbar that wrote a platform's HTML would write it for every platform. */
+/** The description with Markdown written around what the teacher selected:
+ *  the toolbar of a description written in Markdown, which travels as
+ *  `CopyFormat::Markdown` and which each adapter renders in its own way. A
+ *  rich-text description has its own editor (`$lib/rich-text`). */
 export function markUp(text: string, start: number, end: number, kind: MarkKind): MarkedUp {
 	if (kind === 'bold' || kind === 'italic') {
 		const mark = WRAP[kind];

@@ -837,7 +837,7 @@
 {/snippet}
 
 {#snippet toPlans()}
-	<Button tier="primary" small href="/settings/subscription">See plans</Button>
+	<Button tier="primary" small href="/settings/billing">See plans</Button>
 {/snippet}
 
 <style>

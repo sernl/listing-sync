@@ -25,13 +25,13 @@ Do not compare the two columns as if they measured the same thing.
 
 ## Keeping figures fresh
 
-Figures arrive when a signed-in machine reads the marketplace.
+Figures arrive when a signed-in device reads the marketplace.
 
 1. Open the desktop app.
 2. Leave it running.
 3. Refresh **Analytics**.
 
-The page says when a device last sent figures. If that date is old, the machine has not been awake.
+The page says when a device last sent figures. If that date is old, the device has not been awake.
 
 <!-- shot: /analytics, the "last sent" line under the table -->
 __omp_shell("[When figures last arrived](image:analytics-2)")

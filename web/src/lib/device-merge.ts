@@ -157,7 +157,7 @@ export function matchNote(confidence: Confidence): string {
 		case 'matched':
 			return 'Matched to a browser sign-in on the same system.';
 		case 'ambiguous':
-			return 'Several browser sign-ins are on this system, so we cannot tell which is this machine. Signing out here signs out the machine; to end a browser sign-in, use Browser sign-ins.';
+			return 'Several browser sign-ins are on this system, so we cannot tell which is this device. Signing out here signs out the device; to end a browser sign-in, use Browser sign-ins.';
 		case 'unmatched':
 			return 'No browser sign-in is on this system.';
 	}

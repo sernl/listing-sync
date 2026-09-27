@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO billing_subscription (org_id, provider, provider_subscription_id, provider_customer_id, provider_price_id, status, current_period_end, occurred_at, updated_at, cancel_at_period_end) VALUES ($1, 'stripe', $2, $3, $4, $5, $6, $7, $8, COALESCE($9, false)) ON CONFLICT (org_id) DO UPDATE SET provider = EXCLUDED.provider, provider_subscription_id = EXCLUDED.provider_subscription_id, provider_customer_id = EXCLUDED.provider_customer_id, provider_price_id = COALESCE(EXCLUDED.provider_price_id, billing_subscription.provider_price_id), status = EXCLUDED.status, current_period_end = EXCLUDED.current_period_end, occurred_at = EXCLUDED.occurred_at, updated_at = EXCLUDED.updated_at, cancel_at_period_end = CASE WHEN $9::boolean IS NOT NULL THEN $9 WHEN billing_subscription.provider_subscription_id <> EXCLUDED.provider_subscription_id THEN false ELSE billing_subscription.cancel_at_period_end END WHERE EXCLUDED.occurred_at >= billing_subscription.occurred_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Timestamptz",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1362b812d740d7d651f35723a66fb3d0189043f6b723a98b6e28550376e8b0d8"
+}

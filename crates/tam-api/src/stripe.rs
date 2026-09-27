@@ -1,5 +1,6 @@
 //! Stripe's wire concerns: the webhook signature, the price map, the two
-//! secrets, and the three outbound calls the checkout needs.
+//! secrets, the outbound calls the checkout needs, and the coupon and
+//! promotion-code calls the admin pricing page makes.
 //!
 //! The signature half is pure. Nothing in it opens a socket, reads a clock or
 //! touches a database: the caller supplies the raw bytes, the header, the
@@ -14,14 +15,14 @@
 //! re-serialised body is a different message.
 //!
 //! The client half is plain HTTP over `reqwest` rather than a vendor crate.
-//! Three calls are needed and the official Rust binding is still a release
-//! candidate; a form-encoded POST and a JSON read are less code than the
-//! dependency and no less correct.
+//! A handful of calls are needed and the official Rust binding is still a
+//! release candidate; a form-encoded POST and a JSON read are less code than
+//! the dependency and no less correct.
 
 use std::collections::BTreeMap;
 
 use hmac::{Hmac, Mac};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use tam_limits::PriceKey;
 use tam_types::Timestamp;
@@ -383,6 +384,22 @@ pub struct CheckoutRequest<'a> {
     pub customer: Option<&'a str>,
     pub success_url: &'a str,
     pub cancel_url: &'a str,
+    /// The discount the session opens with. Absent, Stripe's own page offers
+    /// the promotion-code field instead: Stripe refuses a session carrying
+    /// both, so a checkout either has its discount decided or lets the seller
+    /// type one.
+    pub discount: Option<CheckoutDiscount<'a>>,
+}
+
+/// A discount a Checkout Session is opened with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckoutDiscount<'a> {
+    /// A coupon applied without the seller doing anything: a sale or a
+    /// one-off discount that is open.
+    Coupon(&'a str),
+    /// A promotion code the seller typed in the console, already resolved to
+    /// Stripe's identifier for it.
+    PromotionCode(&'a str),
 }
 
 /// A Checkout Session as this code reads it.
@@ -485,6 +502,161 @@ struct PortalSession {
     url: String,
 }
 
+/// Which page of the Billing Portal to open. Absent, the portal's home.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortalFlow {
+    /// Straight to "update your card", and back to the console once the new
+    /// card is saved, rather than leaving the seller on the portal's home.
+    PaymentMethodUpdate,
+}
+
+/// A Stripe list envelope. `has_more` is not read: the billing page shows
+/// the most recent page and says where the rest are.
+#[derive(Debug, Clone, Deserialize)]
+struct List<T> {
+    #[serde(default = "Vec::new")]
+    data: Vec<T>,
+}
+
+/// One invoice, narrowed to what the billing page lists.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Invoice {
+    pub id: String,
+    /// Unix seconds.
+    #[serde(default)]
+    pub created: i64,
+    /// In the currency's minor unit, tax included.
+    #[serde(default)]
+    pub total: i64,
+    #[serde(default)]
+    pub currency: String,
+    /// `draft`, `open`, `paid`, `uncollectible` or `void`.
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub hosted_invoice_url: Option<String>,
+    #[serde(default)]
+    pub invoice_pdf: Option<String>,
+    #[serde(default)]
+    lines: Option<List<InvoiceLine>>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct InvoiceLine {
+    #[serde(default)]
+    description: Option<String>,
+}
+
+impl Invoice {
+    /// What the invoice was for, as its first line describes it.
+    #[must_use]
+    pub fn description(&self) -> Option<&str> {
+        self.lines
+            .as_ref()?
+            .data
+            .iter()
+            .find_map(|line| line.description.as_deref())
+    }
+}
+
+/// A card as the billing page names it: never the number, only what Stripe
+/// already shows the cardholder.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Card {
+    #[serde(default)]
+    pub brand: String,
+    #[serde(default)]
+    pub last4: String,
+    #[serde(default)]
+    pub exp_month: Option<u8>,
+    #[serde(default)]
+    pub exp_year: Option<u16>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct PaymentMethod {
+    #[serde(default)]
+    card: Option<Card>,
+}
+
+/// The card an expanded `default_payment_method` carries. An unexpanded one
+/// is an identifier, and a payment method that is not a card (a bank debit)
+/// has no card: both read as none rather than as a failure.
+fn card_of(value: Option<&serde_json::Value>) -> Option<Card> {
+    let value = value.filter(|value| value.is_object())?;
+    serde_json::from_value::<PaymentMethod>(value.clone())
+        .ok()?
+        .card
+}
+
+/// One subscription, narrowed to what the billing page and the cancel route
+/// read.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Subscription {
+    pub id: String,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub cancel_at_period_end: bool,
+    /// A scheduled end other than the period's close, which is how a
+    /// cancellation made in the portal arrives on newer API versions.
+    #[serde(default)]
+    pub cancel_at: Option<i64>,
+    #[serde(default)]
+    current_period_end: Option<i64>,
+    #[serde(default)]
+    items: Option<List<SubscriptionItem>>,
+    #[serde(default)]
+    default_payment_method: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct SubscriptionItem {
+    #[serde(default)]
+    current_period_end: Option<i64>,
+}
+
+impl Subscription {
+    /// Whether the subscription ends rather than renews, by either of the two
+    /// fields Stripe says that with.
+    #[must_use]
+    pub const fn ending(&self) -> bool {
+        self.cancel_at_period_end || self.cancel_at.is_some()
+    }
+
+    /// The period end in unix seconds, top-level on older API versions and
+    /// on the items from 2025-03-31.
+    #[must_use]
+    pub fn period_end(&self) -> Option<i64> {
+        self.current_period_end.or_else(|| {
+            self.items
+                .as_ref()?
+                .data
+                .iter()
+                .filter_map(|item| item.current_period_end)
+                .max()
+        })
+    }
+
+    /// The card this subscription charges, where it names one of its own.
+    #[must_use]
+    pub fn card(&self) -> Option<Card> {
+        card_of(self.default_payment_method.as_ref())
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct Customer {
+    #[serde(default)]
+    invoice_settings: Option<InvoiceSettings>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct InvoiceSettings {
+    #[serde(default)]
+    default_payment_method: Option<serde_json::Value>,
+}
+
 #[derive(Debug, Deserialize)]
 struct ApiRefusal {
     #[serde(default)]
@@ -499,7 +671,103 @@ struct ApiRefusalBody {
     code: Option<String>,
 }
 
-/// The three outbound calls the checkout needs, and nothing else.
+/// Which invoices a coupon reaches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CouponDuration {
+    /// The first invoice of a subscription, or the one payment.
+    Once,
+    /// The first `n` monthly invoices of a subscription.
+    Repeating(u32),
+}
+
+/// What a coupon takes off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CouponAmount<'a> {
+    Percent(u32),
+    /// Cents, in the named currency.
+    Cents {
+        cents: u32,
+        currency: &'a str,
+    },
+}
+
+/// One coupon to create. `id` is ours: naming the coupon after the discount
+/// row makes a retried create collide with the first rather than mint a
+/// second coupon, and makes the Stripe dashboard say which row it belongs to.
+#[derive(Debug, Clone)]
+pub struct CouponRequest<'a> {
+    pub id: &'a str,
+    pub name: &'a str,
+    pub amount: CouponAmount<'a>,
+    pub duration: CouponDuration,
+    /// The last instant it may be redeemed. Stripe then refuses it on its own
+    /// page as well as ours.
+    pub redeem_by: Option<Timestamp>,
+    /// Stripe products it is restricted to. Empty means any.
+    pub products: &'a [String],
+}
+
+/// A coupon as this code reads it.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Coupon {
+    pub id: String,
+    /// False once redeem_by has passed, max redemptions are used up, or the
+    /// coupon was deleted.
+    #[serde(default)]
+    pub valid: bool,
+    #[serde(default)]
+    pub times_redeemed: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct CouponList {
+    data: Vec<Coupon>,
+    #[serde(default)]
+    has_more: bool,
+}
+
+/// One promotion code to create over an existing coupon.
+#[derive(Debug, Clone)]
+pub struct PromotionCodeRequest<'a> {
+    pub coupon: &'a str,
+    pub code: &'a str,
+    pub expires_at: Option<Timestamp>,
+    pub max_redemptions: Option<u32>,
+}
+
+/// A promotion code as this code reads it.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PromotionCode {
+    pub id: String,
+    #[serde(default)]
+    pub code: String,
+    #[serde(default)]
+    pub active: bool,
+    #[serde(default)]
+    pub times_redeemed: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct Price {
+    #[serde(deserialize_with = "expandable")]
+    product: Option<String>,
+}
+
+/// The API version promotion codes are created under.
+///
+/// Pinned per request rather than inherited from the account, because this
+/// is the one call whose shape the account's version changes under us: from
+/// `2025-09-30.clover` a promotion code names its coupon as
+/// `promotion[coupon]`, and before it as a top-level `coupon`. Pinning the
+/// newer version makes the request one shape whatever the dashboard is set
+/// to.
+pub const PROMOTION_CODE_API_VERSION: &str = "2025-09-30.clover";
+
+/// Coupons read per page when listing; Stripe's maximum.
+const LIST_PAGE: usize = 100;
+
+/// The outbound calls checkout, the billing page and the admin pricing page
+/// need, and nothing else.
 #[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
@@ -592,6 +860,17 @@ impl Client {
         Self::read(response).await
     }
 
+    async fn delete<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, StripeError> {
+        let response = self
+            .http
+            .delete(format!("{}{path}", self.base))
+            .bearer_auth(self.key.expose())
+            .send()
+            .await
+            .map_err(|error| StripeError::Transport(error.to_string()))?;
+        Self::read(response).await
+    }
+
     async fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, StripeError> {
         let response = self
             .http
@@ -671,6 +950,15 @@ impl Client {
             // Subscription mode always creates one and refuses the parameter.
             form.push(("customer_creation".to_owned(), "always".to_owned()));
         }
+        match request.discount {
+            Some(CheckoutDiscount::Coupon(coupon)) => {
+                form.push(("discounts[0][coupon]".to_owned(), coupon.to_owned()));
+            }
+            Some(CheckoutDiscount::PromotionCode(code)) => {
+                form.push(("discounts[0][promotion_code]".to_owned(), code.to_owned()));
+            }
+            None => form.push(("allow_promotion_codes".to_owned(), "true".to_owned())),
+        }
         self.post("/v1/checkout/sessions", &form).await
     }
 
@@ -682,11 +970,29 @@ impl Client {
         &self,
         customer: &str,
         return_url: &str,
+        flow: Option<PortalFlow>,
     ) -> Result<String, StripeError> {
-        let form = vec![
+        let mut form = vec![
             ("customer".to_owned(), customer.to_owned()),
             ("return_url".to_owned(), return_url.to_owned()),
         ];
+        match flow {
+            Some(PortalFlow::PaymentMethodUpdate) => {
+                form.push((
+                    "flow_data[type]".to_owned(),
+                    "payment_method_update".to_owned(),
+                ));
+                form.push((
+                    "flow_data[after_completion][type]".to_owned(),
+                    "redirect".to_owned(),
+                ));
+                form.push((
+                    "flow_data[after_completion][redirect][return_url]".to_owned(),
+                    return_url.to_owned(),
+                ));
+            }
+            None => {}
+        }
         let session: PortalSession = self.post("/v1/billing_portal/sessions", &form).await?;
         Ok(session.url)
     }
@@ -703,6 +1009,196 @@ impl Client {
     ) -> Result<CheckoutSession, StripeError> {
         self.get(&format!("/v1/checkout/sessions/{id}?expand[]=line_items"))
             .await
+    }
+
+    /// The customer's most recent invoices, newest first, up to 24 — two
+    /// years of a monthly plan.
+    pub async fn list_invoices(&self, customer: &str) -> Result<Vec<Invoice>, StripeError> {
+        let list: List<Invoice> = self
+            .get(&format!("/v1/invoices?customer={customer}&limit=24"))
+            .await?;
+        Ok(list.data)
+    }
+
+    /// One subscription with its default payment method expanded, so the
+    /// card rides on the same read as the cancellation state.
+    pub async fn retrieve_subscription(&self, id: &str) -> Result<Subscription, StripeError> {
+        self.get(&format!(
+            "/v1/subscriptions/{id}?expand[]=default_payment_method"
+        ))
+        .await
+    }
+
+    /// The card a customer's invoices are charged to by default, for a
+    /// subscription that names none of its own.
+    pub async fn customer_card(&self, customer: &str) -> Result<Option<Card>, StripeError> {
+        let customer: Customer = self
+            .get(&format!(
+                "/v1/customers/{customer}?expand[]=invoice_settings.default_payment_method"
+            ))
+            .await?;
+        Ok(customer
+            .invoice_settings
+            .and_then(|settings| card_of(settings.default_payment_method.as_ref())))
+    }
+
+    /// Asks Stripe to end the subscription at the close of the paid period
+    /// (`true`) or to keep renewing it (`false`).
+    ///
+    /// Keeping it clears `cancel_at` as well when that is the field the
+    /// cancellation was made with: a portal cancellation on a newer API
+    /// version schedules `cancel_at`, and clearing only
+    /// `cancel_at_period_end` would leave it scheduled.
+    pub async fn update_subscription(
+        &self,
+        current: &Subscription,
+        cancel_at_period_end: bool,
+    ) -> Result<Subscription, StripeError> {
+        let form = if !cancel_at_period_end
+            && !current.cancel_at_period_end
+            && current.cancel_at.is_some()
+        {
+            vec![("cancel_at".to_owned(), String::new())]
+        } else {
+            vec![(
+                "cancel_at_period_end".to_owned(),
+                cancel_at_period_end.to_string(),
+            )]
+        };
+        self.post(&format!("/v1/subscriptions/{}", current.id), &form)
+            .await
+    }
+
+    /// Creates one coupon, answering it.
+    ///
+    /// The request carries an `Idempotency-Key` derived from the coupon's own
+    /// identifier, so a retry after a lost reply answers the coupon the first
+    /// attempt created instead of refusing a duplicate identifier.
+    pub async fn create_coupon(&self, request: &CouponRequest<'_>) -> Result<Coupon, StripeError> {
+        let mut form = vec![
+            ("id".to_owned(), request.id.to_owned()),
+            ("name".to_owned(), request.name.to_owned()),
+            ("metadata[source]".to_owned(), "teachouse-admin".to_owned()),
+        ];
+        match request.amount {
+            CouponAmount::Percent(percent) => {
+                form.push(("percent_off".to_owned(), percent.to_string()));
+            }
+            CouponAmount::Cents { cents, currency } => {
+                form.push(("amount_off".to_owned(), cents.to_string()));
+                form.push(("currency".to_owned(), currency.to_owned()));
+            }
+        }
+        match request.duration {
+            CouponDuration::Once => form.push(("duration".to_owned(), "once".to_owned())),
+            CouponDuration::Repeating(months) => {
+                form.push(("duration".to_owned(), "repeating".to_owned()));
+                form.push(("duration_in_months".to_owned(), months.to_string()));
+            }
+        }
+        if let Some(redeem_by) = request.redeem_by {
+            form.push((
+                "redeem_by".to_owned(),
+                redeem_by.0.div_euclid(MILLIS_PER_SEC).to_string(),
+            ));
+        }
+        for (index, product) in request.products.iter().enumerate() {
+            form.push((format!("applies_to[products][{index}]"), product.clone()));
+        }
+        let response = self
+            .http
+            .post(format!("{}/v1/coupons", self.base))
+            .bearer_auth(self.key.expose())
+            .header("Idempotency-Key", format!("coupon-{}", request.id))
+            .form(&form)
+            .send()
+            .await
+            .map_err(|error| StripeError::Transport(error.to_string()))?;
+        Self::read(response).await
+    }
+
+    /// Deletes one coupon, which stops any new redemption of it — on our
+    /// checkout and on Stripe's page — while subscriptions already carrying
+    /// it keep their discount. A coupon Stripe no longer has is the outcome
+    /// asked for, so its 404 is success.
+    pub async fn delete_coupon(&self, id: &str) -> Result<(), StripeError> {
+        match self
+            .delete::<serde_json::Value>(&format!("/v1/coupons/{id}"))
+            .await
+        {
+            Ok(_) | Err(StripeError::Api { status: 404, .. }) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Every coupon on the account, followed across pages.
+    pub async fn list_coupons(&self) -> Result<Vec<Coupon>, StripeError> {
+        let mut coupons = Vec::new();
+        loop {
+            let after = coupons
+                .last()
+                .map(|coupon: &Coupon| format!("&starting_after={}", coupon.id))
+                .unwrap_or_default();
+            let page: CouponList = self
+                .get(&format!("/v1/coupons?limit={LIST_PAGE}{after}"))
+                .await?;
+            let more = page.has_more && !page.data.is_empty();
+            coupons.extend(page.data);
+            if !more {
+                return Ok(coupons);
+            }
+        }
+    }
+
+    /// Creates one promotion code over an existing coupon, under the pinned
+    /// [`PROMOTION_CODE_API_VERSION`].
+    pub async fn create_promotion_code(
+        &self,
+        request: &PromotionCodeRequest<'_>,
+    ) -> Result<PromotionCode, StripeError> {
+        let mut form = vec![
+            ("promotion[type]".to_owned(), "coupon".to_owned()),
+            ("promotion[coupon]".to_owned(), request.coupon.to_owned()),
+            ("code".to_owned(), request.code.to_owned()),
+        ];
+        if let Some(expires_at) = request.expires_at {
+            form.push((
+                "expires_at".to_owned(),
+                expires_at.0.div_euclid(MILLIS_PER_SEC).to_string(),
+            ));
+        }
+        if let Some(max) = request.max_redemptions {
+            form.push(("max_redemptions".to_owned(), max.to_string()));
+        }
+        let response = self
+            .http
+            .post(format!("{}/v1/promotion_codes", self.base))
+            .bearer_auth(self.key.expose())
+            .header("Stripe-Version", PROMOTION_CODE_API_VERSION)
+            .form(&form)
+            .send()
+            .await
+            .map_err(|error| StripeError::Transport(error.to_string()))?;
+        Self::read(response).await
+    }
+
+    /// Stops one promotion code being accepted. Promotion codes cannot be
+    /// deleted; `active=false` is Stripe's only way to withdraw one.
+    pub async fn deactivate_promotion_code(&self, id: &str) -> Result<PromotionCode, StripeError> {
+        self.post(
+            &format!("/v1/promotion_codes/{id}"),
+            &[("active".to_owned(), "false".to_owned())],
+        )
+        .await
+    }
+
+    /// The product one price sells, which is what a coupon is restricted by:
+    /// Stripe scopes coupons to products, never to prices.
+    pub async fn product_of_price(&self, price: &str) -> Result<String, StripeError> {
+        let price: Price = self.get(&format!("/v1/prices/{price}")).await?;
+        price
+            .product
+            .ok_or_else(|| StripeError::Malformed("a price carried no product".to_owned()))
     }
 }
 

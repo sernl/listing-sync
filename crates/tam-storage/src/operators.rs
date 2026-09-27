@@ -10,7 +10,7 @@ use sqlx::PgPool;
 use tam_types::{Timestamp, UserId};
 
 use crate::codec::{timestamp_from_db, timestamp_to_db, uuid_from_db, uuid_to_db};
-use crate::StorageError;
+use crate::{Recipient, StorageError};
 
 /// One operator as the one-shot's listing renders them, revoked ones
 /// included: a withdrawn grant is part of the record, not an absence.
@@ -108,6 +108,37 @@ impl OperatorRepo {
                 granted_at: timestamp_from_db(row.granted_at),
                 granted_by: row.granted_by,
                 revoked_at: row.revoked_at.map(timestamp_from_db),
+            })
+            .collect())
+    }
+
+    /// Every operator whose grant stands, as the identity service knows them:
+    /// who the mail about a new marketplace request goes to.
+    ///
+    /// An operator minted before self-serve sign-in carries no subject and is
+    /// absent here rather than an error, because there is nothing to resolve
+    /// an address from. `notify_email` is not consulted: that is a seller's
+    /// choice about their own runs, and this mail is an operator's work.
+    ///
+    /// On the application pool, like everything else in this file, which is
+    /// why the drainer is handed this repository beside its engine-pool one:
+    /// the engine role is granted nothing on `platform_operator`.
+    pub async fn mail_recipients(&self) -> Result<Vec<Recipient>, StorageError> {
+        let rows = sqlx::query!(
+            "SELECT o.user_id, u.auth_subject \
+             FROM platform_operator o JOIN app_user u ON u.id = o.user_id \
+             WHERE o.revoked_at IS NULL AND u.auth_subject IS NOT NULL \
+             ORDER BY o.user_id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                row.auth_subject.map(|subject| Recipient {
+                    user: UserId(uuid_from_db(row.user_id)),
+                    subject: uuid_from_db(subject),
+                })
             })
             .collect())
     }

@@ -949,7 +949,7 @@ pub async fn library_read(
         .read(hash_of(&hash)?)
         .await
         .map_err(|why| CommandError(why.to_string()))?
-        .ok_or_else(|| CommandError("that file is not kept on this machine".to_owned()))?;
+        .ok_or_else(|| CommandError("that file is not kept on this device".to_owned()))?;
     Ok(tauri::ipc::Response::new(bytes))
 }
 
@@ -1007,12 +1007,12 @@ pub async fn library_open_external(app: AppHandle, hash: String) -> Result<(), C
         .await
         .into_iter()
         .find(|entry| entry.hash == digest)
-        .ok_or_else(|| CommandError("that file is not kept on this machine".to_owned()))?;
+        .ok_or_else(|| CommandError("that file is not kept on this device".to_owned()))?;
     let bytes = library
         .read(digest)
         .await
         .map_err(|why| CommandError(why.to_string()))?
-        .ok_or_else(|| CommandError("that file is not kept on this machine".to_owned()))?;
+        .ok_or_else(|| CommandError("that file is not kept on this device".to_owned()))?;
     let extension = std::path::Path::new(&entry.file_name)
         .extension()
         .and_then(|extension| extension.to_str())

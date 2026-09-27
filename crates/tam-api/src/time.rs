@@ -42,11 +42,89 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     era * 146_097 + day_of_era - 719_468
 }
 
+/// Hinnant's `civil_from_days`, the inverse of [`days_from_civil`], exact over the range a stored timestamp
+/// can hold.
+pub(crate) const fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let shifted = days + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted - era * 146_097;
+    let year_of_era = (day_of_era - day_of_era.div_euclid(1_460) + day_of_era.div_euclid(36_524)
+        - day_of_era.div_euclid(146_096))
+    .div_euclid(365);
+    let year = year_of_era + era * 400;
+    let day_of_year =
+        day_of_era - (365 * year_of_era + year_of_era.div_euclid(4) - year_of_era.div_euclid(100));
+    let month_phase = (5 * day_of_year + 2).div_euclid(153);
+    let date = day_of_year - (153 * month_phase + 2).div_euclid(5) + 1;
+    let month = if month_phase < 10 {
+        month_phase + 3
+    } else {
+        month_phase - 9
+    };
+    (if month <= 2 { year + 1 } else { year }, month, date)
+}
+
+/// Midnight UTC at the start of one `YYYY-MM-DD` calendar date.
+///
+/// A date that does not exist — 2026-02-30 — is refused rather than rolled
+/// into March: it is read back through [`civil_from_days`] and must name
+/// itself.
+pub fn date_start(raw: &str) -> Result<Timestamp, NotAnInstant> {
+    let mut parts = raw.split('-');
+    let (Some(year), Some(month), Some(day), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err(NotAnInstant);
+    };
+    let (year, month, day) = (digits(year, 4)?, digits(month, 2)?, digits(day, 2)?);
+    let days = days_from_civil(year, month, day);
+    if civil_from_days(days) != (year, month, day) {
+        return Err(NotAnInstant);
+    }
+    Ok(Timestamp(days * 86_400 * MILLIS_PER_SEC))
+}
+
+/// The `YYYY-MM-DD` calendar date, in UTC, an instant falls on.
+#[must_use]
+pub fn date_of(at: Timestamp) -> String {
+    let (year, month, day) = civil_from_days(at.0.div_euclid(MILLIS_PER_SEC).div_euclid(86_400));
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
 fn digits(raw: &str, width: usize) -> Result<i64, NotAnInstant> {
     if raw.len() != width || !raw.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(NotAnInstant);
     }
     raw.parse().map_err(|_| NotAnInstant)
+}
+
+/// Reads a calendar date, `YYYY-MM-DD`, as days since 1970-01-01.
+///
+/// Strict about the day of the month, unlike the instant parser's coarse
+/// `1..=31`: a date an operator types into a form is shown back to them, and
+/// `2026-02-30` accepted would be shown as a day that does not exist.
+pub fn days_from_date(raw: &str) -> Result<i64, NotAnInstant> {
+    let (year, month_day) = raw.split_once('-').ok_or(NotAnInstant)?;
+    let (month, day) = month_day.split_once('-').ok_or(NotAnInstant)?;
+    let (year, month, day) = (digits(year, 4)?, digits(month, 2)?, digits(day, 2)?);
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let length = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return Err(NotAnInstant),
+    };
+    if !(1..=length).contains(&day) {
+        return Err(NotAnInstant);
+    }
+    Ok(days_from_civil(year, month, day))
+}
+
+/// The UTC calendar day an instant falls on, as days since 1970-01-01.
+#[must_use]
+pub fn utc_day(at: Timestamp) -> i64 {
+    at.0.div_euclid(86_400 * MILLIS_PER_SEC)
 }
 
 /// Reads an RFC 3339 instant as milliseconds since the epoch.

@@ -63,8 +63,20 @@ const ADMIN_PATHS: [&str; 9] = [
 /// loops would be testing method routing rather than the operator fence.
 /// Their own refusal is asserted by `a_seller_cannot_grant_themselves_a_plan`
 /// and `an_operator_credits_moves_once_per_reason`.
-const ADMIN_PATHS_UNCOVERED: [&str; 13] = [
+const ADMIN_PATHS_UNCOVERED: [&str; 21] = [
     "/{version}/admin/marketplace-requests",
+    // Pricing and the site switches read the application pool, like the
+    // guides below, so they serve with no backoffice database; their
+    // operator fence is asserted in `discounts_flow` and `site_flow`.
+    "/{version}/admin/pricing",
+    "/{version}/admin/site",
+    "/{version}/admin/pricing/sales",
+    "/{version}/admin/pricing/discounts",
+    "/{version}/admin/pricing/codes",
+    "/{version}/admin/pricing/{id}/end",
+    // A DELETE, and a destructive one: its refusal for a seller, and each of
+    // its own refusals, are asserted in `admin_delete_user_flow`.
+    "/{version}/admin/users/{subject}",
     "/{version}/admin/orgs/{org}/plan",
     "/{version}/admin/orgs/{org}/plan/{grant}/revoke",
     "/{version}/admin/orgs/{org}/moves",
@@ -84,6 +96,9 @@ const ADMIN_PATHS_UNCOVERED: [&str; 13] = [
     "/{version}/admin/guides/{slug}",
     "/{version}/admin/guides/{slug}/publish",
     "/{version}/admin/guides/{slug}/unpublish",
+    // The site-wide switches are global and on the application pool, for the
+    // guide corpus's reason; their refusal is asserted in `site_flow`.
+    "/{version}/admin/site",
 ];
 
 #[expect(

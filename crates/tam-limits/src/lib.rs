@@ -37,12 +37,11 @@ use serde::{Deserialize, Serialize};
 /// What an organisation holds. The closed set, and the only axis any feature
 /// is gated on.
 ///
-/// `Studio` exists in code and is never sold: decisions.md, "Plans,
-/// capabilities and the pricing re-evaluation, 2026-09-12" defers it until
-/// ten paying subscribers exist or one catalogue above the top pack asks for
-/// a quote. Declaring it now is what makes that trigger a row in [`PLANS`]
-/// with `sold: false` rather than a second pricing model invented under
-/// pressure.
+/// Three paid tiers above the free one, weakest first: `Starter`,
+/// `Subscriber` (sold as "Sync", the spelling predates the ladder and is kept
+/// because stored grants carry it) and `Studio`
+/// (`docs/notes/design/research/2026-09-27-subscription-tiers.md`, which also
+/// withdraws the founding offer and the paid onboarding session).
 ///
 /// `migration_only` is gone, and its absence is the one structural change the
 /// 2026-09-20 pricing re-evaluation makes: a pack buyer is a Free account
@@ -60,6 +59,7 @@ use serde::{Deserialize, Serialize};
 pub enum Plan {
     #[default]
     Free,
+    Starter,
     Subscriber,
     Studio,
 }
@@ -73,14 +73,15 @@ impl Plan {
     /// exhaustive `match` in `all_is_total_over_the_enum`, which fails to
     /// compile when a variant is added. `wildcard_enum_match_arm` is denied
     /// workspace-wide, so that match cannot be silenced with `_`.
-    pub const ALL: [Self; 3] = [Self::Free, Self::Subscriber, Self::Studio];
+    pub const ALL: [Self; 4] = [Self::Free, Self::Starter, Self::Subscriber, Self::Studio];
 
     /// The wire spelling, which is also the spelling the `plan` CHECK
-    /// constraint enumerates after migration 0084.
+    /// constraint enumerates after migration 0090.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Free => "free",
+            Self::Starter => "starter",
             Self::Subscriber => "subscriber",
             Self::Studio => "studio",
         }
@@ -102,15 +103,17 @@ impl Plan {
     ///
     /// Not `Ord` on the enum, because the derive would key on declaration
     /// order and make the precedence an accident of where a variant was
-    /// typed. Studio outranks Subscriber outranks Free: an operator grant of
+    /// typed. Studio outranks Subscriber outranks Starter outranks Free: an
+    /// operator grant of
     /// Studio made beside a live subscription must not be held down to the
     /// subscription's narrower set.
     #[must_use]
     pub const fn strength(self) -> u8 {
         match self {
             Self::Free => 0,
-            Self::Subscriber => 1,
-            Self::Studio => 2,
+            Self::Starter => 1,
+            Self::Subscriber => 2,
+            Self::Studio => 3,
         }
     }
 
@@ -119,10 +122,9 @@ impl Plan {
     /// DECIDED (decisions.md, "Plans, capabilities and the pricing
     /// re-evaluation, 2026-09-12", as amended by
     /// `docs/notes/design/research/2026-09-20-pricing-model-re-evaluation.md`
-    /// section 3.2): every figure here is that table's, carried unchanged.
-    /// The monthly move allowance re-opens on the first subscriber who
-    /// exhausts the rolling cap twice in a quarter, which is also the trigger
-    /// that ships `Studio`.
+    /// section 3.2 and by `2026-09-27-subscription-tiers.md` section 0, which
+    /// adds Starter and sells Studio): every figure here is that table's.
+    /// Section 8 of the tiers note names the triggers that re-open them.
     ///
     /// `rung` is read only by `Studio`, where it is an operator-set monthly
     /// move allowance above the published hundred, granted with a reason for
@@ -163,6 +165,33 @@ impl Plan {
                 ai_fills_per_month: 0,
                 uploads_in_flight_max: 1,
                 support: Support::Guides,
+            },
+            // Starter: one teacher adding about a resource a week. Edits go
+            // out once a day; statistics and automatic rules start at Sync.
+            Self::Starter => Capabilities {
+                resources_max: u32::MAX,
+                marketplaces_max: u32::MAX,
+                storage_bytes_max: 5 << 30,
+                import_spreadsheet: true,
+                import_marketplace: true,
+                duplicate_review: true,
+                publish_marketplaces_max: u32::MAX,
+                moves_per_month: 10,
+                moves_accrual_cap: 30,
+                free_moves_lifetime: 0,
+                pack_edit_days: 90,
+                scheduling: true,
+                sync_pull_interval_secs: Some(24 * 3_600),
+                auto_publish_rules: false,
+                templates_max: 5,
+                collections_max: 5,
+                labels_max: 20,
+                analytics: false,
+                export: true,
+                devices_max: 5,
+                ai_fills_per_month: 50,
+                uploads_in_flight_max: 2,
+                support: Support::Email2Days,
             },
             Self::Subscriber => Capabilities {
                 resources_max: u32::MAX,
@@ -327,21 +356,24 @@ pub struct Capabilities {
 
 /// One row of the price list.
 ///
-/// `monthly_cents` and `yearly_cents` are absent for Free, which charges
+/// The prices and the keys that buy them are absent for Free, which charges
 /// nothing. Packs are not rows here: a pack buys a balance of moves on
 /// whatever plan the buyer already holds, so it is priced in [`PACKS`] and
 /// keyed by [`PriceKey`] rather than named as a plan.
+///
+/// The keys ride on the row so a card can open the checkout for the cadence
+/// it shows without a second table mapping plans to keys;
+/// `every_paid_row_names_the_keys_that_grant_it` pins that each key grants
+/// the row it sits on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanRow {
     pub id: Plan,
     pub name: &'static str,
     pub monthly_cents: Option<u32>,
     pub yearly_cents: Option<u32>,
+    pub monthly_key: Option<PriceKey>,
+    pub yearly_key: Option<PriceKey>,
     pub trial_days: u32,
-    /// Whether a checkout may route to this plan. False for Studio, which is
-    /// priced and deferred: the figures are published so the trigger has
-    /// something to ship, and no surface offers it.
-    pub sold: bool,
 }
 
 /// Everything a checkout can be opened for, as one closed vocabulary.
@@ -350,15 +382,22 @@ pub struct PlanRow {
 /// never choose; `--stripe-price-map` maps each of them onto one of these,
 /// so the vocabulary crossing the wire and the vocabulary the server gates
 /// on are the same closed set rather than two string tables that can drift.
-/// A key here is not a plan: `Pack20` and `MoveWithMe` grant no plan at all.
+/// A key here is not a plan: a pack grants no plan at all, which is why
+/// [`PriceKey::plan`] answers an `Option`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum PriceKey {
+    #[serde(rename = "starter_monthly")]
+    StarterMonthly,
+    #[serde(rename = "starter_yearly")]
+    StarterYearly,
     #[serde(rename = "sync_monthly")]
     SyncMonthly,
     #[serde(rename = "sync_yearly")]
     SyncYearly,
-    #[serde(rename = "founding_yearly")]
-    FoundingYearly,
+    #[serde(rename = "studio_monthly")]
+    StudioMonthly,
+    #[serde(rename = "studio_yearly")]
+    StudioYearly,
     #[serde(rename = "pack_20")]
     Pack20,
     #[serde(rename = "pack_50")]
@@ -369,36 +408,38 @@ pub enum PriceKey {
     Pack250,
     #[serde(rename = "pack_500")]
     Pack500,
-    #[serde(rename = "move_with_me")]
-    MoveWithMe,
 }
 
 impl PriceKey {
     /// Every key, in the order a pricing page reads them.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 11] = [
+        Self::StarterMonthly,
+        Self::StarterYearly,
         Self::SyncMonthly,
         Self::SyncYearly,
-        Self::FoundingYearly,
+        Self::StudioMonthly,
+        Self::StudioYearly,
         Self::Pack20,
         Self::Pack50,
         Self::Pack100,
         Self::Pack250,
         Self::Pack500,
-        Self::MoveWithMe,
     ];
 
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::StarterMonthly => "starter_monthly",
+            Self::StarterYearly => "starter_yearly",
             Self::SyncMonthly => "sync_monthly",
             Self::SyncYearly => "sync_yearly",
-            Self::FoundingYearly => "founding_yearly",
+            Self::StudioMonthly => "studio_monthly",
+            Self::StudioYearly => "studio_yearly",
             Self::Pack20 => "pack_20",
             Self::Pack50 => "pack_50",
             Self::Pack100 => "pack_100",
             Self::Pack250 => "pack_250",
             Self::Pack500 => "pack_500",
-            Self::MoveWithMe => "move_with_me",
         }
     }
 
@@ -412,19 +453,53 @@ impl PriceKey {
         Self::ALL.into_iter().find(|key| key.as_str() == raw)
     }
 
-    /// Whether this key bills again by itself. The three recurring keys are
-    /// the ones a billing portal can cancel; the rest are single charges.
+    /// The plan a recurring key grants, or `None` for a pack, which credits
+    /// moves on whatever plan the buyer holds.
+    #[must_use]
+    pub const fn plan(self) -> Option<Plan> {
+        match self {
+            Self::StarterMonthly | Self::StarterYearly => Some(Plan::Starter),
+            Self::SyncMonthly | Self::SyncYearly => Some(Plan::Subscriber),
+            Self::StudioMonthly | Self::StudioYearly => Some(Plan::Studio),
+            Self::Pack20 | Self::Pack50 | Self::Pack100 | Self::Pack250 | Self::Pack500 => None,
+        }
+    }
+
+    /// Whether this key bills again by itself: exactly the keys that grant a
+    /// plan, which are the ones a billing portal can cancel.
     #[must_use]
     pub const fn recurring(self) -> bool {
-        match self {
-            Self::SyncMonthly | Self::SyncYearly | Self::FoundingYearly => true,
-            Self::Pack20
-            | Self::Pack50
-            | Self::Pack100
-            | Self::Pack250
-            | Self::Pack500
-            | Self::MoveWithMe => false,
+        self.plan().is_some()
+    }
+
+    /// What this key charges before any discount, in US cents, read off the
+    /// row in [`PLANS`] or [`PACKS`] that names it rather than restated.
+    /// `every_key_has_a_list_price` pins that no key falls through to zero.
+    #[must_use]
+    pub const fn list_cents(self) -> u32 {
+        let mut index = 0;
+        while index < PLANS.len() {
+            let row = PLANS[index];
+            if let (Some(key), Some(cents)) = (row.monthly_key, row.monthly_cents) {
+                if key as u8 == self as u8 {
+                    return cents;
+                }
+            }
+            if let (Some(key), Some(cents)) = (row.yearly_key, row.yearly_cents) {
+                if key as u8 == self as u8 {
+                    return cents;
+                }
+            }
+            index += 1;
         }
+        let mut index = 0;
+        while index < PACKS.len() {
+            if PACKS[index].key as u8 == self as u8 {
+                return PACKS[index].price_cents;
+            }
+            index += 1;
+        }
+        0
     }
 }
 
@@ -440,44 +515,6 @@ pub struct Pack {
     pub moves: u32,
     pub price_cents: u32,
     pub per_move_cents: u32,
-}
-
-/// One thing sold that is not software: a booking, carrying no entitlement.
-///
-/// Its own table rather than a pack with zero moves, because the difference
-/// is exactly that buying it grants nothing a gate reads. What it buys is an
-/// hour of the founder's time, and the ledger must not be credited for it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Service {
-    pub key: PriceKey,
-    pub name: &'static str,
-    pub price_cents: u32,
-}
-
-/// The Founding 100 overlay.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Founding {
-    pub discount_year_one_pct: u32,
-    pub discount_ongoing_pct: u32,
-    /// How many years the ongoing discount runs before it lapses, capped by
-    /// the founder's decision of 2026-09-12.
-    pub ongoing_years: u32,
-    /// What a founding member pays for the first year, and for each of the
-    /// years the ongoing discount covers. Cents rather than only percentages
-    /// because the page states the dollars and a percentage of a price that
-    /// later moves would silently restate the offer.
-    pub year_one_cents: u32,
-    pub ongoing_cents: u32,
-    /// The day the offer closes whether or not the places have gone, as an
-    /// ISO date. A string rather than an instant: it is a date on a page, it
-    /// crosses to two clients, and this crate takes no calendar dependency.
-    pub closes_at: &'static str,
-    /// Annual only. The offer's whole point is cash in the first year, which
-    /// a monthly founding price would not deliver.
-    pub annual_only: bool,
-    /// Moves granted on top of the subscription's own allowance, once.
-    pub extra_moves: u32,
-    pub places: u32,
 }
 
 /// What the AI auto-fill offer promises, which today is that it is coming.
@@ -509,39 +546,52 @@ impl AiStatus {
 
 /// The price list, in the order a pricing page reads it.
 ///
-/// DECIDED (decisions.md, "Plans, capabilities and the pricing re-evaluation,
-/// 2026-09-12", as amended by the 2026-09-20 re-evaluation): the yearly price
-/// is the one already approved and the monthly one is deliberately dearer, so
-/// the page can say "$20 a month, billed yearly" and mean it. Re-opened by
-/// the Studio trigger, which is the only pending pricing decision.
+/// DECIDED (`docs/notes/design/research/2026-09-27-subscription-tiers.md`
+/// section 0): Sync keeps the price decisions.md approved on 2026-09-12;
+/// Starter and Studio sit on the category's entry and "pro" rungs. Every
+/// yearly price is about a third off twelve monthly ones, so each card can
+/// say "$20 a month, billed yearly" and mean it. Section 8 of the note names
+/// what re-opens these.
 ///
 /// No trial days on any row. Look is the trial, there is no other, and a
 /// 14-day clock beside a free plan that never expires was two offers where
 /// the seller only ever understood one.
-pub const PLANS: [PlanRow; 3] = [
+pub const PLANS: [PlanRow; 4] = [
     PlanRow {
         id: Plan::Free,
         name: "Look",
         monthly_cents: None,
         yearly_cents: None,
+        monthly_key: None,
+        yearly_key: None,
         trial_days: 0,
-        sold: true,
+    },
+    PlanRow {
+        id: Plan::Starter,
+        name: "Starter",
+        monthly_cents: Some(1_200),
+        yearly_cents: Some(9_600),
+        monthly_key: Some(PriceKey::StarterMonthly),
+        yearly_key: Some(PriceKey::StarterYearly),
+        trial_days: 0,
     },
     PlanRow {
         id: Plan::Subscriber,
         name: "Sync",
         monthly_cents: Some(2_900),
         yearly_cents: Some(24_000),
+        monthly_key: Some(PriceKey::SyncMonthly),
+        yearly_key: Some(PriceKey::SyncYearly),
         trial_days: 0,
-        sold: true,
     },
     PlanRow {
         id: Plan::Studio,
         name: "Studio",
-        monthly_cents: Some(4_400),
-        yearly_cents: Some(44_000),
+        monthly_cents: Some(5_900),
+        yearly_cents: Some(48_000),
+        monthly_key: Some(PriceKey::StudioMonthly),
+        yearly_key: Some(PriceKey::StudioYearly),
         trial_days: 0,
-        sold: false,
     },
 ];
 
@@ -593,35 +643,6 @@ pub const PACK_VALID_MONTHS: u32 = 12;
 /// price. Carried here rather than written into the page's copy so the server
 /// and the two clients say the same words.
 pub const PACK_ABOVE: &str = "Talk to us";
-
-/// What is sold beside the software. One row, and it grants nothing.
-///
-/// DECIDED (`2026-09-20-pricing-model-re-evaluation.md` section 3.6): a
-/// 45-minute screen-share in which the founder runs the seller's first import
-/// beside them. It is a booking rather than an entitlement, so no gate reads
-/// it and no ledger is credited for it.
-pub const SERVICES: [Service; 1] = [Service {
-    key: PriceKey::MoveWithMe,
-    name: "Move with me",
-    price_cents: 9_900,
-}];
-
-/// The Founding 100 offer.
-///
-/// DECIDED (`2026-09-20-pricing-model-re-evaluation.md` section 3.4): annual
-/// only, because the offer's whole purpose is cash in the first year, and
-/// closing on a stated date so the page never carries an offer with no end.
-pub const FOUNDING: Founding = Founding {
-    discount_year_one_pct: 25,
-    discount_ongoing_pct: 20,
-    ongoing_years: 3,
-    year_one_cents: 18_000,
-    ongoing_cents: 19_200,
-    closes_at: "2026-12-31",
-    annual_only: true,
-    extra_moves: 20,
-    places: 100,
-};
 
 /// The AI auto-fill packaging: bundled with a fair-use cap and a small
 /// add-on, no credit currency.
@@ -798,7 +819,7 @@ const _: () = {
 
 #[cfg(test)]
 mod tests {
-    use super::{http, ingest, job, Plan, PriceKey, Support, FOUNDING, PACKS, PLANS, SERVICES};
+    use super::{http, ingest, job, Plan, PriceKey, Support, PACKS, PLANS};
 
     /// The `UNCALIBRATED` markers are a countdown, not decoration.
     ///
@@ -826,12 +847,12 @@ mod tests {
     fn all_is_total_over_the_enum() {
         for plan in Plan::ALL {
             match plan {
-                Plan::Free | Plan::Subscriber | Plan::Studio => {}
+                Plan::Free | Plan::Starter | Plan::Subscriber | Plan::Studio => {}
             }
         }
         assert_eq!(
             Plan::ALL.len(),
-            3,
+            4,
             "a variant was added to Plan without being added to Plan::ALL"
         );
         for support in Support::ALL {
@@ -841,15 +862,17 @@ mod tests {
         }
         for key in PriceKey::ALL {
             match key {
-                PriceKey::SyncMonthly
+                PriceKey::StarterMonthly
+                | PriceKey::StarterYearly
+                | PriceKey::SyncMonthly
                 | PriceKey::SyncYearly
-                | PriceKey::FoundingYearly
+                | PriceKey::StudioMonthly
+                | PriceKey::StudioYearly
                 | PriceKey::Pack20
                 | PriceKey::Pack50
                 | PriceKey::Pack100
                 | PriceKey::Pack250
-                | PriceKey::Pack500
-                | PriceKey::MoveWithMe => {}
+                | PriceKey::Pack500 => {}
             }
         }
         assert_eq!(PLANS.len(), Plan::ALL.len(), "every plan needs a price row");
@@ -862,7 +885,7 @@ mod tests {
         }
     }
 
-    /// The ladder has to climb, or the plans are three names for one
+    /// The ladder has to climb, or the plans are four names for one
     /// product. It climbs on moves now rather than on resources: import is
     /// unlimited above Free, so the resource ceiling stopped being the axis
     /// that separates the plans the day the free tier became the trial.
@@ -901,7 +924,7 @@ mod tests {
     #[test]
     fn only_the_free_plan_carries_the_lifetime_moves() {
         assert_eq!(Plan::Free.capabilities(None).free_moves_lifetime, 5);
-        for plan in [Plan::Subscriber, Plan::Studio] {
+        for plan in [Plan::Starter, Plan::Subscriber, Plan::Studio] {
             assert_eq!(
                 plan.capabilities(None).free_moves_lifetime,
                 0,
@@ -940,7 +963,7 @@ mod tests {
         assert_eq!(Plan::Studio.capabilities(None).moves_per_month, 100);
         assert_eq!(Plan::Studio.capabilities(Some(20)).moves_per_month, 100);
         assert_eq!(Plan::Studio.capabilities(Some(400)).moves_per_month, 400);
-        for plan in [Plan::Free, Plan::Subscriber] {
+        for plan in [Plan::Free, Plan::Starter, Plan::Subscriber] {
             assert_eq!(
                 plan.capabilities(Some(500)).moves_per_month,
                 plan.capabilities(None).moves_per_month,
@@ -976,48 +999,11 @@ mod tests {
         }
     }
 
-    /// The founding offer's dollars and its percentages are two renderings
-    /// of one decision, and the page prints both.
+    /// A paid row is bought by exactly its own two keys, one per cadence,
+    /// and every recurring key belongs to some row: a key granting a plan the
+    /// row does not name would sell one tier at another's price.
     #[test]
-    fn the_founding_prices_are_the_discounts_off_the_published_yearly() {
-        let yearly = PLANS
-            .iter()
-            .find(|row| row.id == Plan::Subscriber)
-            .and_then(|row| row.yearly_cents)
-            .expect("Sync names a yearly price");
-        assert_eq!(
-            FOUNDING.year_one_cents * 100,
-            yearly * (100 - FOUNDING.discount_year_one_pct)
-        );
-        assert_eq!(
-            FOUNDING.ongoing_cents * 100,
-            yearly * (100 - FOUNDING.discount_ongoing_pct)
-        );
-        assert_eq!(FOUNDING.closes_at, "2026-12-31");
-    }
-
-    /// A service is a booking. Nothing about it may look like an
-    /// entitlement, because nothing a gate reads changes when one is sold.
-    #[test]
-    fn the_service_sku_grants_nothing() {
-        assert_eq!(SERVICES.len(), 1);
-        let service = SERVICES[0];
-        assert_eq!(service.key, PriceKey::MoveWithMe);
-        assert_eq!(service.price_cents, 9_900);
-        assert!(!service.key.recurring());
-        assert!(
-            !PACKS.iter().any(|pack| pack.key == service.key),
-            "a service key that is also a pack key would credit the ledger for an hour of \
-             somebody's time"
-        );
-    }
-
-    /// A plan a checkout can route to must have somewhere to route: either a
-    /// recurring price on its row, or Free, which charges nothing. Studio is
-    /// the one row carrying a price nothing sells, which is what deferring
-    /// it means.
-    #[test]
-    fn every_sold_plan_names_a_price_and_the_only_unsold_one_is_studio() {
+    fn every_paid_row_names_the_keys_that_grant_it() {
         for row in PLANS {
             let priced = row.monthly_cents.is_some();
             assert_eq!(
@@ -1026,25 +1012,67 @@ mod tests {
                 "{} names one recurring price and not the other",
                 row.id.as_str()
             );
-            if row.sold {
-                assert!(
-                    priced || row.id == Plan::Free,
-                    "{} is sold but no price names it",
-                    row.id.as_str()
-                );
-            } else {
+            assert_eq!(priced, row.id != Plan::Free, "only Free charges nothing");
+            assert_eq!(row.monthly_key.is_some(), priced);
+            assert_eq!(row.yearly_key.is_some(), priced);
+            for key in [row.monthly_key, row.yearly_key].into_iter().flatten() {
                 assert_eq!(
-                    row.id,
-                    Plan::Studio,
-                    "Studio is the only deferred plan; anything else unsold is a pricing \
-                     decision that never reached decisions.md"
+                    key.plan(),
+                    Some(row.id),
+                    "{} is on the {} row but grants another plan",
+                    key.as_str(),
+                    row.id.as_str()
                 );
             }
         }
-        assert!(
-            PLANS.iter().filter(|row| !row.sold).count() == 1,
-            "exactly one plan is deferred"
-        );
+        for key in PriceKey::ALL.into_iter().filter(|key| key.recurring()) {
+            assert!(
+                PLANS
+                    .iter()
+                    .any(|row| row.monthly_key == Some(key) || row.yearly_key == Some(key)),
+                "{} is recurring but no row sells it",
+                key.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn every_key_has_a_list_price() {
+        for key in PriceKey::ALL {
+            assert!(key.list_cents() > 0, "{} has no list price", key.as_str());
+        }
+        assert_eq!(PriceKey::SyncYearly.list_cents(), 24_000);
+        assert_eq!(PriceKey::Pack100.list_cents(), 12_700);
+    }
+
+    /// Each paid rung costs more than the one below at both cadences, and
+    /// never charges more per move than the rung below it, so upgrading is
+    /// never the worse deal on the axis the ladder climbs on.
+    #[test]
+    fn every_paid_rung_costs_more_and_no_more_per_move() {
+        let paid: Vec<_> = PLANS.iter().filter(|row| row.id != Plan::Free).collect();
+        for (lower, upper) in paid.iter().zip(paid.iter().skip(1)) {
+            assert!(upper.monthly_cents > lower.monthly_cents);
+            assert!(upper.yearly_cents > lower.yearly_cents);
+            // Compared cross-multiplied, so no cents are lost to rounding.
+            let monthly = |row: &super::PlanRow| row.monthly_cents.unwrap_or(0);
+            let moves = |row: &super::PlanRow| row.id.capabilities(None).moves_per_month;
+            assert!(
+                monthly(upper) * moves(lower) <= monthly(lower) * moves(upper),
+                "{} charges more per move than {}",
+                upper.id.as_str(),
+                lower.id.as_str()
+            );
+        }
+        for row in paid {
+            let monthly = row.monthly_cents.unwrap_or(0);
+            let yearly = row.yearly_cents.unwrap_or(0);
+            assert!(
+                yearly < monthly * 12,
+                "{} charges no less for paying a year up front",
+                row.id.as_str()
+            );
+        }
     }
 
     /// The one capability the founder ruled is never gated.

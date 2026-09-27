@@ -120,8 +120,8 @@ impl SignupsRepo {
 /// different person.
 ///
 /// Neither party is optional, though the columns holding them are.
-/// `auth_event_impersonation_parties_identified` in
-/// `db/auth/0003_impersonation_event.sql` demands both of exactly the two
+/// `auth_event_two_parties_identified` (`db/auth/0004_user_removed_event.sql`,
+/// widened from 0003's impersonation-only check) demands both of the two
 /// events this read selects, so a row reaching here without them is one the
 /// database would not have accepted.
 #[derive(Debug, Clone, PartialEq, Eq)]

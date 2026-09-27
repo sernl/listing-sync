@@ -86,7 +86,7 @@ On the serving side the tier is the one that reaches the filesystem per request,
 It holds the landing tier's construction a different way: `route` yields a single path segment and never one beginning with a dot, and `downloads.rs` enumerates the directory and serves the entry whose name is equal rather than joining that segment to anything, so the path opened is one this process produced.
 Only a regular file is served, and the refusal is on the entry's own type before anything is opened: an open follows a symlink and every check after it describes the target, so a link planted by the one account in the deployment with internet egress would otherwise have `tam-server` read out a key that account cannot read itself.
 The manifest is served `no-cache` and the files beside it for an hour.
-Nothing consumes the surface yet — the console's download cards are the next step, reading `/downloads/downloads.json` and linking to `/downloads/<file>` — and `apps/landing/src/site.js` still carries `downloadUrl = null`.
+Nothing consumes the surface yet — the console's download cards are the next step, reading `/downloads/downloads.json` and linking to `/downloads/<file>`; the landing links no download and says to download the app once signed in.
 A refresh that keeps failing is visible only in the journal and in `refreshed_at`, which is stamped when the published set last changed rather than when the unit last ran; the last good set keeps serving, which is the right failure, but nothing alerts on it.
 
 ## Where the artefact-shape claims are made

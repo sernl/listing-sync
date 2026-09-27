@@ -48,14 +48,17 @@ pub mod migrations;
 pub mod notifications;
 pub mod openapi;
 pub mod org;
+pub mod pricing;
 pub mod product;
 pub mod profile;
 pub mod resource_templates;
 pub mod resources;
+pub mod rich_text;
 pub mod scheduler;
 pub mod schedules;
 pub mod seller_rules;
 pub mod session;
+pub mod site;
 pub mod stream;
 pub mod stripe;
 pub mod sync_activity;
@@ -72,7 +75,7 @@ pub mod work;
 use axum::{
     extract::State,
     http::StatusCode,
-    routing::{get, patch, post, put},
+    routing::{delete, get, patch, post, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -83,12 +86,15 @@ pub use crate::{
     auth::{
         AuthBridge, JwkSet, JwksFuture, JwksSource, JwksUnavailable, VerifiedSubject, AUDIENCE,
     },
-    billing::{BillingView, Cadence, CheckoutBody, MoveBalance, RedirectView, ORG_METADATA_KEY},
+    billing::{
+        BillingView, Cadence, CheckoutBody, InvoiceView, InvoicesView, MoveBalance,
+        PaymentMethodView, RedirectView, ORG_METADATA_KEY,
+    },
     catalogue::{FileHandle, UploadedView},
     entitlement::{Entitlement, EntitlementView, PlansView, QuotaKind},
     error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind, Disclosure},
     session::{OperatorContext, OrgContext, StreamAuth, SESSION_COOKIE},
-    stripe::{PriceMap, SecretKey, WebhookSecret},
+    stripe::{Card, PriceMap, SecretKey, WebhookSecret},
     version::{APIVersion, VersionError},
 };
 
@@ -292,6 +298,13 @@ pub fn router(state: AppState) -> Router {
         // something `fetch` can follow into a new tab.
         .route("/{version}/billing/checkout", post(billing::checkout))
         .route("/{version}/billing/portal", post(billing::portal))
+        .route(
+            "/{version}/billing/payment-method",
+            get(billing::payment_method).post(billing::update_payment_method),
+        )
+        .route("/{version}/billing/invoices", get(billing::invoices))
+        .route("/{version}/billing/cancel", post(billing::cancel))
+        .route("/{version}/billing/resume", post(billing::resume))
         .route("/{version}/billing/webhook", post(billing::webhook))
         // The price list, unauthenticated: the pricing page is public, and a
         // price a seller cannot read before signing up is not a price list.
@@ -503,6 +516,13 @@ pub fn router(state: AppState) -> Router {
         // route rather than a field of bytes on the product view: a thumbnail
         // is fetched by the img element itself, cached by the browser, and
         // asked for once per row.
+        // A resource's own file read back, so a later visit can cut a
+        // preview from the stored PDF and draw it; the same tenant fence as
+        // the cover below.
+        .route(
+            "/{version}/products/{product}/files/{file}/content",
+            get(resources::product_file_content),
+        )
         .route(
             "/{version}/products/{product}/cover",
             get(resources::product_cover),
@@ -793,6 +813,9 @@ pub fn router(state: AppState) -> Router {
                 .put(profile::set_avatar)
                 .delete(profile::clear_avatar),
         )
+        // The guided tour's ending, recorded on the same row the profile
+        // reads, so the console stops offering it.
+        .route("/{version}/onboarding/tour", post(profile::settle_tour))
         // The help corpus, read by every seller through the session gate.
         // `/{version}/guides/images/{handle}` is listed before
         // `/{version}/guides/{slug}` because `images` is a literal segment
@@ -866,6 +889,20 @@ pub fn router(state: AppState) -> Router {
             "/{version}/admin/guides/_taxonomy/{kind}/{id}",
             put(guides::update_guide_taxon),
         )
+        // Sales, one-off discounts and discount codes. Each write creates a
+        // Stripe object before it records the row, which is why these are
+        // operator routes on the application pool and never tenant ones.
+        .route("/{version}/admin/pricing", get(pricing::admin_view))
+        .route("/{version}/admin/pricing/sales", post(pricing::create_sale))
+        .route(
+            "/{version}/admin/pricing/discounts",
+            post(pricing::create_one_off),
+        )
+        .route("/{version}/admin/pricing/codes", post(pricing::create_code))
+        .route(
+            "/{version}/admin/pricing/{id}/end",
+            post(pricing::end_discount),
+        )
         .route(
             "/{version}/admin/guides/{slug}",
             get(guides::guide_detail)
@@ -881,6 +918,17 @@ pub fn router(state: AppState) -> Router {
             post(guides::unpublish_guide),
         )
         .route("/{version}/admin/users", get(admin::list_users))
+        .route(
+            "/{version}/admin/users/{subject}",
+            delete(admin::delete_user),
+        )
+        // The site-wide switches: the public read every page load makes, and
+        // the operator's uncached read and write beside it.
+        .route("/{version}/site", get(site::site_view))
+        .route(
+            "/{version}/admin/site",
+            get(site::admin_site_view).patch(site::update_site),
+        )
         .route("/{version}/openapi.json", get(openapi::serve_document))
         .with_state(state)
 }

@@ -35,8 +35,7 @@ use tam_api::{APIErrorCode, APIErrorKind};
 use tam_domain::equivalence::{ElectionTriggerKind, LossKind};
 use tam_domain::product::FormGroup;
 use tam_limits::{
-    AiStatus, Capabilities, Pack, Plan, PriceKey, Support, AI, FOUNDING, PACKS, PACK_ABOVE, PLANS,
-    SERVICES,
+    AiStatus, Capabilities, Pack, Plan, PriceKey, Support, AI, PACKS, PACK_ABOVE, PLANS,
 };
 use tam_storage::{Colour, DeviceSessionStatus, GrantedBy, ItemStateKind, ALL_GATES};
 use tam_types::{
@@ -479,40 +478,31 @@ fn plans_ts() -> String {
          readonly name: string;\n  \
          readonly monthly_cents: number | null;\n  \
          readonly yearly_cents: number | null;\n  \
+         readonly monthly_key: PriceKey | null;\n  \
+         readonly yearly_key: PriceKey | null;\n  \
          readonly trial_days: number;\n  \
-         readonly sold: boolean;\n  \
          readonly capabilities: Capabilities;\n}\n\n\
          export interface Pack {\n  \
          readonly key: PriceKey;\n  \
          readonly moves: number;\n  \
          readonly price_cents: number;\n  \
          readonly per_move_cents: number;\n}\n\n\
-         export interface Service {\n  \
-         readonly key: PriceKey;\n  \
-         readonly name: string;\n  \
-         readonly price_cents: number;\n}\n\n\
-         export interface Founding {\n  \
-         readonly discount_year_one_pct: number;\n  \
-         readonly discount_ongoing_pct: number;\n  \
-         readonly ongoing_years: number;\n  \
-         readonly year_one_cents: number;\n  \
-         readonly ongoing_cents: number;\n  \
-         readonly closes_at: string;\n  \
-         readonly annual_only: boolean;\n  \
-         readonly extra_moves: number;\n  \
-         readonly places: number;\n}\n\n\
          export interface AiOffer {\n  \
          readonly status: AiStatus;\n  \
          readonly included_fills: number;\n  \
          readonly add_on_fills: number;\n  \
          readonly add_on_cents: number;\n}\n\n\
+         export interface SaleView {\n  \
+         readonly percent_off: number;\n  \
+         readonly until: string;\n  \
+         readonly banner: string;\n  \
+         readonly banner_href: string | null;\n}\n\n\
          export interface PlansView {\n  \
          readonly plans: readonly PlanRow[];\n  \
          readonly packs: readonly Pack[];\n  \
          readonly pack_above: string;\n  \
-         readonly services: readonly Service[];\n  \
-         readonly founding: Founding;\n  \
-         readonly ai: AiOffer;\n}\n\n",
+         readonly ai: AiOffer;\n  \
+         readonly sale: SaleView | null;\n}\n\n",
     );
     out.push_str("export const PLANS: readonly PlanRow[] = [\n");
     out.push_str(&plan_rows("  "));
@@ -523,14 +513,6 @@ fn plans_ts() -> String {
     out.push_str(&lit(
         "export const PACK_ABOVE = ",
         &json(PACK_ABOVE),
-        " as const;\n\n",
-    ));
-    out.push_str("export const SERVICES: readonly Service[] = [\n");
-    out.push_str(&service_rows("  "));
-    out.push_str("] as const;\n\n");
-    out.push_str(&lit(
-        "export const FOUNDING: Founding = ",
-        &json(&FOUNDING),
         " as const;\n\n",
     ));
     out.push_str(&lit(
@@ -557,14 +539,6 @@ fn plans_js() -> String {
         "export const PACK_ABOVE = ",
         &json(PACK_ABOVE),
         ";\n\n",
-    ));
-    out.push_str("export const SERVICES = Object.freeze([\n");
-    out.push_str(&service_rows("  "));
-    out.push_str("]);\n\n");
-    out.push_str(&lit(
-        "export const FOUNDING = Object.freeze(",
-        &json(&FOUNDING),
-        ");\n\n",
     ));
     out.push_str(&lit("export const AI = Object.freeze(", &json(&AI), ");\n"));
     out
@@ -615,10 +589,12 @@ fn plan_rows(indent: &str) -> String {
         out.push_str(&json(&row.monthly_cents));
         out.push_str(", \"yearly_cents\": ");
         out.push_str(&json(&row.yearly_cents));
+        out.push_str(", \"monthly_key\": ");
+        out.push_str(&json(&row.monthly_key));
+        out.push_str(", \"yearly_key\": ");
+        out.push_str(&json(&row.yearly_key));
         out.push_str(", \"trial_days\": ");
         out.push_str(&json(&row.trial_days));
-        out.push_str(", \"sold\": ");
-        out.push_str(&json(&row.sold));
         out.push_str(", \"capabilities\": ");
         out.push_str(&json(&caps));
         out.push_str(" },\n");
@@ -629,13 +605,6 @@ fn plan_rows(indent: &str) -> String {
 fn pack_rows(indent: &str) -> String {
     PACKS.iter().fold(String::new(), |mut out, pack: &Pack| {
         out.push_str(&lit(indent, &json(pack), ",\n"));
-        out
-    })
-}
-
-fn service_rows(indent: &str) -> String {
-    SERVICES.iter().fold(String::new(), |mut out, service| {
-        out.push_str(&lit(indent, &json(service), ",\n"));
         out
     })
 }

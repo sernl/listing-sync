@@ -17,13 +17,23 @@
 	import Placeholder from '$lib/Placeholder.svelte';
 	import { queryKeys } from '$lib/query';
 	import StatusPill from '$lib/StatusPill.svelte';
+	import Icon from '$lib/Icon.svelte';
 	import Toggle from '$lib/Toggle.svelte';
 	import { toast } from '$lib/toast';
 	import { slugRefusal, slugify, titleRefusal } from '$lib/pages/guides/editor';
 	import { taxonLabel } from '$lib/pages/guides/filters';
-	import '$lib/flow.css';
-	import '$lib/pages/admin/admin.css';
+	import {
+		GUIDE_ORDERS,
+		STATUS_FILTERS,
+		emptyGridMessage,
+		statusChip,
+		statusCounts,
+		visibleGuides,
+		type GuideOrder,
+		type StatusFilter
+	} from '$lib/pages/admin/guides/guides-view';
 	import '$lib/pages/guides/guides.css';
+	import '$lib/pages/admin/guides/guides.css';
 
 	const queryClient = useQueryClient();
 	const now = Date.now();
@@ -41,13 +51,15 @@
 	}));
 
 	const rows = $derived(guides.data?.guides ?? []);
-	let filter = $state<'all' | 'published' | 'draft'>('all');
-	const FILTERS = [
-		{ id: 'all', label: 'All' },
-		{ id: 'published', label: 'Published' },
-		{ id: 'draft', label: 'Drafts' }
-	] as const;
-	const shown = $derived(rows.filter((guide) => filter === 'all' || guide.status === filter));
+	let filter = $state<StatusFilter>('all');
+	let query = $state('');
+	let order = $state<GuideOrder>('updated');
+	const counts = $derived(statusCounts(rows));
+	const shown = $derived(visibleGuides(rows, filter, query, order));
+	/** Whether the new-guide form is showing. Opened by the header's button,
+	 *  and open from the start where there is nothing else on the page. */
+	let composing = $state(false);
+	const composeOpen = $derived(composing || (guides.isSuccess && rows.length === 0));
 	const topics = $derived(taxonomy.data?.topics ?? []);
 	const tags = $derived(taxonomy.data?.tags ?? []);
 	/** The two kinds, in the order the panel reads them. One shape for both,
@@ -113,6 +125,7 @@
 			slugTyped = false;
 			topicId = null;
 			tagIds = [];
+			composing = false;
 			await goto(`/admin/guides/${guide.slug}`);
 		},
 		onError: (failure: Error) =>
@@ -220,82 +233,102 @@
 	}
 </script>
 
-<div class="page flow-page">
-	<PageHead icon="book-open" title="Guides" description="The help pages sellers read." />
-
-	<div class="flow">
-
-	<section class="flow-card" aria-labelledby="new-guide-title">
-		<div class="flow-card-head">
-			<h2 class="flow-label" id="new-guide-title">New guide</h2>
-		</div>
-		<!-- One row of controls, aligned on the controls themselves rather than
-		     on the bottom of each field: the address field carries a hint and
-		     the others do not, and a flex row ending at `flex-end` put the
-		     title's input a hint's height above the address's. The hint lives
-		     under the whole row for the same reason. -->
-		<div class="gd-head">
-			<Field label="Title" id="guide-title" required>
-				<input
-					id="guide-title"
-					type="text"
-					bind:value={title}
-					placeholder="Connecting a marketplace"
-				/>
-			</Field>
-			<Field label="Address" id="guide-slug">
-				<input
-					id="guide-slug"
-					type="text"
-					value={suggested}
-					oninput={(event) => {
-						slugTyped = true;
-						slug = event.currentTarget.value;
-					}}
-				/>
-			</Field>
-			<Field label="Topic" id="guide-new-topic">
-				<select
-					id="guide-new-topic"
-					value={topicId ?? ''}
-					disabled={taxonomy.isError}
-					onchange={(event) =>
-						(topicId = event.currentTarget.value.length === 0 ? null : event.currentTarget.value)}
+<div class="page ag-page">
+	<PageHead icon="book-open" title="Guides" description="The help pages sellers read.">
+		{#snippet aside()}
+			{#if rows.length > 0}
+				<Button
+					tier={composeOpen ? 'outline' : 'primary'}
+					icon={composeOpen ? 'x' : 'plus'}
+					onclick={() => (composing = !composing)}
 				>
-					<option value="">No topic</option>
-					{#each liveTopics as topic (topic.id)}
-						<option value={topic.id}>{topic.name}</option>
-					{/each}
-				</select>
-			</Field>
-			<div class="gd-head-tags">
-				<span class="gd-group-label" id="guide-new-tags">Tags</span>
-				<Menu bind:open={tagMenu} label="Tags for the new guide" align="start">
-					{#snippet trigger()}
-						<Button onclick={() => (tagMenu = !tagMenu)}>
-							{tagIds.length === 0 ? 'No tags' : `${tagIds.length} chosen`}
-						</Button>
-					{/snippet}
-					<div class="gd-tag-menu" role="group" aria-labelledby="guide-new-tags">
-						{#each liveTags as tag (tag.id)}
-							<label>
-								<input
-									type="checkbox"
-									checked={tagIds.includes(tag.id)}
-									onchange={(event) =>
-										(tagIds = event.currentTarget.checked
-											? [...tagIds, tag.id]
-											: tagIds.filter((id) => id !== tag.id))}
-								/>
-								<span class="gd-tax">{tag.name}</span>
-							</label>
-						{:else}
-							<p class="none">No tags yet.</p>
-						{/each}
-					</div>
-				</Menu>
+					{composeOpen ? 'Close' : 'New guide'}
+				</Button>
+			{/if}
+		{/snippet}
+	</PageHead>
+
+	{#if composeOpen}
+		<section class="ag-panel" aria-labelledby="new-guide-title">
+			<div class="ag-panel-head">
+				<h2 id="new-guide-title">New guide</h2>
+				<Explain title="How a new guide starts" label="">
+					<p>
+						A new guide starts as an empty draft. You write it in the editor, where the preview
+						is, and publish it from there once you have read it back.
+					</p>
+					<p>
+						The address is made from the title until you type one of your own. It cannot change
+						once the guide exists.
+					</p>
+				</Explain>
 			</div>
-			<div class="gd-head-act">
+			<div class="ag-fields">
+				<Field label="Title" id="guide-title" required>
+					<input
+						id="guide-title"
+						type="text"
+						bind:value={title}
+						placeholder="Connecting a marketplace"
+					/>
+				</Field>
+				<Field label="Address" id="guide-slug">
+					<input
+						id="guide-slug"
+						type="text"
+						value={suggested}
+						oninput={(event) => {
+							slugTyped = true;
+							slug = event.currentTarget.value;
+						}}
+					/>
+				</Field>
+				<Field label="Topic" id="guide-new-topic">
+					<select
+						id="guide-new-topic"
+						value={topicId ?? ''}
+						disabled={taxonomy.isError}
+						onchange={(event) =>
+							(topicId =
+								event.currentTarget.value.length === 0 ? null : event.currentTarget.value)}
+					>
+						<option value="">No topic</option>
+						{#each liveTopics as topic (topic.id)}
+							<option value={topic.id}>{topic.name}</option>
+						{/each}
+					</select>
+				</Field>
+				<div class="ag-group">
+					<span class="ag-group-label" id="guide-new-tags">Tags</span>
+					<Menu bind:open={tagMenu} label="Tags for the new guide" align="start">
+						{#snippet trigger()}
+							<Button onclick={() => (tagMenu = !tagMenu)}>
+								{tagIds.length === 0 ? 'No tags' : `${tagIds.length} chosen`}
+							</Button>
+						{/snippet}
+						<div class="gd-tag-menu" role="group" aria-labelledby="guide-new-tags">
+							{#each liveTags as tag (tag.id)}
+								<label>
+									<input
+										type="checkbox"
+										checked={tagIds.includes(tag.id)}
+										onchange={(event) =>
+											(tagIds = event.currentTarget.checked
+												? [...tagIds, tag.id]
+												: tagIds.filter((id) => id !== tag.id))}
+									/>
+									<span class="gd-tax">{tag.name}</span>
+								</label>
+							{:else}
+								<p class="none">No tags yet.</p>
+							{/each}
+						</div>
+					</Menu>
+				</div>
+			</div>
+			<div class="ag-panel-head">
+				<span class="ag-slug">/guides/{suggested.length === 0 ? '…' : suggested}</span>
+				<span class="ag-spacer"></span>
 				<Button
 					tier="primary"
 					icon="plus"
@@ -306,15 +339,119 @@
 					{creating.isPending ? 'Creating…' : 'Create draft'}
 				</Button>
 			</div>
-		</div>
-		<p class="gd-head-hint">
-			/guides/{suggested.length === 0 ? '…' : suggested} · fixed once created.
-		</p>
+		</section>
+	{/if}
+
+	<section class="ag-stack" aria-labelledby="guides-title">
+		<h2 class="sr-only" id="guides-title">All guides</h2>
+		{#if guides.isPending}
+			<p class="quiet">Loading guides…</p>
+		{:else if guides.isError}
+			<Placeholder
+				icon="book-open"
+				headline="We could not load the guides"
+				body="We cannot tell whether any guides exist. Try reloading the page."
+			/>
+		{:else if rows.length === 0}
+			<Placeholder
+				icon="book-open"
+				headline="No guides yet"
+				body="Sellers see an empty Help page until you publish one."
+			/>
+		{:else}
+			<div class="ag-tools">
+				<label class="ag-search">
+					<Icon name="search" size={16} />
+					<span class="sr-only">Search guides</span>
+					<input type="search" placeholder="Search by title, address, topic or tag" bind:value={query} />
+				</label>
+				<div class="ag-chips" role="group" aria-label="Show">
+					{#each STATUS_FILTERS as chip (chip.id)}
+						<button
+							type="button"
+							class="ag-chip"
+							aria-pressed={filter === chip.id}
+							onclick={() => (filter = chip.id)}
+						>
+							{chip.label}
+							<span class="c">{counts[chip.id]}</span>
+						</button>
+					{/each}
+				</div>
+				<label class="sr-only" for="guides-order">Order</label>
+				<select id="guides-order" class="ag-sort" bind:value={order}>
+					{#each GUIDE_ORDERS as choice (choice.id)}
+						<option value={choice.id}>{choice.label}</option>
+					{/each}
+				</select>
+				<Explain title="Drafts and published guides" label="">
+					<p>
+						Sellers get a 404 for a draft. Only operators can read one, and links to it work only
+						after it is published.
+					</p>
+				</Explain>
+			</div>
+
+			{#if shown.length === 0}
+				<p class="ag-empty">{emptyGridMessage(filter, query)}</p>
+			{:else}
+				<ul class="ag-grid">
+					{#each shown as guide (guide.slug)}
+						{@const chip = statusChip(guide.status)}
+						<li class="ag-card">
+							<div class="ag-card-top">
+								<StatusPill tone={chip.tone} label={chip.label} />
+								<span class="ag-muted" title={utcInstant(guide.updated_at)}>
+									{agoLabel(guide.updated_at, now)}
+								</span>
+							</div>
+							<h3 class="ag-card-title">
+								<a href={`/admin/guides/${guide.slug}`}>{guide.title}</a>
+							</h3>
+							<span class="ag-slug">/guides/{guide.slug}</span>
+							{#if guide.topic !== null || guide.tags.length > 0}
+								<span class="ag-taxa">
+									{#if guide.topic !== null}
+										<span class="gd-tax gd-tax-topic">{taxonLabel(guide.topic)}</span>
+									{/if}
+									{#each guide.tags as tag (tag.id)}
+										<span class="gd-tax">{taxonLabel(tag)}</span>
+									{/each}
+								</span>
+							{/if}
+							<div class="ag-card-foot">
+								<Button tier="quiet" small icon="pencil" href={`/admin/guides/${guide.slug}`}>
+									Edit
+								</Button>
+								{#if guide.status === 'published'}
+									<Button tier="quiet" small icon="eye" href={`/guides/${guide.slug}`}>
+										View
+									</Button>
+								{/if}
+								<span class="ag-spacer"></span>
+								<Button
+									tier="quiet"
+									small
+									danger
+									icon="trash-2"
+									label={`Delete ${guide.title}`}
+									disabled={deleting.isPending}
+									reason={deleting.isPending ? 'Deleting.' : undefined}
+									onclick={() => remove(guide)}
+								>
+									Delete
+								</Button>
+							</div>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+		{/if}
 	</section>
 
-	<details class="flow-more">
+	<details class="ag-more">
 		<summary>Topics and tags</summary>
-		<p class="op-foot">
+		<p class="ag-note">
 			One topic per guide, any number of tags. Retired ones leave the pickers but stay on guides.
 		</p>
 		{#if taxonomy.isPending}
@@ -403,100 +540,4 @@
 			</div>
 		{/if}
 	</details>
-
-	<section class="flow-section" aria-labelledby="guides-title">
-		<div class="flow-section-head">
-			<h2 id="guides-title">All guides</h2>
-			<Explain title="Drafts and published guides" label="">
-				<p>
-					Sellers get a 404 for a draft. Only operators can read one, and links to it work only
-					after it is published.
-				</p>
-			</Explain>
-		</div>
-		{#if guides.isPending}
-			<p class="quiet">Loading guides…</p>
-		{:else if guides.isError}
-			<Placeholder
-				icon="book-open"
-				headline="We could not load the guides"
-				body="We cannot tell whether any guides exist. Try reloading the page."
-			/>
-		{:else if rows.length === 0}
-			<Placeholder
-				icon="book-open"
-				headline="No guides yet"
-				body="Sellers see an empty Help page until you publish one."
-			/>
-		{:else}
-			<div class="op-filters" role="group" aria-label="Show">
-				{#each FILTERS as chip (chip.id)}
-					<button
-						type="button"
-						class="op-chip"
-						aria-pressed={filter === chip.id}
-						onclick={() => (filter = chip.id)}
-					>
-						{chip.label}
-						<span class="c">
-							{rows.filter((guide) => chip.id === 'all' || guide.status === chip.id).length}
-						</span>
-					</button>
-				{/each}
-			</div>
-			<div class="op-guides">
-				{#each shown as guide (guide.slug)}
-					<article class="flow-card op-guide">
-						<div class="flow-card-head">
-							{#if guide.status === 'published'}
-								<StatusPill tone="ok" label="published" />
-							{:else}
-								<StatusPill tone="soon" label="draft" />
-							{/if}
-							<span class="op-foot" title={utcInstant(guide.updated_at)}>
-								{agoLabel(guide.updated_at, now)}
-							</span>
-						</div>
-						<div class="flow-item-main">
-							<a class="flow-item-title op-name" href={`/admin/guides/${guide.slug}`}>{guide.title}</a>
-							<span class="flow-item-line mono">/guides/{guide.slug}</span>
-						</div>
-						{#if guide.topic !== null || guide.tags.length > 0}
-							<span class="gd-row-tax">
-								{#if guide.topic !== null}
-									<span class="gd-tax gd-tax-topic">{taxonLabel(guide.topic)}</span>
-								{/if}
-								{#each guide.tags as tag (tag.id)}
-									<span class="gd-tax">{taxonLabel(tag)}</span>
-								{/each}
-							</span>
-						{/if}
-						<div class="flow-actions op-guide-acts">
-							<Button tier="primary" small icon="pencil" href={`/admin/guides/${guide.slug}`}>
-								Edit
-							</Button>
-							{#if guide.status === 'published'}
-								<Button tier="outline" small icon="eye" href={`/guides/${guide.slug}`}>View</Button>
-							{/if}
-							<span class="op-spacer"></span>
-							<Button
-								tier="quiet"
-								small
-								danger
-								icon="trash-2"
-								disabled={deleting.isPending}
-								reason={deleting.isPending ? 'Deleting.' : undefined}
-								onclick={() => remove(guide)}
-							>
-								Delete
-							</Button>
-						</div>
-					</article>
-				{:else}
-					<p class="quiet">None under this filter.</p>
-				{/each}
-			</div>
-		{/if}
-	</section>
-	</div>
 </div>

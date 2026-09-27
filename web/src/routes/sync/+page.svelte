@@ -776,7 +776,7 @@
 </div>
 
 {#snippet toPlans()}
-	<Button tier="primary" small href="/settings/subscription">See plans</Button>
+	<Button tier="primary" small href="/settings/billing">See plans</Button>
 {/snippet}
 
 <!-- Each retries the page that failed, which the read remembers apart from

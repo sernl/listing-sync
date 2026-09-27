@@ -176,7 +176,7 @@
 			<Banner tone="warn" title="Your plan doesn’t include collections">
 				{capped}
 				{#snippet action()}
-					<Button tier="primary" small href="/settings/subscription">See plans</Button>
+					<Button tier="primary" small href="/settings/billing">See plans</Button>
 				{/snippet}
 			</Banner>
 		{/if}

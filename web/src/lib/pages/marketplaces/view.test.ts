@@ -8,8 +8,8 @@ import {
 	CARD_NAME,
 	attentionAsk,
 	CONNECT_VERDICT_CODES,
-	DOWNLOADS_ANCHOR,
-	MACHINES_ANCHOR,
+	GET_APP_ANCHOR,
+	DEVICES_ANCHOR,
 	TRANSPORT_BADGE,
 	carrying,
 	busyAt,
@@ -20,7 +20,6 @@ import {
 	disconnectSay,
 	disconnectable,
 	footerAction,
-	headerAction,
 	heldHere,
 	hereFace,
 	hostOf,
@@ -78,12 +77,12 @@ describe('the card status pill', () => {
 });
 
 describe('whether a marketplace is carrying work', () => {
-	it('counts a login held on a machine and a connection we serve', () => {
+	it('counts a login held on a device and a connection we serve', () => {
 		expect(carrying(row('signed_in', 'ok'))).toBe(true);
 		expect(carrying(row('served_here', 'ok', 'Etsy'))).toBe(true);
 	});
 
-	it('counts nothing else, including a seller with no machine at all', () => {
+	it('counts nothing else, including a seller with no device at all', () => {
 		for (const state of [
 			'needs_signin',
 			'unverified',
@@ -241,17 +240,15 @@ describe('the card footer action', () => {
 		});
 	});
 
-	// Absent, refused and not-yet-answered are none of them "this machine has
+	// Absent, refused and not-yet-answered are none of them "this device has
 	// no login": offering a sign-in on any of them would be acting on a fact we
-	// do not have, which is the defect this change exists to stop making one
-	// layer up.
-	it('points at the machine that reports a login while this one has not answered', () => {
+	// do not have. A marketplace some device already carries needs nothing
+	// pressed, so the card offers nothing rather than a button that goes
+	// nowhere useful.
+	it('offers nothing to press on a connected shop this device has not answered for', () => {
 		for (const local of NO_LOCAL_ANSWER) {
-			expect(footerAction(row('signed_in', 'ok'), 'app', local)).toEqual({
-				kind: 'link',
-				label: 'Open TPT',
-				href: MACHINES_ANCHOR
-			});
+			expect(footerAction(row('signed_in', 'ok'), 'app', local)).toBeUndefined();
+			expect(footerAction(row('signed_in', 'ok'), 'browser', local)).toBeUndefined();
 		}
 	});
 
@@ -260,7 +257,7 @@ describe('the card footer action', () => {
 			for (const local of NO_LOCAL_ANSWER) {
 				expect(footerAction(row(state, 'bad'), 'app', local)).toMatchObject({
 					kind: 'link',
-					href: MACHINES_ANCHOR
+					href: DEVICES_ANCHOR
 				});
 			}
 		}
@@ -274,20 +271,21 @@ describe('the card footer action', () => {
 		for (const marketplace of ['Tpt', 'Tes'] as const) {
 			expect(footerAction(row('no_device', 'bad', marketplace), 'app', NOT_HERE)).toEqual({
 				kind: 'command',
-				label: `Connect ${CARD_NAME[marketplace]}`,
+				label: 'Connect',
 				marketplace
 			});
 		}
 	});
 
-	it('names the app rather than offering a dead button when it cannot connect', () => {
+	// The founder's ruling: the browser's button says the same one word as
+	// the app's, and takes the seller to step 1, where the page says where
+	// connecting happens.
+	it('sends a browser to the app step with the same Connect the app shows', () => {
 		for (const marketplace of ['Tpt', 'Tes'] as const) {
-			const action = footerAction(row('no_device', 'bad', marketplace), 'browser', null);
-			expect(action.kind).toBe('link');
-			expect(action).toEqual({
+			expect(footerAction(row('no_device', 'bad', marketplace), 'browser', null)).toEqual({
 				kind: 'link',
-				label: `Connect ${CARD_NAME[marketplace]} from the Teachouse app on your computer or phone`,
-				href: DOWNLOADS_ANCHOR
+				label: 'Connect',
+				href: GET_APP_ANCHOR
 			});
 		}
 	});
@@ -299,8 +297,8 @@ describe('the card footer action', () => {
 	// assertion that a caller doing so gets no dead button.
 	it('never offers a browser a local sign-in, whatever the local answer says', () => {
 		for (const local of [NOT_HERE, HERE, ...NO_LOCAL_ANSWER]) {
-			expect(footerAction(row('no_device', 'bad'), 'browser', local).kind).toBe('link');
-			expect(footerAction(row('signed_in', 'ok'), 'browser', local).kind).toBe('link');
+			expect(footerAction(row('no_device', 'bad'), 'browser', local)?.kind).toBe('link');
+			expect(footerAction(row('signed_in', 'ok'), 'browser', local)?.kind).not.toBe('command');
 		}
 	});
 
@@ -309,7 +307,7 @@ describe('the card footer action', () => {
 			for (const state of ['signed_in', 'no_device', 'needs_signin'] as const) {
 				for (const local of [HERE, NOT_HERE, ...NO_LOCAL_ANSWER]) {
 					const action = footerAction(row(state, 'bad'), host, local);
-					if (action.kind === 'link') {
+					if (action?.kind === 'link') {
 						expect(new URL(action.href, 'https://teachouse.example').origin, `${host}/${state}`)
 							.toBe('https://teachouse.example');
 					}
@@ -319,7 +317,7 @@ describe('the card footer action', () => {
 	});
 });
 
-describe('what this machine says about its own session', () => {
+describe('what this device says about its own session', () => {
 	// The pill above this line is the organisation's, lifted from whatever
 	// machine last reported a login. A seller at a second computer read it as a
 	// statement about the computer in front of them, so the two facts are now
@@ -406,14 +404,14 @@ describe('disconnecting a marketplace from the account', () => {
 	// connection back to linked on its next beat, because that is what a
 	// check-in does. A seller told only that the login remains would watch the
 	// marketplace reconnect itself with no account of why.
-	it('says the login stays on its machine and that the machine will reconnect it', () => {
+	it('says the login stays on its device and that the device will reconnect it', () => {
 		const prompt = disconnectPrompt('Tes', true);
-		expect(prompt).toContain('still on the machine');
+		expect(prompt).toContain('still on the device');
 		expect(prompt).toContain('reconnects TES by itself');
-		expect(prompt).toContain('sign the machine out');
+		expect(prompt).toContain('sign the device out');
 	});
 
-	it('claims no reconnection where no machine holds the login', () => {
+	it('claims no reconnection where no device holds the login', () => {
 		const prompt = disconnectPrompt('Tes', false);
 		expect(prompt).not.toContain('reconnects TES by itself');
 		expect(prompt).toContain('Teachouse stops all work on TES');
@@ -423,24 +421,24 @@ describe('disconnecting a marketplace from the account', () => {
 	// the control plane to unlink and reaches no machine's store. A prompt that
 	// claimed a login was removed would be false in the app as well as in a
 	// browser, because this control no longer calls `forgetHere` on either.
-	it('never claims a machine loses its login', () => {
+	it('never claims a device loses its login', () => {
 		for (const heldOnAMachine of [true, false]) {
-			expect(disconnectPrompt('Tpt', heldOnAMachine)).not.toContain('removed from this machine');
+			expect(disconnectPrompt('Tpt', heldOnAMachine)).not.toContain('removed from this device');
 		}
 	});
 });
 
-describe('signing this machine out of a marketplace', () => {
-	it('says the login is removed from this machine', () => {
-		expect(signOutHereAsk('Tpt')).toContain('removed from this machine');
+describe('signing this device out of a marketplace', () => {
+	it('says the login is removed from this device', () => {
+		expect(signOutHereAsk('Tpt')).toContain('removed from this device');
 	});
 
 	// The whole reason the control exists: a seller signing a shared computer
 	// out of TPT must not stop the work running on the computer at home, and
 	// must not be told they have.
-	it('promises the other machines keep their logins, and stops scheduled work nowhere', () => {
+	it('promises the other devices keep their logins, and stops scheduled work nowhere', () => {
 		const prompt = signOutHereAsk('Tes');
-		expect(prompt).toContain('other machines keep their own TES logins');
+		expect(prompt).toContain('other devices keep their own TES logins');
 		expect(prompt).not.toContain('Teachouse stops all work on TES');
 	});
 
@@ -471,7 +469,7 @@ describe('what a card asks before disconnecting the account', () => {
 	// one module for. The reconnect warning has to follow `connection.state`,
 	// because that is the field `derive_link` lifts and the disconnect route
 	// writes.
-	it('warns of a reconnect only where a machine is still reporting the login', () => {
+	it('warns of a reconnect only where a device is still reporting the login', () => {
 		expect(disconnectAsk('Tpt', { state: 'linked' })).toContain('reconnects TPT by itself');
 	});
 
@@ -516,27 +514,8 @@ describe('which card is mid-flight', () => {
 	});
 });
 
-describe('the page header action', () => {
-	it('leads a browser to the app, which is the only way to connect from one', () => {
-		expect(headerAction('browser')).toEqual({
-			label: 'Connect a marketplace',
-			href: DOWNLOADS_ANCHOR
-		});
-	});
-
-	// In the app the cards below are the route, so a header button pointing at
-	// them would be the page's main action doing nothing. What downloads are
-	// still for there is the seller's other machine.
-	it('offers the app the one thing downloads are still for', () => {
-		expect(headerAction('app')).toEqual({
-			label: 'Install on another machine',
-			href: DOWNLOADS_ANCHOR
-		});
-	});
-});
-
 describe('the transport line D1 requires', () => {
-	it('says whose machine, and names the marketplace that gave the permission', () => {
+	it('says whose device, and names the marketplace that gave the permission', () => {
 		expect(transportLine('SellerDevice', 'TPT')).toBe('Runs on your own computer.');
 		expect(transportLine('OfficialApi', 'Etsy')).toBe(
 			'Runs on our servers, with the permission Etsy gave us.'
@@ -589,11 +568,11 @@ describe('what a live tile says when the read has not landed or failed', () => {
 	// The acceptance case, through the function the page actually calls: a
 	// marketplace the server reports signed in on some machine, read on a
 	// machine that holds no login for it, offers the sign-in here.
-	it('carries this machine’s own answer through to the action', () => {
+	it('carries this device’s own answer through to the action', () => {
 		const held = row('signed_in', 'ok', 'Tpt');
 		expect(liveFace({ state: 'read', row: held }, 'app', NOT_HERE).action).toEqual({
 			kind: 'command',
-			label: 'Connect TPT',
+			label: 'Connect',
 			marketplace: 'Tpt'
 		});
 	});
@@ -639,7 +618,7 @@ describe('the card heading name', () => {
 	});
 });
 
-describe('one machine and the logins on it', () => {
+describe('one device and the logins on it', () => {
 	it('names an operating system as its vendor writes it', () => {
 		expect(osLabel({ os: 'macos' } as never)).toBe('macOS');
 		expect(osLabel({ os: 'WINDOWS' } as never)).toBe('Windows');
@@ -673,7 +652,7 @@ describe('one machine and the logins on it', () => {
 
 	it('says a wiped login is the sign-out working, not something failing', () => {
 		expect(sessionWords({ status: 'wiped', account_label: null } as never)).toBe(
-			'removed when you signed this machine out'
+			'removed when you signed this device out'
 		);
 	});
 });
@@ -704,14 +683,14 @@ describe('what a finished account disconnect says', () => {
 	// The boundary: this control asks the control plane and reaches no
 	// machine's store, so no answer it gives may report a login removed. The
 	// sentence it replaced said exactly that, because the one control did both.
-	it('reports no machine’s login, on any answer', () => {
+	it('reports no device’s login, on any answer', () => {
 		for (const server of [
 			{ kind: 'refused' } as const,
 			{ kind: 'moved', moved: 0 } as const,
 			{ kind: 'moved', moved: 2 } as const
 		]) {
 			const say = disconnectSay('Tpt', server);
-			expect(say.message, server.kind).not.toContain('this machine');
+			expect(say.message, server.kind).not.toContain('this device');
 			expect(say.message.length, server.kind).toBeGreaterThan(0);
 		}
 	});
@@ -730,10 +709,10 @@ describe('what a finished local sign-out says', () => {
 		{ kind: 'unavailable' }
 	];
 
-	it('confirms the login is gone from this machine', () => {
+	it('confirms the login is gone from this device', () => {
 		const say = signOutHereSay('Tpt', { kind: 'done' });
 		expect(say.tone).toBe('info');
-		expect(say.message).toContain('removed from this machine');
+		expect(say.message).toContain('removed from this device');
 	});
 
 	it('reports an app that cannot forget', () => {
@@ -743,7 +722,7 @@ describe('what a finished local sign-out says', () => {
 		});
 	});
 
-	it('passes the machine’s own refusal through', () => {
+	it('passes the device’s own refusal through', () => {
 		expect(signOutHereSay('Tpt', { kind: 'refused', detail: REFUSAL })).toEqual({
 			tone: 'error',
 			message: REFUSAL
@@ -793,13 +772,13 @@ describe('what the attention banner asks for', () => {
 		expect(attentionAsk([])).toBeNull();
 	});
 
-	it('names the quiet machine once, however many logins it holds, rather than asking for a sign-in', () => {
+	it('names the quiet device once, however many logins it holds, rather than asking for a sign-in', () => {
 		const ask = attentionAsk([quietOn('Tpt', 'Galaxy Tab'), quietOn('Tes', 'Galaxy Tab')]);
 		expect(ask?.title).toBe('TPT and TES need you');
 		expect(ask?.say).toBe('Open the Teachouse app on Galaxy Tab so scheduled work runs again.');
 	});
 
-	it('asks for a sign-in where no machine holds the login', () => {
+	it('asks for a sign-in where no device holds the login', () => {
 		const ask = attentionAsk([row('needs_signin', 'bad', 'Tes')]);
 		expect(ask?.title).toBe('TES needs you');
 		expect(ask?.say).toContain('Sign in to TES');

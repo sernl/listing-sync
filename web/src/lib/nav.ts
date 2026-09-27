@@ -30,12 +30,7 @@ export interface NavItem {
 }
 
 export type SectionId =
-	| 'import'
-	| 'crosslist'
-	| 'automations'
-	| 'marketplaces'
-	| 'account'
-	| 'admin';
+	'import' | 'crosslist' | 'automations' | 'marketplaces' | 'account' | 'admin';
 
 export interface NavSection {
 	id: SectionId;
@@ -92,10 +87,14 @@ export const SECTIONS: readonly NavSection[] = [
 		hint: 'Publish your resources to multiple marketplaces.',
 		icon: 'package',
 		href: '/resources',
-		primary: { href: '/resources/new', label: 'New resource', icon: 'circle-plus' },
+		primary: {
+			href: '/resources/new',
+			label: 'New resource',
+			icon: 'circle-plus'
+		},
 		items: [
 			{ href: '/resources', label: 'Resources', icon: 'layout-list' },
-			{ href: '/resources/files', label: "Your machines' files", icon: 'files' },
+			{ href: '/resources/files', label: "Your devices' files", icon: 'files' },
 			{ href: '/labels', label: 'Labels', icon: 'tag' },
 			// Between Labels and Analytics because a collection is the other
 			// selection dimension a seller files by: a label is a word on a
@@ -121,7 +120,11 @@ export const SECTIONS: readonly NavSection[] = [
 			// The path is unchanged although the word is: `/automations/sharing`
 			// is where the page has always been, and moving it would break every
 			// link a seller has kept.
-			{ href: '/automations/sharing', label: 'Schedules', icon: 'calendar-clock' },
+			{
+				href: '/automations/sharing',
+				label: 'Schedules',
+				icon: 'calendar-clock'
+			},
 			{
 				href: '/automations/migration',
 				label: 'Migrations',
@@ -159,8 +162,12 @@ export const SECTIONS: readonly NavSection[] = [
 		icon: 'circle-user',
 		href: '/settings',
 		items: [
-			{ href: '/settings', label: 'Account settings', icon: 'sliders-horizontal' },
-			{ href: '/settings/subscription', label: 'Plan and moves', icon: 'credit-card' },
+			{
+				href: '/settings',
+				label: 'Account settings',
+				icon: 'sliders-horizontal'
+			},
+			{ href: '/settings/billing', label: 'Billing', icon: 'credit-card' },
 			{ href: '/notifications', label: 'Notifications', icon: 'bell' },
 			{ href: '/status', label: 'Marketplace status', icon: 'activity' },
 			{ href: '/guides', label: 'Help and guides', icon: 'book-open' }
@@ -212,9 +219,11 @@ export const ADMIN_SECTION: NavSection = {
 		{ href: '/admin/health', label: 'Sync health', icon: 'heart-pulse' },
 		{ href: '/admin/failures', label: 'Failed writes', icon: 'circle-x' },
 		{ href: '/admin/import-drain', label: 'Import drain', icon: 'chart-line' },
-		{ href: '/admin/users', label: 'Identity users', icon: 'users' },
+		{ href: '/admin/users', label: 'Users', icon: 'users' },
 		{ href: '/admin/guides', label: 'Guides', icon: 'book-open' },
-		{ href: '/admin/impersonations', label: 'Impersonations', icon: 'copy' }
+		{ href: '/admin/impersonations', label: 'Impersonations', icon: 'copy' },
+		{ href: '/admin/pricing', label: 'Pricing', icon: 'tag' },
+		{ href: '/admin/site', label: 'Site', icon: 'sliders-horizontal' }
 	]
 };
 
@@ -225,7 +234,11 @@ export const ADMIN_SECTION: NavSection = {
  *  nothing. */
 const SECTION_LANDINGS: readonly NavItem[] = [...SECTIONS, ADMIN_SECTION]
 	.filter((section) => !section.items.some((item) => item.href === section.href))
-	.map((section) => ({ href: section.href, label: section.label, icon: section.icon }));
+	.map((section) => ({
+		href: section.href,
+		label: section.label,
+		icon: section.icon
+	}));
 
 /** Every destination this model names, however it is reached. The one list the
  *  breadcrumb, the redirect table's own test and the tab bar all read, so a
@@ -265,7 +278,7 @@ function claimed(pathname: string, item: NavItem): number | null {
  *  the path belongs to no section.
  *
  * The longest matching page wins before the section's own landing path is
- * considered, so `/settings/subscription` opens Account rather than whichever
+ * considered, so `/settings/billing` opens Account rather than whichever
  * section happens to list a shorter prefix.
  *
  * `null` rather than a fallback, because the home path and the open-questions
@@ -333,7 +346,9 @@ export interface PhoneTab extends Omit<NavItem, 'href'> {
  *  the two desktop ones cannot come to open different screens. */
 const createAction = SECTIONS.find((section) => section.id === 'crosslist')?.primary;
 if (createAction === undefined) {
-	throw new Error('the phone bar carries the Catalogue create action, which that section has none of');
+	throw new Error(
+		'the phone bar carries the Catalogue create action, which that section has none of'
+	);
 }
 
 /** `href` narrowed back to a definite string: the top strip's own create link
@@ -481,7 +496,7 @@ export const LEGACY_REDIRECTS: readonly { from: string; to: string }[] = [
 	// to reach the new one would redirect twice for every saved link.
 	{ from: '/listings', to: '/resources' },
 	{ from: '/connections', to: '/marketplaces' },
-	{ from: '/settings/devices', to: '/settings#machines' },
+	{ from: '/settings/devices', to: '/settings#devices' },
 	{ from: '/queue', to: '/reconciliation' },
 	// The help placeholder was `/library`, then `/resources`; it is `/guides`
 	// now, because "Resources" is what the catalogue is called and two
@@ -493,7 +508,11 @@ export const LEGACY_REDIRECTS: readonly { from: string; to: string }[] = [
 	{ from: '/inventory', to: '/resources' },
 	// `/help` and `/guides` were two placeholders for one thing, and nothing
 	// pointed at `/help` any more.
-	{ from: '/help', to: '/guides' }
+	{ from: '/help', to: '/guides' },
+	// The billing page was "Plan and moves" at `/settings/subscription`. The
+	// landing page's signup links and Stripe sessions opened before the rename
+	// still name the old path, with `?checkout=` or `?price=` on it.
+	{ from: '/settings/subscription', to: '/settings/billing' }
 ];
 
 export function legacyDestination(pathname: string): string | null {
@@ -562,9 +581,7 @@ export function initialsOf(name: string | undefined | null): string {
  *  the organisation's initials otherwise, and the section glyph while neither
  *  is known -- every frame before the reads land, and a name with no letter. */
 export type AccountTile =
-	| { kind: 'picture'; src: string }
-	| { kind: 'initials'; text: string }
-	| { kind: 'glyph' };
+	{ kind: 'picture'; src: string } | { kind: 'initials'; text: string } | { kind: 'glyph' };
 
 export function accountTile(
 	pictureSrc: string | null,

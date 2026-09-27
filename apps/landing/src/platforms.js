@@ -3,11 +3,14 @@
  *
  * The row exists because the sentence beside it tells a reader that some work
  * needs a small app, and a reader on a phone cannot tell from that sentence
- * whether their phone is one of the two. It is not a download page: `site.js`
- * owns the link, and this names the platforms.
+ * whether their phone is one of the two. It is not a download page: the
+ * console offers the build once a seller is signed in, and this names the
+ * platforms.
  *
  * A row carries a file only where the platform's owner permits us to draw its
- * mark, so `file` is null far more often than it is missing. Google licenses
+ * mark, so `file` is null far more often than it is missing. A row without one
+ * names a generic `glyph` instead (a desktop screen), which is ours and no
+ * vendor's, so the two chips read at the same weight. Google licenses
  * the Android robot under Creative Commons with an attribution line this row
  * carries; Microsoft requires an express licence for the Windows symbol, which
  * the founder decided on 2026-09-07 not to apply for -- the drafted request
@@ -31,6 +34,7 @@ export const platforms = [
 	{
 		name: 'Windows',
 		file: null,
+		glyph: 'desktop',
 		why: 'Microsoft requires a trademark use licence for the Windows symbol, which is not held, and permits the name in text meanwhile.'
 	},
 	{ name: 'Android™', file: 'android-robot.svg', why: null }

@@ -3,19 +3,19 @@
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { beforeNavigate, goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ApiFailure, api, type GuideDetailView, type GuideTaxon } from '$lib/api';
+	import { ApiFailure, api, type GuideDetailView } from '$lib/api';
 	import Button from '$lib/Button.svelte';
-	import { utcInstant } from '$lib/elapsed';
+	import Banner from '$lib/Banner.svelte';
+	import { agoLabel, utcInstant } from '$lib/elapsed';
 	import Field from '$lib/Field.svelte';
 	import Icon from '$lib/Icon.svelte';
 	import Menu from '$lib/Menu.svelte';
 	import Explain from '$lib/Explain.svelte';
-	import FlowStep from '$lib/FlowStep.svelte';
 	import PageHead from '$lib/PageHead.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
 	import { queryKeys } from '$lib/query';
 	import StatusPill from '$lib/StatusPill.svelte';
-	import Stepper, { type StepMark } from '$lib/Stepper.svelte';
+	import TabBar from '$lib/TabBar.svelte';
 	import { guideImages } from '$lib/pages/admin/admin-view';
 	import { toast } from '$lib/toast';
 	import { markUp, type MarkKind } from '$lib/tpt-form';
@@ -54,9 +54,17 @@
 		type Write,
 		type WriteKind
 	} from '$lib/pages/guides/save';
+	import {
+		editOf,
+		publishPhase,
+		publishWords,
+		publishedBehind as behindOf,
+		saveWords,
+		writeBlock,
+		writeLabel
+	} from '$lib/pages/admin/guides/guides-view';
 	import '$lib/pages/guides/guides.css';
-	import '$lib/flow.css';
-	import '$lib/pages/admin/admin.css';
+	import '$lib/pages/admin/guides/guides.css';
 
 	/** How long after the last keystroke a draft saves itself. Long enough that
 	 *  a sentence is one save rather than thirty, short enough that a closed
@@ -206,36 +214,11 @@
 		tag_ids: tagIds
 	});
 
-	/** One guide's or one snapshot's associations as an edit, so the three
-	 *  places that compare them cannot each read the shape differently. */
-	function editOf(view: {
-		title: string;
-		body: string;
-		topic: GuideTaxon | null;
-		tags: GuideTaxon[];
-	}): GuideEdit {
-		return {
-			title: view.title,
-			body: view.body,
-			topic_id: view.topic?.id ?? null,
-			tag_ids: view.tags.map((tag) => tag.id)
-		};
-	}
-
 	const unsaved = $derived(base !== null && dirty(editOf(base), outgoing));
 	const refusal = $derived(editRefusal(outgoing));
 
-	/** Whether the published guide is older than the stored draft. Compared by
-	 *  content rather than by revision: a publish moves the revision on, so a
-	 *  revision behind the draft's would also be true of a guide published a
-	 *  second ago with nothing changed since. */
-	const publishedBehind = $derived.by(() => {
-		const view = base;
-		if (view === null || view.status !== 'published' || view.published === null) {
-			return false;
-		}
-		return !sameEdit(editOf(view), editOf(view.published));
-	});
+	/** Whether sellers read an older version than the stored draft. */
+	const publishedBehind = $derived(base !== null && behindOf(base));
 
 	const halt = $derived(pipeline.halt);
 	/** Whether leaving now would lose something: text that is not stored, a
@@ -1101,14 +1084,20 @@
 	const previewing = $derived(previewCurrent(preview, body));
 	const remoteImages = $derived(loadsRemoteImages(preview.html ?? ''));
 	const images = $derived(guideImages(body));
-	const steps = $derived<StepMark[]>([
-		{ id: 'write', label: 'Write', done: !unsaved && body.trim().length > 0 },
-		{ id: 'images', label: 'Images', done: images.length > 0 },
-		{ id: 'publish', label: 'Publish', done: base?.status === 'published' && !publishedBehind }
-	]);
+	const phase = $derived(publishPhase(base?.status ?? 'draft', publishedBehind));
+	const publication = $derived(publishWords(phase));
+	const saveState = $derived(saveWords({ halt, busy, unsaved }));
+	const gate = $derived({ refusal, pipeline, unsaved });
+	const flying = $derived(pipeline.flight?.kind ?? null);
+	/** Which pane shows where the screen is too narrow for both. */
+	let pane = $state<'edit' | 'preview'>('edit');
+	const PANES = [
+		{ id: 'edit', label: 'Edit', count: null },
+		{ id: 'preview', label: 'Preview', count: null }
+	] as const;
 </script>
 
-<div class="page flow-page">
+<div class="page ag-page ag-editor">
 	<PageHead
 		icon="book-open"
 		title={base?.title ?? 'Guide'}
@@ -1125,319 +1114,306 @@
 			body="It may not exist, or the server did not answer. Go back to the guides list."
 		/>
 	{:else if base !== null}
-		<div class="flow">
-			<Stepper {steps} label="Guide" />
+		<div class="ag-bar" role="region" aria-label="Save and publish">
+			<div class="ag-bar-state">
+				<StatusPill tone={saveState.tone} label={saveState.label} />
+				<StatusPill tone={publication.tone} label={publication.label} />
+				<Explain title="Drafts, versions and publishing" label="">
+					<p>A draft is visible to operators only. Sellers get a 404 for it.</p>
+					<p>
+						Your text saves itself a moment after you stop typing. Publishing uses the saved
+						version, so after you change a published guide, publish it again to update what
+						sellers read.
+					</p>
+				</Explain>
+				{#if said !== null}
+					<span class="ag-said" role="status">{said}</span>
+				{/if}
+			</div>
+			<div class="ag-bar-acts">
+				<Button
+					tier="primary"
+					small
+					disabled={writeBlock('save', gate) !== undefined}
+					reason={writeBlock('save', gate)}
+					onclick={() => void write('save')}
+				>
+					{writeLabel('save', phase, flying)}
+				</Button>
+				<Button
+					tier={phase === 'draft' ? 'additive' : 'outline'}
+					small
+					disabled={writeBlock('publish', gate) !== undefined}
+					reason={writeBlock('publish', gate)}
+					onclick={() => void write('publish')}
+				>
+					{writeLabel('publish', phase, flying)}
+				</Button>
+				{#if base.status === 'published'}
+					<Button
+						small
+						danger
+						disabled={writeBlock('unpublish', gate) !== undefined}
+						reason={writeBlock('unpublish', gate)}
+						onclick={() => void write('unpublish')}
+					>
+						{writeLabel('unpublish', phase, flying)}
+					</Button>
+					<Button tier="quiet" small icon="eye" href={`/guides/${slug}`}>View</Button>
+				{/if}
+				<Button
+					tier="quiet"
+					small
+					danger
+					icon="trash-2"
+					label="Delete this guide"
+					onclick={() => void remove()}
+				>
+					Delete
+				</Button>
+			</div>
+		</div>
 
-			{#if halt !== null}
-				<!-- Every halt is a thing that happened to a write, named, with
-				     the way out on it. None of them retries by itself: a write
-				     whose outcome is unknown is the one thing that must not be
-				     sent twice. -->
-				<div class="gd-halt" class:bad={halt.why === 'conflict' || halt.why === 'replaced'}>
-					{#if halt.why === 'replaced'}
-						<p class="t">This guide was deleted, and another now uses its address</p>
-						<p>
-							The guide you were editing was deleted, and a new guide was created at
-							/guides/{slug}{halt.now === null ? '' : `, now at revision ${halt.now.revision}`}.
-							None of your text was sent to it or overwritten. It is still in the Write box.
-						</p>
-						{#if halt.write !== null}
-							<!-- Stated as unknown and left there. The guide that write was
-							     sent to no longer exists, so nothing readable from here can
-							     say whether it landed, and the revisions of the guide
-							     standing at this address count somebody else's writes. -->
-							<p>
-								We cannot tell if that {halt.write.kind === 'save' ? 'save' : halt.write.kind}
-								reached the deleted guide, and it cannot apply to the new one.
-							</p>
+		{#if halt !== null}
+			<!-- Every halt is a thing that happened to a write, named, with the
+			     way out on it. None of them retries by itself: a write whose
+			     outcome is unknown is the one thing that must not be sent twice. -->
+			{#if halt.why === 'replaced'}
+				<Banner tone="bad" title="This guide was deleted, and another now uses its address">
+					The guide you were editing was deleted, and a new guide was created at
+					/guides/{slug}{halt.now === null ? '' : `, now at revision ${halt.now.revision}`}. None
+					of your text was sent to it or overwritten. It is still in the editor.
+					{#if halt.write !== null}
+						<!-- Stated as unknown and left there. The guide that write was
+						     sent to no longer exists, so nothing readable from here can
+						     say whether it landed. -->
+						We cannot tell if that {halt.write.kind === 'save' ? 'save' : halt.write.kind} reached
+						the deleted guide, and it cannot apply to the new one.
+					{/if}
+					Copy anything you need first. Loading the new guide replaces your text.
+					<span class="ag-halt-acts">
+						<!-- No "keep mine" here, deliberately: there is no revision of
+						     this operator's guide left to write over. -->
+						<Button
+							small
+							disabled={acting}
+							reason={acting ? 'Loading this guide.' : undefined}
+							onclick={() => void takeTheirs()}
+						>
+							Load the new guide and discard my text
+						</Button>
+						<Button small tier="outline" onclick={() => void goto('/admin/guides')}>
+							Leave this address
+						</Button>
+					</span>
+				</Banner>
+			{:else if halt.why === 'conflict'}
+				<Banner tone="bad" title="Someone else changed this guide">
+					The server has revision {halt.at ?? 'unknown'}, not the one you were editing. Your text
+					is still here and nothing was overwritten.
+					{#if halt.write.kind !== 'save'}
+						<!-- A refusal is the server declining before it wrote; a
+						     conflict worked out from a read-back cannot say whether
+						     the publication applied. -->
+						{#if halt.applied === 'refused'}
+							The {halt.write.kind === 'publish' ? 'publish' : 'unpublish'} did not happen.
+						{:else}
+							We cannot tell if the {halt.write.kind === 'publish' ? 'publish' : 'unpublish'} worked,
+							because the guide has changed since. Sellers see what the saved copy says.
 						{/if}
-						<p>
-							Copy anything you need from the box first. Loading the new guide replaces your
-							text.
-						</p>
-						<div class="gd-halt-acts">
-							<!-- No "keep mine" here, deliberately: there is no revision of
-							     this operator's guide left to write over, and aiming their
-							     text at the guide now standing here would overwrite one
-							     nobody on this screen has read. -->
-							<Button
-								small
-								disabled={acting}
-								reason={acting ? 'Loading this guide.' : undefined}
-								onclick={() => void takeTheirs()}
-							>
-								Load the new guide and discard my text
-							</Button>
-							<Button small tier="outline" onclick={() => void goto('/admin/guides')}>
-								Leave this address
-							</Button>
-						</div>
-					{:else if halt.why === 'conflict'}
-						<p class="t">Someone else changed this guide</p>
-						<p>
-							The server has revision {halt.at ?? 'unknown'}, not the one you were editing. Your
-							text is still here and nothing was overwritten.
-						</p>
-						{#if halt.write.kind !== 'save'}
-							<!-- Two different things to say, and only one of them is ever
-							     true: a refusal is the server declining before it wrote,
-							     while a conflict worked out from a read-back after a lost
-							     answer cannot say whether the publication applied. -->
-							<p>
-								{#if halt.applied === 'refused'}
-									The {halt.write.kind === 'publish' ? 'publish' : 'unpublish'} did not happen.
-								{:else}
-									We cannot tell if the {halt.write.kind === 'publish' ? 'publish' : 'unpublish'}
-									worked, because the guide has changed since. Sellers see what the saved copy
-									says.
-								{/if}
-							</p>
-						{/if}
-						<div class="gd-halt-acts">
-							<Button
-								small
-								disabled={acting}
-								reason={acting ? 'Loading this guide.' : undefined}
-								onclick={() => void takeTheirs()}
-							>
-								Load the saved copy and discard my text
-							</Button>
-							{#if halt.write.kind === 'save'}
-								<!-- Offered for a save only. Writing a publication over
-								     somebody else's revision would publish a draft nobody
-								     here has read, so a publication conflict is settled by
-								     reading the guide back and deciding again. -->
-								<Button
-									small
-									tier="primary"
-									disabled={acting}
-									reason={acting ? 'Loading this guide.' : undefined}
-									onclick={() => void keepMine()}
-								>
-									Keep my text and overwrite theirs
-								</Button>
-							{/if}
-						</div>
-					{:else if halt.why === 'unconfirmed'}
-						<p class="t">Checking whether that worked</p>
-						<p>
-							That {halt.write.kind === 'save' ? 'save' : halt.write.kind} got no reply, so we
-							are checking the guide before sending anything else. Attempt {halt.reads + 1}.
-						</p>
-					{:else if halt.why === 'unreachable'}
-						<p class="t">We cannot reach the server</p>
-						<p>
-							That {halt.write.kind === 'save' ? 'save' : halt.write.kind} may or may not have
-							worked, and we could not check. Your text is here but not saved. Keep this tab
-							open.
-						</p>
-						<div class="gd-halt-acts">
+					{/if}
+					<span class="ag-halt-acts">
+						<Button
+							small
+							disabled={acting}
+							reason={acting ? 'Loading this guide.' : undefined}
+							onclick={() => void takeTheirs()}
+						>
+							Load the saved copy and discard my text
+						</Button>
+						{#if halt.write.kind === 'save'}
+							<!-- Offered for a save only: writing a publication over
+							     somebody else's revision would publish a draft nobody
+							     here has read. -->
 							<Button
 								small
 								tier="primary"
 								disabled={acting}
 								reason={acting ? 'Loading this guide.' : undefined}
-								onclick={() => void checkAgain()}
+								onclick={() => void keepMine()}
 							>
-								Check again
+								Keep my text and overwrite theirs
 							</Button>
-						</div>
-					{:else}
-						<p class="t">The server refused that change</p>
-						<p>{halt.message}</p>
-						{#if halt.write.edit !== null}
-							<p>
-								Edit the text to send it again. The same text would be refused again.
-							</p>
-						{:else}
-							<div class="gd-halt-acts">
-								<Button small onclick={() => (pipeline = SETTLED)}>Dismiss</Button>
-							</div>
 						{/if}
-					{/if}
-				</div>
-			{/if}
-
-
-			<FlowStep
-				n={1}
-				id="write"
-				title="Write"
-				hint="Write in Markdown; the preview follows."
-				summary={`${body.length} characters`}
-				done={!unsaved && body.trim().length > 0}
-			>
-				{#snippet aside()}
-					{#if halt !== null}
-						<StatusPill tone="bad" label="not saved" />
-					{:else if busy}
-						<StatusPill tone="run" label="saving" />
-					{:else if unsaved}
-						<StatusPill tone="warn" label="unsaved changes" />
-					{:else}
-						<StatusPill tone="ok" label="saved" />
-					{/if}
-				{/snippet}
-				<div class="gd-head">
-						<Field label="Title" id="guide-title" required>
-							<input id="guide-title" type="text" bind:value={title} />
-						</Field>
-						<Field label="Topic" id="guide-topic">
-							<select
-								id="guide-topic"
-								value={topicId ?? ''}
-								disabled={taxonomy.isError}
-								onchange={(event) =>
-									(topicId =
-										event.currentTarget.value.length === 0 ? null : event.currentTarget.value)}
-							>
-								<option value="">No topic</option>
-								<!-- A retired topic is still offered where this guide already
-								     sits under it, or saving would quietly move the guide out
-								     of a topic nobody asked to change. -->
-								{#each topics.filter((topic) => !topic.retired || topic.id === topicId) as topic (topic.id)}
-									<option value={topic.id}>{topic.name}{topic.retired ? ' (retired)' : ''}</option>
-								{/each}
-							</select>
-						</Field>
-						<div class="gd-head-tags">
-							<span class="gd-group-label" id="guide-tags">Tags</span>
-							<Menu bind:open={tagMenu} label="Tags on this guide" align="start">
-								{#snippet trigger()}
-									<Button onclick={() => (tagMenu = !tagMenu)}>
-										{tagIds.length === 0 ? 'No tags' : `${tagIds.length} chosen`}
-									</Button>
-								{/snippet}
-								<div class="gd-tag-menu" role="group" aria-labelledby="guide-tags">
-									{#each tags.filter((tag) => !tag.retired || tagIds.includes(tag.id)) as tag (tag.id)}
-										<label>
-											<input
-												type="checkbox"
-												checked={tagIds.includes(tag.id)}
-												onchange={(event) =>
-													(tagIds = event.currentTarget.checked
-														? [...tagIds, tag.id]
-														: tagIds.filter((id) => id !== tag.id))}
-											/>
-											<span class="gd-tax">{tag.name}{tag.retired ? ' (retired)' : ''}</span>
-										</label>
-									{:else}
-										<p class="none">No tags yet. Add them on the guides list.</p>
-									{/each}
-								</div>
-							</Menu>
-						</div>
-					</div>
-
-
-				<div class="op-write">
-					<div class="flow-section">
-					<div class="gd-md" role="group" aria-label="Formatting">
-						<button type="button" class="gd-md-b" onclick={() => format('bold')}>
-							<b>B</b><span class="sr-only">Bold</span>
-						</button>
-						<button type="button" class="gd-md-b" onclick={() => format('italic')}>
-							<i>I</i><span class="sr-only">Italic</span>
-						</button>
-						<button type="button" class="gd-md-b" onclick={() => insert('heading')}>
-							H2<span class="sr-only">Heading</span>
-						</button>
-						<button type="button" class="gd-md-b" onclick={() => insert('subheading')}>
-							H3<span class="sr-only">Subheading</span>
-						</button>
-						<button type="button" class="gd-md-b" onclick={() => format('bullets')}>
-							•<span class="sr-only">Bulleted list</span>
-						</button>
-						<button type="button" class="gd-md-b" onclick={() => format('numbers')}>
-							1.<span class="sr-only">Numbered list</span>
-						</button>
-						<button type="button" class="gd-md-b" onclick={() => insert('link')}>
-							Link
-						</button>
-						<button type="button" class="gd-md-b" onclick={() => insert('image')}>
-							<Icon name="image" size={14} />
-							Address<span class="sr-only">Picture by address</span>
-						</button>
-						<button type="button" class="gd-md-b" onclick={() => insert('footnote')}>
-							[1]<span class="sr-only">Footnote</span>
-						</button>
-					</div>
-
-
-					<label class="sr-only" for="guide-body">Guide body, in Markdown</label>
-					<textarea
-						id="guide-body"
-						class="gd-body"
-						bind:this={box}
-						bind:value={body}
-						spellcheck="true"
-						placeholder="Write in Markdown: headings, lists, tables, links and pictures. HTML shows as plain text."
-					></textarea>
-
-					</div>
-					<div class="op-preview" aria-label="Preview">
-					<!-- The server's rendering of the body in the editor, from the same
-					     renderer the published page goes through: this console has no
-					     Markdown renderer, and adding one would mean the preview and
-					     the published page could disagree. Raw HTML is escaped during
-					     that rendering, which is what makes `{@html}` safe here. -->
-					{#if preview.html === null}
-						<p class="quiet">Loading preview…</p>
-					{:else}
-						<div class="guide-body" class:gd-stale={!previewing}>
-							{@html preview.html}
-						</div>
-					{/if}
-					<p class="foot-note">
-						{#if previewing}
-							This is exactly how sellers will see the text above.
-						{:else if preview.state === 'failed'}
-							We could not update the preview, so this is an older version. It does not match the
-							text above.
-						{:else}
-							Updating the preview. Until then, this is an older version.
-						{/if}
-						{#if remoteImages}
-							{IMAGE_PRIVACY}
-						{/if}
-					</p>
-					</div>
-				</div>
-
-				{#snippet footer()}
+					</span>
+				</Banner>
+			{:else if halt.why === 'unconfirmed'}
+				<Banner tone="info" title="Checking whether that worked">
+					That {halt.write.kind === 'save' ? 'save' : halt.write.kind} got no reply, so we are
+					checking the guide before sending anything else. Attempt {halt.reads + 1}.
+				</Banner>
+			{:else if halt.why === 'unreachable'}
+				<Banner tone="warn" title="We cannot reach the server">
+					That {halt.write.kind === 'save' ? 'save' : halt.write.kind} may or may not have worked,
+					and we could not check. Your text is here but not saved. Keep this tab open.
+					<span class="ag-halt-acts">
 						<Button
+							small
 							tier="primary"
-							disabled={refusal !== null || !unsaved || busy || halt !== null}
-							reason={refusal ??
-								(halt !== null
-									? 'Resolve the message above first.'
-									: busy
-										? 'Wait for the current change to finish.'
-										: unsaved
-											? undefined
-											: 'No changes to save.')}
-							onclick={() => void write('save')}
+							disabled={acting}
+							reason={acting ? 'Loading this guide.' : undefined}
+							onclick={() => void checkAgain()}
 						>
-							{busy && pipeline.flight?.kind === 'save' ? 'Saving…' : 'Save'}
+							Check again
 						</Button>
-					{#if said !== null}
-						<span class="gd-state">{said}</span>
+					</span>
+				</Banner>
+			{:else}
+				<Banner tone="warn" title="The server refused that change">
+					{halt.message}
+					{#if halt.write.edit !== null}
+						Edit the text to send it again. The same text would be refused again.
+					{:else}
+						<span class="ag-halt-acts">
+							<Button small onclick={() => (pipeline = SETTLED)}>Dismiss</Button>
+						</span>
 					{/if}
-				{/snippet}
-			</FlowStep>
+				</Banner>
+			{/if}
+		{/if}
 
-			<FlowStep
-				n={2}
-				id="images"
-				title="Images"
-				hint="Upload a picture; it goes in at the cursor."
-				summary={`${images.length} ${images.length === 1 ? 'picture' : 'pictures'}`}
-				done={images.length > 0}
-			>
-				{#snippet action()}
-					<label class="cta op-upload" aria-disabled={uploading}>
+		<section class="ag-panel" aria-label="Title, topic and tags">
+			<div class="ag-fields">
+				<Field label="Title" id="guide-title" required>
+					<input id="guide-title" type="text" bind:value={title} />
+				</Field>
+				<Field label="Topic" id="guide-topic">
+					<select
+						id="guide-topic"
+						value={topicId ?? ''}
+						disabled={taxonomy.isError}
+						onchange={(event) =>
+							(topicId =
+								event.currentTarget.value.length === 0 ? null : event.currentTarget.value)}
+					>
+						<option value="">No topic</option>
+						<!-- A retired topic is still offered where this guide already
+						     sits under it, or saving would quietly move the guide out
+						     of a topic nobody asked to change. -->
+						{#each topics.filter((topic) => !topic.retired || topic.id === topicId) as topic (topic.id)}
+							<option value={topic.id}>{topic.name}{topic.retired ? ' (retired)' : ''}</option>
+						{/each}
+					</select>
+				</Field>
+				<div class="ag-group">
+					<span class="ag-group-label" id="guide-tags">Tags</span>
+					<Menu bind:open={tagMenu} label="Tags on this guide" align="start">
+						{#snippet trigger()}
+							<Button onclick={() => (tagMenu = !tagMenu)}>
+								{tagIds.length === 0 ? 'No tags' : `${tagIds.length} chosen`}
+							</Button>
+						{/snippet}
+						<div class="gd-tag-menu" role="group" aria-labelledby="guide-tags">
+							{#each tags.filter((tag) => !tag.retired || tagIds.includes(tag.id)) as tag (tag.id)}
+								<label>
+									<input
+										type="checkbox"
+										checked={tagIds.includes(tag.id)}
+										onchange={(event) =>
+											(tagIds = event.currentTarget.checked
+												? [...tagIds, tag.id]
+												: tagIds.filter((id) => id !== tag.id))}
+									/>
+									<span class="gd-tax">{tag.name}{tag.retired ? ' (retired)' : ''}</span>
+								</label>
+							{:else}
+								<p class="none">No tags yet. Add them on the guides list.</p>
+							{/each}
+						</div>
+					</Menu>
+				</div>
+			</div>
+			<p class="ag-facts">
+				<span>{publication.line}</span>
+				{#if phase === 'behind'}
+					<span>
+						Published {utcInstant(base.published?.published_at ?? base.updated_at)}.
+					</span>
+				{/if}
+				<span title={utcInstant(base.updated_at)}>
+					Revision {base.revision} · saved {agoLabel(base.updated_at, Date.now())}
+				</span>
+			</p>
+		</section>
+
+		<div class="ag-switch">
+			<TabBar
+				tabs={PANES}
+				current={pane}
+				onselect={(id) => (pane = id === 'preview' ? 'preview' : 'edit')}
+			/>
+		</div>
+
+		<div class="ag-panes">
+			<section class="ag-pane" class:on={pane === 'edit'} aria-labelledby="guide-edit-title">
+				<div class="ag-pane-head">
+					<h2 id="guide-edit-title">Write</h2>
+					<span class="ag-spacer"></span>
+					<span class="ag-muted">{body.length} characters</span>
+				</div>
+				<div class="ag-md" role="toolbar" aria-label="Formatting">
+					<button type="button" class="ag-md-b" title="Bold" onclick={() => format('bold')}>
+						<Icon name="bold" size={15} /><span class="sr-only">Bold</span>
+					</button>
+					<button type="button" class="ag-md-b" title="Italic" onclick={() => format('italic')}>
+						<Icon name="italic" size={15} /><span class="sr-only">Italic</span>
+					</button>
+					<button type="button" class="ag-md-b" title="Heading" onclick={() => insert('heading')}>
+						H2<span class="sr-only">Heading</span>
+					</button>
+					<button
+						type="button"
+						class="ag-md-b"
+						title="Subheading"
+						onclick={() => insert('subheading')}
+					>
+						H3<span class="sr-only">Subheading</span>
+					</button>
+					<span class="ag-md-sep" aria-hidden="true"></span>
+					<button
+						type="button"
+						class="ag-md-b"
+						title="Bulleted list"
+						onclick={() => format('bullets')}
+					>
+						<Icon name="list" size={15} /><span class="sr-only">Bulleted list</span>
+					</button>
+					<button
+						type="button"
+						class="ag-md-b"
+						title="Numbered list"
+						onclick={() => format('numbers')}
+					>
+						1.<span class="sr-only">Numbered list</span>
+					</button>
+					<span class="ag-md-sep" aria-hidden="true"></span>
+					<button type="button" class="ag-md-b" onclick={() => insert('link')}>Link</button>
+					<button
+						type="button"
+						class="ag-md-b"
+						title="Picture by address"
+						onclick={() => insert('image')}
+					>
+						<Icon name="image" size={15} />
+						<span class="sr-only">Picture by address</span>
+					</button>
+					<button type="button" class="ag-md-b" title="Footnote" onclick={() => insert('footnote')}>
+						[1]<span class="sr-only">Footnote</span>
+					</button>
+					<span class="ag-md-sep" aria-hidden="true"></span>
+					<label class="ag-md-b ag-upload" aria-disabled={uploading}>
 						<Icon name="upload" size={15} />
-						{uploading ? 'Uploading…' : 'Upload'}
+						{uploading ? 'Uploading…' : 'Upload picture'}
 						<input
 							class="sr-only"
 							type="file"
@@ -1446,11 +1422,28 @@
 							onchange={insertImage}
 						/>
 					</label>
-				{/snippet}
+				</div>
+
+				<label class="sr-only" for="guide-body">Guide body, in Markdown</label>
+				<textarea
+					id="guide-body"
+					class="ag-body"
+					bind:this={box}
+					bind:value={body}
+					spellcheck="true"
+					placeholder="Write in Markdown: headings, lists, tables, links and pictures. HTML shows as plain text."
+				></textarea>
+
+				<div class="ag-pane-head">
+					<h2 id="guide-images-title">
+						{images.length}
+						{images.length === 1 ? 'picture' : 'pictures'}
+					</h2>
+				</div>
 				{#if images.length === 0}
-					<p class="quiet">No pictures in this guide yet.</p>
+					<p class="ag-note">No pictures yet. An upload goes in where the cursor is.</p>
 				{:else}
-					<ul class="op-images">
+					<ul class="ag-images" aria-labelledby="guide-images-title">
 						{#each images as image (image.src)}
 							<li>
 								<span class="thumb">
@@ -1462,101 +1455,56 @@
 									{/if}
 								</span>
 								<span class="s" title={image.src}>{image.alt || image.src}</span>
-								<StatusPill tone={image.own ? 'ok' : 'warn'} label={image.own ? 'uploaded' : 'other site'} />
+								<StatusPill
+									tone={image.own ? 'ok' : 'warn'}
+									label={image.own ? 'uploaded' : 'other site'}
+								/>
 							</li>
 						{/each}
 					</ul>
 				{/if}
-			</FlowStep>
+			</section>
 
-			<FlowStep
-				n={3}
-				id="publish"
-				title="Publish"
-				hint="Sellers see the saved version once it is published."
-				summary={base.status === 'published' ? 'Published' : 'Draft'}
-				done={base.status === 'published' && !publishedBehind}
-			>
-				{#snippet aside()}
-					<Explain title="Drafts, revisions and publishing" label="">
-						<p>A draft is visible to operators only. Sellers get a 404 for it.</p>
-						<p>
-							Publishing uses the saved revision. After you save more changes, publish this
-							revision again to update what sellers read.
-						</p>
-					</Explain>
-				{/snippet}
-				<p class="op-pills">
-					{#if base.status === 'published' && publishedBehind}
-						<StatusPill tone="warn" label="published, behind" />
-					{:else if base.status === 'published'}
-						<StatusPill tone="ok" label="published" />
+			<section class="ag-pane" class:on={pane === 'preview'} aria-labelledby="guide-preview-title">
+				<div class="ag-pane-head">
+					<h2 id="guide-preview-title">Preview</h2>
+					{#if !previewing}
+						<StatusPill tone={preview.state === 'failed' ? 'bad' : 'run'} label={preview.state === 'failed' ? 'out of date' : 'updating'} />
+					{/if}
+				</div>
+				<div class="ag-preview">
+					<!-- The server's rendering of the body in the editor, from the same
+					     renderer the published page goes through: this console has no
+					     Markdown renderer, and adding one would mean the preview and
+					     the published page could disagree. Raw HTML is escaped during
+					     that rendering, which is what makes `{@html}` safe here. -->
+					{#if title.trim().length > 0}
+						<h1 class="ag-preview-title">{title.trim()}</h1>
+					{/if}
+					{#if preview.html === null}
+						<p class="quiet">Loading preview…</p>
+					{:else if preview.html.length === 0 && body.length === 0}
+						<p class="quiet">Nothing written yet.</p>
 					{:else}
-						<StatusPill tone="soon" label="draft" />
+						<div class="guide-body" class:gd-stale={!previewing}>
+							{@html preview.html}
+						</div>
+					{/if}
+				</div>
+				<p class="ag-note">
+					{#if previewing}
+						This is how sellers will see the text.
+					{:else if preview.state === 'failed'}
+						We could not update the preview, so this is an older version. It does not match the
+						text.
+					{:else}
+						Updating the preview. Until then, this is an older version.
+					{/if}
+					{#if remoteImages}
+						{IMAGE_PRIVACY}
 					{/if}
 				</p>
-				<p class="gd-state">
-					{#if base.status === 'published' && publishedBehind}
-						Published, but sellers cannot see your saved changes yet. They see the version published
-						at {utcInstant(base.published?.published_at ?? base.updated_at)}. Publish this revision to
-						update it.
-					{:else if base.status === 'published'}
-						Published. Signed-in sellers read this at /guides/{slug}.
-					{:else}
-						Draft. Only operators can read it.
-					{/if}
-					Revision {base.revision}, last saved {utcInstant(base.updated_at)}.
-				</p>
-
-				{#snippet footer()}
-					{#if base?.status === 'published'}
-						<Button
-							disabled={busy || halt !== null || unsaved}
-							reason={unsaved
-								? 'Save first. Publishing uses the saved version.'
-								: halt !== null
-									? 'Resolve the message above first.'
-									: busy
-										? 'Wait for the current change to finish.'
-										: undefined}
-							onclick={() => void write('publish')}
-						>
-							{busy && pipeline.flight?.kind === 'publish' ? 'Publishing…' : 'Publish this revision'}
-						</Button>
-						<Button
-							danger
-							disabled={busy || halt !== null || unsaved}
-							reason={unsaved
-								? 'Save first, then unpublish.'
-								: halt !== null
-									? 'Resolve the message above first.'
-									: busy
-										? 'Wait for the current change to finish.'
-										: undefined}
-							onclick={() => void write('unpublish')}
-						>
-							Unpublish
-						</Button>
-					{:else}
-						<Button
-							tier="additive"
-							disabled={busy || halt !== null || unsaved}
-							reason={unsaved
-								? 'Save first. Publishing uses the saved version.'
-								: halt !== null
-									? 'Resolve the message above first.'
-									: busy
-										? 'Wait for the current change to finish.'
-										: undefined}
-							onclick={() => void write('publish')}
-						>
-							{busy && pipeline.flight?.kind === 'publish' ? 'Publishing…' : 'Publish'}
-						</Button>
-					{/if}
-					<span class="op-spacer"></span>
-					<Button tier="outline" danger icon="trash-2" onclick={() => void remove()}>Delete</Button>
-				{/snippet}
-			</FlowStep>
+			</section>
 		</div>
 	{/if}
 </div>

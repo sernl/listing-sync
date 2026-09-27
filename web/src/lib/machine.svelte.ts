@@ -68,7 +68,7 @@ export const machineHere = {
 	async signBackIn(): Promise<void> {
 		const here = device;
 		if (here === null) {
-			throw new Error('this console does not know which machine it is on');
+			throw new Error('this console does not know which device it is on');
 		}
 		restoring = true;
 		try {

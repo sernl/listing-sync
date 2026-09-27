@@ -22,6 +22,11 @@
 //! directory. The downloads tier reaches the filesystem per request, because
 //! its contents change under the server between refreshes, and it holds the
 //! same construction a different way: see [`crate::downloads`].
+//!
+//! Maintenance mode stands in front of the landing and console tiers without
+//! changing which tier owns a path: [`gated`] says whether an answer is a page
+//! the maintenance page replaces, and the caller asks `tam_api::site` whether
+//! this request is gated at all, which it is not for a platform operator.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -105,7 +110,11 @@ pub(crate) fn route(
     let relative = decoded.trim_end_matches('/');
     let mut segments = relative.split('/');
     let first = segments.next().unwrap_or_default();
-    if first.parse::<tam_api::APIVersion>().is_ok() {
+    // `/api` is the identity service's prefix, which the edge routes to it
+    // before this server sees a request; one that reaches here anyway is a
+    // misrouted edge or a dev stack with no identity service, and the API's
+    // own 404 says so where the console shell would draw a broken page.
+    if first == "api" || first.parse::<tam_api::APIVersion>().is_ok() {
         return Answer::Api;
     }
     // The map holds only names this module walked out of the directory, so a
@@ -159,6 +168,91 @@ pub(crate) fn route(
         return Answer::Landing(indexed);
     }
     Answer::Console
+}
+
+/// The maintenance page's place in the landing build, which `apps/landing`
+/// emits from `src/pages/maintenance.astro`.
+pub(crate) const MAINTENANCE_PAGE: &str = "maintenance/index.html";
+
+/// How long a gated response tells a client to wait before asking again, in
+/// seconds. An hour: long enough that a crawler does not hammer a site that
+/// said it was down, short enough that it is back soon after the site is.
+const RETRY_AFTER_SECS: &str = "3600";
+
+/// The console pages that stay reachable while maintenance is on, by first
+/// segment: signing in and resetting a password, so an operator can get in
+/// to turn it off; the status page the maintenance page points at; the
+/// console's client bundle, without which none of those render; and the
+/// identity service's namespace, which the edge normally routes past this
+/// server but is named here so the rule does not depend on that.
+const MAINTENANCE_OPEN: [&str; 5] = ["_app", "login", "reset", "status", "api"];
+
+/// Whether a request that `route` answered with `answer` is a page the
+/// maintenance page stands in for while maintenance is on.
+///
+/// Pages only. A landing page is any `.html` file of the landing build; a
+/// console page is any path whose last segment names no file, because the
+/// console's assets all carry an extension and its pages none. Assets pass
+/// through, since the maintenance page itself loads the landing's stylesheet
+/// and fonts. The API and the downloads directory are never gated here.
+pub(crate) fn gated(path: &str, answer: &Answer) -> bool {
+    match answer {
+        Answer::Landing(file) => std::path::Path::new(file)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("html")),
+        Answer::Console => {
+            let decoded =
+                percent_decoded(path.trim_start_matches('/')).unwrap_or_else(|| path.to_owned());
+            let relative = decoded.trim_end_matches('/');
+            let first = relative.split('/').next().unwrap_or_default();
+            let last = relative.rsplit('/').next().unwrap_or_default();
+            !MAINTENANCE_OPEN.contains(&first) && !last.contains('.')
+        }
+        Answer::Api | Answer::Downloads(_) => false,
+    }
+}
+
+/// `page` with `message` as the text of its `data-maintenance-message`
+/// element, escaped. With no message, or no such element, the page is
+/// answered as built, carrying its default line.
+///
+/// The element is found by its attribute rather than by its default text, so
+/// a copy edit to the page cannot quietly stop the splice.
+pub(crate) fn with_message(page: &str, message: Option<&str>) -> String {
+    let Some(message) = message else {
+        return page.to_owned();
+    };
+    // Split at the attribute, then at the tag's close, then at the element's
+    // close: three `split_once` calls, so no index ever lands inside a
+    // character.
+    let spliced = page.split_once("data-maintenance-message").and_then(
+        |(before_attribute, from_attribute)| {
+            let (tag_rest, from_open) = from_attribute.split_once('>')?;
+            let (_, from_close) = from_open.split_once("</")?;
+            Some((before_attribute, tag_rest, from_close))
+        },
+    );
+    let Some((before_attribute, tag_rest, from_close)) = spliced else {
+        return page.to_owned();
+    };
+    let mut out = String::with_capacity(page.len() + message.len());
+    out.push_str(before_attribute);
+    out.push_str("data-maintenance-message");
+    out.push_str(tag_rest);
+    out.push('>');
+    for character in message.chars() {
+        match character {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            other => out.push(other),
+        }
+    }
+    out.push_str("</");
+    out.push_str(from_close);
+    out
 }
 
 /// `path` with its `%XX` escapes resolved, or `None` where an escape is
@@ -287,6 +381,10 @@ struct Asset {
 pub(crate) struct Landing {
     files: BTreeMap<String, Asset>,
     policy: String,
+    /// The maintenance page's text, if this build carries one. Held as text
+    /// rather than only as an asset because it is the one page served with a
+    /// value spliced into it: see [`with_message`].
+    maintenance: Option<String>,
 }
 
 impl Landing {
@@ -301,6 +399,11 @@ impl Landing {
             .into());
         }
         let policy = landing_policy(&inline_script_hashes_across(&bytes)?);
+        let maintenance = bytes
+            .get(MAINTENANCE_PAGE)
+            .map(|page| String::from_utf8(page.to_vec()))
+            .transpose()
+            .map_err(|_| "the maintenance page is not utf-8")?;
         let files = bytes
             .into_iter()
             .map(|(name, bytes)| {
@@ -313,11 +416,60 @@ impl Landing {
                 (name, asset)
             })
             .collect();
-        Ok(Self { files, policy })
+        Ok(Self {
+            files,
+            policy,
+            maintenance,
+        })
     }
 
     pub(crate) fn has(&self, file: &str) -> bool {
         self.files.contains_key(file)
+    }
+
+    /// Whether this build carries a maintenance page to answer with.
+    pub(crate) fn has_maintenance_page(&self) -> bool {
+        self.maintenance.is_some()
+    }
+
+    /// The maintenance page with `message` as its expected-back line, under
+    /// `status`.
+    ///
+    /// 503 with `Retry-After` is what a gated request gets: the status tells a
+    /// crawler the outage is temporary so it keeps the page indexed, and the
+    /// header tells it when to come back. The page's own address answers 200,
+    /// because there it is a preview an operator asked for. Neither may be
+    /// stored anywhere: the page must disappear the moment maintenance ends.
+    pub(crate) fn maintenance(
+        &self,
+        message: Option<&str>,
+        status: axum::http::StatusCode,
+    ) -> axum::response::Response {
+        let Some(page) = &self.maintenance else {
+            return status.into_response();
+        };
+        let mut response = (
+            status,
+            [
+                (axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8"),
+                (axum::http::header::CACHE_CONTROL, "no-store"),
+            ],
+            with_message(page, message),
+        )
+            .into_response();
+        let headers = response.headers_mut();
+        if status == axum::http::StatusCode::SERVICE_UNAVAILABLE {
+            headers.insert(
+                axum::http::header::RETRY_AFTER,
+                axum::http::HeaderValue::from_static(RETRY_AFTER_SECS),
+            );
+        }
+        if let Ok(value) =
+            axum::http::HeaderValue::from_str(&with_nonce(&self.policy, &fresh_nonce()))
+        {
+            headers.insert(axum::http::header::CONTENT_SECURITY_POLICY, value);
+        }
+        response
     }
 
     /// The bytes, their type, their freshness rule, their validator and the
@@ -672,7 +824,7 @@ pub(crate) fn needs_unsafe_eval(user_agent: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{needs_unsafe_eval, route, Answer};
+    use super::{gated, needs_unsafe_eval, route, with_message, Answer};
 
     /// A fixture in the shape of a landing build: enough names to reach every
     /// arm of `route` without a directory to read.
@@ -1286,6 +1438,67 @@ mod tests {
         assert!(
             !needs_unsafe_eval("Chrome/97.0.0.0"),
             "97 is the first version that knows the word"
+        );
+    }
+
+    /// While maintenance is on, every page is the maintenance page except the
+    /// ones an operator needs to get in and the status page it points at;
+    /// every asset still loads, because the maintenance page is built from
+    /// them.
+    #[test]
+    fn maintenance_stands_in_for_pages_and_never_for_assets_or_sign_in() {
+        let gate = |path: &str| gated(path, &route(path, built, true));
+        for path in [
+            "/",
+            "/pricing/",
+            "/privacy",
+            "/app",
+            "/resources",
+            "/settings/billing",
+        ] {
+            assert!(
+                gate(path),
+                "{path} is a page, so maintenance stands in for it"
+            );
+        }
+        for path in [
+            "/login",
+            "/login/",
+            "/reset/confirm",
+            "/status",
+            "/api/auth/sign-in/email",
+            "/_app/immutable/entry/start.js",
+            "/_astro/Base.B4LvswBy.css",
+            "/fonts/fraunces-latin.woff2",
+            "/favicon.svg",
+            "/brand/logo.svg",
+            "/v1/site",
+            "/v1/whoami",
+            "/downloads/manifest.json",
+        ] {
+            assert!(!gate(path), "{path} stays reachable during maintenance");
+        }
+    }
+
+    /// The operator's words land in the page as text, never as markup.
+    #[test]
+    fn the_message_is_spliced_in_escaped() {
+        let page = "<main><p class=\"back\" data-maintenance-message>We expect to be back \
+                    shortly.</p><p>Status</p></main>";
+        assert_eq!(
+            with_message(page, Some("Back by <b>3pm</b> & \"soon\"")),
+            "<main><p class=\"back\" data-maintenance-message>Back by &lt;b&gt;3pm&lt;/b&gt; \
+             &amp; &quot;soon&quot;</p><p>Status</p></main>"
+        );
+        assert_eq!(
+            with_message(page, None),
+            page,
+            "no message keeps the default"
+        );
+        assert_eq!(
+            with_message("<p>no marker</p>", Some("x")),
+            "<p>no marker</p>",
+            "a page without the element is answered as built"
         );
     }
 }

@@ -95,11 +95,6 @@ pub enum APIErrorCode {
     /// used and what the limit is, so the client can render the sentence
     /// rather than reconstructing it.
     QuotaExceeded,
-    /// The edit addresses a listing whose transition no capture supports —
-    /// today, a live Tes listing, which serves neither live-to-live nor
-    /// live-to-draft. Refused before the edit is written rather than after
-    /// an item settles with a code that says nothing about why.
-    UncapturedTransition,
     /// A local delete would leave a bound listing standing on a platform it
     /// does not remove from. `detail.bound` names them.
     ListingStillBound,
@@ -163,7 +158,7 @@ pub enum APIErrorCode {
 impl APIErrorCode {
     /// The closed set, in a stable order; the closed-set test and the
     /// vocabulary generator read this single source.
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 30] = [
         Self::UnsupportedApiVersion,
         Self::VersionParameterMissing,
         Self::VersionParameterUnreadable,
@@ -179,7 +174,6 @@ impl APIErrorCode {
         Self::PayloadMissing,
         Self::RequiredFieldMissing,
         Self::QuotaExceeded,
-        Self::UncapturedTransition,
         Self::ListingStillBound,
         Self::MappingAlreadyExists,
         Self::ListingUrlUnusable,
@@ -215,7 +209,6 @@ impl APIErrorCode {
             Self::PayloadMissing => "payload_missing",
             Self::RequiredFieldMissing => "required_field_missing",
             Self::QuotaExceeded => "quota_exceeded",
-            Self::UncapturedTransition => "uncaptured_transition",
             Self::ListingStillBound => "listing_still_bound",
             Self::MappingAlreadyExists => "mapping_already_exists",
             Self::ListingUrlUnusable => "listing_url_unusable",
@@ -452,7 +445,6 @@ mod tests {
                 | APIErrorCode::PayloadMissing
                 | APIErrorCode::RequiredFieldMissing
                 | APIErrorCode::QuotaExceeded
-                | APIErrorCode::UncapturedTransition
                 | APIErrorCode::ListingStillBound
                 | APIErrorCode::MappingAlreadyExists
                 | APIErrorCode::ListingUrlUnusable

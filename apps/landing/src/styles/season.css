@@ -1,0 +1,404 @@
+/* Seasonal overlays and the announcement banner.
+
+   Everything here keys on `html[data-season]`, which the inline script in
+   `layouts/Base.astro` sets from `GET /v1/site` when an operator's theme is
+   active by the server's clock. A picture named in a `background-image` is
+   fetched only when its rule matches, so a page outside a season downloads
+   none of them. Screen only, so nothing here prints.
+
+   Placement rule: a sticker sits in space the page leaves empty -- a corner,
+   a gutter outside the content measure, the room under the hero art -- and
+   the section pieces paint behind their section's content (`isolation` on the
+   section, `z-index: -1` on the piece), so even an edge that brushes text sits
+   under it. Nothing here takes a pointer. Gutter pieces appear only where the
+   viewport is wide enough to have gutters. */
+
+@media screen {
+	html[data-season] main,
+	html[data-season] .hero,
+	html[data-season] #about,
+	html[data-season] #how,
+	html[data-season] #faq,
+	html[data-season] .site-foot {
+		position: relative;
+		isolation: isolate;
+	}
+
+	.season-layer {
+		display: none;
+	}
+
+	html[data-season] .season-layer {
+		display: block;
+		position: absolute;
+		inset: 0;
+		z-index: 1;
+		overflow: hidden;
+		pointer-events: none;
+	}
+
+	.season-layer > i,
+	html[data-season] .hero::after,
+	html[data-season] #about::before,
+	html[data-season] #about::after,
+	html[data-season] #how::before,
+	html[data-season] #faq::before,
+	html[data-season] .hero::before,
+	html[data-season] .site-foot::before {
+		position: absolute;
+		pointer-events: none;
+		background-repeat: no-repeat;
+		background-size: contain;
+	}
+
+	html[data-season] .hero::before,
+	html[data-season] .hero::after,
+	html[data-season] #about::before,
+	html[data-season] #about::after,
+	html[data-season] #how::before,
+	html[data-season] #faq::before,
+	html[data-season] .site-foot::before {
+		content: '';
+		z-index: -1;
+		display: none;
+	}
+
+	/* The accent: a ribbon for the header's lower edge, in palette tokens. A
+	   border image rather than a positioned piece, because the header is
+	   sticky on a wide screen and static on a phone, and a border follows it
+	   either way. */
+	html[data-season] .site-head {
+		border-bottom: 4px solid;
+	}
+
+	html[data-season='halloween'] .site-head {
+		border-image: repeating-linear-gradient(-45deg, var(--warn) 0 14px, var(--primary) 14px 28px) 1;
+	}
+
+	html[data-season='christmas'] .site-head {
+		border-image: repeating-linear-gradient(
+				-45deg,
+				var(--bad) 0 12px,
+				var(--surface) 12px 20px,
+				var(--accent) 20px 32px,
+				var(--surface) 32px 40px
+			)
+			1;
+	}
+
+	/* The hero's top corners: spider webs, or holly. */
+	.season-corner {
+		top: 0;
+		width: 64px;
+		height: 64px;
+		background-position: top left;
+	}
+
+	.season-corner-start {
+		left: 0;
+	}
+
+	.season-corner-end {
+		right: 0;
+		transform: scaleX(-1);
+	}
+
+	html[data-season='halloween'] .season-corner {
+		background-image: url('/seasons/halloween/web.svg');
+	}
+
+	html[data-season='christmas'] .season-corner {
+		background-image: url('/seasons/christmas/holly.svg');
+		width: 72px;
+		height: 48px;
+		top: 6px;
+	}
+
+	html[data-season='christmas'] .season-corner-start {
+		left: 6px;
+	}
+
+	html[data-season='christmas'] .season-corner-end {
+		right: 6px;
+	}
+
+	/* A band of snow along the hero's top edge, in its padding and above its
+	   first line, fading out before it reaches any text. */
+	.season-snow {
+		display: none;
+	}
+
+	html[data-season='christmas'] .season-snow {
+		display: block;
+		top: 0;
+		left: 0;
+		right: 0;
+		height: 56px;
+		background-image: url('/seasons/christmas/snow.svg');
+		background-size: 240px 240px;
+		background-repeat: repeat;
+		mask-image: linear-gradient(to bottom, var(--text) 30%, transparent);
+	}
+
+	/* The flock, above the hero art where the hero leaves a gap. Bats fly;
+	   baubles hang from the header. */
+	.season-flock {
+		display: none;
+	}
+
+	/* The character, in the room under the hero art. */
+	html[data-season='halloween'] .hero::after {
+		background-image: url('/seasons/halloween/ghoul.svg');
+	}
+
+	html[data-season='christmas'] .hero::after {
+		background-image: url('/seasons/christmas/reindeer.svg');
+	}
+
+	/* Below the hero's two columns there is no room under the art, so the
+	   character stands at the footer's top edge instead, beside the wordmark. */
+	html[data-season] .site-foot::before {
+		display: block;
+		right: 16px;
+		top: -52px;
+		width: 72px;
+		height: 96px;
+		background-position: bottom right;
+	}
+
+	html[data-season='halloween'] .site-foot::before {
+		background-image: url('/seasons/halloween/ghoul.svg');
+	}
+
+	html[data-season='christmas'] .site-foot::before {
+		background-image: url('/seasons/christmas/reindeer.svg');
+	}
+
+	@media (min-width: 900px) {
+		.season-corner {
+			width: 96px;
+			height: 96px;
+		}
+
+		html[data-season='halloween'] .season-corner-end {
+			width: 132px;
+			height: 132px;
+		}
+
+		html[data-season='christmas'] .season-corner {
+			width: 96px;
+			height: 64px;
+		}
+
+		html[data-season] .season-flock {
+			display: block;
+			top: 8px;
+			right: 26%;
+			width: 110px;
+			height: 110px;
+		}
+
+		html[data-season='halloween'] .season-flock {
+			background-image: url('/seasons/halloween/bats.svg');
+		}
+
+		html[data-season='christmas'] .season-flock {
+			top: 0;
+			right: 24%;
+			width: 80px;
+			height: 150px;
+			background-image: url('/seasons/christmas/baubles.svg');
+			background-position: top center;
+		}
+
+		html[data-season] .hero::after {
+			display: block;
+			right: max(40px, calc(50% - 470px));
+			bottom: 0;
+			width: 150px;
+			height: 196px;
+			background-position: bottom center;
+		}
+
+		/* A prop at the character's feet: a pumpkin, or a snowflake. */
+		html[data-season] .hero::before {
+			display: block;
+			right: calc(max(40px, calc(50% - 470px)) + 150px);
+			bottom: 8px;
+			width: 64px;
+			height: 56px;
+			background-position: bottom center;
+		}
+
+		html[data-season='halloween'] .hero::before {
+			background-image: url('/seasons/halloween/pumpkin.svg');
+		}
+
+		html[data-season='christmas'] .hero::before {
+			background-image: url('/seasons/christmas/snowflake.svg');
+			bottom: 120px;
+			width: 40px;
+			height: 40px;
+		}
+
+		/* Beside the hero's character, the footer's would be a second copy. */
+		html[data-season] .site-foot::before {
+			display: none;
+		}
+	}
+
+	/* The gutters, which exist once the viewport is wider than the content
+	   measure plus room for a sticker on each side. */
+	@media (min-width: 1240px) {
+		html[data-season] #about::before,
+		html[data-season] #about::after,
+		html[data-season] #how::before,
+		html[data-season] #faq::before,
+		html[data-season] .site-foot::before {
+			display: block;
+			width: 64px;
+			height: 64px;
+		}
+
+		html[data-season] #about::before {
+			left: max(8px, calc(50% - 632px));
+			top: 48px;
+		}
+
+		html[data-season] #about::after {
+			right: max(8px, calc(50% - 632px));
+			bottom: 40px;
+			width: 72px;
+		}
+
+		html[data-season] #how::before {
+			right: max(12px, calc(50% - 628px));
+			top: 56px;
+		}
+
+		html[data-season] #faq::before {
+			left: max(8px, calc(50% - 632px));
+			top: 72px;
+		}
+
+		html[data-season] .site-foot::before {
+			top: auto;
+			bottom: 24px;
+			right: max(8px, calc(50% - 632px));
+			width: 64px;
+			height: 64px;
+		}
+
+		html[data-season='halloween'] #about::before,
+		html[data-season='halloween'] #faq::before {
+			background-image: url('/seasons/halloween/ghost.svg');
+		}
+
+		html[data-season='halloween'] #about::after,
+		html[data-season='halloween'] .site-foot::before {
+			background-image: url('/seasons/halloween/pumpkin.svg');
+		}
+
+		html[data-season='halloween'] #how::before {
+			background-image: url('/seasons/halloween/bat.svg');
+			height: 32px;
+		}
+
+		html[data-season='christmas'] #about::before,
+		html[data-season='christmas'] #faq::before {
+			background-image: url('/seasons/christmas/snowflake.svg');
+			width: 52px;
+			height: 52px;
+		}
+
+		html[data-season='christmas'] #about::after,
+		html[data-season='christmas'] .site-foot::before {
+			background-image: url('/seasons/christmas/holly.svg');
+			height: 48px;
+		}
+
+		html[data-season='christmas'] #how::before {
+			background-image: url('/seasons/christmas/baubles.svg');
+			top: 0;
+			height: 120px;
+			background-position: top center;
+		}
+	}
+
+	/* Motion, for visitors who have not asked for less of it. */
+	@media (prefers-reduced-motion: no-preference) {
+		html[data-season='halloween'] .season-flock,
+		html[data-season='halloween'] #how::before {
+			animation: season-hover 5s ease-in-out infinite alternate;
+		}
+
+		html[data-season='halloween'] #about::before,
+		html[data-season='halloween'] #faq::before {
+			animation: season-hover 7s ease-in-out infinite alternate;
+		}
+
+		html[data-season='christmas'] .season-snow {
+			animation: season-fall 14s linear infinite;
+		}
+
+		html[data-season='christmas'] .season-flock {
+			transform-origin: top center;
+			animation: season-sway 6s ease-in-out infinite alternate;
+		}
+	}
+
+	@keyframes season-hover {
+		from {
+			translate: 0 0;
+		}
+		to {
+			translate: 0 -10px;
+		}
+	}
+
+	@keyframes season-fall {
+		from {
+			background-position: 0 0;
+		}
+		to {
+			background-position: 40px 240px;
+		}
+	}
+
+	@keyframes season-sway {
+		from {
+			rotate: -2deg;
+		}
+		to {
+			rotate: 2deg;
+		}
+	}
+
+	/* The announcement banner, above the header, shown by the same script when
+	   an operator has set one. */
+	.site-banner {
+		background: var(--primary);
+		color: var(--on-fill);
+		text-align: center;
+		font-size: 14px;
+		font-weight: 600;
+		padding: 8px var(--gutter);
+	}
+
+	.site-banner[hidden] {
+		display: none;
+	}
+
+	.site-banner a {
+		color: inherit;
+		text-decoration: underline;
+		text-underline-offset: 3px;
+	}
+}
+
+@media print {
+	.season-layer,
+	.site-banner {
+		display: none;
+	}
+}

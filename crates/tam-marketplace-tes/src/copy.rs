@@ -27,9 +27,12 @@ pub fn tes_description(body: &str, format: CopyFormat) -> String {
 
 /// Tags that end a line for a reader, whatever the renderer would do inside
 /// them; everything else is inline and vanishes without a trace. `li` opens
-/// with a marker so a list stays a list once its bullets are gone.
+/// with a marker so a list stays a list once its bullets are gone: a dash in
+/// a bulleted list, the item's number in a numbered one.
 fn render_html(body: &str) -> String {
     let mut out = String::with_capacity(body.len());
+    // One entry per open list: `Some(count so far)` for a numbered one.
+    let mut lists: Vec<Option<u32>> = Vec::new();
     let mut rest = body;
     while let Some((before, after)) = rest.split_once('<') {
         out.push_str(before);
@@ -48,13 +51,31 @@ fn render_html(body: &str) -> String {
             .collect();
         let closing = tag.starts_with('/');
         match (name.as_str(), closing) {
-            ("li", false) => out.push_str("\n- "),
+            ("li", false) => match lists.last_mut() {
+                Some(Some(count)) => {
+                    *count += 1;
+                    out.push('\n');
+                    out.push_str(&count.to_string());
+                    out.push_str(". ");
+                }
+                _ => out.push_str("\n- "),
+            },
+            ("ul", false) => lists.push(None),
+            ("ol", false) => lists.push(Some(0)),
             // An item or row ends where the next begins; the list as a whole
             // ends a line so the paragraph after it does not fuse.
-            ("li" | "tr", true) | ("ul" | "ol" | "table", false) => {}
+            ("li" | "tr", true) | ("table", false) => {}
+            // A nested list ends inside its item, so only the outermost
+            // one breaks the line.
+            ("ul" | "ol", true) => {
+                lists.pop();
+                if lists.is_empty() {
+                    out.push('\n');
+                }
+            }
             (
-                "ul" | "ol" | "table" | "br" | "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5"
-                | "h6" | "blockquote" | "pre" | "hr" | "section" | "article" | "header" | "footer",
+                "table" | "br" | "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
+                | "blockquote" | "pre" | "hr" | "section" | "article" | "header" | "footer",
                 _,
             ) => out.push('\n'),
             ("td" | "th", _) => out.push(' '),
@@ -188,6 +209,18 @@ mod tests {
         assert_eq!(
             tes_description(body, CopyFormat::Html),
             "Fractions & decimals\n\nIncludes:\n\n- Worksheet\n- Answers\n\nEnjoy!"
+        );
+    }
+
+    #[test]
+    fn the_rich_text_editors_lists_and_breaks_read_as_lines() {
+        let body = "<p>Fractions <strong>pack</strong><br>for year 4</p>\
+                    <ul><li>Worksheet<ul><li>Answers</li></ul></li><li>Poster</li></ul>\
+                    <ol><li>Print</li><li>Teach</li></ol>\
+                    <p>See <a href=\"https://example.com\">the site</a>.</p>";
+        assert_eq!(
+            tes_description(body, CopyFormat::Html),
+            "Fractions pack\nfor year 4\n\n- Worksheet\n- Answers\n- Poster\n\n1. Print\n2. Teach\n\nSee the site."
         );
     }
 

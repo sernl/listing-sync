@@ -1,5 +1,6 @@
-//! The completion mail: who to send it to, what it says, and the relay it
-//! goes out through.
+//! The mails this process sends: the seller's completion mail and the
+//! operators' word of a new marketplace request, who each goes to, what each
+//! says, and the relay both go out through.
 //!
 //! Three seams, and the reason for each. The address comes from the identity
 //! service rather than from this database, because `app_user.email` holds
@@ -7,18 +8,26 @@
 //! address is `tam-auth`'s; it is held for the length of one send and stored
 //! nowhere, so the domain database keeps its property of not knowing any
 //! seller's address. The relay is a seam so that a test proves the mail
-//! without a network. And the template is a pure function of the payload, so
-//! what a seller reads is asserted against a literal rather than eyeballed.
+//! without a network. And each template is a pure function of its payload, so
+//! what a reader reads is asserted against a literal rather than eyeballed.
 //!
 //! Nothing here carries a resource title, a listing body, or any marketplace
-//! credential or session. The counts and the marketplace's name are the whole
-//! of what leaves this process, and the run's own page is where the titles are.
+//! credential or session. The completion mail's counts and the marketplace's
+//! name are the whole of what it lets leave this process, and the run's own
+//! page is where the titles are. The request mail carries what the seller
+//! typed into the request form for us to read, and nothing else of theirs.
 
 use std::future::Future;
 
 use tam_engine::outbox::{Deliverer, DeliveryError};
-use tam_storage::{NotificationRepo, OutboxMessage, Recipient, JOB_SETTLED_TOPIC};
-use tam_types::{JobSettledNotice, Marketplace, NotificationCounts, NotificationKind, OrgId, Uuid};
+use tam_storage::{
+    NotificationRepo, OperatorRepo, OutboxMessage, Recipient, JOB_SETTLED_TOPIC,
+    MARKETPLACE_REQUESTED_TOPIC,
+};
+use tam_types::{
+    JobSettledNotice, Marketplace, MarketplaceRequestedNotice, NotificationCounts,
+    NotificationKind, OrgId, Uuid,
+};
 
 /// Resend's send endpoint, which is one authenticated JSON POST.
 const RESEND_ENDPOINT: &str = "https://api.resend.com/emails";
@@ -62,8 +71,8 @@ pub(crate) trait AddressResolver: Send + Sync {
 pub(crate) struct Mail {
     pub(crate) subject: String,
     pub(crate) html: String,
-    /// The run's own page, which is the button's target and the one place the
-    /// resource titles live.
+    /// The page the mail's one button opens: the run's own page, which is
+    /// where the resource titles live, or the requesting organisation's.
     pub(crate) href: String,
 }
 
@@ -402,11 +411,90 @@ pub(crate) fn compose(notice: &JobSettledNotice, console_url: &str) -> Mail {
     }
 }
 
+/// Where an organisation's page lives in the operator console.
+#[must_use]
+pub(crate) fn org_admin_path(org: OrgId) -> String {
+    format!("/admin/orgs/{}", uuid_text(org.0))
+}
+
+/// The operators' mail about one new marketplace request, as a pure function
+/// of the payload, who asked, and the console's origin.
+///
+/// `requester` is already the words the mail names the asker by — their
+/// address, or their subject where the identity service holds none — so the
+/// template decides nothing about identity. Every value the seller typed, and
+/// the organisation's name they chose, is escaped here: unlike the completion
+/// mail's, these are stored strings a seller controls. The note keeps its
+/// line breaks, because a seller who wrote two paragraphs meant two.
+///
+/// In the completion mail's palette and for the same reasons; its comment
+/// names each literal's token.
+#[must_use]
+pub(crate) fn compose_request(
+    notice: &MarketplaceRequestedNotice,
+    requester: &str,
+    console_url: &str,
+) -> Mail {
+    let subject = format!(
+        "Marketplace request: {} from {}",
+        notice.marketplace_name, notice.org_name
+    );
+    let href = format!(
+        "{}{}",
+        console_url.trim_end_matches('/'),
+        org_admin_path(notice.org)
+    );
+    let row = |label: &str, value: &str| {
+        format!(
+            "<tr><td style=\"padding:6px 16px 6px 0;color:#5a6560;vertical-align:top\">{label}</td>\
+             <td style=\"padding:6px 0;color:#17231c;white-space:pre-wrap\">{value}</td></tr>"
+        )
+    };
+    let rows = [
+        row("Marketplace", &escaped(&notice.marketplace_name)),
+        row(
+            "Organisation",
+            &format!(
+                "{} <span style=\"color:#5a6560\">({})</span>",
+                escaped(&notice.org_name),
+                uuid_text(notice.org.0)
+            ),
+        ),
+        row("Asked by", &escaped(requester)),
+        row("Their note", &escaped(&notice.note)),
+    ]
+    .concat();
+    let html = format!(
+        "<div style=\"font-family:system-ui,-apple-system,'Segoe UI',sans-serif;\
+           background:#f6f4f1;padding:32px 16px\">\
+           <div style=\"max-width:520px;margin:0 auto;background:#fdfdfc;border-radius:12px;\
+             padding:28px 32px;color:#17231c\">\
+           <p style=\"margin:0 0 16px;font-size:16px\">A seller asked us to support a marketplace.</p>\
+           <table style=\"border-collapse:collapse;margin:0 0 24px;font-size:15px\">{rows}</table>\
+           <a href=\"{href}\" style=\"display:inline-block;background:#1f4a38;color:#ffffff;\
+             text-decoration:none;padding:10px 20px;border-radius:8px;font-weight:600\">\
+             Open the organisation</a>\
+           </div></div>",
+        href = escaped(&href),
+    );
+    Mail {
+        subject,
+        html,
+        href,
+    }
+}
+
 // --------------------------------------------------------------- the drainer
 
 /// The real deliverer: the address, the mail and the relay.
+///
+/// Two repositories because two roles hold the reads: who in an organisation
+/// wants a completion mail is the engine pool's column grant, and who is an
+/// operator is the application pool's alone, the engine role being granted
+/// nothing on `platform_operator`.
 pub(crate) struct EmailDeliverer<R, S> {
     notifications: NotificationRepo,
+    operators: OperatorRepo,
     resolver: R,
     relay: S,
     console_url: String,
@@ -415,12 +503,14 @@ pub(crate) struct EmailDeliverer<R, S> {
 impl<R: AddressResolver, S: Relay> EmailDeliverer<R, S> {
     pub(crate) fn new(
         notifications: NotificationRepo,
+        operators: OperatorRepo,
         resolver: R,
         relay: S,
         console_url: &str,
     ) -> Self {
         Self {
             notifications,
+            operators,
             resolver,
             relay,
             console_url: console_url.to_owned(),
@@ -440,6 +530,44 @@ impl<R: AddressResolver, S: Relay> EmailDeliverer<R, S> {
         self.mail_to(&recipients, notice).await
     }
 
+    /// The address a recipient may be mailed at, or `None` where there is
+    /// none the identity service will vouch for.
+    ///
+    /// Unreachable is the one retryable answer. A subject with no address, or
+    /// one it will not vouch for, is skipped with a logged line naming the
+    /// subject and `mail` — which mail was not sent — and the caller carries
+    /// on (founder decision A1, 2026-09-07). Retrying cannot change either
+    /// answer, and a dead letter nothing reads is a worse record than the log
+    /// line: under the earlier rule every seller whose provider never asserted
+    /// verification simply stopped receiving mail. The subject is a platform
+    /// id and not an address, so naming it costs nothing a log should not
+    /// hold.
+    async fn verified_address(
+        &self,
+        subject: Uuid,
+        mail: &str,
+    ) -> Result<Option<String>, DeliveryError> {
+        let address = match self.resolver.address(subject).await {
+            Ok(address) => address,
+            Err(ResolveError::Unreachable(why)) => return Err(DeliveryError::Retryable(why)),
+            Err(ResolveError::NoAddress(why)) => {
+                eprintln!(
+                    "tam-server: subject {} has no address to mail ({why}); its {mail} is not sent",
+                    uuid_text(subject)
+                );
+                return Ok(None);
+            }
+        };
+        if !address.verified {
+            eprintln!(
+                "tam-server: subject {} has an address the identity service does not vouch for; its {mail} is not sent",
+                uuid_text(subject)
+            );
+            return Ok(None);
+        }
+        Ok(Some(address.email))
+    }
+
     /// The mail itself, given who wants it.
     ///
     /// Separate from the read above so that a test drives the whole retry
@@ -449,16 +577,8 @@ impl<R: AddressResolver, S: Relay> EmailDeliverer<R, S> {
     /// First error wins, and the whole message is retried or dead-lettered on
     /// it. With one user per organisation that is exactly the rule; with
     /// several, a retry can re-mail a recipient the earlier pass reached, which
-    /// is the accepted cost of a single message per run.
-    ///
-    /// A recipient the identity service holds no address for, or holds one it
-    /// will not vouch for, is skipped with a logged line naming the subject,
-    /// and the message completes (founder decision A1, 2026-09-07). Retrying
-    /// cannot change either answer, and a dead letter nothing reads is a worse
-    /// record than the log line: under the earlier rule every seller whose
-    /// provider never asserted verification simply stopped receiving mail. The
-    /// subject is a platform id and not an address, so naming it costs nothing
-    /// a log should not hold.
+    /// is the accepted cost of a single message per run. A recipient without
+    /// a vouched-for address is skipped, as [`Self::verified_address`] says.
     async fn mail_to(
         &self,
         recipients: &[Recipient],
@@ -466,31 +586,107 @@ impl<R: AddressResolver, S: Relay> EmailDeliverer<R, S> {
     ) -> Result<(), DeliveryError> {
         let mail = compose(notice, &self.console_url);
         for recipient in recipients {
-            let address = match self.resolver.address(recipient.subject).await {
-                Ok(address) => address,
-                Err(ResolveError::Unreachable(why)) => return Err(DeliveryError::Retryable(why)),
-                Err(ResolveError::NoAddress(why)) => {
-                    eprintln!(
-                        "tam-server: subject {} has no address to mail ({why}); its completion mail is not sent",
-                        uuid_text(recipient.subject)
-                    );
-                    continue;
-                }
-            };
-            if !address.verified {
-                eprintln!(
-                    "tam-server: subject {} has an address the identity service does not vouch for; its completion mail is not sent",
-                    uuid_text(recipient.subject)
-                );
+            let Some(address) = self
+                .verified_address(recipient.subject, "completion mail")
+                .await?
+            else {
                 continue;
-            }
+            };
             self.relay
-                .send(&address.email, &mail)
+                .send(&address, &mail)
                 .await
                 .map_err(|error| match error {
                     RelayError::Retryable(why) => DeliveryError::Retryable(why),
                     RelayError::Permanent(why) => DeliveryError::Poison(why),
                 })?;
+        }
+        Ok(())
+    }
+
+    async fn deliver_request(
+        &self,
+        notice: &MarketplaceRequestedNotice,
+    ) -> Result<(), DeliveryError> {
+        let operators = self
+            .operators
+            .mail_recipients()
+            .await
+            .map_err(|error| DeliveryError::Retryable(error.to_string()))?;
+        self.mail_operators(&operators, notice).await
+    }
+
+    /// What the request mail calls the seller who asked.
+    ///
+    /// Their address where the identity service holds one, marked when it
+    /// does not vouch for it — an operator replying needs to know the reply
+    /// may go nowhere — and their subject where it holds none, which the
+    /// operator console can still look up. Unreachable is retried, as it is
+    /// for every address this process asks for.
+    async fn requester(
+        &self,
+        notice: &MarketplaceRequestedNotice,
+    ) -> Result<String, DeliveryError> {
+        let Some(subject) = notice.requester_subject else {
+            return Ok("a user with no sign-in identity".to_owned());
+        };
+        match self.resolver.address(subject).await {
+            Ok(Address {
+                email,
+                verified: true,
+            }) => Ok(email),
+            Ok(Address {
+                email,
+                verified: false,
+            }) => Ok(format!("{email} (not verified)")),
+            Err(ResolveError::Unreachable(why)) => Err(DeliveryError::Retryable(why)),
+            Err(ResolveError::NoAddress(_)) => Ok(format!("subject {}", uuid_text(subject))),
+        }
+    }
+
+    /// One mail per operator with a vouched-for address, given who they are.
+    ///
+    /// Separate from the operator read for the reason [`Self::mail_to`] is.
+    /// No operators at all completes with nothing sent and a logged line: the
+    /// request is stored and listed whatever happens here, and retrying will
+    /// not grant anybody the marking.
+    ///
+    /// The retry rule is the completion mail's with one difference. An
+    /// unreachable identity service or a relay fault retries the whole
+    /// message, which can re-mail an operator an earlier pass reached; that is
+    /// the accepted cost of one message per request. A relay's permanent
+    /// refusal skips that one operator with a logged line and carries on, and
+    /// the message completes, rather than dead-lettering: a refusal is about
+    /// one address, and poisoning on it would keep the request from every
+    /// operator after it in the list.
+    async fn mail_operators(
+        &self,
+        operators: &[Recipient],
+        notice: &MarketplaceRequestedNotice,
+    ) -> Result<(), DeliveryError> {
+        if operators.is_empty() {
+            eprintln!(
+                "tam-server: no operator to tell about a marketplace request from organisation {}; it is on the operator listing",
+                uuid_text(notice.org.0)
+            );
+            return Ok(());
+        }
+        let requester = self.requester(notice).await?;
+        let mail = compose_request(notice, &requester, &self.console_url);
+        for operator in operators {
+            let Some(address) = self
+                .verified_address(operator.subject, "marketplace request mail")
+                .await?
+            else {
+                continue;
+            };
+            match self.relay.send(&address, &mail).await {
+                Ok(()) => {}
+                Err(RelayError::Retryable(why)) => return Err(DeliveryError::Retryable(why)),
+                Err(RelayError::Permanent(why)) => eprintln!(
+                    "tam-server: the relay refused the marketplace request mail to subject {} ({why}); not retried",
+                    uuid_text(operator.subject)
+                ),
+            }
         }
         Ok(())
     }
@@ -502,6 +698,18 @@ impl<R: AddressResolver, S: Relay> Deliverer for EmailDeliverer<R, S> {
         // succeed rather than dead-letter: delivery is unordered, and one
         // message the drainer does not understand must not stall the ones
         // behind it.
+        if message.topic == MARKETPLACE_REQUESTED_TOPIC {
+            let Ok(notice) =
+                serde_json::from_value::<MarketplaceRequestedNotice>(message.payload.clone())
+            else {
+                eprintln!(
+                    "tam-server: outbox message on {} carries no request summary; logged and dropped",
+                    message.topic
+                );
+                return Ok(());
+            };
+            return self.deliver_request(&notice).await;
+        }
         if message.topic != JOB_SETTLED_TOPIC {
             eprintln!(
                 "tam-server: outbox topic {} has no relay yet; logged and dropped",
@@ -538,16 +746,16 @@ fn uuid_text(id: Uuid) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        compose, relay_verdict, run_path, select, Address, AddressResolver, EmailDeliverer, Mail,
-        MailConfig, Relay, RelayError, ResolveError, Selected,
+        compose, compose_request, relay_verdict, run_path, select, Address, AddressResolver,
+        EmailDeliverer, Mail, MailConfig, Relay, RelayError, ResolveError, Selected,
     };
     use std::future::Future;
-    use std::sync::OnceLock;
+    use std::sync::{OnceLock, RwLock};
     use tam_engine::outbox::{Deliverer, DeliveryError};
-    use tam_storage::OutboxMessage;
+    use tam_storage::{OutboxMessage, Recipient};
     use tam_types::{
-        InventoryId, JobSettledNotice, Marketplace, NotificationCounts, NotificationKind, OrgId,
-        Timestamp, Uuid,
+        InventoryId, JobSettledNotice, Marketplace, MarketplaceRequestedNotice, NotificationCounts,
+        NotificationKind, OrgId, Timestamp, Uuid,
     };
 
     fn notice(counts: NotificationCounts) -> JobSettledNotice {
@@ -568,16 +776,16 @@ mod tests {
         }
     }
 
-    /// Answers whatever it was scripted with and records the first subject it
-    /// was asked about.
+    /// Answers whatever it was scripted with, per subject where a case names
+    /// one and `answer` otherwise, and records the first subject it was asked
+    /// about.
     ///
-    /// `OnceLock` rather than a lock around a growing list: these cases mail one
-    /// recipient, so the first call is the whole record, and the lint table bans
-    /// `std::sync::Mutex` for a reason that applies to production code and would
-    /// otherwise pull a runtime primitive into a recorder that needs none.
+    /// `OnceLock` rather than a lock around a growing list: every case that
+    /// reads it asks about one subject first, and that call is the record.
     struct RecordingResolver {
         answer: Result<Address, ResolveError>,
         asked: OnceLock<Uuid>,
+        by_subject: Vec<(Uuid, Result<Address, ResolveError>)>,
     }
 
     impl AddressResolver for RecordingResolver {
@@ -586,14 +794,30 @@ mod tests {
             subject: Uuid,
         ) -> impl Future<Output = Result<Address, ResolveError>> + Send {
             let _unused = self.asked.set(subject);
-            core::future::ready(self.answer.clone())
+            let answer = self
+                .by_subject
+                .iter()
+                .find(|(scripted, _)| *scripted == subject)
+                .map_or_else(|| self.answer.clone(), |(_, answer)| answer.clone());
+            core::future::ready(answer)
         }
     }
 
-    /// Records the first mail it was handed and sends none.
+    /// Records every mail it was handed and sends none.
+    ///
+    /// A list, because the request mail goes to several operators and which
+    /// of them received it is the assertion. `RwLock` rather than the banned
+    /// `std::sync::Mutex`: a poisoned lock here fails the one test that
+    /// panicked, which is what a test wants anyway.
     struct RecordingRelay {
         answer: Result<(), RelayError>,
-        sent: OnceLock<(String, Mail)>,
+        record: RwLock<Vec<(String, Mail)>>,
+    }
+
+    impl RecordingRelay {
+        fn sent(&self) -> Vec<(String, Mail)> {
+            self.record.read().expect("the record is readable").clone()
+        }
     }
 
     impl Relay for RecordingRelay {
@@ -602,7 +826,10 @@ mod tests {
             to: &str,
             mail: &Mail,
         ) -> impl Future<Output = Result<(), RelayError>> + Send {
-            let _unused = self.sent.set((to.to_owned(), mail.clone()));
+            self.record
+                .write()
+                .expect("the record is writable")
+                .push((to.to_owned(), mail.clone()));
             core::future::ready(self.answer.clone())
         }
     }
@@ -742,8 +969,8 @@ mod tests {
     }
 
     /// A pool is needed to build the deliverer and never connected to, because
-    /// every case below refuses before the recipient read. `connect_lazy` is
-    /// what makes that possible without a database.
+    /// every case below refuses before the recipient and operator reads.
+    /// `connect_lazy` is what makes that possible without a database.
     fn deliverer(
         resolver: RecordingResolver,
         relay: RecordingRelay,
@@ -752,7 +979,8 @@ mod tests {
             .connect_lazy("postgres://tam_engine@127.0.0.1/unreachable")
             .expect("a lazy pool is built without connecting");
         EmailDeliverer::new(
-            tam_storage::NotificationRepo::new(pool),
+            tam_storage::NotificationRepo::new(pool.clone()),
+            tam_storage::OperatorRepo::new(pool),
             resolver,
             relay,
             "https://app.example.test",
@@ -774,10 +1002,11 @@ mod tests {
                     verified: true,
                 }),
                 asked: OnceLock::new(),
+                by_subject: Vec::new(),
             },
             RecordingRelay {
                 answer: Ok(()),
-                sent: OnceLock::new(),
+                record: RwLock::default(),
             },
         )
     }
@@ -812,10 +1041,11 @@ mod tests {
         let resolver = RecordingResolver {
             answer: Err(ResolveError::Unreachable("down".to_owned())),
             asked: OnceLock::new(),
+            by_subject: Vec::new(),
         };
         let relay = RecordingRelay {
             answer: Ok(()),
-            sent: OnceLock::new(),
+            record: RwLock::default(),
         };
         let deliverer = deliverer(resolver, relay);
         let outcome = deliverer
@@ -827,7 +1057,7 @@ mod tests {
             "a service that is down will answer later, so the attempt budget is kept"
         );
         assert!(
-            deliverer.relay.sent.get().is_none(),
+            deliverer.relay.sent().is_empty(),
             "nothing is handed to the relay without an address"
         );
     }
@@ -849,10 +1079,11 @@ mod tests {
             let resolver = RecordingResolver {
                 answer,
                 asked: OnceLock::new(),
+                by_subject: Vec::new(),
             };
             let relay = RecordingRelay {
                 answer: Ok(()),
-                sent: OnceLock::new(),
+                record: RwLock::default(),
             };
             let deliverer = deliverer(resolver, relay);
             let outcome = deliverer
@@ -864,7 +1095,7 @@ mod tests {
                 "the message completes: neither answer is a fault a later attempt fixes"
             );
             assert!(
-                deliverer.relay.sent.get().is_none(),
+                deliverer.relay.sent().is_empty(),
                 "and nothing reaches the relay, because there is no address to send to"
             );
         }
@@ -879,7 +1110,7 @@ mod tests {
             let (resolver, _unused) = recorders();
             let relay = RecordingRelay {
                 answer: Err(answer),
-                sent: OnceLock::new(),
+                record: RwLock::default(),
             };
             let outcome = deliverer(resolver, relay)
                 .mail_to(&[one_recipient()], &notice(twelve_succeeded()))
@@ -907,8 +1138,9 @@ mod tests {
         );
         let (to, mail) = deliverer
             .relay
-            .sent
-            .get()
+            .sent()
+            .first()
+            .cloned()
             .expect("one mail was handed over");
         assert_eq!(to, "sam@example.test", "and it goes where that answer said");
         assert_eq!(
@@ -964,5 +1196,201 @@ mod tests {
             ])),
             "01234567-89ab-cdef-0123-456789abcdef"
         );
+    }
+
+    const REQUESTER: Uuid = Uuid([0x61; 16]);
+
+    fn request_notice() -> MarketplaceRequestedNotice {
+        MarketplaceRequestedNotice {
+            requester_subject: Some(REQUESTER),
+            org: OrgId(Uuid([0x0c; 16])),
+            org_name: "O'Brien & Daughters".to_owned(),
+            marketplace_name: "Amped <Up> Learning".to_owned(),
+            note: "Science units.\n<script>alert(\"x\")</script>".to_owned(),
+        }
+    }
+
+    fn operator(byte: u8) -> Recipient {
+        Recipient {
+            user: tam_types::UserId(Uuid([byte; 16])),
+            subject: Uuid([byte.wrapping_add(1); 16]),
+        }
+    }
+
+    fn verified(email: &str) -> Address {
+        Address {
+            email: email.to_owned(),
+            verified: true,
+        }
+    }
+
+    /// Everything the seller typed reaches the operator, and none of it
+    /// reaches the markup as markup: the note is a place a seller can write
+    /// anything, and an operator's mail client is where it would run.
+    #[test]
+    fn the_request_mail_names_who_asked_where_and_why_escaped() {
+        let mail = compose_request(
+            &request_notice(),
+            "seller@example.test",
+            "https://app.example.test/",
+        );
+        assert_eq!(
+            mail.subject,
+            "Marketplace request: Amped <Up> Learning from O'Brien & Daughters"
+        );
+        for stated in [
+            "Amped &lt;Up&gt; Learning",
+            "O&#39;Brien &amp; Daughters",
+            "0c0c0c0c-0c0c-0c0c-0c0c-0c0c0c0c0c0c",
+            "seller@example.test",
+            "Science units.\n&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;",
+        ] {
+            assert!(mail.html.contains(stated), "the mail states {stated:?}");
+        }
+        assert!(
+            !mail.html.contains("<script>") && !mail.html.contains("<Up>"),
+            "nothing a seller typed reaches the markup unescaped"
+        );
+        assert_eq!(
+            mail.href, "https://app.example.test/admin/orgs/0c0c0c0c-0c0c-0c0c-0c0c-0c0c0c0c0c0c",
+            "the button opens the asking organisation in the operator console"
+        );
+    }
+
+    #[tokio::test]
+    async fn only_operators_with_a_vouched_for_address_are_told() {
+        let (ana, ben, cai) = (operator(0x10), operator(0x20), operator(0x30));
+        let resolver = RecordingResolver {
+            answer: Err(ResolveError::NoAddress("unscripted".to_owned())),
+            asked: OnceLock::new(),
+            by_subject: vec![
+                (REQUESTER, Ok(verified("seller@example.test"))),
+                (ana.subject, Ok(verified("ana@example.test"))),
+                (
+                    ben.subject,
+                    Ok(Address {
+                        email: "ben@example.test".to_owned(),
+                        verified: false,
+                    }),
+                ),
+                (cai.subject, Err(ResolveError::NoAddress("gone".to_owned()))),
+            ],
+        };
+        let relay = RecordingRelay {
+            answer: Ok(()),
+            record: RwLock::default(),
+        };
+        let deliverer = deliverer(resolver, relay);
+        let outcome = deliverer
+            .mail_operators(&[ana, ben, cai], &request_notice())
+            .await;
+        assert_eq!(outcome, Ok(()), "skipping an operator is not a fault");
+        let sent = deliverer.relay.sent();
+        let recipients: Vec<&str> = sent.iter().map(|(to, _)| to.as_str()).collect();
+        assert_eq!(
+            recipients,
+            ["ana@example.test"],
+            "an unverified or absent address is not mailed"
+        );
+        assert!(
+            sent[0].1.html.contains("seller@example.test"),
+            "the requester is named by the address the identity service gave"
+        );
+    }
+
+    /// A requester the identity service holds no address for is still named,
+    /// by the subject the operator console can look up.
+    #[tokio::test]
+    async fn a_requester_without_an_address_is_named_by_subject() {
+        let resolver = RecordingResolver {
+            answer: Ok(verified("ana@example.test")),
+            asked: OnceLock::new(),
+            by_subject: vec![(REQUESTER, Err(ResolveError::NoAddress("none".to_owned())))],
+        };
+        let relay = RecordingRelay {
+            answer: Ok(()),
+            record: RwLock::default(),
+        };
+        let deliverer = deliverer(resolver, relay);
+        deliverer
+            .mail_operators(&[operator(0x10)], &request_notice())
+            .await
+            .expect("the recorders accept it");
+        let sent = deliverer.relay.sent();
+        assert!(
+            sent[0]
+                .1
+                .html
+                .contains("subject 61616161-6161-6161-6161-616161616161"),
+            "the mail names the subject instead"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_operators_completes_with_nothing_sent() {
+        let (resolver, relay) = recorders();
+        let deliverer = deliverer(resolver, relay);
+        let outcome = deliverer.mail_operators(&[], &request_notice()).await;
+        assert_eq!(
+            outcome,
+            Ok(()),
+            "retrying will not grant anybody the marking"
+        );
+        assert!(deliverer.relay.sent().is_empty(), "and nobody is mailed");
+        assert!(
+            deliverer.resolver.asked.get().is_none(),
+            "and nobody's address is asked for"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_address_service_retries_the_request_mail() {
+        let resolver = RecordingResolver {
+            answer: Err(ResolveError::Unreachable("down".to_owned())),
+            asked: OnceLock::new(),
+            by_subject: Vec::new(),
+        };
+        let relay = RecordingRelay {
+            answer: Ok(()),
+            record: RwLock::default(),
+        };
+        let deliverer = deliverer(resolver, relay);
+        let outcome = deliverer
+            .mail_operators(&[operator(0x10)], &request_notice())
+            .await;
+        assert_eq!(outcome, Err(DeliveryError::Retryable("down".to_owned())));
+        assert!(deliverer.relay.sent().is_empty());
+    }
+
+    /// The one place the request mail's rule departs from the completion
+    /// mail's: a relay refusing one operator's address must not keep the
+    /// request from the operators after them, so it completes rather than
+    /// dead-letters, while a relay fault still keeps its attempts.
+    #[tokio::test]
+    async fn a_relay_refusal_skips_one_operator_and_a_fault_is_retried() {
+        for (answer, expected) in [
+            (RelayError::Permanent("422".to_owned()), Ok(())),
+            (
+                RelayError::Retryable("503".to_owned()),
+                Err(DeliveryError::Retryable("503".to_owned())),
+            ),
+        ] {
+            let (resolver, _unused) = recorders();
+            let relay = RecordingRelay {
+                answer: Err(answer),
+                record: RwLock::default(),
+            };
+            let deliverer = deliverer(resolver, relay);
+            let outcome = deliverer
+                .mail_operators(&[operator(0x10), operator(0x20)], &request_notice())
+                .await;
+            let attempted = deliverer.relay.sent().len();
+            assert_eq!(outcome, expected);
+            assert_eq!(
+                attempted,
+                if expected.is_ok() { 2 } else { 1 },
+                "a refusal moves on to the next operator; a fault stops the pass"
+            );
+        }
     }
 }

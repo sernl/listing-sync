@@ -3,11 +3,15 @@ import { platforms, attribution } from '../platforms.js';
 
 /* The two platforms a build is published for, under the sentence that tells a
    reader an app is involved at all. Each draws its owner's mark where the owner
-   permits one and its name where it does not, at one size, in colour.
+   permits one and a plain desktop glyph where it does not, at one size, beside
+   its name.
 
    No store badge, on either row: all three badge programmes license the badge
    to link to a listing on that store, and Teachouse has none, so a badge here
-   would state something untrue about where the file came from. */
+   would state something untrue about where the file came from.
+
+   The missing platforms are said plainly rather than left for a reader to
+   infer from their absence. */
 ---
 
 <div class="platform-row">
@@ -15,13 +19,21 @@ import { platforms, attribution } from '../platforms.js';
 		{
 			platforms.map((platform) => (
 				<li class="platform">
-					{platform.file && (
-						<img src={`/vendors/${platform.file}`} alt="" width="30" height="18" loading="lazy" decoding="async" />
+					{platform.file ? (
+						<img src={`/vendors/${platform.file}`} alt="" width="41" height="24" loading="lazy" decoding="async" />
+					) : (
+						platform.glyph === 'desktop' && (
+							<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+								<rect width="20" height="14" x="2" y="3" rx="2" />
+								<path d="M8 21h8M12 17v4" />
+							</svg>
+						)
 					)}
 					<span>{platform.name}</span>
 				</li>
 			))
 		}
 	</ul>
+	<p class="platform-missing">No iPhone or Mac app yet.</p>
 	<p class="platform-note">{attribution.join(' ')}</p>
 </div>

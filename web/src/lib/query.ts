@@ -101,6 +101,10 @@ export const queryKeys = {
 	profile: ['profile'] as const,
 	passkeys: ['passkeys'] as const,
 	billing: ['billing'] as const,
+	/** The billing page's card and invoices, read from Stripe per request;
+	 *  under `billing` so invalidating the billing read refreshes them too. */
+	billingPaymentMethod: ['billing', 'payment-method'] as const,
+	billingInvoices: ['billing', 'invoices'] as const,
 	/** What this organisation's plan allows and what it has used. Asked once
 	 *  by the shell and read from the cache by every page that draws a gated
 	 *  control, so a cap is stated the same way everywhere on one answer. */
@@ -121,14 +125,21 @@ export const queryKeys = {
 	 *  shaped answer under: one key, two shapes is a cache collision. */
 	identitySession: ['identity-session'] as const,
 	adminSignups: ['admin-signups'] as const,
+	/** The site-wide switches as the operator reads them, uncached. */
+	adminSite: ['admin-site'] as const,
 	adminOrgs: ['admin-orgs'] as const,
 	adminOrg: (org: string) => ['admin-org', org] as const,
 	adminFailures: ['admin-failed-writes'] as const,
 	adminImportDrain: ['admin-import-drain'] as const,
 	adminDeadLetters: ['admin-dead-letters'] as const,
 	adminImpersonations: ['admin-impersonations'] as const,
+	adminPricing: ['admin-pricing'] as const,
 	/** The identity plane's user list, keyed by the search that produced it. */
 	identityUsers: (search: string) => ['identity-users', search] as const,
+	/** The identity accounts the impersonation trail names, read unsearched
+	 *  and wider than the users page's listing so the trail's parties resolve
+	 *  to people. Its own key: the users page's listing is bounded differently. */
+	identityDirectory: ['identity-directory'] as const,
 	/** One account's live sign-ins, as better-auth's admin plugin lists them.
 	 *  Keyed by the account, because the identity service lists sessions one
 	 *  account at a time and the page reads them only for the row an operator

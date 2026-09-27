@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 175] = [
+pub const ROUTES: [Route; 186] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -187,7 +187,12 @@ pub const ROUTES: [Route; 175] = [
     Route {
         method: "get",
         path: "/{version}/profile",
-        summary: "The requesting user's own profile: which picture they set",
+        summary: "The requesting user's own profile: which picture they set, and where they stand with the guided tour",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/onboarding/tour",
+        summary: "Record that the requesting user completed or skipped the guided tour",
     },
     Route {
         method: "get",
@@ -429,6 +434,11 @@ pub const ROUTES: [Route; 175] = [
     },
     Route {
         method: "get",
+        path: "/{version}/products/{product}/files/{file}/content",
+        summary: "The bytes of one of a resource's own files, for the console to read back",
+    },
+    Route {
+        method: "get",
         path: "/{version}/products/{product}/cover",
         summary: "The bytes of one resource's cover, for a browser to draw",
     },
@@ -571,7 +581,7 @@ pub const ROUTES: [Route; 175] = [
     Route {
         method: "get",
         path: "/{version}/devices",
-        summary: "The seller's own machines and the marketplaces each one holds",
+        summary: "The seller's own devices and the marketplaces each one holds",
     },
     Route {
         method: "post",
@@ -656,12 +666,12 @@ pub const ROUTES: [Route; 175] = [
     Route {
         method: "get",
         path: "/{version}/library",
-        summary: "Search and page files by machine, availability and resource association",
+        summary: "Search and page files by device, availability and resource association",
     },
     Route {
         method: "post",
         path: "/{version}/devices/{device}/library/want",
-        summary: "Ask one machine to fetch one file directly from another that holds it",
+        summary: "Ask one device to fetch one file directly from another that holds it",
     },
     Route {
         method: "delete",
@@ -671,7 +681,7 @@ pub const ROUTES: [Route; 175] = [
     Route {
         method: "get",
         path: "/{version}/devices/{device}/library/wants",
-        summary: "What one machine has been asked to fetch",
+        summary: "What one device has been asked to fetch",
     },
     Route {
         method: "get",
@@ -751,7 +761,7 @@ pub const ROUTES: [Route; 175] = [
     Route {
         method: "get",
         path: "/{version}/plans",
-        summary: "The price list, its capabilities, the import ladder and the founding offer",
+        summary: "The price list: the four plans, their capabilities, the move packs and the AI offer",
     },
     Route {
         method: "get",
@@ -820,6 +830,26 @@ pub const ROUTES: [Route; 175] = [
         summary: "Operator: every user with their organisation, its plan and their last sign-in",
     },
     Route {
+        method: "delete",
+        path: "/{version}/admin/users/{subject}",
+        summary: "Operator: delete a seller and the organisation that was theirs alone",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/site",
+        summary: "Public: maintenance mode, the seasonal theme and the banner, cached a minute",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/admin/site",
+        summary: "Operator: the site-wide switches, uncached",
+    },
+    Route {
+        method: "patch",
+        path: "/{version}/admin/site",
+        summary: "Operator: change maintenance mode, the seasonal theme or the banner",
+    },
+    Route {
         method: "get",
         path: "/{version}/admin/guides",
         summary: "Operator: every help guide, drafts included",
@@ -853,6 +883,31 @@ pub const ROUTES: [Route; 175] = [
         method: "put",
         path: "/{version}/admin/guides/_taxonomy/{kind}/{id}",
         summary: "Operator: rename or retire a guide topic or tag",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/admin/pricing",
+        summary: "Operator: every sale, one-off discount and discount code, with its Stripe standing",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/pricing/sales",
+        summary: "Operator: a percentage off every plan for a window, with a banner; creates its Stripe coupon",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/pricing/discounts",
+        summary: "Operator: a one-off discount on named price keys for a window; creates its Stripe coupon",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/pricing/codes",
+        summary: "Operator: a discount code sellers type; creates its Stripe coupon and promotion code",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/pricing/{id}/end",
+        summary: "Operator: stop offering a discount now; deletes its coupon and deactivates its codes in Stripe",
     },
     Route {
         method: "get",

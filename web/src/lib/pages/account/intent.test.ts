@@ -33,10 +33,10 @@ describe('reading a written intent', () => {
 	it('answers the price the landing page asked to buy', () => {
 		expect(
 			parseIntent(
-				JSON.stringify({ next: '/settings/subscription', price: 'sync_yearly', at: NOW - HOUR }),
+				JSON.stringify({ next: '/settings/billing', price: 'sync_yearly', at: NOW - HOUR }),
 				NOW
 			)
-		).toEqual({ next: '/settings/subscription', price: 'sync_yearly', at: NOW - HOUR });
+		).toEqual({ next: '/settings/billing', price: 'sync_yearly', at: NOW - HOUR });
 	});
 
 	// A key left behind by a sign-up nobody finished must not open a checkout
@@ -74,7 +74,7 @@ describe('reading a written intent', () => {
 
 describe('where the intent says to land', () => {
 	it('takes a path on this origin', () => {
-		expect(safeNext('/settings/subscription')).toBe('/settings/subscription');
+		expect(safeNext('/settings/billing')).toBe('/settings/billing');
 	});
 
 	// `next` arrives as a query parameter, so a value that leaves this origin
@@ -92,9 +92,9 @@ describe('the stored intent', () => {
 		const held = store();
 		vi.useFakeTimers();
 		vi.setSystemTime(NOW);
-		writeIntent({ next: '/settings/subscription', price: 'sync_monthly' });
+		writeIntent({ next: '/settings/billing', price: 'sync_monthly' });
 		expect(JSON.parse(held.get(INTENT_KEY) ?? 'null')).toEqual({
-			next: '/settings/subscription',
+			next: '/settings/billing',
 			price: 'sync_monthly',
 			at: NOW
 		});
@@ -122,12 +122,12 @@ describe('the stored intent', () => {
 	it('is left standing by a look that only asks where to land', () => {
 		const held = store({
 			[INTENT_KEY]: JSON.stringify({
-				next: '/settings/subscription',
+				next: '/settings/billing',
 				price: 'sync_yearly',
 				at: Date.now()
 			})
 		});
-		expect(peekIntent()?.next).toBe('/settings/subscription');
+		expect(peekIntent()?.next).toBe('/settings/billing');
 		expect(held.has(INTENT_KEY)).toBe(true);
 		expect(readIntent()?.price).toBe('sync_yearly');
 	});

@@ -1,0 +1,44 @@
+---
+/* The page `tam-server` answers every landing page and every console page
+   with while an operator has maintenance mode on (`crates/tam-server/src/
+   serving.rs`, `MAINTENANCE_PAGE`), under 503 and `Retry-After`. At its own
+   address it is the operator's preview and answers 200.
+
+   The server splices the operator's expected-back line into the element
+   carrying `data-maintenance-message`, escaped; the text written here is what
+   shows when they wrote none. No header navigation, because every page it
+   would link to is this page for now: the only links are the ones that still
+   work -- signing in, for the operator, and the status page. */
+import '../styles/site.css';
+import '../styles/maintenance.css';
+import { supportEmail } from '../site.js';
+
+const title = 'Teachouse \u2014 back soon';
+---
+
+<!doctype html>
+<html lang="en" data-theme="light">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="robots" content="noindex" />
+		<title>{title}</title>
+		<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+	</head>
+	<body class="maintenance">
+		<main class="maintenance-card">
+			<img class="maintenance-mark" src="/brand/mark.svg" alt="Teachouse" width="72" height="72" />
+			<h1>We’re doing some maintenance</h1>
+			<p class="maintenance-lede">
+				Teachouse is taking a short break while we make some improvements. Your resources and
+				listings are safe.
+			</p>
+			<p class="maintenance-back" data-maintenance-message>We expect to be back shortly.</p>
+			<p class="maintenance-contact">
+				You can check the <a href="/status">status page</a> for the latest
+				{supportEmail ? <>, or write to <a href={`mailto:${supportEmail}`}>{supportEmail}</a></> : null}.
+			</p>
+			<p class="maintenance-signin"><a href="/login">Team sign in</a></p>
+		</main>
+	</body>
+</html>

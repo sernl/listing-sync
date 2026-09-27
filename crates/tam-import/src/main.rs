@@ -317,7 +317,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!(
             "this path takes a TPT source and {source:?} is not one. It carries one \
              adapter and one session, and it downloads no file: the bytes come from \
-             the manifest's own paths on this machine. A source whose catalogue has to \
+             the manifest's own paths on this device. A source whose catalogue has to \
              be enumerated is enumerated on the seller's device instead, which is where \
              docs/notes/design/migration-file-routing.md routes it."
         )

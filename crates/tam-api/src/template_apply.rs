@@ -33,11 +33,13 @@ use tam_storage::{
     MappingRecord, MappingRepo, ProductRepo, ResourceCollectionRepo, ResourceTemplateRepo,
     TptBaseRepo,
 };
-use tam_types::{Currency, InventoryId, Money, OrgId, PriceIntent, ProductId, TermKind, Timestamp};
+use tam_types::{
+    CopyFormat, Currency, InventoryId, Money, OrgId, PriceIntent, ProductId, TermKind, Timestamp,
+};
 
 use crate::catalogue::{
-    commit_edit, prepare_edit, stored_grade_slug, uncaptured_edits, EditBar, PatchProductBody,
-    PathInput, PreparedEdit, UNCAPTURED_EDIT,
+    commit_edit, prepare_edit, stored_grade_slug, EditBar, PatchProductBody, PathInput,
+    PreparedEdit,
 };
 use crate::error::APIError;
 use crate::jobs::{storage_fault, validation, RequestKey};
@@ -237,14 +239,6 @@ async fn plan(
             .list_for_product(context.org, product)
             .await
             .map_err(|error| storage_fault(state, &error))?;
-        // The edit route's own refusal, reported as one row rather than as a
-        // whole failed request: a seller applying a template to forty
-        // resources has to see which of them their Tes listings block.
-        if !uncaptured_edits(&bound).is_empty() {
-            rows.push(blocked(product, title, UNCAPTURED_EDIT.to_owned()));
-            counts.blocked = counts.blocked.saturating_add(1);
-            continue;
-        }
         let base = sidecars
             .get(context.org, product)
             .await
@@ -408,16 +402,21 @@ fn merge(
     let mut fields: Vec<String> = Vec::new();
     let mut patch = PatchProductBody::default();
 
+    // A template's description is Markdown, so a product written in rich
+    // text takes it rendered rather than as literal asterisks.
     let described = draft.description.trim();
+    let written = match stored.body.format {
+        CopyFormat::Html => crate::rich_text::markdown_to_html(described),
+        CopyFormat::Markdown => described.to_owned(),
+    };
     if !described.is_empty()
         && (overwrite || stored.body.body.trim().is_empty())
-        && described != stored.body.body
+        && written != stored.body.body
     {
-        patch.body = Some(described.to_owned());
         // Given with the body it describes, which is what the edit route
-        // requires; the format is the stored one, because a template holds no
-        // opinion about markup and changing it silently is how a listing
-        // acquires escaped markdown.
+        // requires; the format is the stored one, because changing it
+        // silently is how a listing acquires escaped markdown.
+        patch.body = Some(written);
         patch.body_format = Some(stored.body.format);
         fields.push("description".to_owned());
     }
@@ -816,6 +815,30 @@ mod tests {
             patch.tpt_base.map(|base| base.copyright_declaration_id),
             Some(Some(1)),
             "and the sidecar half travels whole, with the attestation filled in"
+        );
+    }
+
+    #[test]
+    fn a_rich_text_resource_takes_the_template_description_rendered() {
+        let mut stored = product("", PriceIntent::Free, vec![]);
+        stored.body.format = CopyFormat::Html;
+        let draft = DraftInput {
+            description: "A **bold** pack.\n\n- one\n- two".to_owned(),
+            ..DraftInput::default()
+        };
+        let (patch, _) = merge(&draft, &stored, None, false);
+        assert_eq!(
+            patch.body.as_deref(),
+            Some("<p>A <strong>bold</strong> pack.</p><ul><li>one</li><li>two</li></ul>"),
+            "Markdown asterisks in an HTML body would reach every marketplace as asterisks"
+        );
+        assert_eq!(patch.body_format, Some(CopyFormat::Html));
+
+        stored.body.body = patch.body.clone().expect("written above");
+        let (again, fields) = merge(&draft, &stored, None, true);
+        assert!(
+            again.body.is_none() && fields.is_empty(),
+            "applied twice, the second finds the description already written"
         );
     }
 

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE billing_subscription SET cancel_at_period_end = $3, updated_at = $4 WHERE org_id = $1 AND provider_subscription_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Bool",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "77e7e5bc8d7931f4efe11636adabbd0bcd8018e48f87cbeb117062aa1bb03c62"
+}

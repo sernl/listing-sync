@@ -222,7 +222,7 @@ impl core::error::Error for ControlPlaneError {}
 /// attempt count: those belong in a disclosure, not in the sentence a seller
 /// reads first.
 pub const SIGNED_OUT_HERE: &str =
-    "This machine was signed out of your Teachouse account, so it cannot run imports. Sign it \
+    "This device was signed out of your Teachouse account, so it cannot run imports. Sign it \
      back in from Marketplaces, then try again.";
 
 /// One control-plane call, boxed so the trait stays object-safe. The same

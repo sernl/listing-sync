@@ -15,8 +15,8 @@ use axum::{
 use http_body_util::BodyExt;
 use sqlx::PgPool;
 use tam_api::catalogue::{
-    AddedFileView, CreatedProductView, DeletedProductView, RemovedFileView, RenamedFileView,
-    ReplacedFileView, ThumbnailView, UploadedView,
+    AddedFileView, CreatedProductView, DeletedProductView, PatchedProductView, RemovedFileView,
+    RenamedFileView, ReplacedFileView, ThumbnailView, UploadedView,
 };
 use tam_api::resources::{FileView, ProductView, ProductsPage};
 use tam_api::taxonomy::TermsView;
@@ -1762,8 +1762,72 @@ async fn bind_live(pool: &PgPool, org: OrgId, product: ProductId, inventory: Inv
     tx.commit().await.expect("the bind commits");
 }
 
+/// The operations every job item on one mapping was lowered to, read under
+/// the tenant pin the ledger is fenced by.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn operations_on(pool: &PgPool, org: OrgId, mapping: tam_types::MappingId) -> Vec<String> {
+    let mut tx = pool.begin().await.expect("tx begins");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(org.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the pin applies");
+    let operations: Vec<String> = sqlx::query_scalar(
+        "SELECT operation FROM job_item WHERE org_id = $1 AND mapping_id = $2 ORDER BY created_at",
+    )
+    .bind(uuid::Uuid::from_bytes(org.0 .0))
+    .bind(uuid::Uuid::from_bytes(mapping.0 .0))
+    .fetch_all(&mut *tx)
+    .await
+    .expect("the items read");
+    tx.commit().await.expect("the read commits");
+    operations
+}
+
+/// Starts one send the way the Publish control does, answering its status.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn send_live(
+    state: AppState,
+    inventory: InventoryId,
+    mapping: tam_types::MappingId,
+) -> StatusCode {
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/jobs")
+        .header(
+            header::COOKIE,
+            format!("{SESSION_COOKIE}={}", TOKEN_A.to_hex()),
+        )
+        .header(header::CONTENT_TYPE, "application/json")
+        // One key per mapping: each send here is its own job.
+        .header(
+            "idempotency-key",
+            uuid::Uuid::from_bytes(mapping.0 .0).to_string(),
+        )
+        .body(Body::from(
+            serde_json::json!({
+                "inventory": inventory,
+                "mappings": [mapping],
+                "intent": "live",
+            })
+            .to_string(),
+        ))
+        .expect("the request builds");
+    router(state)
+        .oneshot(request)
+        .await
+        .expect("the router serves")
+        .status()
+}
+
 #[sqlx::test(migrations = "../tam-storage/migrations")]
-async fn a_live_tes_listing_refuses_the_edit_with_the_capability_named(pool: PgPool) {
+async fn an_edit_past_a_live_tes_listing_is_written_and_says_tes_keeps_its_copy(pool: PgPool) {
     provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
     let root = store_root("edit");
     let state = configured(pool.clone(), &root);
@@ -1773,37 +1837,14 @@ async fn a_live_tes_listing_refuses_the_edit_with_the_capability_named(pool: PgP
         &TOKEN_A,
         Method::POST,
         "/v1/products",
-        &create_body(&uploaded, "Editable", &["Tes"]),
+        &create_body(&uploaded, "Editable", &["Tes", "Tpt"]),
     )
     .await;
     let created: CreatedProductView = parse(&body);
     let path = format!("/v1/products/{}", created.product.0.to_hyphenated());
-
-    // Unbound, the edit lands.
-    let (status, body) = json_call(
-        state.clone(),
-        &TOKEN_A,
-        Method::PATCH,
-        &path,
-        &serde_json::json!({"title": "Retitled while still a draft"}),
-    )
-    .await;
-    assert_eq!(
-        status,
-        StatusCode::OK,
-        "an unbound mapping edits freely: {}",
-        String::from_utf8_lossy(&body)
-    );
-    let (_, body) = get(state.clone(), &TOKEN_A, &path).await;
-    let view: ProductView = parse(&body);
-    assert_eq!(view.title, "Retitled while still a draft");
-    assert_eq!(
-        view.rights.as_ref().and_then(|r| r.native_id.clone()),
-        Some("CC-BY".to_owned()),
-        "a field the patch did not name is left as stored rather than erased"
-    );
-
     bind_live(&pool, ORG_A, created.product, InventoryId::Tes).await;
+    bind_live(&pool, ORG_A, created.product, InventoryId::Tpt).await;
+
     let (status, body) = json_call(
         state.clone(),
         &TOKEN_A,
@@ -1814,27 +1855,59 @@ async fn a_live_tes_listing_refuses_the_edit_with_the_capability_named(pool: PgP
     .await;
     assert_eq!(
         status,
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "Tes serves no live-to-live transition, so the edit is refused before it is written"
+        StatusCode::OK,
+        "a live Tes listing no longer holds the seller's own copy hostage: {}",
+        String::from_utf8_lossy(&body)
     );
-    let error: APIError = parse(&body);
+    let patched: PatchedProductView = parse(&body);
     assert_eq!(
-        error.errors[0].code,
-        Some(APIErrorCode::UncapturedTransition)
+        patched.reaches,
+        vec![InventoryId::Tpt],
+        "the next send revises TPT, which serves live-to-live"
     );
     assert_eq!(
-        error.errors[0]
-            .detail
-            .as_ref()
-            .and_then(|detail| detail["blocked"][0]["capability"].as_str()),
-        Some("tes.edit_published"),
-        "the client can render which capability is missing"
+        patched
+            .kept
+            .iter()
+            .map(|kept| (kept.inventory, kept.capability.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(InventoryId::Tes, "tes.edit_published")],
+        "and says Tes keeps the copy it has, naming the capture it lacks"
     );
-    let (_, body) = get(state, &TOKEN_A, &path).await;
+    let (_, body) = get(state.clone(), &TOKEN_A, &path).await;
     let view: ProductView = parse(&body);
+    assert_eq!(view.title, "Retitled while live", "the edit was written");
+
+    let mappings = MappingRepo::new(pool.clone())
+        .list_for_product(ORG_A, created.product)
+        .await
+        .unwrap_or_else(|error| panic!("the mappings read back: {error}"));
+    let mapping_on = |inventory: InventoryId| {
+        mappings
+            .iter()
+            .find(|record| record.mapping.inventory == inventory)
+            .unwrap_or_else(|| panic!("the product is mapped onto {inventory:?}"))
+            .mapping
+            .id
+    };
+    let (tpt, tes) = (mapping_on(InventoryId::Tpt), mapping_on(InventoryId::Tes));
     assert_eq!(
-        view.title, "Retitled while still a draft",
-        "and the refused edit wrote nothing"
+        send_live(state.clone(), InventoryId::Tpt, tpt).await,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        operations_on(&pool, ORG_A, tpt).await,
+        vec!["revise".to_owned()],
+        "the send carries the edit to TPT as a revise"
+    );
+    assert_eq!(
+        send_live(state, InventoryId::Tes, tes).await,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a live Tes listing is still not revised through us"
+    );
+    assert!(
+        operations_on(&pool, ORG_A, tes).await.is_empty(),
+        "and no Tes item is enqueued"
     );
 }
 
@@ -2797,12 +2870,13 @@ async fn removing_the_only_payload_file_is_refused_by_name_and_the_file_stands(p
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
-async fn a_live_tes_listing_refuses_every_file_change_with_the_capability_named(pool: PgPool) {
+async fn every_file_change_on_a_live_tes_listing_is_written_and_reports_it_kept(pool: PgPool) {
     provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
     let root = store_root("file-uncaptured");
     let state = configured(pool.clone(), &root);
     let (product, first) = with_one_file(state.clone(), &TOKEN_A, "live", &["Tes"]).await;
     let spare = upload(state.clone(), &TOKEN_A, pdf("spare"), "").await;
+    let other = upload(state.clone(), &TOKEN_A, pdf("other"), "").await;
     bind_live(&pool, ORG_A, product, InventoryId::Tes).await;
 
     let (status, body) = json_call(
@@ -2813,31 +2887,47 @@ async fn a_live_tes_listing_refuses_every_file_change_with_the_capability_named(
         &serde_json::json!({"role": "payload", "handle": spare.payload[0]}),
     )
     .await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-    let error: APIError = parse(&body);
     assert_eq!(
-        error.errors[0].code,
-        Some(APIErrorCode::UncapturedTransition),
-        "a file change reaches a marketplace as a revise, so a listing that cannot be \
-         revised cannot have its files changed through us"
+        status,
+        StatusCode::CREATED,
+        "an add lands: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let added: AddedFileView = parse(&body);
+    assert!(added.reaches.is_empty(), "the send reaches nothing else");
+    assert_eq!(
+        added
+            .kept
+            .iter()
+            .map(|kept| kept.inventory)
+            .collect::<Vec<_>>(),
+        vec![InventoryId::Tes],
+        "and the live Tes listing keeps the copy it has"
     );
 
-    let (status, _) = json_call(
+    let (status, body) = json_call(
         state.clone(),
         &TOKEN_A,
         Method::PUT,
         &format!("{}/{first}", files_path(product)),
-        &serde_json::json!({"handle": spare.payload[0]}),
+        &serde_json::json!({"handle": other.payload[0]}),
     )
     .await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "so is a replace");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "so does a replace: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let replaced: ReplacedFileView = parse(&body);
+    assert_eq!(replaced.kept.len(), 1);
 
-    let (status, _) = call(
+    let (status, body) = call(
         state.clone(),
         &TOKEN_A,
         Call {
             method: Method::DELETE,
-            path: &format!("{}/{first}", files_path(product)),
+            path: &format!("{}/{}", files_path(product), added.file.id.to_hyphenated()),
             body: None,
             content_type: None,
         },
@@ -2845,9 +2935,12 @@ async fn a_live_tes_listing_refuses_every_file_change_with_the_capability_named(
     .await;
     assert_eq!(
         status,
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "and so is a removal"
+        StatusCode::OK,
+        "and a removal: {}",
+        String::from_utf8_lossy(&body)
     );
+    let removed: RemovedFileView = parse(&body);
+    assert_eq!(removed.kept.len(), 1);
 
     let (_, body) = get(
         state,
@@ -2856,13 +2949,120 @@ async fn a_live_tes_listing_refuses_every_file_change_with_the_capability_named(
     )
     .await;
     let view: ProductView = parse(&body);
+    let payloads: Vec<&FileView> = view
+        .files
+        .iter()
+        .filter(|file| file.role == "payload")
+        .collect();
     assert_eq!(
-        view.files
+        payloads
             .iter()
-            .filter(|file| file.role == "payload")
-            .count(),
-        1,
-        "nothing was written before the refusal"
+            .map(|file| file.hash.clone())
+            .collect::<Vec<_>>(),
+        vec![other.payload[0].hash.clone()],
+        "all three changes were written: the replacement stands alone"
+    );
+}
+
+/// A `GET` answering every header the file route decides.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn get_with_headers(
+    state: AppState,
+    token: &SessionToken,
+    path: &str,
+) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri(path)
+        .header(
+            header::COOKIE,
+            format!("{SESSION_COOKIE}={}", token.to_hex()),
+        )
+        .header(header::ACCEPT, "*/*")
+        .body(Body::empty())
+        .expect("the request builds");
+    let response = router(state)
+        .oneshot(request)
+        .await
+        .expect("the router serves");
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body collects")
+        .to_bytes()
+        .to_vec();
+    (status, headers, bytes)
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_stored_file_reads_back_to_its_own_organisation_and_to_no_other(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    provision(&pool, ORG_B, USER_B, &TOKEN_B, "org-b").await;
+    let root = store_root("file-content");
+    let state = configured(pool.clone(), &root);
+    let (product, first) = with_one_file(state.clone(), &TOKEN_A, "content", &["Tes"]).await;
+    // Named, so the disposition has a seller's own name to carry.
+    let (status, _) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::PATCH,
+        &format!("{}/{first}", files_path(product)),
+        &serde_json::json!({"name": "Fractions “unit” 1.pdf"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let path = format!("{}/{first}/content", files_path(product));
+
+    let (status, headers, bytes) = get_with_headers(state.clone(), &TOKEN_A, &path).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(bytes, pdf("content"), "the bytes are the ones uploaded");
+    let header_of = |name: header::HeaderName| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+    };
+    assert_eq!(
+        header_of(header::CONTENT_TYPE).as_deref(),
+        Some("application/pdf")
+    );
+    assert_eq!(
+        header_of(header::CACHE_CONTROL).as_deref(),
+        Some("private, no-store"),
+        "a sellable file is kept by no cache"
+    );
+    assert_eq!(
+        header_of(header::CONTENT_DISPOSITION).as_deref(),
+        Some(
+            "inline; filename=\"Fractions _unit_ 1.pdf\"; \
+             filename*=UTF-8''Fractions%20%E2%80%9Cunit%E2%80%9D%201.pdf"
+        ),
+        "the seller's own name, exact in the encoded form and safe in the fallback"
+    );
+
+    let (status, _, _) = get_with_headers(state.clone(), &TOKEN_B, &path).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "another organisation's file answers as one that does not exist"
+    );
+    let (other, _) = with_one_file(state.clone(), &TOKEN_A, "elsewhere", &["Tes"]).await;
+    let (status, _, _) = get_with_headers(
+        state,
+        &TOKEN_A,
+        &format!("{}/{first}/content", files_path(other)),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "a file is read through the resource that holds it and no other"
     );
 }
 

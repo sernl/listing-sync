@@ -366,6 +366,18 @@ export async function unbanIdentityUser(userId: string): Promise<void> {
 	}
 }
 
+/** Delete an identity account outright: the user, their sessions and their
+ * linked sign-in methods. Cannot be undone. The console calls this only
+ * after the platform half (`api.adminDeleteUser`) has gone, so a refusal
+ * there leaves the account standing. The identity service records the act
+ * as `user_removed` in its audit trail. */
+export async function removeIdentityUser(userId: string): Promise<void> {
+	const { error } = await authClient.admin.removeUser({ userId });
+	if (error) {
+		throw refused(error, 'The sign-in account was not deleted.');
+	}
+}
+
 export async function setIdentityRole(userId: string, role: IdentityRole): Promise<void> {
 	const { error } = await authClient.admin.setRole({ userId, role });
 	if (error) {
@@ -459,7 +471,7 @@ export async function stopImpersonatingAndRestore(): Promise<Whoami> {
 /** The identity session as the impersonation banner reads it: who the console
  * is acting as, and whether anybody is acting at all. */
 export async function impersonatedSession(): Promise<{
-	user: { name?: string | null; email?: string | null };
+	user: { id?: string; name?: string | null; email?: string | null };
 	session: { impersonatedBy?: string | null };
 } | null> {
 	const { data } = await authClient.getSession();
@@ -467,7 +479,7 @@ export async function impersonatedSession(): Promise<{
 		return null;
 	}
 	return {
-		user: { name: data.user.name, email: data.user.email },
+		user: { id: data.user.id, name: data.user.name, email: data.user.email },
 		session: { impersonatedBy: data.session.impersonatedBy ?? null }
 	};
 }

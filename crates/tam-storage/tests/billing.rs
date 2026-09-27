@@ -41,6 +41,7 @@ fn state(subscription: &str, status: &str, occurred_at: Timestamp) -> Subscripti
         status: status.to_owned(),
         provider_price_id: Some(format!("price_for_{subscription}")),
         current_period_end: Some(Timestamp(occurred_at.0 + 30_000)),
+        cancel_at_period_end: Some(false),
         occurred_at,
     }
 }
@@ -227,5 +228,78 @@ async fn a_subscription_carrying_no_billing_period_stores_none(pool: PgPool) {
             .and_then(|stored| stored.current_period_end),
         None,
         "an absent period reads back absent rather than as an invented instant"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn a_pending_cancellation_survives_events_that_do_not_mention_it(pool: PgPool) {
+    provision(&pool).await;
+    let repo = BillingRepo::new(pool);
+    repo.apply(
+        ORG_A,
+        &SubscriptionState {
+            cancel_at_period_end: Some(true),
+            ..state("sub_a", "active", EARLY)
+        },
+        WROTE_AT,
+    )
+    .await
+    .expect("the event applies");
+    repo.apply(
+        ORG_A,
+        &SubscriptionState {
+            cancel_at_period_end: None,
+            ..state("sub_a", "active", LATER)
+        },
+        WROTE_AT,
+    )
+    .await
+    .expect("the event applies");
+    assert_eq!(
+        repo.get(ORG_A)
+            .await
+            .expect("the read runs")
+            .and_then(|stored| stored.cancel_at_period_end),
+        Some(true),
+        "an invoice says nothing about the seller's instruction, so it must not \
+         quietly renew a plan they cancelled"
+    );
+
+    repo.apply(
+        ORG_A,
+        &SubscriptionState {
+            cancel_at_period_end: None,
+            ..state("sub_new", "active", Timestamp(3_000))
+        },
+        WROTE_AT,
+    )
+    .await
+    .expect("the event applies");
+    assert_eq!(
+        repo.get(ORG_A)
+            .await
+            .expect("the read runs")
+            .and_then(|stored| stored.cancel_at_period_end),
+        Some(false),
+        "a new subscription does not inherit the old one's cancellation"
+    );
+
+    assert!(
+        !repo
+            .set_cancel_at_period_end(ORG_A, "sub_a", true, WROTE_AT)
+            .await
+            .expect("the write runs"),
+        "a cancel naming a subscription the tenant no longer holds matches nothing"
+    );
+    assert!(repo
+        .set_cancel_at_period_end(ORG_A, "sub_new", true, WROTE_AT)
+        .await
+        .expect("the write runs"));
+    assert_eq!(
+        repo.get(ORG_A)
+            .await
+            .expect("the read runs")
+            .and_then(|stored| stored.cancel_at_period_end),
+        Some(true)
     );
 }

@@ -27,7 +27,7 @@ Prices were quoted in USD as Solo $12 monthly or $120 annually, Studio $24 or $2
 "Powered by PLE Group" links back to our own site, not to a PLE Group site: there is no PLE Group URL to point at, and the founder's decision is that the attribution reads as ours.
 Brand logos are shown on the Marketplaces page under a disclaimer that the marks belong to their owners.
 The landing page takes `/` and the console home moves to `/app`, every deep route unchanged, and the split is revisited at the teachouse.io cutover.
-Emails are HTML with an informal greeting and a welcome illustration, and they cover the reset flow; their palette follows the brand kit since 2026-09-11.
+Emails are HTML with an informal greeting under the Teachouse wordmark, and they cover the reset flow; their palette and faces follow the brand kit (Indigo and Teal, Poppins and Inter) since 2026-09-27.
 The Android build shows this same console inside a phone shell.
 A marketplace we have not built appears as a tile reading "Coming soon" for Etsy and Shopify and "On our list" for the rest.
 

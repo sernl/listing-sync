@@ -87,7 +87,7 @@ describe('what a choice paints', () => {
 		['light', true, 'light'],
 		['dark', false, 'dark'],
 	] as Array<[ThemeChoice, boolean, string]>)(
-		'%s on a machine preferring dark=%s paints %s',
+		'%s on a device preferring dark=%s paints %s',
 		(choice, prefersDark, painted) => {
 			expect(resolvedTheme(choice, prefersDark)).toBe(painted);
 		},
@@ -182,7 +182,7 @@ describe('the first-paint scripts agree with this module', () => {
 		[false, true].map((prefersDark): [string | null, boolean] => [stored, prefersDark]),
 	);
 
-	it.each(cases)('stored %s on a machine preferring dark=%s', (stored, prefersDark) => {
+	it.each(cases)('stored %s on a device preferring dark=%s', (stored, prefersDark) => {
 		const expected = resolvedTheme(
 			themeChoice(store(stored === null ? {} : { [THEME_KEY]: stored })),
 			prefersDark,

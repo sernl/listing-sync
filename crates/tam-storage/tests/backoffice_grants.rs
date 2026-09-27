@@ -299,6 +299,12 @@ async fn the_backoffice_role_sees_only_the_tables_it_was_granted(app: PgPool) {
         "guide",
         "guide_tag_assignment",
         "guide_taxon",
+        // Migration 0087's decision, for the same reason as the guide's.
+        "site_setting",
+        // Migration 0091's decision, likewise: offers are written by an
+        // operator on the application pool.
+        "discount",
+        "discount_code",
         "import_run_receipt",
         "import_run_start_key",
     ] {

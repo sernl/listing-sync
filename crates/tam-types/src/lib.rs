@@ -895,6 +895,28 @@ pub struct JobSettledNotice {
     pub settled_at: Timestamp,
 }
 
+/// The `email.marketplace_requested` outbox payload: a seller asked us to
+/// support a marketplace, and every operator is told.
+///
+/// Composed in the transaction that stores the request, and closed to exactly
+/// these five fields, so the drainer needs no read on the request table and
+/// the mail cannot state anything the seller did not choose to send us. The
+/// web address is not here: it is on the operator listing, one click from the
+/// organisation the mail links to, and a link a seller typed is not one a
+/// mail should carry to a relay's logs.
+///
+/// The requester travels as their identity-service subject, never as an
+/// address: the drainer resolves it for the length of one send, and `None`
+/// is a user minted before self-serve sign-in, who has no subject to resolve.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketplaceRequestedNotice {
+    pub requester_subject: Option<Uuid>,
+    pub org: OrgId,
+    pub org_name: String,
+    pub marketplace_name: String,
+    pub note: String,
+}
+
 /// The body carried beside each `job_event.kind`. The serde tag of each
 /// variant is exactly one `JobEventKind` name — the agreement test below is
 /// the tripwire — and the pair is one tagged union split across the two

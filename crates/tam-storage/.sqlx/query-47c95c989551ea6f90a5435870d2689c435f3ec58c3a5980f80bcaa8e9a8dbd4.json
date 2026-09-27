@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT provider_subscription_id, provider_customer_id, provider_price_id, status, current_period_end, occurred_at FROM billing_subscription WHERE org_id = $1",
+  "query": "SELECT provider_subscription_id, provider_customer_id, provider_price_id, status, current_period_end, cancel_at_period_end, occurred_at FROM billing_subscription WHERE org_id = $1",
   "describe": {
     "columns": [
       {
@@ -30,6 +30,11 @@
       },
       {
         "ordinal": 5,
+        "name": "cancel_at_period_end",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
         "name": "occurred_at",
         "type_info": "Timestamptz"
       }
@@ -45,8 +50,9 @@
       true,
       false,
       true,
+      false,
       false
     ]
   },
-  "hash": "124821deeddde8b5ba90c4f65a8f730f6d3ff8d2e0e6cfdcb9da68bfd18ac7ff"
+  "hash": "47c95c989551ea6f90a5435870d2689c435f3ec58c3a5980f80bcaa8e9a8dbd4"
 }

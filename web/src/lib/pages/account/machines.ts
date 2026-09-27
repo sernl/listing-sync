@@ -68,9 +68,9 @@ export function sessionWords(session: DeviceSessionView): string {
 				? `signed in as ${session.account_label}`
 				: 'signed in';
 		case 'signed_out':
-			return 'signed out in the app on that machine';
+			return 'signed out in the app on that device';
 		case 'wiped':
-			return 'removed when you signed this machine out';
+			return 'removed when you signed this device out';
 	}
 }
 
@@ -123,10 +123,10 @@ export function machineWords(device: DeviceView, now: number): string {
 export function loginWords(device: DeviceView): string {
 	const saved = device.sessions.filter((session) => session.status === 'connected').length;
 	if (saved === 0) {
-		return 'No marketplace login saved on this machine.';
+		return 'No marketplace login saved on this device.';
 	}
 	const plural = saved === 1 ? 'login' : 'logins';
-	return `${saved} marketplace ${plural} saved on this machine. A saved login may no longer work.`;
+	return `${saved} marketplace ${plural} saved on this device. A saved login may no longer work.`;
 }
 
 /** What this installation's version does and does not allow, in the seller's
@@ -146,7 +146,7 @@ export function loginWords(device: DeviceView): string {
 export function sourcedFileWords(device: DeviceView): string | null {
 	return device.runs_sourced_payloads
 		? null
-		: 'Update the Teachouse app on this machine to publish or download files from a marketplace. ' +
+		: 'Update the Teachouse app on this device to publish or download files from a marketplace. ' +
 				'Importing your catalogue and using your own uploaded files still work.';
 }
 
@@ -212,10 +212,10 @@ export function checkInNote(answer: Pick<CheckInHere, 'reached' | 'detail'>): st
 		return null;
 	}
 	if (answer.detail === null) {
-		return 'This machine could not reach Teachouse, and did not say why.';
+		return 'This device could not reach Teachouse, and did not say why.';
 	}
 	const stop = /[.!?]$/.test(answer.detail) ? '' : '.';
-	return `This machine could not reach Teachouse: ${answer.detail}${stop}`;
+	return `This device could not reach Teachouse: ${answer.detail}${stop}`;
 }
 
 /** How the check-in control reads, pressed and unpressed.
@@ -231,6 +231,6 @@ export interface CheckInControl {
 
 export function checkInControl(pending: boolean): CheckInControl {
 	return pending
-		? { label: 'Refreshing…', reason: 'Refreshing this machine.', disabled: true }
-		: { label: 'Refresh this machine', reason: undefined, disabled: false };
+		? { label: 'Refreshing…', reason: 'Refreshing this device.', disabled: true }
+		: { label: 'Refresh this device', reason: undefined, disabled: false };
 }

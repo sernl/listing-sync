@@ -9,8 +9,7 @@ import MarkTile from '../components/MarkTile.astro';
 import ResourceCover from '../components/ResourceCover.astro';
 import { markSlot } from '../art.js';
 import { marks } from '../marketplaces.js';
-import { downloadUrl } from '../site.js';
-import { dollars, FOUNDING, foundingOpen, signupUrl } from '../pricing.js';
+import { signupUrl } from '../pricing.js';
 
 const title = 'Teachouse \u2014 create once, sell everywhere';
 const description =
@@ -54,23 +53,9 @@ const steps = [
 					marketplaces &mdash; all from one place.
 				</p>
 				<div class="actions">
-					{
-						foundingOpen ? (
-							<a class="cta large" href="/pricing/#founding">Join the Founding {FOUNDING.places}</a>
-						) : (
-							<a class="cta large" href={signupUrl()}>Start free</a>
-						)
-					}
+					<a class="cta large" href={signupUrl()}>Start free</a>
 					<a class="btn large" href="#how">See how it works</a>
 				</div>
-				{
-					foundingOpen && (
-						<p class="under">
-							Only {FOUNDING.places} Founding Member places. {dollars(FOUNDING.year_one_cents)} for
-							your first year, plus {FOUNDING.extra_moves} moves on top.
-						</p>
-					)
-				}
 				<MarketplaceBand />
 			</div>
 
@@ -247,38 +232,45 @@ const steps = [
 					Bring your existing catalogue into Teachouse, then cross-list, update and manage it
 					across multiple marketplaces &mdash; all from one home.
 				</p>
+				{/* Lucide's download, share-2 and sliders-horizontal (ISC licence),
+				    on its 24 grid at its own 2px stroke, so the three read as one
+				    set at the tile's size. */}
 				<div class="steps">
 					{
 						steps.map((step, index) => (
 							<>
 								{index > 0 && (
-									<svg class="step-arrow" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-										<path d="M4 12h15" />
-										<path d="M13 6l6 6-6 6" />
+									<svg class="step-arrow" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+										<path d="M5 12h14" />
+										<path d="m12 5 7 7-7 7" />
 									</svg>
 								)}
 								<div class="step">
 									<span class="glyph">
-										{index === 0 && (
-											<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-												<path d="M12 3v10" />
-												<path d="M8 9l4 4 4-4" />
-												<path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
-											</svg>
-										)}
-										{index === 1 && (
-											<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-												<path d="M7 17h9a4 4 0 0 0 .6-7.95A5.5 5.5 0 0 0 6.3 9.2A3.9 3.9 0 0 0 7 17z" />
-												<path d="M12 21v-7" />
-												<path d="M9.5 16.5 12 14l2.5 2.5" />
-											</svg>
-										)}
-										{index === 2 && (
-											<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-												<circle cx="12" cy="12" r="2.9" />
-												<path d="M10.4 3.4h3.2l.4 2 1.7 1 2-.7 1.6 2.8-1.6 1.4v2.2l1.6 1.4-1.6 2.8-2-.7-1.7 1-.4 2h-3.2l-.4-2-1.7-1-2 .7-1.6-2.8 1.6-1.4v-2.2L4.4 8.5 6 5.7l2 .7 1.7-1z" />
-											</svg>
-										)}
+										<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+											{index === 0 && (
+												<>
+													<path d="M12 15V3" />
+													<path d="m7 10 5 5 5-5" />
+													<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+												</>
+											)}
+											{index === 1 && (
+												<>
+													<circle cx="18" cy="5" r="3" />
+													<circle cx="6" cy="12" r="3" />
+													<circle cx="18" cy="19" r="3" />
+													<path d="m8.59 13.51 6.83 3.98" />
+													<path d="m15.41 6.51-6.82 3.98" />
+												</>
+											)}
+											{index === 2 && (
+												<>
+													<path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3" />
+													<path d="M14 2v4M8 10v4M16 18v4" />
+												</>
+											)}
+										</svg>
 									</span>
 									<h3>{step.h}</h3>
 									<p>{step.p}</p>
@@ -288,49 +280,41 @@ const steps = [
 					}
 				</div>
 				<div class="actions">
-					{
-						foundingOpen ? (
-							<a class="cta" href="/pricing/#founding">Join the Founding {FOUNDING.places}</a>
-						) : (
-							<a class="cta" href={signupUrl()}>Start free</a>
-						)
-					}
+					<a class="cta" href={signupUrl()}>Start free</a>
 					{/* The mockup's second button reads "See how it works", which is
 					    this section; from here the useful next step is the price. */}
 					<a class="link" href="#pricing">See pricing</a>
 				</div>
-				<p class="aside">
-					Some of the work runs on your own computer, under your own login, so you install a
-					small app once. Everything else is in your browser.{' '}
-					{
-						downloadUrl ? (
-							<a class="link" href={downloadUrl}>
-								Download Teachouse
-							</a>
-						) : (
-							<span class="pending">Download link to come.</span>
-						)
-					}
-				</p>
-				{/* The row sits after the sentence rather than inside it: the aside is
-				    a paragraph, and a list nested in a `p` is closed by the parser
-				    before it is drawn. */}
-				<PlatformRow />
 			</div>
-			{/* The proof, and the one photograph-shaped thing on the page: a
-			    capture of the console's own Resources page, taken from
-			    production on 2026-09-26 in the light theme. It is framed
-			    rather than bled, under the house mark, because a screenshot
-			    with no edge reads as part of the page rather than as the
-			    product.
+			{/* The small app some marketplace work needs. There is no download
+			    link here: the console offers the build that fits the reader's
+			    device once they are signed in, and a link on a public page would
+			    hand out a file before anyone knows which one they need. */}
+			<aside class="download" aria-labelledby="download-title">
+				<h3 id="download-title">The Teachouse app</h3>
+				<p>
+					A few jobs run in a small app on your own device, signed in as you. Everything else
+					happens here in your browser.
+				</p>
+				<p class="download-when">Download the app once you&rsquo;re signed in.</p>
+				<PlatformRow />
+			</aside>
+		</div>
 
-			    Two files: the desktop capture at 2x (1440 wide), and the 390
-			    phone layout at 2x, because scaling the wide shot down to a
-			    phone column makes the page unreadable. Both stop above the
-			    first resource card: the covers on production were still the
-			    placeholder cards the cover renderer is replacing, and a proof
-			    shot of placeholders sells the wrong thing. */}
-			<figure class="art console-shot">
+		{/* The proof, and the one photograph-shaped thing on the page: a
+		    capture of the console's own Resources page with six sample
+		    resources and the covers Teachouse drew from their PDFs, taken on
+		    2026-09-27 in the light theme. It spans the whole measure under the
+		    two columns above, so the covers and titles read at the size a
+		    seller sees them, and it is framed rather than bled, under the house
+		    mark, because a screenshot with no edge reads as part of the page
+		    rather than as the product.
+
+		    Two files: the desktop capture at 2x (1440 wide), and the 390
+		    phone layout at 2x, because scaling the wide shot down to a phone
+		    column makes the page unreadable. */}
+		<div class="wrap">
+			<figure class="console-shot">
 				<img class="house" src="/brand/house.svg" alt="" width="30" height="30" />
 				<div class="frame">
 					<picture>
@@ -338,13 +322,13 @@ const steps = [
 							media="(max-width: 720px)"
 							srcset="/images/console-resources-phone.webp"
 							width="390"
-							height="690"
+							height="844"
 						/>
 						<img
 							src="/images/console-resources.webp"
-							alt="The Teachouse Resources page: search, marketplace and label filters, and every resource sorted by where it is listed"
+							alt="The Teachouse Resources page listing six resources with their covers, such as Year 6 English, Persuasive writing unit and Grade 4 Math, Fractions practice, each with its price and where it is listed"
 							width="1440"
-							height="398"
+							height="750"
 							loading="lazy"
 							decoding="async"
 						/>

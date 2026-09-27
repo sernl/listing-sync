@@ -8,30 +8,34 @@
 //! from the same secret the router is configured with, which is what makes an
 //! end-to-end test possible with no Stripe account in existence.
 //!
-//! One socket does open, and only one: `checkout.session.completed` is
-//! fulfilled by re-reading the session with its line items expanded, which is
-//! Stripe's own guidance and the only outbound call on any path here. The
-//! double below answers that read on a loopback port, so the fulfilment
-//! branch — the branch that credits a seller's moves — is exercised rather
+//! One socket does open: `checkout.session.completed` is fulfilled by
+//! re-reading the session with its line items expanded, which is Stripe's
+//! own guidance, and the billing page's card, invoices, cancel and resume
+//! read and write the subscription. The double below answers those calls on
+//! a loopback port, so the fulfilment branch — the branch that credits a
+//! seller's moves — and the cancellation round trip are exercised rather
 //! than stubbed past.
 
 #![cfg(feature = "pg-tests")]
 
 use axum::{
     body::Body,
-    extract::Path,
+    extract::{Path, Query},
     http::{header, Request, StatusCode},
     routing::get,
-    Json,
+    Form, Json,
 };
 use core::fmt::Write as _;
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use hmac::{Hmac, Mac};
 use http_body_util::BodyExt;
 use sqlx::PgPool;
 use tam_api::{
-    router, stripe, AppState, BillingView, Config, PriceMap, SecretKey, WebhookSecret,
-    ORG_METADATA_KEY, SESSION_COOKIE,
+    router, stripe, AppState, BillingView, Config, InvoicesView, PaymentMethodView, PriceMap,
+    SecretKey, WebhookSecret, ORG_METADATA_KEY, SESSION_COOKIE,
 };
 use tam_storage::{SessionRepo, SessionToken};
 use tam_types::{OrgId, Timestamp, UserId, Uuid};
@@ -54,10 +58,11 @@ const PERIOD_END_SECS: i64 = NOW_SECS + 14 * 86_400;
 
 const PACK_PRICE: &str = "price_pack_100";
 const MONTHLY_PRICE: &str = "price_sync_monthly";
-const SERVICE_PRICE: &str = "price_move_with_me";
+const STARTER_PRICE: &str = "price_starter_yearly";
+const STUDIO_PRICE: &str = "price_studio_monthly";
 const PACK_SESSION: &str = "cs_pack_01";
 const SUBSCRIPTION_SESSION: &str = "cs_sub_01";
-const SERVICE_SESSION: &str = "cs_svc_01";
+const STARTER_SESSION: &str = "cs_starter_01";
 const SUBSCRIPTION: &str = "sub_01";
 const CUSTOMER: &str = "cus_01";
 
@@ -67,16 +72,19 @@ const CUSTOMER: &str = "cus_01";
 )]
 fn price_map() -> PriceMap {
     PriceMap::parse(&format!(
-        r#"{{"{PACK_PRICE}":"pack_100","{MONTHLY_PRICE}":"sync_monthly","{SERVICE_PRICE}":"move_with_me"}}"#
+        r#"{{"{PACK_PRICE}":"pack_100","{MONTHLY_PRICE}":"sync_monthly","{STARTER_PRICE}":"starter_yearly","{STUDIO_PRICE}":"studio_monthly"}}"#
     ))
     .expect("the fixture price map parses")
 }
 
-/// A Stripe double answering the one outbound read the webhook makes.
+/// A Stripe double answering the outbound calls this file's routes make.
 ///
 /// It serves every session this file posts, keyed by the identifier in the
-/// path, with the line items the real API would return for an expanded read.
-/// Nothing else is implemented, because nothing else is called.
+/// path, with the line items the real API would return for an expanded read;
+/// the one subscription, whose `cancel_at_period_end` the update call flips
+/// and the read reports, with its card expanded; and the customer's invoice
+/// list, a draft among them. Nothing else is implemented, because nothing
+/// else is called.
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
@@ -87,7 +95,7 @@ async fn stripe_double() -> String {
         get(|Path(id): Path<String>| async move {
             let (mode, price, subscription) = match id.as_str() {
                 SUBSCRIPTION_SESSION => ("subscription", MONTHLY_PRICE, Some(SUBSCRIPTION)),
-                SERVICE_SESSION => ("payment", SERVICE_PRICE, None),
+                STARTER_SESSION => ("subscription", STARTER_PRICE, Some(SUBSCRIPTION)),
                 _pack => ("payment", PACK_PRICE, None),
             };
             Json(serde_json::json!({
@@ -110,6 +118,67 @@ async fn stripe_double() -> String {
             }))
         }),
     );
+    let cancelling = Arc::new(AtomicBool::new(false));
+    let subscription = |cancelling: bool| {
+        serde_json::json!({
+            "id": SUBSCRIPTION,
+            "object": "subscription",
+            "status": "active",
+            "customer": CUSTOMER,
+            "cancel_at_period_end": cancelling,
+            "cancel_at": null,
+            "items": { "object": "list", "data": [{ "current_period_end": PERIOD_END_SECS }] },
+            "default_payment_method": {
+                "id": "pm_01",
+                "object": "payment_method",
+                "card": { "brand": "visa", "last4": "3115", "exp_month": 8, "exp_year": 2029 }
+            }
+        })
+    };
+    let read = Arc::clone(&cancelling);
+    let write = Arc::clone(&cancelling);
+    let app = app
+        .route(
+            "/v1/subscriptions/{id}",
+            get(move |Path(_id): Path<String>| {
+                let read = Arc::clone(&read);
+                async move { Json(subscription(read.load(Ordering::SeqCst))) }
+            })
+            .post(
+                move |Path(_id): Path<String>, Form(form): Form<BTreeMap<String, String>>| {
+                    let write = Arc::clone(&write);
+                    async move {
+                        let flag = form.get("cancel_at_period_end").map(String::as_str) == Some("true");
+                        write.store(flag, Ordering::SeqCst);
+                        Json(subscription(flag))
+                    }
+                },
+            ),
+        )
+        .route(
+            "/v1/invoices",
+            get(|Query(query): Query<BTreeMap<String, String>>| async move {
+                let mine = query.get("customer").map(String::as_str) == Some(CUSTOMER);
+                let invoices = if mine {
+                    serde_json::json!([
+                        {
+                            "id": "in_draft", "object": "invoice", "created": NOW_SECS + 60,
+                            "total": 2900, "currency": "nzd", "status": "draft"
+                        },
+                        {
+                            "id": "in_01", "object": "invoice", "created": NOW_SECS,
+                            "total": 34783, "currency": "nzd", "status": "paid",
+                            "hosted_invoice_url": "https://invoice.stripe.com/i/in_01",
+                            "invoice_pdf": "https://pay.stripe.com/invoice/in_01/pdf",
+                            "lines": { "object": "list", "data": [{ "description": "1 × Sync (monthly)" }] }
+                        }
+                    ])
+                } else {
+                    serde_json::json!([])
+                };
+                Json(serde_json::json!({ "object": "list", "data": invoices, "has_more": false }))
+            }),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("the double binds a loopback port");
@@ -207,7 +276,7 @@ fn invoice(org: OrgId, event: &str) -> String {
     .to_string()
 }
 
-fn subscription_event(org: OrgId, event: &str, status: &str) -> String {
+fn subscription_event(org: OrgId, event: &str, status: &str, price: &str) -> String {
     serde_json::json!({
         "id": "evt_subscription_01",
         "type": event,
@@ -222,7 +291,7 @@ fn subscription_event(org: OrgId, event: &str, status: &str) -> String {
             "items": { "object": "list", "data": [{
                 "id": "si_01",
                 "current_period_end": PERIOD_END_SECS,
-                "price": { "id": MONTHLY_PRICE, "object": "price" }
+                "price": { "id": price, "object": "price" }
             }]}
         }}
     })
@@ -329,6 +398,61 @@ async fn read_billing(pool: PgPool, token: &SessionToken) -> BillingView {
         .expect("the body collects")
         .to_bytes();
     serde_json::from_slice(&body).expect("the answer is the billing shape")
+}
+
+/// One session-authenticated call to a billing route with the double
+/// reachable, answering the status and the body's bytes.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn call(
+    pool: &PgPool,
+    base: &str,
+    method: &str,
+    uri: &str,
+    token: &SessionToken,
+) -> (StatusCode, Vec<u8>) {
+    let mut request = Request::builder().method(method).uri(uri).header(
+        header::COOKIE,
+        format!("{SESSION_COOKIE}={}", token.to_hex()),
+    );
+    if method == "POST" {
+        request = request.header(header::CONTENT_TYPE, "application/json");
+    }
+    let body = if method == "POST" { "{}" } else { "" };
+    let response = router(state(pool.clone(), Some(SECRET), Some(base)))
+        .oneshot(request.body(Body::from(body)).expect("the request builds"))
+        .await
+        .expect("the router serves");
+    let status = response.status();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("the body collects")
+        .to_bytes()
+        .to_vec();
+    (status, bytes)
+}
+
+/// A subscriber on the monthly price, renewing at `PERIOD_END_SECS`.
+async fn subscribe(pool: &PgPool, base: &str) {
+    assert_eq!(
+        deliver(
+            pool,
+            base,
+            &checkout_completed(ORG_A, SUBSCRIPTION_SESSION, "subscription")
+        )
+        .await,
+        StatusCode::OK,
+        "the subscription checkout is accepted"
+    );
+    assert_eq!(
+        deliver(pool, base, &invoice(ORG_A, "invoice.paid")).await,
+        StatusCode::OK,
+        "the first invoice is accepted"
+    );
 }
 
 /// One pinned read of a fenced table.
@@ -443,10 +567,6 @@ async fn a_completed_subscription_checkout_entitles_and_accrues(pool: PgPool) {
         view.portal_available,
         "a tenant with a Stripe customer can be sent to the portal"
     );
-    assert!(
-        !view.founding,
-        "the monthly price is not the founding price"
-    );
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
@@ -517,7 +637,12 @@ async fn a_deleted_subscription_stops_entitling_at_the_period_end(pool: PgPool) 
         deliver(
             &pool,
             &base,
-            &subscription_event(ORG_A, "customer.subscription.deleted", "canceled")
+            &subscription_event(
+                ORG_A,
+                "customer.subscription.deleted",
+                "canceled",
+                MONTHLY_PRICE
+            )
         )
         .await,
         StatusCode::OK
@@ -552,7 +677,12 @@ async fn an_updated_subscription_keeps_a_day_of_grace_past_the_period(pool: PgPo
         deliver(
             &pool,
             &base,
-            &subscription_event(ORG_A, "customer.subscription.updated", "active")
+            &subscription_event(
+                ORG_A,
+                "customer.subscription.updated",
+                "active",
+                MONTHLY_PRICE
+            )
         )
         .await,
         StatusCode::OK
@@ -566,34 +696,79 @@ async fn an_updated_subscription_keeps_a_day_of_grace_past_the_period(pool: PgPo
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
-async fn the_service_purchase_books_time_and_grants_nothing(pool: PgPool) {
+async fn each_tier_grants_its_own_plan_and_its_own_moves(pool: PgPool) {
     provision(&pool).await;
     let base = stripe_double().await;
     assert_eq!(
         deliver(
             &pool,
             &base,
-            &checkout_completed(ORG_A, SERVICE_SESSION, "payment")
+            &checkout_completed(ORG_A, STARTER_SESSION, "subscription")
         )
         .await,
         StatusCode::OK
     );
+    let view = read_billing(pool, &TOKEN_A).await;
+    assert_eq!(
+        view.plan.as_str(),
+        "starter",
+        "the Starter price grants Starter, not the plan every subscription used to grant"
+    );
+    assert_eq!(view.cadence, Some(tam_api::Cadence::Yearly));
+    assert_eq!(
+        view.moves.available, 10,
+        "the first period accrues Starter's allowance, not Sync's"
+    );
+}
 
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_price_change_in_the_portal_moves_the_grant_to_the_new_tier(pool: PgPool) {
+    provision(&pool).await;
+    let base = stripe_double().await;
+    deliver(
+        &pool,
+        &base,
+        &checkout_completed(ORG_A, SUBSCRIPTION_SESSION, "subscription"),
+    )
+    .await;
+    for _delivery in 0..2 {
+        assert_eq!(
+            deliver(
+                &pool,
+                &base,
+                &subscription_event(
+                    ORG_A,
+                    "customer.subscription.updated",
+                    "active",
+                    STUDIO_PRICE
+                )
+            )
+            .await,
+            StatusCode::OK
+        );
+    }
     let view = read_billing(pool.clone(), &TOKEN_A).await;
     assert_eq!(
         view.plan.as_str(),
-        "free",
-        "\"Move with me\" buys 45 minutes of somebody's time, not a capability"
+        "studio",
+        "switching Sync to Studio in the billing portal changes the plan the seller holds"
     );
-    assert_eq!(view.moves.available, 0, "and not a move either");
-    let booked: i64 = pinned_scalar(
+    let live: i64 = pinned_scalar(
         &pool,
         ORG_A,
-        "SELECT count(*) FROM service_booking WHERE key = $1",
-        "move_with_me",
+        "SELECT count(*) FROM entitlement_grant WHERE source_ref = $1 AND revoked_at IS NULL",
+        SUBSCRIPTION,
     )
     .await;
-    assert_eq!(booked, 1, "the booking is what was recorded");
+    assert_eq!(
+        live, 1,
+        "one live grant per subscription, however often the switch is redelivered"
+    );
+    assert_eq!(
+        grant_expiry(&pool, SUBSCRIPTION).await,
+        Some(PERIOD_END_SECS + 24 * 3_600),
+        "the new tier's grant runs to the same period end, with the same grace"
+    );
 }
 
 // ----------------------------------------------------------- the boundary
@@ -713,5 +888,145 @@ async fn an_event_type_this_route_does_not_handle_is_acknowledged(pool: PgPool) 
         StatusCode::OK,
         "the endpoint may be subscribed to more than it handles, and an \
          unhandled delivery is ordinary rather than a fault"
+    );
+}
+
+// ------------------------------------------------------ the billing page
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_cancelled_plan_runs_to_the_period_end_and_can_be_kept(pool: PgPool) {
+    provision(&pool).await;
+    let base = stripe_double().await;
+    subscribe(&pool, &base).await;
+
+    let (status, body) = call(&pool, &base, "POST", "/v1/billing/cancel", &TOKEN_A).await;
+    assert_eq!(status, StatusCode::OK);
+    let answered: BillingView = serde_json::from_slice(&body).expect("the billing shape");
+    assert!(
+        answered.cancel_at_period_end,
+        "the answer is the page as it now stands"
+    );
+
+    let view = read_billing(pool.clone(), &TOKEN_A).await;
+    assert_eq!(
+        view.plan.as_str(),
+        "subscriber",
+        "cancelling ends the plan at the period's close, not now"
+    );
+    assert_eq!(
+        (view.renews_at, view.ends_at),
+        (None, Some(Timestamp(PERIOD_END_SECS * 1_000))),
+        "a cancelled plan says when it ends and never that it renews"
+    );
+    assert_eq!(
+        grant_expiry(&pool, SUBSCRIPTION).await,
+        Some(PERIOD_END_SECS + 24 * 3_600),
+        "the paid period and its grace are untouched by the cancel request"
+    );
+
+    let (status, body) = call(&pool, &base, "POST", "/v1/billing/resume", &TOKEN_A).await;
+    assert_eq!(status, StatusCode::OK);
+    let kept: BillingView = serde_json::from_slice(&body).expect("the billing shape");
+    assert!(!kept.cancel_at_period_end);
+    assert_eq!(
+        (kept.renews_at, kept.ends_at),
+        (Some(Timestamp(PERIOD_END_SECS * 1_000)), None),
+        "a kept plan renews on the date it would have"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_cancellation_made_in_the_portal_reaches_the_page(pool: PgPool) {
+    provision(&pool).await;
+    let base = stripe_double().await;
+    subscribe(&pool, &base).await;
+
+    let mut event: serde_json::Value = serde_json::from_str(&subscription_event(
+        ORG_A,
+        "customer.subscription.updated",
+        "active",
+        MONTHLY_PRICE,
+    ))
+    .expect("the fixture reads");
+    event["data"]["object"]["cancel_at_period_end"] = serde_json::json!(true);
+    assert_eq!(
+        deliver(&pool, &base, &event.to_string()).await,
+        StatusCode::OK
+    );
+    let view = read_billing(pool.clone(), &TOKEN_A).await;
+    assert!(view.cancel_at_period_end);
+    assert_eq!(view.ends_at, Some(Timestamp(PERIOD_END_SECS * 1_000)));
+
+    // The renewal invoice that follows a portal "undo" says nothing about the
+    // instruction; only the subscription event may clear it.
+    assert_eq!(
+        deliver(&pool, &base, &invoice(ORG_A, "invoice.paid")).await,
+        StatusCode::OK
+    );
+    assert!(
+        read_billing(pool, &TOKEN_A).await.cancel_at_period_end,
+        "an invoice must not quietly renew a plan the seller cancelled"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_page_lists_bills_and_names_the_card(pool: PgPool) {
+    provision(&pool).await;
+    let base = stripe_double().await;
+    subscribe(&pool, &base).await;
+
+    let (status, body) = call(&pool, &base, "GET", "/v1/billing/invoices", &TOKEN_A).await;
+    assert_eq!(status, StatusCode::OK);
+    let listed: InvoicesView = serde_json::from_slice(&body).expect("the invoices shape");
+    assert_eq!(
+        listed
+            .invoices
+            .iter()
+            .map(|invoice| invoice.id.as_str())
+            .collect::<Vec<_>>(),
+        ["in_01"],
+        "a draft is not yet a bill and is not listed"
+    );
+    let bill = &listed.invoices[0];
+    assert_eq!(
+        (bill.total, bill.currency.as_str(), bill.status.as_str()),
+        (34_783, "nzd", "paid")
+    );
+    assert_eq!(bill.created_at, NOW);
+    assert_eq!(
+        bill.hosted_url.as_deref(),
+        Some("https://invoice.stripe.com/i/in_01")
+    );
+    assert_eq!(bill.description.as_deref(), Some("1 × Sync (monthly)"));
+
+    let (status, body) = call(&pool, &base, "GET", "/v1/billing/payment-method", &TOKEN_A).await;
+    assert_eq!(status, StatusCode::OK);
+    let card = serde_json::from_slice::<PaymentMethodView>(&body)
+        .expect("the payment-method shape")
+        .card
+        .expect("the subscription's own card is named");
+    assert_eq!((card.brand.as_str(), card.last4.as_str()), ("visa", "3115"));
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_tenant_that_never_paid_has_no_bills_and_nothing_to_cancel(pool: PgPool) {
+    provision(&pool).await;
+    let base = stripe_double().await;
+    subscribe(&pool, &base).await;
+
+    let (status, body) = call(&pool, &base, "GET", "/v1/billing/invoices", &TOKEN_B).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        serde_json::from_slice::<InvoicesView>(&body)
+            .expect("the invoices shape")
+            .invoices
+            .is_empty(),
+        "the other tenant's bills are not this one's"
+    );
+    let (status, _) = call(&pool, &base, "POST", "/v1/billing/cancel", &TOKEN_B).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(
+        !read_billing(pool, &TOKEN_A).await.cancel_at_period_end,
+        "a refused cancel from one tenant leaves the other's plan renewing"
     );
 }

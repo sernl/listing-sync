@@ -20,8 +20,10 @@ pub mod connections;
 pub mod consent;
 pub mod device;
 pub mod device_library;
+pub mod discount;
 pub mod duplicates;
 pub mod entitlement;
+pub mod erasure;
 pub mod file_source;
 pub mod fingerprints;
 pub mod guide;
@@ -45,6 +47,7 @@ pub mod rule_capture;
 pub mod schedules;
 pub mod seller_rules;
 pub mod sessions;
+pub mod site_setting;
 pub mod sync_settings;
 pub mod taxonomy;
 pub mod tpt_base;
@@ -56,7 +59,7 @@ pub use backoffice::{
     ImpersonationEvent, ImportDrainPage, ImportDrainRun, OrgDetail, OrgSummary, PlatformUser,
     SignupsRepo, SubscriptionRecord, SyncHealth,
 };
-pub use billing::{BillingRepo, ServiceBooking, SubscriptionState};
+pub use billing::{BillingRepo, SubscriptionState};
 pub use blobs::{
     describe_files, BlobError, BlobRepo, PipelineFileSource, StoredFile, TenantBlobSink,
 };
@@ -78,6 +81,9 @@ pub use device_library::{
     LibraryLinked, LibraryPage, LibraryReport, LibraryResource, Peer, LIBRARY_LIMIT_DEFAULT,
     LIBRARY_LIMIT_MAX,
 };
+pub use discount::{
+    CodeWrite, Discount, DiscountAmount, DiscountCode, DiscountDuration, DiscountKind, DiscountRepo,
+};
 pub use duplicates::{
     answered_pairs, decide_verdict, ordered as ordered_pair, pair_verdict, raise_verdict,
     DecidedBy, DuplicateRepo, Evidence, EvidenceUnit, MatchLayer, NewVerdict, Polarity, Verdict,
@@ -87,6 +93,7 @@ pub use entitlement::{
     Accrual, EntitlementRepo, Grant, GrantRecord, GrantedBy, MoveBalance, MoveCredit, MoveSource,
     NewGrant, StorefrontAllowance, Usage,
 };
+pub use erasure::{Erased, ErasureRefusal, ErasureRepo};
 pub use file_source::ProductFileSourceRepo;
 pub use fingerprints::{
     candidates_in, digest_frequency_in, digests_for_in, metadata_for_in, products_by_digest_in,
@@ -150,8 +157,8 @@ pub use mapping::{
 };
 pub use marketplace_requests::{
     MarketplaceRequestBackofficeRepo, MarketplaceRequestRecord, MarketplaceRequestRepo,
-    MarketplaceRequestWrite, NewMarketplaceRequest, PAGE_LIMIT_MAX as REQUEST_PAGE_LIMIT_MAX,
-    REQUESTS_PER_ORG_MAX,
+    MarketplaceRequestWrite, NewMarketplaceRequest, MARKETPLACE_REQUESTED_TOPIC,
+    PAGE_LIMIT_MAX as REQUEST_PAGE_LIMIT_MAX, REQUESTS_PER_ORG_MAX,
 };
 pub use notifications::{
     NotificationCursor, NotificationRecord, NotificationRepo, Recipient, JOB_SETTLED_TOPIC,
@@ -166,7 +173,7 @@ pub use product::{
     ProductCreationFacts, ProductEdit, ProductFiles, ProductRecord, ProductRepo, ProductSummary,
     ReplacedFiles, StoredCover, ThumbnailChange,
 };
-pub use profile::{AvatarWrite, ProfileRepo};
+pub use profile::{AvatarWrite, ProfileRepo, TourOutcome, TourState};
 pub use pruning::{PruneRepo, PruneReport};
 pub use resource_templates::{
     NewResourceTemplate, ResourceTemplateRecord, ResourceTemplateRepo, ResourceTemplateSummary,
@@ -178,6 +185,7 @@ pub use schedules::{
     ScheduleWrite, UnknownTimezone, SCHEDULE_RUNS_LISTED_MAX,
 };
 pub use sessions::{NewTenant, SessionIdentity, SessionRepo, SessionToken};
+pub use site_setting::SiteSettingRepo;
 pub use sync_settings::{
     ActivityCursor, ActivityKind, ActivityRow, MultiListedRow, SyncSettingRecord, SyncSettingRepo,
     ACTIVITY_LISTED_MAX,

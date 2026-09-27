@@ -28,6 +28,7 @@ const user = (orgId: string, over: Partial<AdminUserView> = {}): AdminUserView =
 	organisation: { org: orgId, name: `Org ${orgId}` },
 	plan: 'free',
 	created_at: 0,
+	operator: false,
 	...over
 });
 

@@ -4,7 +4,7 @@ The public site a teacher-seller reaches before signing up.
 
 - date: 2026-09-03
 - status: built and green under `just landing-check`, which runs inside `just pre-push`; rewritten 2026-09-05 to carry the founder's approved prices at `/` and at a new `/pricing`, and re-based on `tam-server` serving the build rather than on a static host of its own; rebuilt 2026-09-11 to the founder's mockup, on the brand kit and the pricing recorded in `brand-kit-and-teacher-ui.md` and `decisions.md` under that date, which supersede the copy, tokens, pricing and the no-marketplace-names rule described below wherever the two disagree; amended 2026-09-12 with the Resource Atelier imagery, two more import rungs, the three-year cap on the Founding discount and the AI "coming soon" placements, recorded under "Amended 2026-09-12" below
-- placeholders: the legal text and the support address are what the founder must still replace, and the desktop download URL is still null
+- placeholders: the legal text and the support address are what the founder must still replace
 - paths: `apps/landing/`, `nix/landing.nix`, and the `landing-check` and `landing-dev` recipes in the justfile
 
 ## What it is, and why it is a separate build
@@ -70,7 +70,7 @@ The re-runs-of-failed-items promise the research proposed is not on the page, be
 
 The site says that the work for a marketplace publishing no interface needs a small app, installed once.
 It is said in "How it works" rather than buried, because a seller who learns it after signing up learns it as a surprise, and because the device story is not credible without it.
-The download link is driven from one value that is null today, so the sentence stands and the link reads "Download link to come" rather than pointing at nothing.
+There is no download link on this site: the card says "Download the app once you’re signed in.", and the console offers the build that fits the seller's device after sign-in (amended 2026-09-27, below).
 
 ## The marketplace band
 
@@ -103,7 +103,7 @@ It does not run in `nix flake check`, which is the same lane gap wave 4's landin
 
 Under the sentence in "How it works" that says some marketplace work needs a small app, a row names the platforms a build is published for: Windows and Android.
 The sentence alone leaves a reader on a phone unable to tell whether their phone is one of them, and a row omitting Windows would say we do not support it.
-It is not a download page; `site.js` still owns the link.
+It is not a download page, and the site carries no download link.
 
 Android draws Google's own robot, in colour, and its name carries the trademark symbol: `Android™`.
 Google's brand guidelines license the robot under Creative Commons 3.0 Attribution and the caption under the row carries the attribution line verbatim, which is the condition of that grant; the same page asks that the name carry the symbol at its first appearance in a creative, and this row is a creative of its own.
@@ -178,9 +178,24 @@ The drawn covers' cream becomes the hover grey on dark, because any Peach mixed 
 Import, Distribute and Manage are a five-column grid: three centred columns with 72px icon tiles and 36px arrows centred on the tiles' middle line, one row down to a phone.
 The platform row's licence lines stay, because the Android robot's Creative Commons grant makes its attribution line a condition (`marketplace-logo-sources.md`), but as 11px fine print in `--faint`.
 "Three ways to start" is followed by a definition of a move; it names Tes and TPT as the founder's example does, so the line carries `data-marketplace-band`.
-The plan cards read "(Trial)", "(Subscription)" and "Move Packs (One-Off)", and their lines are the founder's wording, matched line for line by the console's plan page: "Import all your resources from wherever you sell" for "Import included", "5 moves onto a marketplace of your choice" for the per-shop free moves, "Statistics on every shop" for "Figures on every shop", and a new Sync line, "Edit resources in Teachouse and sync the edits across all platforms"; "No limit on resources" and "Pulls every 6 hours" are gone. Every FAQ answer was rewritten in a teacher's words.
+The plan cards read "(trial)", "(subscription)" and "Move Packs (one-off)" (lowercased 2026-09-27), and their lines are the founder's wording, matched line for line by the console's plan page: "Import all your resources from wherever you sell" for "Import included", "5 moves onto a marketplace of your choice" for the per-shop free moves, "Statistics on every shop" for "Figures on every shop", and a new Sync line, "Edit resources in Teachouse and sync the edits across all platforms"; "No limit on resources" and "Pulls every 6 hours" are gone. Every FAQ answer was rewritten in a teacher's words.
 
 The screenshot was retaken from production `/resources` at 1440×900 and 390×844, light theme, at 2x. Both captures stop above the first resource card, because production still showed the placeholder covers the pure-Rust page rasteriser replaces; retake the full list once real covers are live.
+
+## Amended 2026-09-27: the founder's PDF feedback
+
+Import, Distribute and Manage draw Lucide's `download`, `share-2` and `sliders-horizontal` on the 24 grid at a 2px stroke, with Lucide's `arrow-right` between them, replacing the hand-drawn cloud and gear that read as smudges at tile size.
+
+The screenshot is its own full-measure figure under the section's two columns rather than one of them, so the covers and titles read.
+It is a capture of `/resources` against a development database with six resources seeded through the API (`POST /v1/uploads` with a one-page PDF each, then `POST /v1/products`): Year 6 English — Persuasive writing unit, Grade 4 Math — Fractions practice, Year 5 Maths — Place value, Grade 2 Reading — Sight words, Year 3 Science — Life cycles and Grade 5 Social Studies — Map skills.
+Each PDF is a typographic cover printed from HTML in the brand faces, and the thumbnails in the capture are the ones the server's page rasteriser drew from them.
+Both files are light theme at 2x: `console-resources.webp` is 1440×900 cropped to 1440×750 below the list, and `console-resources-phone.webp` is the full 390×844 viewport.
+The console build captured still said "Your machines' files" in its navigation, which the parallel device rename changes, so the capture was taken with that label already reading "Your devices' files".
+
+The app sits in a card beside the solution copy: one sentence on what runs in the app, "Download the app once you’re signed in.", the two platform chips, and "No iPhone or Mac app yet."
+There is no download link on the page any more and `downloadUrl` is gone from `site.js`: the console offers the right build after sign-in.
+Windows has no mark we may draw, so its chip carries a plain desktop glyph beside the name; Android's robot is drawn at 24px.
+The licence lines stay as 11px fine print, verbatim, because the robot's grant requires them.
 
 ## Where the code holds each decision
 
@@ -190,8 +205,7 @@ Amended 2026-09-12, phase 1: the prices are no longer the landing's own.
 `just web-check` diffs the emitted file against the tree and fails when a number moved in Rust without the landing being regenerated, which is the gate; the landing lane has no price check of its own, and changing a price is an edit in `tam-limits` and nowhere else.
 `studio` is in the table with `sold: false` and is rendered nowhere on this site.
 
-`apps/landing/src/site.js` holds what the founder must supply and nothing else: the login path, the support address, the desktop download URL and the availability sentence.
-`downloadUrl` is null, and a null renders as "Download link to come" rather than as a link, so no broken download can ship by being forgotten.
+`apps/landing/src/site.js` holds what the founder must supply and nothing else: the login path, the support address and the availability sentence.
 The login path is `/login` rather than an origin, because the console is served from this same origin, which is also what keeps the site working under `default-src 'self'`.
 
 `apps/landing/public/app-redirect.js` is the site's only script, loaded from our own origin on every page.
@@ -221,8 +235,7 @@ Three items.
 2. The whole of `/privacy`, which is a placeholder for counsel and not a policy.
 3. The whole of `/terms`, which is a placeholder for counsel and not terms.
 
-`downloadUrl` is not in this list, because null is a working state rather than a wrong value: the sentence stands without it.
-No public download page URL exists yet, since releases go to CrabNebula Cloud on the `beta` channel and a channelled release is not listed on an application's public page, while the GitHub releases beside them are in a private repository.
+A download URL is not in this list: the landing links no download at all since 2026-09-27, and releases go to CrabNebula Cloud on the `beta` channel, which is not listed on an application's public page.
 
 ## The two legal pages
 

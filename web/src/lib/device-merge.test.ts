@@ -65,7 +65,7 @@ describe('merge', () => {
 		expect(orphans).toHaveLength(0);
 	});
 
-	it('refuses to guess when two machines run the same operating system', () => {
+	it('refuses to guess when two devices run the same operating system', () => {
 		const { rows, orphans } = merge(
 			[device('d1', 'founder-pc', 'windows'), device('d2', 'studio-pc', 'windows')],
 			[session('tok-win', WINDOWS)],
@@ -79,7 +79,7 @@ describe('merge', () => {
 		).toEqual(['tok-win']);
 	});
 
-	it('refuses to guess when one machine has two browsers signed in', () => {
+	it('refuses to guess when one device has two browsers signed in', () => {
 		const { rows, orphans } = merge(
 			[device('d1', 'founder-pc', 'windows')],
 			[session('tok-a', WINDOWS), session('tok-b', WINDOWS)],
@@ -121,7 +121,7 @@ describe('merge', () => {
 		).toEqual(['tok-phone']);
 	});
 
-	it('lists a registered phone as a machine rather than as a stray browser sign-in', () => {
+	it('lists a registered phone as a device rather than as a stray browser sign-in', () => {
 		// The founder's complaint, as a test. The Android app signs in by
 		// navigating its own window to the console, so its session is a browser
 		// session with an Android user agent and nothing else. Until the app

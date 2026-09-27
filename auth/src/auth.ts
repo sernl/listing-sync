@@ -1,6 +1,6 @@
 import { passkey } from '@better-auth/passkey';
 import { type BetterAuthOptions, betterAuth } from 'better-auth';
-import { createAuthMiddleware, getIP, isAPIError } from 'better-auth/api';
+import { createAuthMiddleware, getIP, getSessionFromCtx, isAPIError } from 'better-auth/api';
 import { admin, captcha, haveIBeenPwned, jwt, openAPI } from 'better-auth/plugins';
 import { PostgresDialect } from 'kysely';
 import pg from 'pg';
@@ -135,7 +135,6 @@ const passwordChanged = (to: string, name: string | null, changer: Changer): voi
       : `Your Teachouse password was changed on ${utcTime(new Date())}.`,
     action: 'Request a new reset',
     url: `${env.baseUrl}/reset`,
-    illustration: undefined,
     closing: byAdministrator
       ? 'If you did not expect this, use the button above to set a password only you know.'
       : 'If this was not you, use the button above to request a new reset straight away.',
@@ -191,8 +190,7 @@ export const auth = betterAuth({
         lead: 'You asked to reset the password on your Teachouse account. Choose a new one below and you will be straight back in.',
         action: 'Choose a new password',
         url,
-        illustration: undefined,
-        closing: 'If you did not request this, you can ignore this message.',
+            closing: 'If you did not request this, you can ignore this message.',
       });
     },
     // better-auth calls this after the new password is stored and before it
@@ -207,8 +205,7 @@ export const auth = betterAuth({
         lead: `Your Teachouse password was changed on ${utcTime(new Date())}.`,
         action: 'Request a new reset',
         url: `${env.baseUrl}/reset`,
-        illustration: undefined,
-        closing: 'If this was not you, use the button above to request a new reset straight away.',
+            closing: 'If this was not you, use the button above to request a new reset straight away.',
       });
     },
   },
@@ -222,8 +219,6 @@ export const auth = betterAuth({
         lead: 'Welcome to Teachouse. We keep your teaching resources in one place and list them on every marketplace you sell on, so you write a listing once instead of once per site.',
         action: 'Confirm your email address',
         url,
-        illustration:
-          'A courier with a satchel hands a book to someone at their front door, with New Zealand hills and ferns behind them.',
         closing: 'If you did not request this, you can ignore this message.',
       });
     },
@@ -312,6 +307,22 @@ export const auth = betterAuth({
         } catch (cause: unknown) {
           console.error('tam-auth: could not notify a user of an administrative password set', cause);
         }
+        return;
+      }
+
+      // /admin/remove-user deletes the account, its sessions and its linked
+      // accounts, so after it returns this table is the only place the act
+      // can be read. The acting administrator is the caller's own session,
+      // which the removal leaves standing; the removed account is named only
+      // in the request body.
+      if (ctx.path === '/admin/remove-user' && failed === undefined) {
+        const removed = targetUserId(ctx.body);
+        const acting = await getSessionFromCtx(ctx).catch(() => null);
+        if (removed === undefined || acting === null) {
+          console.error('tam-auth: an account was removed but its parties could not be read for the audit trail');
+          return;
+        }
+        audit({ event: 'user_removed', userId: acting.user.id, targetUserId: removed, ...where });
       }
     }),
   },
