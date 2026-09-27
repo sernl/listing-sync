@@ -231,6 +231,10 @@ fn validated(body: &CreateBody) -> Result<Validated<'_>, APIError> {
 /// The last two exist because this table has exactly one reader — an operator
 /// page — and a tenant appending to it without bound pushes every other
 /// tenant's request out of view.
+///
+/// A recorded request also tells every operator by mail: the repository
+/// enqueues the message in the transaction that stores the row, and the
+/// server's outbox drainer sends it. A refused request tells nobody.
 pub(crate) async fn create(
     State(state): State<AppState>,
     context: OrgContext,
