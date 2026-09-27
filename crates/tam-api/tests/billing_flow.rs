@@ -58,10 +58,11 @@ const PERIOD_END_SECS: i64 = NOW_SECS + 14 * 86_400;
 
 const PACK_PRICE: &str = "price_pack_100";
 const MONTHLY_PRICE: &str = "price_sync_monthly";
-const SERVICE_PRICE: &str = "price_move_with_me";
+const STARTER_PRICE: &str = "price_starter_yearly";
+const STUDIO_PRICE: &str = "price_studio_monthly";
 const PACK_SESSION: &str = "cs_pack_01";
 const SUBSCRIPTION_SESSION: &str = "cs_sub_01";
-const SERVICE_SESSION: &str = "cs_svc_01";
+const STARTER_SESSION: &str = "cs_starter_01";
 const SUBSCRIPTION: &str = "sub_01";
 const CUSTOMER: &str = "cus_01";
 
@@ -71,7 +72,7 @@ const CUSTOMER: &str = "cus_01";
 )]
 fn price_map() -> PriceMap {
     PriceMap::parse(&format!(
-        r#"{{"{PACK_PRICE}":"pack_100","{MONTHLY_PRICE}":"sync_monthly","{SERVICE_PRICE}":"move_with_me"}}"#
+        r#"{{"{PACK_PRICE}":"pack_100","{MONTHLY_PRICE}":"sync_monthly","{STARTER_PRICE}":"starter_yearly","{STUDIO_PRICE}":"studio_monthly"}}"#
     ))
     .expect("the fixture price map parses")
 }
@@ -94,7 +95,7 @@ async fn stripe_double() -> String {
         get(|Path(id): Path<String>| async move {
             let (mode, price, subscription) = match id.as_str() {
                 SUBSCRIPTION_SESSION => ("subscription", MONTHLY_PRICE, Some(SUBSCRIPTION)),
-                SERVICE_SESSION => ("payment", SERVICE_PRICE, None),
+                STARTER_SESSION => ("subscription", STARTER_PRICE, Some(SUBSCRIPTION)),
                 _pack => ("payment", PACK_PRICE, None),
             };
             Json(serde_json::json!({
@@ -275,7 +276,7 @@ fn invoice(org: OrgId, event: &str) -> String {
     .to_string()
 }
 
-fn subscription_event(org: OrgId, event: &str, status: &str) -> String {
+fn subscription_event(org: OrgId, event: &str, status: &str, price: &str) -> String {
     serde_json::json!({
         "id": "evt_subscription_01",
         "type": event,
@@ -290,7 +291,7 @@ fn subscription_event(org: OrgId, event: &str, status: &str) -> String {
             "items": { "object": "list", "data": [{
                 "id": "si_01",
                 "current_period_end": PERIOD_END_SECS,
-                "price": { "id": MONTHLY_PRICE, "object": "price" }
+                "price": { "id": price, "object": "price" }
             }]}
         }}
     })
@@ -564,10 +565,6 @@ async fn a_completed_subscription_checkout_entitles_and_accrues(pool: PgPool) {
         view.portal_available,
         "a tenant with a Stripe customer can be sent to the portal"
     );
-    assert!(
-        !view.founding,
-        "the monthly price is not the founding price"
-    );
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
@@ -638,7 +635,12 @@ async fn a_deleted_subscription_stops_entitling_at_the_period_end(pool: PgPool) 
         deliver(
             &pool,
             &base,
-            &subscription_event(ORG_A, "customer.subscription.deleted", "canceled")
+            &subscription_event(
+                ORG_A,
+                "customer.subscription.deleted",
+                "canceled",
+                MONTHLY_PRICE
+            )
         )
         .await,
         StatusCode::OK
@@ -673,7 +675,12 @@ async fn an_updated_subscription_keeps_a_day_of_grace_past_the_period(pool: PgPo
         deliver(
             &pool,
             &base,
-            &subscription_event(ORG_A, "customer.subscription.updated", "active")
+            &subscription_event(
+                ORG_A,
+                "customer.subscription.updated",
+                "active",
+                MONTHLY_PRICE
+            )
         )
         .await,
         StatusCode::OK
@@ -687,34 +694,79 @@ async fn an_updated_subscription_keeps_a_day_of_grace_past_the_period(pool: PgPo
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
-async fn the_service_purchase_books_time_and_grants_nothing(pool: PgPool) {
+async fn each_tier_grants_its_own_plan_and_its_own_moves(pool: PgPool) {
     provision(&pool).await;
     let base = stripe_double().await;
     assert_eq!(
         deliver(
             &pool,
             &base,
-            &checkout_completed(ORG_A, SERVICE_SESSION, "payment")
+            &checkout_completed(ORG_A, STARTER_SESSION, "subscription")
         )
         .await,
         StatusCode::OK
     );
+    let view = read_billing(pool, &TOKEN_A).await;
+    assert_eq!(
+        view.plan.as_str(),
+        "starter",
+        "the Starter price grants Starter, not the plan every subscription used to grant"
+    );
+    assert_eq!(view.cadence, Some(tam_api::Cadence::Yearly));
+    assert_eq!(
+        view.moves.available, 10,
+        "the first period accrues Starter's allowance, not Sync's"
+    );
+}
 
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_price_change_in_the_portal_moves_the_grant_to_the_new_tier(pool: PgPool) {
+    provision(&pool).await;
+    let base = stripe_double().await;
+    deliver(
+        &pool,
+        &base,
+        &checkout_completed(ORG_A, SUBSCRIPTION_SESSION, "subscription"),
+    )
+    .await;
+    for _delivery in 0..2 {
+        assert_eq!(
+            deliver(
+                &pool,
+                &base,
+                &subscription_event(
+                    ORG_A,
+                    "customer.subscription.updated",
+                    "active",
+                    STUDIO_PRICE
+                )
+            )
+            .await,
+            StatusCode::OK
+        );
+    }
     let view = read_billing(pool.clone(), &TOKEN_A).await;
     assert_eq!(
         view.plan.as_str(),
-        "free",
-        "\"Move with me\" buys 45 minutes of somebody's time, not a capability"
+        "studio",
+        "switching Sync to Studio in the billing portal changes the plan the seller holds"
     );
-    assert_eq!(view.moves.available, 0, "and not a move either");
-    let booked: i64 = pinned_scalar(
+    let live: i64 = pinned_scalar(
         &pool,
         ORG_A,
-        "SELECT count(*) FROM service_booking WHERE key = $1",
-        "move_with_me",
+        "SELECT count(*) FROM entitlement_grant WHERE source_ref = $1 AND revoked_at IS NULL",
+        SUBSCRIPTION,
     )
     .await;
-    assert_eq!(booked, 1, "the booking is what was recorded");
+    assert_eq!(
+        live, 1,
+        "one live grant per subscription, however often the switch is redelivered"
+    );
+    assert_eq!(
+        grant_expiry(&pool, SUBSCRIPTION).await,
+        Some(PERIOD_END_SECS + 24 * 3_600),
+        "the new tier's grant runs to the same period end, with the same grace"
+    );
 }
 
 // ----------------------------------------------------------- the boundary

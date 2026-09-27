@@ -22,8 +22,7 @@
 //! second arrival a no-op. Every write below therefore lands through a
 //! `source_ref` the provider owns: the partial unique index migration 0086
 //! makes vendor-agnostic is the fence under the grants, and
-//! `EntitlementRepo::credit_moves` and `BillingRepo::record_booking` carry
-//! their own.
+//! `EntitlementRepo::credit_moves` carries its own.
 
 use std::collections::BTreeMap;
 
@@ -32,10 +31,10 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use tam_limits::{Plan, PriceKey, FOUNDING, PACKS};
+use tam_limits::{Plan, PriceKey, PACKS};
 use tam_storage::{
     Accrual, BillingRepo, EntitlementRepo, GrantedBy, MoveCredit, MoveSource, NewGrant,
-    ServiceBooking, SubscriptionState,
+    SubscriptionState,
 };
 use tam_types::{OrgId, Timestamp, Uuid};
 
@@ -115,14 +114,17 @@ impl Cadence {
     #[must_use]
     const fn of(key: PriceKey) -> Option<Self> {
         match key {
-            PriceKey::SyncMonthly => Some(Self::Monthly),
-            PriceKey::SyncYearly | PriceKey::FoundingYearly => Some(Self::Yearly),
+            PriceKey::StarterMonthly | PriceKey::SyncMonthly | PriceKey::StudioMonthly => {
+                Some(Self::Monthly)
+            }
+            PriceKey::StarterYearly | PriceKey::SyncYearly | PriceKey::StudioYearly => {
+                Some(Self::Yearly)
+            }
             PriceKey::Pack20
             | PriceKey::Pack50
             | PriceKey::Pack100
             | PriceKey::Pack250
-            | PriceKey::Pack500
-            | PriceKey::MoveWithMe => None,
+            | PriceKey::Pack500 => None,
         }
     }
 }
@@ -168,10 +170,6 @@ pub struct BillingView {
     /// which is the one state "Keep my plan" can undo.
     pub cancel_at_period_end: bool,
     pub moves: MoveBalance,
-    /// Whether this tenant holds a founding-member price. It changes what
-    /// they are charged for the next two years, so it is a fact the page
-    /// states rather than infers.
-    pub founding: bool,
     /// Whether "Manage billing" will open. False where this deployment holds
     /// no Stripe key, and where the tenant has never reached checkout and so
     /// has no customer to manage.
@@ -271,7 +269,6 @@ async fn view_of(state: &AppState, org: OrgId) -> Result<BillingView, APIError> 
         ends_at,
         cancel_at_period_end,
         moves: MoveBalance::of(moves),
-        founding: sold == Some(PriceKey::FoundingYearly),
         portal_available: state.config.stripe.is_some()
             && stored.is_some_and(|state| !state.provider_customer_id.is_empty()),
     })
@@ -323,6 +320,20 @@ pub(crate) async fn checkout(
         .get(context.org)
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
+    // A second subscription beside a live one would bill the seller twice for
+    // one organisation. Changing tier is a change to the subscription they
+    // already hold, which the billing portal makes and `hold_plan` follows.
+    if key.recurring()
+        && held
+            .as_ref()
+            .is_some_and(|stored| ENTITLING.contains(&stored.status.as_str()))
+    {
+        return Err(APIError::new(
+            StatusCode::CONFLICT,
+            APIErrorEntry::new("You already have a plan. Change it from Manage billing.")
+                .kind(APIErrorKind::Validation),
+        ));
+    }
     let customer = held
         .as_ref()
         .map(|state| state.provider_customer_id.as_str())
@@ -578,16 +589,10 @@ fn nothing_bought() -> APIError {
 /// `payment` and a one-off price refuses `subscription`, so this is a fact
 /// about the price list rather than a preference.
 const fn mode_for(key: PriceKey) -> CheckoutMode {
-    match key {
-        PriceKey::SyncMonthly | PriceKey::SyncYearly | PriceKey::FoundingYearly => {
-            CheckoutMode::Subscription
-        }
-        PriceKey::Pack20
-        | PriceKey::Pack50
-        | PriceKey::Pack100
-        | PriceKey::Pack250
-        | PriceKey::Pack500
-        | PriceKey::MoveWithMe => CheckoutMode::Payment,
+    if key.recurring() {
+        CheckoutMode::Subscription
+    } else {
+        CheckoutMode::Payment
     }
 }
 
@@ -1011,27 +1016,6 @@ async fn checkout_completed(state: &AppState, event: &Event) -> Result<StatusCod
             continue;
         };
         match key {
-            PriceKey::MoveWithMe => {
-                let booked = BillingRepo::new(state.pool.clone())
-                    .record_booking(
-                        org,
-                        &ServiceBooking {
-                            id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
-                            key: key.as_str().to_owned(),
-                            provider_ref: expanded.id.clone(),
-                            created_at: occurred_at,
-                        },
-                    )
-                    .await
-                    .map_err(|error| state.internal(&error.to_string()))?;
-                if booked {
-                    state.telemetry.capture(
-                        org,
-                        "service_booked",
-                        serde_json::json!({ "price_key": key.as_str() }),
-                    );
-                }
-            }
             PriceKey::Pack20
             | PriceKey::Pack50
             | PriceKey::Pack100
@@ -1070,7 +1054,12 @@ async fn checkout_completed(state: &AppState, event: &Event) -> Result<StatusCod
                     );
                 }
             }
-            PriceKey::SyncMonthly | PriceKey::SyncYearly | PriceKey::FoundingYearly => {
+            PriceKey::StarterMonthly
+            | PriceKey::StarterYearly
+            | PriceKey::SyncMonthly
+            | PriceKey::SyncYearly
+            | PriceKey::StudioMonthly
+            | PriceKey::StudioYearly => {
                 let Some(subscription) = expanded.subscription.as_deref() else {
                     // A subscription mode session with no subscription is a
                     // shape Stripe does not send; refusing keeps the drift
@@ -1093,8 +1082,8 @@ async fn checkout_completed(state: &AppState, event: &Event) -> Result<StatusCod
     Ok(StatusCode::OK)
 }
 
-/// The first period of a new subscription: the grant, the founding bonus and
-/// the first month's moves.
+/// The first period of a new subscription: the grant for the plan the key
+/// sells, and the first month's moves.
 ///
 /// Every write is keyed on the subscription identifier or the period, so a
 /// redelivery of the session and the `invoice.paid` that follows it land the
@@ -1109,6 +1098,9 @@ async fn subscription_started(
     key: PriceKey,
     occurred_at: Timestamp,
 ) -> Result<(), APIError> {
+    let Some(plan) = key.plan() else {
+        return Err(state.internal("a subscription was started for a key that sells no plan"));
+    };
     let entitlements = EntitlementRepo::new(state.pool.clone());
     let held = entitlements
         .provider_grant(org, subscription)
@@ -1120,7 +1112,7 @@ async fn subscription_started(
                 org,
                 &NewGrant {
                     id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
-                    plan: Plan::Subscriber,
+                    plan,
                     rung: None,
                     granted_by: GrantedBy::Stripe,
                     grantor_user: None,
@@ -1146,22 +1138,7 @@ async fn subscription_started(
             serde_json::json!({ "price_key": key.as_str() }),
         );
     }
-    if key == PriceKey::FoundingYearly {
-        let _credited: bool = entitlements
-            .credit_moves(
-                org,
-                MoveCredit {
-                    delta: i32::try_from(FOUNDING.extra_moves).unwrap_or(i32::MAX),
-                    source: MoveSource::Founding,
-                    source_ref: Some(&format!("{subscription}:founding")),
-                    expires_at: None,
-                    at: occurred_at,
-                },
-            )
-            .await
-            .map_err(|error| state.internal(&error.to_string()))?;
-    }
-    accrue(state, org, occurred_at, occurred_at).await?;
+    accrue(state, org, plan, occurred_at, occurred_at).await?;
 
     // The subscription row is recorded last, because it is the record of what
     // Stripe said and the grant beside it is what the product reads. Two
@@ -1198,15 +1175,17 @@ async fn subscription_started(
     Ok(())
 }
 
-/// One billing period's moves, capped so a balance accumulated from
-/// subscription periods never climbs past the plan's accrual ceiling.
+/// One billing period's moves for the plan the subscription sells, capped so
+/// a balance accumulated from subscription periods never climbs past that
+/// plan's accrual ceiling.
 async fn accrue(
     state: &AppState,
     org: OrgId,
+    plan: Plan,
     period_start: Timestamp,
     at: Timestamp,
 ) -> Result<(), APIError> {
-    let capabilities = Plan::Subscriber.capabilities(None);
+    let capabilities = plan.capabilities(None);
     let _accrued: bool = EntitlementRepo::new(state.pool.clone())
         .accrue_subscription_moves(
             org,
@@ -1258,7 +1237,6 @@ async fn invoice_paid(state: &AppState, event: &Event) -> Result<StatusCode, API
     let (period_start, period_end) = invoice.period();
     let occurred_at = at(event.created);
 
-    let entitlements = EntitlementRepo::new(state.pool.clone());
     let expires_at = period_end.map(|end| {
         Timestamp(
             at(end)
@@ -1266,45 +1244,29 @@ async fn invoice_paid(state: &AppState, event: &Event) -> Result<StatusCode, API
                 .saturating_add(SUBSCRIPTION_GRACE_HOURS * MILLIS_PER_HOUR),
         )
     });
-    match entitlements
-        .provider_grant(org, subscription)
-        .await
-        .map_err(|error| state.internal(&error.to_string()))?
-    {
-        Some(grant) => {
-            let _moved: bool = entitlements
-                .set_expiry(org, grant, expires_at)
-                .await
-                .map_err(|error| state.internal(&error.to_string()))?;
-        }
-        // A renewal for a subscription we never recorded is a subscription
-        // started outside our checkout or one whose session event was lost.
-        // Granting here is what keeps a paying seller entitled either way.
-        None => entitlements
-            .grant(
-                org,
-                &NewGrant {
-                    id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
-                    plan: Plan::Subscriber,
-                    rung: None,
-                    granted_by: GrantedBy::Stripe,
-                    grantor_user: None,
-                    reason: None,
-                    source_ref: Some(subscription),
-                    granted_at: occurred_at,
-                    expires_at,
-                },
-            )
-            .await
-            .map_err(|error| state.internal(&error.to_string()))?,
-    }
-    accrue(
+    // A renewal for a subscription we never recorded is a subscription
+    // started outside our checkout or one whose session event was lost, and
+    // granting here is what keeps a paying seller entitled either way.
+    let plan = hold_plan(
         state,
         org,
-        period_start.map_or(occurred_at, at),
+        subscription,
+        plan_sold(state, invoice.price()),
+        expires_at,
         occurred_at,
+        true,
     )
     .await?;
+    if let Some(plan) = plan {
+        accrue(
+            state,
+            org,
+            plan,
+            period_start.map_or(occurred_at, at),
+            occurred_at,
+        )
+        .await?;
+    }
 
     let _applied: bool = BillingRepo::new(state.pool.clone())
         .apply(
@@ -1403,11 +1365,6 @@ async fn subscription_changed(state: &AppState, event: &Event) -> Result<StatusC
     let ended = event.kind == SUBSCRIPTION_DELETED;
     let entitling = !ended && ENTITLING.contains(&status);
 
-    let entitlements = EntitlementRepo::new(state.pool.clone());
-    let held = entitlements
-        .provider_grant(org, subscription)
-        .await
-        .map_err(|error| state.internal(&error.to_string()))?;
     let expires_at = if entitling {
         period_end.map(|end| {
             Timestamp(
@@ -1421,34 +1378,18 @@ async fn subscription_changed(state: &AppState, event: &Event) -> Result<StatusC
         // day they did not ask for.
         period_end
     };
-    match held {
-        Some(grant) => {
-            let _moved: bool = entitlements
-                .set_expiry(org, grant, expires_at)
-                .await
-                .map_err(|error| state.internal(&error.to_string()))?;
-        }
-        None if entitling => {
-            entitlements
-                .grant(
-                    org,
-                    &NewGrant {
-                        id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
-                        plan: Plan::Subscriber,
-                        rung: None,
-                        granted_by: GrantedBy::Stripe,
-                        grantor_user: None,
-                        reason: None,
-                        source_ref: Some(subscription),
-                        granted_at: occurred_at,
-                        expires_at,
-                    },
-                )
-                .await
-                .map_err(|error| state.internal(&error.to_string()))?;
-        }
-        None => {}
-    }
+    // A price change on a live subscription is a plan switch made in the
+    // billing portal, and `hold_plan` moves the grant to the new plan.
+    let _held: Option<Plan> = hold_plan(
+        state,
+        org,
+        subscription,
+        plan_sold(state, object.price()),
+        expires_at,
+        occurred_at,
+        entitling,
+    )
+    .await?;
     if ended {
         state.telemetry.capture(
             org,
@@ -1476,6 +1417,104 @@ async fn subscription_changed(state: &AppState, event: &Event) -> Result<StatusC
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
     Ok(StatusCode::OK)
+}
+
+/// The plan a Stripe price sells, or `None` for a price this deployment's
+/// map does not carry, which is said on the log rather than guessed at.
+fn plan_sold(state: &AppState, price: Option<&str>) -> Option<Plan> {
+    let price = price?;
+    let plan = state
+        .config
+        .stripe_price_map
+        .key_for(price)
+        .and_then(PriceKey::plan);
+    if plan.is_none() {
+        eprintln!(
+            "tam-api: stripe price {price} sells no plan in the price map, so the subscription \
+             keeps whatever plan its grant already names"
+        );
+    }
+    plan
+}
+
+/// Keeps one live grant for a subscription, naming the plan it now sells and
+/// running to `expires_at`, and answers the plan the grant names afterwards.
+///
+/// The same plan moves the existing grant's expiry, so a stream of renewals
+/// renews one row. A different plan is a switch made in the billing portal:
+/// the old grant is revoked and a new one written under the same
+/// subscription, which is what the partial unique index on a live
+/// `source_ref` allows. An unknown `plan` (a price missing from the map)
+/// keeps the grant's own plan. No grant is written where `create` is false
+/// or no plan is known, because an ended subscription is not a new one.
+async fn hold_plan(
+    state: &AppState,
+    org: OrgId,
+    subscription: &str,
+    plan: Option<Plan>,
+    expires_at: Option<Timestamp>,
+    occurred_at: Timestamp,
+    create: bool,
+) -> Result<Option<Plan>, APIError> {
+    let entitlements = EntitlementRepo::new(state.pool.clone());
+    let held = entitlements
+        .provider_grant(org, subscription)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?;
+    let held_plan = match held {
+        Some(grant) => entitlements
+            .history(org)
+            .await
+            .map_err(|error| state.internal(&error.to_string()))?
+            .into_iter()
+            .find(|record| record.id == grant)
+            .map(|record| record.plan),
+        None => None,
+    };
+    let write = |plan: Plan| NewGrant {
+        id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
+        plan,
+        rung: None,
+        granted_by: GrantedBy::Stripe,
+        grantor_user: None,
+        reason: None,
+        source_ref: Some(subscription),
+        granted_at: occurred_at,
+        expires_at,
+    };
+    match (held, held_plan, plan) {
+        (Some(grant), Some(was), Some(now)) if was != now => {
+            let _revoked: bool = entitlements
+                .revoke(org, grant, occurred_at)
+                .await
+                .map_err(|error| state.internal(&error.to_string()))?;
+            entitlements
+                .grant(org, &write(now))
+                .await
+                .map_err(|error| state.internal(&error.to_string()))?;
+            state.telemetry.capture(
+                org,
+                "subscription_plan_changed",
+                serde_json::json!({ "from": was.as_str(), "to": now.as_str() }),
+            );
+            Ok(Some(now))
+        }
+        (Some(grant), was, _) => {
+            let _moved: bool = entitlements
+                .set_expiry(org, grant, expires_at)
+                .await
+                .map_err(|error| state.internal(&error.to_string()))?;
+            Ok(was)
+        }
+        (None, _, Some(now)) if create => {
+            entitlements
+                .grant(org, &write(now))
+                .await
+                .map_err(|error| state.internal(&error.to_string()))?;
+            Ok(Some(now))
+        }
+        (None, _, _) => Ok(None),
+    }
 }
 
 #[cfg(test)]
@@ -1569,13 +1608,16 @@ mod tests {
 
     #[test]
     fn only_the_recurring_keys_carry_a_cadence() {
-        assert_eq!(Cadence::of(PriceKey::SyncMonthly), Some(Cadence::Monthly));
-        assert_eq!(Cadence::of(PriceKey::SyncYearly), Some(Cadence::Yearly));
-        assert_eq!(
-            Cadence::of(PriceKey::FoundingYearly),
-            Some(Cadence::Yearly),
-            "founding is an annual price, and the page says so"
-        );
+        for key in PriceKey::ALL {
+            assert_eq!(
+                Cadence::of(key).is_some(),
+                key.recurring(),
+                "{} carries a cadence exactly when it renews",
+                key.as_str()
+            );
+        }
+        assert_eq!(Cadence::of(PriceKey::StarterMonthly), Some(Cadence::Monthly));
+        assert_eq!(Cadence::of(PriceKey::StudioYearly), Some(Cadence::Yearly));
         assert_eq!(
             Cadence::of(PriceKey::Pack100),
             None,

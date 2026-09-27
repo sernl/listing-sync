@@ -24,6 +24,7 @@ export interface Capabilities {
   readonly export: boolean;
   readonly devices_max: number;
   readonly ai_fills_per_month: number;
+  readonly uploads_in_flight_max: number;
   readonly support: SupportLevel;
 }
 
@@ -32,8 +33,9 @@ export interface PlanRow {
   readonly name: string;
   readonly monthly_cents: number | null;
   readonly yearly_cents: number | null;
+  readonly monthly_key: PriceKey | null;
+  readonly yearly_key: PriceKey | null;
   readonly trial_days: number;
-  readonly sold: boolean;
   readonly capabilities: Capabilities;
 }
 
@@ -42,24 +44,6 @@ export interface Pack {
   readonly moves: number;
   readonly price_cents: number;
   readonly per_move_cents: number;
-}
-
-export interface Service {
-  readonly key: PriceKey;
-  readonly name: string;
-  readonly price_cents: number;
-}
-
-export interface Founding {
-  readonly discount_year_one_pct: number;
-  readonly discount_ongoing_pct: number;
-  readonly ongoing_years: number;
-  readonly year_one_cents: number;
-  readonly ongoing_cents: number;
-  readonly closes_at: string;
-  readonly annual_only: boolean;
-  readonly extra_moves: number;
-  readonly places: number;
 }
 
 export interface AiOffer {
@@ -73,15 +57,14 @@ export interface PlansView {
   readonly plans: readonly PlanRow[];
   readonly packs: readonly Pack[];
   readonly pack_above: string;
-  readonly services: readonly Service[];
-  readonly founding: Founding;
   readonly ai: AiOffer;
 }
 
 export const PLANS: readonly PlanRow[] = [
-  { "id": "free", "name": "Look", "monthly_cents": null, "yearly_cents": null, "trial_days": 0, "sold": true, "capabilities": {"resources_max":500,"marketplaces_max":4294967295,"storage_bytes_max":1073741824,"import_spreadsheet":true,"import_marketplace":true,"duplicate_review":true,"publish_marketplaces_max":4294967295,"moves_per_month":0,"moves_accrual_cap":0,"free_moves_lifetime":5,"pack_edit_days":90,"scheduling":false,"sync_pull_interval_secs":null,"auto_publish_rules":false,"templates_max":1,"collections_max":0,"labels_max":5,"analytics":false,"export":true,"devices_max":5,"ai_fills_per_month":0,"support":"guides"} },
-  { "id": "subscriber", "name": "Sync", "monthly_cents": 2900, "yearly_cents": 24000, "trial_days": 0, "sold": true, "capabilities": {"resources_max":4294967295,"marketplaces_max":4294967295,"storage_bytes_max":21474836480,"import_spreadsheet":true,"import_marketplace":true,"duplicate_review":true,"publish_marketplaces_max":4294967295,"moves_per_month":25,"moves_accrual_cap":75,"free_moves_lifetime":0,"pack_edit_days":90,"scheduling":true,"sync_pull_interval_secs":21600,"auto_publish_rules":true,"templates_max":20,"collections_max":20,"labels_max":20,"analytics":true,"export":true,"devices_max":5,"ai_fills_per_month":200,"support":"email_2_days"} },
-  { "id": "studio", "name": "Studio", "monthly_cents": 4400, "yearly_cents": 44000, "trial_days": 0, "sold": false, "capabilities": {"resources_max":4294967295,"marketplaces_max":4294967295,"storage_bytes_max":214748364800,"import_spreadsheet":true,"import_marketplace":true,"duplicate_review":true,"publish_marketplaces_max":4294967295,"moves_per_month":100,"moves_accrual_cap":300,"free_moves_lifetime":0,"pack_edit_days":90,"scheduling":true,"sync_pull_interval_secs":3600,"auto_publish_rules":true,"templates_max":4294967295,"collections_max":4294967295,"labels_max":50,"analytics":true,"export":true,"devices_max":5,"ai_fills_per_month":600,"support":"email_1_day"} },
+  { "id": "free", "name": "Look", "monthly_cents": null, "yearly_cents": null, "monthly_key": null, "yearly_key": null, "trial_days": 0, "capabilities": {"resources_max":500,"marketplaces_max":4294967295,"storage_bytes_max":268435456,"import_spreadsheet":true,"import_marketplace":true,"duplicate_review":true,"publish_marketplaces_max":4294967295,"moves_per_month":0,"moves_accrual_cap":0,"free_moves_lifetime":5,"pack_edit_days":90,"scheduling":false,"sync_pull_interval_secs":null,"auto_publish_rules":false,"templates_max":1,"collections_max":0,"labels_max":5,"analytics":false,"export":true,"devices_max":5,"ai_fills_per_month":0,"uploads_in_flight_max":1,"support":"guides"} },
+  { "id": "starter", "name": "Starter", "monthly_cents": 1200, "yearly_cents": 9600, "monthly_key": "starter_monthly", "yearly_key": "starter_yearly", "trial_days": 0, "capabilities": {"resources_max":4294967295,"marketplaces_max":4294967295,"storage_bytes_max":5368709120,"import_spreadsheet":true,"import_marketplace":true,"duplicate_review":true,"publish_marketplaces_max":4294967295,"moves_per_month":10,"moves_accrual_cap":30,"free_moves_lifetime":0,"pack_edit_days":90,"scheduling":true,"sync_pull_interval_secs":86400,"auto_publish_rules":false,"templates_max":5,"collections_max":5,"labels_max":20,"analytics":false,"export":true,"devices_max":5,"ai_fills_per_month":50,"uploads_in_flight_max":2,"support":"email_2_days"} },
+  { "id": "subscriber", "name": "Sync", "monthly_cents": 2900, "yearly_cents": 24000, "monthly_key": "sync_monthly", "yearly_key": "sync_yearly", "trial_days": 0, "capabilities": {"resources_max":4294967295,"marketplaces_max":4294967295,"storage_bytes_max":21474836480,"import_spreadsheet":true,"import_marketplace":true,"duplicate_review":true,"publish_marketplaces_max":4294967295,"moves_per_month":25,"moves_accrual_cap":75,"free_moves_lifetime":0,"pack_edit_days":90,"scheduling":true,"sync_pull_interval_secs":21600,"auto_publish_rules":true,"templates_max":20,"collections_max":20,"labels_max":20,"analytics":true,"export":true,"devices_max":5,"ai_fills_per_month":200,"uploads_in_flight_max":3,"support":"email_2_days"} },
+  { "id": "studio", "name": "Studio", "monthly_cents": 5900, "yearly_cents": 48000, "monthly_key": "studio_monthly", "yearly_key": "studio_yearly", "trial_days": 0, "capabilities": {"resources_max":4294967295,"marketplaces_max":4294967295,"storage_bytes_max":214748364800,"import_spreadsheet":true,"import_marketplace":true,"duplicate_review":true,"publish_marketplaces_max":4294967295,"moves_per_month":100,"moves_accrual_cap":300,"free_moves_lifetime":0,"pack_edit_days":90,"scheduling":true,"sync_pull_interval_secs":3600,"auto_publish_rules":true,"templates_max":4294967295,"collections_max":4294967295,"labels_max":50,"analytics":true,"export":true,"devices_max":5,"ai_fills_per_month":600,"uploads_in_flight_max":3,"support":"email_1_day"} },
 ] as const;
 
 export const PACKS: readonly Pack[] = [
@@ -93,11 +76,5 @@ export const PACKS: readonly Pack[] = [
 ] as const;
 
 export const PACK_ABOVE = "Talk to us" as const;
-
-export const SERVICES: readonly Service[] = [
-  {"key":"move_with_me","name":"Move with me","price_cents":9900},
-] as const;
-
-export const FOUNDING: Founding = {"discount_year_one_pct":25,"discount_ongoing_pct":20,"ongoing_years":3,"year_one_cents":18000,"ongoing_cents":19200,"closes_at":"2026-12-31","annual_only":true,"extra_moves":20,"places":100} as const;
 
 export const AI: AiOffer = {"status":"coming_soon","included_fills":200,"add_on_fills":100,"add_on_cents":500} as const;

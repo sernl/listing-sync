@@ -172,11 +172,11 @@ export const faqs = [
 	},
 	{
 		q: 'Can I get a refund?',
-		a: 'Yes, for a Move Pack you have not used: write to us within 14 days of buying it. You can cancel a plan at any time in Settings \u2192 Billing, and it runs until the end of the period you paid for.'
+		a: 'Yes, for a Move Pack you have not used: write to us within 14 days of buying it. You can cancel a plan at any time in Account \u2192 Billing, and it runs until the end of the period you paid for.'
 	},
 	{
 		q: 'Can I change plans?',
-		a: 'Yes, up or down at any time in Settings \u2192 Billing. Your resources and the moves you already hold stay where they are.'
+		a: 'Yes, up or down at any time in Account \u2192 Billing. Your resources and the moves you already hold stay where they are.'
 	},
 	{
 		q: 'Which marketplaces can I use?',
