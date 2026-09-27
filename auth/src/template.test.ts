@@ -11,7 +11,6 @@ const delivery = (overrides: Partial<Delivery> = {}): Delivery => ({
   lead: 'Welcome to Teachouse. We keep your teaching resources in one place.',
   action: 'Confirm your email address',
   url: `${ORIGIN}/api/auth/verify-email?token=abc`,
-  illustration: undefined,
   closing: 'If you did not request this, you can ignore this message.',
   ...overrides,
 });
@@ -166,7 +165,7 @@ test('the footer carries the copyright, the address and the PLE Group link in bo
 test('the mark and the footer link are taken from the configured origin', () => {
   const message = delivery({ url: 'https://other.example/verify' });
   const html = render(message, 'https://other.example/');
-  assert.ok(html.includes('src="https://other.example/email/teachouse-mark.png"'));
+  assert.ok(html.includes('src="https://other.example/email/teachouse-wordmark.png"'));
   assert.ok(!html.includes('other.example//email'), 'a trailing slash reached the asset path');
   assert.ok(!html.includes('teachouse.example'), 'an origin was hard-coded');
   assert.ok(plainText(message, 'https://other.example/').includes('Group: https://other.example'));
@@ -181,7 +180,7 @@ test('the button and the written-out link both carry the action url', () => {
 
 test('the button holds its padding on the table cell, where Outlook honours it', () => {
   const html = render(delivery(), ORIGIN);
-  assert.match(html, /<td align="center" bgcolor="#6B4423"[^>]*padding:14px 28px;"/u);
+  assert.match(html, /<td align="center" bgcolor="#1E2A5A"[^>]*padding:14px 28px;"/u);
   assert.ok(html.includes('mso-padding-alt:0;'), 'Outlook would double the padding');
 });
 
@@ -266,20 +265,6 @@ test('the refusal names the scheme and never the link, which carries a token', (
   assert.throws(
     () => render(message, ORIGIN),
     (error: Error) => !error.message.includes('SECRET-TOKEN'),
-  );
-});
-
-test('the illustration appears only when the message asks for it', () => {
-  const plain = render(delivery(), ORIGIN);
-  assert.ok(!plain.includes('teachouse-delivery.png'));
-
-  const alt = 'A courier hands a book to someone at their door.';
-  const illustrated = render(delivery({ illustration: alt }), ORIGIN);
-  assert.ok(illustrated.includes(`src="${ORIGIN}/email/teachouse-delivery.png"`));
-  assert.ok(illustrated.includes(`alt="${alt}"`));
-  assert.ok(
-    illustrated.indexOf('teachouse-delivery.png') < illustrated.indexOf('Hey there'),
-    'the illustration must sit above the greeting',
   );
 });
 

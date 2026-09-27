@@ -254,8 +254,6 @@ const STATIC_DIRS: Record<string, string> = {
 		"Each marketplace's own logo, drawn in colours that are the marketplace's and not ours to move.",
 	'vendors/':
 		"Mozilla's Firefox logo and Google's Android robot, each the vendor's published file unaltered. Both licences forbid modifying the mark, so its colours are the vendor's and not ours to move.",
-	'email/teachouse-delivery.svg':
-		"An illustration rather than a mark: a figure at a door, with skin tones, a satchel and a sky that no token names and that a palette edit has no opinion about. Its two brand colours were moved to the kit's Indigo and Teal on 2026-09-11 with the geometry untouched; the rest is the drawing's own. The two marks beside it are the console's mark and are swept.",
 };
 
 /** Everything else `web/static` writes that is neither a token's value nor the

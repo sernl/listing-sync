@@ -4,11 +4,20 @@
  * Tables and inline CSS only: Outlook's Word renderer ignores flexbox, grid and
  * most of the box model, and Gmail strips `<style>` entirely on some clients, so
  * a rule that is not inline is a rule that may not arrive. The single `<style>`
- * block carries one `@media` rule for narrow screens and nothing the layout
- * depends on. That renderer also drops `border-radius` and does not implement
- * `display:inline-block`, so the primary button carries its padding on the
- * enclosing table cell rather than on the anchor: in Outlook it is a square
- * button of the right size, and the rounded corners are what is lost.
+ * block carries the brand faces for the clients that load web fonts (Apple Mail
+ * and iOS), one `@media` rule for narrow screens, and nothing the layout depends
+ * on: every other client reads the fallbacks in the inline stacks. That renderer
+ * also drops `border-radius` and does not implement `display:inline-block`, so
+ * the primary button carries its padding on the enclosing table cell rather
+ * than on the anchor: in Outlook it is a square button of the right size, and
+ * the rounded corners are what is lost.
+ *
+ * Colours are the brand kit's (`web/src/lib/styles/tokens.css`, light block),
+ * written out because a mail client has no stylesheet to read them from. Every
+ * cell names its own background and every run of text its own colour: a client
+ * that repaints a message for dark mode repaints what was left to its default,
+ * so nothing is. The wordmark is an opaque PNG on the header's own white, so a
+ * client that inverts the page still shows Indigo on white inside the image.
  *
  * The module is pure and imports no configuration: the origin arrives as an
  * argument so the template can be rendered and asserted without a configured
@@ -27,8 +36,6 @@ export interface Delivery {
   readonly action: string;
   /** Where the button points. Must be http or https. */
   readonly url: string;
-  /** Alt text for the header illustration, or undefined to leave it out. */
-  readonly illustration: string | undefined;
   /**
    * The closing line, which differs by message: ignoring a verification email
    * you did not ask for is safe, ignoring a password change you did not make
@@ -37,18 +44,17 @@ export interface Delivery {
   readonly closing: string;
 }
 
-const GROUND = '#F7F2E9';
-const SURFACE = '#FFFDF9';
-const NAV = '#ECE1CD';
-const PRIMARY = '#6B4423';
-const ACCENT = '#C2543A';
-const ADDITIVE = '#3E5A8C';
-const TEXT = '#241A12';
-const MUTED = '#7C6B5B';
-const LINE = '#E4D8C4';
+const GROUND = '#F8FAF8';
+const SURFACE = '#FFFFFF';
+const PRIMARY = '#1E2A5A';
+const ACCENT = '#00B894';
+const ON_FILL = '#FFFFFF';
+const TEXT = '#2D3748';
+const MUTED = '#64748B';
+const LINE = '#E2E8F0';
 
-const DISPLAY = "Georgia,'Times New Roman',serif";
-const BODY = "-apple-system,'Segoe UI',Helvetica,Arial,sans-serif";
+const DISPLAY = "Poppins,'Segoe UI',Helvetica,Arial,sans-serif";
+const BODY = "Inter,'Segoe UI',-apple-system,Helvetica,Arial,sans-serif";
 
 const ESCAPES: Readonly<Record<string, string>> = {
   '&': '&amp;',
@@ -274,26 +280,13 @@ export const plainText = (delivery: Delivery, origin: string): string => {
 const paragraph = (style: string, content: string): string =>
   `<p style="margin:0;${style}">${content}</p>`;
 
-// The illustration carries no instruction -- the greeting, the lead and the
-// button say everything the reader must act on, and the message is complete
-// with images blocked, which is most clients' default. It is described rather
-// than given an empty alt, so a reader who cannot see it is told what the
-// sighted reader is looking at instead of being skipped past a blank.
-const illustrationRow = (site: string, alt: string): string =>
-  `<tr>
-              <td align="center" style="padding:28px 32px 0;font-size:0;line-height:0;">
-                <img src="${site}/email/teachouse-delivery.png" width="520" height="260" alt="${alt}" style="display:block;width:520px;max-width:100%;height:auto;border:0;" />
-              </td>
-            </tr>
-            `;
-
 /**
  * Render one message as HTML.
  *
  * `origin` is the console's own origin, the value `env.baseUrl` already holds:
- * it serves the mark from its public static tree and is where "Powered by PLE
- * Group" points. Passing it keeps the origin out of this module's imports and
- * out of the markup as a literal.
+ * it serves the wordmark and the two faces from its public static tree and is
+ * where "Powered by PLE Group" points. Passing it keeps the origin out of this
+ * module's imports and out of the markup as a literal.
  */
 export const render = (delivery: Delivery, origin: string): string => {
   const url = escapeHtml(checkedUrl(delivery.url, origin));
@@ -319,53 +312,49 @@ export const render = (delivery: Delivery, origin: string): string => {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <meta name="color-scheme" content="light" />
-    <meta name="supported-color-schemes" content="light" />
+    <meta name="color-scheme" content="light only" />
+    <meta name="supported-color-schemes" content="light only" />
     <meta name="x-apple-disable-message-reformatting" />
     <title>${escapeHtml(delivery.subject)}</title>
     <style>
+      :root { color-scheme: light only; supported-color-schemes: light only; }
+      @font-face { font-family: Poppins; font-weight: 600; font-style: normal; src: url('${site}/fonts/poppins-600-latin.woff2') format('woff2'); }
+      @font-face { font-family: Inter; font-weight: 400 700; font-style: normal; src: url('${site}/fonts/inter-400-700-latin.woff2') format('woff2'); }
       @media only screen and (max-width: 620px) {
         .tam-column { width: 100% !important; }
         .tam-pad { padding: 24px !important; }
       }
     </style>
   </head>
-  <body bgcolor="${GROUND}" style="margin:0;padding:0;width:100%;background-color:${GROUND};">
+  <body bgcolor="${GROUND}" style="margin:0;padding:0;width:100%;background-color:${GROUND};color:${TEXT};">
     <div style="display:none;max-height:0;max-width:0;overflow:hidden;opacity:0;font-size:1px;line-height:1px;color:${GROUND};">${preheader}${FILLER}</div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${GROUND}" style="width:100%;background-color:${GROUND};">
       <tr>
-        <td align="center" style="padding:32px 12px;">
-          <table role="presentation" class="tam-column" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:600px;background-color:${SURFACE};border:1px solid ${LINE};border-radius:14px;">
+        <td align="center" bgcolor="${GROUND}" style="padding:32px 12px;background-color:${GROUND};">
+          <table role="presentation" class="tam-column" width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="${SURFACE}" style="width:600px;max-width:600px;background-color:${SURFACE};border:1px solid ${LINE};border-top:4px solid ${ACCENT};border-radius:14px;">
             <tr>
-              <td style="padding:24px;background-color:${NAV};border-radius:13px 13px 0 0;">
-                <table role="presentation" cellpadding="0" cellspacing="0" border="0">
-                  <tr>
-                    <td width="48" style="padding-right:12px;line-height:0;">
-                      <img src="${site}/email/teachouse-mark.png" width="48" height="48" alt="" style="display:block;width:48px;height:48px;border:0;" />
-                    </td>
-                    <td style="font-family:${DISPLAY};font-size:22px;font-weight:600;letter-spacing:0.2px;color:${PRIMARY};">Teachouse</td>
-                  </tr>
-                </table>
+              <td class="tam-pad" bgcolor="${SURFACE}" style="padding:28px 32px 0;background-color:${SURFACE};border-radius:13px 13px 0 0;line-height:0;">
+                <img src="${site}/email/teachouse-wordmark.png" width="176" height="43" alt="Teachouse" style="display:block;width:176px;height:43px;border:0;font-family:${DISPLAY};font-size:22px;font-weight:600;line-height:43px;color:${PRIMARY};" />
               </td>
             </tr>
-            ${delivery.illustration === undefined ? '' : illustrationRow(site, escapeHtml(delivery.illustration))}<tr>
-              <td class="tam-pad" style="padding:32px;">
-                ${paragraph(`padding-bottom:16px;font-family:${DISPLAY};font-size:20px;font-weight:700;line-height:1.35;color:${TEXT};`, escapeHtml(delivery.greeting))}
+            <tr>
+              <td class="tam-pad" bgcolor="${SURFACE}" style="padding:28px 32px 32px;background-color:${SURFACE};">
+                ${paragraph(`padding-bottom:14px;font-family:${DISPLAY};font-size:22px;font-weight:600;line-height:1.3;color:${PRIMARY};`, escapeHtml(delivery.greeting))}
                 ${paragraph(`padding-bottom:26px;font-family:${BODY};font-size:15px;line-height:1.6;color:${TEXT};`, escapeHtml(delivery.lead))}
                 <table role="presentation" cellpadding="0" cellspacing="0" border="0">
                   <tr>
                     <td align="center" bgcolor="${PRIMARY}" style="border-radius:999px;background-color:${PRIMARY};padding:14px 28px;">
-                      <a href="${url}" style="display:inline-block;font-family:${BODY};font-size:14px;font-weight:600;line-height:1.2;color:${SURFACE};text-decoration:none;mso-padding-alt:0;">${escapeHtml(delivery.action)}</a>
+                      <a href="${url}" style="display:inline-block;font-family:${BODY};font-size:15px;font-weight:600;line-height:1.2;color:${ON_FILL};text-decoration:none;mso-padding-alt:0;">${escapeHtml(delivery.action)}</a>
                     </td>
                   </tr>
                 </table>
                 ${paragraph(`padding:26px 0 4px;font-family:${BODY};font-size:13px;line-height:1.5;color:${MUTED};`, 'If the button does not work, copy this link into your browser:')}
-                ${paragraph(`padding-bottom:20px;font-family:${BODY};font-size:13px;line-height:1.5;word-break:break-all;`, `<a href="${url}" style="color:${ADDITIVE};text-decoration:underline;">${url}</a>`)}
+                ${paragraph(`padding-bottom:20px;font-family:${BODY};font-size:13px;line-height:1.5;word-break:break-all;color:${PRIMARY};`, `<a href="${url}" style="color:${PRIMARY};text-decoration:underline;">${url}</a>`)}
                 ${paragraph(`font-family:${BODY};font-size:13px;line-height:1.5;color:${MUTED};`, escapeHtml(delivery.closing))}
               </td>
             </tr>
             <tr>
-              <td align="center" style="padding:24px;border-top:1px solid ${LINE};border-radius:0 0 13px 13px;">
+              <td align="center" bgcolor="${SURFACE}" style="padding:24px;background-color:${SURFACE};border-top:1px solid ${LINE};border-radius:0 0 13px 13px;">
           ${footer}
               </td>
             </tr>

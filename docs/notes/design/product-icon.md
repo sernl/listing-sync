@@ -24,7 +24,7 @@ Every section below is rewritten to the kit where it named a colour or a source,
 
 The mark writes two colours, `#1E2A5A` and `#00B894`, which are the values of `--primary` and `--accent`, and nothing else.
 That is what retired the named exception the Pounamu and Kauri marks' two creams held in `tokens.test.ts`, and what let the two email marks join the swept set.
-The `email/` exception now names `teachouse-delivery.svg` alone, the illustration beside them, whose skin tones and sky no token names.
+The `email/` exception went on 2026-09-27 with the courier illustration it named: its creams and browns were the retired palette's, so the emails now open on the wordmark instead.
 
 `web/static/brand/mark-small.svg` is the 16 pixel companion: the same tile and the same two colours, with the house redrawn heavier so it survives the size.
 
@@ -50,9 +50,8 @@ magick /tmp/mark-192.png -depth 8 -strip PNG32:web/static/icon-192.png
 magick /tmp/mark-512.png -depth 8 -strip PNG32:web/static/icon-512.png
 magick /tmp/mark-180.png -background '#1E2A5A' -alpha remove -alpha off \
   -depth 8 -strip PNG24:web/static/apple-touch-icon.png
-magick /tmp/mark-96.png -depth 8 -strip PNG32:web/static/email/teachouse-mark.png
-resvg --width 1040 --height 520 web/static/email/teachouse-delivery.svg /tmp/delivery.png
-magick /tmp/delivery.png -depth 8 -strip PNG32:web/static/email/teachouse-delivery.png
+resvg --width 528 --background white web/static/brand/wordmark.svg /tmp/wordmark.png
+magick /tmp/wordmark.png -depth 8 -strip PNG24:web/static/email/teachouse-wordmark.png
 cp web/static/favicon.svg apps/landing/public/favicon.svg
 ```
 
@@ -63,7 +62,7 @@ Flattening the apple-touch icon onto the tile colour fills the corners the `rx="
 `favicon-32.png` is rendered from the full mark, and `favicon-16.png` from `brand/mark-small.svg`, which is drawn for that size.
 At 16 pixels the full mark's four window panes fill in and the gaps between them close, so the companion replaces the window with one rounded opening and carries the roof and walls heavier.
 Until 2026-09-11 the 16 pixel source was `email/teachouse-mark-small.svg`, and the kit supplies its own small mark, so the render now reads from `brand/`.
-The two SVGs under `email/` are copies of the brand drawings rather than sources, and the two PNGs beside them are truecolour with alpha: `teachouse-mark.png` because a mail client is handed a raster with no palette to negotiate, and `teachouse-delivery.png` because the illustration has more colours than a palette holds.
+The two SVGs under `email/` are copies of the brand drawings rather than sources. The PNG beside them, `teachouse-wordmark.png`, is the wordmark at 3x its 176 pixel header width, truecolour and flattened onto white: a mail client is handed a raster with no palette to negotiate, and a client that inverts a message for dark mode leaves images alone, so the white ground inside the image keeps the Indigo readable.
 
 The landing declares the SVG alone, in the head of `apps/landing/src/layouts/Base.astro`, and draws it again as an `img` in `SiteHeader.astro` and `SiteFooter.astro`.
 It has no raster icons and no manifest, so the loop above writes nothing else for it.
