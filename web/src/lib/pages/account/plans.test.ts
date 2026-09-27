@@ -1,20 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import type { Founding, Pack } from '$lib/generated/plans';
+import type { Pack, PlanRow } from '$lib/generated/plans';
 import { AI, PACKS, PLANS } from '$lib/generated/plans';
 import {
 	bestValuePack,
+	cardLabel,
 	checkoutOutcome,
 	dayLabel,
 	dollars,
 	expiryLine,
-	foundingClosesLabel,
-	foundingOpen,
+	invoiceStatus,
+	money,
 	moves,
 	packsBySize,
 	perMonth,
 	planBullets,
-	renewsLine,
-	syncPlan
+	planMeaning,
+	paidPlans,
+	termLine,
+	tierPrice
 } from './plans';
 
 // The price table is `tam-limits`' and arrives generated, so the fixtures
@@ -24,25 +27,14 @@ import {
 // of the founder's own prices rather than of this rendering.
 
 function pack(over: Partial<Pack> = {}): Pack {
-	return { key: 'pack_20', moves: 20, price_cents: 4700, per_move_cents: 235, ...over };
-}
-
-function founding(over: Partial<Founding> = {}): Founding {
 	return {
-		discount_year_one_pct: 25,
-		discount_ongoing_pct: 20,
-		ongoing_years: 3,
-		year_one_cents: 18000,
-		ongoing_cents: 19200,
-		closes_at: '2026-12-31',
-		annual_only: true,
-		extra_moves: 20,
-		places: 100,
+		key: 'pack_20',
+		moves: 20,
+		price_cents: 4700,
+		per_move_cents: 235,
 		...over
 	};
 }
-
-const CLOSING_DAY = Date.parse('2026-12-31T12:00:00Z');
 
 describe('money printed from cents', () => {
 	it('drops the decimals on a whole number of dollars', () => {
@@ -78,7 +70,9 @@ describe('the packs on sale', () => {
 
 	it('orders by size, and a bigger pack never costs more per move', () => {
 		const ordered = packsBySize(PACKS);
-		expect(ordered.map((row) => row.moves)).toEqual([...ordered.map((row) => row.moves)].sort((one, two) => one - two));
+		expect(ordered.map((row) => row.moves)).toEqual(
+			[...ordered.map((row) => row.moves)].sort((one, two) => one - two)
+		);
 		for (let index = 1; index < ordered.length; index += 1) {
 			expect(ordered[index]!.per_move_cents).toBeLessThan(ordered[index - 1]!.per_move_cents);
 		}
@@ -105,41 +99,74 @@ describe('a count of moves', () => {
 	});
 });
 
-describe('the founding offer', () => {
-	it('is on sale on its closing day, because an offer closing on the 31st is sold on the 31st', () => {
-		expect(foundingOpen(founding(), CLOSING_DAY)).toBe(true);
-	});
-
-	it('is gone the day after', () => {
-		expect(foundingOpen(founding(), Date.parse('2027-01-01T00:00:00Z'))).toBe(false);
-	});
-
-	it('is on sale well before', () => {
-		expect(foundingOpen(founding(), Date.parse('2026-01-05T00:00:00Z'))).toBe(true);
-	});
-
-	it('states the day it closes', () => {
-		expect(foundingClosesLabel(founding())).toBe('Closes 31 Dec 2026.');
-	});
-});
-
 describe('what the billing read says in words', () => {
 	it('names the day the soonest moves lapse', () => {
-		expect(expiryLine({ available: 12, expiring_soonest: Date.parse('2027-03-03T00:00:00Z') })).toBe(
-			'Moves start expiring on 3 Mar 2027.'
-		);
+		expect(
+			expiryLine({
+				available: 12,
+				expiring_soonest: Date.parse('2027-03-03T00:00:00Z')
+			})
+		).toBe('Moves start expiring on 3 Mar 2027.');
 	});
 
 	it('says nothing where no part of the balance lapses', () => {
 		expect(expiryLine({ available: 12 })).toBeNull();
 	});
 
-	it('names the renewal day', () => {
-		expect(renewsLine(Date.parse('2027-03-03T00:00:00Z'))).toBe('Renews on 3 Mar 2027.');
+	it('names the renewal day while the subscription renews', () => {
+		expect(termLine({ renews_at: Date.parse('2027-03-03T00:00:00Z') })).toBe(
+			'Your subscription renews on 3 Mar 2027.'
+		);
 	});
 
-	it('says nothing where nothing renews', () => {
-		expect(renewsLine(undefined)).toBeNull();
+	it('names the end day once cancelled, and never a renewal beside it', () => {
+		expect(
+			termLine({
+				renews_at: Date.parse('2027-03-03T00:00:00Z'),
+				ends_at: Date.parse('2027-03-03T00:00:00Z')
+			})
+		).toBe('Your plan ends on 3 Mar 2027 and will not renew.');
+	});
+
+	it('says nothing where nothing renews or ends', () => {
+		expect(termLine({})).toBeNull();
+	});
+
+	it('prints an invoice total in its own currency and minor unit', () => {
+		expect(money(34783, 'nzd')).toBe('NZ$347.83');
+		expect(money(2900, 'usd')).toBe('$29.00');
+		expect(money(3000, 'jpy'), 'yen has no minor unit, so 3000 is ¥3,000').toBe('¥3,000');
+	});
+
+	it('calls an unpaid open invoice due, and keeps a status Stripe adds later readable', () => {
+		expect(invoiceStatus('open')).toEqual({ label: 'Due', tone: 'warn' });
+		expect(invoiceStatus('paid')).toEqual({ label: 'Paid', tone: 'ok' });
+		expect(invoiceStatus('refunded_someday').label).toBe('refunded_someday');
+	});
+
+	it('names a card by brand and last four, and an unknown brand as a card', () => {
+		expect(cardLabel({ brand: 'visa', last4: '3115' })).toBe('Visa •••• 3115');
+		expect(cardLabel({ brand: 'link', last4: '0000' })).toBe('Card •••• 0000');
+	});
+
+	it('says a plan in one line from what it gives', () => {
+		const caps = PLANS[0].capabilities;
+		expect(
+			planMeaning({
+				...caps,
+				moves_per_month: 25,
+				moves_accrual_cap: 75,
+				free_moves_lifetime: 0
+			})
+		).toBe('25 moves a month, saving up to 75.');
+		expect(
+			planMeaning({
+				...caps,
+				moves_per_month: 0,
+				moves_accrual_cap: 0,
+				free_moves_lifetime: 5
+			})
+		).toBe('5 moves free to try, then packs as you need them.');
 	});
 
 	it('prints a date in the server’s own zone, so a seller east of UTC reads the enforced day', () => {
@@ -147,15 +174,51 @@ describe('what the billing read says in words', () => {
 	});
 });
 
-describe('the plan a deployment sells', () => {
-	it('is Sync, which is the one recurring plan on sale', () => {
-		const plan = syncPlan();
-		expect(plan?.id).toBe('subscriber');
-		expect(plan?.name).toBe('Sync');
+describe('the tier cards', () => {
+	const row = (over: Partial<PlanRow> = {}): PlanRow => ({
+		...PLANS[0],
+		id: 'subscriber',
+		name: 'Sync',
+		monthly_cents: 2900,
+		yearly_cents: 24000,
+		monthly_key: 'sync_monthly',
+		yearly_key: 'sync_yearly',
+		...over
 	});
 
-	it('is never Studio, which ships priced and unsold', () => {
-		expect(syncPlan()?.id).not.toBe('studio');
+	it('are every priced plan, cheapest first, and never the free one', () => {
+		const tiers = paidPlans();
+		expect(tiers.map((plan) => plan.id)).not.toContain('free');
+		expect(tiers.length).toBeGreaterThanOrEqual(3);
+		const monthly = tiers.map((plan) => plan.monthly_cents ?? 0);
+		expect([...monthly].sort((a, b) => a - b)).toEqual(monthly);
+	});
+
+	it('lead yearly with the month it works out at, the saving, and the yearly key', () => {
+		expect(tierPrice(row(), 'yearly')).toEqual({
+			headline: '$20',
+			per: 'a month, billed yearly',
+			note: '$240 a year. You save $108.',
+			key: 'sync_yearly'
+		});
+	});
+
+	it('sell the monthly key at the monthly price when the toggle says monthly', () => {
+		expect(tierPrice(row(), 'monthly')).toEqual({
+			headline: '$29',
+			per: 'a month',
+			note: 'Or $20 a month if you pay yearly.',
+			key: 'sync_monthly'
+		});
+	});
+
+	it('have no price for a plan that charges nothing', () => {
+		expect(
+			tierPrice(
+				row({ monthly_cents: null, yearly_cents: null, monthly_key: null, yearly_key: null }),
+				'yearly'
+			)
+		).toBeNull();
 	});
 });
 
@@ -170,6 +233,16 @@ describe('the lines on a plan card', () => {
 
 	it('never prints the no-limit sentinel as a count', () => {
 		expect(texts('studio').some((text) => text.includes('4294967295'))).toBe(false);
+	});
+
+	it("puts what every plan does first and the free plan's trial moves last", () => {
+		const free = texts('free');
+		expect(free[0]).toBe('Import from wherever you sell');
+		expect(free[free.length - 1]).toMatch(/onto a marketplace of your choice$/);
+		expect(texts('starter').slice(0, 2)).toEqual([
+			'Import from wherever you sell',
+			'Edit once, sync everywhere'
+		]);
 	});
 
 	it('marks AI fill as not yet built only while it is coming soon', () => {

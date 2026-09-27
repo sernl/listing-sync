@@ -20,6 +20,7 @@ pub mod connections;
 pub mod consent;
 pub mod device;
 pub mod device_library;
+pub mod discount;
 pub mod duplicates;
 pub mod entitlement;
 pub mod file_source;
@@ -45,6 +46,7 @@ pub mod rule_capture;
 pub mod schedules;
 pub mod seller_rules;
 pub mod sessions;
+pub mod site_setting;
 pub mod sync_settings;
 pub mod taxonomy;
 pub mod tpt_base;
@@ -56,7 +58,7 @@ pub use backoffice::{
     ImpersonationEvent, ImportDrainPage, ImportDrainRun, OrgDetail, OrgSummary, PlatformUser,
     SignupsRepo, SubscriptionRecord, SyncHealth,
 };
-pub use billing::{BillingRepo, ServiceBooking, SubscriptionState};
+pub use billing::{BillingRepo, SubscriptionState};
 pub use blobs::{
     describe_files, BlobError, BlobRepo, PipelineFileSource, StoredFile, TenantBlobSink,
 };
@@ -77,6 +79,9 @@ pub use device_library::{
     DeviceLibraryRepo, Holder, HoldingReport, LibraryAvailability, LibraryFile, LibraryFilter,
     LibraryLinked, LibraryPage, LibraryReport, LibraryResource, Peer, LIBRARY_LIMIT_DEFAULT,
     LIBRARY_LIMIT_MAX,
+};
+pub use discount::{
+    CodeWrite, Discount, DiscountAmount, DiscountCode, DiscountDuration, DiscountKind, DiscountRepo,
 };
 pub use duplicates::{
     answered_pairs, decide_verdict, ordered as ordered_pair, pair_verdict, raise_verdict,
@@ -178,6 +183,7 @@ pub use schedules::{
     ScheduleWrite, UnknownTimezone, SCHEDULE_RUNS_LISTED_MAX,
 };
 pub use sessions::{NewTenant, SessionIdentity, SessionRepo, SessionToken};
+pub use site_setting::SiteSettingRepo;
 pub use sync_settings::{
     ActivityCursor, ActivityKind, ActivityRow, MultiListedRow, SyncSettingRecord, SyncSettingRepo,
     ACTIVITY_LISTED_MAX,

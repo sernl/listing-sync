@@ -27,10 +27,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use tam_limits::{
-    AiOffer, Capabilities, Founding, Pack, Plan, PlanRow, PriceKey, Service, AI, FOUNDING, PACKS,
-    PACK_ABOVE, PLANS, SERVICES,
-};
+use tam_limits::{AiOffer, Capabilities, Pack, Plan, PlanRow, PriceKey, AI, PACKS, PACK_ABOVE, PLANS};
 use tam_storage::{EntitlementRepo, Grant, MoveBalance, Usage};
 use tam_types::Timestamp;
 
@@ -297,8 +294,9 @@ pub struct PlanRowView {
     pub name: String,
     pub monthly_cents: Option<u32>,
     pub yearly_cents: Option<u32>,
+    pub monthly_key: Option<PriceKey>,
+    pub yearly_key: Option<PriceKey>,
     pub trial_days: u32,
-    pub sold: bool,
     pub capabilities: Capabilities,
 }
 
@@ -309,65 +307,13 @@ impl PlanRowView {
             name: row.name.to_owned(),
             monthly_cents: row.monthly_cents,
             yearly_cents: row.yearly_cents,
+            monthly_key: row.monthly_key,
+            yearly_key: row.yearly_key,
             trial_days: row.trial_days,
             // At no rung, which is what a price list shows: the only plan
             // that reads one is Studio, whose rung is an operator's decision
             // about one tenant rather than a figure on a public page.
             capabilities: row.id.capabilities(None),
-            sold: row.sold,
-        }
-    }
-}
-
-/// One service as the pricing page reads it.
-///
-/// Owned rather than [`Service`] itself, for [`PlanRowView`]'s reason: the
-/// constant carries `&'static str`, and a view a client deserialises cannot
-/// borrow from a lifetime it does not have.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ServiceView {
-    pub key: PriceKey,
-    pub name: String,
-    pub price_cents: u32,
-}
-
-impl ServiceView {
-    fn of(service: Service) -> Self {
-        Self {
-            key: service.key,
-            name: service.name.to_owned(),
-            price_cents: service.price_cents,
-        }
-    }
-}
-
-/// The founding offer as the pricing page reads it. Owned for the same
-/// reason as [`ServiceView`]; `closes_at` is the borrowed field.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FoundingView {
-    pub discount_year_one_pct: u32,
-    pub discount_ongoing_pct: u32,
-    pub ongoing_years: u32,
-    pub year_one_cents: u32,
-    pub ongoing_cents: u32,
-    pub closes_at: String,
-    pub annual_only: bool,
-    pub extra_moves: u32,
-    pub places: u32,
-}
-
-impl FoundingView {
-    fn of(founding: Founding) -> Self {
-        Self {
-            discount_year_one_pct: founding.discount_year_one_pct,
-            discount_ongoing_pct: founding.discount_ongoing_pct,
-            ongoing_years: founding.ongoing_years,
-            year_one_cents: founding.year_one_cents,
-            ongoing_cents: founding.ongoing_cents,
-            closes_at: founding.closes_at.to_owned(),
-            annual_only: founding.annual_only,
-            extra_moves: founding.extra_moves,
-            places: founding.places,
         }
     }
 }
@@ -377,22 +323,38 @@ pub struct PlansView {
     pub plans: Vec<PlanRowView>,
     pub packs: Vec<Pack>,
     pub pack_above: String,
-    pub services: Vec<ServiceView>,
-    pub founding: FoundingView,
     pub ai: AiOffer,
+    /// The sale open now, which every plan's checkout applies by itself.
+    /// Absent outside a sale, and whenever the sale could not be read: the
+    /// price list stays readable at list prices rather than failing.
+    pub sale: Option<crate::pricing::SaleView>,
 }
+
+/// How long a shared cache may keep the price list. A sale opens or closes
+/// at midnight and an operator may end one early; a minute is the most a
+/// struck price may lag either.
+const PLANS_MAX_AGE_SECS: u32 = 60;
 
 /// The price list. Unauthenticated, because the pricing page is public and a
 /// price a seller cannot read before signing up is not a price list.
-pub(crate) async fn plans_view(_version: APIVersion) -> Json<PlansView> {
-    Json(PlansView {
+pub(crate) async fn plans_view(
+    _version: APIVersion,
+    State(state): State<AppState>,
+) -> impl axum::response::IntoResponse {
+    let sale = crate::pricing::current_sale(&state, (state.wall)())
+        .await
+        .unwrap_or_else(|error| {
+            eprintln!("tam-api: the price list could not read the current sale: {error}");
+            None
+        });
+    let cache = format!("public, max-age={PLANS_MAX_AGE_SECS}");
+    ([(axum::http::header::CACHE_CONTROL, cache)], Json(PlansView {
         plans: PLANS.into_iter().map(PlanRowView::of).collect(),
         packs: PACKS.to_vec(),
         pack_above: PACK_ABOVE.to_owned(),
-        services: SERVICES.into_iter().map(ServiceView::of).collect(),
-        founding: FoundingView::of(FOUNDING),
         ai: AI,
-    })
+        sale,
+    }))
 }
 
 // ------------------------------------------------------- GET /v1/entitlement

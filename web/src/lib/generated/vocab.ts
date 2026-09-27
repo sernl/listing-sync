@@ -745,36 +745,42 @@ export const SCHEDULE_REPEATS: readonly ScheduleRepeat[] = [
 
 export type Plan =
   | "free"
+  | "starter"
   | "subscriber"
   | "studio";
 
 export const PLAN_IDS: readonly Plan[] = [
   "free",
+  "starter",
   "subscriber",
   "studio",
 ];
 
 export type PriceKey =
+  | "starter_monthly"
+  | "starter_yearly"
   | "sync_monthly"
   | "sync_yearly"
-  | "founding_yearly"
+  | "studio_monthly"
+  | "studio_yearly"
   | "pack_20"
   | "pack_50"
   | "pack_100"
   | "pack_250"
-  | "pack_500"
-  | "move_with_me";
+  | "pack_500";
 
 export const PRICE_KEYS: readonly PriceKey[] = [
+  "starter_monthly",
+  "starter_yearly",
   "sync_monthly",
   "sync_yearly",
-  "founding_yearly",
+  "studio_monthly",
+  "studio_yearly",
   "pack_20",
   "pack_50",
   "pack_100",
   "pack_250",
   "pack_500",
-  "move_with_me",
 ];
 
 export type SupportLevel =

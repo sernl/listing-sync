@@ -26,7 +26,7 @@
 		/>
 		<Placeholder icon="chart-line" headline="Not on your plan" body={refusal}>
 			{#snippet actions()}
-				<Button tier="primary" href="/settings/subscription">See plans</Button>
+				<Button tier="primary" href="/settings/billing">See plans</Button>
 			{/snippet}
 		</Placeholder>
 	</div>

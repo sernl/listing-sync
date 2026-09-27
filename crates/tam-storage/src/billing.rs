@@ -14,7 +14,7 @@
 //! a de-duplication table.
 
 use sqlx::PgPool;
-use tam_types::{OrgId, Timestamp, Uuid};
+use tam_types::{OrgId, Timestamp};
 
 use crate::codec::{timestamp_from_db, timestamp_to_db, uuid_to_db};
 use crate::{pin_org, StorageError};
@@ -33,29 +33,23 @@ pub struct SubscriptionState {
     pub status: String,
     /// The price this subscription renews at, where the event named one.
     ///
-    /// Kept so the billing page can answer the cadence and the founding
-    /// question from the price map alone, without a second read of the
+    /// Kept so the billing page can answer the plan and the cadence from the
+    /// price map alone, without a second read of the
     /// provider. Absent where the event carried no line item, which is what
     /// a cancellation looks like.
     pub provider_price_id: Option<String>,
     /// Absent where the provider carried no billing period — a trial, or a
     /// subscription cancelled outright. Absent rather than fabricated.
     pub current_period_end: Option<Timestamp>,
+    /// Whether the subscription ends at `current_period_end` rather than
+    /// renewing. Absent where the event did not say — a checkout or an
+    /// invoice describes a payment, not the seller's standing instruction —
+    /// and an absent value keeps what is stored for the same subscription.
+    /// Read back it is always present.
+    pub cancel_at_period_end: Option<bool>,
     /// The instant the provider stamped on the event, not the instant we
     /// wrote it. The ordering fence in [`BillingRepo::apply`] is this field.
     pub occurred_at: Timestamp,
-}
-
-/// One service purchase: time bought, not a capability granted.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ServiceBooking {
-    pub id: Uuid,
-    /// The service's price key, `move_with_me` today.
-    pub key: String,
-    /// The provider's own identifier for the purchase — a checkout session —
-    /// which is what makes a replayed delivery book once.
-    pub provider_ref: String,
-    pub created_at: Timestamp,
 }
 
 pub struct BillingRepo {
@@ -92,7 +86,7 @@ impl BillingRepo {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let applied = sqlx::query!(
-            "INSERT INTO billing_subscription (org_id, provider, provider_subscription_id, provider_customer_id, provider_price_id, status, current_period_end, occurred_at, updated_at) VALUES ($1, 'stripe', $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (org_id) DO UPDATE SET provider = EXCLUDED.provider, provider_subscription_id = EXCLUDED.provider_subscription_id, provider_customer_id = EXCLUDED.provider_customer_id, provider_price_id = COALESCE(EXCLUDED.provider_price_id, billing_subscription.provider_price_id), status = EXCLUDED.status, current_period_end = EXCLUDED.current_period_end, occurred_at = EXCLUDED.occurred_at, updated_at = EXCLUDED.updated_at WHERE EXCLUDED.occurred_at >= billing_subscription.occurred_at",
+            "INSERT INTO billing_subscription (org_id, provider, provider_subscription_id, provider_customer_id, provider_price_id, status, current_period_end, occurred_at, updated_at, cancel_at_period_end) VALUES ($1, 'stripe', $2, $3, $4, $5, $6, $7, $8, COALESCE($9, false)) ON CONFLICT (org_id) DO UPDATE SET provider = EXCLUDED.provider, provider_subscription_id = EXCLUDED.provider_subscription_id, provider_customer_id = EXCLUDED.provider_customer_id, provider_price_id = COALESCE(EXCLUDED.provider_price_id, billing_subscription.provider_price_id), status = EXCLUDED.status, current_period_end = EXCLUDED.current_period_end, occurred_at = EXCLUDED.occurred_at, updated_at = EXCLUDED.updated_at, cancel_at_period_end = CASE WHEN $9::boolean IS NOT NULL THEN $9 WHEN billing_subscription.provider_subscription_id <> EXCLUDED.provider_subscription_id THEN false ELSE billing_subscription.cancel_at_period_end END WHERE EXCLUDED.occurred_at >= billing_subscription.occurred_at",
             uuid_to_db(org.0),
             state.provider_subscription_id,
             state.provider_customer_id,
@@ -101,12 +95,44 @@ impl BillingRepo {
             state.current_period_end.map(timestamp_to_db).transpose()?,
             timestamp_to_db(state.occurred_at)?,
             timestamp_to_db(now)?,
+            state.cancel_at_period_end,
         )
         .execute(&mut *tx)
         .await?
         .rows_affected();
         tx.commit().await?;
         Ok(applied == 1)
+    }
+
+    /// Records the seller's own cancel or resume, as Stripe answered it, for
+    /// the subscription this tenant holds, answering whether a row matched.
+    ///
+    /// Separate from [`Self::apply`] because it is not an event: the console
+    /// changed the subscription and Stripe answered synchronously, and
+    /// stamping that answer as an event would move the ordering fence to our
+    /// clock and refuse the webhook Stripe then sends about the same change.
+    /// Only the flag moves; the webhook that follows restates it anyway.
+    pub async fn set_cancel_at_period_end(
+        &self,
+        org: OrgId,
+        subscription: &str,
+        cancel_at_period_end: bool,
+        now: Timestamp,
+    ) -> Result<bool, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let updated = sqlx::query!(
+            "UPDATE billing_subscription SET cancel_at_period_end = $3, updated_at = $4 WHERE org_id = $1 AND provider_subscription_id = $2",
+            uuid_to_db(org.0),
+            subscription,
+            cancel_at_period_end,
+            timestamp_to_db(now)?,
+        )
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        tx.commit().await?;
+        Ok(updated == 1)
     }
 
     /// This organisation's subscription state, or `None` where it has never
@@ -117,7 +143,7 @@ impl BillingRepo {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
         let row = sqlx::query!(
-            "SELECT provider_subscription_id, provider_customer_id, provider_price_id, status, current_period_end, occurred_at FROM billing_subscription WHERE org_id = $1",
+            "SELECT provider_subscription_id, provider_customer_id, provider_price_id, status, current_period_end, cancel_at_period_end, occurred_at FROM billing_subscription WHERE org_id = $1",
             uuid_to_db(org.0),
         )
         .fetch_optional(&mut *tx)
@@ -129,35 +155,8 @@ impl BillingRepo {
             provider_price_id: row.provider_price_id,
             status: row.status,
             current_period_end: row.current_period_end.map(timestamp_from_db),
+            cancel_at_period_end: Some(row.cancel_at_period_end),
             occurred_at: timestamp_from_db(row.occurred_at),
         }))
-    }
-
-    /// Records one service purchase, answering whether it was new.
-    ///
-    /// `false` means this provider reference is already booked, which is what
-    /// a retried webhook delivery looks like. Idempotent on `provider_ref`
-    /// rather than on the row identifier, because the provider's identifier
-    /// is the one both deliveries agree on.
-    pub async fn record_booking(
-        &self,
-        org: OrgId,
-        booking: &ServiceBooking,
-    ) -> Result<bool, StorageError> {
-        let mut tx = self.pool.begin().await?;
-        pin_org(&mut tx, org).await?;
-        let written = sqlx::query!(
-            "INSERT INTO service_booking (org_id, id, key, provider_ref, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (provider_ref) DO NOTHING",
-            uuid_to_db(org.0),
-            uuid_to_db(booking.id),
-            booking.key,
-            booking.provider_ref,
-            timestamp_to_db(booking.created_at)?,
-        )
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
-        tx.commit().await?;
-        Ok(written == 1)
     }
 }

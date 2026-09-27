@@ -18,7 +18,6 @@ import {
 	signedOutView
 } from './nav';
 
-
 describe('the navigation model', () => {
 	it('lands each rail glyph on a destination the model names', () => {
 		const named = new Set(ALL_DESTINATIONS.map((item) => item.href));
@@ -36,7 +35,6 @@ describe('the navigation model', () => {
 		expect(new Set(paths).size).toBe(paths.length);
 	});
 });
-
 
 describe('the phone bar', () => {
 	it('puts the create cell at the centre of an odd number of cells', () => {
@@ -99,7 +97,7 @@ describe('the section the rail lights', () => {
 	});
 
 	it('prefers the longest matching page, so Subscription is not Account settings', () => {
-		expect(sectionFor('/settings/subscription')?.id).toBe('account');
+		expect(sectionFor('/settings/billing')?.id).toBe('account');
 	});
 
 	it('offers the operator section only to an operator', () => {
@@ -121,8 +119,8 @@ describe('the current destination', () => {
 	});
 
 	it('keeps Subscription off Account settings, which prefixes it', () => {
-		expect(isCurrent('/settings/subscription', '/settings')).toBe(false);
-		expect(isCurrent('/settings/subscription', '/settings/subscription')).toBe(true);
+		expect(isCurrent('/settings/billing', '/settings')).toBe(false);
+		expect(isCurrent('/settings/billing', '/settings/billing')).toBe(true);
 	});
 
 	it('stays lit on a child path', () => {
@@ -145,7 +143,6 @@ describe('the current destination', () => {
 		expect(isCurrent('/admin/orgs/9f2c', '/admin')).toBe(false);
 	});
 });
-
 
 describe('the destination a path belongs to', () => {
 	it('is the item whose own href contains it', () => {
@@ -177,7 +174,7 @@ describe('the destination a path belongs to', () => {
 
 	it('prefers the longer claim where two could answer', () => {
 		expect(currentDestination('/admin/orgs/9f2c8a11')?.href).toBe('/admin/orgs');
-		expect(currentDestination('/settings/subscription')?.href).toBe('/settings/subscription');
+		expect(currentDestination('/settings/billing')?.href).toBe('/settings/billing');
 		expect(currentDestination('/resources/files')?.href).toBe('/resources/files');
 	});
 
@@ -185,7 +182,6 @@ describe('the destination a path belongs to', () => {
 		expect(currentDestination('/nowhere')).toBeNull();
 	});
 });
-
 
 describe('the redirects from the old paths', () => {
 	it('send the jobs list to sync', () => {
@@ -208,6 +204,7 @@ describe('the redirects from the old paths', () => {
 		expect(legacyDestination('/library')).toBe('/guides');
 		expect(legacyDestination('/help')).toBe('/guides');
 		expect(legacyDestination('/settings/devices')).toBe('/settings#devices');
+		expect(legacyDestination('/settings/subscription')).toBe('/settings/billing');
 	});
 
 	it('carry an item identifier through the catalogue renames', () => {
@@ -231,14 +228,20 @@ describe('the redirects from the old paths', () => {
 		}
 	});
 
-
 	it('leaves the catalogue itself alone, now that it owns the word', () => {
 		expect(legacyDestination('/resources')).toBeNull();
 		expect(legacyDestination('/resources/new')).toBeNull();
 	});
 
 	it('leave every path that did not move alone', () => {
-		for (const path of ['/app', '/resources', '/sync', '/marketplaces', '/jobsy', '/reconciliation']) {
+		for (const path of [
+			'/app',
+			'/resources',
+			'/sync',
+			'/marketplaces',
+			'/jobsy',
+			'/reconciliation'
+		]) {
 			expect(legacyDestination(path)).toBeNull();
 		}
 	});
@@ -329,12 +332,18 @@ describe('the account tile', () => {
 	const SRC = '/v1/profile/avatar?v=3fa405a8';
 
 	it('draws the picture where one is set, whatever the organisation is called', () => {
-		expect(accountTile(SRC, 'Sunrise Teaching Co')).toEqual({ kind: 'picture', src: SRC });
+		expect(accountTile(SRC, 'Sunrise Teaching Co')).toEqual({
+			kind: 'picture',
+			src: SRC
+		});
 		expect(accountTile(SRC, undefined)).toEqual({ kind: 'picture', src: SRC });
 	});
 
 	it('falls back to the initials where there is no picture', () => {
-		expect(accountTile(null, 'Sunrise Teaching Co')).toEqual({ kind: 'initials', text: 'ST' });
+		expect(accountTile(null, 'Sunrise Teaching Co')).toEqual({
+			kind: 'initials',
+			text: 'ST'
+		});
 	});
 
 	it('is the section glyph while neither is known', () => {

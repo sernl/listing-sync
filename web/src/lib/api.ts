@@ -44,6 +44,13 @@ import type {
 	StandardsState,
 	TermKind
 } from '$lib/generated/vocab';
+import type {
+	CodeBody,
+	DiscountView,
+	PricingAdminView,
+	SaleBody,
+	TermsBody
+} from '$lib/pages/admin/pricing';
 import type { Capabilities, PlansView } from '$lib/generated/plans';
 
 export interface APIErrorEntry {
@@ -76,9 +83,11 @@ export class ApiFailure extends Error {
 		body: APIErrorBody | null,
 		readonly response: ApiResponseContext | null = null
 	) {
-		super(response?.problem
-			? `Unexpected API response (${status}); reload or report this request.`
-			: body?.errors?.[0]?.message ?? `request failed with ${status}`);
+		super(
+			response?.problem
+				? `Unexpected API response (${status}); reload or report this request.`
+				: (body?.errors?.[0]?.message ?? `request failed with ${status}`)
+		);
 		this.status = status;
 		this.body = body;
 	}
@@ -105,25 +114,40 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	const mediaType = context.content_type?.split(';', 1)[0].trim().toLowerCase();
 	if (mediaType !== 'application/json' && !mediaType?.endsWith('+json')) {
 		throw new ApiFailure(response.status, null, {
-			...context, problem: 'unexpected_content_type'
+			...context,
+			problem: 'unexpected_content_type'
 		});
 	}
 	let body: unknown;
 	try {
 		body = await response.json();
 	} catch {
-		throw new ApiFailure(response.status, null, { ...context, problem: 'invalid_json' });
+		throw new ApiFailure(response.status, null, {
+			...context,
+			problem: 'invalid_json'
+		});
 	}
 	if (!response.ok) {
-		const envelope = typeof body === 'object' && body !== null &&
-			'errors' in body && Array.isArray(body.errors) &&
-			body.errors.every((entry: unknown) =>
-				typeof entry === 'object' && entry !== null &&
-				'message' in entry && typeof entry.message === 'string'
-			) && 'status' in body && typeof body.status === 'number';
+		const envelope =
+			typeof body === 'object' &&
+			body !== null &&
+			'errors' in body &&
+			Array.isArray(body.errors) &&
+			body.errors.every(
+				(entry: unknown) =>
+					typeof entry === 'object' &&
+					entry !== null &&
+					'message' in entry &&
+					typeof entry.message === 'string'
+			) &&
+			'status' in body &&
+			typeof body.status === 'number';
 		throw envelope
 			? new ApiFailure(response.status, body as APIErrorBody, context)
-			: new ApiFailure(response.status, null, { ...context, problem: 'invalid_error_body' });
+			: new ApiFailure(response.status, null, {
+					...context,
+					problem: 'invalid_error_body'
+				});
 	}
 	return body as T;
 }
@@ -819,8 +843,7 @@ export interface MultiListedView {
  *  device linked, or standing while the connection needs a fresh sign-in, is
  *  still on record and the seller looking to check it must see it. */
 export type AuthorshipView =
-	| { state: 'undeclared' }
-	| { state: 'declared'; name: string; attested_at: number };
+	{ state: 'undeclared' } | { state: 'declared'; name: string; attested_at: number };
 
 export interface ConnectionView {
 	id: string;
@@ -978,10 +1001,36 @@ export interface MoveBalance {
 export interface BillingView {
 	plan: Plan;
 	cadence?: Cadence;
+	/** When the subscription next charges; absent once it is cancelled. */
 	renews_at?: number;
+	/** When a cancelled subscription stops, while that is still ahead. */
+	ends_at?: number;
+	/** The seller cancelled and the period still runs: "Keep my plan" can
+	 *  undo it. */
+	cancel_at_period_end: boolean;
 	moves: MoveBalance;
-	founding: boolean;
 	portal_available: boolean;
+}
+
+/** One Stripe invoice as the billing page lists it. `total` is in the
+ *  currency's minor unit, tax included. */
+export interface InvoiceView {
+	id: string;
+	created_at: number;
+	total: number;
+	currency: string;
+	status: 'open' | 'paid' | 'uncollectible' | 'void' | (string & {});
+	description?: string;
+	hosted_url?: string;
+	pdf_url?: string;
+}
+
+/** The card a subscription is charged to. Never the number. */
+export interface CardView {
+	brand: string;
+	last4: string;
+	exp_month?: number;
+	exp_year?: number;
 }
 
 /** Where to send the browser, for a checkout and for the billing portal
@@ -998,15 +1047,7 @@ export interface RedirectView {
  *  definition: the server derives capabilities from the plan, and a second
  *  hand-written copy of those twenty fields is how the pricing page and the
  *  request gate came to disagree in the first place. */
-export type {
-	AiOffer,
-	Capabilities,
-	Founding,
-	Pack,
-	PlanRow,
-	PlansView,
-	Service
-} from '$lib/generated/plans';
+export type { AiOffer, Capabilities, Pack, PlanRow, PlansView } from '$lib/generated/plans';
 
 /** What the seller has used, against the figures above. Moves are not here:
  *  they are bought and spent rather than counted against a ceiling, so they
@@ -1519,7 +1560,12 @@ async function guideReply(path: string, init?: RequestInit): Promise<GuideDetail
 
 async function renderedReply(path: string, init?: RequestInit): Promise<{ html: string }> {
 	const body = await request<unknown>(path, init);
-	if (typeof body !== 'object' || body === null || !('html' in body) || typeof body.html !== 'string') {
+	if (
+		typeof body !== 'object' ||
+		body === null ||
+		!('html' in body) ||
+		typeof body.html !== 'string'
+	) {
 		throw malformed(path);
 	}
 	return { html: body.html };
@@ -1530,7 +1576,6 @@ async function renderedReply(path: string, init?: RequestInit): Promise<{ html: 
 /** Where the seller asked a publish to leave the listing. The server's own
  *  default is `draft`, and `live` is a deliberate second choice. */
 export type PublishIntent = 'draft' | 'live';
-
 
 /** A price as `PriceIntent` crosses the wire: the bare string, or the tagged
  *  object carrying the amount in the denomination's minor units.
@@ -1634,7 +1679,11 @@ export interface TptBaseInput {
 	 *  edit form seeded from a product that never answered has to be able to
 	 *  leave it unanswered; `Option<bool>` on the server reads it as `None`. */
 	appropriate_for_country?: boolean | null;
-	standards?: { framework: number; code: string; tpt_node_id?: number | null }[];
+	standards?: {
+		framework: number;
+		code: string;
+		tpt_node_id?: number | null;
+	}[];
 	teaching_duration_id?: number | null;
 	pages_or_slides?: number | null;
 	answer_key_id?: number | null;
@@ -1764,10 +1813,7 @@ export interface RemovedFileView {
 	 *  became the first one, or retired because nothing is left to draw one
 	 *  from. Three states rather than an optional file, because the last is not
 	 *  the absence of the second. */
-	thumbnail:
-		| { state: 'untouched' }
-		| { state: 'redrawn'; file: FileView }
-		| { state: 'retired' };
+	thumbnail: { state: 'untouched' } | { state: 'redrawn'; file: FileView } | { state: 'retired' };
 	reaches: InventoryId[];
 }
 
@@ -2088,7 +2134,11 @@ export interface DraftInput {
 	 *  edit form seeded from a product that never answered has to be able to
 	 *  leave it unanswered; `Option<bool>` on the server reads it as `None`. */
 	appropriate_for_country?: boolean | null;
-	standards?: { framework: number; code: string; tpt_node_id?: number | null }[];
+	standards?: {
+		framework: number;
+		code: string;
+		tpt_node_id?: number | null;
+	}[];
 	teaching_duration_id?: number | null;
 	pages_or_slides?: number | null;
 	answer_key_id?: number | null;
@@ -2192,12 +2242,7 @@ export interface TermsView {
  *  The first three are open and the last three are settled. `attaching` never
  *  walks back to `parsed`: a batch that has begun taking files has begun. */
 export type BatchStateView =
-	| 'parsed'
-	| 'attaching'
-	| 'importing'
-	| 'imported'
-	| 'failed'
-	| 'abandoned';
+	'parsed' | 'attaching' | 'importing' | 'imported' | 'failed' | 'abandoned';
 
 /** Where one row of a batch stands.
  *
@@ -2205,13 +2250,7 @@ export type BatchStateView =
  *  create not yet run — so a resumed commit finishes the row it left rather
  *  than minting a second product for it. */
 export type RowStateView =
-	| 'parsed'
-	| 'attached'
-	| 'creating'
-	| 'created'
-	| 'published'
-	| 'failed'
-	| 'skipped';
+	'parsed' | 'attached' | 'creating' | 'created' | 'published' | 'failed' | 'skipped';
 
 /** What one row asked to become. Named apart from `PublishIntent`, which says
  *  the same two words about a mapping rather than about a spreadsheet row. */
@@ -2481,13 +2520,7 @@ export interface ImportRunsView {
 }
 
 export type ImportRunFilterState =
-	| 'open'
-	| 'reading'
-	| 'reviewing'
-	| 'committing'
-	| 'complete'
-	| 'failed'
-	| 'abandoned';
+	'open' | 'reading' | 'reviewing' | 'committing' | 'complete' | 'failed' | 'abandoned';
 export type ImportRunOrder = 'newest' | 'oldest';
 export interface ImportRunsQuery {
 	offset?: number;
@@ -2652,8 +2685,7 @@ export const api = {
 			body: JSON.stringify(body)
 		}),
 	/** The labels on one item. */
-	productLabels: (product: string) =>
-		request<LabelsView>(`/v1/products/${product}/labels`),
+	productLabels: (product: string) => request<LabelsView>(`/v1/products/${product}/labels`),
 	/** Replace the labels on one item. The whole set, not a delta: a delta
 	 *  would leave removing the last label with no spelling. */
 	setProductLabels: (product: string, labels: string[]) =>
@@ -2671,14 +2703,15 @@ export const api = {
 	 *  marketplace, a link that is not a listing page, a mapping that already
 	 *  binds one, and a listing another of the seller's items already claims. */
 	bindMapping: (mapping: string, listingUrl: string) =>
-		post<MappingHead>(`/v1/mappings/${mapping}/bind`, { listing_url: listingUrl }),
+		post<MappingHead>(`/v1/mappings/${mapping}/bind`, {
+			listing_url: listingUrl
+		}),
 	analytics: () => request<AnalyticsSummary>('/v1/analytics/summary'),
 
 	/** One marketplace's authoring vocabulary. Cached per inventory: it is
 	 *  the registry rendered onto the wire and changes only when the server
 	 *  does. */
-	vocabulary: (inventory: InventoryId) =>
-		request<VocabularyView>(`/v1/vocabulary/${inventory}`),
+	vocabulary: (inventory: InventoryId) => request<VocabularyView>(`/v1/vocabulary/${inventory}`),
 	/** The canonical terms of one kind, ordered by the words they read. Cached
 	 *  like a vocabulary: the taxonomy is ours rather than an organisation's and
 	 *  changes only when the server does. */
@@ -2697,8 +2730,7 @@ export const api = {
 			`/v1/standards/search?framework=${framework}&q=${encodeURIComponent(query)}`
 		),
 	upload,
-	createProduct: (body: CreateProductBody) =>
-		post<CreatedProductView>('/v1/products', body),
+	createProduct: (body: CreateProductBody) => post<CreatedProductView>('/v1/products', body),
 	patchProduct: (id: string, body: PatchProductBody) =>
 		patch<PatchedProductView>(`/v1/products/${id}`, body),
 	/** Add one file to a resource that already exists, naming a handle
@@ -2715,7 +2747,9 @@ export const api = {
 	/** Retire one file. Refused with `payload_missing` where it is the only
 	 *  payload file the resource has: a resource keeps at least one. */
 	removeProductFile: (product: string, file: string) =>
-		request<RemovedFileView>(`/v1/products/${product}/files/${file}`, { method: 'DELETE' }),
+		request<RemovedFileView>(`/v1/products/${product}/files/${file}`, {
+			method: 'DELETE'
+		}),
 	/** Rename one payload or preview file. Refused for the cover, which is
 	 *  drawn rather than chosen, and for a blank name. */
 	renameProductFile: (product: string, file: string, name: string) =>
@@ -2753,7 +2787,9 @@ export const api = {
 	},
 	job: (id: string) => request<JobView>(`/v1/jobs/${id}`),
 	deleteJob: (id: string) =>
-		request<JobDeletionView>(`/v1/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+		request<JobDeletionView>(`/v1/jobs/${encodeURIComponent(id)}`, {
+			method: 'DELETE'
+		}),
 	items: (job: string, cursor?: string | null, limit?: number) => {
 		const query = new URLSearchParams();
 		if (cursor) query.set('cursor', cursor);
@@ -2770,13 +2806,17 @@ export const api = {
 	},
 
 	deleteSyncRequest: (id: string) =>
-		request<JobDeletionView>(`/v1/sync/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+		request<JobDeletionView>(`/v1/sync/${encodeURIComponent(id)}`, {
+			method: 'DELETE'
+		}),
 
 	/** Ask for a sync or a migrate. The key is the request's own identity on the
 	 *  server rather than a deduplication token beside it, so a retried submit is
 	 *  the same request, and the key is what the request is read back by. */
 	createSyncRequest: (body: SyncRequestBody, idempotencyKey: string) =>
-		post<SyncRequestAck>('/v1/sync', body, { 'idempotency-key': idempotencyKey }),
+		post<SyncRequestAck>('/v1/sync', body, {
+			'idempotency-key': idempotencyKey
+		}),
 	/** One request as it fills. This is what the console watches between the
 	 *  submit and the ledger having a run to show. */
 	syncRequest: (id: string, after?: number | null, limit?: number) => {
@@ -2816,7 +2856,9 @@ export const api = {
 	updateSchedule: (id: string, body: ScheduleBody) =>
 		put<ScheduleView>(`/v1/schedules/${encodeURIComponent(id)}`, body),
 	deleteSchedule: (id: string) =>
-		request<void>(`/v1/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+		request<void>(`/v1/schedules/${encodeURIComponent(id)}`, {
+			method: 'DELETE'
+		}),
 	/** What one schedule's ticks did, newest first: one row per marketplace per
 	 *  tick, with the members it could not send and the sentence for each. */
 	scheduleRuns: (id: string) =>
@@ -2844,13 +2886,14 @@ export const api = {
 	/** What a migration would do, per resource, before anything is written.
 	 *  Asked again on every change of selection, which is safe because the
 	 *  endpoint writes nothing and takes no idempotency key. */
-	migrationPlan: (body: MigrationBody) =>
-		post<MigrationPlanView>('/v1/migrations/plan', body),
+	migrationPlan: (body: MigrationBody) => post<MigrationPlanView>('/v1/migrations/plan', body),
 	/** Confirm the plan. The key is the request's own identity, as it is for
 	 *  `createSyncRequest`, so a retried confirm reaches the same request
 	 *  rather than moving the seller's shop twice. */
 	createMigration: (body: MigrationBody, idempotencyKey: string) =>
-		post<MigrationAck>('/v1/migrations', body, { 'idempotency-key': idempotencyKey }),
+		post<MigrationAck>('/v1/migrations', body, {
+			'idempotency-key': idempotencyKey
+		}),
 
 	/** Every spreadsheet import this organisation has made, newest first, with
 	 *  the open one named. Deliberately apart from `syncRequests` above: the
@@ -2863,7 +2906,9 @@ export const api = {
 	/** Give up on an open batch. Answers 204 whether or not it was still open,
 	 *  so a double-pressed button is one action. */
 	abandonImport: (batch: string) =>
-		request<void>(`/v1/imports/${encodeURIComponent(batch)}`, { method: 'DELETE' }),
+		request<void>(`/v1/imports/${encodeURIComponent(batch)}`, {
+			method: 'DELETE'
+		}),
 	/** Bind uploaded bytes to one row, replacing whatever it held. Answers the
 	 *  row and the two counts, so a drop of many files costs no re-read. */
 	bindImportFile: (batch: string, sheet: string, ordinal: number, files: BindFileBody) =>
@@ -2878,11 +2923,17 @@ export const api = {
 	 *  route declares no body extractor and an empty JSON object would be a
 	 *  payload nothing reads. */
 	commitImport: (batch: string) =>
-		request<CommitAck>(`/v1/imports/${encodeURIComponent(batch)}/commit`, { method: 'POST' }),
+		request<CommitAck>(`/v1/imports/${encodeURIComponent(batch)}/commit`, {
+			method: 'POST'
+		}),
 
 	/** One retained key per explicit start intent, including retries after a lost reply. */
 	createImportRun: (source: InventoryId, startKey: string, retryOf: string | null = null) =>
-		post<ImportRunView>('/v1/imports/runs', { source, start_key: startKey, retry_of: retryOf }),
+		post<ImportRunView>('/v1/imports/runs', {
+			source,
+			start_key: startKey,
+			retry_of: retryOf
+		}),
 	/** A filtered page of import history, newest first unless requested otherwise. */
 	importRuns: (query: ImportRunsQuery = {}) => {
 		const params = new URLSearchParams();
@@ -2921,7 +2972,9 @@ export const api = {
 	abandonImportRun: (run: string) =>
 		post<void>(`/v1/imports/runs/${encodeURIComponent(run)}/abandon`, {}),
 	deleteImportRun: (run: string) =>
-		request<JobDeletionView>(`/v1/imports/runs/${encodeURIComponent(run)}`, { method: 'DELETE' }),
+		request<JobDeletionView>(`/v1/imports/runs/${encodeURIComponent(run)}`, {
+			method: 'DELETE'
+		}),
 
 	/** The pairs still waiting on the seller, for one run or for the whole
 	 *  organisation where none is named. */
@@ -2992,7 +3045,6 @@ export const api = {
 	withdrawConsent: (marketplace: Marketplace) =>
 		post<ConsentView>(`/v1/consents/${marketplace}/withdraw`, {}),
 
-
 	/** The seller's files across their machines: who holds what and who
 	 *  asked. Coordination only; the bytes never pass through the server. */
 	library: (params: LibraryQuery = {}) => {
@@ -3026,10 +3078,7 @@ export const api = {
 	 *  sessions their machines report. The operator and security path; a
 	 *  seller's Disconnect is `disconnect` below. */
 	revoke: (connection: string) =>
-		post<{ connections: number; elapsed_ms: number }>(
-			`/v1/connections/${connection}/revoke`,
-			{}
-		),
+		post<{ connections: number; elapsed_ms: number }>(`/v1/connections/${connection}/revoke`, {}),
 	/** The seller's own disconnect: reversible, because the next check-in from
 	 *  a machine holding that login lifts the row back. Answers the same two
 	 *  numbers `revoke` does — one row moved or none — and answers zero rather
@@ -3066,7 +3115,9 @@ export const api = {
 	 *  user, which is the only user either call can name. */
 	notifyPreferences: () => request<NotifyPreferences>('/v1/notifications/preferences'),
 	setNotifyPreferences: (notifyEmail: boolean) =>
-		patch<NotifyPreferences>('/v1/notifications/preferences', { notify_email: notifyEmail }),
+		patch<NotifyPreferences>('/v1/notifications/preferences', {
+			notify_email: notifyEmail
+		}),
 	/** The seller's own picture. The session's user is the only user any of
 	 *  these can name; the bytes reach `POST /v1/uploads` first, slot-bound as
 	 *  a picture, and the write names the handle that upload answered. */
@@ -3084,14 +3135,33 @@ export const api = {
 
 	/** Opens a Stripe Checkout Session for one price key and answers where to
 	 *  send the browser. The key is ours — `sync_monthly`, `pack_100`,
-	 *  `move_with_me` — never a Stripe price id: the server owns that map, and
+	 *  `studio_yearly` — never a Stripe price id: the server owns that map, and
 	 *  a client that could name a Stripe price could name any Stripe price. */
-	billingCheckout: (priceKey: PriceKey) =>
-		post<RedirectView>('/v1/billing/checkout', { price_key: priceKey }),
+	billingCheckout: (priceKey: PriceKey, code?: string) =>
+		post<RedirectView>('/v1/billing/checkout', {
+			price_key: priceKey,
+			...(code === undefined || code.trim() === '' ? {} : { code: code.trim() })
+		}),
 
 	/** Opens the Stripe billing portal. Minted per click: an unused portal
 	 *  link expires in five minutes, so a cached one is already dead. */
 	billingPortal: () => post<RedirectView>('/v1/billing/portal', {}),
+
+	/** The most recent invoices, read from Stripe per request. */
+	billingInvoices: () => request<{ invoices: InvoiceView[] }>('/v1/billing/invoices'),
+
+	/** The card the subscription is charged to, where there is one. */
+	billingPaymentMethod: () => request<{ card?: CardView }>('/v1/billing/payment-method'),
+
+	/** Opens the Stripe portal straight onto "update your card". */
+	billingUpdatePaymentMethod: () => post<RedirectView>('/v1/billing/payment-method', {}),
+
+	/** Ends the plan when the paid period closes; answers the page as it now
+	 *  stands. */
+	billingCancel: () => post<BillingView>('/v1/billing/cancel', {}),
+
+	/** Undoes a cancellation while the period still runs. */
+	billingResume: () => post<BillingView>('/v1/billing/resume', {}),
 
 	/** The price table and what each plan allows. Public: naming a price needs
 	 *  no session, and the landing build reads the same figures out of the
@@ -3122,6 +3192,15 @@ export const api = {
 	 *  and the two are joined on `auth_subject` in the browser because no one
 	 *  role can read both. */
 	adminUsers: () => request<AdminUsersView>('/v1/admin/users'),
+
+	/** Sales, one-off discounts and discount codes. Every create makes the
+	 *  Stripe coupon (and promotion code) before it answers, so a 201 means
+	 *  Stripe holds it too. */
+	adminPricing: () => request<PricingAdminView>('/v1/admin/pricing'),
+	createSale: (body: SaleBody) => post<DiscountView>('/v1/admin/pricing/sales', body),
+	createOneOff: (body: TermsBody) => post<DiscountView>('/v1/admin/pricing/discounts', body),
+	createCode: (body: CodeBody) => post<DiscountView>('/v1/admin/pricing/codes', body),
+	endDiscount: (id: string) => post<DiscountView>(`/v1/admin/pricing/${id}/end`, {}),
 
 	/** Writes an operator grant on one organisation, and answers the org
 	 *  detail so the panel redraws from the server's own record rather than
@@ -3370,7 +3449,9 @@ export const collectionsApi = {
 	 *  so a reorder and a removal are the same call and there is no second way
 	 *  to say what order the members are in. */
 	setMembers: (id: string, products: readonly string[]) =>
-		put<CollectionView>(`${collectionPath(id)}/members`, { products: [...products] }),
+		put<CollectionView>(`${collectionPath(id)}/members`, {
+			products: [...products]
+		}),
 
 	publishPlan: (id: string, body: CollectionPublishBody) =>
 		post<CollectionPublishPlanView>(`${collectionPath(id)}/publish/plan`, body),

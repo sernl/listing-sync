@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 176] = [
+pub const ROUTES: [Route; 181] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -756,7 +756,7 @@ pub const ROUTES: [Route; 176] = [
     Route {
         method: "get",
         path: "/{version}/plans",
-        summary: "The price list, its capabilities, the import ladder and the founding offer",
+        summary: "The price list: the four plans, their capabilities, the move packs and the AI offer",
     },
     Route {
         method: "get",
@@ -858,6 +858,31 @@ pub const ROUTES: [Route; 176] = [
         method: "put",
         path: "/{version}/admin/guides/_taxonomy/{kind}/{id}",
         summary: "Operator: rename or retire a guide topic or tag",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/admin/pricing",
+        summary: "Operator: every sale, one-off discount and discount code, with its Stripe standing",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/pricing/sales",
+        summary: "Operator: a percentage off every plan for a window, with a banner; creates its Stripe coupon",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/pricing/discounts",
+        summary: "Operator: a one-off discount on named price keys for a window; creates its Stripe coupon",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/pricing/codes",
+        summary: "Operator: a discount code sellers type; creates its Stripe coupon and promotion code",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/pricing/{id}/end",
+        summary: "Operator: stop offering a discount now; deletes its coupon and deactivates its codes in Stripe",
     },
     Route {
         method: "get",

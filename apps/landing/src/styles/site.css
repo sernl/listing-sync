@@ -780,7 +780,7 @@ main {
 	color: var(--primary);
 }
 
-/* The tick the pricing chips and the founding list are built from. */
+/* The tick the pricing chips are built from. */
 .tick {
 	flex: none;
 	width: 18px;
@@ -1113,15 +1113,34 @@ main {
 	color: var(--primary);
 }
 
-/* Three cards of equal weight: free, the subscription, and the packs a seller
-   on the free plan buys. Equal columns rather than a wide pair and a rail,
-   because the packs table is a price list in its own right and the reader is
-   choosing between three prices, not reading two and glancing at a third. */
+/* Four cards of equal weight: free and the three paid plans, so the reader
+   compares four prices side by side. Two across below 1180px, where four
+   columns would squeeze the chips into two-word lines, and one on a phone. */
 .ways {
 	display: grid;
-	grid-template-columns: repeat(3, minmax(0, 1fr));
-	gap: 24px;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 20px;
 	align-items: stretch;
+}
+
+@media (max-width: 1180px) {
+	.ways {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+
+/* The packs under the deck, a band rather than a fifth card: a pack is not a
+   plan, it tops one up. Copy on the left, the rung table on the right. */
+.way.packs-way {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+	gap: 8px 40px;
+	align-items: start;
+	margin-top: 24px;
+}
+
+.packs-way .packs {
+	margin-top: 0;
 }
 
 .way {
@@ -1215,6 +1234,46 @@ main {
 	color: var(--muted);
 }
 
+/* An open sale: the banner above the cards, and each struck list price
+   beside the price the checkout will charge. Drawn by `src/sale.js`. */
+.sale-banner {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 14px;
+	align-items: baseline;
+	margin: 16px 0 0;
+	padding: 12px 16px;
+	border-radius: 12px;
+	background: var(--peach);
+	color: var(--primary);
+	font-size: 15px;
+}
+
+.sale-banner[hidden] {
+	display: none;
+}
+
+.sale-banner a {
+	color: var(--primary);
+	font-weight: 600;
+}
+
+.way .price .was,
+.way .counts .was {
+	color: var(--muted);
+	font-weight: 400;
+	text-decoration-thickness: 2px;
+}
+
+.way .price .was {
+	font-size: 22px;
+}
+
+.way .counts .now {
+	color: var(--primary);
+	font-weight: 600;
+}
+
 /* The small print a card owes the reader before the checkout says it. */
 .way .counts {
 	margin: 12px 0 0;
@@ -1261,83 +1320,6 @@ main {
 .way .actions {
 	margin-top: auto;
 	padding-top: 20px;
-}
-
-/* The founding offer is a band under the deck rather than a fourth card: it
-   is not a fourth way to start, it is a discount on one of the three, and it
-   is drawn only while its closing date is still ahead of the build. */
-.founding {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 14px 28px;
-	margin-top: 28px;
-	background: var(--additive-soft);
-	border-radius: var(--r-card);
-	padding: 22px 24px;
-	box-shadow: var(--ring);
-}
-
-.founding .head {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	color: var(--additive);
-}
-
-.founding h3 {
-	margin: 0;
-	font-size: 18px;
-}
-
-.founding ul {
-	list-style: none;
-	margin: 0;
-	padding: 0;
-	display: flex;
-	flex-wrap: wrap;
-	gap: 6px 22px;
-	flex: 1 1 360px;
-	font-size: 15px;
-}
-
-.founding strong {
-	font-weight: 600;
-	color: var(--primary);
-}
-
-.founding .btn {
-	margin-left: auto;
-	background: var(--lavender);
-	border-color: var(--additive);
-	color: var(--on-accent-surface);
-}
-
-.founding .btn:hover {
-	background: color-mix(in srgb, var(--lavender) 75%, var(--surface));
-}
-
-/* The one service sold beside the plans: a row, because it is a booking
-   rather than a plan and a card would put it in the deck. */
-.service {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: baseline;
-	gap: 6px 14px;
-	margin: 20px 0 0;
-	font-size: 15px;
-	color: var(--muted);
-}
-
-.service .service-name {
-	font-family: var(--display);
-	font-weight: 600;
-	color: var(--primary);
-}
-
-.service .service-price {
-	font-weight: 600;
-	color: var(--text);
 }
 
 /* The plain figure and its cadence, which only the cards draw */
@@ -1592,14 +1574,11 @@ main {
 		gap: 40px;
 	}
 
-	/* Three price cards in a phone-width column each hold a price and a list;
+	/* Price cards in a phone-width column each hold a price and a list;
 	   side by side under 900px they hold a price and a hyphenation. */
-	.ways {
+	.ways,
+	.way.packs-way {
 		grid-template-columns: minmax(0, 1fr);
-	}
-
-	.founding .btn {
-		margin-left: 0;
 	}
 
 	/* Wrapped onto three rows, the header is a fifth of a phone screen; stuck
