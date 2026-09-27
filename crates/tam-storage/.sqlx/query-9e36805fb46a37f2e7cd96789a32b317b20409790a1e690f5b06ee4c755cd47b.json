@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT key, value FROM site_setting WHERE key = ANY($1) ORDER BY key",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "value",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "9e36805fb46a37f2e7cd96789a32b317b20409790a1e690f5b06ee4c755cd47b"
+}

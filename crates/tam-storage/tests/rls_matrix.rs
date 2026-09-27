@@ -98,10 +98,12 @@ const TENANT_TABLES: [&str; 75] = [
 /// shared by every tenant, carrying no organisation column, per
 /// docs/notes/design/standards-ingestion.md. guide is the help corpus, which
 /// is the same kind of fact in the other direction: one document set the
-/// platform writes and every tenant reads. The rest are genuinely global:
+/// platform writes and every tenant reads. site_setting is the site-wide
+/// switches (maintenance, seasonal theme, banner), read by every visitor
+/// signed in or not. The rest are genuinely global:
 /// reference data, the canonical taxonomy, the fleet kill switch, and sqlx's
 /// migration bookkeeping.
-const GLOBAL_TABLES: [&str; 14] = [
+const GLOBAL_TABLES: [&str; 15] = [
     "_sqlx_migrations",
     "app_user",
     "canonical_term",
@@ -114,6 +116,7 @@ const GLOBAL_TABLES: [&str; 14] = [
     "platform_operator",
     "projection_edge",
     "projection_no_counterpart",
+    "site_setting",
     "standards_node",
     "user_session",
 ];

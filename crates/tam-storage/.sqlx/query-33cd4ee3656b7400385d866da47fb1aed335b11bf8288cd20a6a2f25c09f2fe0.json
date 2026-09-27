@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT key, value FROM site_setting WHERE starts_with(key, $1) ORDER BY key",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "value",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "33cd4ee3656b7400385d866da47fb1aed335b11bf8288cd20a6a2f25c09f2fe0"
+}

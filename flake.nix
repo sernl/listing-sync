@@ -308,7 +308,7 @@
 
               # Every page resolves through its own index rather than as an
               # extensionless file, which is the shape `route` probes for.
-              for page in pricing privacy terms; do
+              for page in pricing privacy terms maintenance; do
                 test -f "$landing/$page/index.html"
               done
 

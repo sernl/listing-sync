@@ -1,0 +1,61 @@
+/* The maintenance page: one centred card on the page ground, the brand mark
+   above a heading, the operator's expected-back line, and the two links that
+   still work. */
+
+.maintenance {
+	min-height: 100vh;
+	display: grid;
+	place-items: center;
+	padding: 32px var(--gutter);
+	box-sizing: border-box;
+}
+
+.maintenance-card {
+	max-width: 520px;
+	text-align: center;
+	background: var(--surface);
+	border-radius: var(--r-region);
+	box-shadow: var(--lift), var(--ring);
+	padding: 44px 32px 36px;
+}
+
+.maintenance-mark {
+	display: block;
+	margin: 0 auto 20px;
+	border-radius: 18px;
+}
+
+.maintenance-card h1 {
+	font-family: var(--display);
+	color: var(--primary);
+	font-size: clamp(26px, 5vw, 34px);
+	line-height: 1.2;
+	margin: 0 0 14px;
+}
+
+.maintenance-lede {
+	color: var(--text);
+	margin: 0 0 18px;
+}
+
+.maintenance-back {
+	font-weight: 600;
+	color: var(--primary);
+	background: var(--accent-soft);
+	border-radius: var(--r-panel);
+	padding: 12px 16px;
+	margin: 0 0 18px;
+}
+
+.maintenance-contact,
+.maintenance-signin {
+	color: var(--muted);
+	font-size: 15px;
+	margin: 0 0 8px;
+}
+
+.maintenance-card a {
+	color: var(--accent-ink);
+	text-decoration: underline;
+	text-underline-offset: 3px;
+}

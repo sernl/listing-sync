@@ -45,6 +45,7 @@ pub mod rule_capture;
 pub mod schedules;
 pub mod seller_rules;
 pub mod sessions;
+pub mod site_setting;
 pub mod sync_settings;
 pub mod taxonomy;
 pub mod tpt_base;
@@ -178,6 +179,7 @@ pub use schedules::{
     ScheduleWrite, UnknownTimezone, SCHEDULE_RUNS_LISTED_MAX,
 };
 pub use sessions::{NewTenant, SessionIdentity, SessionRepo, SessionToken};
+pub use site_setting::SiteSettingRepo;
 pub use sync_settings::{
     ActivityCursor, ActivityKind, ActivityRow, MultiListedRow, SyncSettingRecord, SyncSettingRepo,
     ACTIVITY_LISTED_MAX,
