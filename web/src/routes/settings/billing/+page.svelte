@@ -5,7 +5,7 @@
 	import { ApiFailure, api, type BillingView } from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
-	import { FOUNDING, PLANS, SERVICES } from '$lib/generated/plans';
+	import { PLANS } from '$lib/generated/plans';
 	import { type PriceKey } from '$lib/generated/vocab';
 	import Icon from '$lib/Icon.svelte';
 	import Note from '$lib/Note.svelte';
@@ -22,17 +22,16 @@
 		dayLabel,
 		dollars,
 		expiryLine,
-		foundingClosesLabel,
-		foundingOpen,
 		invoiceStatus,
 		money,
 		moves,
 		packsBySize,
-		perMonth,
+		paidPlans,
 		planBullets,
 		planMeaning,
-		syncPlan,
-		termLine
+		termLine,
+		tierPrice,
+		type Cadence
 	} from '$lib/pages/account/plans';
 	import CancelPlanDialog from '$lib/pages/account/CancelPlanDialog.svelte';
 	import { readIntent } from '$lib/pages/account/intent';
@@ -43,22 +42,18 @@
 	// here writes a price as a literal: a number typed into markup is a price
 	// that drifts from the one Stripe takes.
 	const look = PLANS.find((plan) => plan.id === 'free') ?? null;
-	const sync = syncPlan();
+	const tiers = paidPlans();
 	const packs = packsBySize();
 	const best = bestValuePack();
-	const service = SERVICES[0];
-	const founding = FOUNDING;
 
 	// The card lines are the landing page's pricing cards, read off the same
 	// capabilities, so a seller reads one promise on both.
 	const lookBullets = look === null ? [] : planBullets(look.capabilities);
-	const syncBullets = sync === null ? [] : planBullets(sync.capabilities);
-	const editDays = (sync ?? look)?.capabilities.pack_edit_days ?? null;
+	const editDays = look?.capabilities.pack_edit_days ?? null;
 
-	// Read once at load rather than in a `$derived`: whether the offer is open
-	// is a fact about today, and re-evaluating it per render would make the
-	// card flicker off mid-session at midnight on the closing day.
-	const foundingIsOpen = foundingOpen(founding);
+	// Which of each tier's two prices the cards show and buy. Yearly first,
+	// because it is the price every card's headline is compared by.
+	let cadence = $state<Cadence>('yearly');
 
 	const queryClient = useQueryClient();
 
@@ -69,7 +64,9 @@
 
 	const held = $derived(billing.data);
 	const balance = $derived(held?.moves);
-	const subscribed = $derived(held?.plan === 'subscriber' || held?.plan === 'studio');
+	// A seller already paying changes tier in Stripe's portal rather than
+	// through a second checkout, which would bill them twice.
+	const subscribed = $derived(tiers.some((plan) => plan.id === held?.plan));
 	const expiry = $derived(balance === undefined ? null : expiryLine(balance));
 	const renews = $derived(held === undefined ? null : termLine(held));
 
@@ -394,23 +391,39 @@
 		{/if}
 	</Panel>
 
-	<div class="page-grid" id="plans">
-		<div class="plan-column">
+	<section class="tiers" id="plans" aria-labelledby="plans-title">
+		<div class="tiers-head">
+			<h2 id="plans-title">Plans</h2>
+			<div class="flow-choice cadence" role="radiogroup" aria-label="Billing period">
+				<button
+					type="button"
+					role="radio"
+					aria-checked={cadence === 'monthly'}
+					onclick={() => (cadence = 'monthly')}>Monthly</button
+				>
+				<button
+					type="button"
+					role="radio"
+					aria-checked={cadence === 'yearly'}
+					onclick={() => (cadence = 'yearly')}>Yearly</button
+				>
+			</div>
+		</div>
+		<div class="tier-grid">
 			{#if look !== null}
-				<div class="acct-plan">
+				<div class="acct-plan" class:held={held?.plan === 'free'}>
 					<div class="acct-plan-top">
 						<span class="name">
-							<Icon name="eye" size={16} />
 							{look.name}
-							<span class="kind">(Trial)</span>
+							<span class="kind">(trial)</span>
 						</span>
 						{#if held?.plan === 'free'}
 							<StatusPill tone="ok" label="current" />
 						{/if}
 					</div>
 					<div class="price">
-						<span class="n">{dollars(0)}</span>
-						<span class="per">to start</span>
+						<span class="n">Free</span>
+						<span class="per">for as long as you like</span>
 					</div>
 					<ul class="bullets">
 						{#each lookBullets as line (line.text)}
@@ -420,130 +433,68 @@
 				</div>
 			{/if}
 
-			{#if sync !== null && sync.yearly_cents !== null && sync.monthly_cents !== null}
-				<div class="acct-plan">
-					<div class="acct-plan-top">
-						<span class="name">
-							<Icon name="credit-card" size={16} />
-							{sync.name}
-							<span class="kind">(Subscription)</span>
-						</span>
-						{#if subscribed}
-							<StatusPill tone="ok" label="current" />
-						{/if}
-					</div>
-					<div class="price">
-						<span class="n">{perMonth(sync.yearly_cents)}</span>
-						<span class="per">a month, billed yearly</span>
-					</div>
-					<p class="quiet">
-						{dollars(sync.yearly_cents)} a year, or {dollars(sync.monthly_cents)} a month.
-					</p>
-					<ul class="bullets">
-						{#each syncBullets as line (line.text)}
-							<li class:soon={line.soon}>{line.text}</li>
-						{/each}
-					</ul>
-					{#if subscribed}
-						{#if renews !== null}
-							<p class="quiet">{renews}</p>
-						{/if}
-						<div class="actions">
-							<Button
-								tier="primary"
-								disabled={portalOpening || held?.portal_available === false}
-								reason={portalOpening
-									? 'Billing is opening.'
-									: held?.portal_available === false
-										? 'Billing opens after your first payment.'
-										: undefined}
-								onclick={manage}
-							>
-								{portalOpening ? 'Opening…' : 'Manage billing'}
-							</Button>
+			{#each tiers as plan (plan.id)}
+				{@const price = tierPrice(plan, cadence)}
+				{@const current = held?.plan === plan.id}
+				{#if price !== null}
+					<div class="acct-plan" class:held={current}>
+						<div class="acct-plan-top">
+							<span class="name">
+								{plan.name}
+								<span class="kind">(subscription)</span>
+							</span>
+							{#if current}
+								<StatusPill tone="ok" label="current" />
+							{/if}
 						</div>
-					{:else}
-						<div class="actions">
-							<Button
-								tier="primary"
-								disabled={busy !== null}
-								reason={busy ?? undefined}
-								onclick={() => buy('sync_yearly')}
-							>
-								{working === 'sync_yearly' ? 'Opening…' : 'Choose yearly'}
-							</Button>
-							<Button
-								disabled={busy !== null}
-								reason={busy ?? undefined}
-								onclick={() => buy('sync_monthly')}
-							>
-								{working === 'sync_monthly' ? 'Opening…' : 'Choose monthly'}
-							</Button>
+						<div class="price">
+							<span class="n">{price.headline}</span>
+							<span class="per">{price.per}</span>
 						</div>
-					{/if}
-				</div>
-			{/if}
+						<p class="quiet">{price.note}</p>
+						<ul class="bullets">
+							{#each planBullets(plan.capabilities) as line (line.text)}
+								<li class:soon={line.soon}>{line.text}</li>
+							{/each}
+						</ul>
+						<div class="actions">
+							{#if subscribed}
+								{#if !current}
+									<Button
+										disabled={portalOpening || held?.portal_available === false}
+										reason={portalOpening
+											? 'Billing is opening.'
+											: held?.portal_available === false
+												? 'Billing opens after your first payment.'
+												: undefined}
+										onclick={manage}
+									>
+										{portalOpening ? 'Opening…' : `Switch to ${plan.name}`}
+									</Button>
+								{/if}
+							{:else}
+								<Button
+									tier="primary"
+									disabled={busy !== null}
+									reason={busy ?? undefined}
+									onclick={() => buy(price.key)}
+								>
+									{working === price.key ? 'Opening…' : `Choose ${plan.name}`}
+								</Button>
+							{/if}
+						</div>
+					</div>
+				{/if}
+			{/each}
 		</div>
+		{#if subscribed}
+			<p class="quiet tiers-note">
+				Switching opens Stripe, which shows the new price before anything changes.
+			</p>
+		{/if}
+	</section>
 
-		<div class="plan-column">
-			{#if foundingIsOpen}
-				<div class="acct-plan">
-					<div class="acct-plan-top">
-						<span class="name">
-							<Icon name="gift" size={16} />
-							Founding {founding.places}
-						</span>
-					</div>
-					<div class="price">
-						<span class="n">{dollars(founding.year_one_cents)}</span>
-						<span class="per">first year</span>
-					</div>
-					<p>
-						Then {dollars(founding.ongoing_cents)} a year for years 2–{founding.ongoing_years},
-						with {founding.extra_moves} extra moves.
-					</p>
-					<p class="quiet">{foundingClosesLabel(founding)}</p>
-					<div class="actions">
-						<Button
-							tier="primary"
-							disabled={busy !== null}
-							reason={busy ?? undefined}
-							onclick={() => buy('founding_yearly')}
-						>
-							{working === 'founding_yearly' ? 'Opening…' : 'Take a founding place'}
-						</Button>
-					</div>
-				</div>
-			{/if}
-
-			{#if service !== undefined}
-				<div class="acct-plan">
-					<div class="acct-plan-top">
-						<span class="name">
-							<Icon name="sparkles" size={16} />
-							{service.name}
-						</span>
-					</div>
-					<div class="price">
-						<span class="n">{dollars(service.price_cents)}</span>
-						<span class="per">one-off</span>
-					</div>
-					<p>We move your back catalogue for you.</p>
-					<div class="actions">
-						<Button
-							disabled={busy !== null}
-							reason={busy ?? undefined}
-							onclick={() => buy(service.key)}
-						>
-							{working === service.key ? 'Opening…' : 'Book a move'}
-						</Button>
-					</div>
-				</div>
-			{/if}
-		</div>
-	</div>
-
-	<Panel title="Move Packs (One-Off)">
+	<Panel title="Move Packs (one-off)">
 		{#if editDays !== null}
 			<p class="pack-note">
 				Edit a moved listing once within {editDays} days without spending another move.
@@ -717,6 +668,59 @@
 
 	.bullets .soon {
 		color: var(--muted);
+	}
+
+	.tiers {
+		display: flex;
+		flex-direction: column;
+		gap: var(--s-3);
+	}
+
+	.tiers-head {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--s-3);
+	}
+
+	.tiers-head h2 {
+		margin: 0;
+		font-family: var(--display);
+		font-size: 18px;
+		font-weight: 600;
+	}
+
+	/* Four cards on a laptop, two on a tablet, one on a phone: the same
+	   break the landing page's pricing deck takes. */
+	.tier-grid {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+		gap: 12px;
+	}
+
+	@media (min-width: 701px) {
+		.tier-grid {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+	}
+
+	@media (min-width: 1180px) {
+		.tier-grid {
+			grid-template-columns: repeat(4, minmax(0, 1fr));
+		}
+	}
+
+	/* The tier the seller holds, ringed in the same accent as the current
+	   plan card at the top of the page. */
+	.tier-grid .acct-plan.held {
+		border-color: var(--additive);
+		box-shadow: inset 0 0 0 1px var(--additive);
+	}
+
+	.tiers-note {
+		margin: 0;
+		font-size: 13px;
 	}
 
 	.pack-note {

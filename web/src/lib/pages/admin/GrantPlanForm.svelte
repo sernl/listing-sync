@@ -116,7 +116,7 @@
 			>
 				{row.name}
 				<span class="sub">
-					{allowance(row)}{row.sold ? '' : ' · not sold'}{row.id === current ? ' · current' : ''}
+					{allowance(row)}{row.id === current ? ' · current' : ''}
 				</span>
 			</button>
 		{/each}

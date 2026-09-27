@@ -14,7 +14,7 @@
 //! a de-duplication table.
 
 use sqlx::PgPool;
-use tam_types::{OrgId, Timestamp, Uuid};
+use tam_types::{OrgId, Timestamp};
 
 use crate::codec::{timestamp_from_db, timestamp_to_db, uuid_to_db};
 use crate::{pin_org, StorageError};
@@ -33,8 +33,8 @@ pub struct SubscriptionState {
     pub status: String,
     /// The price this subscription renews at, where the event named one.
     ///
-    /// Kept so the billing page can answer the cadence and the founding
-    /// question from the price map alone, without a second read of the
+    /// Kept so the billing page can answer the plan and the cadence from the
+    /// price map alone, without a second read of the
     /// provider. Absent where the event carried no line item, which is what
     /// a cancellation looks like.
     pub provider_price_id: Option<String>,
@@ -50,18 +50,6 @@ pub struct SubscriptionState {
     /// The instant the provider stamped on the event, not the instant we
     /// wrote it. The ordering fence in [`BillingRepo::apply`] is this field.
     pub occurred_at: Timestamp,
-}
-
-/// One service purchase: time bought, not a capability granted.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ServiceBooking {
-    pub id: Uuid,
-    /// The service's price key, `move_with_me` today.
-    pub key: String,
-    /// The provider's own identifier for the purchase — a checkout session —
-    /// which is what makes a replayed delivery book once.
-    pub provider_ref: String,
-    pub created_at: Timestamp,
 }
 
 pub struct BillingRepo {
@@ -170,33 +158,5 @@ impl BillingRepo {
             cancel_at_period_end: Some(row.cancel_at_period_end),
             occurred_at: timestamp_from_db(row.occurred_at),
         }))
-    }
-
-    /// Records one service purchase, answering whether it was new.
-    ///
-    /// `false` means this provider reference is already booked, which is what
-    /// a retried webhook delivery looks like. Idempotent on `provider_ref`
-    /// rather than on the row identifier, because the provider's identifier
-    /// is the one both deliveries agree on.
-    pub async fn record_booking(
-        &self,
-        org: OrgId,
-        booking: &ServiceBooking,
-    ) -> Result<bool, StorageError> {
-        let mut tx = self.pool.begin().await?;
-        pin_org(&mut tx, org).await?;
-        let written = sqlx::query!(
-            "INSERT INTO service_booking (org_id, id, key, provider_ref, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (provider_ref) DO NOTHING",
-            uuid_to_db(org.0),
-            uuid_to_db(booking.id),
-            booking.key,
-            booking.provider_ref,
-            timestamp_to_db(booking.created_at)?,
-        )
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
-        tx.commit().await?;
-        Ok(written == 1)
     }
 }

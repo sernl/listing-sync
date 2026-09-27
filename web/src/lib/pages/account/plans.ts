@@ -5,7 +5,7 @@
 // them, and `just web-typegen` mirrors them into `$lib/generated/plans`, so
 // this page, the landing page and the request gate read one set. What is
 // left is the rendering: dollars out of cents, a move balance in a sentence,
-// and whether the founding offer is still open.
+// and what a tier card says at the cadence the page is showing.
 
 import type {
   BillingView,
@@ -17,15 +17,14 @@ import { unlimited } from "$lib/entitlement";
 import type { Tone } from "$lib/StatusPill.svelte";
 import {
   AI,
-  FOUNDING,
   PACKS,
   PLANS,
   type AiOffer,
   type Capabilities,
-  type Founding,
   type Pack,
   type PlanRow,
 } from "$lib/generated/plans";
+import type { PriceKey } from "$lib/generated/vocab";
 
 /** Cents as the page prints money: whole dollars where the price is whole,
  *  and cents where it is not.
@@ -43,13 +42,54 @@ export function perMonth(yearlyCents: number): string {
   return dollars(Math.round(yearlyCents / 12));
 }
 
-/** The recurring plan this deployment sells.
+/** The paid plans, cheapest first: every row that names a price. Free is
+ *  not a tier card beside them; it is where a seller who buys nothing is. */
+export function paidPlans(plans: readonly PlanRow[] = PLANS): PlanRow[] {
+  return plans.filter(
+    (plan) => plan.monthly_key !== null && plan.yearly_key !== null,
+  );
+}
+
+/** Which of a plan's two prices the tier cards show and buy. */
+export type Cadence = "monthly" | "yearly";
+
+/** What one tier card says at the cadence the toggle is on. */
+export interface TierPrice {
+  /** The headline figure: the monthly price, or the yearly one over twelve. */
+  headline: string;
+  per: string;
+  /** The small print under the figure: what the other cadence costs. */
+  note: string;
+  /** The key the card's button opens a checkout for. */
+  key: PriceKey;
+}
+
+/** A tier card's price at one cadence, or null for a plan with no price.
  *
- *  `studio` ships priced and `sold: false`, because the founder's trigger for
- *  selling it is a measurement rather than a date, and a card for it would
- *  offer a plan no checkout can buy. */
-export function syncPlan(plans: readonly PlanRow[] = PLANS): PlanRow | null {
-  return plans.find((plan) => plan.id === "subscriber" && plan.sold) ?? null;
+ *  The yearly card leads with the month it works out at and says the saving
+ *  in dollars, because "$20 a month" is what a seller compares against $29
+ *  and "you save $108" is the reason to pay a year up front. */
+export function tierPrice(plan: PlanRow, cadence: Cadence): TierPrice | null {
+  if (
+    plan.monthly_cents === null ||
+    plan.yearly_cents === null ||
+    plan.monthly_key === null ||
+    plan.yearly_key === null
+  )
+    return null;
+  if (cadence === "yearly")
+    return {
+      headline: perMonth(plan.yearly_cents),
+      per: "a month, billed yearly",
+      note: `${dollars(plan.yearly_cents)} a year. You save ${dollars(plan.monthly_cents * 12 - plan.yearly_cents)}.`,
+      key: plan.yearly_key,
+    };
+  return {
+    headline: dollars(plan.monthly_cents),
+    per: "a month",
+    note: `Or ${perMonth(plan.yearly_cents)} a month if you pay yearly.`,
+    key: plan.monthly_key,
+  };
 }
 
 /** One line on a plan card; `soon` marks a line sold before it is built. */
@@ -60,43 +100,41 @@ export interface PlanBullet {
 
 /** A plan card's lines, read off `capabilities` so no figure is typed twice.
  *
- *  The wording is the landing page's pricing cards, so a seller reads the
- *  same promise on both. */
+ *  The wording and order are the landing page's pricing cards
+ *  (`apps/landing/src/pricing.js`), so a seller reads the same promise on
+ *  both. */
 export function planBullets(
   caps: Capabilities,
   ai: AiOffer = AI,
 ): PlanBullet[] {
+  const count = (n: number, noun: string) =>
+    `${unlimited(n) ? "Unlimited" : n} ${noun}`;
   const lines: PlanBullet[] = [];
+  if (caps.import_spreadsheet && caps.import_marketplace)
+    lines.push({ text: "Import from wherever you sell" });
+  if (caps.sync_pull_interval_secs !== null)
+    lines.push({ text: "Edit once, sync everywhere" });
   if (caps.moves_per_month > 0)
     lines.push({ text: `${caps.moves_per_month} moves a month` });
   if (caps.moves_accrual_cap > caps.moves_per_month)
     lines.push({ text: `Unused moves stack to ${caps.moves_accrual_cap}` });
+  if (!unlimited(caps.resources_max))
+    lines.push({ text: `Up to ${caps.resources_max} resources` });
+  lines.push({ text: "Add a watermarked preview of your file" });
+  if (caps.scheduling) lines.push({ text: "Scheduling" });
+  if (caps.templates_max > 1)
+    lines.push({ text: count(caps.templates_max, "templates") });
+  if (caps.collections_max > 0)
+    lines.push({ text: count(caps.collections_max, "collections") });
+  if (caps.analytics) lines.push({ text: "Statistics on every shop" });
+  if (caps.auto_publish_rules)
+    lines.push({ text: "Automatic publishing rules" });
+  if (caps.support === "email_1_day") lines.push({ text: "Priority support" });
+  if (caps.ai_fills_per_month > 0 && ai.status === "coming_soon")
+    lines.push({ text: "AI description fill, coming soon", soon: true });
   if (caps.free_moves_lifetime > 0)
     lines.push({
       text: `${moves(caps.free_moves_lifetime)} onto a marketplace of your choice`,
-    });
-  if (caps.import_spreadsheet && caps.import_marketplace)
-    lines.push({ text: "Import all your resources from wherever you sell" });
-  if (!unlimited(caps.resources_max))
-    lines.push({ text: `Up to ${caps.resources_max} resources` });
-  if (caps.sync_pull_interval_secs !== null)
-    lines.push({
-      text: "Edit resources in Teachouse and sync the edits across all platforms",
-    });
-  if (caps.scheduling) lines.push({ text: "Scheduling" });
-  if (caps.templates_max > 1)
-    lines.push({
-      text: `${unlimited(caps.templates_max) ? "Unlimited" : caps.templates_max} templates`,
-    });
-  if (caps.collections_max > 0)
-    lines.push({
-      text: `${unlimited(caps.collections_max) ? "Unlimited" : caps.collections_max} collections`,
-    });
-  if (caps.analytics) lines.push({ text: "Statistics on every shop" });
-  if (caps.ai_fills_per_month > 0 && ai.status === "coming_soon")
-    lines.push({
-      text: `AI fill, coming soon (${caps.ai_fills_per_month} a month)`,
-      soon: true,
     });
   return lines;
 }
@@ -137,24 +175,6 @@ export function dayLabel(ms: number): string {
     year: "numeric",
     timeZone: "UTC",
   });
-}
-
-/** Whether the founding offer can still be bought.
- *
- *  The card is drawn from this rather than from a flag someone has to
- *  remember to turn off: the date is in the table, so the offer disappears on
- *  its own. The comparison is against the end of the closing day, because an
- *  offer that closes on the 31st is on sale on the 31st. */
-export function foundingOpen(
-  founding: Founding = FOUNDING,
-  now: number = Date.now(),
-): boolean {
-  return now <= Date.parse(`${founding.closes_at}T23:59:59.999Z`);
-}
-
-/** When the founding offer closes, as its card says it. */
-export function foundingClosesLabel(founding: Founding = FOUNDING): string {
-  return `Closes ${dayLabel(Date.parse(`${founding.closes_at}T00:00:00Z`))}.`;
 }
 
 /** When the balance starts lapsing, or null where none of it does.

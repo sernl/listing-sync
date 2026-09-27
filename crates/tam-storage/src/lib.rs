@@ -56,7 +56,7 @@ pub use backoffice::{
     ImpersonationEvent, ImportDrainPage, ImportDrainRun, OrgDetail, OrgSummary, PlatformUser,
     SignupsRepo, SubscriptionRecord, SyncHealth,
 };
-pub use billing::{BillingRepo, ServiceBooking, SubscriptionState};
+pub use billing::{BillingRepo, SubscriptionState};
 pub use blobs::{
     describe_files, BlobError, BlobRepo, PipelineFileSource, StoredFile, TenantBlobSink,
 };

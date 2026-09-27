@@ -1000,7 +1000,6 @@ export interface BillingView {
    *  undo it. */
   cancel_at_period_end: boolean;
   moves: MoveBalance;
-  founding: boolean;
   portal_available: boolean;
 }
 
@@ -1042,11 +1041,9 @@ export interface RedirectView {
 export type {
   AiOffer,
   Capabilities,
-  Founding,
   Pack,
   PlanRow,
   PlansView,
-  Service,
 } from "$lib/generated/plans";
 
 /** What the seller has used, against the figures above. Moves are not here:
@@ -3196,7 +3193,7 @@ export const api = {
 
   /** Opens a Stripe Checkout Session for one price key and answers where to
    *  send the browser. The key is ours — `sync_monthly`, `pack_100`,
-   *  `move_with_me` — never a Stripe price id: the server owns that map, and
+   *  `studio_yearly` — never a Stripe price id: the server owns that map, and
    *  a client that could name a Stripe price could name any Stripe price. */
   billingCheckout: (priceKey: PriceKey) =>
     post<RedirectView>("/v1/billing/checkout", { price_key: priceKey }),
