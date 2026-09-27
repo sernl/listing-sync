@@ -63,7 +63,7 @@ const ADMIN_PATHS: [&str; 9] = [
 /// loops would be testing method routing rather than the operator fence.
 /// Their own refusal is asserted by `a_seller_cannot_grant_themselves_a_plan`
 /// and `an_operator_credits_moves_once_per_reason`.
-const ADMIN_PATHS_UNCOVERED: [&str; 13] = [
+const ADMIN_PATHS_UNCOVERED: [&str; 14] = [
     "/{version}/admin/marketplace-requests",
     "/{version}/admin/orgs/{org}/plan",
     "/{version}/admin/orgs/{org}/plan/{grant}/revoke",
@@ -84,6 +84,9 @@ const ADMIN_PATHS_UNCOVERED: [&str; 13] = [
     "/{version}/admin/guides/{slug}",
     "/{version}/admin/guides/{slug}/publish",
     "/{version}/admin/guides/{slug}/unpublish",
+    // The site-wide switches are global and on the application pool, for the
+    // guide corpus's reason; their refusal is asserted in `site_flow`.
+    "/{version}/admin/site",
 ];
 
 #[expect(

@@ -56,6 +56,7 @@ pub mod scheduler;
 pub mod schedules;
 pub mod seller_rules;
 pub mod session;
+pub mod site;
 pub mod stream;
 pub mod stripe;
 pub mod sync_activity;
@@ -881,6 +882,13 @@ pub fn router(state: AppState) -> Router {
             post(guides::unpublish_guide),
         )
         .route("/{version}/admin/users", get(admin::list_users))
+        // The site-wide switches: the public read every page load makes, and
+        // the operator's uncached read and write beside it.
+        .route("/{version}/site", get(site::site_view))
+        .route(
+            "/{version}/admin/site",
+            get(site::admin_site_view).patch(site::update_site),
+        )
         .route("/{version}/openapi.json", get(openapi::serve_document))
         .with_state(state)
 }

@@ -214,7 +214,8 @@ export const ADMIN_SECTION: NavSection = {
 		{ href: '/admin/import-drain', label: 'Import drain', icon: 'chart-line' },
 		{ href: '/admin/users', label: 'Identity users', icon: 'users' },
 		{ href: '/admin/guides', label: 'Guides', icon: 'book-open' },
-		{ href: '/admin/impersonations', label: 'Impersonations', icon: 'copy' }
+		{ href: '/admin/impersonations', label: 'Impersonations', icon: 'copy' },
+		{ href: '/admin/site', label: 'Site', icon: 'sliders-horizontal' }
 	]
 };
 

@@ -1357,6 +1357,43 @@ export interface GuidesView {
 	sort: GuideSort;
 }
 
+/** Maintenance mode: whether it is on, and the operator's expected-back line. */
+export interface SiteMaintenance {
+	on: boolean;
+	message: string | null;
+}
+
+export type SeasonName = 'none' | 'halloween' | 'christmas';
+
+/** The landing page's seasonal theme. `from` and `until` are UTC calendar
+ *  days, both included; `active` is the server's own reading of today. */
+export interface SiteTheme {
+	name: SeasonName;
+	from: string | null;
+	until: string | null;
+	active: boolean;
+}
+
+export interface SiteBanner {
+	text: string;
+	href: string;
+}
+
+/** `GET /v1/site`: the site-wide switches, public and cached for a minute. */
+export interface SiteView {
+	maintenance: SiteMaintenance;
+	theme: SiteTheme;
+	banner: SiteBanner | null;
+}
+
+/** A change to the switches. An absent field is left alone; `banner: null`
+ *  removes the banner. */
+export interface SitePatch {
+	maintenance?: SiteMaintenance;
+	theme?: { name: SeasonName; from: string | null; until: string | null };
+	banner?: SiteBanner | null;
+}
+
 /** One guide as the editor reads it: `body` is the Markdown the operator
  *  types, `html` is what the server rendered from the body it last stored.
  *  Both, because the editor writes the first and previews the second — and
@@ -3138,6 +3175,13 @@ export const api = {
 		guideReply(`/v1/admin/guides/${encodeURIComponent(slug)}`, signal ? { signal } : undefined),
 	adminGuideTaxonomy: () => request<GuideTaxonomyView>('/v1/admin/guides/_taxonomy'),
 	guideTaxonomy: () => request<GuideTaxonomyView>('/v1/guides/_taxonomy'),
+
+	// The site-wide switches. The public read is what every console load asks
+	// for; the operator's read is the same answer uncached, and its write
+	// answers the whole view as it now stands.
+	site: () => request<SiteView>('/v1/site'),
+	adminSite: () => request<SiteView>('/v1/admin/site'),
+	updateSite: (body: SitePatch) => patch<SiteView>('/v1/admin/site', body),
 	createGuideTaxon: (kind: GuideTaxonKind, body: { slug: string; name: string }) =>
 		post<GuideTaxon>(`/v1/admin/guides/_taxonomy/${kind}`, body),
 	updateGuideTaxon: (kind: GuideTaxonKind, id: string, body: { name: string; retired: boolean }) =>

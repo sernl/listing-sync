@@ -1124,7 +1124,11 @@ fn assemble(
     downloads: Option<std::sync::Arc<downloads::Downloads>>,
 ) -> axum::Router {
     let fallback = if landing.is_some() || downloads.is_some() {
-        let tiers = std::sync::Arc::new(Tiers { landing, downloads });
+        let tiers = std::sync::Arc::new(Tiers {
+            landing,
+            downloads,
+            state: state.clone(),
+        });
         Some(
             console
                 .unwrap_or_else(|| axum::Router::new().fallback(nothing_here))
@@ -1186,10 +1190,11 @@ async fn api_namespace(
 }
 
 /// The two static tiers this deployment was configured with, either of which
-/// may be absent.
+/// may be absent, and the API state the maintenance gate reads through.
 struct Tiers {
     landing: Option<std::sync::Arc<serving::Landing>>,
     downloads: Option<std::sync::Arc<downloads::Downloads>>,
+    state: AppState,
 }
 
 /// The landing page and the downloads directory ahead of the console, at the
@@ -1216,6 +1221,36 @@ async fn static_tiers(
     );
     if serves_static && !serving::method_serves_static(request.method()) {
         return serving::method_not_allowed();
+    }
+    // Maintenance mode, ahead of every page. It needs the landing build's
+    // maintenance page, so a deployment without one is not gated here and
+    // the console's own layout is what shows a seller the notice.
+    let landing_with_page = tiers
+        .landing
+        .as_ref()
+        .filter(|landing| landing.has_maintenance_page())
+        .filter(|_| serving::method_serves_static(request.method()));
+    if let Some(landing) = landing_with_page {
+        let gate = if serving::gated(request.uri().path(), &answer) {
+            tam_api::site::maintenance_gate(&tiers.state, request.headers()).await
+        } else {
+            None
+        };
+        if let Some(maintenance) = gate {
+            return landing.maintenance(
+                maintenance.message.as_deref(),
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            );
+        }
+        // The page at its own address is the operator's preview, carrying the
+        // message as it stands whether or not maintenance is on.
+        if answer == serving::Answer::Landing(serving::MAINTENANCE_PAGE.to_owned()) {
+            let message = tam_api::site::read_site(&tiers.state)
+                .await
+                .ok()
+                .and_then(|site| site.maintenance.message);
+            return landing.maintenance(message.as_deref(), axum::http::StatusCode::OK);
+        }
     }
     let if_none_match = request
         .headers()

@@ -63,24 +63,25 @@
 		display: none;
 	}
 
-	/* The accent: a ribbon for the header's lower edge. A border image
-	   rather than a positioned piece, because the header is sticky on a wide
-	   screen and static on a phone, and a border follows it either way. */
+	/* The accent: a ribbon for the header's lower edge, in palette tokens. A
+	   border image rather than a positioned piece, because the header is
+	   sticky on a wide screen and static on a phone, and a border follows it
+	   either way. */
 	html[data-season] .site-head {
 		border-bottom: 4px solid;
 	}
 
 	html[data-season='halloween'] .site-head {
-		border-image: repeating-linear-gradient(-45deg, #f28c28 0 14px, #2b2140 14px 28px) 1;
+		border-image: repeating-linear-gradient(-45deg, var(--warn) 0 14px, var(--primary) 14px 28px) 1;
 	}
 
 	html[data-season='christmas'] .site-head {
 		border-image: repeating-linear-gradient(
 				-45deg,
-				#d6293a 0 12px,
-				#ffffff 12px 20px,
-				#2e8b57 20px 32px,
-				#ffffff 32px 40px
+				var(--bad) 0 12px,
+				var(--surface) 12px 20px,
+				var(--accent) 20px 32px,
+				var(--surface) 32px 40px
 			)
 			1;
 	}
@@ -136,7 +137,7 @@
 		background-image: url('/seasons/christmas/snow.svg');
 		background-size: 240px 240px;
 		background-repeat: repeat;
-		mask-image: linear-gradient(to bottom, #000 30%, transparent);
+		mask-image: linear-gradient(to bottom, var(--text) 30%, transparent);
 	}
 
 	/* The flock, above the hero art where the hero leaves a gap. Bats fly;
