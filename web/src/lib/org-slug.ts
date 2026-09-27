@@ -67,6 +67,7 @@ export const RESERVED_SLUGS: readonly string[] = [
 	'reset',
 	'resources',
 	'root',
+	'seasons',
 	'security',
 	'settings',
 	'signup',
