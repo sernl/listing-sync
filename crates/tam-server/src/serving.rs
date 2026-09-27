@@ -110,7 +110,11 @@ pub(crate) fn route(
     let relative = decoded.trim_end_matches('/');
     let mut segments = relative.split('/');
     let first = segments.next().unwrap_or_default();
-    if first.parse::<tam_api::APIVersion>().is_ok() {
+    // `/api` is the identity service's prefix, which the edge routes to it
+    // before this server sees a request; one that reaches here anyway is a
+    // misrouted edge or a dev stack with no identity service, and the API's
+    // own 404 says so where the console shell would draw a broken page.
+    if first == "api" || first.parse::<tam_api::APIVersion>().is_ok() {
         return Answer::Api;
     }
     // The map holds only names this module walked out of the directory, so a

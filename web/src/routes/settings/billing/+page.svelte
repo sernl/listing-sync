@@ -35,7 +35,7 @@
 	} from '$lib/pages/account/plans';
 	import CancelPlanDialog from '$lib/pages/account/CancelPlanDialog.svelte';
 	import { readIntent } from '$lib/pages/account/intent';
-	import { saleLine, salePrice } from '$lib/sale';
+	import { afterPercentOff, saleLine, salePrice } from '$lib/sale';
 	import '$lib/flow.css';
 	import '$lib/pages/account/account.css';
 
@@ -484,7 +484,14 @@
 						{#if onSale !== null && sale !== null}
 							<p class="sale-line">{saleLine(sale)}</p>
 						{/if}
-						<p class="quiet">{price.note}</p>
+						{#if onSale !== null && cadence === 'yearly' && plan.yearly_cents !== null}
+							<p class="quiet">
+								{dollars(afterPercentOff(plan.yearly_cents, sale?.percent_off ?? 0))} for the year (usually
+								{dollars(plan.yearly_cents)}).
+							</p>
+						{:else}
+							<p class="quiet">{price.note}</p>
+						{/if}
 						<ul class="bullets">
 							{#each planBullets(plan.capabilities) as line (line.text)}
 								<li class:soon={line.soon}>{line.text}</li>
@@ -759,6 +766,13 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: var(--s-3);
+	}
+
+	/* Two buttons side by side: the flow-choice grid's auto-fit would fall
+	   to one column inside the flex head. */
+	.tiers-head .cadence {
+		grid-template-columns: repeat(2, minmax(0, auto));
+		flex: 0 0 auto;
 	}
 
 	.tiers-head h2 {

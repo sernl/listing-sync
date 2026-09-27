@@ -29,7 +29,9 @@
 	let until = $state('');
 	let bannerText = $state('');
 	let bannerHref = $state('');
-	let seeded = $state<SiteView | null>(null);
+	// Plain, not `$state`: it is only compared inside the effect, and a deep
+	// proxy would never equal the query's object, so the effect would loop.
+	let seeded: SiteView | null = null;
 
 	$effect(() => {
 		const view = site.data;
