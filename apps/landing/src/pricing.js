@@ -14,9 +14,9 @@
  * conversion in front of a small ticket.
  */
 
-import { AI, FOUNDING, PACKS, PLANS, SERVICES } from './plans.generated.js';
+import { AI, PACKS, PLANS } from './plans.generated.js';
 
-export { AI, FOUNDING, PACKS };
+export { AI, PACKS };
 
 /** `u32::MAX` is how the plan table spells "no cap". */
 const UNCAPPED = 4294967295;
@@ -28,11 +28,21 @@ export const dollars = (cents) =>
 /** The free plan, which the table names "Look". */
 export const free = PLANS.find((plan) => plan.id === 'free');
 
+/** The three paid plans, cheapest first, in the table's own order. */
+export const paidPlans = PLANS.filter((plan) => plan.yearly_cents !== null);
+
 /**
- * The one subscription, as the server's table holds it. `studio` is in the
- * same table with `sold: false`; nothing on this site may render it.
+ * The plan we expect most sellers to want, drawn with the ring. Sync, the
+ * middle rung: the one a teacher adding resources every week lands on.
  */
-export const subscription = PLANS.find((plan) => plan.id === 'subscriber');
+export const leadPlan = 'subscriber';
+
+/** Who each paid plan is for, in one sentence under its name. */
+export const planPitch = {
+	starter: 'For teachers who add a resource now and then.',
+	subscriber: 'For teachers who add resources every week.',
+	studio: 'For big catalogues and whole-shop moves.'
+};
 
 /**
  * The headline figure is the annual price divided across its months, because
@@ -40,10 +50,7 @@ export const subscription = PLANS.find((plan) => plan.id === 'subscriber');
  * The true monthly price sits beside it in smaller type rather than being
  * left for the checkout to introduce.
  */
-export const subscriptionPerMonth = Math.round(subscription.yearly_cents / 12);
-
-/** The service the table sells beside the plans, currently one booking. */
-export const moveWithMe = SERVICES.find((service) => service.key === 'move_with_me');
+export const perMonthYearly = (plan) => Math.round(plan.yearly_cents / 12);
 
 /**
  * The pack a reader lands on from the packs card.
@@ -59,52 +66,13 @@ export const featuredPack = PACKS.find((pack) => pack.key === 'pack_100');
  * The console's signup reads `next` and `price` from its query: `next` is
  * where to land after the account exists, and `price` is the checkout to open
  * on arrival. Sending the price key from here means a reader who clicked
- * "Start Sync" does not have to find Sync again on the other side.
+ * "Choose Sync" does not have to find Sync again on the other side.
  */
 const SIGNUP = 'https://teachouse.io/signup';
 export const signupUrl = (priceKey) =>
-	priceKey === undefined
-		? `${SIGNUP}?next=/settings/subscription`
-		: `${SIGNUP}?next=/settings/subscription&price=${priceKey}`;
-
-const MONTHS = [
-	'January',
-	'February',
-	'March',
-	'April',
-	'May',
-	'June',
-	'July',
-	'August',
-	'September',
-	'October',
-	'November',
-	'December'
-];
-
-/**
- * "31 December 2026", spelled out here rather than by `toLocaleDateString`:
- * the date is rendered once at build time into a static page, and a build
- * machine with a trimmed ICU would quietly print a different string.
- */
-const spellDate = (iso) => {
-	const [year, month, day] = iso.split('-').map(Number);
-	return `${day} ${MONTHS[month - 1]} ${year}`;
-};
-
-/** "31 December 2026", the day the founding offer stops being offered. */
-export const foundingCloses = spellDate(FOUNDING.closes_at);
-
-/**
- * Whether the founding band is drawn at all.
- *
- * This is a static site: there is no request to evaluate the date against, so
- * the question is answered when the page is built and the answer is frozen
- * into the HTML. That is why the closing date is printed beside the offer —
- * a reader who finds a stale build can see for themselves that it has passed,
- * and a rebuild drops the band.
- */
-export const foundingOpen = Date.parse(`${FOUNDING.closes_at}T23:59:59Z`) > Date.now();
+	priceKey === undefined || priceKey === null
+		? `${SIGNUP}?next=/settings/billing`
+		: `${SIGNUP}?next=/settings/billing&price=${priceKey}`;
 
 /**
  * A plan card's lines, read off `capabilities` rather than typed out beside
@@ -116,33 +84,36 @@ export const foundingOpen = Date.parse(`${FOUNDING.closes_at}T23:59:59Z`) > Date
  * teacher rather than for whoever built them (the founder's 2026-09-26
  * review: no "pulls every 6 hours"), and `soon` marks the one line that is
  * sold before it is built so a tick cannot claim otherwise. The console's
- * plan page (`web/src/lib/pages/account/plans.ts`) says the same lines.
+ * Billing page (`web/src/lib/pages/account/plans.ts`) says the same lines.
  *
- * A cap that is not there is not a line: an unlimited catalogue says nothing
- * rather than "No limit on resources", which the review asked to remove.
+ * The order is the founder's PDF review of 2026-09-27: what every plan does
+ * first, the counts in the middle, and the free plan's trial moves last. A
+ * cap that is not there is not a line: an unlimited catalogue says nothing
+ * rather than "No limit on resources", which the 2026-09-26 review asked to
+ * remove.
  */
 export const planFeatures = (plan) => {
 	const caps = plan.capabilities;
+	const count = (n, noun) => (n === UNCAPPED ? `Unlimited ${noun}` : `${n} ${noun}`);
 	const lines = [];
-	if (caps.free_moves_lifetime > 0)
-		lines.push({ text: `${caps.free_moves_lifetime} moves onto a marketplace of your choice` });
+	if (caps.import_spreadsheet && caps.import_marketplace)
+		lines.push({ text: 'Import from wherever you sell' });
+	if (caps.sync_pull_interval_secs !== null) lines.push({ text: 'Edit once, sync everywhere' });
 	if (caps.moves_per_month > 0) lines.push({ text: `${caps.moves_per_month} moves a month` });
 	if (caps.moves_accrual_cap > 0)
 		lines.push({ text: `Unused moves stack to ${caps.moves_accrual_cap}` });
-	if (caps.import_spreadsheet && caps.import_marketplace)
-		lines.push({ text: 'Import all your resources from wherever you sell' });
 	if (caps.resources_max < UNCAPPED) lines.push({ text: `Up to ${caps.resources_max} resources` });
-	if (caps.sync_pull_interval_secs !== null)
-		lines.push({ text: 'Edit resources in Teachouse and sync the edits across all platforms' });
+	lines.push({ text: 'Add a watermarked preview of your file' });
 	if (caps.scheduling) lines.push({ text: 'Scheduling' });
-	if (caps.templates_max > 1) lines.push({ text: `${caps.templates_max} templates` });
-	if (caps.collections_max > 0) lines.push({ text: `${caps.collections_max} collections` });
+	if (caps.templates_max > 1) lines.push({ text: count(caps.templates_max, 'templates') });
+	if (caps.collections_max > 0) lines.push({ text: count(caps.collections_max, 'collections') });
 	if (caps.analytics) lines.push({ text: 'Statistics on every shop' });
+	if (caps.auto_publish_rules) lines.push({ text: 'Automatic publishing rules' });
+	if (caps.support === 'email_1_day') lines.push({ text: 'Priority support' });
 	if (caps.ai_fills_per_month > 0 && AI.status === 'coming_soon')
-		lines.push({
-			text: `AI fill, coming soon (${caps.ai_fills_per_month} a month)`,
-			soon: true
-		});
+		lines.push({ text: 'AI description fill, coming soon', soon: true });
+	if (caps.free_moves_lifetime > 0)
+		lines.push({ text: `${caps.free_moves_lifetime} moves onto a marketplace of your choice` });
 	return lines;
 };
 
@@ -173,10 +144,6 @@ export const moveDefinition =
  * `docs/guides/faq.md`, cut to two short sentences and written the way a
  * teacher would say them, not the way the system counts them: a reader on
  * this page is deciding, not learning the product.
- *
- * The founding question rides on the same gate as the band: once the offer
- * has closed, answering a question about how to take it is an advertisement
- * for something nobody can buy.
  */
 export const faqs = [
 	{
@@ -192,12 +159,12 @@ export const faqs = [
 		a: `When you connect your first shop, you get ${free.capabilities.free_moves_lifetime} free moves to publish onto a marketplace of your choice. Every account gets them once.`
 	},
 	{
-		q: 'Move Packs or Sync \u2014 which is right for me?',
-		a: `Buy a Move Pack if you are moving your shop once. Choose Sync if you add new resources often: you get ${subscription.capabilities.moves_per_month} moves a month, scheduling and statistics, and your edits stay in step on every marketplace.`
+		q: 'Which plan is right for me?',
+		a: `Buy a Move Pack if you are moving your shop once. Otherwise pick by how often you publish: ${paidPlans.map((plan) => `${plan.name} gives ${plan.capabilities.moves_per_month} moves a month`).join(', ')}.`
 	},
 	{
 		q: 'Do moves run out?',
-		a: `Move Pack moves last 12 months from the day you buy them. With Sync, moves you do not use carry over, up to ${subscription.capabilities.moves_accrual_cap}.`
+		a: 'Move Pack moves last 12 months from the day you buy them. On a paid plan, moves you do not use carry over, up to three months\u2019 worth.'
 	},
 	{
 		q: 'Can I change a listing after I move it?',
@@ -205,19 +172,11 @@ export const faqs = [
 	},
 	{
 		q: 'Can I get a refund?',
-		a: 'Yes, for a Move Pack you have not used: write to us within 14 days of buying it. You can cancel Sync at any time in Account \u2192 Subscription, and it runs until the end of the period you paid for.'
+		a: 'Yes, for a Move Pack you have not used: write to us within 14 days of buying it. You can cancel a plan at any time in Settings \u2192 Billing, and it runs until the end of the period you paid for.'
 	},
-	...(foundingOpen
-		? [
-				{
-					q: `What is the Founding ${FOUNDING.places}?`,
-					a: `Our launch offer, paid yearly: ${dollars(FOUNDING.year_one_cents)} for your first year, then ${dollars(FOUNDING.ongoing_cents)} a year until year ${FOUNDING.ongoing_years}, plus ${FOUNDING.extra_moves} extra moves. It closes when ${FOUNDING.places} teachers have joined, or on ${foundingCloses}.`
-				}
-			]
-		: []),
 	{
-		q: 'What is "Move with me"?',
-		a: `A ${dollars(moveWithMe.price_cents)} session where we move your shop together with you. The moves themselves come from a Move Pack.`
+		q: 'Can I change plans?',
+		a: 'Yes, up or down at any time in Settings \u2192 Billing. Your resources and the moves you already hold stay where they are.'
 	},
 	{
 		q: 'Which marketplaces can I use?',

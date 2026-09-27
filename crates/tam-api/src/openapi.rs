@@ -751,7 +751,7 @@ pub const ROUTES: [Route; 175] = [
     Route {
         method: "get",
         path: "/{version}/plans",
-        summary: "The price list, its capabilities, the import ladder and the founding offer",
+        summary: "The price list: the four plans, their capabilities, the move packs and the AI offer",
     },
     Route {
         method: "get",

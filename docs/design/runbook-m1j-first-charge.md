@@ -183,21 +183,23 @@ The line that bites first is UK VAT on B2C digital services, which has no regist
 
 ### Configuring a deployment
 
-1. In the Stripe dashboard, create one Product per thing sold and a Price under each: two recurring prices for Sync (monthly and yearly), one recurring annual price for the founding cohort, five one-time prices for the packs, and one one-time price for "Move with me".
+1. In the Stripe dashboard, create one Product per thing sold and a Price under each: two recurring prices (monthly and yearly) for each of Starter, Sync and Studio, and five one-time prices for the packs.
    The prices are the ones `crates/tam-limits` names; the dashboard holds the identifiers and nothing else.
 2. Write the price map to a file the server can read, keyed by Stripe's identifier and valued by our price key:
 
    ```json
    {
+     "price_...": "starter_monthly",
+     "price_...": "starter_yearly",
      "price_...": "sync_monthly",
      "price_...": "sync_yearly",
-     "price_...": "founding_yearly",
+     "price_...": "studio_monthly",
+     "price_...": "studio_yearly",
      "price_...": "pack_20",
      "price_...": "pack_50",
      "price_...": "pack_100",
      "price_...": "pack_250",
-     "price_...": "pack_500",
-     "price_...": "move_with_me"
+     "price_...": "pack_500"
    }
    ```
 
@@ -209,7 +211,7 @@ The line that bites first is UK VAT on B2C digital services, which has no regist
 
    | Event | What it does here |
    |---|---|
-   | `checkout.session.completed` | The primary fulfilment trigger: credits a pack, records a "Move with me" booking, or starts a subscription |
+   | `checkout.session.completed` | The primary fulfilment trigger: credits a pack or starts a subscription |
    | `invoice.paid` | The renewal signal: moves the grant's expiry forward and accrues the period's moves |
    | `invoice.payment_failed` | A day of grace while dunning runs; the plan is not taken away on the first failure |
    | `customer.subscription.updated` | Status and period changes, including a plan switch made in the portal |

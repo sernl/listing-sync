@@ -553,15 +553,17 @@ in
       stripePriceMap = lib.mkOption {
         type = lib.types.attrsOf (
           lib.types.enum [
+            "starter_monthly"
+            "starter_yearly"
             "sync_monthly"
             "sync_yearly"
-            "founding_yearly"
+            "studio_monthly"
+            "studio_yearly"
             "pack_20"
             "pack_50"
             "pack_100"
             "pack_250"
             "pack_500"
-            "move_with_me"
           ]
         );
         default = { };
