@@ -274,6 +274,15 @@ describe('starting a new resource from a template', () => {
 		expect(merged.filled).toEqual([]);
 	});
 
+	it('renders the template’s Markdown description into a rich-text draft', () => {
+		const template = { description: 'A **bold** pack.\n\n- one' };
+		expect(mergeIntoEmpty(emptyTptDraft(), template).draft.description).toBe(
+			'<p>A <strong>bold</strong> pack.</p><ul><li>one</li></ul>'
+		);
+		const markdown = { ...emptyTptDraft(), bodyFormat: 'Markdown' as const };
+		expect(mergeIntoEmpty(markdown, template).draft.description).toBe(template.description);
+	});
+
 	it('never touches the title, which no template holds', () => {
 		const typed = { ...emptyTptDraft(), name: 'Fractions pack' };
 		expect(mergeIntoEmpty(typed, { name: 'A template title' }).draft.name).toBe('Fractions pack');

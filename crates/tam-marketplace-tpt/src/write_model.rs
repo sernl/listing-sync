@@ -842,7 +842,10 @@ const MARKDOWN_EXTENSIONS: Options = Options::ENABLE_TABLES.union(Options::ENABL
 /// CommonMark says it is HTML and the target field is an HTML field. Nothing
 /// here sanitises: the body is the seller's own copy travelling from one of
 /// their listings to another, and this adapter is not the boundary that would
-/// decide what to strip from it.
+/// decide what to strip from it. That boundary is the write: an HTML body the
+/// seller wrote in the console is held to the rich-text allow-list by
+/// `tam-api`'s `rich_text` before it is stored, and an imported one keeps
+/// what its own marketplace let it hold.
 fn body_as_html(body: &str, format: CopyFormat) -> String {
     match format {
         CopyFormat::Html => body.to_owned(),

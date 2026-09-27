@@ -61,6 +61,16 @@ const INTENT_VERSION: u32 = 1;
 /// delete replays the first job rather than minting a second.
 const DELETE_LEG: &str = "product-delete";
 
+/// A description as it is stored when the seller writes it here: an HTML body
+/// held to the rich-text allow-list ([`crate::rich_text`]), a Markdown one as
+/// typed.
+fn written_body(body: &str, format: CopyFormat) -> String {
+    match format {
+        CopyFormat::Html => crate::rich_text::sanitise_html(body),
+        CopyFormat::Markdown => body.to_owned(),
+    }
+}
+
 // ------------------------------------------------------------------ errors
 
 fn storage_fault(state: &AppState, error: &StorageError) -> APIError {
@@ -1297,7 +1307,7 @@ pub(crate) async fn prepare_create(
             org,
             title: Title(body.title.clone()),
             body: ListingCopy {
-                body: body.body.clone(),
+                body: written_body(&body.body, body.body_format),
                 format: body.body_format,
             },
             payload,
@@ -2149,9 +2159,20 @@ pub(crate) async fn prepare_edit(
     Ok(PreparedEdit {
         edit: ProductEdit {
             title,
-            body: body.body.as_ref().map(|text| ListingCopy {
-                body: text.clone(),
-                format: body.body_format.unwrap_or(CopyFormat::Markdown),
+            body: body.body.as_ref().map(|text| {
+                let format = body.body_format.unwrap_or(CopyFormat::Markdown);
+                // A body sent back exactly as stored keeps what an import
+                // brought with it; one the seller changed is held to the
+                // allow-list.
+                let unchanged = *text == stored.body.body && format == stored.body.format;
+                ListingCopy {
+                    body: if unchanged {
+                        text.clone()
+                    } else {
+                        written_body(text, format)
+                    },
+                    format,
+                }
             }),
             price,
             subjects: body.subjects.clone(),

@@ -1231,9 +1231,14 @@ describe('the edit form, seeded from what is stored', () => {
 		expect(patchBodyOf(seeded)?.body).toBe('<p>Ten pages of practice.</p>');
 	});
 
-	it('writes Markdown on the create path, where no control offers the other', () => {
-		expect(emptyTptDraft().bodyFormat).toBe('Markdown');
-		expect(createBodyOf(filled())?.body_format).toBe('Markdown');
+	it('starts a new resource in rich text and keeps a stored Markdown body Markdown', () => {
+		expect(createBodyOf(filled())?.body_format).toBe('Html');
+		const markdown: ProductView = {
+			...viewOf(createBodyOf(filled()) as CreateProductBody),
+			body: '**Ten** pages',
+			body_format: 'Markdown'
+		};
+		expect(patchBodyOf(draftOf(markdown))?.body_format).toBe('Markdown');
 	});
 
 	it('leaves an unanswered localisation question unanswered', () => {
