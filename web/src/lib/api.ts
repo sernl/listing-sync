@@ -1253,10 +1253,19 @@ export interface AdminUserView {
 	plan: Plan;
 	last_sign_in_at?: number;
 	created_at: number;
+	/** Holds an operator marking nobody has withdrawn. */
+	operator: boolean;
 }
 
 export interface AdminUsersView {
 	users: AdminUserView[];
+}
+
+/** What `DELETE /v1/admin/users/{subject}` removed: the platform user and the
+ *  organisation that was theirs alone. */
+export interface DeletedUserView {
+	user: string;
+	organisation: { org: string; name: string };
 }
 
 // -------------------------------------------------------------------- guides
@@ -3106,6 +3115,12 @@ export const api = {
 	 *  and the two are joined on `auth_subject` in the browser because no one
 	 *  role can read both. */
 	adminUsers: () => request<AdminUsersView>('/v1/admin/users'),
+	/** Deletes a seller's platform user and their organisation, with
+	 *  everything in it. Refused with 409 (detail `refusal`: `operator`,
+	 *  `shared_organisation`, `live_subscription`) and a sentence saying what
+	 *  to do first; 404 when the subject has no platform user. */
+	adminDeleteUser: (subject: string) =>
+		request<DeletedUserView>(`/v1/admin/users/${subject}`, { method: 'DELETE' }),
 
 	/** Writes an operator grant on one organisation, and answers the org
 	 *  detail so the panel redraws from the server's own record rather than
