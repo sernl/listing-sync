@@ -52,6 +52,7 @@ pub mod product;
 pub mod profile;
 pub mod resource_templates;
 pub mod resources;
+pub mod rich_text;
 pub mod scheduler;
 pub mod schedules;
 pub mod seller_rules;

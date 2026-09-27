@@ -42,6 +42,7 @@
 	import { coverUrlOf } from './files';
 	import CategoriesPanel from './panels/CategoriesPanel.svelte';
 	import DescriptionPanel from './panels/DescriptionPanel.svelte';
+	import DescriptionPreview from './panels/DescriptionPreview.svelte';
 	import DetailsPanel from './panels/DetailsPanel.svelte';
 	import MarketplacePanel from './panels/MarketplacePanel.svelte';
 	import PricePanel from './panels/PricePanel.svelte';
@@ -1243,13 +1244,22 @@
 											{row.label}
 											{#if differs}<StatusPill label="changed here" />{/if}
 										</span>
-										<input
-											type="text"
-											aria-labelledby={`override-${row.key}`}
-											value={own}
-											oninput={(event) =>
-												(draft = withOverride(draft, where, row.key, event.currentTarget.value))}
-										/>
+										{#if row.key === 'description' && (where === 'Tpt' || where === 'Tes')}
+											<DescriptionPreview
+												body={own}
+												format={draft.bodyFormat}
+												inventory={where}
+												labelledby={`override-${row.key}`}
+											/>
+										{:else}
+											<input
+												type="text"
+												aria-labelledby={`override-${row.key}`}
+												value={own}
+												oninput={(event) =>
+													(draft = withOverride(draft, where, row.key, event.currentTarget.value))}
+											/>
+										{/if}
 										{#if differs}
 											<div class="res-acts">
 												<Button small onclick={() => (draft = applyToAll(draft, row.key, own))}>

@@ -853,7 +853,7 @@
 					     and we will ask as usual", so a Required chip here would tell
 					     the seller the opposite of what the panel and the write both
 					     do. The create form leaves the prop alone and is unchanged. -->
-					<DescriptionPanel draft={form.draft} form={held} optional {set} />
+					<DescriptionPanel draft={form.draft} form={held} optional choosesFormat={false} {set} />
 					<PricePanel draft={form.draft} form={held} optional {set} />
 					<CategoriesPanel
 						draft={form.draft}

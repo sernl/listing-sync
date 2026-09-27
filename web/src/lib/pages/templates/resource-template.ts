@@ -13,6 +13,7 @@ import type { DraftInput } from '$lib/api';
 import { agoLabel } from '$lib/elapsed';
 import type { InventoryId } from '$lib/generated/vocab';
 import { MARKETPLACE_WORD } from '$lib/platforms';
+import { markdownToHtml } from '$lib/rich-text';
 import {
 	emptyTptDraft,
 	majorUnitsOf,
@@ -57,9 +58,13 @@ export interface TemplateForm {
  *  drafted or live and one of the two is always true of it, so the create form
  *  starts at "draft"; a template that answered it would decide the status of
  *  every resource started from it, so it starts unanswered. The localisation
- *  tick is the sidecar's third state for the same reason. */
+ *  tick is the sidecar's third state for the same reason.
+ *
+ *  The description is Markdown whatever a new resource defaults to: a
+ *  template stores no format, and the resource it fills renders the Markdown
+ *  into its own. */
 export function blankTemplateDraft(): TptDraft {
-	return { ...emptyTptDraft(), status: '', appropriateForCountry: null };
+	return { ...emptyTptDraft(), bodyFormat: 'Markdown', status: '', appropriateForCountry: null };
 }
 
 export function emptyForm(): TemplateForm {
@@ -427,6 +432,11 @@ export function mergeIntoEmpty(draft: TptDraft, template: DraftInput): Merged {
 	}
 
 	take('description', from.description !== '');
+	// A template's description is Markdown; a draft written in rich text takes
+	// it rendered, as the server's own template apply does.
+	if (merged.description !== draft.description && draft.bodyFormat === 'Html') {
+		merged.description = markdownToHtml(from.description).html;
+	}
 	// The pricing branch travels whole or not at all: a template that says
 	// "free" and a draft that took only its price would carry a price under a
 	// free resource, which is the one combination the form refuses.
