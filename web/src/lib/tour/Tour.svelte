@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import Button from '$lib/Button.svelte';
 	import { placeTour, visibleRect, TOUR_STEPS, type Rect, type Size } from './model';
@@ -23,8 +24,9 @@
 	 *  whole viewport, so the element's own client rectangle is already in
 	 *  the dialog's coordinates. */
 	function measure() {
-		viewport = { width: window.innerWidth, height: window.innerHeight };
+		const size = { width: window.innerWidth, height: window.innerHeight };
 		const anchor = step.anchor;
+		viewport = size;
 		target =
 			anchor === null
 				? null
@@ -32,12 +34,12 @@
 						Array.from(document.querySelectorAll(`[data-tour="${anchor}"]`), (element) =>
 							element.getBoundingClientRect()
 						),
-						viewport
+						size
 					);
 	}
 
 	// Opened as a modal dialog, which is what makes the page behind it inert
-	// and keeps Tab inside the card; Escape arrives as `cancel` below.
+	// and puts it in the top layer; Escape arrives as `cancel` below.
 	$effect(() => {
 		if (box === undefined) {
 			return;
@@ -50,14 +52,18 @@
 	});
 
 	// Re-measured on every step, and whenever the window moves under it.
+	// Only the step is tracked: the measurement writes the state it would
+	// otherwise read, and tracking that would re-run this without end.
 	$effect(() => {
 		if (!tour.open) {
 			return;
 		}
-		void tour.index;
-		measure();
-		// The step's forward control takes the focus, so Enter walks on.
-		primary?.querySelector<HTMLElement>('button')?.focus();
+		void step;
+		untrack(() => {
+			measure();
+			// The step's forward control takes the focus, so Enter walks on.
+			primary?.querySelector<HTMLElement>('button')?.focus();
+		});
 		window.addEventListener('resize', measure);
 		window.addEventListener('scroll', measure, true);
 		return () => {
@@ -80,6 +86,23 @@
 		} else if (event.key === 'ArrowLeft') {
 			event.preventDefault();
 			tour.back();
+		} else if (event.key === 'Tab' && box !== undefined) {
+			// The modal dialog already makes the page inert, but lets Tab run
+			// off its last control into the browser's own; this keeps it
+			// cycling through the card's controls instead.
+			const controls = Array.from(box.querySelectorAll<HTMLElement>('button, a[href]'));
+			const first = controls[0];
+			const last = controls.at(-1);
+			if (first === undefined || last === undefined) {
+				return;
+			}
+			if (event.shiftKey && document.activeElement === first) {
+				event.preventDefault();
+				last.focus();
+			} else if (!event.shiftKey && document.activeElement === last) {
+				event.preventDefault();
+				first.focus();
+			}
 		}
 	}
 
