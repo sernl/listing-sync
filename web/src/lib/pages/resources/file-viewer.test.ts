@@ -50,7 +50,7 @@ describe('what the viewer draws', () => {
 });
 
 describe('the kept source', () => {
-	it('names the first PDF payload this machine keeps, and nothing else', () => {
+	it('names the first PDF payload this device keeps, and nothing else', () => {
 		const kept = new Set(['b'.repeat(64)]);
 		const files = [
 			file({ id: 'cover', role: 'cover', kind: 'image', hash: 'b'.repeat(64) }),
@@ -68,6 +68,6 @@ describe('the kept source', () => {
 		const source = sourceOfKept(invoke, 'a.pdf', 'a'.repeat(64));
 		expect(new Uint8Array(await source.bytes())).toEqual(bytes);
 		const gone = sourceOfKept(null, 'a.pdf', 'a'.repeat(64));
-		await expect(gone.bytes()).rejects.toThrow('not kept on this machine');
+		await expect(gone.bytes()).rejects.toThrow('not kept on this device');
 	});
 });

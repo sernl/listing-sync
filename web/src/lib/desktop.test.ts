@@ -44,7 +44,7 @@ describe('reaching the desktop application', () => {
 	});
 });
 
-describe('putting this machine in the registry', () => {
+describe('putting this device in the registry', () => {
 	const MACHINE = { device_id: 'dev_9', device_name: 'Studio laptop' };
 
 	it('invokes the check-in and says the registry may have gained a row', async () => {
@@ -91,7 +91,7 @@ describe('putting this machine in the registry', () => {
 	});
 });
 
-describe('reading which machine the console is on', () => {
+describe('reading which device the console is on', () => {
 	// The founder's own ask: every platform must say which machine the seller
 	// is at. The console is one build served to a browser and to the app
 	// window around it, so this answer is the only thing that can tell them
@@ -109,7 +109,7 @@ describe('reading which machine the console is on', () => {
 	// browser all mean the same thing: this console cannot name the machine.
 	// Naming half of one is worse — the restore route addresses a device by
 	// id, so a name with no id is a button that cannot be pressed.
-	it('names no machine unless both halves arrived', async () => {
+	it('names no device unless both halves arrived', async () => {
 		for (const answer of [
 			{ reached_server: true },
 			{ reached_server: true, device_id: 'dev_1' },
@@ -123,7 +123,7 @@ describe('reading which machine the console is on', () => {
 	});
 });
 
-describe('reading whether this machine was signed out from the console', () => {
+describe('reading whether this device was signed out from the console', () => {
 	it('reports the revocation the heartbeat was told about', async () => {
 		const invoke: Invoke = async () => ({ reached_server: true, revoked: true });
 		expect((await checkInHere(invoke)).revoked).toBe(true);
@@ -314,10 +314,10 @@ describe('asking this computer to run an import', () => {
 	// to a teacher verbatim. Every spelling of that one fact now becomes the
 	// same sentence, and a caller can compare against it to stop offering an
 	// action the machine cannot perform.
-	it('turns every spelling of a signed-out machine into one teacher-facing sentence', async () => {
+	it('turns every spelling of a signed-out device into one teacher-facing sentence', async () => {
 		for (const raw of [
 			DEVICE_SIGNED_OUT,
-			'This machine was signed out of your Teachouse account, so it cannot run imports. Sign it back in from Marketplaces, then try again.',
+			'This device was signed out of your Teachouse account, so it cannot run imports. Sign it back in from Marketplaces, then try again.',
 			'the control plane refused: 403: {"errors":[{"message":"this device is revoked and may not report a catalogue","kind":"validation"}]}',
 			'403 device revoked'
 		]) {

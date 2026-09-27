@@ -481,7 +481,7 @@ export const APP_CANNOT_CONNECT =
  * alone. */
 export const APP_CANNOT_FORGET =
 	'This version of the Teachouse app cannot remove a marketplace login. The login is still on ' +
-	'this machine; update the app, or sign the machine out below.';
+	'this device; update the app, or sign the device out below.';
 
 /** Ask this computer to open one marketplace's login and keep the session.
  *
@@ -598,6 +598,9 @@ export type LibraryOutcome<T> =
 	| { kind: 'refused'; detail: string }
 	| { kind: 'unavailable' };
 
+// The application's own refusal, compared rather than shown: `NO_LIBRARY` in
+// `apps/desktop/src-tauri/src/commands.rs`, spelled as every installed app
+// still sends it.
 const NOT_KEEPING = 'this machine is not keeping files';
 const LIBRARY_REFUSED_SILENTLY = 'This computer could not read its files and did not say why.';
 
@@ -751,7 +754,7 @@ function refusal(caught: unknown, command: string, fallback: string): SessionOut
  * gate a control on; this is the answer for the window between a sign-out and
  * this console's next check-in, and for a press that raced one. */
 export const DEVICE_SIGNED_OUT =
-	'This machine was signed out of your Teachouse account, so it cannot run imports. Sign it ' +
+	'This device was signed out of your Teachouse account, so it cannot run imports. Sign it ' +
 	'back in from Marketplaces, then try again.';
 
 /** Whether a refusal is this machine having been signed out, rather than any

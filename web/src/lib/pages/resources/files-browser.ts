@@ -21,22 +21,22 @@ export const FILES_HREF = '/resources/files';
 
 /** The promise the browser closes with. One sentence; which machine holds
  *  what, and how a copy crosses between them, is the `your-files` guide's. */
-export const FILES_STAY_ON_YOUR_MACHINES = 'Your files stay on your own machines.';
+export const FILES_STAY_ON_YOUR_DEVICES = 'Your files stay on your own devices.';
 
 /** What the page says in a browser, where no machine is keeping files. */
-export const BROWSER_SENTENCE = 'Your files are kept on the machines that run the Teachouse app.';
+export const BROWSER_SENTENCE = 'Your files are kept on the devices that run the Teachouse app.';
 
 /** What the page says when the application keeps no library at all. */
-export const NOT_KEEPING_SENTENCE = 'This machine is not keeping files.';
+export const NOT_KEEPING_SENTENCE = 'This device is not keeping files.';
 
 /** The label on the setting. */
-export const KEEP_LABEL = 'Keep a copy of imported files on this machine';
+export const KEEP_LABEL = 'Keep a copy of imported files on this device';
 
 /** How a holder that is this very machine is named. By role rather than by
  *  name: the seller knows which machine they are sitting at, and a name read
  *  off the device registry is the name of some machine rather than proof it
  *  is this one. */
-export const HERE = 'This machine';
+export const HERE = 'This device';
 
 /** The page this browser asks for, which is the page the server serves
  *  without being asked. Stated here because the pager does the arithmetic
@@ -45,16 +45,16 @@ export const PAGE_SIZE = 25;
 
 /** The confirmation before a file is removed from this machine. */
 export function removePrompt(name: string): string {
-	return `Remove "${name}" from this machine? Your listing and the copy on the marketplace stay as they are.`;
+	return `Remove "${name}" from this device? Your listing and the copy on the marketplace stay as they are.`;
 }
 
 /** The usage line above the list, for the machine that is keeping files. */
 export function usageLine(entries: readonly LibraryEntry[], usage: number): string {
 	if (entries.length === 0) {
-		return 'No files are kept on this machine yet.';
+		return 'No files are kept on this device yet.';
 	}
 	const count = entries.length === 1 ? '1 file' : `${entries.length} files`;
-	return `${count}, ${formatBytes(usage)} on this machine.`;
+	return `${count}, ${formatBytes(usage)} on this device.`;
 }
 
 // ------------------------------------------------------------- the filters
@@ -176,8 +176,8 @@ export function availabilityOf(file: LibraryFileView): Availability {
 
 export const AVAILABILITY_LABEL: Record<Availability, string> = {
 	online: 'Available now',
-	offline: 'Machine offline',
-	missing: 'No machine has it'
+	offline: 'Device offline',
+	missing: 'No device has it'
 };
 
 /** What the row offers or says about getting a file onto this machine.
@@ -231,13 +231,13 @@ export function transferSentence(label: TransferLabel): string | null {
 		case 'get':
 			return `${label.from} has this file.`;
 		case 'waiting':
-			return label.on === null ? 'Waiting for a machine that has this file.' : `Waiting for ${label.on} to come online.`;
+			return label.on === null ? 'Waiting for a device that has this file.' : `Waiting for ${label.on} to come online.`;
 		case 'fetching':
 			return `Copying from ${label.from}…`;
 		case 'elsewhere':
 			return `${label.on} has this file.`;
 		case 'missing':
-			return 'None of your machines has this file.';
+			return 'None of your devices has this file.';
 	}
 }
 
@@ -308,7 +308,7 @@ export function seenLine(row: FileRow, now: number): string {
 		return 'Online now';
 	}
 	if (row.lastSeen === null) {
-		return row.availability === 'missing' ? 'No machine' : 'Not seen yet';
+		return row.availability === 'missing' ? 'No device' : 'Not seen yet';
 	}
 	return agoLabel(row.lastSeen, now);
 }

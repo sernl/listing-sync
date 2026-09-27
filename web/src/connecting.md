@@ -13,7 +13,7 @@ Connect a marketplace once, then Teachouse can read your shop and send listings 
 2. Install it and sign in with your Teachouse account.
 3. Leave it running while an import, a migration or a schedule is going.
 
-Tes and TPT are reached through your own browser session on your own machine, which is what the desktop app provides. There is no browser extension.
+Tes and TPT are reached through your own browser session on your own device, which is what the desktop app provides. There is no browser extension.
 
 <!-- shot: /marketplaces, the downloads panel with the app for this platform -->
 __omp_shell("[Downloading the desktop app](image:connecting-1)")
@@ -30,7 +30,7 @@ __omp_shell("[A connected shop](image:connecting-2)")
 
 ## Where the sign-in is kept
 
-Your marketplace sign-in stays on your machine, in the app. Teachouse never holds your marketplace password.
+Your marketplace sign-in stays on your device, in the app. Teachouse never holds your marketplace password.
 
 ## One Teachouse account per shop
 

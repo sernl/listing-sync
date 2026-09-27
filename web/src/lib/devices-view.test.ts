@@ -87,7 +87,7 @@ describe('a device standing', () => {
 		expect(deviceStanding(device({ last_seen_at: NOW - QUIET_AFTER_MS - 1 }), NOW)).toBe('quiet');
 	});
 
-	it('reads a revoked machine as signed out however recently it spoke', () => {
+	it('reads a revoked device as signed out however recently it spoke', () => {
 		expect(
 			deviceStanding(device({ last_seen_at: NOW, revoked_at: NOW - 10 }), NOW)
 		).toBe('signed_out');
@@ -118,7 +118,7 @@ describe('the summary', () => {
 		});
 	});
 
-	it('lists only the marketplaces a machine currently holds', () => {
+	it('lists only the marketplaces a device currently holds', () => {
 		const rows = deviceRows(
 			[device({ sessions: [session('Tpt'), session('Tes', 'wiped')] })],
 			NOW
@@ -128,12 +128,12 @@ describe('the summary', () => {
 });
 
 describe('where each login lives', () => {
-	it('names the machine holding a no-API marketplace, and D30 words it', () => {
+	it('names the device holding a no-API marketplace, and D30 words it', () => {
 		const tpt = of(signInStates([device({ sessions: [session('Tpt')] })], [], NOW), 'Tpt');
 		expect(tpt.state).toBe('signed_in');
 		expect(tpt.device?.name).toBe('staffroom-laptop');
 		expect(tpt.accountLabel).toBe('Miss Cooper');
-		expect(tpt.line).toContain('stays on that machine');
+		expect(tpt.line).toContain('stays on that device');
 	});
 
 	it('says a schedule is not running when the holder has gone quiet', () => {
@@ -150,7 +150,7 @@ describe('where each login lives', () => {
 		expect(tpt.line).toContain('not running');
 	});
 
-	it('separates having no machine at all from needing a sign-in on one', () => {
+	it('separates having no device at all from needing a sign-in on one', () => {
 		const none = signInStates([], [], NOW);
 		expect(none.every((entry) => entry.state !== 'needs_signin')).toBe(true);
 		expect(of(none, 'Tpt').state).toBe('no_device');
@@ -167,7 +167,7 @@ describe('where each login lives', () => {
 		);
 		const tpt = of(states, 'Tpt');
 		expect(tpt.state).toBe('all_signed_out');
-		expect(tpt.line).toContain('Every machine of yours is signed out');
+		expect(tpt.line).toContain('Every device of yours is signed out');
 		expect(needingDeviceSignIn(states)).toEqual([]);
 	});
 
@@ -179,7 +179,7 @@ describe('where each login lives', () => {
 	it('never asks for a device for a marketplace with a sanctioned API', () => {
 		const etsy = of(signInStates([], [connection('Etsy')], NOW), 'Etsy');
 		expect(etsy.state).toBe('served_here');
-		expect(etsy.line).toContain('No machine is needed');
+		expect(etsy.line).toContain('No device is needed');
 	});
 
 	it('does not call an unverified server-side connection served', () => {
@@ -204,7 +204,7 @@ describe('where each login lives', () => {
 		expect(needingDeviceSignIn(signInStates([], [], NOW))).toEqual([]);
 	});
 
-	it('ignores a signed-out machine when deciding who holds a login', () => {
+	it('ignores a signed-out device when deciding who holds a login', () => {
 		const states = signInStates(
 			[
 				device({ id: 'gone', revoked_at: NOW - 5, sessions: [session('Tpt')] }),
@@ -237,7 +237,7 @@ describe('where each login lives', () => {
 });
 
 describe('whether anything scheduled can run', () => {
-	it('needs a machine that is both checking in and holding a login', () => {
+	it('needs a device that is both checking in and holding a login', () => {
 		expect(schedulesRunning(deviceRows([device({ sessions: [session('Tpt')] })], NOW))).toBe(true);
 		expect(schedulesRunning(deviceRows([device()], NOW))).toBe(false);
 		expect(
@@ -257,12 +257,12 @@ describe('what the band says when nothing is running', () => {
 		return { summary: deviceSummary(rows), running: schedulesRunning(rows) };
 	}
 
-	it('says nothing at all when there is no machine to speak about', () => {
+	it('says nothing at all when there is no device to speak about', () => {
 		const { summary, running } = summaryOf([]);
 		expect(bandNotice(summary, running)).toBeNull();
 	});
 
-	it('says nothing while a machine is checking in and holding a login', () => {
+	it('says nothing while a device is checking in and holding a login', () => {
 		const { summary, running } = summaryOf([device({ sessions: [session('Tpt')] })]);
 		expect(bandNotice(summary, running)).toBeNull();
 	});
@@ -276,7 +276,7 @@ describe('what the band says when nothing is running', () => {
 		expect(notice?.body).not.toContain('checked in');
 	});
 
-	it('blames silence only where a live machine has actually gone quiet', () => {
+	it('blames silence only where a live device has actually gone quiet', () => {
 		const { summary, running } = summaryOf([
 			device({ last_seen_at: NOW - QUIET_AFTER_MS - 1, sessions: [session('Tpt')] })
 		]);
@@ -285,7 +285,7 @@ describe('what the band says when nothing is running', () => {
 		expect(notice?.body).toContain('online for half an hour');
 	});
 
-	it('says a current machine has nothing to run when it holds no login', () => {
+	it('says a current device has nothing to run when it holds no login', () => {
 		const { summary, running } = summaryOf([device()]);
 		const notice = bandNotice(summary, running);
 		expect(notice?.kind).toBe('no_login');
@@ -306,24 +306,24 @@ describe('the footnote under the marketplace rows', () => {
 		return deviceSummary(deviceRows(devices, NOW));
 	}
 
-	it('says nothing where there is no machine to count', () => {
+	it('says nothing where there is no device to count', () => {
 		expect(deviceFootnote(summaryOf([]))).toBe('');
 	});
 
-	it('counts against the machines that could check in, not the ones signed out', () => {
+	it('counts against the devices that could check in, not the ones signed out', () => {
 		const line = deviceFootnote(
 			summaryOf([
 				device({ id: 'a', sessions: [session('Tpt')] }),
 				device({ id: 'b', revoked_at: NOW - 5 })
 			])
 		);
-		expect(line).toContain('1 of 1 machine has been online');
+		expect(line).toContain('1 of 1 device has been online');
 		expect(line).toContain('1 other is signed out and kept in history.');
 	});
 
 	it('never divides by a registry that is entirely signed out', () => {
 		const line = deviceFootnote(summaryOf([device({ revoked_at: NOW - 5 })]));
-		expect(line).toBe('All your machines are signed out.');
+		expect(line).toBe('All your devices are signed out.');
 		expect(line).not.toContain('0 of');
 	});
 
@@ -334,7 +334,7 @@ describe('the footnote under the marketplace rows', () => {
 				device({ id: 'b', last_seen_at: NOW - QUIET_AFTER_MS - 1 })
 			])
 		);
-		expect(line).toBe('1 of 2 machines have been online in the last half hour.');
+		expect(line).toBe('1 of 2 devices have been online in the last half hour.');
 	});
 
 	it('carries the outstanding wipe wherever it lands', () => {
@@ -414,19 +414,19 @@ describe('the merged marketplace rows', () => {
 		expect(rowOf(rows, 'Tpt').authorship).toBeUndefined();
 	});
 
-	it('report a login held on a machine that has gone quiet', () => {
+	it('report a login held on a device that has gone quiet', () => {
 		const quiet = device({ last_seen_at: NOW - QUIET_AFTER_MS - 1, sessions: [session('Tes')] });
 		const rows = marketplaceRows([quiet], [], NOW);
 		expect(rowOf(rows, 'Tes').quiet).toBe(true);
 		expect(rowOf(rows, 'Tpt').quiet).toBe(false);
 	});
 
-	it('does not call a login quiet while its machine is checking in', () => {
+	it('does not call a login quiet while its device is checking in', () => {
 		const rows = marketplaceRows([device({ sessions: [session('Tes')] })], [], NOW);
 		expect(rowOf(rows, 'Tes').quiet).toBe(false);
 	});
 
-	it('name the machines a signed-out login may still be sitting on', () => {
+	it('name the devices a signed-out login may still be sitting on', () => {
 		const stale = device({
 			id: 'd2',
 			name: 'old-desktop',
@@ -441,7 +441,7 @@ describe('the merged marketplace rows', () => {
 		expect(rowOf(rows, 'Tes').wipeOutstandingOn).toEqual([]);
 	});
 
-	it('leaves a machine that was signed out and has since checked in off that list', () => {
+	it('leaves a device that was signed out and has since checked in off that list', () => {
 		const wiped = device({
 			revoked_at: NOW - 5_000,
 			wipe_outstanding: false,
@@ -452,7 +452,7 @@ describe('the merged marketplace rows', () => {
 });
 
 describe('the marketplaces the screen puts at the top', () => {
-	it('name a device-branch marketplace no machine holds', () => {
+	it('name a device-branch marketplace no device holds', () => {
 		const rows = marketplaceRows([device({ sessions: [session('Tpt')] })], [], NOW);
 		expect(needingAttention(rows).map((row) => row.marketplace)).toEqual(['Tes']);
 	});
@@ -476,7 +476,7 @@ describe('the marketplaces the screen puts at the top', () => {
 		).toEqual([]);
 	});
 
-	it('name a login whose machine has gone quiet, because its schedule is not running', () => {
+	it('name a login whose device has gone quiet, because its schedule is not running', () => {
 		const quiet = device({
 			last_seen_at: NOW - QUIET_AFTER_MS - 1,
 			sessions: [session('Tpt'), session('Tes')]
@@ -486,7 +486,7 @@ describe('the marketplaces the screen puts at the top', () => {
 		);
 	});
 
-	it('says nothing about a marketplace never linked or a seller with no machine', () => {
+	it('says nothing about a marketplace never linked or a seller with no device', () => {
 		expect(needingAttention(marketplaceRows([], [], NOW))).toEqual([]);
 	});
 
@@ -539,7 +539,7 @@ describe('readiness, as facts that are kept apart', () => {
 		expect(line).toContain('Everything else works there as normal');
 	});
 
-	it('counts a current machine and runs the schedule on it', () => {
+	it('counts a current device and runs the schedule on it', () => {
 		const rows = deviceRows([device({ sessions: [session('Tpt')] })], NOW);
 		expect(deviceSummary(rows).current).toBe(1);
 		expect(schedulesRunning(rows)).toBe(true);
@@ -547,7 +547,7 @@ describe('readiness, as facts that are kept apart', () => {
 
 	// Counts are about what the page shows. A seller with one working laptop
 	// and three replaced installations read "1 of 4" and could see one row.
-	it('counts the current machines and keeps signed-out records out of the total it divides by', () => {
+	it('counts the current devices and keeps signed-out records out of the total it divides by', () => {
 		const rows = deviceRows(
 			[
 				device({ id: 'live', sessions: [session('Tpt')] }),
@@ -560,6 +560,6 @@ describe('readiness, as facts that are kept apart', () => {
 		const summary = deviceSummary(rows);
 		expect(summary.current).toBe(1);
 		expect(summary.signedOut).toBe(3);
-		expect(deviceFootnote(summary)).toContain('1 of 1 machine has been online');
+		expect(deviceFootnote(summary)).toContain('1 of 1 device has been online');
 	});
 });

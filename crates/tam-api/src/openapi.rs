@@ -571,7 +571,7 @@ pub const ROUTES: [Route; 175] = [
     Route {
         method: "get",
         path: "/{version}/devices",
-        summary: "The seller's own machines and the marketplaces each one holds",
+        summary: "The seller's own devices and the marketplaces each one holds",
     },
     Route {
         method: "post",
@@ -656,12 +656,12 @@ pub const ROUTES: [Route; 175] = [
     Route {
         method: "get",
         path: "/{version}/library",
-        summary: "Search and page files by machine, availability and resource association",
+        summary: "Search and page files by device, availability and resource association",
     },
     Route {
         method: "post",
         path: "/{version}/devices/{device}/library/want",
-        summary: "Ask one machine to fetch one file directly from another that holds it",
+        summary: "Ask one device to fetch one file directly from another that holds it",
     },
     Route {
         method: "delete",
@@ -671,7 +671,7 @@ pub const ROUTES: [Route; 175] = [
     Route {
         method: "get",
         path: "/{version}/devices/{device}/library/wants",
-        summary: "What one machine has been asked to fetch",
+        summary: "What one device has been asked to fetch",
     },
     Route {
         method: "get",

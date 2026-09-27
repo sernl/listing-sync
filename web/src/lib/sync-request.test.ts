@@ -284,7 +284,7 @@ describe('coverage, where absent and zero are different facts', () => {
 });
 
 describe('the device-version banner', () => {
-	it('is absent while every machine can run the work', () => {
+	it('is absent while every device can run the work', () => {
 		expect(deviceUpdateNotice(request())).toBeNull();
 		expect(deviceUpdateNotice(request({ waiting_for_device_version: null }))).toBeNull();
 	});
@@ -404,11 +404,11 @@ describe('the authorship gate', () => {
 });
 
 describe('which requests a computer can still be asked to run', () => {
-	it('a pending request naming nothing is the one a machine can pick up', () => {
+	it('a pending request naming nothing is the one a device can pick up', () => {
 		expect(canStartHere(request({ state: 'pending' }))).toBe(true);
 	});
 
-	it('a request already being run by some machine is not offered again', () => {
+	it('a request already being run by some device is not offered again', () => {
 		expect(canStartHere(request({ state: 'draining', resources: [resource()] }))).toBe(false);
 	});
 
@@ -618,7 +618,7 @@ describe('the version banner and the start action, together', () => {
 		}
 	});
 
-	it('a finished import is never told that no machine can run it', () => {
+	it('a finished import is never told that no device can run it', () => {
 		const done = request({
 			state: 'enqueued',
 			resources: [resource()],

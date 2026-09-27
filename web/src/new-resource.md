@@ -34,7 +34,7 @@ Grades read in British or American words from the same set. Switch the labels wi
 2. Tick the pages buyers may see.
 3. Turn on the watermark to draw your name faintly across each previewed page.
 
-The preview is built on your own machine and uploaded as the resource's preview.
+The preview is built on your own device and uploaded as the resource's preview.
 
 <!-- shot: /resources/new, page ticks with the watermark switch on -->
 __omp_shell("[Choosing preview pages](image:new-resource-2)")

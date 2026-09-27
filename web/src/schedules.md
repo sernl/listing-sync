@@ -12,7 +12,7 @@ A schedule sends resources to a marketplace at a time you choose.
 1. Connect the marketplace.
 2. Sign in on the desktop app and leave it running at the scheduled time.
 
-A schedule with no connected marketplace, or no signed-in machine, waits instead of sending.
+A schedule with no connected marketplace, or no signed-in device, waits instead of sending.
 
 ## Make a schedule
 
@@ -31,7 +31,7 @@ The time you set is read in the timezone on the schedule, not in your browser's.
 
 ## What a schedule sends
 
-Only resources that are ready: a target price, the marketplace's required fields answered, and a file on a signed-in machine. A resource that is not ready is skipped and listed, not failed.
+Only resources that are ready: a target price, the marketplace's required fields answered, and a file on a signed-in device. A resource that is not ready is skipped and listed, not failed.
 
 ## Republishing
 

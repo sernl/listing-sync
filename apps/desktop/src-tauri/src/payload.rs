@@ -333,16 +333,16 @@ impl<T: PayloadTransport> DevicePayloads<T> {
                     .to_owned(),
             ),
             (Some(slot), Some(committed)) => match slot.get().await {
-                Err(why) => Some(format!("this machine's library could not be opened: {why}")),
+                Err(why) => Some(format!("this device's library could not be opened: {why}")),
                 Ok(library) => match library.read(committed.hash).await {
                     Ok(Some(bytes)) => return checked(manifest, bytes),
                     Ok(None) => Some(
-                        "this machine's library keeps nothing under the digest the work order \
+                        "this device's library keeps nothing under the digest the work order \
                          commits to"
                             .to_owned(),
                     ),
                     Err(why) => Some(format!(
-                        "this machine's library refused the digest the work order commits \
+                        "this device's library refused the digest the work order commits \
                          to: {why}"
                     )),
                 },
@@ -352,7 +352,7 @@ impl<T: PayloadTransport> DevicePayloads<T> {
             if let PayloadSource::Marketplace { marketplace, .. } = &manifest.source {
                 eprintln!(
                     "file {} is being fetched from {marketplace:?} under the seller's own \
-                     session rather than read from this machine: {why}",
+                     session rather than read from this device: {why}",
                     manifest.file.0.to_hyphenated()
                 );
             }

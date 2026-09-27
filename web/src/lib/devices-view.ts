@@ -162,8 +162,8 @@ export const SIGN_IN_LABEL: Record<SignInState, string> = {
 	needs_signin: 'Sign in',
 	unverified: 'Not verified',
 	no_account: 'Not linked',
-	no_device: 'No machine',
-	all_signed_out: 'No machine signed in',
+	no_device: 'No device',
+	all_signed_out: 'No device signed in',
 	served_here: 'Connected directly'
 };
 
@@ -233,7 +233,7 @@ function servedHere(
 		state,
 		line:
 			state === 'served_here'
-				? `${shown.explanation} No machine is needed: Teachouse connects to this marketplace directly.`
+				? `${shown.explanation} No device is needed: Teachouse connects to this marketplace directly.`
 				: shown.explanation,
 		tone: shown.tone
 	};
@@ -275,7 +275,7 @@ export function signInStates(
 				accountLabel: session?.account_label ?? null,
 				line:
 					holder.standing === 'checking_in'
-						? `Signed in on ${holder.device.name}. Your login stays on that machine.`
+						? `Signed in on ${holder.device.name}. Your login stays on that device.`
 						: `Signed in on ${holder.device.name}, but it has not been online lately, so scheduled work for this marketplace is not running.`,
 				tone: holder.standing === 'checking_in' ? 'ok' : 'run'
 			};
@@ -285,7 +285,7 @@ export function signInStates(
 			return {
 				...base,
 				state: 'no_device' as const,
-				line: 'You have no machines set up yet. You sign in to this marketplace in the Teachouse app on your own machine.',
+				line: 'You have no devices set up yet. You sign in to this marketplace in the Teachouse app on your own device.',
 				tone: 'mut' as const
 			};
 		}
@@ -293,14 +293,14 @@ export function signInStates(
 			return {
 				...base,
 				state: 'all_signed_out' as const,
-				line: 'Every machine of yours is signed out. Sign in on a machine again so this marketplace can run.',
+				line: 'Every device of yours is signed out. Sign in on a device again so this marketplace can run.',
 				tone: 'run' as const
 			};
 		}
 		return {
 			...base,
 			state: 'needs_signin' as const,
-			line: 'None of your machines is signed in to this marketplace. Sign in on one; your login stays on that machine.',
+			line: 'None of your devices is signed in to this marketplace. Sign in on one; your login stays on that device.',
 			tone: 'bad' as const
 		};
 	});
@@ -480,8 +480,8 @@ export function bandNotice(summary: DeviceSummary, running: boolean): BandNotice
 		return {
 			kind: 'all_signed_out',
 			tone: 'warn',
-			headline: 'Every machine is signed out',
-			body: 'Nothing scheduled runs until you sign in on a machine again. Nothing is lost; waiting items go out then.'
+			headline: 'Every device is signed out',
+			body: 'Nothing scheduled runs until you sign in on a device again. Nothing is lost; waiting items go out then.'
 		};
 	}
 	if (running) {
@@ -492,14 +492,14 @@ export function bandNotice(summary: DeviceSummary, running: boolean): BandNotice
 			kind: 'nothing_checking_in',
 			tone: 'attn',
 			headline: 'Nothing scheduled is running',
-			body: 'None of your machines has been online for half an hour. Waiting items go out once one is back; nothing is lost.'
+			body: 'None of your devices has been online for half an hour. Waiting items go out once one is back; nothing is lost.'
 		};
 	}
 	return {
 		kind: 'no_login',
 		tone: 'attn',
 		headline: 'Nothing scheduled is running',
-		body: 'A machine is online, but none is signed in to a marketplace yet, so there is nothing for it to run.'
+		body: 'A device is online, but none is signed in to a marketplace yet, so there is nothing for it to run.'
 	};
 }
 
@@ -534,8 +534,8 @@ export function deviceFootnote(summary: DeviceSummary): string {
 			? ''
 			: ` ${summary.wipesOutstanding} ${count(
 					summary.wipesOutstanding,
-					'machine was',
-					'machines were'
+					'device was',
+					'devices were'
 				)} signed out and ${count(
 					summary.wipesOutstanding,
 					'has',
@@ -550,7 +550,7 @@ export function deviceFootnote(summary: DeviceSummary): string {
 					'them'
 				)}.`;
 	if (live === 0) {
-		return `All your machines are signed out.${wipes}`;
+		return `All your devices are signed out.${wipes}`;
 	}
 	const signedOut =
 		summary.signedOut === 0
@@ -565,8 +565,8 @@ export function deviceFootnote(summary: DeviceSummary): string {
 			? ''
 			: ` ${summary.needingUpdateForSourcedFiles} ${count(
 					summary.needingUpdateForSourcedFiles,
-					'machine needs',
-					'machines need'
+					'device needs',
+					'devices need'
 				)} a newer Teachouse app before ${count(
 					summary.needingUpdateForSourcedFiles,
 					'it',
@@ -575,8 +575,8 @@ export function deviceFootnote(summary: DeviceSummary): string {
 	return (
 		`${summary.checkingIn} of ${live} ${count(
 			live,
-			'machine has',
-			'machines have'
+			'device has',
+			'devices have'
 		)} been online in the last half hour.${stale}${signedOut}${wipes}`
 	);
 }

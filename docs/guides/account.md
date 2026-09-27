@@ -46,7 +46,7 @@ Choose the email address for notices in **Account settings**. It can be differen
 
 A signed-out computer stops working for Teachouse. Nothing already saved is deleted, and space already used is not freed up.
 
-<!-- shot: /settings, the machines panel with one machine signed in -->
+<!-- shot: /settings, the devices panel with one device signed in -->
 ![Computers signed in](/v1/guides/images/f3eb740ea53f9456926b63cd6a0597059a57126d10807223b1738820c1d5765c)
 
 ## Forgotten password

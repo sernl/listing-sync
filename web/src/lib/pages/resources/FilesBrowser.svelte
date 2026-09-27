@@ -30,7 +30,7 @@
 		AVAILABILITY_LABEL,
 		BROWSER_SENTENCE,
 		EMPTY_FILTERS,
-		FILES_STAY_ON_YOUR_MACHINES,
+		FILES_STAY_ON_YOUR_DEVICES,
 		HERE,
 		KEEP_LABEL,
 		NOT_KEEPING_SENTENCE,
@@ -203,7 +203,7 @@
 	);
 
 	const tabs = $derived([
-		{ id: 'all', label: 'All machines', count: null },
+		{ id: 'all', label: 'All devices', count: null },
 		...(devices.data?.devices ?? [])
 			.filter((device) => device.revoked_at === null)
 			.map((device) => ({
@@ -244,7 +244,7 @@
 		if (answer.kind !== 'ok') {
 			toast('error', answer.kind === 'refused' ? answer.detail : NOT_KEEPING_SENTENCE);
 		} else {
-			toast('info', `"${name}" was removed from this machine.`);
+			toast('info', `"${name}" was removed from this device.`);
 		}
 		await load();
 	}
@@ -259,7 +259,7 @@
 			toast(
 				'error',
 				answer.kind === 'refused'
-					? 'This machine couldn’t open that file in another app.'
+					? 'This device couldn’t open that file in another app.'
 					: NOT_KEEPING_SENTENCE
 			);
 		}
@@ -270,17 +270,17 @@
 	 *  reads "Waiting for…" until then. */
 	async function get(hash: string, name: string) {
 		if (thisDevice === null) {
-			toast('error', 'This machine isn’t connected yet, so it can’t get files. Try again soon.');
+			toast('error', 'This device isn’t connected yet, so it can’t get files. Try again soon.');
 			return;
 		}
 		if (local.state !== 'read') {
-			toast('error', 'This machine’s files haven’t loaded, so it can’t receive files yet.');
+			toast('error', 'This device’s files haven’t loaded, so it can’t receive files yet.');
 			return;
 		}
 		asking = hash;
 		try {
 			await api.wantFile(thisDevice, hash);
-			toast('info', `"${name}" will be copied to this machine.`);
+			toast('info', `"${name}" will be copied to this device.`);
 			await queryClient.invalidateQueries({ queryKey: queryKeys.library });
 		} catch (failure) {
 			toast('error', failure instanceof ApiFailure ? failure.message : 'The copy wasn’t requested. Try again.');
@@ -306,21 +306,21 @@
 </script>
 
 <div class="page resources-page files-page">
-	<PageHead icon="files" title="Your machines' files" guide="your-files">
+	<PageHead icon="files" title="Your devices' files" guide="your-files">
 		{#snippet aside()}
 			<Explain title="What “on your computer” means" label="Where are they?">
-				<p>{FILES_STAY_ON_YOUR_MACHINES}</p>
+				<p>{FILES_STAY_ON_YOUR_DEVICES}</p>
 				<p>
 					The Teachouse app on each of your computers keeps the files you import there. This page
 					shows which computer holds each file and which resources use it.
 				</p>
-				<p>A computer that is off can’t hand its files over. Copy a file to this machine to use it here.</p>
+				<p>A computer that is off can’t hand its files over. Copy a file to this device to use it here.</p>
 				<p>{BROWSER_SENTENCE}</p>
 			</Explain>
 		{/snippet}
 	</PageHead>
 
-	<p class="flow-hint res-files-hint">Every file your resources use, and the machine it is on.</p>
+	<p class="flow-hint res-files-hint">Every file your resources use, and the device it is on.</p>
 
 	<div class="res-bar files-bar">
 		<label class="res-search">
@@ -341,7 +341,7 @@
 		<!-- The machines as chips. A machine that could not be read has no chip
 		     rather than an empty one, so the row never offers a filter that can
 		     only answer nothing. -->
-		<div class="res-fchips" role="group" aria-label="Machine">
+		<div class="res-fchips" role="group" aria-label="Device">
 			{#each tabs as one (one.id)}
 				<button
 					type="button"
@@ -373,9 +373,9 @@
 					})}
 			>
 				<option value="any">Anywhere</option>
-				<option value="online">On a machine that is online</option>
-				<option value="offline">On a machine that is offline</option>
-				<option value="missing">On no machine</option>
+				<option value="online">On a device that is online</option>
+				<option value="offline">On a device that is offline</option>
+				<option value="missing">On no device</option>
 			</select>
 
 			<label class="sr-only" for="file-linked">Resources</label>
@@ -414,7 +414,7 @@
 			<p class="res-note">{usageLine(local.entries, local.usage)}</p>
 		</div>
 		<details class="flow-more files-local">
-			<summary>Files saved on this machine ({local.entries.length})</summary>
+			<summary>Files saved on this device ({local.entries.length})</summary>
 			<p class="res-note">The filters above don’t apply to this list.</p>
 			<Field label="Search saved files" id="local-file-search">
 				<input
@@ -453,7 +453,7 @@
 										disabled={removing === entry.hash}
 										onclick={() => void remove(entry.hash, entry.file_name)}
 									>
-										{removing === entry.hash ? 'Removing…' : 'Remove from this machine'}
+										{removing === entry.hash ? 'Removing…' : 'Remove from this device'}
 									</Button>
 								</td>
 							</tr>
@@ -521,7 +521,7 @@
 			body={shown.hasPrev
 				? 'Go to the previous page to see earlier files.'
 				: filtersActive(filters)
-					? 'Widen the search, or choose another machine.'
+					? 'Widen the search, or choose another device.'
 					: 'Files show up here after an import, or when you add a file to a resource.'}
 		/>
 	{:else}
@@ -531,7 +531,7 @@
 					<tr>
 						<th>File</th>
 						<th>Size</th>
-						<th>Machine</th>
+						<th>Device</th>
 						<th>Last seen</th>
 						<th>Used by</th>
 						<th><span class="sr-only">Actions</span></th>
@@ -544,7 +544,7 @@
 								<span class:res-file-anon={row.anonymous}>{row.name}</span>
 							</td>
 							<td class="files-num" data-label="Size">{row.size}</td>
-							<td data-label="Machine">
+							<td data-label="Device">
 								<!-- The dot says whether it can be reached now; the names say
 								     where, in the seller's own words for their machines. -->
 								<span class="files-where" title={AVAILABILITY_LABEL[row.availability]}>

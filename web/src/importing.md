@@ -29,7 +29,7 @@ __omp_shell("[The import report](image:importing-2)")
 
 ## Files come separately
 
-An import records what a listing says, not the file a buyer downloads. Attach files from the machine that holds them — see [Where your files live](/guides/your-files).
+An import records what a listing says, not the file a buyer downloads. Attach files from the device that holds them — see [Where your files live](/guides/your-files).
 
 ## When a run stops
 

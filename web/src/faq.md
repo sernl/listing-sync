@@ -55,11 +55,11 @@ Tes and Teachers Pay Teachers, in both directions.
 
 ## Why do I need the desktop app?
 
-Tes and TPT are reached through your own signed-in browser session on your own machine. The app provides that session, keeps your marketplace password on your machine, and reads your files where they already are.
+Tes and TPT are reached through your own signed-in browser session on your own device. The app provides that session, keeps your marketplace password on your device, and reads your files where they already are.
 
 ## Do my files get uploaded to Teachouse?
 
-No. Files stay on your machines and are sent to a marketplace only when you publish. The one exception is the thumbnail, which is stored so the console can show it.
+No. Files stay on your devices and are sent to a marketplace only when you publish. The one exception is the thumbnail, which is stored so the console can show it.
 
 ## How many resources can I keep?
 

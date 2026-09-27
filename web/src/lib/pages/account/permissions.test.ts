@@ -52,8 +52,8 @@ describe('the withdrawal prompt', () => {
 	it('says what stops and what does not', () => {
 		const prompt = withdrawPrompt('TPT');
 		expect(prompt).toContain('Withdraw permission for TPT?');
-		expect(prompt).toContain('stops all new TPT work on your machines');
-		expect(prompt).toContain('logins stay on each machine');
+		expect(prompt).toContain('stops all new TPT work on your devices');
+		expect(prompt).toContain('logins stay on each device');
 	});
 });
 
