@@ -794,6 +794,9 @@ pub fn router(state: AppState) -> Router {
                 .put(profile::set_avatar)
                 .delete(profile::clear_avatar),
         )
+        // The guided tour's ending, recorded on the same row the profile
+        // reads, so the console stops offering it.
+        .route("/{version}/onboarding/tour", post(profile::settle_tour))
         // The help corpus, read by every seller through the session gate.
         // `/{version}/guides/images/{handle}` is listed before
         // `/{version}/guides/{slug}` because `images` is a literal segment

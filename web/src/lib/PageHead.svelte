@@ -103,6 +103,7 @@
 				href={ACCOUNT_DESTINATION.href}
 				aria-label={ACCOUNT_DESTINATION.label}
 				title={whereYouAre(machineHere.where)}
+				data-tour="billing"
 			>
 				{#if tile.kind === 'picture'}
 					<img

@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE app_user SET tour_state = $3, tour_settled_at = $4 WHERE id = $1 AND org_id = $2 RETURNING tour_state, tour_settled_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "tour_state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "tour_settled_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "92cfb8e7d922027f0905e3e606bc158fd565ee67c6a3f70b201c8a654d41d547"
+}

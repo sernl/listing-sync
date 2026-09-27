@@ -36,6 +36,9 @@
 	import { toast } from '$lib/toast';
 	import { opensPalette } from '$lib/search-palette';
 	import { capture } from '$lib/posthog';
+	import Tour from '$lib/tour/Tour.svelte';
+	import { shouldOfferTour } from '$lib/tour/model';
+	import { tour } from '$lib/tour/tour.svelte';
 
 	let { children, onLogout }: { children: Snippet; onLogout: () => void } = $props();
 
@@ -196,6 +199,42 @@
 		queryFn: () => api.profile()
 	}));
 	const picture = $derived(avatarSrc(profile.data));
+
+	// The guided tour, offered once per load and only once both reads it
+	// depends on have answered: the profile says whether it is due, and the
+	// identity session says whether this is an operator impersonating, who
+	// is never shown it. Plain rather than `$state`, for the reason
+	// `gateReported` below gives.
+	let tourDecided = false;
+	$effect(() => {
+		if (tourDecided || profile.data === undefined || !identity.isFetched) {
+			return;
+		}
+		tourDecided = true;
+		const offered = shouldOfferTour({
+			tour: profile.data.tour.state,
+			impersonating: impersonation !== null,
+			checkoutSuccess: page.url.searchParams.get('checkout') === 'success'
+		});
+		if (offered) {
+			tour.start();
+		}
+	});
+
+	/** Records how the tour ended, so it is not offered again. Not while
+	 *  impersonating: the tour is the user's to end, and an operator who
+	 *  opened it from Help would otherwise end it for them. A failed write is
+	 *  left unsaid -- the tour is offered again next time, which is the whole
+	 *  of the harm. */
+	function tourEnded(outcome: 'completed' | 'skipped') {
+		if (impersonation !== null) {
+			return;
+		}
+		void api.settleTour(outcome).then(
+			(settled) => queryClient.setQueryData(queryKeys.profile, settled),
+			(failure: unknown) => console.warn('the tour ending was not recorded', failure)
+		);
+	}
 	// The strip's tile and the page header's avatar button are one derivation in
 	// `account-tile.svelte.ts`, fed from here: this component holds both reads,
 	// and a header that read them itself would fire them on the public pages
@@ -352,6 +391,7 @@
 				aria-current={entry.id === section?.id ? 'page' : undefined}
 				aria-label={entry.label}
 				title={entry.hint}
+				data-tour={entry.id}
 			>
 				<Icon name={entry.icon} size={20} />
 			</a>
@@ -370,6 +410,7 @@
 				aria-current={accountSection.id === section?.id ? 'page' : undefined}
 				aria-label={accountSection.label}
 				title={accountSection.hint}
+				data-tour="billing"
 			>
 				<Icon name={accountSection.icon} size={20} />
 			</a>
@@ -392,7 +433,7 @@
 			     reason reads as a fault. -->
 			{#if card.primary}
 				{#if createRefusal === null}
-					<a class="cta nav-primary" href={card.primary.href}>
+					<a class="cta nav-primary" href={card.primary.href} data-tour="new">
 						<Icon name={card.primary.icon} size={16} />
 						{card.primary.label}
 					</a>
@@ -453,7 +494,7 @@
 				<kbd>ctrl K</kbd>
 			</button>
 			{#if createRefusal === null}
-				<a class="cta" href={CREATE_TAB.href}>{CREATE_TAB.label}</a>
+				<a class="cta" href={CREATE_TAB.href} data-tour="new">{CREATE_TAB.label}</a>
 			{:else}
 				<button class="cta" type="button" disabled title={createRefusal}>{CREATE_TAB.label}</button>
 			{/if}
@@ -578,7 +619,7 @@
 				     resource" is what the control does. No `aria-current` in any
 				     state -- creating a resource is never the page you are on --
 				     which is also why the disc carries no selected pill. -->
-				<a class="tab-create" href={tab.href} aria-label={tab.label}>
+				<a class="tab-create" href={tab.href} aria-label={tab.label} data-tour="new">
 					<span class="ring"><Icon name={tab.icon} size={24} /></span>
 					<span>{tab.short ?? tab.label}</span>
 				</a>
@@ -587,6 +628,7 @@
 					class="tab-item"
 					href={tab.href}
 					aria-current={tab.href === section?.href ? 'page' : undefined}
+					data-tour={SECTIONS.find((entry) => entry.href === tab.href)?.id}
 				>
 					<span class="ico"><Icon name={tab.icon} size={24} /></span>
 					<span>{tab.short ?? tab.label}</span>
@@ -596,6 +638,7 @@
 	</nav>
 
 	<SearchPalette bind:open={palette.open} />
+	<Tour onEnd={tourEnded} />
 </div>
 
 <style>

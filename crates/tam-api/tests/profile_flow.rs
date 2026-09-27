@@ -10,7 +10,7 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use sqlx::PgPool;
-use tam_api::profile::ProfileView;
+use tam_api::profile::{ProfileView, TourStateView, TourView};
 use tam_api::{
     router, APIError, APIErrorCode, AppState, BlobStore, Config, UploadedView, SESSION_COOKIE,
 };
@@ -227,7 +227,8 @@ async fn a_seller_sets_reads_and_clears_their_picture(pool: PgPool) {
         before,
         ProfileView {
             user: USER_A,
-            avatar_hash: None
+            avatar_hash: None,
+            tour: DUE,
         },
         "a fresh user has no picture"
     );
@@ -424,7 +425,8 @@ async fn a_picture_is_the_owners_alone(pool: PgPool) {
         profile(state.clone(), &TOKEN_B).await,
         ProfileView {
             user: USER_B,
-            avatar_hash: None
+            avatar_hash: None,
+            tour: DUE,
         },
         "the other user's profile is their own, and carries no picture"
     );
@@ -463,6 +465,7 @@ async fn every_profile_route_is_behind_the_session(pool: PgPool) {
         (Method::GET, "/v1/profile/avatar"),
         (Method::PUT, "/v1/profile/avatar"),
         (Method::DELETE, "/v1/profile/avatar"),
+        (Method::POST, "/v1/onboarding/tour"),
     ] {
         let answer = call(
             state.clone(),
@@ -478,4 +481,100 @@ async fn every_profile_route_is_behind_the_session(pool: PgPool) {
             "{method} {path} must refuse before it reads anything"
         );
     }
+}
+
+/// A user created since the tour shipped, who has not ended it.
+const DUE: TourView = TourView {
+    state: TourStateView::Due,
+    settled_at: None,
+};
+
+async fn settle_tour(state: AppState, token: &SessionToken, body: &serde_json::Value) -> Answer {
+    call(
+        state,
+        Some(token),
+        Method::POST,
+        "/v1/onboarding/tour",
+        Some(("application/json", body.to_string().into_bytes())),
+    )
+    .await
+}
+
+/// The tour's ending round-trips through the profile: a new user is offered
+/// it, a skip is recorded with the server's clock and read back, a later
+/// completion replaces the skip, and none of it touches another user's row.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_seller_ends_the_tour_and_the_profile_remembers(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    provision(&pool, ORG_B, USER_B, &TOKEN_B, "org-b").await;
+    let root = store_root("tour");
+    let state = configured(pool, &root);
+
+    assert_eq!(
+        profile(state.clone(), &TOKEN_A).await.tour,
+        DUE,
+        "a new account is due the tour"
+    );
+
+    let skipped = settle_tour(
+        state.clone(),
+        &TOKEN_A,
+        &serde_json::json!({ "outcome": "skipped" }),
+    )
+    .await;
+    assert_eq!(
+        skipped.status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&skipped.body)
+    );
+    let skipped: ProfileView = parse(&skipped.body);
+    assert_eq!(
+        skipped.tour,
+        TourView {
+            state: TourStateView::Skipped,
+            settled_at: Some(NOW),
+        },
+        "the skip is dated by the server's clock"
+    );
+    assert_eq!(
+        profile(state.clone(), &TOKEN_A).await,
+        skipped,
+        "the profile read answers what the write answered"
+    );
+
+    let completed = settle_tour(
+        state.clone(),
+        &TOKEN_A,
+        &serde_json::json!({ "outcome": "completed" }),
+    )
+    .await;
+    assert_eq!(completed.status, StatusCode::OK);
+    assert_eq!(
+        profile(state.clone(), &TOKEN_A).await.tour.state,
+        TourStateView::Completed,
+        "a tour restarted from Help and finished is recorded as finished"
+    );
+
+    for body in [
+        serde_json::json!({ "outcome": "seen" }),
+        serde_json::json!({ "outcome": "skipped", "user": USER_B }),
+    ] {
+        let refused = settle_tour(state.clone(), &TOKEN_A, &body).await;
+        assert!(
+            refused.status.is_client_error(),
+            "{body} is refused, answered {}",
+            refused.status
+        );
+    }
+    assert_eq!(
+        profile(state.clone(), &TOKEN_A).await.tour.state,
+        TourStateView::Completed,
+        "a refused write changes nothing"
+    );
+    assert_eq!(
+        profile(state, &TOKEN_B).await.tour,
+        DUE,
+        "the other user is still due their own tour"
+    );
 }
