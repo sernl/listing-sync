@@ -744,11 +744,14 @@ main {
 }
 
 /* The proof shot: a capture of the console's own Resources board, framed in
-   the brand's indigo under the house mark rather than bled into the band. */
+   the brand's indigo under the house mark rather than bled into the band, and
+   given the whole measure under the section's two columns so the covers and
+   titles in it read at the size a seller sees them. */
 .console-shot {
 	display: grid;
 	justify-items: start;
 	gap: 14px;
+	margin: 64px 0 0;
 }
 
 .console-shot .house {
@@ -763,6 +766,12 @@ main {
 	overflow: hidden;
 	background: var(--surface);
 	box-shadow: var(--lift);
+}
+
+.console-shot img:not(.house) {
+	display: block;
+	width: 100%;
+	height: auto;
 }
 
 .console-shot figcaption {
@@ -1008,22 +1017,33 @@ main {
 }
 
 /* The small app that some marketplace work needs, and the platforms it is
-   built for. Microsoft's guidelines require the name in direct proximity to
-   its symbol, which is why the name is beside the mark on every row. */
-
-.aside {
-	margin: 26px 0 0;
-	font-size: 14px;
-	color: var(--muted);
-	max-width: 62ch;
+   built for, as a card beside the solution copy. Microsoft's guidelines
+   require the name in direct proximity to its symbol, which is why the name
+   is beside the glyph on every row. */
+.download {
+	padding: 28px;
+	border-radius: var(--r-region);
+	background: var(--surface);
+	box-shadow: var(--ring);
 }
 
-.pending {
-	color: var(--muted);
+.download h3 {
+	margin: 0 0 10px;
+}
+
+.download > p {
+	margin: 0;
+	color: var(--text);
+}
+
+.download > .download-when {
+	margin: 14px 0 0;
+	font-weight: 600;
+	color: var(--primary);
 }
 
 .platform-row {
-	margin-top: 12px;
+	margin-top: 18px;
 }
 
 .platforms {
@@ -1032,25 +1052,37 @@ main {
 	padding: 0;
 	display: flex;
 	flex-wrap: wrap;
-	gap: 10px;
+	gap: 12px;
 }
 
 .platform {
 	display: inline-flex;
 	align-items: center;
-	gap: 8px;
-	padding: 7px 14px;
+	gap: 10px;
+	padding: 10px 18px;
 	border-radius: var(--r-pill);
 	background: var(--surface);
 	border: 1px solid var(--line);
-	font-size: 14px;
+	font-weight: 600;
+	font-size: 15px;
 	color: var(--text);
 }
 
 .platform img {
 	display: block;
-	height: 18px;
+	height: 24px;
 	width: auto;
+}
+
+.platform svg {
+	display: block;
+	color: var(--primary);
+}
+
+.platform-missing {
+	margin: 12px 0 0;
+	font-size: 14px;
+	color: var(--muted);
 }
 
 /* The licence lines the Android robot's Creative Commons grant requires
@@ -1611,6 +1643,15 @@ main {
 	/* The three steps stay one row on a phone, a size down. */
 	.steps {
 		gap: 6px;
+	}
+
+	/* The two platform chips stay one row on a phone. */
+	.download {
+		padding: 22px;
+	}
+
+	.platform {
+		padding: 8px 14px;
 	}
 
 	.step .glyph {

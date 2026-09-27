@@ -106,7 +106,7 @@ const MARKS_PER_GRAPHEME = 2;
  * Devanagari, Thai, Hebrew and Vietnamese written in NFD. But nothing else
  * bounds them: 300 combining acutes on one letter is one grapheme inside the
  * 80-code-point cap, and a client that honours the stacking paints them out of
- * the line box and over the illustration and the paragraphs around it.
+ * the line box and over the wordmark and the paragraphs around it.
  *
  * Two survive per base character, which is what the scripts above need: a
  * Devanagari nukta with a virama, a Thai vowel with a tone mark. NFC runs

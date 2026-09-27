@@ -32,9 +32,9 @@ Changing a price is an edit in `tam-limits` and a regeneration, never an edit he
 The brand files under `public/brand/`, the marks under `public/marks/` and the faces under `public/fonts/` are byte copies of the console's, not links: the two trees build separately, and `landing-band.test.ts` fails a copy that drifted.
 `public/images/og.png` is the social card, 1200 by 630, rendered from `public/brand/logo.svg` with resvg; nothing rebuilds it, so refreshing the logo means re-rendering the card.
 
-Every value the founder must supply is in `src/site.js` and nowhere else: the login path, the support address, the desktop download URL and the availability sentence.
+Every value the founder must supply is in `src/site.js` and nowhere else: the login path, the support address and the availability sentence.
 `supportEmail` is `null` and renders no address anywhere rather than a `mailto:` that reaches nobody.
-`downloadUrl` is `null` and renders as "Download link to come" rather than as a broken link, because no public download page URL exists yet.
+The site links no download: the app card says to download the app once signed in, and the console offers the build.
 
 `/privacy` and `/terms` are placeholders for counsel, not legal text, and must be replaced in full rather than edited.
 

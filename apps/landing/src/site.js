@@ -19,18 +19,6 @@ export const loginUrl = '/login';
 export const supportEmail = null;
 
 /**
- * The public download for the desktop client, which a seller needs before TPT
- * or TES work can run. Null renders as "Download link to come" rather than as
- * a broken link.
- *
- * There is no URL to put here yet. Releases go to CrabNebula Cloud on the
- * `beta` channel, and CrabNebula's documentation says a channelled release is
- * not listed on an application's public page; the GitHub releases beside them
- * are in a private repository. See `docs/notes/design/desktop-distribution.md`.
- */
-export const downloadUrl = null;
-
-/**
  * What the founder is willing to say about availability today. This sentence
  * is the only claim on the site about whether a seller can use it right now.
  */
