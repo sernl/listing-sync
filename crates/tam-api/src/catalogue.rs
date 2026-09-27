@@ -2983,8 +2983,8 @@ pub fn upload_body_limit() -> DefaultBodyLimit {
 #[cfg(test)]
 mod tests {
     use super::{
-        creation_blocked, hex_encode, parse_hash, required_fields_answered, trigger_kind_of,
-        reach_of, Approved, CreationBlocked, ElectionInput, FileHandle, RightsInput,
+        creation_blocked, hex_encode, parse_hash, reach_of, required_fields_answered,
+        trigger_kind_of, Approved, CreationBlocked, ElectionInput, FileHandle, RightsInput,
         FILE_NAME_MAX,
     };
     use tam_domain::equivalence::ElectionTriggerKind;

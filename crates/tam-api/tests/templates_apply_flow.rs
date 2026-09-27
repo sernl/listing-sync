@@ -424,7 +424,11 @@ async fn a_template_fills_what_is_empty_and_says_what_it_will_not_touch(pool: Pg
     );
     let admitted = row(&plan, &on_tes);
     assert_eq!(
-        (admitted.verdict, admitted.fields.as_slice(), admitted.reason.as_deref()),
+        (
+            admitted.verdict,
+            admitted.fields.as_slice(),
+            admitted.reason.as_deref()
+        ),
         (
             TemplateApplyVerdict::WillChange,
             [
