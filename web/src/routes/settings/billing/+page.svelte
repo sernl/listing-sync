@@ -35,6 +35,7 @@
 	} from '$lib/pages/account/plans';
 	import CancelPlanDialog from '$lib/pages/account/CancelPlanDialog.svelte';
 	import { readIntent } from '$lib/pages/account/intent';
+	import { saleLine, salePrice } from '$lib/sale';
 	import '$lib/flow.css';
 	import '$lib/pages/account/account.css';
 
@@ -62,6 +63,18 @@
 		queryKey: queryKeys.billing,
 		queryFn: () => api.billing()
 	}));
+
+	// The sale open now, if any: every plan checkout applies it by itself, so
+	// the cards strike the list price and show what Stripe will charge.
+	const plans = createQuery(() => ({
+		queryKey: queryKeys.plans,
+		queryFn: () => api.plans()
+	}));
+	const sale = $derived(plans.data?.sale ?? null);
+
+	// A code the seller typed, sent with the next checkout. The server says
+	// whether it reaches the price chosen, in its own sentence.
+	let code = $state('');
 
 	const held = $derived(billing.data);
 	const balance = $derived(held?.moves);
@@ -182,7 +195,7 @@
 	async function buy(priceKey: PriceKey, origin: string = gate) {
 		working = priceKey;
 		try {
-			const { url } = await api.billingCheckout(priceKey);
+			const { url } = await api.billingCheckout(priceKey, code);
 			sessionStorage.setItem(
 				OPENED_KEY,
 				JSON.stringify({ price_key: priceKey, origin_gate: origin })
@@ -392,6 +405,12 @@
 		{/if}
 	</Panel>
 
+	{#if sale !== null && !subscribed}
+		<Banner tone="ok" title={sale.banner}>
+			{saleLine(sale)}. The sale price is taken off at checkout.
+		</Banner>
+	{/if}
+
 	<section class="tiers" id="plans" aria-labelledby="plans-title">
 		<div class="tiers-head">
 			<h2 id="plans-title">Plans</h2>
@@ -437,6 +456,11 @@
 			{#each tiers as plan (plan.id)}
 				{@const price = tierPrice(plan, cadence)}
 				{@const current = held?.plan === plan.id}
+				{@const onSale = subscribed
+					? null
+					: cadence === 'yearly'
+						? salePrice(sale, plan.yearly_cents, 12)
+						: salePrice(sale, plan.monthly_cents)}
 				{#if price !== null}
 					<div class="acct-plan" class:held={current}>
 						<div class="acct-plan-top">
@@ -449,9 +473,17 @@
 							{/if}
 						</div>
 						<div class="price">
-							<span class="n">{price.headline}</span>
+							{#if onSale !== null}
+								<s class="was">{dollars(onSale.listCents)}</s>
+								<span class="n">{dollars(onSale.saleCents)}</span>
+							{:else}
+								<span class="n">{price.headline}</span>
+							{/if}
 							<span class="per">{price.per}</span>
 						</div>
+						{#if onSale !== null && sale !== null}
+							<p class="sale-line">{saleLine(sale)}</p>
+						{/if}
 						<p class="quiet">{price.note}</p>
 						<ul class="bullets">
 							{#each planBullets(plan.capabilities) as line (line.text)}
@@ -488,6 +520,20 @@
 				{/if}
 			{/each}
 		</div>
+		{#if !subscribed}
+			<div class="code-row">
+				<label for="discount-code">Have a code?</label>
+				<input
+					id="discount-code"
+					type="text"
+					autocomplete="off"
+					spellcheck="false"
+					placeholder="Discount code"
+					bind:value={code}
+				/>
+				<span class="quiet">It is checked when you choose a plan or a pack.</span>
+			</div>
+		{/if}
 		{#if subscribed}
 			<p class="quiet tiers-note">
 				Switching opens Stripe, which shows the new price before anything changes.
@@ -546,6 +592,36 @@
 />
 
 <style>
+	.price .was {
+		font-size: 18px;
+		color: var(--muted);
+		text-decoration-thickness: 2px;
+	}
+
+	.sale-line {
+		font-size: 12.5px;
+		font-weight: 600;
+		color: var(--ok-ink);
+	}
+
+	.code-row {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 6px 10px;
+		margin-top: 12px;
+		font-size: 13px;
+	}
+
+	.code-row label {
+		font-weight: 500;
+	}
+
+	.code-row input {
+		width: 14em;
+		text-transform: uppercase;
+	}
+
 	/* The plan the seller holds, set apart from the plan cards below by its
 	   ground: a card of the same colour as the ones on sale reads as one more
 	   offer rather than as what is already theirs. */

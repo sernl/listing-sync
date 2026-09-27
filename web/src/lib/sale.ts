@@ -32,16 +32,22 @@ export function afterPercentOff(cents: number, percent: number): number {
 /**
  * The struck and sale prices for one plan price, or `null` where nothing
  * is struck: no sale, a free plan, or a price the sale does not reach.
+ *
+ * `per` is what the price is shown divided by — 12 for a yearly price
+ * quoted a month. The sale is taken off the price as charged and only then
+ * divided, because that is the figure Stripe bills.
  */
 export function salePrice(
 	sale: SaleView | null | undefined,
-	cents: number | null | undefined
+	cents: number | null | undefined,
+	per = 1
 ): SalePrice | null {
 	if (!sale || cents === null || cents === undefined || cents <= 0) {
 		return null;
 	}
-	const saleCents = afterPercentOff(cents, sale.percent_off);
-	return saleCents === cents ? null : { listCents: cents, saleCents };
+	const listCents = Math.round(cents / per);
+	const saleCents = Math.round(afterPercentOff(cents, sale.percent_off) / per);
+	return saleCents === listCents ? null : { listCents, saleCents };
 }
 
 const MONTHS = [

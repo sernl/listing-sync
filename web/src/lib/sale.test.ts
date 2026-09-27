@@ -19,6 +19,13 @@ describe('a sale price', () => {
 		expect(salePrice(halloween, 24000)).toEqual({ listCents: 24000, saleCents: 18000 });
 	});
 
+	it('takes the sale off a yearly price before quoting it a month', () => {
+		// $96 a year is $8 a month; 25% off the year is $72, $6 a month.
+		expect(salePrice(halloween, 9600, 12)).toEqual({ listCents: 800, saleCents: 600 });
+		// $480 a year: $40 a month, and $30 a month in the sale.
+		expect(salePrice(halloween, 48000, 12)).toEqual({ listCents: 4000, saleCents: 3000 });
+	});
+
 	it('rounds the amount off to the cent, the way Stripe does', () => {
 		// 15% of $9.99 is 149.85 cents; Stripe takes 150 off.
 		expect(afterPercentOff(999, 15)).toBe(849);
