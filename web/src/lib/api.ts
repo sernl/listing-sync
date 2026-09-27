@@ -438,12 +438,24 @@ export interface NotifyPreferences {
 	notify_email: boolean;
 }
 
+/** Where the user stands with the guided tour. `due` for an account made
+ *  since the tour shipped, `predates` for one made before it, and
+ *  `settled_at` (epoch milliseconds) only once they completed or skipped it. */
+export type TourState = 'due' | 'predates' | 'completed' | 'skipped';
+
+export interface TourView {
+	state: TourState;
+	settled_at: number | null;
+}
+
 /** The signed-in user's own profile: which picture they set, as the handle
- *  `POST /v1/uploads` answered, or `null` for none. The bytes are fetched
- *  separately, by the img element, from `avatarSrc`. */
+ *  `POST /v1/uploads` answered, or `null` for none, and where they stand
+ *  with the guided tour. The bytes are fetched separately, by the img
+ *  element, from `avatarSrc`. */
 export interface ProfileView {
 	user: string;
 	avatar_hash: string | null;
+	tour: TourView;
 }
 
 /** Where the signed-in user's picture is fetched from, or `null` while the
@@ -3061,6 +3073,10 @@ export const api = {
 	profile: () => request<ProfileView>('/v1/profile'),
 	setAvatar: (hash: string) => put<ProfileView>('/v1/profile/avatar', { hash }),
 	clearAvatar: () => request<ProfileView>('/v1/profile/avatar', { method: 'DELETE' }),
+	/** Records how the seller ended the guided tour, so it is not offered
+	 *  again. Never called while an operator is impersonating them. */
+	settleTour: (outcome: 'completed' | 'skipped') =>
+		post<ProfileView>('/v1/onboarding/tour', { outcome }),
 
 	status: () => request<{ inventories: InventoryStatus[] }>('/v1/status'),
 

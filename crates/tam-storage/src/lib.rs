@@ -166,7 +166,7 @@ pub use product::{
     ProductCreationFacts, ProductEdit, ProductFiles, ProductRecord, ProductRepo, ProductSummary,
     ReplacedFiles, StoredCover, ThumbnailChange,
 };
-pub use profile::{AvatarWrite, ProfileRepo};
+pub use profile::{AvatarWrite, ProfileRepo, TourOutcome, TourState};
 pub use pruning::{PruneRepo, PruneReport};
 pub use resource_templates::{
     NewResourceTemplate, ResourceTemplateRecord, ResourceTemplateRepo, ResourceTemplateSummary,

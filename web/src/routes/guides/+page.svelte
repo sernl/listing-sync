@@ -14,6 +14,7 @@
 	import Pagination from '$lib/Pagination.svelte';
 	import Placeholder from '$lib/Placeholder.svelte';
 	import { queryKeys } from '$lib/query';
+	import { tour } from '$lib/tour/tour.svelte';
 	import {
 		filterKey,
 		filterSearch,
@@ -297,7 +298,13 @@
 		icon="book-open"
 		title="Help and guides"
 		description="Find a guide: search by title or topic."
-	/>
+	>
+		{#snippet aside()}
+			<!-- The guided tour again, from its first step, whether or not it was
+			     finished or skipped before. -->
+			<Button tier="outline" icon="sparkles" onclick={() => tour.start()}>Show me around</Button>
+		{/snippet}
+	</PageHead>
 
 	<div class="gd-find">
 		<Field label="Search guides" id="guide-search">

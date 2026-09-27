@@ -56,12 +56,16 @@ describe('why a picture was not saved', () => {
 });
 
 describe('where the picture is fetched from', () => {
+	const tour = { state: 'due', settled_at: null } as const;
+
 	it('is the profile route, versioned by the hash so a changed picture is refetched', () => {
-		expect(avatarSrc({ user: 'u', avatar_hash: HASH })).toBe(`/v1/profile/avatar?v=${HASH}`);
+		expect(avatarSrc({ user: 'u', avatar_hash: HASH, tour })).toBe(
+			`/v1/profile/avatar?v=${HASH}`
+		);
 	});
 
 	it('is nothing while the profile is unread or carries no picture', () => {
 		expect(avatarSrc(undefined)).toBeNull();
-		expect(avatarSrc({ user: 'u', avatar_hash: null })).toBeNull();
+		expect(avatarSrc({ user: 'u', avatar_hash: null, tour })).toBeNull();
 	});
 });
