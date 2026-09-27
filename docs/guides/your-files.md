@@ -9,18 +9,18 @@ Your listing files stay on your own computers. Teachouse notes which computer ha
 
 ## See which computer has a file
 
-1. Open **Catalogue → Your machines' files**.
+1. Open **Catalogue → Your devices' files**.
 2. Search for the resource.
 3. Read the computer name next to each file.
 
-<!-- shot: /resources/files, the file list showing two machines -->
+<!-- shot: /resources/files, the file list showing two devices -->
 ![Which computer has which file](/v1/guides/images/bda4ac14eff896a9def3fe06e8159891a7f5f42b5163fb03df12904ba1b6f500)
 
 ## Add a computer
 
 1. Install the desktop app on your second computer and sign in.
 2. Leave it running once so it can find the files on that computer.
-3. Refresh **Your machines' files**.
+3. Refresh **Your devices' files**.
 
 ## Move a file to another computer
 

@@ -30,14 +30,14 @@ function machine(over: Partial<DeviceView> = {}): DeviceView {
 	};
 }
 
-describe('what one machine is doing', () => {
+describe('what one device is doing', () => {
 	// The defect, stated as an ordering. The heartbeat stamps `last_seen_at`
 	// on a revoked device — that check-in is how we learn it has wiped its
 	// logins — so a machine signed out from the console goes on looking as
 	// fresh as any other. The founder read "available just now" beside a
 	// machine he had signed out that morning and concluded the app was
 	// broken.
-	it('says a machine was signed out before it says anything about freshness', () => {
+	it('says a device was signed out before it says anything about freshness', () => {
 		const said = machineWords(
 			machine({ revoked_at: NOW - 3 * 60 * MINUTE, last_seen_at: NOW - MINUTE }),
 			NOW
@@ -71,7 +71,7 @@ describe('what one machine is doing', () => {
 	// A machine that is both revoked and stale still leads with the
 	// revocation: "last seen 3 days ago" is true and answers a question the
 	// seller did not ask.
-	it('leads with the revocation even where the machine is also quiet', () => {
+	it('leads with the revocation even where the device is also quiet', () => {
 		expect(
 			machineWords(
 				machine({
@@ -84,7 +84,7 @@ describe('what one machine is doing', () => {
 	});
 });
 
-describe('the facts about a machine, kept apart', () => {
+describe('the facts about a device, kept apart', () => {
 	// The founder's complaint, as three sentences that must not merge. A saved
 	// login is a credential on a machine; it is not evidence the machine is
 	// there, nor that the credential still works.
@@ -110,14 +110,14 @@ describe('the facts about a machine, kept apart', () => {
 	});
 
 	it('says plainly when no login is saved', () => {
-		expect(loginWords(machine())).toBe('No marketplace login saved on this machine.');
+		expect(loginWords(machine())).toBe('No marketplace login saved on this device.');
 	});
 
 	// Eligibility is narrow and its wording must be too. The server's version
 	// floor applies only to marketplace-sourced payloads; the import claim
 	// itself never looks at a version. So an older installation is told what
 	// it cannot do and nothing more, and one at the floor is told nothing.
-	it('names only the sourced-file limitation and never calls a machine unable to import', () => {
+	it('names only the sourced-file limitation and never calls a device unable to import', () => {
 		expect(sourcedFileWords(machine({ runs_sourced_payloads: true }))).toBeNull();
 		const older = sourcedFileWords(machine({ app_version: '0.8.0', runs_sourced_payloads: false }));
 		expect(older).toContain('publish or download files from a marketplace');
@@ -128,7 +128,7 @@ describe('the facts about a machine, kept apart', () => {
 	});
 });
 
-describe('the order the list puts machines in', () => {
+describe('the order the list puts devices in', () => {
 	function row(over: Partial<DeviceView>) {
 		return { device: machine(over) };
 	}
@@ -169,7 +169,7 @@ describe('the order the list puts machines in', () => {
 });
 
 describe('what the panel says about a check-in it asked for', () => {
-	it('says nothing at all when the machine reached us', () => {
+	it('says nothing at all when the device reached us', () => {
 		expect(checkInNote({ reached: true, detail: null })).toBeNull();
 		expect(checkInNote({ reached: true, detail: 'ignored' })).toBeNull();
 	});
@@ -188,13 +188,13 @@ describe('what the panel says about a check-in it asked for', () => {
 		];
 		for (const detail of sentences) {
 			const said = checkInNote({ reached: false, detail });
-			expect(said).toBe(`This machine could not reach Teachouse: ${detail}.`);
+			expect(said).toBe(`This device could not reach Teachouse: ${detail}.`);
 		}
 	});
 
 	it('does not add a second full stop to a sentence that has one', () => {
 		expect(checkInNote({ reached: false, detail: 'the control plane refused: no route.' })).toBe(
-			'This machine could not reach Teachouse: the control plane refused: no route.'
+			'This device could not reach Teachouse: the control plane refused: no route.'
 		);
 	});
 
@@ -202,14 +202,14 @@ describe('what the panel says about a check-in it asked for', () => {
 		// An application older than the field, and a rejection, both land here. A
 		// substituted cause would read as something the machine actually said.
 		const said = checkInNote({ reached: false, detail: null });
-		expect(said).toBe('This machine could not reach Teachouse, and did not say why.');
+		expect(said).toBe('This device could not reach Teachouse, and did not say why.');
 		expect(said).not.toContain(':');
 	});
 });
 
 describe('the check-in control', () => {
 	it('reads as the act while it is idle and as the running act while it is not', () => {
-		expect(checkInControl(false).label).toBe('Refresh this machine');
+		expect(checkInControl(false).label).toBe('Refresh this device');
 		expect(checkInControl(true).label).toBe('Refreshing…');
 	});
 

@@ -38,14 +38,14 @@ export function whereYouAre(machine: MachineHere): string {
 		return 'You are in a browser, not the Teachouse app.';
 	}
 	return machine.device === null
-		? 'You are in the Teachouse app on this machine.'
+		? 'You are in the Teachouse app on this device.'
 		: `You are on ${machine.device.name} in the Teachouse app.`;
 }
 
 /** The control that brings a signed-out machine back, named the same wherever
  *  it is offered: the banner over every page and the row for this machine on
  *  the Machines list. */
-export const SIGN_BACK_IN = 'Sign this machine back in';
+export const SIGN_BACK_IN = 'Sign this device back in';
 
 /** What the banner says to a seller standing at a machine that was signed out
  *  from the console.
@@ -61,7 +61,7 @@ export const SIGN_BACK_IN = 'Sign this machine back in';
 export function signedOutHere(at: number | null): string {
 	const when = at === null ? '' : ` on ${dayMonth(at)}`;
 	return (
-		`This machine was signed out of your account${when}. Sign it back in to use ` +
+		`This device was signed out of your account${when}. Sign it back in to use ` +
 		'marketplace logins here.'
 	);
 }
@@ -87,4 +87,4 @@ export function signBackInRefusal(failure: unknown): string {
 
 /** What stands where the server said nothing readable. */
 export const NOT_SIGNED_BACK_IN =
-	'This machine was not signed back in. Check your connection and try again.';
+	'This device was not signed back in. Check your connection and try again.';

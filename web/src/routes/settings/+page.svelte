@@ -856,7 +856,7 @@
 	<Panel
 		id="permissions"
 		title="Marketplace permissions"
-		description="Give Teachouse permission to use each marketplace on your machines. You only do this once."
+		description="Give Teachouse permission to use each marketplace on your devices. You only do this once."
 	>
 		{#if consents.isError}
 			<p class="quiet">We could not load your permissions.</p>

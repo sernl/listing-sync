@@ -65,8 +65,8 @@ pub enum TransferError {
 impl core::fmt::Display for TransferError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Unreachable(why) => write!(f, "the other machine could not be reached: {why}"),
-            Self::Refused(why) => write!(f, "the other machine did not hand the file over: {why}"),
+            Self::Unreachable(why) => write!(f, "the other device could not be reached: {why}"),
+            Self::Refused(why) => write!(f, "the other device did not hand the file over: {why}"),
             Self::DigestMismatch(_) => {
                 f.write_str("the bytes that arrived are not the file that was asked for")
             }
@@ -207,7 +207,7 @@ impl Transfer {
             .map_err(|why| TransferError::Refused(why.to_string()))?;
         if meta_len == 0 {
             return Err(TransferError::Refused(
-                "the other machine no longer holds that file".to_owned(),
+                "the other device no longer holds that file".to_owned(),
             ));
         }
         if u64::from(meta_len) > 64 * 1024 {

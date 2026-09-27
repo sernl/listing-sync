@@ -13,21 +13,21 @@ describe('where the seller is', () => {
 	// the same one is shown in the strip's account title, the phone's account
 	// avatar and on the Preferences panel, and three wordings of one fact
 	// would read as three facts.
-	it('names the machine when the app knows which one it is', () => {
+	it('names the device when the app knows which one it is', () => {
 		expect(whereYouAre({ inApp: true, device: { id: 'dev_1', name: 'SM-N975F' } })).toBe(
 			'You are on SM-N975F in the Teachouse app.'
 		);
 	});
 
-	it('still says it is the app when it cannot name the machine', () => {
+	it('still says it is the app when it cannot name the device', () => {
 		// An application older than the two fields, and a check-in that has not
 		// landed. Naming no machine is true; inventing one is not.
 		const said = whereYouAre({ inApp: true, device: null });
-		expect(said).toBe('You are in the Teachouse app on this machine.');
+		expect(said).toBe('You are in the Teachouse app on this device.');
 		expect(said).toContain('Teachouse app');
 	});
 
-	it('says a browser is a browser, and names no machine there', () => {
+	it('says a browser is a browser, and names no device there', () => {
 		const said = whereYouAre({ inApp: false, device: null });
 		expect(said).toBe('You are in a browser, not the Teachouse app.');
 		// A browser is no machine at all: the registry holds none for it, and a
@@ -36,7 +36,7 @@ describe('where the seller is', () => {
 	});
 });
 
-describe('the banner over a machine that was signed out', () => {
+describe('the banner over a device that was signed out', () => {
 	it('dates the act and names the act that undoes it', () => {
 		// 1 October 2025, in UTC.
 		const said = signedOutHere(Date.UTC(2025, 9, 1, 7, 11));
@@ -49,7 +49,7 @@ describe('the banner over a machine that was signed out', () => {
 		// act, and the seller's own act is what the sentence is about.
 		const said = signedOutHere(null);
 		expect(said).toBe(
-			'This machine was signed out of your account. Sign it back in to use marketplace logins here.'
+			'This device was signed out of your account. Sign it back in to use marketplace logins here.'
 		);
 		expect(said).not.toMatch(/ on /);
 	});
@@ -62,9 +62,9 @@ describe('what a refused sign-in says', () => {
 	it("carries the server's own sentence wherever it sent one", () => {
 		const capped = new ApiFailure(422, {
 			status: 422,
-			errors: [{ message: 'your plan allows 2 machines; sign one out first' }]
+			errors: [{ message: 'your plan allows 2 devices; sign one out first' }]
 		});
-		expect(signBackInRefusal(capped)).toBe('your plan allows 2 machines; sign one out first');
+		expect(signBackInRefusal(capped)).toBe('your plan allows 2 devices; sign one out first');
 	});
 
 	it('falls back to our own words where nothing readable came back', () => {

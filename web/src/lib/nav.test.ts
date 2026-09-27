@@ -207,7 +207,7 @@ describe('the redirects from the old paths', () => {
 		expect(legacyDestination('/queue')).toBe('/reconciliation');
 		expect(legacyDestination('/library')).toBe('/guides');
 		expect(legacyDestination('/help')).toBe('/guides');
-		expect(legacyDestination('/settings/devices')).toBe('/settings#machines');
+		expect(legacyDestination('/settings/devices')).toBe('/settings#devices');
 	});
 
 	it('carry an item identifier through the catalogue renames', () => {

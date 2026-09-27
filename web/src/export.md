@@ -28,7 +28,7 @@ The rows come out in the collection's order. See [Labels and collections](/guide
 
 One row per resource, with a status column saying where it stands on each marketplace. Details only: no file a buyer downloads is included, and no preview.
 
-To get your files, copy them from the machine that holds them — see [Where your files live](/guides/your-files).
+To get your files, copy them from the device that holds them — see [Where your files live](/guides/your-files).
 
 ## The file name
 

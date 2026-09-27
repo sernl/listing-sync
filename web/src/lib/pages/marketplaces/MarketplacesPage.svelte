@@ -44,7 +44,7 @@
 		type DisconnectServer,
 		type LiveRead,
 		GET_APP_ANCHOR,
-		MACHINES_ANCHOR,
+		DEVICES_ANCHOR,
 		TRANSPORT_BADGE,
 		attentionAsk,
 		busyAt,
@@ -72,11 +72,12 @@
 	import '$lib/flow.css';
 	import './marketplaces.css';
 
+	// The device list lives in Settings. An old link to it here, under either
+	// anchor it has had (`#machines` before the rename), still lands there.
 	$effect(() => {
-		if (page.url.hash === '#machines') {
-			void goto(`${MACHINES_ANCHOR.split('#')[0]}${page.url.search}#machines`, {
-				replaceState: true
-			});
+		if (page.url.hash === '#devices' || page.url.hash === '#machines') {
+			const [path, anchor] = DEVICES_ANCHOR.split('#');
+			void goto(`${path}${page.url.search}#${anchor}`, { replaceState: true });
 		}
 	});
 
@@ -254,7 +255,7 @@
 				return;
 			}
 			if (outcome.kind === 'done') {
-				toast('info', `${name} is connected on this machine.`);
+				toast('info', `${name} is connected on this device.`);
 			} else if (outcome.kind === 'signedOut') {
 				// The application refused before opening anything, because this
 				// machine was signed out from the console. The same sentence the
@@ -285,7 +286,7 @@
 			await Promise.all([loadLocalSessions(), refetchConnections()]);
 		},
 		onError: () => {
-			toast('error', 'We could not open the sign-in on this machine. Try again.');
+			toast('error', 'We could not open the sign-in on this device. Try again.');
 		},
 		onSettled: (outcome: SessionOutcome | undefined, _error, marketplace: Marketplace) => {
 			// Left busy on `opening`, which is the one outcome where the page
@@ -320,7 +321,7 @@
 			await Promise.all([loadLocalSessions(), refetchConnections()]);
 		},
 		onError: () => {
-			toast('error', 'We could not remove the login from this machine. Try again.');
+			toast('error', 'We could not remove the login from this device. Try again.');
 		},
 		onSettled: (_data, _error, marketplace: Marketplace) => {
 			busy = withBusy(busy, marketplace, null);

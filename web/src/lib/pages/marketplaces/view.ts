@@ -54,7 +54,7 @@ export function carrying(row: MarketplaceRow): boolean {
 
 /** Where the machines this console knows about are listed. One constant,
  *  because the card foot and the sign-in explanation both point at it. */
-export const MACHINES_ANCHOR = '/settings#machines';
+export const DEVICES_ANCHOR = '/settings#devices';
 
 /** Where a seller gets the app that holds a marketplace login: the downloads
  *  inside step 1. */
@@ -142,7 +142,7 @@ export type CardAction =
  * whole account — so the way to sign in on a second device was to take the
  * first one's login away.
  *
- * `local` is this machine's own answer and null is "not answered yet": a read
+ * `local` is this device's own answer and null is "not answered yet": a read
  * in flight is never read as absent, because acting on a fact we do not have
  * is the same defect one layer down. Where the answer is `known` and negative
  * the app offers its own Connect whatever other devices report. A saved local
@@ -173,7 +173,7 @@ export function footerAction(
 		return undefined;
 	}
 	return host === 'app'
-		? { kind: 'link', label: 'Check this device', href: MACHINES_ANCHOR }
+		? { kind: 'link', label: 'Check this device', href: DEVICES_ANCHOR }
 		: { kind: 'link', label: 'Connect', href: GET_APP_ANCHOR };
 }
 
@@ -255,10 +255,10 @@ export function disconnectPrompt(marketplace: Marketplace, heldOnAMachine: boole
 	return (
 		`Disconnect ${name} from your account?\n\n` +
 		shared +
-		`\n\nThis signs no machine out. Your ${name} login is still on the machine that has it, ` +
-		`and while that machine is online it reconnects ${name} by itself. To stop that, sign out ` +
-		`of ${name} in the Teachouse app on that machine, or sign the machine out under ` +
-		'Preferences > Machine sign-ins.'
+		`\n\nThis signs no device out. Your ${name} login is still on the device that has it, ` +
+		`and while that device is online it reconnects ${name} by itself. To stop that, sign out ` +
+		`of ${name} in the Teachouse app on that device, or sign the device out under ` +
+		'Preferences > Device sign-ins.'
 	);
 }
 
@@ -294,9 +294,9 @@ export function signOutHereAsk(marketplace: Marketplace, inPlace = false): strin
 	const name = CARD_NAME[marketplace];
 	return (
 		`Sign out of ${name} on this device?\n\n` +
-		`Your ${name} login is removed from this machine. Nothing is removed from ${name} ` +
-		'itself, your listings stay here, and your other machines keep their own ' +
-		`${name} logins. If no other machine is signed in to ${name}, your account shows it ` +
+		`Your ${name} login is removed from this device. Nothing is removed from ${name} ` +
+		'itself, your listings stay here, and your other devices keep their own ' +
+		`${name} logins. If no other device is signed in to ${name}, your account shows it ` +
 		'as disconnected soon after. You can sign in again at any time.' +
 		(inPlace ? `\n\n${STAYS_IN_THE_PHONES_BROWSER(name)}` : '')
 	);
@@ -370,7 +370,7 @@ export function signOutHereSay(marketplace: Marketplace, forgotten: SessionOutco
 		case 'done':
 			return {
 				tone: 'info',
-				message: `Your ${name} login is removed from this machine.`
+				message: `Your ${name} login is removed from this device.`
 			};
 		case 'unsupported':
 			return { tone: 'error', message: APP_CANNOT_FORGET };
@@ -380,8 +380,8 @@ export function signOutHereSay(marketplace: Marketplace, forgotten: SessionOutco
 			return {
 				tone: 'error',
 				message:
-					`This machine was signed out of Teachouse, which already removed its ${name} ` +
-					'login. Sign it back in under Preferences > Machine sign-ins.'
+					`This device was signed out of Teachouse, which already removed its ${name} ` +
+					'login. Sign it back in under Preferences > Device sign-ins.'
 			};
 		// A forget never asks for consent and never reaches the shop the
 		// server binds; both arms exist because the type is shared with
@@ -392,7 +392,7 @@ export function signOutHereSay(marketplace: Marketplace, forgotten: SessionOutco
 		case 'unavailable':
 			return {
 				tone: 'error',
-				message: `You can only remove the ${name} login in the Teachouse app on this machine.`
+				message: `You can only remove the ${name} login in the Teachouse app on this device.`
 			};
 	}
 }
@@ -483,7 +483,7 @@ const CONNECT_SAID: Record<ConnectVerdictCode, (name: string) => ConnectReturn> 
 	}),
 	signed_out: (name) => ({
 		tone: 'error',
-		message: `This machine was signed out of Teachouse, so the ${name} sign-in did not open and nothing was saved. Sign this machine back in under Preferences > Machine sign-ins, then press Connect ${name}.`
+		message: `This device was signed out of Teachouse, so the ${name} sign-in did not open and nothing was saved. Sign this device back in under Preferences > Device sign-ins, then press Connect ${name}.`
 	}),
 	// The seller has not agreed to the seller-device notice for this
 	// marketplace, so the application refused in front of the password.
@@ -540,7 +540,7 @@ const CONNECT_SAID_UNNAMED: Record<ConnectVerdictCode, ConnectReturn> = {
 	signed_out: {
 		tone: 'error',
 		message:
-			'This machine was signed out of Teachouse, so your marketplace sign-in did not open and nothing was saved. Sign this machine back in under Preferences > Machine sign-ins, then press Connect on the card.'
+			'This device was signed out of Teachouse, so your marketplace sign-in did not open and nothing was saved. Sign this device back in under Preferences > Device sign-ins, then press Connect on the card.'
 	},
 	consent: {
 		tone: 'error',
@@ -780,12 +780,12 @@ export function hereFace(
 		? {
 				tone: 'ok',
 				label: 'Signed in on this device',
-				line: `This machine is signed in to ${name}.`
+				line: `This device is signed in to ${name}.`
 			}
 		: {
 				tone: 'soon',
 				label: 'Not on this device',
-				line: `This machine is not signed in to ${name}.`
+				line: `This device is not signed in to ${name}.`
 			};
 }
 

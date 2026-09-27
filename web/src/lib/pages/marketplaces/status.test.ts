@@ -20,7 +20,7 @@ const device = (name: string, revoked: number | null, used: number): DeviceView 
 });
 
 describe('the recent events on the status page', () => {
-	it('lists pauses and sessions newest first, skipping signed-out machines and ended sessions', () => {
+	it('lists pauses and sessions newest first, skipping signed-out devices and ended sessions', () => {
 		const events = statusEvents(
 			[
 				{ inventory: 'Tpt', marketplace: 'Tpt', halted: true, reason: 'TPT is down', raised_at: 50 },

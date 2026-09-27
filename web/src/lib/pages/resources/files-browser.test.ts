@@ -53,7 +53,7 @@ describe('where a file is', () => {
 	});
 });
 
-describe('getting a file onto this machine', () => {
+describe('getting a file onto this device', () => {
 	const offline = file();
 	const wanted = file({
 		hash: 'b'.repeat(64),
@@ -64,13 +64,13 @@ describe('getting a file onto this machine', () => {
 		wanted_by: ['laptop']
 	});
 
-	it('offers Get where another machine holds it, and says nothing when held here', () => {
+	it('offers Get where another device holds it, and says nothing when held here', () => {
 		expect(transferLabel(offline, 'laptop', false)).toEqual({ kind: 'get', from: 'Pixel' });
 		expect(transferLabel(offline, 'laptop', true)).toEqual({ kind: 'held' });
 		expect(transferLabel(file({ holders: [] }), 'laptop', false)).toEqual({ kind: 'missing' });
 	});
 
-	it('reads a holding of this machine as held even before its own library answers', () => {
+	it('reads a holding of this device as held even before its own library answers', () => {
 		const here = file({ holders: [{ device: 'laptop', name: 'founder-pc', online: true }] });
 		expect(transferLabel(here, 'laptop', null)).toEqual({ kind: 'held' });
 	});
@@ -123,7 +123,7 @@ describe('the rows', () => {
 		expect(rows[1].anonymous).toBe(true);
 	});
 
-	it('names this machine by its role rather than by the name it registered under', () => {
+	it('names this device by its role rather than by the name it registered under', () => {
 		const rows = fileRows(
 			[
 				file({
@@ -138,7 +138,7 @@ describe('the rows', () => {
 		expect(rows[0].machines).toEqual([HERE, 'Pixel']);
 	});
 
-	it('shows a kept date only for a file this machine actually keeps', () => {
+	it('shows a kept date only for a file this device actually keeps', () => {
 		const held = fileRows([file()], {
 			thisDevice: 'laptop',
 			kept: new Map([['a'.repeat(64), entry({ hash: 'a'.repeat(64), kept_at: 1_000 })]])
@@ -165,7 +165,7 @@ describe('the rows', () => {
 		expect(rows[1].resources).toEqual([]);
 	});
 
-	it('reads last seen from the latest check-in of the machines holding it', () => {
+	it('reads last seen from the latest check-in of the devices holding it', () => {
 		const hour = 60 * 60 * 1000;
 		const seen = new Map([
 			['phone', 10 * hour],
@@ -187,7 +187,7 @@ describe('the rows', () => {
 		expect(rows[0].lastSeen).toBe(10 * hour);
 		expect(seenLine(rows[0], 12 * hour)).toBe('2 h ago');
 		expect(seenLine(rows[1], 12 * hour)).toBe('Online now');
-		expect(seenLine(rows[2], 12 * hour)).toBe('No machine');
+		expect(seenLine(rows[2], 12 * hour)).toBe('No device');
 	});
 });
 
@@ -231,7 +231,7 @@ describe('the filters in the address', () => {
 		});
 	});
 
-	it('links one machine to its own files', () => {
+	it('links one device to its own files', () => {
 		expect(machineFilesHref('laptop')).toBe('/resources/files?device=laptop');
 	});
 });

@@ -64,8 +64,8 @@ export function permissionRows(view: ConsentsView | undefined): PermissionRow[] 
 export function withdrawPrompt(name: string): string {
 	return (
 		`Withdraw permission for ${name}?\n\n` +
-		`Teachouse stops all new ${name} work on your machines. ` +
-		`Your ${name} logins stay on each machine until you sign out there.`
+		`Teachouse stops all new ${name} work on your devices. ` +
+		`Your ${name} logins stay on each device until you sign out there.`
 	);
 }
 

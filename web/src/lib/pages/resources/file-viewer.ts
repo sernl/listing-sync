@@ -31,7 +31,7 @@ export function sourceOfKept(invoke: Invoke | null, name: string, hash: string):
 		bytes: async () => {
 			const bytes = await libraryRead(invoke, hash);
 			if (bytes === null) {
-				throw new Error('that file is not kept on this machine');
+				throw new Error('that file is not kept on this device');
 			}
 			return bytes;
 		}

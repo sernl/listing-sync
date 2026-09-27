@@ -137,7 +137,7 @@
 	const signingBackIn = createMutation(() => ({
 		mutationFn: () => machineHere.signBackIn(),
 		onSuccess: async () => {
-			toast('info', 'This machine is signed back in. Connect your marketplaces again on it.');
+			toast('info', 'This device is signed back in. Connect your marketplaces again on it.');
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: queryKeys.devices }),
 				queryClient.invalidateQueries({ queryKey: queryKeys.connections })

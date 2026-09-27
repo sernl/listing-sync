@@ -43,7 +43,7 @@ A migration starts at the next device check-in, so leave the desktop app signed 
 
 - No target price. Set one under [Setting target prices](/guides/target-prices).
 - A word the marketplace does not offer. Answer it under **Unmatched words**.
-- No file on any signed-in machine.
+- No file on any signed-in device.
 - Not enough moves.
 
 Fix what a row names and run the migration again; rows already committed are not committed twice.

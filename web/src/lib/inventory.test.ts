@@ -95,7 +95,7 @@ describe('the transport branch', () => {
 		expect(onSellerDevice('Etsy')).toBe(false);
 	});
 
-	it('says a send runs on the seller machine only for the device branch', () => {
+	it('says a send runs on the seller device only for the device branch', () => {
 		const onDevice = chip('Tpt', {
 			mapping: mapping({ inventory: 'Tpt', binding_state: 'unbound' }),
 			work: work({ mapping: 'm-Tpt', state: 'running' })

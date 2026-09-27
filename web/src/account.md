@@ -39,15 +39,15 @@ If your browser does not support passkeys, sign in with your password and add on
 
 Set the address notices go to under **Account settings**. It can differ from the address you sign in with.
 
-## Machines
+## Devices
 
-1. Open **Account → Account settings** to see the machines signed in.
-2. Sign a machine out when you stop using it.
+1. Open **Account → Account settings** to see the devices signed in.
+2. Sign a device out when you stop using it.
 
-Signing a machine out stops it doing work. It does not delete anything already stored, and space already used is not reclaimed.
+Signing a device out stops it doing work. It does not delete anything already stored, and space already used is not reclaimed.
 
-<!-- shot: /settings, the machines panel with one machine signed in -->
-__omp_shell("[Machines signed in](image:account-2)")
+<!-- shot: /settings, the devices panel with one device signed in -->
+__omp_shell("[Devices signed in](image:account-2)")
 
 ## Forgotten password
 

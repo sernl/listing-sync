@@ -371,7 +371,7 @@ export function deviceUpdateNotice(view: SyncRequestView): string | null {
 	}
 	return (
 		`Update the Teachouse app on your computer to ${version.trim()} or later. ` +
-		'None of your machines can run this import until one is on that version.'
+		'None of your devices can run this import until one is on that version.'
 	);
 }
 

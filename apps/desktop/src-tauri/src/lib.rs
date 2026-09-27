@@ -198,7 +198,7 @@ pub fn run() {
             // again.
             if let Err(why) = tauri::async_runtime::block_on(library.get()) {
                 eprintln!(
-                    "the library on this machine could not be opened, and opening it will be \
+                    "the library on this device could not be opened, and opening it will be \
                      retried: {why}"
                 );
             }

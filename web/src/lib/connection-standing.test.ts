@@ -83,7 +83,7 @@ describe('whether the seller has any marketplace at all', () => {
 	});
 });
 
-describe('whether a machine will reconnect this by itself', () => {
+describe('whether a device will reconnect this by itself', () => {
 	// Narrower than `connectionStands` on purpose, and the two must not be
 	// confused: `derive_link` writes `linked` when a live device reports a
 	// session and lifts an `unlinked` row back to it on the next beat, so
