@@ -1786,19 +1786,38 @@ pub struct PatchProductBody {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PatchedProductView {
     pub product: ProductId,
-    /// The platforms this edit will reach when it is next synced, and the
-    /// ones it will not, each with the reason. Reported so the client can say
-    /// what an edit does rather than implying it reaches everywhere.
+    /// The platforms this edit will reach when it is next sent. Reported so
+    /// the client can say what an edit does rather than implying it reaches
+    /// everywhere.
     pub reaches: Vec<InventoryId>,
+    /// The live listings this edit is written past rather than sent to, each
+    /// with the reason. See [`KeptListing`].
+    #[serde(default)]
+    pub kept: Vec<KeptListing>,
 }
 
-/// Which live listings this edit cannot be attempted against.
+/// A live listing that keeps the copy it has, because the marketplace serves
+/// no captured way to revise a listing that is already live.
+///
+/// The edit is accepted and the catalogue written regardless: the seller's own
+/// copy of their resource is theirs to change at any time, and refusing the
+/// write because one marketplace cannot yet take it held the whole resource
+/// hostage to that marketplace. What the seller is owed instead is the truth
+/// about that listing, which is this.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeptListing {
+    pub inventory: InventoryId,
+    /// The capture that is missing, in the registry's own name.
+    pub capability: String,
+    pub reason: String,
+}
+
+/// Which live listings an edit cannot be sent to.
 ///
 /// A bound mapping lowers a revise, and the lowering refuses a transition no
 /// capture supports: Tes serves neither live-to-live nor live-to-draft, so a
-/// Tes listing that is already live cannot be edited through us today. The
-/// refusal happens here rather than at enqueue so the seller is told before
-/// the edit is written, not after an item settles.
+/// Tes listing that is already live cannot be revised through us today. The
+/// classifier the reach below is built from; nothing refuses on it.
 pub(crate) fn uncaptured_edits(mappings: &[MappingRecord]) -> Vec<(InventoryId, &'static str)> {
     mappings
         .iter()
@@ -1818,32 +1837,34 @@ pub(crate) fn uncaptured_edits(mappings: &[MappingRecord]) -> Vec<(InventoryId, 
         .collect()
 }
 
-/// What a seller is told when an edit cannot be attempted at all.
-///
-/// One sentence and one detail shape, because two surfaces report it: the edit
-/// route refuses the whole request, and a template applied over a selection
-/// blocks the one row and carries the same sentence as its reason. A second
-/// wording would have the two screens disagree about the same fact.
-pub(crate) const UNCAPTURED_EDIT: &str =
-    "this listing is live on a platform whose edit-published transition is uncaptured, so the \
-     edit cannot be attempted";
+/// Where a change to the catalogue goes: the marketplaces the next send
+/// revises, and the live listings it cannot and that keep what they have.
+pub(crate) struct Reach {
+    pub(crate) reaches: Vec<InventoryId>,
+    pub(crate) kept: Vec<KeptListing>,
+}
 
-pub(crate) fn uncaptured_refusal(refused: &[(InventoryId, &'static str)]) -> APIError {
-    APIError::new(
-        StatusCode::UNPROCESSABLE_ENTITY,
-        APIErrorEntry::new(UNCAPTURED_EDIT)
-            .code(APIErrorCode::UncapturedTransition)
-            .kind(APIErrorKind::Validation)
-            .detail(serde_json::json!({
-                "blocked": refused
-                    .iter()
-                    .map(|(inventory, capability)| serde_json::json!({
-                        "inventory": inventory,
-                        "capability": capability,
-                    }))
-                    .collect::<Vec<_>>(),
-            })),
-    )
+pub(crate) fn reach_of(mappings: &[MappingRecord]) -> Reach {
+    let uncaptured = uncaptured_edits(mappings);
+    Reach {
+        reaches: mappings
+            .iter()
+            .map(|record| record.mapping.inventory)
+            .filter(|inventory| !uncaptured.iter().any(|(held, _)| held == inventory))
+            .collect(),
+        kept: uncaptured
+            .into_iter()
+            .map(|(inventory, capability)| KeptListing {
+                inventory,
+                capability: capability.to_owned(),
+                reason: format!(
+                    "{:?} keeps the copy it has, because Teachouse can't update a listing that is \
+                     already live there yet",
+                    inventory.marketplace()
+                ),
+            })
+            .collect(),
+    }
 }
 
 /// The product this edit will leave behind, as the sidecar's rules read it.
@@ -2223,10 +2244,6 @@ pub(crate) async fn patch_product(
         .list_for_product(context.org, product)
         .await
         .map_err(|error| storage_fault(&state, &error))?;
-    let refused = uncaptured_edits(&mappings);
-    if !refused.is_empty() {
-        return Err(uncaptured_refusal(&refused));
-    }
     let stored = ProductRepo::new(state.pool.clone())
         .get(context.org, product)
         .await
@@ -2246,12 +2263,14 @@ pub(crate) async fn patch_product(
     if !commit_edit(&state, context.org, product, &prepared, now).await? {
         return Err(missing("no such product"));
     }
+    // Written past a live listing whose revise is uncaptured rather than
+    // refused: the catalogue is the seller's own, and that listing is told
+    // apart in `kept` so the client can say it keeps the copy it has.
+    let Reach { reaches, kept } = reach_of(&mappings);
     Ok(Json(PatchedProductView {
         product,
-        reaches: mappings
-            .iter()
-            .map(|record| record.mapping.inventory)
-            .collect(),
+        reaches,
+        kept,
     }))
 }
 
@@ -2491,6 +2510,9 @@ pub struct AddedFileView {
     /// [`PatchedProductView`] reports them. Nothing here contacts a
     /// marketplace, so the copy already on one stands until that send.
     pub reaches: Vec<InventoryId>,
+    /// The live listings this change is written past, as the edit's.
+    #[serde(default)]
+    pub kept: Vec<KeptListing>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2509,6 +2531,8 @@ pub struct ReplacedFileView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cover: Option<FileView>,
     pub reaches: Vec<InventoryId>,
+    #[serde(default)]
+    pub kept: Vec<KeptListing>,
 }
 
 /// What a file is to be called from now on. A name alone: the bytes and the
@@ -2533,6 +2557,8 @@ pub struct RemovedFileView {
     /// and the last is not the absence of the second.
     pub thumbnail: ThumbnailView,
     pub reaches: Vec<InventoryId>,
+    #[serde(default)]
+    pub kept: Vec<KeptListing>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2590,67 +2616,21 @@ fn file_refusal(state: &AppState, refusal: tam_storage::FileRefusal) -> APIError
     }
 }
 
-/// Which marketplaces this change reaches on the next send, and the refusal
-/// where a live listing cannot be revised at all.
+/// Where this change goes on the next send, read after the write rather than
+/// before it.
 ///
-/// The same gate the edit passes through, for the same reason: a file change
-/// reaches a marketplace as a revise, so a listing whose revise no capture
-/// supports cannot have its file changed through us either, and the seller is
-/// told before the catalogue is written rather than after an item settles.
-async fn refuse_uncaptured(
-    state: &AppState,
-    org: OrgId,
-    product: ProductId,
-) -> Result<(), APIError> {
+/// Nothing is refused here: a file change on a resource whose live listing
+/// cannot be revised is written like any other, and that listing is reported
+/// in `kept` instead. Read after the write, because a mapping bound or unbound
+/// while the write held the product's row would otherwise be described by a
+/// value taken before it; the response then says where the change actually
+/// landed rather than where it was going to.
+async fn reach_after(state: &AppState, org: OrgId, product: ProductId) -> Result<Reach, APIError> {
     let mappings = MappingRepo::new(state.pool.clone())
         .list_for_product(org, product)
         .await
         .map_err(|error| storage_fault(state, &error))?;
-    let refused = uncaptured_edits(&mappings);
-    if !refused.is_empty() {
-        return Err(APIError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            APIErrorEntry::new(
-                "this listing is live on a platform whose edit-published transition is \
-                 uncaptured, so its files cannot be changed",
-            )
-            .code(APIErrorCode::UncapturedTransition)
-            .kind(APIErrorKind::Validation)
-            .detail(serde_json::json!({
-                "blocked": refused
-                    .iter()
-                    .map(|(inventory, capability)| serde_json::json!({
-                        "inventory": inventory,
-                        "capability": capability,
-                    }))
-                    .collect::<Vec<_>>(),
-            })),
-        ));
-    }
-    Ok(())
-}
-
-/// Which marketplaces this change reaches on the next send, read after the
-/// write rather than before it.
-///
-/// The two halves are separate calls on purpose. The refusal has to run before
-/// the write, because its whole point is to decline before the catalogue moves;
-/// the reported reach has to be read after, because a mapping bound or unbound
-/// while the write held the product's row would otherwise be described by a
-/// value taken before it. The response then says where the change actually
-/// landed rather than where it was going to.
-async fn reaches_after(
-    state: &AppState,
-    org: OrgId,
-    product: ProductId,
-) -> Result<Vec<InventoryId>, APIError> {
-    Ok(MappingRepo::new(state.pool.clone())
-        .list_for_product(org, product)
-        .await
-        .map_err(|error| storage_fault(state, &error))?
-        .iter()
-        .map(|record| record.mapping.inventory)
-        .collect())
+    Ok(reach_of(&mappings))
 }
 
 /// Refuses a handle naming bytes this tenant has never uploaded, which is the
@@ -2812,7 +2792,6 @@ pub(crate) async fn add_file(
         return Err(cover_not_yours());
     }
     let now = (state.wall)();
-    refuse_uncaptured(&state, context.org, product).await?;
     let (hash, length) = held(&state, context.org, &body.handle).await?;
     // The same cap the create enforces, at the other door into the same
     // slot: a preview added after the fact is the preview a buyer is shown.
@@ -2830,13 +2809,14 @@ pub(crate) async fn add_file(
         .await
         .map_err(|error| storage_fault(&state, &error))?
         .map_err(|refusal| file_refusal(&state, refusal))?;
-    let reaches = reaches_after(&state, context.org, product).await?;
+    let Reach { reaches, kept } = reach_after(&state, context.org, product).await?;
     Ok((
         StatusCode::CREATED,
         Json(AddedFileView {
             product,
             file: file_view(&file, name),
             reaches,
+            kept,
         }),
     ))
 }
@@ -2850,7 +2830,6 @@ pub(crate) async fn replace_file(
     let product = parse_product_id(&product)?;
     let replaced = parse_file_id(&file)?;
     let now = (state.wall)();
-    refuse_uncaptured(&state, context.org, product).await?;
     let facts = cover_facts(&state, context.org, product).await?;
     // The cover row is not a target. Replacing it would let a client put any
     // hash the organisation holds behind the one role the console renders as
@@ -2894,7 +2873,7 @@ pub(crate) async fn replace_file(
         .await
         .map_err(|error| storage_fault(&state, &error))?
         .map_err(|refusal| file_refusal(&state, refusal))?;
-    let reaches = reaches_after(&state, context.org, product).await?;
+    let Reach { reaches, kept } = reach_after(&state, context.org, product).await?;
     Ok(Json(ReplacedFileView {
         product,
         removed: replaced.0,
@@ -2902,6 +2881,7 @@ pub(crate) async fn replace_file(
         // No name: the cover was drawn from the new bytes, not chosen.
         cover: written.cover.as_ref().map(|drawn| file_view(drawn, None)),
         reaches,
+        kept,
     }))
 }
 
@@ -2913,7 +2893,6 @@ pub(crate) async fn remove_file(
     let product = parse_product_id(&product)?;
     let removed = parse_file_id(&file)?;
     let now = (state.wall)();
-    refuse_uncaptured(&state, context.org, product).await?;
     let facts = cover_facts(&state, context.org, product).await?;
     // The thumbnail is drawn from the first payload file, so removing that
     // file leaves it depicting a file the resource no longer holds. It is
@@ -2939,7 +2918,7 @@ pub(crate) async fn remove_file(
         .await
         .map_err(|error| storage_fault(&state, &error))?
         .map_err(|refusal| file_refusal(&state, refusal))?;
-    let reaches = reaches_after(&state, context.org, product).await?;
+    let Reach { reaches, kept } = reach_after(&state, context.org, product).await?;
     Ok(Json(RemovedFileView {
         product,
         file: removed.0,
@@ -2951,6 +2930,7 @@ pub(crate) async fn remove_file(
             tam_storage::ThumbnailChange::Retired => ThumbnailView::Retired,
         },
         reaches,
+        kept,
     }))
 }
 
@@ -3024,8 +3004,8 @@ pub fn upload_body_limit() -> DefaultBodyLimit {
 #[cfg(test)]
 mod tests {
     use super::{
-        creation_blocked, hex_encode, parse_hash, required_fields_answered, trigger_kind_of,
-        uncaptured_edits, Approved, CreationBlocked, ElectionInput, FileHandle, RightsInput,
+        creation_blocked, hex_encode, parse_hash, reach_of, required_fields_answered,
+        trigger_kind_of, Approved, CreationBlocked, ElectionInput, FileHandle, RightsInput,
         FILE_NAME_MAX,
     };
     use tam_domain::equivalence::ElectionTriggerKind;
@@ -3424,31 +3404,34 @@ mod tests {
     }
 
     #[test]
-    fn a_live_tes_listing_refuses_the_edit_and_a_live_tpt_listing_does_not() {
-        let tes = uncaptured_edits(&[bound_mapping(
-            InventoryId::Tes,
-            RemoteLifecycle::Live {
-                since: Timestamp(2),
-            },
-        )]);
+    fn an_edit_reaches_a_live_tpt_listing_and_a_live_tes_listing_keeps_its_copy() {
+        let live = RemoteLifecycle::Live {
+            since: Timestamp(2),
+        };
+        let reach = reach_of(&[
+            bound_mapping(InventoryId::Tes, live.clone()),
+            bound_mapping(InventoryId::Tpt, live),
+        ]);
         assert_eq!(
-            tes,
+            reach.reaches,
+            vec![InventoryId::Tpt],
+            "TPT serves live-to-live, so the next send revises it"
+        );
+        assert_eq!(
+            reach
+                .kept
+                .iter()
+                .map(|kept| (kept.inventory, kept.capability.as_str()))
+                .collect::<Vec<_>>(),
             vec![(InventoryId::Tes, "tes.edit_published")],
-            "Tes serves neither live-to-live nor live-to-draft, so the edit is refused by name"
+            "Tes serves no live-to-live transition, so its listing keeps the copy it has, \
+             named with the capture it lacks"
         );
-        assert!(
-            uncaptured_edits(&[bound_mapping(
-                InventoryId::Tpt,
-                RemoteLifecycle::Live {
-                    since: Timestamp(2)
-                }
-            )])
-            .is_empty(),
-            "TPT serves all four transitions"
-        );
-        assert!(
-            uncaptured_edits(&[bound_mapping(InventoryId::Tes, RemoteLifecycle::Draft)]).is_empty(),
-            "a Tes draft is editable; only a live one is not"
+        let draft = reach_of(&[bound_mapping(InventoryId::Tes, RemoteLifecycle::Draft)]);
+        assert_eq!(
+            (draft.reaches, draft.kept),
+            (vec![InventoryId::Tes], Vec::new()),
+            "a Tes draft takes the edit; only a live one keeps its copy"
         );
     }
 

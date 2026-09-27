@@ -27,6 +27,7 @@
 		source,
 		sellerName,
 		uploadLabel = 'Make preview',
+		storedOf,
 		onAdd,
 		onReplace,
 		onRename,
@@ -36,13 +37,16 @@
 		previews: readonly FileHandle[];
 		limits: FormLimits | null;
 		/** The PDF a preview can be cut out of: the one chosen in this session,
-		 *  or one the Teachouse app keeps on this machine. Either way the bytes
-		 *  are on this machine; a file uploaded on some earlier visit from
-		 *  another one is not. */
+		 *  one the Teachouse app keeps on this machine, or — on a saved
+		 *  resource — the stored one, read back from Teachouse. */
 		source: File | ByteSource | null;
 		/** What the confirming button says. On the kept-file path pressing it
 		 *  is what sends the derived file to Teachouse, so it says so. */
 		uploadLabel?: string;
+		/** Where a saved preview's own bytes are read back, or `null` where
+		 *  this listing has no stored file under that digest yet. Absent on a
+		 *  new resource, which has no product to read through. */
+		storedOf?: (preview: FileHandle) => ByteSource | null;
 		/** Whose name is written across the pages, where the teacher asks for
 		 *  it. Their own shop name, never one composed here. */
 		sellerName: string;
@@ -85,9 +89,9 @@
 		})();
 	});
 
-	/** Where a preview's bytes can be read on this machine, or `null`: sent
-	 *  from this page, kept by the app, or remade from the remembered choices
-	 *  and the PDF that is here. The server hands no file's bytes back. */
+	/** Where a preview's bytes can be read, or `null`: sent from this page,
+	 *  kept by the app, stored in Teachouse, or remade from the remembered
+	 *  choices and the PDF that is here. */
 	function viewSource(preview: FileHandle): ByteSource | null {
 		const name = preview.name ?? 'Preview';
 		const local = sent.get(preview.hash);
@@ -96,6 +100,10 @@
 		}
 		if (kept.has(preview.hash)) {
 			return sourceOfKept(invoke, name, preview.hash);
+		}
+		const stored = storedOf?.(preview) ?? null;
+		if (stored !== null) {
+			return stored;
 		}
 		const recipe = readRecipe(preview.hash);
 		const from = pdfSource;

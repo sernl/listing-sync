@@ -37,9 +37,9 @@
 	import MarketplacePicker from './MarketplacePicker.svelte';
 	import PreviewField from './PreviewField.svelte';
 	import { desktopInvoker, libraryEntries } from '$lib/desktop';
-	import { keptPdfSource } from './file-viewer';
+	import { keptPdfSource, sourceOfStored, storedPdfSource } from './file-viewer';
 	import ThumbnailSlots from './ThumbnailSlots.svelte';
-	import { coverUrlOf } from './files';
+	import { coverUrlOf, keptSentence } from './files';
 	import CategoriesPanel from './panels/CategoriesPanel.svelte';
 	import DescriptionPanel from './panels/DescriptionPanel.svelte';
 	import DescriptionPreview from './panels/DescriptionPreview.svelte';
@@ -119,9 +119,6 @@
 	} = $props();
 
 	const editing = $derived(mode.kind === 'edit' ? mode : null);
-	// Read-only where a published listing makes the edit unattemptable. Every
-	// control takes it, so the fields are shown as stored rather than hidden.
-	const locked = $derived((editing?.blockedBy.length ?? 0) > 0);
 
 	const queryClient = useQueryClient();
 
@@ -238,6 +235,27 @@
 	const keptSource = $derived(
 		editing === null ? null : keptPdfSource(invoke, editing.product.files, kept)
 	);
+	/** The last: on a saved resource, the stored PDF itself, read back from
+	 *  Teachouse when the maker opens. What a reopened draft has in any
+	 *  browser, where neither of the two above is here. */
+	const storedSource = $derived(
+		editing === null ? null : storedPdfSource(editing.product.id, editing.product.files)
+	);
+	/** Where a saved preview's own bytes are read back, for View. */
+	const storedPreview = $derived.by(() => {
+		const product = editing?.product;
+		if (product === undefined) {
+			return undefined;
+		}
+		return (preview: FileHandle) => {
+			const file = product.files.find(
+				(held) => held.role === 'preview' && held.hash === preview.hash
+			);
+			return file === undefined ? null : sourceOfStored(product.id, file);
+		};
+	});
+	/** The live listings a change here is saved past rather than sent to. */
+	const keeps = $derived(editing?.keeps ?? []);
 	let keepWhole = $state(false);
 	let creating = $state(false);
 	// The marketplace being added in edit mode, so a second tick cannot start a
@@ -286,6 +304,8 @@
 		if (stored !== undefined && seededFor !== stored.id) {
 			draft = draftOf(stored, editing?.mapped ?? []);
 			slots = slotsFrom(stored.tpt_base?.thumbnail_hashes ?? []);
+			// Another resource's PDF is not this one's.
+			sourcePdf = null;
 			seededFor = stored.id;
 		}
 	});
@@ -425,16 +445,13 @@
 	const refusals = $derived(refusalsOf(draft, form, known, verdict));
 	const advisories = $derived(advisoriesOf(draft, form, verdict));
 	const canCreate = $derived(
-		submittable(refusals) && form !== null && !creating && !slotsSettling(slots) && !locked
+		submittable(refusals) && form !== null && !creating && !slotsSettling(slots)
 	);
 
 	/** Why Create cannot run, which the button tier requires of any disabled
 	 *  control: the refusals themselves are listed above it, so this names the
 	 *  class of thing rather than repeating one of them. */
 	const blocking = $derived.by(() => {
-		if (locked) {
-			return 'You can’t edit a published listing here.';
-		}
 		if (creating) {
 			return editing === null ? 'Creating your listing…' : 'Saving your changes…';
 		}
@@ -937,13 +954,18 @@
 		serverRefusal = null;
 		try {
 			const patched = await api.patchProduct(product, body);
+			const keptNow = patched.kept.map((held) => held.inventory);
 			await queryClient.invalidateQueries({ queryKey: queryKeys.product(product) });
 			await queryClient.invalidateQueries({ queryKey: queryKeys.products });
+			const saved =
+				patched.reaches.length > 0
+					? `Saved. Your changes go to ${patched.reaches.map(platformTitle).join(', ')} next time you send.`
+					: patched.kept.length > 0
+						? 'Saved.'
+						: 'Saved. This listing isn’t on any marketplace yet.';
 			toast(
 				'info',
-				patched.reaches.length === 0
-					? 'Saved. This listing isn’t on any marketplace yet.'
-					: `Saved. Your changes go to ${patched.reaches.map(platformTitle).join(', ')} next time you send.`
+				keptNow.length === 0 ? saved : `${saved} ${keptSentence(keptNow)}`
 			);
 		} catch (failure) {
 			serverRefusal = editRefusalOf(failure);
@@ -953,13 +975,9 @@
 	}
 
 	function editRefusalOf(failure: unknown): string {
-		if (!(failure instanceof ApiFailure)) {
-			return 'Your changes weren’t saved.';
-		}
-		if (failure.code() === 'uncaptured_transition') {
-			return 'This listing is live on a marketplace we can’t edit yet, so your change wasn’t sent.';
-		}
-		return sentenceFor(failure, 'Your changes weren’t saved.');
+		return failure instanceof ApiFailure
+			? sentenceFor(failure, 'Your changes weren’t saved.')
+			: 'Your changes weren’t saved.';
 	}
 </script>
 
@@ -977,45 +995,64 @@
 		</Banner>
 	{/if}
 
-	<!-- Above the steps rather than inside them: a template is where this form
-	     starts, not one of the things it asks. Only on a new resource, and only
-	     where the seller has saved one. -->
-	{#if editing === null && (templateHeads.data?.length ?? 0) > 0}
-		<div class="res-start">
-			<Field label="Start from a template" id="start-from-template">
-				<select
-					id="start-from-template"
-					disabled={starting}
-					onchange={(event) => void startFrom(event.currentTarget.value)}
-				>
-					<option value="">{starting ? 'Loading the template…' : 'None'}</option>
-					{#each templateHeads.data ?? [] as head (head.id)}
-						<option value={head.id}>
-							{head.name}{head.scope === null ? '' : ` — ${MARKETPLACE_WORD[head.scope]}`}
-						</option>
-					{/each}
-				</select>
-			</Field>
-			{#if started !== null}
-				<p class="res-start-said">
-					{filledLine(started.name, started.filled)}
-					<Button small tier="quiet" onclick={undoStart}>Undo</Button>
-				</p>
-			{/if}
-			{#if startRefusal !== null}
-				<p class="res-start-said">{startRefusal}</p>
-			{/if}
-		</div>
-	{/if}
-
 	<form class="res-form" onsubmit={submit}>
 			<div class="flow">
 				<Stepper steps={stepMarks} label="Resource steps" />
 
-				{#if editing !== null && editing.blockedBy.length > 0}
-					<Banner tone="warn" title="This resource is live, so you can’t edit it here">
-						{editing.blockedBy.map(platformTitle).join(', ')} has a published listing, so this
-						change won’t be sent.
+				<!-- Step 0, and optional: a template is where this form can start,
+				     not one of the things it asks, so it is a quiet card in the flow
+				     rather than a numbered step, and it lights up only once one is
+				     chosen. Only on a new resource, and only where the seller has
+				     saved one. -->
+				{#if editing === null && (templateHeads.data?.length ?? 0) > 0}
+					<section class="res-start" class:chosen={started !== null} aria-labelledby="res-start-h">
+						<div class="res-start-head">
+							<h2 id="res-start-h">Optional: start from a template</h2>
+							<Explain title="Starting from a template" label="How it works">
+								<p>A template fills in answers you saved before, like the price and the licence.</p>
+								<p>It only fills fields that are still empty, so nothing you typed is replaced.</p>
+								<p>Undo puts the form back the way it was.</p>
+							</Explain>
+						</div>
+						<Field label="Template" id="start-from-template">
+							<select
+								id="start-from-template"
+								disabled={starting}
+								onchange={(event) => void startFrom(event.currentTarget.value)}
+							>
+								<option value="">{starting ? 'Loading the template…' : 'None'}</option>
+								{#each templateHeads.data ?? [] as head (head.id)}
+									<option value={head.id}>
+										{head.name}{head.scope === null ? '' : ` — ${MARKETPLACE_WORD[head.scope]}`}
+									</option>
+								{/each}
+							</select>
+						</Field>
+						{#if started !== null}
+							<p class="res-start-said">
+								{filledLine(started.name, started.filled)}
+								<Button small tier="quiet" onclick={undoStart}>Undo</Button>
+							</p>
+						{/if}
+						{#if startRefusal !== null}
+							<p class="res-start-said">{startRefusal}</p>
+						{/if}
+					</section>
+				{/if}
+
+				<!-- Every field stays editable: a live listing a change cannot be
+				     sent to keeps the copy it has, and this says which. -->
+				{#if editing !== null && keeps.length > 0}
+					<Banner tone="info">
+						{keptSentence(keeps)}
+						<Explain title="Why your change stays here">
+							<p>Your changes are saved in Teachouse either way.</p>
+							<p>
+								Teachouse can’t update a listing that is already live on
+								{keeps.map(platformTitle).join(', ')} yet, so that listing stays as it is.
+							</p>
+							<p>Your other marketplaces get the change the next time you send.</p>
+						</Explain>
 					</Banner>
 				{/if}
 
@@ -1051,12 +1088,6 @@
 						label="Your file makes the thumbnail, and both go to {selected.length === 0 ? 'the marketplaces you choose in step 3' : selected.map(platformTitle).join(' and ')}"
 					/>
 
-					<!-- One `disabled` per step's controls rather than one per
-					     control: a published listing on a platform whose edit we have
-					     not captured cannot be edited through us, so every field is
-					     shown as stored and takes no edit. The step toggles, the
-					     Explains and the marketplace tiles stay live outside it. -->
-					<fieldset class="res-lock" disabled={locked}>
 						<FormSection group="files" icon="package" {refusals}>
 							{#snippet badge()}
 								<!-- A notice and not a control: the feature is not built. -->
@@ -1080,6 +1111,8 @@
 									product={editing.product.id}
 									files={editing.product.files}
 									inventories={editing.mapped}
+									{keeps}
+									onPdf={(file) => (sourcePdf = file)}
 								/>
 							{/if}
 						</FormSection>
@@ -1088,10 +1121,11 @@
 							<PreviewField
 								{previews}
 								limits={form?.limits ?? null}
-								source={sourcePdf ?? keptSource}
+								source={sourcePdf ?? keptSource ?? storedSource}
 								uploadLabel={sourcePdf === null && keptSource !== null
 									? 'Upload preview to Teachouse'
 									: 'Make preview'}
+								storedOf={storedPreview}
 								sellerName={organisation.data?.name ?? ''}
 								onAdd={(handle) => void addPreview(handle)}
 								onReplace={(hash, handle) => void replacePreview(hash, handle)}
@@ -1115,7 +1149,6 @@
 								<p class="res-note">Loading the thumbnail options…</p>
 							{/if}
 						</FormSection>
-					</fieldset>
 				</FlowStep>
 
 				<FlowStep
@@ -1127,7 +1160,6 @@
 					done={detailsDone}
 					bind:open={openSteps.details}
 				>
-					<fieldset class="res-lock" disabled={locked}>
 						<FormSection group="name" icon="tag" {refusals}>
 							<Field label="Title" id="draft-title" required>
 								<input
@@ -1168,7 +1200,6 @@
 						<StandardsPanel {draft} {form} {refusals} {set} />
 
 						<DetailsPanel {draft} {form} {refusals} {set} />
-					</fieldset>
 				</FlowStep>
 
 				<FlowStep
@@ -1201,7 +1232,6 @@
 
 					{#if listed}{@render listed()}{/if}
 
-					<fieldset class="res-lock" disabled={locked}>
 						<!-- The founder's rule: the marketplace is the decision the
 						     per-marketplace questions below are asked under. -->
 						<FormSection group="marketplaces" icon="store" help={GROUP_HELP.marketplaces} {refusals}>
@@ -1317,7 +1347,6 @@
 								{/if}
 							</details>
 						{/if}
-					</fieldset>
 				</FlowStep>
 
 				<FlowStep
@@ -1330,9 +1359,7 @@
 					done={false}
 					bind:open={openSteps.publish}
 				>
-					<fieldset class="res-lock" disabled={locked}>
-						<StatusPanel {draft} {form} {refusals} {set} />
-					</fieldset>
+					<StatusPanel {draft} {form} {refusals} {set} />
 
 					{#if refusals.length > 0 || (serverCheck !== null && !serverCheck.submittable) || serverRefusal !== null}
 						<section class="res-sec">

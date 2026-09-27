@@ -236,11 +236,10 @@ export type FormMode =
 			/** The marketplaces this resource already reaches. Add-only: no
 			 *  route unmaps one, so these render ticked and disabled. */
 			mapped: readonly InventoryId[];
-			/** The live listings that make this whole form read-only, or empty.
-			 *  A published listing on a platform whose edit transition we have
-			 *  not captured cannot be edited through us, and the server refuses
-			 *  the request, so the fields are shown as stored and held back. */
-			blockedBy: readonly InventoryId[];
+			/** The live listings an edit here is saved past rather than sent
+			 *  to, or empty: a published listing on a platform whose edit
+			 *  transition we have not captured keeps the copy it has. */
+			keeps: readonly InventoryId[];
 	  };
 
 export function emptyTptDraft(): TptDraft {

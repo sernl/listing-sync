@@ -196,6 +196,16 @@ describe('what a file change says it does', () => {
 		);
 	});
 
+	it('tells apart a live listing that keeps its copy from one the next send revises', () => {
+		// The founder's case: a live Tes listing no longer blocks the change,
+		// so the sentence has to say that Tes is the one place it does not go.
+		expect(reachSentence(['Tpt'], ['Tes'])).toBe(
+			'The copy on TPT (Teachers Pay Teachers) stays as it is until you send again. ' +
+				'TES (Tes.com) keeps the copy it has for now.'
+		);
+		expect(reachSentence([], ['Tes'])).toBe('TES (Tes.com) keeps the copy it has for now.');
+	});
+
 	it('names a file by what the page actually knows about it', () => {
 		expect(fileWords(file('a', 'payload'))).toBe('the file (PDF, 2.3 MB)');
 		expect(fileWords(file('c', 'cover', 184_220))).toBe('the thumbnail (IMAGE, 180 KB)');
@@ -280,16 +290,6 @@ describe('which replacement redraws the thumbnail', () => {
 });
 
 describe('a refused file change', () => {
-	it('says a live listing’s files cannot be changed, rather than showing a code', () => {
-		const refused = new ApiFailure(422, {
-			status: 422,
-			errors: [{ code: 'uncaptured_transition', message: 'uncaptured', detail: undefined }]
-		} as never);
-		expect(fileRefusal(refused, 'replace')).toBe(
-			'This resource is live on a marketplace we can’t edit yet, so you can’t change its files there.'
-		);
-	});
-
 	it('turns the server’s last-file refusal into the same sentence the control carries', () => {
 		const refused = new ApiFailure(422, {
 			status: 422,

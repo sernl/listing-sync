@@ -1,12 +1,12 @@
 /**
- * The read-only viewer over a file kept on this machine, and the source a
- * preview can be cut from: what to draw for a content type, and which pages
- * to have drawn for where the reader is.
+ * The read-only viewer over a resource's files, and the source a preview can
+ * be cut from: what to draw for a content type, and which pages to have drawn
+ * for where the reader is.
  *
  * Pure, so the page-window arithmetic tests without a canvas.
  */
 
-import type { FileView } from '$lib/api';
+import { api, type FileView } from '$lib/api';
 import type { Invoke } from '$lib/desktop';
 import { libraryRead } from '$lib/desktop';
 
@@ -52,6 +52,35 @@ export function keptPdfSource(
 		return null;
 	}
 	return sourceOfKept(invoke, file.name ?? 'file.pdf', file.hash);
+}
+
+/** A file Teachouse stores for this resource, read back from the server
+ *  when asked, never earlier. What a reopened resource has on any machine,
+ *  in any browser. */
+export function sourceOfStored(product: string, file: FileView): ByteSource {
+	return {
+		name: file.name ?? `file.${file.kind}`,
+		bytes: () => api.productFileBytes(product, file.id)
+	};
+}
+
+/** The stored PDF a preview is cut from on a saved resource: the first PDF
+ *  payload, which is the file the thumbnail is drawn from too. */
+export function storedPdfSource(product: string, files: readonly FileView[]): ByteSource | null {
+	const file = files.find((candidate) => candidate.role === 'payload' && candidate.kind === 'pdf');
+	return file === undefined ? null : sourceOfStored(product, file);
+}
+
+/** The type a stored file is drawn as, from the kind the product view names. */
+export function contentTypeOfKind(kind: FileView['kind']): string {
+	switch (kind) {
+		case 'pdf':
+			return 'application/pdf';
+		case 'image':
+			return 'image/png';
+		default:
+			return 'application/octet-stream';
+	}
 }
 
 /** How the viewer draws one content type. */

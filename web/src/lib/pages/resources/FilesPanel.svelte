@@ -21,7 +21,12 @@
 	} from '$lib/desktop';
 	import FileViewer from '$lib/FileViewer.svelte';
 	import FileRename from './FileRename.svelte';
-	import { OPEN_UNAVAILABLE, sourceOfKept } from './file-viewer';
+	import {
+		OPEN_UNAVAILABLE,
+		contentTypeOfKind,
+		sourceOfKept,
+		sourceOfStored
+	} from './file-viewer';
 	import {
 		IDLE,
 		advance,
@@ -44,12 +49,23 @@
 	let {
 		product,
 		files,
-		inventories
+		inventories,
+		keeps = [],
+		onPdf
 	}: {
 		product: string;
 		files: readonly FileView[];
 		inventories: readonly InventoryId[];
+		/** The live listings a change here is saved past rather than sent to. */
+		keeps?: readonly InventoryId[];
+		/** A PDF this panel just stored, so the preview maker can cut pages
+		 *  from the bytes already in this browser rather than reading them
+		 *  back. */
+		onPdf?: (file: File) => void;
 	} = $props();
+
+	/** The mapped marketplaces the next send revises. */
+	const sent = $derived(inventories.filter((inventory) => !keeps.includes(inventory)));
 
 	const queryClient = useQueryClient();
 
@@ -150,7 +166,10 @@
 			const handle = { ...landed, name: bytes.name };
 			if (verb === 'add') {
 				const added = await api.addProductFile(product, 'payload', handle);
-				await settleFile(added.reaches, 'File added.');
+				if (landed.kind === 'pdf') {
+					onPdf?.(bytes);
+				}
+				await settleFile(added, 'File added.');
 				return;
 			}
 			// No thumbnail is sent: the server renders one from these bytes
@@ -158,8 +177,11 @@
 			// handle offered from here would be a handle a client could point
 			// at any file, which is the hole that closed by removing the field.
 			const replaced = await api.replaceProductFile(product, file ?? '', handle);
+			if (landed.kind === 'pdf') {
+				onPdf?.(bytes);
+			}
 			await settleFile(
-				replaced.reaches,
+				replaced,
 				replaced.cover === undefined ? 'File replaced.' : 'File replaced and thumbnail updated.'
 			);
 		} catch (failure) {
@@ -172,7 +194,7 @@
 		try {
 			const landed = await api.removeProductFile(product, file);
 			await settleFile(
-				landed.reaches,
+				landed,
 				landed.thumbnail.state === 'redrawn'
 					? 'File removed and thumbnail updated.'
 					: landed.thumbnail.state === 'retired'
@@ -200,8 +222,14 @@
 		}
 	}
 
-	async function settleFile(reaches: InventoryId[], said: string) {
-		fileReach = reachSentence(reaches);
+	async function settleFile(
+		landed: { reaches: InventoryId[]; kept: { inventory: InventoryId }[] },
+		said: string
+	) {
+		fileReach = reachSentence(
+			landed.reaches,
+			landed.kept.map((kept) => kept.inventory)
+		);
 		fileEvent({ kind: 'settled' });
 		await queryClient.invalidateQueries({ queryKey: queryKeys.product(product) });
 		await queryClient.invalidateQueries({ queryKey: queryKeys.products });
@@ -242,9 +270,7 @@
 			</span>
 			<span class="res-line-at">{formatBytes(file.byte_len)}</span>
 			<span class="res-file-acts">
-				{#if kept.has(file.hash)}
-					<Button small onclick={() => (viewing = file)}>View</Button>
-				{/if}
+				<Button small onclick={() => (viewing = file)}>View</Button>
 				{#if file.role !== 'cover'}
 					<Button
 						small
@@ -307,7 +333,7 @@
 								Your thumbnail comes from this file, so it will be remade from the new one.
 							{/if}
 						{/if}
-						{reachSentence(inventories)}
+						{reachSentence(sent, keeps)}
 						{STORAGE_NOT_RECLAIMED}
 					</p>
 					<span class="res-file-acts">
@@ -337,7 +363,7 @@
 		{/if}
 		<Explain title="What changing a file does" label="What changes?">
 			<p>Changing a file here updates this resource in Teachouse.</p>
-			<p>{reachSentence(inventories)}</p>
+			<p>{reachSentence(sent, keeps)}</p>
 			<p>Your thumbnail comes from the first file.</p>
 		</Explain>
 		<Button
@@ -367,11 +393,14 @@
 
 {#if viewing !== null}
 	{@const shown = viewing}
+	{@const local = kept.get(shown.hash)}
 	<FileViewer
 		open={viewing !== null}
 		name={fileName(shown)}
-		contentType={kept.get(shown.hash)?.content_type ?? 'application/octet-stream'}
-		bytes={sourceOfKept(invoke, fileName(shown), shown.hash).bytes}
+		contentType={local?.content_type ?? contentTypeOfKind(shown.kind)}
+		bytes={local === undefined
+			? sourceOfStored(product, shown).bytes
+			: sourceOfKept(invoke, fileName(shown), shown.hash).bytes}
 		onClose={() => (viewing = null)}
 		onOpenElsewhere={() => void openElsewhere(shown)}
 	/>

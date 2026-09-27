@@ -265,20 +265,21 @@ export function rightsOf(
 // second mode, so `draftOf` and `patchBodyOf` in `$lib/tpt-form` compose the
 // whole product rather than a subset, and one function pair serves both
 // directions. What stays here is what the edit still needs and the create needs
-// too: the licence options, the rights grant, and the refusal below.
+// too: the licence options, the rights grant, and which live listings keep
+// their copy.
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null;
 }
 
-/** Why this product cannot be edited through us, or `null` where it can.
+/** The live listings an edit to this product is saved past rather than sent
+ * to, or empty.
  *
- * Mirrors the server's own refusal: a bound mapping lowers a revise, and Tes
+ * Mirrors the server's `reach_of`: a bound mapping lowers a revise, and Tes
  * serves neither live-to-live nor live-to-draft, so a listing already live
- * there cannot be edited by us today. The refusal is whole-product rather than
- * per-platform because the edit is on the canonical product and the server
- * refuses the whole request. */
-export function editBlockedBy(mappings: readonly MappingHead[]): InventoryId[] {
+ * there keeps the copy it has. The edit itself is always saved; this only
+ * says which listing it will not reach. */
+export function keptOnEdit(mappings: readonly MappingHead[]): InventoryId[] {
 	return mappings
 		.filter(
 			(mapping) =>

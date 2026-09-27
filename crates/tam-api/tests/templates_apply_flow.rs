@@ -1,11 +1,11 @@
 //! Applying a template to resources the catalogue already holds, end to end.
 //!
-//! The severity is in the three answers and in the write matching them. A
-//! template that states a description, a price and a copyright attestation is
-//! applied to three resources: one authored blank, which takes all three; one
-//! the seller has already priced and described, which takes nothing; and one
-//! live on Tes, whose edit-published transition no capture supports and which
-//! is therefore refused with the sentence the edit route refuses it with.
+//! The severity is in the answers and in the write matching them. A template
+//! that states a description, a price and a copyright attestation is applied
+//! to three resources: one authored blank, which takes all three; one the
+//! seller has already priced and described, which takes nothing; and one live
+//! on Tes, which takes all three like the blank one does — a live Tes listing
+//! keeps its own copy, so it no longer locks the resource against the edit.
 //!
 //! Then the submit, and what makes it worth testing over the plan: the rows it
 //! writes are exactly the rows the plan admitted, the stored values are the
@@ -52,7 +52,8 @@ const KEY: &str = "11111111-1111-4111-8111-111111111111";
 const BLANK: u8 = 0x01;
 /// The seller's own: described, priced, and attested. Takes nothing.
 const ANSWERED: u8 = 0x02;
-/// Live on Tes, whose edit-published transition is uncaptured.
+/// Live on Tes and otherwise blank. The Tes listing keeps its copy; the
+/// resource itself still takes the template.
 const ON_TES: u8 = 0x03;
 
 fn state(pool: PgPool) -> AppState {
@@ -421,16 +422,25 @@ async fn a_template_fills_what_is_empty_and_says_what_it_will_not_touch(pool: Pg
         "and a resource that has answered its own description, price and attestation takes \
          none of them: {kept:?}"
     );
-    let refused = row(&plan, &on_tes);
-    assert_eq!(refused.verdict, TemplateApplyVerdict::Blocked);
+    let admitted = row(&plan, &on_tes);
     assert_eq!(
-        refused.reason.as_deref(),
-        Some(
-            "this listing is live on a platform whose edit-published transition is uncaptured, \
-             so the edit cannot be attempted"
+        (
+            admitted.verdict,
+            admitted.fields.as_slice(),
+            admitted.reason.as_deref()
         ),
-        "a row the edit route would refuse carries that route's own sentence rather than \
-         failing the whole preview"
+        (
+            TemplateApplyVerdict::WillChange,
+            [
+                "description".to_owned(),
+                "price".to_owned(),
+                "copyright_declaration_id".to_owned()
+            ]
+            .as_slice(),
+            None
+        ),
+        "a resource live on Tes is not refused: the Tes listing keeps its copy and the \
+         resource takes the template like any blank one: {admitted:?}"
     );
     assert_eq!(
         (
@@ -438,7 +448,7 @@ async fn a_template_fills_what_is_empty_and_says_what_it_will_not_touch(pool: Pg
             plan.counts.unchanged,
             plan.counts.blocked
         ),
-        (1, 1, 1),
+        (2, 1, 0),
         "and the counts are the rows"
     );
 
@@ -474,7 +484,7 @@ async fn a_template_fills_what_is_empty_and_says_what_it_will_not_touch(pool: Pg
     let ack: TemplateApplyAck = applied.json();
     assert_eq!(
         (ack.changed, ack.unchanged, ack.blocked),
-        (1, 1, 1),
+        (2, 1, 0),
         "the submit wrote exactly the rows the plan admitted"
     );
 
@@ -519,7 +529,7 @@ async fn a_template_fills_what_is_empty_and_says_what_it_will_not_touch(pool: Pg
     .json();
     assert_eq!(
         (replayed.changed, replayed.unchanged, replayed.blocked),
-        (0, 2, 1),
+        (0, 3, 0),
         "a replay writes nothing, because a field is listed only where the merged value \
          differs from the stored one"
     );

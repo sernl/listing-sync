@@ -1748,8 +1748,20 @@ export interface PatchProductBody {
 
 export interface PatchedProductView {
 	product: string;
-	/** The platforms this edit reaches when it is next synced. */
+	/** The platforms this edit reaches when it is next sent. */
 	reaches: InventoryId[];
+	/** The live listings this edit was written past: saved here, not sent
+	 *  there, because the marketplace has no way we can update a listing that
+	 *  is already live. They keep the copy they have. */
+	kept: KeptListing[];
+}
+
+/** A live listing that keeps the copy it has after a change. */
+export interface KeptListing {
+	inventory: InventoryId;
+	/** The capture that is missing, in the registry's own name. */
+	capability: string;
+	reason: string;
 }
 
 export interface DeleteProductBody {
@@ -1798,6 +1810,7 @@ export interface AddedFileView {
 	product: string;
 	file: FileView;
 	reaches: InventoryId[];
+	kept: KeptListing[];
 }
 
 /** A replacement is a new row with a new identifier, so `removed` names the
@@ -1813,6 +1826,7 @@ export interface ReplacedFileView {
 	 *  when it had not. */
 	cover?: FileView;
 	reaches: InventoryId[];
+	kept: KeptListing[];
 }
 
 export interface RemovedFileView {
@@ -1824,6 +1838,7 @@ export interface RemovedFileView {
 	 *  the absence of the second. */
 	thumbnail: { state: 'untouched' } | { state: 'redrawn'; file: FileView } | { state: 'retired' };
 	reaches: InventoryId[];
+	kept: KeptListing[];
 }
 
 /** A rename keeps the row, its bytes and its role; only `file.name` moved. */
@@ -2763,6 +2778,23 @@ export const api = {
 	 *  drawn rather than chosen, and for a blank name. */
 	renameProductFile: (product: string, file: string, name: string) =>
 		patch<RenamedFileView>(`/v1/products/${product}/files/${file}`, { name }),
+	/** The bytes of one of a resource's own files, read back from Teachouse.
+	 *  A refusal is thrown as the structured failure every other route
+	 *  answers with. */
+	productFileBytes: async (product: string, file: string): Promise<ArrayBuffer> => {
+		const path = `/v1/products/${product}/files/${file}/content`;
+		const response = await fetch(path);
+		if (response.ok) {
+			return response.arrayBuffer();
+		}
+		let body: APIErrorBody | null = null;
+		try {
+			body = (await response.json()) as APIErrorBody;
+		} catch {
+			body = null;
+		}
+		throw new ApiFailure(response.status, body);
+	},
 
 	/** The body is mandatory in practice even though the server defaults it:
 	 *  a delete that removes nothing remotely has to say so, and `leave_live`

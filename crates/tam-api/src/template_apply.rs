@@ -38,8 +38,8 @@ use tam_types::{
 };
 
 use crate::catalogue::{
-    commit_edit, prepare_edit, stored_grade_slug, uncaptured_edits, EditBar, PatchProductBody,
-    PathInput, PreparedEdit, UNCAPTURED_EDIT,
+    commit_edit, prepare_edit, stored_grade_slug, EditBar, PatchProductBody, PathInput,
+    PreparedEdit,
 };
 use crate::error::APIError;
 use crate::jobs::{storage_fault, validation, RequestKey};
@@ -239,14 +239,6 @@ async fn plan(
             .list_for_product(context.org, product)
             .await
             .map_err(|error| storage_fault(state, &error))?;
-        // The edit route's own refusal, reported as one row rather than as a
-        // whole failed request: a seller applying a template to forty
-        // resources has to see which of them their Tes listings block.
-        if !uncaptured_edits(&bound).is_empty() {
-            rows.push(blocked(product, title, UNCAPTURED_EDIT.to_owned()));
-            counts.blocked = counts.blocked.saturating_add(1);
-            continue;
-        }
         let base = sidecars
             .get(context.org, product)
             .await

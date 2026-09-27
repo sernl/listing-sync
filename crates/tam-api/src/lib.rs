@@ -515,6 +515,13 @@ pub fn router(state: AppState) -> Router {
         // route rather than a field of bytes on the product view: a thumbnail
         // is fetched by the img element itself, cached by the browser, and
         // asked for once per row.
+        // A resource's own file read back, so a later visit can cut a
+        // preview from the stored PDF and draw it; the same tenant fence as
+        // the cover below.
+        .route(
+            "/{version}/products/{product}/files/{file}/content",
+            get(resources::product_file_content),
+        )
         .route(
             "/{version}/products/{product}/cover",
             get(resources::product_cover),

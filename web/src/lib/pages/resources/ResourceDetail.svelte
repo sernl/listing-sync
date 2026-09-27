@@ -9,7 +9,7 @@
 		type MappingHead,
 		type VocabularyView
 	} from '$lib/api';
-	import { editBlockedBy } from '$lib/authoring';
+	import { keptOnEdit } from '$lib/authoring';
 	import MarketplaceMark from '$lib/MarketplaceMark.svelte';
 	import { AUTHORABLE_PLATFORMS, platformTitle } from '$lib/platforms';
 	import Banner from '$lib/Banner.svelte';
@@ -272,7 +272,7 @@
 		chips.filter((chip: MarketplaceChip) => chip.action !== null && chip.tone === 'bad')
 	);
 
-	const blockedBy = $derived(editBlockedBy(mappings));
+	const keeps = $derived(keptOnEdit(mappings));
 	const payloadFiles = $derived(
 		(product.data?.files ?? []).filter((file) => file.role === 'payload').length
 	);
@@ -451,7 +451,7 @@
 		<!-- The same form the create route renders, in its second mode, with
 		     this page's own pieces handed into its steps: the marketplace tiles
 		     into step 3, Publish beside Save, and the history under the steps. -->
-		<ResourceForm mode={{ kind: 'edit', product: stored, mapped: inventories, blockedBy }}>
+		<ResourceForm mode={{ kind: 'edit', product: stored, mapped: inventories, keeps }}>
 			{#snippet listed()}
 				<div class="flow-section">
 					<div class="flow-section-head">

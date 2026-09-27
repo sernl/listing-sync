@@ -610,17 +610,50 @@
 	display: block;
 }
 
-/* The template strip above the form's card. Its own surface rather than a
-   band inside the card, because a template is where the form starts and the
-   card is the form: putting it inside would make it look like one more thing
-   the seller has to answer. */
+/* The template card: step 0 of the flow, and optional. Quiet — a dashed
+   outline and no surface of its own — so it never reads as one more thing the
+   seller has to answer, and it takes the accent only once a template has been
+   chosen. It sits in `.flow`, so the flow's own gap is what separates it from
+   the Stepper above and step 1 below. */
 .resources-page .res-start {
-	background: var(--surface);
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-3);
+	border: 1px dashed var(--line);
 	border-radius: var(--r-card);
-	box-shadow: var(--sh-2);
-	margin-top: 24px;
-	padding: 16px 20px;
+	padding: var(--s-4) var(--s-5);
 	min-width: 0;
+}
+
+.resources-page .res-start.chosen {
+	border-style: solid;
+	border-color: var(--accent);
+	background: var(--accent-soft);
+}
+
+.resources-page .res-start-head {
+	display: flex;
+	align-items: center;
+	gap: var(--s-3);
+	flex-wrap: wrap;
+}
+
+.resources-page .res-start-head h2 {
+	margin: 0;
+	flex: 1 1 auto;
+	font-size: 15px;
+	font-weight: 600;
+	color: var(--muted);
+}
+
+.resources-page .res-start.chosen .res-start-head h2 {
+	color: var(--text);
+}
+
+@media (max-width: 620px) {
+	.resources-page .res-start {
+		padding: var(--s-3) var(--s-4);
+	}
 }
 
 .resources-page .res-start-said {
@@ -628,7 +661,7 @@
 	align-items: center;
 	gap: 10px;
 	flex-wrap: wrap;
-	margin: 8px 0 0;
+	margin: 0;
 	font-size: 13px;
 	color: var(--muted);
 }
@@ -1349,29 +1382,6 @@
 .resources-page .res-file-anon {
 	color: var(--faint);
 	font-weight: 500;
-}
-
-/* The whole form as one disable-able group. A `fieldset` is the only element
-   whose `disabled` reaches its descendants, so the resource form uses one to
-   hold every control back when a published listing makes the edit
-   unattemptable; these rules take away the box the user agent draws around it,
-   and `min-width: 0` undoes the `min-content` floor a fieldset otherwise
-   imposes, which is what stops a wide picker forcing the page to scroll
-   sideways at 390px. */
-.resources-page .res-lock {
-	border: 0;
-	margin: 0;
-	padding: 0;
-	min-width: 0;
-	/* Block, exactly as `.res-form` was: the sections and the panel space
-	   themselves, and a flex container here would restack them. */
-	display: block;
-}
-
-/* Every control inside reads as unavailable rather than merely inert, which is
-   what separates "held back" from "broken". */
-.resources-page .res-lock:disabled {
-	opacity: 0.72;
 }
 
 /* The stored files, inside the form's own Files section rather than in a panel
