@@ -68,6 +68,16 @@
 		padding-left: 1.4em;
 	}
 
+	/* The console's reset takes list markers off; a description's lists are
+	   the reader's, so they come back. */
+	.res-preview :global(ul) {
+		list-style: disc;
+	}
+
+	.res-preview :global(ol) {
+		list-style: decimal;
+	}
+
 	.res-preview :global(a) {
 		color: var(--primary);
 		text-decoration: underline;

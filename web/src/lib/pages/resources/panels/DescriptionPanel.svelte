@@ -336,6 +336,9 @@
 		max-height: 60vh;
 		overflow-y: auto;
 		line-height: 1.5;
+		/* The field's label is bold, and a box that inherited it would make
+		   Bold read as already on, so the first press took it off. */
+		font-weight: 400;
 		color: var(--ink);
 		overflow-wrap: anywhere;
 	}
@@ -360,6 +363,16 @@
 	.res-rich :global(ol) {
 		margin: 0 0 0.6em;
 		padding-left: 1.4em;
+	}
+
+	/* The console's reset takes list markers off; a description's lists are
+	   the reader's, so they come back. */
+	.res-rich :global(ul) {
+		list-style: disc;
+	}
+
+	.res-rich :global(ol) {
+		list-style: decimal;
 	}
 
 	.res-rich :global(a) {
