@@ -35,6 +35,7 @@
 	} from '$lib/pages/account/plans';
 	import CancelPlanDialog from '$lib/pages/account/CancelPlanDialog.svelte';
 	import { readIntent } from '$lib/pages/account/intent';
+	import '$lib/flow.css';
 	import '$lib/pages/account/account.css';
 
 	// Everything priced on this page comes from the generated table, which is
