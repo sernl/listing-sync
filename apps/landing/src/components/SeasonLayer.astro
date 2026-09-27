@@ -1,0 +1,19 @@
+---
+/* The seasonal overlay's hero pieces: two top corners, a flock that hangs or
+   flies above the hero art, and a band of snow along the hero's top edge.
+   Empty elements whose pictures come from `season.css`, which draws them only
+   under `html[data-season]`, so a page with no season active fetches no
+   picture and paints nothing here. The layer sits under `main`'s top edge,
+   which is the hero's, and every piece is placed in space the hero leaves
+   empty; the section-edge pieces and the character are pseudo-elements in
+   `season.css` rather than markup here, because they belong to sections this
+   component does not render. */
+import '../styles/season.css';
+---
+
+<div class="season-layer" aria-hidden="true">
+	<i class="season-corner season-corner-start"></i>
+	<i class="season-corner season-corner-end"></i>
+	<i class="season-flock"></i>
+	<i class="season-snow"></i>
+</div>

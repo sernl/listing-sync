@@ -1,6 +1,7 @@
 ---
 import SiteFooter from '../components/SiteFooter.astro';
 import SiteHeader from '../components/SiteHeader.astro';
+import SeasonLayer from '../components/SeasonLayer.astro';
 import '../styles/site.css';
 
 const { title, description } = Astro.props;
@@ -97,10 +98,49 @@ const posthogKey = import.meta.env.PUBLIC_POSTHOG_KEY;
 	</head>
 	<body>
 		<a class="skip" href="#main">Skip to content</a>
+		<p class="site-banner" id="site-banner" hidden><a href="/"></a></p>
 		<SiteHeader />
 		<main id="main">
+			<SeasonLayer />
 			<slot />
 		</main>
 		<SiteFooter />
+		{/* The site-wide switches, read once per page from `GET /v1/site`,
+		    which the browser caches for a minute. The seasonal theme is decided
+		    by the server's clock, so this only copies `theme.active` onto
+		    `<html>` as `data-season`, which is all `styles/season.css` keys on;
+		    `?season=halloween` or `?season=christmas` forces one, which is the
+		    operator's preview. The banner is text and a link written by
+		    `textContent` and `href`, never as markup. A failed read changes
+		    nothing. Hashed into the policy by `tam-server` like the blocks above. */}
+		<script is:inline>
+			(function () {
+				var root = document.documentElement;
+				var forced = new URLSearchParams(location.search).get('season');
+				if (forced === 'halloween' || forced === 'christmas') {
+					root.dataset.season = forced;
+				}
+				fetch('/v1/site', { credentials: 'same-origin' })
+					.then(function (response) {
+						return response.ok ? response.json() : null;
+					})
+					.then(function (site) {
+						if (!site) {
+							return;
+						}
+						if (!forced && site.theme && site.theme.active && site.theme.name !== 'none') {
+							root.dataset.season = site.theme.name;
+						}
+						var banner = document.getElementById('site-banner');
+						if (site.banner && banner) {
+							var link = banner.querySelector('a');
+							link.textContent = site.banner.text;
+							link.href = site.banner.href;
+							banner.hidden = false;
+						}
+					})
+					.catch(function () {});
+			})();
+		</script>
 	</body>
 </html>
