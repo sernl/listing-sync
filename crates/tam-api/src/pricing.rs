@@ -733,15 +733,25 @@ pub(crate) async fn create_sale(
     };
     let value = serde_json::to_value(&presentation)
         .map_err(|error| state.internal(&error.to_string()))?;
-    SiteSettingRepo::new(state.pool.clone())
+    let written = SiteSettingRepo::new(state.pool.clone())
         .set(
             &format!("{SALE_SETTING_PREFIX}{}", discount.id.to_hyphenated()),
             &value,
             operator.user,
             now,
         )
-        .await
-        .map_err(|e| storage(&state, &e))?;
+        .await;
+    if let Err(error) = written {
+        // A sale with no banner would strike prices with nothing saying why;
+        // withdraw it rather than leave it half-made.
+        if let Some(client) = state.config.stripe.as_ref() {
+            let _undone = client.delete_coupon(&discount.stripe_coupon_id).await;
+        }
+        let _ended = DiscountRepo::new(state.pool.clone())
+            .end(discount.id, now)
+            .await;
+        return Err(storage(&state, &error));
+    }
     Ok((
         StatusCode::CREATED,
         Json(view(&state, &discount, Some(presentation))),
