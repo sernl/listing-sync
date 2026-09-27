@@ -490,11 +490,17 @@ fn plans_ts() -> String {
          readonly included_fills: number;\n  \
          readonly add_on_fills: number;\n  \
          readonly add_on_cents: number;\n}\n\n\
+         export interface SaleView {\n  \
+         readonly percent_off: number;\n  \
+         readonly until: string;\n  \
+         readonly banner: string;\n  \
+         readonly banner_href: string | null;\n}\n\n\
          export interface PlansView {\n  \
          readonly plans: readonly PlanRow[];\n  \
          readonly packs: readonly Pack[];\n  \
          readonly pack_above: string;\n  \
-         readonly ai: AiOffer;\n}\n\n",
+         readonly ai: AiOffer;\n  \
+         readonly sale: SaleView | null;\n}\n\n",
     );
     out.push_str("export const PLANS: readonly PlanRow[] = [\n");
     out.push_str(&plan_rows("  "));

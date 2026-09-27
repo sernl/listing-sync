@@ -9,13 +9,7 @@
  * strike the same list price and show the same sale price Stripe charges.
  */
 
-export interface Sale {
-	readonly percent_off: number;
-	/** The last day of the sale, inclusive, `YYYY-MM-DD` (UTC). */
-	readonly until: string;
-	readonly banner: string;
-	readonly banner_href: string | null;
-}
+import type { SaleView } from '$lib/generated/plans';
 
 /** A list price and the price a sale makes of it. */
 export interface SalePrice {
@@ -40,7 +34,7 @@ export function afterPercentOff(cents: number, percent: number): number {
  * is struck: no sale, a free plan, or a price the sale does not reach.
  */
 export function salePrice(
-	sale: Sale | null | undefined,
+	sale: SaleView | null | undefined,
 	cents: number | null | undefined
 ): SalePrice | null {
 	if (!sale || cents === null || cents === undefined || cents <= 0) {
@@ -73,6 +67,6 @@ export function saleUntilLabel(until: string): string {
 }
 
 /** The short line under a struck price: "25% off until 31 October". */
-export function saleLine(sale: Sale): string {
+export function saleLine(sale: SaleView): string {
 	return `${sale.percent_off}% off until ${saleUntilLabel(sale.until)}`;
 }

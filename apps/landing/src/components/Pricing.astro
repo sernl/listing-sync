@@ -30,6 +30,13 @@ const Heading = level === 1 ? 'h1' : 'h2';
 		<Heading>Plans for every shop</Heading>
 		{/* The founder's own example names two marketplaces, so the line is a
 		    marked band for `just landing-copy-gate`. */}
+		{/* A sale is data an operator saves, and this page is built ahead of
+		    it: the banner is drawn hidden and `sale.js` fills and shows it,
+		    striking the prices below, when `/v1/plans` answers one. */}
+		<p class="sale-banner" data-sale-banner hidden>
+			<strong data-sale-text></strong>
+			<a data-sale-link href="/pricing">See the plans</a>
+		</p>
 		<p class="move-def" data-marketplace-band><strong>What is a move?</strong> {moveDefinition}</p>
 
 		<div class="ways">
@@ -60,10 +67,15 @@ const Heading = level === 1 ? 'h1' : 'h2';
 						</h3>
 						<p>{planPitch[plan.id]}</p>
 						<p class="price">
-							{dollars(perMonthYearly(plan))}
+							<span data-list-cents={plan.yearly_cents} data-per="12">
+								{dollars(perMonthYearly(plan))}
+							</span>
 							<span class="per"> a month, billed yearly</span>
 						</p>
-						<p class="counts">{dollars(plan.monthly_cents)} a month if you pay monthly.</p>
+						<p class="counts">
+							<span data-list-cents={plan.monthly_cents}>{dollars(plan.monthly_cents)}</span> a
+							month if you pay monthly.
+						</p>
 						{/* A tick beside a line that is not built yet would claim it is.
 						    The one coming-soon line takes a hollow mark instead. */}
 						<div class="chips">
@@ -124,3 +136,11 @@ const Heading = level === 1 ? 'h1' : 'h2';
 		</div>
 	</div>
 </section>
+
+<script>
+	import { dollars } from '../pricing.js';
+	import { loadSale } from '../sale.js';
+
+	const section = document.getElementById('pricing');
+	if (section) void loadSale(section, dollars);
+</script>

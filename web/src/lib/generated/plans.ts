@@ -53,11 +53,19 @@ export interface AiOffer {
   readonly add_on_cents: number;
 }
 
+export interface SaleView {
+  readonly percent_off: number;
+  readonly until: string;
+  readonly banner: string;
+  readonly banner_href: string | null;
+}
+
 export interface PlansView {
   readonly plans: readonly PlanRow[];
   readonly packs: readonly Pack[];
   readonly pack_above: string;
   readonly ai: AiOffer;
+  readonly sale: SaleView | null;
 }
 
 export const PLANS: readonly PlanRow[] = [

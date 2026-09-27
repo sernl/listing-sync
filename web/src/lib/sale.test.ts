@@ -3,9 +3,10 @@ import {
 	afterPercentOff as landingAfterPercentOff,
 	saleLine as landingSaleLine
 } from '../../../apps/landing/src/sale.js';
-import { afterPercentOff, saleLine, salePrice, type Sale } from './sale';
+import type { SaleView } from '$lib/generated/plans';
+import { afterPercentOff, saleLine, salePrice } from './sale';
 
-const halloween: Sale = {
+const halloween: SaleView = {
 	percent_off: 25,
 	until: '2026-10-31',
 	banner: 'Halloween sale: 25% off every plan until 31 October',
