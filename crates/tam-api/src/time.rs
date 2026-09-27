@@ -98,6 +98,35 @@ fn digits(raw: &str, width: usize) -> Result<i64, NotAnInstant> {
     raw.parse().map_err(|_| NotAnInstant)
 }
 
+/// Reads a calendar date, `YYYY-MM-DD`, as days since 1970-01-01.
+///
+/// Strict about the day of the month, unlike the instant parser's coarse
+/// `1..=31`: a date an operator types into a form is shown back to them, and
+/// `2026-02-30` accepted would be shown as a day that does not exist.
+pub fn days_from_date(raw: &str) -> Result<i64, NotAnInstant> {
+    let (year, month_day) = raw.split_once('-').ok_or(NotAnInstant)?;
+    let (month, day) = month_day.split_once('-').ok_or(NotAnInstant)?;
+    let (year, month, day) = (digits(year, 4)?, digits(month, 2)?, digits(day, 2)?);
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let length = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return Err(NotAnInstant),
+    };
+    if !(1..=length).contains(&day) {
+        return Err(NotAnInstant);
+    }
+    Ok(days_from_civil(year, month, day))
+}
+
+/// The UTC calendar day an instant falls on, as days since 1970-01-01.
+#[must_use]
+pub fn utc_day(at: Timestamp) -> i64 {
+    at.0.div_euclid(86_400 * MILLIS_PER_SEC)
+}
+
 /// Reads an RFC 3339 instant as milliseconds since the epoch.
 ///
 /// A leap second (`:60`) is accepted and carried arithmetically into the

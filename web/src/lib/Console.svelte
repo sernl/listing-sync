@@ -40,7 +40,17 @@
 	import { shouldOfferTour } from '$lib/tour/model';
 	import { tour } from '$lib/tour/tour.svelte';
 
-	let { children, onLogout }: { children: Snippet; onLogout: () => void } = $props();
+	let {
+		children,
+		onLogout,
+		season = null
+	}: {
+		children: Snippet;
+		onLogout: () => void;
+		/** The seasonal theme showing on the landing page, marked here with one
+		 *  small picture; null outside a season. */
+		season?: 'halloween' | 'christmas' | null;
+	} = $props();
 
 	const organisation = createQuery(() => ({ queryKey: queryKeys.org, queryFn: () => api.org() }));
 	const connections = createQuery(() => ({
@@ -488,6 +498,9 @@
 				{/each}
 			</span>
 			<span class="grow"></span>
+			{#if season !== null}
+				<img class="season-mark" src="/seasons/{season}.svg" alt="" width="28" height="24" />
+			{/if}
 			<button class="search search-open" type="button" onclick={() => palette.show()}>
 				<Icon name="search" size={15} />
 				<span class="search-said">Search resources…</span>

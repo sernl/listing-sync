@@ -38,8 +38,10 @@ const NOW: Timestamp = Timestamp(5_000);
 /// Every operator route, with the organisation path already concrete. Used
 /// whole by the refusal tests, so a route added to the router and forgotten
 /// here is a gap a reviewer can see rather than one the suite hides.
-const ADMIN_PATHS: [&str; 9] = [
+const ADMIN_PATHS: [&str; 11] = [
     "/v1/admin/signups",
+    "/v1/admin/pricing",
+    "/v1/admin/site",
     "/v1/admin/orgs",
     "/v1/admin/orgs/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
     "/v1/admin/sync-health",
@@ -63,8 +65,14 @@ const ADMIN_PATHS: [&str; 9] = [
 /// loops would be testing method routing rather than the operator fence.
 /// Their own refusal is asserted by `a_seller_cannot_grant_themselves_a_plan`
 /// and `an_operator_credits_moves_once_per_reason`.
-const ADMIN_PATHS_UNCOVERED: [&str; 14] = [
+const ADMIN_PATHS_UNCOVERED: [&str; 18] = [
     "/{version}/admin/marketplace-requests",
+    // Writes: their operator fence and their own refusals are asserted in
+    // `discounts_flow`.
+    "/{version}/admin/pricing/sales",
+    "/{version}/admin/pricing/discounts",
+    "/{version}/admin/pricing/codes",
+    "/{version}/admin/pricing/{id}/end",
     // A DELETE, and a destructive one: its refusal for a seller, and each of
     // its own refusals, are asserted in `admin_delete_user_flow`.
     "/{version}/admin/users/{subject}",
@@ -87,6 +95,9 @@ const ADMIN_PATHS_UNCOVERED: [&str; 14] = [
     "/{version}/admin/guides/{slug}",
     "/{version}/admin/guides/{slug}/publish",
     "/{version}/admin/guides/{slug}/unpublish",
+    // The site-wide switches are global and on the application pool, for the
+    // guide corpus's reason; their refusal is asserted in `site_flow`.
+    "/{version}/admin/site",
 ];
 
 #[expect(

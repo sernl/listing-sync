@@ -254,6 +254,8 @@ const STATIC_DIRS: Record<string, string> = {
 		"Each marketplace's own logo, drawn in colours that are the marketplace's and not ours to move.",
 	'vendors/':
 		"Mozilla's Firefox logo and Google's Android robot, each the vendor's published file unaltered. Both licences forbid modifying the mark, so its colours are the vendor's and not ours to move.",
+	'seasons/':
+		"The console's seasonal marks, a pumpkin and a sprig of holly, copied from the landing page's hand-drawn stickers. They are drawn in their holiday's own colours, which a palette edit has no opinion about.",
 };
 
 /** Everything else `web/static` writes that is neither a token's value nor the

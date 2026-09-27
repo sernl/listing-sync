@@ -21,6 +21,7 @@
 	import type { IconName } from '$lib/icons';
 	import { dismiss, sweep, toastStore, type Toast } from '$lib/toast';
 	import { probeReachability } from '$lib/unreachable';
+	import { activeSeason, siteGate } from '$lib/site';
 
 	let { data, children } = $props();
 
@@ -78,6 +79,13 @@
 			publicRoute: PUBLIC_ROUTES.includes(page.url.pathname),
 			bannerDismissed
 		})
+	);
+
+	// Maintenance mode, as the server already applies it to every page load:
+	// this covers the navigations that never reach the server, such as a
+	// seller signing in on `/login` and being taken into the console.
+	const gate = $derived(
+		siteGate({ site: data.site, operator: data.operator, pathname: page.url.pathname })
 	);
 
 	async function claimed() {
@@ -210,6 +218,24 @@
 				</p>
 			</div>
 		</div>
+	{:else if gate === 'maintenance'}
+		<!-- Maintenance mode, which an operator switched on from Admin, Site.
+		     Ahead of the console, so nothing below mounts and asks the API for
+		     anything while the site is being worked on. -->
+		<div class="auth">
+			<div class="wordmark">
+				<img src="/brand/logo.svg" alt="Teachouse" width="220" />
+			</div>
+			<div class="auth-card">
+				<h1>We’re doing some maintenance</h1>
+				<p>Teachouse is taking a short break while we make some improvements. Your resources and listings are safe.</p>
+				<p><strong>{data.site?.maintenance.message ?? 'We expect to be back shortly.'}</strong></p>
+				<p>You can check the <a href="/status">status page</a> for the latest.</p>
+				{#if data.session}
+					<p class="claim-out"><button type="button" class="link" onclick={logout}>Sign out</button></p>
+				{/if}
+			</div>
+		</div>
 	{:else if data.session && verdict === 'claim-screen'}
 		<div class="auth">
 			<div class="wordmark">
@@ -222,7 +248,7 @@
 			<p class="claim-out"><button type="button" class="link" onclick={logout}>Sign out</button></p>
 		</div>
 	{:else if data.session}
-		<Console onLogout={logout}>
+		<Console onLogout={logout} season={activeSeason(data.site)}>
 			{#if verdict === 'banner'}
 				<ClaimBanner onDismiss={() => (bannerDismissed = true)} />
 			{/if}

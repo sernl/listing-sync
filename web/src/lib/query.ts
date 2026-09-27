@@ -125,6 +125,8 @@ export const queryKeys = {
 	 *  shaped answer under: one key, two shapes is a cache collision. */
 	identitySession: ['identity-session'] as const,
 	adminSignups: ['admin-signups'] as const,
+	/** The site-wide switches as the operator reads them, uncached. */
+	adminSite: ['admin-site'] as const,
 	adminOrgs: ['admin-orgs'] as const,
 	adminOrg: (org: string) => ['admin-org', org] as const,
 	adminFailures: ['admin-failed-writes'] as const,
