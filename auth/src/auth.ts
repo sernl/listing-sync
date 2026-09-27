@@ -1,6 +1,6 @@
 import { passkey } from '@better-auth/passkey';
 import { type BetterAuthOptions, betterAuth } from 'better-auth';
-import { createAuthMiddleware, getIP, isAPIError } from 'better-auth/api';
+import { createAuthMiddleware, getIP, getSessionFromCtx, isAPIError } from 'better-auth/api';
 import { admin, captcha, haveIBeenPwned, jwt, openAPI } from 'better-auth/plugins';
 import { PostgresDialect } from 'kysely';
 import pg from 'pg';
@@ -312,6 +312,22 @@ export const auth = betterAuth({
         } catch (cause: unknown) {
           console.error('tam-auth: could not notify a user of an administrative password set', cause);
         }
+        return;
+      }
+
+      // /admin/remove-user deletes the account, its sessions and its linked
+      // accounts, so after it returns this table is the only place the act
+      // can be read. The acting administrator is the caller's own session,
+      // which the removal leaves standing; the removed account is named only
+      // in the request body.
+      if (ctx.path === '/admin/remove-user' && failed === undefined) {
+        const removed = targetUserId(ctx.body);
+        const acting = await getSessionFromCtx(ctx).catch(() => null);
+        if (removed === undefined || acting === null) {
+          console.error('tam-auth: an account was removed but its parties could not be read for the audit trail');
+          return;
+        }
+        audit({ event: 'user_removed', userId: acting.user.id, targetUserId: removed, ...where });
       }
     }),
   },

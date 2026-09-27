@@ -72,7 +72,7 @@ pub mod work;
 use axum::{
     extract::State,
     http::StatusCode,
-    routing::{get, patch, post, put},
+    routing::{delete, get, patch, post, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -881,6 +881,10 @@ pub fn router(state: AppState) -> Router {
             post(guides::unpublish_guide),
         )
         .route("/{version}/admin/users", get(admin::list_users))
+        .route(
+            "/{version}/admin/users/{subject}",
+            delete(admin::delete_user),
+        )
         .route("/{version}/openapi.json", get(openapi::serve_document))
         .with_state(state)
 }

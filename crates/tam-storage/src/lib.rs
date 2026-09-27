@@ -22,6 +22,7 @@ pub mod device;
 pub mod device_library;
 pub mod duplicates;
 pub mod entitlement;
+pub mod erasure;
 pub mod file_source;
 pub mod fingerprints;
 pub mod guide;
@@ -83,6 +84,7 @@ pub use duplicates::{
     DecidedBy, DuplicateRepo, Evidence, EvidenceUnit, MatchLayer, NewVerdict, Polarity, Verdict,
     VerdictRecord, REVERSIBLE_MS,
 };
+pub use erasure::{Erased, ErasureRefusal, ErasureRepo};
 pub use entitlement::{
     Accrual, EntitlementRepo, Grant, GrantRecord, GrantedBy, MoveBalance, MoveCredit, MoveSource,
     NewGrant, StorefrontAllowance, Usage,
