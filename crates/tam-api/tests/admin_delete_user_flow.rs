@@ -80,10 +80,7 @@ fn state(pool: PgPool, backoffice: PgPool) -> AppState {
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
 )]
 async fn provision(pool: &PgPool) {
-    for (org, name) in [
-        (ORG_OPERATOR, "Teachouse"),
-        (ORG_SELLER, "Maths Corner"),
-    ] {
+    for (org, name) in [(ORG_OPERATOR, "Teachouse"), (ORG_SELLER, "Maths Corner")] {
         sqlx::query("INSERT INTO organisation (id, name, created_at) VALUES ($1, $2, now())")
             .bind(uuid::Uuid::from_bytes(org.0 .0))
             .bind(name)
@@ -175,6 +172,7 @@ async fn subscribe(pool: &PgPool, status: &str) {
                 status: status.to_owned(),
                 provider_price_id: None,
                 current_period_end: None,
+                cancel_at_period_end: None,
                 occurred_at: Timestamp(4_000),
             },
             NOW,
@@ -269,7 +267,11 @@ const UNTOUCHED: [i64; 5] = [1, 1, 1, 1, 1];
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_seller_alone_in_their_organisation_is_deleted_with_it(pool: PgPool) {
     provision(&pool).await;
-    assert_eq!(seller_rows(&pool).await, UNTOUCHED, "the fixture holds a whole tenant");
+    assert_eq!(
+        seller_rows(&pool).await,
+        UNTOUCHED,
+        "the fixture holds a whole tenant"
+    );
 
     let (status, body) = delete(&pool, &TOKEN_OPERATOR, SUBJECT_SELLER).await;
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
@@ -290,12 +292,11 @@ async fn a_seller_alone_in_their_organisation_is_deleted_with_it(pool: PgPool) {
         .await
         .expect("the count reads");
     assert_eq!(sessions, 0, "their session cannot outlive them");
-    let operator_still: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM app_user WHERE org_id = $1")
-            .bind(uuid::Uuid::from_bytes(ORG_OPERATOR.0 .0))
-            .fetch_one(&pool)
-            .await
-            .expect("the count reads");
+    let operator_still: i64 = sqlx::query_scalar("SELECT count(*) FROM app_user WHERE org_id = $1")
+        .bind(uuid::Uuid::from_bytes(ORG_OPERATOR.0 .0))
+        .fetch_one(&pool)
+        .await
+        .expect("the count reads");
     assert_eq!(operator_still, 1, "the other tenant is untouched");
 
     let (again, _) = delete(&pool, &TOKEN_OPERATOR, SUBJECT_SELLER).await;
@@ -310,7 +311,12 @@ async fn a_seller_alone_in_their_organisation_is_deleted_with_it(pool: PgPool) {
 async fn a_seller_who_shares_their_organisation_is_not_deleted(pool: PgPool) {
     provision(&pool).await;
     SessionRepo::new(pool.clone())
-        .create_user(ORG_SELLER, USER_COLLEAGUE, "colleague@example.test", Timestamp(1_500))
+        .create_user(
+            ORG_SELLER,
+            USER_COLLEAGUE,
+            "colleague@example.test",
+            Timestamp(1_500),
+        )
         .await
         .expect("the colleague provisions");
 
@@ -359,7 +365,10 @@ async fn an_operator_cannot_be_deleted_from_the_console(pool: PgPool) {
         .fetch_one(&pool)
         .await
         .expect("the count reads");
-    assert_eq!(still, 1, "an operator deleting themselves is the same refusal");
+    assert_eq!(
+        still, 1,
+        "an operator deleting themselves is the same refusal"
+    );
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]

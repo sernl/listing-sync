@@ -123,12 +123,9 @@ impl ErasureRepo {
             }
         }
 
-        let rows = sqlx::query_scalar!(
-            "SELECT erase_organisation($1) AS \"rows!\"",
-            target.org_id
-        )
-        .fetch_one(&mut *tx)
-        .await?;
+        let rows = sqlx::query_scalar!("SELECT erase_organisation($1) AS \"rows!\"", target.org_id)
+            .fetch_one(&mut *tx)
+            .await?;
         tx.commit().await?;
         Ok(Ok(Erased {
             user,

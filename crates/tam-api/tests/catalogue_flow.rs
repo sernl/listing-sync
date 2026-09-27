@@ -1886,8 +1886,9 @@ async fn an_edit_past_a_live_tes_listing_is_written_and_says_tes_keeps_its_copy(
         mappings
             .iter()
             .find(|record| record.mapping.inventory == inventory)
-            .map(|record| record.mapping.id)
             .unwrap_or_else(|| panic!("the product is mapped onto {inventory:?}"))
+            .mapping
+            .id
     };
     let (tpt, tes) = (mapping_on(InventoryId::Tpt), mapping_on(InventoryId::Tes));
     assert_eq!(

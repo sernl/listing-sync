@@ -10,7 +10,9 @@
 
 #![cfg(feature = "pg-tests")]
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use tokio::sync::Mutex;
 
 use axum::{
     body::Body,
@@ -60,10 +62,8 @@ struct Seen {
 
 type Log = Arc<Mutex<Vec<Seen>>>;
 
-fn record(log: &Log, seen: Seen) {
-    if let Ok(mut held) = log.lock() {
-        held.push(seen);
-    }
+async fn record(log: &Log, seen: Seen) {
+    log.lock().await.push(seen);
 }
 
 fn version(headers: &HeaderMap) -> Option<String> {
@@ -93,28 +93,26 @@ async fn stripe_double() -> (String, Log) {
             post(
                 |State(log): State<Log>, headers: HeaderMap, Form(form): Form<Vec<(String, String)>>| async move {
                     let id = field(&form, "id").unwrap_or("coupon").to_owned();
-                    record(&log, Seen { method: "POST", path: "/v1/coupons".to_owned(), form, version: version(&headers) });
+                    record(&log, Seen { method: "POST", path: "/v1/coupons".to_owned(), form, version: version(&headers) }).await;
                     Json(serde_json::json!({ "id": id, "object": "coupon", "valid": true, "times_redeemed": 0 }))
                 },
             )
             .get(|State(log): State<Log>| async move {
                 let created: Vec<serde_json::Value> = log
                     .lock()
-                    .map(|held| {
-                        held.iter()
-                            .filter(|seen| seen.method == "POST" && seen.path == "/v1/coupons")
-                            .filter_map(|seen| field(&seen.form, "id"))
-                            .map(|id| serde_json::json!({ "id": id, "valid": true }))
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                    .await
+                    .iter()
+                    .filter(|seen| seen.method == "POST" && seen.path == "/v1/coupons")
+                    .filter_map(|seen| field(&seen.form, "id"))
+                    .map(|id| serde_json::json!({ "id": id, "valid": true }))
+                    .collect();
                 Json(serde_json::json!({ "object": "list", "data": created, "has_more": false }))
             }),
         )
         .route(
             "/v1/coupons/{id}",
             axum::routing::delete(|State(log): State<Log>, Path(id): Path<String>| async move {
-                record(&log, Seen { method: "DELETE", path: format!("/v1/coupons/{id}"), form: Vec::new(), version: None });
+                record(&log, Seen { method: "DELETE", path: format!("/v1/coupons/{id}"), form: Vec::new(), version: None }).await;
                 Json(serde_json::json!({ "id": id, "deleted": true }))
             }),
         )
@@ -123,7 +121,7 @@ async fn stripe_double() -> (String, Log) {
             post(
                 |State(log): State<Log>, headers: HeaderMap, Form(form): Form<Vec<(String, String)>>| async move {
                     let code = field(&form, "code").unwrap_or("CODE").to_owned();
-                    record(&log, Seen { method: "POST", path: "/v1/promotion_codes".to_owned(), form, version: version(&headers) });
+                    record(&log, Seen { method: "POST", path: "/v1/promotion_codes".to_owned(), form, version: version(&headers) }).await;
                     Json(serde_json::json!({ "id": format!("promo_{code}"), "code": code, "active": true }))
                 },
             ),
@@ -132,7 +130,7 @@ async fn stripe_double() -> (String, Log) {
             "/v1/promotion_codes/{id}",
             post(
                 |State(log): State<Log>, Path(id): Path<String>, Form(form): Form<Vec<(String, String)>>| async move {
-                    record(&log, Seen { method: "POST", path: format!("/v1/promotion_codes/{id}"), form, version: None });
+                    record(&log, Seen { method: "POST", path: format!("/v1/promotion_codes/{id}"), form, version: None }).await;
                     Json(serde_json::json!({ "id": id, "active": false }))
                 },
             ),
@@ -147,7 +145,7 @@ async fn stripe_double() -> (String, Log) {
             "/v1/checkout/sessions",
             post(
                 |State(log): State<Log>, Form(form): Form<Vec<(String, String)>>| async move {
-                    record(&log, Seen { method: "POST", path: "/v1/checkout/sessions".to_owned(), form, version: None });
+                    record(&log, Seen { method: "POST", path: "/v1/checkout/sessions".to_owned(), form, version: None }).await;
                     Json(serde_json::json!({ "id": "cs_test_01", "url": "https://checkout.stripe.test/cs_test_01" }))
                 },
             ),
@@ -208,7 +206,12 @@ async fn provision(pool: &PgPool) {
     }
     let sessions = SessionRepo::new(pool.clone());
     for (org, user, email, token) in [
-        (ORG_OPERATOR, USER_OPERATOR, "operator@example.test", TOKEN_OPERATOR),
+        (
+            ORG_OPERATOR,
+            USER_OPERATOR,
+            "operator@example.test",
+            TOKEN_OPERATOR,
+        ),
         (ORG_SELLER, USER_SELLER, "seller@example.test", TOKEN_SELLER),
     ] {
         sessions
@@ -216,7 +219,12 @@ async fn provision(pool: &PgPool) {
             .await
             .expect("the user provisions");
         sessions
-            .mint(&token, user, Timestamp(AFTER.0 + 86_400_000), Timestamp(1_000))
+            .mint(
+                &token,
+                user,
+                Timestamp(AFTER.0 + 86_400_000),
+                Timestamp(1_000),
+            )
             .await
             .expect("the session mints");
     }
@@ -239,7 +247,10 @@ async fn call(
 ) -> (StatusCode, HeaderMap, Vec<u8>) {
     let mut request = Request::builder().method(method).uri(path);
     if let Some(token) = token {
-        request = request.header(header::COOKIE, format!("{SESSION_COOKIE}={}", token.to_hex()));
+        request = request.header(
+            header::COOKIE,
+            format!("{SESSION_COOKIE}={}", token.to_hex()),
+        );
     }
     if body.is_some() {
         request = request.header(header::CONTENT_TYPE, "application/json");
@@ -283,15 +294,13 @@ fn halloween() -> serde_json::Value {
     })
 }
 
-fn seen(log: &Log, method: &str, path: &str) -> Vec<Seen> {
+async fn seen(log: &Log, method: &str, path: &str) -> Vec<Seen> {
     log.lock()
-        .map(|held| {
-            held.iter()
-                .filter(|seen| seen.method == method && seen.path == path)
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default()
+        .await
+        .iter()
+        .filter(|seen| seen.method == method && seen.path == path)
+        .cloned()
+        .collect()
 }
 
 async fn create_sale(pool: &PgPool, base: &str) -> DiscountView {
@@ -303,13 +312,25 @@ async fn create_sale(pool: &PgPool, base: &str) -> DiscountView {
         Some(halloween()),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
     json(&body)
 }
 
 async fn plans(pool: &PgPool, base: &str, wall: fn() -> Timestamp) -> (HeaderMap, PlansView) {
-    let (status, headers, body) = call(state(pool.clone(), base, wall), None, Method::GET, "/v1/plans", None).await;
-    assert_eq!(status, StatusCode::OK);
+    let (status, headers, body) = call(
+        state(pool.clone(), base, wall),
+        None,
+        Method::GET,
+        "/v1/plans",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
     (headers, json(&body))
 }
 
@@ -334,8 +355,9 @@ async fn checkout(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
 )]
-fn last_checkout(log: &Log) -> Vec<(String, String)> {
+async fn last_checkout(log: &Log) -> Vec<(String, String)> {
     seen(log, "POST", "/v1/checkout/sessions")
+        .await
         .pop()
         .expect("a checkout session was opened")
         .form
@@ -347,7 +369,7 @@ async fn a_saved_sale_mints_its_coupon_with_the_terms_typed(pool: PgPool) {
     let (base, log) = stripe_double().await;
     let sale = create_sale(&pool, &base).await;
 
-    let coupons = seen(&log, "POST", "/v1/coupons");
+    let coupons = seen(&log, "POST", "/v1/coupons").await;
     assert_eq!(coupons.len(), 1, "one coupon per sale");
     let form = &coupons[0].form;
     assert_eq!(field(form, "id"), Some(sale.stripe_coupon_id.as_str()));
@@ -398,9 +420,14 @@ async fn the_price_list_announces_a_sale_only_inside_its_window(pool: PgPool) {
     let sale = during.sale.expect("the sale is announced while open");
     assert_eq!(sale.percent_off, 25);
     assert_eq!(sale.until, "2026-10-31");
-    assert_eq!(sale.banner, "Halloween sale: 25% off every plan until 31 October");
     assert_eq!(
-        headers.get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()),
+        sale.banner,
+        "Halloween sale: 25% off every plan until 31 October"
+    );
+    assert_eq!(
+        headers
+            .get(header::CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok()),
         Some("public, max-age=60")
     );
 
@@ -416,8 +443,11 @@ async fn a_checkout_during_a_sale_carries_its_coupon_on_plans_only(pool: PgPool)
 
     let (status, body) = checkout(&pool, &base, PLAN_KEY, None).await;
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
-    let form = last_checkout(&log);
-    assert_eq!(field(&form, "discounts[0][coupon]"), Some(sale.stripe_coupon_id.as_str()));
+    let form = last_checkout(&log).await;
+    assert_eq!(
+        field(&form, "discounts[0][coupon]"),
+        Some(sale.stripe_coupon_id.as_str())
+    );
     assert_eq!(
         field(&form, "allow_promotion_codes"),
         None,
@@ -426,8 +456,12 @@ async fn a_checkout_during_a_sale_carries_its_coupon_on_plans_only(pool: PgPool)
 
     let (status, _body) = checkout(&pool, &base, PACK_KEY, None).await;
     assert_eq!(status, StatusCode::OK);
-    let form = last_checkout(&log);
-    assert_eq!(field(&form, "discounts[0][coupon]"), None, "a pack is not a plan");
+    let form = last_checkout(&log).await;
+    assert_eq!(
+        field(&form, "discounts[0][coupon]"),
+        None,
+        "a pack is not a plan"
+    );
     assert_eq!(field(&form, "allow_promotion_codes"), Some("true"));
 }
 
@@ -451,16 +485,21 @@ async fn a_typed_code_reaches_only_the_prices_it_names(pool: PgPool) {
         })),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
     let created: DiscountView = json(&body);
 
-    let coupon = seen(&log, "POST", "/v1/coupons").remove(0).form;
+    let coupon = seen(&log, "POST", "/v1/coupons").await.remove(0).form;
     assert_eq!(
         field(&coupon, "applies_to[products][0]"),
         Some(format!("prod_{PACK_PRICE}").as_str()),
         "a typed coupon is restricted in Stripe too, because Stripe's own field skips our check"
     );
-    let promotion = seen(&log, "POST", "/v1/promotion_codes").remove(0);
+    let promotion = seen(&log, "POST", "/v1/promotion_codes").await.remove(0);
     assert_eq!(field(&promotion.form, "promotion[type]"), Some("coupon"));
     assert_eq!(
         field(&promotion.form, "promotion[coupon]"),
@@ -477,17 +516,24 @@ async fn a_typed_code_reaches_only_the_prices_it_names(pool: PgPool) {
     // Typed in any case, it opens the pack checkout with the promotion code.
     let (status, body) = checkout(&pool, &base, PACK_KEY, Some("packs20")).await;
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
-    let form = last_checkout(&log);
-    assert_eq!(field(&form, "discounts[0][promotion_code]"), Some("promo_PACKS20"));
+    let form = last_checkout(&log).await;
+    assert_eq!(
+        field(&form, "discounts[0][promotion_code]"),
+        Some("promo_PACKS20")
+    );
     assert_eq!(field(&form, "allow_promotion_codes"), None);
 
     // It does not reach a plan, and an unknown code is refused the same way.
     for (key, code) in [(PLAN_KEY, "PACKS20"), (PACK_KEY, "NOPE123")] {
-        let opened = seen(&log, "POST", "/v1/checkout/sessions").len();
+        let opened = seen(&log, "POST", "/v1/checkout/sessions").await.len();
         let (status, _body) = checkout(&pool, &base, key, Some(code)).await;
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{key} with {code}");
         assert_eq!(
-            seen(&log, "POST", "/v1/checkout/sessions").len(),
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{key} with {code}"
+        );
+        assert_eq!(
+            seen(&log, "POST", "/v1/checkout/sessions").await.len(),
             opened,
             "a refused code opens no session"
         );
@@ -512,7 +558,11 @@ async fn overlapping_sales_are_refused_and_ending_one_withdraws_its_coupon(pool:
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(seen(&log, "POST", "/v1/coupons").len(), 1, "a refused sale mints nothing");
+    assert_eq!(
+        seen(&log, "POST", "/v1/coupons").await.len(),
+        1,
+        "a refused sale mints nothing"
+    );
 
     let (status, _headers, body) = call(
         state(pool.clone(), &base, || DURING),
@@ -524,14 +574,23 @@ async fn overlapping_sales_are_refused_and_ending_one_withdraws_its_coupon(pool:
     .await;
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
     assert_eq!(
-        seen(&log, "DELETE", &format!("/v1/coupons/{}", sale.stripe_coupon_id)).len(),
+        seen(
+            &log,
+            "DELETE",
+            &format!("/v1/coupons/{}", sale.stripe_coupon_id)
+        )
+        .await
+        .len(),
         1
     );
     let (_headers, during) = plans(&pool, &base, || DURING).await;
     assert_eq!(during.sale, None, "an ended sale is announced nowhere");
     let (status, _body) = checkout(&pool, &base, PLAN_KEY, None).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(field(&last_checkout(&log), "discounts[0][coupon]"), None);
+    assert_eq!(
+        field(&last_checkout(&log).await, "discounts[0][coupon]"),
+        None
+    );
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
@@ -547,5 +606,5 @@ async fn a_seller_cannot_reach_the_pricing_surface(pool: PgPool) {
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert!(seen(&log, "POST", "/v1/coupons").is_empty());
+    assert!(seen(&log, "POST", "/v1/coupons").await.is_empty());
 }

@@ -622,7 +622,10 @@ impl<R: AddressResolver, S: Relay> EmailDeliverer<R, S> {
     /// may go nowhere — and their subject where it holds none, which the
     /// operator console can still look up. Unreachable is retried, as it is
     /// for every address this process asks for.
-    async fn requester(&self, notice: &MarketplaceRequestedNotice) -> Result<String, DeliveryError> {
+    async fn requester(
+        &self,
+        notice: &MarketplaceRequestedNotice,
+    ) -> Result<String, DeliveryError> {
         let Some(subject) = notice.requester_subject else {
             return Ok("a user with no sign-in identity".to_owned());
         };
@@ -1214,11 +1217,11 @@ mod tests {
         }
     }
 
-    fn verified(email: &str) -> Result<Address, ResolveError> {
-        Ok(Address {
+    fn verified(email: &str) -> Address {
+        Address {
             email: email.to_owned(),
             verified: true,
-        })
+        }
     }
 
     /// Everything the seller typed reaches the operator, and none of it
@@ -1249,8 +1252,7 @@ mod tests {
             "nothing a seller typed reaches the markup unescaped"
         );
         assert_eq!(
-            mail.href,
-            "https://app.example.test/admin/orgs/0c0c0c0c-0c0c-0c0c-0c0c-0c0c0c0c0c0c",
+            mail.href, "https://app.example.test/admin/orgs/0c0c0c0c-0c0c-0c0c-0c0c-0c0c0c0c0c0c",
             "the button opens the asking organisation in the operator console"
         );
     }
@@ -1262,8 +1264,8 @@ mod tests {
             answer: Err(ResolveError::NoAddress("unscripted".to_owned())),
             asked: OnceLock::new(),
             by_subject: vec![
-                (REQUESTER, verified("seller@example.test")),
-                (ana.subject, verified("ana@example.test")),
+                (REQUESTER, Ok(verified("seller@example.test"))),
+                (ana.subject, Ok(verified("ana@example.test"))),
                 (
                     ben.subject,
                     Ok(Address {
@@ -1301,7 +1303,7 @@ mod tests {
     #[tokio::test]
     async fn a_requester_without_an_address_is_named_by_subject() {
         let resolver = RecordingResolver {
-            answer: verified("ana@example.test"),
+            answer: Ok(verified("ana@example.test")),
             asked: OnceLock::new(),
             by_subject: vec![(REQUESTER, Err(ResolveError::NoAddress("none".to_owned())))],
         };

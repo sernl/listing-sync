@@ -20,6 +20,8 @@ enum Node {
     Element(Element),
 }
 
+/// The default is the nameless root every parse starts from.
+#[derive(Default)]
 struct Element {
     name: String,
     href: Option<String>,
@@ -111,15 +113,14 @@ fn is_list(name: &str) -> bool {
 fn decode_entities(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
-    while let Some(at) = rest.find('&') {
-        out.push_str(&rest[..at]);
-        let after = &rest[at + 1..];
+    while let Some((before, after)) = rest.split_once('&') {
+        out.push_str(before);
         let decoded = after
             .char_indices()
             .take(9)
             .find(|&(_, c)| c == ';')
             .and_then(|(end, _)| {
-                let body = &after[..end];
+                let (body, remaining) = after.split_at_checked(end)?;
                 let character = if let Some(digits) = body.strip_prefix('#') {
                     let code = match digits.strip_prefix(['x', 'X']) {
                         Some(hex) => u32::from_str_radix(hex, 16).ok(),
@@ -132,17 +133,14 @@ fn decode_entities(text: &str) -> String {
                         .find(|(name, _)| *name == body)
                         .map(|(_, c)| *c)
                 };
-                character.map(|c| (c, end + 1))
+                character.zip(remaining.strip_prefix(';'))
             });
-        match decoded {
-            Some((c, used)) => {
-                out.push(c);
-                rest = &after[used..];
-            }
-            None => {
-                out.push('&');
-                rest = after;
-            }
+        if let Some((c, remaining)) = decoded {
+            out.push(c);
+            rest = remaining;
+        } else {
+            out.push('&');
+            rest = after;
         }
     }
     out.push_str(rest);
@@ -212,11 +210,11 @@ fn href_of(attributes: &str) -> Option<String> {
             at += 1;
             continue;
         }
-        let name = &attributes[start..at];
+        let name = attributes.get(start..at).unwrap_or_default();
         while at < bytes.len() && bytes[at].is_ascii_whitespace() {
             at += 1;
         }
-        let mut value = String::new();
+        let mut value = "";
         if at < bytes.len() && bytes[at] == b'=' {
             at += 1;
             while at < bytes.len() && bytes[at].is_ascii_whitespace() {
@@ -229,18 +227,18 @@ fn href_of(attributes: &str) -> Option<String> {
                 while at < bytes.len() && bytes[at] != quote {
                     at += 1;
                 }
-                value = attributes[from..at].to_owned();
+                value = attributes.get(from..at).unwrap_or_default();
                 at += 1;
             } else {
                 let from = at;
                 while at < bytes.len() && !bytes[at].is_ascii_whitespace() {
                     at += 1;
                 }
-                value = attributes[from..at].to_owned();
+                value = attributes.get(from..at).unwrap_or_default();
             }
         }
         if name.eq_ignore_ascii_case("href") {
-            return Some(value);
+            return Some(value.to_owned());
         }
     }
     None
@@ -251,20 +249,12 @@ fn href_of(attributes: &str) -> Option<String> {
 /// a browser would. Text is decoded.
 fn parse(html: &str) -> Element {
     fn close_to(stack: &mut Vec<Element>, name: &str, fence: &[&str]) {
-        let Some(found) = (1..stack.len())
+        if let Some(found) = (1..stack.len())
             .rev()
             .take_while(|&at| stack[at].name == name || !fence.contains(&stack[at].name.as_str()))
             .find(|&at| stack[at].name == name)
-        else {
-            return;
-        };
-        while stack.len() > found {
-            let done = stack.pop().expect("above the root");
-            stack
-                .last_mut()
-                .expect("the root stays")
-                .children
-                .push(Node::Element(done));
+        {
+            close_above(stack, found);
         }
     }
     fn push_text(stack: &mut [Element], text: &str) {
@@ -273,24 +263,23 @@ fn parse(html: &str) -> Element {
         }
     }
 
-    let mut stack = vec![Element {
-        name: String::new(),
-        href: None,
-        children: Vec::new(),
-    }];
+    let mut stack = vec![Element::default()];
     let bytes = html.as_bytes();
     let mut at = 0;
-    while at < html.len() {
-        let Some(offset) = html[at..].find('<') else {
-            push_text(&mut stack, &html[at..]);
+    while let Some(tail) = html.get(at..).filter(|tail| !tail.is_empty()) {
+        let Some((text, tag)) = tail
+            .find('<')
+            .and_then(|offset| tail.split_at_checked(offset))
+        else {
+            push_text(&mut stack, tail);
             break;
         };
-        let lt = at + offset;
-        if lt > at {
-            push_text(&mut stack, &html[at..lt]);
+        let lt = at + text.len();
+        if !text.is_empty() {
+            push_text(&mut stack, text);
         }
-        if html[lt..].starts_with("<!--") {
-            at = html[lt + 4..]
+        if let Some(comment) = tag.strip_prefix("<!--") {
+            at = comment
                 .find("-->")
                 .map_or(html.len(), |end| lt + 4 + end + 3);
             continue;
@@ -299,7 +288,7 @@ fn parse(html: &str) -> Element {
         let name_start = lt + 1 + usize::from(closing);
         if !bytes.get(name_start).is_some_and(u8::is_ascii_alphabetic) {
             if matches!(bytes.get(lt + 1), Some(b'!' | b'?')) {
-                at = html[lt..].find('>').map_or(html.len(), |end| lt + end + 1);
+                at = tag.find('>').map_or(html.len(), |end| lt + end + 1);
             } else {
                 push_text(&mut stack, "<");
                 at = lt + 1;
@@ -320,10 +309,9 @@ fn parse(html: &str) -> Element {
             let b = bytes[end];
             match quote {
                 Some(q) if b == q => quote = None,
-                Some(_) => {}
                 None if b == b'"' || b == b'\'' => quote = Some(b),
                 None if b == b'>' => break,
-                None => {}
+                Some(_) | None => {}
             }
             end += 1;
         }
@@ -331,8 +319,11 @@ fn parse(html: &str) -> Element {
             // An unclosed tag swallows the rest: its text was never visible.
             break;
         }
-        let name = html[name_start..name_end].to_ascii_lowercase();
-        let attributes = &html[name_end..end];
+        let name = html
+            .get(name_start..name_end)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let attributes = html.get(name_end..end).unwrap_or_default();
         at = end + 1;
         if closing {
             let fence: &[&str] = if name == "li" { &["ul", "ol"] } else { &[] };
@@ -344,7 +335,11 @@ fn parse(html: &str) -> Element {
             continue;
         }
         if is_block(&name) {
-            close_to(&mut stack, "p", &["li", "ul", "ol", "blockquote", "td", "th"]);
+            close_to(
+                &mut stack,
+                "p",
+                &["li", "ul", "ol", "blockquote", "td", "th"],
+            );
         }
         if name == "li" {
             close_to(&mut stack, "li", &["ul", "ol"]);
@@ -365,26 +360,32 @@ fn parse(html: &str) -> Element {
     close_to_root(&mut stack)
 }
 
-fn close_to_root(stack: &mut Vec<Element>) -> Element {
-    while stack.len() > 1 {
-        let done = stack.pop().expect("above the root");
-        stack
-            .last_mut()
-            .expect("the root stays")
-            .children
-            .push(Node::Element(done));
+/// Closes every open element above `depth`, each into the one below it.
+fn close_above(stack: &mut Vec<Element>, depth: usize) {
+    while stack.len() > depth {
+        let Some(done) = stack.pop() else {
+            return;
+        };
+        let Some(parent) = stack.last_mut() else {
+            return;
+        };
+        parent.children.push(Node::Element(done));
     }
-    stack.pop().expect("the root")
+}
+
+fn close_to_root(stack: &mut Vec<Element>) -> Element {
+    close_above(stack, 1);
+    stack.pop().unwrap_or_default()
 }
 
 /// Where the text after `</name>` starts, matched case-insensitively.
 fn closing_tag(html: &str, from: usize, name: &str) -> Option<usize> {
-    let lower = html[from..].to_ascii_lowercase();
+    let lower = html.get(from..)?.to_ascii_lowercase();
     let needle = format!("</{name}");
     let mut search = 0;
-    while let Some(found) = lower[search..].find(&needle) {
+    while let Some(found) = lower.get(search..).and_then(|rest| rest.find(&needle)) {
         let after = search + found + needle.len();
-        let rest = &lower[after..];
+        let rest = lower.get(after..)?;
         let trimmed = rest.trim_start();
         if trimmed.starts_with('>') {
             return Some(from + after + (rest.len() - trimmed.len()) + 1);
@@ -501,29 +502,25 @@ fn wrap(tag: &str, content: &str, out: &mut String) {
         out.push_str(content);
         return;
     }
-    let mut lead = 0;
-    loop {
-        if content[lead..].starts_with(' ') {
-            lead += 1;
-        } else if content[lead..].starts_with("<br>") {
-            lead += 4;
-        } else {
-            break;
-        }
+    let mut body = content;
+    while let Some(rest) = body.strip_prefix(' ').or_else(|| body.strip_prefix("<br>")) {
+        body = rest;
     }
-    let mut trail = content.len();
-    loop {
-        if content[lead..trail].ends_with(' ') {
-            trail -= 1;
-        } else if content[lead..trail].ends_with("<br>") {
-            trail -= 4;
-        } else {
-            break;
-        }
+    let lead = content.strip_suffix(body).unwrap_or_default();
+    let unled = body;
+    while let Some(rest) = body.strip_suffix(' ').or_else(|| body.strip_suffix("<br>")) {
+        body = rest;
     }
-    out.push_str(&content[..lead]);
-    out.push_str(&format!("<{tag}>{}</{tag}>", &content[lead..trail]));
-    out.push_str(&content[trail..]);
+    let trail = unled.strip_prefix(body).unwrap_or_default();
+    out.push_str(lead);
+    out.push('<');
+    out.push_str(tag);
+    out.push('>');
+    out.push_str(body);
+    out.push_str("</");
+    out.push_str(tag);
+    out.push('>');
+    out.push_str(trail);
 }
 
 fn flush_paragraphs(run: &mut String, out: &mut String) {
@@ -559,7 +556,7 @@ fn blocks(children: &[Node], out: &mut String) {
                 flush_paragraphs(&mut run, out);
                 blocks(&element.children, out);
             }
-            _ => inline(child, &mut run),
+            Node::Text(_) | Node::Element(_) => inline(child, &mut run),
         }
     }
     flush_paragraphs(&mut run, out);
@@ -593,14 +590,14 @@ fn list_of(list: &Element) -> String {
                     continue;
                 }
                 match items.pop() {
-                    Some(last) => {
-                        let open = last.strip_suffix("</li>").unwrap_or(&last);
+                    Some(previous) => {
+                        let open = previous.strip_suffix("</li>").unwrap_or(&previous);
                         items.push(format!("{open}{nested}</li>"));
                     }
                     None => items.push(format!("<li>{nested}</li>")),
                 }
             }
-            _ => inline(child, &mut loose),
+            Node::Text(_) | Node::Element(_) => inline(child, &mut loose),
         }
     }
     flush_loose(&mut loose, &mut items);
@@ -627,7 +624,7 @@ fn item_of(item: &Element) -> String {
                 }
                 words.push_str("<br>");
             }
-            _ => inline(child, &mut words),
+            Node::Text(_) | Node::Element(_) => inline(child, &mut words),
         }
     }
     let mut tidy = tidy_inline(&words);
@@ -702,7 +699,9 @@ mod tests {
     #[test]
     fn reads_a_browsers_b_i_and_div_as_strong_em_and_paragraphs() {
         assert_eq!(
-            sanitise_html("First line<div><b>Bold</b> <i>it</i></div><div><br></div><div>Last</div>"),
+            sanitise_html(
+                "First line<div><b>Bold</b> <i>it</i></div><div><br></div><div>Last</div>"
+            ),
             "<p>First line</p><p><strong>Bold</strong> <em>it</em></p><p>Last</p>"
         );
     }
@@ -717,7 +716,10 @@ mod tests {
 
     #[test]
     fn nothing_visible_is_empty() {
-        assert_eq!(sanitise_html("<p><br></p><p>&nbsp; </p><ul><li></li></ul>"), "");
+        assert_eq!(
+            sanitise_html("<p><br></p><p>&nbsp; </p><ul><li></li></ul>"),
+            ""
+        );
     }
 
     #[test]

@@ -34,7 +34,9 @@ use tam_api::vocabulary::{
 use tam_api::{APIErrorCode, APIErrorKind};
 use tam_domain::equivalence::{ElectionTriggerKind, LossKind};
 use tam_domain::product::FormGroup;
-use tam_limits::{AiStatus, Capabilities, Pack, Plan, PriceKey, Support, AI, PACKS, PACK_ABOVE, PLANS};
+use tam_limits::{
+    AiStatus, Capabilities, Pack, Plan, PriceKey, Support, AI, PACKS, PACK_ABOVE, PLANS,
+};
 use tam_storage::{Colour, DeviceSessionStatus, GrantedBy, ItemStateKind, ALL_GATES};
 use tam_types::{
     ConnectionEvent, ConnectionStatus, CopyFormat, FailureCode, FileKind, FileRole, InventoryId,

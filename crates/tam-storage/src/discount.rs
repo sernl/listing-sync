@@ -390,6 +390,9 @@ impl DiscountRepo {
             return Ok(None);
         };
         let code = DiscountCode::try_from(row)?;
-        Ok(self.get(code.discount_id).await?.map(|discount| (code, discount)))
+        Ok(self
+            .get(code.discount_id)
+            .await?
+            .map(|discount| (code, discount)))
     }
 }

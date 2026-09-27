@@ -1555,3 +1555,120 @@
 		padding-top: var(--s-2);
 	}
 }
+
+/* ---- description editor (panels/DescriptionPanel.svelte) ---- */
+/* The rich-text box, drawn as the Markdown textarea is so the two modes
+   are one field that changes its manners, not two fields. */
+.res-rich {
+	position: relative;
+	border: 1px solid var(--line);
+	background: var(--card);
+	border-radius: var(--r-field);
+	padding: 8px 11px;
+	min-height: 150px;
+	max-height: 60vh;
+	overflow-y: auto;
+	line-height: 1.5;
+	/* The field's label is bold, and a box that inherited it would make
+	   Bold read as already on, so the first press took it off. */
+	font-weight: 400;
+	color: var(--ink);
+	overflow-wrap: anywhere;
+}
+
+.res-rich:focus-visible {
+	outline: none;
+	border-color: var(--primary);
+}
+
+.res-rich.empty::before {
+	content: attr(data-placeholder);
+	color: var(--muted);
+	pointer-events: none;
+	position: absolute;
+}
+
+.res-rich p {
+	margin: 0 0 0.6em;
+}
+
+.res-rich ul,
+.res-rich ol {
+	margin: 0 0 0.6em;
+	padding-left: 1.4em;
+}
+
+/* The console's reset takes list markers off; a description's lists are
+   the reader's, so they come back. */
+.res-rich ul {
+	list-style: disc;
+}
+
+.res-rich ol {
+	list-style: decimal;
+}
+
+.res-rich a {
+	color: var(--primary);
+	text-decoration: underline;
+}
+
+.res-format {
+	margin-bottom: 10px;
+}
+
+/* ---- description preview (panels/DescriptionPreview.svelte) ---- */
+.res-preview {
+	border: 1px solid var(--line);
+	background: var(--surface);
+	border-radius: var(--r-field);
+	padding: 8px 11px;
+	max-height: 240px;
+	overflow-y: auto;
+	line-height: 1.5;
+	font-size: 13.5px;
+	color: var(--ink);
+	overflow-wrap: anywhere;
+}
+
+.res-preview.plain {
+	white-space: pre-line;
+}
+
+.res-preview p {
+	margin: 0 0 0.6em;
+}
+
+.res-preview ul,
+.res-preview ol {
+	margin: 0 0 0.6em;
+	padding-left: 1.4em;
+}
+
+/* The console's reset takes list markers off; a description's lists are
+   the reader's, so they come back. */
+.res-preview ul {
+	list-style: disc;
+}
+
+.res-preview ol {
+	list-style: decimal;
+}
+
+.res-preview a {
+	color: var(--primary);
+	text-decoration: underline;
+}
+
+.res-preview-source {
+	font-size: 12px;
+	color: var(--muted);
+}
+
+.res-preview-source code {
+	display: block;
+	margin-top: 4px;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	color: var(--ink);
+}

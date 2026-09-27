@@ -445,11 +445,13 @@ async fn subscribe(pool: &PgPool, base: &str) {
             &checkout_completed(ORG_A, SUBSCRIPTION_SESSION, "subscription")
         )
         .await,
-        StatusCode::OK
+        StatusCode::OK,
+        "the subscription checkout is accepted"
     );
     assert_eq!(
         deliver(pool, base, &invoice(ORG_A, "invoice.paid")).await,
-        StatusCode::OK
+        StatusCode::OK,
+        "the first invoice is accepted"
     );
 }
 
@@ -892,10 +894,6 @@ async fn an_event_type_this_route_does_not_handle_is_acknowledged(pool: PgPool) 
 // ------------------------------------------------------ the billing page
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
-#[expect(
-    clippy::expect_used,
-    reason = "the body is the route's answer; an unreadable one should fail the test"
-)]
 async fn a_cancelled_plan_runs_to_the_period_end_and_can_be_kept(pool: PgPool) {
     provision(&pool).await;
     let base = stripe_double().await;
@@ -938,10 +936,6 @@ async fn a_cancelled_plan_runs_to_the_period_end_and_can_be_kept(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
-#[expect(
-    clippy::expect_used,
-    reason = "the fixture is this file's own JSON; an unreadable one should fail the test"
-)]
 async fn a_cancellation_made_in_the_portal_reaches_the_page(pool: PgPool) {
     provision(&pool).await;
     let base = stripe_double().await;
@@ -951,6 +945,7 @@ async fn a_cancellation_made_in_the_portal_reaches_the_page(pool: PgPool) {
         ORG_A,
         "customer.subscription.updated",
         "active",
+        MONTHLY_PRICE,
     ))
     .expect("the fixture reads");
     event["data"]["object"]["cancel_at_period_end"] = serde_json::json!(true);
@@ -975,10 +970,6 @@ async fn a_cancellation_made_in_the_portal_reaches_the_page(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
-#[expect(
-    clippy::expect_used,
-    reason = "the body is the route's answer; an unreadable one should fail the test"
-)]
 async fn the_page_lists_bills_and_names_the_card(pool: PgPool) {
     provision(&pool).await;
     let base = stripe_double().await;
@@ -1018,10 +1009,6 @@ async fn the_page_lists_bills_and_names_the_card(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
-#[expect(
-    clippy::expect_used,
-    reason = "the body is the route's answer; an unreadable one should fail the test"
-)]
 async fn a_tenant_that_never_paid_has_no_bills_and_nothing_to_cancel(pool: PgPool) {
     provision(&pool).await;
     let base = stripe_double().await;

@@ -27,7 +27,9 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use tam_limits::{AiOffer, Capabilities, Pack, Plan, PlanRow, PriceKey, AI, PACKS, PACK_ABOVE, PLANS};
+use tam_limits::{
+    AiOffer, Capabilities, Pack, Plan, PlanRow, PriceKey, AI, PACKS, PACK_ABOVE, PLANS,
+};
 use tam_storage::{EntitlementRepo, Grant, MoveBalance, Usage};
 use tam_types::Timestamp;
 
@@ -348,13 +350,16 @@ pub(crate) async fn plans_view(
             None
         });
     let cache = format!("public, max-age={PLANS_MAX_AGE_SECS}");
-    ([(axum::http::header::CACHE_CONTROL, cache)], Json(PlansView {
-        plans: PLANS.into_iter().map(PlanRowView::of).collect(),
-        packs: PACKS.to_vec(),
-        pack_above: PACK_ABOVE.to_owned(),
-        ai: AI,
-        sale,
-    }))
+    (
+        [(axum::http::header::CACHE_CONTROL, cache)],
+        Json(PlansView {
+            plans: PLANS.into_iter().map(PlanRowView::of).collect(),
+            packs: PACKS.to_vec(),
+            pack_above: PACK_ABOVE.to_owned(),
+            ai: AI,
+            sale,
+        }),
+    )
 }
 
 // ------------------------------------------------------- GET /v1/entitlement

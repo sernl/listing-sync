@@ -465,11 +465,11 @@ fn civil_date(at: Timestamp) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::time::civil_from_days;
     use super::{
-        amount, civil_date, field, header_row, labels, major_units, rfc3339,
-        standing, write_row, EXPORT_ORDER,
+        amount, civil_date, field, header_row, labels, major_units, rfc3339, standing, write_row,
+        EXPORT_ORDER,
     };
+    use crate::time::civil_from_days;
     use tam_types::{Currency, InventoryId, Money, PriceIntent, Timestamp};
 
     #[test]

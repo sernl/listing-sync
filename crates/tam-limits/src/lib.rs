@@ -1051,15 +1051,14 @@ mod tests {
     #[test]
     fn every_paid_rung_costs_more_and_no_more_per_move() {
         let paid: Vec<_> = PLANS.iter().filter(|row| row.id != Plan::Free).collect();
-        for pair in paid.windows(2) {
-            let (lower, upper) = (pair[0], pair[1]);
+        for (lower, upper) in paid.iter().zip(paid.iter().skip(1)) {
             assert!(upper.monthly_cents > lower.monthly_cents);
             assert!(upper.yearly_cents > lower.yearly_cents);
-            let per_move = |row: &super::PlanRow| {
-                row.monthly_cents.unwrap_or(0) / row.id.capabilities(None).moves_per_month
-            };
+            // Compared cross-multiplied, so no cents are lost to rounding.
+            let monthly = |row: &super::PlanRow| row.monthly_cents.unwrap_or(0);
+            let moves = |row: &super::PlanRow| row.id.capabilities(None).moves_per_month;
             assert!(
-                per_move(upper) <= per_move(lower),
+                monthly(upper) * moves(lower) <= monthly(lower) * moves(upper),
                 "{} charges more per move than {}",
                 upper.id.as_str(),
                 lower.id.as_str()

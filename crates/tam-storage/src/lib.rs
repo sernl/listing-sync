@@ -89,11 +89,11 @@ pub use duplicates::{
     DecidedBy, DuplicateRepo, Evidence, EvidenceUnit, MatchLayer, NewVerdict, Polarity, Verdict,
     VerdictRecord, REVERSIBLE_MS,
 };
-pub use erasure::{Erased, ErasureRefusal, ErasureRepo};
 pub use entitlement::{
     Accrual, EntitlementRepo, Grant, GrantRecord, GrantedBy, MoveBalance, MoveCredit, MoveSource,
     NewGrant, StorefrontAllowance, Usage,
 };
+pub use erasure::{Erased, ErasureRefusal, ErasureRepo};
 pub use file_source::ProductFileSourceRepo;
 pub use fingerprints::{
     candidates_in, digest_frequency_in, digests_for_in, metadata_for_in, products_by_digest_in,

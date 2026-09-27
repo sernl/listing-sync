@@ -547,8 +547,9 @@ fn inline_disposition(name: &str) -> String {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
             encoded.push(char::from(byte));
         } else {
-            // Writing to a `String` cannot fail.
-            let _ = std::fmt::Write::write_fmt(&mut encoded, format_args!("%{byte:02X}"));
+            use core::fmt::Write as _;
+            // infallible on String; the Result is the trait's, not the writer's
+            let _unused: core::fmt::Result = write!(encoded, "%{byte:02X}");
         }
     }
     format!("inline; filename=\"{fallback}\"; filename*=UTF-8''{encoded}")

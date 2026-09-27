@@ -33,8 +33,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tam_limits::Plan;
 use tam_storage::{
-    BackofficeRepo, DailyCount, EntitlementRepo, ErasureRefusal, ErasureRepo, Grant, GrantRecord, GrantedBy, IdentityAuditRepo,
-    ItemCounts, MoveCredit, MoveSource, NewGrant, OperatorRepo, SignupsRepo,
+    BackofficeRepo, DailyCount, EntitlementRepo, ErasureRefusal, ErasureRepo, Grant, GrantRecord,
+    GrantedBy, IdentityAuditRepo, ItemCounts, MoveCredit, MoveSource, NewGrant, OperatorRepo,
+    SignupsRepo,
 };
 use tam_types::{FailureCode, InventoryId, MappingId, Marketplace, OrgId, Timestamp, UserId, Uuid};
 
@@ -762,14 +763,16 @@ fn erasure_refused(refusal: &ErasureRefusal) -> APIError {
                 .to_owned(),
             serde_json::json!({ "refusal": "operator" }),
         ),
-        ErasureRefusal::SharedOrganisation { other_members } => (
-            format!(
+        ErasureRefusal::SharedOrganisation { other_members } => {
+            (
+                format!(
                 "Their organisation has {other_members} other {}, and deleting it would delete \
                  their work too. Nothing was deleted.",
                 if *other_members == 1 { "member" } else { "members" }
             ),
-            serde_json::json!({ "refusal": "shared_organisation", "other_members": other_members }),
-        ),
+                serde_json::json!({ "refusal": "shared_organisation", "other_members": other_members }),
+            )
+        }
         ErasureRefusal::LiveSubscription { status } => (
             format!(
                 "Their subscription is still {status} at Stripe. Cancel it there first, \

@@ -685,7 +685,10 @@ pub enum CouponDuration {
 pub enum CouponAmount<'a> {
     Percent(u32),
     /// Cents, in the named currency.
-    Cents { cents: u32, currency: &'a str },
+    Cents {
+        cents: u32,
+        currency: &'a str,
+    },
 }
 
 /// One coupon to create. `id` is ours: naming the coupon after the discount

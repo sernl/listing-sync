@@ -67,9 +67,18 @@ pub const fn is_plan(key: PriceKey) -> bool {
 fn saving(amount: DiscountAmount, key: PriceKey) -> u64 {
     let list = u64::from(key.list_cents());
     match amount {
-        DiscountAmount::Percent(percent) => list * u64::from(percent) / 100,
+        DiscountAmount::Percent(percent) => percent_of(list, percent),
         DiscountAmount::Cents(cents) => u64::from(cents).min(list),
     }
+}
+
+/// `percent` of `cents`, rounded to the nearest whole cent, halves up.
+#[expect(
+    clippy::integer_division,
+    reason = "whole cents: the added half makes the truncating division round to nearest"
+)]
+fn percent_of(cents: u64, percent: u32) -> u64 {
+    (cents * u64::from(percent) + 50) / 100
 }
 
 fn coupon_id(discount: Uuid) -> String {
@@ -530,9 +539,16 @@ fn check_terms(body: &TermsBody, now: Timestamp) -> Result<Terms, APIError> {
         (None, Some(cents)) if cents > 0 => DiscountAmount::Cents(cents),
         (Some(_), None) => return Err(invalid("A percentage off is between 1 and 100.")),
         (None, Some(_)) => return Err(invalid("An amount off is more than zero.")),
-        _ => return Err(invalid("Choose a percentage off or an amount off, not both.")),
+        _ => {
+            return Err(invalid(
+                "Choose a percentage off or an amount off, not both.",
+            ))
+        }
     };
-    let duration = match (body.duration.as_deref().unwrap_or("once"), body.duration_months) {
+    let duration = match (
+        body.duration.as_deref().unwrap_or("once"),
+        body.duration_months,
+    ) {
         ("once", None) => DiscountDuration::Once,
         ("repeating", Some(months)) if (1..=36).contains(&months) => {
             DiscountDuration::Repeating(months)
@@ -660,8 +676,18 @@ async fn products_for(state: &AppState, keys: &[PriceKey]) -> Result<Vec<String>
     Ok(products)
 }
 
-fn view(state: &AppState, discount: &Discount, presentation: Option<SalePresentation>) -> DiscountView {
-    DiscountView::of(discount, presentation, Vec::new(), Some(true), (state.wall)())
+fn view(
+    state: &AppState,
+    discount: &Discount,
+    presentation: Option<SalePresentation>,
+) -> DiscountView {
+    DiscountView::of(
+        discount,
+        presentation,
+        Vec::new(),
+        Some(true),
+        (state.wall)(),
+    )
 }
 
 /// `POST /v1/admin/pricing/sales`: a percentage off every plan for a window,
@@ -699,7 +725,9 @@ pub(crate) async fn create_sale(
     }
     let theme = body.theme.as_deref().filter(|theme| *theme != "none");
     if theme.is_some_and(|theme| !THEMES.contains(&theme)) {
-        return Err(invalid("A sale is tied to the halloween or christmas theme, or to none."));
+        return Err(invalid(
+            "A sale is tied to the halloween or christmas theme, or to none.",
+        ));
     }
 
     // One sale at a time: the pricing pages show one banner and one struck
@@ -731,8 +759,8 @@ pub(crate) async fn create_sale(
         banner_href: banner_href.map(str::to_owned),
         theme: theme.map(str::to_owned),
     };
-    let value = serde_json::to_value(&presentation)
-        .map_err(|error| state.internal(&error.to_string()))?;
+    let value =
+        serde_json::to_value(&presentation).map_err(|error| state.internal(&error.to_string()))?;
     let written = SiteSettingRepo::new(state.pool.clone())
         .set(
             &format!("{SALE_SETTING_PREFIX}{}", discount.id.to_hyphenated()),
@@ -766,8 +794,7 @@ pub(crate) async fn create_one_off(
     Json(body): Json<TermsBody>,
 ) -> Result<(StatusCode, Json<DiscountView>), APIError> {
     let terms = check_terms(&body, (state.wall)())?;
-    let discount =
-        create_discount(&state, &operator, DiscountKind::OneOff, &terms, &[]).await?;
+    let discount = create_discount(&state, &operator, DiscountKind::OneOff, &terms, &[]).await?;
     Ok((StatusCode::CREATED, Json(view(&state, &discount, None))))
 }
 
@@ -791,15 +818,26 @@ pub(crate) async fn create_code(
         ));
     }
     if body.max_redemptions == Some(0) {
-        return Err(invalid("A redemption limit is at least 1, or empty for none."));
+        return Err(invalid(
+            "A redemption limit is at least 1, or empty for none.",
+        ));
     }
     let terms = check_terms(&body.terms, now)?;
     let repo = DiscountRepo::new(state.pool.clone());
-    if repo.code_taken(code).await.map_err(|e| storage(&state, &e))? {
-        return Err(conflict("That code is already in use. End the old one first."));
+    if repo
+        .code_taken(code)
+        .await
+        .map_err(|e| storage(&state, &e))?
+    {
+        return Err(conflict(
+            "That code is already in use. End the old one first.",
+        ));
     }
     let covered: Vec<PriceKey> = if terms.price_keys.is_empty() {
-        PriceKey::ALL.into_iter().filter(|key| is_plan(*key)).collect()
+        PriceKey::ALL
+            .into_iter()
+            .filter(|key| is_plan(*key))
+            .collect()
     } else {
         terms.price_keys.clone()
     };
@@ -845,7 +883,9 @@ pub(crate) async fn create_code(
                 .await;
             let _undone = client.delete_coupon(&discount.stripe_coupon_id).await;
             let _ended = repo.end(discount.id, now).await;
-            return Err(conflict("That code is already in use. End the old one first."));
+            return Err(conflict(
+                "That code is already in use. End the old one first.",
+            ));
         }
     }
     let mut shown = view(&state, &discount, None);
@@ -955,7 +995,12 @@ mod tests {
 
     #[test]
     fn a_sale_reaches_plans_and_never_packs() {
-        let sale = [discount(1, DiscountKind::Sale, DiscountAmount::Percent(25), &[])];
+        let sale = [discount(
+            1,
+            DiscountKind::Sale,
+            DiscountAmount::Percent(25),
+            &[],
+        )];
         assert!(best_automatic(&sale, a_plan(), Timestamp(10)).is_some());
         assert!(best_automatic(&sale, a_pack(), Timestamp(10)).is_none());
     }
@@ -966,11 +1011,17 @@ mod tests {
         let list = plan.list_cents();
         let open = [
             discount(1, DiscountKind::Sale, DiscountAmount::Percent(10), &[]),
-            // An amount worth more than 10 % of this key's list price.
-            discount(2, DiscountKind::OneOff, DiscountAmount::Cents(list / 5), &[plan.as_str()]),
+            // An amount worth more than 10 % of this key's list price: all of it.
+            discount(
+                2,
+                DiscountKind::OneOff,
+                DiscountAmount::Cents(list),
+                &[plan.as_str()],
+            ),
         ];
-        let chosen = best_automatic(&open, plan, Timestamp(10)).map(|d| d.stripe_coupon_id.as_str());
-        assert_eq!(chosen, Some("c2"), "a fifth off beats a tenth off");
+        let chosen =
+            best_automatic(&open, plan, Timestamp(10)).map(|d| d.stripe_coupon_id.as_str());
+        assert_eq!(chosen, Some("c2"), "the whole price off beats a tenth off");
     }
 
     #[test]
@@ -983,7 +1034,12 @@ mod tests {
             ended,
         ];
         assert!(best_automatic(&open, plan, Timestamp(10)).is_none());
-        let sale = [discount(3, DiscountKind::Sale, DiscountAmount::Percent(25), &[])];
+        let sale = [discount(
+            3,
+            DiscountKind::Sale,
+            DiscountAmount::Percent(25),
+            &[],
+        )];
         assert!(
             best_automatic(&sale, plan, Timestamp(1_000)).is_none(),
             "the window is half-open: the end instant is outside it"
@@ -993,7 +1049,12 @@ mod tests {
     #[test]
     fn a_one_off_reaches_only_the_keys_it_names() {
         let pack = a_pack();
-        let open = [discount(1, DiscountKind::OneOff, DiscountAmount::Percent(20), &[pack.as_str()])];
+        let open = [discount(
+            1,
+            DiscountKind::OneOff,
+            DiscountAmount::Percent(20),
+            &[pack.as_str()],
+        )];
         assert!(best_automatic(&open, pack, Timestamp(10)).is_some());
         assert!(best_automatic(&open, a_plan(), Timestamp(10)).is_none());
     }

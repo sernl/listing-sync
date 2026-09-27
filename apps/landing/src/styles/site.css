@@ -148,6 +148,14 @@
 	--additive: #6D57C9;
 	--additive-soft: #EFE9FF;
 	--lavender: #C8B4FF;
+	/* Seasonal overlays (season.css): the ribbon stripes and the sticker fade.
+	   Named for the season so a palette change is one line here. */
+	--season-pumpkin: #F28C28;
+	--season-night: #2B2140;
+	--season-holly-red: #D6293A;
+	--season-holly-green: #2E8B57;
+	--season-snow: #FFFFFF;
+	--season-fade: #000000;
 	--peach: #FFD6B3;
 
 	/* The drawn compositions' two grounds: the cream a resource cover and the

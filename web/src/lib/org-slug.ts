@@ -55,6 +55,7 @@ export const RESERVED_SLUGS: readonly string[] = [
 	'listings',
 	'login',
 	'mail',
+	'maintenance',
 	'marketplaces',
 	'notifications',
 	'postmaster',

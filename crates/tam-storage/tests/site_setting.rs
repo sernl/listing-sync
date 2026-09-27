@@ -34,12 +34,26 @@ async fn a_write_replaces_and_a_read_answers_the_latest(pool: PgPool) -> Result<
     provision(&pool).await?;
     let repo = SiteSettingRepo::new(pool.clone());
 
-    assert_eq!(repo.get("maintenance").await?, None, "nothing is set on a fresh database");
+    assert_eq!(
+        repo.get("maintenance").await?,
+        None,
+        "nothing is set on a fresh database"
+    );
 
-    repo.set("maintenance", &json!({"on": true, "message": null}), OPERATOR, T0)
-        .await?;
-    repo.set("maintenance", &json!({"on": false, "message": "back"}), OPERATOR, T1)
-        .await?;
+    repo.set(
+        "maintenance",
+        &json!({"on": true, "message": null}),
+        OPERATOR,
+        T0,
+    )
+    .await?;
+    repo.set(
+        "maintenance",
+        &json!({"on": false, "message": "back"}),
+        OPERATOR,
+        T1,
+    )
+    .await?;
     assert_eq!(
         repo.get("maintenance").await?,
         Some(json!({"on": false, "message": "back"})),
@@ -59,7 +73,8 @@ async fn a_write_replaces_and_a_read_answers_the_latest(pool: PgPool) -> Result<
 async fn many_and_prefix_answer_only_the_keys_asked_for(pool: PgPool) -> Result<(), StorageError> {
     provision(&pool).await?;
     let repo = SiteSettingRepo::new(pool);
-    repo.set("theme", &json!({"name": "halloween"}), OPERATOR, T0).await?;
+    repo.set("theme", &json!({"name": "halloween"}), OPERATOR, T0)
+        .await?;
     repo.set("sale.a", &json!(1), OPERATOR, T0).await?;
     repo.set("sale.b", &json!(2), OPERATOR, T0).await?;
     repo.set("sales_report", &json!(3), OPERATOR, T0).await?;
@@ -71,7 +86,10 @@ async fn many_and_prefix_answer_only_the_keys_asked_for(pool: PgPool) -> Result<
     );
     assert_eq!(
         repo.with_prefix("sale.").await?,
-        vec![("sale.a".to_owned(), json!(1)), ("sale.b".to_owned(), json!(2))],
+        vec![
+            ("sale.a".to_owned(), json!(1)),
+            ("sale.b".to_owned(), json!(2))
+        ],
         "the prefix is literal, so `sales_report` is not a sale"
     );
     Ok(())
@@ -83,8 +101,14 @@ async fn a_delete_happens_once(pool: PgPool) -> Result<(), StorageError> {
     let repo = SiteSettingRepo::new(pool);
     repo.set("banner", &json!({"text": "Hi", "href": "/"}), OPERATOR, T0)
         .await?;
-    assert!(repo.delete("banner").await?, "the first delete removes the row");
-    assert!(!repo.delete("banner").await?, "the second finds nothing to remove");
+    assert!(
+        repo.delete("banner").await?,
+        "the first delete removes the row"
+    );
+    assert!(
+        !repo.delete("banner").await?,
+        "the second finds nothing to remove"
+    );
     assert_eq!(repo.get("banner").await?, None);
     Ok(())
 }

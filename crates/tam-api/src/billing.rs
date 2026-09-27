@@ -356,7 +356,9 @@ pub(crate) async fn checkout(
             customer,
             success_url: &format!("{origin}{CONSOLE_RETURN_PATH}?checkout=success"),
             cancel_url: &format!("{origin}{CONSOLE_RETURN_PATH}?checkout=cancel"),
-            discount: discount.as_ref().map(crate::pricing::ChosenDiscount::as_checkout),
+            discount: discount
+                .as_ref()
+                .map(crate::pricing::ChosenDiscount::as_checkout),
         })
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
@@ -1259,10 +1261,12 @@ async fn invoice_paid(state: &AppState, event: &Event) -> Result<StatusCode, API
         state,
         org,
         subscription,
-        plan_sold(state, invoice.price()),
-        expires_at,
-        occurred_at,
-        true,
+        Hold {
+            plan: plan_sold(state, invoice.price()),
+            expires_at,
+            occurred_at,
+            create: true,
+        },
     )
     .await?;
     if let Some(plan) = plan {
@@ -1392,10 +1396,12 @@ async fn subscription_changed(state: &AppState, event: &Event) -> Result<StatusC
         state,
         org,
         subscription,
-        plan_sold(state, object.price()),
-        expires_at,
-        occurred_at,
-        entitling,
+        Hold {
+            plan: plan_sold(state, object.price()),
+            expires_at,
+            occurred_at,
+            create: entitling,
+        },
     )
     .await?;
     if ended {
@@ -1445,6 +1451,17 @@ fn plan_sold(state: &AppState, price: Option<&str>) -> Option<Plan> {
     plan
 }
 
+/// What one Stripe event asks of a subscription's grant.
+struct Hold {
+    /// The plan the subscription's price sells; `None` for a price the map
+    /// does not carry.
+    plan: Option<Plan>,
+    expires_at: Option<Timestamp>,
+    occurred_at: Timestamp,
+    /// Whether a subscription with no grant yet is given one.
+    create: bool,
+}
+
 /// Keeps one live grant for a subscription, naming the plan it now sells and
 /// running to `expires_at`, and answers the plan the grant names afterwards.
 ///
@@ -1459,10 +1476,12 @@ async fn hold_plan(
     state: &AppState,
     org: OrgId,
     subscription: &str,
-    plan: Option<Plan>,
-    expires_at: Option<Timestamp>,
-    occurred_at: Timestamp,
-    create: bool,
+    Hold {
+        plan,
+        expires_at,
+        occurred_at,
+        create,
+    }: Hold,
 ) -> Result<Option<Plan>, APIError> {
     let entitlements = EntitlementRepo::new(state.pool.clone());
     let held = entitlements
@@ -1624,7 +1643,10 @@ mod tests {
                 key.as_str()
             );
         }
-        assert_eq!(Cadence::of(PriceKey::StarterMonthly), Some(Cadence::Monthly));
+        assert_eq!(
+            Cadence::of(PriceKey::StarterMonthly),
+            Some(Cadence::Monthly)
+        );
         assert_eq!(Cadence::of(PriceKey::StudioYearly), Some(Cadence::Yearly));
         assert_eq!(
             Cadence::of(PriceKey::Pack100),

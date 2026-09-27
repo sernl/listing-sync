@@ -54,7 +54,9 @@ fn render_html(body: &str) -> String {
             ("li", false) => match lists.last_mut() {
                 Some(Some(count)) => {
                     *count += 1;
-                    out.push_str(&format!("\n{count}. "));
+                    out.push('\n');
+                    out.push_str(&count.to_string());
+                    out.push_str(". ");
                 }
                 _ => out.push_str("\n- "),
             },
@@ -72,8 +74,8 @@ fn render_html(body: &str) -> String {
                 }
             }
             (
-                "table" | "br" | "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "blockquote"
-                | "pre" | "hr" | "section" | "article" | "header" | "footer",
+                "table" | "br" | "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
+                | "blockquote" | "pre" | "hr" | "section" | "article" | "header" | "footer",
                 _,
             ) => out.push('\n'),
             ("td" | "th", _) => out.push(' '),

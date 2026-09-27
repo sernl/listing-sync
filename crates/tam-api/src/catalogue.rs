@@ -1100,6 +1100,13 @@ pub(crate) async fn create_product(
     Json(body): Json<CreateProductBody>,
 ) -> Result<(StatusCode, Json<CreatedProductView>), APIError> {
     let product = ProductId(fresh_uuid());
+    // Held to the allow-list before any rule reads it: a body made only of
+    // markup the list drops would otherwise pass the required-description
+    // check and be stored empty.
+    let body = CreateProductBody {
+        body: written_body(&body.body, body.body_format),
+        ..body
+    };
     let mappings: Vec<MappingId> = body
         .inventories
         .iter()
@@ -1307,6 +1314,8 @@ pub(crate) async fn prepare_create(
             org,
             title: Title(body.title.clone()),
             body: ListingCopy {
+                // Already held to the allow-list by the handler; the
+                // spreadsheet import reaches here with Markdown.
                 body: written_body(&body.body, body.body_format),
                 format: body.body_format,
             },
@@ -2067,6 +2076,21 @@ pub(crate) async fn prepare_edit(
             }
         }
     };
+    // A changed body is held to the allow-list before any rule reads it, for
+    // the reason the create gives; one sent back exactly as stored keeps what
+    // an import brought with it.
+    let written = body.body.as_ref().map(|text| {
+        let format = body.body_format.unwrap_or(CopyFormat::Markdown);
+        if *text == stored.body.body && format == stored.body.format {
+            text.clone()
+        } else {
+            written_body(text, format)
+        }
+    });
+    let body = &PatchProductBody {
+        body: written,
+        ..body.clone()
+    };
     if body.body.is_none() && body.body_format.is_some() {
         return Err(validation(
             "a body format is given with the body it describes, never on its own",
@@ -2180,20 +2204,9 @@ pub(crate) async fn prepare_edit(
     Ok(PreparedEdit {
         edit: ProductEdit {
             title,
-            body: body.body.as_ref().map(|text| {
-                let format = body.body_format.unwrap_or(CopyFormat::Markdown);
-                // A body sent back exactly as stored keeps what an import
-                // brought with it; one the seller changed is held to the
-                // allow-list.
-                let unchanged = *text == stored.body.body && format == stored.body.format;
-                ListingCopy {
-                    body: if unchanged {
-                        text.clone()
-                    } else {
-                        written_body(text, format)
-                    },
-                    format,
-                }
+            body: body.body.as_ref().map(|text| ListingCopy {
+                body: text.clone(),
+                format: body.body_format.unwrap_or(CopyFormat::Markdown),
             }),
             price,
             subjects: body.subjects.clone(),
