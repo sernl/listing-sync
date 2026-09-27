@@ -10,7 +10,7 @@ Tell us who owns the copyright for the work you sell. This is your own statement
 ## Add it
 
 1. Open **Marketplaces**.
-2. Find the authorship panel.
+2. Go to step 3, **Who made this work**.
 3. Enter the person or business that owns the copyright.
 4. Save.
 

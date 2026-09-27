@@ -43,6 +43,7 @@
 		CONNECT_RETURN_PARAM,
 		type DisconnectServer,
 		type LiveRead,
+		GET_APP_ANCHOR,
 		MACHINES_ANCHOR,
 		TRANSPORT_BADGE,
 		attentionAsk,
@@ -495,17 +496,13 @@
 			: []
 	);
 
-	/** Whether TPT is waiting on a copyright declaration.
-	 *
-	 *  Its own banner rather than a line on the card, because it is the one
-	 *  thing on this page that silently fails a send: TPT refuses a listing that
-	 *  does not name who holds the copyright, and the refusal is not retried.
+	/** Whether TPT is waiting on a copyright declaration, which is step 3's
+	 *  tick: TPT refuses a listing that does not name who holds the copyright.
 	 *
 	 *  Only once the read lands. `marketplaceRows` maps a total order, so it
 	 *  answers a row per marketplace whatever the fetch did, and an unread row
 	 *  carries no authorship — which is indistinguishable from a seller who has
-	 *  not declared. Raising the banner on that would tell a seller their TPT
-	 *  sends are failing on a fact we never received. */
+	 *  not declared. */
 	const undeclared = $derived(
 		read === 'read' &&
 			rows.some(
@@ -515,12 +512,20 @@
 			)
 	);
 
+	/** Whether a browser's Connect just sent the seller to step 1, which is
+	 *  what raises the one line there saying where connecting happens. */
+	const cameToConnect = $derived(host === 'browser' && page.url.hash === GET_APP_ANCHOR);
+
 	/** The attention banner's title and its one sentence of what to do. */
 	const ask = $derived(attentionAsk(waiting));
 
-	/** The flow's three steps, ticked once each holds its answer: both shops
-	 *  signed in with nothing waiting, a machine of the seller's registered (or this page open in
-	 *  the app, which is one), and TPT's copyright declared. */
+	/** The flow's three steps, in the order a seller does them, ticked once
+	 *  each holds its answer: a device of the seller's registered (or this
+	 *  page open in the app, which is one), both shops signed in with nothing
+	 *  waiting, and TPT's copyright declared. */
+	const appDone = $derived(
+		host === 'app' || devices.some((device) => device.revoked_at === null)
+	);
 	const shopsDone = $derived(
 		read === 'read' &&
 			waiting.length === 0 &&
@@ -529,12 +534,9 @@
 					rows.find((row) => row.marketplace === tile.marketplace)?.signIn.state === 'signed_in'
 			)
 	);
-	const appDone = $derived(
-		host === 'app' || devices.some((device) => device.revoked_at === null)
-	);
 	const steps = $derived<StepMark[]>([
-		{ id: 'shops', label: 'Your shops', done: shopsDone },
 		{ id: 'app', label: 'Get the app', done: appDone },
+		{ id: 'shops', label: 'Connect your shops', done: shopsDone },
 		{ id: 'authorship', label: 'Who made this work', done: read === 'read' && !undeclared }
 	]);
 </script>
@@ -562,12 +564,6 @@
 		<Banner tone="warn" title={ask.title}>{ask.say}</Banner>
 	{/if}
 
-	{#if undeclared}
-		<Banner tone="warn" title="TPT needs to know who holds the copyright" action={toCopyright}>
-			Tell us who holds the copyright before you publish anything to TPT.
-		</Banner>
-	{/if}
-
 	{#if blocked !== null}
 		<Banner tone="warn" title={blocked.title} action={toPermissions}>
 			We can't start anything new on {CARD_NAME[blocked.marketplace]} until you give permission.
@@ -586,21 +582,50 @@
 
 		<FlowStep
 			n={1}
-			id="shops"
-			title="Your shops"
-			hint="Connect each shop once, from the Teachouse app."
-			done={shopsDone}
+			id="app"
+			title="Get the app"
+			hint="The app signs in to TPT and TES on your own device, so Teachouse never holds your passwords."
+			done={appDone}
 		>
 			{#snippet aside()}
-				<Explain title="How connecting works">
+				<Explain title="Why you need the app">
 					<p>
-						Teachouse signs in to TPT and TES from the Teachouse app on your own computer or
-						phone. Your login stays on that machine, and your scheduled work runs there.
+						TPT and TES offer no way for another service to connect to your shop, so the
+						Teachouse app signs in for you on your own computer or phone, just as you would in a
+						browser.
+					</p>
+					<p>
+						Your marketplace logins stay on that device. Teachouse never sees your passwords, and
+						your scheduled work runs there too.
 					</p>
 					<p><a href="/guides/connecting">Read the guide on connecting</a></p>
 				</Explain>
 			{/snippet}
 
+			{#if cameToConnect}
+				<Note icon="laptop">Open the Teachouse app on your device to connect.</Note>
+			{/if}
+
+			<Downloads manifest={releases.data ?? null}>
+				{#snippet soon()}
+					<!-- The browser extensions: the desktop app does everything one
+					     would. Each mark opens its owner's page, which is Mozilla's
+					     condition for its logo. -->
+					{#each EXTENSIONS as tile (tile.slug)}
+						<MarkLink mark={tile.mark} name={tile.name} home={tile.home} about={tile.body} />
+					{/each}
+				{/snippet}
+			</Downloads>
+			<Note>There is no iPhone or Mac app yet.</Note>
+		</FlowStep>
+
+		<FlowStep
+			n={2}
+			id="shops"
+			title="Connect your shops"
+			hint="In the app, press Connect on each shop and sign in once."
+			done={shopsDone}
+		>
 			<FlowDiagram
 				from={{ icon: 'library-big', label: 'Teachouse' }}
 				to={LIVE.map((tile) => ({ inventory: tile.marketplace }))}
@@ -646,25 +671,6 @@
 					/>
 				{/each}
 			</div>
-		</FlowStep>
-
-		<FlowStep
-			n={2}
-			id="app"
-			title="Get the app"
-			hint="Install it on the computer or phone you sell from."
-			done={appDone}
-		>
-			<Downloads manifest={releases.data ?? null}>
-				{#snippet soon()}
-					<!-- The browser extensions: the desktop app does everything one
-					     would. Each mark opens its owner's page, which is Mozilla's
-					     condition for its logo. -->
-					{#each EXTENSIONS as tile (tile.slug)}
-						<MarkLink mark={tile.mark} name={tile.name} home={tile.home} about={tile.body} />
-					{/each}
-				{/snippet}
-			</Downloads>
 		</FlowStep>
 
 		<FlowStep
@@ -736,10 +742,6 @@
 		onClose={() => (consentFor = null)}
 	/>
 {/if}
-
-{#snippet toCopyright()}
-	<Button tier="outline" small href="#copyright">Declare it</Button>
-{/snippet}
 
 {#snippet toPermissions()}
 	<Button tier="outline" small href="/settings#permissions">Give permission</Button>

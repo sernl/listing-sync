@@ -8,7 +8,7 @@ import {
 	CARD_NAME,
 	attentionAsk,
 	CONNECT_VERDICT_CODES,
-	DOWNLOADS_ANCHOR,
+	GET_APP_ANCHOR,
 	MACHINES_ANCHOR,
 	TRANSPORT_BADGE,
 	carrying,
@@ -20,7 +20,6 @@ import {
 	disconnectSay,
 	disconnectable,
 	footerAction,
-	headerAction,
 	heldHere,
 	hereFace,
 	hostOf,
@@ -243,15 +242,13 @@ describe('the card footer action', () => {
 
 	// Absent, refused and not-yet-answered are none of them "this machine has
 	// no login": offering a sign-in on any of them would be acting on a fact we
-	// do not have, which is the defect this change exists to stop making one
-	// layer up.
-	it('points at the machine that reports a login while this one has not answered', () => {
+	// do not have. A marketplace some device already carries needs nothing
+	// pressed, so the card offers nothing rather than a button that goes
+	// nowhere useful.
+	it('offers nothing to press on a connected shop this device has not answered for', () => {
 		for (const local of NO_LOCAL_ANSWER) {
-			expect(footerAction(row('signed_in', 'ok'), 'app', local)).toEqual({
-				kind: 'link',
-				label: 'Open TPT',
-				href: MACHINES_ANCHOR
-			});
+			expect(footerAction(row('signed_in', 'ok'), 'app', local)).toBeUndefined();
+			expect(footerAction(row('signed_in', 'ok'), 'browser', local)).toBeUndefined();
 		}
 	});
 
@@ -274,20 +271,21 @@ describe('the card footer action', () => {
 		for (const marketplace of ['Tpt', 'Tes'] as const) {
 			expect(footerAction(row('no_device', 'bad', marketplace), 'app', NOT_HERE)).toEqual({
 				kind: 'command',
-				label: `Connect ${CARD_NAME[marketplace]}`,
+				label: 'Connect',
 				marketplace
 			});
 		}
 	});
 
-	it('names the app rather than offering a dead button when it cannot connect', () => {
+	// The founder's ruling: the browser's button says the same one word as
+	// the app's, and takes the seller to step 1, where the page says where
+	// connecting happens.
+	it('sends a browser to the app step with the same Connect the app shows', () => {
 		for (const marketplace of ['Tpt', 'Tes'] as const) {
-			const action = footerAction(row('no_device', 'bad', marketplace), 'browser', null);
-			expect(action.kind).toBe('link');
-			expect(action).toEqual({
+			expect(footerAction(row('no_device', 'bad', marketplace), 'browser', null)).toEqual({
 				kind: 'link',
-				label: `Connect ${CARD_NAME[marketplace]} from the Teachouse app on your computer or phone`,
-				href: DOWNLOADS_ANCHOR
+				label: 'Connect',
+				href: GET_APP_ANCHOR
 			});
 		}
 	});
@@ -299,8 +297,8 @@ describe('the card footer action', () => {
 	// assertion that a caller doing so gets no dead button.
 	it('never offers a browser a local sign-in, whatever the local answer says', () => {
 		for (const local of [NOT_HERE, HERE, ...NO_LOCAL_ANSWER]) {
-			expect(footerAction(row('no_device', 'bad'), 'browser', local).kind).toBe('link');
-			expect(footerAction(row('signed_in', 'ok'), 'browser', local).kind).toBe('link');
+			expect(footerAction(row('no_device', 'bad'), 'browser', local)?.kind).toBe('link');
+			expect(footerAction(row('signed_in', 'ok'), 'browser', local)?.kind).not.toBe('command');
 		}
 	});
 
@@ -309,7 +307,7 @@ describe('the card footer action', () => {
 			for (const state of ['signed_in', 'no_device', 'needs_signin'] as const) {
 				for (const local of [HERE, NOT_HERE, ...NO_LOCAL_ANSWER]) {
 					const action = footerAction(row(state, 'bad'), host, local);
-					if (action.kind === 'link') {
+					if (action?.kind === 'link') {
 						expect(new URL(action.href, 'https://teachouse.example').origin, `${host}/${state}`)
 							.toBe('https://teachouse.example');
 					}
@@ -516,25 +514,6 @@ describe('which card is mid-flight', () => {
 	});
 });
 
-describe('the page header action', () => {
-	it('leads a browser to the app, which is the only way to connect from one', () => {
-		expect(headerAction('browser')).toEqual({
-			label: 'Connect a marketplace',
-			href: DOWNLOADS_ANCHOR
-		});
-	});
-
-	// In the app the cards below are the route, so a header button pointing at
-	// them would be the page's main action doing nothing. What downloads are
-	// still for there is the seller's other machine.
-	it('offers the app the one thing downloads are still for', () => {
-		expect(headerAction('app')).toEqual({
-			label: 'Install on another machine',
-			href: DOWNLOADS_ANCHOR
-		});
-	});
-});
-
 describe('the transport line D1 requires', () => {
 	it('says whose machine, and names the marketplace that gave the permission', () => {
 		expect(transportLine('SellerDevice', 'TPT')).toBe('Runs on your own computer.');
@@ -593,7 +572,7 @@ describe('what a live tile says when the read has not landed or failed', () => {
 		const held = row('signed_in', 'ok', 'Tpt');
 		expect(liveFace({ state: 'read', row: held }, 'app', NOT_HERE).action).toEqual({
 			kind: 'command',
-			label: 'Connect TPT',
+			label: 'Connect',
 			marketplace: 'Tpt'
 		});
 	});

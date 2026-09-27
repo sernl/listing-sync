@@ -56,8 +56,14 @@ export function carrying(row: MarketplaceRow): boolean {
  *  because the card foot and the sign-in explanation both point at it. */
 export const MACHINES_ANCHOR = '/settings#machines';
 
-/** Where a seller gets the app that holds a marketplace login. */
+/** Where a seller gets the app that holds a marketplace login: the downloads
+ *  inside step 1. */
 export const DOWNLOADS_ANCHOR = '#downloads';
+
+/** Step 1 itself, which a browser's Connect scrolls to. Its own anchor rather
+ *  than the downloads', because arriving here is what raises the one-line
+ *  hint above them, and the header's "Get the app" should not. */
+export const GET_APP_ANCHOR = '#step-app';
 
 /** How the two live marketplaces write their own names, in capitals, which is
  *  what the card heading shows. `$lib/platforms` spells them with the full
@@ -126,11 +132,11 @@ export type CardAction =
 	| { kind: 'command'; label: string; marketplace: Marketplace };
 
 /**
- * The card's one action, decided by what THIS machine holds rather than by
- * what some machine holds.
+ * The card's one action, decided by what THIS device holds rather than by
+ * what some device holds, or undefined where there is nothing to press.
  *
- * The defect this replaces: the action was read off `carrying`, which is true
- * as soon as any one of the seller's machines reports a login. A seller
+ * The defect this replaced: the action was read off `carrying`, which is true
+ * as soon as any one of the seller's devices reports a login. A seller
  * standing at a second computer was shown "Open TPT", pointing at the first
  * one, and the card's only other control disconnected the marketplace for the
  * whole account — so the way to sign in on a second device was to take the
@@ -139,42 +145,36 @@ export type CardAction =
  * `local` is this machine's own answer and null is "not answered yet": a read
  * in flight is never read as absent, because acting on a fact we do not have
  * is the same defect one layer down. Where the answer is `known` and negative
- * the app offers its own sign-in whatever other machines report. A saved
- * local login can also be renewed: cookie presence does not promise the
- * marketplace still accepts it. An unanswered read keeps the machine link.
+ * the app offers its own Connect whatever other devices report. A saved local
+ * login can also be renewed: cookie presence does not promise the marketplace
+ * still accepts it. An unanswered read keeps the device link.
  *
- * A browser ignores `local` and has to: it holds no session, and
- * `sessionStatusHere` has no command to ask there. Its arm names the app
- * instead, as a sentence rather than a verb, because "Connect from the
- * Teachouse app TPT" is what appending a name to a verb would produce.
+ * A browser ignores `local` and has to: it holds no session. Its Connect is
+ * the same one word, and it scrolls to step 1, where the page says to open
+ * the app. A marketplace some device already carries offers no Connect at all
+ * where this host cannot start one: the pill already says it is connected.
  *
- * Neither arm ever leaves for the marketplace's own website. The command hands
- * a name to the application; the link goes to our own downloads.
+ * No arm ever leaves for the marketplace's own website. The command hands a
+ * name to the application; the links stay on our own pages.
  */
 export function footerAction(
 	row: MarketplaceRow,
 	host: ConnectHost,
 	local: LocalSessionOutcome | null
-): CardAction {
-	const name = CARD_NAME[row.marketplace];
-	if (host === 'app' && !carrying(row) && local?.kind !== 'known') {
-		return { kind: 'link', label: 'Check this device', href: MACHINES_ANCHOR };
-	}
+): CardAction | undefined {
 	if (host === 'app' && local?.kind === 'known') {
 		return {
 			kind: 'command',
-			label: local.connected ? `Sign in to ${name} again` : `Connect ${name}`,
+			label: local.connected ? 'Sign in again' : 'Connect',
 			marketplace: row.marketplace
 		};
 	}
 	if (carrying(row)) {
-		return { kind: 'link', label: `Open ${name}`, href: MACHINES_ANCHOR };
+		return undefined;
 	}
-	return {
-		kind: 'link',
-		label: `Connect ${name} from the Teachouse app on your computer or phone`,
-		href: DOWNLOADS_ANCHOR
-	};
+	return host === 'app'
+		? { kind: 'link', label: 'Check this device', href: MACHINES_ANCHOR }
+		: { kind: 'link', label: 'Connect', href: GET_APP_ANCHOR };
 }
 
 /** Whether this machine itself holds a login for one marketplace.
@@ -643,18 +643,17 @@ export function busyAt(busy: Busy, marketplace: Marketplace): BusyAt | undefined
 /** The page header's own action, which is a different question from a card's.
  *
  * In a browser there is one answer to "connect a marketplace" and it is the
- * app, so the header is the primary route to it. Inside the app the cards
- * below already are that route, and a header button pointing at them would be
- * a no-op dressed as the page's main action; what the downloads section is
- * still for there is the seller's other machine.
+ * app, so the header goes straight to its downloads. Inside the app the cards
+ * below already are that route, and what the downloads are still for there is
+ * the seller's other device.
  */
 export function headerAction(host: ConnectHost): {
 	label: string;
 	href: string;
 } {
 	return host === 'app'
-		? { label: 'Install on another machine', href: DOWNLOADS_ANCHOR }
-		: { label: 'Connect a marketplace', href: DOWNLOADS_ANCHOR };
+		? { label: 'Install on another device', href: DOWNLOADS_ANCHOR }
+		: { label: 'Get the app', href: DOWNLOADS_ANCHOR };
 }
 
 /** The badge D1 requires on every marketplace row. */
