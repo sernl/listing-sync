@@ -21,7 +21,7 @@ One thing is counted: a **move**. A move is one resource committed to the other 
 - Schedules, pulls and figures.
 - 200 AI fills a month, once AI arrives.
 
-<!-- shot: /settings/subscription, the plan cards with the current plan marked -->
+<!-- shot: /settings/billing, the plan cards with the current plan marked -->
 __omp_shell("[Choosing a plan](image:plans-1)")
 
 ## Move packs — on any plan
@@ -50,9 +50,9 @@ Book a session and we do your move with you. It is a booking and brings no moves
 
 ## Buy, change or cancel
 
-1. Open **Account → Subscription**.
+1. Open **Account → Billing**.
 2. Choose a plan or a pack.
 3. Manage or cancel the subscription from the same page.
 
-<!-- shot: /settings/subscription, the move balance with its soonest expiry -->
+<!-- shot: /settings/billing, the move balance with its soonest expiry -->
 __omp_shell("[Your move balance](image:plans-2)")

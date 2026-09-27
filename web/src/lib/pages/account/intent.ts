@@ -8,7 +8,7 @@
 // intent is written down. `localStorage` is the only store that survives all
 // three; `sessionStorage` dies with the tab the verification link replaced.
 //
-// The signup and login pages write it. `/settings/subscription` is the only
+// The signup and login pages write it. `/settings/billing` is the only
 // reader, and reading spends it.
 
 import { PRICE_KEYS, type PriceKey } from '$lib/generated/vocab';

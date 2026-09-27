@@ -540,7 +540,7 @@
 					<div class="page">
 						<Placeholder icon="credit-card" headline="Not on your plan" body={gated}>
 							{#snippet actions()}
-								<Button tier="primary" href="/settings/subscription">See plans</Button>
+								<Button tier="primary" href="/settings/billing">See plans</Button>
 							{/snippet}
 						</Placeholder>
 					</div>

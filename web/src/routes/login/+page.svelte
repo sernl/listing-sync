@@ -23,7 +23,7 @@
 
 	/** What the landing page asked for, if the sign-in link carried it. The
 	 * price is written down before the browser leaves for the console,
-	 * because `/settings/subscription` is the page that spends it and this
+	 * because `/settings/billing` is the page that spends it and this
 	 * one only passes it on. A social sign-in comes back here with the query
 	 * gone, so the stored record is what answers then. */
 	const intendedNext = $derived(safeNext(page.url.searchParams.get('next')));

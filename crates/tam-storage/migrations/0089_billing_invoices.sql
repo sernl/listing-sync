@@ -1,0 +1,21 @@
+-- Whether the seller has asked Stripe to end their subscription at the close
+-- of the period they have paid for.
+--
+-- Stripe's own name, stored as Stripe last described it: the billing page's
+-- "Cancel plan" sets it, "Keep my plan" clears it, and
+-- `customer.subscription.updated` reports it whichever surface changed it
+-- (the console, the Stripe portal, or the dashboard). While it is true the
+-- subscription still entitles until `current_period_end`; nothing about the
+-- grant changes here, which is why this is a column on the provider's state
+-- rather than on the entitlement.
+--
+-- NOT NULL DEFAULT false backfills every existing row with the only true
+-- answer for it: no row written before this migration could have recorded a
+-- pending cancellation. A default rather than an UPDATE, for the reason 0086
+-- gives: this table forces row-level security and an UPDATE here would match
+-- nothing.
+--
+-- No invoice table: invoices are read from Stripe per request and never
+-- stored, because Stripe is the ledger and a copy would be one that drifts.
+ALTER TABLE billing_subscription
+    ADD COLUMN cancel_at_period_end boolean NOT NULL DEFAULT false;

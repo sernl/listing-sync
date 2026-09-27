@@ -83,12 +83,15 @@ pub use crate::{
     auth::{
         AuthBridge, JwkSet, JwksFuture, JwksSource, JwksUnavailable, VerifiedSubject, AUDIENCE,
     },
-    billing::{BillingView, Cadence, CheckoutBody, MoveBalance, RedirectView, ORG_METADATA_KEY},
+    billing::{
+        BillingView, Cadence, CheckoutBody, InvoiceView, InvoicesView, MoveBalance,
+        PaymentMethodView, RedirectView, ORG_METADATA_KEY,
+    },
     catalogue::{FileHandle, UploadedView},
     entitlement::{Entitlement, EntitlementView, PlansView, QuotaKind},
     error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind, Disclosure},
     session::{OperatorContext, OrgContext, StreamAuth, SESSION_COOKIE},
-    stripe::{PriceMap, SecretKey, WebhookSecret},
+    stripe::{Card, PriceMap, SecretKey, WebhookSecret},
     version::{APIVersion, VersionError},
 };
 
@@ -292,6 +295,13 @@ pub fn router(state: AppState) -> Router {
         // something `fetch` can follow into a new tab.
         .route("/{version}/billing/checkout", post(billing::checkout))
         .route("/{version}/billing/portal", post(billing::portal))
+        .route(
+            "/{version}/billing/payment-method",
+            get(billing::payment_method).post(billing::update_payment_method),
+        )
+        .route("/{version}/billing/invoices", get(billing::invoices))
+        .route("/{version}/billing/cancel", post(billing::cancel))
+        .route("/{version}/billing/resume", post(billing::resume))
         .route("/{version}/billing/webhook", post(billing::webhook))
         // The price list, unauthenticated: the pricing page is public, and a
         // price a seller cannot read before signing up is not a price list.

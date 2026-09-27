@@ -508,7 +508,7 @@
 		guide="account"
 	>
 		{#snippet aside()}
-			<Button tier="quiet" icon="credit-card" href="/settings/subscription">Plan and moves</Button>
+			<Button tier="quiet" icon="credit-card" href="/settings/billing">Billing</Button>
 			<!-- The shell's account nav-card carries the other one, and `shell.css`
 			     hides that card below 620px, so this is the whole of signing out on
 			     a phone. Both run `signOut`. -->

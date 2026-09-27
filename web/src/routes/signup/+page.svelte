@@ -26,7 +26,7 @@
 	 * on arrival. Both are written down as well as carried in the sign-in
 	 * link, because the verification link is often opened in another tab and
 	 * a social sign-up leaves through a provider redirect — see
-	 * `$lib/pages/account/intent`, which `/settings/subscription` spends. */
+	 * `$lib/pages/account/intent`, which `/settings/billing` spends. */
 	const intendedNext = $derived(safeNext(page.url.searchParams.get('next')));
 	const intendedPrice = $derived(safePrice(page.url.searchParams.get('price')));
 

@@ -2,7 +2,7 @@
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { ApiFailure, api } from '$lib/api';
+	import { ApiFailure, api, type BillingView } from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
 	import { FOUNDING, PLANS, SERVICES } from '$lib/generated/plans';
@@ -17,18 +17,24 @@
 	import { toast } from '$lib/toast';
 	import {
 		bestValuePack,
+		cardLabel,
 		checkoutOutcome,
+		dayLabel,
 		dollars,
 		expiryLine,
 		foundingClosesLabel,
 		foundingOpen,
+		invoiceStatus,
+		money,
 		moves,
 		packsBySize,
 		perMonth,
 		planBullets,
-		renewsLine,
-		syncPlan
+		planMeaning,
+		syncPlan,
+		termLine
 	} from '$lib/pages/account/plans';
+	import CancelPlanDialog from '$lib/pages/account/CancelPlanDialog.svelte';
 	import { readIntent } from '$lib/pages/account/intent';
 	import '$lib/pages/account/account.css';
 
@@ -65,7 +71,35 @@
 	const balance = $derived(held?.moves);
 	const subscribed = $derived(held?.plan === 'subscriber' || held?.plan === 'studio');
 	const expiry = $derived(balance === undefined ? null : expiryLine(balance));
-	const renews = $derived(renewsLine(held?.renews_at));
+	const renews = $derived(held === undefined ? null : termLine(held));
+
+	// The plan the seller holds, as the current-plan card names it. Read off
+	// the generated table so the name and the one-line meaning move when the
+	// plan does.
+	const heldPlan = $derived(PLANS.find((plan) => plan.id === held?.plan) ?? null);
+
+	// Payment and invoices exist once Stripe knows a customer, which is the
+	// same fact that opens the portal.
+	const hasCustomer = $derived(held?.portal_available === true);
+	const paymentMethod = createQuery(() => ({
+		queryKey: queryKeys.billingPaymentMethod,
+		queryFn: () => api.billingPaymentMethod(),
+		enabled: hasCustomer
+	}));
+	const invoices = createQuery(() => ({
+		queryKey: queryKeys.billingInvoices,
+		queryFn: () => api.billingInvoices(),
+		enabled: hasCustomer
+	}));
+
+	// A subscription that is still running can be cancelled; a cancelled one
+	// that has not yet ended can be kept. Neither applies to a plan with no
+	// subscription behind it, nor to one Stripe has already ended.
+	const canCancel = $derived(held?.renews_at !== undefined && !held.cancel_at_period_end);
+	const canKeep = $derived(held?.cancel_at_period_end === true);
+	let cancelOpen = $state(false);
+	let resuming = $state(false);
+	let cardOpening = $state(false);
 
 	// What Stripe handed back, and which gate sent the seller here. The gate
 	// is a query parameter so the paywall that linked here is what the
@@ -188,19 +222,158 @@
 		}
 	}
 
+	function settled(view: BillingView) {
+		queryClient.setQueryData(queryKeys.billing, view);
+	}
+
+	async function keepPlan() {
+		resuming = true;
+		try {
+			settled(await api.billingResume());
+			toast('info', 'Your plan will renew as before.');
+		} catch (failure) {
+			toast(
+				'error',
+				failure instanceof ApiFailure ? failure.message : 'Your plan was not changed.'
+			);
+		} finally {
+			resuming = false;
+		}
+	}
+
+	async function updateCard() {
+		cardOpening = true;
+		try {
+			const { url } = await api.billingUpdatePaymentMethod();
+			leaving = true;
+			window.location.assign(url);
+		} catch (failure) {
+			cardOpening = false;
+			toast(
+				'error',
+				failure instanceof ApiFailure ? failure.message : 'The card page did not open.'
+			);
+		}
+	}
+
 	/** Why a buy control cannot run, or null where it can. */
 	const busy = $derived(working === null ? null : 'A checkout is opening.');
 </script>
 
 <div class="page">
-	<PageHead icon="credit-card" title="Plan and moves" guide="plans" />
+	<PageHead icon="credit-card" title="Billing" guide="plans" />
 
 	{#if outcome === 'success'}
-		<Banner tone="ok" title="Payment taken">Your moves are on the card above.</Banner>
+		<Banner tone="ok" title="Payment taken">Your moves are on the card below.</Banner>
 	{:else if outcome === 'cancel'}
 		<Banner tone="info" title="Checkout closed">Pick an option below to try again.</Banner>
 	{:else if intentRefused !== null}
 		<Banner tone="bad" title="Checkout did not open">{intentRefused}</Banner>
+	{/if}
+
+	<section class="current-plan" aria-labelledby="current-plan-name">
+		<span class="current-mark" aria-hidden="true"><Icon name="credit-card" size={22} /></span>
+		<div class="current-text">
+			{#if billing.isPending}
+				<p class="quiet">Loading…</p>
+			{:else if billing.isError || held === undefined}
+				<p class="quiet">Your plan did not load. Refresh the page to try again.</p>
+			{:else}
+				<h2 id="current-plan-name">{heldPlan?.name ?? held.plan} plan</h2>
+				{#if heldPlan !== null}
+					<p>{planMeaning(heldPlan.capabilities)}</p>
+				{/if}
+				{#if renews !== null}
+					<p class="term" class:ending={held.ends_at !== undefined}>{renews}</p>
+				{/if}
+			{/if}
+		</div>
+		<Button href="#plans">Adjust plan</Button>
+	</section>
+
+	{#if hasCustomer}
+		<Panel title="Payment">
+			<div class="bill-row">
+				<span class="bill-card">
+					<Icon name="credit-card" size={16} />
+					{#if paymentMethod.isPending}
+						<span class="quiet">Loading…</span>
+					{:else if paymentMethod.isError}
+						<span class="quiet">Your card did not load.</span>
+					{:else if paymentMethod.data?.card === undefined}
+						<span class="quiet">No card on file.</span>
+					{:else}
+						{cardLabel(paymentMethod.data.card)}
+					{/if}
+				</span>
+				<Button
+					small
+					disabled={cardOpening}
+					reason={cardOpening ? 'The card page is opening.' : undefined}
+					onclick={updateCard}
+				>
+					{cardOpening ? 'Opening…' : 'Update'}
+				</Button>
+			</div>
+		</Panel>
+
+		<Panel title="Invoices">
+			{#if invoices.isPending}
+				<p class="quiet">Loading…</p>
+			{:else if invoices.isError}
+				<p class="quiet">Your invoices did not load. Refresh the page to try again.</p>
+			{:else if (invoices.data?.invoices.length ?? 0) === 0}
+				<p class="quiet">No invoices yet.</p>
+			{:else}
+				<table class="bill-invoices">
+					<thead>
+						<tr>
+							<th scope="col">Date</th>
+							<th scope="col">Total</th>
+							<th scope="col">Status</th>
+							<th scope="col"><span class="sr-only">Invoice</span></th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each invoices.data?.invoices ?? [] as invoice (invoice.id)}
+							{@const status = invoiceStatus(invoice.status)}
+							<tr>
+								<td>{dayLabel(invoice.created_at)}</td>
+								<td class="num">{money(invoice.total, invoice.currency)}</td>
+								<td><StatusPill tone={status.tone} label={status.label} /></td>
+								<td class="act">
+									{#if invoice.hosted_url !== undefined}
+										<a href={invoice.hosted_url} target="_blank" rel="noopener noreferrer">View</a>
+									{/if}
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			{/if}
+		</Panel>
+
+		{#if canCancel || canKeep}
+			<Panel title="Cancellation">
+				<div class="bill-row">
+					{#if canKeep}
+						<span>{renews ?? 'Your plan will not renew.'}</span>
+						<Button
+							tier="additive"
+							small
+							disabled={resuming}
+							reason={resuming ? 'Your plan is being kept.' : undefined}
+							onclick={keepPlan}
+						>
+							{resuming ? 'Keeping…' : 'Keep my plan'}
+						</Button>
+					{:else}
+						<span>Stop renewing. You keep your plan until the end of the period you paid for.</span>
+						<Button small danger onclick={() => (cancelOpen = true)}>Cancel plan</Button>
+					{/if}
+				</div>
+			</Panel>
+		{/if}
 	{/if}
 
 	<Panel title="Your moves">
@@ -221,7 +394,7 @@
 		{/if}
 	</Panel>
 
-	<div class="page-grid">
+	<div class="page-grid" id="plans">
 		<div class="plan-column">
 			{#if look !== null}
 				<div class="acct-plan">
@@ -408,7 +581,123 @@
 	</Panel>
 </div>
 
+<CancelPlanDialog
+	open={cancelOpen}
+	planName={heldPlan?.name ?? 'current'}
+	periodEnd={held?.renews_at}
+	onClose={() => (cancelOpen = false)}
+	onCancelled={(view) => {
+		settled(view);
+		cancelOpen = false;
+		toast('info', 'Your plan is cancelled. It keeps working until the end date.');
+	}}
+/>
+
 <style>
+	/* The plan the seller holds, set apart from the plan cards below by its
+	   ground: a card of the same colour as the ones on sale reads as one more
+	   offer rather than as what is already theirs. */
+	.current-plan {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--s-3) var(--s-4);
+		padding: 20px 18px;
+		border-radius: var(--r-card);
+		background: var(--additive-soft);
+		border: 1px solid color-mix(in srgb, var(--additive) 25%, transparent);
+	}
+
+	.current-mark {
+		display: grid;
+		place-items: center;
+		width: 44px;
+		height: 44px;
+		border-radius: var(--r-panel);
+		background: var(--surface);
+		color: var(--additive);
+		flex: none;
+	}
+
+	.current-text {
+		flex: 1 1 220px;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+
+	.current-text h2 {
+		margin: 0;
+		font-family: var(--display);
+		font-size: 18px;
+		font-weight: 600;
+	}
+
+	.current-text p {
+		margin: 0;
+		font-size: 13px;
+		line-height: 1.4;
+	}
+
+	.current-text .term {
+		color: var(--muted);
+	}
+
+	.current-text .term.ending {
+		color: var(--warn-ink);
+		font-weight: 500;
+	}
+
+	.bill-row {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--s-3);
+		font-size: 13px;
+	}
+
+	.bill-row > span {
+		flex: 1 1 200px;
+		min-width: 0;
+	}
+
+	.bill-card {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.bill-invoices {
+		width: 100%;
+		border-collapse: collapse;
+		font-size: 13px;
+	}
+
+	.bill-invoices th {
+		text-align: left;
+		font-size: 12px;
+		font-weight: 500;
+		color: var(--muted);
+		padding: 0 8px 8px 0;
+	}
+
+	.bill-invoices td {
+		padding: 8px 8px 8px 0;
+		border-top: 1px solid var(--line);
+		white-space: nowrap;
+	}
+
+	.bill-invoices .num {
+		font-variant-numeric: tabular-nums;
+	}
+
+	.bill-invoices .act {
+		text-align: right;
+		padding-right: 0;
+	}
+
 	.kind {
 		font-family: var(--sans);
 		font-size: 13px;

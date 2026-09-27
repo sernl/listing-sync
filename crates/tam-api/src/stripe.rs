@@ -1,5 +1,6 @@
 //! Stripe's wire concerns: the webhook signature, the price map, the two
-//! secrets, and the three outbound calls the checkout needs.
+//! secrets, and the handful of outbound calls checkout and the billing page
+//! need.
 //!
 //! The signature half is pure. Nothing in it opens a socket, reads a clock or
 //! touches a database: the caller supplies the raw bytes, the header, the
@@ -14,14 +15,14 @@
 //! re-serialised body is a different message.
 //!
 //! The client half is plain HTTP over `reqwest` rather than a vendor crate.
-//! Three calls are needed and the official Rust binding is still a release
+//! A few calls are needed and the official Rust binding is still a release
 //! candidate; a form-encoded POST and a JSON read are less code than the
 //! dependency and no less correct.
 
 use std::collections::BTreeMap;
 
 use hmac::{Hmac, Mac};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use tam_limits::PriceKey;
 use tam_types::Timestamp;
@@ -485,6 +486,161 @@ struct PortalSession {
     url: String,
 }
 
+/// Which page of the Billing Portal to open. Absent, the portal's home.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortalFlow {
+    /// Straight to "update your card", and back to the console once the new
+    /// card is saved, rather than leaving the seller on the portal's home.
+    PaymentMethodUpdate,
+}
+
+/// A Stripe list envelope. `has_more` is not read: the billing page shows
+/// the most recent page and says where the rest are.
+#[derive(Debug, Clone, Deserialize)]
+struct List<T> {
+    #[serde(default = "Vec::new")]
+    data: Vec<T>,
+}
+
+/// One invoice, narrowed to what the billing page lists.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Invoice {
+    pub id: String,
+    /// Unix seconds.
+    #[serde(default)]
+    pub created: i64,
+    /// In the currency's minor unit, tax included.
+    #[serde(default)]
+    pub total: i64,
+    #[serde(default)]
+    pub currency: String,
+    /// `draft`, `open`, `paid`, `uncollectible` or `void`.
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub hosted_invoice_url: Option<String>,
+    #[serde(default)]
+    pub invoice_pdf: Option<String>,
+    #[serde(default)]
+    lines: Option<List<InvoiceLine>>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct InvoiceLine {
+    #[serde(default)]
+    description: Option<String>,
+}
+
+impl Invoice {
+    /// What the invoice was for, as its first line describes it.
+    #[must_use]
+    pub fn description(&self) -> Option<&str> {
+        self.lines
+            .as_ref()?
+            .data
+            .iter()
+            .find_map(|line| line.description.as_deref())
+    }
+}
+
+/// A card as the billing page names it: never the number, only what Stripe
+/// already shows the cardholder.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Card {
+    #[serde(default)]
+    pub brand: String,
+    #[serde(default)]
+    pub last4: String,
+    #[serde(default)]
+    pub exp_month: Option<u8>,
+    #[serde(default)]
+    pub exp_year: Option<u16>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct PaymentMethod {
+    #[serde(default)]
+    card: Option<Card>,
+}
+
+/// The card an expanded `default_payment_method` carries. An unexpanded one
+/// is an identifier, and a payment method that is not a card (a bank debit)
+/// has no card: both read as none rather than as a failure.
+fn card_of(value: Option<&serde_json::Value>) -> Option<Card> {
+    let value = value.filter(|value| value.is_object())?;
+    serde_json::from_value::<PaymentMethod>(value.clone())
+        .ok()?
+        .card
+}
+
+/// One subscription, narrowed to what the billing page and the cancel route
+/// read.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Subscription {
+    pub id: String,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub cancel_at_period_end: bool,
+    /// A scheduled end other than the period's close, which is how a
+    /// cancellation made in the portal arrives on newer API versions.
+    #[serde(default)]
+    pub cancel_at: Option<i64>,
+    #[serde(default)]
+    current_period_end: Option<i64>,
+    #[serde(default)]
+    items: Option<List<SubscriptionItem>>,
+    #[serde(default)]
+    default_payment_method: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct SubscriptionItem {
+    #[serde(default)]
+    current_period_end: Option<i64>,
+}
+
+impl Subscription {
+    /// Whether the subscription ends rather than renews, by either of the two
+    /// fields Stripe says that with.
+    #[must_use]
+    pub const fn ending(&self) -> bool {
+        self.cancel_at_period_end || self.cancel_at.is_some()
+    }
+
+    /// The period end in unix seconds, top-level on older API versions and
+    /// on the items from 2025-03-31.
+    #[must_use]
+    pub fn period_end(&self) -> Option<i64> {
+        self.current_period_end.or_else(|| {
+            self.items
+                .as_ref()?
+                .data
+                .iter()
+                .filter_map(|item| item.current_period_end)
+                .max()
+        })
+    }
+
+    /// The card this subscription charges, where it names one of its own.
+    #[must_use]
+    pub fn card(&self) -> Option<Card> {
+        card_of(self.default_payment_method.as_ref())
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct Customer {
+    #[serde(default)]
+    invoice_settings: Option<InvoiceSettings>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct InvoiceSettings {
+    #[serde(default)]
+    default_payment_method: Option<serde_json::Value>,
+}
+
 #[derive(Debug, Deserialize)]
 struct ApiRefusal {
     #[serde(default)]
@@ -499,7 +655,7 @@ struct ApiRefusalBody {
     code: Option<String>,
 }
 
-/// The three outbound calls the checkout needs, and nothing else.
+/// The outbound calls checkout and the billing page need, and nothing else.
 #[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
@@ -682,11 +838,29 @@ impl Client {
         &self,
         customer: &str,
         return_url: &str,
+        flow: Option<PortalFlow>,
     ) -> Result<String, StripeError> {
-        let form = vec![
+        let mut form = vec![
             ("customer".to_owned(), customer.to_owned()),
             ("return_url".to_owned(), return_url.to_owned()),
         ];
+        match flow {
+            Some(PortalFlow::PaymentMethodUpdate) => {
+                form.push((
+                    "flow_data[type]".to_owned(),
+                    "payment_method_update".to_owned(),
+                ));
+                form.push((
+                    "flow_data[after_completion][type]".to_owned(),
+                    "redirect".to_owned(),
+                ));
+                form.push((
+                    "flow_data[after_completion][redirect][return_url]".to_owned(),
+                    return_url.to_owned(),
+                ));
+            }
+            None => {}
+        }
         let session: PortalSession = self.post("/v1/billing_portal/sessions", &form).await?;
         Ok(session.url)
     }
@@ -702,6 +876,64 @@ impl Client {
         id: &str,
     ) -> Result<CheckoutSession, StripeError> {
         self.get(&format!("/v1/checkout/sessions/{id}?expand[]=line_items"))
+            .await
+    }
+
+    /// The customer's most recent invoices, newest first, up to 24 — two
+    /// years of a monthly plan.
+    pub async fn list_invoices(&self, customer: &str) -> Result<Vec<Invoice>, StripeError> {
+        let list: List<Invoice> = self
+            .get(&format!("/v1/invoices?customer={customer}&limit=24"))
+            .await?;
+        Ok(list.data)
+    }
+
+    /// One subscription with its default payment method expanded, so the
+    /// card rides on the same read as the cancellation state.
+    pub async fn retrieve_subscription(&self, id: &str) -> Result<Subscription, StripeError> {
+        self.get(&format!(
+            "/v1/subscriptions/{id}?expand[]=default_payment_method"
+        ))
+        .await
+    }
+
+    /// The card a customer's invoices are charged to by default, for a
+    /// subscription that names none of its own.
+    pub async fn customer_card(&self, customer: &str) -> Result<Option<Card>, StripeError> {
+        let customer: Customer = self
+            .get(&format!(
+                "/v1/customers/{customer}?expand[]=invoice_settings.default_payment_method"
+            ))
+            .await?;
+        Ok(customer
+            .invoice_settings
+            .and_then(|settings| card_of(settings.default_payment_method.as_ref())))
+    }
+
+    /// Asks Stripe to end the subscription at the close of the paid period
+    /// (`true`) or to keep renewing it (`false`).
+    ///
+    /// Keeping it clears `cancel_at` as well when that is the field the
+    /// cancellation was made with: a portal cancellation on a newer API
+    /// version schedules `cancel_at`, and clearing only
+    /// `cancel_at_period_end` would leave it scheduled.
+    pub async fn update_subscription(
+        &self,
+        current: &Subscription,
+        cancel_at_period_end: bool,
+    ) -> Result<Subscription, StripeError> {
+        let form = if !cancel_at_period_end
+            && !current.cancel_at_period_end
+            && current.cancel_at.is_some()
+        {
+            vec![("cancel_at".to_owned(), String::new())]
+        } else {
+            vec![(
+                "cancel_at_period_end".to_owned(),
+                cancel_at_period_end.to_string(),
+            )]
+        };
+        self.post(&format!("/v1/subscriptions/{}", current.id), &form)
             .await
     }
 }
