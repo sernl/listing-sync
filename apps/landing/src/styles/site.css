@@ -1516,6 +1516,88 @@ main {
 	margin-bottom: 6px;
 }
 
+/* The privacy policy: a dated page with three reference tables. Each table
+   scrolls inside its own box on a phone rather than widening the page. */
+
+.policy h3 {
+	font-size: 17px;
+	margin: 20px 0 8px;
+}
+
+.policy-meta {
+	margin: -4px 0 20px;
+	font-size: 14px;
+	color: var(--muted);
+}
+
+.policy h2[id] {
+	scroll-margin-top: 88px;
+}
+
+.policy-scroll {
+	overflow-x: auto;
+	margin: 0 0 16px;
+	border: 1px solid var(--line);
+	border-radius: 10px;
+}
+
+.policy-table {
+	width: 100%;
+	min-width: 520px;
+	border-collapse: collapse;
+	font-size: 14.5px;
+	line-height: 1.45;
+}
+
+.policy-table th,
+.policy-table td {
+	padding: 10px 12px;
+	text-align: left;
+	vertical-align: top;
+	border-top: 1px solid var(--line);
+}
+
+.policy-table thead th {
+	border-top: 0;
+	background: var(--nav);
+	color: var(--primary);
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.policy-table tbody th {
+	font-weight: 600;
+	color: var(--ink);
+}
+
+.policy-table code {
+	font-size: 13px;
+}
+
+.policy-toc {
+	margin: 8px 0 12px;
+	padding: 14px 18px;
+	background: var(--nav);
+	border-radius: 10px;
+}
+
+.policy-toc ol {
+	margin: 0;
+	padding-left: 22px;
+	columns: 2 16rem;
+	column-gap: 28px;
+}
+
+.policy-toc li {
+	margin-bottom: 4px;
+}
+
+.policy-toc a:hover {
+	color: var(--primary);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}
+
 /* Footer */
 
 .site-foot {

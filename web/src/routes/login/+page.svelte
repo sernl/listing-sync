@@ -256,6 +256,12 @@
 			{/each}
 		</div>
 
+		<p class="auth-consent">
+			By continuing you agree to the
+			<a class="link" href="/terms/" data-sveltekit-reload>Terms</a>
+			and <a class="link" href="/privacy/" data-sveltekit-reload>Privacy Policy</a>.
+		</p>
+
 		<p class="auth-foot">
 			No account yet? <a class="link" href="/signup">Create one</a>.
 		</p>
