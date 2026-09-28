@@ -1,8 +1,11 @@
 <script lang="ts">
+	import { createQuery } from '@tanstack/svelte-query';
 	import { ApiFailure } from '$lib/api';
+	import { identity } from '$lib/auth-client';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
 	import Field from '$lib/Field.svelte';
+	import { queryKeys } from '$lib/query';
 	import {
 		NAME_MAX_CHARS,
 		REASON_MAX_CHARS,
@@ -13,6 +16,15 @@
 	} from './api';
 
 	let { onclose }: { onclose: () => void } = $props();
+
+	/** The address a reply goes to, as the identity service holds it — the
+	 *  same one the operators' mail names — so the form can say where the
+	 *  answer will arrive. The settings page reads the same query. */
+	const signedIn = createQuery(() => ({
+		queryKey: queryKeys.identity,
+		queryFn: () => identity()
+	}));
+	const replyTo = $derived(signedIn.data?.email ?? 'the email you sign in with');
 
 	let name = $state('');
 	let url = $state('');
@@ -88,10 +100,11 @@
 <div class="mp-request">
 	{#if thanked !== null}
 		<Banner tone="ok" onDismiss={onclose} dismissLabel="Close this confirmation">
-			Thanks — we have your request for {thanked}.
+			Thanks — we have your request for {thanked}. We’ll reply to {replyTo}.
 		</Banner>
 	{:else}
 		<h3>Request a marketplace</h3>
+		<p class="what">We email the Teachouse team; they reply to {replyTo}.</p>
 		<form onsubmit={send}>
 			<div class="rows">
 				<Field label="Marketplace name" id="mp-name" required>
@@ -149,7 +162,7 @@
 		</form>
 
 		{#if refusal !== null}
-			<p class="refused">{refusal}</p>
+			<p class="refused" role="alert">{refusal}</p>
 		{/if}
 	{/if}
 </div>

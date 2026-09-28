@@ -49,6 +49,17 @@ pub const PAGE_LIMIT_MAX: i64 = 200;
 /// exists; until then a seller who reaches twenty is someone to talk to.
 pub const REQUESTS_PER_ORG_MAX: i64 = 20;
 
+/// How many requests one person may send in any rolling day.
+///
+/// A rate rather than a cap, and a second bound beside the organisation's
+/// lifetime one: every recorded request mails the operators, so this is what
+/// stops one seller filling the Teachouse inbox in an afternoon. Three is more
+/// than a seller listing the shops they already sell in needs in one sitting.
+pub const REQUESTS_PER_USER_PER_DAY: i64 = 3;
+
+/// The window [`REQUESTS_PER_USER_PER_DAY`] is counted over, in milliseconds.
+pub const REQUEST_RATE_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
+
 /// One request as it was written, answered back to whoever may read it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarketplaceRequestRecord {
@@ -78,6 +89,9 @@ pub enum MarketplaceRequestWrite {
     AlreadyAsked,
     /// This organisation holds [`REQUESTS_PER_ORG_MAX`] requests already.
     TooMany,
+    /// This person has sent [`REQUESTS_PER_USER_PER_DAY`] requests in the
+    /// [`REQUEST_RATE_WINDOW_MS`] before this one.
+    TooOften,
 }
 
 /// What a new request carries. The identifier and the instant are the
@@ -109,19 +123,23 @@ impl MarketplaceRequestRepo {
 
     /// Records one request, or says why it was not recorded.
     ///
-    /// Both bounds are read in the same transaction as the insert, under the
-    /// tenant pin, so the count they read is this organisation's own and no
+    /// Every bound is read in the same transaction as the insert, under the
+    /// tenant pin, so the counts it reads are this organisation's own and no
     /// other's. The address is compared case-folded, because a seller who
     /// pastes the same shop twice has asked once.
     ///
-    /// The residual is a race: two requests arriving together each see the
-    /// count before the other commits, so a tenant can hold twenty-one rows or
-    /// two rows naming one address. Neither is worth the cost of removing.
-    /// Serialising every write on this table, or taking a lock wide enough to
-    /// order them, would spend a real fence on an off-by-one in a table whose
-    /// only reader is a person reading a page of fifty; and the cap still
-    /// bounds the flood it exists to bound, because a caller repeating the
-    /// race has to win it every time to gain a row.
+    /// The per-person rate is exact: a transaction-scoped advisory lock keyed
+    /// on the requester serialises one person's writes, so two requests sent
+    /// together cannot both read two and land a fourth. The organisation's cap
+    /// keeps a residual race between different people in one organisation,
+    /// which can leave twenty-one rows or two naming one address. That is not
+    /// worth a lock wide enough to order every writer in a tenant: the table's
+    /// only reader is a person reading a page of fifty, and the cap still
+    /// bounds the flood it exists to bound.
+    ///
+    /// The window is the [`REQUEST_RATE_WINDOW_MS`] before this request's own
+    /// instant, which is the caller's clock rather than the database's, so a
+    /// test drives the boundary without waiting a day.
     ///
     /// The operators' mail is an outbox message on
     /// [`MARKETPLACE_REQUESTED_TOPIC`] written in this same transaction, so a
@@ -139,12 +157,24 @@ impl MarketplaceRequestRepo {
     ) -> Result<MarketplaceRequestWrite, StorageError> {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
+        let requester_key = uuid_to_db(request.requested_by.0).to_string();
+        sqlx::query!(
+            "SELECT pg_advisory_xact_lock(hashtextextended('marketplace-request:' || $1, 0))",
+            requester_key,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        let window_start = Timestamp(request.created_at.0.saturating_sub(REQUEST_RATE_WINDOW_MS));
         let standing = sqlx::query!(
             "SELECT count(*) AS \"total!\", \
-                    count(*) FILTER (WHERE lower(url) = lower($2)) AS \"same_url!\" \
+                    count(*) FILTER (WHERE lower(url) = lower($2)) AS \"same_url!\", \
+                    count(*) FILTER (WHERE requested_by = $3 AND created_at > $4) \
+                        AS \"recent_by_requester!\" \
                FROM marketplace_request WHERE org_id = $1",
             uuid_to_db(org.0),
             request.url,
+            uuid_to_db(request.requested_by.0),
+            timestamp_to_db(window_start)?,
         )
         .fetch_one(&mut *tx)
         .await?;
@@ -153,6 +183,9 @@ impl MarketplaceRequestRepo {
         }
         if standing.total >= REQUESTS_PER_ORG_MAX {
             return Ok(MarketplaceRequestWrite::TooMany);
+        }
+        if standing.recent_by_requester >= REQUESTS_PER_USER_PER_DAY {
+            return Ok(MarketplaceRequestWrite::TooOften);
         }
         let row = sqlx::query!(
             "INSERT INTO marketplace_request \

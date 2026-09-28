@@ -183,6 +183,10 @@ let
     cfg.server.mail.authInternalUrl
     "--auth-internal-secret-file"
     cfg.server.mail.authInternalSecretFile
+  ]
+  ++ lib.optionals (mailEnabled && cfg.server.mail.opsEmail != null) [
+    "--ops-email"
+    cfg.server.mail.opsEmail
   ];
 
   # tam-server and tam-worker reach nothing off this machine while their stores
@@ -648,6 +652,17 @@ in
             `teachouse-api` account. The same value the identity service
             reads through `auth.internalSecretFile`; the two files differ in
             form and in owner, not in content.
+          '';
+        };
+        opsEmail = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          example = "hello@teachouse.com";
+          description = ''
+            The operations inbox a seller's marketplace request is mailed to
+            when no platform operator has an address the identity service
+            vouches for. Null leaves such a request on the operator listing
+            only. Passed only when the mail path is on.
           '';
         };
       };

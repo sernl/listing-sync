@@ -68,10 +68,11 @@ export interface MarketplaceRequestView {
 /**
  * Records where else this seller sells.
  *
- * Every refusal arrives as a 422 carrying one sentence written for the person
- * who typed the field — an address already asked about, more requests than one
- * organisation may hold, a field over its bound — so the form renders
- * `ApiFailure.message` rather than deciding what went wrong from the status.
+ * Every refusal arrives carrying one sentence written for the person who typed
+ * the field — a 422 for an address already asked about, more requests than one
+ * organisation may hold, or a field over its bound, and a 429 for a fourth
+ * request inside a day — so the form renders `ApiFailure.message` rather than
+ * deciding what went wrong from the status.
  */
 export async function sendMarketplaceRequest(
 	body: MarketplaceRequestBody
