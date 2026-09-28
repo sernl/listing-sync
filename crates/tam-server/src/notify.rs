@@ -546,22 +546,30 @@ pub(crate) struct EmailDeliverer<R, S> {
     ops_email: Option<String>,
 }
 
+/// Where the mail points and where it falls back to: the console the links
+/// open, and the operations inbox a marketplace request reaches when no
+/// operator has a verified address.
+#[derive(Clone, Copy)]
+pub(crate) struct Sending<'a> {
+    pub(crate) console_url: &'a str,
+    pub(crate) ops_email: Option<&'a str>,
+}
+
 impl<R: AddressResolver, S: Relay> EmailDeliverer<R, S> {
     pub(crate) fn new(
         notifications: NotificationRepo,
         operators: OperatorRepo,
         resolver: R,
         relay: S,
-        console_url: &str,
-        ops_email: Option<&str>,
+        sending: Sending<'_>,
     ) -> Self {
         Self {
             notifications,
             operators,
             resolver,
             relay,
-            console_url: console_url.to_owned(),
-            ops_email: ops_email.map(str::to_owned),
+            console_url: sending.console_url.to_owned(),
+            ops_email: sending.ops_email.map(str::to_owned),
         }
     }
 
@@ -1114,8 +1122,10 @@ mod tests {
             tam_storage::OperatorRepo::new(pool),
             resolver,
             relay,
-            "https://app.example.test",
-            ops_email,
+            super::Sending {
+                console_url: "https://app.example.test",
+                ops_email,
+            },
         )
     }
 

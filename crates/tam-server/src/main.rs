@@ -654,8 +654,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             &mail.auth_internal_secret,
                         )?,
                         notify::ResendRelay::new(&mail.resend_api_key, &mail.email_from)?,
-                        &mail.console_url,
-                        mail.ops_email.as_deref(),
+                        notify::Sending {
+                            console_url: &mail.console_url,
+                            ops_email: mail.ops_email.as_deref(),
+                        },
                     ),
                     loops.clone(),
                 );

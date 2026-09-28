@@ -359,10 +359,6 @@ async fn more_sellers(pool: &PgPool) -> Vec<UserId> {
     made
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
-)]
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn paging_walks_every_user_once_newest_first(pool: PgPool) {
     provision(&pool).await;
@@ -407,8 +403,9 @@ async fn paging_walks_every_user_once_newest_first(pool: PgPool) {
         "the two sellers sharing a millisecond are both reached"
     );
     assert!(
-        seen.windows(2)
-            .all(|pair| (pair[0].0, pair[0].1 .0 .0) > (pair[1].0, pair[1].1 .0 .0)),
+        seen.iter()
+            .zip(seen.iter().skip(1))
+            .all(|(newer, older)| (newer.0, newer.1 .0 .0) > (older.0, older.1 .0 .0)),
         "newest first, ties broken by the user id, strictly: {seen:?}"
     );
 }
@@ -459,10 +456,6 @@ fn operator_uri(subject: [u8; 16]) -> String {
     )
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
-)]
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn an_operator_grants_and_withdraws_the_marking_with_a_trail(pool: PgPool) {
     provision(&pool).await;
@@ -530,10 +523,6 @@ async fn an_operator_grants_and_withdraws_the_marking_with_a_trail(pool: PgPool)
     );
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
-)]
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn an_operator_cannot_withdraw_their_own_marking(pool: PgPool) {
     provision(&pool).await;
@@ -583,10 +572,6 @@ async fn an_unknown_user_cannot_be_granted_or_withdrawn(pool: PgPool) {
     assert!(status.is_client_error(), "a malformed subject is refused");
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
-)]
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn a_seller_cannot_make_themselves_an_operator(pool: PgPool) {
     provision(&pool).await;
