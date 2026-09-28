@@ -1,24 +1,31 @@
 ---
 import Tick from './Tick.astro';
 import {
+	bestYearlyPercent,
+	cardHighlights,
+	cell,
+	comparison,
 	dollars,
 	featuredPack,
-	free,
-	leadPlan,
 	moveDefinition,
-	packEditNote,
 	packRows,
-	paidPlans,
 	perMonthYearly,
-	planFeatures,
-	planPitch,
-	signupUrl
+	plans,
+	signupUrl,
+	yearlySaving
 } from '../pricing.js';
 
-/* The free plan, the three paid plans, and the one-off packs under them. One
-   component draws both `/` and `/pricing`, which carry the same price list;
-   `level` is only which heading rank the section takes on its page. Every
-   number comes from the server's plan table by way of `src/pricing.js`. */
+/* Good, better, best: the free plan and the three paid plans as four cards,
+   the recommended one raised, the full comparison as a table under them, and
+   the one-off packs as a strip at the foot. One component draws both `/` and
+   `/pricing`; `level` is only which heading rank the section takes on its
+   page. Every number, tagline and the recommended plan come from the
+   server's plan table by way of `src/pricing.js`.
+
+   The monthly/yearly switch is two native radio inputs, and the stylesheet
+   shows one cadence's figures with `:has()`, so it needs no script, reads as
+   a radio group to a screen reader and works from the keyboard. Yearly is
+   checked in the markup, so it is the default. */
 
 const { level = 2 } = Astro.props;
 const Heading = level === 1 ? 'h1' : 'h2';
@@ -28,8 +35,6 @@ const Heading = level === 1 ? 'h1' : 'h2';
 	<div class="wrap">
 		<p class="eyebrow">Simple, transparent pricing</p>
 		<Heading>Plans for every shop</Heading>
-		{/* The founder's own example names two marketplaces, so the line is a
-		    marked band for `just landing-copy-gate`. */}
 		{/* A sale is data an operator saves, and this page is built ahead of
 		    it: the banner is drawn hidden and `sale.js` fills and shows it,
 		    striking the prices below, when `/v1/plans` answers one. */}
@@ -37,81 +42,176 @@ const Heading = level === 1 ? 'h1' : 'h2';
 			<strong data-sale-text></strong>
 			<a data-sale-link href="/pricing">See the plans</a>
 		</p>
+		{/* The founder's own example names two marketplaces, so the line is a
+		    marked band for `just landing-copy-gate`. */}
 		<p class="move-def" data-marketplace-band><strong>What is a move?</strong> {moveDefinition}</p>
 
-		<div class="ways">
-			<div class="way">
-				<h3>{free.name} <span class="cadence">(trial)</span></h3>
-				<p>Bring your shops in and try {free.capabilities.free_moves_lifetime} moves.</p>
-				<p class="price">Free<span class="per"> for as long as you like</span></p>
-				<div class="chips">
-					{
-						planFeatures(free).map((feature) => (
-							<span class="chip">
-								<Tick />
-								{feature.text}
-							</span>
-						))
-					}
-				</div>
-				<div class="actions">
-					<a class="btn" href={signupUrl()}>Start free</a>
-				</div>
-			</div>
+		<fieldset class="billing">
+			<legend class="sr-only">Billing period</legend>
+			<input type="radio" name="billing" id="billing-yearly" value="yearly" checked />
+			<label for="billing-yearly">
+				Yearly <span class="billing-save">save up to {bestYearlyPercent}%</span>
+			</label>
+			<input type="radio" name="billing" id="billing-monthly" value="monthly" />
+			<label for="billing-monthly">Monthly</label>
+		</fieldset>
 
+		<div class="tiers">
 			{
-				paidPlans.map((plan) => (
-					<div class:list={['way', { lead: plan.id === leadPlan }]}>
-						<h3>
-							{plan.name} <span class="cadence">(subscription)</span>
-						</h3>
-						<p>{planPitch[plan.id]}</p>
-						<p class="price">
-							<span data-list-cents={plan.yearly_cents} data-per="12">
-								{dollars(perMonthYearly(plan))}
-							</span>
-							<span class="per"> a month, billed yearly</span>
-						</p>
-						<p class="counts">
-							<span data-list-cents={plan.monthly_cents}>{dollars(plan.monthly_cents)}</span> a
-							month if you pay monthly.
-						</p>
-						{/* A tick beside a line that is not built yet would claim it is.
-						    The one coming-soon line takes a hollow mark instead. */}
-						<div class="chips">
-							{planFeatures(plan).map((feature) => (
-								<span class="chip">
-									{feature.soon ? (
-										<span class="tick soon" aria-hidden="true">
-											<svg width="8" height="8" viewBox="0 0 8 8" aria-hidden="true">
-												<circle cx="4" cy="4" r="3" fill="currentColor" />
-											</svg>
-										</span>
-									) : (
+				plans.map((plan) => {
+					const { base, lines } = cardHighlights(plan);
+					const paid = plan.yearly_cents !== null;
+					return (
+						<article
+							class:list={['tier', { recommended: plan.recommended }]}
+							aria-labelledby={`tier-${plan.id}`}
+						>
+							{plan.recommended && <p class="tier-badge">Recommended</p>}
+							<h3 id={`tier-${plan.id}`}>{plan.name}</h3>
+							<p class="tier-tagline">{plan.tagline}</p>
+							{paid ? (
+								<>
+									<div class="tier-price yearly-only">
+										<p class="price">
+											<span data-list-cents={plan.yearly_cents} data-per="12">
+												{dollars(perMonthYearly(plan))}
+											</span>
+											<span class="per"> a month</span>
+										</p>
+										<p class="tier-note">
+											Billed yearly,{' '}
+											<span data-list-cents={plan.yearly_cents}>{dollars(plan.yearly_cents)}</span>
+											<span class="tier-save" data-sale-hide>
+												{' '}
+												&middot; save {dollars(yearlySaving(plan))} a year
+											</span>
+										</p>
+									</div>
+									<div class="tier-price monthly-only">
+										<p class="price">
+											<span data-list-cents={plan.monthly_cents}>{dollars(plan.monthly_cents)}</span>
+											<span class="per"> a month</span>
+										</p>
+										<p class="tier-note">Billed monthly, cancel any time</p>
+									</div>
+								</>
+							) : (
+								<div class="tier-price">
+									<p class="price">
+										$0<span class="per"> for as long as you like</span>
+									</p>
+									<p class="tier-note">No card needed</p>
+								</div>
+							)}
+							<div class="tier-actions">
+								{paid ? (
+									<>
+										<a
+											class:list={[plan.recommended ? 'cta' : 'btn', 'yearly-only']}
+											href={signupUrl(plan.yearly_key)}
+										>
+											Choose {plan.name}
+										</a>
+										<a
+											class:list={[plan.recommended ? 'cta' : 'btn', 'monthly-only']}
+											href={signupUrl(plan.monthly_key)}
+										>
+											Choose {plan.name}
+										</a>
+									</>
+								) : (
+									<a class="btn" href={signupUrl()}>
+										Start free
+									</a>
+								)}
+							</div>
+							{base !== null && <p class="tier-base">Everything in {base}, plus:</p>}
+							<ul class="tier-list">
+								{lines.map((line) => (
+									<li>
 										<Tick />
-									)}
-									{feature.text}
-								</span>
-							))}
-						</div>
-						<div class="actions">
-							<a class={plan.id === leadPlan ? 'cta' : 'btn'} href={signupUrl(plan.yearly_key)}>
-								Choose {plan.name}
-							</a>
-						</div>
-					</div>
-				))
+										{line}
+									</li>
+								))}
+							</ul>
+						</article>
+					);
+				})
 			}
 		</div>
 
-		<div class="way packs-way">
+		<h3 class="compare-title" id="compare-title">Compare the plans</h3>
+		{/* A region with a name and a tab stop, so a keyboard user can scroll
+		    the table sideways on a phone; the feature column stays pinned. */}
+		<div class="compare-wrap" role="region" aria-labelledby="compare-title" tabindex="0">
+			<table class="compare">
+				<thead>
+					<tr>
+						<th scope="col"><span class="sr-only">Feature</span></th>
+						{
+							plans.map((plan) => (
+								<th scope="col" class:list={{ recommended: plan.recommended }}>
+									{plan.name}
+								</th>
+							))
+						}
+					</tr>
+				</thead>
+				{
+					comparison.map((group) => (
+						<tbody>
+							<tr class="compare-group">
+								<th scope="colgroup" colspan={plans.length + 1}>
+									{group.label}
+								</th>
+							</tr>
+							{group.rows.map((feature) => (
+								<tr>
+									<th scope="row">
+										{feature.label}
+										{feature.soon && <span class="soon-tag">Coming soon</span>}
+									</th>
+									{plans.map((plan) => {
+										const shown = cell(feature, plan);
+										return (
+											<td class:list={{ recommended: plan.recommended }}>
+												{shown.kind === 'yes' && (
+													<>
+														<Tick />
+														<span class="sr-only">{shown.label}</span>
+													</>
+												)}
+												{shown.kind === 'soon' && (
+													<>
+														<span class="tick soon" aria-hidden="true" />
+														<span class="sr-only">{shown.label}</span>
+													</>
+												)}
+												{shown.kind === 'no' && (
+													<>
+														<span class="dash" aria-hidden="true">
+															&ndash;
+														</span>
+														<span class="sr-only">{shown.label}</span>
+													</>
+												)}
+												{shown.kind === 'text' && shown.text}
+											</td>
+										);
+									})}
+								</tr>
+							))}
+						</tbody>
+					))
+				}
+			</table>
+		</div>
+
+		<div class="packs-strip">
 			<div class="packs-copy">
 				<h3>Move Packs <span class="cadence">(one-off)</span></h3>
-				<p>Moving your shop once? Buy the moves you need, on any plan, with no subscription.</p>
-				<p class="counts">{packEditNote} Pack moves last 12 months.</p>
-				<div class="actions">
-					<a class="btn" href={signupUrl(featuredPack.key)}>Buy a pack</a>
-				</div>
+				<p>Moving your shop once? Buy the moves you need, on any plan, with no subscription. Pack moves last 12 months.</p>
+				<a class="btn" href={signupUrl(featuredPack.key)}>Buy a pack</a>
 			</div>
 			<table class="packs">
 				<thead>
@@ -138,8 +238,9 @@ const Heading = level === 1 ? 'h1' : 'h2';
 </section>
 
 <script>
-	import { dollars } from '../pricing.js';
-	import { loadSale } from '../sale.js';
+	/* `dollars` comes from `sale.js` rather than `pricing.js`, so the
+	   browser bundle does not carry the generated plan table. */
+	import { dollars, loadSale } from '../sale.js';
 
 	const section = document.getElementById('pricing');
 	if (section) void loadSale(section, dollars);

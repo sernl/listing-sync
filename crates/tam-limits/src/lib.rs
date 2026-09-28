@@ -122,9 +122,12 @@ impl Plan {
     /// DECIDED (decisions.md, "Plans, capabilities and the pricing
     /// re-evaluation, 2026-09-12", as amended by
     /// `docs/notes/design/research/2026-09-20-pricing-model-re-evaluation.md`
-    /// section 3.2 and by `2026-09-27-subscription-tiers.md` section 0, which
-    /// adds Starter and sells Studio): every figure here is that table's.
-    /// Section 8 of the tiers note names the triggers that re-open them.
+    /// section 3.2, by `2026-09-27-subscription-tiers.md` section 0, which
+    /// adds Starter and sells Studio, and by
+    /// `2026-09-29-pricing-structure-review.md` section 5, which opens one
+    /// collection to Look and lifts the label cap on every paid plan):
+    /// every figure here is that table's. Section 8 of the tiers note and
+    /// section 9 of the review name the triggers that re-open them.
     ///
     /// `rung` is read only by `Studio`, where it is an operator-set monthly
     /// move allowance above the published hundred, granted with a reason for
@@ -157,7 +160,9 @@ impl Plan {
                 sync_pull_interval_secs: None,
                 auto_publish_rules: false,
                 templates_max: 1,
-                collections_max: 0,
+                // One of each organising object, so a trial seller can try
+                // grouping resources before paying (review section 5).
+                collections_max: 1,
                 labels_max: 5,
                 analytics: false,
                 export: true,
@@ -185,7 +190,9 @@ impl Plan {
                 auto_publish_rules: false,
                 templates_max: 5,
                 collections_max: 5,
-                labels_max: 20,
+                // Labels cost nothing to keep and are not a ladder axis:
+                // capped on Look, unlimited on every paid plan (review §5).
+                labels_max: u32::MAX,
                 analytics: false,
                 export: true,
                 devices_max: 5,
@@ -210,7 +217,7 @@ impl Plan {
                 auto_publish_rules: true,
                 templates_max: 20,
                 collections_max: 20,
-                labels_max: 20,
+                labels_max: u32::MAX,
                 analytics: true,
                 export: true,
                 devices_max: 5,
@@ -238,7 +245,7 @@ impl Plan {
                 auto_publish_rules: true,
                 templates_max: u32::MAX,
                 collections_max: u32::MAX,
-                labels_max: 50,
+                labels_max: u32::MAX,
                 analytics: true,
                 export: true,
                 devices_max: 5,
@@ -374,6 +381,12 @@ pub struct PlanRow {
     pub monthly_key: Option<PriceKey>,
     pub yearly_key: Option<PriceKey>,
     pub trial_days: u32,
+    /// The one paid plan a pricing page raises and badges "Recommended".
+    /// Exactly one row carries it, which `exactly_one_paid_plan_is_recommended`
+    /// pins, so no surface names the plan it features by hand.
+    pub recommended: bool,
+    /// Who the plan is for, in one teacher-facing sentence under its name.
+    pub tagline: &'static str,
 }
 
 /// Everything a checkout can be opened for, as one closed vocabulary.
@@ -551,7 +564,9 @@ impl AiStatus {
 /// Starter and Studio sit on the category's entry and "pro" rungs. Every
 /// yearly price is about a third off twelve monthly ones, so each card can
 /// say "$20 a month, billed yearly" and mean it. Section 8 of the note names
-/// what re-opens these.
+/// what re-opens these. `2026-09-29-pricing-structure-review.md` sections 3
+/// and 4 re-test the prices and the yearly saving against the category and
+/// keep both; section 6 makes Sync the recommended plan.
 ///
 /// No trial days on any row. Look is the trial, there is no other, and a
 /// 14-day clock beside a free plan that never expires was two offers where
@@ -565,6 +580,8 @@ pub const PLANS: [PlanRow; 4] = [
         monthly_key: None,
         yearly_key: None,
         trial_days: 0,
+        recommended: false,
+        tagline: "Bring your shops in, see every resource in one place and try five moves.",
     },
     PlanRow {
         id: Plan::Starter,
@@ -574,6 +591,8 @@ pub const PLANS: [PlanRow; 4] = [
         monthly_key: Some(PriceKey::StarterMonthly),
         yearly_key: Some(PriceKey::StarterYearly),
         trial_days: 0,
+        recommended: false,
+        tagline: "For teachers who add a resource now and then.",
     },
     PlanRow {
         id: Plan::Subscriber,
@@ -583,6 +602,8 @@ pub const PLANS: [PlanRow; 4] = [
         monthly_key: Some(PriceKey::SyncMonthly),
         yearly_key: Some(PriceKey::SyncYearly),
         trial_days: 0,
+        recommended: true,
+        tagline: "For teachers who add resources every week.",
     },
     PlanRow {
         id: Plan::Studio,
@@ -592,6 +613,8 @@ pub const PLANS: [PlanRow; 4] = [
         monthly_key: Some(PriceKey::StudioMonthly),
         yearly_key: Some(PriceKey::StudioYearly),
         trial_days: 0,
+        recommended: false,
+        tagline: "For big catalogues and whole-shop moves.",
     },
 ];
 
@@ -652,6 +675,398 @@ pub const AI: AiOffer = AiOffer {
     add_on_fills: 100,
     add_on_cents: 500,
 };
+
+/// One value per plan, keyed by the plan's wire name, so a client reads
+/// `included[plan.id]` rather than trusting an array's order to match
+/// [`Plan::ALL`]. A struct rather than a map so a fifth plan is a compile
+/// error at every row of [`PLAN_FEATURES`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PerPlan<T> {
+    pub free: T,
+    pub starter: T,
+    pub subscriber: T,
+    pub studio: T,
+}
+
+impl<T: Copy> PerPlan<T> {
+    #[must_use]
+    pub const fn get(&self, plan: Plan) -> T {
+        match plan {
+            Plan::Free => self.free,
+            Plan::Starter => self.starter,
+            Plan::Subscriber => self.subscriber,
+            Plan::Studio => self.studio,
+        }
+    }
+}
+
+/// What one plan gets of one feature: `false` (not on this plan), `true`
+/// (included, and on a counted feature, with no ceiling) or a number read
+/// in the feature's [`FeatureUnit`]. Untagged, so the wire carries the bare
+/// `boolean | number` a comparison table renders as a tick, a dash or a
+/// figure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Included {
+    Flag(bool),
+    Limit(u32),
+}
+
+impl Included {
+    /// A count read off [`Capabilities`], where `0` is "not on this plan"
+    /// and `u32::MAX` is "no ceiling".
+    #[must_use]
+    pub const fn counted(n: u32) -> Self {
+        match n {
+            0 => Self::Flag(false),
+            u32::MAX => Self::Flag(true),
+            limit => Self::Limit(limit),
+        }
+    }
+}
+
+/// How a number in an [`Included`] cell reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureUnit {
+    /// A plain count: "500", "20".
+    Count,
+    /// A count renewed each billing month: "25 a month".
+    PerMonth,
+    /// A size in mebibytes, which a client renders as MB or GB.
+    Megabytes,
+    /// An interval in hours, where fewer is better: "every 6 hours".
+    EveryHours,
+}
+
+impl FeatureUnit {
+    pub const ALL: [Self; 4] = [
+        Self::Count,
+        Self::PerMonth,
+        Self::Megabytes,
+        Self::EveryHours,
+    ];
+}
+
+/// The comparison table's sections, in the order it reads them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureGroup {
+    Moving,
+    Automation,
+    Catalogue,
+    Insight,
+    Support,
+}
+
+impl FeatureGroup {
+    pub const ALL: [Self; 5] = [
+        Self::Moving,
+        Self::Automation,
+        Self::Catalogue,
+        Self::Insight,
+        Self::Support,
+    ];
+
+    /// The heading a comparison table draws above the group's rows.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Moving => "Moves and updates",
+            Self::Automation => "Automations",
+            Self::Catalogue => "Your catalogue",
+            Self::Insight => "Statistics and AI",
+            Self::Support => "Help",
+        }
+    }
+}
+
+/// Every row of the plan comparison, as one closed vocabulary.
+///
+/// Each key reads its cells off [`Capabilities`] in [`FeatureKey::included`]
+/// where a capability exists, so the table a seller compares is the table
+/// the server enforces; the rows with no capability behind them are the
+/// features every plan carries and no gate withholds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureKey {
+    Moves,
+    MovesRollover,
+    CopyOrMove,
+    EditSync,
+    Scheduling,
+    AutoPublishRules,
+    TermAndPriceRules,
+    Resources,
+    Storage,
+    Import,
+    DuplicateReview,
+    RichText,
+    WatermarkedPreviews,
+    Templates,
+    Collections,
+    Labels,
+    Export,
+    Analytics,
+    AiFill,
+    DesktopApp,
+    EmailSupport,
+    PrioritySupport,
+}
+
+impl FeatureKey {
+    /// Every key, for the same reason [`Plan::ALL`] exists.
+    pub const ALL: [Self; 22] = [
+        Self::Moves,
+        Self::MovesRollover,
+        Self::CopyOrMove,
+        Self::EditSync,
+        Self::Scheduling,
+        Self::AutoPublishRules,
+        Self::TermAndPriceRules,
+        Self::Resources,
+        Self::Storage,
+        Self::Import,
+        Self::DuplicateReview,
+        Self::RichText,
+        Self::WatermarkedPreviews,
+        Self::Templates,
+        Self::Collections,
+        Self::Labels,
+        Self::Export,
+        Self::Analytics,
+        Self::AiFill,
+        Self::DesktopApp,
+        Self::EmailSupport,
+        Self::PrioritySupport,
+    ];
+
+    /// What a plan holding `caps` gets of this feature.
+    ///
+    /// The rows answering a constant `true` are the core: import, the
+    /// editor, previews, rules and the desktop app are the product itself,
+    /// cost nothing per seller, and are what a trial has to show
+    /// (`2026-09-29-pricing-structure-review.md` section 5).
+    #[must_use]
+    #[expect(
+        clippy::integer_division,
+        reason = "the pull interval is a whole number of hours on every plan, which \
+                  `every_edit_sync_interval_is_whole_hours` pins"
+    )]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "200 GiB is 204,800 MiB, far inside u32; the shift runs before the cast"
+    )]
+    pub const fn included(self, caps: &Capabilities) -> Included {
+        match self {
+            Self::Moves => Included::counted(caps.moves_per_month),
+            Self::MovesRollover => Included::counted(caps.moves_accrual_cap),
+            Self::EditSync => match caps.sync_pull_interval_secs {
+                Some(secs) => Included::Limit(secs / 3_600),
+                None => Included::Flag(false),
+            },
+            Self::Scheduling => Included::Flag(caps.scheduling),
+            Self::AutoPublishRules => Included::Flag(caps.auto_publish_rules),
+            Self::Resources => Included::counted(caps.resources_max),
+            Self::Storage => Included::counted((caps.storage_bytes_max >> 20) as u32),
+            Self::Import => Included::Flag(caps.import_spreadsheet && caps.import_marketplace),
+            Self::DuplicateReview => Included::Flag(caps.duplicate_review),
+            Self::Templates => Included::counted(caps.templates_max),
+            Self::Collections => Included::counted(caps.collections_max),
+            Self::Labels => Included::counted(caps.labels_max),
+            Self::Export => Included::Flag(caps.export),
+            Self::Analytics => Included::Flag(caps.analytics),
+            Self::AiFill => Included::counted(caps.ai_fills_per_month),
+            Self::DesktopApp => Included::Flag(caps.devices_max > 0),
+            Self::EmailSupport => Included::Flag(!matches!(caps.support, Support::Guides)),
+            Self::PrioritySupport => Included::Flag(matches!(caps.support, Support::Email1Day)),
+            Self::CopyOrMove
+            | Self::TermAndPriceRules
+            | Self::RichText
+            | Self::WatermarkedPreviews => Included::Flag(true),
+        }
+    }
+}
+
+/// One row of the plan comparison: what the feature is called, where it
+/// sits, how its numbers read, whether it is sold before it is built, and
+/// what each plan gets of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanFeature {
+    pub key: FeatureKey,
+    pub label: &'static str,
+    pub group: FeatureGroup,
+    /// `None` on a yes-or-no row, where every cell is a flag.
+    pub unit: Option<FeatureUnit>,
+    /// Sold before it is built. A table draws a hollow mark rather than a
+    /// tick, so a tick never claims a feature exists.
+    pub soon: bool,
+    pub included: PerPlan<Included>,
+}
+
+const fn feature(
+    key: FeatureKey,
+    label: &'static str,
+    group: FeatureGroup,
+    unit: Option<FeatureUnit>,
+) -> PlanFeature {
+    PlanFeature {
+        key,
+        label,
+        group,
+        unit,
+        soon: matches!(key, FeatureKey::AiFill) && matches!(AI.status, AiStatus::ComingSoon),
+        included: PerPlan {
+            free: key.included(&Plan::Free.capabilities(None)),
+            starter: key.included(&Plan::Starter.capabilities(None)),
+            subscriber: key.included(&Plan::Subscriber.capabilities(None)),
+            studio: key.included(&Plan::Studio.capabilities(None)),
+        },
+    }
+}
+
+/// The plan comparison, grouped and in reading order.
+///
+/// DECIDED (`docs/notes/design/research/2026-09-29-pricing-structure-review.md`
+/// section 5, the feature matrix): which features are core, which are
+/// counted per plan and which start at a plan. The cells are computed from
+/// [`Plan::capabilities`] at compile time, so this table cannot promise a
+/// plan more or less than its gates allow; only the labels and the order
+/// are written here.
+pub const PLAN_FEATURES: [PlanFeature; 22] = [
+    feature(
+        FeatureKey::Moves,
+        "Moves",
+        FeatureGroup::Moving,
+        Some(FeatureUnit::PerMonth),
+    ),
+    feature(
+        FeatureKey::MovesRollover,
+        "Unused moves carry over, up to",
+        FeatureGroup::Moving,
+        Some(FeatureUnit::Count),
+    ),
+    feature(
+        FeatureKey::CopyOrMove,
+        "Copy or move resources between marketplaces",
+        FeatureGroup::Moving,
+        None,
+    ),
+    feature(
+        FeatureKey::EditSync,
+        "Edits sent to every marketplace",
+        FeatureGroup::Moving,
+        Some(FeatureUnit::EveryHours),
+    ),
+    feature(
+        FeatureKey::Scheduling,
+        "Schedule when a listing goes live",
+        FeatureGroup::Automation,
+        None,
+    ),
+    feature(
+        FeatureKey::AutoPublishRules,
+        "Automatic publishing rules",
+        FeatureGroup::Automation,
+        None,
+    ),
+    feature(
+        FeatureKey::TermAndPriceRules,
+        "Term mapping and price rules",
+        FeatureGroup::Automation,
+        None,
+    ),
+    feature(
+        FeatureKey::Resources,
+        "Resources",
+        FeatureGroup::Catalogue,
+        Some(FeatureUnit::Count),
+    ),
+    feature(
+        FeatureKey::Storage,
+        "Storage for covers and previews",
+        FeatureGroup::Catalogue,
+        Some(FeatureUnit::Megabytes),
+    ),
+    feature(
+        FeatureKey::Import,
+        "Import from your shops or a spreadsheet",
+        FeatureGroup::Catalogue,
+        None,
+    ),
+    feature(
+        FeatureKey::DuplicateReview,
+        "Find and merge duplicates",
+        FeatureGroup::Catalogue,
+        None,
+    ),
+    feature(
+        FeatureKey::RichText,
+        "Rich-text descriptions",
+        FeatureGroup::Catalogue,
+        None,
+    ),
+    feature(
+        FeatureKey::WatermarkedPreviews,
+        "Watermarked previews",
+        FeatureGroup::Catalogue,
+        None,
+    ),
+    feature(
+        FeatureKey::Templates,
+        "Templates",
+        FeatureGroup::Catalogue,
+        Some(FeatureUnit::Count),
+    ),
+    feature(
+        FeatureKey::Collections,
+        "Collections",
+        FeatureGroup::Catalogue,
+        Some(FeatureUnit::Count),
+    ),
+    feature(
+        FeatureKey::Labels,
+        "Labels",
+        FeatureGroup::Catalogue,
+        Some(FeatureUnit::Count),
+    ),
+    feature(
+        FeatureKey::Export,
+        "Export to a spreadsheet",
+        FeatureGroup::Catalogue,
+        None,
+    ),
+    feature(
+        FeatureKey::Analytics,
+        "Statistics on every shop",
+        FeatureGroup::Insight,
+        None,
+    ),
+    feature(
+        FeatureKey::AiFill,
+        "AI description fill",
+        FeatureGroup::Insight,
+        Some(FeatureUnit::PerMonth),
+    ),
+    feature(
+        FeatureKey::DesktopApp,
+        "Desktop app for your own devices",
+        FeatureGroup::Support,
+        None,
+    ),
+    feature(
+        FeatureKey::EmailSupport,
+        "Email support",
+        FeatureGroup::Support,
+        None,
+    ),
+    feature(
+        FeatureKey::PrioritySupport,
+        "Priority support, answered within a day",
+        FeatureGroup::Support,
+        None,
+    ),
+];
 
 pub mod http {
     /// SIZED against RAM, not against traffic: at this ceiling the concurrent
@@ -819,7 +1234,160 @@ const _: () = {
 
 #[cfg(test)]
 mod tests {
-    use super::{http, ingest, job, Plan, PriceKey, Support, PACKS, PLANS};
+    use super::{
+        http, ingest, job, FeatureGroup, FeatureKey, FeatureUnit, Included, Plan, PriceKey,
+        Support, PACKS, PLANS, PLAN_FEATURES,
+    };
+
+    /// The pricing page raises one plan. Two would be no recommendation and
+    /// a free one would be recommending that nobody pays.
+    #[test]
+    fn exactly_one_paid_plan_is_recommended() {
+        let recommended: Vec<Plan> = PLANS
+            .iter()
+            .filter(|row| row.recommended)
+            .map(|row| row.id)
+            .collect();
+        assert_eq!(recommended.len(), 1, "recommended: {recommended:?}");
+        assert_ne!(
+            recommended[0],
+            Plan::Free,
+            "the recommended plan must be one that is paid for"
+        );
+        for row in PLANS {
+            let tagline = row.tagline.trim();
+            assert!(
+                tagline.ends_with('.') && !tagline.trim_end_matches('.').contains(". "),
+                "{}'s tagline must be one sentence: {tagline:?}",
+                row.id.as_str()
+            );
+        }
+    }
+
+    /// How far a cell reaches, on a scale where a stronger plan must never
+    /// score lower. An interval counts down: an hourly sync is more than a
+    /// daily one.
+    fn reach(cell: Included, unit: Option<FeatureUnit>) -> u64 {
+        match cell {
+            Included::Flag(false) => 0,
+            Included::Flag(true) => u64::MAX,
+            Included::Limit(n) if unit == Some(FeatureUnit::EveryHours) => u64::from(u32::MAX - n),
+            Included::Limit(n) => u64::from(n),
+        }
+    }
+
+    /// No row of the comparison gets worse as the plans climb: an upgrade
+    /// that lost a tick or a count anywhere would be a downgrade in one row
+    /// the seller did not look at.
+    #[test]
+    fn the_feature_matrix_never_gets_worse_up_the_ladder() {
+        for row in PLAN_FEATURES {
+            for (below, above) in Plan::ALL.iter().zip(Plan::ALL.iter().skip(1)) {
+                let (lower, upper) = (row.included.get(*below), row.included.get(*above));
+                assert!(
+                    reach(upper, row.unit) >= reach(lower, row.unit),
+                    "{:?}: {} has {upper:?} but {} has {lower:?}",
+                    row.key,
+                    above.as_str(),
+                    below.as_str()
+                );
+            }
+        }
+    }
+
+    /// The matrix is one row per key, grouped in reading order, with numbers
+    /// only where the row says how to read them.
+    #[test]
+    fn the_feature_matrix_is_consistent() {
+        for key in FeatureKey::ALL {
+            match key {
+                FeatureKey::Moves
+                | FeatureKey::MovesRollover
+                | FeatureKey::CopyOrMove
+                | FeatureKey::EditSync
+                | FeatureKey::Scheduling
+                | FeatureKey::AutoPublishRules
+                | FeatureKey::TermAndPriceRules
+                | FeatureKey::Resources
+                | FeatureKey::Storage
+                | FeatureKey::Import
+                | FeatureKey::DuplicateReview
+                | FeatureKey::RichText
+                | FeatureKey::WatermarkedPreviews
+                | FeatureKey::Templates
+                | FeatureKey::Collections
+                | FeatureKey::Labels
+                | FeatureKey::Export
+                | FeatureKey::Analytics
+                | FeatureKey::AiFill
+                | FeatureKey::DesktopApp
+                | FeatureKey::EmailSupport
+                | FeatureKey::PrioritySupport => {}
+            }
+            assert_eq!(
+                PLAN_FEATURES.iter().filter(|row| row.key == key).count(),
+                1,
+                "{key:?} must be exactly one row of the comparison"
+            );
+        }
+        let groups: Vec<FeatureGroup> = PLAN_FEATURES.iter().map(|row| row.group).collect();
+        let mut order = groups.clone();
+        order.dedup();
+        assert_eq!(
+            order,
+            FeatureGroup::ALL.to_vec(),
+            "rows must sit together under their group, groups in reading order, none empty"
+        );
+        for row in PLAN_FEATURES {
+            assert!(!row.label.trim().is_empty(), "{:?} has no label", row.key);
+            for plan in Plan::ALL {
+                let cell = row.included.get(plan);
+                if row.unit.is_none() {
+                    assert!(
+                        matches!(cell, Included::Flag(_)),
+                        "{:?} is a yes-or-no row but {} carries a number",
+                        row.key,
+                        plan.as_str()
+                    );
+                }
+            }
+            assert_eq!(
+                row.soon,
+                row.key == FeatureKey::AiFill,
+                "only the AI fill is sold before it is built; {:?} says otherwise",
+                row.key
+            );
+        }
+        // Core: what a trial has to show and no gate withholds.
+        for key in [
+            FeatureKey::CopyOrMove,
+            FeatureKey::Import,
+            FeatureKey::DuplicateReview,
+            FeatureKey::RichText,
+            FeatureKey::WatermarkedPreviews,
+            FeatureKey::TermAndPriceRules,
+            FeatureKey::Export,
+            FeatureKey::DesktopApp,
+        ] {
+            for plan in Plan::ALL {
+                assert_eq!(
+                    key.included(&plan.capabilities(None)),
+                    Included::Flag(true),
+                    "{key:?} is core and must be on {}",
+                    plan.as_str()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_edit_sync_interval_is_whole_hours() {
+        for plan in Plan::ALL {
+            if let Some(secs) = plan.capabilities(None).sync_pull_interval_secs {
+                assert_eq!(secs % 3_600, 0, "{} syncs off the hour", plan.as_str());
+            }
+        }
+    }
 
     /// The `UNCALIBRATED` markers are a countdown, not decoration.
     ///
@@ -1139,6 +1707,17 @@ mod tests {
             None,
             "the ladder's old spelling names nothing this build sells"
         );
+        for (cell, wire) in [
+            (Included::Flag(false), "false"),
+            (Included::Flag(true), "true"),
+            (Included::Limit(25), "25"),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&cell).expect("a cell serialises"),
+                wire,
+                "a comparison cell crosses the wire as a bare boolean or number"
+            );
+        }
     }
 
     #[test]

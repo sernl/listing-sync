@@ -299,6 +299,8 @@ pub struct PlanRowView {
     pub monthly_key: Option<PriceKey>,
     pub yearly_key: Option<PriceKey>,
     pub trial_days: u32,
+    pub recommended: bool,
+    pub tagline: String,
     pub capabilities: Capabilities,
 }
 
@@ -312,6 +314,8 @@ impl PlanRowView {
             monthly_key: row.monthly_key,
             yearly_key: row.yearly_key,
             trial_days: row.trial_days,
+            recommended: row.recommended,
+            tagline: row.tagline.to_owned(),
             // At no rung, which is what a price list shows: the only plan
             // that reads one is Studio, whose rung is an operator's decision
             // about one tenant rather than a figure on a public page.
