@@ -345,3 +345,92 @@
 .collections-page .coll-plan td:first-child {
 	min-width: 12rem;
 }
+
+/* --- the board's "Add to a collection" dialog ------------------------------
+   Drawn on the Resources board rather than on these pages, so these rules are
+   scoped by the dialog's own class instead of `.collections-page`. One radio
+   row per collection, its name on the left and its count on the right, so a
+   long name wraps inside its own row rather than squeezing the next. The phone
+   sheet in `app.css` gives the dialog its full width below 621px; above it the
+   dialog is narrower than the shared 560px, wide enough for a name and its
+   count on one line. */
+
+@media (min-width: 621px) {
+	dialog.coll-dialog {
+		width: min(480px, calc(100vw - 32px));
+		min-width: min(420px, calc(100vw - 32px));
+	}
+}
+
+.coll-dialog .coll-picks {
+	display: flex;
+	flex-direction: column;
+	margin: 0;
+	padding: 0;
+	border: 1px solid var(--line);
+	border-radius: var(--r-field);
+	overflow: hidden;
+}
+
+.coll-dialog .coll-pick {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-height: var(--control-h);
+	padding: 10px 12px;
+	border-top: 1px solid var(--line);
+	font-size: 13px;
+	cursor: pointer;
+}
+
+.coll-dialog .coll-pick:first-of-type {
+	border-top: 0;
+}
+
+.coll-dialog .coll-pick:hover {
+	background: var(--hover);
+}
+
+.coll-dialog .coll-pick:has(input:checked) {
+	background: var(--accent-soft);
+}
+
+.coll-dialog .coll-pick:has(input:disabled) {
+	cursor: not-allowed;
+	opacity: 0.6;
+}
+
+.coll-dialog .coll-pick input {
+	flex: none;
+	margin: 0;
+}
+
+.coll-dialog .coll-pick-name {
+	flex: 1;
+	min-width: 0;
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+.coll-dialog .coll-pick-count {
+	flex: none;
+	color: var(--muted);
+	font-size: 12.5px;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+/* The new collection's name, under its own row and inside the same frame, so
+   the field reads as part of the choice rather than as the dialog's next
+   question. */
+.coll-dialog .coll-pick-new {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-3);
+	padding: 4px 12px 12px 36px;
+	background: var(--accent-soft);
+}
+
+.coll-dialog .coll-pick-new .refusal {
+	margin: 0;
+}

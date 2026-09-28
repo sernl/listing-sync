@@ -2,6 +2,7 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
 	import { allPages, api } from '$lib/api';
+	import { lightDismiss } from '$lib/dismiss';
 	import Icon from '$lib/Icon.svelte';
 	import { searchHref } from '$lib/nav';
 	import { queryKeys } from '$lib/query';
@@ -188,21 +189,13 @@
 				return;
 		}
 	}
-
-	// A press on the backdrop of a modal dialog lands on the dialog element
-	// itself, which is the whole of "click outside" here.
-	function pressed(event: MouseEvent) {
-		if (event.target === element) {
-			dismiss();
-		}
-	}
 </script>
 
 <dialog
+	use:lightDismiss
 	class="pal-box"
 	bind:this={element}
 	aria-label="Search resources"
-	onclick={pressed}
 	oncancel={(event) => {
 		event.preventDefault();
 		dismiss();

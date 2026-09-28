@@ -8,6 +8,7 @@
 		type PublishIntent,
 		type VocabularyView
 	} from '$lib/api';
+	import { lightDismiss } from '$lib/dismiss';
 	import { connectionFor, readinessOf } from '$lib/publish-readiness';
 	import type { InventoryId } from '$lib/generated/vocab';
 	import Note from '$lib/Note.svelte';
@@ -116,7 +117,7 @@
 	}
 </script>
 
-<dialog bind:this={element} aria-labelledby="publish-title" onclose={onClose}>
+<dialog use:lightDismiss bind:this={element} aria-labelledby="publish-title" onclose={onClose}>
 	<div class="dialog-body">
 		<h2 id="publish-title">Send to marketplaces</h2>
 		<p>

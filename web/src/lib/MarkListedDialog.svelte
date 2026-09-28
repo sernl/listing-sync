@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { ApiFailure, api } from '$lib/api';
+	import { lightDismiss } from '$lib/dismiss';
 	import type { InventoryRow } from '$lib/inventory';
 	import { AUTHORABLE_PLATFORMS, platformTitle } from '$lib/platforms';
 	import type { InventoryId } from '$lib/generated/vocab';
@@ -81,7 +82,7 @@
 	}
 </script>
 
-<dialog bind:this={element} aria-labelledby="mark-listed-title" onclose={onClose}>
+<dialog use:lightDismiss bind:this={element} aria-labelledby="mark-listed-title" onclose={onClose}>
 	<div class="dialog-body">
 		<h2 id="mark-listed-title">
 			Mark {rows.length} {rows.length === 1 ? 'resource' : 'resources'} as listed

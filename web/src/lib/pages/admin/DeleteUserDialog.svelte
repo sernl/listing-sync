@@ -10,6 +10,7 @@
 	import { removeIdentityUser } from '$lib/auth-client';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
+	import { lightDismiss } from '$lib/dismiss';
 	import Explain from '$lib/Explain.svelte';
 	import Icon from '$lib/Icon.svelte';
 	import { deleteConfirmed, displayName } from './users-view';
@@ -95,7 +96,7 @@
 	};
 </script>
 
-<dialog
+<dialog use:lightDismiss
 	bind:this={element}
 	class="ux-delete"
 	aria-labelledby="delete-user-title"

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { ApiFailure, api, type LabelView } from '$lib/api';
+	import { lightDismiss } from '$lib/dismiss';
 	import type { InventoryRow } from '$lib/inventory';
 	import type { LabelColour } from '$lib/generated/vocab';
 	import Note from '$lib/Note.svelte';
@@ -142,7 +143,7 @@
 	}
 </script>
 
-<dialog bind:this={element} aria-labelledby="labels-title" onclose={onClose}>
+<dialog use:lightDismiss bind:this={element} aria-labelledby="labels-title" onclose={onClose}>
 	<div class="dialog-body">
 		<h2 id="labels-title">
 			Label {rows.length} {rows.length === 1 ? 'resource' : 'resources'}

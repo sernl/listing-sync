@@ -10,6 +10,7 @@
 
 	import { ApiFailure, collectionsApi, type CollectionHead } from '$lib/api';
 	import Button from '$lib/Button.svelte';
+	import { lightDismiss } from '$lib/dismiss';
 	import Field from '$lib/Field.svelte';
 	import type { InventoryRow } from '$lib/inventory';
 	import Note from '$lib/Note.svelte';
@@ -153,10 +154,14 @@
 </script>
 
 <dialog
+	use:lightDismiss
 	class="coll-dialog"
 	bind:this={element}
 	aria-labelledby="add-to-collection-title"
 	onclose={onClose}
+	oncancel={(event) => {
+		if (sending) event.preventDefault();
+	}}
 >
 	<div class="dialog-body">
 		<h2 id="add-to-collection-title">
@@ -172,73 +177,64 @@
 			</p>
 		{/if}
 
-		<div class="mk-tiles" role="radiogroup" aria-label="Which collection">
+		<fieldset class="coll-picks">
+			<legend class="sr-only">Which collection</legend>
 			{#each collections as collection (collection.id)}
-				<button
-					type="button"
-					class="mk-tile"
-					class:on={chosen === collection.id}
-					role="radio"
-					aria-checked={chosen === collection.id}
-					disabled={sending}
-					onclick={() => (chosen = collection.id)}
-				>
-					<span aria-hidden="true">{chosen === collection.id ? '●' : '○'}</span>
-					<span>
-						{collection.name}
-						<span class="mk-tile-why">
-							{countLine(collection.count)}{collection.description === null
-								? ''
-								: ` · ${collection.description}`}
-						</span>
-					</span>
-				</button>
+				<label class="coll-pick">
+					<input
+						type="radio"
+						name="add-to-collection"
+						value={collection.id}
+						checked={chosen === collection.id}
+						disabled={sending}
+						onchange={() => (chosen = collection.id)}
+					/>
+					<span class="coll-pick-name">{collection.name}</span>
+					<span class="coll-pick-count">{countLine(collection.count)}</span>
+				</label>
 			{/each}
-			<button
-				type="button"
-				class="mk-tile"
-				class:on={chosen === 'new'}
-				role="radio"
-				aria-checked={chosen === 'new'}
-				disabled={sending}
-				onclick={() => (chosen = 'new')}
-			>
-				<span aria-hidden="true">{chosen === 'new' ? '●' : '○'}</span>
-				<span>
-					A new collection
-					<span class="mk-tile-why">Name it below.</span>
-				</span>
-			</button>
-		</div>
-
-		{#if chosen === 'new'}
-			<Field label="Name" id="add-collection-name" required>
+			<label class="coll-pick">
 				<input
-					id="add-collection-name"
-					type="text"
-					maxlength={NAME_MAX_CHARS}
-					placeholder="Autumn term"
+					type="radio"
+					name="add-to-collection"
+					value="new"
+					checked={chosen === 'new'}
 					disabled={sending}
-					bind:value={name}
+					onchange={() => (chosen = 'new')}
 				/>
-			</Field>
-			<Field
-				label="Description"
-				id="add-collection-description"
-				hint="Only you see this. It doesn't go to any marketplace."
-			>
-				<textarea
-					id="add-collection-description"
-					rows="2"
-					maxlength={DESCRIPTION_MAX_CHARS}
-					disabled={sending}
-					bind:value={description}
-				></textarea>
-			</Field>
-			{#if name.trim().length > 0 && !verdict.accepted}
-				<p class="refusal">{verdict.message}</p>
+				<span class="coll-pick-name">A new collection</span>
+			</label>
+			{#if chosen === 'new'}
+				<div class="coll-pick-new">
+					<Field label="Name" id="add-collection-name" required>
+						<input
+							id="add-collection-name"
+							type="text"
+							maxlength={NAME_MAX_CHARS}
+							placeholder="Autumn term"
+							disabled={sending}
+							bind:value={name}
+						/>
+					</Field>
+					<Field
+						label="Description"
+						id="add-collection-description"
+						hint="Only you see this. It doesn't go to any marketplace."
+					>
+						<textarea
+							id="add-collection-description"
+							rows="2"
+							maxlength={DESCRIPTION_MAX_CHARS}
+							disabled={sending}
+							bind:value={description}
+						></textarea>
+					</Field>
+					{#if name.trim().length > 0 && !verdict.accepted}
+						<p class="refusal">{verdict.message}</p>
+					{/if}
+				</div>
 			{/if}
-		{/if}
+		</fieldset>
 
 		{#if refusal !== null}
 			<p class="refusal">{refusal}</p>

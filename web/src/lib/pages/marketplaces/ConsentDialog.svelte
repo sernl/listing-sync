@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import { ApiFailure, api } from '$lib/api';
+	import { lightDismiss } from '$lib/dismiss';
 	import type { Marketplace } from '$lib/generated/vocab';
 	import { queryKeys } from '$lib/query';
 	import { CONSENT_NOTICE_VERSION, consentCopy } from './consent';
@@ -63,7 +64,7 @@
 	}
 </script>
 
-<dialog bind:this={element} aria-labelledby="consent-title" onclose={onClose}>
+<dialog use:lightDismiss bind:this={element} aria-labelledby="consent-title" onclose={onClose}>
 	<div class="dialog-body">
 		<h2 id="consent-title">{copy.title}</h2>
 		<p>{copy.intro}</p>

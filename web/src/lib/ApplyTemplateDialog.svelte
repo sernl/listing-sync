@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { ApiFailure } from '$lib/api';
+	import { lightDismiss } from '$lib/dismiss';
 	import {
 		templates,
 		type TemplateApplyPlanView,
@@ -143,7 +144,7 @@
 	}
 </script>
 
-<dialog bind:this={element} aria-labelledby="apply-template-title" onclose={onClose}>
+<dialog use:lightDismiss bind:this={element} aria-labelledby="apply-template-title" onclose={onClose}>
 	<div class="dialog-body">
 		<h2 id="apply-template-title">
 			Apply a template to {products.length}

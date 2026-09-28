@@ -3,6 +3,7 @@
 	import type { PDFDocumentProxy } from 'pdfjs-dist';
 	import { buildPreview, previewFileName } from './preview-pdf';
 	import type { PreviewRecipe } from './preview-recipe';
+	import { lightDismiss } from '$lib/dismiss';
 
 	let {
 		source,
@@ -233,7 +234,7 @@
 	}
 </script>
 
-<dialog bind:this={element} aria-labelledby="preview-maker-title" onclose={oncancel}>
+<dialog use:lightDismiss bind:this={element} aria-labelledby="preview-maker-title" onclose={oncancel}>
 	<div class="dialog-body">
 		<h2 id="preview-maker-title">{title}</h2>
 		<p>Tick the pages you want buyers to see.</p>
