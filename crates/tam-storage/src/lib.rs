@@ -158,7 +158,8 @@ pub use mapping::{
 pub use marketplace_requests::{
     MarketplaceRequestBackofficeRepo, MarketplaceRequestRecord, MarketplaceRequestRepo,
     MarketplaceRequestWrite, NewMarketplaceRequest, MARKETPLACE_REQUESTED_TOPIC,
-    PAGE_LIMIT_MAX as REQUEST_PAGE_LIMIT_MAX, REQUESTS_PER_ORG_MAX,
+    PAGE_LIMIT_MAX as REQUEST_PAGE_LIMIT_MAX, REQUESTS_PER_ORG_MAX, REQUESTS_PER_USER_PER_DAY,
+    REQUEST_RATE_WINDOW_MS,
 };
 pub use notifications::{
     NotificationCursor, NotificationRecord, NotificationRepo, Recipient, JOB_SETTLED_TOPIC,

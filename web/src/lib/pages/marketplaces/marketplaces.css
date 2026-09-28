@@ -429,6 +429,13 @@ a.mp-chip:focus-visible {
   font-weight: 600;
 }
 
+/* What sending does, one line under the heading and tucked up to it. */
+.mp-request .what {
+  margin: -8px 0 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
 .mp-request .rows {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
