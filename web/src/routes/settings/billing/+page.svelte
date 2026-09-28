@@ -5,39 +5,39 @@
 	import { ApiFailure, api, type BillingView } from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
+	import Explain from '$lib/Explain.svelte';
 	import { PLANS } from '$lib/generated/plans';
 	import { type PriceKey } from '$lib/generated/vocab';
 	import Icon from '$lib/Icon.svelte';
-	import Note from '$lib/Note.svelte';
 	import PageHead from '$lib/PageHead.svelte';
-	import Panel from '$lib/Panel.svelte';
 	import { capture } from '$lib/posthog';
 	import { queryKeys } from '$lib/query';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import { toast } from '$lib/toast';
 	import {
 		bestValuePack,
+		cardExpiry,
 		cardLabel,
+		cardMark,
 		checkoutOutcome,
-		dayLabel,
 		dollars,
 		expiryLine,
-		invoiceStatus,
-		money,
+		heldPrice,
+		invoiceRows,
 		moves,
 		packsBySize,
 		paidPlans,
-		planBullets,
+		planCards,
 		planMeaning,
+		planTagline,
 		termLine,
-		tierPrice,
 		type Cadence
 	} from '$lib/pages/account/plans';
 	import CancelPlanDialog from '$lib/pages/account/CancelPlanDialog.svelte';
 	import { readIntent } from '$lib/pages/account/intent';
-	import { afterPercentOff, saleLine, salePrice } from '$lib/sale';
-	import '$lib/flow.css';
+	import { saleLine } from '$lib/sale';
 	import '$lib/pages/account/account.css';
+	import '$lib/styles/data.css';
 
 	// Everything priced on this page comes from the generated table, which is
 	// `tam-limits`' own and the same figures the checkout charges. Nothing
@@ -48,9 +48,6 @@
 	const packs = packsBySize();
 	const best = bestValuePack();
 
-	// The card lines are the landing page's pricing cards, read off the same
-	// capabilities, so a seller reads one promise on both.
-	const lookBullets = look === null ? [] : planBullets(look.capabilities);
 	const editDays = look?.capabilities.pack_edit_days ?? null;
 
 	// Which of each tier's two prices the cards show and buy. Yearly first,
@@ -88,6 +85,11 @@
 	// the generated table so the name and the one-line meaning move when the
 	// plan does.
 	const heldPlan = $derived(PLANS.find((plan) => plan.id === held?.plan) ?? null);
+	const heroPrice = $derived(heldPlan === null ? null : heldPrice(heldPlan, held?.cadence));
+
+	// The Plans grid, read off the generated table: the card lines are the
+	// landing page's pricing cards, so a seller reads one promise on both.
+	const cards = $derived(planCards({ held: held?.plan, cadence, sale }));
 
 	// Payment and invoices exist once Stripe knows a customer, which is the
 	// same fact that opens the portal.
@@ -102,6 +104,7 @@
 		queryFn: () => api.billingInvoices(),
 		enabled: hasCustomer
 	}));
+	const invoiceList = $derived(invoiceRows(invoices.data?.invoices ?? []));
 
 	// A subscription that is still running can be cancelled; a cancelled one
 	// that has not yet ended can be kept. Neither applies to a plan with no
@@ -271,7 +274,7 @@
 	const busy = $derived(working === null ? null : 'A checkout is opening.');
 </script>
 
-<div class="page">
+<div class="page bill">
 	<PageHead icon="credit-card" title="Billing" guide="plans" />
 
 	{#if outcome === 'success'}
@@ -282,93 +285,39 @@
 		<Banner tone="bad" title="Checkout did not open">{intentRefused}</Banner>
 	{/if}
 
-	<section class="current-plan" aria-labelledby="current-plan-name">
-		<span class="current-mark" aria-hidden="true"><Icon name="credit-card" size={22} /></span>
-		<div class="current-text">
-			{#if billing.isPending}
-				<p class="quiet">Loading…</p>
-			{:else if billing.isError || held === undefined}
-				<p class="quiet">Your plan did not load. Refresh the page to try again.</p>
-			{:else}
-				<h2 id="current-plan-name">{heldPlan?.name ?? held.plan} plan</h2>
+	<section class="bill-hero" aria-labelledby="current-plan-name">
+		{#if billing.isPending}
+			<p class="quiet">Loading…</p>
+		{:else if billing.isError || held === undefined}
+			<p class="quiet">Your plan did not load. Refresh the page to try again.</p>
+		{:else}
+			<div class="bill-hero-main">
+				<span class="bill-eyebrow">Your plan</span>
+				<h2 id="current-plan-name">{heldPlan?.name ?? held.plan}</h2>
 				{#if heldPlan !== null}
-					<p>{planMeaning(heldPlan.capabilities)}</p>
+					<p class="bill-tagline">{planTagline(heldPlan)}</p>
+					{#if planTagline(heldPlan) !== planMeaning(heldPlan.capabilities)}
+						<p class="bill-meaning">{planMeaning(heldPlan.capabilities)}</p>
+					{/if}
 				{/if}
 				{#if renews !== null}
-					<p class="term" class:ending={held.ends_at !== undefined}>{renews}</p>
+					<p class="bill-term" class:ending={held.ends_at !== undefined}>
+						<Icon name="calendar-clock" size={14} />
+						{renews}
+					</p>
 				{/if}
-			{/if}
-		</div>
-		<Button href="#plans">Adjust plan</Button>
-	</section>
-
-	{#if hasCustomer}
-		<Panel title="Payment">
-			<div class="bill-row">
-				<span class="bill-card">
-					<Icon name="credit-card" size={16} />
-					{#if paymentMethod.isPending}
-						<span class="quiet">Loading…</span>
-					{:else if paymentMethod.isError}
-						<span class="quiet">Your card did not load.</span>
-					{:else if paymentMethod.data?.card === undefined}
-						<span class="quiet">No card on file.</span>
-					{:else}
-						{cardLabel(paymentMethod.data.card)}
-					{/if}
-				</span>
-				<Button
-					small
-					disabled={cardOpening}
-					reason={cardOpening ? 'The card page is opening.' : undefined}
-					onclick={updateCard}
-				>
-					{cardOpening ? 'Opening…' : 'Update'}
-				</Button>
 			</div>
-		</Panel>
-
-		<Panel title="Invoices">
-			{#if invoices.isPending}
-				<p class="quiet">Loading…</p>
-			{:else if invoices.isError}
-				<p class="quiet">Your invoices did not load. Refresh the page to try again.</p>
-			{:else if (invoices.data?.invoices.length ?? 0) === 0}
-				<p class="quiet">No invoices yet.</p>
-			{:else}
-				<table class="bill-invoices">
-					<thead>
-						<tr>
-							<th scope="col">Date</th>
-							<th scope="col">Total</th>
-							<th scope="col">Status</th>
-							<th scope="col"><span class="sr-only">Invoice</span></th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each invoices.data?.invoices ?? [] as invoice (invoice.id)}
-							{@const status = invoiceStatus(invoice.status)}
-							<tr>
-								<td>{dayLabel(invoice.created_at)}</td>
-								<td class="num">{money(invoice.total, invoice.currency)}</td>
-								<td><StatusPill tone={status.tone} label={status.label} /></td>
-								<td class="act">
-									{#if invoice.hosted_url !== undefined}
-										<a href={invoice.hosted_url} target="_blank" rel="noopener noreferrer">View</a>
-									{/if}
-								</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			{/if}
-		</Panel>
-
-		{#if canCancel || canKeep}
-			<Panel title="Cancellation">
-				<div class="bill-row">
-					{#if canKeep}
-						<span>{renews ?? 'Your plan will not renew.'}</span>
+			<div class="bill-hero-side">
+				{#if heroPrice !== null}
+					<p class="bill-hero-price">
+						<span class="n">{heroPrice.headline}</span>
+						<span class="per">{heroPrice.per}</span>
+					</p>
+				{/if}
+				<div class="bill-hero-acts">
+					{#if hasCustomer && canCancel}
+						<Button tier="quiet" small onclick={() => (cancelOpen = true)}>Cancel plan</Button>
+					{:else if hasCustomer && canKeep}
 						<Button
 							tier="additive"
 							small
@@ -378,43 +327,126 @@
 						>
 							{resuming ? 'Keeping…' : 'Keep my plan'}
 						</Button>
-					{:else}
-						<span>Stop renewing. You keep your plan until the end of the period you paid for.</span>
-						<Button small danger onclick={() => (cancelOpen = true)}>Cancel plan</Button>
 					{/if}
+					<Button tier="primary" href="#plans">Adjust plan</Button>
 				</div>
-			</Panel>
+			</div>
 		{/if}
-	{/if}
+	</section>
 
-	<Panel title="Your moves">
-		{#if billing.isPending}
-			<p class="quiet">Loading…</p>
-		{:else if billing.isError || balance === undefined}
-			<p class="quiet">Your balance did not load. Refresh the page to try again.</p>
-		{:else}
-			<p class="moves-count"><span class="n">{balance.available}</span> available</p>
-			{#if expiry !== null}
-				<p class="quiet">{expiry}</p>
+	<div class="bill-pair">
+		<section class="bill-card" aria-labelledby="payment-title">
+			<div class="bill-card-head">
+				<h2 id="payment-title">Payment</h2>
+				{#if hasCustomer}
+					<Button
+						small
+						disabled={cardOpening}
+						reason={cardOpening ? 'The card page is opening.' : undefined}
+						onclick={updateCard}
+					>
+						{cardOpening ? 'Opening…' : 'Update'}
+					</Button>
+				{/if}
+			</div>
+			{#if !hasCustomer}
+				<p class="quiet">No card yet. You add one when you choose a plan or a pack.</p>
+			{:else if paymentMethod.isPending}
+				<p class="quiet">Loading…</p>
+			{:else if paymentMethod.isError}
+				<p class="quiet">Your card did not load.</p>
+			{:else if paymentMethod.data?.card === undefined}
+				<p class="quiet">No card on file.</p>
+			{:else}
+				{@const card = paymentMethod.data.card}
+				{@const expires = cardExpiry(card)}
+				<div class="bill-method">
+					<span class="bill-brand" aria-hidden="true">{cardMark(card)}</span>
+					<div>
+						<p class="bill-method-name">{cardLabel(card)}</p>
+						{#if expires !== null}<p class="quiet">{expires}</p>{/if}
+					</div>
+				</div>
 			{/if}
-			<Note icon="info">
-				A move is publishing one imported resource onto one marketplace. Publishing a resource to
-				Tes and TPT is 2 moves; to Tes alone is 1 move.
-				<a href="/guides/plans">Read how moves work.</a>
-			</Note>
-		{/if}
-	</Panel>
+		</section>
 
-	{#if sale !== null && !subscribed}
-		<Banner tone="ok" title={sale.banner}>
-			{saleLine(sale)}. The sale price is taken off at checkout.
-		</Banner>
+		<section class="bill-card" aria-labelledby="moves-title">
+			<div class="bill-card-head">
+				<h2 id="moves-title">Your moves</h2>
+				<Explain title="How moves work" label="How it works">
+					<p>
+						A move is publishing one imported resource onto one marketplace. Publishing a resource
+						to Tes and TPT is 2 moves; to Tes alone is 1 move.
+					</p>
+					<p><a href="/guides/plans">Read the guide to plans and moves.</a></p>
+				</Explain>
+			</div>
+			{#if billing.isPending}
+				<p class="quiet">Loading…</p>
+			{:else if billing.isError || balance === undefined}
+				<p class="quiet">Your balance did not load. Refresh the page to try again.</p>
+			{:else}
+				<p class="bill-moves"><span class="n">{balance.available}</span> available</p>
+				<p class="quiet">{expiry ?? 'None of your moves are about to expire.'}</p>
+			{/if}
+		</section>
+	</div>
+
+	{#if hasCustomer}
+		<section class="bill-section" aria-labelledby="invoices-title">
+			<h2 id="invoices-title" class="bill-h2">Invoices</h2>
+			{#if invoices.isPending}
+				<p class="data-empty">Loading…</p>
+			{:else if invoices.isError}
+				<p class="data-empty">Your invoices did not load. Refresh the page to try again.</p>
+			{:else if invoiceList.length === 0}
+				<p class="data-empty">No invoices yet. Each payment shows up here with its receipt.</p>
+			{:else}
+				<div class="data-table-wrap">
+					<table class="data-table stack">
+						<thead>
+							<tr>
+								<th scope="col">Date</th>
+								<th scope="col">Description</th>
+								<th scope="col" class="num">Amount</th>
+								<th scope="col">Status</th>
+								<th scope="col" class="act">Receipt</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each invoiceList as row (row.id)}
+								<tr>
+									<td class="nowrap" data-label="Date">{row.date}</td>
+									<td data-label="Description">{row.description}</td>
+									<td class="num" data-label="Amount">{row.amount}</td>
+									<td data-label="Status"><StatusPill tone={row.status.tone} label={row.status.label} /></td>
+									<td class="act" data-label="Receipt">
+										{#if row.receipt !== null}
+											<a
+												class="bill-receipt"
+												href={row.receipt}
+												target="_blank"
+												rel="noopener noreferrer"
+											>
+												View <Icon name="external-link" size={12} />
+											</a>
+										{:else}
+											<span class="quiet">—</span>
+										{/if}
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
+		</section>
 	{/if}
 
-	<section class="tiers" id="plans" aria-labelledby="plans-title">
-		<div class="tiers-head">
-			<h2 id="plans-title">Plans</h2>
-			<div class="flow-choice cadence" role="radiogroup" aria-label="Billing period">
+	<section class="bill-section" id="plans" aria-labelledby="plans-title">
+		<div class="bill-plans-head">
+			<h2 id="plans-title" class="bill-h2">Plans</h2>
+			<div class="segmented" role="radiogroup" aria-label="Billing period">
 				<button
 					type="button"
 					role="radio"
@@ -429,104 +461,82 @@
 				>
 			</div>
 		</div>
-		<div class="tier-grid">
-			{#if look !== null}
-				<div class="acct-plan" class:held={held?.plan === 'free'}>
-					<div class="acct-plan-top">
-						<span class="name">
-							{look.name}
-							<span class="kind">(trial)</span>
-						</span>
-						{#if held?.plan === 'free'}
-							<StatusPill tone="ok" label="current" />
+
+		{#if sale !== null && !subscribed}
+			<Banner tone="ok" title={sale.banner}>
+				{saleLine(sale)}. The sale price is taken off at checkout.
+			</Banner>
+		{/if}
+
+		<div class="bill-plan-grid">
+			{#each cards as card (card.id)}
+				<article
+					class="bill-plan"
+					class:held={card.current}
+					class:recommended={card.recommended}
+					aria-labelledby="plan-{card.id}"
+				>
+					{#if card.recommended}
+						<span class="bill-plan-badge">Recommended</span>
+					{/if}
+					<div class="bill-plan-top">
+						<h3 id="plan-{card.id}">{card.name}</h3>
+						{#if card.current}
+							<StatusPill tone="ok" label="Your plan" />
+						{:else}
+							<span class="kind">{card.kind}</span>
 						{/if}
 					</div>
-					<div class="price">
-						<span class="n">Free</span>
-						<span class="per">for as long as you like</span>
+					<p class="bill-plan-tagline">{card.tagline}</p>
+					<div class="bill-plan-price">
+						{#if card.was !== null}<s class="was">{card.was}</s>{/if}
+						<span class="n">{card.headline}</span>
+						<span class="per">{card.per}</span>
 					</div>
-					<ul class="bullets">
-						{#each lookBullets as line (line.text)}
-							<li>{line.text}</li>
+					{#if card.saleNote !== null}<p class="sale-line">{card.saleNote}</p>{/if}
+					<p class="bill-plan-note">{card.note ?? ''}</p>
+					<ul class="bill-bullets">
+						{#each card.bullets as line (line.text)}
+							<li class:soon={line.soon}>
+								<Icon name="check" size={14} />
+								<span>{line.text}</span>
+							</li>
 						{/each}
 					</ul>
-				</div>
-			{/if}
-
-			{#each tiers as plan (plan.id)}
-				{@const price = tierPrice(plan, cadence)}
-				{@const current = held?.plan === plan.id}
-				{@const onSale = subscribed
-					? null
-					: cadence === 'yearly'
-						? salePrice(sale, plan.yearly_cents, 12)
-						: salePrice(sale, plan.monthly_cents)}
-				{#if price !== null}
-					<div class="acct-plan" class:held={current}>
-						<div class="acct-plan-top">
-							<span class="name">
-								{plan.name}
-								<span class="kind">(subscription)</span>
-							</span>
-							{#if current}
-								<StatusPill tone="ok" label="current" />
-							{/if}
-						</div>
-						<div class="price">
-							{#if onSale !== null}
-								<s class="was">{dollars(onSale.listCents)}</s>
-								<span class="n">{dollars(onSale.saleCents)}</span>
-							{:else}
-								<span class="n">{price.headline}</span>
-							{/if}
-							<span class="per">{price.per}</span>
-						</div>
-						{#if onSale !== null && sale !== null}
-							<p class="sale-line">{saleLine(sale)}</p>
-						{/if}
-						{#if onSale !== null && cadence === 'yearly' && plan.yearly_cents !== null}
-							<p class="quiet">
-								{dollars(afterPercentOff(plan.yearly_cents, sale?.percent_off ?? 0))} for the year (usually
-								{dollars(plan.yearly_cents)}).
-							</p>
+					<div class="bill-plan-cta">
+						{#if card.cta?.kind === 'buy'}
+							{@const key = card.cta.key}
+							<Button
+								tier={card.recommended ? 'primary' : 'outline'}
+								disabled={busy !== null}
+								reason={busy ?? undefined}
+								onclick={() => buy(key)}
+							>
+								{working === key ? 'Opening…' : card.cta.label}
+							</Button>
+						{:else if card.cta?.kind === 'switch'}
+							<Button
+								tier={card.recommended ? 'primary' : 'outline'}
+								disabled={portalOpening || held?.portal_available === false}
+								reason={portalOpening
+									? 'Billing is opening.'
+									: held?.portal_available === false
+										? 'Billing opens after your first payment.'
+										: undefined}
+								onclick={manage}
+							>
+								{portalOpening ? 'Opening…' : card.cta.label}
+							</Button>
+						{:else if card.current}
+							<span class="bill-plan-here">You are on this plan</span>
 						{:else}
-							<p class="quiet">{price.note}</p>
+							<span class="bill-plan-here">Where every account starts</span>
 						{/if}
-						<ul class="bullets">
-							{#each planBullets(plan.capabilities) as line (line.text)}
-								<li class:soon={line.soon}>{line.text}</li>
-							{/each}
-						</ul>
-						<div class="actions">
-							{#if subscribed}
-								{#if !current}
-									<Button
-										disabled={portalOpening || held?.portal_available === false}
-										reason={portalOpening
-											? 'Billing is opening.'
-											: held?.portal_available === false
-												? 'Billing opens after your first payment.'
-												: undefined}
-										onclick={manage}
-									>
-										{portalOpening ? 'Opening…' : `Switch to ${plan.name}`}
-									</Button>
-								{/if}
-							{:else}
-								<Button
-									tier="primary"
-									disabled={busy !== null}
-									reason={busy ?? undefined}
-									onclick={() => buy(price.key)}
-								>
-									{working === price.key ? 'Opening…' : `Choose ${plan.name}`}
-								</Button>
-							{/if}
-						</div>
 					</div>
-				{/if}
+				</article>
 			{/each}
 		</div>
+
 		{#if !subscribed}
 			<div class="code-row">
 				<label for="discount-code">Have a code?</label>
@@ -540,38 +550,38 @@
 				/>
 				<span class="quiet">It is checked when you choose a plan or a pack.</span>
 			</div>
-		{/if}
-		{#if subscribed}
-			<p class="quiet tiers-note">
-				Switching opens Stripe, which shows the new price before anything changes.
-			</p>
+		{:else}
+			<p class="quiet">Switching opens Stripe, which shows the new price before anything changes.</p>
 		{/if}
 	</section>
 
-	<Panel title="Move Packs (one-off)">
-		{#if editDays !== null}
-			<p class="pack-note">
-				Edit a moved listing once within {editDays} days without spending another move.
+	<section class="bill-section" aria-labelledby="packs-title">
+		<div>
+			<h2 id="packs-title" class="bill-h2">Move Packs</h2>
+			<p class="quiet bill-sub">
+				One-off, valid 12 months.
+				{#if editDays !== null}
+					Edit a moved listing once within {editDays} days without spending another move.
+				{/if}
 			</p>
-		{/if}
-		<div class="pack-grid">
+		</div>
+		<div class="bill-pack-grid">
 			{#each packs as pack (pack.key)}
-				<div class="acct-plan">
-					<div class="acct-plan-top">
-						<span class="name">
+				<div class="bill-card bill-pack">
+					<div class="bill-card-head">
+						<span class="bill-pack-name">
 							<Icon name="shopping-bag" size={16} />
 							{moves(pack.moves)}
 						</span>
 						{#if best !== null && best.key === pack.key}
-							<StatusPill tone="ok" label="best value" />
+							<StatusPill tone="ok" label="Best value" />
 						{/if}
 					</div>
-					<div class="price">
+					<div class="bill-plan-price">
 						<span class="n">{dollars(pack.price_cents)}</span>
 						<span class="per">{dollars(pack.per_move_cents)} a move</span>
 					</div>
-					<p class="quiet">Valid 12 months.</p>
-					<div class="actions">
+					<div class="bill-plan-cta">
 						<Button
 							disabled={busy !== null}
 							reason={busy ?? undefined}
@@ -583,7 +593,7 @@
 				</div>
 			{/each}
 		</div>
-	</Panel>
+	</section>
 </div>
 
 <CancelPlanDialog
@@ -599,24 +609,439 @@
 />
 
 <style>
-	.price .was {
+	/* One column of sections at one rhythm: --s-6 between sections, --s-4
+	   inside one. 1040 wide at most, so four plan cards sit on a laptop
+	   without the page reading as a spreadsheet. */
+	.bill {
+		max-width: 1040px;
+		display: flex;
+		flex-direction: column;
+		gap: var(--s-6);
+	}
+
+	.bill :global(.page-head) {
+		margin-bottom: 0;
+	}
+
+	.bill-h2 {
+		margin: 0;
+		font-family: var(--display);
+		font-size: 19px;
+		font-weight: 600;
+		letter-spacing: -0.01em;
+	}
+
+	.bill-sub {
+		margin: var(--s-1) 0 0;
+	}
+
+	.bill-section {
+		display: flex;
+		flex-direction: column;
+		gap: var(--s-4);
+		min-width: 0;
+		scroll-margin-top: var(--s-5);
+	}
+
+	/* --- the current plan ------------------------------------------------ */
+
+	.bill-hero {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: flex-end;
+		justify-content: space-between;
+		gap: var(--s-5);
+		padding: var(--s-5) var(--s-6);
+		border-radius: var(--r-card);
+		background: var(--additive-soft);
+		border: 1px solid color-mix(in srgb, var(--additive) 25%, transparent);
+	}
+
+	.bill-hero-main {
+		flex: 1 1 320px;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: var(--s-1);
+	}
+
+	.bill-eyebrow {
+		font-size: 12px;
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--additive);
+	}
+
+	.bill-hero h2 {
+		margin: 0;
+		font-family: var(--display);
+		font-size: 28px;
+		font-weight: 600;
+		letter-spacing: -0.01em;
+		line-height: 1.2;
+	}
+
+	.bill-hero p {
+		margin: 0;
+		font-size: 14px;
+		line-height: 1.45;
+	}
+
+	.bill-hero .bill-meaning {
+		font-size: 13px;
+		color: var(--muted);
+	}
+
+	.bill-hero .bill-term {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--s-2);
+		margin-top: var(--s-2);
+		color: var(--muted);
+		font-size: 13px;
+	}
+
+	.bill-hero .bill-term.ending {
+		color: var(--warn-ink);
+		font-weight: 500;
+	}
+
+	.bill-hero-side {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-end;
+		gap: var(--s-3);
+	}
+
+	.bill-hero-price {
+		display: flex;
+		align-items: baseline;
+		gap: var(--s-2);
+	}
+
+	.bill-hero-price .n {
+		font-family: var(--display);
+		font-size: 32px;
+		font-weight: 600;
+		font-variant-numeric: tabular-nums;
+	}
+
+	.bill-hero-price .per {
+		color: var(--muted);
+		font-size: 13px;
+	}
+
+	.bill-hero-acts {
+		display: flex;
+		align-items: center;
+		gap: var(--s-2);
+	}
+
+	/* --- payment and moves ----------------------------------------------- */
+
+	.bill-pair {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+		gap: var(--s-4);
+	}
+
+	@media (min-width: 761px) {
+		.bill-pair {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+	}
+
+	.bill-card {
+		display: flex;
+		flex-direction: column;
+		gap: var(--s-3);
+		background: var(--card);
+		border: 1px solid var(--line);
+		border-radius: var(--r-card);
+		padding: var(--s-5);
+		min-width: 0;
+	}
+
+	.bill-card p {
+		margin: 0;
+	}
+
+	.bill-card-head {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--s-3);
+		min-height: var(--control-h-sm);
+	}
+
+	.bill-card-head h2 {
+		margin: 0;
+		font-family: var(--display);
+		font-size: 16px;
+		font-weight: 600;
+	}
+
+	.bill-method {
+		display: flex;
+		align-items: center;
+		gap: var(--s-3);
+	}
+
+	.bill-brand {
+		display: grid;
+		place-items: center;
+		min-width: 52px;
+		height: 34px;
+		padding: 0 var(--s-2);
+		border-radius: var(--r-field);
+		background: var(--primary);
+		color: var(--on-fill);
+		font-size: 11px;
+		font-weight: 700;
+		letter-spacing: 0.06em;
+	}
+
+	.bill-method-name {
+		font-size: 15px;
+		font-weight: 600;
+		font-variant-numeric: tabular-nums;
+	}
+
+	.bill-moves {
+		display: flex;
+		align-items: baseline;
+		gap: var(--s-2);
+		color: var(--muted);
+		font-size: 13px;
+	}
+
+	.bill-moves .n {
+		font-family: var(--display);
+		font-size: 40px;
+		font-weight: 600;
+		line-height: 1;
+		color: var(--ink);
+		font-variant-numeric: tabular-nums;
+	}
+
+	/* --- invoices -------------------------------------------------------- */
+
+	.bill-receipt {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--s-1);
+		font-weight: 500;
+	}
+
+	/* --- plans ----------------------------------------------------------- */
+
+	.bill-plans-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--s-3);
+	}
+
+	/* Four cards on a laptop, two on a tablet, one on a phone. Rows stretch,
+	   so every card in a row is the height of the tallest and the buttons
+	   line up along one foot. */
+	.bill-plan-grid {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+		gap: var(--s-4);
+		align-items: stretch;
+		padding-top: var(--s-3);
+	}
+
+	@media (min-width: 701px) {
+		.bill-plan-grid {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+	}
+
+	@media (min-width: 1100px) {
+		.bill-plan-grid {
+			grid-template-columns: repeat(4, minmax(0, 1fr));
+		}
+	}
+
+	.bill-plan {
+		position: relative;
+		display: flex;
+		flex-direction: column;
+		gap: var(--s-2);
+		background: var(--card);
+		border: 1px solid var(--line);
+		border-radius: var(--r-card);
+		padding: var(--s-5) var(--s-4);
+		min-width: 0;
+	}
+
+	.bill-plan.recommended {
+		border-color: var(--accent);
+		box-shadow: var(--sh-3);
+		transform: translateY(calc(-1 * var(--s-2)));
+	}
+
+	.bill-plan.held {
+		border-color: var(--additive);
+		box-shadow: inset 0 0 0 1px var(--additive);
+	}
+
+	.bill-plan.held.recommended {
+		box-shadow:
+			inset 0 0 0 1px var(--additive),
+			var(--sh-3);
+	}
+
+	.bill-plan-badge {
+		position: absolute;
+		top: 0;
+		left: 50%;
+		transform: translate(-50%, -50%);
+		padding: 2px var(--s-3);
+		border-radius: var(--r-pill);
+		background: var(--accent);
+		color: var(--on-fill);
+		font-size: 11px;
+		font-weight: 700;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		white-space: nowrap;
+	}
+
+	.bill-plan-top {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--s-2);
+	}
+
+	.bill-plan-top h3 {
+		margin: 0;
+		font-family: var(--display);
+		font-size: 19px;
+		font-weight: 600;
+	}
+
+	.kind {
+		font-size: 12px;
+		font-weight: 500;
+		color: var(--muted);
+		text-transform: capitalize;
+	}
+
+	.bill-plan p {
+		margin: 0;
+		font-size: 13px;
+		line-height: 1.4;
+	}
+
+	.bill-plan-tagline {
+		color: var(--muted);
+		min-height: 2.8em;
+	}
+
+	.bill-plan-price {
+		display: flex;
+		align-items: baseline;
+		flex-wrap: wrap;
+		gap: var(--s-1) var(--s-2);
+		margin-top: var(--s-1);
+	}
+
+	.bill-plan-price .n {
+		font-family: var(--display);
+		font-size: 30px;
+		font-weight: 600;
+		letter-spacing: -0.02em;
+		font-variant-numeric: tabular-nums;
+	}
+
+	.bill-plan-price .per {
+		flex-basis: 100%;
+		font-size: 12.5px;
+		color: var(--muted);
+	}
+
+	.bill-plan-price .was {
 		font-size: 18px;
 		color: var(--muted);
 		text-decoration-thickness: 2px;
 	}
 
-	.sale-line {
+	.bill-plan .bill-plan-note {
+		min-height: 1.4em;
 		font-size: 12.5px;
+		color: var(--muted);
+	}
+
+	.sale-line {
 		font-weight: 600;
 		color: var(--ok-ink);
+	}
+
+	.bill-bullets {
+		list-style: none;
+		margin: var(--s-2) 0 0;
+		padding: var(--s-3) 0 0;
+		border-top: 1px solid var(--line);
+		display: flex;
+		flex-direction: column;
+		gap: var(--s-2);
+		font-size: 13px;
+		line-height: 1.4;
+	}
+
+	.bill-bullets li {
+		display: flex;
+		align-items: flex-start;
+		gap: var(--s-2);
+	}
+
+	.bill-bullets li :global(svg) {
+		flex: none;
+		margin-top: 2px;
+		color: var(--ok-ink);
+	}
+
+	.bill-bullets .soon {
+		color: var(--muted);
+	}
+
+	.bill-bullets .soon :global(svg) {
+		color: var(--muted);
+	}
+
+	.bill-plan-cta {
+		display: flex;
+		flex-direction: column;
+		align-items: stretch;
+		margin-top: auto;
+		padding-top: var(--s-4);
+	}
+
+	.bill-plan-cta :global(.cta),
+	.bill-plan-cta :global(.btn) {
+		justify-content: center;
+		width: 100%;
+	}
+
+	.bill-plan-here {
+		display: grid;
+		place-items: center;
+		min-height: var(--control-h);
+		font-size: 13px;
+		color: var(--muted);
 	}
 
 	.code-row {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
-		gap: 6px 10px;
-		margin-top: 12px;
+		gap: var(--s-2) var(--s-3);
 		font-size: 13px;
 	}
 
@@ -629,194 +1054,48 @@
 		text-transform: uppercase;
 	}
 
-	/* The plan the seller holds, set apart from the plan cards below by its
-	   ground: a card of the same colour as the ones on sale reads as one more
-	   offer rather than as what is already theirs. */
-	.current-plan {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: var(--s-3) var(--s-4);
-		padding: 20px 18px;
-		border-radius: var(--r-card);
-		background: var(--additive-soft);
-		border: 1px solid color-mix(in srgb, var(--additive) 25%, transparent);
-	}
+	/* --- packs ----------------------------------------------------------- */
 
-	.current-mark {
+	.bill-pack-grid {
 		display: grid;
-		place-items: center;
-		width: 44px;
-		height: 44px;
-		border-radius: var(--r-panel);
-		background: var(--surface);
-		color: var(--additive);
-		flex: none;
+		grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+		gap: var(--s-4);
 	}
 
-	.current-text {
-		flex: 1 1 220px;
-		min-width: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-	}
-
-	.current-text h2 {
-		margin: 0;
-		font-family: var(--display);
-		font-size: 18px;
-		font-weight: 600;
-	}
-
-	.current-text p {
-		margin: 0;
-		font-size: 13px;
-		line-height: 1.4;
-	}
-
-	.current-text .term {
-		color: var(--muted);
-	}
-
-	.current-text .term.ending {
-		color: var(--warn-ink);
-		font-weight: 500;
-	}
-
-	.bill-row {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		justify-content: space-between;
-		gap: var(--s-3);
-		font-size: 13px;
-	}
-
-	.bill-row > span {
-		flex: 1 1 200px;
-		min-width: 0;
-	}
-
-	.bill-card {
+	.bill-pack-name {
 		display: inline-flex;
 		align-items: center;
-		gap: 8px;
-	}
-
-	.bill-invoices {
-		width: 100%;
-		border-collapse: collapse;
-		font-size: 13px;
-	}
-
-	.bill-invoices th {
-		text-align: left;
-		font-size: 12px;
-		font-weight: 500;
-		color: var(--muted);
-		padding: 0 8px 8px 0;
-	}
-
-	.bill-invoices td {
-		padding: 8px 8px 8px 0;
-		border-top: 1px solid var(--line);
-		white-space: nowrap;
-	}
-
-	.bill-invoices .num {
-		font-variant-numeric: tabular-nums;
-	}
-
-	.bill-invoices .act {
-		text-align: right;
-		padding-right: 0;
-	}
-
-	.kind {
-		font-family: var(--sans);
-		font-size: 13px;
-		font-weight: 500;
-		color: var(--muted);
-	}
-
-	.bullets {
-		margin: 0;
-		padding-left: 18px;
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-		font-size: 13px;
-		line-height: 1.4;
-	}
-
-	.bullets .soon {
-		color: var(--muted);
-	}
-
-	.tiers {
-		display: flex;
-		flex-direction: column;
-		gap: var(--s-3);
-	}
-
-	.tiers-head {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		justify-content: space-between;
-		gap: var(--s-3);
-	}
-
-	/* Two buttons side by side: the flow-choice grid's auto-fit would fall
-	   to one column inside the flex head. */
-	.tiers-head .cadence {
-		grid-template-columns: repeat(2, minmax(0, auto));
-		flex: 0 0 auto;
-	}
-
-	.tiers-head h2 {
-		margin: 0;
+		gap: var(--s-2);
 		font-family: var(--display);
-		font-size: 18px;
+		font-size: 16px;
 		font-weight: 600;
 	}
 
-	/* Four cards on a laptop, two on a tablet, one on a phone: the same
-	   break the landing page's pricing deck takes. */
-	.tier-grid {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr);
-		gap: 12px;
+	.bill-pack .bill-plan-cta {
+		padding-top: var(--s-2);
 	}
 
-	@media (min-width: 701px) {
-		.tier-grid {
-			grid-template-columns: repeat(2, minmax(0, 1fr));
+	@media (max-width: 620px) {
+		.bill {
+			gap: var(--s-5);
 		}
-	}
 
-	@media (min-width: 1180px) {
-		.tier-grid {
-			grid-template-columns: repeat(4, minmax(0, 1fr));
+		.bill-hero {
+			padding: var(--s-5) var(--s-4);
 		}
-	}
 
-	/* The tier the seller holds, ringed in the same accent as the current
-	   plan card at the top of the page. */
-	.tier-grid .acct-plan.held {
-		border-color: var(--additive);
-		box-shadow: inset 0 0 0 1px var(--additive);
-	}
+		.bill-hero-side {
+			flex: 1 1 100%;
+			align-items: stretch;
+		}
 
-	.tiers-note {
-		margin: 0;
-		font-size: 13px;
-	}
+		.bill-hero-acts {
+			flex-direction: row-reverse;
+			justify-content: flex-end;
+		}
 
-	.pack-note {
-		margin: 0 0 12px;
-		font-size: 13px;
-		color: var(--muted);
+		.bill-plan.recommended {
+			transform: none;
+		}
 	}
 </style>
