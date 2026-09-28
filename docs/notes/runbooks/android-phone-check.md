@@ -8,19 +8,21 @@ Use a real arm64 Android phone or tablet to check registration, marketplace sign
 Emulator-only checks do not establish that these paths work on a seller's device.
 Marketplace sign-in must run from the authenticated control-plane origin; do not widen the native command grant to use a stand-in console.
 
-- date: 2026-09-06
-- applies to: an arm64 Android phone or tablet
+- date: 2026-09-29
+- applies to: an Android phone or tablet on Android 7.0 (API 24) or newer
 - prerequisite: a Teachouse account you can sign in to, and — for the second exercise — a TPT or Tes account of your own
 
 ## Before you start
 
-Open the release page for the version you are testing and confirm it carries two files: `Teachouse_<version>_arm64.apk` and `SHA256SUMS-android.txt`.
+Open the release page for the version you are testing and confirm it carries two files: `Teachouse_<version>_universal.apk` and `SHA256SUMS-android.txt`.
+Releases up to 0.14.0 carried `Teachouse_<version>_arm64.apk` instead.
 
 If either file is missing, inspect the complete tagged-release logs before installing anything.
 Missing signing credentials, a build failure and a skipped release job are distinct failures; do not substitute an unsigned or debug APK for an existing signed installation.
 
-The APK is arm64 only, deliberately.
-An x86 Android device — an emulator image, or one of the handful of Intel tablets — has no asset to install and is out of scope for this check.
+The APK is universal: one file carrying arm64 and x86_64 code, so the same download installs on a phone, a tablet, a Chromebook and an x86_64 emulator.
+A 32-bit-only device (old or budget ARM phones) cannot run Teachouse: the byte limits are 64-bit and the build refuses a 32-bit target.
+Nothing in it is phone-only: it declares every screen size, requires no telephony, camera or other hardware, and runs in landscape and split screen.
 
 ## Install
 
@@ -29,10 +31,64 @@ Android asks whether to allow installing from that source the first time; allow 
 
 Update an existing installation in place, with the same package and signing certificate and a version code no lower than the installed one.
 For a cabled device, use `adb -s SERIAL install -r APK`.
-Never uninstall or clear app data to work around a signing mismatch: that destroys the Android Keystore key used to protect the saved sessions and library.
+Do not uninstall or clear app data to work around a failed update of a **release** installation: that destroys the Android Keystore key used to protect the saved sessions and library.
+The one exception is a device that was ever given a debug build, below.
 
 The app opens its own window straight onto the console.
 If it shows a bundled page saying it cannot reach us instead, that is the network probe rather than a failure of the app, and the page's own button retries.
+
+## When Android says "App not installed"
+
+Read the whole sentence: Android's installer names the failure class after "App not installed as", and each class has a different fix.
+
+| The installer says | What it means | What to do |
+| --- | --- | --- |
+| "…as package conflicts with an existing package" | A Teachouse signed with a **different certificate** is already installed. Every release is signed with the one release key, so the installed copy is a debug build. | Uninstall first, below. |
+| "…as app isn't compatible with your phone/tablet" | The device is below Android 7.0, the APK is for another processor, or the installed copy has a **higher** version than this APK. | Install the newest release. On a release installation, never uninstall to downgrade. |
+| "…as package appears to be invalid" | The download is truncated or not the release file. | Download again; compare its SHA-256 with `SHA256SUMS-android.txt`. |
+| A Samsung sheet naming **Auto Blocker** | Samsung's Auto Blocker (One UI 6 and newer) refuses every app not from Play or Galaxy Store. It is on by default on devices that shipped with One UI 6.1.1. | Settings → Security and privacy → Auto Blocker → off, install, then turn it back on. |
+
+With a cable, `adb -s SERIAL install -r APK` prints the underlying code instead of a sentence:
+
+| `adb install` says | Meaning |
+| --- | --- |
+| `INSTALL_FAILED_UPDATE_INCOMPATIBLE: … signatures do not match newer version` | Different certificate from the installed copy: a debug build is installed. Uninstall first. |
+| `INSTALL_FAILED_VERSION_DOWNGRADE` | The installed version code is higher than this APK's. Install a newer release. |
+| `INSTALL_FAILED_NO_MATCHING_ABIS` | The APK has no code for this processor: a 32-bit-only device. |
+| `INSTALL_FAILED_OLDER_SDK` | The device is below Android 7.0 (API 24). |
+| `INSTALL_PARSE_FAILED_NO_CERTIFICATES` or `INSTALL_PARSE_FAILED_NOT_APK` | Unsigned or damaged file. Check the name ends `_universal.apk` and the SHA-256 matches. |
+| `INSTALL_FAILED_USER_RESTRICTED` | The device refused the install over USB: Auto Blocker, or "Install via USB" is off in developer options. |
+| `INSTALL_FAILED_INSUFFICIENT_STORAGE` | Not enough free space on the device. |
+
+To see what is installed, and whether it is a debug build:
+
+```sh
+adb -s SERIAL shell dumpsys package io.teachouse.desktop | grep -E 'versionCode|versionName|pkgFlags'
+```
+
+`DEBUGGABLE` in `pkgFlags` is a debug build.
+To compare certificates, pull the installed copy and print both:
+
+```sh
+adb -s SERIAL pull "$(adb -s SERIAL shell pm path io.teachouse.desktop | sed -n 's/^package://p' | head -1)" installed.apk
+apksigner verify --print-certs installed.apk | grep 'SHA-256'
+apksigner verify --print-certs Teachouse_<version>_universal.apk | grep 'SHA-256'
+```
+
+Two different digests are the signature conflict; the release job prints the release digest in its "collect the APK" step.
+
+### Uninstall first when a debug build was ever installed
+
+A debug build is signed with the key of the machine that built it — a laptop's `~/.android/debug.keystore`, or a key the CI runner makes fresh for each `android-build` debug run.
+Android refuses to update an app with one signed by another key, so no release can ever update a debug installation, and no debug build can update another machine's debug build.
+Uninstalling is the only way onto the release, and it costs what the Keystore protects:
+
+1. On any other device, open Resources → Files and make sure every original this device keeps is also kept by another device. Uninstalling deletes the ones held only here.
+2. On the device: Settings → Apps → Teachouse → Uninstall. With a cable: `adb -s SERIAL uninstall io.teachouse.desktop`.
+3. Install the release APK from the release page, open it and sign in again. Marketplace sign-ins on this device must be connected again.
+4. The device registers as a new row under "Device sign-ins". Press **Sign out** on the old row for it; that copy of the app no longer exists.
+
+After that, every later release updates in place and this never needs doing again, as long as only release APKs are installed.
 
 ## Sign in
 
@@ -42,7 +98,7 @@ Registration happens on that load, so a page that is still loading has not regis
 
 ## Look
 
-Go to Settings → Preferences and find "Machine sign-ins", below "Browser sign-ins".
+Go to Settings → Preferences and find "Device sign-ins", below "Browser sign-ins".
 
 The phone should be a row of its own, named by the phone rather than by a host name: "Google Pixel 8", "Samsung SM-G991B", "OnePlus CPH2451".
 Under the name should be a line reading `Android · aarch64 · app <version> · last seen just now`.
@@ -94,7 +150,7 @@ Our own copy of the session is gone either way, and the card and "Your machines"
 
 ## Confirm it is one machine and not two
 
-Close the app fully — from the recent-apps list, not by pressing back — reopen it, and return to Settings → Preferences → Machine sign-ins.
+Close the app fully — from the recent-apps list, not by pressing back — reopen it, and return to Settings → Preferences → Device sign-ins.
 Back is not a substitute here even now that it leaves the app once the pages behind you run out: an Activity that finishes leaves the process, and everything the app is holding, alive.
 
 There must still be one phone row.
@@ -122,7 +178,7 @@ The same check on Windows needs an installed build rather than a development run
 
 ## If no phone row appears
 
-Press "Check in now", beside "Machine sign-ins" in Settings → Preferences, on the device.
+Press "Check in now", beside "Device sign-ins" in Settings → Preferences, on the device.
 It asks the app to register and check in again, and it is the same call the console makes when it loads.
 
 If it fails, a line appears under the panel's description reading "This machine could not tell us it is here:" and then the app's own sentence.
@@ -155,3 +211,9 @@ curl -s 127.0.0.1:9444/json            # pages and their websocket URLs
 ```
 
 Any CDP client on that websocket (`Runtime.enable`, then `Runtime.exceptionThrown` and `Runtime.consoleAPICalled`) shows the exception behind the page. The 0.13.0 error on a Galaxy Note10+ was found this way on the `api31` emulator, whose System WebView is Chrome 91: `Object.hasOwn is not a function`, a method that engine lacks. `web/src/app.html` now defines each such method and `web/src/lib/polyfills.test.ts` keeps the list against the source; a new one shows here first.
+
+## When the app says "Teachouse can’t be reached"
+
+That card is the app's own start page. From 0.15.0 it also comes back when the console was sent for but had drawn nothing after 8 seconds, so a white window no longer lasts until the app is killed. "Why?" says which of the two happened: the connection check failing prints its own error; "The server answered, but the Teachouse page did not finish loading within 8 seconds" means the network reached Teachouse and the page itself stalled.
+
+Check the connection the device is actually using, not the status bar: airplane mode can be on with Wi-Fi still connected, and that is a working connection. With a cable, `adb -s SERIAL shell dumpsys connectivity | grep -E "Active default network|VALIDATED"` shows it without changing anything, and `adb -s SERIAL logcat -s RustStdoutStderr` carries the line "the console did not appear within 8s (last seen: …)" with the address the window was on. A stall on a validated network is a console fault; send that line with the time.

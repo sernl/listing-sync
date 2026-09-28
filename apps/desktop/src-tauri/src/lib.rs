@@ -43,6 +43,7 @@ pub mod android_name;
 pub mod commands;
 pub mod connect;
 pub mod console_session;
+mod console_watch;
 pub mod control_plane;
 pub mod device;
 pub mod entitlement;
@@ -877,7 +878,13 @@ pub(crate) async fn retry_console_from<R: tauri::Runtime>(
         .await
         .map_err(|why| why.to_string())?;
     let url = console_home(&origin)?;
-    show_console(&window, url, start_up_nav())
+    // Read before the window leaves: this is the bundled page's own address,
+    // the one the watch returns the window to if the console never draws.
+    let start = window.url().map_err(|why| why.to_string())?;
+    let how = start_up_nav();
+    show_console(&window, url.clone(), how)?;
+    tauri::async_runtime::spawn(console_watch::watch(window, url, start, how));
+    Ok(())
 }
 
 #[cfg(test)]
