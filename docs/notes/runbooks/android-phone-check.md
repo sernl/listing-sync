@@ -54,7 +54,7 @@ With a cable, `adb -s SERIAL install -r APK` prints the underlying code instead 
 | --- | --- |
 | `INSTALL_FAILED_UPDATE_INCOMPATIBLE: … signatures do not match newer version` | Different certificate from the installed copy: a debug build is installed. Uninstall first. |
 | `INSTALL_FAILED_VERSION_DOWNGRADE` | The installed version code is higher than this APK's. Install a newer release. |
-| `INSTALL_FAILED_NO_MATCHING_ABIS` | The APK has no code for this processor: a 32-bit-only device, or an arm64-only APK from 0.14.0 or earlier on an x86_64 emulator. |
+| `INSTALL_FAILED_NO_MATCHING_ABIS` | The APK has no code for this processor: a 32-bit-only device. |
 | `INSTALL_FAILED_OLDER_SDK` | The device is below Android 7.0 (API 24). |
 | `INSTALL_PARSE_FAILED_NO_CERTIFICATES` or `INSTALL_PARSE_FAILED_NOT_APK` | Unsigned or damaged file. Check the name ends `_universal.apk` and the SHA-256 matches. |
 | `INSTALL_FAILED_USER_RESTRICTED` | The device refused the install over USB: Auto Blocker, or "Install via USB" is off in developer options. |
@@ -86,7 +86,7 @@ Uninstalling is the only way onto the release, and it costs what the Keystore pr
 1. On any other device, open Resources → Files and make sure every original this device keeps is also kept by another device. Uninstalling deletes the ones held only here.
 2. On the device: Settings → Apps → Teachouse → Uninstall. With a cable: `adb -s SERIAL uninstall io.teachouse.desktop`.
 3. Install the release APK from the release page, open it and sign in again. Marketplace sign-ins on this device must be connected again.
-4. The device registers as a new row under "Machine sign-ins". Remove the old row for it; it will not be seen again.
+4. The device registers as a new row under "Device sign-ins". Press **Sign out** on the old row for it; that copy of the app no longer exists.
 
 After that, every later release updates in place and this never needs doing again, as long as only release APKs are installed.
 
@@ -98,7 +98,7 @@ Registration happens on that load, so a page that is still loading has not regis
 
 ## Look
 
-Go to Settings → Preferences and find "Machine sign-ins", below "Browser sign-ins".
+Go to Settings → Preferences and find "Device sign-ins", below "Browser sign-ins".
 
 The phone should be a row of its own, named by the phone rather than by a host name: "Google Pixel 8", "Samsung SM-G991B", "OnePlus CPH2451".
 Under the name should be a line reading `Android · aarch64 · app <version> · last seen just now`.
@@ -150,7 +150,7 @@ Our own copy of the session is gone either way, and the card and "Your machines"
 
 ## Confirm it is one machine and not two
 
-Close the app fully — from the recent-apps list, not by pressing back — reopen it, and return to Settings → Preferences → Machine sign-ins.
+Close the app fully — from the recent-apps list, not by pressing back — reopen it, and return to Settings → Preferences → Device sign-ins.
 Back is not a substitute here even now that it leaves the app once the pages behind you run out: an Activity that finishes leaves the process, and everything the app is holding, alive.
 
 There must still be one phone row.
@@ -178,7 +178,7 @@ The same check on Windows needs an installed build rather than a development run
 
 ## If no phone row appears
 
-Press "Check in now", beside "Machine sign-ins" in Settings → Preferences, on the device.
+Press "Check in now", beside "Device sign-ins" in Settings → Preferences, on the device.
 It asks the app to register and check in again, and it is the same call the console makes when it loads.
 
 If it fails, a line appears under the panel's description reading "This machine could not tell us it is here:" and then the app's own sentence.

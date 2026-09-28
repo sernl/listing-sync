@@ -186,14 +186,16 @@ The decisive fact is on our side of the wire rather than theirs: `tauri-plugin-u
 The Cloud can therefore host an APK as a generic asset for the sideload channel, which is worth doing because it is free and already in the pipeline, but Android updates ship through Play, exactly as the rethink memo said at line 507.
 
 That is now built rather than planned.
-`.github/workflows/desktop-release.yml` carries an `android` job that builds the arm64 release APK on a version tag, in parallel with the Windows bundles, and uploads it to the same CrabNebula release with no `--public-platform` and no `--update-platform` — the documented form for a platform-independent asset, and the only one available given that neither platform list names Android (<https://docs.crabnebula.dev/cloud/cli/upload-assets/>, fetched 2026-09-03).
+`.github/workflows/desktop-release.yml` carries an `android` job that builds the universal release APK on a version tag, in parallel with the Windows bundles, and uploads it to the same CrabNebula release with no `--public-platform` and no `--update-platform` — the documented form for a platform-independent asset, and the only one available given that neither platform list names Android (<https://docs.crabnebula.dev/cloud/cli/upload-assets/>, fetched 2026-09-03).
 A generic asset is still fetched from the CDN by file name, at `https://cdn.crabnebula.app/download/<org-slug>/<app-slug>/latest/<asset-file-name>` (<https://docs.crabnebula.dev/cloud/cli/fetch-latest-release/>, fetched 2026-09-03), which is exactly what a sideload link needs and all it needs.
 The APK is also attached to the GitHub release for the tag.
 
 The whole job is gated on the signing secrets rather than only its upload.
 An unsigned APK cannot be installed, so building one would spend twenty minutes of every tag to produce nothing a seller could use; the `verify` job computes the boolean from the three `ANDROID_KEY_*` secrets and the Android job's `if:` reads it, so an unconfigured repository skips the job and says so in the run summary.
-Both Android profiles build arm64 alone, here and in `android-build.yml`, so a hand-run build and a tagged one ship the same ABI set; armv7 returns as its own decision if a seller's phone needs it.
-The remaining guard is the filename Gradle chooses: the collect step matches `*-release.apk` alone, so a keystore that failed to apply leaves only `*-release-unsigned.apk`, matches nothing and fails the job instead of publishing something no one can install.
+Both Android profiles build one universal APK with arm64 and x86_64, here and in `android-build.yml`, so a hand-run build and a tagged one ship the same ABI set, and a Chromebook or an x86_64 emulator installs the file a seller downloads (0.15.0; up to 0.14.0 it was arm64 alone, `Teachouse_<version>_arm64.apk`).
+armv7 is not an option while `tam-limits` refuses, at compile time, any non-wasm target whose `usize` is narrower than its `u64` byte bounds.
+The universal native code roughly doubles the download (about 111 MB against 57 MB for 0.14.0).
+The remaining guard is the filename Gradle chooses: the collect step matches `*-universal-release.apk` alone, so a keystore that failed to apply leaves only `*-release-unsigned.apk`, matches nothing and fails the job instead of publishing something no one can install; it then checks both `lib/` directories are present and prints the signing certificate digest.
 The key material never reaches the working tree unignored: `gen/android/.gitignore` already lists `keystore.properties` and `key.properties`, which is the generated project's own doing rather than ours.
 The NDK version reaches this workflow and `android-build.yml` alike through `.github/scripts/android-pins.sh`, which reads it from `flake.nix`, so the pin has one home.
 
