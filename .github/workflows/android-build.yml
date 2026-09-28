@@ -79,9 +79,10 @@ jobs:
 
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
-          # No `toolchain:` and no `target:`: the action reads
-          # rust-toolchain.toml, which already carries aarch64-linux-android,
-          # and both profiles build that ABI alone.
+          # No `toolchain:`: the action reads rust-toolchain.toml, which
+          # carries aarch64-linux-android alone; the universal APK also needs
+          # the two ABIs below, matching the tagged release.
+          target: armv7-linux-androideabi,x86_64-linux-android
           cache: true
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -181,9 +182,13 @@ jobs:
           chmod 600 "$properties"
           echo "release signing is configured"
 
-      # arm64 for both profiles, so this hand-run build and the tagged release
-      # ship the same ABI set. armv7 returns as its own decision if a seller's
-      # phone turns out to need it.
+      # The universal APK for both profiles (arm64, armv7, x86_64), so this
+      # hand-run build and the tagged release ship the same ABI set.
+      #
+      # A debug APK is signed with the runner's own debug key, which is created
+      # fresh on every runner: it installs only on a device that has no
+      # Teachouse at all, and no later build -- release or debug -- can update
+      # it in place. It is for an emulator or a spare device, never a seller's.
       - name: build the APK
         working-directory: apps/desktop
         env:
@@ -204,9 +209,9 @@ jobs:
             exit 1
           fi
           if [ "$RELEASE" = "true" ]; then
-            cargo tauri android build --apk --ci --target aarch64
+            cargo tauri android build --apk --ci --target aarch64 --target armv7 --target x86_64
           else
-            cargo tauri android build --apk --debug --ci --target aarch64
+            cargo tauri android build --apk --debug --ci --target aarch64 --target armv7 --target x86_64
           fi
 
       - name: collect the artefacts
@@ -259,22 +264,22 @@ jobs:
           name: android-apk-${{ inputs.profile }}-${{ github.sha }}
           path: dist
 
-      # `*-release.apk` alone: a debug build or a build whose keystore did not
-      # apply leaves `*-debug.apk` or `*-release-unsigned.apk`, matches nothing
-      # and stops here rather than attaching something nobody can install.
+      # `*-universal-release.apk` alone: a debug build or a build whose keystore
+      # did not apply leaves `*-debug.apk` or `*-release-unsigned.apk`, matches
+      # nothing and stops here rather than attaching something nobody can install.
       - name: name the APK for the release
         id: apk
         env:
           VERSION: ${{ inputs.attach_to }}
         run: |
           set -euo pipefail
-          apk=$(find dist -maxdepth 1 -type f -name '*-release.apk' | head -1)
+          apk=$(find dist -maxdepth 1 -type f -name '*-universal-release.apk' | head -1)
           if [ -z "$apk" ]; then
             echo "no signed release APK in the build artefact; refusing to attach" >&2
             find dist -maxdepth 1 -type f -name '*.apk' >&2 || true
             exit 1
           fi
-          named="dist/Teachouse_${VERSION}_arm64.apk"
+          named="dist/Teachouse_${VERSION}_universal.apk"
           if [ "$apk" != "$named" ]; then
             cp "$apk" "$named"
           fi
