@@ -20,7 +20,8 @@ Releases up to 0.14.0 carried `Teachouse_<version>_arm64.apk` instead.
 If either file is missing, inspect the complete tagged-release logs before installing anything.
 Missing signing credentials, a build failure and a skipped release job are distinct failures; do not substitute an unsigned or debug APK for an existing signed installation.
 
-The APK is universal: one file carrying arm64, 32-bit ARM and x86_64 code, so the same download installs on a phone, a tablet, a Chromebook and an x86_64 emulator.
+The APK is universal: one file carrying arm64 and x86_64 code, so the same download installs on a phone, a tablet, a Chromebook and an x86_64 emulator.
+A 32-bit-only device (old or budget ARM phones) cannot run Teachouse: the byte limits are 64-bit and the build refuses a 32-bit target.
 Nothing in it is phone-only: it declares every screen size, requires no telephony, camera or other hardware, and runs in landscape and split screen.
 
 ## Install
@@ -53,11 +54,11 @@ With a cable, `adb -s SERIAL install -r APK` prints the underlying code instead 
 | --- | --- |
 | `INSTALL_FAILED_UPDATE_INCOMPATIBLE: … signatures do not match newer version` | Different certificate from the installed copy: a debug build is installed. Uninstall first. |
 | `INSTALL_FAILED_VERSION_DOWNGRADE` | The installed version code is higher than this APK's. Install a newer release. |
-| `INSTALL_FAILED_NO_MATCHING_ABIS` | The APK has no code for this processor. Only an arm64-only APK from 0.14.0 or earlier can say this; the universal APK cannot. |
+| `INSTALL_FAILED_NO_MATCHING_ABIS` | The APK has no code for this processor: a 32-bit-only device, or an arm64-only APK from 0.14.0 or earlier on an x86_64 emulator. |
 | `INSTALL_FAILED_OLDER_SDK` | The device is below Android 7.0 (API 24). |
 | `INSTALL_PARSE_FAILED_NO_CERTIFICATES` or `INSTALL_PARSE_FAILED_NOT_APK` | Unsigned or damaged file. Check the name ends `_universal.apk` and the SHA-256 matches. |
 | `INSTALL_FAILED_USER_RESTRICTED` | The device refused the install over USB: Auto Blocker, or "Install via USB" is off in developer options. |
-| `INSTALL_FAILED_INSUFFICIENT_STORAGE` | Not enough free space; the universal APK needs about three times its download size free. |
+| `INSTALL_FAILED_INSUFFICIENT_STORAGE` | Not enough free space on the device. |
 
 To see what is installed, and whether it is a debug build:
 

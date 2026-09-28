@@ -239,8 +239,8 @@ jobs:
         with:
           # rust-toolchain.toml carries aarch64-linux-android alone, because
           # `just check-portable` proves one triple per surface; the universal
-          # APK also needs the two it does not.
-          target: armv7-linux-androideabi,x86_64-linux-android
+          # APK also needs x86_64.
+          target: x86_64-linux-android
           cache: true
 
       # An Android build needs the cargo subcommand, not the npm binary. Tauri's
@@ -296,12 +296,12 @@ jobs:
           chmod 600 "$properties"
           echo "release signing is configured"
 
-      # Three ABIs in one universal APK rather than arm64 alone: the tablet
-      # and the phone are both arm64, but a 32-bit-only phone, a Chromebook and
-      # an x86_64 emulator then install the same file the seller downloads, and
-      # an "App not installed" on a device we have never seen cannot be an ABI
-      # the release left out. `--split-per-abi` is not passed, so Gradle emits
-      # one `app-universal-release.apk` carrying all three `lib/` directories.
+      # Every 64-bit ABI in one universal APK rather than arm64 alone: the
+      # tablet and the phone are arm64, and a Chromebook or an x86_64 emulator
+      # then installs the same file the seller downloads. 32-bit ARM is not
+      # buildable: tam-limits refuses a target whose usize is narrower than its
+      # u64 byte bounds at compile time. `--split-per-abi` is not passed, so
+      # Gradle emits one `app-universal-release.apk` with both `lib/` directories.
       - name: build the APK
         working-directory: apps/desktop
         env:
@@ -310,7 +310,7 @@ jobs:
           TAM_ENTITLEMENT_PUBLIC_KEY: ${{ vars.TAM_ENTITLEMENT_PUBLIC_KEY }}
         run: |
           set -euo pipefail
-          cargo tauri android build --apk --ci --target aarch64 --target armv7 --target x86_64
+          cargo tauri android build --apk --ci --target aarch64 --target x86_64
 
       # Gradle names an unsigned build `...-release-unsigned.apk`, so matching
       # `*-universal-release.apk` alone is the check that signing actually
@@ -332,9 +332,9 @@ jobs:
             find "$outputs" -type f -name '*.apk' >&2 || true
             exit 1
           fi
-          for abi in arm64-v8a armeabi-v7a x86_64; do
-            if ! unzip -l "$apk" | grep -q " lib/$abi/libtam_desktop_lib.so$"; then
-              echo "the universal APK carries no lib/$abi/libtam_desktop_lib.so" >&2
+          for abi in arm64-v8a x86_64; do
+            if ! unzip -l "$apk" | grep -q " lib/$abi/libtam_desktop.so$"; then
+              echo "the universal APK carries no lib/$abi/libtam_desktop.so" >&2
               unzip -l "$apk" | grep ' lib/' >&2 || true
               exit 1
             fi

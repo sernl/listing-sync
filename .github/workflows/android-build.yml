@@ -81,8 +81,8 @@ jobs:
         with:
           # No `toolchain:`: the action reads rust-toolchain.toml, which
           # carries aarch64-linux-android alone; the universal APK also needs
-          # the two ABIs below, matching the tagged release.
-          target: armv7-linux-androideabi,x86_64-linux-android
+          # x86_64 as well, matching the tagged release.
+          target: x86_64-linux-android
           cache: true
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -182,7 +182,7 @@ jobs:
           chmod 600 "$properties"
           echo "release signing is configured"
 
-      # The universal APK for both profiles (arm64, armv7, x86_64), so this
+      # The universal APK for both profiles (arm64, x86_64), so this
       # hand-run build and the tagged release ship the same ABI set.
       #
       # A debug APK is signed with the runner's own debug key, which is created
@@ -209,9 +209,9 @@ jobs:
             exit 1
           fi
           if [ "$RELEASE" = "true" ]; then
-            cargo tauri android build --apk --ci --target aarch64 --target armv7 --target x86_64
+            cargo tauri android build --apk --ci --target aarch64 --target x86_64
           else
-            cargo tauri android build --apk --debug --ci --target aarch64 --target armv7 --target x86_64
+            cargo tauri android build --apk --debug --ci --target aarch64 --target x86_64
           fi
 
       - name: collect the artefacts
