@@ -552,10 +552,61 @@ pub struct EditSubmission<'a> {
     pub thumbs: &'a [ThumbHandle],
     pub status: StatusUser,
     pub authorship: &'a AuthorshipDeclaration,
-    /// `localization.countryIdFlag` as the product's own read-back returned
-    /// it, used only where the listing states no value of its own. `None` is
-    /// a read that carried none, and posts the box unticked.
-    pub observed_appropriate_for_country: Option<bool>,
+    /// What the product's own read-back returned for the fields the listing
+    /// left unstated, used only where the listing states no value of its
+    /// own. `None` is an edit that needed no read, because the listing
+    /// states every one of them.
+    pub observed: Option<&'a ObservedEdit>,
+}
+
+/// The product's own values for the fields an edit would otherwise clear.
+///
+/// An edit is a full replace, and the edit-render scrape yields none of these
+/// three, so the product read is the only place their current values are
+/// learned. Each is posted only where the listing leaves the
+/// field unstated: a listing that names a value is the seller's intent and
+/// wins.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ObservedEdit {
+    /// `localization.countryIdFlag`. `None` is a read that carried no
+    /// localisation object, and posts the box unticked.
+    pub appropriate_for_country: Option<bool>,
+    /// `taxCode.id`, which is the row id the form posts — the same wire
+    /// value [`TaxCode::id`] spells. Carried as the read's own string rather
+    /// than mapped onto [`TaxCode`], because posting back what the product
+    /// holds must not depend on this crate knowing every row: a sixth tax
+    /// code would otherwise be cleared by the first revise after it appeared.
+    pub tax_code_id: Option<String>,
+    /// The seller's own shelf ids. Posted back when the listing names none,
+    /// which is every projection: shelves are not a crosswalked axis, so a
+    /// revise that posted the listing's empty list would unfile the product.
+    pub category_ids: Vec<String>,
+}
+
+impl ObservedEdit {
+    /// The read-back's own values, whole.
+    #[must_use]
+    pub fn from_product(product: &crate::read_model::UploadPageProduct) -> Self {
+        Self {
+            appropriate_for_country: product.appropriate_for_country,
+            tax_code_id: product.tax_code.clone(),
+            category_ids: product
+                .categories
+                .iter()
+                .map(|shelf| shelf.id.clone())
+                .collect(),
+        }
+    }
+}
+
+/// True where an edit of this listing needs the product's own read-back: any
+/// one of the fields [`ObservedEdit`] carries is left unstated, and posting
+/// the listing's absence would clear what the product holds.
+#[must_use]
+pub fn edit_needs_read_back(listing: &TptListing) -> bool {
+    listing.appropriate_for_country.is_none()
+        || listing.tax_code.is_none()
+        || listing.category_ids.is_empty()
 }
 
 /// The edit body: the fields the captured `POST /itemsDigital/editNext/{id}`
@@ -577,7 +628,7 @@ pub fn edit_fields(submission: &EditSubmission<'_>) -> Vec<(String, String)> {
         thumbs,
         status,
         authorship,
-        observed_appropriate_for_country,
+        observed,
     } = *submission;
     let mut fields = vec![
         field(names::METHOD, "POST"),
@@ -626,7 +677,12 @@ pub fn edit_fields(submission: &EditSubmission<'_>) -> Vec<(String, String)> {
     fields.push(field(names::DISCOUNTPRICE, "0"));
     fields.push(field(names::LICENSE_PRICE, listing.price.licence_amount()));
     fields.push(field(names::STATUS_USER, status.as_str()));
-    for category in &listing.category_ids {
+    let categories = if listing.category_ids.is_empty() {
+        observed.map_or(&[][..], |read| read.category_ids.as_slice())
+    } else {
+        listing.category_ids.as_slice()
+    };
+    for category in categories {
         fields.push(field(names::CATEGORY, category));
     }
     fields.push(field(names::COMMON_CORE_ID, ""));
@@ -635,16 +691,19 @@ pub fn edit_fields(submission: &EditSubmission<'_>) -> Vec<(String, String)> {
         country_flag(
             listing
                 .appropriate_for_country
-                .or(observed_appropriate_for_country)
+                .or_else(|| observed.and_then(|read| read.appropriate_for_country))
                 .unwrap_or(false),
         ),
     ));
     fields.push(field(names::DURATION, DURATION_UNSET.as_str()));
     fields.push(field(names::ANSWER_KEY, ANSWER_KEY_ABSENT.as_str()));
-    fields.push(field(
-        names::TAX_CODE_ID,
-        listing.tax_code.map_or("", TaxCode::id),
-    ));
+    let tax_code_id = match listing.tax_code {
+        Some(code) => code.id(),
+        None => observed
+            .and_then(|read| read.tax_code_id.as_deref())
+            .unwrap_or(""),
+    };
+    fields.push(field(names::TAX_CODE_ID, tax_code_id));
     fields.push(field(names::IS_POST, ""));
     fields
 }
@@ -1052,9 +1111,10 @@ pub fn listing_from_field_set(fields: &FieldSet) -> Result<TptListing, AdapterEr
 #[cfg(test)]
 mod tests {
     use super::{
-        create_fields, dotted_path, edit_fields, entry, listing_from_field_set, project_fields,
-        written_field_paths, AuthorshipDeclaration, CreateSubmission, EditSubmission, ListingPrice,
-        PaidPrice, PriceError, StatusUser, TaxCode, TptListing, MIN_PRICE_MINOR_UNITS,
+        create_fields, dotted_path, edit_fields, edit_needs_read_back, entry,
+        listing_from_field_set, project_fields, written_field_paths, AuthorshipDeclaration,
+        CreateSubmission, EditSubmission, ListingPrice, ObservedEdit, PaidPrice, PriceError,
+        StatusUser, TaxCode, TptListing, MIN_PRICE_MINOR_UNITS,
     };
     use crate::form::TptFormTokens;
     use crate::upload::ProcessedHandle;
@@ -1321,13 +1381,17 @@ mod tests {
                 appropriate_for_country: carried,
                 ..listing()
             };
+            let read = ObservedEdit {
+                appropriate_for_country: observed,
+                ..ObservedEdit::default()
+            };
             let fields = edit_fields(&EditSubmission {
                 tokens: &tokens,
                 listing: &listing,
                 thumbs: &[],
                 status: StatusUser::Live,
                 authorship: &authorship,
-                observed_appropriate_for_country: observed,
+                observed: Some(&read),
             });
             value_of(&fields, "data[ItemsLocalization][country_id_flag]")
                 .map(str::to_owned)
@@ -1355,6 +1419,70 @@ mod tests {
         assert_eq!(posted(Some(false), Some(true)), "0");
     }
 
+    /// The same property for the tax code and the shelves, which no
+    /// projection carries at all: `listing_from_field_set` names no tax code
+    /// and no shelf, so an edit that posted the listing's absence would strip
+    /// both from every product it revised.
+    #[test]
+    fn an_edit_reposts_the_tax_code_and_shelves_the_product_already_had() {
+        let tokens = tokens();
+        let authorship = attested();
+        let read = ObservedEdit {
+            appropriate_for_country: None,
+            tax_code_id: Some("2".to_owned()),
+            category_ids: vec!["1368989".to_owned(), "1368990".to_owned()],
+        };
+        let posted = |listing: &TptListing| {
+            let fields = edit_fields(&EditSubmission {
+                tokens: &tokens,
+                listing,
+                thumbs: &[],
+                status: StatusUser::Live,
+                authorship: &authorship,
+                observed: Some(&read),
+            });
+            let shelves: Vec<String> = fields
+                .iter()
+                .filter(|(name, _)| name == "data[Category][Category][]")
+                .map(|(_, value)| value.clone())
+                .collect();
+            let tax = value_of(&fields, "data[ItemTaxCode][tax_code_id]").map(str::to_owned);
+            (tax, shelves)
+        };
+        let unstated = TptListing {
+            category_ids: Vec::new(),
+            tax_code: None,
+            ..listing()
+        };
+        assert_eq!(
+            posted(&unstated),
+            (
+                Some("2".to_owned()),
+                vec!["1368989".to_owned(), "1368990".to_owned()]
+            ),
+            "a listing that states neither reposts the product's own tax row and shelves"
+        );
+        assert!(
+            edit_needs_read_back(&unstated),
+            "and is exactly the listing the flow reads the product back for"
+        );
+        let stated = TptListing {
+            tax_code: Some(TaxCode::Videos),
+            appropriate_for_country: Some(false),
+            ..listing()
+        };
+        assert_eq!(
+            posted(&stated),
+            (Some("4".to_owned()), vec!["1361944".to_owned()]),
+            "a listing that states its own values wins; the read-back is the fallback and \
+             never the override"
+        );
+        assert!(
+            !edit_needs_read_back(&stated),
+            "and a listing stating all three costs no read at all"
+        );
+    }
+
     #[test]
     fn an_edit_says_the_assets_are_unchanged_rather_than_clearing_them() {
         let tokens = tokens();
@@ -1366,7 +1494,7 @@ mod tests {
             thumbs: &[],
             status: StatusUser::Live,
             authorship: &authorship,
-            observed_appropriate_for_country: None,
+            observed: None,
         });
         assert_eq!(
             (
@@ -1404,7 +1532,7 @@ mod tests {
             thumbs: &[],
             status: StatusUser::Draft,
             authorship: &authorship,
-            observed_appropriate_for_country: None,
+            observed: None,
         });
         let money: Vec<&str> = fields
             .iter()
@@ -1440,7 +1568,7 @@ mod tests {
             thumbs: page.thumbs(),
             status: StatusUser::Live,
             authorship: &authorship,
-            observed_appropriate_for_country: None,
+            observed: None,
         });
         for slot in 1..=4_u8 {
             assert_eq!(
@@ -1473,7 +1601,7 @@ mod tests {
             thumbs: &[],
             status: StatusUser::Live,
             authorship: &authorship,
-            observed_appropriate_for_country: None,
+            observed: None,
         });
         assert_eq!(
             value_of(&fields, "data[ItemTaxCode][tax_code_id]"),
@@ -1828,7 +1956,7 @@ mod tests {
             thumbs: &[],
             status: StatusUser::Live,
             authorship: &authorship,
-            observed_appropriate_for_country: None,
+            observed: None,
         });
         assert_eq!(
             (
