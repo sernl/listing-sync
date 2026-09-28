@@ -99,7 +99,8 @@ async fn provision(pool: &PgPool) {
             .await
             .expect("the user provisions");
         sessions
-            .mint(&token, user, Timestamp(100_000), Timestamp(1_000))
+            // Well past the day the rate-limit test travels through.
+            .mint(&token, user, Timestamp(1_000_000_000), Timestamp(1_000))
             .await
             .expect("the session mints");
     }
