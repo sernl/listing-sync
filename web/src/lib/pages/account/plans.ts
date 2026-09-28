@@ -7,8 +7,9 @@
 // left is the rendering: dollars out of cents, a move balance in a sentence,
 // and what a tier card says at the cadence the page is showing.
 
-import type { BillingView, CardView, EntitlementView, MoveBalance } from '$lib/api';
+import type { BillingView, CardView, EntitlementView, InvoiceView, MoveBalance } from '$lib/api';
 import { unlimited } from '$lib/entitlement';
+import { afterPercentOff, saleLine, salePrice } from '$lib/sale';
 import type { Tone } from '$lib/StatusPill.svelte';
 import {
 	AI,
@@ -17,9 +18,10 @@ import {
 	type AiOffer,
 	type Capabilities,
 	type Pack,
-	type PlanRow
+	type PlanRow,
+	type SaleView
 } from '$lib/generated/plans';
-import type { PriceKey } from '$lib/generated/vocab';
+import type { Plan, PriceKey } from '$lib/generated/vocab';
 
 /** Cents as the page prints money: whole dollars where the price is whole,
  *  and cents where it is not.
@@ -264,3 +266,193 @@ export function checkoutOutcome(param: string | null): CheckoutOutcome | null {
  * `free` would tell a paying seller to buy what they already have.
  */
 export type EntitlementRead = { state: 'unread' } | { state: 'read'; entitlement: EntitlementView };
+
+// --------------------------------------------------------- the page's views
+
+/** The two fields the plan table carries from 0.15 on — which paid plan the
+ *  page recommends, and each plan in one sentence. Read as optional so the
+ *  page renders the same table before and after the generated type has them. */
+type PlanExtras = { readonly recommended?: boolean; readonly tagline?: string };
+
+/** A plan in one sentence: its own tagline where the table has one, and
+ *  otherwise what it gives, in moves. */
+export function planTagline(plan: PlanRow): string {
+	const tagline = (plan as PlanRow & PlanExtras).tagline;
+	return tagline !== undefined && tagline.trim() !== '' ? tagline : planMeaning(plan.capabilities);
+}
+
+/** What a plan card's button does: open a checkout for one price, send a
+ *  seller who already pays to Stripe's portal to switch, or nothing. */
+export type PlanCta =
+	{ kind: 'buy'; key: PriceKey; label: string } | { kind: 'switch'; label: string };
+
+/** One card in the Plans grid, everything it prints already worked out. */
+export interface PlanCard {
+	id: Plan;
+	name: string;
+	/** "trial" for the free plan, "subscription" for the rest. */
+	kind: 'trial' | 'subscription';
+	tagline: string;
+	headline: string;
+	per: string;
+	/** The list price struck through while a sale takes some off. */
+	was: string | null;
+	/** The sale in words, while one applies to this card. */
+	saleNote: string | null;
+	/** The small print under the price. */
+	note: string | null;
+	bullets: PlanBullet[];
+	current: boolean;
+	recommended: boolean;
+	cta: PlanCta | null;
+}
+
+export interface PlanCardsInput {
+	/** The plan the seller holds; undefined while the billing read is out. */
+	held: Plan | undefined;
+	cadence: Cadence;
+	sale: SaleView | null;
+	plans?: readonly PlanRow[];
+	ai?: AiOffer;
+}
+
+/** The Plans grid, free plan first and then every priced plan, from the
+ *  generated table alone.
+ *
+ *  A seller who already pays changes plan in Stripe's portal rather than
+ *  through a second checkout, so their cards switch instead of buy, and no
+ *  sale is shown to them: a sale reaches a new checkout, not a running
+ *  subscription. */
+export function planCards({
+	held,
+	cadence,
+	sale,
+	plans = PLANS,
+	ai = AI
+}: PlanCardsInput): PlanCard[] {
+	const paid = paidPlans(plans);
+	const subscribed = paid.some((plan) => plan.id === held);
+	const cards: PlanCard[] = [];
+	for (const plan of plans) {
+		const recommended = (plan as PlanRow & PlanExtras).recommended === true;
+		const base = {
+			id: plan.id,
+			name: plan.name,
+			tagline: planTagline(plan),
+			bullets: planBullets(plan.capabilities, ai),
+			current: plan.id === held,
+			recommended
+		};
+		if (!paid.includes(plan)) {
+			if (plan.monthly_cents !== null || plan.yearly_cents !== null) continue;
+			cards.push({
+				...base,
+				kind: 'trial',
+				headline: 'Free',
+				per: 'for as long as you like',
+				was: null,
+				saleNote: null,
+				note: null,
+				cta: null
+			});
+			continue;
+		}
+		const price = tierPrice(plan, cadence);
+		if (price === null) continue;
+		const onSale = subscribed
+			? null
+			: cadence === 'yearly'
+				? salePrice(sale, plan.yearly_cents, 12)
+				: salePrice(sale, plan.monthly_cents);
+		const yearlyOnSale = onSale !== null && sale !== null && cadence === 'yearly';
+		cards.push({
+			...base,
+			kind: 'subscription',
+			headline: onSale === null ? price.headline : dollars(onSale.saleCents),
+			per: price.per,
+			was: onSale === null ? null : dollars(onSale.listCents),
+			saleNote: onSale !== null && sale !== null ? saleLine(sale) : null,
+			note:
+				yearlyOnSale && plan.yearly_cents !== null
+					? `${dollars(afterPercentOff(plan.yearly_cents, sale.percent_off))} for the year (usually ${dollars(plan.yearly_cents)}).`
+					: price.note,
+			cta: subscribed
+				? base.current
+					? null
+					: { kind: 'switch', label: `Switch to ${plan.name}` }
+				: { kind: 'buy', key: price.key, label: `Choose ${plan.name}` }
+		});
+	}
+	return cards;
+}
+
+/** The price the current-plan card leads with: the held plan at the cadence
+ *  it is billed at. Null for a paid plan with no cadence behind it — a plan
+ *  an operator granted is not charged, and a price beside it would say it is. */
+export function heldPrice(
+	plan: PlanRow,
+	cadence: Cadence | undefined
+): { headline: string; per: string } | null {
+	if (plan.monthly_cents === null && plan.yearly_cents === null) {
+		return { headline: 'Free', per: 'for as long as you like' };
+	}
+	if (cadence === undefined) return null;
+	const price = tierPrice(plan, cadence);
+	if (price === null) return null;
+	return cadence === 'yearly' && plan.yearly_cents !== null
+		? { headline: dollars(plan.yearly_cents), per: 'a year' }
+		: { headline: price.headline, per: price.per };
+}
+
+/** One row of the Invoices table. */
+export interface InvoiceRow {
+	id: string;
+	date: string;
+	description: string;
+	amount: string;
+	status: { label: string; tone: Tone };
+	/** Where the receipt opens: Stripe's hosted page, or its PDF. */
+	receipt: string | null;
+}
+
+/** The Invoices table's rows, newest first.
+ *
+ *  Stripe leaves a subscription invoice's description empty; the row then
+ *  says what every invoice here is, a payment to Teachouse. */
+export function invoiceRows(invoices: readonly InvoiceView[]): InvoiceRow[] {
+	return [...invoices]
+		.sort((one, two) => two.created_at - one.created_at)
+		.map((invoice) => ({
+			id: invoice.id,
+			date: dayLabel(invoice.created_at),
+			description:
+				invoice.description === undefined || invoice.description.trim() === ''
+					? 'Payment to Teachouse'
+					: invoice.description,
+			amount: money(invoice.total, invoice.currency),
+			status: invoiceStatus(invoice.status),
+			receipt: invoice.hosted_url ?? invoice.pdf_url ?? null
+		}));
+}
+
+const BRAND_MARKS: Record<string, string> = {
+	amex: 'AMEX',
+	diners: 'DINERS',
+	discover: 'DISC',
+	eftpos_au: 'EFTPOS',
+	jcb: 'JCB',
+	mastercard: 'MC',
+	unionpay: 'UPI',
+	visa: 'VISA'
+};
+
+/** The short mark the Payment card draws for a card's brand. */
+export function cardMark(card: CardView): string {
+	return BRAND_MARKS[card.brand] ?? 'CARD';
+}
+
+/** "Expires 04/2028", or null where Stripe did not say. */
+export function cardExpiry(card: CardView): string | null {
+	if (card.exp_month === undefined || card.exp_year === undefined) return null;
+	return `Expires ${String(card.exp_month).padStart(2, '0')}/${card.exp_year}`;
+}
