@@ -330,8 +330,19 @@ describe('the refusals', () => {
 		expect(refusalsIn(refusalsOf(deferred, VOCABULARY), 'files')).toHaveLength(1);
 	});
 
-	it('lets a finished resource name no marketplace at all', () => {
-		const kept = { ...complete(), inventories: [] };
+	it('asks a resource kept here, with no marketplace, for none of TPT’s answers', () => {
+		const kept = withMarketplaces(
+			{
+				...complete(),
+				free: false,
+				price: '3.00',
+				subjectAreas: [],
+				tags: [],
+				copyright: null,
+				taxCode: null
+			},
+			[]
+		);
 		expect(refusalsOf(kept, VOCABULARY)).toEqual([]);
 		expect(submittable(refusalsOf(kept, VOCABULARY))).toBe(true);
 	});
