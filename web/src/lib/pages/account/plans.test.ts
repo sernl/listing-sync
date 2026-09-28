@@ -308,7 +308,8 @@ describe('the Plans grid', () => {
 	});
 
 	it('reads the recommended plan and the tagline off the table, and neither is invented', () => {
-		const plain = planCards({ held: 'free', cadence: 'yearly', sale: null, plans: [row()] });
+		const bare = { ...row(), recommended: false, tagline: undefined } as unknown as PlanRow;
+		const plain = planCards({ held: 'free', cadence: 'yearly', sale: null, plans: [bare] });
 		expect(plain[0].recommended).toBe(false);
 		expect(plain[0].tagline).toBe(planMeaning(row().capabilities));
 		const marked = { ...row(), recommended: true, tagline: 'For a shop on two marketplaces.' };

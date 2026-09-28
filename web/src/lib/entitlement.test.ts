@@ -150,12 +150,13 @@ describe('why a counted allowance is full', () => {
 		);
 	});
 
-	// The free plan has no collections of its own, and the sentence says zero
-	// rather than implying a cap the seller could reach.
+	// A plan with none of something says zero rather than implying a cap the
+	// seller could reach. No shipped plan is at zero any more (Look has one
+	// collection since 0.15.0), so the figure is set here.
 	it('states a zero allowance as zero', () => {
-		expect(limitReason(caps('free'), usage(), 'collections')).toBe(
-			'Your plan includes 0 collections. Upgrade to add more.'
-		);
+		expect(
+			limitReason({ ...caps('free'), collections_max: 0 }, usage(), 'collections')
+		).toBe('Your plan includes 0 collections. Upgrade to add more.');
 	});
 
 	it('never refuses an unlimited allowance', () => {
