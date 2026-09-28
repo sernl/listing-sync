@@ -345,9 +345,6 @@ button {
 	font-size: 13px;
 }
 
-/* At least one control tall, with its contents centred in it, so a short pill
-   or a "Why?" trigger sits on the same centre line as a full-height button and
-   as the help control beside them. */
 .head-aside {
 	grid-column: 1 / -1;
 	grid-row: 3;
@@ -356,7 +353,6 @@ button {
 	align-items: center;
 	justify-content: flex-end;
 	gap: 10px;
-	min-height: var(--control-h);
 }
 
 /* The header band's help control. 44px on a phone alongside the kebab in
@@ -467,10 +463,17 @@ button {
 		flex-wrap: wrap;
 	}
 
+	/* At least one control tall, with its contents centred in it and hung
+	   from the top of the band like the help control, so a short pill or a
+	   "Why?" trigger sits on the same centre line as a full-height button,
+	   the help control and the page glyph. Only here, where they share a
+	   line: below this the actions have a row of their own, and a page whose
+	   actions are all hidden on a phone would keep an empty one. */
 	.head-aside {
 		margin-left: auto;
 		justify-content: flex-start;
 		align-self: flex-start;
+		min-height: var(--control-h);
 	}
 
 	.page-help {

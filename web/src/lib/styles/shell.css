@@ -258,6 +258,14 @@
 	background: var(--bad);
 }
 
+/* The strip's dot sits beside lowercase text in a line box that makes room
+   for descenders, so centring it on the box drew it below the middle of the
+   letters. Lifted by the descender's share of the font, in `em`, so it holds
+   at whatever size the strip's text is drawn. */
+.conn .dot {
+	translate: 0 -0.15em;
+}
+
 /* The kit's search field: white, a hairline border and the 8px field shape
    rather than the pill the strip carried before. */
 .search {

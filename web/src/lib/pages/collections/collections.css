@@ -431,6 +431,10 @@
 	background: var(--accent-soft);
 }
 
+.coll-dialog .coll-pick-new textarea {
+	min-height: 0;
+}
+
 .coll-dialog .coll-pick-new .refusal {
 	margin: 0;
 }
