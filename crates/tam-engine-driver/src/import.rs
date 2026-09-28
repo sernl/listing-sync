@@ -101,6 +101,17 @@ pub const COVER_BYTES_MAX: usize = 2 * 1024 * 1024;
 /// duplication does.
 pub const PNG_MAGIC: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 
+/// The largest listing picture this vocabulary will carry.
+///
+/// The same ceiling a cover has: a marketplace's own full-size thumbnail is a
+/// few hundred kilobytes, and four of them per resource, base64-encoded, still
+/// sit well inside the import route's upload body limit for a page of
+/// twenty-five.
+pub const THUMBNAIL_BYTES_MAX: usize = COVER_BYTES_MAX;
+
+/// How many listing pictures one resource may carry: TPT's own four slots.
+pub const THUMBNAILS_MAX: usize = 4;
+
 /// Why a value a device was about to report is not one it may report.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NotReportable {
@@ -114,6 +125,9 @@ pub enum NotReportable {
     LocatorTooLong(usize),
     LocatorNotALocator,
     ReasonTooLong(usize),
+    ThumbnailNotAnImage,
+    ThumbnailTooLarge(usize),
+    ThumbnailNotBase64,
 }
 
 impl core::fmt::Display for NotReportable {
@@ -159,6 +173,16 @@ impl core::fmt::Display for NotReportable {
                     f,
                     "a reason is at most {REASON_MAX} bytes and this is {len}"
                 )
+            }
+            Self::ThumbnailNotAnImage => {
+                f.write_str("a listing picture is a PNG, JPEG, GIF or WebP and this is not one")
+            }
+            Self::ThumbnailTooLarge(len) => write!(
+                f,
+                "a listing picture is at most {THUMBNAIL_BYTES_MAX} bytes and this is {len}"
+            ),
+            Self::ThumbnailNotBase64 => {
+                f.write_str("a listing picture is canonical base64 and this is not well-formed")
             }
         }
     }
@@ -472,6 +496,63 @@ impl From<Cover> for String {
     }
 }
 
+/// One of the listing's own pictures, as the marketplace serves it, checked to
+/// be a picture.
+///
+/// The seller's thumbnails on their listing, in the marketplace's own slot
+/// order: not derived from the file the way [`Cover`] is, but read back from
+/// the listing so a resource imported with four pictures keeps four. Bytes on
+/// the wire, for the reason the cover rides in the page: the server never
+/// reaches the marketplace itself (D27), so the device that read the listing
+/// is the only place the pictures can come from.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct Thumbnail(Vec<u8>);
+
+impl Thumbnail {
+    /// Takes a fetched picture, refusing anything that is not one.
+    pub fn encode(bytes: &[u8]) -> Result<Self, NotReportable> {
+        if !is_picture(bytes) {
+            return Err(NotReportable::ThumbnailNotAnImage);
+        }
+        if bytes.len() > THUMBNAIL_BYTES_MAX {
+            return Err(NotReportable::ThumbnailTooLarge(bytes.len()));
+        }
+        Ok(Self(bytes.to_vec()))
+    }
+
+    /// The picture this carries.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+/// Whether these bytes open like one of the four picture formats a thumbnail
+/// slot takes: PNG, JPEG, GIF or WebP.
+fn is_picture(bytes: &[u8]) -> bool {
+    bytes.starts_with(PNG_MAGIC)
+        || bytes.starts_with(&[0xFF, 0xD8, 0xFF])
+        || bytes.starts_with(b"GIF87a")
+        || bytes.starts_with(b"GIF89a")
+        || (bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP".as_slice()))
+}
+
+impl TryFrom<String> for Thumbnail {
+    type Error = NotReportable;
+
+    fn try_from(encoded: String) -> Result<Self, Self::Error> {
+        let decoded = unbase64(&encoded).ok_or(NotReportable::ThumbnailNotBase64)?;
+        Self::encode(&decoded)
+    }
+}
+
+impl From<Thumbnail> for String {
+    fn from(thumbnail: Thumbnail) -> Self {
+        base64(&thumbnail.0)
+    }
+}
+
 /// What one device saw of one file, as the wire carries it.
 ///
 /// Every field describes the bytes handed onward after the unwrap decision,
@@ -531,6 +612,16 @@ pub struct ObservedResource {
     /// device too old to measure one.
     #[serde(default)]
     pub fingerprint: Option<tam_fingerprint::Fingerprint>,
+    /// The listing's own pictures, in the marketplace's slot order, at most
+    /// [`THUMBNAILS_MAX`].
+    ///
+    /// Read from the listing rather than drawn from the file, so this may be
+    /// present where `file` is not. Empty is a device too old to fetch them
+    /// or a listing that carried none; the server keeps whatever the resource
+    /// already holds in either case. Stripped from the stored copy once the
+    /// server holds the bytes, exactly as the cover is.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub thumbnails: Vec<Thumbnail>,
 }
 
 /// One resource as the enumeration saw it, before anything was read.

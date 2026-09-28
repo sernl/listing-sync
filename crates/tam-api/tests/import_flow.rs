@@ -293,6 +293,7 @@ fn observed(resource: i64, digest: u8) -> ObservedResource {
             rights: None,
             price: ImportedPrice::Free,
             state: Some(ListingState::Live),
+            extras: Default::default(),
         },
         fingerprint: None,
         file: Some(ObservedFile {
@@ -305,6 +306,7 @@ fn observed(resource: i64, digest: u8) -> ObservedResource {
             entry: None,
         }),
         cover_png: Some(cover()),
+        thumbnails: Vec::new(),
     }
 }
 

@@ -92,6 +92,29 @@ struct Facet {
     /// unmeasured one.
     #[serde(default)]
     seller_writable: Option<bool>,
+    /// Which of TPT's facet groups the slug belongs to, which is the only
+    /// thing that says which picker a slug in the flat `taxonomyTags` array
+    /// came from.
+    #[serde(default)]
+    category: Option<String>,
+    /// Retired: readable on an existing product and offered by no control.
+    #[serde(default)]
+    is_hidden: bool,
+}
+
+/// The picker a facet group is chosen through, where the form has one.
+///
+/// TPT's own label for the tag picker is "Tag (Theme, Audience, Language)",
+/// and those three groups are exactly the ones behind it; the console's
+/// vocabulary view draws the same three into one list.
+fn picker_of_category(category: &str) -> Option<Picker> {
+    match category {
+        "Grade-Level" => Some(Picker::Grades),
+        "PreK-12-Subject-Area" => Some(Picker::SubjectAreas),
+        "theme" | "audience" | "language" => Some(Picker::Tags),
+        "Format" => Some(Picker::Formats),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -129,6 +152,13 @@ struct ThumbnailSlots {
 pub struct TptForm {
     caps: SelectionCapsResolved,
     unwritable: BTreeSet<String>,
+    /// Every facet the capture holds, with the picker that offers it where
+    /// one does. `None` is a facet the form has no control for — a resource
+    /// type, a support, a retired facet — which a listing can still carry.
+    facets: std::collections::BTreeMap<String, Option<Picker>>,
+    /// Current, writable facets no control offers: what a listing holds that
+    /// the form cannot show as a choice and a revise must still post.
+    unpicked: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,9 +204,36 @@ impl TptForm {
             unwritable: parsed
                 .taxonomy_tags
                 .options
-                .into_iter()
+                .iter()
                 .filter(|(_, facet)| facet.seller_writable == Some(false))
-                .map(|(slug, _)| slug)
+                .map(|(slug, _)| slug.clone())
+                .collect(),
+            unpicked: parsed
+                .taxonomy_tags
+                .options
+                .iter()
+                .filter(|(_, facet)| {
+                    !facet.is_hidden
+                        && facet.seller_writable != Some(false)
+                        && facet
+                            .category
+                            .as_deref()
+                            .is_some_and(|category| picker_of_category(category).is_none())
+                })
+                .map(|(slug, _)| slug.clone())
+                .collect(),
+            facets: parsed
+                .taxonomy_tags
+                .options
+                .into_iter()
+                .map(|(slug, facet)| {
+                    let picker = if facet.is_hidden || facet.seller_writable == Some(false) {
+                        None
+                    } else {
+                        facet.category.as_deref().and_then(picker_of_category)
+                    };
+                    (slug, picker)
+                })
                 .collect(),
         })
     }
@@ -229,6 +286,27 @@ impl TptForm {
     /// Every facet the form offers no control for, ascending by slug.
     pub fn unwritable(&self) -> impl Iterator<Item = &str> {
         self.unwritable.iter().map(String::as_str)
+    }
+
+    /// Where one slug of a listing's flat `taxonomyTags` array belongs on the
+    /// form.
+    ///
+    /// `Some(Some(picker))` is a facet a control offers; `Some(None)` is a
+    /// facet TPT issued that no control offers — a resource type, a support,
+    /// a retired or unwritable facet — which the listing holds and the form
+    /// cannot show as a choice; `None` is a slug the capture does not hold at
+    /// all, which is a seller shelf id or a facet newer than the capture.
+    #[must_use]
+    pub fn placement(&self, slug: &str) -> Option<Option<Picker>> {
+        self.facets.get(slug).copied()
+    }
+
+    /// Whether this is a current facet the seller may post and no control on
+    /// the form offers — a resource type, a support, a programme — so a
+    /// listing that holds it holds it only through what was read.
+    #[must_use]
+    pub fn is_unpicked(&self, slug: &str) -> bool {
+        self.unpicked.contains(slug)
     }
 }
 

@@ -1946,6 +1946,10 @@ export interface ProductView {
 	 *  existed, or imported from a marketplace. Not the same as a row whose
 	 *  fields are all unanswered. */
 	tpt_base?: TptBaseView;
+	/** What this resource's TPT listing holds that no control on the form
+	 *  offers — its resource types, supports, programmes — as an import read
+	 *  them. Every send to TPT posts them back unchanged. */
+	tpt_held?: FacetView[];
 	created_at: number;
 	updated_at: number;
 }
@@ -2205,6 +2209,15 @@ export interface DraftInput {
 	answer_key_id?: number | null;
 	copyright_declaration_id?: number | null;
 	status_user?: number | null;
+	/** The marketplaces this draft is going to. TPT's own form rules — Subject
+	 *  Area, Tag, copyright statement, tax code, its price floor and caps —
+	 *  hold only a draft going to TPT. Absent holds the draft to all of them. */
+	targets?: Marketplace[] | null;
+	/** The marketplaces this resource is already live on through a bound
+	 *  listing. A field left empty is not refused for one of these: the live
+	 *  listing met that marketplace's rules and holds what the last send
+	 *  carried. A value that marketplace would refuse still is. */
+	satisfied?: Marketplace[];
 }
 
 export interface RefusalView {

@@ -1460,6 +1460,129 @@ pub(crate) async fn abandon(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// What refreshing one run's resources from its own reads did.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RunRefreshView {
+    /// Resources whose empty details this refresh filled.
+    pub filled: u32,
+    /// Resources the stored reads had nothing more to give.
+    pub unchanged: u32,
+    /// Resources whose stored read predates the listing details TPT states —
+    /// tax code, copyright statement, localisation, the listing's own
+    /// pictures. Only reading them again through the Teachouse app can fill
+    /// those; the seller does that by importing from the shop again, which
+    /// re-reads exactly these.
+    pub read_again: u32,
+}
+
+/// Fills what this run's stored reads state onto the resources they landed
+/// on, wherever those resources leave it unanswered.
+///
+/// The backfill for every product an import made before its listing details
+/// were carried. The run kept each read's description — the listing's own
+/// facet slugs, its price and state, and on a current device its tax code,
+/// attestation, localisation and pictures — so the Subject Area, Tag and
+/// Format pickers, and whatever else the read stated, are filled from what is
+/// already stored without reaching the marketplace. What a stored read never
+/// carried is counted in `read_again` rather than invented.
+///
+/// Fill-only, through the same write every import commit uses: a value the
+/// seller set is never replaced, and pressing it twice changes nothing the
+/// second time. One transaction per resource under the catalogue guard, so a
+/// refresh racing a commit cannot interleave inside either.
+pub(crate) async fn refresh(
+    State(state): State<AppState>,
+    context: OrgContext,
+    Path((_version, run)): Path<(String, String)>,
+) -> Result<Json<RunRefreshView>, APIError> {
+    let run = parse_id(&run)?;
+    let head = head_or_missing(&state, context.org, run).await?;
+    let source = head.source.ok_or_else(|| {
+        validation("This import read a spreadsheet, so there is no listing to refresh from.")
+    })?;
+    let now = (state.wall)();
+    let runs = ImportRunRepo::new(state.pool.clone());
+    let mut view = RunRefreshView::default();
+    let mut offset = 0;
+    loop {
+        let page = runs
+            .items_page(
+                context.org,
+                run,
+                &ItemPageFilter {
+                    state: None,
+                    search: None,
+                    order: ItemOrder::Listed,
+                    offset,
+                    limit: ITEMS_LISTED_MAX,
+                },
+            )
+            .await
+            .map_err(|error| storage_fault(&state, &error))?;
+        if page.items.is_empty() {
+            break;
+        }
+        offset = offset.saturating_add(i64::try_from(page.items.len()).unwrap_or(i64::MAX));
+        for item in &page.items {
+            if !matches!(item.state, RunItemState::Imported | RunItemState::Skipped) {
+                continue;
+            }
+            let Some(observed) = item.observed.as_ref() else {
+                continue;
+            };
+            let Ok(resource) = serde_json::from_value::<ObservedResource>(observed.clone()) else {
+                continue;
+            };
+            let pictures = stored_thumbnails(Some(observed));
+            let mut tx = begin_guarded(&state, context.org).await?;
+            let claim = match tam_storage::claimed_product_for(
+                &mut tx,
+                context.org,
+                source,
+                &resource.listing.remote,
+            )
+            .await
+            .map_err(|error| storage_fault(&state, &error))?
+            {
+                claimed @ Some(_) => claimed,
+                None => tam_storage::imported_product_for(
+                    &mut tx,
+                    context.org,
+                    source,
+                    item.locator.as_str(),
+                )
+                .await
+                .map_err(|error| storage_fault(&state, &error))?,
+            };
+            let filled = match claim.filter(|claim| claim.live) {
+                Some(claim) => fill_listing_facts(
+                    &mut tx,
+                    context.org,
+                    claim.product,
+                    &resource.listing,
+                    &pictures,
+                    now,
+                )
+                .await
+                .map_err(|error| storage_fault(&state, &error))?,
+                None => false,
+            };
+            tx.commit()
+                .await
+                .map_err(|error| sql_fault(&state, &error))?;
+            if filled {
+                view.filled = view.filled.saturating_add(1);
+            } else {
+                view.unchanged = view.unchanged.saturating_add(1);
+            }
+            if source.marketplace() == Marketplace::Tpt && resource.listing.extras.is_empty() {
+                view.read_again = view.read_again.saturating_add(1);
+            }
+        }
+    }
+    Ok(Json(view))
+}
+
 /// Deletes one import, at any stage of its life.
 ///
 /// Distinct from [`abandon`], which is the seller stopping an import they
@@ -2257,6 +2380,22 @@ async fn already_held(
         .covers(org, &held)
         .await
         .map_err(|error| storage_fault(state, &error))?;
+    // The same saving stops being one for a TPT resource whose listing
+    // details never arrived: every TPT import before they were carried made a
+    // product with empty pickers, no attestation and one picture, and only a
+    // read of the listing can give it the rest. The attestation marks a
+    // resource a read has filled — TPT states one on every listing — so
+    // exactly the unfilled ones are read again, once.
+    let detailed = if source.marketplace() == Marketplace::Tpt {
+        Some(
+            tam_storage::TptBaseRepo::new(state.pool.clone())
+                .attested(org, &held)
+                .await
+                .map_err(|error| storage_fault(state, &error))?,
+        )
+    } else {
+        None
+    };
     Ok(rows
         .iter()
         .filter_map(|row| {
@@ -2265,6 +2404,12 @@ async fn already_held(
                 cover.product == *product && !tam_pipeline::render::is_generated_card(cover.hash)
             });
             if !pictured {
+                return None;
+            }
+            if detailed
+                .as_ref()
+                .is_some_and(|filled| !filled.contains(product))
+            {
                 return None;
             }
             let title = products
@@ -2394,16 +2539,42 @@ pub(crate) async fn prepare_match(
         None => (None, None),
     };
 
+    // The listing's own pictures, stored the same way and for the same
+    // reason: each is a held blob from here on, named in the stored
+    // description by its digest and never by its bytes.
+    let mut thumbnails: Vec<ContentHash> = Vec::new();
+    for thumbnail in resource
+        .thumbnails
+        .iter()
+        .take(tam_engine_driver::import::THUMBNAILS_MAX)
+    {
+        thumbnails.push(store_cover(state, org, thumbnail.bytes(), now).await?);
+    }
+
     // The description as posted, minus the cover bytes: those are a blob named
     // by `cover_hash`, and a page's worth of base64 in a jsonb column would be
     // the one copy of a file this design exists to avoid.
     let mut stored = resource.clone();
     stored.cover_png = None;
-    let observed = serde_json::to_value(&stored).map_err(|error| {
+    stored.thumbnails = Vec::new();
+    let mut observed = serde_json::to_value(&stored).map_err(|error| {
         state.internal(&format!(
             "an observed resource would not serialise: {error}"
         ))
     })?;
+    if let Some(object) = observed.as_object_mut() {
+        if !thumbnails.is_empty() {
+            object.insert(
+                STORED_THUMBNAILS.to_owned(),
+                serde_json::Value::Array(
+                    thumbnails
+                        .iter()
+                        .map(|hash| serde_json::Value::String(crate::catalogue::hash_hex(*hash)))
+                        .collect(),
+                ),
+            );
+        }
+    }
 
     let source = head
         .source
@@ -3263,6 +3434,8 @@ async fn commit_one(
         }
         None => None,
     };
+    // The listing's own pictures, as the page stored them.
+    let pictures = stored_thumbnails(item.observed.as_ref());
 
     let applied = AppliedResource {
         // A locator is not inherently numeric -- a Tes resource is a URL -- so
@@ -3497,6 +3670,10 @@ async fn commit_one(
             )
             .await
             .map_err(|error| storage_fault(state, &error))?;
+            let detailed =
+                fill_listing_facts(&mut tx, org, survivor, &resource.listing, &pictures, now)
+                    .await
+                    .map_err(|error| storage_fault(state, &error))?;
             let (settlement, effect) = if restored {
                 tam_storage::record_imported(&mut tx, org, at, survivor, now)
                     .await
@@ -3513,7 +3690,7 @@ async fn commit_one(
                     &mut tx,
                     org,
                     at,
-                    &skip_sentence(&title, Supplied::thumbnail(repaired)),
+                    &skip_sentence(&title, Supplied::thumbnail(repaired).detailed(detailed)),
                     now,
                 )
                 .await
@@ -3540,6 +3717,16 @@ async fn commit_one(
             now,
         )
         .await?;
+        let detailed = fill_listing_facts(
+            &mut tx,
+            org,
+            reconciled.product,
+            &resource.listing,
+            &pictures,
+            now,
+        )
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
         let title = if reconciled.restored {
             std::borrow::Cow::Borrowed(prepared.product.title.0.as_str())
         } else {
@@ -3582,7 +3769,7 @@ async fn commit_one(
                 &mut tx,
                 org,
                 at,
-                &skip_sentence(&title, reconciled.supplied),
+                &skip_sentence(&title, reconciled.supplied.detailed(detailed)),
                 now,
             )
             .await
@@ -3627,11 +3814,14 @@ async fn commit_one(
         )
         .await
         .map_err(|error| storage_fault(state, &error))?;
+        let detailed = fill_listing_facts(&mut tx, org, holder, &resource.listing, &pictures, now)
+            .await
+            .map_err(|error| storage_fault(state, &error))?;
         tam_storage::record_skipped(
             &mut tx,
             org,
             at,
-            &skip_sentence(&title, Supplied::thumbnail(repaired)),
+            &skip_sentence(&title, Supplied::thumbnail(repaired).detailed(detailed)),
             now,
         )
         .await
@@ -3660,6 +3850,19 @@ async fn commit_one(
             .await
             .map_err(|error| storage_fault(state, &error))?;
     }
+    // The form's own fields the canonical product has no column for, from the
+    // same read, in the same transaction: a product that exists without them
+    // is the resource that opened with every picker empty and refused.
+    fill_listing_facts(
+        &mut tx,
+        org,
+        item.product,
+        &resource.listing,
+        &pictures,
+        now,
+    )
+    .await
+    .map_err(|error| storage_fault(state, &error))?;
     if let Some(fingerprint) = resource.fingerprint.as_ref() {
         write_fingerprint(
             &mut tx,
@@ -3696,6 +3899,9 @@ async fn commit_one(
 struct Supplied {
     file: bool,
     thumbnail: bool,
+    /// Whether the read filled any of the listing's own details the resource
+    /// had left empty: its pickers, tax code, attestation, pictures, licence.
+    details: bool,
 }
 
 impl Supplied {
@@ -3705,7 +3911,13 @@ impl Supplied {
         Self {
             file: false,
             thumbnail: repaired,
+            details: false,
         }
+    }
+
+    /// The same, noting whether the read filled the resource's details.
+    const fn detailed(self, details: bool) -> Self {
+        Self { details, ..self }
     }
 }
 
@@ -3851,7 +4063,11 @@ async fn reconcile_source(
         product,
         restored,
         describes_the_payload,
-        supplied: Supplied { file, thumbnail },
+        supplied: Supplied {
+            file,
+            thumbnail,
+            details: false,
+        },
     })
 }
 
@@ -4269,12 +4485,77 @@ async fn repair_cover(
 /// whether the resource can reach a marketplace at all, so it is named
 /// first.
 fn skip_sentence(title: &str, supplied: Supplied) -> String {
-    match (supplied.file, supplied.thumbnail) {
-        (true, true) => format!("same as {title}; this import added its file and thumbnail"),
-        (true, false) => format!("same as {title}; this import added its file"),
-        (false, true) => format!("same as {title}; this import added its thumbnail"),
-        (false, false) => format!("same as {title}"),
+    let mut added: Vec<&str> = Vec::new();
+    if supplied.file {
+        added.push("file");
     }
+    if supplied.thumbnail {
+        added.push("thumbnail");
+    }
+    if supplied.details {
+        added.push("details");
+    }
+    match added.as_slice() {
+        [] => format!("same as {title}"),
+        [one] => format!("same as {title}; this import added its {one}"),
+        [first, second] => format!("same as {title}; this import added its {first} and {second}"),
+        [first, second, third, ..] => {
+            format!("same as {title}; this import added its {first}, {second} and {third}")
+        }
+    }
+}
+
+/// The key the stored description names its listing pictures under.
+///
+/// The server's own annotation rather than a field of the wire type: a device
+/// posts the pictures' bytes, the page handler stores them as blobs, and what
+/// the description keeps is the digests, first slot first — the same trade
+/// `cover_hash` makes, held in the description because the pictures are a
+/// fact of the listing the description is.
+const STORED_THUMBNAILS: &str = "thumbnail_hashes";
+
+/// The listing pictures one stored description names, first slot first, and
+/// none for a description stored before pictures were read.
+pub(crate) fn stored_thumbnails(observed: Option<&serde_json::Value>) -> Vec<ContentHash> {
+    observed
+        .and_then(|value| value.get(STORED_THUMBNAILS))
+        .and_then(serde_json::Value::as_array)
+        .map(|hashes| {
+            hashes
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .filter_map(crate::catalogue::parse_hash)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// What a read states that the resource it landed on leaves unanswered,
+/// written onto that resource and nothing it already answers: the TPT form's
+/// own fields — pickers, tax code, attestation, localisation, pictures — and a
+/// rights grant where the resource states none.
+///
+/// Every commit branch calls this for the product the listing ends up on,
+/// which is what makes a re-import the backfill: the first read of a listing
+/// fills a new product, and a later read of the same listing fills whatever
+/// the first could not carry, without moving a value the seller has set.
+///
+/// Answers whether anything changed.
+pub(crate) async fn fill_listing_facts(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    product: ProductId,
+    listing: &tam_marketplace::ImportedListing,
+    thumbnails: &[ContentHash],
+    now: Timestamp,
+) -> Result<bool, tam_storage::StorageError> {
+    let sidecar = match tam_import::tpt_base_fill(listing, thumbnails) {
+        Some(fill) => tam_storage::fill_tpt_base(tx, org, product, &fill, now).await?,
+        None => false,
+    };
+    let rights =
+        tam_storage::fill_rights(tx, org, product, &tam_import::rights_from(listing), now).await?;
+    Ok(sidecar || rights)
 }
 
 async fn store_cover(

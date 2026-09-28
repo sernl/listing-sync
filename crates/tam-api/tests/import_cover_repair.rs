@@ -428,6 +428,7 @@ fn described(run: Uuid, cover: Option<Cover>) -> ImportPage {
                 rights: None,
                 price: ImportedPrice::Free,
                 state: Some(ListingState::Live),
+                extras: Default::default(),
             },
             fingerprint: None,
             file: Some(ObservedFile {
@@ -440,6 +441,7 @@ fn described(run: Uuid, cover: Option<Cover>) -> ImportPage {
                 entry: None,
             }),
             cover_png: cover,
+            thumbnails: Vec::new(),
         }],
         skipped: Vec::new(),
         complete: true,

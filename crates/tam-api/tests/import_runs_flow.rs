@@ -544,6 +544,7 @@ fn observed_on(
             rights: None,
             price: ImportedPrice::Free,
             state: Some(ListingState::Live),
+            extras: Default::default(),
         },
         fingerprint: Some(Fingerprint {
             version: tam_fingerprint::FINGERPRINT_VERSION,
@@ -562,6 +563,7 @@ fn observed_on(
             entry: None,
         }),
         cover_png: Some(cover()),
+        thumbnails: Vec::new(),
     }
 }
 

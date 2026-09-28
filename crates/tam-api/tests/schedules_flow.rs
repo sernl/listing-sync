@@ -830,6 +830,7 @@ fn observed(locator: &str, title: &str) -> ObservedResource {
             rights: None,
             price: ImportedPrice::Free,
             state: Some(ListingState::Live),
+            extras: Default::default(),
         },
         fingerprint: Some(Fingerprint {
             version: tam_fingerprint::FINGERPRINT_VERSION,
@@ -848,5 +849,6 @@ fn observed(locator: &str, title: &str) -> ObservedResource {
             entry: None,
         }),
         cover_png: Some(cover()),
+        thumbnails: Vec::new(),
     }
 }

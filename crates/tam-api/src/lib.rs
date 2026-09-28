@@ -443,6 +443,12 @@ pub fn router(state: AppState) -> Router {
             "/{version}/imports/runs/{run}/abandon",
             post(import_runs::abandon),
         )
+        // Fills what this run's stored reads state onto the resources they
+        // landed on, where those resources leave it unanswered.
+        .route(
+            "/{version}/imports/runs/{run}/refresh",
+            post(import_runs::refresh),
+        )
         // The cover a read produced, before any product exists to address it
         // through. Keyed on the ordinal rather than the locator, because a
         // locator is a URL and a path segment is not where one goes.

@@ -1062,6 +1062,8 @@ fn draft_head(
         // path overrides it from its own inventory list, which is the only
         // place that holds one.
         for_marketplace: false,
+        targets: None,
+        satisfied: vec![],
         grades: grades
             .iter()
             .map(|path| {
@@ -1182,6 +1184,14 @@ pub(crate) async fn prepare_create(
             // does not (D32), and only this body knows which it is.
             let draft = base.into_draft(DraftHead {
                 for_marketplace: !body.inventories.is_empty(),
+                // Held to the rules of the marketplaces it is going to and no
+                // others: a new resource is live nowhere yet.
+                targets: Some(
+                    body.inventories
+                        .iter()
+                        .map(|inventory| inventory.marketplace())
+                        .collect(),
+                ),
                 ..draft_head(&body.title, &body.body, price, &body.payload, &body.grades)
             });
             refuse_unsubmittable(&draft)?;
@@ -1911,7 +1921,33 @@ fn edited_head(
             None => stored.grades.raw.iter().map(stored_grade_slug).collect(),
         },
         for_marketplace: !mappings.is_empty(),
+        // The marketplaces this resource is mapped to are where the edit goes,
+        // and the ones it is already live on through a bound listing hold the
+        // fields they require: see `DraftInput::satisfied`.
+        targets: Some(
+            mappings
+                .iter()
+                .map(|record| record.mapping.inventory.marketplace())
+                .collect(),
+        ),
+        satisfied: live_on(mappings),
     }
+}
+
+/// The marketplaces this resource is live on through a bound listing.
+///
+/// Bound and live together, because each alone is not the claim: a bound
+/// draft was never held to the marketplace's publish rules, and a live
+/// lifecycle without a binding is a listing we cannot address.
+pub(crate) fn live_on(mappings: &[MappingRecord]) -> Vec<Marketplace> {
+    mappings
+        .iter()
+        .filter(|record| {
+            matches!(record.mapping.binding, Binding::Bound { .. })
+                && matches!(record.mapping.lifecycle, RemoteLifecycle::Live { .. })
+        })
+        .map(|record| record.mapping.inventory.marketplace())
+        .collect()
 }
 
 /// Whether this edit changes anything the sidecar's rules read.
