@@ -28,7 +28,7 @@ use tauri::Url;
 pub(crate) const GIVE_UP_AFTER: Duration = Duration::from_secs(8);
 
 /// How often the window is looked at until then.
-pub(crate) const LOOK_EVERY: Duration = Duration::from_millis(1_000);
+pub(crate) const LOOK_EVERY: Duration = Duration::from_secs(1);
 
 /// How long a look may take to be answered. A WebView that cannot evaluate
 /// a one-line script in this long is not showing the seller anything either.
@@ -121,16 +121,17 @@ pub(crate) fn taken_back(start: &Url) -> Url {
 /// One look at the window, or `None` when it did not answer in time or
 /// answered with something that is not a look.
 async fn look<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> Option<Look> {
-    let (tx, rx) = tokio::sync::oneshot::channel::<String>();
-    let tx = std::sync::Mutex::new(Some(tx));
+    // A bounded channel rather than a oneshot: the callback is `Fn`, and
+    // `try_send` takes `&self`, so nothing has to be moved out of it.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(1);
     window
         .eval_with_callback(LOOK_SCRIPT, move |answer| {
-            if let Some(tx) = tx.lock().ok().and_then(|mut slot| slot.take()) {
-                tx.send(answer).ok();
-            }
+            tx.try_send(answer).ok();
         })
         .ok()?;
-    let answer = tokio::time::timeout(ANSWER_WITHIN, rx).await.ok()?.ok()?;
+    let answer = tokio::time::timeout(ANSWER_WITHIN, rx.recv())
+        .await
+        .ok()??;
     read_look(&answer)
 }
 
