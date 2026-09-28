@@ -243,10 +243,12 @@
 	</article>
 {/snippet}
 
-{#snippet problem(field: FormField)}
+{#snippet problem(field: FormField, hint: string)}
 	{@const says = problemOf(field)}
-	{#if says !== null}
-		<span class="pr-error" id="pricing-{field}-error" role="alert">
+	{#if says === null}
+		<span class="hint">{hint}</span>
+	{:else}
+		<span class="hint pr-error" role="alert">
 			<Icon name="circle-alert" size={13} />
 			{says}
 		</span>
@@ -399,7 +401,6 @@
 									label="Code"
 									id="pricing-code"
 									required
-									hint="Letters, digits, - and _. Case does not matter."
 								>
 									<input
 										id="pricing-code"
@@ -410,10 +411,10 @@
 										aria-invalid={problemOf('code') !== null}
 										placeholder="TEACHER10"
 									/>
-									{@render problem('code')}
+									{@render problem('code', 'Letters, digits, - and _. Case does not matter.')}
 								</Field>
 							{/if}
-							<Field label="Name" id="pricing-name" required hint="Shown in Stripe and on receipts.">
+							<Field label="Name" id="pricing-name" required>
 								<input
 									id="pricing-name"
 									type="text"
@@ -422,7 +423,7 @@
 									aria-invalid={problemOf('name') !== null}
 									placeholder="Halloween 2026"
 								/>
-								{@render problem('name')}
+								{@render problem('name', 'Shown in Stripe and on receipts.')}
 							</Field>
 
 							{#if form.kind !== 'sale'}
@@ -449,7 +450,6 @@
 									label="Percent off"
 									id="pricing-percent"
 									required
-									hint="A whole number from 1 to 100."
 								>
 									<input
 										id="pricing-percent"
@@ -462,10 +462,10 @@
 										aria-invalid={problemOf('percent') !== null}
 										placeholder="25"
 									/>
-									{@render problem('percent')}
+									{@render problem('percent', 'A whole number from 1 to 100.')}
 								</Field>
 							{:else}
-								<Field label="Dollars off" id="pricing-dollars" required hint="Taken off in USD.">
+								<Field label="Dollars off" id="pricing-dollars" required>
 									<input
 										id="pricing-dollars"
 										type="number"
@@ -476,12 +476,12 @@
 										aria-invalid={problemOf('dollars') !== null}
 										placeholder="10"
 									/>
-									{@render problem('dollars')}
+									{@render problem('dollars', 'Taken off in USD.')}
 								</Field>
 							{/if}
 
 							<div class="pr-span pr-range">
-								<Field label="First day" id="pricing-from" required hint="Days are UTC.">
+								<Field label="First day" id="pricing-from" required>
 									<input
 										id="pricing-from"
 										type="date"
@@ -489,9 +489,9 @@
 										onblur={leave('from')}
 										aria-invalid={problemOf('from') !== null}
 									/>
-									{@render problem('from')}
+									{@render problem('from', 'Days are UTC.')}
 								</Field>
-								<Field label="Last day" id="pricing-until" required hint="Included.">
+								<Field label="Last day" id="pricing-until" required>
 									<input
 										id="pricing-until"
 										type="date"
@@ -500,7 +500,7 @@
 										onblur={leave('until')}
 										aria-invalid={problemOf('until') !== null}
 									/>
-									{@render problem('until')}
+									{@render problem('until', 'Included.')}
 								</Field>
 							</div>
 
@@ -515,7 +515,7 @@
 								</select>
 							</Field>
 							{#if form.terms.duration === 'repeating'}
-								<Field label="Months" id="pricing-months" required hint="From 1 to 36.">
+								<Field label="Months" id="pricing-months" required>
 									<input
 										id="pricing-months"
 										type="number"
@@ -526,7 +526,7 @@
 										onblur={leave('months')}
 										aria-invalid={problemOf('months') !== null}
 									/>
-									{@render problem('months')}
+									{@render problem('months', 'From 1 to 36.')}
 								</Field>
 							{:else}
 								<span class="pr-gap" aria-hidden="true"></span>
@@ -538,7 +538,6 @@
 										label="Banner"
 										id="pricing-banner"
 										required
-										hint="Shown on the pricing pages while the sale runs. Up to 140 characters."
 									>
 										<input
 											id="pricing-banner"
@@ -549,7 +548,7 @@
 											aria-invalid={problemOf('banner') !== null}
 											placeholder="Halloween sale: 25% off every plan until 31 October"
 										/>
-										{@render problem('banner')}
+										{@render problem('banner', 'Shown on the pricing pages while the sale runs. Up to 140 characters.')}
 									</Field>
 								</div>
 								<Field label="Banner link" id="pricing-href" hint="Optional. Starts with / or https://.">
@@ -585,13 +584,13 @@
 											</label>
 										{/each}
 									</div>
-									<span class="hint">
-										{form.kind === 'code' ? 'None picked means every plan.' : 'Pick one or more.'}
-									</span>
-									{@render problem('keys')}
+									{@render problem(
+										'keys',
+										form.kind === 'code' ? 'None picked means every plan.' : 'Pick one or more.'
+									)}
 								</fieldset>
 								{#if form.kind === 'code'}
-									<Field label="Use limit" id="pricing-limit" hint="Empty for no limit.">
+									<Field label="Use limit" id="pricing-limit">
 										<input
 											id="pricing-limit"
 											type="number"
@@ -601,7 +600,7 @@
 											onblur={leave('limit')}
 											aria-invalid={problemOf('limit') !== null}
 										/>
-										{@render problem('limit')}
+										{@render problem('limit', 'Empty for no limit.')}
 									</Field>
 								{/if}
 							{/if}
@@ -875,7 +874,7 @@
 		border-color: var(--bad);
 	}
 
-	.pr-error {
+	.pr-form .hint.pr-error {
 		display: inline-flex;
 		align-items: center;
 		gap: var(--s-1);
@@ -1004,6 +1003,22 @@
 
 		.pr-form {
 			padding: var(--s-4);
+		}
+
+		/* Three kinds across a phone: each takes a third and may wrap to
+		   two lines, rather than the last one running off the card. */
+		.pr-form-kind .segmented {
+			display: flex;
+			width: 100%;
+			border-radius: var(--r-panel);
+		}
+
+		.pr-form-kind .segmented button {
+			flex: 1 1 0;
+			padding: 6px 8px;
+			white-space: normal;
+			line-height: 1.25;
+			border-radius: var(--r-field);
 		}
 
 		.pr-form-foot :global(.cta) {

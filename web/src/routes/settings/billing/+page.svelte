@@ -559,8 +559,10 @@
 		<div>
 			<h2 id="packs-title" class="bill-h2">Move Packs</h2>
 			<p class="quiet bill-sub">
-				One-off, valid 12 months.{#if editDays !== null}
-					Edit a moved listing once within {editDays} days without spending another move.{/if}
+				One-off, valid 12 months.
+				{#if editDays !== null}
+					Edit a moved listing once within {editDays} days without spending another move.
+				{/if}
 			</p>
 		</div>
 		<div class="bill-pack-grid">
@@ -767,6 +769,7 @@
 
 	.bill-card-head {
 		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
 		justify-content: space-between;
 		gap: var(--s-3);
@@ -958,6 +961,7 @@
 	}
 
 	.bill-plan-price .per {
+		flex-basis: 100%;
 		font-size: 12.5px;
 		color: var(--muted);
 	}
@@ -1054,7 +1058,7 @@
 
 	.bill-pack-grid {
 		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+		grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
 		gap: var(--s-4);
 	}
 
