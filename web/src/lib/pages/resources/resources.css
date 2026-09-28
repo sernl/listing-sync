@@ -95,8 +95,14 @@
 	cursor: pointer;
 }
 
+/* A mark alone draws as a circle the height of its neighbours, centred, so the
+   three marks line up with the text chips rather than as ovals of their
+   marks' own widths. */
 .resources-page .res-fchip-mark {
-	padding: 0 9px;
+	justify-content: center;
+	flex: none;
+	width: 34px;
+	padding: 0;
 }
 
 .resources-page .res-fchip:hover:not(:disabled) {

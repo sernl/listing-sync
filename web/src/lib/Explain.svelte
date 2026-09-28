@@ -4,9 +4,11 @@
 	// A page's main flow says what to do in one sentence; the reasons, the
 	// marketplace policy quotes and the licence cautions live here, one press
 	// away. A native <dialog> rather than a hover popover: a thumb cannot
-	// hover, and the dialog brings focus trapping and Escape with it.
+	// hover, and the dialog brings focus trapping and Escape with it. A press
+	// outside closes it too, through `lightDismiss`.
 
 	import type { Snippet } from 'svelte';
+	import { lightDismiss } from '$lib/dismiss';
 	import Icon from '$lib/Icon.svelte';
 	import type { IconName } from '$lib/icons';
 
@@ -45,7 +47,7 @@
 	{#if label.length > 0}<span>{label}</span>{/if}
 </button>
 
-<dialog bind:this={element} aria-labelledby="{id}-title" class="explain">
+<dialog use:lightDismiss bind:this={element} aria-labelledby="{id}-title" class="explain">
 	<div class="dialog-body">
 		<h2 id="{id}-title">{title}</h2>
 		<div class="explain-body">

@@ -11,6 +11,7 @@
 		type VocabularyView
 	} from '$lib/api';
 	import { licenceGated, licenceOptions, payloadRefusal, requiredFields, fieldWords } from '$lib/authoring';
+	import { lightDismiss } from '$lib/dismiss';
 	import {
 		AUTHORABLE_PLATFORMS,
 		MARKETPLACE_TILES,
@@ -1420,7 +1421,7 @@
 	<!-- Centred, and a modal rather than a banner, because it answers an action
 	     the seller has just taken and a banner further down the page is exactly
 	     what they would not see. -->
-	<dialog
+	<dialog use:lightDismiss
 		class="res-warn"
 		bind:this={fileFirstDialog}
 		aria-labelledby="file-first-title"

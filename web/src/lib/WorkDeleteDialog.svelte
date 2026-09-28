@@ -9,6 +9,7 @@
 	// nothing outside the seller's own history, and saying so is most of what
 	// it is for.
 	import { ApiFailure, type JobDeletionView } from '$lib/api';
+	import { lightDismiss } from '$lib/dismiss';
 	import Note from '$lib/Note.svelte';
 	import {
 		WORK_DELETE_IN_FLIGHT,
@@ -126,7 +127,7 @@
 	}
 </script>
 
-<dialog
+<dialog use:lightDismiss
 	bind:this={element}
 	aria-labelledby="work-delete-title"
 	onclose={onClose}

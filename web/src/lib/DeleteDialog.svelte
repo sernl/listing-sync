@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { ApiFailure, api, type MappingHead } from '$lib/api';
+	import { lightDismiss } from '$lib/dismiss';
 	import { platformTitle } from '$lib/platforms';
 	import { standingOf } from '$lib/tes-portfolio';
 	import type { InventoryId } from '$lib/generated/vocab';
@@ -83,7 +84,7 @@
 	}
 </script>
 
-<dialog
+<dialog use:lightDismiss
 	bind:this={element}
 	aria-labelledby="delete-title"
 	onclose={onClose}

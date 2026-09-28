@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist';
+	import { lightDismiss } from '$lib/dismiss';
 	import {
 		OPENS_ELSEWHERE,
 		currentPage,
@@ -170,7 +171,7 @@
 	}
 </script>
 
-<dialog bind:this={element} aria-labelledby="file-viewer-title" onclose={onClose} class="viewer">
+<dialog use:lightDismiss bind:this={element} aria-labelledby="file-viewer-title" onclose={onClose} class="viewer">
 	<div class="dialog-body">
 		<h2 id="file-viewer-title">{name}</h2>
 		{#if refusal !== null}

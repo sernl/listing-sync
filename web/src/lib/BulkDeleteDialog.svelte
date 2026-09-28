@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { ApiFailure, api } from '$lib/api';
+	import { lightDismiss } from '$lib/dismiss';
 	import type { InventoryRow } from '$lib/inventory';
 	import { platformTitle } from '$lib/platforms';
 	import { standingOf } from '$lib/tes-portfolio';
@@ -112,7 +113,7 @@
 	}
 </script>
 
-<dialog
+<dialog use:lightDismiss
 	bind:this={element}
 	aria-labelledby="bulk-delete-title"
 	onclose={onClose}

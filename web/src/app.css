@@ -306,9 +306,12 @@ button {
 	min-width: 0;
 }
 
+/* Centred on its row on a phone, where it shares the row with the 44px
+   controls; at the top of the band above it, beside the title. */
 .page-ico {
 	grid-column: 1;
 	grid-row: 1;
+	align-self: center;
 	width: 38px;
 	height: 38px;
 	border-radius: 11px;
@@ -416,7 +419,11 @@ button {
 
 /* Above the phone line: the title returns beside the glyph, the fourth track
    goes with the controls that occupied it, and the actions take the row under
-   the title. */
+   the title. The glyph and the help control both hang from the top of the
+   band: centred, they followed the title block's height, which a description
+   under the title makes taller, and the help control dropped below the
+   actions beside it. Both are `--control-h` tall, so their tops line up their
+   centres too. */
 @media (min-width: 621px) {
 	.page-head {
 		grid-template-columns: auto minmax(0, 1fr) auto;
@@ -429,6 +436,11 @@ button {
 
 	.head-aside {
 		grid-row: 2;
+	}
+
+	.page-ico,
+	.page-help {
+		align-self: start;
 	}
 
 	.page-help {
@@ -451,9 +463,17 @@ button {
 		flex-wrap: wrap;
 	}
 
+	/* At least one control tall, with its contents centred in it and hung
+	   from the top of the band like the help control, so a short pill or a
+	   "Why?" trigger sits on the same centre line as a full-height button,
+	   the help control and the page glyph. Only here, where they share a
+	   line: below this the actions have a row of their own, and a page whose
+	   actions are all hidden on a phone would keep an empty one. */
 	.head-aside {
 		margin-left: auto;
 		justify-content: flex-start;
+		align-self: flex-start;
+		min-height: var(--control-h);
 	}
 
 	.page-help {
