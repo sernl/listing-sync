@@ -702,9 +702,19 @@ pub fn router(state: AppState) -> Router {
             post(consent::withdraw_consent),
         )
         // The seller's own files, on the seller's own machines: who holds
-        // what, and where one machine can reach another. Coordination only;
-        // no route here carries a byte of a file.
+        // what, and where one machine can reach another. Coordination only,
+        // except Teachouse's own copy of each imported file, which the
+        // seller's app sends and any signed-in browser reads back.
         .route("/{version}/library", get(library::list_library))
+        .route("/{version}/library/missing", get(library::missing_copies))
+        .route(
+            "/{version}/library/files/{hash}",
+            put(library::copy_file).layer(library::copy_body_limit()),
+        )
+        .route(
+            "/{version}/library/files/{hash}/content",
+            get(library::file_content),
+        )
         .route(
             "/{version}/devices/{device}/library/want",
             post(library::want).delete(library::unwant),

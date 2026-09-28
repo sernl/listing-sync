@@ -13,6 +13,7 @@
 		name,
 		contentType,
 		bytes,
+		url,
 		onClose,
 		onOpenElsewhere
 	}: {
@@ -21,6 +22,10 @@
 		contentType: string;
 		/** Read when the dialog opens, never earlier. */
 		bytes: () => Promise<ArrayBuffer>;
+		/** Where the file can be streamed from instead: Teachouse's copy. A
+		 *  PDF is then read a range at a time, so its first pages draw before
+		 *  the rest of a large file has arrived. */
+		url?: string;
 		onClose: () => void;
 		/** Hand the file to another application on this machine, where the
 		 *  surface can. Absent where it cannot, and the button is not shown. */
@@ -60,7 +65,9 @@
 
 	function release() {
 		if (imageUrl !== null) {
-			URL.revokeObjectURL(imageUrl);
+			if (imageUrl.startsWith('blob:')) {
+				URL.revokeObjectURL(imageUrl);
+			}
 			imageUrl = null;
 		}
 		for (const canvas of drawn.values()) {
@@ -76,9 +83,9 @@
 	async function load() {
 		refusal = null;
 		try {
-			const whole = await bytes();
 			if (mode === 'image') {
-				imageUrl = URL.createObjectURL(new Blob([whole], { type: contentType }));
+				imageUrl =
+					url ?? URL.createObjectURL(new Blob([await bytes()], { type: contentType }));
 				return;
 			}
 			if (mode !== 'pdf') {
@@ -87,7 +94,13 @@
 			const pdfjs = await import('pdfjs-dist');
 			const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
 			pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
-			task = pdfjs.getDocument({ data: whole.slice(0) });
+			// A megabyte a range: a 30 MB PDF is thirty requests at most, and
+			// the first page usually needs one or two.
+			task = pdfjs.getDocument(
+				url === undefined
+					? { data: (await bytes()).slice(0) }
+					: { url, rangeChunkSize: 1024 * 1024, withCredentials: true }
+			);
 			pdf = await task.promise;
 			pageCount = pdf.numPages;
 			width = Math.max(320, (scroller?.clientWidth ?? 640) - 32);
@@ -103,7 +116,10 @@
 			canvases = Array.from({ length: pageCount }, () => null);
 			await draw();
 		} catch {
-			refusal = 'Teachouse could not open that file on this computer.';
+			refusal =
+				url === undefined
+					? 'Teachouse could not open that file on this device.'
+					: 'Teachouse could not open that file. Try again, or download it.';
 		}
 	}
 

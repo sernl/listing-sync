@@ -11,6 +11,8 @@ import {
 	filtersToUrl,
 	machineFilesHref,
 	keptLine,
+	placeOf,
+	copyNote,
 	seenLine,
 	pageWindow,
 	transferLabel
@@ -38,10 +40,10 @@ function file(over: Partial<LibraryFileView> = {}): LibraryFileView {
 		holders: [{ device: 'phone', name: 'Pixel', online: false }],
 		wanted_by: [],
 		resources: [],
+		server_copy: 'device_only',
 		...over
 	};
 }
-
 
 describe('where a file is', () => {
 	it('tells a live holder, an offline holder and no holder apart', () => {
@@ -260,5 +262,33 @@ describe('the pager', () => {
 
 	it('says there are none rather than showing a range of nothing', () => {
 		expect(countSentence(pageWindow(0, 0, 0, 25))).toBe('No files');
+	});
+});
+
+describe('where a file is kept', () => {
+	it('tells a device copy, a Teachouse copy, both and neither apart', () => {
+		expect(placeOf(file({ server_copy: 'stored' }))).toBe('both');
+		expect(placeOf(file())).toBe('device');
+		expect(placeOf(file({ holders: [], server_copy: 'stored' }))).toBe('teachouse');
+		expect(placeOf(file({ holders: [] }))).toBe('nowhere');
+	});
+
+	it('names this device when it holds the file, and says why a copy will not happen', () => {
+		const [here, full, big] = fileRows(
+			[
+				file({
+					holders: [{ device: 'laptop', name: 'founder-pc', online: true }],
+					server_copy: 'stored'
+				}),
+				file({ hash: 'b'.repeat(64), server_copy: 'storage_full' }),
+				file({ hash: 'c'.repeat(64), server_copy: 'too_large' })
+			],
+			{ thisDevice: 'laptop', kept: new Map() }
+		);
+		expect(here.where).toBe('This device and Teachouse');
+		expect(full.where).toBe('Your device only');
+		expect(copyNote(full.copy)).toBe('Your plan’s storage is full — files stay on your device.');
+		expect(copyNote(big.copy)).toContain('too big');
+		expect(copyNote(here.copy)).toBeNull();
 	});
 });

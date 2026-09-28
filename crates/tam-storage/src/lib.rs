@@ -46,6 +46,7 @@ pub mod resource_templates;
 pub mod rule_capture;
 pub mod schedules;
 pub mod seller_rules;
+pub mod server_copy;
 pub mod sessions;
 pub mod site_setting;
 pub mod sync_settings;
@@ -185,6 +186,7 @@ pub use schedules::{
     ScheduleRepeat, ScheduleRepo, ScheduleRunRow, ScheduleRunWrite, ScheduleSelection,
     ScheduleWrite, UnknownTimezone, SCHEDULE_RUNS_LISTED_MAX,
 };
+pub use server_copy::{MissingCopy, NamedCopy, ServerCopyRepo};
 pub use sessions::{NewTenant, SessionIdentity, SessionRepo, SessionToken};
 pub use site_setting::SiteSettingRepo;
 pub use sync_settings::{

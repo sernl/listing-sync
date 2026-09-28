@@ -6,7 +6,7 @@
  * Pure, so the page-window arithmetic tests without a canvas.
  */
 
-import { api, type FileView } from '$lib/api';
+import { api, type FileView, type ServerCopy } from '$lib/api';
 import type { Invoke } from '$lib/desktop';
 import { libraryRead } from '$lib/desktop';
 
@@ -15,6 +15,76 @@ import { libraryRead } from '$lib/desktop';
 export interface ByteSource {
 	name: string;
 	bytes: () => Promise<ArrayBuffer>;
+	/** Where the viewer can stream it from instead, a page at a time. Only a
+	 *  file Teachouse holds has one. */
+	url?: string;
+	/** Why these bytes cannot be read from here, where they cannot. The
+	 *  sentence the seller reads in place of the control. */
+	unavailable?: string;
+}
+
+// ------------------------------------------------------- where a file is
+
+/** Where only the seller's device holds an imported file. */
+export const DEVICE_ONLY =
+	'This file is on your device only. Open the Teachouse app on that device to copy it to Teachouse.';
+
+/** Where the plan has no room for the copy. */
+export const STORAGE_FULL = 'Your plan’s storage is full — files stay on your device.';
+
+/** Where the file is larger than a copy can be. */
+export const TOO_LARGE = 'This file is too big to copy to Teachouse, so it stays on your device.';
+
+/** How the app's copy works, for the Explain beside any of the three. */
+export const COPY_EXPLAINED = [
+	'When you import from a marketplace, the Teachouse app on that device keeps the original file.',
+	'The app then copies it to Teachouse, so you can view it, make a preview from it and download it wherever you sign in. It does this in the background, whenever the app is open.',
+	'Copies count towards your plan’s storage.'
+];
+
+/** Whether Teachouse holds a file. A server that predates the field only
+ *  ever answered files it held. */
+export function copyOf(file: Pick<FileView, 'server_copy'>): ServerCopy {
+	return file.server_copy ?? 'stored';
+}
+
+/** The sentence a file Teachouse does not hold carries, or `null` where it
+ *  holds it. */
+export function copySentence(copy: ServerCopy): string | null {
+	switch (copy) {
+		case 'stored':
+			return null;
+		case 'device_only':
+			return DEVICE_ONLY;
+		case 'storage_full':
+			return STORAGE_FULL;
+		case 'too_large':
+			return TOO_LARGE;
+	}
+}
+
+/** What View opens for one stored file, in order of preference: Teachouse's
+ *  copy, which streams and is the same everywhere; this device's own kept
+ *  copy, inside the app; or nothing, with the sentence saying why. */
+export type ViewFrom =
+	| { kind: 'server'; source: ByteSource }
+	| { kind: 'device'; source: ByteSource }
+	| { kind: 'unavailable'; sentence: string };
+
+export function viewFrom(
+	product: string,
+	file: FileView,
+	invoke: Invoke | null,
+	keptHere: boolean
+): ViewFrom {
+	const copy = copyOf(file);
+	if (copy === 'stored') {
+		return { kind: 'server', source: sourceOfStored(product, file) };
+	}
+	if (keptHere) {
+		return { kind: 'device', source: sourceOfKept(invoke, file.name ?? 'file', file.hash) };
+	}
+	return { kind: 'unavailable', sentence: copySentence(copy) ?? DEVICE_ONLY };
 }
 
 /** The in-session upload as a source. */
@@ -46,7 +116,8 @@ export function keptPdfSource(
 	kept: ReadonlySet<string>
 ): ByteSource | null {
 	const file = files.find(
-		(candidate) => candidate.role === 'payload' && candidate.kind === 'pdf' && kept.has(candidate.hash)
+		(candidate) =>
+			candidate.role === 'payload' && candidate.kind === 'pdf' && kept.has(candidate.hash)
 	);
 	if (file === undefined) {
 		return null;
@@ -60,15 +131,31 @@ export function keptPdfSource(
 export function sourceOfStored(product: string, file: FileView): ByteSource {
 	return {
 		name: file.name ?? `file.${file.kind}`,
-		bytes: () => api.productFileBytes(product, file.id)
+		bytes: () => api.productFileBytes(product, file.id),
+		url: api.productFileUrl(product, file.id)
 	};
 }
 
 /** The stored PDF a preview is cut from on a saved resource: the first PDF
- *  payload, which is the file the thumbnail is drawn from too. */
+ *  payload, which is the file the thumbnail is drawn from too.
+ *
+ *  Where Teachouse has no copy of it yet, the source says so rather than
+ *  offering bytes that would fail to arrive: the maker shows the sentence in
+ *  place of the button. */
 export function storedPdfSource(product: string, files: readonly FileView[]): ByteSource | null {
 	const file = files.find((candidate) => candidate.role === 'payload' && candidate.kind === 'pdf');
-	return file === undefined ? null : sourceOfStored(product, file);
+	if (file === undefined) {
+		return null;
+	}
+	const sentence = copySentence(copyOf(file));
+	if (sentence === null) {
+		return sourceOfStored(product, file);
+	}
+	return {
+		name: file.name ?? 'file.pdf',
+		bytes: () => Promise.reject(new Error(sentence)),
+		unavailable: sentence
+	};
 }
 
 /** The type a stored file is drawn as, from the kind the product view names. */

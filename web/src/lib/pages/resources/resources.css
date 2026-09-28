@@ -1253,6 +1253,15 @@
 	color: var(--bad-ink);
 }
 
+/* Where an imported file is when Teachouse has no copy yet: the sentence and
+   its Why? on one line under the row. */
+.resources-page .res-file-copy {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
 .resources-page .res-file-ask {
 	flex-basis: 100%;
 	display: flex;

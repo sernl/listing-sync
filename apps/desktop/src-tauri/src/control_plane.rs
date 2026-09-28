@@ -107,6 +107,11 @@ pub fn base_url() -> String {
 /// would stall the scheduler tick behind it.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long one file copy to Teachouse may take. A 96 MiB file over a home
+/// upload of 1 Mbit/s is about thirteen minutes; this bound is for a copy
+/// that has stalled, not for one that is slow.
+pub const COPY_TIMEOUT: Duration = Duration::from_mins(30);
+
 /// How long the connection itself may take. Shorter than the whole request:
 /// a machine that cannot reach us at all should fail fast and be retried at
 /// the next tick rather than occupy one.
@@ -180,6 +185,19 @@ pub trait Transport: Send + Sync {
         _body: String,
     ) -> TransportFuture<'a> {
         Box::pin(async { Err("this transport cannot delete".to_owned()) })
+    }
+
+    /// Puts raw bytes at one of our own paths, under the same per-call
+    /// session. One caller: the library's copy of an imported file to
+    /// Teachouse. Defaulted to a refusal so the test doubles that never send
+    /// a file need no arm for it.
+    fn put_bytes<'a>(
+        &'a self,
+        _path: &'a str,
+        _session: &'a str,
+        _body: Vec<u8>,
+    ) -> TransportFuture<'a> {
+        Box::pin(async { Err("this transport cannot send a file".to_owned()) })
     }
 }
 
@@ -312,6 +330,30 @@ impl Transport for HttpTransport {
                 .client
                 .delete(format!("{}{path}", self.base))
                 .header("content-type", "application/json")
+                .header("accept", "application/json")
+                .header("cookie", format!("{SESSION_COOKIE}={session}"))
+                .body(body)
+                .send()
+                .await
+                .map_err(|why| why.to_string())?;
+            let status = response.status().as_u16();
+            let body = response.text().await.map_err(|why| why.to_string())?;
+            Ok(Reply { status, body })
+        })
+    }
+
+    fn put_bytes<'a>(
+        &'a self,
+        path: &'a str,
+        session: &'a str,
+        body: Vec<u8>,
+    ) -> TransportFuture<'a> {
+        Box::pin(async move {
+            let response = self
+                .client
+                .put(format!("{}{path}", self.base))
+                .timeout(COPY_TIMEOUT)
+                .header("content-type", "application/octet-stream")
                 .header("accept", "application/json")
                 .header("cookie", format!("{SESSION_COOKIE}={session}"))
                 .body(body)
@@ -492,6 +534,94 @@ impl HttpControlPlane {
             Err(refusal(&reply))
         }
     }
+}
+
+/// The imported files Teachouse holds no copy of, and the room there is for
+/// them: `GET /v1/library/missing`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct MissingCopies {
+    /// Smallest first.
+    pub files: Vec<MissingCopy>,
+    pub stored_bytes: u64,
+    pub storage_bytes_max: u64,
+    /// The largest single copy the server takes.
+    pub copy_bytes_max: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct MissingCopy {
+    pub hash: String,
+    pub byte_len: u64,
+}
+
+/// What one copy to Teachouse came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CopyOutcome {
+    /// Teachouse holds the file now, whether this copy put it there or an
+    /// earlier one had.
+    Stored,
+    /// The plan's storage has no room for it. Nothing more fits until the
+    /// seller frees space or changes plan, so the caller stops.
+    StorageFull,
+    /// The server will never take these bytes as sent: too large, not the
+    /// file named, no resource uses it, or a scan refused them.
+    Refused(String),
+}
+
+impl HttpControlPlane {
+    /// The imported files Teachouse has no copy of.
+    pub async fn library_missing(&self) -> Result<MissingCopies, ControlPlaneError> {
+        let view = self
+            .view(
+                "/v1/library/missing",
+                "the server does not know this library",
+            )
+            .await?;
+        serde_json::from_value(view).map_err(|why| ControlPlaneError::Refused(why.to_string()))
+    }
+
+    /// Sends one file's bytes as Teachouse's copy of it.
+    ///
+    /// An outage is an error, so the caller tries again on a later beat; a
+    /// refusal the server will repeat is an outcome, so it does not.
+    pub async fn library_copy(
+        &self,
+        hash: &str,
+        bytes: Vec<u8>,
+    ) -> Result<CopyOutcome, ControlPlaneError> {
+        let session = self
+            .sessions
+            .session()
+            .await
+            .map_err(|why| ControlPlaneError::Refused(why.to_string()))?
+            .ok_or(ControlPlaneError::NoSession)?;
+        let reply = self
+            .transport
+            .put_bytes(&copy_path(hash), &session, bytes)
+            .await
+            .map_err(ControlPlaneError::Refused)?;
+        Ok(match reply.status {
+            200 | 201 => CopyOutcome::Stored,
+            401 | 403 => return Err(forbidden(&reply.body)),
+            422 if reply.body.contains("quota_exceeded") => CopyOutcome::StorageFull,
+            404 | 413 | 422 => {
+                CopyOutcome::Refused(format!("{}: {}", reply.status, excerpt(&reply.body)))
+            }
+            status => {
+                return Err(ControlPlaneError::Refused(format!(
+                    "{status}: {}",
+                    excerpt(&reply.body)
+                )))
+            }
+        })
+    }
+}
+
+/// Where one file's copy is sent. Free so the tests name the same expression
+/// the client uses rather than a copy of it.
+#[must_use]
+pub fn copy_path(hash: &str) -> String {
+    format!("/v1/library/files/{hash}")
 }
 
 /// The answer to the peers read.
