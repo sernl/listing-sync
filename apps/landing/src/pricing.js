@@ -1,64 +1,51 @@
 /**
  * What the landing page adds to the server's plan table.
  *
- * Every price, cap and capability arrives from `plans.generated.js`, which
- * `cargo run -p tam-typegen` emits from `tam-limits` and `just web-check`
- * diffs, so the pricing page cannot drift from what the server actually
- * enforces. Changing a number is a change in the Rust table, never here.
+ * Every price, cap, tagline and comparison row arrives from
+ * `plans.generated.js`, which `cargo run -p tam-typegen` emits from
+ * `tam-limits` and `just web-check` diffs, so the pricing page cannot drift
+ * from what the server actually enforces. Changing a number, a tagline or
+ * which plan is recommended is a change in the Rust table, never here.
  *
- * What stays here is what the landing alone owns: the phrasing of a card, the
- * dollar formatting, the chips each plan derives from `capabilities`, the
+ * What stays here is what the landing alone owns: dollar formatting, how a
+ * comparison cell reads, which rows a card lifts out as its highlights, the
  * signup links that carry a price key across to the console, and the
  * questions. Prices are quoted in USD only: TPT is a US marketplace and Tes is
  * UK-centred, so NZD is neither buyer's currency and quoting it puts an FX
  * conversion in front of a small ticket.
  */
 
-import { AI, PACKS, PLANS } from './plans.generated.js';
+import { PACKS, PLANS, PLAN_FEATURES, PLAN_FEATURE_GROUPS } from './plans.generated.js';
+import { dollars } from './sale.js';
 
-export { AI, PACKS };
+export { dollars };
 
-/** `u32::MAX` is how the plan table spells "no cap". */
-const UNCAPPED = 4294967295;
-
-/** A price in dollars, showing cents only where a price is not whole. */
-export const dollars = (cents) =>
-	cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`;
+/** Every plan, weakest first, in the table's own order. */
+export const plans = PLANS;
 
 /** The free plan, which the table names "Look". */
 export const free = PLANS.find((plan) => plan.id === 'free');
 
-/** The three paid plans, cheapest first, in the table's own order. */
-export const paidPlans = PLANS.filter((plan) => plan.yearly_cents !== null);
-
 /**
- * The plan we expect most sellers to want, drawn with the ring. Sync, the
- * middle rung: the one a teacher adding resources every week lands on.
- */
-export const leadPlan = 'subscriber';
-
-/** Who each paid plan is for, in one sentence under its name. */
-export const planPitch = {
-	starter: 'For teachers who add a resource now and then.',
-	subscriber: 'For teachers who add resources every week.',
-	studio: 'For big catalogues and whole-shop moves.'
-};
-
-/**
- * The headline figure is the annual price divided across its months, because
- * that is the number a reader compares against another tool's monthly price.
- * The true monthly price sits beside it in smaller type rather than being
- * left for the checkout to introduce.
+ * The headline figure in yearly mode is the annual price divided across its
+ * months, because that is the number a reader compares against another
+ * tool's monthly price. The year's total sits under it rather than being left
+ * for the checkout to introduce.
  */
 export const perMonthYearly = (plan) => Math.round(plan.yearly_cents / 12);
 
 /**
- * The pack a reader lands on from the packs card.
- *
- * The middle rung is the one a seller moving a shop usually wants, and a card
- * whose button leads nowhere in particular is a card with no button.
+ * What paying yearly saves, in dollars: a concrete sum reads better than a
+ * percentage (2026-09-29 pricing review, section 4).
  */
-export const featuredPack = PACKS.find((pack) => pack.key === 'pack_100');
+export const yearlySaving = (plan) => plan.monthly_cents * 12 - plan.yearly_cents;
+
+/** The largest yearly saving on the page, as a whole percentage, for the switch. */
+export const bestYearlyPercent = Math.max(
+	...PLANS.filter((plan) => plan.yearly_cents !== null).map((plan) =>
+		Math.floor((yearlySaving(plan) * 100) / (plan.monthly_cents * 12))
+	)
+);
 
 /**
  * Where a call to action goes, and what it carries.
@@ -74,63 +61,122 @@ export const signupUrl = (priceKey) =>
 		? `${SIGNUP}?next=/settings/billing`
 		: `${SIGNUP}?next=/settings/billing&price=${priceKey}`;
 
-/**
- * A plan card's lines, read off `capabilities` rather than typed out beside
- * them.
- *
- * A hand-written chip is a second price list: it goes stale the day a cap
- * moves in `tam-limits` and nothing fails. These are the capabilities a
- * teacher is choosing between, in the order they matter, worded for a
- * teacher rather than for whoever built them (the founder's 2026-09-26
- * review: no "pulls every 6 hours"), and `soon` marks the one line that is
- * sold before it is built so a tick cannot claim otherwise. The console's
- * Billing page (`web/src/lib/pages/account/plans.ts`) says the same lines.
- *
- * The order is the founder's PDF review of 2026-09-27: what every plan does
- * first, the counts in the middle, and the free plan's trial moves last. A
- * cap that is not there is not a line: an unlimited catalogue says nothing
- * rather than "No limit on resources", which the 2026-09-26 review asked to
- * remove.
- */
-export const planFeatures = (plan) => {
-	const caps = plan.capabilities;
-	const count = (n, noun) => (n === UNCAPPED ? `Unlimited ${noun}` : `${n} ${noun}`);
-	const lines = [];
-	if (caps.import_spreadsheet && caps.import_marketplace)
-		lines.push({ text: 'Import from wherever you sell' });
-	if (caps.sync_pull_interval_secs !== null) lines.push({ text: 'Edit once, sync everywhere' });
-	if (caps.moves_per_month > 0) lines.push({ text: `${caps.moves_per_month} moves a month` });
-	if (caps.moves_accrual_cap > 0)
-		lines.push({ text: `Unused moves stack to ${caps.moves_accrual_cap}` });
-	if (caps.resources_max < UNCAPPED) lines.push({ text: `Up to ${caps.resources_max} resources` });
-	lines.push({ text: 'Add a watermarked preview of your file' });
-	if (caps.scheduling) lines.push({ text: 'Scheduling' });
-	if (caps.templates_max > 1) lines.push({ text: count(caps.templates_max, 'templates') });
-	if (caps.collections_max > 0) lines.push({ text: count(caps.collections_max, 'collections') });
-	if (caps.analytics) lines.push({ text: 'Statistics on every shop' });
-	if (caps.auto_publish_rules) lines.push({ text: 'Automatic publishing rules' });
-	if (caps.support === 'email_1_day') lines.push({ text: 'Priority support' });
-	if (caps.ai_fills_per_month > 0 && AI.status === 'coming_soon')
-		lines.push({ text: 'AI description fill, coming soon', soon: true });
-	if (caps.free_moves_lifetime > 0)
-		lines.push({ text: `${caps.free_moves_lifetime} moves onto a marketplace of your choice` });
-	return lines;
-};
+/** How often edits go out, said the way a teacher would. */
+const cadence = (hours) =>
+	hours === 24 ? 'Daily' : hours === 1 ? 'Hourly' : `Every ${hours} hours`;
+
+/** A size in mebibytes, as MB below a gigabyte and GB above. */
+const size = (megabytes) =>
+	megabytes >= 1024 ? `${Math.round(megabytes / 1024)} GB` : `${megabytes} MB`;
 
 /**
- * What a pack buys, per pack. The per-move figure is the reason the table has
- * three columns: the rungs are priced to reward a bigger commitment, and a
- * reader cannot see that from the price alone.
+ * One comparison cell, as the table draws it: `kind` picks the mark (a tick,
+ * a dash, a hollow "soon" mark or a figure), `text` is what a figure says and
+ * `label` is what a screen reader hears in place of a mark.
+ *
+ * The one cell the table cannot read off its row is Look's moves: Look has
+ * no monthly allowance but does have its trial moves, which the table says
+ * rather than a dash that would read as "none".
  */
+export const cell = (feature, plan) => {
+	const value = feature.included[plan.id];
+	if (feature.key === 'moves' && value === false && plan.capabilities.free_moves_lifetime > 0)
+		return { kind: 'text', text: `${plan.capabilities.free_moves_lifetime} to try` };
+	if (value === false) return { kind: 'no', label: 'Not included' };
+	if (value === true) {
+		if (feature.unit !== null) return { kind: 'text', text: 'Unlimited' };
+		return feature.soon
+			? { kind: 'soon', label: 'Coming soon' }
+			: { kind: 'yes', label: 'Included' };
+	}
+	switch (feature.unit) {
+		case 'per_month':
+			return { kind: 'text', text: `${value} a month` };
+		case 'megabytes':
+			return { kind: 'text', text: size(value) };
+		case 'every_hours':
+			return { kind: 'text', text: cadence(value) };
+		default:
+			return { kind: 'text', text: `${value}` };
+	}
+};
+
+/** The comparison table: its sections in order, each with its rows. */
+export const comparison = PLAN_FEATURE_GROUPS.map((group) => ({
+	...group,
+	rows: PLAN_FEATURES.filter((feature) => feature.group === group.id)
+}));
+
+/**
+ * The rows a card lifts out, in the order they matter to a teacher choosing.
+ * A card shows at most five, so the full list lives in the table under the
+ * cards and each card stays a glance.
+ */
+const HIGHLIGHT_ORDER = [
+	'moves',
+	'edit_sync',
+	'scheduling',
+	'auto_publish_rules',
+	'analytics',
+	'resources',
+	'import',
+	'watermarked_previews',
+	'templates',
+	'collections',
+	'priority_support',
+	'export'
+];
+const HIGHLIGHTS_MAX = 5;
+const byKey = new Map(PLAN_FEATURES.map((feature) => [feature.key, feature]));
+
+/** One highlight line, worded from a row and one plan's cell. */
+const highlight = (feature, plan) => {
+	const value = feature.included[plan.id];
+	const noun = feature.label.toLowerCase();
+	if (feature.key === 'moves' && value === false)
+		return `${plan.capabilities.free_moves_lifetime} moves to try`;
+	if (feature.key === 'edit_sync') return `Edits synced ${cadence(value).toLowerCase()}`;
+	if (feature.unit === null) return feature.label;
+	if (value === true) return `Unlimited ${noun}`;
+	if (feature.unit === 'per_month') return `${value} ${noun} a month`;
+	const counted = value === 1 ? noun.replace(/s$/, '') : noun;
+	return feature.key === 'resources' ? `Up to ${value} ${counted}` : `${value} ${counted}`;
+};
+
+/** Whether a row's cell on one plan is worth saying on that plan's card. */
+const reaches = (feature, plan) =>
+	feature.included[plan.id] !== false ||
+	(feature.key === 'moves' && plan.capabilities.free_moves_lifetime > 0);
+
+/**
+ * A card's highlights. The free card says what the trial gives; each paid
+ * card says only what it adds to the plan before it, under "Everything in
+ * Look, plus", which is the reading the good-better-best layout asks for.
+ */
+export const cardHighlights = (plan) => {
+	const index = PLANS.indexOf(plan);
+	const below = index > 0 ? PLANS[index - 1] : null;
+	const lines = HIGHLIGHT_ORDER.map((key) => byKey.get(key))
+		.filter((feature) => feature !== undefined && !feature.soon && reaches(feature, plan))
+		.filter(
+			(feature) =>
+				below === null || feature.included[plan.id] !== feature.included[below.id]
+		)
+		.slice(0, HIGHLIGHTS_MAX)
+		.map((feature) => highlight(feature, plan));
+	return { base: below === null ? null : below.name, lines };
+};
+
+/** The pack a reader lands on from the packs strip: the middle rung. */
+export const featuredPack = PACKS.find((pack) => pack.key === 'pack_100');
+
+/** What a pack buys, per pack, with the per-move figure the rungs fall by. */
 export const packRows = PACKS.map((pack) => ({
 	key: pack.key,
 	moves: pack.moves,
 	price: dollars(pack.price_cents),
 	perMove: dollars(pack.per_move_cents)
 }));
-
-/** The edit window, said on the packs card rather than at the first re-edit. */
-export const packEditNote = `Edit a moved listing once within ${free.capabilities.pack_edit_days} days without spending another move.`;
 
 /** What a move is, said once under the heading of the cards that sell them. */
 export const moveDefinition =
@@ -139,11 +185,10 @@ export const moveDefinition =
 /**
  * The questions, and the only place the site answers one.
  *
- * Every figure in an answer is interpolated from the plan table above, so the
- * price list and the questions about it cannot disagree. The answers follow
- * `docs/guides/faq.md`, cut to two short sentences and written the way a
- * teacher would say them, not the way the system counts them: a reader on
- * this page is deciding, not learning the product.
+ * Eight, trimmed from eleven in the 2026-09-29 review: the pricing questions
+ * a card or the comparison table does not already answer, and the two
+ * questions about trust (the desktop app, where files go) that no table
+ * can. Every figure in an answer is interpolated from the plan table.
  */
 export const faqs = [
 	{
@@ -152,35 +197,25 @@ export const faqs = [
 	},
 	{
 		q: 'What is free?',
-		a: 'Importing your resources, editing them in Teachouse, previewing and exporting never use a move. You only use a move when you publish a resource onto a marketplace.'
-	},
-	{
-		q: 'What do the free moves get me?',
-		a: `When you connect your first shop, you get ${free.capabilities.free_moves_lifetime} free moves to publish onto a marketplace of your choice. Every account gets them once.`
+		a: `Importing your resources, editing them in Teachouse, previewing and exporting never use a move. On ${free.name} you also get ${free.capabilities.free_moves_lifetime} free moves when you connect your first shop.`
 	},
 	{
 		q: 'Which plan is right for me?',
-		a: `Buy a Move Pack if you are moving your shop once. Otherwise pick by how often you publish: ${paidPlans.map((plan) => `${plan.name} gives ${plan.capabilities.moves_per_month} moves a month`).join(', ')}.`
+		a: `Pick by how often you publish: ${PLANS.filter((plan) => plan.capabilities.moves_per_month > 0)
+			.map((plan) => `${plan.name} gives ${plan.capabilities.moves_per_month} moves a month`)
+			.join(', ')}. Moving your shop once? A Move Pack is cheaper than subscribing.`
 	},
 	{
-		q: 'Do moves run out?',
-		a: 'Move Pack moves last 12 months from the day you buy them. On a paid plan, moves you do not use carry over, up to three months\u2019 worth.'
+		q: 'What happens if I run out of moves?',
+		a: 'Nothing is charged by surprise. Your next move waits for next month\u2019s moves, or you buy a Move Pack. Unused moves carry over, up to three months\u2019 worth, and pack moves last 12 months.'
 	},
 	{
-		q: 'Can I change a listing after I move it?',
-		a: `Yes. Within ${free.capabilities.pack_edit_days} days of a move you can edit that listing once and send the change without using another move.`
+		q: 'Can I change plans or cancel?',
+		a: 'Yes, up or down at any time in Account \u2192 Billing. A cancelled plan runs to the end of the period you paid for, and your resources and moves stay where they are.'
 	},
 	{
 		q: 'Can I get a refund?',
-		a: 'Yes, for a Move Pack you have not used: write to us within 14 days of buying it. You can cancel a plan at any time in Account \u2192 Billing, and it runs until the end of the period you paid for.'
-	},
-	{
-		q: 'Can I change plans?',
-		a: 'Yes, up or down at any time in Account \u2192 Billing. Your resources and the moves you already hold stay where they are.'
-	},
-	{
-		q: 'Which marketplaces can I use?',
-		a: 'Tes and Teachers Pay Teachers. You can move resources either way between them.'
+		a: 'Yes, for a Move Pack you have not used: write to us within 14 days of buying it.'
 	},
 	{
 		q: 'Why do I need the desktop app?',

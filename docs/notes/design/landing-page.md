@@ -197,6 +197,17 @@ There is no download link on the page any more and `downloadUrl` is gone from `s
 Windows has no mark we may draw, so its chip carries a plain desktop glyph beside the name; Android's robot is drawn at 24px.
 The licence lines stay as 11px fine print, verbatim, because the robot's grant requires them.
 
+## Amended 2026-09-29: good, better, best
+
+The pricing section is four cards, a comparison table and the packs strip (`docs/notes/design/research/2026-09-29-pricing-structure-review.md` §6).
+
+- **The switch.** A Monthly/Yearly switch defaults to yearly. It is two native radio inputs, and `site.css` shows one cadence with `:has()`, so it needs no script and reads as a radio group.
+- **The cards.** The plan the table marks `recommended` (Sync) is raised with a badge. Each card carries the plan's `tagline`, its price and at most five highlights. For a paid card those are only what it adds to the plan below ("Everything in Starter, plus:").
+- **The table.** "Compare the plans" is drawn from `PLAN_FEATURES`, whose cells `tam-limits` computes from the gates at compile time. `src/pricing.js` only words a cell. The table scrolls sideways in a focusable region with the feature column pinned.
+- **Sales.** The page still strikes prices during a sale, and it hides "save $N a year" (`data-sale-hide`) because that figure is worked out at list price.
+- **The questions.** They are cut to eight.
+- **What this retires.** The chips (`planFeatures`, `leadPlan` and `planPitch`) are gone, along with the promise of a 90-day free re-edit, which no code implements.
+
 ## Where the code holds each decision
 
 Amended 2026-09-12, phase 1: the prices are no longer the landing's own.
