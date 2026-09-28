@@ -774,7 +774,7 @@ async fn subject_user(state: &AppState, subject: &str) -> Result<UserId, APIErro
         .map_err(|error| storage_fault(state, &error))?
         .map(|(_, user)| user)
         .ok_or_else(|| {
-            missing("no platform user has that identity; they must open the app once first")
+            missing("They have not opened the app yet, so there is no one to make an operator.")
         })
 }
 

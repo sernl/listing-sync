@@ -3,6 +3,7 @@
 	// account at a time with a running tally, then lists what happened to
 	// each, failures first and in the server's own words.
 
+	import { untrack } from 'svelte';
 	import type { IdentityUser } from '$lib/auth-client';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
@@ -39,6 +40,11 @@
 
 	type Stage = 'confirm' | 'running' | 'done';
 
+	/** The count as it was when the dialog opened. The host clears its
+	 *  selection when the run ends, and the heading must keep saying what
+	 *  was asked. */
+	const asked = untrack(() => count);
+
 	let element = $state<HTMLDialogElement | null>(null);
 	let stage = $state<Stage>('confirm');
 	let typed = $state('');
@@ -48,7 +54,7 @@
 	let refusal = $state<string | null>(null);
 
 	const words = $derived(BULK_WORDS[action]);
-	const ready = $derived(action !== 'delete' || typed.trim() === String(count));
+	const ready = $derived(action !== 'delete' || typed.trim() === String(asked));
 	const failures = $derived(results.filter((result) => result.failure !== null));
 	const worked = $derived(results.filter((result) => result.failure === null));
 
@@ -95,7 +101,7 @@
 	use:lightDismiss
 >
 	<form class="dialog-body" onsubmit={run}>
-		<h2 id="bulk-users-title">{countWords(words.question, count)}</h2>
+		<h2 id="bulk-users-title">{countWords(words.question, asked)}</h2>
 		<p>{words.effect}</p>
 
 		{#if refusal}
@@ -111,7 +117,7 @@
 			{/if}
 			{#if action === 'delete'}
 				<label class="field">
-					<span>Type <strong>{count}</strong> to confirm.</span>
+					<span>Type <strong>{asked}</strong> to confirm.</span>
 					<input bind:value={typed} inputmode="numeric" autocomplete="off" />
 				</label>
 			{/if}
@@ -169,9 +175,9 @@
 					type="submit"
 					icon={words.icon}
 					disabled={!ready || stage === 'running'}
-					reason={stage === 'running' ? 'Working.' : !ready ? `Type ${count} first.` : undefined}
+					reason={stage === 'running' ? 'Working.' : !ready ? `Type ${asked} first.` : undefined}
 				>
-					{countWords(words.confirm, count)}
+					{countWords(words.confirm, asked)}
 				</Button>
 			{/if}
 		</div>

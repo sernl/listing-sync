@@ -75,8 +75,9 @@
 	let bulk = $state<BulkAction | null>(null);
 	let openId = $state<string | null>(null);
 	/** Every identity account a loaded page has shown, by id: what a ticked
-	 *  row on another page resolves to when the bulk action runs. */
-	let known = $state<Record<string, IdentityUser>>({});
+	 *  row on another page resolves to when the bulk action runs. Not state:
+	 *  nothing draws it, it is only read when an action starts. */
+	const known = new Map<string, IdentityUser>();
 	/** Sign-in counts, by identity account, for the accounts an operator has
 	 *  opened. Not preloaded: the identity service lists sessions one account
 	 *  at a time. */
@@ -163,9 +164,7 @@
 	$effect(() => {
 		const fresh = users.data?.users;
 		if (fresh === undefined) return;
-		const next = { ...known };
-		for (const user of fresh) next[user.id] = user;
-		known = next;
+		for (const user of fresh) known.set(user.id, user);
 	});
 
 	async function reload() {
@@ -201,7 +200,7 @@
 
 	/** The accounts the bulk action runs on, read when the operator confirms. */
 	async function resolveTargets(): Promise<IdentityUser[]> {
-		if (selection.kind === 'ids') return targets(selection, Object.values(known));
+		if (selection.kind === 'ids') return targets(selection, [...known.values()]);
 		return targets(selection, await listAllIdentityUsers(selection.search));
 	}
 
@@ -292,7 +291,7 @@
 					<div class="ux-bulk-count">
 						<strong>{chosen} selected</strong>
 						{#if selection.kind === 'matching'}
-							<span class="quiet">every account {applied ? `matching “${applied}”` : ''}</span>
+							<span class="quiet">on every page{applied ? `, matching “${applied}”` : ''}</span>
 						{:else if tick === 'all' && total > shownIds.length}
 							<button
 								type="button"
@@ -439,18 +438,20 @@
 										/>
 									</td>
 									<td class="c-who">
-										<span class="ux-avatar" aria-hidden="true"
-											>{initials(user.name, user.email)}</span
-										>
-										<button
-											type="button"
-											class="ux-open"
-											aria-haspopup="dialog"
-											onclick={() => (openId = user.id)}
-										>
-											<span class="ux-name">{displayName(user)}</span>
-											<span class="ux-email">{user.email}</span>
-										</button>
+										<div class="ux-who">
+											<span class="ux-avatar" aria-hidden="true"
+												>{initials(user.name, user.email)}</span
+											>
+											<button
+												type="button"
+												class="ux-open"
+												aria-haspopup="dialog"
+												onclick={() => (openId = user.id)}
+											>
+												<span class="ux-name">{displayName(user)}</span>
+												<span class="ux-email">{user.email}</span>
+											</button>
+										</div>
 									</td>
 									<td class="c-org">
 										{#if row.platform !== null}
@@ -624,6 +625,11 @@
 		display: none;
 	}
 
+	.ux-table th,
+	.ux-table td {
+		padding-inline: var(--s-3);
+	}
+
 	.ux-table th.c-check,
 	.ux-table td.c-check {
 		width: 1%;
@@ -653,6 +659,8 @@
 		background: none;
 		color: inherit;
 		font: inherit;
+		text-transform: inherit;
+		letter-spacing: inherit;
 		cursor: pointer;
 	}
 
@@ -689,11 +697,12 @@
 		background: var(--accent-soft);
 	}
 
-	.c-who {
+	.ux-who {
 		display: flex;
 		align-items: center;
 		gap: var(--s-3);
-		min-width: 0;
+		min-width: 11rem;
+		max-width: 20rem;
 	}
 
 	.ux-avatar {
@@ -745,7 +754,7 @@
 
 	.ux-org-name {
 		display: block;
-		max-width: 22ch;
+		max-width: 16ch;
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -815,7 +824,7 @@
 
 		.ux-table tbody tr {
 			display: grid;
-			grid-template-columns: auto auto minmax(0, 1fr) auto;
+			grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr) auto;
 			grid-template-areas:
 				'check who who go'
 				'. org plan go'
@@ -894,6 +903,10 @@
 
 		.ux-avatar {
 			display: none;
+		}
+
+		.ux-who {
+			min-width: 0;
 		}
 	}
 </style>
