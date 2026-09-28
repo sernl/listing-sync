@@ -1554,19 +1554,28 @@ pub(crate) async fn refresh(
                 .await
                 .map_err(|error| storage_fault(&state, &error))?,
             };
-            let filled = match claim.filter(|claim| claim.live) {
-                Some(claim) => fill_listing_facts(
-                    &mut tx,
-                    context.org,
-                    claim.product,
-                    &resource.listing,
-                    &pictures,
-                    now,
-                )
-                .await
-                .map_err(|error| storage_fault(&state, &error))?,
-                None => false,
+            let Some(claim) = claim.filter(|claim| claim.live) else {
+                continue;
             };
+            let filled = fill_listing_facts(
+                &mut tx,
+                context.org,
+                claim.product,
+                &resource.listing,
+                &pictures,
+                now,
+            )
+            .await
+            .map_err(|error| storage_fault(&state, &error))?;
+            // TPT states a copyright statement on every listing, so a resource
+            // still without one after this fill is one whose saved read never
+            // held the listing's details: only a fresh read gives them.
+            let unread = source.marketplace() == Marketplace::Tpt
+                && tam_storage::read_tpt_base(&mut tx, context.org, claim.product)
+                    .await
+                    .map_err(|error| storage_fault(&state, &error))?
+                    .and_then(|record| record.copyright)
+                    .is_none();
             tx.commit()
                 .await
                 .map_err(|error| sql_fault(&state, &error))?;
@@ -1575,7 +1584,7 @@ pub(crate) async fn refresh(
             } else {
                 view.unchanged = view.unchanged.saturating_add(1);
             }
-            if source.marketplace() == Marketplace::Tpt && resource.listing.extras.is_empty() {
+            if unread {
                 view.read_again = view.read_again.saturating_add(1);
             }
         }
@@ -4541,6 +4550,12 @@ pub(crate) fn stored_thumbnails(observed: Option<&serde_json::Value>) -> Vec<Con
 /// the first could not carry, without moving a value the seller has set.
 ///
 /// Answers whether anything changed.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the transaction, the tenant, the product and the read's two halves (the listing \
+              and the pictures the page stored apart from it), plus the clock; a struct over \
+              them would name this call's argument list and nothing else"
+)]
 pub(crate) async fn fill_listing_facts(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     org: OrgId,

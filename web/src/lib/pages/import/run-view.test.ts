@@ -7,7 +7,9 @@ import {
 	pageCount,
 	pageSummary,
 	progressDone,
+	readAgainLine,
 	reasonLine,
+	refreshedLine,
 	reviewCard,
 	runBadge,
 	runHref,
@@ -52,10 +54,20 @@ function head(partial: Partial<ImportRunHead> = {}): ImportRunHead {
 		settled_at: null,
 		retry_of: null,
 		execution: {
-			owner_device: null, attempt: 0, lease_expires_at: null,
-			last_contact_at: null, last_progress_at: null, stage: 'waiting',
-			reason_code: null, reason: null, discovered: 0, processed: 0, described: 0,
-			enumeration_complete: false, selected_total: null, commit_authorised: false
+			owner_device: null,
+			attempt: 0,
+			lease_expires_at: null,
+			last_contact_at: null,
+			last_progress_at: null,
+			stage: 'waiting',
+			reason_code: null,
+			reason: null,
+			discovered: 0,
+			processed: 0,
+			described: 0,
+			enumeration_complete: false,
+			selected_total: null,
+			commit_authorised: false
 		},
 		...partial
 	};
@@ -118,7 +130,6 @@ describe('stageFrom', () => {
 		run.execution.stage = 'committing';
 		expect(stageFrom(run)).toBe('confirming');
 	});
-
 });
 
 describe('runBadge', () => {
@@ -128,7 +139,6 @@ describe('runBadge', () => {
 		expect(runBadge(run).tone).toBe('warn');
 	});
 });
-
 
 describe('where a run is read', () => {
 	// A spreadsheet run's review belongs on the batch page, which holds the
@@ -271,6 +281,19 @@ describe('the settled summary', () => {
 	});
 });
 
+describe('the refresh answer', () => {
+	it('states all three counts, zeros included', () => {
+		expect(refreshedLine({ filled: 3, unchanged: 0, read_again: 1 })).toBe(
+			'Filled in 3 resources. 0 resources had nothing new. 1 resource still needs its pictures, tax code and copyright.'
+		);
+	});
+
+	it('sends the seller back to TPT only while something still needs reading', () => {
+		expect(readAgainLine({ filled: 2, unchanged: 1, read_again: 0 })).toBeNull();
+		expect(readAgainLine({ filled: 0, unchanged: 0, read_again: 5 })).toContain('Import from TPT');
+	});
+});
+
 describe('why an import stopped', () => {
 	// The codes are transport diagnostics. A seller shown "lease_expired"
 	// learns nothing they can do, which is the whole reason this table exists.
@@ -319,7 +342,11 @@ describe('the pager', () => {
 });
 
 describe('progressDone', () => {
-	function at(stage: ImportRunHead['execution']['stage'], extra: Partial<ImportRunHead['execution']> = {}, over: Partial<ImportRunHead> = {}) {
+	function at(
+		stage: ImportRunHead['execution']['stage'],
+		extra: Partial<ImportRunHead['execution']> = {},
+		over: Partial<ImportRunHead> = {}
+	) {
 		const run = head(over);
 		run.execution = { ...run.execution, stage, ...extra };
 		return progressDone(run);
@@ -336,14 +363,23 @@ describe('progressDone', () => {
 	});
 
 	it('never draws a stopped run as imported', () => {
-		const chosen = { enumeration_complete: true, selected_total: 10, processed: 10, commit_authorised: true };
+		const chosen = {
+			enumeration_complete: true,
+			selected_total: 10,
+			processed: 10,
+			commit_authorised: true
+		};
 		expect(at('failed', chosen, { state: 'failed' })).toBe(3);
 		expect(at('abandoned', chosen, { state: 'abandoned' })).toBe(3);
 	});
 
 	it('places a paused run by what it had got through', () => {
 		expect(at('interrupted')).toBe(0);
-		expect(at('interrupted', { enumeration_complete: true, selected_total: 10, processed: 4 })).toBe(1);
-		expect(at('interrupted', { enumeration_complete: true, selected_total: 10, processed: 10 })).toBe(2);
+		expect(
+			at('interrupted', { enumeration_complete: true, selected_total: 10, processed: 4 })
+		).toBe(1);
+		expect(
+			at('interrupted', { enumeration_complete: true, selected_total: 10, processed: 10 })
+		).toBe(2);
 	});
 });

@@ -120,6 +120,16 @@
 
 /* --- the tick list ------------------------------------------------------- */
 
+/* Refresh from TPT, under the settled line: its sentence, the button and
+   what the refresh answered, stacked so a phone reads them in order. */
+.run-refresh {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 8px;
+	margin-top: 12px;
+}
+
 .run-picks {
 	display: flex;
 	align-items: center;

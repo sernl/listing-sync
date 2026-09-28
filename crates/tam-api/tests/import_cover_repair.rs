@@ -428,7 +428,7 @@ fn described(run: Uuid, cover: Option<Cover>) -> ImportPage {
                 rights: None,
                 price: ImportedPrice::Free,
                 state: Some(ListingState::Live),
-                extras: Default::default(),
+                extras: tam_marketplace::ListingExtras::default(),
             },
             fingerprint: None,
             file: Some(ObservedFile {

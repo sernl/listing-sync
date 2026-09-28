@@ -307,8 +307,7 @@ async fn listing_of(
             DraftId(resource),
         )
         .await
-        .expect("the fixture listing reads"),
-        extras: Default::default(),
+        .expect("the fixture listing reads")
 }
 
 /// One resource, read from the cassette and ingested from the fixture bytes,

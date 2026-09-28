@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE product SET rights_state = $3, rights_source_inventory = $4, rights_segments = $5, rights_native_id = $6, updated_at = $7 WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL AND rights_state = 'unstated'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "TextArray",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "59384bf27f4a337b00eeb68a2c0d1d319f197c7bfb46d51c01066fdfd95ee46f"
+}

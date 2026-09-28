@@ -830,7 +830,7 @@ fn observed(locator: &str, title: &str) -> ObservedResource {
             rights: None,
             price: ImportedPrice::Free,
             state: Some(ListingState::Live),
-            extras: Default::default(),
+            extras: tam_marketplace::ListingExtras::default(),
         },
         fingerprint: Some(Fingerprint {
             version: tam_fingerprint::FINGERPRINT_VERSION,

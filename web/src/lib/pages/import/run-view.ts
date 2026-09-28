@@ -14,7 +14,8 @@ import type {
 	ImportRunItemView,
 	ObservedPrice,
 	ReviewPairView,
-	ReviewSideView
+	ReviewSideView,
+	RunRefreshView
 } from '$lib/api';
 import type { ImportReasonCode, InventoryId, Marketplace } from '$lib/generated/vocab';
 import { MARKETPLACE_OF, formatPrice } from '$lib/listings-view';
@@ -26,8 +27,16 @@ import type { PillTone } from './import-view';
 
 /** Presentation of the server's authoritative lifecycle and execution facts. */
 export type RunStage =
-	'waiting' | 'listing' | 'selecting' | 'reading' | 'reviewing' |
-	'confirming' | 'committing' | 'interrupted' | 'done' | 'failed';
+	| 'waiting'
+	| 'listing'
+	| 'selecting'
+	| 'reading'
+	| 'reviewing'
+	| 'confirming'
+	| 'committing'
+	| 'interrupted'
+	| 'done'
+	| 'failed';
 
 export function stageFrom(run: ImportRunHead): RunStage {
 	switch (run.execution.stage) {
@@ -125,7 +134,8 @@ const STAGE_COPY: Record<RunStage, StageCopy> = {
 	},
 	interrupted: {
 		headline: 'This import has paused.',
-		detail: 'Open the app on the computer that was importing, then resume. Resources already added stay in Resources.'
+		detail:
+			'Open the app on the computer that was importing, then resume. Resources already added stay in Resources.'
 	},
 	confirming: {
 		headline: 'Ready to add to Resources.',
@@ -164,7 +174,6 @@ const STAGE_COPY: Record<RunStage, StageCopy> = {
 export function stageCopy(stage: RunStage): StageCopy {
 	return STAGE_COPY[stage];
 }
-
 
 /** The line the listing draws under a run's name.
  *
@@ -417,6 +426,21 @@ export function settledLine(counts: ImportRunCounts): string {
 	return rest.length === 0 ? `${imported}.` : `${imported}, ${rest.join(' and ')}.`;
 }
 
+/** The three counts a refresh from the saved TPT reads answers with, in one
+ *  line, zeros stated for the reason `settledLine` states them. */
+export function refreshedLine(view: RunRefreshView): string {
+	const resources = (n: number) => `${n} ${n === 1 ? 'resource' : 'resources'}`;
+	const need = view.read_again === 1 ? 'still needs its' : 'still need their';
+	return `Filled in ${resources(view.filled)}. ${resources(view.unchanged)} had nothing new. ${resources(view.read_again)} ${need} pictures, tax code and copyright.`;
+}
+
+/** What the seller does next about the details a saved read never held, or
+ *  `null` when no resource is missing them. */
+export function readAgainLine(view: RunRefreshView): string | null {
+	if (view.read_again === 0) return null;
+	return 'For those, update the Teachouse app, then press ‘Import from TPT’ again. It reads only the resources still missing them.';
+}
+
 /** What the run page says while it holds no resources at all, which depends
  *  on why it holds none. */
 export function emptyItemsLine(stage: RunStage): string {
@@ -445,8 +469,7 @@ export function emptyItemsLine(stage: RunStage): string {
  * Distinct from [`emptyItemsLine`], which answers "this run holds nothing":
  * a seller who searched and found nothing has narrowed a list that still has
  * things in it, and telling them the import is empty would be false. */
-export const NO_ITEM_MATCHES =
-	'No resource matches your search. Clear it to see the rest.';
+export const NO_ITEM_MATCHES = 'No resource matches your search. Clear it to see the rest.';
 
 /** Why an import stopped, in words that name what the seller does next.
  *
@@ -532,12 +555,7 @@ export function pageCount(total: number, size: number): number {
  * Counts the whole filtered list rather than the page in hand, which is the
  * figure the seller is deciding against — "1–25 of 143" tells them there is
  * more, and "25 resources" does not. */
-export function pageSummary(
-	offset: number,
-	shown: number,
-	total: number,
-	noun: string
-): string {
+export function pageSummary(offset: number, shown: number, total: number, noun: string): string {
 	if (total === 0) {
 		return `No ${noun}`;
 	}
@@ -552,5 +570,4 @@ export const RUN_UNREAD = 'We could not load this import. Anything already runni
 
 /** What the seller is told while the reading happens somewhere else. One
  *  sentence; which bytes travel is the `your-files` guide's to hold. */
-export const READING_HAPPENS_ON_YOUR_COMPUTER =
-	'Each resource is opened on your own computer.';
+export const READING_HAPPENS_ON_YOUR_COMPUTER = 'Each resource is opened on your own computer.';

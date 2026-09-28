@@ -923,8 +923,8 @@ pub trait FaultPlan: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::{
-        settle, AmbiguityCause, FieldDiffReport, ImportedListing, InstantPause, ListingState,
-        Outcome, Pause as _, RemoteListingId,
+        settle, AmbiguityCause, FieldDiffReport, ImportedListing, InstantPause, ListingExtras,
+        ListingState, Outcome, Pause as _, RemoteListingId,
     };
     use tam_types::{
         AttemptId, CopyFormat, FieldKey, FieldMismatch, ImportedPrice, ImportedTerm, InventoryId,
@@ -990,6 +990,12 @@ mod tests {
                 denomination: "£".to_owned(),
             },
             state: Some(ListingState::Live),
+            extras: ListingExtras {
+                tax_code: Some("2".to_owned()),
+                copyright: Some("ORIGINAL_WORK".to_owned()),
+                appropriate_for_country: Some(false),
+                thumbnails: vec!["https://example.test/1.jpg".to_owned()],
+            },
         };
 
         let json = serde_json::to_string(&listing).expect("the listing serialises");

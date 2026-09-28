@@ -2576,6 +2576,17 @@ export interface ImportRunHead {
 	execution: ImportExecutionView;
 }
 
+/** What refreshing one run's resources from its own saved reads did. */
+export interface RunRefreshView {
+	/** Resources this refresh filled empty details on. */
+	filled: number;
+	/** Resources the saved reads had nothing more to give. */
+	unchanged: number;
+	/** Resources whose saved read has no tax code, copyright statement or
+	 *  pictures: only importing from TPT again, with the current app, fills those. */
+	read_again: number;
+}
+
 /** One run with its items and whatever pairs are still parked on it. */
 export interface ImportRunView extends ImportRunHead {
 	items: ImportRunItemView[];
@@ -3062,6 +3073,10 @@ export const api = {
 	/** Cancel future work; previously committed resources remain. */
 	abandonImportRun: (run: string) =>
 		post<void>(`/v1/imports/runs/${encodeURIComponent(run)}/abandon`, {}),
+	/** Fill the empty TPT details of what this run imported from the listings
+	 *  it read: Subject Area, Tags and Format come back without the device. */
+	refreshImportRun: (run: string) =>
+		post<RunRefreshView>(`/v1/imports/runs/${encodeURIComponent(run)}/refresh`, {}),
 	deleteImportRun: (run: string) =>
 		request<JobDeletionView>(`/v1/imports/runs/${encodeURIComponent(run)}`, {
 			method: 'DELETE'

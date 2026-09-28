@@ -544,7 +544,7 @@ fn observed_on(
             rights: None,
             price: ImportedPrice::Free,
             state: Some(ListingState::Live),
-            extras: Default::default(),
+            extras: tam_marketplace::ListingExtras::default(),
         },
         fingerprint: Some(Fingerprint {
             version: tam_fingerprint::FINGERPRINT_VERSION,
@@ -4708,5 +4708,206 @@ async fn a_repeated_delete_keeps_a_hold_the_device_has_not_released(pool: PgPool
     assert!(
         converged.runs.is_empty() && converged.total == 0,
         "and with the device stopped the deletion completes: {converged:?}"
+    );
+}
+
+// ------------------------------------------------- the TPT listing's details
+
+/// The captured listing's `taxonomyTags` (`upload_page_product.json`), plus a
+/// Format facet so every one of the three pickers has something to hold.
+fn captured_tpt_terms() -> Vec<tam_types::ImportedTerm> {
+    [
+        "4th-grade",
+        "5th-grade",
+        "6th-grade",
+        "homeschool",
+        "homeschool-curricula",
+        "math",
+        "unit-plans",
+        "worksheets",
+        "pdf",
+    ]
+    .map(|slug| tam_types::ImportedTerm {
+        inventory: tam_types::InventoryId::Tpt,
+        kind: None,
+        segments: vec![slug.to_owned()],
+        native_id: Some(slug.to_owned()),
+    })
+    .to_vec()
+}
+
+/// One of the listing's own pictures: a PNG whose bytes differ per slot.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+fn listing_picture(slot: u8) -> tam_engine_driver::import::Thumbnail {
+    let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    png.extend_from_slice(b"IHDR listing picture ");
+    png.push(slot);
+    tam_engine_driver::import::Thumbnail::encode(&png).expect("the fixture is a PNG")
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn tpt_base_of(app: &axum::Router, product: ProductId) -> tam_api::resources::TptBaseView {
+    let held: tam_api::resources::ProductView = call(
+        app,
+        Method::GET,
+        &format!("/v1/products/{}", product_text(product)),
+        None,
+    )
+    .await
+    .json();
+    held.tpt_base.expect("the resource has its TPT details")
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn under_tenant(pool: &PgPool, sql: &str, product: ProductId) {
+    let mut tx = pool.begin().await.expect("the transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pins");
+    sqlx::query(sql)
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+        .bind(uuid::Uuid::from_bytes(product.0 .0))
+        .execute(&mut *tx)
+        .await
+        .expect("the statement runs");
+    tx.commit().await.expect("the transaction commits");
+}
+
+async fn refreshed(app: &axum::Router, run: Uuid) -> (u32, u32, u32) {
+    let answer = call(
+        app,
+        Method::POST,
+        &format!("/v1/imports/runs/{}/refresh", uuid_text(run)),
+        None,
+    )
+    .await;
+    assert_eq!(
+        answer.status,
+        StatusCode::OK,
+        "the refresh: {}",
+        answer.body
+    );
+    let view: tam_api::import_runs::RunRefreshView = answer.json();
+    (view.filled, view.unchanged, view.read_again)
+}
+
+/// The founder's backfill, end to end. An import made before the listing's
+/// details were carried left a resource with empty pickers; Refresh fills
+/// them from the saved read and says the rest needs a fresh read; the fresh
+/// read (what the new app sends) fills tax code, copyright statement,
+/// localisation and four pictures, and keeps a picker the seller set.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn refresh_fills_from_saved_reads_and_a_fresh_read_fills_the_rest(pool: PgPool) {
+    provision(&pool).await;
+    let state = configured(pool.clone(), &store_root("tptdetails"));
+    let app = router(state.clone());
+    let title = "Sample Unit: Stem and Leaf Plots (Differentiated)";
+
+    // ---- the old way: the listing's tags, none of its details.
+    let mut reduced = observed_on(Marketplace::Tpt, "13042099", title, Some((0x31, BIG)), None);
+    reduced.listing.native = captured_tpt_terms();
+    let first = imported_read(&app, &state, "Tpt", reduced).await;
+    let product = first
+        .items
+        .iter()
+        .find_map(|item| item.product_id)
+        .expect("the import created a resource");
+    under_tenant(
+        &pool,
+        "DELETE FROM product_tpt_base WHERE org_id = $1 AND product_id = $2",
+        product,
+    )
+    .await;
+
+    assert_eq!(
+        refreshed(&app, first.id).await,
+        (1, 0, 1),
+        "filled from the saved read, and still owed a read for what it never held"
+    );
+    let base = tpt_base_of(&app, product).await;
+    assert_eq!(
+        (base.subject_areas, base.tags, base.formats),
+        (
+            vec!["math".to_owned()],
+            vec!["homeschool".to_owned()],
+            vec!["pdf".to_owned()]
+        ),
+        "each TPT tag sorted onto the picker that offers it"
+    );
+    assert_eq!(
+        (base.tax_code_id, base.copyright_declaration_id),
+        (None, None),
+        "a saved read that never held them invents neither"
+    );
+    assert_eq!(
+        refreshed(&app, first.id).await,
+        (0, 1, 1),
+        "pressing twice changes nothing the second time"
+    );
+
+    // ---- the seller chose their own Subject Area in the meantime.
+    under_tenant(
+        &pool,
+        "UPDATE product_tpt_base SET subject_area_slugs = ARRAY['science'] \
+          WHERE org_id = $1 AND product_id = $2",
+        product,
+    )
+    .await;
+
+    // ---- Import from TPT again, with the new app: the full read.
+    let mut full = observed_on(Marketplace::Tpt, "13042099", title, Some((0x31, BIG)), None);
+    full.listing.native = captured_tpt_terms();
+    full.listing.extras = tam_marketplace::ListingExtras {
+        tax_code: Some("2".to_owned()),
+        copyright: Some("ORIGINAL_WORK".to_owned()),
+        appropriate_for_country: Some(true),
+        thumbnails: (1..=4)
+            .map(|slot| {
+                format!("https://ecdn.teacherspayteachers.com/thumbitem/x/original-{slot}.jpg")
+            })
+            .collect(),
+    };
+    full.thumbnails = (1..=4).map(listing_picture).collect();
+    let again = imported_read(&app, &state, "Tpt", full).await;
+    assert_eq!(
+        again
+            .items
+            .iter()
+            .find_map(|item| item.product_id)
+            .or(Some(product)),
+        Some(product),
+        "the fresh read lands on the resource it already made"
+    );
+    let base = tpt_base_of(&app, product).await;
+    assert_eq!(base.subject_areas, ["science"], "the seller's pick is kept");
+    assert_eq!(base.tags, ["homeschool"]);
+    assert_eq!(base.tax_code_id, Some(2));
+    assert_eq!(base.copyright_declaration_id, Some(1));
+    assert_eq!(base.appropriate_for_country, Some(true));
+    assert_eq!(base.thumbnail_hashes.len(), 4, "all four listing pictures");
+    assert_eq!(
+        base.thumbnail_hashes
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        4,
+        "four different pictures, in their own slots"
+    );
+
+    assert_eq!(
+        refreshed(&app, first.id).await,
+        (0, 1, 0),
+        "once a read has carried the details nothing is owed"
     );
 }

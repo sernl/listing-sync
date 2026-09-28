@@ -1553,3 +1553,122 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod tpt_fill_tests {
+    use super::tpt_base_fill;
+    use tam_domain::product::{CopyrightDeclaration, FacetSlug, ListingStatus, TaxCode};
+    use tam_marketplace::{ImportedListing, ListingExtras, ListingState, RemoteListingId};
+    use tam_types::{ContentHash, CopyFormat, ImportedPrice, ImportedTerm, InventoryId};
+
+    fn term(slug: &str) -> ImportedTerm {
+        ImportedTerm {
+            inventory: InventoryId::Tpt,
+            kind: None,
+            segments: vec![slug.to_owned()],
+            native_id: Some(slug.to_owned()),
+        }
+    }
+
+    /// The captured listing (`upload_page_product.json`): its eight
+    /// `taxonomyTags`, tax code 2, `ORIGINAL_WORK`, localised, live.
+    fn captured() -> ImportedListing {
+        ImportedListing {
+            remote: RemoteListingId::Tpt {
+                product_id: 13_042_099,
+            },
+            title: "Sample Unit: Stem and Leaf Plots (Differentiated)".to_owned(),
+            body: String::new(),
+            body_format: CopyFormat::Html,
+            native: [
+                "4th-grade",
+                "5th-grade",
+                "6th-grade",
+                "homeschool",
+                "homeschool-curricula",
+                "math",
+                "unit-plans",
+                "worksheets",
+                "easel",
+                "not-a-facet-tpt-issued",
+            ]
+            .map(term)
+            .to_vec(),
+            rights: None,
+            price: ImportedPrice::Free,
+            state: Some(ListingState::Live),
+            extras: ListingExtras {
+                tax_code: Some("2".to_owned()),
+                copyright: Some("ORIGINAL_WORK".to_owned()),
+                appropriate_for_country: Some(true),
+                thumbnails: vec![],
+            },
+        }
+    }
+
+    fn slugs(values: &[FacetSlug]) -> Vec<&str> {
+        values.iter().map(FacetSlug::as_str).collect()
+    }
+
+    #[test]
+    fn a_tpt_tag_lands_on_the_picker_the_form_offers_it_through() {
+        let fill = tpt_base_fill(&captured(), &[]).expect("a TPT listing fills the sidecar");
+        assert_eq!(slugs(&fill.subject_areas), ["math"]);
+        assert_eq!(
+            slugs(&fill.tags),
+            ["homeschool"],
+            "an audience facet is a Tag"
+        );
+        assert_eq!(slugs(&fill.formats), ["easel"]);
+        let everywhere: Vec<&str> = slugs(&fill.subject_areas)
+            .into_iter()
+            .chain(slugs(&fill.tags))
+            .chain(slugs(&fill.formats))
+            .collect();
+        for elsewhere in [
+            "4th-grade",
+            "unit-plans",
+            "worksheets",
+            "not-a-facet-tpt-issued",
+        ] {
+            assert!(
+                !everywhere.contains(&elsewhere),
+                "{elsewhere} has no Subject Area, Tag or Format box, so it is not put in one"
+            );
+        }
+    }
+
+    #[test]
+    fn the_listing_s_own_answers_are_carried_and_nothing_is_invented() {
+        let pictures = [ContentHash([7; 32]), ContentHash([8; 32])];
+        let fill = tpt_base_fill(&captured(), &pictures).expect("a TPT listing fills the sidecar");
+        assert_eq!(fill.tax_code, TaxCode::from_wire_id(2));
+        assert_eq!(fill.copyright, Some(CopyrightDeclaration::OriginalWork));
+        assert_eq!(fill.appropriate_for_country, Some(true));
+        assert_eq!(fill.status, Some(ListingStatus::Live));
+        assert_eq!(fill.thumbnails.len(), 2);
+        assert_eq!(fill.thumbnails[0].as_str(), "07".repeat(32));
+
+        let old = ImportedListing {
+            extras: ListingExtras::default(),
+            ..captured()
+        };
+        let fill = tpt_base_fill(&old, &[]).expect("a TPT listing fills the sidecar");
+        assert_eq!(
+            (fill.tax_code, fill.copyright),
+            (None, None),
+            "a read that stated no copyright statement is not given 'my own original work'"
+        );
+    }
+
+    #[test]
+    fn only_a_tpt_listing_fills_the_tpt_form() {
+        let tes = ImportedListing {
+            remote: RemoteListingId::Tes {
+                url: "https://www.tes.com/teaching-resource/x-1".to_owned(),
+            },
+            ..captured()
+        };
+        assert_eq!(tpt_base_fill(&tes, &[]), None);
+    }
+}
