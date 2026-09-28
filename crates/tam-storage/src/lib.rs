@@ -57,7 +57,7 @@ pub use authorship::{AuthorshipRecord, ConnectionFactsRepo};
 pub use backoffice::{
     BackofficeRepo, DailyCount, DeadLetterTopic, FailedWrite, HaltRecord, IdentityAuditRepo,
     ImpersonationEvent, ImportDrainPage, ImportDrainRun, OrgDetail, OrgSummary, PlatformUser,
-    SignupsRepo, SubscriptionRecord, SyncHealth,
+    SignupsRepo, SubscriptionRecord, SyncHealth, UserCursor, UsersPage,
 };
 pub use billing::{BillingRepo, SubscriptionState};
 pub use blobs::{
@@ -164,7 +164,7 @@ pub use marketplace_requests::{
 pub use notifications::{
     NotificationCursor, NotificationRecord, NotificationRepo, Recipient, JOB_SETTLED_TOPIC,
 };
-pub use operators::{OperatorRecord, OperatorRepo};
+pub use operators::{OperatorEvent, OperatorRecord, OperatorRepo};
 pub use org::{OrgRecord, OrgRepo, OrgWrite};
 pub use overrides::OverrideRepo;
 pub use product::{

@@ -200,11 +200,10 @@ describe('the two planes joined on auth_subject', () => {
 			[account('s1', 'ada@example.test'), account('s2', 'bea@example.test')],
 			[appUser('b', 's2'), appUser('a', 's1')]
 		);
-		expect(merged.rows.map((row) => [row.identity.id, row.platform?.user])).toEqual([
+		expect(merged.map((row) => [row.identity.id, row.platform?.user])).toEqual([
 			['s1', 'a'],
 			['s2', 'b']
 		]);
-		expect(merged.unlinked).toBe(0);
 	});
 
 	it('never matches an app user carrying no subject', () => {
@@ -212,8 +211,7 @@ describe('the two planes joined on auth_subject', () => {
 		// identity subject. Matching it to whichever account came next would
 		// put somebody else's organisation and plan on that row.
 		const merged = mergeUsers([account('s1', 'ada@example.test')], [appUser('a')]);
-		expect(merged.rows[0]?.platform).toBeNull();
-		expect(merged.unlinked).toBe(1);
+		expect(merged[0]?.platform).toBeNull();
 	});
 
 	it('never matches a subject the server sent as an explicit null either', () => {
@@ -222,35 +220,22 @@ describe('the two planes joined on auth_subject', () => {
 		// that row would be somebody else's organisation.
 		const nulled = { ...appUser('a', 's1'), auth_subject: null } as unknown as AdminUserView;
 		const merged = mergeUsers([account('s1', 'ada@example.test')], [nulled]);
-		expect(merged.rows[0]?.platform).toBeNull();
-		expect(merged.unlinked).toBe(1);
+		expect(merged[0]?.platform).toBeNull();
 	});
 
 	it('leaves an account with no app user of its own unattached', () => {
 		const merged = mergeUsers([account('s1', 'ada@example.test')], []);
-		expect(merged.rows).toEqual([{ identity: account('s1', 'ada@example.test'), platform: null }]);
-		expect(merged.unlinked).toBe(0);
-	});
-
-	it('counts app users the listing does not show, which a narrowed search is full of', () => {
-		const merged = mergeUsers(
-			[account('s1', 'ada@example.test')],
-			[appUser('a', 's1'), appUser('b', 's2'), appUser('c')]
-		);
-		expect(merged.rows[0]?.platform?.user).toBe('a');
-		expect(merged.unlinked).toBe(2);
+		expect(merged).toEqual([{ identity: account('s1', 'ada@example.test'), platform: null }]);
 	});
 
 	it('keeps the first of two app users claiming one subject', () => {
 		// A broken unique index rather than a case to resolve, so the row is
-		// drawn from one of them and the other is reported rather than merged
-		// over the top.
+		// drawn from one of them rather than merged over the top.
 		const merged = mergeUsers(
 			[account('s1', 'ada@example.test')],
 			[appUser('a', 's1'), appUser('b', 's1')]
 		);
-		expect(merged.rows[0]?.platform?.user).toBe('a');
-		expect(merged.unlinked).toBe(1);
+		expect(merged[0]?.platform?.user).toBe('a');
 	});
 });
 

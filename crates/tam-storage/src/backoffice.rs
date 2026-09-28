@@ -269,6 +269,25 @@ pub struct PlatformUser {
     pub created_at: Timestamp,
 }
 
+/// Where the next page of the user listing starts: after this user, in the
+/// listing's newest-first order. `created_at` is at millisecond precision,
+/// which is the precision the listing compares at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UserCursor {
+    pub created_at: Timestamp,
+    pub user: UserId,
+}
+
+/// One page of the platform's users.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsersPage {
+    pub users: Vec<PlatformUser>,
+    /// Every app user on the platform, not just this page's.
+    pub total: i64,
+    /// Where the following page starts; `None` on the last page.
+    pub next: Option<UserCursor>,
+}
+
 /// A tenant-wide halt as recorded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HaltRecord {
@@ -406,27 +425,72 @@ impl BackofficeRepo {
             .collect())
     }
 
-    /// Every user of the platform with their organisation and its plan,
-    /// newest first.
+    /// One page of the platform's users with their organisation and its
+    /// plan, newest first, and how many users there are in all.
+    ///
+    /// Keyset-paged on `(created_at, id)`, both descending, so a user who
+    /// signs up while an operator pages does not shift every later page by
+    /// one. The instant is compared at millisecond precision, which is what
+    /// a [`UserCursor`] carries: comparing the stored microseconds against a
+    /// truncated cursor would skip the users who share the cursor's
+    /// millisecond but sort after it.
     ///
     /// Two statements rather than one join, and the second is the reason:
     /// which grant an organisation holds is decided by `Plan::strength` in
     /// Rust (see [`crate::EntitlementRepo::current`]), and a `CASE` in SQL
     /// restating that precedence would be a second copy of the one ordering
-    /// this platform has. So the live grants come back unranked and are
-    /// folded here, through the same comparison the per-organisation read
-    /// uses.
+    /// this platform has. So the live grants of the page's organisations come
+    /// back unranked and are folded here, through the same comparison the
+    /// per-organisation read uses.
     ///
     /// All three tables are already this role's to read -- `app_user` and
     /// `organisation` by migration 0037's grant, `entitlement_grant` by
     /// migration 0069's grant and policy -- so this listing reaches nothing
     /// new; it asks the questions the organisation panel already asks, once
-    /// for the whole platform instead of once per tenant.
-    pub async fn users(&self, now: Timestamp) -> Result<Vec<PlatformUser>, StorageError> {
+    /// for a page of the platform instead of once per tenant.
+    pub async fn users(
+        &self,
+        now: Timestamp,
+        after: Option<UserCursor>,
+        limit: i64,
+    ) -> Result<UsersPage, StorageError> {
+        let limit = limit.clamp(1, MAX_ROWS);
+        let (after_at, after_id) = match after {
+            Some(cursor) => (
+                Some(timestamp_to_db(cursor.created_at)?),
+                Some(uuid_to_db(cursor.user.0)),
+            ),
+            None => (None, None),
+        };
+        // One more than asked for, so whether another page follows is known
+        // without a second count.
+        let mut rows = sqlx::query!(
+            "SELECT u.id, u.email, u.auth_subject, u.created_at, \
+                    o.id AS \"org_id\", o.name AS \"org_name\", o.slug AS \"org_slug\" \
+             FROM app_user u JOIN organisation o ON o.id = u.org_id \
+             WHERE $1::timestamptz IS NULL \
+                OR (date_trunc('milliseconds', u.created_at), u.id) < ($1, $2::uuid) \
+             ORDER BY date_trunc('milliseconds', u.created_at) DESC, u.id DESC LIMIT $3",
+            after_at,
+            after_id,
+            limit + 1,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let more = i64::try_from(rows.len()).unwrap_or(i64::MAX) > limit;
+        rows.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+
+        let total = sqlx::query_scalar!("SELECT count(*) AS \"total!\" FROM app_user")
+            .fetch_one(&self.pool)
+            .await?;
+
+        let orgs: Vec<uuid::Uuid> = rows.iter().map(|row| row.org_id).collect();
         let grants = sqlx::query!(
             "SELECT org_id, plan, granted_at FROM entitlement_grant \
-              WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > $1)",
+              WHERE org_id = ANY($2) \
+                AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > $1)",
             timestamp_to_db(now)?,
+            &orgs,
         )
         .fetch_all(&self.pool)
         .await?;
@@ -445,16 +509,7 @@ impl BackofficeRepo {
             }
         }
 
-        let rows = sqlx::query!(
-            "SELECT u.id, u.email, u.auth_subject, u.created_at, \
-                    o.id AS \"org_id\", o.name AS \"org_name\", o.slug AS \"org_slug\" \
-             FROM app_user u JOIN organisation o ON o.id = u.org_id \
-             ORDER BY u.created_at DESC, u.id LIMIT $1",
-            MAX_ROWS,
-        )
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows
+        let users: Vec<PlatformUser> = rows
             .into_iter()
             .map(|row| {
                 let org = uuid_from_db(row.org_id);
@@ -469,7 +524,16 @@ impl BackofficeRepo {
                     created_at: timestamp_from_db(row.created_at),
                 }
             })
-            .collect())
+            .collect();
+        let next = if more {
+            users.last().map(|last| UserCursor {
+                created_at: last.created_at,
+                user: last.user,
+            })
+        } else {
+            None
+        };
+        Ok(UsersPage { users, total, next })
     }
 
     /// One organisation: its counts, its connections carrying the same

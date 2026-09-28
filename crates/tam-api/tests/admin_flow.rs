@@ -63,7 +63,7 @@ const ADMIN_PATHS: [&str; 9] = [
 /// loops would be testing method routing rather than the operator fence.
 /// Their own refusal is asserted by `a_seller_cannot_grant_themselves_a_plan`
 /// and `an_operator_credits_moves_once_per_reason`.
-const ADMIN_PATHS_UNCOVERED: [&str; 21] = [
+const ADMIN_PATHS_UNCOVERED: [&str; 22] = [
     "/{version}/admin/marketplace-requests",
     // Pricing and the site switches read the application pool, like the
     // guides below, so they serve with no backoffice database; their
@@ -77,6 +77,10 @@ const ADMIN_PATHS_UNCOVERED: [&str; 21] = [
     // A DELETE, and a destructive one: its refusal for a seller, and each of
     // its own refusals, are asserted in `admin_delete_user_flow`.
     "/{version}/admin/users/{subject}",
+    // A POST and a DELETE that change who is an operator: the seller's
+    // refusal and each of their own refusals are asserted in
+    // `admin_users_flow`.
+    "/{version}/admin/operators/{subject}",
     "/{version}/admin/orgs/{org}/plan",
     "/{version}/admin/orgs/{org}/plan/{grant}/revoke",
     "/{version}/admin/orgs/{org}/moves",
@@ -1139,7 +1143,7 @@ async fn a_revoked_operator_is_refused_on_the_very_next_request(pool: PgPool) {
     assert_eq!(admitted.status, StatusCode::OK, "the grant admits");
 
     let withdrawn = OperatorRepo::new(pool.clone())
-        .revoke(USER_OPERATOR, NOW)
+        .revoke(USER_OPERATOR, "test", NOW)
         .await;
     assert_eq!(
         withdrawn.ok(),

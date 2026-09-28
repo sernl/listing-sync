@@ -23,6 +23,35 @@ pub struct OperatorRecord {
     pub revoked_at: Option<Timestamp>,
 }
 
+/// One line of the marking's trail: granted or withdrawn, by whom, when.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperatorEvent {
+    /// `true` for a grant, `false` for a withdrawal.
+    pub granted: bool,
+    pub actor: String,
+    pub at: Timestamp,
+}
+
+/// Appends one line to the trail inside the caller's transaction.
+async fn record(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user: UserId,
+    action: &str,
+    actor: &str,
+    at: Timestamp,
+) -> Result<(), StorageError> {
+    sqlx::query!(
+        "INSERT INTO platform_operator_event (user_id, action, actor, at) VALUES ($1, $2, $3, $4)",
+        uuid_to_db(user.0),
+        action,
+        actor,
+        timestamp_to_db(at)?,
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 pub struct OperatorRepo {
     pool: PgPool,
 }
@@ -54,12 +83,17 @@ impl OperatorRepo {
     /// predecessor would still read as revoked. The foreign key means a user
     /// id nobody has provisioned fails here instead of creating a marking
     /// that names nobody.
+    ///
+    /// The grant is written to `platform_operator_event` in the same
+    /// transaction (migration 0096), so the trail and the state cannot
+    /// disagree about who did it.
     pub async fn grant(
         &self,
         user: UserId,
         granted_by: &str,
         at: Timestamp,
     ) -> Result<(), StorageError> {
+        let mut tx = self.pool.begin().await?;
         sqlx::query!(
             "INSERT INTO platform_operator (user_id, granted_at, granted_by) \
              VALUES ($1, $2, $3) \
@@ -71,24 +105,57 @@ impl OperatorRepo {
             timestamp_to_db(at)?,
             granted_by,
         )
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        record(&mut tx, user, "grant", granted_by, at).await?;
+        tx.commit().await?;
         Ok(())
     }
 
     /// Withdraws a grant, answering whether there was an active one to
     /// withdraw. Revoking twice is not an error; it is simply `false` the
-    /// second time, and the first revocation's instant survives.
-    pub async fn revoke(&self, user: UserId, at: Timestamp) -> Result<bool, StorageError> {
+    /// second time, and the first revocation's instant survives. Only a
+    /// withdrawal that happened is written to the trail, naming `revoked_by`.
+    pub async fn revoke(
+        &self,
+        user: UserId,
+        revoked_by: &str,
+        at: Timestamp,
+    ) -> Result<bool, StorageError> {
+        let mut tx = self.pool.begin().await?;
         let done = sqlx::query!(
             "UPDATE platform_operator SET revoked_at = $2 \
              WHERE user_id = $1 AND revoked_at IS NULL",
             uuid_to_db(user.0),
             timestamp_to_db(at)?,
         )
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
-        Ok(done.rows_affected() == 1)
+        let withdrawn = done.rows_affected() == 1;
+        if withdrawn {
+            record(&mut tx, user, "revoke", revoked_by, at).await?;
+        }
+        tx.commit().await?;
+        Ok(withdrawn)
+    }
+
+    /// Every grant and withdrawal of one person's marking, oldest first.
+    pub async fn events(&self, user: UserId) -> Result<Vec<OperatorEvent>, StorageError> {
+        let rows = sqlx::query!(
+            "SELECT action, actor, at FROM platform_operator_event \
+             WHERE user_id = $1 ORDER BY at, id",
+            uuid_to_db(user.0),
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| OperatorEvent {
+                granted: row.action == "grant",
+                actor: row.actor,
+                at: timestamp_from_db(row.at),
+            })
+            .collect())
     }
 
     /// Every marking ever made, oldest grant first.

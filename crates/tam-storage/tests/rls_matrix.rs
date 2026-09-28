@@ -94,7 +94,8 @@ const TENANT_TABLES: [&str; 75] = [
 /// row must be readable before any tenant pin exists, the stored token digest
 /// is the capability's verifier rather than tenant data, and an operator
 /// marking is a platform fact about a human rather than a row any tenant
-/// owns. standards_node is the mirrored standards catalogue: public data
+/// owns; platform_operator_event is that marking's trail (migration 0096).
+/// standards_node is the mirrored standards catalogue: public data
 /// shared by every tenant, carrying no organisation column, per
 /// docs/notes/design/standards-ingestion.md. guide is the help corpus, which
 /// is the same kind of fact in the other direction: one document set the
@@ -104,7 +105,7 @@ const TENANT_TABLES: [&str; 75] = [
 /// every tenant at once, written by operators. The rest are genuinely global:
 /// reference data, the canonical taxonomy, the fleet kill switch, and sqlx's
 /// migration bookkeeping.
-const GLOBAL_TABLES: [&str; 17] = [
+const GLOBAL_TABLES: [&str; 18] = [
     "_sqlx_migrations",
     "app_user",
     "canonical_term",
@@ -117,6 +118,7 @@ const GLOBAL_TABLES: [&str; 17] = [
     "marketplace_inventory",
     "organisation",
     "platform_operator",
+    "platform_operator_event",
     "projection_edge",
     "projection_no_counterpart",
     "site_setting",

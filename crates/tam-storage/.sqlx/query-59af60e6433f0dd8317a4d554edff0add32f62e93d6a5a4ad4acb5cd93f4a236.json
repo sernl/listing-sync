@@ -1,27 +1,27 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT org_id, plan, granted_at FROM entitlement_grant WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > $1)",
+  "query": "SELECT action, actor, at FROM platform_operator_event WHERE user_id = $1 ORDER BY at, id",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "org_id",
-        "type_info": "Uuid"
+        "name": "action",
+        "type_info": "Text"
       },
       {
         "ordinal": 1,
-        "name": "plan",
+        "name": "actor",
         "type_info": "Text"
       },
       {
         "ordinal": 2,
-        "name": "granted_at",
+        "name": "at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
       "Left": [
-        "Timestamptz"
+        "Uuid"
       ]
     },
     "nullable": [
@@ -30,5 +30,5 @@
       false
     ]
   },
-  "hash": "5a1e55fc2314e5342d2ef42f17eb6480694bd0c6d7c3534646de64076df2228c"
+  "hash": "59af60e6433f0dd8317a4d554edff0add32f62e93d6a5a4ad4acb5cd93f4a236"
 }
