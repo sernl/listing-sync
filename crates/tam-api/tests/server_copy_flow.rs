@@ -102,6 +102,10 @@ impl Answer {
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
 )]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one request's six parts, each varied by some caller; a struct would only rename them"
+)]
 async fn call(
     state: &AppState,
     method: Method,
