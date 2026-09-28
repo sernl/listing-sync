@@ -1,89 +1,561 @@
 ---
 import Base from '../layouts/Base.astro';
 import { supportEmail } from '../site.js';
+
+/* The date the text below last changed in substance. Moving it is part of
+   changing the policy, and section 14 says how a change is announced. */
+const updated = '29 September 2026';
 ---
 
 <Base
-	title="Privacy — Teachouse"
-	description="Placeholder for the Teachouse privacy policy, pending review by counsel."
+	title="Privacy Policy — Teachouse"
+	description="What Teachouse collects, why, where it is kept, who else sees it, and how to get it corrected or deleted."
 >
 	<section class="section">
-		<div class="wrap prose">
-			<p><span class="pill draft">Draft placeholder</span></p>
-			<h1>Privacy</h1>
-			<p class="notice">
-				<strong>This is not the privacy policy.</strong> It is a placeholder recording what the
-				policy will have to cover, so that counsel can draft it against how the product actually
-				works. Nothing on this page is a commitment, and it will be replaced in full before
-				Teachouse takes an account.
-			</p>
+		<div class="wrap prose policy">
+			<h1>Privacy Policy</h1>
+			<p class="policy-meta">Last updated {updated}</p>
 
-			<h2>What counsel needs to know about the product</h2>
 			<p>
-				The facts below are true of the system as built, and are set down here as briefing
-				material rather than as policy language.
+				Teachouse helps teachers who sell resources keep one catalogue and publish it to several
+				marketplaces. This policy explains what personal information we collect when you use the
+				Teachouse website, the web console and the Teachouse app on your computer or phone, what we
+				do with it, and the choices you have.
+			</p>
+			<p>
+				"Teachouse", "we" and "us" mean the business that runs Teachouse from Auckland, New Zealand.
+				"You" means the person who holds a Teachouse account, or anyone visiting our website.
+			</p>
+
+			<h2 id="summary">At a glance</h2>
+			<div class="policy-scroll">
+				<table class="policy-table">
+					<thead>
+						<tr>
+							<th scope="col">What</th>
+							<th scope="col">Why we have it</th>
+							<th scope="col">Where it is kept</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<th scope="row">Your name, email and sign-in details</th>
+							<td>To create your account and let you sign in</td>
+							<td>Our servers in New Zealand</td>
+						</tr>
+						<tr>
+							<th scope="row">Your catalogue: titles, descriptions, prices, covers</th>
+							<td>It is the product: we keep it so you can publish it</td>
+							<td>Our servers in New Zealand, files encrypted</td>
+						</tr>
+						<tr>
+							<th scope="row">Files you import from a marketplace</th>
+							<td>So you can open and publish them again</td>
+							<td>On your own devices only, encrypted</td>
+						</tr>
+						<tr>
+							<th scope="row">Your marketplace passwords and logins</th>
+							<td>Signing in to marketplaces happens in the app on your device</td>
+							<td>On your own device only. We never receive them</td>
+						</tr>
+						<tr>
+							<th scope="row">Card details</th>
+							<td>To take payment</td>
+							<td>With Stripe only. We never see them</td>
+						</tr>
+						<tr>
+							<th scope="row">How the console is used</th>
+							<td>To find what is confusing or broken</td>
+							<td>PostHog, in the European Union</td>
+						</tr>
+						<tr>
+							<th scope="row">Security records: sign-ins, IP address, browser</th>
+							<td>To protect your account and investigate problems</td>
+							<td>Our servers in New Zealand</td>
+						</tr>
+					</tbody>
+				</table>
+			</div>
+			<p>
+				We do not sell personal information, we do not use it for advertising, and we do not share
+				it with anyone except the service providers listed in{' '}
+				<a class="link" href="#sharing">section 5</a>.
+			</p>
+
+			<nav class="policy-toc" aria-label="Sections of this policy">
+				<ol>
+					<li><a href="#collect">What we collect</a></li>
+					<li><a href="#never">What we never collect</a></li>
+					<li><a href="#use">How we use it</a></li>
+					<li><a href="#bases">Legal bases (EU and UK)</a></li>
+					<li><a href="#sharing">Who else sees it</a></li>
+					<li><a href="#location">Where it is kept</a></li>
+					<li><a href="#retention">How long we keep it</a></li>
+					<li><a href="#security">How we protect it</a></li>
+					<li><a href="#cookies">Cookies and browser storage</a></li>
+					<li><a href="#rights">Your rights</a></li>
+					<li><a href="#children">Children</a></li>
+					<li><a href="#breach">If something goes wrong</a></li>
+					<li><a href="#law">Governing law and complaints</a></li>
+					<li><a href="#changes">Changes to this policy</a></li>
+					<li><a href="#contact">Contact</a></li>
+				</ol>
+			</nav>
+
+			<h2 id="collect">1. What we collect</h2>
+
+			<h3>Your account</h3>
+			<ul>
+				<li>
+					Your name and email address, and the email address you choose for notices if it is a
+					different one.
+				</li>
+				<li>
+					How you sign in: a password, stored only as a one-way hash we cannot turn back into the
+					password; a passkey, of which we hold only the public half, while the private half stays
+					on your device; or a Google or Microsoft account, in which case that provider tells us
+					your name, email address and whether the address is verified.
+				</li>
+				<li>
+					Your signed-in sessions: when each started and expires, the IP address and the browser it
+					came from.
+				</li>
+			</ul>
+
+			<h3>Your organisation and catalogue</h3>
+			<ul>
+				<li>
+					Your account settings, organisation name, plan and the marketplaces you connect.
+				</li>
+				<li>
+					The resources you create or import: titles, descriptions, prices, grades, subjects, tags,
+					cover images and thumbnails, the files you upload through the console, and the choices
+					you make about where each resource is published.
+				</li>
+				<li>
+					What happened when you published: which listing went where and when, and whether it
+					worked. We also keep the sales and view figures a marketplace reports back to you, so you
+					can see them over time.
+				</li>
+				<li>
+					Your permission to use a marketplace that has no official connection, with the date you
+					gave or withdrew it.
+				</li>
+			</ul>
+
+			<h3>Your devices</h3>
+			<p>
+				The Teachouse app on your computer or phone does the work that has to happen under your own
+				marketplace login. For each device you sign in, we keep a name for it, which marketplaces it
+				is signed in to, when it last checked in, and the network address other devices of yours
+				use to reach it. We also keep a list of which files each device holds, identified by a
+				fingerprint of the file's contents and its name, never the file itself.
+			</p>
+			<p>
+				Files you import from a marketplace stay on your devices, encrypted with a key that never
+				leaves that device. When one of your devices needs a copy of a file another of your devices
+				holds, the two connect to each other directly over an encrypted connection. The file does
+				not pass through our servers.
+			</p>
+
+			<h3>Billing</h3>
+			<p>
+				If you buy a plan or a pack, you pay on Stripe's checkout page, and Stripe collects your card
+				details and billing address. We receive and keep your Stripe customer reference, what you
+				bought, the amount, the currency, the tax charged, your invoices, and whether payment
+				succeeded.
+			</p>
+
+			<h3>How you use Teachouse</h3>
+			<p>
+				When you use the website or console, we record page views and a small set of named events,
+				such as starting a checkout or finishing an import, with counts and settings rather than
+				anything you wrote. In the console these are linked to your organisation, not to you by
+				name or email address. We also record sessions of the console so we can see where people
+				get stuck; every text field and every piece of text on the page is masked before it is
+				recorded, so the recording shows the layout, not your catalogue. The website records page
+				views only and never records sessions.
+			</p>
+
+			<h3>Technical and security records</h3>
+			<p>
+				Our servers record requests and errors so we can keep Teachouse running. Our sign-in
+				service keeps a security log of sign-ups, sign-ins, failed sign-ins, sign-outs and password
+				resets, with the IP address and browser of each. When a sign-in fails or a password reset is
+				requested, that log holds the email address that was typed, because there is no account to
+				name instead.
+			</p>
+
+			<h3>Messages</h3>
+			<p>
+				If you write to us or send a request through the console, such as asking for a new
+				marketplace, we keep what you sent and our reply.
+			</p>
+
+			<h2 id="never">2. What we never collect</h2>
+			<ul>
+				<li>
+					Your marketplace passwords or login sessions for marketplaces without an official
+					connection. You sign in to those inside the Teachouse app on your own device; the login is
+					kept in your device's own secure storage and our servers never receive it.
+				</li>
+				<li>Your card number or bank details. Those go straight to Stripe.</li>
+				<li>
+					Information about your buyers, beyond the sales totals a marketplace shows you.
+				</li>
+				<li>Anything from the files you import, other than their name and fingerprint.</li>
+			</ul>
+			<p>
+				Some marketplaces offer an official connection for tools like Teachouse. When we connect to
+				one of those for you, we will hold the access token that marketplace issues, use it only
+				from our servers to act on your listings, and delete it when you disconnect. The
+				marketplaces Teachouse connects to today do not offer one, so their sign-in stays on your
+				device.
+			</p>
+
+			<h2 id="use">3. How we use it</h2>
+			<ul>
+				<li>To run your account, sign you in, and keep your catalogue.</li>
+				<li>To publish, update and track your listings where you ask us to.</li>
+				<li>To take payment and apply your plan.</li>
+				<li>
+					To send you email you need: verifying your address, resetting your password, telling you
+					your password changed, and telling you when an import or a publish has finished or needs
+					you. We do not send marketing email.
+				</li>
+				<li>To stop abuse, such as automated sign-ups, and to keep accounts secure.</li>
+				<li>To find and fix problems, and to understand which parts of Teachouse are used.</li>
+				<li>To answer you when you contact us.</li>
+				<li>To meet legal duties, such as keeping tax records.</li>
+			</ul>
+			<p>
+				If you ask us for help, a Teachouse administrator may view your account as you see it, to
+				find the problem. Every time that happens it is recorded, with which administrator it was
+				and when.
+			</p>
+
+			<h2 id="bases">4. Legal bases (EU and UK)</h2>
+			<p>
+				If you are in the European Economic Area or the United Kingdom, the law requires us to say
+				why we are allowed to use your information:
 			</p>
 			<ul>
 				<li>
-					An account is identified by a name, an email address and a credential, which may be a
-					password, a passkey, or a sign-in through a social provider.
+					<strong>Contract:</strong> your account, catalogue, devices, publishing, billing and the
+					email that goes with them. We cannot provide Teachouse without them.
 				</li>
 				<li>
-					For marketplaces with no official API, the seller's marketplace session lives on the
-					seller's own device. Teachouse's servers do not hold the credential for those
-					marketplaces and do not open a session on them.
+					<strong>Legitimate interests:</strong> security records, stopping abuse, and product
+					analytics. We keep these to what we need, and you can object (see{' '}
+					<a class="link" href="#rights">section 10</a>).
 				</li>
 				<li>
-					For marketplaces that publish an official API, Teachouse holds a token issued for that
-					purpose and uses it from its own servers.
+					<strong>Consent:</strong> connecting a marketplace that has no official connection. You
+					can withdraw it at any time from your account.
 				</li>
-				<li>
-					Teachouse's servers hold the seller's catalogue: titles, descriptions, prices,
-					mapping decisions, and the record of what was published where and when.
-				</li>
-				<li>
-					Resource files for the no-API marketplaces stay on the seller's device, because the
-					upload is itself a request that originates there.
-				</li>
-				<li>
-					Sales and view figures read back from a marketplace are stored so that they can be
-					shown over time.
-				</li>
-				<li>
-					Payment is taken through a third-party merchant of record, which handles the card
-					details; Teachouse does not see them.
-				</li>
-				<li>
-					A device registry records which of the seller's devices are signed in, so that the
-					seller can sign one out.
-				</li>
-				<li>The site itself carries no analytics and loads nothing from a third party.</li>
+				<li><strong>Legal obligation:</strong> tax and accounting records.</li>
 			</ul>
 
-			<h2>Questions this document must answer</h2>
+			<h2 id="sharing">5. Who else sees it</h2>
+			<p>
+				We use a small number of service providers. Each one receives only what it needs for its
+				job, and may use it only to provide that service to us.
+			</p>
+			<div class="policy-scroll">
+				<table class="policy-table">
+					<thead>
+						<tr>
+							<th scope="col">Provider</th>
+							<th scope="col">What it does for us</th>
+							<th scope="col">What it receives</th>
+							<th scope="col">Where</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<th scope="row">Cloudflare</th>
+							<td>Delivers our website and blocks automated sign-ups (Turnstile)</td>
+							<td>Your IP address, browser details and the pages you request</td>
+							<td>Global network</td>
+						</tr>
+						<tr>
+							<th scope="row">Stripe</th>
+							<td>Takes payment and runs the billing page</td>
+							<td>Your email address, payment details and what you buy</td>
+							<td>United States and elsewhere</td>
+						</tr>
+						<tr>
+							<th scope="row">Resend</th>
+							<td>Sends our email</td>
+							<td>Your email address, name and the message</td>
+							<td>United States</td>
+						</tr>
+						<tr>
+							<th scope="row">PostHog</th>
+							<td>Product analytics</td>
+							<td>
+								Page views, named events and masked session recordings, linked to your organisation's
+								ID
+							</td>
+							<td>European Union</td>
+						</tr>
+						<tr>
+							<th scope="row">Have I Been Pwned</th>
+							<td>Warns you if a new password has appeared in a known data breach</td>
+							<td>
+								The first five characters of a one-way hash of the password, never the password
+							</td>
+							<td>Global network</td>
+						</tr>
+						<tr>
+							<th scope="row">Google, Microsoft</th>
+							<td>Sign-in, only if you choose it</td>
+							<td>The fact that you are signing in to Teachouse</td>
+							<td>Their own locations</td>
+						</tr>
+					</tbody>
+				</table>
+			</div>
+			<p>
+				When you publish, the marketplace you publish to receives your listing: that is the point.
+				What it does with it is covered by that marketplace's own privacy policy.
+			</p>
+			<p>
+				We may also disclose information if the law requires it, to protect someone's safety, or to
+				a buyer of the business if Teachouse is sold, in which case this policy continues to apply
+				to your information.
+			</p>
+
+			<h2 id="location">6. Where it is kept</h2>
+			<p>
+				Your account and catalogue are stored on servers we run in New Zealand, and so are our
+				backups. Product analytics are stored by PostHog in the European Union. Cloudflare, Stripe
+				and Resend may process information in other countries, including the United States.
+			</p>
+			<p>
+				New Zealand is recognised by the European Commission and the United Kingdom as giving
+				adequate protection to personal information. Where a provider handles information from the
+				EU or UK outside those places, we rely on its standard contractual clauses or an equivalent
+				safeguard.
+			</p>
+
+			<h2 id="retention">7. How long we keep it</h2>
 			<ul>
-				<li>Which jurisdiction's law governs, and which regimes the product must satisfy.</li>
-				<li>How long each class of record is kept, and what deletion does.</li>
-				<li>How a seller exports or deletes their catalogue.</li>
-				<li>Which processors are used, and what each one receives.</li>
-				<li>How a change to this document is notified.</li>
+				<li>
+					<strong>Your account and catalogue:</strong> for as long as your account is open. When
+					your account is deleted, they are deleted with it.
+				</li>
+				<li>
+					<strong>Sessions:</strong> a console session lasts up to 7 days, and ends sooner if you
+					sign out.
+				</li>
+				<li>
+					<strong>Progress of imports and publishes:</strong> the step-by-step record is deleted
+					after 30 days. The result of each publish stays with your catalogue.
+				</li>
+				<li>
+					<strong>Security log and server logs:</strong> kept only as long as we need them to
+					investigate problems and protect accounts.
+				</li>
+				<li>
+					<strong>Billing records:</strong> kept for as long as tax law requires, which in New
+					Zealand is seven years.
+				</li>
+				<li>
+					<strong>Backups:</strong> encrypted, and replaced on a rolling schedule. The oldest is 12
+					months old, so information deleted from Teachouse is gone from every backup within 12
+					months.
+				</li>
+				<li>
+					<strong>Files on your devices:</strong> under your control. Deleting a resource in
+					Teachouse does not delete your copy of the file; delete it yourself if you want it gone.
+				</li>
 			</ul>
 
-			<h2>Contact</h2>
+			<h2 id="security">8. How we protect it</h2>
+			<ul>
+				<li>Every connection to Teachouse is encrypted with TLS.</li>
+				<li>
+					Files and images we store are encrypted, each under its own key, and those keys are
+					themselves encrypted under a master key kept apart from the files.
+				</li>
+				<li>
+					Our database separates every organisation's rows at the database level, so a request made
+					for one account cannot read another's.
+				</li>
+				<li>
+					Passwords are stored as one-way hashes, and passkeys are supported as a stronger
+					alternative.
+				</li>
+				<li>
+					Marketplace logins and imported files on your devices are kept in the device's own
+					secure storage and encrypted on disk.
+				</li>
+				<li>
+					You can see which devices are signed in to your account and sign any of them out. A
+					signed-out device deletes its marketplace logins the next time it connects.
+				</li>
+				<li>Only a small number of administrators can reach account data, and their access is logged.</li>
+			</ul>
+			<p>No system is perfectly secure, but we design Teachouse to hold as little as it can.</p>
+
+			<h2 id="cookies">9. Cookies and browser storage</h2>
+			<p>
+				Every cookie and every item of browser storage below is set on Teachouse's own address. We
+				do not use advertising or cross-site tracking cookies, and we do not load other companies'
+				trackers. Analytics reach PostHog through our own address, so your browser never talks to
+				PostHog directly.
+			</p>
+			<div class="policy-scroll">
+				<table class="policy-table">
+					<thead>
+						<tr>
+							<th scope="col">Name</th>
+							<th scope="col">What it is for</th>
+							<th scope="col">How long</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<th scope="row"><code>tam_session</code></th>
+							<td>Keeps you signed in to the console. Required.</td>
+							<td>Up to 7 days</td>
+						</tr>
+						<tr>
+							<th scope="row"><code>better-auth.…</code></th>
+							<td>Our sign-in service's own session, which signs you in to the console. Required.</td>
+							<td>Until the session ends</td>
+						</tr>
+						<tr>
+							<th scope="row"><code>cf_clearance</code></th>
+							<td>
+								Set by Cloudflare, which runs our network edge, to show your browser passed its
+								check against automated traffic. Required.
+							</td>
+							<td>Set by Cloudflare, usually minutes to hours</td>
+						</tr>
+						<tr>
+							<th scope="row"><code>teachouse.theme</code></th>
+							<td>Remembers light or dark mode (browser storage, not a cookie).</td>
+							<td>Until you clear it</td>
+						</tr>
+						<tr>
+							<th scope="row">Other <code>teachouse.…</code> items</th>
+							<td>
+								Browser storage for console preferences and steps in progress, such as the plan you
+								picked before signing up. Never sent to anyone.
+							</td>
+							<td>Until you clear it, or the step finishes</td>
+						</tr>
+						<tr>
+							<th scope="row">PostHog (<code>ph_…</code>)</th>
+							<td>
+								A random identifier so analytics can tell one visit from the next. Set on
+								Teachouse's own address.
+							</td>
+							<td>Up to 1 year</td>
+						</tr>
+					</tbody>
+				</table>
+			</div>
+			<p>
+				The Turnstile check on the sign-in and sign-up pages runs in a frame served by Cloudflare,
+				to tell people from automated programs. You can block cookies in your browser, but you will not be able to
+				sign in without the required ones.
+			</p>
+
+			<h2 id="rights">10. Your rights</h2>
+			<p>Wherever you live, you can ask us to:</p>
+			<ul>
+				<li><strong>Access</strong> the personal information we hold about you.</li>
+				<li><strong>Correct</strong> anything that is wrong.</li>
+				<li>
+					<strong>Export</strong> your catalogue. You can download it yourself as a spreadsheet from
+					the console, and ask us for the rest.
+				</li>
+				<li>
+					<strong>Delete</strong> your account and everything in it. We confirm the request came
+					from you, then delete the account, your organisation, your catalogue, your sessions and
+					your sign-in details. The keys to your stored files are destroyed at the same time, so
+					any copy left behind cannot be read. If you have a paid plan, cancel it first, or ask us
+					to.
+				</li>
+				<li>
+					<strong>Object</strong> to analytics or <strong>restrict</strong> how we use your
+					information.
+				</li>
+				<li>
+					<strong>Withdraw consent</strong> for a marketplace without an official connection, from
+					your account at any time.
+				</li>
+			</ul>
+			<p>
+				You can change your name and notice address yourself in Account settings. For anything
+				else, contact us (<a class="link" href="#contact">section 15</a>). We answer within 20
+				working days, as the New Zealand Privacy Act requires, and within one month if you are in
+				the EU or UK. We do not charge for a request, and we will never treat you differently for
+				making one.
+			</p>
+			<p>
+				If you are in California, you have the rights above under the California Consumer Privacy
+				Act. We do not sell or share personal information for cross-context behavioural
+				advertising.
+			</p>
+
+			<h2 id="children">11. Children</h2>
+			<p>
+				Teachouse is a tool for teachers who sell teaching resources, not for students. You must be
+				at least 13 to create an account, and if you are under 18, or under the age at which you can
+				consent to data processing where you live, you need a parent or guardian's permission. We do
+				not knowingly collect information from children under 13. If you believe a child has given
+				us their information, contact us and we will delete it.
+			</p>
+
+			<h2 id="breach">12. If something goes wrong</h2>
+			<p>
+				If personal information we hold is lost, accessed or disclosed without permission and it is
+				likely to cause serious harm, we will tell the people affected and the New Zealand Privacy
+				Commissioner as soon as we practicably can. Where EU or UK law applies, we will notify the
+				relevant authority within 72 hours of becoming aware of it.
+			</p>
+
+			<h2 id="law">13. Governing law and complaints</h2>
+			<p>
+				This policy is governed by the law of New Zealand, including the Privacy Act 2020. We also
+				follow the EU and UK General Data Protection Regulation for people in those places.
+			</p>
+			<p>
+				If you are unhappy with how we have handled your information, please tell us first so we can
+				put it right. You can also complain to the{' '}
+				<a class="link" href="https://www.privacy.org.nz/">New Zealand Privacy Commissioner</a>, or
+				to the data protection authority where you live.
+			</p>
+
+			<h2 id="changes">14. Changes to this policy</h2>
+			<p>
+				When we change this policy, we update the date at the top. If a change affects how we use
+				information we already hold, we will email account holders before it takes effect.
+			</p>
+
+			<h2 id="contact">15. Contact</h2>
 			<p>
 				{
 					supportEmail ? (
 						<Fragment>
-							Until this page is replaced, questions go to{' '}
+							For privacy questions and requests, email{' '}
 							<a class="link" href={`mailto:${supportEmail}`}>
 								{supportEmail}
 							</a>
 							.
 						</Fragment>
 					) : (
-						'A contact address goes here before this page is replaced.'
+						'Our address for privacy questions and requests is being set up and will be published here.'
 					)
 				}
+			</p>
+			<p>Teachouse, Auckland 1072, New Zealand.</p>
+			<p>
+				This policy works alongside our <a class="link" href="/terms/">Terms</a>.
 			</p>
 		</div>
 	</section>

@@ -54,3 +54,14 @@
 	margin-top: 20px;
 	text-align: center;
 }
+
+/* The consent line under the choices: the Terms and the Privacy Policy are
+   landing pages on this same origin, so both links reload rather than ask the
+   console's router for a route it does not have. */
+.auth-card.acct-signed-out .auth-consent {
+	margin: 18px 0 0;
+	font-size: 12.5px;
+	line-height: 1.5;
+	color: var(--muted);
+	text-align: center;
+}

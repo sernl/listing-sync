@@ -192,6 +192,12 @@
 			</div>
 		{/if}
 
+		<p class="auth-consent">
+			By signing up you agree to the
+			<a class="link" href="/terms/" data-sveltekit-reload>Terms</a>
+			and <a class="link" href="/privacy/" data-sveltekit-reload>Privacy Policy</a>.
+		</p>
+
 		<p class="auth-foot">
 			Already have an account? <a class="link" href="/login">Sign in</a>.
 		</p>
