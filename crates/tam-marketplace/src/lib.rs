@@ -737,6 +737,50 @@ pub struct ImportedListing {
     /// `None` refuses at the API rather than defaulting: a removal must never
     /// carry a lifecycle nobody has observed.
     pub state: Option<ListingState>,
+    /// What the listing states that no canonical field holds, verbatim.
+    ///
+    /// Absent from every read before these were carried, which is why it
+    /// defaults: a stored observation from an older device decodes to an
+    /// extras that says nothing, and the import leaves those fields as the
+    /// resource already holds them.
+    #[serde(default, skip_serializing_if = "ListingExtras::is_empty")]
+    pub extras: ListingExtras,
+}
+
+/// The marketplace's own answers to the questions its form asks and the
+/// canonical product has no field for, in the marketplace's own words.
+///
+/// Carried verbatim rather than resolved here, because resolving them is a
+/// decision about the marketplace's vocabulary that the importer makes against
+/// the same capture the create form reads; the read only reports what was on
+/// the wire.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListingExtras {
+    /// The tax designation's row id as the read returns it (`"2"` on TPT).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tax_code: Option<String>,
+    /// The authorship attestation as the read spells it (`"ORIGINAL_WORK"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copyright: Option<String>,
+    /// The "appropriate for my country" flag, where the read carried one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub appropriate_for_country: Option<bool>,
+    /// The listing's own pictures, as addresses, in the marketplace's slot
+    /// order. The device fetches the bytes; the addresses themselves are
+    /// never stored as the pictures.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub thumbnails: Vec<String>,
+}
+
+impl ListingExtras {
+    /// Whether the read stated none of these.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.tax_code.is_none()
+            && self.copyright.is_none()
+            && self.appropriate_for_country.is_none()
+            && self.thumbnails.is_empty()
+    }
 }
 
 impl ImportedListing {
@@ -879,8 +923,8 @@ pub trait FaultPlan: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::{
-        settle, AmbiguityCause, FieldDiffReport, ImportedListing, InstantPause, ListingState,
-        Outcome, Pause as _, RemoteListingId,
+        settle, AmbiguityCause, FieldDiffReport, ImportedListing, InstantPause, ListingExtras,
+        ListingState, Outcome, Pause as _, RemoteListingId,
     };
     use tam_types::{
         AttemptId, CopyFormat, FieldKey, FieldMismatch, ImportedPrice, ImportedTerm, InventoryId,
@@ -946,6 +990,12 @@ mod tests {
                 denomination: "£".to_owned(),
             },
             state: Some(ListingState::Live),
+            extras: ListingExtras {
+                tax_code: Some("2".to_owned()),
+                copyright: Some("ORIGINAL_WORK".to_owned()),
+                appropriate_for_country: Some(false),
+                thumbnails: vec!["https://example.test/1.jpg".to_owned()],
+            },
         };
 
         let json = serde_json::to_string(&listing).expect("the listing serialises");

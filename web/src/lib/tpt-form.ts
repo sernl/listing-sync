@@ -219,6 +219,11 @@ export interface TptDraft {
 	/** One marketplace's own value for one field, held only where the seller
 	 *  edited it away from the canonical one. Keyed `inventory:field`. */
 	overrides: Record<string, string>;
+	/** The marketplaces this resource is already live on through a bound
+	 *  listing. Read from its mappings, never written by a control: a live
+	 *  listing met its marketplace's rules when it went live, so a field that
+	 *  marketplace requires is not refused as missing there. */
+	live: InventoryId[];
 }
 
 /** Which of the two things this form is doing.
@@ -240,6 +245,9 @@ export type FormMode =
 			 *  to, or empty: a published listing on a platform whose edit
 			 *  transition we have not captured keeps the copy it has. */
 			keeps: readonly InventoryId[];
+			/** The marketplaces this resource is live on through a bound
+			 *  listing, whose rules its live listing already meets. */
+			live?: readonly InventoryId[];
 	  };
 
 export function emptyTptDraft(): TptDraft {
@@ -273,7 +281,8 @@ export function emptyTptDraft(): TptDraft {
 		licence: null,
 		marketplaces: [],
 		inventories: [],
-		overrides: {}
+		overrides: {},
+		live: []
 	};
 }
 
@@ -614,6 +623,11 @@ export function refusalsOf(
 ): Refusal[] {
 	void vocabulary;
 	const found: Refusal[] = [];
+	// Every refusal below is decided per marketplace: the core holds TPT's own
+	// rules only for a draft going to TPT and not already live there, and the
+	// licence rule below names only the marketplaces that still need one. A
+	// marketplace this resource is live on is not refused for a field its live
+	// listing already holds, because it met those rules when it went live.
 	if (verdict === null) {
 		// Fail closed. An unloaded module has not decided that there is nothing
 		// to refuse, and treating it as though it had would let a blank form
@@ -653,7 +667,9 @@ export function refusalsOf(
 	// field it cannot see answered. Sending it and reading the refusal back was
 	// how every Tes create from this form failed.
 	for (const marketplace of new Set(
-		unlicensed(draft, known).map((inventory) => MARKETPLACE_OF[inventory])
+		unlicensed(draft, known)
+			.filter((inventory) => !draft.live.includes(inventory))
+			.map((inventory) => MARKETPLACE_OF[inventory])
 	)) {
 		found.push({
 			group: marketplace === 'Tpt' ? 'tpt_options' : 'tes_options',
@@ -1120,7 +1136,9 @@ export function draftInputOf(draft: TptDraft): DraftInput {
 		pages_or_slides: pagesOf(draft),
 		answer_key_id: draft.answerKey === null ? null : Number(draft.answerKey),
 		copyright_declaration_id: draft.copyright === null ? null : Number(draft.copyright),
-		status_user: Number(draft.status)
+		status_user: Number(draft.status),
+		targets: [...draft.marketplaces],
+		satisfied: [...new Set(draft.live.map((inventory) => MARKETPLACE_OF[inventory]))]
 	};
 }
 
@@ -1281,7 +1299,8 @@ export function patchBodyOf(
  *  than from the sidecar, which holds neither. */
 export function draftOf(
 	product: ProductView,
-	inventories: readonly InventoryId[] = []
+	inventories: readonly InventoryId[] = [],
+	live: readonly InventoryId[] = []
 ): TptDraft {
 	const base = product.tpt_base;
 	const files = (role: FileRole) => product.files.filter((file) => file.role === role);
@@ -1320,7 +1339,8 @@ export function draftOf(
 		status: base === undefined ? empty.status : String(base.status_user),
 		licence: product.rights?.native_id ?? product.rights?.segments[0] ?? null,
 		...tilesOf(inventories),
-		inventories: [...inventories]
+		inventories: [...inventories],
+		live: live.filter((inventory) => inventories.includes(inventory))
 	};
 }
 

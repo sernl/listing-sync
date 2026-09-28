@@ -169,7 +169,7 @@ pub use operators::{OperatorEvent, OperatorRecord, OperatorRepo};
 pub use org::{OrgRecord, OrgRepo, OrgWrite};
 pub use overrides::OverrideRepo;
 pub use product::{
-    has_live_payload, insert_product, offer_cover, offer_payload, restore_product,
+    fill_rights, has_live_payload, insert_product, offer_cover, offer_payload, restore_product,
     soft_delete_product, title_of, update_product, CoverOffer, ExportedListing, ExportedResource,
     FileRefusal, FileReplacement, FileSwap, FileTarget, PayloadOffer, PayloadOfferPolicy,
     ProductCreationFacts, ProductEdit, ProductFiles, ProductRecord, ProductRepo, ProductSummary,
@@ -193,7 +193,9 @@ pub use sync_settings::{
     ActivityCursor, ActivityKind, ActivityRow, MultiListedRow, SyncSettingRecord, SyncSettingRepo,
     ACTIVITY_LISTED_MAX,
 };
-pub use tpt_base::{upsert_tpt_base, TptBaseRecord, TptBaseRepo};
+pub use tpt_base::{
+    fill_tpt_base, read_tpt_base, upsert_tpt_base, TptBaseFill, TptBaseRecord, TptBaseRepo,
+};
 pub mod elections;
 pub mod sync_requests;
 pub use elections::{

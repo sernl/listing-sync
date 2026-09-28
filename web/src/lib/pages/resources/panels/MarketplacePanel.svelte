@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { FormVocabularyView, NativeValueView } from '$lib/api';
+	import type { FacetView, FormVocabularyView, NativeValueView } from '$lib/api';
 	import Explain from '$lib/Explain.svelte';
 	import Field from '$lib/Field.svelte';
 	import FormSection from '$lib/FormSection.svelte';
@@ -20,6 +20,7 @@
 		/** Whether this band asks rather than requires. A template's fields are
 		 *  starting points, so the Required words are off there. */
 		optional = false,
+		held = [],
 		set
 	}: {
 		marketplace: Marketplace;
@@ -31,6 +32,9 @@
 		gatesLicence?: boolean;
 		licences?: readonly NativeValueView[];
 		optional?: boolean;
+		/** What this marketplace's listing holds that no control here offers,
+		 *  shown so the seller sees the listing TPT shows buyers. */
+		held?: readonly FacetView[];
 		set: <K extends keyof TptDraft>(field: K, value: TptDraft[K]) => void;
 	} = $props();
 
@@ -97,6 +101,21 @@
 					{form.localisation.label ?? form.localisation.generic_label}
 				</label>
 			</fieldset>
+
+			{#if held.length > 0}
+				<div class="res-group">
+					<span class="res-group-label">
+						Also on your TPT listing
+						<Explain title="Also on your TPT listing" label="How it works">
+							<p>
+								Your TPT listing has these too. There is no box for them here, so Teachouse
+								sends them back to TPT exactly as they are whenever you update the listing.
+							</p>
+						</Explain>
+					</span>
+					<p class="res-note">{held.map((facet) => facet.label).join(', ')}</p>
+				</div>
+			{/if}
 		{:else}
 			<p class="res-note">Loading TPT’s questions…</p>
 		{/if}

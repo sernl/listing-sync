@@ -763,6 +763,12 @@ pub struct ProductView {
     /// from a row of nulls.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tpt_base: Option<TptBaseView>,
+    /// What this resource's TPT listing holds that no control on the form
+    /// offers: its resource types, supports and programmes, as an import read
+    /// them. Every send to TPT posts them back unchanged, so they are shown
+    /// rather than edited.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tpt_held: Vec<crate::product::FacetView>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -1143,6 +1149,14 @@ pub(crate) async fn product_view(
         grades,
         rights,
         tpt_base: tpt_base.as_ref().map(tpt_base_view),
+        tpt_held: crate::product::tpt_held_facets(
+            &aggregate
+                .native_residue
+                .iter()
+                .filter(|term| term.inventory == tam_types::InventoryId::Tpt)
+                .filter_map(|term| term.native_id.as_deref())
+                .collect::<Vec<_>>(),
+        ),
         created_at: record.created_at,
         updated_at: record.updated_at,
     }))

@@ -303,7 +303,7 @@
 	$effect(() => {
 		const stored = editing?.product;
 		if (stored !== undefined && seededFor !== stored.id) {
-			draft = draftOf(stored, editing?.mapped ?? []);
+			draft = draftOf(stored, editing?.mapped ?? [], editing?.live ?? []);
 			slots = slotsFrom(stored.tpt_base?.thumbnail_hashes ?? []);
 			// Another resource's PDF is not this one's.
 			sourcePdf = null;
@@ -1253,6 +1253,7 @@
 								{form}
 								{refusals}
 								gatesLicence={gatesLicence(panel.marketplace)}
+								held={panel.marketplace === 'Tpt' ? (editing?.product.tpt_held ?? []) : []}
 								{licences}
 								{set}
 							/>

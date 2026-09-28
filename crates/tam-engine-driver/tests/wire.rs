@@ -10,7 +10,7 @@ use tam_domain::{ItemOperation, ItemOutcome, JobItemId, StepBudget};
 use tam_engine_driver::driver::VerifyPolicy;
 use tam_engine_driver::import::{
     ContentType, Cover, FileName, Fingerprint, ImportPage, ListedResource, Locator, ObservedFile,
-    ObservedResource, Reason, SkippedResource,
+    ObservedResource, Reason, SkippedResource, Thumbnail,
 };
 use tam_engine_driver::vocabulary::{
     AttemptIntent, AttemptRef, AttemptVerdict, BindDisposition, BudgetGrant, ClaimView, Committed,
@@ -19,8 +19,8 @@ use tam_engine_driver::vocabulary::{
     ReconcileSubject, SettleEnvelope, WorkOrder,
 };
 use tam_marketplace::{
-    CreateStrategy, FormId, IdempotencyKey, ImportedListing, LifecycleTransition, ListingState,
-    RemoteLifecycle, RemoteListingId,
+    CreateStrategy, FormId, IdempotencyKey, ImportedListing, LifecycleTransition, ListingExtras,
+    ListingState, RemoteLifecycle, RemoteListingId,
 };
 use tam_types::{
     ContentHash, CopyFormat, FailureCode, FailureDetail, FileKind, ImportedPrice, InventoryId,
@@ -760,6 +760,7 @@ fn listing() -> ImportedListing {
         rights: None,
         price: ImportedPrice::Free,
         state: Some(ListingState::Live),
+        extras: ListingExtras::default(),
     }
 }
 
@@ -810,6 +811,7 @@ fn an_import_page_round_trips_over_both_file_arms_and_a_skip() {
                 file: Some(observed(None)),
                 cover_png: Some(cover()),
                 fingerprint: Some(Fingerprint::of_title("Fractions on a number line | TPT")),
+                thumbnails: Vec::new(),
             },
             ObservedResource {
                 locator: Locator::from_resource_id(13_549_795),
@@ -817,16 +819,32 @@ fn an_import_page_round_trips_over_both_file_arms_and_a_skip() {
                 file: Some(observed(Some("worksheet.pdf"))),
                 cover_png: Some(cover()),
                 fingerprint: None,
+                thumbnails: Vec::new(),
             },
             // The TPT arm: a listing read whose file this device could not
             // fetch, which must be representable or a TPT import cannot be
-            // posted at all.
+            // posted at all. Its pictures and extras come from the listing
+            // rather than the file, so they survive the missing file.
             ObservedResource {
                 locator: Locator::from_resource_id(13_549_797),
-                listing: listing(),
+                listing: ImportedListing {
+                    extras: ListingExtras {
+                        tax_code: Some("2".to_owned()),
+                        copyright: Some("ORIGINAL_WORK".to_owned()),
+                        appropriate_for_country: Some(true),
+                        thumbnails: vec![
+                            "https://ecdn.teacherspayteachers.com/thumbitem/a/original-1.jpg"
+                                .to_owned(),
+                        ],
+                    },
+                    ..listing()
+                },
                 file: None,
                 cover_png: None,
                 fingerprint: Some(Fingerprint::of_title("A poster")),
+                thumbnails: vec![
+                    Thumbnail::encode(&[0xFF, 0xD8, 0xFF, 0xE0]).expect("a JPEG opening")
+                ],
             },
         ],
         skipped: vec![SkippedResource {

@@ -456,6 +456,37 @@ fn form() -> Option<&'static TptForm> {
     READ.get_or_init(|| TptForm::read(CAPTURE).ok()).as_ref()
 }
 
+/// The TPT facets a listing holds that no control on the form offers — its
+/// resource types, supports, programmes — with TPT's own name for each, in
+/// the order the listing carried them.
+///
+/// The edit form shows these under TPT's own panel as what the listing keeps:
+/// an import records them as the listing had them and every send to TPT posts
+/// them back, so a seller who could not see them would read a listing
+/// narrower than the one TPT shows buyers.
+pub(crate) fn tpt_held_facets(slugs: &[&str]) -> Vec<FacetView> {
+    let (Some(capture), Some(form)) = (capture(), form()) else {
+        return Vec::new();
+    };
+    let mut held: Vec<FacetView> = Vec::new();
+    for slug in slugs {
+        if !form.is_unpicked(slug) || held.iter().any(|facet| facet.slug == *slug) {
+            continue;
+        }
+        let Some(facet) = capture.taxonomy_tags.options.get(*slug) else {
+            continue;
+        };
+        held.push(FacetView {
+            slug: (*slug).to_owned(),
+            label: facet.name.clone(),
+            british_label: None,
+            parent: facet.parent_id.clone(),
+            seller_writable: true,
+        });
+    }
+    held
+}
+
 fn slot_view(label: &str, slot: &Slot) -> SlotView {
     SlotView {
         label: label.to_owned(),

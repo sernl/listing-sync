@@ -9,6 +9,7 @@
 		type ImportRunItemOrder,
 		type ImportRunItemView,
 		type ImportRunView,
+		type RunRefreshView,
 		type PairFieldChoice,
 		type PairSide
 	} from '$lib/api';
@@ -58,7 +59,9 @@
 		pageCount,
 		pageSummary,
 		progressDone,
+		readAgainLine,
 		reasonLine,
+		refreshedLine,
 		runBadge,
 		runName,
 		selectionBlocked,
@@ -114,6 +117,9 @@
 	let committing = $state(false);
 	let commitRefusal = $state<string | null>(null);
 	let stopPending = $state(false);
+	let refreshing = $state(false);
+	let refreshed = $state<RunRefreshView | null>(null);
+	let refreshRefusal = $state<string | null>(null);
 
 	/** How many resources one page of the list holds. The server's own
 	 *  default, restated so the pager can count pages without a round trip. */
@@ -484,6 +490,26 @@
 		}
 	}
 
+	/** Fills what this run's saved reads state onto the resources it made,
+	 *  where those resources left it empty. Safe to press twice. */
+	async function refresh() {
+		if (refreshing) return;
+		const target = { id: runId, epoch: runEpoch };
+		refreshing = true;
+		refreshRefusal = null;
+		try {
+			const outcome = await api.refreshImportRun(target.id);
+			if (current(target)) refreshed = outcome;
+		} catch (caught) {
+			if (current(target)) {
+				refreshRefusal =
+					caught instanceof ApiFailure ? caught.message : 'We did not hear back about the refresh.';
+			}
+		} finally {
+			if (current(target)) refreshing = false;
+		}
+	}
+
 	function merged(keep: string, fields: PairFieldChoice): DuplicateDecision {
 		return { verdict: 'same', keep, fields };
 	}
@@ -728,6 +754,44 @@
 						</Button>
 					{/snippet}
 					<p class="imp-line">{settledLine(run.counts)}</p>
+					{#if run.source === 'Tpt'}
+						<div class="run-refresh">
+							<p class="imp-line">
+								Fill in Subject Area, Tags and Format from what this import read from TPT.
+								<Explain title="Refresh from TPT" label="How it works">
+									<p>
+										Teachouse kept what it read from each TPT listing. Refreshing fills the boxes
+										you left empty from that. It never changes a box you filled yourself.
+									</p>
+									<p>
+										Imports made before Teachouse read pictures, tax code and copyright did not
+										keep them. Only importing from TPT again, with the updated app, brings those in.
+									</p>
+								</Explain>
+							</p>
+							<Button
+								icon="refresh-cw"
+								disabled={refreshing}
+								reason={refreshing ? 'Refreshing.' : undefined}
+								onclick={() => void refresh()}
+							>
+								{refreshing ? 'Refreshing…' : 'Refresh from TPT'}
+							</Button>
+							{#if refreshed !== null}
+								{@const next = readAgainLine(refreshed)}
+								<p class="imp-line" role="status">{refreshedLine(refreshed)}</p>
+								{#if next !== null}
+									<p class="flow-warn">
+										{next}
+										<a href={`/import?source=${encodeURIComponent(run.source)}`}>Go to Import</a>
+									</p>
+								{/if}
+							{/if}
+							{#if refreshRefusal !== null}
+								<Banner tone="bad" title="That refresh did not finish">{refreshRefusal}</Banner>
+							{/if}
+						</div>
+					{/if}
 				</FlowStep>
 			{/if}
 

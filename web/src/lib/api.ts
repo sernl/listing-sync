@@ -1993,6 +1993,10 @@ export interface ProductView {
 	 *  existed, or imported from a marketplace. Not the same as a row whose
 	 *  fields are all unanswered. */
 	tpt_base?: TptBaseView;
+	/** What this resource's TPT listing holds that no control on the form
+	 *  offers — its resource types, supports, programmes — as an import read
+	 *  them. Every send to TPT posts them back unchanged. */
+	tpt_held?: FacetView[];
 	created_at: number;
 	updated_at: number;
 }
@@ -2252,6 +2256,15 @@ export interface DraftInput {
 	answer_key_id?: number | null;
 	copyright_declaration_id?: number | null;
 	status_user?: number | null;
+	/** The marketplaces this draft is going to. TPT's own form rules — Subject
+	 *  Area, Tag, copyright statement, tax code, its price floor and caps —
+	 *  hold only a draft going to TPT. Absent holds the draft to all of them. */
+	targets?: Marketplace[] | null;
+	/** The marketplaces this resource is already live on through a bound
+	 *  listing. A field left empty is not refused for one of these: the live
+	 *  listing met that marketplace's rules and holds what the last send
+	 *  carried. A value that marketplace would refuse still is. */
+	satisfied?: Marketplace[];
 }
 
 export interface RefusalView {
@@ -2608,6 +2621,17 @@ export interface ImportRunHead {
 	settled_at: number | null;
 	retry_of: string | null;
 	execution: ImportExecutionView;
+}
+
+/** What refreshing one run's resources from its own saved reads did. */
+export interface RunRefreshView {
+	/** Resources this refresh filled empty details on. */
+	filled: number;
+	/** Resources the saved reads had nothing more to give. */
+	unchanged: number;
+	/** Resources whose saved read has no tax code, copyright statement or
+	 *  pictures: only importing from TPT again, with the current app, fills those. */
+	read_again: number;
 }
 
 /** One run with its items and whatever pairs are still parked on it. */
@@ -3104,6 +3128,10 @@ export const api = {
 	/** Cancel future work; previously committed resources remain. */
 	abandonImportRun: (run: string) =>
 		post<void>(`/v1/imports/runs/${encodeURIComponent(run)}/abandon`, {}),
+	/** Fill the empty TPT details of what this run imported from the listings
+	 *  it read: Subject Area, Tags and Format come back without the device. */
+	refreshImportRun: (run: string) =>
+		post<RunRefreshView>(`/v1/imports/runs/${encodeURIComponent(run)}/refresh`, {}),
 	deleteImportRun: (run: string) =>
 		request<JobDeletionView>(`/v1/imports/runs/${encodeURIComponent(run)}`, {
 			method: 'DELETE'

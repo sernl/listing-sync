@@ -207,8 +207,8 @@ fn edit_render() -> Interaction {
     form_page(include_str!("cassettes/edit_form_page.json"))
 }
 
-/// The product's own read, which every edit now makes because no projection
-/// carries the localisation flag yet.
+/// The product's own read, which every edit makes because no projection
+/// carries the localisation flag, a tax code or a shelf.
 ///
 /// The committed recording of `UploadPageProductQuery`, reused rather than
 /// hand-authored: its product has the box ticked, `countryIdFlag: true`, which
@@ -233,6 +233,17 @@ fn upload_page_read() -> Interaction {
         // countryIdFlag is the true this test needs.
         request: endpoints::upload_page_product_request(ProductId(PRODUCT_ID)),
         response: recorded.response,
+    }
+}
+
+/// What [`upload_page_read`]'s response holds for the fields an edit reposts,
+/// written out from the recording rather than parsed by the code under test:
+/// the ticked box, `taxCode { id: "2" }`, and the seller's two shelves.
+fn recorded_product() -> write_model::ObservedEdit {
+    write_model::ObservedEdit {
+        appropriate_for_country: Some(true),
+        tax_code_id: Some("2".to_owned()),
+        category_ids: vec!["1368989".to_owned(), "1368990".to_owned()],
     }
 }
 
@@ -786,7 +797,7 @@ fn the_publish_edit_moves_the_status_selector_and_echoes_the_existing_thumbnails
         authorship: &authorship,
         // What the read-back returns for this product, which the flow reads
         // and posts because the projection carries nothing.
-        observed_appropriate_for_country: Some(true),
+        observed: Some(&recorded_product()),
     });
     let value = |name: &str| {
         body.iter()
@@ -802,6 +813,18 @@ fn the_publish_edit_moves_the_status_selector_and_echoes_the_existing_thumbnails
         value("data[ItemDigital][thumb1]").as_deref(),
         Some("THUMBPLACEHOLDER1/aa+bb="),
         "an edit that dropped the handle would drop the product's thumbnail"
+    );
+    assert_eq!(
+        (
+            value("data[ItemTaxCode][tax_code_id]").as_deref(),
+            body.iter()
+                .filter(|(field, _)| field == "data[Category][Category][]")
+                .map(|(_, value)| value.as_str())
+                .collect::<Vec<_>>(),
+        ),
+        (Some("2"), vec!["1368989", "1368990"]),
+        "the projection names no tax code and no shelf, so the edit reposts the product's own \
+         rather than clearing them; the replay below proves the flow read them back"
     );
     let target = FormTarget::EditDigital(ProductId(PRODUCT_ID));
     let cassette = Cassette {
@@ -850,7 +873,7 @@ fn a_publish_that_redirects_to_another_product_is_an_ambiguity() {
         authorship: &authorship,
         // What the read-back returns for this product, which the flow reads
         // and posts because the projection carries nothing.
-        observed_appropriate_for_country: Some(true),
+        observed: Some(&recorded_product()),
     });
     let cassette = Cassette {
         interactions: vec![
@@ -1300,7 +1323,7 @@ fn revise_moves_the_status_selector_and_echoes_the_existing_thumbnails() {
                 Interaction {
                     request: endpoints::submit_form_request(
                         target,
-                        edit_body_observing(&fields(), status, Some(true)),
+                        edit_body_observing(&fields(), status, Some(&recorded_product())),
                     ),
                     response: with_header(
                         302,
@@ -1383,7 +1406,11 @@ fn an_edit_reposts_exactly_what_a_create_posts_for_the_fields_it_does_not_carry(
     // seller's own and TPT is where it comes from, so the create posts the
     // untouched box and the edit reposts what the product already had. The
     // captured edit posted 1, because that seller has it ticked.
-    let observed = edit_body_observing(&fields(), write_model::StatusUser::Draft, Some(true));
+    let observed = edit_body_observing(
+        &fields(),
+        write_model::StatusUser::Draft,
+        Some(&recorded_product()),
+    );
     assert_eq!(
         value(&created, "data[ItemsLocalization][country_id_flag]").as_deref(),
         Some("0"),
@@ -1401,9 +1428,14 @@ fn an_edit_reposts_exactly_what_a_create_posts_for_the_fields_it_does_not_carry(
         "the create posts no tax code at all"
     );
     assert_eq!(
-        value(&edited, "data[ItemTaxCode][tax_code_id]").as_deref(),
-        Some(""),
-        "and the edit posts an empty one, so a created product has none to lose"
+        (
+            value(&edited, "data[ItemTaxCode][tax_code_id]").as_deref(),
+            value(&observed, "data[ItemTaxCode][tax_code_id]").as_deref(),
+        ),
+        (Some(""), Some("2")),
+        "and the edit posts the product's own tax row where the read-back found one, and an \
+         empty one where it found none, so a created product has none to lose and an adopted \
+         one keeps the row it had"
     );
 }
 
@@ -1547,7 +1579,7 @@ fn edit_body(fields: &FieldSet, status: write_model::StatusUser) -> Vec<(String,
 fn edit_body_observing(
     fields: &FieldSet,
     status: write_model::StatusUser,
-    observed_appropriate_for_country: Option<bool>,
+    observed: Option<&write_model::ObservedEdit>,
 ) -> Vec<(String, String)> {
     let page = tam_marketplace_tpt::form::scrape_form_page(&edit_render().response.text())
         .expect("the committed edit render parses");
@@ -1558,14 +1590,18 @@ fn edit_body_observing(
         thumbs: page.thumbs(),
         status,
         authorship: &attested(),
-        observed_appropriate_for_country,
+        observed,
     })
 }
 
 #[test]
 fn an_update_rewrites_the_description_and_leaves_the_product_where_it_was() {
     let rewritten = described("<p>a second draft</p>");
-    let body = edit_body_observing(&rewritten, write_model::StatusUser::Draft, Some(true));
+    let body = edit_body_observing(
+        &rewritten,
+        write_model::StatusUser::Draft,
+        Some(&recorded_product()),
+    );
     let value = |name: &str| {
         body.iter()
             .find(|(field, _)| field == name)
@@ -1586,7 +1622,11 @@ fn an_update_rewrites_the_description_and_leaves_the_product_where_it_was() {
         Some("1"),
         "a free listing's edit posts the flag; the live form refuses the body without it"
     );
-    let unchanged = edit_body_observing(&fields(), write_model::StatusUser::Draft, Some(true));
+    let unchanged = edit_body_observing(
+        &fields(),
+        write_model::StatusUser::Draft,
+        Some(&recorded_product()),
+    );
     let moved: Vec<&str> = body
         .iter()
         .zip(unchanged.iter())
@@ -1638,7 +1678,11 @@ fn an_update_rewrites_the_description_and_leaves_the_product_where_it_was() {
 #[test]
 fn an_edit_bounced_back_to_its_own_form_is_not_reported_as_a_landing() {
     let rewritten = described("<p>a second draft</p>");
-    let body = edit_body_observing(&rewritten, write_model::StatusUser::Draft, Some(true));
+    let body = edit_body_observing(
+        &rewritten,
+        write_model::StatusUser::Draft,
+        Some(&recorded_product()),
+    );
     let target = FormTarget::EditDigital(ProductId(PRODUCT_ID));
     let adapter = adapter(Cassette {
         interactions: vec![

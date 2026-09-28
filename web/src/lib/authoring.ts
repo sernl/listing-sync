@@ -290,6 +290,18 @@ export function keptOnEdit(mappings: readonly MappingHead[]): InventoryId[] {
 		.map((mapping) => mapping.inventory);
 }
 
+/** The marketplaces this product is live on through a bound listing.
+ *
+ * Mirrors the server's `live_on`: bound and live together, because a bound
+ * draft was never held to its marketplace's publish rules and a live state
+ * without a binding is a listing nothing can address. The edit form reads it
+ * so a field a live listing already holds is not refused as missing there. */
+export function liveOn(mappings: readonly MappingHead[]): InventoryId[] {
+	return mappings
+		.filter((mapping) => mapping.binding_state === 'bound' && mapping.lifecycle_state === 'live')
+		.map((mapping) => mapping.inventory);
+}
+
 // ------------------------------------------------------------------- refusals
 
 /** The quota refusal's detail, rendered as the sentence the server composed it

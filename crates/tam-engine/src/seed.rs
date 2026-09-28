@@ -562,15 +562,31 @@ pub async fn prepare_item(
     // fixed, arriving through the sidecar instead of through a constant.
     //
     // Read only where an inventory binds it, so a Tes item costs no query.
-    let appropriate_for_country = if lease.inventory.marketplace() == Marketplace::Tpt {
+    let sidecar = if lease.inventory.marketplace() == Marketplace::Tpt {
         TptBaseRepo::new(pool.clone())
             .get(lease.org, mapping.mapping.product)
             .await
             .map_err(|error| crate::ledger::to_wire_error(&error))?
-            .and_then(|record| record.categories.appropriate_for_country)
     } else {
         None
     };
+    let appropriate_for_country = sidecar
+        .as_ref()
+        .and_then(|record| record.categories.appropriate_for_country);
+    let mut taxonomy: Vec<NativeTerm> = projection.taxonomy.iter().map(native_term).collect();
+    if lease.inventory.marketplace() == Marketplace::Tpt {
+        for slug in tpt_held_slugs(sidecar.as_ref(), &product.native_residue) {
+            if !taxonomy
+                .iter()
+                .any(|term| term.native_id.as_deref() == Some(slug.as_str()))
+            {
+                taxonomy.push(NativeTerm {
+                    native_id: Some(slug.clone()),
+                    segments: vec![slug],
+                });
+            }
+        }
+    }
 
     Ok(ItemPreparation::Ready {
         operation,
@@ -579,7 +595,7 @@ pub async fn prepare_item(
             title: projection.title,
             body: projection.body,
             price: projection.price,
-            taxonomy: projection.taxonomy.iter().map(native_term).collect(),
+            taxonomy,
             grades: projection.grades.iter().map(native_term).collect(),
             ages: product.grades.derived.map(|interval| AgeSpan {
                 low_years: interval.low_years(),
@@ -601,6 +617,59 @@ pub async fn prepare_item(
                 .collect(),
         }),
     })
+}
+
+/// The committed capture of TPT's form, which says which facets a control
+/// offers and which a listing can only hold.
+static TPT_FORM: std::sync::LazyLock<Option<tam_taxonomy::TptForm>> =
+    std::sync::LazyLock::new(|| {
+        tam_taxonomy::TptForm::read(include_str!(
+            "../../../docs/design/data/tpt-vocabulary.json"
+        ))
+        .ok()
+    });
+
+/// The TPT slugs a listing holds beyond what the canonical projection
+/// resolves: the seller's own Subject Area, Tag and Format picks from the
+/// sidecar, and the facets no control offers that an import read off the
+/// listing itself (its resource types, supports, programmes).
+///
+/// TPT's edit is a full replace of `taxonomyTags`, and the canonical model
+/// types only subjects, topics, one resource type and the grades, so without
+/// these a revise of an imported listing posts it back with its tags, its
+/// formats and every resource type but one removed. The picks are the
+/// seller's current answer, so one they untick is not posted; the unpicked
+/// facets have no control to untick them with, so what the listing held is
+/// what it keeps.
+fn tpt_held_slugs(
+    sidecar: Option<&tam_storage::TptBaseRecord>,
+    residue: &[tam_types::ImportedTerm],
+) -> Vec<String> {
+    let mut slugs: Vec<String> = Vec::new();
+    if let Some(record) = sidecar {
+        let picks = &record.categories;
+        for slug in picks
+            .subject_areas
+            .iter()
+            .chain(&picks.tags)
+            .chain(&picks.formats)
+        {
+            slugs.push(slug.as_str().to_owned());
+        }
+    }
+    if let Some(form) = TPT_FORM.as_ref() {
+        for term in residue {
+            if term.inventory != tam_types::InventoryId::Tpt {
+                continue;
+            }
+            if let Some(slug) = term.native_id.as_deref() {
+                if form.is_unpicked(slug) && !slugs.iter().any(|held| held == slug) {
+                    slugs.push(slug.to_owned());
+                }
+            }
+        }
+    }
+    slugs
 }
 
 /// What one projection could not carry, recorded against the mapping that

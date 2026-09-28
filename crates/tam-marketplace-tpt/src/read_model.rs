@@ -326,6 +326,45 @@ pub struct UploadPageProduct {
     /// `None` is a response that carried no `localization` object, which the
     /// older captures do, and is not the same as a measured false.
     pub appropriate_for_country: Option<bool>,
+    /// `taxCode.id`, the row id the edit form posts back as
+    /// `data[ItemTaxCode][tax_code_id]` (`"2"` is `DigitalBooks`). Kept as the
+    /// wire's own string so that an edit reposts exactly what the product
+    /// holds, including a row this crate has never seen. `None` is a product
+    /// that carries no tax code, or a read whose `taxCode` was null.
+    pub tax_code: Option<String>,
+    /// The listing's own pictures, in slot order, one url per `images[]`
+    /// element: `original` where the element carries one, else `large`.
+    ///
+    /// `original` first because it is the seller's upload before TPT's
+    /// resizing, and a picture imported to another marketplace is resized
+    /// again there; `large` is the best the element offers when it is
+    /// missing. At most [`LISTING_PICTURES_MAX`], which is the four
+    /// manual-thumbnail slots the product form itself offers — a longer
+    /// array would be pictures no seller could have placed.
+    pub thumbnails: Vec<String>,
+}
+
+/// The four manual-thumbnail slots of TPT's product form, which bounds how
+/// many listing pictures a product can carry.
+pub const LISTING_PICTURES_MAX: usize = 4;
+
+/// One url per picture, preferring the unresized upload. An element carrying
+/// neither size is skipped rather than failing the read: the pictures are an
+/// accompaniment to the listing, and one malformed element must not cost the
+/// seller the listing's text.
+fn listing_pictures(row: &Value) -> Vec<String> {
+    row.get("images")
+        .and_then(Value::as_array)
+        .map(|images| {
+            images
+                .iter()
+                .filter_map(|image| {
+                    optional_str(image, "original").or_else(|| optional_str(image, "large"))
+                })
+                .take(LISTING_PICTURES_MAX)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Parses the edit form's own product read. The id is not in the response —
@@ -360,6 +399,8 @@ pub fn parse_upload_page_product(
         appropriate_for_country: row
             .pointer("/localization/countryIdFlag")
             .and_then(Value::as_bool),
+        tax_code: row.pointer("/taxCode/id").and_then(scalar_id),
+        thumbnails: listing_pictures(row),
     })
 }
 
@@ -445,9 +486,99 @@ pub fn parse_stats_edges(body: &Value) -> Result<Vec<ResourceStat>, ShapeError> 
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_display_price, parse_stats_edges, PriceParseError, ProductId, ShapeError};
-    use serde_json::json;
+    use super::{
+        parse_display_price, parse_stats_edges, parse_upload_page_product, PriceParseError,
+        ProductId, ShapeError,
+    };
+    use serde_json::{json, Value};
     use tam_marketplace::RemoteListingId;
+
+    /// One `images[]` element in the exact shape `MyProductListings` returns
+    /// it (`tests/cassettes/my_product_listings.json`): every size of one
+    /// picture, the slot number the url's `-N.jpg` tail.
+    fn thumbnail(slot: u8) -> Value {
+        let base = "https://ecdn.teacherspayteachers.com/thumbitem/\
+                    Sample-Unit-Fractions-Practice-Differentiated-12854712--1700000001";
+        json!({
+            "__typename": "Thumbnail",
+            "home": format!("{base}/home-12854712-{slot}.jpg"),
+            "large": format!("{base}/large-12854712-{slot}.jpg"),
+            "medium": format!("{base}/medium-12854712-{slot}.jpg"),
+            "original": format!("{base}/original-12854712-{slot}.jpg"),
+            "small": format!("{base}/small-12854712-{slot}.jpg"),
+        })
+    }
+
+    /// Composed rather than captured: the recorded `UploadPageProductQuery`
+    /// answer predates the `images` selection, so the committed response is
+    /// taken whole and given an `images` array of the shape the catalogue
+    /// read records for the same `Product` type.
+    fn product_with_images(images: Vec<Value>) -> Value {
+        let cassette: Value =
+            serde_json::from_str(include_str!("../tests/cassettes/upload_page_product.json"))
+                .expect("the committed UploadPageProductQuery fixture parses");
+        let recorded = cassette
+            .pointer("/interactions/0/response/body")
+            .and_then(Value::as_str)
+            .expect("the fixture records one response body");
+        let mut body: Value = serde_json::from_str(recorded).expect("the body is JSON");
+        let row = body
+            .pointer_mut("/data/products/0")
+            .and_then(Value::as_object_mut)
+            .expect("the body carries one product row");
+        row.insert("images".to_owned(), Value::Array(images));
+        body
+    }
+
+    #[test]
+    fn the_listing_pictures_are_read_in_slot_order_preferring_the_original() {
+        let body = product_with_images((1..=4).map(thumbnail).collect());
+        let product = parse_upload_page_product(&body, ProductId(13_042_099))
+            .expect("the composed read parses");
+        assert_eq!(
+            product.thumbnails,
+            (1..=4)
+                .map(|slot| format!(
+                    "https://ecdn.teacherspayteachers.com/thumbitem/\
+                     Sample-Unit-Fractions-Practice-Differentiated-12854712--1700000001/\
+                     original-12854712-{slot}.jpg"
+                ))
+                .collect::<Vec<_>>(),
+            "one url per picture, in the array's own order, and the unresized upload of each"
+        );
+        assert_eq!(
+            product.tax_code.as_deref(),
+            Some("2"),
+            "the tax row id the edit form posts back"
+        );
+
+        let mut without_original = thumbnail(1);
+        if let Some(element) = without_original.as_object_mut() {
+            element.remove("original");
+        }
+        let body = product_with_images(vec![
+            without_original,
+            thumbnail(2),
+            thumbnail(3),
+            thumbnail(4),
+            thumbnail(5),
+        ]);
+        let product = parse_upload_page_product(&body, ProductId(13_042_099))
+            .expect("the composed read parses");
+        assert!(
+            product
+                .thumbnails
+                .first()
+                .is_some_and(|url| url.ends_with("/large-12854712-1.jpg")),
+            "an element without its original falls back to the large size, got {:?}",
+            product.thumbnails
+        );
+        assert_eq!(
+            product.thumbnails.len(),
+            4,
+            "the form offers four picture slots, so a fifth is not one a seller placed"
+        );
+    }
 
     #[test]
     fn a_display_price_parses_to_minor_units() {

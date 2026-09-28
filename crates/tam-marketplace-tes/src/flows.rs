@@ -1455,6 +1455,11 @@ impl<T: Transport, F: FileSource> TesAdapter<T, F> {
             // The resource's own state rather than the overlay's `draft`
             // key, which describes the overlay: see `published_state`.
             state: Some(self.published_state(id, &state).await?),
+            // The extras are TPT's own fields — tax row, copyright
+            // declaration, localisation flag, listing pictures — and this
+            // read maps none of them from Tes's editor state, so they travel
+            // empty rather than guessed at.
+            extras: tam_marketplace::ListingExtras::default(),
         })
     }
 

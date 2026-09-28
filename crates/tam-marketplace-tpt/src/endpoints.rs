@@ -204,7 +204,7 @@ fragment MyResourceFields on Product {
 
 /// The seller's own product whole, verbatim from the `UploadPageProductQuery`
 /// POST the edit form issues (`tpt-capture-edit-live-product.har`, entry 51),
-/// with one word added.
+/// with two selections added: `status` and `images`.
 ///
 /// `status` is selected beside `statusUser` because that is the field the
 /// draft line is actually read off. `statusUser` is observed once in the
@@ -217,6 +217,13 @@ fragment MyResourceFields on Product {
 /// field on the same `Product` type that `MyResourceFields` already selects,
 /// the query text is ours rather than a persisted-query hash, and the crate
 /// carries no operation allowlist.
+///
+/// `images` is added on the same grounds: `MyResourceFields` selects it on
+/// the same `Product` type, and the catalogue capture records it as an array
+/// of `Thumbnail` objects, one per listing picture in slot order. It is read
+/// here rather than from the catalogue because the import read is this query,
+/// and the pictures belong to the listing that read yields. Only `original`
+/// and `large` are selected, which are the two sizes the import takes.
 ///
 /// The catalogue query is not an alternative for this read: it carries no
 /// `description`, and the description is the field canonicalisation exists
@@ -274,6 +281,11 @@ pub const UPLOAD_PAGE_PRODUCT_QUERY: &str = r"query UploadPageProductQuery($id: 
     videoTypeText
     taxCode {
       id
+      __typename
+    }
+    images {
+      original
+      large
       __typename
     }
     author {
@@ -828,6 +840,78 @@ pub fn signed_asset_request(asset: SignedAssetUrl) -> HttpRequest {
     }
 }
 
+/// The one host listing pictures are served from, as the catalogue capture
+/// records every `images[]` url: `https://ecdn.teacherspayteachers.com/thumbitem/…`.
+///
+/// Named exactly, like [`ASSET_HOST`] and for the same reason: the url
+/// arrives in a marketplace response, and a suffix rule or an open https
+/// rule would let that response decide where this process sends a request.
+pub const PICTURE_HOST: &str = "ecdn.teacherspayteachers.com";
+
+/// The path every captured listing picture sits under.
+const PICTURE_PREFIX: &str = "/thumbitem/";
+
+/// True where a url is a listing picture on the captured picture host: an
+/// absolute https url, exactly that host, no userinfo, no port but 443, no
+/// fragment, nothing a URL parser would rewrite, and a path under
+/// `/thumbitem/` with no dot segment in it.
+///
+/// Both the flow and the transport ask this, so the rule is spelled once.
+/// The path is held to its prefix because the host is a content network
+/// serving more than pictures, and a picture read is the only thing an
+/// import asks of it.
+#[must_use]
+pub fn is_listing_picture_url(url: &str) -> bool {
+    if !url.is_ascii()
+        || url.bytes().any(|byte| {
+            byte.is_ascii_control()
+                || byte.is_ascii_whitespace()
+                || matches!(
+                    byte,
+                    b'\\' | b'"' | b'<' | b'>' | b'`' | b'\'' | b'#' | b'%'
+                )
+        })
+    {
+        return false;
+    }
+    let Some(rest) = url.strip_prefix("https://") else {
+        return false;
+    };
+    let Some((authority, path)) = rest.find('/').and_then(|end| rest.split_at_checked(end)) else {
+        return false;
+    };
+    let host = match authority.split_once(':') {
+        None => authority,
+        Some((host, port)) if port == HTTPS_PORT => host,
+        Some(_) => return false,
+    };
+    let target = path.split('?').next().unwrap_or(path);
+    host.eq_ignore_ascii_case(PICTURE_HOST)
+        && target.starts_with(PICTURE_PREFIX)
+        && target
+            .split('/')
+            .skip(2)
+            .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
+}
+
+/// One listing picture, fetched as a browser renders it on the listing page:
+/// a bodyless GET carrying nothing of the seller's.
+///
+/// [`RequestAuth::Redirected`] is the authentication that means exactly that
+/// — the transport routes it to the client holding no jar — and it is the
+/// honest one here too: the url is one a marketplace response named, which
+/// is the same trust position as the download's second hop. The transport
+/// admits it only where [`is_listing_picture_url`] does.
+#[must_use]
+pub fn listing_picture_request(url: &str) -> HttpRequest {
+    HttpRequest {
+        method: Method::Get,
+        url: url.to_owned(),
+        body: RequestBody::Empty,
+        auth: RequestAuth::Redirected,
+    }
+}
+
 /// The second hop of a download whose redirect stayed on the origin.
 /// Session-authenticated like the first, because it is the same origin and
 /// the same navigation. No capture carries one; the asset hop above is what
@@ -1096,9 +1180,10 @@ pub fn remove_resource_request(product: ProductId) -> HttpRequest {
 mod tests {
     use super::{
         all_time_stats_request, download_redirect, form_page_request, is_asset_url, is_gateway,
-        is_product_form, my_product_listings_request, remove_resource_request,
-        signed_asset_request, AllTimeMetric, DownloadRedirect, FormTarget, RedirectRefusal,
-        Service, ASSET_HOST, MY_PRODUCT_LISTINGS_QUERY, ORIGIN,
+        is_listing_picture_url, is_product_form, listing_picture_request,
+        my_product_listings_request, remove_resource_request, signed_asset_request, AllTimeMetric,
+        DownloadRedirect, FormTarget, RedirectRefusal, Service, ASSET_HOST,
+        MY_PRODUCT_LISTINGS_QUERY, ORIGIN, PICTURE_HOST,
     };
     use crate::read_model::ProductId;
     use serde_json::{json, Value};
@@ -1112,6 +1197,63 @@ mod tests {
         format!(
             "https://{ASSET_HOST}/resources/13042099/assets/9f2c1b?file_name=worksheet.zip&verify=token"
         )
+    }
+
+    /// A listing picture url exactly as the catalogue capture records one.
+    fn captured_picture() -> String {
+        format!(
+            "https://{PICTURE_HOST}/thumbitem/Sample-Unit-Fractions-Practice-Differentiated-12854712--1700000001/original-12854712-1.jpg"
+        )
+    }
+
+    #[test]
+    fn a_listing_picture_is_a_bodyless_get_carrying_nothing_of_the_sellers() {
+        let url = captured_picture();
+        assert!(
+            is_listing_picture_url(&url),
+            "the captured shape is a picture"
+        );
+        let request = listing_picture_request(&url);
+        assert_eq!(
+            (request.method, request.body, request.auth, request.url),
+            (
+                Method::Get,
+                RequestBody::Empty,
+                RequestAuth::Redirected,
+                url
+            ),
+            "the url a marketplace response named, fetched on the client holding no jar"
+        );
+    }
+
+    #[test]
+    fn a_url_that_is_not_a_captured_listing_picture_is_refused() {
+        let url = captured_picture();
+        assert!(
+            is_listing_picture_url(&url.replace(PICTURE_HOST, &format!("{PICTURE_HOST}:443"))),
+            "an explicit 443 is the same destination written longhand"
+        );
+        for refused in [
+            url.replace("https://", "http://"),
+            url.replace(PICTURE_HOST, &format!("{PICTURE_HOST}.example")),
+            url.replace(PICTURE_HOST, &format!("user@{PICTURE_HOST}")),
+            url.replace(PICTURE_HOST, &format!("{PICTURE_HOST}:8443")),
+            url.replace(PICTURE_HOST, ASSET_HOST),
+            url.replace("/thumbitem/", "/other/"),
+            url.replace("/thumbitem/", "/thumbitem/../"),
+            url.replace("/thumbitem/", "/thumbitem/%2e%2e/"),
+            format!("{url}#x"),
+            format!("https://{PICTURE_HOST}/thumbitem/"),
+            format!("https://{PICTURE_HOST}"),
+            format!("//{PICTURE_HOST}/thumbitem/a/b.jpg"),
+            format!("https://example.invalid/{PICTURE_HOST}/thumbitem/a/b.jpg"),
+            format!("{ORIGIN}/thumbitem/a/b.jpg"),
+        ] {
+            assert!(
+                !is_listing_picture_url(&refused),
+                "{refused} is not the captured picture host and path"
+            );
+        }
     }
 
     #[test]

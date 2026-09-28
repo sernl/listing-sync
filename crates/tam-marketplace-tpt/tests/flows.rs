@@ -975,6 +975,21 @@ fn the_import_read_yields_the_product_whole_and_states_what_it_did_not_carry() {
          the honest answer is that the read did not carry it -- and a migrate's removal \
          refuses on None rather than deleting against a lifecycle nobody observed"
     );
+    assert_eq!(
+        (
+            listing.extras.tax_code.as_deref(),
+            listing.extras.copyright.as_deref(),
+            listing.extras.appropriate_for_country,
+        ),
+        (Some("2"), Some("ORIGINAL_WORK"), Some(true)),
+        "what the listing holds beyond the canonical fields travels rather than being dropped: \
+         the tax row, the copyright declaration and the ticked localisation box"
+    );
+    assert!(
+        listing.extras.thumbnails.is_empty(),
+        "the recorded answer predates the images selection, so it names no picture, and none \
+         is invented"
+    );
 }
 
 #[test]
@@ -1014,6 +1029,90 @@ fn every_imported_value_travels_untagged_because_the_axis_is_the_relations_fact(
             "1368990".to_owned(),
         ],
         "the eight facet slugs the capture carried, then the seller's own two shelves"
+    );
+    assert_eq!(
+        (
+            listing.extras.tax_code.as_deref(),
+            listing.extras.copyright.as_deref(),
+            listing.extras.appropriate_for_country,
+        ),
+        (Some("2"), Some("ORIGINAL_WORK"), Some(true)),
+        "the extras travel as the wire states them, untagged like the terms"
+    );
+}
+
+/// Hand-authored: no capture fetched a picture. The url is the catalogue
+/// capture's own shape and the bytes are a JPEG's opening, which is all the
+/// adapter hands back — whether they are an image is the caller's check.
+#[test]
+fn a_listing_picture_is_fetched_only_from_the_captured_picture_host_and_only_on_a_200() {
+    let url = "https://ecdn.teacherspayteachers.com/thumbitem/Sample-Unit-Fractions-Practice-Differentiated-12854712--1700000001/original-12854712-1.jpg";
+    let answering = |status: u16| {
+        adapter(
+            Cassette {
+                interactions: vec![Interaction {
+                    request: endpoints::listing_picture_request(url),
+                    response: HttpResponse::plain(status, vec![0xFF, 0xD8, 0xFF, 0xE0]),
+                }],
+            },
+            1,
+        )
+    };
+
+    let fetched = answering(200);
+    assert_eq!(
+        futures::executor::block_on(fetched.fetch_listing_picture(&export(), url)),
+        Ok(vec![0xFF, 0xD8, 0xFF, 0xE0]),
+        "a 200 is the picture, returned whole"
+    );
+    assert_eq!(fetched.transport().remaining(), 0);
+
+    let missing = futures::executor::block_on(answering(404).fetch_listing_picture(&export(), url));
+    assert!(
+        matches!(
+            missing,
+            Err(AdapterError::Rejected {
+                code: FailureCode::Other,
+                ..
+            })
+        ),
+        "any other status is a fetch that failed, got {missing:?}"
+    );
+
+    let foreign = answering(200);
+    let refused = futures::executor::block_on(
+        foreign.fetch_listing_picture(&export(), "https://example.invalid/thumbitem/a/b.jpg"),
+    );
+    assert!(
+        matches!(
+            refused,
+            Err(AdapterError::Rejected {
+                code: FailureCode::UnexpectedOrigin,
+                ..
+            })
+        ),
+        "a url a response named is not where this process sends a request unless it is the \
+         captured picture host, got {refused:?}"
+    );
+    assert_eq!(
+        foreign.transport().remaining(),
+        1,
+        "and the refusal precedes the request"
+    );
+
+    let unjustified = answering(200);
+    let refused = futures::executor::block_on(unjustified.fetch_listing_picture(
+        &FetchReason::StructuralProbe {
+            grant: CanaryGrant {
+                inventory: InventoryId::Tpt,
+                decided_at: Timestamp(0),
+            },
+        },
+        url,
+    ));
+    assert!(
+        refused.is_err() && unjustified.transport().remaining() == 1,
+        "a picture read is part of the tier-one import read and nothing else justifies one"
     );
 }
 
