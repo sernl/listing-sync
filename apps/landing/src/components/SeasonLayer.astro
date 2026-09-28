@@ -1,19 +1,24 @@
 ---
-/* The seasonal overlay's hero pieces: two top corners, a flock that hangs or
-   flies above the hero art, and a band of snow along the hero's top edge.
-   Empty elements whose pictures come from `season.css`, which draws them only
-   under `html[data-season]`, so a page with no season active fetches no
-   picture and paints nothing here. The layer sits under `main`'s top edge,
-   which is the hero's, and every piece is placed in space the hero leaves
-   empty; the section-edge pieces and the character are pseudo-elements in
-   `season.css` rather than markup here, because they belong to sections this
-   component does not render. */
+/* The seasonal overlay's top pieces: the two top corners and what hangs from
+   one, the sky above the hero art, and a band of snow along the hero's top
+   edge. Empty elements whose pictures come from `season.css`, which draws
+   them only under `html[data-season]`, so a page with no season active
+   fetches no picture and paints nothing here. The layer spans `main` and is
+   placed from its top edge, which is the hero's, and every piece is put in
+   space the hero leaves empty. Everything placed from an element's bottom or
+   belonging to an element this component does not render -- the scene
+   under the hero art, the header's, the sections' and the footer's pieces --
+   is a pseudo-element in `season.css` instead. The classes name a place,
+   not a picture: each season decides what stands there. */
 import '../styles/season.css';
 ---
 
 <div class="season-layer" aria-hidden="true">
+	<i class="season-snow"></i>
 	<i class="season-corner season-corner-start"></i>
 	<i class="season-corner season-corner-end"></i>
+	<i class="season-dangle"></i>
+	<i class="season-sky"></i>
 	<i class="season-flock"></i>
-	<i class="season-snow"></i>
+	<i class="season-flyer"></i>
 </div>
