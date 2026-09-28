@@ -43,6 +43,7 @@ pub mod android_name;
 pub mod commands;
 pub mod connect;
 pub mod console_session;
+mod console_watch;
 pub mod control_plane;
 pub mod device;
 pub mod entitlement;
@@ -54,6 +55,7 @@ pub mod library_sync;
 pub mod marketplace;
 pub mod notify;
 pub mod payload;
+pub mod replication;
 pub mod run;
 pub mod scheduler;
 pub mod session;
@@ -473,6 +475,13 @@ struct Syncing {
     /// failed is reported once rather than on every beat for the life of the
     /// process.
     bound: bool,
+    /// The copy of this machine's imported files to Teachouse, once the
+    /// library has opened. Independent of the endpoint: a machine whose
+    /// endpoint could not bind still copies its files.
+    copier: Option<replication::Replicator>,
+    /// The library's size when the last copy run was started, so a change —
+    /// an import keeping a file — starts another without waiting for a beat.
+    copied_at: Option<u64>,
 }
 
 impl Syncing {
@@ -487,6 +496,8 @@ impl Syncing {
             library,
             endpoint: None,
             bound: false,
+            copier: None,
+            copied_at: None,
         }
     }
 
@@ -502,11 +513,29 @@ impl Syncing {
         if !self.bound {
             if let Ok(library) = self.library.get().await {
                 self.bound = true;
+                self.copier = Some(replication::Replicator::new(
+                    Arc::clone(&self.plane),
+                    Arc::clone(&library),
+                ));
                 self.endpoint =
                     Self::bind(self.device.clone(), Arc::clone(&self.plane), library).await;
             }
         }
         self.endpoint.as_ref()
+    }
+
+    /// Starts a copy of this machine's imported files to Teachouse on a beat,
+    /// and between beats whenever the library has changed since the last
+    /// one. The run itself is in the background and never two at once.
+    async fn copy(&mut self, beat: bool) {
+        let Some(copier) = &self.copier else {
+            return;
+        };
+        let size = copier.library.usage().await;
+        if beat || self.copied_at != Some(size) {
+            self.copied_at = Some(size);
+            copier.start();
+        }
     }
 
     /// The endpoint if this process has one, with no attempt to bind.
@@ -657,6 +686,11 @@ async fn run_schedule<W: scheduler::WorkSource + 'static>(
         let standing = !app.state::<DesktopState>().revoked();
         #[cfg(mobile)]
         let standing = standing && in_the_foreground(&app);
+        // Teachouse's copy of the files this machine imported: on each beat,
+        // and on any pass after an import has kept a file here.
+        if standing {
+            syncing.copy(due.sweep || due.check_in).await;
+        }
         if (due.sweep || due.discover) && standing {
             // Stamp every import poll, even while a work task is running;
             // otherwise discovery stays due and the one-second floor takes over.
@@ -844,7 +878,13 @@ pub(crate) async fn retry_console_from<R: tauri::Runtime>(
         .await
         .map_err(|why| why.to_string())?;
     let url = console_home(&origin)?;
-    show_console(&window, url, start_up_nav())
+    // Read before the window leaves: this is the bundled page's own address,
+    // the one the watch returns the window to if the console never draws.
+    let start = window.url().map_err(|why| why.to_string())?;
+    let how = start_up_nav();
+    show_console(&window, url.clone(), how)?;
+    tauri::async_runtime::spawn(console_watch::watch(window, url, start, how));
+    Ok(())
 }
 
 #[cfg(test)]

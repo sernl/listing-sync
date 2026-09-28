@@ -13,7 +13,7 @@
 //! Given an engine-role url it also hosts the two service loops the design
 //! puts in this process: the outbox drainer and the job-event pruner.
 //!
-//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--stripe-webhook-secret <secret>] [--stripe-secret-key <path>] [--stripe-price-map <path>] [--ui-dir <path>] [--landing-dir <path>] [--downloads-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> (--blob-store-root <path> | --blob-store-s3 <endpoint> --blob-store-bucket <name> --blob-store-credentials <path> [--blob-store-region <region>])] [--entitlement-key-path <path>] [--entitlement-public-key <hex>] [--require-entitlement-key] [--resend-api-key-file <path> --email-from <address> --console-url <url> --auth-internal-url <url> --auth-internal-secret-file <path>] [--posthog-key <key> [--posthog-host <url>]] [--disclose-internals]
+//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--stripe-webhook-secret <secret>] [--stripe-secret-key <path>] [--stripe-price-map <path>] [--ui-dir <path>] [--landing-dir <path>] [--downloads-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> (--blob-store-root <path> | --blob-store-s3 <endpoint> --blob-store-bucket <name> --blob-store-credentials <path> [--blob-store-region <region>])] [--entitlement-key-path <path>] [--entitlement-public-key <hex>] [--require-entitlement-key] [--resend-api-key-file <path> --email-from <address> --console-url <url> --auth-internal-url <url> --auth-internal-secret-file <path> [--ops-email <address>]] [--posthog-key <key> [--posthog-host <url>]] [--disclose-internals]
 
 #![forbid(unsafe_code)]
 
@@ -219,6 +219,10 @@ const CONSOLE_URL_FLAG: &str = "--console-url";
 const AUTH_INTERNAL_URL_FLAG: &str = "--auth-internal-url";
 /// See [`RESEND_API_KEY_FLAG`].
 const AUTH_INTERNAL_SECRET_FLAG: &str = "--auth-internal-secret-file";
+/// The operations inbox a marketplace request is mailed to when no operator
+/// has an address the identity service vouches for. Optional within the mail
+/// set, and refused without it: with no relay there is nothing to send with.
+const OPS_EMAIL_FLAG: &str = "--ops-email";
 
 /// The most of a secret file that is read. A relay key and a shared secret are
 /// both under a hundred bytes; this refuses to allocate a mis-pointed gigabyte
@@ -630,6 +634,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "tam-server sending completion mail from {}",
                     mail.email_from
                 );
+                match &mail.ops_email {
+                    Some(inbox) => eprintln!(
+                        "tam-server mailing marketplace requests to {inbox} when no operator has a verified address"
+                    ),
+                    None => eprintln!(
+                        "tam-server has no {OPS_EMAIL_FLAG}: a marketplace request no operator can be mailed about is only listed"
+                    ),
+                }
                 spawn_outbox_drain(
                     OutboxRepo::new(engine.clone()),
                     notify::EmailDeliverer::new(
@@ -642,7 +654,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             &mail.auth_internal_secret,
                         )?,
                         notify::ResendRelay::new(&mail.resend_api_key, &mail.email_from)?,
-                        &mail.console_url,
+                        notify::Sending {
+                            console_url: &mail.console_url,
+                            ops_email: mail.ops_email.as_deref(),
+                        },
                     ),
                     loops.clone(),
                 );
@@ -747,6 +762,7 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     let mut console_url = None;
     let mut auth_internal_url = None;
     let mut auth_internal_secret_file = None;
+    let mut ops_email = None;
     let mut posthog_key = None;
     let mut posthog_host = tam_api::telemetry::DEFAULT_HOST.to_owned();
     let mut arguments = std::env::args().skip(1);
@@ -872,6 +888,12 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
                     .next()
                     .ok_or("--auth-internal-secret-file needs a path argument")?,
             );
+        } else if argument == OPS_EMAIL_FLAG {
+            ops_email = Some(
+                arguments
+                    .next()
+                    .ok_or("--ops-email needs an address argument")?,
+            );
         } else if blob_store.accept(&argument, &mut arguments)? {
             // One of the object-store flags, whose spellings and pairing rule
             // live in `tam-blob-store` so both binaries read the same set.
@@ -920,6 +942,12 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     // Refused rather than half-configured, exactly as the identity and blob
     // pairs are: four fifths of a mail path is a deployment that composes mail
     // it cannot address, cannot send, or points at nothing.
+    if ops_email.is_some() && resend_api_key_file.is_none() {
+        return Err(format!(
+            "{OPS_EMAIL_FLAG} needs {RESEND_API_KEY_FLAG} and the rest of its set"
+        )
+        .into());
+    }
     let mail = match (
         resend_api_key_file,
         email_from,
@@ -935,6 +963,7 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
                 console_url: console,
                 auth_internal_url: auth_url,
                 auth_internal_secret: read_secret(&secret_path)?,
+                ops_email,
             })
         }
         _ => {

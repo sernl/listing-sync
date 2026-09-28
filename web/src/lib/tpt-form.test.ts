@@ -117,7 +117,11 @@ const VOCABULARY: FormVocabularyView = {
 			label: 'Digital audio works sold to an end user with rights for permanent use',
 			code: 'DA051011'
 		},
-		{ id: '2', label: 'Digital books sold to an end user with rights for permanent use', code: 'DB031013' }
+		{
+			id: '2',
+			label: 'Digital books sold to an end user with rights for permanent use',
+			code: 'DB031013'
+		}
 	],
 	teaching_durations: [
 		{ id: '0', label: 'N/A' },
@@ -205,7 +209,9 @@ describe('the grade grid', () => {
 	});
 
 	it('omits the three roll-ups, which the create form renders no checkbox for', () => {
-		const shown = gradeColumns(VOCABULARY).flat().map((grade) => grade.slug);
+		const shown = gradeColumns(VOCABULARY)
+			.flat()
+			.map((grade) => grade.slug);
 		expect(shown).not.toContain('elementary');
 		expect(shown).toHaveLength(17);
 	});
@@ -304,9 +310,9 @@ describe('the refusals', () => {
 		const paid = { ...complete(), free: false, price: '4.50' };
 		// The tax code is asked in the TPT-only panel, so its refusal points
 		// there rather than into the middle of Price.
-		expect(refusalsIn(refusalsOf(paid, VOCABULARY), 'tpt_options').map((r) => r.control)).toEqual(
-			['Tax Code']
-		);
+		expect(refusalsIn(refusalsOf(paid, VOCABULARY), 'tpt_options').map((r) => r.control)).toEqual([
+			'Tax Code'
+		]);
 		expect(emptyTptDraft().taxCode).toBeNull();
 	});
 
@@ -324,8 +330,19 @@ describe('the refusals', () => {
 		expect(refusalsIn(refusalsOf(deferred, VOCABULARY), 'files')).toHaveLength(1);
 	});
 
-	it('lets a finished resource name no marketplace at all', () => {
-		const kept = { ...complete(), inventories: [] };
+	it('asks a resource kept here, with no marketplace, for none of TPT’s answers', () => {
+		const kept = withMarketplaces(
+			{
+				...complete(),
+				free: false,
+				price: '3.00',
+				subjectAreas: [],
+				tags: [],
+				copyright: null,
+				taxCode: null
+			},
+			[]
+		);
 		expect(refusalsOf(kept, VOCABULARY)).toEqual([]);
 		expect(submittable(refusalsOf(kept, VOCABULARY))).toBe(true);
 	});
@@ -335,6 +352,58 @@ describe('the refusals', () => {
 		expect(refusalsIn(refusalsOf(early, VOCABULARY), 'marketplaces')[0].message).toBe(
 			'Add your file before you choose a marketplace.'
 		);
+	});
+});
+
+describe('the refusals, per marketplace', () => {
+	/** An imported TPT listing before its details were filled: named, filed,
+	 *  graded and priced, with every TPT-only answer empty. */
+	function imported(): TptDraft {
+		return {
+			...complete(),
+			free: false,
+			price: '3.00',
+			subjectAreas: [],
+			tags: [],
+			copyright: null,
+			taxCode: null
+		};
+	}
+
+	it('holds a draft going to TPT for the first time to every TPT answer', () => {
+		const controls = refusalsOf(imported(), VOCABULARY).map((refusal) => refusal.control);
+		expect(controls).toEqual(expect.arrayContaining(['Subject Area', 'Tag', 'Tax Code']));
+		expect(
+			refusalsIn(refusalsOf(imported(), VOCABULARY), 'tpt_options').map((r) => r.message)
+		).toContain('Choose one of the two copyright statements.');
+	});
+
+	it('does not refuse a bound, live TPT listing for a field TPT already holds', () => {
+		expect(refusalsOf({ ...imported(), live: ['Tpt'] }, VOCABULARY)).toEqual([]);
+	});
+
+	it('still refuses a live TPT listing a value TPT would refuse', () => {
+		const over = {
+			...imported(),
+			live: ['Tpt' as const],
+			grades: ['preschool', 'kindergarten', '1st-grade', '2nd-grade', '3rd-grade'],
+			price: '0.50'
+		};
+		const refusals = refusalsOf(over, VOCABULARY);
+		expect(refusalsIn(refusals, 'categories').map((r) => r.control)).toEqual(['Grade Level']);
+		expect(refusalsIn(refusals, 'price')[0].message).toContain('$0.95');
+		expect(refusals).toHaveLength(2);
+	});
+
+	it('does not hold a draft going only to Tes to TPT’s rules', () => {
+		const tes = withMarketplaces({ ...imported(), licence: 'TES-PAID' }, ['Tes']);
+		expect(refusalsOf(tes, VOCABULARY)).toEqual([]);
+	});
+
+	it('asks no licence of a marketplace the resource is already live on', () => {
+		const bare = { ...complete(), inventories: ['Tes' as const], free: true, licence: null };
+		expect(refusalsIn(refusalsOf(bare, VOCABULARY, GATING), 'tes_options')).toHaveLength(1);
+		expect(refusalsOf({ ...bare, live: ['Tes' as const] }, VOCABULARY, GATING)).toEqual([]);
 	});
 });
 
@@ -375,9 +444,7 @@ describe('the warning that a marketplace needs a file first', () => {
 	});
 
 	it('stays shut for a draft kept here, which is the case it must not block', () => {
-		expect(needsFileBeforeMarketplace({ ...complete(), payload: [], inventories: [] })).toBe(
-			false
-		);
+		expect(needsFileBeforeMarketplace({ ...complete(), payload: [], inventories: [] })).toBe(false);
 	});
 
 	it('stays shut once the file is uploaded', () => {
@@ -492,9 +559,7 @@ describe('the request bodies', () => {
 		// named-key assertion would pass an implementation that promoted the
 		// flag onto some other part of the body, and promoting it anywhere on
 		// the body changes a wire that migration 0040's sidecar already holds.
-		expect(JSON.stringify({ ...body, tpt_base: null })).not.toContain(
-			'appropriate_for_country'
-		);
+		expect(JSON.stringify({ ...body, tpt_base: null })).not.toContain('appropriate_for_country');
 	});
 
 	it('states the flag on save whichever way the box is ticked', () => {
@@ -529,9 +594,7 @@ describe('the marketplace tab contract', () => {
 	it('renders one field row per overridable field, decided by the listing', () => {
 		const projection = projectionOf({ ...complete(), inventories: ['Tes'] }, 'Tes');
 		expect(projection.inventory).toBe('Tes');
-		expect(
-			projection.rows.map((row) => [row.key, row.kind, row.decided_by?.by])
-		).toEqual([
+		expect(projection.rows.map((row) => [row.key, row.kind, row.decided_by?.by])).toEqual([
 			['name', 'field', 'listing'],
 			['description', 'field', 'listing'],
 			['price', 'field', 'listing']
@@ -659,8 +722,9 @@ describe('the axis rows on a marketplace tab', () => {
 
 	it('reads a one-valued axis as a cap of one rather than as a separate case', () => {
 		const draft = { ...complete(), inventories: ['Tes' as const] };
-		expect(axisRow(projectionOf(draft, 'Tes', vocabularyWithSubjectCap(3)), 'licence')?.axis?.cap)
-			.toBe(1);
+		expect(
+			axisRow(projectionOf(draft, 'Tes', vocabularyWithSubjectCap(3)), 'licence')?.axis?.cap
+		).toBe(1);
 	});
 
 	it('refuses the licence axis an override and any computed answer', () => {
@@ -751,9 +815,7 @@ describe('the standards a marketplace will not carry', () => {
 			inventories: ['Tes' as const],
 			standards: [pick('A.1'), pick('A.2')]
 		};
-		expect(
-			projectionOf(draft, 'Tes').rows.find((one) => one.key === 'standards')
-		).toBeUndefined();
+		expect(projectionOf(draft, 'Tes').rows.find((one) => one.key === 'standards')).toBeUndefined();
 	});
 
 	it('renders no standards row where the seller picked none', () => {
@@ -929,10 +991,7 @@ describe('the four thumbnail slots', () => {
 
 	it('sends the handles it holds in the sidecar block', () => {
 		const listing = { ...complete(), thumbnailMode: '2', thumbnails: [handle('a'), handle('c')] };
-		expect(tptBaseOf(listing).thumbnail_hashes).toEqual([
-			'a'.repeat(64),
-			'c'.repeat(64)
-		]);
+		expect(tptBaseOf(listing).thumbnail_hashes).toEqual(['a'.repeat(64), 'c'.repeat(64)]);
 	});
 });
 
@@ -1193,7 +1252,10 @@ describe('the edit form, seeded from what is stored', () => {
 
 	it('round-trips a filled draft through the create body and the read', () => {
 		const original = filled();
-		const seeded = draftOf(viewOf(createBodyOf(original) as CreateProductBody), original.inventories);
+		const seeded = draftOf(
+			viewOf(createBodyOf(original) as CreateProductBody),
+			original.inventories
+		);
 		// Every field either body carries. `overrides` is neither body's and
 		// `standards` is compared on what the sidecar stores: the mirror's own
 		// identifier and the published statement are not columns, so the seed
@@ -1201,11 +1263,13 @@ describe('the edit form, seeded from what is stored', () => {
 		const { standards: seededStandards, ...seededRest } = seeded;
 		const { standards: originalStandards, ...originalRest } = original;
 		expect(seededRest).toEqual(originalRest);
-		expect(seededStandards.map(({ framework, code, tpt_node_id }) => ({
-			framework,
-			code,
-			tpt_node_id
-		}))).toEqual(
+		expect(
+			seededStandards.map(({ framework, code, tpt_node_id }) => ({
+				framework,
+				code,
+				tpt_node_id
+			}))
+		).toEqual(
 			originalStandards.map(({ framework, code, tpt_node_id }) => ({
 				framework,
 				code,

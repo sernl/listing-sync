@@ -1280,7 +1280,8 @@ pub fn resolve_price(
 /// D4: the grant the source stated, kept as the source's own value. Read and
 /// discarded before this existed, which is why every product before it reads
 /// back `Unstated`.
-fn rights_from(listing: &tam_marketplace::ImportedListing) -> tam_domain::RightsDeclaration {
+#[must_use]
+pub fn rights_from(listing: &tam_marketplace::ImportedListing) -> tam_domain::RightsDeclaration {
     listing
         .rights
         .as_ref()
@@ -1334,6 +1335,106 @@ fn listing_inventory(listing: &tam_marketplace::ImportedListing) -> InventoryId 
         .native
         .first()
         .map_or(InventoryId::Tes, |term| term.inventory)
+}
+
+/// The committed capture of TPT's own form, which is what says which picker a
+/// slug in the flat `taxonomyTags` array was chosen through.
+const TPT_CAPTURE: &str = include_str!("../../../docs/design/data/tpt-vocabulary.json");
+
+/// The capture, read once. `None` only where the committed file does not
+/// parse, which is a build-time fact the import answers by filling nothing
+/// rather than by guessing an axis.
+static TPT_FORM: std::sync::LazyLock<Option<tam_taxonomy::TptForm>> =
+    std::sync::LazyLock::new(|| tam_taxonomy::TptForm::read(TPT_CAPTURE).ok());
+
+/// What a TPT listing states about the fields the create form asks for and
+/// the canonical product has no column for, sorted onto the form's own
+/// controls: the product the import makes opens with its Subject Area, Tag
+/// and Format pickers, tax code, attestation, localisation and pictures as the
+/// listing has them, rather than empty and refused.
+///
+/// `None` for a listing from anywhere but TPT: the sidecar is TPT's form, and
+/// another marketplace's values have no picker on it.
+///
+/// The attestation is TPT's own: `copyrightDeclaration` reads back as
+/// `ORIGINAL_WORK` or `USED_COPYRIGHTED_MATERIALS`, the two members the create
+/// form posts as `1` and `2`. It is filled from the listing and never
+/// defaulted — a listing that is live on TPT was attested by its seller, and
+/// that attestation is what is carried; a read that did not state one (an
+/// older device's) leaves it unanswered, and the refusal a live listing would
+/// otherwise earn is withheld by the per-marketplace check instead.
+///
+/// `thumbnails` are the listing's own pictures as held blobs, first slot
+/// first; the caller stored them.
+#[must_use]
+pub fn tpt_base_fill(
+    listing: &ImportedListing,
+    thumbnails: &[ContentHash],
+) -> Option<tam_storage::TptBaseFill> {
+    if !matches!(listing.remote, RemoteListingId::Tpt { .. }) {
+        return None;
+    }
+    let form = TPT_FORM.as_ref()?;
+    let mut fill = tam_storage::TptBaseFill::default();
+    for term in &listing.native {
+        if term.inventory != InventoryId::Tpt {
+            continue;
+        }
+        let Some(slug) = term.native_id.as_deref() else {
+            continue;
+        };
+        let picked = match form.placement(slug) {
+            Some(Some(tam_taxonomy::Picker::SubjectAreas)) => &mut fill.subject_areas,
+            Some(Some(tam_taxonomy::Picker::Tags)) => &mut fill.tags,
+            Some(Some(tam_taxonomy::Picker::Formats)) => &mut fill.formats,
+            // Grades live on the product's own grade declaration, and a slug
+            // no picker offers is carried back to TPT from the residue.
+            _ => continue,
+        };
+        if let Ok(facet) = tam_domain::product::FacetSlug::new(slug) {
+            if !picked.contains(&facet) {
+                picked.push(facet);
+            }
+        }
+    }
+    fill.tax_code = listing
+        .extras
+        .tax_code
+        .as_deref()
+        .and_then(|id| id.trim().parse::<u8>().ok())
+        .and_then(tam_domain::product::TaxCode::from_wire_id);
+    fill.copyright = match listing.extras.copyright.as_deref() {
+        Some("ORIGINAL_WORK") => Some(tam_domain::product::CopyrightDeclaration::OriginalWork),
+        Some("USED_COPYRIGHTED_MATERIALS") => {
+            Some(tam_domain::product::CopyrightDeclaration::UsedCopyrightedMaterials)
+        }
+        _ => None,
+    };
+    fill.appropriate_for_country = listing.extras.appropriate_for_country;
+    fill.thumbnails = thumbnails
+        .iter()
+        // The form's own four slots; the sidecar's CHECK refuses a fifth.
+        .take(
+            form.cap(tam_taxonomy::Picker::Thumbnails)
+                .map_or(4, |cap| cap.limit),
+        )
+        .filter_map(|hash| tam_domain::product::UploadRef::new(&hex(hash)).ok())
+        .collect();
+    fill.status = listing.state.map(|state| match state {
+        ListingState::Live => tam_domain::product::ListingStatus::Live,
+        ListingState::Draft => tam_domain::product::ListingStatus::Draft,
+    });
+    Some(fill)
+}
+
+/// A digest as the upload handles spell it: lowercase hex.
+fn hex(hash: &ContentHash) -> String {
+    use core::fmt::Write as _;
+    let mut out = String::with_capacity(64);
+    for byte in hash.0 {
+        let _unused: core::fmt::Result = write!(out, "{byte:02x}");
+    }
+    out
 }
 
 /// What the import's own projection could not carry, recorded against the
@@ -1450,5 +1551,124 @@ mod tests {
             ),
             "reading a USD price into a GBP-fixed inventory would silently redenominate it"
         );
+    }
+}
+
+#[cfg(test)]
+mod tpt_fill_tests {
+    use super::tpt_base_fill;
+    use tam_domain::product::{CopyrightDeclaration, FacetSlug, ListingStatus, TaxCode};
+    use tam_marketplace::{ImportedListing, ListingExtras, ListingState, RemoteListingId};
+    use tam_types::{ContentHash, CopyFormat, ImportedPrice, ImportedTerm, InventoryId};
+
+    fn term(slug: &str) -> ImportedTerm {
+        ImportedTerm {
+            inventory: InventoryId::Tpt,
+            kind: None,
+            segments: vec![slug.to_owned()],
+            native_id: Some(slug.to_owned()),
+        }
+    }
+
+    /// The captured listing (`upload_page_product.json`): its eight
+    /// `taxonomyTags`, tax code 2, `ORIGINAL_WORK`, localised, live.
+    fn captured() -> ImportedListing {
+        ImportedListing {
+            remote: RemoteListingId::Tpt {
+                product_id: 13_042_099,
+            },
+            title: "Sample Unit: Stem and Leaf Plots (Differentiated)".to_owned(),
+            body: String::new(),
+            body_format: CopyFormat::Html,
+            native: [
+                "4th-grade",
+                "5th-grade",
+                "6th-grade",
+                "homeschool",
+                "homeschool-curricula",
+                "math",
+                "unit-plans",
+                "worksheets",
+                "easel",
+                "not-a-facet-tpt-issued",
+            ]
+            .map(term)
+            .to_vec(),
+            rights: None,
+            price: ImportedPrice::Free,
+            state: Some(ListingState::Live),
+            extras: ListingExtras {
+                tax_code: Some("2".to_owned()),
+                copyright: Some("ORIGINAL_WORK".to_owned()),
+                appropriate_for_country: Some(true),
+                thumbnails: vec![],
+            },
+        }
+    }
+
+    fn slugs(values: &[FacetSlug]) -> Vec<&str> {
+        values.iter().map(FacetSlug::as_str).collect()
+    }
+
+    #[test]
+    fn a_tpt_tag_lands_on_the_picker_the_form_offers_it_through() {
+        let fill = tpt_base_fill(&captured(), &[]).expect("a TPT listing fills the sidecar");
+        assert_eq!(slugs(&fill.subject_areas), ["math"]);
+        assert_eq!(
+            slugs(&fill.tags),
+            ["homeschool"],
+            "an audience facet is a Tag"
+        );
+        assert_eq!(slugs(&fill.formats), ["easel"]);
+        let everywhere: Vec<&str> = slugs(&fill.subject_areas)
+            .into_iter()
+            .chain(slugs(&fill.tags))
+            .chain(slugs(&fill.formats))
+            .collect();
+        for elsewhere in [
+            "4th-grade",
+            "unit-plans",
+            "worksheets",
+            "not-a-facet-tpt-issued",
+        ] {
+            assert!(
+                !everywhere.contains(&elsewhere),
+                "{elsewhere} has no Subject Area, Tag or Format box, so it is not put in one"
+            );
+        }
+    }
+
+    #[test]
+    fn the_listing_s_own_answers_are_carried_and_nothing_is_invented() {
+        let pictures = [ContentHash([7; 32]), ContentHash([8; 32])];
+        let fill = tpt_base_fill(&captured(), &pictures).expect("a TPT listing fills the sidecar");
+        assert_eq!(fill.tax_code, TaxCode::from_wire_id(2));
+        assert_eq!(fill.copyright, Some(CopyrightDeclaration::OriginalWork));
+        assert_eq!(fill.appropriate_for_country, Some(true));
+        assert_eq!(fill.status, Some(ListingStatus::Live));
+        assert_eq!(fill.thumbnails.len(), 2);
+        assert_eq!(fill.thumbnails[0].as_str(), "07".repeat(32));
+
+        let old = ImportedListing {
+            extras: ListingExtras::default(),
+            ..captured()
+        };
+        let fill = tpt_base_fill(&old, &[]).expect("a TPT listing fills the sidecar");
+        assert_eq!(
+            (fill.tax_code, fill.copyright),
+            (None, None),
+            "a read that stated no copyright statement is not given 'my own original work'"
+        );
+    }
+
+    #[test]
+    fn only_a_tpt_listing_fills_the_tpt_form() {
+        let tes = ImportedListing {
+            remote: RemoteListingId::Tes {
+                url: "https://www.tes.com/teaching-resource/x-1".to_owned(),
+            },
+            ..captured()
+        };
+        assert_eq!(tpt_base_fill(&tes, &[]), None);
     }
 }

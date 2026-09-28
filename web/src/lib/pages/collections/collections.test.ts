@@ -178,12 +178,12 @@ describe('checking a name', () => {
 });
 
 describe('the collections allowance', () => {
-	// The free plan includes none, which is the arm the New collection control
-	// is drawn disabled by: the sentence has to name the figure and offer the
-	// way forward, because a greyed control with neither reads as a fault.
-	it('refuses the free plan, saying it includes none', () => {
-		const reason = limitReason(caps('free'), usage(), 'collections');
-		expect(reason).toBe('Your plan includes 0 collections. Upgrade to add more.');
+	// The free plan includes one; at the one, the New collection control is
+	// drawn disabled and the sentence names the figure and offers the way
+	// forward, because a greyed control with neither reads as a fault.
+	it('refuses the free plan at its one collection, naming the figure', () => {
+		const reason = limitReason(caps('free'), usage({ collections: 1 }), 'collections');
+		expect(reason).toBe('Your plan includes 1 collection. Upgrade to add more.');
 	});
 
 	it('lets a subscriber with room through', () => {

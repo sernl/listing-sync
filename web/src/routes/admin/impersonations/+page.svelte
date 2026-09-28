@@ -31,7 +31,8 @@
 	 *  admin still reads the trail, by id. */
 	const directory = createQuery(() => ({
 		queryKey: queryKeys.identityDirectory,
-		queryFn: () => listIdentityUsers('', DIRECTORY_SIZE),
+		queryFn: () =>
+			listIdentityUsers({ search: '', limit: DIRECTORY_SIZE }).then((page) => page.users),
 		retry: false
 	}));
 
@@ -45,13 +46,13 @@
 	 *  is a different fact from nobody having been impersonated. */
 	const events = $derived(trail.data?.impersonations);
 	const open = $derived(openImpersonations(events ?? []));
-	const merged = $derived(mergeUsers(directory.data ?? [], platform.data?.users ?? []));
+	const rows = $derived(mergeUsers(directory.data ?? [], platform.data?.users ?? []));
 	const accounts = $derived(
-		new Map<string, IdentityUser>(merged.rows.map((row) => [row.identity.id, row.identity]))
+		new Map<string, IdentityUser>(rows.map((row) => [row.identity.id, row.identity]))
 	);
 	const orgOf = $derived(
 		new Map<string, string>(
-			merged.rows.flatMap((row) =>
+			rows.flatMap((row) =>
 				row.platform === null ? [] : [[row.identity.id, row.platform.organisation.name] as const]
 			)
 		)
@@ -87,7 +88,11 @@
 				body="This database has no identity schema. That does not mean nobody was impersonated."
 			/>
 		{:else if events.length === 0}
-			<Placeholder icon="circle-check" headline="Nobody has been impersonated" body="The trail is empty." />
+			<Placeholder
+				icon="circle-check"
+				headline="Nobody has been impersonated"
+				body="The trail is empty."
+			/>
 		{:else}
 			<section class="imp">
 				<div class="imp-bar">

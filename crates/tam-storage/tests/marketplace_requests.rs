@@ -14,6 +14,7 @@ use sqlx::PgPool;
 use tam_storage::{
     LedgerCursor, MarketplaceRequestBackofficeRepo, MarketplaceRequestRepo,
     MarketplaceRequestWrite, NewMarketplaceRequest, REQUESTS_PER_ORG_MAX, REQUEST_PAGE_LIMIT_MAX,
+    REQUEST_RATE_WINDOW_MS,
 };
 use tam_types::{OrgId, Timestamp, UserId, Uuid};
 
@@ -186,7 +187,8 @@ async fn one_address_is_one_request_per_organisation(pool: PgPool) {
 }
 
 /// The cap, at its own boundary: the last request inside it lands and the
-/// first outside it does not.
+/// first outside it does not. Each is a day after the last, so the per-person
+/// rate never answers first.
 #[sqlx::test(migrations = "./migrations")]
 async fn an_organisation_holds_at_most_the_capped_number_of_requests(pool: PgPool) {
     seed_org_a(&pool).await.expect("org a seeds");
@@ -199,18 +201,28 @@ async fn an_organisation_holds_at_most_the_capped_number_of_requests(pool: PgPoo
         let url = format!("https://shop-{index}.test");
         assert!(
             matches!(
-                repo.create(ORG_A, &request(USER_A, &url, 5_000 + index))
-                    .await
-                    .expect("the request records"),
+                repo.create(
+                    ORG_A,
+                    &request(USER_A, &url, 5_000 + index * REQUEST_RATE_WINDOW_MS)
+                )
+                .await
+                .expect("the request records"),
                 MarketplaceRequestWrite::Recorded(_)
             ),
             "request {index} is inside the cap and must land"
         );
     }
     assert_eq!(
-        repo.create(ORG_A, &request(USER_A, "https://one-too-many.test", 9_000))
-            .await
-            .expect("the refused request is an answer rather than a fault"),
+        repo.create(
+            ORG_A,
+            &request(
+                USER_A,
+                "https://one-too-many.test",
+                5_000 + REQUESTS_PER_ORG_MAX * REQUEST_RATE_WINDOW_MS
+            )
+        )
+        .await
+        .expect("the refused request is an answer rather than a fault"),
         MarketplaceRequestWrite::TooMany,
         "the request past the cap is refused, which is what stops one tenant \
          filling the operator's only view of this table"
@@ -228,9 +240,12 @@ async fn the_operator_page_walks_by_cursor_and_cannot_ask_for_the_whole_table(po
     let repo = MarketplaceRequestRepo::new(pool.clone());
     for index in 0..5 {
         let url = format!("https://shop-{index}.test");
-        repo.create(ORG_A, &request(USER_A, &url, 5_000 + index))
-            .await
-            .expect("the request records");
+        repo.create(
+            ORG_A,
+            &request(USER_A, &url, 5_000 + index * REQUEST_RATE_WINDOW_MS),
+        )
+        .await
+        .expect("the request records");
     }
 
     let backoffice = MarketplaceRequestBackofficeRepo::new(

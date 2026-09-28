@@ -900,6 +900,12 @@ export interface LibraryResourceView {
 	title: string;
 }
 
+/** Whether Teachouse holds a file's bytes, and why not where it does not.
+ *  An imported file stays on the seller's device until the Teachouse app
+ *  there copies it; `storage_full` and `too_large` are the two reasons a
+ *  copy will not happen by itself. */
+export type ServerCopy = 'stored' | 'device_only' | 'storage_full' | 'too_large';
+
 export interface LibraryFileView {
 	hash: string;
 	file_name: string | null;
@@ -907,6 +913,7 @@ export interface LibraryFileView {
 	holders: LibraryHolderView[];
 	wanted_by: string[];
 	resources: LibraryResourceView[];
+	server_copy: ServerCopy;
 }
 
 export interface LibraryView {
@@ -1312,6 +1319,42 @@ export interface AdminUserView {
 
 export interface AdminUsersView {
 	users: AdminUserView[];
+}
+
+/** One page of `GET /v1/admin/users?cursor=&limit=`, newest first. `total`
+ *  counts every app user; `next_cursor` is absent on the last page. */
+export interface AdminUsersPage {
+	users: AdminUserView[];
+	total: number;
+	next_cursor?: string;
+}
+
+/** Whether someone holds the operator marking after a grant or withdrawal. */
+export interface OperatorMarkingView {
+	user: string;
+	operator: boolean;
+}
+
+/** The most users one page of the operator listing carries. */
+export const ADMIN_USERS_PAGE_MAX = 100;
+
+/**
+ * Walk the operator user listing a page at a time, newest first, until
+ * `enough` says the rows so far suffice or the listing ends. Each page is
+ * asked for at the largest size the server allows, because every caller
+ * here wants many rows rather than one screenful.
+ */
+export async function walkAdminUsers(
+	enough: (rows: readonly AdminUserView[]) => boolean = () => false
+): Promise<AdminUsersView> {
+	const users: AdminUserView[] = [];
+	let cursor: string | undefined;
+	do {
+		const page = await api.adminUsersPage(cursor, ADMIN_USERS_PAGE_MAX);
+		users.push(...page.users);
+		cursor = page.next_cursor;
+	} while (cursor !== undefined && !enough(users));
+	return { users };
 }
 
 /** What `DELETE /v1/admin/users/{subject}` removed: the platform user and the
@@ -1836,6 +1879,10 @@ export interface FileView {
 	 *  a file stored before names existed and for a generated cover, and the
 	 *  console renders the absence rather than substituting the kind. */
 	name?: string;
+	/** Whether Teachouse holds these bytes. Every upload is `stored`; an
+	 *  imported file is `device_only` until the app copies it. Read through
+	 *  `copyOf`, which takes an absent value as `stored`. */
+	server_copy?: ServerCopy;
 }
 
 /** What one file change did, and where it lands.
@@ -1946,6 +1993,10 @@ export interface ProductView {
 	 *  existed, or imported from a marketplace. Not the same as a row whose
 	 *  fields are all unanswered. */
 	tpt_base?: TptBaseView;
+	/** What this resource's TPT listing holds that no control on the form
+	 *  offers — its resource types, supports, programmes — as an import read
+	 *  them. Every send to TPT posts them back unchanged. */
+	tpt_held?: FacetView[];
 	created_at: number;
 	updated_at: number;
 }
@@ -2205,6 +2256,15 @@ export interface DraftInput {
 	answer_key_id?: number | null;
 	copyright_declaration_id?: number | null;
 	status_user?: number | null;
+	/** The marketplaces this draft is going to. TPT's own form rules — Subject
+	 *  Area, Tag, copyright statement, tax code, its price floor and caps —
+	 *  hold only a draft going to TPT. Absent holds the draft to all of them. */
+	targets?: Marketplace[] | null;
+	/** The marketplaces this resource is already live on through a bound
+	 *  listing. A field left empty is not refused for one of these: the live
+	 *  listing met that marketplace's rules and holds what the last send
+	 *  carried. A value that marketplace would refuse still is. */
+	satisfied?: Marketplace[];
 }
 
 export interface RefusalView {
@@ -2563,6 +2623,17 @@ export interface ImportRunHead {
 	execution: ImportExecutionView;
 }
 
+/** What refreshing one run's resources from its own saved reads did. */
+export interface RunRefreshView {
+	/** Resources this refresh filled empty details on. */
+	filled: number;
+	/** Resources the saved reads had nothing more to give. */
+	unchanged: number;
+	/** Resources whose saved read has no tax code, copyright statement or
+	 *  pictures: only importing from TPT again, with the current app, fills those. */
+	read_again: number;
+}
+
 /** One run with its items and whatever pairs are still parked on it. */
 export interface ImportRunView extends ImportRunHead {
 	items: ImportRunItemView[];
@@ -2815,6 +2886,14 @@ export const api = {
 	 *  drawn rather than chosen, and for a blank name. */
 	renameProductFile: (product: string, file: string, name: string) =>
 		patch<RenamedFileView>(`/v1/products/${product}/files/${file}`, { name }),
+	/** Where one of a resource's own files is read from Teachouse: shown, or
+	 *  saved as a download. The route honours `Range`, so a viewer handed this
+	 *  URL can draw the first pages before the rest has arrived. */
+	productFileUrl: (product: string, file: string, download = false) =>
+		`/v1/products/${product}/files/${file}/content${download ? '?download=1' : ''}`,
+	/** One of the seller's files by digest, for the file browser. */
+	libraryFileUrl: (hash: string, download = false) =>
+		`/v1/library/files/${hash}/content${download ? '?download=1' : ''}`,
 	/** The bytes of one of a resource's own files, read back from Teachouse.
 	 *  A refusal is thrown as the structured failure every other route
 	 *  answers with. */
@@ -3049,6 +3128,10 @@ export const api = {
 	/** Cancel future work; previously committed resources remain. */
 	abandonImportRun: (run: string) =>
 		post<void>(`/v1/imports/runs/${encodeURIComponent(run)}/abandon`, {}),
+	/** Fill the empty TPT details of what this run imported from the listings
+	 *  it read: Subject Area, Tags and Format come back without the device. */
+	refreshImportRun: (run: string) =>
+		post<RunRefreshView>(`/v1/imports/runs/${encodeURIComponent(run)}/refresh`, {}),
 	deleteImportRun: (run: string) =>
 		request<JobDeletionView>(`/v1/imports/runs/${encodeURIComponent(run)}`, {
 			method: 'DELETE'
@@ -3264,12 +3347,27 @@ export const api = {
 	adminImportDrain: () => request<ImportDrainView>('/v1/admin/import-drain'),
 	adminDeadLetters: () => request<DeadLettersView>('/v1/admin/dead-letters'),
 	adminImpersonations: () => request<ImpersonationsView>('/v1/admin/impersonations'),
-	/** Every app user, with their organisation, its plan, and the identity
-	 *  trail's last sign-in. The platform's half of the Identity users page:
+	/** Every app user, walked page by page, with their organisation, its
+	 *  plan, and the identity trail's last sign-in. The platform's half of the Identity users page:
 	 *  the identity plane's own accounts come from better-auth's admin plugin,
 	 *  and the two are joined on `auth_subject` in the browser because no one
 	 *  role can read both. */
-	adminUsers: () => request<AdminUsersView>('/v1/admin/users'),
+	adminUsers: () => walkAdminUsers(),
+	/** One page of the same listing. `cursor` is what the previous page's
+	 *  `next_cursor` said; none is the first page. */
+	adminUsersPage: (cursor: string | undefined, limit: number) => {
+		const query = new URLSearchParams({ limit: String(limit) });
+		if (cursor !== undefined) query.set('cursor', cursor);
+		return request<AdminUsersPage>(`/v1/admin/users?${query}`);
+	},
+	/** Makes someone an operator. 404 when the subject has no platform user:
+	 *  the marking names an app user, so they must open the app once first. */
+	adminGrantOperator: (subject: string) =>
+		request<OperatorMarkingView>(`/v1/admin/operators/${subject}`, { method: 'POST' }),
+	/** Withdraws someone else's operator marking. 409 with `refusal: "self"`
+	 *  for the operator's own. */
+	adminRevokeOperator: (subject: string) =>
+		request<OperatorMarkingView>(`/v1/admin/operators/${subject}`, { method: 'DELETE' }),
 	/** Deletes a seller's platform user and their organisation, with
 	 *  everything in it. Refused with 409 (detail `refusal`: `operator`,
 	 *  `shared_organisation`, `live_subscription`) and a sentence saying what

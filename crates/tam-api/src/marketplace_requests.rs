@@ -17,7 +17,8 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use tam_storage::{
     MarketplaceRequestBackofficeRepo, MarketplaceRequestRecord, MarketplaceRequestRepo,
-    MarketplaceRequestWrite, NewMarketplaceRequest, REQUESTS_PER_ORG_MAX, REQUEST_PAGE_LIMIT_MAX,
+    MarketplaceRequestWrite, NewMarketplaceRequest, REQUESTS_PER_ORG_MAX,
+    REQUESTS_PER_USER_PER_DAY, REQUEST_PAGE_LIMIT_MAX,
 };
 use tam_types::{OrgId, Timestamp, UserId, Uuid};
 
@@ -232,6 +233,11 @@ fn validated(body: &CreateBody) -> Result<Validated<'_>, APIError> {
 /// page — and a tenant appending to it without bound pushes every other
 /// tenant's request out of view.
 ///
+/// One person may also send at most [`REQUESTS_PER_USER_PER_DAY`] requests in
+/// any rolling day, because each one mails the Teachouse team. That refusal is
+/// 429 rather than validation: nothing in the form is wrong, and the sentence
+/// says when to try again.
+///
 /// A recorded request also tells every operator by mail: the repository
 /// enqueues the message in the transaction that stores the row, and the
 /// server's outbox drainer sends it. A refused request tells nobody.
@@ -271,6 +277,12 @@ pub(crate) async fn create(
             "You have {REQUESTS_PER_ORG_MAX} requests with us already. Tell us about the next \
              one in a reply instead."
         ))),
+        MarketplaceRequestWrite::TooOften => Err(APIError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            APIErrorEntry::new(&format!(
+                "You’ve sent {REQUESTS_PER_USER_PER_DAY} requests today. Try again tomorrow."
+            )),
+        )),
     }
 }
 

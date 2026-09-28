@@ -15,7 +15,7 @@
 //! report success when it removed none.
 //!
 //! Usage: tam-admin <db-url> grant  (--user <uuid> | --email <address>) [--by <who>]
-//!        tam-admin <db-url> revoke (--user <uuid> | --email <address>)
+//!        tam-admin <db-url> revoke (--user <uuid> | --email <address>) [--by <who>]
 //!        tam-admin <db-url> list
 //!        tam-admin <db-url> backfill-workflow-owners
 //!        tam-admin guides seed --dir <path> [--dry-run] [--db <url>]
@@ -46,7 +46,7 @@ use tam_types::{OrgId, Timestamp, UserId, Uuid};
 
 const USAGE: &str =
     "usage: tam-admin <db-url> grant  (--user <uuid> | --email <address>) [--by <who>]\n\
-                     \x20      tam-admin <db-url> revoke (--user <uuid> | --email <address>)\n\
+                     \x20      tam-admin <db-url> revoke (--user <uuid> | --email <address>) [--by <who>]\n\
                      \x20      tam-admin <db-url> list\n\
                      \x20      tam-admin <db-url> backfill-workflow-owners\n\
                      \x20      tam-admin guides seed --dir <path> [--dry-run] [--db <url>]\n\
@@ -96,6 +96,7 @@ enum Command {
     },
     Revoke {
         subject: Subject,
+        revoked_by: String,
     },
     List,
     /// The deployment-time normalization that gives a legacy migration's
@@ -256,6 +257,7 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
         },
         "revoke" => Command::Revoke {
             subject: subject()?,
+            revoked_by: granted_by.unwrap_or_else(|| DEFAULT_GRANTED_BY.to_owned()),
         },
         "list" => Command::List,
         "backfill-workflow-owners" => Command::BackfillWorkflowOwners,
@@ -342,12 +344,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             operators.grant(user, &granted_by, wall_now()?).await?;
             println!("operator granted: {} (by {granted_by})", render(user));
         }
-        Command::Revoke { subject } => {
+        Command::Revoke {
+            subject,
+            revoked_by,
+        } => {
             let user = resolve(&sessions, subject).await?;
-            if !operators.revoke(user, wall_now()?).await? {
+            if !operators.revoke(user, &revoked_by, wall_now()?).await? {
                 return Err(format!("{} holds no active operator grant", render(user)).into());
             }
-            println!("operator revoked: {}", render(user));
+            println!("operator revoked: {} (by {revoked_by})", render(user));
         }
         Command::List => {
             let records = operators.list().await?;

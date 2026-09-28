@@ -1,15 +1,14 @@
 <script lang="ts">
 	// One account, opened from the user list: who they are, their organisation
 	// and plan, and every action an operator takes on them. A side sheet on a
-	// desktop, a bottom sheet on a phone — the native <dialog> gives both the
-	// focus trap and Escape.
+	// desktop, a bottom sheet on a phone; Escape or a press outside closes it.
 
 	import { createMutation, useQueryClient } from '@tanstack/svelte-query';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { sessionWords, type AdminUserRow } from '$lib/admin';
+	import { ApiFailure, api } from '$lib/api';
 	import {
 		AuthFailure,
-		IDENTITY_ROLES,
 		banIdentityUser,
 		impersonateAndCarry,
 		setIdentityRole,
@@ -22,13 +21,15 @@
 	import Explain from '$lib/Explain.svelte';
 	import { queryKeys } from '$lib/query';
 	import Icon from '$lib/Icon.svelte';
+	import Sheet, { type SheetHandle } from '$lib/Sheet.svelte';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import { toast } from '$lib/toast';
+	import Toggle from '$lib/Toggle.svelte';
 	import GrantPlanForm from './GrantPlanForm.svelte';
 	import { planName, planTone } from './admin-view';
 	import DeleteUserDialog from './DeleteUserDialog.svelte';
 	import SessionsDialog from './SessionsDialog.svelte';
-	import { CHIP_WORDS, displayName, initials, userChips } from './users-view';
+	import { CHIP_WORDS, displayName, initials, joinedAt, userChips } from './users-view';
 
 	let {
 		row,
@@ -56,7 +57,7 @@
 
 	const queryClient = useQueryClient();
 
-	let element = $state<HTMLDialogElement | null>(null);
+	let sheet = $state<SheetHandle>();
 	let showSessions = $state(false);
 	let showDelete = $state(false);
 	let settingPlan = $state(false);
@@ -69,21 +70,14 @@
 	const platform = $derived(row.platform);
 	const chips = $derived(userChips(row));
 	const isSelf = $derived(selfId !== null && selfId === user.id);
-	const joinedAt = $derived.by(() => {
-		if (user.createdAt === null || user.createdAt === undefined) return null;
-		const parsed = new Date(user.createdAt).getTime();
-		return Number.isNaN(parsed) ? null : parsed;
-	});
+	const joined = $derived(joinedAt(user));
 	const signedIn = $derived(platform?.last_sign_in_at ?? null);
-
-	$effect(() => {
-		if (element !== null && !element.open) {
-			element.showModal();
-		}
-	});
+	const isAdmin = $derived(user.role === 'admin');
 
 	function refusalOf(failure: Error, fallback: string): string {
-		return failure instanceof AuthFailure ? failure.message : fallback;
+		return failure instanceof AuthFailure || failure instanceof ApiFailure
+			? failure.message
+			: fallback;
 	}
 
 	const ban = createMutation(() => ({
@@ -94,7 +88,8 @@
 			await onChanged();
 			toast('info', 'Account banned. They can no longer sign in.');
 		},
-		onError: (failure: Error) => toast('error', refusalOf(failure, 'The account was not banned. Try again.'))
+		onError: (failure: Error) =>
+			toast('error', refusalOf(failure, 'The account was not banned. Try again.'))
 	}));
 
 	const unban = createMutation(() => ({
@@ -103,24 +98,43 @@
 			await onChanged();
 			toast('info', 'Account unbanned.');
 		},
-		onError: (failure: Error) => toast('error', refusalOf(failure, 'The account was not unbanned. Try again.'))
+		onError: (failure: Error) =>
+			toast('error', refusalOf(failure, 'The account was not unbanned. Try again.'))
 	}));
 
 	const role = createMutation(() => ({
-		mutationFn: (input: { id: string; role: IdentityRole }) => setIdentityRole(input.id, input.role),
-		onSuccess: async () => {
+		mutationFn: (input: { id: string; role: IdentityRole }) =>
+			setIdentityRole(input.id, input.role),
+		onSuccess: async (_, input) => {
 			await onChanged();
-			toast('info', 'Role changed.');
+			toast(
+				'info',
+				input.role === 'admin'
+					? 'They are now identity admin.'
+					: 'They are no longer identity admin.'
+			);
 		},
-		onError: (failure: Error) => toast('error', refusalOf(failure, 'The role was not changed. Try again.'))
+		onError: async (failure: Error) => {
+			await onChanged();
+			toast('error', refusalOf(failure, 'The role was not changed. Try again.'));
+		}
 	}));
 
-	function changeRole(event: Event) {
-		const chosen = (event.currentTarget as HTMLSelectElement).value as IdentityRole;
-		if (chosen !== (user.role ?? 'user')) {
-			role.mutate({ id: user.id, role: chosen });
+	const marking = createMutation(() => ({
+		mutationFn: (input: { id: string; operator: boolean }) =>
+			input.operator ? api.adminGrantOperator(input.id) : api.adminRevokeOperator(input.id),
+		onSuccess: async (_, input) => {
+			await onChanged();
+			toast(
+				'info',
+				input.operator ? 'They are now an operator.' : 'They are no longer an operator.'
+			);
+		},
+		onError: async (failure: Error) => {
+			await onChanged();
+			toast('error', refusalOf(failure, 'The operator marking was not changed. Try again.'));
 		}
-	}
+	}));
 
 	/**
 	 * Sign in as this account, and carry the console with it.
@@ -165,228 +179,264 @@
 		showDelete = false;
 		await onChanged();
 		toast('info', `${email} is deleted.`);
-		element?.close();
+		sheet?.close();
 	}
 </script>
 
-<dialog bind:this={element} class="ux-sheet" aria-labelledby="user-sheet-title" onclose={onClose}>
-	<div class="sheet">
-		<header class="sheet-head">
-			<span class="avatar" aria-hidden="true">{initials(user.name, user.email)}</span>
-			<div class="who">
-				<h2 id="user-sheet-title">{displayName(user)}</h2>
-				<span class="email">{user.email}</span>
-				{#if chips.length > 0}
-					<span class="chips">
-						{#each chips as chip (chip)}
-							<StatusPill tone={CHIP_WORDS[chip].tone} label={CHIP_WORDS[chip].label} />
-						{/each}
-					</span>
+<Sheet labelledby="user-sheet-title" {onClose} bind:handle={sheet}>
+	<header class="sheet-head">
+		<span class="avatar" aria-hidden="true">{initials(user.name, user.email)}</span>
+		<div class="who">
+			<h2 id="user-sheet-title">{displayName(user)}</h2>
+			<span class="email">{user.email}</span>
+			{#if chips.length > 0}
+				<span class="chips">
+					{#each chips as chip (chip)}
+						<StatusPill tone={CHIP_WORDS[chip].tone} label={CHIP_WORDS[chip].label} />
+					{/each}
+				</span>
+			{/if}
+		</div>
+		<button type="button" class="close" aria-label="Close" onclick={() => sheet?.close()}>
+			<Icon name="x" />
+		</button>
+	</header>
+
+	<div class="sheet-body">
+		{#if refusal}
+			<Banner tone="bad" title="The impersonation was refused">{refusal}</Banner>
+		{/if}
+
+		<section class="block">
+			<h3>Account</h3>
+			<dl>
+				<dt>Email</dt>
+				<dd>
+					{#if user.emailVerified}
+						<StatusPill tone="ok" label="verified" />
+					{:else}
+						<StatusPill tone="warn" label="not verified" />
+					{/if}
+				</dd>
+				<dt>Joined</dt>
+				<dd title={joined === null ? undefined : utcInstant(joined)}>
+					{joined === null ? '—' : agoLabel(joined, now)}
+				</dd>
+				<dt>Last sign-in</dt>
+				<dd title={signedIn === null ? undefined : utcInstant(signedIn)}>
+					{#if signedIn !== null}
+						{agoLabel(signedIn, now)}
+					{:else}
+						none recorded
+						{#if !trailVisible}
+							<Explain title="Why no sign-in shows" label="">
+								<p>
+									No account on this page shows a last sign-in. Most likely this server cannot see
+									the identity schema, not that nobody has signed in.
+								</p>
+							</Explain>
+						{/if}
+					{/if}
+				</dd>
+				<dt>Signed in on</dt>
+				<dd>
+					<button type="button" class="link" onclick={() => (showSessions = true)}>
+						{sessionCount === null ? 'See devices' : sessionWords(sessionCount)}
+					</button>
+				</dd>
+			</dl>
+		</section>
+
+		<section class="block">
+			<h3>Organisation and plan</h3>
+			{#if platform === null}
+				<p class="quiet">
+					No app user yet. They made a sign-in account but have not opened the app.
+				</p>
+			{:else}
+				<div class="org">
+					<a class="org-name" href={`/admin/orgs/${platform.organisation.org}`}>
+						{platform.organisation.name}
+					</a>
+					<StatusPill tone={planTone(platform.plan)} label={planName(platform.plan)} />
+				</div>
+				{#if settingPlan}
+					<p class="quiet">
+						A plan belongs to the organisation, so everyone in {platform.organisation.name} gets it.
+					</p>
+					<GrantPlanForm
+						org={platform.organisation.org}
+						current={platform.plan}
+						onGranted={granted}
+					/>
+					<Button tier="quiet" small onclick={() => (settingPlan = false)}>Cancel</Button>
+				{:else}
+					<Button tier="outline" small icon="gift" onclick={() => (settingPlan = true)}>
+						Set plan
+					</Button>
+				{/if}
+			{/if}
+		</section>
+
+		<section class="block">
+			<h3>Access</h3>
+			<div class="access">
+				{#key `${platform?.operator}-${marking.isPending}`}
+					<Toggle
+						label="Operator"
+						checked={platform?.operator === true}
+						disabled={platform === null || isSelf || marking.isPending}
+						onchange={(on) => marking.mutate({ id: user.id, operator: on })}
+					/>
+				{/key}
+				<span class="access-why">
+					{#if platform === null}
+						They must open the app once first.
+					{:else if isSelf}
+						This is you. Another operator can change it.
+					{:else}
+						Opens this Admin area and every organisation.
+					{/if}
+				</span>
+				<Explain title="What an operator is" label="">
+					<p>
+						An operator can open this Admin area and read every organisation on the platform: their
+						resources, listings and sync history.
+					</p>
+					<p>
+						Only an operator can make someone else one, and nobody can remove their own, so there is
+						always someone left who can. Every change is recorded with who made it.
+					</p>
+				</Explain>
+
+				{#key `${user.role}-${role.isPending}`}
+					<Toggle
+						label="Identity admin"
+						checked={isAdmin}
+						disabled={isSelf || role.isPending}
+						onchange={(on) => role.mutate({ id: user.id, role: on ? 'admin' : 'user' })}
+					/>
+				{/key}
+				<span class="access-why">
+					{isSelf
+						? 'This is you. Another admin can change it.'
+						: 'Can ban, sign in as, and delete accounts.'}
+				</span>
+				<Explain title="What identity admin is" label="">
+					<p>
+						Identity admin is a role on the sign-in service. It lets someone ban people, sign in as
+						them, and delete their sign-in accounts. This users list needs it too.
+					</p>
+					<p>
+						It is separate from operator on purpose. Most people who run the platform need both; a
+						helper who only reads organisations needs operator alone.
+					</p>
+				</Explain>
+			</div>
+		</section>
+
+		<section class="block">
+			<h3>Actions</h3>
+			<div class="acts">
+				<Button
+					tier="primary"
+					icon="log-out"
+					disabled={impersonating || isSelf || user.banned === true}
+					reason={isSelf
+						? 'This is you.'
+						: user.banned
+							? 'Unban them first.'
+							: impersonating
+								? 'Starting.'
+								: undefined}
+					onclick={impersonate}
+				>
+					{impersonating ? 'Starting…' : 'Sign in as them'}
+				</Button>
+
+				{#if user.banned}
+					<Button
+						tier="outline"
+						disabled={unban.isPending}
+						reason={unban.isPending ? 'Unbanning.' : undefined}
+						onclick={() => unban.mutate(user.id)}
+					>
+						Unban
+					</Button>
+				{:else if !banning}
+					<Button
+						tier="outline"
+						icon="lock"
+						disabled={isSelf}
+						reason={isSelf ? 'This is you.' : undefined}
+						onclick={() => (banning = true)}
+					>
+						Ban
+					</Button>
 				{/if}
 			</div>
-			<button type="button" class="close" aria-label="Close" onclick={() => element?.close()}>
-				<Icon name="x" />
-			</button>
-		</header>
-
-		<div class="sheet-body">
-			{#if refusal}
-				<Banner tone="bad" title="The impersonation was refused">{refusal}</Banner>
+			{#if user.banned && user.banReason}
+				<p class="quiet">Banned because: {user.banReason}</p>
 			{/if}
-
-			<section class="block">
-				<h3>Account</h3>
-				<dl>
-					<dt>Email</dt>
-					<dd>
-						{#if user.emailVerified}
-							<StatusPill tone="ok" label="verified" />
-						{:else}
-							<StatusPill tone="warn" label="not verified" />
-						{/if}
-					</dd>
-					<dt>Joined</dt>
-					<dd title={joinedAt === null ? undefined : utcInstant(joinedAt)}>
-						{joinedAt === null ? '—' : agoLabel(joinedAt, now)}
-					</dd>
-					<dt>Last sign-in</dt>
-					<dd title={signedIn === null ? undefined : utcInstant(signedIn)}>
-						{#if signedIn !== null}
-							{agoLabel(signedIn, now)}
-						{:else}
-							none recorded
-							{#if !trailVisible}
-								<Explain title="Why no sign-in shows" label="">
-									<p>
-										No account on this page shows a last sign-in. Most likely this server cannot
-										see the identity schema, not that nobody has signed in.
-									</p>
-								</Explain>
-							{/if}
-						{/if}
-					</dd>
-					<dt>Signed in on</dt>
-					<dd>
-						<button type="button" class="link" onclick={() => (showSessions = true)}>
-							{sessionCount === null ? 'See devices' : sessionWords(sessionCount)}
-						</button>
-					</dd>
-					<dt>Role</dt>
-					<dd>
-						<label class="sr-only" for="sheet-role">Identity role for {user.email}</label>
-						<select
-							id="sheet-role"
-							value={user.role ?? 'user'}
-							disabled={role.isPending || isSelf}
-							onchange={changeRole}
-						>
-							{#each IDENTITY_ROLES as option (option)}
-								<option value={option}>{option}</option>
-							{/each}
-						</select>
-						<Explain title="Role and operator" label="">
-							<p>
-								<strong>admin</strong> lets someone ban, impersonate and delete sign-in accounts.
-								It is the identity service's role.
-							</p>
-							<p>
-								<strong>Operator</strong> lets someone read across every organisation here. It is
-								granted with tam-admin on the server, never from this page, so the two are kept
-								apart.
-							</p>
-						</Explain>
-					</dd>
-				</dl>
-			</section>
-
-			<section class="block">
-				<h3>Organisation and plan</h3>
-				{#if platform === null}
-					<p class="quiet">
-						No app user yet. They made a sign-in account but have not opened the app.
-					</p>
-				{:else}
-					<div class="org">
-						<a class="org-name" href={`/admin/orgs/${platform.organisation.org}`}>
-							{platform.organisation.name}
-						</a>
-						<StatusPill tone={planTone(platform.plan)} label={planName(platform.plan)} />
-					</div>
-					{#if settingPlan}
-						<p class="quiet">
-							A plan belongs to the organisation, so everyone in {platform.organisation.name} gets
-							it.
-						</p>
-						<GrantPlanForm
-							org={platform.organisation.org}
-							current={platform.plan}
-							onGranted={granted}
-						/>
-						<Button tier="quiet" small onclick={() => (settingPlan = false)}>Cancel</Button>
-					{:else}
-						<Button tier="outline" small icon="gift" onclick={() => (settingPlan = true)}>
-							Set plan
-						</Button>
-					{/if}
-				{/if}
-			</section>
-
-			<section class="block">
-				<h3>Actions</h3>
-				<div class="acts">
-					<Button
-						tier="primary"
-						icon="log-out"
-						disabled={impersonating || isSelf || user.banned === true}
-						reason={isSelf
-							? 'This is you.'
-							: user.banned
-								? 'Unban them first.'
-								: impersonating
-									? 'Starting.'
-									: undefined}
-						onclick={impersonate}
-					>
-						{impersonating ? 'Starting…' : 'Sign in as them'}
-					</Button>
-
-					{#if user.banned}
-						<Button
-							tier="outline"
-							disabled={unban.isPending}
-							reason={unban.isPending ? 'Unbanning.' : undefined}
-							onclick={() => unban.mutate(user.id)}
-						>
-							Unban
-						</Button>
-					{:else if !banning}
-						<Button
-							tier="outline"
-							icon="lock"
-							disabled={isSelf}
-							reason={isSelf ? 'This is you.' : undefined}
-							onclick={() => (banning = true)}
-						>
-							Ban
-						</Button>
-					{/if}
-				</div>
-				{#if user.banned && user.banReason}
-					<p class="quiet">Banned because: {user.banReason}</p>
-				{/if}
-				{#if banning && !user.banned}
-					<form
-						class="ban"
-						onsubmit={(event) => {
-							event.preventDefault();
-							ban.mutate({ id: user.id, reason: banReason });
-						}}
-					>
-						<label for="ban-reason">Why? They can no longer sign in, starting now.</label>
-						<input id="ban-reason" bind:value={banReason} placeholder="Reason, shown here later" />
-						<div class="acts">
-							<Button tier="quiet" small onclick={() => (banning = false)}>Cancel</Button>
-							<Button
-								tier="primary"
-								small
-								danger
-								type="submit"
-								disabled={ban.isPending}
-								reason={ban.isPending ? 'Banning.' : undefined}
-							>
-								Ban them
-							</Button>
-						</div>
-					</form>
-				{/if}
-			</section>
-
-			<section class="block danger-zone">
-				<h3>Delete</h3>
-				<p class="quiet">
-					Deletes their sign-in account{platform === null ? '' : ', their organisation and everything in it'}.
-				</p>
-				<Button
-					tier="outline"
-					danger
-					icon="x"
-					disabled={isSelf || platform?.operator === true}
-					reason={isSelf
-						? 'You cannot delete yourself.'
-						: platform?.operator
-							? 'Operators cannot be deleted here. Withdraw the marking with tam-admin first.'
-							: undefined}
-					onclick={() => (showDelete = true)}
+			{#if banning && !user.banned}
+				<form
+					class="ban"
+					onsubmit={(event) => {
+						event.preventDefault();
+						ban.mutate({ id: user.id, reason: banReason });
+					}}
 				>
-					Delete account
-				</Button>
-			</section>
-		</div>
+					<label for="ban-reason">Why? They can no longer sign in, starting now.</label>
+					<input id="ban-reason" bind:value={banReason} placeholder="Reason, shown here later" />
+					<div class="acts">
+						<Button tier="quiet" small onclick={() => (banning = false)}>Cancel</Button>
+						<Button
+							tier="primary"
+							small
+							danger
+							type="submit"
+							disabled={ban.isPending}
+							reason={ban.isPending ? 'Banning.' : undefined}
+						>
+							Ban them
+						</Button>
+					</div>
+				</form>
+			{/if}
+		</section>
+
+		<section class="block danger-zone">
+			<h3>Delete</h3>
+			<p class="quiet">
+				Deletes their sign-in account{platform === null
+					? ''
+					: ', their organisation and everything in it'}.
+			</p>
+			<Button
+				tier="outline"
+				danger
+				icon="x"
+				disabled={isSelf || platform?.operator === true}
+				reason={isSelf
+					? 'You cannot delete yourself.'
+					: platform?.operator
+						? 'Operators cannot be deleted. Turn Operator off first.'
+						: undefined}
+				onclick={() => (showDelete = true)}
+			>
+				Delete account
+			</Button>
+		</section>
 	</div>
-</dialog>
+</Sheet>
 
 {#if showSessions}
-	<SessionsDialog userId={user.id} email={user.email} onClose={() => (showSessions = false)} {onCount} />
+	<SessionsDialog
+		userId={user.id}
+		email={user.email}
+		onClose={() => (showSessions = false)}
+		{onCount}
+	/>
 {/if}
 
 {#if showDelete}
@@ -394,29 +444,6 @@
 {/if}
 
 <style>
-	dialog.ux-sheet[open] {
-		display: flex;
-	}
-
-	@media (min-width: 621px) {
-		dialog.ux-sheet {
-			margin: 0 0 0 auto;
-			width: min(460px, 100vw);
-			max-width: 100vw;
-			height: 100dvh;
-			max-height: 100dvh;
-			border-radius: var(--r-region) 0 0 var(--r-region);
-			border-right: 0;
-		}
-	}
-
-	.sheet {
-		display: flex;
-		flex-direction: column;
-		min-height: 0;
-		width: 100%;
-	}
-
 	.sheet-head {
 		display: grid;
 		grid-template-columns: auto 1fr auto;
@@ -529,14 +556,17 @@
 		min-width: 0;
 	}
 
-	select {
-		min-height: var(--control-h-sm);
-		border: 1px solid var(--line);
-		border-radius: var(--r-field);
-		background: var(--card);
-		color: var(--text);
-		padding-inline: 8px;
-		font: inherit;
+	.access {
+		display: grid;
+		grid-template-columns: max-content 1fr auto;
+		align-items: center;
+		gap: var(--s-2) var(--s-3);
+		font-size: 13.5px;
+	}
+
+	.access-why {
+		color: var(--muted);
+		font-size: 13px;
 	}
 
 	.link {

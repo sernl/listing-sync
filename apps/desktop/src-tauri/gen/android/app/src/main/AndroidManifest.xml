@@ -2,6 +2,18 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Stated rather than left to the targetSdk defaults: a tablet (the
+         founder's Galaxy Tab S8 Ultra is xlarge) must never be read as an
+         unsupported screen by a store or an installer. Nothing here requires
+         telephony, a camera or a touchscreen, so no uses-feature excludes one. -->
+    <supports-screens
+        android:smallScreens="true"
+        android:normalScreens="true"
+        android:largeScreens="true"
+        android:xlargeScreens="true"
+        android:anyDensity="true"
+        android:resizeable="true" />
+
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
 

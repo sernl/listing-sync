@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { ApiFailure, api, type BillingView } from '$lib/api';
+	import { lightDismiss } from '$lib/dismiss';
 	import { dayLabel } from '$lib/pages/account/plans';
 
 	let {
@@ -49,7 +50,7 @@
 	}
 </script>
 
-<dialog
+<dialog use:lightDismiss
 	bind:this={element}
 	aria-labelledby="cancel-plan-title"
 	onclose={onClose}

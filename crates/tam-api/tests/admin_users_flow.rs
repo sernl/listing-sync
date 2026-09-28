@@ -18,7 +18,7 @@ use axum::{
 use http_body_util::BodyExt;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
-use tam_api::admin::UsersView;
+use tam_api::admin::{OperatorMarkingView, UsersView};
 use tam_api::{router, AppState, Config, SESSION_COOKIE};
 use tam_limits::Plan;
 use tam_storage::{EntitlementRepo, GrantedBy, NewGrant, OperatorRepo, SessionRepo, SessionToken};
@@ -180,8 +180,13 @@ async fn identity_audit_standin(pool: &PgPool) {
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
 )]
-async fn call(state: AppState, token: Option<&SessionToken>) -> (StatusCode, Vec<u8>) {
-    let mut request = Request::builder().uri("/v1/admin/users");
+async fn send(
+    state: AppState,
+    method: &str,
+    uri: &str,
+    token: Option<&SessionToken>,
+) -> (StatusCode, Vec<u8>) {
+    let mut request = Request::builder().method(method).uri(uri);
     if let Some(token) = token {
         request = request.header(
             header::COOKIE,
@@ -201,6 +206,10 @@ async fn call(state: AppState, token: Option<&SessionToken>) -> (StatusCode, Vec
         .to_bytes()
         .to_vec();
     (status, bytes)
+}
+
+async fn call(state: AppState, token: Option<&SessionToken>) -> (StatusCode, Vec<u8>) {
+    send(state, "GET", "/v1/admin/users", token).await
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
@@ -281,7 +290,11 @@ async fn a_database_without_the_identity_schema_still_answers_the_listing(pool: 
          holding one and not the other answers what it can: {}",
         String::from_utf8_lossy(&body)
     );
-    let view: UsersView = serde_json::from_slice(&body).unwrap_or(UsersView { users: Vec::new() });
+    let view: UsersView = serde_json::from_slice(&body).unwrap_or(UsersView {
+        users: Vec::new(),
+        total: 0,
+        next_cursor: None,
+    });
     assert_eq!(view.users.len(), 2, "every user is listed");
     assert!(
         view.users.iter().all(|row| row.last_sign_in_at.is_none()),
@@ -311,5 +324,271 @@ async fn a_seller_and_an_anonymous_caller_are_refused_identically(pool: PgPool) 
         seller_body, anonymous_body,
         "the two refusals are byte-identical, or the difference is itself the \
          answer a prober wanted"
+    );
+}
+
+// ------------------------------------------------------------------ paging
+
+/// Seven more sellers in the second tenant, two of them created in the same
+/// millisecond as each other, so the cursor's tie-break on the user id is
+/// what keeps them apart.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn more_sellers(pool: &PgPool) -> Vec<UserId> {
+    let sessions = SessionRepo::new(pool.clone());
+    let mut made = Vec::new();
+    for (index, at) in [2_000, 3_000, 3_000, 4_000, 4_500, 6_000, 7_000]
+        .into_iter()
+        .enumerate()
+    {
+        let byte = 0xC0 + u8::try_from(index).expect("a handful of sellers");
+        let user = UserId(Uuid([byte; 16]));
+        sessions
+            .create_user(
+                ORG_B,
+                user,
+                &format!("seller{index}@example.test"),
+                Timestamp(at),
+            )
+            .await
+            .expect("the seller provisions");
+        made.push(user);
+    }
+    made
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn paging_walks_every_user_once_newest_first(pool: PgPool) {
+    provision(&pool).await;
+    let extra = more_sellers(&pool).await;
+    let backoffice = backoffice_pool(&pool).await;
+
+    let mut seen: Vec<(Timestamp, UserId)> = Vec::new();
+    let mut cursor: Option<String> = None;
+    let mut pages = 0;
+    loop {
+        let uri = match &cursor {
+            Some(next) => format!("/v1/admin/users?limit=2&cursor={next}"),
+            None => "/v1/admin/users?limit=2".to_owned(),
+        };
+        let (status, body) = send(
+            state(pool.clone(), Some(backoffice.clone())),
+            "GET",
+            &uri,
+            Some(&TOKEN_OPERATOR),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        let view: UsersView = serde_json::from_slice(&body).expect("the page parses");
+        assert_eq!(view.total, 9, "the total counts every user, not the page");
+        assert!(view.users.len() <= 2, "a page holds at most what was asked");
+        seen.extend(view.users.iter().map(|row| (row.created_at, row.user)));
+        pages += 1;
+        match view.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+        assert!(pages < 10, "the walk ends");
+    }
+    assert_eq!(pages, 5, "nine users at two a page");
+    assert_eq!(seen.len(), 9, "every user appears");
+    let mut unique: Vec<UserId> = seen.iter().map(|&(_, user)| user).collect();
+    unique.sort_by_key(|user| user.0 .0);
+    unique.dedup();
+    assert_eq!(unique.len(), 9, "and none appears twice across pages");
+    assert!(
+        extra.iter().all(|user| unique.contains(user)),
+        "the two sellers sharing a millisecond are both reached"
+    );
+    assert!(
+        seen.iter()
+            .zip(seen.iter().skip(1))
+            .all(|(newer, older)| (newer.0, newer.1 .0 .0) > (older.0, older.1 .0 .0)),
+        "newest first, ties broken by the user id, strictly: {seen:?}"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_page_size_or_cursor_the_listing_never_gave_is_refused(pool: PgPool) {
+    provision(&pool).await;
+    let backoffice = backoffice_pool(&pool).await;
+    for uri in [
+        "/v1/admin/users?limit=0",
+        "/v1/admin/users?limit=101",
+        "/v1/admin/users?cursor=yesterday",
+        "/v1/admin/users?cursor=12_not-a-uuid",
+    ] {
+        let (status, _) = send(
+            state(pool.clone(), Some(backoffice.clone())),
+            "GET",
+            uri,
+            Some(&TOKEN_OPERATOR),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{uri}");
+    }
+}
+
+// --------------------------------------------------------------- operators
+
+/// The seller's identity subject, linked in the tests that act on them.
+const SUBJECT_SELLER: [u8; 16] = [0xB1; 16];
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn link_seller(pool: &PgPool) {
+    sqlx::query("UPDATE app_user SET auth_subject = $2 WHERE id = $1")
+        .bind(uuid::Uuid::from_bytes(USER_SELLER.0 .0))
+        .bind(uuid::Uuid::from_bytes(SUBJECT_SELLER))
+        .execute(pool)
+        .await
+        .expect("the subject links");
+}
+
+fn operator_uri(subject: [u8; 16]) -> String {
+    format!(
+        "/v1/admin/operators/{}",
+        uuid::Uuid::from_bytes(subject).hyphenated()
+    )
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_operator_grants_and_withdraws_the_marking_with_a_trail(pool: PgPool) {
+    provision(&pool).await;
+    link_seller(&pool).await;
+    let repo = OperatorRepo::new(pool.clone());
+    let actor = format!(
+        "operator:{}",
+        uuid::Uuid::from_bytes(USER_OPERATOR.0 .0).hyphenated()
+    );
+
+    for _ in 0..2 {
+        let (status, body) = send(
+            state(pool.clone(), None),
+            "POST",
+            &operator_uri(SUBJECT_SELLER),
+            Some(&TOKEN_OPERATOR),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        let view: OperatorMarkingView = serde_json::from_slice(&body).expect("the answer parses");
+        assert_eq!((view.user, view.operator), (USER_SELLER, true));
+    }
+    assert!(
+        repo.is_active(USER_SELLER)
+            .await
+            .expect("the marking reads"),
+        "the seller is now an operator"
+    );
+    let trail = repo.events(USER_SELLER).await.expect("the trail reads");
+    assert_eq!(
+        trail
+            .iter()
+            .map(|event| (event.granted, event.actor.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(true, actor.as_str())],
+        "one grant naming who made it: the second POST found them an operator \
+         already and wrote nothing"
+    );
+
+    let (status, body) = send(
+        state(pool.clone(), None),
+        "DELETE",
+        &operator_uri(SUBJECT_SELLER),
+        Some(&TOKEN_OPERATOR),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let view: OperatorMarkingView = serde_json::from_slice(&body).expect("the answer parses");
+    assert!(!view.operator);
+    assert!(
+        !repo
+            .is_active(USER_SELLER)
+            .await
+            .expect("the marking reads"),
+        "the withdrawal takes effect"
+    );
+    let trail = repo.events(USER_SELLER).await.expect("the trail reads");
+    assert_eq!(
+        trail
+            .iter()
+            .map(|event| (event.granted, event.actor.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(true, actor.as_str()), (false, actor.as_str())],
+        "the withdrawal is on the trail too, naming who made it"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_operator_cannot_withdraw_their_own_marking(pool: PgPool) {
+    provision(&pool).await;
+    let (status, body) = send(
+        state(pool.clone(), None),
+        "DELETE",
+        &operator_uri(SUBJECT_OPERATOR),
+        Some(&TOKEN_OPERATOR),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(
+        String::from_utf8_lossy(&body).contains("\"refusal\":\"self\""),
+        "the refusal says why: {}",
+        String::from_utf8_lossy(&body)
+    );
+    assert!(
+        OperatorRepo::new(pool.clone())
+            .is_active(USER_OPERATOR)
+            .await
+            .expect("the marking reads"),
+        "and the marking stands"
+    );
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn an_unknown_user_cannot_be_granted_or_withdrawn(pool: PgPool) {
+    provision(&pool).await;
+    // USER_SELLER exists but carries no subject, so this names nobody.
+    for method in ["POST", "DELETE"] {
+        let (status, _) = send(
+            state(pool.clone(), None),
+            method,
+            &operator_uri(SUBJECT_SELLER),
+            Some(&TOKEN_OPERATOR),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method} names nobody");
+    }
+    let (status, _) = send(
+        state(pool.clone(), None),
+        "POST",
+        "/v1/admin/operators/not-a-subject",
+        Some(&TOKEN_OPERATOR),
+    )
+    .await;
+    assert!(status.is_client_error(), "a malformed subject is refused");
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_seller_cannot_make_themselves_an_operator(pool: PgPool) {
+    provision(&pool).await;
+    link_seller(&pool).await;
+    let (status, _) = send(
+        state(pool.clone(), None),
+        "POST",
+        &operator_uri(SUBJECT_SELLER),
+        Some(&TOKEN_SELLER),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(
+        !OperatorRepo::new(pool.clone())
+            .is_active(USER_SELLER)
+            .await
+            .expect("the marking reads"),
+        "and nothing was granted"
     );
 }

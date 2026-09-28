@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import type { FileView } from '$lib/api';
-import { currentPage, keptPdfSource, pageWindow, sourceOfKept, viewerMode } from './file-viewer';
+import {
+	DEVICE_ONLY,
+	STORAGE_FULL,
+	currentPage,
+	keptPdfSource,
+	pageWindow,
+	sourceOfKept,
+	storedPdfSource,
+	viewFrom,
+	viewerMode
+} from './file-viewer';
 
 function file(over: Partial<FileView>): FileView {
 	return {
@@ -69,5 +79,42 @@ describe('the kept source', () => {
 		expect(new Uint8Array(await source.bytes())).toEqual(bytes);
 		const gone = sourceOfKept(null, 'a.pdf', 'a'.repeat(64));
 		await expect(gone.bytes()).rejects.toThrow('not kept on this device');
+	});
+});
+
+describe('where View and the preview maker read a file from', () => {
+	const product = 'p1';
+
+	it('streams Teachouse’s copy wherever there is one, even inside the app', () => {
+		const from = viewFrom(product, file({ server_copy: 'stored' }), null, true);
+		expect(from.kind).toBe('server');
+		expect(from.kind === 'server' && from.source.url).toBe('/v1/products/p1/files/f1/content');
+	});
+
+	it('reads a file older servers never labelled as Teachouse’s own', () => {
+		expect(viewFrom(product, file({}), null, false).kind).toBe('server');
+	});
+
+	it('falls back to this device’s kept copy, and otherwise says the file is on the device', () => {
+		const imported = file({ server_copy: 'device_only' });
+		expect(viewFrom(product, imported, null, true).kind).toBe('device');
+		expect(viewFrom(product, imported, null, false)).toEqual({
+			kind: 'unavailable',
+			sentence: DEVICE_ONLY
+		});
+		expect(viewFrom(product, file({ server_copy: 'storage_full' }), null, false)).toEqual({
+			kind: 'unavailable',
+			sentence: STORAGE_FULL
+		});
+	});
+
+	it('cuts a preview from the stored PDF only once Teachouse holds it', async () => {
+		const copied = storedPdfSource(product, [file({ server_copy: 'stored' })]);
+		expect(copied?.unavailable).toBeUndefined();
+		expect(copied?.url).toBe('/v1/products/p1/files/f1/content');
+		const waiting = storedPdfSource(product, [file({ server_copy: 'device_only' })]);
+		expect(waiting?.unavailable).toBe(DEVICE_ONLY);
+		await expect(waiting?.bytes()).rejects.toThrow(DEVICE_ONLY);
+		expect(storedPdfSource(product, [file({ kind: 'zip' })])).toBeNull();
 	});
 });

@@ -2838,6 +2838,43 @@ pub async fn update_product(
     Ok(true)
 }
 
+/// States a rights grant on a product that states none, and leaves one it
+/// already states alone.
+///
+/// A re-import's and a backfill's write: a resource the catalogue already
+/// held gains the licence a listing it is bound to declares, without a grant
+/// the seller chose being replaced by whatever the marketplace last said.
+/// Answers whether the product changed.
+pub async fn fill_rights(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    id: ProductId,
+    rights: &RightsDeclaration,
+    at: Timestamp,
+) -> Result<bool, StorageError> {
+    if matches!(rights, RightsDeclaration::Unstated) {
+        return Ok(false);
+    }
+    let columns = RightsColumns::encode(rights);
+    let touched = sqlx::query!(
+        "UPDATE product SET \
+         rights_state = $3, rights_source_inventory = $4, rights_segments = $5, \
+         rights_native_id = $6, updated_at = $7 \
+         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL AND rights_state = 'unstated'",
+        uuid_to_db(org.0),
+        uuid_to_db(id.0),
+        columns.state,
+        columns.inventory,
+        columns.segments.as_deref(),
+        columns.native_id.as_deref(),
+        timestamp_to_db(at)?,
+    )
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+    Ok(touched > 0)
+}
+
 /// Tombstones one product inside a transaction the caller owns.
 ///
 /// A tombstone rather than an erasure, which is what makes the thirty-day

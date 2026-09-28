@@ -1,19 +1,25 @@
 import { describe, expect, it } from 'vitest';
+import type { InvoiceView } from '$lib/api';
 import type { Pack, PlanRow } from '$lib/generated/plans';
 import { AI, PACKS, PLANS } from '$lib/generated/plans';
 import {
 	bestValuePack,
+	cardExpiry,
 	cardLabel,
+	cardMark,
 	checkoutOutcome,
 	dayLabel,
 	dollars,
 	expiryLine,
+	heldPrice,
+	invoiceRows,
 	invoiceStatus,
 	money,
 	moves,
 	packsBySize,
 	perMonth,
 	planBullets,
+	planCards,
 	planMeaning,
 	paidPlans,
 	termLine,
@@ -249,6 +255,144 @@ describe('the lines on a plan card', () => {
 		expect(planBullets(caps('subscriber'), AI).some((line) => line.soon)).toBe(true);
 		const live = { ...AI, status: 'live' } as unknown as typeof AI;
 		expect(planBullets(caps('subscriber'), live).some((line) => line.soon)).toBe(false);
+	});
+});
+
+describe('the Plans grid', () => {
+	const sale = { percent_off: 25, until: '2026-10-31', banner: 'Halloween', banner_href: null };
+	const ids = (cards: { id: string }[]) => cards.map((card) => card.id);
+
+	it('is the free plan and then every priced plan, in the table’s order', () => {
+		const cards = planCards({ held: 'free', cadence: 'yearly', sale: null });
+		expect(ids(cards)).toEqual(PLANS.map((plan) => plan.id));
+		expect(cards[0]).toMatchObject({ kind: 'trial', headline: 'Free', cta: null, current: true });
+	});
+
+	it('sells the price the toggle is on to a seller who pays nothing yet', () => {
+		const yearly = planCards({ held: 'free', cadence: 'yearly', sale: null });
+		const monthly = planCards({ held: 'free', cadence: 'monthly', sale: null });
+		for (const plan of paidPlans()) {
+			expect(yearly.find((card) => card.id === plan.id)?.cta).toEqual({
+				kind: 'buy',
+				key: plan.yearly_key,
+				label: `Choose ${plan.name}`
+			});
+			expect(monthly.find((card) => card.id === plan.id)?.cta).toMatchObject({
+				key: plan.monthly_key
+			});
+		}
+	});
+
+	it('switches rather than buys once the seller pays, and marks only the held card', () => {
+		const [held, other] = paidPlans();
+		const cards = planCards({ held: held.id, cadence: 'yearly', sale });
+		expect(cards.filter((card) => card.current).map((card) => card.id)).toEqual([held.id]);
+		expect(cards.find((card) => card.id === held.id)?.cta).toBeNull();
+		expect(cards.find((card) => card.id === other.id)?.cta).toEqual({
+			kind: 'switch',
+			label: `Switch to ${other.name}`
+		});
+		// A sale reaches a new checkout, not a running subscription.
+		expect(cards.every((card) => card.was === null && card.saleNote === null)).toBe(true);
+	});
+
+	it('strikes the list price and says the sale to a seller who can take it', () => {
+		const plan = row({ yearly_cents: 24000 });
+		const [card] = planCards({ held: 'free', cadence: 'yearly', sale, plans: [plan] });
+		expect(card).toMatchObject({
+			was: '$20',
+			headline: '$15',
+			saleNote: '25% off until 31 October',
+			note: '$180 for the year (usually $240).'
+		});
+	});
+
+	it('reads the recommended plan and the tagline off the table, and neither is invented', () => {
+		const bare = { ...row(), recommended: false, tagline: undefined } as unknown as PlanRow;
+		const plain = planCards({ held: 'free', cadence: 'yearly', sale: null, plans: [bare] });
+		expect(plain[0].recommended).toBe(false);
+		expect(plain[0].tagline).toBe(planMeaning(row().capabilities));
+		const marked = { ...row(), recommended: true, tagline: 'For a shop on two marketplaces.' };
+		const [card] = planCards({ held: 'free', cadence: 'yearly', sale: null, plans: [marked] });
+		expect(card).toMatchObject({ recommended: true, tagline: 'For a shop on two marketplaces.' });
+	});
+
+	it('prints the lines from the feature matrix', () => {
+		const cards = planCards({ held: undefined, cadence: 'monthly', sale: null });
+		for (const plan of PLANS) {
+			expect(cards.find((card) => card.id === plan.id)?.bullets).toEqual(
+				planBullets(plan.capabilities)
+			);
+		}
+	});
+
+	it('states the held price at the cadence billed, and none for a granted plan', () => {
+		expect(heldPrice(row(), 'yearly')).toEqual({ headline: '$240', per: 'a year' });
+		expect(heldPrice(row(), 'monthly')).toEqual({ headline: '$29', per: 'a month' });
+		expect(heldPrice(row(), undefined)).toBeNull();
+		expect(heldPrice(PLANS[0], undefined)).toMatchObject({ headline: 'Free' });
+	});
+
+	function row(over: Partial<PlanRow> = {}): PlanRow {
+		return {
+			...PLANS[0],
+			id: 'subscriber',
+			name: 'Sync',
+			monthly_cents: 2900,
+			yearly_cents: 24000,
+			monthly_key: 'sync_monthly',
+			yearly_key: 'sync_yearly',
+			...over
+		};
+	}
+});
+
+describe('the Invoices table', () => {
+	const invoice = (over: Partial<InvoiceView> = {}): InvoiceView => ({
+		id: 'in_1',
+		created_at: Date.UTC(2026, 8, 22),
+		total: 2900,
+		currency: 'usd',
+		status: 'paid',
+		...over
+	});
+
+	it('lists newest first with the date, amount, status and receipt', () => {
+		const rows = invoiceRows([
+			invoice({ id: 'old', created_at: Date.UTC(2026, 7, 22), hosted_url: 'https://h/old' }),
+			invoice({
+				id: 'new',
+				description: 'Studio plan, yearly',
+				status: 'open',
+				pdf_url: 'https://p/new'
+			})
+		]);
+		expect(rows.map((one) => one.id)).toEqual(['new', 'old']);
+		expect(rows[0]).toEqual({
+			id: 'new',
+			date: '22 Sept 2026',
+			description: 'Studio plan, yearly',
+			amount: '$29.00',
+			status: { label: 'Due', tone: 'warn' },
+			receipt: 'https://p/new'
+		});
+		expect(rows[1].receipt).toBe('https://h/old');
+	});
+
+	it('says what an invoice is where Stripe left the description empty', () => {
+		expect(invoiceRows([invoice({ description: '  ' })])[0].description).toBe(
+			'Payment to Teachouse'
+		);
+		expect(invoiceRows([invoice()])[0].receipt).toBeNull();
+	});
+
+	it('names a card by a short brand mark and its expiry where Stripe gave one', () => {
+		expect(cardMark({ brand: 'visa', last4: '4242' })).toBe('VISA');
+		expect(cardMark({ brand: 'link', last4: '4242' })).toBe('CARD');
+		expect(cardExpiry({ brand: 'visa', last4: '4242', exp_month: 4, exp_year: 2028 })).toBe(
+			'Expires 04/2028'
+		);
+		expect(cardExpiry({ brand: 'visa', last4: '4242' })).toBeNull();
 	});
 });
 

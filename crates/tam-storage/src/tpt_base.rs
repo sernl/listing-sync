@@ -28,7 +28,7 @@ use tam_domain::product::{
 };
 use tam_types::{OrgId, ProductId, Timestamp};
 
-use crate::codec::{timestamp_to_db, uuid_to_db};
+use crate::codec::{timestamp_to_db, uuid_from_db, uuid_to_db};
 use crate::{pin_org, StorageError};
 
 /// One product's TPT-base fields, as the sidecar holds them.
@@ -159,84 +159,223 @@ impl TptBaseRepo {
     ) -> Result<Option<TptBaseRecord>, StorageError> {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
-        let row = sqlx::query!(
-            "SELECT thumbnail_mode, thumbnail_hashes, video_preview_hash, \
+        let held = read_tpt_base(&mut tx, org, product).await?;
+        tx.commit().await?;
+        Ok(held)
+    }
+
+    /// Of these products, the ones whose sidecar states an attestation.
+    ///
+    /// The marker of a resource whose TPT details a read has filled: TPT
+    /// states the attestation on every listing, so a resource imported from
+    /// TPT without one is a resource imported before those details were
+    /// carried, and a re-import has something to give it.
+    pub async fn attested(
+        &self,
+        org: OrgId,
+        products: &[ProductId],
+    ) -> Result<Vec<ProductId>, StorageError> {
+        if products.is_empty() {
+            return Ok(Vec::new());
+        }
+        let wanted: Vec<uuid::Uuid> = products.iter().map(|id| uuid_to_db(id.0)).collect();
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let rows = sqlx::query_scalar!(
+            "SELECT product_id FROM product_tpt_base \
+              WHERE org_id = $1 AND product_id = ANY($2) \
+                AND copyright_declaration_id IS NOT NULL",
+            uuid_to_db(org.0),
+            &wanted,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(rows
+            .into_iter()
+            .map(|id| ProductId(uuid_from_db(id)))
+            .collect())
+    }
+}
+
+/// One product's TPT-base row, read inside a transaction the caller owns and
+/// has already pinned to the tenant.
+pub async fn read_tpt_base(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    product: ProductId,
+) -> Result<Option<TptBaseRecord>, StorageError> {
+    let row = sqlx::query!(
+        "SELECT thumbnail_mode, thumbnail_hashes, video_preview_hash, \
                     additional_licence_minor_units, bundle_discount_minor_units, tax_code_id, \
                     subject_area_slugs, tag_slugs, format_slugs, custom_categories, standards, \
                     teaching_duration_id, pages_or_slides, answer_key_id, \
                     copyright_declaration_id, status_user, appropriate_for_country \
                FROM product_tpt_base WHERE org_id = $1 AND product_id = $2",
-            uuid_to_db(org.0),
-            uuid_to_db(product.0),
-        )
-        .fetch_optional(&mut *tx)
-        .await?;
-        tx.commit().await?;
+        uuid_to_db(org.0),
+        uuid_to_db(product.0),
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
 
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        let standards = read_standards(&row.standards)?;
-        Ok(Some(TptBaseRecord {
-            thumbnail_mode: decode(
-                row.thumbnail_mode,
-                ThumbnailMode::from_wire_id,
-                "thumbnail mode",
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let standards = read_standards(&row.standards)?;
+    Ok(Some(TptBaseRecord {
+        thumbnail_mode: decode(
+            row.thumbnail_mode,
+            ThumbnailMode::from_wire_id,
+            "thumbnail mode",
+        )?,
+        thumbnails: row
+            .thumbnail_hashes
+            .iter()
+            .map(|bytes| encode_hex(bytes))
+            .collect::<Result<Vec<_>, StorageError>>()?,
+        video_preview: row
+            .video_preview_hash
+            .as_deref()
+            .map(encode_hex)
+            .transpose()?,
+        additional_licence_minor_units: row.additional_licence_minor_units,
+        bundle_discount_minor_units: row.bundle_discount_minor_units,
+        tax_code: decode_optional(row.tax_code_id, TaxCode::from_wire_id, "tax code")?,
+        categories: CategoryGroup {
+            // The grades live on `product.grades` as the verbatim
+            // declaration every other reader already uses, so this row
+            // does not hold a second copy of them.
+            grades: vec![],
+            subject_areas: slugs(&row.subject_area_slugs)?,
+            tags: slugs(&row.tag_slugs)?,
+            formats: slugs(&row.format_slugs)?,
+            custom_categories: row.custom_categories,
+            appropriate_for_country: row.appropriate_for_country,
+        },
+        standards,
+        details: DetailGroup {
+            teaching_duration: decode_optional(
+                row.teaching_duration_id,
+                TeachingDuration::from_wire_id,
+                "teaching duration",
             )?,
-            thumbnails: row
-                .thumbnail_hashes
-                .iter()
-                .map(|bytes| encode_hex(bytes))
-                .collect::<Result<Vec<_>, StorageError>>()?,
-            video_preview: row
-                .video_preview_hash
-                .as_deref()
-                .map(encode_hex)
-                .transpose()?,
-            additional_licence_minor_units: row.additional_licence_minor_units,
-            bundle_discount_minor_units: row.bundle_discount_minor_units,
-            tax_code: decode_optional(row.tax_code_id, TaxCode::from_wire_id, "tax code")?,
-            categories: CategoryGroup {
-                // The grades live on `product.grades` as the verbatim
-                // declaration every other reader already uses, so this row
-                // does not hold a second copy of them.
-                grades: vec![],
-                subject_areas: slugs(&row.subject_area_slugs)?,
-                tags: slugs(&row.tag_slugs)?,
-                formats: slugs(&row.format_slugs)?,
-                custom_categories: row.custom_categories,
-                appropriate_for_country: row.appropriate_for_country,
-            },
-            standards,
-            details: DetailGroup {
-                teaching_duration: decode_optional(
-                    row.teaching_duration_id,
-                    TeachingDuration::from_wire_id,
-                    "teaching duration",
-                )?,
-                pages_or_slides: row.pages_or_slides.map(u32::try_from).transpose().map_err(
-                    |_| StorageError::CorruptRow {
-                        reason: "the page count is negative".to_owned(),
-                    },
-                )?,
-                answer_key: decode_optional(
-                    row.answer_key_id,
-                    AnswerKey::from_wire_id,
-                    "answer key",
-                )?,
-            },
-            copyright: decode_optional(
-                row.copyright_declaration_id,
-                CopyrightDeclaration::from_wire_id,
-                "copyright declaration",
-            )?,
-            status: decode(
-                row.status_user,
-                ListingStatus::from_wire_id,
-                "listing status",
-            )?,
-        }))
+            pages_or_slides: row
+                .pages_or_slides
+                .map(u32::try_from)
+                .transpose()
+                .map_err(|_| StorageError::CorruptRow {
+                    reason: "the page count is negative".to_owned(),
+                })?,
+            answer_key: decode_optional(row.answer_key_id, AnswerKey::from_wire_id, "answer key")?,
+        },
+        copyright: decode_optional(
+            row.copyright_declaration_id,
+            CopyrightDeclaration::from_wire_id,
+            "copyright declaration",
+        )?,
+        status: decode(
+            row.status_user,
+            ListingStatus::from_wire_id,
+            "listing status",
+        )?,
+    }))
+}
+
+/// What a marketplace read states about the fields this sidecar holds.
+///
+/// Each field is what the listing carried and `None` or empty where it
+/// carried nothing, so [`fill_tpt_base`] can tell "the read said nothing" from
+/// "the read said this".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TptBaseFill {
+    pub subject_areas: Vec<FacetSlug>,
+    pub tags: Vec<FacetSlug>,
+    pub formats: Vec<FacetSlug>,
+    pub tax_code: Option<TaxCode>,
+    pub copyright: Option<CopyrightDeclaration>,
+    pub appropriate_for_country: Option<bool>,
+    /// The listing's own pictures, first slot first, as held blobs.
+    pub thumbnails: Vec<UploadRef>,
+    /// Which side of the draft line the listing sits on, where the read said.
+    pub status: Option<ListingStatus>,
+}
+
+/// Fills what this product's sidecar leaves unanswered from what a
+/// marketplace read stated, and touches nothing it already answers.
+///
+/// The import's write and the backfill's, in one place. A field is filled only
+/// where the row is silent on it — an empty picker, an unchosen tax code, an
+/// unstated attestation, no pictures under the default mode — so a seller who
+/// edited a field keeps their edit through every later import, and a re-import
+/// that reads the same listing twice writes nothing the second time. A product
+/// with no row gets one, which is what an imported product never had.
+///
+/// Answers whether anything was written.
+pub async fn fill_tpt_base(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    product: ProductId,
+    fill: &TptBaseFill,
+    now: Timestamp,
+) -> Result<bool, StorageError> {
+    let held = read_tpt_base(tx, org, product).await?;
+    let before = held.clone();
+    let mut record = held.unwrap_or_else(|| TptBaseRecord {
+        thumbnail_mode: ThumbnailMode::AutoGenerate,
+        thumbnails: vec![],
+        video_preview: None,
+        additional_licence_minor_units: None,
+        bundle_discount_minor_units: None,
+        tax_code: None,
+        categories: CategoryGroup {
+            grades: vec![],
+            subject_areas: vec![],
+            tags: vec![],
+            formats: vec![],
+            custom_categories: vec![],
+            appropriate_for_country: None,
+        },
+        standards: vec![],
+        details: DetailGroup {
+            teaching_duration: None,
+            pages_or_slides: None,
+            answer_key: None,
+        },
+        copyright: None,
+        status: fill.status.unwrap_or(ListingStatus::Draft),
+    });
+    if record.categories.subject_areas.is_empty() {
+        record
+            .categories
+            .subject_areas
+            .clone_from(&fill.subject_areas);
     }
+    if record.categories.tags.is_empty() {
+        record.categories.tags.clone_from(&fill.tags);
+    }
+    if record.categories.formats.is_empty() {
+        record.categories.formats.clone_from(&fill.formats);
+    }
+    record.tax_code = record.tax_code.or(fill.tax_code);
+    record.copyright = record.copyright.or(fill.copyright);
+    record.categories.appropriate_for_country = record
+        .categories
+        .appropriate_for_country
+        .or(fill.appropriate_for_country);
+    // Pictures only under the default mode: a seller who chose to upload
+    // later, or uploaded their own, has answered this control.
+    if record.thumbnails.is_empty()
+        && record.thumbnail_mode == ThumbnailMode::AutoGenerate
+        && !fill.thumbnails.is_empty()
+    {
+        record.thumbnail_mode = ThumbnailMode::UploadNow;
+        record.thumbnails.clone_from(&fill.thumbnails);
+    }
+    if before.as_ref() == Some(&record) {
+        return Ok(false);
+    }
+    upsert_tpt_base(tx, org, product, &record, now).await?;
+    Ok(true)
 }
 
 fn slug_strings(slugs: &[FacetSlug]) -> Vec<String> {

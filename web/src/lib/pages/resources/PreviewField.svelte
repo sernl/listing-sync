@@ -11,6 +11,7 @@
 	import { quotaSentence } from '$lib/authoring';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
+	import Explain from '$lib/Explain.svelte';
 	import FileViewer from '$lib/FileViewer.svelte';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import { desktopInvoker, libraryEntries, type LibraryEntry } from '$lib/desktop';
@@ -19,7 +20,7 @@
 	import PreviewMaker from './PreviewMaker.svelte';
 	import { buildPreview } from './preview-pdf';
 	import { forgetRecipe, readRecipe, writeRecipe, type PreviewRecipe } from './preview-recipe';
-	import { type ByteSource, sourceOfFile, sourceOfKept } from './file-viewer';
+	import { COPY_EXPLAINED, type ByteSource, sourceOfFile, sourceOfKept } from './file-viewer';
 
 	let {
 		previews,
@@ -73,6 +74,9 @@
 	const pdfSource = $derived(
 		source === null ? null : source instanceof File ? sourceOfFile(source) : source
 	);
+	/** Why the file a preview would be cut from cannot be read from here: an
+	 *  imported PDF Teachouse has no copy of yet. */
+	const unavailable = $derived(pdfSource?.unavailable ?? null);
 
 	// The bytes of every preview sent from this page, by digest, so View works
 	// on a draft that has no product to read it back through.
@@ -210,15 +214,24 @@
 
 <div class="res-acts">
 	<Button
-		disabled={source === null || sending}
+		disabled={source === null || unavailable !== null || sending}
 		reason={source === null
 			? 'Upload a PDF first to make a preview from it.'
-			: undefined}
+			: (unavailable ?? undefined)}
 		onclick={() => openMaker(null)}
 	>
 		Make a preview from your file
 	</Button>
 </div>
+
+{#if unavailable !== null}
+	<div class="res-file-say res-file-copy">
+		<span>{unavailable}</span>
+		<Explain title="Where your file is" label="Why?">
+			{#each COPY_EXPLAINED as line (line)}<p>{line}</p>{/each}
+		</Explain>
+	</div>
+{/if}
 
 {#if refusal !== null}
 	<Banner tone="bad">{refusal}</Banner>
@@ -240,10 +253,12 @@
 			>
 			<Button
 				small
-				disabled={source === null || sending}
+				disabled={source === null || unavailable !== null || sending}
 				reason={source === null
 					? 'Upload the PDF first to remake this preview.'
-					: sending
+					: unavailable !== null
+						? unavailable
+						: sending
 						? 'Wait for the upload to finish.'
 						: undefined}
 				onclick={() => openMaker(preview.hash)}>Change</Button
@@ -296,6 +311,7 @@
 			name={shown.name ?? 'Preview'}
 			contentType={contentTypeOf(shown)}
 			bytes={from.bytes}
+			url={from.url}
 			onClose={() => (viewing = null)}
 		/>
 	{/if}

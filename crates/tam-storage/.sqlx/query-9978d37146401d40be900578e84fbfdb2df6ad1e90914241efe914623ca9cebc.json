@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT u.id, u.email, u.auth_subject, u.created_at, o.id AS \"org_id\", o.name AS \"org_name\", o.slug AS \"org_slug\" FROM app_user u JOIN organisation o ON o.id = u.org_id ORDER BY u.created_at DESC, u.id LIMIT $1",
+  "query": "SELECT u.id, u.email, u.auth_subject, u.created_at, o.id AS \"org_id\", o.name AS \"org_name\", o.slug AS \"org_slug\" FROM app_user u JOIN organisation o ON o.id = u.org_id WHERE $1::timestamptz IS NULL OR (date_trunc('milliseconds', u.created_at), u.id) < ($1, $2::uuid) ORDER BY date_trunc('milliseconds', u.created_at) DESC, u.id DESC LIMIT $3",
   "describe": {
     "columns": [
       {
@@ -41,6 +41,8 @@
     ],
     "parameters": {
       "Left": [
+        "Timestamptz",
+        "Uuid",
         "Int8"
       ]
     },
@@ -54,5 +56,5 @@
       true
     ]
   },
-  "hash": "ae34eb1d699d4593a8f6f8a931ba4ed39b51a5a14f414865988b6263f6045df1"
+  "hash": "9978d37146401d40be900578e84fbfdb2df6ad1e90914241efe914623ca9cebc"
 }

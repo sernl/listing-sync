@@ -1,0 +1,37 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"total!\", count(*) FILTER (WHERE lower(url) = lower($2)) AS \"same_url!\", count(*) FILTER (WHERE requested_by = $3 AND created_at > $4) AS \"recent_by_requester!\" FROM marketplace_request WHERE org_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "same_url!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "recent_by_requester!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "07b4e48126610f5887ae569aac1add27a50710b3d0f7ebbeda5bbe8712a02ca0"
+}

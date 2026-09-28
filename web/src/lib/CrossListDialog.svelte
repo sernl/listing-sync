@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { ApiFailure, api, type PublishIntent } from '$lib/api';
+	import { lightDismiss } from '$lib/dismiss';
 	import { bulkTarget, type BulkTarget, type InventoryRow } from '$lib/inventory';
 	import { AUTHORABLE_PLATFORMS, platformTitle } from '$lib/platforms';
 	import type { InventoryId } from '$lib/generated/vocab';
@@ -123,7 +124,7 @@
 	}
 </script>
 
-<dialog bind:this={element} aria-labelledby="cross-list-title" onclose={onClose}>
+<dialog use:lightDismiss bind:this={element} aria-labelledby="cross-list-title" onclose={onClose}>
 	<div class="dialog-body">
 		<h2 id="cross-list-title">Cross-list {rows.length} {rows.length === 1 ? 'resource' : 'resources'}</h2>
 		<p>

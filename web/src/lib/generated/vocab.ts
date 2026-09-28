@@ -799,6 +799,83 @@ export const AI_STATUSES: readonly AiStatus[] = [
   "coming_soon",
 ];
 
+export type FeatureKey =
+  | "moves"
+  | "moves_rollover"
+  | "copy_or_move"
+  | "edit_sync"
+  | "scheduling"
+  | "auto_publish_rules"
+  | "term_and_price_rules"
+  | "resources"
+  | "storage"
+  | "import"
+  | "duplicate_review"
+  | "rich_text"
+  | "watermarked_previews"
+  | "templates"
+  | "collections"
+  | "labels"
+  | "export"
+  | "analytics"
+  | "ai_fill"
+  | "desktop_app"
+  | "email_support"
+  | "priority_support";
+
+export const FEATURE_KEYS: readonly FeatureKey[] = [
+  "moves",
+  "moves_rollover",
+  "copy_or_move",
+  "edit_sync",
+  "scheduling",
+  "auto_publish_rules",
+  "term_and_price_rules",
+  "resources",
+  "storage",
+  "import",
+  "duplicate_review",
+  "rich_text",
+  "watermarked_previews",
+  "templates",
+  "collections",
+  "labels",
+  "export",
+  "analytics",
+  "ai_fill",
+  "desktop_app",
+  "email_support",
+  "priority_support",
+];
+
+export type FeatureGroup =
+  | "moving"
+  | "automation"
+  | "catalogue"
+  | "insight"
+  | "support";
+
+export const FEATURE_GROUPS: readonly FeatureGroup[] = [
+  "moving",
+  "automation",
+  "catalogue",
+  "insight",
+  "support",
+];
+
+export type FeatureUnit =
+  | "count"
+  | "per_month"
+  | "megabytes"
+  | "every_hours";
+
+export const FEATURE_UNITS: readonly FeatureUnit[] = [
+  "count",
+  "per_month",
+  "megabytes",
+  "every_hours",
+];
+
 export type GrantedBy =
   | "paddle"
   | "stripe"

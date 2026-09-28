@@ -46,6 +46,7 @@ pub mod resource_templates;
 pub mod rule_capture;
 pub mod schedules;
 pub mod seller_rules;
+pub mod server_copy;
 pub mod sessions;
 pub mod site_setting;
 pub mod sync_settings;
@@ -57,7 +58,7 @@ pub use authorship::{AuthorshipRecord, ConnectionFactsRepo};
 pub use backoffice::{
     BackofficeRepo, DailyCount, DeadLetterTopic, FailedWrite, HaltRecord, IdentityAuditRepo,
     ImpersonationEvent, ImportDrainPage, ImportDrainRun, OrgDetail, OrgSummary, PlatformUser,
-    SignupsRepo, SubscriptionRecord, SyncHealth,
+    SignupsRepo, SubscriptionRecord, SyncHealth, UserCursor, UsersPage,
 };
 pub use billing::{BillingRepo, SubscriptionState};
 pub use blobs::{
@@ -158,16 +159,17 @@ pub use mapping::{
 pub use marketplace_requests::{
     MarketplaceRequestBackofficeRepo, MarketplaceRequestRecord, MarketplaceRequestRepo,
     MarketplaceRequestWrite, NewMarketplaceRequest, MARKETPLACE_REQUESTED_TOPIC,
-    PAGE_LIMIT_MAX as REQUEST_PAGE_LIMIT_MAX, REQUESTS_PER_ORG_MAX,
+    PAGE_LIMIT_MAX as REQUEST_PAGE_LIMIT_MAX, REQUESTS_PER_ORG_MAX, REQUESTS_PER_USER_PER_DAY,
+    REQUEST_RATE_WINDOW_MS,
 };
 pub use notifications::{
     NotificationCursor, NotificationRecord, NotificationRepo, Recipient, JOB_SETTLED_TOPIC,
 };
-pub use operators::{OperatorRecord, OperatorRepo};
+pub use operators::{OperatorEvent, OperatorRecord, OperatorRepo};
 pub use org::{OrgRecord, OrgRepo, OrgWrite};
 pub use overrides::OverrideRepo;
 pub use product::{
-    has_live_payload, insert_product, offer_cover, offer_payload, restore_product,
+    fill_rights, has_live_payload, insert_product, offer_cover, offer_payload, restore_product,
     soft_delete_product, title_of, update_product, CoverOffer, ExportedListing, ExportedResource,
     FileRefusal, FileReplacement, FileSwap, FileTarget, PayloadOffer, PayloadOfferPolicy,
     ProductCreationFacts, ProductEdit, ProductFiles, ProductRecord, ProductRepo, ProductSummary,
@@ -184,13 +186,16 @@ pub use schedules::{
     ScheduleRepeat, ScheduleRepo, ScheduleRunRow, ScheduleRunWrite, ScheduleSelection,
     ScheduleWrite, UnknownTimezone, SCHEDULE_RUNS_LISTED_MAX,
 };
+pub use server_copy::{MissingCopy, NamedCopy, ServerCopyRepo};
 pub use sessions::{NewTenant, SessionIdentity, SessionRepo, SessionToken};
 pub use site_setting::SiteSettingRepo;
 pub use sync_settings::{
     ActivityCursor, ActivityKind, ActivityRow, MultiListedRow, SyncSettingRecord, SyncSettingRepo,
     ACTIVITY_LISTED_MAX,
 };
-pub use tpt_base::{upsert_tpt_base, TptBaseRecord, TptBaseRepo};
+pub use tpt_base::{
+    fill_tpt_base, read_tpt_base, upsert_tpt_base, TptBaseFill, TptBaseRecord, TptBaseRepo,
+};
 pub mod elections;
 pub mod sync_requests;
 pub use elections::{

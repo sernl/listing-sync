@@ -12,7 +12,9 @@
 //! download answers 302 too, to a signed url on the marketplace's asset
 //! network, and that one the flow re-issues itself: it arrives declaring
 //! `Redirected`, which routes it to the client holding no jar, and it is
-//! admitted only to the host the capture named.
+//! admitted only to the host the capture named. The import's read of a
+//! listing's own pictures rides the same client under the same declaration,
+//! admitted only to the picture host and path the catalogue capture records.
 //!
 //! The header envelope is per request rather than per client, because the
 //! capture distinguishes three shapes on one host: the product form renders
@@ -211,23 +213,40 @@ fn is_captured_asset_hop(request: &HttpRequest) -> bool {
         && endpoints::is_asset_url(&request.url)
 }
 
+/// The listing-picture read's assertion, the Redirected arm's second and
+/// last destination.
+///
+/// Same shape as the asset hop and for the same reasons — a bodyless GET to
+/// one named host — because the url is one a marketplace response named, and
+/// the import reads each picture a listing lists. The path is held to the
+/// picture prefix as well as the host, since the content network serves more
+/// than pictures and a picture is the only thing asked of it.
+fn is_listing_picture_read(request: &HttpRequest) -> bool {
+    matches!(request.method, Method::Get)
+        && matches!(request.body, RequestBody::Empty)
+        && endpoints::is_listing_picture_url(&request.url)
+}
+
 /// The host assertion. A request's declared authentication and its
 /// destination must agree or it never leaves, so the seller's session cannot
 /// reach the bucket, an upload signature cannot reach TPT, and a redirected
-/// hop cannot reach anything but the one captured asset host — whatever
-/// request value a future flow builds.
+/// hop cannot reach anything but the captured asset host and the listing
+/// picture host — whatever request value a future flow builds.
 fn route(request: &HttpRequest) -> Result<Route, TransportError> {
     let host = host_of(&request.url).ok_or(TransportError::NotSent(ConnectFailure::DnsFailure))?;
     let permitted = match request.auth {
         RequestAuth::Session => host == SESSION_HOST,
         RequestAuth::Anonymous | RequestAuth::S3SigV2 { .. } => is_s3_host(host),
         // The own-bundle download's second hop, captured on the founder's own
-        // device on 2026-09-13. The session arm above is what keeps the
-        // seller's cookie off it, and this arm is what stops the pairing
-        // being used in reverse: a `Location` cannot route a credential-free
-        // request back into the marketplace origin, nor out to a host the
-        // capture never named.
-        RequestAuth::Redirected => is_captured_asset_hop(request),
+        // device on 2026-09-13, and the import's read of a listing's own
+        // pictures. The session arm above is what keeps the seller's cookie
+        // off both, and this arm is what stops the pairing being used in
+        // reverse: a url a response named cannot route a credential-free
+        // request back into the marketplace origin, nor out to a host no
+        // capture named.
+        RequestAuth::Redirected => {
+            is_captured_asset_hop(request) || is_listing_picture_read(request)
+        }
     };
     if !permitted {
         return Err(TransportError::NotSent(ConnectFailure::NoRouteToHost));
@@ -617,7 +636,7 @@ mod tests {
     };
 
     /// The captured asset hop rides the client that carries nothing of ours,
-    /// and only that hop does.
+    /// and nothing shaped like it does.
     ///
     /// The url is the 2026-09-13 capture's shape with a synthetic token. What
     /// the adversarial rows guard is the pairing itself: `Redirected` is the
@@ -625,7 +644,7 @@ mod tests {
     /// bucket, so every way of writing "somewhere else" while looking like
     /// the asset host is a way of aiming a request this transport will send.
     #[test]
-    fn the_captured_asset_hop_is_the_only_redirected_destination() {
+    fn the_captured_asset_hop_is_a_redirected_destination_and_nothing_near_it_is() {
         let asset = format!(
             "https://{}/resources/13042099/assets/9f2c1b?file_name=worksheet.zip&verify=token",
             crate::endpoints::ASSET_HOST
@@ -704,6 +723,68 @@ mod tests {
                 tam_marketplace::ConnectFailure::NoRouteToHost
             )),
             "and a body on this hop would be ours, travelling to a host we were merely pointed at"
+        );
+    }
+
+    /// A listing picture rides the cookie-free client, on the picture host
+    /// and path alone, and as a bodyless GET alone.
+    #[test]
+    fn a_listing_picture_is_a_redirected_destination_and_nothing_near_it_is() {
+        let picture = format!(
+            "https://{}/thumbitem/Sample-Unit-Fractions-Practice-Differentiated-12854712--1700000001/original-12854712-1.jpg",
+            crate::endpoints::PICTURE_HOST
+        );
+        assert_eq!(
+            route(&crate::endpoints::listing_picture_request(&picture)),
+            Ok(Route::Redirected),
+            "the picture a listing names rides the client that carries nothing of ours"
+        );
+        let refused = Err(TransportError::NotSent(
+            tam_marketplace::ConnectFailure::NoRouteToHost,
+        ));
+        for url in [
+            picture.replace("https://", "http://"),
+            picture.replace(
+                crate::endpoints::PICTURE_HOST,
+                &format!("{}.example", crate::endpoints::PICTURE_HOST),
+            ),
+            picture.replace("/thumbitem/", "/other/"),
+            format!(
+                "https://{}@example.invalid/thumbitem/a/b.jpg",
+                crate::endpoints::PICTURE_HOST
+            ),
+            format!("{ORIGIN}/thumbitem/a/b.jpg"),
+        ] {
+            assert_eq!(
+                route(&redirected(url.clone())),
+                refused,
+                "a redirected read of {url} is a destination no capture named"
+            );
+        }
+        assert_eq!(
+            route(&HttpRequest::get(picture.clone())),
+            refused,
+            "and the seller's session may not reach the picture host at all"
+        );
+        assert_eq!(
+            route(&HttpRequest {
+                method: Method::Post,
+                url: picture.clone(),
+                body: RequestBody::Empty,
+                auth: RequestAuth::Redirected,
+            }),
+            refused,
+            "a picture read is a GET"
+        );
+        assert_eq!(
+            route(&HttpRequest {
+                method: Method::Get,
+                url: picture,
+                body: RequestBody::Bytes(b"ours".to_vec()),
+                auth: RequestAuth::Redirected,
+            }),
+            refused,
+            "and a body on it would be ours, travelling to a host we were merely pointed at"
         );
     }
 

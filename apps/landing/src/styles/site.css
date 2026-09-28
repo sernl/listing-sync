@@ -1113,37 +1113,26 @@ main {
 	color: var(--primary);
 }
 
-/* Four cards of equal weight: free and the three paid plans, so the reader
-   compares four prices side by side. Two across below 1180px, where four
-   columns would squeeze the chips into two-word lines, and one on a phone. */
-.ways {
+/* Good, better, best. Four cards of equal width: the free plan and the three
+   paid plans, so a reader compares four prices side by side. The recommended
+   one is raised and ringed rather than scaled, so nothing is cropped when the
+   cards stack. Two across below 1180px, one on a phone. */
+.tiers {
 	display: grid;
 	grid-template-columns: repeat(4, minmax(0, 1fr));
 	gap: 20px;
-	align-items: stretch;
+	align-items: start;
+	margin-top: 28px;
 }
 
 @media (max-width: 1180px) {
-	.ways {
+	.tiers {
 		grid-template-columns: repeat(2, minmax(0, 1fr));
 	}
 }
 
-/* The packs under the deck, a band rather than a fifth card: a pack is not a
-   plan, it tops one up. Copy on the left, the rung table on the right. */
-.way.packs-way {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
-	gap: 8px 40px;
-	align-items: start;
-	margin-top: 24px;
-}
-
-.packs-way .packs {
-	margin-top: 0;
-}
-
-.way {
+.tier {
+	position: relative;
 	display: flex;
 	flex-direction: column;
 	background: var(--surface);
@@ -1152,45 +1141,275 @@ main {
 	box-shadow: var(--ring);
 }
 
-/* The one card we expect most sellers to want. A ring rather than a scale or
-   a shadow: the three cards stay the same size, so nothing is cropped when
-   they stack. */
-.way.lead {
-	box-shadow: inset 0 0 0 2px var(--accent);
+.tier.recommended {
+	box-shadow:
+		inset 0 0 0 2px var(--accent),
+		var(--lift);
+	transform: translateY(-12px);
 }
 
-.way h3 {
-	font-size: 19px;
+.tier-badge {
+	position: absolute;
+	top: -12px;
+	left: 24px;
+	margin: 0;
+	padding: 3px 12px;
+	border-radius: var(--r-pill);
+	background: var(--accent);
+	color: var(--on-fill);
+	font-family: var(--display);
+	font-size: 12px;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+}
+
+.tier h3 {
+	font-size: 20px;
 	margin: 0;
 }
 
-.way .cadence {
-	font-weight: 400;
+.tier-tagline {
+	margin: 6px 0 0;
+	min-height: 3em;
+	color: var(--muted);
+	font-size: 14.5px;
+	line-height: 1.5;
+}
+
+.tier-price {
+	margin-top: 14px;
+}
+
+/* The card's own headline figure; `.price` below is the shared shape, and
+   this only takes its margin away inside a card. */
+.tier-price .price {
+	margin: 0;
+}
+
+.tier-note {
+	margin: 2px 0 0;
+	font-size: 13px;
 	color: var(--muted);
 }
 
-.way p {
-	color: var(--muted);
-	font-size: 15px;
-	max-width: 34ch;
+.tier-save {
+	color: var(--accent-ink);
+	font-weight: 600;
 }
 
-/* The card's own headline figure. It repeats the `.price` rule below rather
-   than inheriting it, because `.way p` is the more specific selector and
-   would otherwise shrink the price to body copy. */
-.way .price {
-	font-family: var(--display);
-	font-weight: 700;
-	font-size: 34px;
+.tier-actions {
+	margin-top: 18px;
+}
+
+.tier-actions .cta,
+.tier-actions .btn {
+	width: 100%;
+}
+
+.tier-base {
+	margin: 20px 0 0;
+	font-size: 13px;
+	font-weight: 600;
 	color: var(--primary);
-	margin: 14px 0 0;
-	max-width: none;
 }
 
-.way .price .per {
-	font-family: var(--sans);
+.tier-list {
+	display: grid;
+	gap: 10px;
+	margin: 12px 0 0;
+	padding: 0;
+	list-style: none;
+	font-size: 14px;
+	color: var(--text);
+}
+
+.tier-list li {
+	display: flex;
+	align-items: flex-start;
+	gap: 9px;
+	line-height: 1.4;
+}
+
+/* The billing switch: two radios drawn as one segmented control. The
+   inputs stay in the accessibility tree and take focus; only their circles
+   are hidden, and the focused one draws the ring on its label. */
+.billing {
+	display: inline-flex;
+	gap: 4px;
+	margin: 0;
+	padding: 4px;
+	border: 0;
+	border-radius: var(--r-pill);
+	background: var(--surface);
+	box-shadow: var(--ring);
+}
+
+.billing input {
+	position: absolute;
+	opacity: 0;
+	width: 1px;
+	height: 1px;
+	margin: 0;
+}
+
+.billing label {
+	padding: 8px 18px;
+	border-radius: var(--r-pill);
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--muted);
+	cursor: pointer;
+}
+
+.billing input:checked + label {
+	background: var(--primary);
+	color: var(--on-fill);
+}
+
+.billing input:focus-visible + label {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.billing-save {
 	font-weight: 400;
+	opacity: 0.85;
+}
+
+/* One cadence's figures and buttons at a time. Yearly is the default because
+   its radio is checked in the markup; the rule reads the switch, so no
+   script is involved. */
+.band-pricing .monthly-only,
+.band-pricing:has(#billing-monthly:checked) .yearly-only {
+	display: none;
+}
+
+.band-pricing:has(#billing-monthly:checked) .monthly-only {
+	display: block;
+}
+
+.band-pricing:has(#billing-monthly:checked) .tier-actions .monthly-only {
+	display: inline-flex;
+}
+
+/* The comparison under the cards: rows are features, columns are plans. On
+   a phone it scrolls sideways inside its own box, with the feature column
+   pinned so a row never loses its name. */
+.compare-title {
+	margin: 56px 0 14px;
+	font-size: 22px;
+}
+
+.compare-wrap {
+	overflow-x: auto;
+	border-radius: var(--r-card);
+	background: var(--surface);
+	box-shadow: var(--ring);
+}
+
+.compare-wrap:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.compare {
+	width: 100%;
+	min-width: 640px;
+	border-collapse: collapse;
+	font-size: 14px;
+}
+
+.compare th,
+.compare td {
+	padding: 10px 14px;
+	border-top: 1px solid var(--line);
+	text-align: center;
+	font-weight: 400;
+	color: var(--text);
+}
+
+.compare thead th {
+	border-top: 0;
+	font-family: var(--display);
+	font-weight: 600;
 	font-size: 15px;
+	color: var(--primary);
+}
+
+.compare th[scope='row'],
+.compare thead th:first-child {
+	position: sticky;
+	left: 0;
+	z-index: 1;
+	text-align: left;
+	background: var(--surface);
+	min-width: 180px;
+}
+
+.compare .recommended {
+	background: color-mix(in srgb, var(--accent-soft) 60%, var(--surface));
+}
+
+.compare-group th {
+	padding-top: 20px;
+	text-align: left;
+	font-family: var(--display);
+	font-size: 12px;
+	font-weight: 600;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+
+.compare .tick {
+	background: var(--accent);
+	color: var(--on-fill);
+}
+
+/* The one mark for a feature sold before it is built: hollow, in the "soon"
+   grey, so it reads as planned rather than delivered. */
+.compare .soon {
+	background: transparent;
+	box-shadow: inset 0 0 0 2px var(--soon);
+}
+
+.compare .dash {
+	color: var(--muted);
+}
+
+.soon-tag {
+	display: inline-block;
+	margin-left: 8px;
+	padding: 1px 8px;
+	border-radius: var(--r-pill);
+	background: var(--soon-soft);
+	color: var(--soon);
+	font-size: 11.5px;
+	white-space: nowrap;
+}
+
+/* The packs under the table, a strip rather than a fifth card: a pack is not
+   a plan, it tops one up. Copy on the left, the rung table on the right. */
+.packs-strip {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+	gap: 8px 40px;
+	align-items: start;
+	margin-top: 32px;
+	padding: 24px;
+	border-radius: var(--r-card);
+	background: var(--surface);
+	box-shadow: var(--ring);
+}
+
+.packs-copy p {
+	color: var(--muted);
+	font-size: 15px;
+	max-width: 40ch;
+}
+
+.packs-copy .cadence {
+	font-weight: 400;
 	color: var(--muted);
 }
 
@@ -1199,7 +1418,6 @@ main {
    divide five pairs in their head. */
 .packs {
 	width: 100%;
-	margin-top: 16px;
 	border-collapse: collapse;
 	font-size: 14px;
 }
@@ -1258,71 +1476,23 @@ main {
 	font-weight: 600;
 }
 
-.way .price .was,
-.way .counts .was {
+.price .was,
+.tier-note .was {
 	color: var(--muted);
 	font-weight: 400;
 	text-decoration-thickness: 2px;
 }
 
-.way .price .was {
+.price .was {
 	font-size: 22px;
 }
 
-.way .counts .now {
+.tier-note .now {
 	color: var(--primary);
 	font-weight: 600;
 }
 
-/* The small print a card owes the reader before the checkout says it. */
-.way .counts {
-	margin: 12px 0 0;
-	font-size: 12.5px;
-	line-height: 1.5;
-	color: var(--muted);
-	max-width: 40ch;
-}
-
-/* One chip per line inside a card a third of the deck wide: two across left
-   "Unused moves stack to 75" wrapping mid-phrase. */
-.chips {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr);
-	gap: 8px;
-	margin-top: 18px;
-}
-
-.chip {
-	display: flex;
-	align-items: center;
-	gap: 9px;
-	padding: 9px 14px;
-	border-radius: var(--r-pill);
-	background: var(--surface);
-	border: 1px solid var(--line);
-	font-size: 14px;
-	color: var(--text);
-}
-
-.chip .tick {
-	background: var(--accent);
-	color: var(--on-fill);
-}
-
-/* The one line sold before it is built: a hollow mark in the "soon" grey, so
-   the chip reads as planned rather than as delivered. It follows the tick
-   rule because the element carries both classes. */
-.chip .soon {
-	background: var(--soon-soft);
-	color: var(--soon);
-}
-
-.way .actions {
-	margin-top: auto;
-	padding-top: 20px;
-}
-
-/* The plain figure and its cadence, which only the cards draw */
+/* The plain figure and its cadence, which the cards draw */
 
 .price {
 	font-family: var(--display);
@@ -1516,6 +1686,88 @@ main {
 	margin-bottom: 6px;
 }
 
+/* The privacy policy: a dated page with three reference tables. Each table
+   scrolls inside its own box on a phone rather than widening the page. */
+
+.policy h3 {
+	font-size: 17px;
+	margin: 20px 0 8px;
+}
+
+.policy-meta {
+	margin: -4px 0 20px;
+	font-size: 14px;
+	color: var(--muted);
+}
+
+.policy h2[id] {
+	scroll-margin-top: 88px;
+}
+
+.policy-scroll {
+	overflow-x: auto;
+	margin: 0 0 16px;
+	border: 1px solid var(--line);
+	border-radius: 10px;
+}
+
+.policy-table {
+	width: 100%;
+	min-width: 520px;
+	border-collapse: collapse;
+	font-size: 14.5px;
+	line-height: 1.45;
+}
+
+.policy-table th,
+.policy-table td {
+	padding: 10px 12px;
+	text-align: left;
+	vertical-align: top;
+	border-top: 1px solid var(--line);
+}
+
+.policy-table thead th {
+	border-top: 0;
+	background: var(--nav);
+	color: var(--primary);
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.policy-table tbody th {
+	font-weight: 600;
+	color: var(--ink);
+}
+
+.policy-table code {
+	font-size: 13px;
+}
+
+.policy-toc {
+	margin: 8px 0 12px;
+	padding: 14px 18px;
+	background: var(--nav);
+	border-radius: 10px;
+}
+
+.policy-toc ol {
+	margin: 0;
+	padding-left: 22px;
+	columns: 2 16rem;
+	column-gap: 28px;
+}
+
+.policy-toc li {
+	margin-bottom: 4px;
+}
+
+.policy-toc a:hover {
+	color: var(--primary);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}
+
 /* Footer */
 
 .site-foot {
@@ -1574,11 +1826,37 @@ main {
 		gap: 40px;
 	}
 
-	/* Price cards in a phone-width column each hold a price and a list;
-	   side by side under 900px they hold a price and a hyphenation. */
-	.ways,
-	.way.packs-way {
+	/* Price cards in a phone-width column each hold a price and a list; side
+	   by side under 900px they hold a price and a hyphenation. Stacked, the
+	   recommended card needs no lift to stand out, and a lift would eat into
+	   the card above. */
+	.tiers,
+	.packs-strip {
 		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.tier.recommended {
+		transform: none;
+		margin-top: 12px;
+	}
+
+	/* On a phone the pinned feature column takes about a third of the width,
+	   so two plan columns show beside it and the rest scroll in. */
+	.compare {
+		min-width: 520px;
+		font-size: 13px;
+	}
+
+	.compare th,
+	.compare td {
+		padding: 9px 10px;
+	}
+
+	.compare th[scope='row'],
+	.compare thead th:first-child {
+		min-width: 0;
+		width: 130px;
+		max-width: 130px;
 	}
 
 	/* Wrapped onto three rows, the header is a fifth of a phone screen; stuck

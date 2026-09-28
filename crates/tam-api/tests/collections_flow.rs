@@ -582,18 +582,32 @@ async fn a_seller_files_resources_and_acts_on_the_set(pool: PgPool) {
     );
 }
 
-/// The plan's own allowance, on the plan that includes none. Asserted as the
+/// The plan's own allowance, on the plan that includes one. Asserted as the
 /// refusal a seller reads rather than as an accepted value, so a gate that was
 /// deleted fails here.
 #[sqlx::test(migrations = "../tam-storage/migrations")]
-async fn a_plan_that_includes_no_collections_refuses_the_first_one(pool: PgPool) {
+async fn a_plan_that_includes_one_collection_refuses_the_second(pool: PgPool) {
     provision(&pool).await;
-    let refused = call(
+    let first = call(
         &pool,
         &FREE_TOKEN,
         Method::POST,
         "/v1/collections",
         Some(serde_json::json!({ "name": "Autumn unit" })),
+    )
+    .await;
+    assert_eq!(
+        first.status,
+        StatusCode::CREATED,
+        "the one the plan includes: {}",
+        first.text()
+    );
+    let refused = call(
+        &pool,
+        &FREE_TOKEN,
+        Method::POST,
+        "/v1/collections",
+        Some(serde_json::json!({ "name": "Spring unit" })),
     )
     .await;
     assert_eq!(
@@ -608,7 +622,7 @@ async fn a_plan_that_includes_no_collections_refuses_the_first_one(pool: PgPool)
         .first()
         .unwrap_or_else(|| panic!("the refusal carries an entry"));
     assert_eq!(
-        entry.message, "Your plan does not include collections. Upgrade to use them.",
+        entry.message, "Your plan includes one collection. Upgrade to make more.",
         "and says what the plan includes and the one thing they can do about it"
     );
     assert_eq!(
@@ -624,9 +638,10 @@ async fn a_plan_that_includes_no_collections_refuses_the_first_one(pool: PgPool)
     let listed: CollectionsView = call(&pool, &FREE_TOKEN, Method::GET, "/v1/collections", None)
         .await
         .json();
-    assert!(
-        listed.collections.is_empty(),
-        "and nothing was written: {listed:?}"
+    assert_eq!(
+        listed.collections.len(),
+        1,
+        "and the refused one was not written: {listed:?}"
     );
 }
 

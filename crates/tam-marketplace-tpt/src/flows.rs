@@ -20,9 +20,9 @@ use tam_marketplace::transport::{
 };
 use tam_marketplace::{
     AdapterError, AmbiguityCause, FetchReason, FieldSet, FileContent, FileSource, FirstPartyExport,
-    FormId, FormSchemaFingerprint, IdempotencyKey, ImportedListing, ListingLocator, ListingState,
-    MarketplaceAdapter, ObservedListing, Pause, ProjectedListing, RemoteLifecycle, RemoteListingId,
-    RemovalPlan, RevisePlan, SchemaDrift, SubmitEvidence,
+    FormId, FormSchemaFingerprint, IdempotencyKey, ImportedListing, ListingExtras, ListingLocator,
+    ListingState, MarketplaceAdapter, ObservedListing, Pause, ProjectedListing, RemoteLifecycle,
+    RemoteListingId, RemovalPlan, RevisePlan, SchemaDrift, SubmitEvidence,
 };
 use tam_types::{
     ContentHash, CopyFormat, CurrencyRule, FailureCode, FailureDetail, FieldKey, FileId,
@@ -738,8 +738,8 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
         let listing = write_model::listing_from_field_set(fields)?;
         let target = FormTarget::EditDigital(product);
         let page = self.form_page(target).await?;
-        let observed = if listing.appropriate_for_country.is_none() {
-            self.observed_localisation(product).await?
+        let observed = if write_model::edit_needs_read_back(&listing) {
+            Some(self.observed_product(product).await?)
         } else {
             None
         };
@@ -749,7 +749,7 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
             thumbs: page.thumbs(),
             status,
             authorship,
-            observed_appropriate_for_country: observed,
+            observed: observed.as_ref(),
         });
         let response = self
             .send_ambiguous_on_loss(endpoints::submit_form_request(target, body))
@@ -764,30 +764,31 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
         }
     }
 
-    /// The product's own localisation flag, read back so an edit does not
-    /// clear a box the seller ticked.
+    /// The product's own localisation flag, tax code and shelves, read back
+    /// so an edit does not clear what the seller set.
     ///
-    /// An edit is a full replace, and the form render states this control in
-    /// JavaScript rather than in its markup, so the product read is the only
-    /// place its current value can be learned. A failed read propagates
-    /// rather than defaulting: not knowing the current state and posting `0`
-    /// anyway is precisely the silent clear this read exists to stop, and a
-    /// caller that retries loses nothing. `None` from a read that succeeded
-    /// is different — the response carried no localisation object, which is
-    /// measured absence and posts the box unticked.
+    /// An edit is a full replace, and the render this connector scrapes
+    /// yields none of these — the localisation control lives in JavaScript,
+    /// and the scrape reads neither the tax code nor the shelves — so the
+    /// product read is the only place their current values are learned. No
+    /// projection carries a tax code or a shelf, which makes this read part
+    /// of every revise rather than a temporary cost.
     ///
-    /// Skipped entirely once a projection carries a value of its own, which
-    /// is what makes this cost temporary rather than permanent.
-    async fn observed_localisation(
+    /// A failed read propagates rather than defaulting: not knowing the
+    /// current state and posting blanks anyway is precisely the silent clear
+    /// this read exists to stop, and a caller that retries loses nothing. An
+    /// absent value from a read that succeeded is different — it is measured
+    /// absence, and posts the field empty.
+    async fn observed_product(
         &self,
         product: ProductId,
-    ) -> Result<Option<bool>, AdapterError> {
+    ) -> Result<write_model::ObservedEdit, AdapterError> {
         let response = self
             .send(endpoints::upload_page_product_request(product))
             .await?;
         let body = classify_graphql_read(&response)?;
         read_model::parse_upload_page_product(&body, product)
-            .map(|read| read.appropriate_for_country)
+            .map(|read| write_model::ObservedEdit::from_product(&read))
             .map_err(|error| AdapterError::Rejected {
                 code: FailureCode::VerificationMismatch,
                 detail: FailureDetail(error.to_string()),
@@ -1041,6 +1042,14 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
     /// the eight HAR captures and the vocabulary poll between them reached
     /// every field either write posts and every field the read returns, and
     /// none of them is a licence. The registry records the same absence.
+    ///
+    /// `extras` carries what the listing holds that no canonical field does:
+    /// the tax row id, the copyright declaration, the localisation flag and
+    /// the listing's picture urls in slot order. They travel so that an
+    /// import keeps them rather than a later revise discovering they were
+    /// never read; the pictures are urls rather than bytes because fetching
+    /// them is a separate read, [`Self::fetch_listing_picture`], which the
+    /// caller makes per picture and may skip.
     pub async fn fetch_for_import(
         &self,
         reason: &FetchReason,
@@ -1095,7 +1104,58 @@ impl<T: Transport, F: FileSource, P: Pause> TptAdapter<T, F, P> {
                 .status
                 .as_deref()
                 .and_then(listing_state_from_status),
+            extras: ListingExtras {
+                tax_code: product.tax_code,
+                copyright: product.copyright_declaration,
+                appropriate_for_country: product.appropriate_for_country,
+                thumbnails: product.thumbnails,
+            },
         })
+    }
+
+    /// One of the seller's own listing pictures, by a url their import read
+    /// returned. Refuses any reason but `FirstPartyExport`, because it is
+    /// part of that read.
+    ///
+    /// The url came out of a marketplace response, so it is measured before
+    /// anything is sent: only the picture host and path the catalogue capture
+    /// records are fetched, and anything else is refused as an unexpected
+    /// origin rather than reached. The request carries nothing of the
+    /// seller's — pictures are public on the listing page — and exactly a
+    /// `200` is a picture: a redirect is not followed, because a chain the
+    /// network controls is not one this read walks, and any other status is
+    /// a fetch that failed. Whether the bytes are an image is the caller's
+    /// check, which it makes against its own wire contract.
+    pub async fn fetch_listing_picture(
+        &self,
+        reason: &FetchReason,
+        url: &str,
+    ) -> Result<Vec<u8>, AdapterError> {
+        if !matches!(reason, FetchReason::FirstPartyExport { .. }) {
+            return Err(not_first_party("listing picture read"));
+        }
+        if !endpoints::is_listing_picture_url(url) {
+            return Err(AdapterError::Rejected {
+                code: FailureCode::UnexpectedOrigin,
+                detail: FailureDetail(
+                    "a listing picture url names a host or path other than the captured \
+                     picture host"
+                        .to_owned(),
+                ),
+            });
+        }
+        let response = self.send(endpoints::listing_picture_request(url)).await?;
+        if response.status != 200 {
+            return Err(AdapterError::Rejected {
+                code: FailureCode::Other,
+                detail: FailureDetail(format!(
+                    "a listing picture answered {} with {} bytes, and a picture is a 200",
+                    response.status,
+                    response.body.len()
+                )),
+            });
+        }
+        Ok(response.body)
     }
 }
 

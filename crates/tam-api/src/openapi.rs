@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 186] = [
+pub const ROUTES: [Route; 192] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -373,6 +373,11 @@ pub const ROUTES: [Route; 186] = [
         summary: "Settle an open run the seller has given up on",
     },
     Route {
+        method: "post",
+        path: "/{version}/imports/runs/{run}/refresh",
+        summary: "Fill imported resources' empty listing details from what this run read",
+    },
+    Route {
         method: "get",
         path: "/{version}/imports/runs/{run}/items/{ordinal}/cover",
         summary: "The cover one read produced, before any product exists to hold it",
@@ -669,6 +674,21 @@ pub const ROUTES: [Route; 186] = [
         summary: "Search and page files by device, availability and resource association",
     },
     Route {
+        method: "get",
+        path: "/{version}/library/missing",
+        summary: "The imported files Teachouse holds no copy of, and the storage left for them",
+    },
+    Route {
+        method: "put",
+        path: "/{version}/library/files/{hash}",
+        summary: "Take the seller's app's copy of one imported file, within the plan's storage",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/library/files/{hash}/content",
+        summary: "The bytes of one of the seller's files by digest, ranged or as a download",
+    },
+    Route {
         method: "post",
         path: "/{version}/devices/{device}/library/want",
         summary: "Ask one device to fetch one file directly from another that holds it",
@@ -827,12 +847,22 @@ pub const ROUTES: [Route; 186] = [
     Route {
         method: "get",
         path: "/{version}/admin/users",
-        summary: "Operator: every user with their organisation, its plan and their last sign-in",
+        summary: "Operator: a page of users with their organisation, its plan and their last sign-in",
     },
     Route {
         method: "delete",
         path: "/{version}/admin/users/{subject}",
         summary: "Operator: delete a seller and the organisation that was theirs alone",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/operators/{subject}",
+        summary: "Operator: make someone an operator",
+    },
+    Route {
+        method: "delete",
+        path: "/{version}/admin/operators/{subject}",
+        summary: "Operator: withdraw someone else's operator marking",
     },
     Route {
         method: "get",

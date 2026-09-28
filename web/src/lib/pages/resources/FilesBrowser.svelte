@@ -29,6 +29,7 @@
 	import {
 		AVAILABILITY_LABEL,
 		BROWSER_SENTENCE,
+		copyNote,
 		EMPTY_FILTERS,
 		FILES_STAY_ON_YOUR_DEVICES,
 		HERE,
@@ -315,6 +316,10 @@
 					shows which computer holds each file and which resources use it.
 				</p>
 				<p>A computer that is off can’t hand its files over. Copy a file to this device to use it here.</p>
+				<p>
+					Where says whether Teachouse has its own copy too. A file on Teachouse can be viewed and
+					downloaded from any browser.
+				</p>
 				<p>{BROWSER_SENTENCE}</p>
 			</Explain>
 		{/snippet}
@@ -532,6 +537,7 @@
 						<th>File</th>
 						<th>Size</th>
 						<th>Device</th>
+						<th>Where</th>
 						<th>Last seen</th>
 						<th>Used by</th>
 						<th><span class="sr-only">Actions</span></th>
@@ -554,6 +560,10 @@
 								</span>
 								{#if keptLine(row) !== null}<span class="files-sub">{keptLine(row)}</span>{/if}
 							</td>
+							<td data-label="Where">
+								<span>{row.where}</span>
+								{#if copyNote(row.copy) !== null}<span class="files-sub">{copyNote(row.copy)}</span>{/if}
+							</td>
 							<td class="files-num" data-label="Last seen">{seenLine(row, now)}</td>
 							<td data-label="Used by">
 								{#if row.resources.length === 0}
@@ -571,6 +581,11 @@
 								     is already the Machine column. -->
 								{#if row.label.kind === 'waiting' || row.label.kind === 'fetching'}
 									<span class="files-sub">{transferSentence(row.label)}</span>
+								{/if}
+								{#if row.copy === 'stored'}
+									<Button tier="outline" small icon="download" href={api.libraryFileUrl(row.hash, true)}>
+										Download
+									</Button>
 								{/if}
 								{#if row.kept !== null}
 									<Button

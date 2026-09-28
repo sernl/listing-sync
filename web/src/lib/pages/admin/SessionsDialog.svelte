@@ -3,6 +3,7 @@
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { AuthFailure, listUserSessions, revokeUserSessions } from '$lib/auth-client';
 	import Button from '$lib/Button.svelte';
+	import { lightDismiss } from '$lib/dismiss';
 	import Explain from '$lib/Explain.svelte';
 	import { agoLabel, utcInstant } from '$lib/elapsed';
 	import { queryKeys } from '$lib/query';
@@ -100,7 +101,7 @@
 	}
 </script>
 
-<dialog bind:this={element} aria-labelledby="sessions-title" onclose={onClose}>
+<dialog use:lightDismiss bind:this={element} aria-labelledby="sessions-title" onclose={onClose}>
 	<div class="dialog-body">
 		<h2 id="sessions-title">Sign-ins for {email}</h2>
 

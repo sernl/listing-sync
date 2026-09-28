@@ -22,7 +22,7 @@ use tam_domain::product::{
     PriceGroup, ProductName, SelectionCaps, StandardAlignment, StandardsFramework, TaxCode,
     TeachingDuration, ThumbnailMode, TptBaseProduct, UploadRef,
 };
-use tam_types::{CopyFormat, Currency, ListingCopy, Money};
+use tam_types::{CopyFormat, Currency, ListingCopy, Marketplace, Money};
 
 /// The committed capture every number below is measured from, compiled in so
 /// the browser reads what the server reads rather than being told it.
@@ -179,6 +179,64 @@ pub struct DraftInput {
     pub copyright_declaration_id: Option<i64>,
     #[serde(default)]
     pub status_user: Option<i64>,
+    /// The marketplaces this draft is on its way to, where the caller knows.
+    ///
+    /// Every rule below that is not about the resource itself — a Subject
+    /// Area, a Tag, a copyright statement, a tax code, TPT's price floor and
+    /// caps — is TPT's own form's, so it holds only a draft that is going to
+    /// TPT. `None` is a caller that has not said, which is every recorded
+    /// fixture and every saved template, and holds the draft to all of them as
+    /// before; `Some` of a list without TPT holds it to none of them.
+    #[serde(default)]
+    pub targets: Option<Vec<Marketplace>>,
+    /// The marketplaces this resource is already live on through a bound
+    /// listing.
+    ///
+    /// A live listing met its marketplace's rules the moment it went live, and
+    /// the fields it holds are the ones the last send carried, so a field that
+    /// marketplace requires is not missing there however this draft reads.
+    /// An absence is therefore not refused for a marketplace named here; a
+    /// value that marketplace would refuse — one over a cap, a price under its
+    /// floor — still is, because this edit is what will be sent next.
+    #[serde(default)]
+    pub satisfied: Vec<Marketplace>,
+}
+
+impl DraftInput {
+    /// Whether TPT's form rules apply at all: the draft is going to TPT, or
+    /// the caller did not say where it is going.
+    fn bound_for_tpt(&self) -> bool {
+        self.targets
+            .as_ref()
+            .is_none_or(|targets| targets.contains(&Marketplace::Tpt))
+    }
+
+    /// Whether TPT's rules about a field left empty apply: the draft is going
+    /// to TPT, and TPT does not already hold a live listing of it.
+    fn owes_tpt_answers(&self) -> bool {
+        self.bound_for_tpt() && !self.satisfied.contains(&Marketplace::Tpt)
+    }
+}
+
+/// Whether one refusal the model raised is TPT's, and of which kind.
+///
+/// The model is TPT's own form, so most of what it refuses is a TPT rule; the
+/// name and the shape of the values are the resource's own and hold wherever
+/// it goes.
+fn applies(error: &AuthoringError, draft: &DraftInput) -> bool {
+    match error {
+        AuthoringError::PickerEmpty { .. } | AuthoringError::CopyrightUnstated => {
+            draft.owes_tpt_answers()
+        }
+        AuthoringError::OverCap { .. } | AuthoringError::ThumbnailsWithoutUploadNow { .. } => {
+            draft.bound_for_tpt()
+        }
+        AuthoringError::NameMissing
+        | AuthoringError::NameTooLong { .. }
+        | AuthoringError::EmptySlug
+        | AuthoringError::MalformedUploadRef
+        | AuthoringError::PriceCurrencyMismatch => true,
+    }
 }
 
 /// The vocabulary member a wire id names, or `None` where no member has it.
@@ -520,6 +578,10 @@ pub struct DraftHead {
     /// makes the payload necessary (D32). The create body holds the inventory
     /// list, so this is read from there rather than guessed at here.
     pub for_marketplace: bool,
+    /// See [`DraftInput::targets`].
+    pub targets: Option<Vec<Marketplace>>,
+    /// See [`DraftInput::satisfied`].
+    pub satisfied: Vec<Marketplace>,
 }
 
 impl TptBaseInput {
@@ -551,6 +613,8 @@ impl TptBaseInput {
             answer_key_id: self.answer_key_id.map(i64::from),
             copyright_declaration_id: self.copyright_declaration_id.map(i64::from),
             status_user: self.status_user.map(i64::from),
+            targets: head.targets,
+            satisfied: head.satisfied,
         }
     }
 }
@@ -755,13 +819,21 @@ fn draft_refusals(draft: &DraftInput) -> Vec<DraftRefusal> {
         draft.thumbnail_mode,
         ThumbnailMode::from_wire_id,
     ));
-    if !draft.free {
+    // TPT's floor and TPT's tax code: a price under the floor is a value the
+    // next send would carry and is refused wherever TPT is a destination; a
+    // blank price or tax code is an absence, which a live TPT listing does
+    // not have.
+    if !draft.free && draft.bound_for_tpt() {
         let floor = min_price_minor_units();
         let stated = draft.price_minor_units;
-        if stated.is_none_or(|minor| minor < floor) {
+        let under = match stated {
+            Some(minor) => minor < floor,
+            None => draft.owes_tpt_answers(),
+        };
+        if under {
             found.push(DraftRefusal::PriceUnderFloor { stated, floor });
         }
-        if draft.tax_code_id.is_none() {
+        if draft.tax_code_id.is_none() && draft.owes_tpt_answers() {
             found.push(DraftRefusal::TaxCodeUnstated);
         }
     }
@@ -818,7 +890,11 @@ pub fn verdict_with(draft: &DraftInput, caps: SelectionCaps) -> CheckView {
         errors.extend(report.errors);
         advisories.extend(report.warnings.into_iter().map(advisory_of));
     }
-    let mut refusals: Vec<RefusalView> = errors.iter().map(refusal_of).collect();
+    let mut refusals: Vec<RefusalView> = errors
+        .iter()
+        .filter(|error| applies(error, draft))
+        .map(refusal_of)
+        .collect();
     refusals.extend(draft_refusals(draft).into_iter().map(refusal_of_draft));
     CheckView {
         submittable: refusals.is_empty(),
@@ -863,6 +939,100 @@ mod draft_rule_tests {
         assert!(
             verdict(&paid()).submittable,
             "every rule the form states is answered, so nothing is refused"
+        );
+    }
+
+    /// What an imported TPT listing looks like before its details are filled:
+    /// named, filed, priced, graded, and nothing else.
+    fn imported() -> DraftInput {
+        DraftInput {
+            subject_areas: vec![],
+            tags: vec![],
+            tax_code_id: None,
+            copyright_declaration_id: None,
+            ..paid()
+        }
+    }
+
+    fn messages(draft: &DraftInput) -> Vec<String> {
+        verdict(draft)
+            .refusals
+            .into_iter()
+            .map(|refusal| refusal.message)
+            .collect()
+    }
+
+    #[test]
+    fn a_listing_live_on_tpt_is_not_refused_for_what_tpt_already_holds() {
+        use tam_types::Marketplace;
+        let sending = DraftInput {
+            targets: Some(vec![Marketplace::Tpt]),
+            ..imported()
+        };
+        assert_eq!(
+            controls(&sending),
+            ["Subject Area", "Tag", "Tax Code"],
+            "going to TPT for the first time, every empty field is refused"
+        );
+        assert!(
+            messages(&sending).contains(&"Choose one of the two copyright statements.".to_owned())
+        );
+
+        let live = DraftInput {
+            satisfied: vec![Marketplace::Tpt],
+            ..sending
+        };
+        assert_eq!(
+            verdict(&live).refusals,
+            Vec::<RefusalView>::new(),
+            "a bound, live TPT listing met TPT's rules when it went live, so an edit is not \
+             refused for fields that listing already holds"
+        );
+    }
+
+    #[test]
+    fn a_live_listing_is_still_refused_a_value_its_marketplace_would_refuse() {
+        use tam_types::Marketplace;
+        let over = DraftInput {
+            targets: Some(vec![Marketplace::Tpt]),
+            satisfied: vec![Marketplace::Tpt],
+            grades: [
+                "1st-grade",
+                "2nd-grade",
+                "3rd-grade",
+                "4th-grade",
+                "5th-grade",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+            price_minor_units: Some(50),
+            ..imported()
+        };
+        assert_eq!(
+            controls(&over),
+            ["Grade Level", "Price"],
+            "the next send carries these values, so TPT's cap and floor still hold"
+        );
+    }
+
+    #[test]
+    fn tpt_s_rules_hold_only_a_draft_going_to_tpt() {
+        use tam_types::Marketplace;
+        for elsewhere in [vec![Marketplace::Tes], vec![]] {
+            let draft = DraftInput {
+                targets: Some(elsewhere.clone()),
+                ..imported()
+            };
+            assert!(
+                verdict(&draft).submittable,
+                "a draft going to {elsewhere:?} is not held to TPT's Subject Area, Tag, tax code \
+                 or copyright statement: {:?}",
+                messages(&draft)
+            );
+        }
+        assert!(
+            !verdict(&imported()).submittable,
+            "a caller that names no destination is held to every rule, as before"
         );
     }
 

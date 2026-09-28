@@ -11,6 +11,7 @@
 		type VocabularyView
 	} from '$lib/api';
 	import { licenceGated, licenceOptions, payloadRefusal, requiredFields, fieldWords } from '$lib/authoring';
+	import { lightDismiss } from '$lib/dismiss';
 	import {
 		AUTHORABLE_PLATFORMS,
 		MARKETPLACE_TILES,
@@ -302,7 +303,7 @@
 	$effect(() => {
 		const stored = editing?.product;
 		if (stored !== undefined && seededFor !== stored.id) {
-			draft = draftOf(stored, editing?.mapped ?? []);
+			draft = draftOf(stored, editing?.mapped ?? [], editing?.live ?? []);
 			slots = slotsFrom(stored.tpt_base?.thumbnail_hashes ?? []);
 			// Another resource's PDF is not this one's.
 			sourcePdf = null;
@@ -1252,6 +1253,7 @@
 								{form}
 								{refusals}
 								gatesLicence={gatesLicence(panel.marketplace)}
+								held={panel.marketplace === 'Tpt' ? (editing?.product.tpt_held ?? []) : []}
 								{licences}
 								{set}
 							/>
@@ -1420,7 +1422,7 @@
 	<!-- Centred, and a modal rather than a banner, because it answers an action
 	     the seller has just taken and a banner further down the page is exactly
 	     what they would not see. -->
-	<dialog
+	<dialog use:lightDismiss
 		class="res-warn"
 		bind:this={fileFirstDialog}
 		aria-labelledby="file-first-title"

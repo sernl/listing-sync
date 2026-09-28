@@ -22,6 +22,7 @@ use tam_api::marketplace_requests::{MarketplaceRequestView, MarketplaceRequestsP
 use tam_api::{router, APIError, APIErrorCode, APIErrorKind, AppState, Config, SESSION_COOKIE};
 use tam_storage::{
     OperatorRepo, SessionRepo, SessionToken, MARKETPLACE_REQUESTED_TOPIC, REQUESTS_PER_ORG_MAX,
+    REQUESTS_PER_USER_PER_DAY, REQUEST_RATE_WINDOW_MS,
 };
 use tam_types::{MarketplaceRequestedNotice, OrgId, Timestamp, UserId, Uuid};
 use tower::ServiceExt;
@@ -35,12 +36,18 @@ const TOKEN_B: SessionToken = SessionToken([0x42; 32]);
 const NOW: Timestamp = Timestamp(5_000);
 
 fn state(pool: PgPool, backoffice: Option<PgPool>) -> AppState {
+    state_at(pool, backoffice, || NOW)
+}
+
+/// The same state on another clock, which is how the rate window's far edge
+/// is reached without waiting a day.
+fn state_at(pool: PgPool, backoffice: Option<PgPool>, wall: fn() -> Timestamp) -> AppState {
     AppState {
         telemetry: tam_api::telemetry::Telemetry::default(),
         exchange_rates: None,
         pool,
         config: Config::default(),
-        wall: || NOW,
+        wall,
         auth: None,
         backoffice,
         blobs: None,
@@ -92,7 +99,8 @@ async fn provision(pool: &PgPool) {
             .await
             .expect("the user provisions");
         sessions
-            .mint(&token, user, Timestamp(100_000), Timestamp(1_000))
+            // Well past the day the rate-limit test travels through.
+            .mint(&token, user, Timestamp(1_000_000_000), Timestamp(1_000))
             .await
             .expect("the session mints");
     }
@@ -513,26 +521,27 @@ async fn one_tenant_cannot_fill_the_table(pool: PgPool) {
         "the refusal carries the kind the form branches on"
     );
 
-    // Up to the cap, each naming an address of its own, then one past it.
-    for index in 1..REQUESTS_PER_ORG_MAX {
-        let landed = call(
-            state(pool.clone(), None),
-            Method::POST,
-            "/v1/marketplace-requests",
-            Some(&TOKEN_A),
-            Some(request_body(
-                &format!("Shop {index}"),
-                &format!("https://shop-{index}.test"),
-                "why",
-            )),
-        )
-        .await;
-        assert_eq!(
-            landed.status,
-            StatusCode::CREATED,
-            "request {index} is inside the cap"
-        );
-    }
+    // Up to the cap, each naming an address of its own and each asked more
+    // than a day ago, so the per-person rate is not what answers; then one
+    // more through the API to reach the cap, and one past it.
+    seed_requests_long_ago(&pool, ORG_A, USER_A, REQUESTS_PER_ORG_MAX - 2).await;
+    let last_inside = call(
+        state(pool.clone(), None),
+        Method::POST,
+        "/v1/marketplace-requests",
+        Some(&TOKEN_A),
+        Some(request_body(
+            "Last inside",
+            "https://last-inside.test",
+            "why",
+        )),
+    )
+    .await;
+    assert_eq!(
+        last_inside.status,
+        StatusCode::CREATED,
+        "the request that reaches the cap is inside it"
+    );
     let past = call(
         state(pool.clone(), None),
         Method::POST,
@@ -574,6 +583,133 @@ async fn one_tenant_cannot_fill_the_table(pool: PgPool) {
         neighbour.status,
         StatusCode::CREATED,
         "another tenant's first request lands however full its neighbour is"
+    );
+}
+
+/// `count` requests by `user`, each naming its own address and each stamped
+/// in 1960, so they count against the organisation's cap and not against the
+/// person's daily rate.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn seed_requests_long_ago(pool: &PgPool, org: OrgId, user: UserId, count: i64) {
+    let mut tx = pool.begin().await.expect("the fixture transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(org.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pins");
+    sqlx::query(
+        "INSERT INTO marketplace_request \
+         (org_id, id, requested_by, name, url, reason, created_at) \
+         SELECT $1, gen_random_uuid(), $2, 'Shop ' || n, 'https://shop-' || n || '.test', \
+             'why', timestamptz '1960-01-01T00:00:00Z' + make_interval(days => n) \
+           FROM generate_series(1, $3::int) AS n",
+    )
+    .bind(uuid::Uuid::from_bytes(org.0 .0))
+    .bind(uuid::Uuid::from_bytes(user.0 .0))
+    .bind(i32::try_from(count).expect("a small count"))
+    .execute(&mut *tx)
+    .await
+    .expect("the older requests insert");
+    tx.commit().await.expect("the fixture transaction commits");
+}
+
+/// One person sends at most three requests in any rolling day, because each
+/// one mails the Teachouse team. The fourth is refused with the sentence the
+/// form shows, stores nothing and mails nobody; a colleague is unaffected;
+/// and the first request leaves the window exactly a day after it was sent.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn one_person_sends_at_most_three_requests_a_day(pool: PgPool) {
+    provision(&pool).await;
+    assert_eq!(
+        REQUESTS_PER_USER_PER_DAY, 3,
+        "the sentence below says three"
+    );
+    for index in 0..REQUESTS_PER_USER_PER_DAY {
+        let landed = call(
+            state(pool.clone(), None),
+            Method::POST,
+            "/v1/marketplace-requests",
+            Some(&TOKEN_A),
+            Some(request_body(
+                &format!("Shop {index}"),
+                &format!("https://shop-{index}.test"),
+                "why",
+            )),
+        )
+        .await;
+        assert_eq!(landed.status, StatusCode::CREATED, "request {index} lands");
+    }
+
+    let fourth = request_body("Fourth", "https://fourth.test", "why");
+    let refused = call(
+        state(pool.clone(), None),
+        Method::POST,
+        "/v1/marketplace-requests",
+        Some(&TOKEN_A),
+        Some(fourth.clone()),
+    )
+    .await;
+    assert_eq!(refused.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        refused.json::<APIError>().errors[0].message,
+        "You’ve sent 3 requests today. Try again tomorrow.",
+        "the refusal is a sentence the form renders as it stands"
+    );
+    assert_eq!(
+        (
+            names_under_pin(&pool, ORG_A).await.len(),
+            outbox_under_pin(&pool, ORG_A).await.len()
+        ),
+        (3, 3),
+        "the refused request stores nothing and mails nobody"
+    );
+
+    let colleague = call(
+        state(pool.clone(), None),
+        Method::POST,
+        "/v1/marketplace-requests",
+        Some(&TOKEN_B),
+        Some(request_body("Elsewhere", "https://elsewhere.test", "why")),
+    )
+    .await;
+    assert_eq!(
+        colleague.status,
+        StatusCode::CREATED,
+        "the rate is one person's, so somebody else's first ask lands"
+    );
+
+    let just_inside = call(
+        state_at(pool.clone(), None, || {
+            Timestamp(NOW.0 + REQUEST_RATE_WINDOW_MS - 1)
+        }),
+        Method::POST,
+        "/v1/marketplace-requests",
+        Some(&TOKEN_A),
+        Some(fourth.clone()),
+    )
+    .await;
+    assert_eq!(
+        just_inside.status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "a millisecond short of a day, the first three still count"
+    );
+    let a_day_on = call(
+        state_at(pool.clone(), None, || {
+            Timestamp(NOW.0 + REQUEST_RATE_WINDOW_MS)
+        }),
+        Method::POST,
+        "/v1/marketplace-requests",
+        Some(&TOKEN_A),
+        Some(fourth),
+    )
+    .await;
+    assert_eq!(
+        a_day_on.status,
+        StatusCode::CREATED,
+        "a day after the first three, the window has rolled past them"
     );
 }
 

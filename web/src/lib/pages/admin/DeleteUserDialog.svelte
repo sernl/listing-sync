@@ -10,6 +10,7 @@
 	import { removeIdentityUser } from '$lib/auth-client';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
+	import { lightDismiss } from '$lib/dismiss';
 	import Explain from '$lib/Explain.svelte';
 	import Icon from '$lib/Icon.svelte';
 	import { deleteConfirmed, displayName } from './users-view';
@@ -75,7 +76,9 @@
 			} catch (failure) {
 				identityHalf = 'failed';
 				refusal =
-					(platform === null ? '' : 'Their organisation is deleted, but their sign-in account is not. ') +
+					(platform === null
+						? ''
+						: 'Their organisation is deleted, but their sign-in account is not. ') +
 					(failure instanceof Error ? failure.message : 'The sign-in account was not deleted.') +
 					' Try again to delete just the sign-in account.';
 				return;
@@ -95,7 +98,7 @@
 	};
 </script>
 
-<dialog
+<dialog use:lightDismiss
 	bind:this={element}
 	class="ux-delete"
 	aria-labelledby="delete-user-title"
@@ -123,7 +126,9 @@
 			{/if}
 			<li class={identityHalf}>
 				<span class="dot" aria-hidden="true">
-					{#if identityHalf === 'done'}<Icon name="check" size={13} />{:else}{platform === null ? 1 : 2}{/if}
+					{#if identityHalf === 'done'}<Icon name="check" size={13} />{:else}{platform === null
+							? 1
+							: 2}{/if}
 				</span>
 				<span class="what">
 					<span class="t">Their sign-in account</span>
@@ -138,13 +143,10 @@
 				If someone else is in their organisation, nothing is deleted: their work lives there too.
 			</p>
 			<p>
-				If they still have a live subscription at Stripe, cancel it there first. Deleting the account
-				would not stop the charges.
+				If they still have a live subscription at Stripe, cancel it there first. Deleting the
+				account would not stop the charges.
 			</p>
-			<p>
-				An operator cannot be deleted from here. Withdraw the marking with tam-admin on the server
-				first.
-			</p>
+			<p>An operator cannot be deleted. Turn Operator off on their account first.</p>
 			<p>
 				The organisation goes first. If that is refused, the sign-in account is left alone. Both
 				deletions are recorded: the sign-in one in the identity audit trail.
@@ -167,7 +169,12 @@
 		</label>
 
 		<div class="actions">
-			<Button tier="outline" disabled={working} reason={working ? 'Deleting.' : undefined} onclick={() => element?.close()}>
+			<Button
+				tier="outline"
+				disabled={working}
+				reason={working ? 'Deleting.' : undefined}
+				onclick={() => element?.close()}
+			>
 				Cancel
 			</Button>
 			<Button
