@@ -317,8 +317,25 @@ export interface IdentityUser {
 export const IDENTITY_ROLES = ['admin', 'user'] as const;
 export type IdentityRole = (typeof IDENTITY_ROLES)[number];
 
+/** What the identity plane's account listing is asked for. */
+export interface IdentityUserQuery {
+	/** A `contains` match on the address; blank lists everyone. */
+	search: string;
+	limit: number;
+	/** How many accounts to skip, in the listing's order. */
+	offset?: number;
+	/** By when the account was made; newest first unless asked otherwise. */
+	direction?: 'asc' | 'desc';
+}
+
+export interface IdentityUserPage {
+	users: IdentityUser[];
+	/** Every account the search matches, not just this page's. */
+	total: number;
+}
+
 /**
- * The identity plane's accounts, optionally filtered.
+ * One page of the identity plane's accounts, optionally filtered.
  *
  * The search is a `contains` match on the address, which is the field an
  * operator has when a human writes in. A blank search lists the newest
@@ -328,22 +345,47 @@ export type IdentityRole = (typeof IDENTITY_ROLES)[number];
  * admin role — a distinct fact from the platform operator marking, and one the
  * page explains rather than reports as an error.
  */
-export async function listIdentityUsers(search: string, limit: number): Promise<IdentityUser[]> {
-	const trimmed = search.trim();
+export async function listIdentityUsers(query: IdentityUserQuery): Promise<IdentityUserPage> {
+	const trimmed = query.search.trim();
 	const { data, error } = await authClient.admin.listUsers({
 		query: {
-			limit,
+			limit: query.limit,
+			offset: query.offset ?? 0,
 			sortBy: 'createdAt',
-			sortDirection: 'desc',
+			sortDirection: query.direction ?? 'desc',
 			...(trimmed.length === 0
 				? {}
-				: { searchField: 'email' as const, searchOperator: 'contains' as const, searchValue: trimmed })
+				: {
+						searchField: 'email' as const,
+						searchOperator: 'contains' as const,
+						searchValue: trimmed
+					})
 		}
 	});
 	if (error) {
 		throw refused(error, 'The identity accounts could not be listed.');
 	}
-	return (data?.users ?? []) as IdentityUser[];
+	const users = (data?.users ?? []) as IdentityUser[];
+	const total = typeof data?.total === 'number' ? data.total : users.length;
+	return { users, total };
+}
+
+/**
+ * Every account the search matches, read a hundred at a time: what "select
+ * all matching" acts on. Bounded by the listing's own total, so an account
+ * made mid-walk cannot keep it going.
+ */
+export async function listAllIdentityUsers(search: string): Promise<IdentityUser[]> {
+	const size = 100;
+	const all: IdentityUser[] = [];
+	let total = Infinity;
+	while (all.length < total) {
+		const page = await listIdentityUsers({ search, limit: size, offset: all.length });
+		all.push(...page.users);
+		total = page.total;
+		if (page.users.length < size) break;
+	}
+	return all;
 }
 
 /** Ban an account, recording why. better-auth stores the reason and shows it

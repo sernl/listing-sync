@@ -1314,6 +1314,42 @@ export interface AdminUsersView {
 	users: AdminUserView[];
 }
 
+/** One page of `GET /v1/admin/users?cursor=&limit=`, newest first. `total`
+ *  counts every app user; `next_cursor` is absent on the last page. */
+export interface AdminUsersPage {
+	users: AdminUserView[];
+	total: number;
+	next_cursor?: string;
+}
+
+/** Whether someone holds the operator marking after a grant or withdrawal. */
+export interface OperatorMarkingView {
+	user: string;
+	operator: boolean;
+}
+
+/** The most users one page of the operator listing carries. */
+export const ADMIN_USERS_PAGE_MAX = 100;
+
+/**
+ * Walk the operator user listing a page at a time, newest first, until
+ * `enough` says the rows so far suffice or the listing ends. Each page is
+ * asked for at the largest size the server allows, because every caller
+ * here wants many rows rather than one screenful.
+ */
+export async function walkAdminUsers(
+	enough: (rows: readonly AdminUserView[]) => boolean = () => false
+): Promise<AdminUsersView> {
+	const users: AdminUserView[] = [];
+	let cursor: string | undefined;
+	do {
+		const page = await api.adminUsersPage(cursor, ADMIN_USERS_PAGE_MAX);
+		users.push(...page.users);
+		cursor = page.next_cursor;
+	} while (cursor !== undefined && !enough(users));
+	return { users };
+}
+
 /** What `DELETE /v1/admin/users/{subject}` removed: the platform user and the
  *  organisation that was theirs alone. */
 export interface DeletedUserView {
@@ -3264,12 +3300,27 @@ export const api = {
 	adminImportDrain: () => request<ImportDrainView>('/v1/admin/import-drain'),
 	adminDeadLetters: () => request<DeadLettersView>('/v1/admin/dead-letters'),
 	adminImpersonations: () => request<ImpersonationsView>('/v1/admin/impersonations'),
-	/** Every app user, with their organisation, its plan, and the identity
-	 *  trail's last sign-in. The platform's half of the Identity users page:
+	/** Every app user, walked page by page, with their organisation, its
+	 *  plan, and the identity trail's last sign-in. The platform's half of the Identity users page:
 	 *  the identity plane's own accounts come from better-auth's admin plugin,
 	 *  and the two are joined on `auth_subject` in the browser because no one
 	 *  role can read both. */
-	adminUsers: () => request<AdminUsersView>('/v1/admin/users'),
+	adminUsers: () => walkAdminUsers(),
+	/** One page of the same listing. `cursor` is what the previous page's
+	 *  `next_cursor` said; none is the first page. */
+	adminUsersPage: (cursor: string | undefined, limit: number) => {
+		const query = new URLSearchParams({ limit: String(limit) });
+		if (cursor !== undefined) query.set('cursor', cursor);
+		return request<AdminUsersPage>(`/v1/admin/users?${query}`);
+	},
+	/** Makes someone an operator. 404 when the subject has no platform user:
+	 *  the marking names an app user, so they must open the app once first. */
+	adminGrantOperator: (subject: string) =>
+		request<OperatorMarkingView>(`/v1/admin/operators/${subject}`, { method: 'POST' }),
+	/** Withdraws someone else's operator marking. 409 with `refusal: "self"`
+	 *  for the operator's own. */
+	adminRevokeOperator: (subject: string) =>
+		request<OperatorMarkingView>(`/v1/admin/operators/${subject}`, { method: 'DELETE' }),
 	/** Deletes a seller's platform user and their organisation, with
 	 *  everything in it. Refused with 409 (detail `refusal`: `operator`,
 	 *  `shared_organisation`, `live_subscription`) and a sentence saying what

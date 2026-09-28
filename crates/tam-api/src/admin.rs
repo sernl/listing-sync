@@ -1,10 +1,11 @@
 //! The operator backoffice: reads over the whole platform rather than one
-//! tenant, and one write.
+//! tenant, and a few writes.
 //!
 //! Every route here takes [`OperatorContext`], so the marking is checked
-//! before a handler runs and no route can forget it. Nothing here creates or
-//! modifies an operator: the marking is granted by the `tam-admin` one-shot
-//! on the box, so there is no self-elevation endpoint to attack.
+//! before a handler runs and no route can forget it. An operator may grant
+//! and withdraw the marking for someone else from here; the very first one
+//! is still granted by the `tam-admin` one-shot on the box, so a caller who is
+//! not already an operator has no path to becoming one.
 //!
 //! The cross-tenant queries run on a second pool connected as
 //! `tam_backoffice`, whose whole reach is the SELECT grants and read
@@ -12,7 +13,7 @@
 //! passes no `--backoffice-db-url` serves no operator surface at all, rather
 //! than half of one.
 //!
-//! The one write is the plan grant, and it does not go through that pool.
+//! The writes do not go through that pool.
 //! `tam_backoffice` holds SELECT and nothing else, deliberately: the reason
 //! every other handler on this surface is safe is that the connection it
 //! holds cannot write across the tenant fence, and granting it INSERT on one
@@ -26,7 +27,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -35,7 +36,7 @@ use tam_limits::Plan;
 use tam_storage::{
     BackofficeRepo, DailyCount, EntitlementRepo, ErasureRefusal, ErasureRepo, Grant, GrantRecord,
     GrantedBy, IdentityAuditRepo, ItemCounts, MoveCredit, MoveSource, NewGrant, OperatorRepo,
-    SignupsRepo,
+    SessionRepo, SignupsRepo, UserCursor,
 };
 use tam_types::{FailureCode, InventoryId, MappingId, Marketplace, OrgId, Timestamp, UserId, Uuid};
 
@@ -626,9 +627,47 @@ pub struct PlatformUserView {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UsersView {
     pub users: Vec<PlatformUserView>,
+    /// Every app user on the platform, not just this page's.
+    pub total: i64,
+    /// Pass back as `cursor` for the following page; absent on the last.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
 }
 
-/// Every user of the platform, newest first.
+/// How many users a page carries when the caller does not say.
+const USERS_PAGE_DEFAULT: i64 = 25;
+/// The most a caller may ask for in one page.
+const USERS_PAGE_MAX: i64 = 100;
+
+/// `?cursor=&limit=` on the user listing. Both optional: no cursor is the
+/// first page, no limit is [`USERS_PAGE_DEFAULT`].
+#[derive(Debug, Deserialize)]
+pub struct UsersPageParams {
+    cursor: Option<String>,
+    limit: Option<i64>,
+}
+
+/// A cursor as the wire carries it: `<millis>_<user uuid>`. Opaque to the
+/// console, which only ever hands back what the previous page gave it.
+fn render_cursor(cursor: UserCursor) -> String {
+    let mut out = cursor.created_at.0.to_string();
+    out.push('_');
+    out.push_str(&cursor.user.0.to_hyphenated());
+    out
+}
+
+fn parse_cursor(raw: &str) -> Result<UserCursor, APIError> {
+    let refused = || validation("that page cursor is not one this listing gave out");
+    let (millis, user) = raw.split_once('_').ok_or_else(refused)?;
+    let created_at = Timestamp(millis.parse().map_err(|_| refused())?);
+    let user = uuid::Uuid::parse_str(user).map_err(|_| refused())?;
+    Ok(UserCursor {
+        created_at,
+        user: UserId(Uuid(*user.as_bytes())),
+    })
+}
+
+/// One page of the platform's users, newest first.
 ///
 /// Two pools, and the split is migration 0037's boundary rather than a
 /// convenience: the organisation, the plan and the user row come through the
@@ -636,6 +675,11 @@ pub struct UsersView {
 /// sign-in comes through the application pool, because `auth.auth_event` is
 /// the one object in the identity schema `tam_app` can read and
 /// `tam_backoffice` holds not even USAGE there.
+///
+/// Paged by an opaque `cursor` rather than an offset, so a signup landing
+/// between two pages does not show the operator one person twice. `limit`
+/// is 1 to [`USERS_PAGE_MAX`]; anything else is refused rather than
+/// clamped, so a console asking for more than it gets is told so.
 ///
 /// A database with no identity schema answers the listing whole with every
 /// `last_sign_in_at` absent, rather than refusing. The two DDL sets are
@@ -652,10 +696,21 @@ pub struct UsersView {
 pub(crate) async fn list_users(
     State(state): State<AppState>,
     _operator: OperatorContext,
+    Query(params): Query<UsersPageParams>,
 ) -> Result<Json<UsersView>, APIError> {
+    let limit = params.limit.unwrap_or(USERS_PAGE_DEFAULT);
+    if !(1..=USERS_PAGE_MAX).contains(&limit) {
+        return Err(validation("a page holds between 1 and 100 users"));
+    }
+    let after = params
+        .cursor
+        .as_deref()
+        .filter(|raw| !raw.is_empty())
+        .map(parse_cursor)
+        .transpose()?;
     let now = (state.wall)();
-    let users = BackofficeRepo::new(backoffice(&state)?)
-        .users(now)
+    let page = BackofficeRepo::new(backoffice(&state)?)
+        .users(now, after, limit)
         .await
         .map_err(|error| storage_fault(&state, &error))?;
     let seen: HashMap<Uuid, Timestamp> = IdentityAuditRepo::new(state.pool.clone())
@@ -674,7 +729,8 @@ pub(crate) async fn list_users(
         .map(|record| record.user)
         .collect();
     Ok(Json(UsersView {
-        users: users
+        users: page
+            .users
             .into_iter()
             .map(|user| PlatformUserView {
                 last_sign_in_at: user
@@ -693,6 +749,117 @@ pub(crate) async fn list_users(
                 operator: operators.contains(&user.user),
             })
             .collect(),
+        total: page.total,
+        next_cursor: page.next.map(render_cursor),
+    }))
+}
+
+// ----------------------------------------------------------------- operators
+
+/// Whether a person holds the operator marking after a grant or withdrawal.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OperatorMarkingView {
+    pub user: UserId,
+    pub operator: bool,
+}
+
+/// The platform user an identity subject speaks for, or the 404 the
+/// operator routes answer when there is none: the marking names an app user,
+/// and an account that never opened the app has nobody to mark.
+async fn subject_user(state: &AppState, subject: &str) -> Result<UserId, APIError> {
+    let subject = parse_id(subject)?;
+    SessionRepo::new(state.pool.clone())
+        .user_by_auth_subject(subject)
+        .await
+        .map_err(|error| storage_fault(state, &error))?
+        .map(|(_, user)| user)
+        .ok_or_else(|| {
+            missing("no platform user has that identity; they must open the app once first")
+        })
+}
+
+/// Who the trail names when an operator acts from the console.
+fn console_actor(operator: &OperatorContext) -> String {
+    let mut out = String::from("operator:");
+    out.push_str(&operator.user.0.to_hyphenated());
+    out
+}
+
+/// An operator makes someone else an operator.
+///
+/// Keyed on the identity subject, as the console's user list is. Granting
+/// the marking to someone who already holds it changes nothing and writes
+/// nothing, so a double-click does not restamp the grant or the trail. A
+/// grant that does happen lands in `platform_operator_event` beside the
+/// state change (migration 0096) and on the server log.
+///
+/// Only an operator reaches this ([`OperatorContext`]), so it is not a
+/// self-elevation path: a seller is refused with the blank 401 every
+/// operator route gives.
+pub(crate) async fn grant_operator(
+    State(state): State<AppState>,
+    operator: OperatorContext,
+    Path((_version, subject)): Path<(String, String)>,
+) -> Result<Json<OperatorMarkingView>, APIError> {
+    let user = subject_user(&state, &subject).await?;
+    let repo = OperatorRepo::new(state.pool.clone());
+    let already = repo
+        .is_active(user)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    if !already {
+        repo.grant(user, &console_actor(&operator), (state.wall)())
+            .await
+            .map_err(|error| storage_fault(&state, &error))?;
+        eprintln!(
+            "tam-api: operator {} granted the operator marking to user {}",
+            operator.user.0.to_hyphenated(),
+            user.0.to_hyphenated(),
+        );
+    }
+    Ok(Json(OperatorMarkingView {
+        user,
+        operator: true,
+    }))
+}
+
+/// An operator withdraws someone else's marking.
+///
+/// Refused with 409 and `refusal: "self"` when the operator names
+/// themselves: the last operator withdrawing their own marking would leave
+/// nobody able to grant it back from the console, and anyone who means to
+/// step down can ask another operator. Withdrawing a marking nobody holds
+/// answers `operator: false` and writes nothing.
+pub(crate) async fn revoke_operator(
+    State(state): State<AppState>,
+    operator: OperatorContext,
+    Path((_version, subject)): Path<(String, String)>,
+) -> Result<Json<OperatorMarkingView>, APIError> {
+    let user = subject_user(&state, &subject).await?;
+    if user == operator.user {
+        return Err(APIError::new(
+            StatusCode::CONFLICT,
+            APIErrorEntry::new(
+                "You cannot remove your own operator marking. Ask another operator to do it.",
+            )
+            .kind(APIErrorKind::Validation)
+            .detail(serde_json::json!({ "refusal": "self" })),
+        ));
+    }
+    let withdrawn = OperatorRepo::new(state.pool.clone())
+        .revoke(user, &console_actor(&operator), (state.wall)())
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    if withdrawn {
+        eprintln!(
+            "tam-api: operator {} withdrew the operator marking of user {}",
+            operator.user.0.to_hyphenated(),
+            user.0.to_hyphenated(),
+        );
+    }
+    Ok(Json(OperatorMarkingView {
+        user,
+        operator: false,
     }))
 }
 
@@ -759,8 +926,7 @@ fn erasure_refused(refusal: &ErasureRefusal) -> APIError {
             return missing("no platform user has that identity; there is nothing here to delete")
         }
         ErasureRefusal::ActiveOperator => (
-            "This person is an operator. Withdraw the marking with tam-admin on the server first."
-                .to_owned(),
+            "This person is an operator. Remove their operator marking first.".to_owned(),
             serde_json::json!({ "refusal": "operator" }),
         ),
         ErasureRefusal::SharedOrganisation { other_members } => {

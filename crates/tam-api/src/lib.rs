@@ -922,6 +922,10 @@ pub fn router(state: AppState) -> Router {
             "/{version}/admin/users/{subject}",
             delete(admin::delete_user),
         )
+        .route(
+            "/{version}/admin/operators/{subject}",
+            post(admin::grant_operator).delete(admin::revoke_operator),
+        )
         // The site-wide switches: the public read every page load makes, and
         // the operator's uncached read and write beside it.
         .route("/{version}/site", get(site::site_view))

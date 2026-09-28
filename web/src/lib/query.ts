@@ -134,8 +134,10 @@ export const queryKeys = {
 	adminDeadLetters: ['admin-dead-letters'] as const,
 	adminImpersonations: ['admin-impersonations'] as const,
 	adminPricing: ['admin-pricing'] as const,
-	/** The identity plane's user list, keyed by the search that produced it. */
-	identityUsers: (search: string) => ['identity-users', search] as const,
+	/** One page of the identity plane's user list, keyed by the search, the
+	 *  page and the order that produced it. */
+	identityUsers: (search: string, page: number, direction: 'asc' | 'desc') =>
+		['identity-users', search, page, direction] as const,
 	/** The identity accounts the impersonation trail names, read unsearched
 	 *  and wider than the users page's listing so the trail's parties resolve
 	 *  to people. Its own key: the users page's listing is bounded differently. */
@@ -150,6 +152,10 @@ export const queryKeys = {
 	 *  shape under `identityUsers`, which the search narrows and this does
 	 *  not. */
 	adminUsers: ['admin-users'] as const,
+	/** The platform's users from the newest back to `oldest` (epoch ms): as
+	 *  far as the identity page on screen needs. Under `adminUsers`, so
+	 *  invalidating that invalidates this. */
+	adminUsersCovering: (oldest: number) => ['admin-users', 'covering', oldest] as const,
 	adminGuides: ['admin-guides'] as const,
 	/** One guide as its editor reads it — body and rendered html. Distinct
 	 *  from `guide` below, which carries no Markdown source. */

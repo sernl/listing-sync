@@ -200,19 +200,6 @@ export interface AdminUserRow {
 	platform: AdminUserView | null;
 }
 
-export interface MergedUsers {
-	rows: AdminUserRow[];
-	/**
-	 * App users this listing cannot show: ones carrying no `auth_subject`, and
-	 * ones whose subject is not on the identity page in front of the operator.
-	 *
-	 * Counted rather than dropped silently, because `auth_subject` is nullable
-	 * and a provisioned user with no identity subject is exactly the row that
-	 * would otherwise vanish between the two planes with nothing saying so.
-	 */
-	unlinked: number;
-}
-
 /**
  * Join the identity plane's accounts to the platform's own user rows.
  *
@@ -223,31 +210,27 @@ export interface MergedUsers {
  * comparison against one absent value, so neither an omitted key nor an
  * explicit null can become a map key. A subject claimed by two app users
  * would be a broken unique index rather than a case to resolve, so the first
- * row wins and the second is counted as unlinked.
+ * row wins.
+ *
+ * The platform rows need not be the same page as the identity ones: the
+ * users page loads platform pages until they reach back past the oldest
+ * account on screen, and every row beyond that is simply not matched.
  */
 export function mergeUsers(
 	identity: readonly IdentityUser[],
 	platform: readonly AdminUserView[]
-): MergedUsers {
+): AdminUserRow[] {
 	const bySubject = new Map<string, AdminUserView>();
-	let unlinked = 0;
 	for (const user of platform) {
 		const subject = user.auth_subject;
-		if (typeof subject !== 'string' || bySubject.has(subject)) {
-			unlinked += 1;
-			continue;
+		if (typeof subject === 'string' && !bySubject.has(subject)) {
+			bySubject.set(subject, user);
 		}
-		bySubject.set(subject, user);
 	}
-	const rows = identity.map((account) => ({
+	return identity.map((account) => ({
 		identity: account,
 		platform: bySubject.get(account.id) ?? null
 	}));
-	// Every app user whose subject no listed account claims: the listing is
-	// search-narrowed, so this is usually "the rest of the platform" rather
-	// than anything wrong.
-	const matched = rows.filter((row) => row.platform !== null).length;
-	return { rows, unlinked: unlinked + (bySubject.size - matched) };
 }
 
 /**

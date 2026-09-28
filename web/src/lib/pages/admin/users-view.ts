@@ -155,3 +155,35 @@ export function partyOf(id: string, accounts: ReadonlyMap<string, IdentityUser>)
 		known: true
 	};
 }
+
+/** When an identity account was made, in epoch milliseconds, or null when
+ *  the service did not say or said something unreadable. */
+export function joinedAt(user: Pick<IdentityUser, 'createdAt'>): number | null {
+	if (user.createdAt === null || user.createdAt === undefined) return null;
+	const parsed = new Date(user.createdAt).getTime();
+	return Number.isNaN(parsed) ? null : parsed;
+}
+
+export type SortKey = 'joined' | 'signin';
+export interface UserSort {
+	key: SortKey;
+	direction: 'asc' | 'desc';
+}
+
+/**
+ * The rows on screen in last-sign-in order. Within the page only: the
+ * identity service pages by when accounts were made, and the sign-in trail
+ * lives in the other plane. Rows with no sign-in go last either way, since
+ * "never seen" is not the oldest sign-in.
+ */
+export function bySignIn(rows: readonly AdminUserRow[], direction: 'asc' | 'desc'): AdminUserRow[] {
+	const sign = direction === 'asc' ? 1 : -1;
+	return [...rows].sort((a, b) => {
+		const left = a.platform?.last_sign_in_at;
+		const right = b.platform?.last_sign_in_at;
+		if (left === undefined || right === undefined) {
+			return (left === undefined ? 1 : 0) - (right === undefined ? 1 : 0);
+		}
+		return sign * (left - right);
+	});
+}
