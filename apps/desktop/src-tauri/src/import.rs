@@ -40,8 +40,8 @@ use tokio::sync::Mutex;
 pub use tam_engine_driver::import::{
     base64, ContentType, Cover, FileName, Fingerprint, ImportLease, ImportPage,
     ImportProgressReport, ImportReasonCode, ImportStage, ListedResource, Locator, NotReportable,
-    ObservedFile, ObservedResource, Reason, SkippedResource, CONTENT_TYPE_MAX, COVER_BYTES_MAX,
-    LOCATOR_MAX, NAME_MAX, PNG_MAGIC, REASON_MAX,
+    ObservedFile, ObservedResource, Reason, SkippedResource, Thumbnail, CONTENT_TYPE_MAX,
+    COVER_BYTES_MAX, LOCATOR_MAX, NAME_MAX, PNG_MAGIC, REASON_MAX, THUMBNAILS_MAX,
 };
 
 use crate::entitlement::EntitlementGate;
@@ -402,6 +402,17 @@ pub trait CatalogueSource: Send + Sync {
     /// without a downloadable file and inventing the answer would be this
     /// device stating a fact TPT did not.
     fn bundle(&self, resource: i64) -> SourceFuture<'_, Option<Vec<u8>>>;
+
+    /// One of the listing's own pictures, by a url [`Self::read`] returned
+    /// in `extras.thumbnails`.
+    ///
+    /// `Ok(None)` is a source that serves no listing pictures at all, which
+    /// is Tes: its read names none, so there is nothing to fetch and nothing
+    /// failed. `Err` is a fetch that was attempted and failed, or a url the
+    /// binding refused to send. Either way the caller skips the picture and
+    /// keeps the resource: a picture is an accompaniment to the listing, and
+    /// one that could not be had must not cost the seller the listing.
+    fn picture<'a>(&'a self, url: &'a str) -> SourceFuture<'a, Option<Vec<u8>>>;
 }
 
 /// So a command that picked its source at run time can hold one.
@@ -421,6 +432,10 @@ impl CatalogueSource for Box<dyn CatalogueSource> {
 
     fn bundle(&self, resource: i64) -> SourceFuture<'_, Option<Vec<u8>>> {
         (**self).bundle(resource)
+    }
+
+    fn picture<'a>(&'a self, url: &'a str) -> SourceFuture<'a, Option<Vec<u8>>> {
+        (**self).picture(url)
     }
 }
 
@@ -2531,12 +2546,16 @@ impl<S: CatalogueSource> ImportPass<S> {
         // not be fetched is therefore the source's own answer and not a
         // state: `Ok(None)` is an absence the marketplace confirmed, and an
         // `Err` is a fetch that failed and stays a named skip.
-        let Some(bundle) = self
+        let bundle = self
             .source
             .bundle(locator)
             .await
-            .map_err(|why| format!("its file could not be fetched: {why}"))?
-        else {
+            .map_err(|why| format!("its file could not be fetched: {why}"))?;
+        // The listing's own pictures, read whichever arm the file takes:
+        // they belong to the listing rather than to the bundle, so a
+        // resource with no file still carries the pictures its listing shows.
+        let thumbnails = self.thumbnails(&listing, locator).await;
+        let Some(bundle) = bundle else {
             // Metadata-only rather than skipped: a listing with no file is
             // still a catalogue entry the seller can use, and its title is
             // still evidence the matcher reads. Backed by the wire already —
@@ -2547,6 +2566,7 @@ impl<S: CatalogueSource> ImportPass<S> {
                 listing,
                 file: None,
                 cover_png: None,
+                thumbnails,
             });
         };
 
@@ -2615,6 +2635,7 @@ impl<S: CatalogueSource> ImportPass<S> {
                     .map_err(|why| format!("the cover made from its file is not one: {why}"))?,
             ),
             fingerprint: Some(fingerprint),
+            thumbnails,
         };
         // The seller's bytes end here as far as the wire is concerned. Every
         // field of the value above is bounded or fixed-width — a digest, a
@@ -2660,6 +2681,42 @@ impl<S: CatalogueSource> ImportPass<S> {
             }
         }
         Ok(observed)
+    }
+
+    /// The listing's own pictures, fetched one by one and checked to be
+    /// pictures, in the listing's slot order and at most [`THUMBNAILS_MAX`].
+    ///
+    /// Each picture's bytes are a local of one loop turn: fetched, checked
+    /// and moved into the bounded [`Thumbnail`] or dropped, so nothing
+    /// accumulates beyond what the wire carries. A picture that could not be
+    /// fetched, or whose bytes are not a picture, is logged and skipped
+    /// rather than failing the resource — the listing is what the seller is
+    /// importing and its pictures accompany it. The log names the resource
+    /// and the slot and never the url, which carries the seller's title.
+    async fn thumbnails(&self, listing: &ImportedListing, locator: i64) -> Vec<Thumbnail> {
+        let mut thumbnails = Vec::new();
+        for (slot, url) in listing
+            .extras
+            .thumbnails
+            .iter()
+            .take(THUMBNAILS_MAX)
+            .enumerate()
+        {
+            let slot = slot.saturating_add(1);
+            match self.source.picture(url).await {
+                Ok(Some(bytes)) => match Thumbnail::encode(&bytes) {
+                    Ok(thumbnail) => thumbnails.push(thumbnail),
+                    Err(why) => eprintln!(
+                        "picture {slot} of resource {locator} is not one this device will report: {why}"
+                    ),
+                },
+                Ok(None) => {}
+                Err(why) => {
+                    eprintln!("picture {slot} of resource {locator} could not be fetched: {why}");
+                }
+            }
+        }
+        thumbnails
     }
 }
 
@@ -4067,7 +4124,7 @@ mod tests {
         base64, content_type_for, import_path, payload_of, CatalogueSource, ImportJournal,
         ImportLease, ImportPage, ImportPass, ImportProgressReport, ImportReasonCode, ImportStage,
         ListedResource, Locator, MemoryJournal, PassError, Reason, RunLedger, RunPhase,
-        SourcePermission, StopSignal, PAGE_SIZE, PNG_MAGIC,
+        SourcePermission, StopSignal, Thumbnail, PAGE_SIZE, PNG_MAGIC,
     };
     use crate::device::DeviceId;
     use crate::entitlement::{Claims, Entitlement, EntitlementGate};
@@ -4104,6 +4161,7 @@ mod tests {
             rights: None,
             price: ImportedPrice::Free,
             state,
+            extras: tam_marketplace::ListingExtras::default(),
         }
     }
 
@@ -4133,6 +4191,11 @@ mod tests {
         bundleless: Vec<i64>,
         /// A source that hands this device no file at all, which is TPT.
         fileless: bool,
+        /// The picture urls every listing names, which is what the TPT read
+        /// hands over in `extras.thumbnails`.
+        pictures: Vec<String>,
+        /// Picture urls whose fetch fails.
+        unfetchable_pictures: Vec<String>,
         pause: Option<Arc<tokio::sync::Barrier>>,
     }
 
@@ -4145,6 +4208,8 @@ mod tests {
                 drafts: Vec::new(),
                 bundleless: Vec::new(),
                 fileless: false,
+                pictures: Vec::new(),
+                unfetchable_pictures: Vec::new(),
                 pause: None,
             }
         }
@@ -4190,7 +4255,9 @@ mod tests {
                 } else {
                     None
                 };
-                Ok(listing(resource, state))
+                let mut read = listing(resource, state);
+                read.extras.thumbnails.clone_from(&self.pictures);
+                Ok(read)
             })
         }
 
@@ -4206,6 +4273,17 @@ mod tests {
                     return Err(tes_answered("the session expired"));
                 }
                 Ok(Some(self.bundle.clone()))
+            })
+        }
+
+        /// A JPEG's opening for every picture but the unfetchable ones: the
+        /// device's check is that the bytes open like a picture.
+        fn picture<'a>(&'a self, url: &'a str) -> SourceFuture<'a, Option<Vec<u8>>> {
+            Box::pin(async move {
+                if self.unfetchable_pictures.iter().any(|bad| bad == url) {
+                    return Err(tes_answered("the picture answered 404"));
+                }
+                Ok(Some(vec![0xFF, 0xD8, 0xFF, 0xE0]))
             })
         }
     }
@@ -4889,6 +4967,58 @@ mod tests {
         assert_eq!(print.cover_phash, None);
     }
 
+    /// The listing's pictures cross with it, on both file arms, and one that
+    /// could not be fetched is skipped rather than costing the resource.
+    ///
+    /// The fileless arm is TPT's own when its download is refused; the file
+    /// arm is every other resource. Pictures come from the listing, so the
+    /// two must carry the same ones.
+    #[tokio::test]
+    async fn a_listings_pictures_cross_with_it_and_a_failed_one_is_skipped() {
+        let picture = |slot: u8| {
+            format!("https://ecdn.teacherspayteachers.com/thumbitem/p/original-1-{slot}.jpg")
+        };
+        for fileless in [true, false] {
+            let plane = Arc::new(FakePlane::default());
+            let mut source = Scripted::of(1, PDF.to_vec());
+            source.fileless = fileless;
+            source.pictures = vec![picture(1), picture(2), picture(3)];
+            source.unfetchable_pictures = vec![picture(2)];
+            let report = pass(source, &plane)
+                .run(NOW, |_| {})
+                .await
+                .expect("a picture that failed does not end the pass");
+
+            assert_eq!(
+                (report.described, report.skipped.len()),
+                (1, 0),
+                "the resource crossed and was not skipped for its picture (fileless: {fileless})"
+            );
+            let posted = plane.pages().await;
+            let [_listed, page] = posted.as_slice() else {
+                panic!("one listing and one page, and got {}", posted.len());
+            };
+            let [resource] = page.resources.as_slice() else {
+                panic!("one resource, and got {}", page.resources.len());
+            };
+            assert_eq!(
+                resource
+                    .thumbnails
+                    .iter()
+                    .map(Thumbnail::bytes)
+                    .collect::<Vec<_>>(),
+                vec![[0xFF, 0xD8, 0xFF, 0xE0].as_slice(); 2],
+                "the two pictures that answered cross, and the one that failed is left out \
+                 (fileless: {fileless})"
+            );
+            assert_eq!(
+                resource.file.is_some(),
+                !fileless,
+                "and the file arm is the source's own answer, unaffected by the pictures"
+            );
+        }
+    }
+
     /// Every resource the seller ticked crosses, whatever the source's own
     /// snapshot called its state.
     ///
@@ -5324,6 +5454,8 @@ mod tests {
             drafts: Vec::new(),
             bundleless: Vec::new(),
             fileless: false,
+            pictures: Vec::new(),
+            unfetchable_pictures: Vec::new(),
             pause: None,
         };
         let why = pass(source, &plane)
@@ -5693,6 +5825,10 @@ mod tests {
         }
 
         fn bundle(&self, _resource: i64) -> SourceFuture<'_, Option<Vec<u8>>> {
+            Box::pin(core::future::pending())
+        }
+
+        fn picture<'a>(&'a self, _url: &'a str) -> SourceFuture<'a, Option<Vec<u8>>> {
             Box::pin(core::future::pending())
         }
     }
@@ -7358,6 +7494,10 @@ mod tests {
 
         fn bundle(&self, resource: i64) -> SourceFuture<'_, Option<Vec<u8>>> {
             self.shop.bundle(resource)
+        }
+
+        fn picture<'a>(&'a self, url: &'a str) -> SourceFuture<'a, Option<Vec<u8>>> {
+            self.shop.picture(url)
         }
     }
 

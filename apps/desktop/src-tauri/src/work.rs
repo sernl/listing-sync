@@ -466,6 +466,13 @@ impl<B: LiveTransport + Clone> crate::import::CatalogueSource for SellerCatalogu
             }
         })
     }
+
+    /// No picture at all: the Tes read names none in `extras.thumbnails`,
+    /// so a call here is one no pass makes, and answering it with a request
+    /// would be this device reaching a host no read pointed it at.
+    fn picture<'a>(&'a self, _url: &'a str) -> SourceFuture<'a, Option<Vec<u8>>> {
+        Box::pin(async { Ok(None) })
+    }
 }
 
 /// The seller's own TPT shop, as this device can read it.
@@ -602,6 +609,26 @@ impl<B: LiveTransport + Clone> crate::import::CatalogueSource for TptSellerCatal
                     tam_marketplace_tpt::read_model::ProductId(u64::try_from(resource).map_err(
                         |_| SourceError::NoClient("a TPT product id cannot be negative".to_owned()),
                     )?),
+                )
+                .await
+                .map(Some)
+                .map_err(|why| self.answered(&why))
+        })
+    }
+
+    /// One listing picture, under the same first-party reason the read
+    /// itself uses: the picture is part of that read. The adapter refuses any
+    /// url but the captured picture host before sending, so a url the read
+    /// returned cannot aim this device anywhere else.
+    fn picture<'a>(&'a self, url: &'a str) -> SourceFuture<'a, Option<Vec<u8>>> {
+        Box::pin(async move {
+            let adapter = self.adapter()?;
+            adapter
+                .fetch_listing_picture(
+                    &FetchReason::FirstPartyExport {
+                        inventory: self.inventory,
+                    },
+                    url,
                 )
                 .await
                 .map(Some)
