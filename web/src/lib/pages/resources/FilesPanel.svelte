@@ -22,10 +22,12 @@
 	import FileViewer from '$lib/FileViewer.svelte';
 	import FileRename from './FileRename.svelte';
 	import {
+		COPY_EXPLAINED,
 		OPEN_UNAVAILABLE,
 		contentTypeOfKind,
-		sourceOfKept,
-		sourceOfStored
+		copyOf,
+		copySentence,
+		viewFrom
 	} from './file-viewer';
 	import {
 		IDLE,
@@ -260,6 +262,8 @@
 		{@const may = removable(stored, file.id, inventories.length > 0)}
 		{@const swappable = replaceable(stored, file.id)}
 		{@const mine = fileAction.kind !== 'idle' && fileAction.file === file.id}
+		{@const from = viewFrom(product, file, invoke, kept.has(file.hash))}
+		{@const onServer = copyOf(file) === 'stored'}
 		<div class="res-line res-file">
 			<span class="res-line-what">
 				<StatusPill tone="flat" label={ROLE_WORD[file.role]} />
@@ -270,7 +274,20 @@
 			</span>
 			<span class="res-line-at">{formatBytes(file.byte_len)}</span>
 			<span class="res-file-acts">
-				<Button small onclick={() => (viewing = file)}>View</Button>
+				<Button
+					small
+					disabled={from.kind === 'unavailable'}
+					reason={from.kind === 'unavailable' ? from.sentence : undefined}
+					onclick={() => (viewing = file)}>View</Button
+				>
+				<Button
+					small
+					icon="download"
+					href={onServer ? api.productFileUrl(product, file.id, true) : undefined}
+					disabled={!onServer}
+					reason={onServer ? undefined : (copySentence(copyOf(file)) ?? undefined)}
+					>Download</Button
+				>
 				{#if file.role !== 'cover'}
 					<Button
 						small
@@ -302,6 +319,14 @@
 					>Remove…</Button
 				>
 			</span>
+			{#if !onServer}
+				<div class="res-file-say res-file-copy">
+					<span>{copySentence(copyOf(file))}</span>
+					<Explain title="Where your file is" label="Why?">
+						{#each COPY_EXPLAINED as line (line)}<p>{line}</p>{/each}
+					</Explain>
+				</div>
+			{/if}
 			{#if renaming === file.id}
 				<FileRename
 					name={file.name ?? ''}
@@ -394,14 +419,16 @@
 {#if viewing !== null}
 	{@const shown = viewing}
 	{@const local = kept.get(shown.hash)}
-	<FileViewer
-		open={viewing !== null}
-		name={fileName(shown)}
-		contentType={local?.content_type ?? contentTypeOfKind(shown.kind)}
-		bytes={local === undefined
-			? sourceOfStored(product, shown).bytes
-			: sourceOfKept(invoke, fileName(shown), shown.hash).bytes}
-		onClose={() => (viewing = null)}
-		onOpenElsewhere={() => void openElsewhere(shown)}
-	/>
+	{@const from = viewFrom(product, shown, invoke, local !== undefined)}
+	{#if from.kind !== 'unavailable'}
+		<FileViewer
+			open={viewing !== null}
+			name={fileName(shown)}
+			contentType={local?.content_type ?? contentTypeOfKind(shown.kind)}
+			bytes={from.source.bytes}
+			url={from.source.url}
+			onClose={() => (viewing = null)}
+			onOpenElsewhere={local === undefined ? undefined : () => void openElsewhere(shown)}
+		/>
+	{/if}
 {/if}

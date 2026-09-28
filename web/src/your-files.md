@@ -5,7 +5,7 @@ tags: files, privacy, desktop-app
 
 # Where your files live
 
-Your listing files stay on your own devices. Teachouse records which device holds which file and sends a file only when you publish to a marketplace.
+Files you import stay on the device that imported them. The Teachouse app on that device then copies each one to Teachouse, so you can view it, make a preview from it and download it wherever you sign in. Teachouse records which device holds which file.
 
 ## See which device holds a file
 
@@ -36,9 +36,15 @@ A publish waits for a device that holds the file. Keep that device on and signed
 
 Removing a resource in Teachouse removes the record, not your file. Delete the file yourself if you want it gone.
 
-## The one exception
+## Teachouse's copy
 
-A thumbnail is stored by Teachouse so the console and the marketplace can show it without waking your device. Everything a buyer downloads stays with you.
+The app copies imported files in the background whenever it is open. **Your devices' files** shows where each file is: on your device, on Teachouse, or both.
+
+Copies count towards your plan's storage. When it is full, files stay on your device and Teachouse says so beside each one. A file bigger than 96 MB stays on your device too.
+
+A file on your device only can't be viewed or downloaded from another browser yet. Open the Teachouse app on that device to copy it.
+
+Teachouse also stores each thumbnail, so the marketplace can show it without waking your device.
 
 <!-- shot: /resources/files, a resource card showing its stored thumbnail -->
 __omp_shell("[A stored thumbnail](image:your-files-2)")

@@ -794,6 +794,45 @@ fn image_content_type(bytes: &[u8]) -> &'static str {
 /// the source's own buyers receive — and a bundle of one becomes that one
 /// file, because a buyer expects the worksheet rather than a zip wrapping the
 /// worksheet.
+/// The name a single-file product is filed under: the listing's title and
+/// the extension its bytes have, or `None` for a kind that is not one file.
+///
+/// The title is cut to what a file name may carry — no separators, no
+/// control characters, no leading or trailing space, at most 200 bytes on a
+/// character boundary — and a title with nothing left becomes the
+/// marketplace's number for the resource, which is at least unique.
+fn single_file_name(title: &str, locator: i64, kind: FileKind) -> Option<String> {
+    let extension = match kind {
+        FileKind::Pdf => "pdf",
+        FileKind::Pptx => "pptx",
+        FileKind::Docx => "docx",
+        FileKind::Zip | FileKind::Image => return None,
+    };
+    let cleaned: String = title
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                ' '
+            } else {
+                c
+            }
+        })
+        .filter(|c| !matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}'))
+        .collect();
+    let mut stem = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut end = stem.len().min(200);
+    while !stem.is_char_boundary(end) {
+        end -= 1;
+    }
+    stem.truncate(end);
+    let stem = stem.trim_end_matches(['.', ' ']);
+    Some(if stem.is_empty() {
+        format!("{locator}.{extension}")
+    } else {
+        format!("{stem}.{extension}")
+    })
+}
+
 fn payload_of(bundle: Vec<u8>, fallback_name: &str) -> (Vec<u8>, String, Option<String>) {
     match tam_pipeline::archive::sole_entry(
         &bundle,
@@ -2554,12 +2593,12 @@ impl<S: CatalogueSource> ImportPass<S> {
         let kind = tam_pipeline::probe::probe_kind(&payload)
             .ok_or_else(|| "its file is of a kind this device does not recognise".to_owned())?;
         // A single-file product arrives as the file itself, not as a bundle,
-        // so the fallback name follows the bytes rather than the wrapper.
-        let name = match (entry.is_none(), kind) {
-            (true, FileKind::Pdf) => format!("{locator}.pdf"),
-            (true, FileKind::Pptx) => format!("{locator}.pptx"),
-            (true, FileKind::Docx) => format!("{locator}.docx"),
-            _ => name,
+        // and the marketplace names it nowhere we read; so it is named as the
+        // seller named the listing, with the extension the bytes have.
+        let name = if entry.is_none() {
+            single_file_name(&listing.title, locator, kind).unwrap_or(name)
+        } else {
+            name
         };
 
         // The scan is the device's own and is recorded as the device's. Q-b
@@ -8014,5 +8053,36 @@ mod tests {
             0,
             "delivering an old terminal report is not a new marketplace import"
         );
+    }
+}
+
+#[cfg(test)]
+mod single_file_name_tests {
+    use super::single_file_name;
+    use tam_engine_driver::import::FileName;
+    use tam_types::FileKind;
+
+    #[test]
+    fn a_single_file_is_named_after_its_listing() {
+        assert_eq!(
+            single_file_name("Full Unit: Whole Numbers", 123, FileKind::Pdf).as_deref(),
+            Some("Full Unit Whole Numbers.pdf")
+        );
+    }
+
+    #[test]
+    fn what_a_file_name_cannot_carry_is_cut_and_the_number_stands_in_for_nothing() {
+        let named = single_file_name("  a/b\\c\u{202E}d\n  ", 7, FileKind::Pptx).expect("a pptx");
+        assert_eq!(named, "a b c d.pptx");
+        assert!(FileName::new(&named).is_ok());
+        assert_eq!(
+            single_file_name(" ... ", 7, FileKind::Docx).as_deref(),
+            Some("7.docx")
+        );
+        let long = "é".repeat(300);
+        let named = single_file_name(&long, 7, FileKind::Pdf).expect("a pdf");
+        assert!(named.len() <= 204);
+        assert!(FileName::new(&named).is_ok());
+        assert_eq!(single_file_name("Bundle", 7, FileKind::Zip), None);
     }
 }

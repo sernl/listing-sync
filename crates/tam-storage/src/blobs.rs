@@ -276,7 +276,7 @@ fn extension(kind: &str) -> &'static str {
     }
 }
 
-fn content_type(kind: &str) -> String {
+pub(crate) fn content_type(kind: &str) -> String {
     match kind {
         "pdf" => "application/pdf",
         "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",

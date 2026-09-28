@@ -11,17 +11,19 @@
  * and not the second, and nothing here invents the second for it.
  */
 
-import type { LibraryFileView } from '$lib/api';
+import type { LibraryFileView, ServerCopy } from '$lib/api';
 import { formatBytes } from '$lib/authoring';
 import { agoLabel } from '$lib/elapsed';
 import type { LibraryEntry } from '$lib/desktop';
+import { STORAGE_FULL, TOO_LARGE } from './file-viewer';
 
 /** Where the browser lives, named once for every surface that links to it. */
 export const FILES_HREF = '/resources/files';
 
 /** The promise the browser closes with. One sentence; which machine holds
  *  what, and how a copy crosses between them, is the `your-files` guide's. */
-export const FILES_STAY_ON_YOUR_DEVICES = 'Your files stay on your own devices.';
+export const FILES_STAY_ON_YOUR_DEVICES =
+	'Imported files stay on your devices, and the Teachouse app copies them to Teachouse so you can open them anywhere.';
 
 /** What the page says in a browser, where no machine is keeping files. */
 export const BROWSER_SENTENCE = 'Your files are kept on the devices that run the Teachouse app.';
@@ -203,7 +205,9 @@ export function transferLabel(
 ): TransferLabel {
 	if (
 		heldHere === true ||
-		(heldHere === null && thisDevice !== null && file.holders.some((one) => one.device === thisDevice))
+		(heldHere === null &&
+			thisDevice !== null &&
+			file.holders.some((one) => one.device === thisDevice))
 	) {
 		return { kind: 'held' };
 	}
@@ -231,7 +235,9 @@ export function transferSentence(label: TransferLabel): string | null {
 		case 'get':
 			return `${label.from} has this file.`;
 		case 'waiting':
-			return label.on === null ? 'Waiting for a device that has this file.' : `Waiting for ${label.on} to come online.`;
+			return label.on === null
+				? 'Waiting for a device that has this file.'
+				: `Waiting for ${label.on} to come online.`;
 		case 'fetching':
 			return `Copying from ${label.from}…`;
 		case 'elsewhere':
@@ -245,6 +251,47 @@ export function transferSentence(label: TransferLabel): string | null {
  *  the name its registration carries. */
 export function holderNames(file: LibraryFileView, thisDevice: string | null): string[] {
 	return file.holders.map((holder) => (holder.device === thisDevice ? HERE : holder.name));
+}
+
+/** Where a file's bytes are: on a device of the seller's, in Teachouse's own
+ *  copy, both, or — for a digest a resource names that nothing reports —
+ *  neither. */
+export type Place = 'both' | 'device' | 'teachouse' | 'nowhere';
+
+export function placeOf(file: LibraryFileView): Place {
+	const onDevice = file.holders.length > 0;
+	const onTeachouse = file.server_copy === 'stored';
+	if (onDevice && onTeachouse) return 'both';
+	if (onTeachouse) return 'teachouse';
+	return onDevice ? 'device' : 'nowhere';
+}
+
+/** The Where cell, with the machine the seller is sitting at named as such. */
+export function placeLine(place: Place, heldHere: boolean): string {
+	const device = heldHere ? 'This device' : 'Your device';
+	switch (place) {
+		case 'both':
+			return `${device} and Teachouse`;
+		case 'device':
+			return `${device} only`;
+		case 'teachouse':
+			return 'Teachouse only';
+		case 'nowhere':
+			return 'Not on any device';
+	}
+}
+
+/** What the Where cell adds for a file that will not be copied by itself. */
+export function copyNote(copy: ServerCopy): string | null {
+	switch (copy) {
+		case 'storage_full':
+			return STORAGE_FULL;
+		case 'too_large':
+			return TOO_LARGE;
+		case 'stored':
+		case 'device_only':
+			return null;
+	}
 }
 
 export interface FileRow {
@@ -268,6 +315,11 @@ export interface FileRow {
 	 *  it. Absent for every file this machine does not hold, so no row shows
 	 *  a source or a kept date for bytes that are somewhere else. */
 	kept: LibraryEntry | null;
+	/** Whether Teachouse holds a copy, which is what Download needs. */
+	copy: ServerCopy;
+	place: Place;
+	/** The Where cell. */
+	where: string;
 }
 
 /** One page of rows. The order is the server's, so paging is stable; this
@@ -296,7 +348,15 @@ export function fileRows(
 			}, null),
 			resources: file.resources,
 			label: transferLabel(file, here.thisDevice, here.kept === null ? null : kept !== null),
-			kept
+			kept,
+			copy: file.server_copy,
+			place: placeOf(file),
+			where: placeLine(
+				placeOf(file),
+				kept !== null ||
+					(here.thisDevice !== null &&
+						file.holders.some((holder) => holder.device === here.thisDevice))
+			)
 		};
 	});
 }
@@ -334,7 +394,12 @@ export interface PageWindow {
 /** The window one page covers, from what the server itself said it served.
  *  Derived from the answer rather than from what was asked, so a page cut
  *  short by a filter does not claim rows it was not given. */
-export function pageWindow(shown: number, total: number, offset: number, limit: number): PageWindow {
+export function pageWindow(
+	shown: number,
+	total: number,
+	offset: number,
+	limit: number
+): PageWindow {
 	const step = limit > 0 ? limit : PAGE_SIZE;
 	const from = shown === 0 ? 0 : offset + 1;
 	return {

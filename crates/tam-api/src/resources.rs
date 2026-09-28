@@ -448,25 +448,200 @@ pub struct CoverQuery {
     pub v: Option<String>,
 }
 
+/// What a file read may ask for beyond the bytes themselves.
+#[derive(Debug, Default, Deserialize)]
+pub struct ContentQuery {
+    /// `1` asks for the file as a download rather than to be shown.
+    #[serde(default)]
+    pub download: Option<String>,
+}
+
+impl ContentQuery {
+    #[must_use]
+    pub fn wants_download(&self) -> bool {
+        matches!(self.download.as_deref(), Some("1" | "true"))
+    }
+}
+
+/// What a file read says where only the seller's device holds the bytes.
+pub const DEVICE_ONLY: &str =
+    "This file is on your device only. Open the Teachouse app on that device to copy it to Teachouse.";
+
+/// Opens this organisation's copy of one file, or `None` where it holds none.
+///
+/// Whole, because a sealed blob is one envelope and opens only whole; so the
+/// length is checked first and a file above [`crate::library::OPEN_BYTES_MAX`]
+/// is refused before a byte is read rather than held in memory to serve.
+pub(crate) async fn open_copy(
+    state: &AppState,
+    org: OrgId,
+    hash: tam_types::ContentHash,
+    byte_len: u64,
+) -> Result<Option<Vec<u8>>, APIError> {
+    if byte_len > crate::library::OPEN_BYTES_MAX {
+        return Err(APIError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            APIErrorEntry::new(
+                "This file is too big to open in Teachouse. Open it with the Teachouse app on your device.",
+            )
+            .kind(APIErrorKind::Validation),
+        ));
+    }
+    let Some(blobs) = state.blobs.clone() else {
+        return Err(APIError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            APIErrorEntry::new("File storage isn't available right now. Try again later.")
+                .kind(APIErrorKind::Internal),
+        ));
+    };
+    match BlobRepo::new(state.pool.clone(), blobs.object_store(), blobs.kek.clone())
+        .get(org, hash)
+        .await
+    {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(BlobError::Missing) => Ok(None),
+        Err(fault @ (BlobError::Storage(_) | BlobError::Store(_) | BlobError::Crypto(_))) => {
+            Err(state.internal(&format!("{fault}")))
+        }
+    }
+}
+
+/// The part of a file one `Range` header asks for, as inclusive bounds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Ranged {
+    /// No usable range: the whole file. A header that does not parse, or
+    /// asks for several ranges at once, is answered this way, which RFC 9110
+    /// allows and every reader of this route handles.
+    Whole,
+    Part {
+        first: u64,
+        last: u64,
+    },
+    /// A range that starts past the end.
+    Unsatisfiable,
+}
+
+/// Reads a `Range` header against a file of `len` bytes: `bytes=a-b`,
+/// `bytes=a-` and `bytes=-n`.
+pub(crate) fn ranged(header: Option<&str>, len: u64) -> Ranged {
+    let Some(spec) = header.and_then(|raw| raw.trim().strip_prefix("bytes=")) else {
+        return Ranged::Whole;
+    };
+    if spec.contains(',') {
+        return Ranged::Whole;
+    }
+    let Some((from, to)) = spec.trim().split_once('-') else {
+        return Ranged::Whole;
+    };
+    let (from, to) = (from.trim(), to.trim());
+    if from.is_empty() {
+        // The last `n` bytes.
+        let Ok(tail) = to.parse::<u64>() else {
+            return Ranged::Whole;
+        };
+        if tail == 0 || len == 0 {
+            return Ranged::Unsatisfiable;
+        }
+        return Ranged::Part {
+            first: len.saturating_sub(tail),
+            last: len - 1,
+        };
+    }
+    let Ok(first) = from.parse::<u64>() else {
+        return Ranged::Whole;
+    };
+    if first >= len {
+        return Ranged::Unsatisfiable;
+    }
+    let last = if to.is_empty() {
+        len - 1
+    } else {
+        match to.parse::<u64>() {
+            Ok(last) if last >= first => last.min(len - 1),
+            _ => return Ranged::Whole,
+        }
+    };
+    Ranged::Part { first, last }
+}
+
+/// How one file is served: under which name and type, and whether as a
+/// download.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Served<'a> {
+    pub name: &'a str,
+    pub content_type: &'a str,
+    pub download: bool,
+}
+
+/// One file's answer: the whole of it or the range asked for, shown or
+/// downloaded under the seller's own name.
+///
+/// `private, no-store`, because it is a seller's sellable file and no cache
+/// anywhere has a reason to keep it; `nosniff`, because the type is ours to
+/// state and not the browser's to guess.
+pub(crate) fn file_answer(
+    state: &AppState,
+    bytes: Vec<u8>,
+    served: &Served<'_>,
+    range: Option<&axum::http::HeaderValue>,
+) -> Result<axum::response::Response, APIError> {
+    let Served {
+        name,
+        content_type,
+        download,
+    } = *served;
+    let whole = axum::body::Bytes::from(bytes);
+    let len = u64::try_from(whole.len()).unwrap_or(u64::MAX);
+    let builder = axum::response::Response::builder()
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CACHE_CONTROL, "private, no-store")
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff");
+    let answer = match ranged(range.and_then(|value| value.to_str().ok()), len) {
+        Ranged::Unsatisfiable => builder
+            .status(StatusCode::RANGE_NOT_SATISFIABLE)
+            .header(header::CONTENT_RANGE, format!("bytes */{len}"))
+            .body(axum::body::Body::empty()),
+        Ranged::Whole => builder
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, content_type)
+            .header(header::CONTENT_DISPOSITION, disposition(name, download))
+            .header(header::CONTENT_LENGTH, len)
+            .body(axum::body::Body::from(whole)),
+        Ranged::Part { first, last } => {
+            let start = usize::try_from(first).unwrap_or(usize::MAX);
+            let end = usize::try_from(last).unwrap_or(usize::MAX);
+            builder
+                .status(StatusCode::PARTIAL_CONTENT)
+                .header(header::CONTENT_TYPE, content_type)
+                .header(header::CONTENT_DISPOSITION, disposition(name, download))
+                .header(header::CONTENT_RANGE, format!("bytes {first}-{last}/{len}"))
+                .header(header::CONTENT_LENGTH, last - first + 1)
+                .body(axum::body::Body::from(whole.slice(start..=end)))
+        }
+    };
+    answer.map_err(|error| state.internal(&format!("the file answer did not build: {error}")))
+}
+
 /// The bytes of one of a resource's own files, for the console to read back.
 ///
-/// What makes a stored PDF usable again on a later visit: the preview maker
-/// cuts pages out of it and the viewer draws it, and neither could before,
-/// because the only copies were the one chosen in the session that uploaded it
-/// and the one the desktop app keeps. Fenced exactly as the cover is: the
-/// caller's organisation pins the product read, so another tenant's file
-/// answers as a file that does not exist; the file must be one this product
-/// holds, so a file id is not a key to the organisation's whole store.
+/// What makes a stored PDF usable again on a later visit, from any browser:
+/// the preview maker cuts pages out of it, the viewer draws it and Download
+/// saves it. Fenced exactly as the cover is: the caller's organisation pins
+/// the product read, so another tenant's file answers as a file that does
+/// not exist; the file must be one this product holds, so a file id is not a
+/// key to the organisation's whole store.
 ///
-/// The body is the whole file. The blob is sealed as one envelope and opens
-/// only whole, so there is no ranged read to offer; nothing here caps it,
-/// because every byte it serves already passed the upload's own ceiling.
-/// `private, no-store`, because it is a seller's sellable file and no cache
-/// anywhere has a reason to keep it.
+/// An imported file is served from Teachouse's copy of it, which the
+/// seller's app makes after the import; until it has, the answer says the
+/// file is on the device only. `Range` is honoured so the viewer can draw
+/// the first pages before the rest arrives, and `?download=1` answers as an
+/// attachment.
 pub(crate) async fn product_file_content(
     State(state): State<AppState>,
     context: OrgContext,
     Path((_version, product, file)): Path<(String, String, String)>,
+    Query(query): Query<ContentQuery>,
+    headers: axum::http::HeaderMap,
 ) -> Result<axum::response::Response, APIError> {
     let product = ProductId(parse_id(&product)?);
     let file = tam_types::FileId(parse_id(&file)?);
@@ -482,56 +657,57 @@ pub(crate) async fn product_file_content(
         .chain(record.product.previews.iter())
         .find(|held| held.id == file)
         .ok_or_else(|| missing("We can't find that file."))?;
-    // A file read from a marketplace and never brought here has no bytes on
-    // this server; its copy is on the seller's device.
-    let tam_types::FileBytes::Held { hash, .. } = held.bytes else {
-        return Err(missing(
-            "This file is kept on your marketplace, not in Teachouse, so it can't be opened here.",
-        ));
+    let (hash, content_type, fallback_name) = match &held.bytes {
+        tam_types::FileBytes::Held { hash, .. } => {
+            let described = tam_storage::describe_files(&state.pool, context.org, &[file])
+                .await
+                .map_err(|error| storage_fault(&state, &error))?
+                .into_iter()
+                .next()
+                .ok_or_else(|| missing("We can't find that file."))?;
+            (*hash, described.content_type, described.file_name)
+        }
+        tam_types::FileBytes::Sourced {
+            observed,
+            payload_file_name,
+            payload_content_type,
+            ..
+        } => (
+            observed.hash,
+            payload_content_type.clone(),
+            payload_file_name.clone(),
+        ),
     };
-    let described = tam_storage::describe_files(&state.pool, context.org, &[file])
-        .await
-        .map_err(|error| storage_fault(&state, &error))?
-        .into_iter()
-        .next()
-        .ok_or_else(|| missing("We can't find that file."))?;
     let name = record
         .file_names
         .get(&file)
         .cloned()
-        .unwrap_or(described.file_name);
-    let Some(blobs) = state.blobs.clone() else {
-        return Err(APIError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            APIErrorEntry::new("File storage isn't available right now. Try again later.")
-                .kind(APIErrorKind::Internal),
-        ));
-    };
-    let bytes = BlobRepo::new(state.pool.clone(), blobs.object_store(), blobs.kek.clone())
-        .get(context.org, hash)
-        .await
-        .map_err(|error| match error {
-            BlobError::Missing => {
+        .unwrap_or(fallback_name);
+    let Some(bytes) = open_copy(&state, context.org, hash, held.bytes.byte_len()).await? else {
+        return Err(match held.bytes {
+            tam_types::FileBytes::Sourced { .. } => missing(DEVICE_ONLY),
+            // Ours, not theirs: the row says these bytes are here.
+            tam_types::FileBytes::Held { .. } => {
                 state.internal("a product file row names a blob this store does not hold")
             }
-            fault @ (BlobError::Storage(_) | BlobError::Store(_) | BlobError::Crypto(_)) => {
-                state.internal(&format!("{fault}"))
-            }
-        })?;
-    axum::response::Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, described.content_type)
-        .header(header::CONTENT_DISPOSITION, inline_disposition(&name))
-        .header(header::CACHE_CONTROL, "private, no-store")
-        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
-        .body(axum::body::Body::from(bytes))
-        .map_err(|error| state.internal(&format!("the file answer did not build: {error}")))
+        });
+    };
+    file_answer(
+        &state,
+        bytes,
+        &Served {
+            name: &name,
+            content_type: &content_type,
+            download: query.wants_download(),
+        },
+        headers.get(header::RANGE),
+    )
 }
 
-/// `inline` with the seller's own file name, in both spellings RFC 6266
-/// allows: an ASCII fallback with anything a quoted string cannot carry
-/// replaced, and the exact name percent-encoded as UTF-8.
-fn inline_disposition(name: &str) -> String {
+/// `inline` or `attachment` with the seller's own file name, in both
+/// spellings RFC 6266 allows: an ASCII fallback with anything a quoted string
+/// cannot carry replaced, and the exact name percent-encoded as UTF-8.
+fn disposition(name: &str, download: bool) -> String {
     let fallback: String = name
         .chars()
         .map(|c| {
@@ -552,7 +728,8 @@ fn inline_disposition(name: &str) -> String {
             let _unused: core::fmt::Result = write!(encoded, "%{byte:02X}");
         }
     }
-    format!("inline; filename=\"{fallback}\"; filename*=UTF-8''{encoded}")
+    let kind = if download { "attachment" } else { "inline" };
+    format!("{kind}; filename=\"{fallback}\"; filename*=UTF-8''{encoded}")
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -749,6 +926,10 @@ pub struct FileView {
     /// and three of them are not three names.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Whether Teachouse holds these bytes, and why not where it does not:
+    /// an imported file stays on the seller's device until their app copies
+    /// it here.
+    pub server_copy: crate::library::ServerCopy,
 }
 
 /// Who vouched for a file's scan, from which arm holds its bytes.
@@ -762,7 +943,23 @@ fn scan_vouched_by(bytes: &tam_types::FileBytes) -> &'static str {
 /// One stored file as every reader of one renders it. Shared with the file
 /// routes in `catalogue`, so a field added here reaches the read and the three
 /// writes at once rather than three of the four.
+///
+/// An imported file carries the name its producer recorded for it, which is
+/// what the seller called it on the marketplace; `name` is the seller's own
+/// rename and wins where there is one. Its copy is read as device-only here;
+/// [`product_view`] reads the store and says otherwise where it holds one.
 pub(crate) fn file_view(file: &tam_types::ProductFile, name: Option<&str>) -> FileView {
+    let (name, server_copy) = match &file.bytes {
+        tam_types::FileBytes::Held { .. } => {
+            (name.map(str::to_owned), crate::library::ServerCopy::Stored)
+        }
+        tam_types::FileBytes::Sourced {
+            payload_file_name, ..
+        } => (
+            Some(name.unwrap_or(payload_file_name).to_owned()),
+            crate::library::ServerCopy::DeviceOnly,
+        ),
+    };
     FileView {
         id: file.id.0,
         role: role_str(file.role).to_owned(),
@@ -771,8 +968,29 @@ pub(crate) fn file_view(file: &tam_types::ProductFile, name: Option<&str>) -> Fi
         hash: crate::catalogue::hash_hex(file.bytes.digest()),
         scan: scan_str(file.bytes.scan()).to_owned(),
         scan_vouched_by: scan_vouched_by(&file.bytes).to_owned(),
-        name: name.map(str::to_owned),
+        name,
+        server_copy,
     }
+}
+
+/// The name an imported file is shown under.
+///
+/// A device that could learn no name for a single-file product filed it as
+/// `{resource}.{ext}`, the marketplace's number for it, which says nothing to
+/// a teacher. Those read as the resource's own title instead; every other
+/// name is the producer's own and stands.
+fn shown_name(file: &tam_types::ProductFile, title: &str) -> Option<String> {
+    let tam_types::FileBytes::Sourced {
+        resource,
+        payload_file_name,
+        ..
+    } = &file.bytes
+    else {
+        return None;
+    };
+    let (stem, extension) = payload_file_name.rsplit_once('.')?;
+    let title = title.trim();
+    (stem == resource && !title.is_empty()).then(|| format!("{title}.{extension}"))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -870,8 +1088,27 @@ pub(crate) async fn product_view(
         .map_err(|error| storage_fault(&state, &error))?;
     let file_names = record.file_names;
     let aggregate = record.product;
+    let sourced: Vec<tam_types::ContentHash> = aggregate
+        .payload_files()
+        .chain(aggregate.cover.iter())
+        .chain(aggregate.previews.iter())
+        .filter(|file| matches!(file.bytes, tam_types::FileBytes::Sourced { .. }))
+        .map(|file| file.bytes.digest())
+        .collect();
+    let ledger = crate::library::CopyLedger::read(&state, &context, &sourced).await?;
     let named = |file: &tam_types::ProductFile| {
-        file_view(file, file_names.get(&file.id).map(String::as_str))
+        let shown = shown_name(file, &aggregate.title.0);
+        let mut view = file_view(
+            file,
+            file_names
+                .get(&file.id)
+                .map(String::as_str)
+                .or(shown.as_deref()),
+        );
+        if matches!(file.bytes, tam_types::FileBytes::Sourced { .. }) {
+            view.server_copy = ledger.state(file.bytes.digest(), file.bytes.byte_len());
+        }
+        view
     };
     let mut files: Vec<FileView> = aggregate.payload_files().map(&named).collect();
     files.extend(aggregate.cover.iter().map(&named));

@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 186] = [
+pub const ROUTES: [Route; 189] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -667,6 +667,21 @@ pub const ROUTES: [Route; 186] = [
         method: "get",
         path: "/{version}/library",
         summary: "Search and page files by device, availability and resource association",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/library/missing",
+        summary: "The imported files Teachouse holds no copy of, and the storage left for them",
+    },
+    Route {
+        method: "put",
+        path: "/{version}/library/files/{hash}",
+        summary: "Take the seller's app's copy of one imported file, within the plan's storage",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/library/files/{hash}/content",
+        summary: "The bytes of one of the seller's files by digest, ranged or as a download",
     },
     Route {
         method: "post",

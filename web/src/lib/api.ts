@@ -900,6 +900,12 @@ export interface LibraryResourceView {
 	title: string;
 }
 
+/** Whether Teachouse holds a file's bytes, and why not where it does not.
+ *  An imported file stays on the seller's device until the Teachouse app
+ *  there copies it; `storage_full` and `too_large` are the two reasons a
+ *  copy will not happen by itself. */
+export type ServerCopy = 'stored' | 'device_only' | 'storage_full' | 'too_large';
+
 export interface LibraryFileView {
 	hash: string;
 	file_name: string | null;
@@ -907,6 +913,7 @@ export interface LibraryFileView {
 	holders: LibraryHolderView[];
 	wanted_by: string[];
 	resources: LibraryResourceView[];
+	server_copy: ServerCopy;
 }
 
 export interface LibraryView {
@@ -1836,6 +1843,10 @@ export interface FileView {
 	 *  a file stored before names existed and for a generated cover, and the
 	 *  console renders the absence rather than substituting the kind. */
 	name?: string;
+	/** Whether Teachouse holds these bytes. Every upload is `stored`; an
+	 *  imported file is `device_only` until the app copies it. Read through
+	 *  `copyOf`, which takes an absent value as `stored`. */
+	server_copy?: ServerCopy;
 }
 
 /** What one file change did, and where it lands.
@@ -2815,6 +2826,14 @@ export const api = {
 	 *  drawn rather than chosen, and for a blank name. */
 	renameProductFile: (product: string, file: string, name: string) =>
 		patch<RenamedFileView>(`/v1/products/${product}/files/${file}`, { name }),
+	/** Where one of a resource's own files is read from Teachouse: shown, or
+	 *  saved as a download. The route honours `Range`, so a viewer handed this
+	 *  URL can draw the first pages before the rest has arrived. */
+	productFileUrl: (product: string, file: string, download = false) =>
+		`/v1/products/${product}/files/${file}/content${download ? '?download=1' : ''}`,
+	/** One of the seller's files by digest, for the file browser. */
+	libraryFileUrl: (hash: string, download = false) =>
+		`/v1/library/files/${hash}/content${download ? '?download=1' : ''}`,
 	/** The bytes of one of a resource's own files, read back from Teachouse.
 	 *  A refusal is thrown as the structured failure every other route
 	 *  answers with. */
