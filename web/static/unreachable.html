@@ -123,6 +123,19 @@
     color: #64748b;
     cursor: default;
   }
+  details {
+    margin-top: 4px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  details p {
+    margin: 6px 0 0;
+    font-size: 13px;
+  }
+  summary {
+    cursor: pointer;
+    color: var(--primary);
+  }
   #outcome {
     min-height: 1.6em;
     margin: 12px 0 0;
@@ -176,12 +189,27 @@
   <p>Your marketplace sign-ins stay on this device.</p>
   <button id="retry" type="button">Try again</button>
   <p id="outcome" role="status"></p>
+  <details id="why" hidden>
+    <summary>Why?</summary>
+    <p id="detail"></p>
+  </details>
 </main>
 <script>
   const button = document.getElementById("retry");
   const outcome = document.getElementById("outcome");
   const heading = document.getElementById("heading");
   const explanation = document.getElementById("explanation");
+  const why = document.getElementById("why");
+  const detail = document.getElementById("detail");
+  // One sentence for the seller; what actually failed goes behind "Why?".
+  function unreachable(reason) {
+    heading.textContent = "Teachouse can’t be reached";
+    explanation.textContent = "Check your connection, then try again.";
+    outcome.textContent = "";
+    detail.textContent = reason;
+    why.hidden = false;
+    button.disabled = false;
+  }
   async function openConsole() {
     const invoke = window.__TAURI__?.core?.invoke;
     if (!invoke) {
@@ -190,21 +218,31 @@
       return;
     }
     button.disabled = true;
+    why.hidden = true;
     heading.textContent = "Opening Teachouse";
+    explanation.textContent = "Connecting to your workspace.";
     outcome.textContent = "Connecting…";
     try {
       await invoke("retry_console");
       outcome.textContent = "Connected. Opening Teachouse…";
-    } catch (why) {
-      heading.textContent = "Teachouse could not be reached";
-      explanation.textContent = "Check your connection, then try again.";
-      outcome.textContent =
-        typeof why === "string" ? why : "Still could not reach Teachouse.";
-      button.disabled = false;
+    } catch (failure) {
+      unreachable(
+        typeof failure === "string" ? failure : "Still could not reach Teachouse.",
+      );
     }
   }
   button.addEventListener("click", openConsole);
-  // The document owns navigation: a setup-time location.replace can be lost
-  // before the Android WebView finishes loading its first local page.
-  void openConsole();
+  // `?reason=unreachable` is the application bringing the window back because
+  // the console it was sent to did not appear (console_watch.rs): say so and
+  // wait for Retry, since trying again by itself would loop on a network that
+  // answers the health check and then stalls.
+  if (new URLSearchParams(location.search).get("reason") === "unreachable") {
+    unreachable(
+      "The server answered, but the Teachouse page did not finish loading within 8 seconds.",
+    );
+  } else {
+    // The document owns navigation: a setup-time location.replace can be lost
+    // before the Android WebView finishes loading its first local page.
+    void openConsole();
+  }
 </script>

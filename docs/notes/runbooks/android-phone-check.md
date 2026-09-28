@@ -211,3 +211,9 @@ curl -s 127.0.0.1:9444/json            # pages and their websocket URLs
 ```
 
 Any CDP client on that websocket (`Runtime.enable`, then `Runtime.exceptionThrown` and `Runtime.consoleAPICalled`) shows the exception behind the page. The 0.13.0 error on a Galaxy Note10+ was found this way on the `api31` emulator, whose System WebView is Chrome 91: `Object.hasOwn is not a function`, a method that engine lacks. `web/src/app.html` now defines each such method and `web/src/lib/polyfills.test.ts` keeps the list against the source; a new one shows here first.
+
+## When the app says "Teachouse can’t be reached"
+
+That card is the app's own start page. From 0.15.0 it also comes back when the console was sent for but had drawn nothing after 8 seconds, so a white window no longer lasts until the app is killed. "Why?" says which of the two happened: the connection check failing prints its own error; "The server answered, but the Teachouse page did not finish loading within 8 seconds" means the network reached Teachouse and the page itself stalled.
+
+Check the connection the device is actually using, not the status bar: airplane mode can be on with Wi-Fi still connected, and that is a working connection. With a cable, `adb -s SERIAL shell dumpsys connectivity | grep -E "Active default network|VALIDATED"` shows it without changing anything, and `adb -s SERIAL logcat -s RustStdoutStderr` carries the line "the console did not appear within 8s (last seen: …)" with the address the window was on. A stall on a validated network is a console fault; send that line with the time.
