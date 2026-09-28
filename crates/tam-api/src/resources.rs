@@ -682,6 +682,7 @@ pub(crate) async fn product_file_content(
         .file_names
         .get(&file)
         .cloned()
+        .or_else(|| shown_name(held, &record.product.title.0))
         .unwrap_or(fallback_name);
     let Some(bytes) = open_copy(&state, context.org, hash, held.bytes.byte_len()).await? else {
         return Err(match held.bytes {

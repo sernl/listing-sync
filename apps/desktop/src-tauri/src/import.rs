@@ -787,20 +787,14 @@ fn image_content_type(bytes: &[u8]) -> &'static str {
     }
 }
 
-/// The bundle reduced to what will actually be uploaded.
-///
-/// The rule is the one the whole migration turns on: the target's product slot
-/// takes one file, so a bundle of several travels whole — which is also what
-/// the source's own buyers receive — and a bundle of one becomes that one
-/// file, because a buyer expects the worksheet rather than a zip wrapping the
-/// worksheet.
 /// The name a single-file product is filed under: the listing's title and
 /// the extension its bytes have, or `None` for a kind that is not one file.
 ///
 /// The title is cut to what a file name may carry — no separators, no
-/// control characters, no leading or trailing space, at most 200 bytes on a
-/// character boundary — and a title with nothing left becomes the
-/// marketplace's number for the resource, which is at least unique.
+/// control characters, no leading or trailing space, and short enough on a
+/// character boundary that the name with its extension fits `NAME_MAX`
+/// bytes — and a title with nothing left becomes the marketplace's number
+/// for the resource, which is at least unique.
 fn single_file_name(title: &str, locator: i64, kind: FileKind) -> Option<String> {
     let extension = match kind {
         FileKind::Pdf => "pdf",
@@ -820,7 +814,9 @@ fn single_file_name(title: &str, locator: i64, kind: FileKind) -> Option<String>
         .filter(|c| !matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}'))
         .collect();
     let mut stem = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut end = stem.len().min(200);
+    let mut end = stem
+        .len()
+        .min(tam_engine_driver::import::NAME_MAX - 1 - extension.len());
     while !stem.is_char_boundary(end) {
         end -= 1;
     }
@@ -833,6 +829,13 @@ fn single_file_name(title: &str, locator: i64, kind: FileKind) -> Option<String>
     })
 }
 
+/// The bundle reduced to what will actually be uploaded.
+///
+/// The rule is the one the whole migration turns on: the target's product slot
+/// takes one file, so a bundle of several travels whole — which is also what
+/// the source's own buyers receive — and a bundle of one becomes that one
+/// file, because a buyer expects the worksheet rather than a zip wrapping the
+/// worksheet.
 fn payload_of(bundle: Vec<u8>, fallback_name: &str) -> (Vec<u8>, String, Option<String>) {
     match tam_pipeline::archive::sole_entry(
         &bundle,
@@ -8073,7 +8076,10 @@ mod single_file_name_tests {
     #[test]
     fn what_a_file_name_cannot_carry_is_cut_and_the_number_stands_in_for_nothing() {
         let named = single_file_name("  a/b\\c\u{202E}d\n  ", 7, FileKind::Pptx).expect("a pptx");
-        assert_eq!(named, "a b c d.pptx");
+        assert_eq!(
+            named, "a b cd.pptx",
+            "separators become spaces and a direction override is dropped"
+        );
         assert!(FileName::new(&named).is_ok());
         assert_eq!(
             single_file_name(" ... ", 7, FileKind::Docx).as_deref(),
@@ -8081,7 +8087,10 @@ mod single_file_name_tests {
         );
         let long = "é".repeat(300);
         let named = single_file_name(&long, 7, FileKind::Pdf).expect("a pdf");
-        assert!(named.len() <= 204);
+        assert!(
+            named.len() <= tam_engine_driver::import::NAME_MAX,
+            "the extension fits inside the bound rather than past it"
+        );
         assert!(FileName::new(&named).is_ok());
         assert_eq!(single_file_name("Bundle", 7, FileKind::Zip), None);
     }

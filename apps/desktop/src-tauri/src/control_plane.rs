@@ -110,7 +110,7 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long one file copy to Teachouse may take. A 96 MiB file over a home
 /// upload of 1 Mbit/s is about thirteen minutes; this bound is for a copy
 /// that has stalled, not for one that is slow.
-pub const COPY_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+pub const COPY_TIMEOUT: Duration = Duration::from_mins(30);
 
 /// How long the connection itself may take. Shorter than the whole request:
 /// a machine that cannot reach us at all should fail fast and be retried at

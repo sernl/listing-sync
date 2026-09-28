@@ -234,6 +234,14 @@ async fn provision(pool: &PgPool) {
     .execute(&mut *tx)
     .await
     .expect("the product inserts");
+    sqlx::query(
+        "INSERT INTO device (org_id, id, name, os, arch, app_version, first_seen_at, last_seen_at) \
+         VALUES ($1, 'device-1', 'laptop', 'windows', 'x86_64', '0.1.0', now(), now())",
+    )
+    .bind(org)
+    .execute(&mut *tx)
+    .await
+    .expect("the device that read the file registers");
     let body = original();
     sqlx::query(
         "INSERT INTO product_file (org_id, id, product_id, position, role, kind, created_at, \
