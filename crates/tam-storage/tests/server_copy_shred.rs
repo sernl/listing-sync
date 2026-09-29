@@ -23,12 +23,16 @@ const DEVICE_STREAMS_VERSION: i64 = 99;
 const ORG: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const CONNECTION: &str = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 
-/// Three digests: an upload, an import with a server copy, and an import
-/// whose bytes the seller also uploaded.
+/// Four digests: an upload, an import with a server copy, an import whose
+/// bytes the seller also uploaded, and an uploaded cover.
 const UPLOADED: &str = "\\x1111111111111111111111111111111111111111111111111111111111111111";
 const COPIED: &str = "\\x2222222222222222222222222222222222222222222222222222222222222222";
 const BOTH: &str = "\\x3333333333333333333333333333333333333333333333333333333333333333";
 const COVER: &str = "\\x4444444444444444444444444444444444444444444444444444444444444444";
+/// Imported bytes the seller also uploaded as a TPT thumbnail, and as a TPT
+/// video preview: uploads, which an import never writes.
+const THUMBNAIL: &str = "\\x5555555555555555555555555555555555555555555555555555555555555555";
+const VIDEO: &str = "\\x6666666666666666666666666666666666666666666666666666666666666666";
 
 #[expect(
     clippy::panic,
@@ -75,6 +79,15 @@ fn uploaded_file(product: char, file: char, role: &str, hash: &str) -> String {
     )
 }
 
+fn tpt_base(product: char, thumbnail: &str, video: &str) -> String {
+    format!(
+        "INSERT INTO product_tpt_base (org_id, product_id, thumbnail_mode, thumbnail_hashes,
+                                       video_preview_hash, status_user, updated_at)
+             VALUES ('{ORG}', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb{product}', 2,
+                     ARRAY['{thumbnail}'::bytea], '{video}', 0, now());"
+    )
+}
+
 fn imported_file(product: char, file: char, hash: &str) -> String {
     format!(
         "INSERT INTO product_file (org_id, id, product_id, position, role, kind, created_at,
@@ -110,6 +123,8 @@ async fn seed(connection: &mut sqlx::pool::PoolConnection<sqlx::Postgres>) {
         blob(COPIED),
         blob(BOTH),
         blob(COVER),
+        blob(THUMBNAIL),
+        blob(VIDEO),
         "BEGIN;".to_owned(),
         product('1'),
         uploaded_file('1', '1', "payload", UPLOADED),
@@ -119,6 +134,11 @@ async fn seed(connection: &mut sqlx::pool::PoolConnection<sqlx::Postgres>) {
         imported_file('2', '3', COPIED),
         product('3'),
         imported_file('3', '5', BOTH),
+        product('4'),
+        imported_file('4', '6', THUMBNAIL),
+        product('5'),
+        imported_file('5', '7', VIDEO),
+        tpt_base('4', THUMBNAIL, VIDEO),
         "COMMIT;".to_owned(),
     ];
     connection
@@ -159,14 +179,20 @@ async fn only_the_copies_of_imported_files_are_shredded(pool: PgPool) {
     let hex = |literal: &str| literal.trim_start_matches("\\x").to_owned();
     assert_eq!(
         left,
-        vec![hex(UPLOADED), hex(BOTH), hex(COVER)],
-        "the upload, the cover and the bytes also uploaded survive; the import's copy does not"
+        vec![
+            hex(UPLOADED),
+            hex(BOTH),
+            hex(COVER),
+            hex(THUMBNAIL),
+            hex(VIDEO)
+        ],
+        "every upload survives, including bytes also imported; the import's copy does not"
     );
 
     let forced: Vec<bool> = sqlx::query_scalar(
         "SELECT relforcerowsecurity FROM pg_class
           WHERE relname IN ('blob', 'product_file', 'import_batch_row', 'import_run_item',
-                            'device_stream')
+                            'product_tpt_base', 'device_stream')
           ORDER BY relname",
     )
     .fetch_all(connection.as_mut())
@@ -174,7 +200,7 @@ async fn only_the_copies_of_imported_files_are_shredded(pool: PgPool) {
     .expect("the fences read");
     assert_eq!(
         forced,
-        vec![true; 5],
+        vec![true; 6],
         "every table the migration lifted is fenced again, and the new one is fenced"
     );
 }

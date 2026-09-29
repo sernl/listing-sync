@@ -27,7 +27,11 @@
 --    the sealed object: the object left in the store is ciphertext nobody can
 --    read (0092's crypto-shred). Files the seller uploaded themselves are
 --    referenced by `product_file.hash` and are untouched, as are covers,
---    avatars and anything an import batch or run still names.
+--    avatars, TPT thumbnails and video previews (always uploads; an import
+--    never writes them) and anything an import batch or run still names.
+--    `blob` carries no mark of which path wrote a row, so a copy is known by
+--    what names it: the delete keeps any blob another reference names, even
+--    when the same bytes were also imported.
 
 ALTER TABLE device ADD COLUMN stream_polled_at timestamptz;
 
@@ -73,7 +77,7 @@ CREATE POLICY device_stream_org_isolation ON device_stream
 -- `0076_import_selection_backfill.sql`'s pattern, for its reason.
 CREATE TEMP TABLE server_copy_unfenced (name text PRIMARY KEY) ON COMMIT DROP;
 INSERT INTO server_copy_unfenced (name) VALUES
-    ('blob'), ('product_file'), ('import_batch_row'), ('import_run_item');
+    ('blob'), ('product_file'), ('import_batch_row'), ('import_run_item'), ('product_tpt_base');
 
 DO $$
 DECLARE
@@ -96,6 +100,11 @@ DELETE FROM blob b
        )
    AND NOT EXISTS (
            SELECT 1 FROM import_run_item i WHERE i.org_id = b.org_id AND i.cover_hash = b.hash
+       )
+   AND NOT EXISTS (
+           SELECT 1 FROM product_tpt_base t
+            WHERE t.org_id = b.org_id
+              AND (t.video_preview_hash = b.hash OR b.hash = ANY (t.thumbnail_hashes))
        )
    AND NOT EXISTS (
            SELECT 1 FROM app_user u WHERE u.org_id = b.org_id AND u.avatar_hash = b.hash
