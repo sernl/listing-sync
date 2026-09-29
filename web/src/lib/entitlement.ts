@@ -38,7 +38,10 @@ export function sectionReason(caps: Capabilities, section: SectionId): string | 
 		case 'crosslist':
 			return null;
 		case 'automations':
-			return caps.scheduling || caps.sync_pull_interval_secs !== null || movesLimit(caps) !== null
+			return caps.scheduling ||
+				caps.sync_pull_interval_secs !== null ||
+				caps.moves_per_month > 0 ||
+				caps.free_moves_lifetime > 0
 				? null
 				: 'Upgrade your plan to schedule, check for changes, and move resources.';
 		case 'marketplaces':

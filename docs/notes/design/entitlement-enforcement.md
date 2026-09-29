@@ -59,7 +59,9 @@ Why these numbers, tested against the pricing review:
 | **Labels** (`labels_max`) | `resources.rs` set labels, `collections.rs` add labels, and now the spreadsheet commit (a row that would create a label past the ceiling fails; reusing existing labels never does) | spreadsheet rows created labels unchecked | labels page |
 | **Devices** (`devices_max`) | `devices.rs` register and restore | yes | Devices |
 | **Marketplaces** (`marketplaces_max`) | `devices.rs` session bind | yes (no cap on any plan) | Marketplaces |
-| **Moves** | the ledger: `migrations.rs` confirm, `jobs.rs` sync submit, `work.rs` debit on settle | yes | `movesReason` |
+| **Moves**: spending (the balance) | the ledger: `migrations.rs` confirm, `jobs.rs` sync submit, `work.rs` debit on settle; a move with no balance is refused | yes | `movesReason` |
+| **Moves**: `moves_per_month`, `moves_accrual_cap` | `billing.rs` credits `moves_per_month` at each period start, never past `moves_accrual_cap` (the ledger holds the ceiling, so the balance can't outgrow it) | yes | Billing |
+| **Moves**: `free_moves_lifetime` | `tam-storage` `device.rs` grants it once per storefront through `grant_storefront_allowance_in` (`storefront_allowance` is the record), so a second organisation naming the same shop gets nothing | yes | Billing |
 | **Scheduling** | `schedules.rs` `held()` on every route; the scheduler skips a plan without it | yes | sharing page |
 | **Auto-publish rules** | `schedules.rs` republish, `sync_settings.rs`, scheduler `finish` | yes | sync and sharing pages |
 | **Edit sync interval** (`sync_pull_interval_secs`) | `sync_settings.rs` refuses and clamps on write, and now the scheduler reads a stored interval shorter than the plan's as the plan's, so a downgrade takes effect on the next pass | on write only; a downgraded seller kept the faster pull until they saved again | sync page |
@@ -68,8 +70,9 @@ Why these numbers, tested against the pricing review:
 | **Duplicate review** | `duplicates.rs`, `import_runs.rs` | yes (true on every plan) | – |
 | **Export** (`export`) | `export.rs` now reads it (true on every plan, pinned by `export_is_granted_on_every_plan`) | never read | – |
 | `publish_marketplaces_max` | no gate: `u32::MAX` on every plan, so no plan can exceed it. A cap below that needs a gate at publish | – | – |
-| `uploads_in_flight_max` | not a plan allowance but a fairness bound, still not built (review §10) | – | – |
-| `pack_edit_days` | promised, not built (review §10); the dead console line printing it is removed | – | – |
+| `uploads_in_flight_max` | not enforced, with a reason: it is a fairness bound between accounts sharing a replica, not an allowance a seller buys, and belongs beside the limiter; still not built (review §10) | – | – |
+| `pack_edit_days` | not enforced, with a reason: editing a moved listing after the window is promised in the review (§10) but not built, so there is nothing yet to hold. The dead console line printing it is removed | – | – |
+| `support` | not enforced, with a reason: it is a promise of reply time, not a bound a request can exceed; the pricing table renders it | – | pricing table |
 
 Every refusal is the same 422 `quota_exceeded` with `detail.quota` naming the bound (`listings_max`, `storage_bytes_max`, `labels_max`, `previews_per_month`, …) and a one-sentence reason. The console's `limitReason` uses the same sentences: *"Your plan includes 100 resources. Upgrade to add more."* and *"Your plan includes 5 watermarked previews a month. Upgrade to make more, or wait until next month."*
 
