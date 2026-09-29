@@ -4391,3 +4391,214 @@ async fn another_tenants_sidecar_is_not_reachable(pool: PgPool) {
         "the product answers as absent, so its sidecar is not a second way in"
     );
 }
+
+/// What a refusal's `detail` names: the bound, what was used and the limit.
+fn quota_of(body: &[u8]) -> (Option<String>, Option<i64>, Option<i64>) {
+    let error: APIError = parse(body);
+    let detail = error.errors.first().and_then(|entry| entry.detail.clone());
+    let field = |name: &str| detail.as_ref().and_then(|detail| detail[name].as_i64());
+    (
+        detail
+            .as_ref()
+            .and_then(|detail| detail["quota"].as_str().map(str::to_owned)),
+        field("used"),
+        field("limit"),
+    )
+}
+
+/// A seller already past a ceiling that was lowered keeps every resource
+/// they have and is refused the next one: the grandfather rule.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_catalogue_over_a_lowered_ceiling_keeps_its_resources_but_cannot_add(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("grandfathered");
+    let state = configured(pool.clone(), &root);
+    let uploaded = upload(state.clone(), &TOKEN_A, pdf("over"), "").await;
+    seed_filler_products(&pool, ORG_A, 150).await;
+
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        "/v1/products",
+        &create_body(&uploaded, "The hundred and fifty-first", &["Tes"]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        refusal_of(&body).1,
+        "Your plan includes 100 resources. Upgrade to add more."
+    );
+    assert_eq!(
+        quota_of(&body),
+        (Some("listings_max".to_owned()), Some(150), Some(100))
+    );
+    let (status, body) = get(state, &TOKEN_A, "/v1/entitlement").await;
+    assert_eq!(status, StatusCode::OK);
+    let view: serde_json::Value = parse(&body);
+    assert_eq!(
+        view["usage"]["resources"], 150,
+        "nothing the seller already had was taken away"
+    );
+}
+
+/// The first instant of February 1970 (UTC), the month after `NOW`.
+const NEXT_MONTH: Timestamp = Timestamp(31 * 86_400_000);
+const TOKEN_LATER: SessionToken = SessionToken([0x43; 32]);
+
+/// Look's watermarked previews, counted at every door a preview comes in by,
+/// refused at the month's allowance, and given back when the month turns.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn the_free_plan_makes_its_monthly_previews_and_no_more_until_the_month_turns(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    let root = store_root("preview-month");
+    let state = configured(pool.clone(), &root);
+    let (product, _) = with_one_file(state.clone(), &TOKEN_A, "sellable", &["Tes"]).await;
+    let allowance = tam_limits::Plan::Free.capabilities(None).previews_per_month;
+    assert_eq!(allowance, 5);
+
+    for n in 0..allowance {
+        let made = upload(
+            state.clone(),
+            &TOKEN_A,
+            pdf(&format!("preview {n}")),
+            "?archive=keep_whole&slot=preview",
+        )
+        .await;
+        let (status, body) = json_call(
+            state.clone(),
+            &TOKEN_A,
+            Method::POST,
+            &files_path(product),
+            &serde_json::json!({"role": "preview", "handle": made.payload[0]}),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "preview {n} is inside the month: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+
+    // The maker's upload stops before a byte is stored.
+    let (status, body) = call(
+        state.clone(),
+        &TOKEN_A,
+        Call {
+            method: Method::POST,
+            path: "/v1/uploads?archive=keep_whole&slot=preview",
+            body: Some(Body::from(pdf("the sixth"))),
+            content_type: Some("application/octet-stream"),
+        },
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        refusal_of(&body),
+        (
+            Some(APIErrorCode::QuotaExceeded),
+            "Your plan includes 5 watermarked previews a month. Upgrade to make more, or wait \
+             until next month."
+                .to_owned()
+        )
+    );
+    assert_eq!(
+        quota_of(&body),
+        (Some("previews_per_month".to_owned()), Some(5), Some(5))
+    );
+
+    // Bytes uploaded without the slot are still refused at the attach, which
+    // is the door every preview passes.
+    let plain = upload(state.clone(), &TOKEN_A, pdf("drawn elsewhere"), "").await;
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        &files_path(product),
+        &serde_json::json!({"role": "preview", "handle": plain.payload[0]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(quota_of(&body).0.as_deref(), Some("previews_per_month"));
+
+    // And a create carrying one is refused whole: no resource is left behind
+    // by the preview it could not keep.
+    let payload = upload(state.clone(), &TOKEN_A, pdf("another resource"), "").await;
+    let mut create = create_body(&payload, "Carrying a preview", &["Tes"]);
+    create["previews"] = serde_json::json!([plain.payload[0]]);
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        "/v1/products",
+        &create,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(quota_of(&body).0.as_deref(), Some("previews_per_month"));
+
+    // A payload file is not a preview and costs nothing.
+    let (status, _) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        &files_path(product),
+        &serde_json::json!({"role": "payload", "handle": plain.payload[0]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, body) = get(state.clone(), &TOKEN_A, "/v1/entitlement").await;
+    assert_eq!(status, StatusCode::OK);
+    let view: serde_json::Value = parse(&body);
+    assert_eq!(
+        view["usage"]["previews"], 5,
+        "the refused ones were not counted"
+    );
+    assert_eq!(
+        view["usage"]["resources"], 1,
+        "the refused create left nothing"
+    );
+    assert_eq!(view["capabilities"]["previews_per_month"], 5);
+    assert_eq!(view["usage"]["month_resets_at"], NEXT_MONTH.0);
+
+    // February: the allowance is whole again.
+    SessionRepo::new(pool.clone())
+        .mint(
+            &TOKEN_LATER,
+            USER_A,
+            Timestamp(4_000_000_000_000),
+            NEXT_MONTH,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("the later session mints: {error}"));
+    let later = AppState {
+        wall: || NEXT_MONTH,
+        ..configured(pool.clone(), &root)
+    };
+    let fresh = upload(
+        later.clone(),
+        &TOKEN_LATER,
+        pdf("a february preview"),
+        "?archive=keep_whole&slot=preview",
+    )
+    .await;
+    let (status, body) = json_call(
+        later.clone(),
+        &TOKEN_LATER,
+        Method::POST,
+        &files_path(product),
+        &serde_json::json!({"role": "preview", "handle": fresh.payload[0]}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "a new month is a new allowance: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let (_, body) = get(later, &TOKEN_LATER, "/v1/entitlement").await;
+    let view: serde_json::Value = parse(&body);
+    assert_eq!(view["usage"]["previews"], 1);
+}

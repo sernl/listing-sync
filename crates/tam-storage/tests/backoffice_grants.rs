@@ -310,6 +310,9 @@ async fn the_backoffice_role_sees_only_the_tables_it_was_granted(app: PgPool) {
         "discount_code",
         "import_run_receipt",
         "import_run_start_key",
+        // Migration 0098's decision, migration 0084's reason: usage is read
+        // through the application pool with the organisation pinned.
+        "usage_counter",
     ] {
         let denied = sqlx::query(&format!("SELECT count(*) FROM {table}"))
             .fetch_one(&backoffice)

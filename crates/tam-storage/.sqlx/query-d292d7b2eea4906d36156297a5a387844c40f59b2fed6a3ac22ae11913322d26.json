@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE usage_counter SET used = GREATEST(used - $3, 0), updated_at = $4 WHERE org_id = $1 AND kind = $2 AND month = date_trunc('month', $4 AT TIME ZONE 'UTC')::date",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int4",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d292d7b2eea4906d36156297a5a387844c40f59b2fed6a3ac22ae11913322d26"
+}

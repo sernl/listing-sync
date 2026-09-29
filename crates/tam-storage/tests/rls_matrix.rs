@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 
 use sqlx::PgPool;
 
-const TENANT_TABLES: [&str; 75] = [
+const TENANT_TABLES: [&str; 76] = [
     "auto_publish_rule",
     "auto_publish_run",
     "billing_subscription",
@@ -85,6 +85,7 @@ const TENANT_TABLES: [&str; 75] = [
     "sync_request_resource",
     "sync_request_rule_choice",
     "sync_request_rule_snapshot",
+    "usage_counter",
     "write_attempt",
 ];
 

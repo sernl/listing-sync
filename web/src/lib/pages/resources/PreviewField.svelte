@@ -7,7 +7,10 @@
 	// nothing on the page said otherwise. The maker is the second half of the
 	// same answer — most teachers have no preview to hand, and the pages they
 	// would show are already inside the PDF they uploaded.
+	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { ApiFailure, api, type FileHandle, type FormLimits } from '$lib/api';
+	import { entitlementRead, limitOf } from '$lib/entitlement-read';
+	import { queryKeys } from '$lib/query';
 	import { quotaSentence } from '$lib/authoring';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
@@ -71,6 +74,12 @@
 	let viewing = $state<FileHandle | null>(null);
 
 	const cap = $derived(limits?.preview.max_size_bytes ?? null);
+	// This month's watermarked previews. The server counts every preview a
+	// resource gains and refuses past the plan's allowance; this only says so
+	// before the teacher draws one.
+	const queryClient = useQueryClient();
+	const plan = createQuery(() => entitlementRead);
+	const monthFull = $derived(limitOf(plan.data, 'previews'));
 	const pdfSource = $derived(
 		source === null ? null : source instanceof File ? sourceOfFile(source) : source
 	);
@@ -143,7 +152,7 @@
 		sending = true;
 		refusal = null;
 		try {
-			const landed = await api.upload(file, 'keep_whole');
+			const landed = await api.upload(file, 'keep_whole', undefined, 'preview');
 			const uploaded = landed.payload[0];
 			if (uploaded === undefined) {
 				refusal = 'That file didn’t upload properly. Try again.';
@@ -168,6 +177,9 @@
 					: 'The upload didn’t finish, so nothing was saved. Try again.';
 		} finally {
 			sending = false;
+			// The month's count moves when a preview lands, and a refusal means
+			// the snapshot this page drew from was behind.
+			void queryClient.invalidateQueries({ queryKey: queryKeys.entitlement });
 		}
 	}
 
@@ -199,12 +211,12 @@
 		take(event.dataTransfer?.files ?? null);
 	}}
 >
-	<b>{sending ? 'Uploading…' : 'Drag and drop a preview file, or browse.'}</b>
-	{#if cap !== null}Up to {sizeWords(cap)}.{/if}
+	<b>{sending ? 'Uploading…' : (monthFull ?? 'Drag and drop a preview file, or browse.')}</b>
+	{#if cap !== null && monthFull === null}Up to {sizeWords(cap)}.{/if}
 	<input
 		id={inputId}
 		type="file"
-		disabled={sending}
+		disabled={sending || monthFull !== null}
 		onchange={(event) => {
 			take(event.currentTarget.files);
 			event.currentTarget.value = '';
@@ -214,10 +226,10 @@
 
 <div class="res-acts">
 	<Button
-		disabled={source === null || unavailable !== null || sending}
-		reason={source === null
-			? 'Upload a PDF first to make a preview from it.'
-			: (unavailable ?? undefined)}
+		disabled={source === null || unavailable !== null || sending || monthFull !== null}
+		reason={(monthFull ??
+			(source === null ? 'Upload a PDF first to make a preview from it.' : unavailable)) ??
+			undefined}
 		onclick={() => openMaker(null)}
 	>
 		Make a preview from your file
@@ -253,8 +265,10 @@
 			>
 			<Button
 				small
-				disabled={source === null || unavailable !== null || sending}
-				reason={source === null
+				disabled={source === null || unavailable !== null || sending || monthFull !== null}
+				reason={monthFull !== null
+					? monthFull
+					: source === null
 					? 'Upload the PDF first to remake this preview.'
 					: unavailable !== null
 						? unavailable

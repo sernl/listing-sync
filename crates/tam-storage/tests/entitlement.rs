@@ -241,7 +241,7 @@ async fn the_history_keeps_revoked_and_expired_rows_with_their_attribution(pool:
 async fn the_usage_read_counts_what_the_account_page_shows(pool: PgPool) {
     provision(&pool).await;
     let usage = EntitlementRepo::new(pool)
-        .usage(ORG_A)
+        .usage(ORG_A, NOW)
         .await
         .expect("the read runs");
     assert_eq!(usage.resources, 0);

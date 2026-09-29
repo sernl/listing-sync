@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"counted!\" FROM label WHERE org_id = $1 AND NOT system",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "counted!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "59447e5fb1e00851571ee31d9423bcda982ea13437d3c896cbf0fe3b2fdf3a98"
+}

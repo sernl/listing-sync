@@ -4911,3 +4911,132 @@ async fn refresh_fills_from_saved_reads_and_a_fresh_read_fills_the_rest(pool: Pg
         "once a read has carried the details nothing is owed"
     );
 }
+
+/// `count` filler resources, each with the payload file the deferred
+/// constraints ask of a live product, written straight to the table: the
+/// plan ceiling is what is under test, not the create that would reach it.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn seed_filler_products(pool: &PgPool, org: OrgId, count: i32) {
+    let mut tx = pool.begin().await.expect("the fixture transaction begins");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(org.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pin applies");
+    sqlx::query(
+        "INSERT INTO blob (org_id, hash, byte_len, object_key, dek_key_version, first_seen_at) \
+         VALUES ($1, $2, 4, 'filler', 0, now())",
+    )
+    .bind(uuid::Uuid::from_bytes(org.0 .0))
+    .bind(vec![0x5Au8; 32])
+    .execute(&mut *tx)
+    .await
+    .expect("the filler blob inserts");
+    sqlx::query(
+        "WITH made AS ( \
+             INSERT INTO product \
+             (org_id, id, title, body, body_format, price_kind, rights_state, \
+              created_at, updated_at) \
+             SELECT $1, gen_random_uuid(), 'filler', '', 'markdown', 'free', 'unstated', \
+                    now(), now() \
+             FROM generate_series(1, $2) \
+             RETURNING id \
+         ) \
+         INSERT INTO product_file \
+         (org_id, id, product_id, position, role, kind, hash, scan_state, created_at) \
+         SELECT $1, gen_random_uuid(), made.id, 0, 'payload', 'pdf', $3, 'pending', now() \
+         FROM made",
+    )
+    .bind(uuid::Uuid::from_bytes(org.0 .0))
+    .bind(count)
+    .bind(vec![0x5Au8; 32])
+    .execute(&mut *tx)
+    .await
+    .expect("the filler products insert");
+    tx.commit().await.expect("the fixture commits");
+}
+
+/// Drops the fixture's subscription, so the tenant runs on Look.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn on_the_free_plan(pool: &PgPool, org: OrgId) {
+    let mut tx = pool.begin().await.expect("the fixture transaction begins");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(org.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pin applies");
+    sqlx::query("UPDATE entitlement_grant SET revoked_at = to_timestamp(1) WHERE org_id = $1")
+        .bind(uuid::Uuid::from_bytes(org.0 .0))
+        .execute(&mut *tx)
+        .await
+        .expect("the subscription lapses");
+    tx.commit().await.expect("the fixture commits");
+}
+
+/// A shop import adds resources like a create does, so on Look it stops at
+/// the plan's hundred: the resource that fits lands, the next one fails with
+/// the plan's sentence, and the run still finishes rather than retrying.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_shop_import_on_the_free_plan_stops_at_its_hundred_resources(pool: PgPool) {
+    provision(&pool).await;
+    on_the_free_plan(&pool, ORG_A).await;
+    let ceiling = tam_limits::Plan::Free.capabilities(None).resources_max;
+    assert_eq!(ceiling, 100, "the free plan starts at a hundred resources");
+    seed_filler_products(&pool, ORG_A, i32::try_from(ceiling).unwrap_or(i32::MAX) - 1).await;
+
+    let state = configured(pool.clone(), &store_root("free-ceiling"));
+    let app = router(state.clone());
+    let run = started_run(&app).await;
+    let described = page(
+        run,
+        vec![
+            observed(
+                "https://www.tes.com/teaching-resource/-101",
+                "The hundredth resource",
+                None,
+                None,
+            ),
+            observed(
+                "https://www.tes.com/teaching-resource/-102",
+                "One past the ceiling",
+                None,
+                None,
+            ),
+        ],
+        true,
+    );
+    assert_eq!(post_page(&app, &described).await.status, StatusCode::OK);
+
+    let settled = confirm_and_drain(&app, &state, run).await;
+    assert_eq!(
+        (settled.counts.imported, settled.counts.failed),
+        (1, 1),
+        "one resource fits and the next is refused: {settled:?}"
+    );
+    assert_eq!(
+        settled.state,
+        ImportRunState::Complete,
+        "the run still finishes"
+    );
+    assert_eq!(
+        live_products(&pool).await,
+        i64::from(ceiling),
+        "the catalogue holds exactly the plan's hundred"
+    );
+    let refused = run_view(&app, run)
+        .await
+        .items
+        .into_iter()
+        .find_map(|item| item.failure_detail)
+        .unwrap_or_default();
+    assert_eq!(
+        refused, "Your plan includes 100 resources. Upgrade to add more.",
+        "the failed row says why, in the plan's words"
+    );
+}

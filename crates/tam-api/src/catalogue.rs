@@ -31,8 +31,9 @@ use tam_pipeline::archive::ExtractBudget;
 use tam_pipeline::pipeline::{ingest, ArchiveMode, IngestContext, IngestError};
 use tam_pipeline::scan::EicarScanner;
 use tam_storage::{
-    intent_digest, AnsweredElection, BlobRepo, JobRepo, MappingAdd, MappingRecord, MappingRepo,
-    NewJob, NewJobItem, ProductEdit, ProductRepo, StorageError, TenantBlobSink, TptBaseRepo,
+    intent_digest, AnsweredElection, BlobRepo, EntitlementRepo, JobRepo, MappingAdd, MappingRecord,
+    MappingRepo, MonthlyKind, NewJob, NewJobItem, ProductEdit, ProductRepo, StorageError,
+    TenantBlobSink, TptBaseRepo,
 };
 use tam_types::{
     Actor, CanonicalTermId, ContentHash, CopyFormat, FileBytes, FileId, FileRole, ImportedTerm,
@@ -44,7 +45,7 @@ use tam_authoring::refusal_of;
 use tam_domain::product::ProductName;
 use tam_limits::Capabilities;
 
-use crate::entitlement::{quota_refusal, QuotaKind};
+use crate::entitlement::{quota_refusal, PreviewSpend, QuotaKind};
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::product::{record_of, verdict, DraftHead, TptBaseInput};
 use crate::resources::{
@@ -280,6 +281,11 @@ pub enum UploadSlot {
     Any,
     /// A cover or thumbnail slot, which holds a picture and nothing else.
     Image,
+    /// A watermarked preview on its way to a resource. Refused before a byte
+    /// is sealed where this month's previews are used up, so the preview
+    /// maker stops before the upload rather than after it; the preview is
+    /// counted when it is attached, which is the door every preview passes.
+    Preview,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -377,8 +383,21 @@ pub(crate) async fn upload(
         ));
     }
     let now = (state.wall)();
-    let products = ProductRepo::new(state.pool.clone());
     let caps = context.entitlement.caps;
+    if params.slot == UploadSlot::Preview {
+        let used = EntitlementRepo::new(state.pool.clone())
+            .monthly_used(context.org, MonthlyKind::Preview, now)
+            .await
+            .map_err(|error| storage_fault(&state, &error))?;
+        if used >= i64::from(caps.previews_per_month) {
+            return Err(quota_refusal(
+                QuotaKind::Previews,
+                used,
+                u64::from(caps.previews_per_month),
+            ));
+        }
+    }
+    let products = ProductRepo::new(state.pool.clone());
     let used = products
         .stored_bytes(context.org)
         .await
@@ -1353,6 +1372,7 @@ pub(crate) async fn prepare_create(
             .into_iter()
             .map(|record| record.mapping.id)
             .collect(),
+        caps,
     };
     Ok(prepared)
 }
@@ -1373,6 +1393,9 @@ pub(crate) struct PreparedCreate {
     /// resumed create inserts only what is missing, and reading it here keeps
     /// the guarded transaction free of a second connection's query.
     held_mappings: Vec<MappingId>,
+    /// The plan the create was prepared under, whose resource ceiling and
+    /// preview allowance are checked again inside the write's transaction.
+    caps: Capabilities,
 }
 
 /// Writes one prepared create inside a transaction the caller owns.
@@ -1387,6 +1410,19 @@ pub(crate) async fn apply_create(
     tam_storage::insert_product(tx, org, &prepared.canonical, &prepared.names, now)
         .await
         .map_err(|error| create_fault(state, &error))?;
+    // The early count in `prepare_create` answers before any file is
+    // resolved; this one runs under the catalogue lock, so two creates racing
+    // for the last place cannot both land.
+    crate::entitlement::refuse_past_resource_cap_in(tx, state, org, prepared.caps.resources_max)
+        .await?;
+    crate::entitlement::spend_previews_in(
+        tx,
+        state,
+        org,
+        &prepared.caps,
+        u32::try_from(prepared.canonical.previews.len()).unwrap_or(u32::MAX),
+    )
+    .await?;
 
     if let Some(record) = &prepared.sidecar {
         // After the product row, because the sidecar's foreign key names it.
@@ -2744,6 +2780,9 @@ struct CoverFacts {
     /// where the product has only one, which is a removal the repository
     /// refuses anyway.
     next_payload: Option<ProductFile>,
+    /// The preview rows, so a swap that puts new bytes behind one is counted
+    /// against the month's previews like any other preview made.
+    previews: Vec<FileId>,
 }
 
 async fn cover_facts(
@@ -2763,6 +2802,7 @@ async fn cover_facts(
         cover: record.product.cover.as_ref().map(|cover| cover.id),
         first_payload,
         next_payload,
+        previews: record.product.previews.iter().map(|file| file.id).collect(),
     })
 }
 
@@ -2784,6 +2824,7 @@ async fn redraw_cover(
     org: OrgId,
     file: &ProductFile,
     now: Timestamp,
+    storage_bytes_max: u64,
 ) -> Result<tam_storage::FileReplacement, APIError> {
     let blobs = state.blobs.clone().ok_or_else(|| {
         APIError::new(
@@ -2806,6 +2847,20 @@ async fn redraw_cover(
     let rendered = tam_pipeline::render::cover(file.kind, &bytes)
         .map_err(|error| state.internal(&format!("the thumbnail could not be drawn: {error}")))?
         .image;
+    // A drawn thumbnail is a blob like any other, so it fits in the plan's
+    // storage or the change that asked for it is refused.
+    let used = ProductRepo::new(state.pool.clone())
+        .stored_bytes(org)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    let incoming = i64::try_from(rendered.png.len()).unwrap_or(i64::MAX);
+    if used.saturating_add(incoming) > i64::try_from(storage_bytes_max).unwrap_or(i64::MAX) {
+        return Err(quota_refusal(
+            QuotaKind::StorageBytes,
+            used,
+            storage_bytes_max,
+        ));
+    }
     let sink = TenantBlobSink {
         repo: &repo,
         org,
@@ -2853,11 +2908,19 @@ pub(crate) async fn add_file(
     }
     let file = body.handle.resolve(role, now)?;
     let name = body.handle.checked_name()?;
-    ProductRepo::new(state.pool.clone())
+    let spend = if role == FileRole::Preview {
+        PreviewSpend::one(&state, context.org, &context.entitlement.caps).await?
+    } else {
+        PreviewSpend::none()
+    };
+    let added = match ProductRepo::new(state.pool.clone())
         .add_file(context.org, product, (&file, name), now)
         .await
-        .map_err(|error| storage_fault(&state, &error))?
-        .map_err(|refusal| file_refusal(&state, refusal))?;
+    {
+        Ok(answer) => answer.map_err(|refusal| file_refusal(&state, refusal)),
+        Err(error) => Err(storage_fault(&state, &error)),
+    };
+    spend.settle(&state, context.org, added).await?;
     let Reach { reaches, kept } = reach_after(&state, context.org, product).await?;
     Ok((
         StatusCode::CREATED,
@@ -2897,11 +2960,25 @@ pub(crate) async fn replace_file(
     // a cover drawn against a product that moved underneath is discarded
     // rather than written.
     let cover = if facts.first_payload == Some(replaced) && facts.cover.is_some() {
-        Some(redraw_cover(&state, context.org, &parsed, now).await?)
+        Some(
+            redraw_cover(
+                &state,
+                context.org,
+                &parsed,
+                now,
+                context.entitlement.caps.storage_bytes_max,
+            )
+            .await?,
+        )
     } else {
         None
     };
-    let written = ProductRepo::new(state.pool.clone())
+    let spend = if facts.previews.contains(&replaced) {
+        PreviewSpend::one(&state, context.org, &context.entitlement.caps).await?
+    } else {
+        PreviewSpend::none()
+    };
+    let swapped = match ProductRepo::new(state.pool.clone())
         .replace_file(
             context.org,
             tam_storage::FileTarget {
@@ -2920,8 +2997,11 @@ pub(crate) async fn replace_file(
             now,
         )
         .await
-        .map_err(|error| storage_fault(&state, &error))?
-        .map_err(|refusal| file_refusal(&state, refusal))?;
+    {
+        Ok(answer) => answer.map_err(|refusal| file_refusal(&state, refusal)),
+        Err(error) => Err(storage_fault(&state, &error)),
+    };
+    let written = spend.settle(&state, context.org, swapped).await?;
     let Reach { reaches, kept } = reach_after(&state, context.org, product).await?;
     Ok(Json(ReplacedFileView {
         product,
@@ -2950,7 +3030,12 @@ pub(crate) async fn remove_file(
     // same reason a replacement's is.
     let redrawn = match (&facts.next_payload, facts.first_payload, facts.cover) {
         (Some(next), Some(first), Some(_)) if first == removed => {
-            Some(redraw_cover(&state, context.org, next, now).await?)
+            Some(
+                // Unbounded: a removal is how a seller over their storage
+                // makes room, and refusing it for the thumbnail it redraws
+                // would leave them no way out.
+                redraw_cover(&state, context.org, next, now, u64::MAX).await?,
+            )
         }
         _ => None,
     };
