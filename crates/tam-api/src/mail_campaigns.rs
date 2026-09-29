@@ -1896,8 +1896,10 @@ fn token_of(raw: &str) -> Option<Uuid> {
 /// and a GET that unsubscribed would unsubscribe people who never clicked.
 pub(crate) async fn unsubscribe_page(Query(params): Query<UnsubscribeParams>) -> Response {
     if token_of(&params.t).is_none() {
+        // A link with no usable token is a malformed request, not a missing
+        // page: 422 keeps the route distinguishable from an unmounted one.
         return (
-            StatusCode::NOT_FOUND,
+            StatusCode::UNPROCESSABLE_ENTITY,
             page(
                 "This link doesn't work",
                 "Open Settings in Teachouse to choose which emails you get.",
@@ -1924,7 +1926,7 @@ pub(crate) async fn unsubscribe(
 ) -> Result<Response, APIError> {
     let Some(token) = token_of(&params.t) else {
         return Ok((
-            StatusCode::NOT_FOUND,
+            StatusCode::UNPROCESSABLE_ENTITY,
             page(
                 "This link doesn't work",
                 "Open Settings in Teachouse to choose which emails you get.",
