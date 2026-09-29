@@ -5,47 +5,50 @@ tags: schedules, publishing, desktop-app
 
 # Scheduling sends
 
-A schedule sends resources to a marketplace at a time you choose.
+A schedule sends the same resources to a marketplace at a time you choose, once or every day or week.
 
 ## Before you start
 
-1. Connect the marketplace.
-2. Sign in to the desktop app and keep it running at the scheduled time.
+1. Connect the marketplace on **Marketplaces**. TPT and Tes are connected in the free Teachouse app. See [Why you need the Teachouse app](/guides/why-the-app).
+2. Keep the Teachouse app open and signed in on at least one device.
 
-If the marketplace is not connected, or no computer is signed in, the schedule waits instead of sending.
+When the time comes, Teachouse gets the send ready. A device with the app open then does the sending at its next check-in. If none of your devices is on, the send waits until one is. If the page says **A schedule needs a computer to run on**, install the app first.
 
 ## Make a schedule
 
-1. Open **Automations → Schedules**.
-2. Choose the marketplace.
-3. Choose what to send: a label, a collection, or everything not sent yet.
-4. Set the day, the time and the time zone.
-5. Save.
+Open **Automations → Schedules** and press **New schedule**. The form has four steps.
 
-<!-- shot: /automations/sharing, the schedule form with a time and timezone set -->
-![Creating a schedule](/v1/guides/images/1049fc8e0d90df1b5f017419315ab894f4add6f4901fc57dfa3d507c93364d14)
+1. **Where**: tick the marketplaces to send to.
+2. **What**: choose **Everything with a label** and pick the label, or **Let me choose** and tick the resources. A label is checked again at every run, so resources you label later are sent too.
+3. **When**: set the **Time**, choose **Repeat** (**Once**, **Daily** or **Weekly**), the **Day** for a weekly schedule, and the **Timezone**. Under **When it arrives**, choose **Draft** (made on the marketplace for you to check) or **Live** (made and published in one go).
+4. **Save**: give it a **Name** and press **Save schedule**.
+
+<!-- shot: /automations/sharing, the New schedule form set to send the Autumn term label to TES weekly on Friday at 07:00 Europe/London -->
+![A new schedule: the Autumn term label to Tes, every Friday at 07:00](/v1/guides/images/75084010d388af442728ac74c8a3e80814475d95ce877a08086cc3d060543d32)
 
 ## Time zone
 
-The schedule uses the time zone you set on it, not your browser's. If you travel, change the time zone on the schedule.
+The schedule uses the time zone you set on it, not your browser's. If you move, change the time zone on the schedule.
 
 ## What a schedule sends
 
-It only sends resources that are ready. A ready resource has a target price, every field the marketplace needs, and its file on a signed-in computer. A resource that is not ready is skipped and listed, not marked as failed.
+A schedule only sends resources that are ready: they have a price and every field the marketplace needs, and one of your devices has the file. A resource that is not ready is skipped and listed with the reason. It is not marked as failed, and it goes next time once you fix it.
 
 ## Sending edits again
 
-A resource that is already live is only sent again if you have changed it. Turn on republishing if you want your edits sent the next time the schedule runs.
+A resource that is already live is not sent again unless you turn on **Republish when a resource changes**. Then your edits go out the next time the schedule runs.
 
-## Tes cannot take edits
-
-Tes accepts new listings but not changes to a listing that is already live. To update it, take the listing down on Tes and let the schedule send it again.
-
-<!-- shot: /automations/sharing, the schedule list showing the last run's result -->
-![Schedule results](/v1/guides/images/73ac178bcbfb2dbf1e1d730c20f4f47a24bda1d7430c7abd45e5402b28deaeed)
+Tes does not accept edits to a live listing. Tes skips a resource that changed after it went live; every other marketplace is sent the edit.
 
 ## Check what was sent
 
-1. Open **Automations → Schedules**.
-2. Look at the last send next to the schedule.
-3. Open it to see what happened to each resource.
+Your schedules are listed under **Your schedules**, with when each one runs next and when it last ran. Use the switch to turn a schedule **On** or **Off** without deleting it.
+
+1. Press **Runs** next to a schedule.
+2. Each run shows how many resources were sent, and each skipped resource with its reason.
+3. Press **Open the run** to see each resource being sent. See [Keeping marketplaces up to date](/guides/updates).
+
+<!-- shot: /automations/sharing, the Friday maths drop schedule with its last run: 2 sent, Map skills skipped for a missing licence -->
+![A schedule's last run: two sent, one skipped with its reason](/v1/guides/images/d118f567825bf46d32c9231d8e14e4c36395a9061bb8bc7426ad23bb3389ba3f)
+
+A skipped resource that needs a licence or a price is fixed in [Mapping your words to a marketplace's](/guides/target-terms) or [Setting target prices](/guides/target-prices).

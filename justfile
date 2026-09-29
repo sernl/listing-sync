@@ -888,12 +888,14 @@ dev-all: db-up db-wait db-migrate auth-migrate auth-env
 #
 #   just guides-images https://teachouse.io ~/operator-session.txt
 #
-# The session file holds an operator's `tam_session` cookie value.
+# The session file holds an operator's `tam_session` cookie value, alone or as
+# a `tam_session=<value>` line among other cookies.
 guides-images base_url session_file:
     #!/usr/bin/env node
     const { readFileSync, readdirSync } = require('node:fs');
     const base = '{{base_url}}'.replace(/\/$/, '');
-    const session = readFileSync('{{session_file}}', 'utf8').trim().replace(/^tam_session=/, '');
+    const sessionFile = readFileSync('{{session_file}}', 'utf8');
+    const session = sessionFile.match(/(?:^|[\s;])tam_session=([^\s;]+)/)?.[1] ?? sessionFile.trim();
     const types = { webp: 'image/webp', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif' };
     const named = new Set();
     for (const file of readdirSync('docs/guides').filter((name) => name.endsWith('.md'))) {

@@ -5,41 +5,60 @@ tags: analytics, connections
 
 # Reading your figures
 
-**Analytics** shows what each marketplace tells you about your resources, next to what Teachouse can count for you.
+**Analytics** shows what your shops report about your resources. TPT sends its own figures. Tes shares none, so for Tes Teachouse counts your own resources instead.
 
 ## See your figures
 
 1. Open **Catalogue → Analytics**.
-2. Choose the marketplace and the time period.
-3. Read the table.
+2. To look at only some resources, choose one in **Label**. **Every resource** shows them all.
+3. Read the cards at the top: **Sold**, **Earned** and **Views** from TPT, and how many of your listings are **Live**.
+4. Scroll to **Top resources** for one row per listing.
 
-<!-- shot: /analytics, the figures table for one marketplace -->
-![Your figures](/v1/guides/images/5f596b785e89798fc6c6041ec4abdb3ed31d3d2825841c65228c0b70c90349d4)
+There is no date range. **Sold**, **Views** and **Earned** are totals, as TPT reports them. **Earned** is the number TPT gave, in its own currency.
+
+The **Top resources** table has these columns:
+
+- **Resource**: the resource's name in your catalogue.
+- **Shop**: the marketplace the listing is on.
+- **Sold**, **Earned** and **Views**: TPT's figures for that listing.
+- **Read**: how long ago the Teachouse app read these figures.
+
+<!-- shot: /analytics, the Top resources table with TPT figures for the six resources -->
+![Your figures for each resource on TPT](/v1/guides/images/7bcf26c9d7b552a0addcf2b9dcd9d22e5f585e743323894a79d11d26b8c9407a)
 
 ## What each marketplace shows
 
-- **TPT** shares views, sales and earnings. These are TPT's own figures.
-- **Tes** shares no figures. What you see for Tes is counted from your own catalogue: how many resources you have live, not how well they sold.
+Each shop has its own panel.
 
-The two columns measure different things, so do not compare them directly.
+- **TPT reports** sold, views and earned. Its panel shows the three totals, your **Most viewed resources**, and **Where they stand**: how many listings are **Live**, **Drafts**, **Not sent yet** or **Other**.
+- **Tes shares nothing.** Its panel counts your own resources instead: how many are **Live on TES**, **Drafts waiting to go live**, **Not sent to TES yet**, **In another state**, and **Resources with no TES listing**. These counts say what is live, not how well it sold.
 
-## Getting new figures
+The two panels measure different things, so do not compare them directly.
 
-New figures arrive when a signed-in computer reads the marketplace.
+<!-- shot: /analytics, the TPT panel with figures beside the Tes panel with your own counts -->
+![TPT reports figures; Tes shares none](/v1/guides/images/b810748da94e11fb0f772f7635cf6e775fff8d574fc627775bd8cc0224bc524e)
 
-1. Open the desktop app.
-2. Leave it running.
+## When the figures were last sent
+
+Nothing on this page is live. The Teachouse app reads TPT's figures on a device where you are signed in to TPT, and sends them to Teachouse.
+
+At the top right, **Figures as of** says when the oldest figure on the page was read, so nothing looks fresher than it is. Each card says the same, for example "as of 2 h ago".
+
+If that time is old, no device has read TPT for a while. To get new figures:
+
+1. Open the Teachouse app on a device where you are signed in to TPT.
+2. Leave it open.
 3. Refresh **Analytics**.
 
-The page shows when a computer last sent figures. If that date is old, the computer has not been on.
+Press **How it works** at the top of the page for a short reminder of how the figures are read.
 
-<!-- shot: /analytics, the "last sent" line under the table -->
-![When figures last arrived](/v1/guides/images/0ce74b67cfbe47baee2c1f2127f9dd59172aa6d24be07e39c8e5799e206095cc)
+<!-- shot: /analytics, the top of the page with the Label filter, "Figures as of", How it works and the cards -->
+![When your figures were last read](/v1/guides/images/8b4e2340f49170c9b1cccc03274ab10865f1e438805f9472435896f3b3023a94)
 
-## Nothing to rank
+## No figures yet
 
-Ranking needs figures from the marketplace. If a marketplace shares none, there is nothing to rank, and the panel tells you so.
+If no device has sent figures yet, **Top resources** says **No figures yet**. They show up the next time the Teachouse app is online on your device.
 
 ## Figures need a plan
 
-Analytics comes with Sync. See [Your plan and what it allows](/guides/plans).
+Statistics on every shop come with Sync and Studio. See [Your plan and what it allows](/guides/plans).

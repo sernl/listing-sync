@@ -27,7 +27,7 @@ Everything else works in the app or in any browser where you sign in: importing,
 There is an app for Windows, Linux and Android. There is no iPhone or Mac app yet.
 
 <!-- shot: /marketplaces, step 1 "Get the app" with the download cards -->
-![Getting the app from Marketplaces](/v1/guides/images/PENDING)
+![Getting the app from Marketplaces](/v1/guides/images/18c08991041e7d00becb3b1e96f8c7bb50a233c3881ae5c2ff76d471be43886e)
 
 ## Keep the app open for marketplace work
 
