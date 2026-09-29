@@ -244,17 +244,20 @@ pub(crate) async fn read_order(
     context: OrgContext,
     Path((_version, device)): Path<(String, String)>,
 ) -> Result<Json<ReadOrderView>, APIError> {
-    let listings = if may_capture(&state, context.org, &device).await? {
-        tam_storage::MappingRepo::new(state.pool.clone())
-            .bound_listings(context.org, InventoryId::Tpt)
-            .await
-            .map_err(|error| state.internal(&error.to_string()))?
-            .into_iter()
-            .map(BoundListing::from)
-            .collect()
-    } else {
-        Vec::new()
-    };
+    // A plan without statistics captures nothing: the figures would be
+    // collected against the shop's rate budget for a page it cannot open.
+    let listings =
+        if context.entitlement.caps.analytics && may_capture(&state, context.org, &device).await? {
+            tam_storage::MappingRepo::new(state.pool.clone())
+                .bound_listings(context.org, InventoryId::Tpt)
+                .await
+                .map_err(|error| state.internal(&error.to_string()))?
+                .into_iter()
+                .map(BoundListing::from)
+                .collect()
+        } else {
+            Vec::new()
+        };
     Ok(Json(ReadOrderView {
         listings,
         next_poll_ms: READ_POLL_MS,
@@ -274,7 +277,7 @@ pub(crate) async fn record_capture(
     Path((_version, device)): Path<(String, String)>,
     Json(body): Json<CaptureBody>,
 ) -> Result<Json<CaptureAcceptedView>, APIError> {
-    if !may_capture(&state, context.org, &device).await? {
+    if !context.entitlement.caps.analytics || !may_capture(&state, context.org, &device).await? {
         return Ok(Json(CaptureAcceptedView { written: 0 }));
     }
     // Only this tenant's own mappings. `listing_metric_snapshot` carries a

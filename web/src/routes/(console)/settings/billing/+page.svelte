@@ -5,6 +5,8 @@
 	import { ApiFailure, api, type BillingView } from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
+	import { dayMonth, usageLines } from '$lib/entitlement';
+	import { entitlementRead } from '$lib/entitlement-read';
 	import Explain from '$lib/Explain.svelte';
 	import { PLANS } from '$lib/generated/plans';
 	import { type PriceKey } from '$lib/generated/vocab';
@@ -55,6 +57,15 @@
 	let cadence = $state<Cadence>('yearly');
 
 	const queryClient = useQueryClient();
+
+	// What has been used of each allowance, against the plan's own figures:
+	// the server counts the same numbers and refuses at them.
+	const entitlement = createQuery(() => entitlementRead);
+	const used = $derived(
+		entitlement.data === undefined
+			? null
+			: usageLines(entitlement.data.usage, entitlement.data.capabilities)
+	);
 
 	const billing = createQuery(() => ({
 		queryKey: queryKeys.billing,
@@ -391,6 +402,36 @@
 			{/if}
 		</section>
 	</div>
+
+	<section class="bill-section" aria-labelledby="usage-title">
+		<div class="bill-card-head">
+			<h2 id="usage-title" class="bill-h2">What you have used</h2>
+			<Explain title="What your plan counts" label="How it works">
+				<p>
+					Each plan includes a number of resources, templates, collections, labels and devices.
+					Watermarked previews are counted each month and start again on the 1st.
+				</p>
+				<p>
+					If you are over a number because your plan changed, you keep everything you have. You
+					can't add more until you upgrade or make room.
+				</p>
+			</Explain>
+		</div>
+		{#if entitlement.isPending}
+			<p class="quiet">Loading…</p>
+		{:else if used === null || entitlement.data === undefined}
+			<p class="quiet">Your usage did not load. Refresh the page to try again.</p>
+		{:else}
+			<ul class="bill-usage">
+				{#each used as row (row.limit)}
+					<li class:full={row.full}>{row.line}{#if row.full}<span class="quiet">{' · full'}</span>{/if}</li>
+				{/each}
+			</ul>
+			<p class="quiet">
+				Previews start again on {dayMonth(entitlement.data.usage.month_resets_at)}.
+			</p>
+		{/if}
+	</section>
 
 	{#if hasCustomer}
 		<section class="bill-section" aria-labelledby="invoices-title">
@@ -750,6 +791,18 @@
 		.bill-pair {
 			grid-template-columns: repeat(2, minmax(0, 1fr));
 		}
+	}
+
+	.bill-usage {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+		gap: var(--s-2) var(--s-4);
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	.bill-usage .full {
+		font-weight: 600;
 	}
 
 	.bill-card {

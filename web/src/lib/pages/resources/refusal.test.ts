@@ -30,6 +30,23 @@ describe('a refused create', () => {
 		expect(createRefusal(new Error('offline'))).toBe(NOT_CREATED);
 		expect(createRefusal(undefined)).toBe(NOT_CREATED);
 	});
+
+	it('quotes the plan sentence the server refused a resource past the cap with', () => {
+		// The same words the disabled New resource button carries, so a seller
+		// who reached the form anyway reads one refusal, not two.
+		const said = 'Your plan includes 100 resources. Upgrade to add more.';
+		const full = new ApiFailure(422, {
+			status: 422,
+			errors: [
+				{
+					code: 'quota_exceeded',
+					message: said,
+					detail: { quota: 'listings_max', used: 100, limit: 100 }
+				}
+			]
+		} as never);
+		expect(createRefusal(full)).toBe(said);
+	});
 });
 
 describe('a marketplace refusing a field this listing does not carry', () => {

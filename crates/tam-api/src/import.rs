@@ -32,7 +32,7 @@ use tam_import::{
 };
 use tam_storage::{
     job_request_key, BlobRepo, Completion, DeviceRepo, Disposition, EventScope, JobOrigin, JobRepo,
-    Mint, NewJob, Observed, ResourceAdmission, ResourceCoverage, SyncRequestRecord,
+    Mint, NewJob, Observed, ProductRepo, ResourceAdmission, ResourceCoverage, SyncRequestRecord,
     SyncRequestRepo, CREATE_LEG, IMPORT_LEG,
 };
 use tam_types::{
@@ -40,7 +40,7 @@ use tam_types::{
     SystemComponent, Timestamp, TransportClass, Uuid,
 };
 
-use crate::entitlement::feature_refusal;
+use crate::entitlement::{feature_refusal, quota_refusal, QuotaKind};
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::jobs::{missing, storage_fault, validation, workflow_deleted};
 use crate::{AppState, OrgContext};
@@ -279,6 +279,7 @@ async fn legacy_page(
         repo: &repo,
         request,
         device: &device,
+        caps: context.entitlement.caps,
     };
     let mut applied = 0u32;
     // Recovery may finish prior admissions, but cannot extend or complete
@@ -501,6 +502,9 @@ struct Applying<'a> {
     /// Which machine reported this, recorded as the device's own assertion
     /// beside our receipt rather than restated as something we verified.
     device: &'a str,
+    /// The plan the page arrived under, whose resource ceiling and storage
+    /// bound each resource this leg adds.
+    caps: tam_limits::Capabilities,
 }
 
 enum ResourceApply {
@@ -571,6 +575,15 @@ async fn prepare_resource(
         ));
     };
     let connection = source_connection(state, run.org, run.source, run.now).await?;
+    let stored = ProductRepo::new(state.pool.clone())
+        .stored_bytes(run.org)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    let storage_max = applying.caps.storage_bytes_max;
+    let incoming = i64::try_from(cover_png.bytes().len()).unwrap_or(i64::MAX);
+    if stored.saturating_add(incoming) > i64::try_from(storage_max).unwrap_or(i64::MAX) {
+        return Err(quota_refusal(QuotaKind::StorageBytes, stored, storage_max));
+    }
     let hash = applying
         .repo
         .put(run.org, cover_png.bytes(), run.now)
@@ -649,6 +662,13 @@ async fn apply_admitted(
     let report = apply_import(&mut tx, run.org, &prepared, run.now)
         .await
         .map_err(|error| import_fault(state, error))?;
+    crate::entitlement::refuse_past_resource_cap_in(
+        &mut tx,
+        state,
+        run.org,
+        applying.caps.resources_max,
+    )
+    .await?;
     SyncRequestRepo::append_observed(
         &mut tx,
         run.org,

@@ -1021,7 +1021,8 @@ export type { AiOffer, Capabilities, Pack, PlanRow, PlansView } from '$lib/gener
 
 /** What the seller has used, against the figures above. Moves are not here:
  *  they are bought and spent rather than counted against a ceiling, so they
- *  ride beside this block as a balance. */
+ *  ride beside this block as a balance. `previews` and `ai_fills` count the
+ *  current UTC month and start again at `month_resets_at` (epoch ms). */
 export interface EntitlementUsage {
 	resources: number;
 	marketplaces: number;
@@ -1029,6 +1030,10 @@ export interface EntitlementUsage {
 	collections: number;
 	labels: number;
 	devices: number;
+	storage_bytes: number;
+	previews: number;
+	ai_fills: number;
+	month_resets_at: number;
 }
 
 /** Where an organisation's plan came from.
@@ -1689,9 +1694,11 @@ export type ArchiveMode = 'explode' | 'keep_whole';
  *  on that ground alone. `image` is the thumbnail slots: the upload answers
  *  422 `upload_rejected` for bytes that are not a picture, so a worksheet
  *  dropped into a slot is refused before it is stored rather than kept and
- *  discovered later. Omitted means the upload is not slot-bound and any
- *  accepted type may land. */
-export type UploadSlot = 'image';
+ *  discovered later. `preview` is a watermarked preview on its way to a
+ *  resource: the upload answers 422 `previews_per_month` once this month's
+ *  previews are used up, before any byte is stored. Omitted means the upload
+ *  is not slot-bound and any accepted type may land. */
+export type UploadSlot = 'image' | 'preview';
 
 /** One vocabulary value as a create or an edit names it, matching the shape
  *  `PathView` reads back. */

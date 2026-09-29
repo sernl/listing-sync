@@ -36,7 +36,7 @@ use tam_storage::{
     due_tick, job_request_key, EntitlementRepo, ImportRunRepo, JobReadRepo, JobRepo, MappingRepo,
     NewImportRun, NewJobItem, ProductRepo, RunKind, RunOpening, RunState, ScheduleMember,
     ScheduleOutcome, ScheduleRecord, ScheduleRepo, ScheduleRunWrite, SyncIntent, SyncRequestRepo,
-    SyncSettingRepo,
+    SyncSettingRecord, SyncSettingRepo,
 };
 use tam_types::{
     Actor, InventoryId, JobId, MappingId, OrgId, PriceIntent, ProductId, Stamp, SystemComponent,
@@ -141,8 +141,8 @@ async fn tenant_pass(
     // forever.
     maintain(state, org, report).await?;
 
-    if caps.sync_pull_interval_secs.is_some() {
-        pull(state, org, now, report).await?;
+    if let Some(minimum) = caps.sync_pull_interval_secs {
+        pull(state, org, now, minimum, report).await?;
     }
     // Finishing a run is not gated on the pull capability. A tenant whose
     // plan lapsed between the pull and the read still has resources their own
@@ -435,10 +435,16 @@ fn skipped(product: ProductId, inventory: InventoryId, reason: &str) -> Schedule
 /// necessary was organisation-wide and is now per shop. One device may still
 /// only serve one at a time, and that is the device's own decision rather
 /// than a fence here.
+///
+/// `minimum` is the plan's own interval. A stored interval shorter than it
+/// is one the seller chose on a faster plan they no longer hold, and is read
+/// as the plan's until they save the setting again, so a downgrade takes
+/// effect on the next pass rather than on the next edit.
 async fn pull(
     state: &AppState,
     org: OrgId,
     now: Timestamp,
+    minimum: u32,
     report: &mut PassReport,
 ) -> Result<(), APIError> {
     let runs = ImportRunRepo::new(state.pool.clone());
@@ -448,6 +454,10 @@ async fn pull(
         .await
         .map_err(|error| storage_fault(state, &error))?
         .into_iter()
+        .map(|setting| SyncSettingRecord {
+            interval_secs: setting.interval_secs.max(minimum),
+            ..setting
+        })
         .filter(|setting| setting.due(now))
         .map(|setting| setting.inventory)
         .filter(|inventory| {

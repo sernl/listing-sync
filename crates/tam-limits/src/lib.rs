@@ -125,7 +125,10 @@ impl Plan {
     /// section 3.2, by `2026-09-27-subscription-tiers.md` section 0, which
     /// adds Starter and sells Studio, and by
     /// `2026-09-29-pricing-structure-review.md` section 5, which opens one
-    /// collection to Look and lifts the label cap on every paid plan):
+    /// collection to Look and lifts the label cap on every paid plan, and by
+    /// `docs/notes/design/entitlement-enforcement.md` section 1, which puts a
+    /// resource ceiling on every plan below Studio and counts watermarked
+    /// previews per month):
     /// every figure here is that table's. Section 8 of the tiers note and
     /// section 9 of the review name the triggers that re-open them.
     ///
@@ -137,16 +140,17 @@ impl Plan {
     #[must_use]
     pub const fn capabilities(self, rung: Option<u32>) -> Capabilities {
         match self {
-            // Look: the whole catalogue visible on both marketplaces, and
-            // five moves to watch one listing actually appear on the other
-            // side. There is no other trial, so import is not gated at all
-            // and the only ceiling is the storage one behind `resources_max`.
+            // Look: a small shop brought in whole, and five moves to watch
+            // one listing actually appear on the other side. There is no
+            // other trial, so import is not gated at all; what bounds it is
+            // the resource ceiling. A hundred resources is a typical first
+            // shop and still shows every tool (enforcement note section 1).
             Self::Free => Capabilities {
-                resources_max: 500,
+                resources_max: 100,
                 marketplaces_max: u32::MAX,
                 // DECIDED (2026-09-26 re-evaluation): Look stores covers, not
-                // bundles, so 500 resources fit in ~150 MiB; the cut quadruples
-                // the Look accounts Garage holds at quota.
+                // bundles, so even 500 resources fit in ~150 MiB; the cut
+                // quadruples the Look accounts Garage holds at quota.
                 storage_bytes_max: 256 << 20,
                 import_spreadsheet: true,
                 import_marketplace: true,
@@ -168,13 +172,18 @@ impl Plan {
                 export: true,
                 devices_max: 5,
                 ai_fills_per_month: 0,
+                // Enough to see what a watermarked preview does to a listing
+                // on a few resources, not enough to preview a whole shop.
+                previews_per_month: 5,
                 uploads_in_flight_max: 1,
                 support: Support::Guides,
             },
             // Starter: one teacher adding about a resource a week. Edits go
             // out once a day; statistics and automatic rules start at Sync.
+            // Five hundred resources is five times Look, and a preview for
+            // every new resource plus a refresh of the rest each month.
             Self::Starter => Capabilities {
-                resources_max: u32::MAX,
+                resources_max: 500,
                 marketplaces_max: u32::MAX,
                 storage_bytes_max: 5 << 30,
                 import_spreadsheet: true,
@@ -197,11 +206,12 @@ impl Plan {
                 export: true,
                 devices_max: 5,
                 ai_fills_per_month: 50,
+                previews_per_month: 50,
                 uploads_in_flight_max: 2,
                 support: Support::Email2Days,
             },
             Self::Subscriber => Capabilities {
-                resources_max: u32::MAX,
+                resources_max: 2_000,
                 marketplaces_max: u32::MAX,
                 storage_bytes_max: 20 << 30,
                 import_spreadsheet: true,
@@ -222,6 +232,7 @@ impl Plan {
                 export: true,
                 devices_max: 5,
                 ai_fills_per_month: 200,
+                previews_per_month: 200,
                 uploads_in_flight_max: 3,
                 support: Support::Email2Days,
             },
@@ -250,6 +261,7 @@ impl Plan {
                 export: true,
                 devices_max: 5,
                 ai_fills_per_month: 600,
+                previews_per_month: u32::MAX,
                 uploads_in_flight_max: 3,
                 support: Support::Email1Day,
             },
@@ -352,6 +364,10 @@ pub struct Capabilities {
     pub export: bool,
     pub devices_max: u32,
     pub ai_fills_per_month: u32,
+    /// Watermarked previews made in the preview maker, counted per UTC
+    /// calendar month in `usage_counter` (migration 0098). `u32::MAX` is no
+    /// ceiling.
+    pub previews_per_month: u32,
     /// Uploads one organisation may have open at once. The upload route is
     /// the one server path that is memory-heavy and holds a pool connection
     /// across the object-store write, so this is the fairness bound between
@@ -581,7 +597,7 @@ pub const PLANS: [PlanRow; 4] = [
         yearly_key: None,
         trial_days: 0,
         recommended: false,
-        tagline: "Bring your shops in, see every resource in one place and try five moves.",
+        tagline: "For a small shop: bring your resources in, make previews and try five moves.",
     },
     PlanRow {
         id: Plan::Starter,
@@ -844,9 +860,11 @@ impl FeatureKey {
     /// What a plan holding `caps` gets of this feature.
     ///
     /// The rows answering a constant `true` are the core: import, the
-    /// editor, previews, rules and the desktop app are the product itself,
-    /// cost nothing per seller, and are what a trial has to show
-    /// (`2026-09-29-pricing-structure-review.md` section 5).
+    /// editor, rules and the desktop app are the product itself, cost
+    /// nothing per seller, and are what a trial has to show
+    /// (`2026-09-29-pricing-structure-review.md` section 5). Watermarked
+    /// previews left the core in the enforcement note: every plan makes
+    /// them, and how many a month climbs the ladder.
     #[must_use]
     #[expect(
         clippy::integer_division,
@@ -877,13 +895,11 @@ impl FeatureKey {
             Self::Export => Included::Flag(caps.export),
             Self::Analytics => Included::Flag(caps.analytics),
             Self::AiFill => Included::counted(caps.ai_fills_per_month),
+            Self::WatermarkedPreviews => Included::counted(caps.previews_per_month),
             Self::DesktopApp => Included::Flag(caps.devices_max > 0),
             Self::EmailSupport => Included::Flag(!matches!(caps.support, Support::Guides)),
             Self::PrioritySupport => Included::Flag(matches!(caps.support, Support::Email1Day)),
-            Self::CopyOrMove
-            | Self::TermAndPriceRules
-            | Self::RichText
-            | Self::WatermarkedPreviews => Included::Flag(true),
+            Self::CopyOrMove | Self::TermAndPriceRules | Self::RichText => Included::Flag(true),
         }
     }
 }
@@ -1010,7 +1026,7 @@ pub const PLAN_FEATURES: [PlanFeature; 22] = [
         FeatureKey::WatermarkedPreviews,
         "Watermarked previews",
         FeatureGroup::Catalogue,
-        None,
+        Some(FeatureUnit::PerMonth),
     ),
     feature(
         FeatureKey::Templates,
@@ -1235,8 +1251,8 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::{
-        http, ingest, job, FeatureGroup, FeatureKey, FeatureUnit, Included, Plan, PriceKey,
-        Support, PACKS, PLANS, PLAN_FEATURES,
+        http, ingest, job, Capabilities, FeatureGroup, FeatureKey, FeatureUnit, Included, Plan,
+        PriceKey, Support, PACKS, PLANS, PLAN_FEATURES,
     };
 
     /// The pricing page raises one plan. Two would be no recommendation and
@@ -1364,7 +1380,6 @@ mod tests {
             FeatureKey::Import,
             FeatureKey::DuplicateReview,
             FeatureKey::RichText,
-            FeatureKey::WatermarkedPreviews,
             FeatureKey::TermAndPriceRules,
             FeatureKey::Export,
             FeatureKey::DesktopApp,
@@ -1375,6 +1390,106 @@ mod tests {
                     Included::Flag(true),
                     "{key:?} is core and must be on {}",
                     plan.as_str()
+                );
+            }
+        }
+        // Counted, but never withheld: every plan makes some previews.
+        for plan in Plan::ALL {
+            assert_ne!(
+                FeatureKey::WatermarkedPreviews.included(&plan.capabilities(None)),
+                Included::Flag(false),
+                "{} must be able to make a watermarked preview",
+                plan.as_str()
+            );
+        }
+    }
+
+    /// Every capability, as a score on which a stronger plan must never be
+    /// lower. The destructure names every field with no `..`, so a new
+    /// capability is a compile error here until someone says how it climbs.
+    fn cap_reach(caps: Capabilities) -> Vec<(&'static str, u64)> {
+        let Capabilities {
+            resources_max,
+            marketplaces_max,
+            storage_bytes_max,
+            import_spreadsheet,
+            import_marketplace,
+            duplicate_review,
+            publish_marketplaces_max,
+            moves_per_month,
+            moves_accrual_cap,
+            // Descends by design: the trial's five moves are Look's alone,
+            // and `only_the_free_plan_carries_the_lifetime_moves` pins it.
+            free_moves_lifetime: _,
+            pack_edit_days,
+            scheduling,
+            sync_pull_interval_secs,
+            auto_publish_rules,
+            templates_max,
+            collections_max,
+            labels_max,
+            analytics,
+            export,
+            devices_max,
+            ai_fills_per_month,
+            previews_per_month,
+            uploads_in_flight_max,
+            support,
+        } = caps;
+        vec![
+            ("resources_max", u64::from(resources_max)),
+            ("marketplaces_max", u64::from(marketplaces_max)),
+            ("storage_bytes_max", storage_bytes_max),
+            ("import_spreadsheet", u64::from(import_spreadsheet)),
+            ("import_marketplace", u64::from(import_marketplace)),
+            ("duplicate_review", u64::from(duplicate_review)),
+            (
+                "publish_marketplaces_max",
+                u64::from(publish_marketplaces_max),
+            ),
+            ("moves_per_month", u64::from(moves_per_month)),
+            ("moves_accrual_cap", u64::from(moves_accrual_cap)),
+            ("pack_edit_days", u64::from(pack_edit_days)),
+            ("scheduling", u64::from(scheduling)),
+            (
+                "sync_pull_interval_secs",
+                sync_pull_interval_secs.map_or(0, |secs| u64::MAX - u64::from(secs)),
+            ),
+            ("auto_publish_rules", u64::from(auto_publish_rules)),
+            ("templates_max", u64::from(templates_max)),
+            ("collections_max", u64::from(collections_max)),
+            ("labels_max", u64::from(labels_max)),
+            ("analytics", u64::from(analytics)),
+            ("export", u64::from(export)),
+            ("devices_max", u64::from(devices_max)),
+            ("ai_fills_per_month", u64::from(ai_fills_per_month)),
+            ("previews_per_month", u64::from(previews_per_month)),
+            ("uploads_in_flight_max", u64::from(uploads_in_flight_max)),
+            (
+                "support",
+                match support {
+                    Support::Guides => 0,
+                    Support::Email2Days => 1,
+                    Support::Email1Day => 2,
+                },
+            ),
+        ]
+    }
+
+    /// No capability gets worse up the ladder, whether or not the comparison
+    /// table shows it: an upgrade that lost anything would be a downgrade in
+    /// a row the seller never saw.
+    #[test]
+    fn every_cap_climbs_the_ladder() {
+        for (below, above) in Plan::ALL.iter().zip(Plan::ALL.iter().skip(1)) {
+            let lower = cap_reach(below.capabilities(None));
+            let upper = cap_reach(above.capabilities(None));
+            for ((name, low), (_, high)) in lower.iter().zip(&upper) {
+                assert!(
+                    high >= low,
+                    "{name}: {} grants less than {}",
+                    above.as_str(),
+                    below.as_str()
                 );
             }
         }
@@ -1454,36 +1569,26 @@ mod tests {
     }
 
     /// The ladder has to climb, or the plans are four names for one
-    /// product. It climbs on moves now rather than on resources: import is
-    /// unlimited above Free, so the resource ceiling stopped being the axis
-    /// that separates the plans the day the free tier became the trial.
+    /// product. It climbs on three counted axes: moves, resources and
+    /// watermarked previews, each strictly larger on every stronger plan.
     #[test]
-    fn every_plan_grants_strictly_more_moves_than_the_one_below() {
-        let allowances: Vec<u32> = Plan::ALL
-            .iter()
-            .map(|plan| plan.capabilities(None).moves_per_month)
-            .collect();
-        for pair in allowances.windows(2) {
-            assert!(
-                pair[1] > pair[0],
-                "monthly move allowances must increase: {pair:?}"
-            );
+    fn every_plan_grants_strictly_more_of_each_counted_axis_than_the_one_below() {
+        let axes: [(&str, fn(Capabilities) -> u32); 3] = [
+            ("moves_per_month", |caps| caps.moves_per_month),
+            ("resources_max", |caps| caps.resources_max),
+            ("previews_per_month", |caps| caps.previews_per_month),
+        ];
+        for (axis, read) in axes {
+            let values: Vec<u32> = Plan::ALL
+                .iter()
+                .map(|plan| read(plan.capabilities(None)))
+                .collect();
+            for pair in values.windows(2) {
+                assert!(pair[1] > pair[0], "{axis} must increase: {pair:?}");
+            }
         }
-        let ceilings: Vec<u32> = Plan::ALL
-            .iter()
-            .map(|plan| plan.capabilities(None).resources_max)
-            .collect();
-        for pair in ceilings.windows(2) {
-            assert!(
-                pair[1] >= pair[0],
-                "no plan may hold fewer resources than a weaker one: {pair:?}"
-            );
-        }
-        assert!(
-            Plan::Free.capabilities(None).resources_max
-                < Plan::Subscriber.capabilities(None).resources_max,
-            "the free ceiling is the one resource bound that still separates two plans"
-        );
+        // The founder's floor: the free plan starts at a hundred resources.
+        assert_eq!(Plan::Free.capabilities(None).resources_max, 100);
     }
 
     /// Five moves once, on the free plan and nowhere else: a plan that is

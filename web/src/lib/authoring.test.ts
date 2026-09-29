@@ -317,12 +317,6 @@ describe('the quota refusal', () => {
 		);
 	});
 
-	it('renders the catalogue sentence in the word the console uses for one', () => {
-		expect(quotaSentence({ quota: 'listings_max', used: 100, limit: 100 })).toMatch(
-			/up to 100 resources, and you have 100/
-		);
-	});
-
 	it('falls back to the server’s own message for a detail it cannot read', () => {
 		expect(quotaSentence({ quota: 'something_new', used: 1, limit: 2 })).toBeNull();
 		expect(quotaSentence('nope')).toBeNull();

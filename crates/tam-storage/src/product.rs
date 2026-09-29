@@ -885,17 +885,11 @@ impl ProductRepo {
     }
 
     /// How many live products this tenant holds, which is what
-    /// `TierQuota::listings_max` bounds.
+    /// `Capabilities::resources_max` bounds.
     pub async fn live_count(&self, org: OrgId) -> Result<i64, StorageError> {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
-        let counted = sqlx::query_scalar!(
-            r#"SELECT count(*) AS "counted!" FROM product
-               WHERE org_id = $1 AND deleted_at IS NULL"#,
-            uuid_to_db(org.0),
-        )
-        .fetch_one(&mut *tx)
-        .await?;
+        let counted = live_count_in(&mut tx, org).await?;
         tx.commit().await?;
         Ok(counted)
     }
@@ -2938,4 +2932,25 @@ pub async fn restore_product(
         .await?;
     }
     Ok(true)
+}
+
+/// [`ProductRepo::live_count`] in a transaction the caller owns and has
+/// pinned, so a gate that holds the organisation's catalogue lock counts and
+/// inserts under the same lock and two concurrent writes cannot both take the
+/// last place.
+///
+/// # Errors
+///
+/// Storage only.
+pub async fn live_count_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+) -> Result<i64, StorageError> {
+    Ok(sqlx::query_scalar!(
+        r#"SELECT count(*) AS "counted!" FROM product
+           WHERE org_id = $1 AND deleted_at IS NULL"#,
+        uuid_to_db(org.0),
+    )
+    .fetch_one(&mut **tx)
+    .await?)
 }

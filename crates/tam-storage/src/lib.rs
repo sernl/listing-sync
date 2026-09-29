@@ -92,8 +92,9 @@ pub use duplicates::{
     VerdictRecord, REVERSIBLE_MS,
 };
 pub use entitlement::{
-    Accrual, EntitlementRepo, Grant, GrantRecord, GrantedBy, MoveBalance, MoveCredit, MoveSource,
-    NewGrant, StorefrontAllowance, Usage,
+    spend_monthly_in, Accrual, EntitlementRepo, Grant, GrantRecord, GrantedBy, MonthlyCharge,
+    MonthlyKind, MonthlySpend, MoveBalance, MoveCredit, MoveSource, NewGrant, StorefrontAllowance,
+    Usage,
 };
 pub use erasure::{Erased, ErasureRefusal, ErasureRepo};
 pub use file_source::ProductFileSourceRepo;
@@ -145,8 +146,8 @@ pub use jobs::{
     REAUTH_REQUIRED, REVIVABLE_GATES,
 };
 pub use labels::{
-    attach_system_label, set_labels_for_product, system_label_name, Colour, LabelRecord,
-    LabelRename, LabelRepo,
+    attach_system_label, own_label_count_in, set_labels_for_product, system_label_name, Colour,
+    LabelRecord, LabelRename, LabelRepo,
 };
 pub use lowering::{
     lower, lower_head, lower_removal, requires_bound_on, uncaptured_source, uncaptured_transition,
@@ -174,11 +175,11 @@ pub use operators::{OperatorEvent, OperatorRecord, OperatorRepo};
 pub use org::{OrgRecord, OrgRepo, OrgWrite};
 pub use overrides::OverrideRepo;
 pub use product::{
-    fill_rights, has_live_payload, insert_product, offer_cover, offer_payload, restore_product,
-    soft_delete_product, title_of, update_product, CoverOffer, ExportedListing, ExportedResource,
-    FileRefusal, FileReplacement, FileSwap, FileTarget, PayloadOffer, PayloadOfferPolicy,
-    ProductCreationFacts, ProductEdit, ProductFiles, ProductRecord, ProductRepo, ProductSummary,
-    ReplacedFiles, StoredCover, ThumbnailChange,
+    fill_rights, has_live_payload, insert_product, live_count_in, offer_cover, offer_payload,
+    restore_product, soft_delete_product, title_of, update_product, CoverOffer, ExportedListing,
+    ExportedResource, FileRefusal, FileReplacement, FileSwap, FileTarget, PayloadOffer,
+    PayloadOfferPolicy, ProductCreationFacts, ProductEdit, ProductFiles, ProductRecord,
+    ProductRepo, ProductSummary, ReplacedFiles, StoredCover, ThumbnailChange,
 };
 pub use profile::{AvatarWrite, ProfileRepo, TourOutcome, TourState};
 pub use pruning::{PruneRepo, PruneReport};
