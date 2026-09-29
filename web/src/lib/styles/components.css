@@ -34,25 +34,6 @@
 	background: var(--accent-soft);
 }
 
-/* A disabled control states its reason in a `title`, which is the discipline
-   `$lib/bulk-verbs` already enforces; the fill says it is not a fault. */
-.cta:disabled,
-.btn:disabled {
-	background: var(--soon-soft);
-	border-color: var(--line);
-	color: var(--soon);
-	opacity: 1;
-}
-
-/* Every button's children are wrapped so the word can be taken away without
-   taking the glyph with it. `display: contents` by default, so the wrapper
-   changes no layout on the hundreds of buttons that never hide anything: the
-   children stay the flex items they were, and the 7px gap still falls between
-   them rather than around a single box. */
-.btn-word {
-	display: contents;
-}
-
 /* A control that names itself in `label` keeps its word on a screen wide
    enough to hold it and draws as its glyph alone below that, which is how a
    six-verb bulk bar fits a 360px row at all. The word stays in the markup:

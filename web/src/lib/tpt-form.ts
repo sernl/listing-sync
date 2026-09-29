@@ -39,16 +39,22 @@ import type {
 	TermKind
 } from '$lib/generated/vocab';
 import { core, loadCore } from '$lib/core';
+import { afterLoadIdle } from '$lib/idle';
 import { licenceElections, licenceGated, rightsOf, type LicenceIntent } from '$lib/authoring';
 import { MARKETPLACE_OF } from '$lib/listings-view';
 import { MARKETPLACE_TILES, MARKETPLACE_WORD, platformTitle } from '$lib/platforms';
 
-// Started at module scope so the rules are ready before the seller has typed
-// anything; guarded because there is no asset to fetch while prerendering. A
-// failure is not unhandled here: the form awaits the same promise and, when
-// it rejects, asks the server for each verdict instead (`verdictOf`).
+// Started from module scope so the rules are ready before the seller has
+// typed anything, but only once the page has loaded and gone idle: this module
+// is imported by the resource list as well as the form, and the compiled core
+// is over a hundred kilobytes the list never runs, so it must not compete with
+// the list's first paint. The form asks for it itself as it mounts, which
+// starts the same load at once there. Guarded because there is no asset to
+// fetch while prerendering. A failure is not unhandled here: the form awaits
+// the same promise and, when it rejects, asks the server for each verdict
+// instead (`verdictOf`).
 if (typeof window !== 'undefined') {
-	loadCore().catch(() => undefined);
+	void afterLoadIdle(window).then(() => loadCore().catch(() => undefined));
 }
 
 /** The core's verdict on a draft, or null while the module is not here.

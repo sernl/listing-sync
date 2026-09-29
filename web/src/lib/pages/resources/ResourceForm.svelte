@@ -395,8 +395,9 @@
 	// flight, and stood at "the form's rules are still loading" for as long as
 	// the seller left the fields alone — with Create disabled behind it.
 	//
-	// The promise is already in flight from `$lib/tpt-form`'s own module scope;
-	// this awaits the same one and records which way it went.
+	// `$lib/tpt-form` warms the same promise once a page has gone idle; the
+	// form cannot wait for that, so this starts it (or joins it) and records
+	// which way it went.
 	let rulesReady = $state(false);
 	let rulesFailed = $state(false);
 	$effect(() => {

@@ -115,7 +115,7 @@ describe('the landing brand copies', () => {
 
 	const pairs: [string, string][] = [
 		['apps/landing/public/brand', 'web/static/brand'],
-		['apps/landing/public/fonts', 'web/static/fonts']
+		['apps/landing/public/fonts', 'web/src/lib/fonts']
 	];
 
 	it.each(pairs)('%s carries the console\'s own bytes', (landing, console_) => {

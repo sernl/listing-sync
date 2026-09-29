@@ -3,7 +3,7 @@
 Poppins for headings and Inter for body text, the two faces of the brand kit, served from this directory rather than from Google's CDN.
 The site's Content-Security-Policy admits no third-party origin, so a face fetched from `fonts.gstatic.com` would be refused rather than merely unnecessary.
 
-Every file below is a byte copy of the one under `web/static/fonts/`, which is where the console loads the same faces from.
+Every file below is a byte copy of the one under `web/src/lib/fonts/`, which is where the console loads the same faces from.
 That is not tidiness: `crates/tam-server/src/serving.rs` probes this build ahead of the console's own static directory, so a name both builds carry is answered from this copy whichever tier asked for it, and the flake check `served-artefacts` fails a build where the two differ.
 
 Downloaded from `fonts.gstatic.com` on 2026-09-11 by requesting the `fonts.googleapis.com/css2` URL for each family with a woff2-capable user agent and taking one file per `unicode-range` block.
@@ -28,4 +28,4 @@ Poppins ships one static file per weight, so each weight is its own `@font-face`
 Both families are licensed under the SIL Open Font License 1.1, whose text is beside the files as `OFL-Poppins.txt` and `OFL-Inter.txt`.
 Poppins is copyright 2020 The Poppins Project Authors; Inter is copyright 2020 The Inter Project Authors.
 
-To refresh a face, request the same `css2` URL again, take one file per `unicode-range` block, update the `unicode-range` values in `src/styles/site.css` against the ones the new stylesheet emits, and copy the same bytes to `web/static/fonts/`.
+To refresh a face, request the same `css2` URL again, take one file per `unicode-range` block, update the `unicode-range` values in `src/styles/site.css` against the ones the new stylesheet emits, and copy the same bytes to `web/src/lib/fonts/`.

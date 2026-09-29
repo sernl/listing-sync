@@ -112,13 +112,25 @@ function dirAt(relative: string): string[] {
 	return readdirSync(fileURLToPath(new URL(relative, import.meta.url)));
 }
 
+/** The first path segments a route directory defines. A group directory --
+ *  `(auth)`, `(console)` -- names no segment of its own, so its children are
+ *  read in its place, and a `+` file is a route's contents rather than one. */
+function routeSegments(relative: string): string[] {
+	return dirAt(relative).flatMap((name) => {
+		if (name.startsWith('(')) {
+			return routeSegments(`${relative}/${name}`);
+		}
+		return name.startsWith('+') ? [] : [name];
+	});
+}
+
 /** Every top-level path this product serves, read from the trees that define
  *  them rather than restated. A name that could not be a slug anyway -- a
  *  filename with a dot, anything under three characters such as the API's own
  *  `v1` -- is dropped, because reserving an unclaimable handle enforces
  *  nothing and would fail the reachability assertion above. */
 function servedTopLevelPaths(): string[] {
-	const routes = dirAt('../routes').filter((name) => !name.startsWith('+'));
+	const routes = routeSegments('../routes');
 	const statics = dirAt('../../static');
 	const landing = dirAt('../../../apps/landing/src/pages')
 		.map((file) => file.replace(/\.[^.]+$/, ''))

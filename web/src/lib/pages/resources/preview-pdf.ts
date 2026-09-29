@@ -1,7 +1,5 @@
-import { PDFDocument, StandardFonts, degrees, rgb } from 'pdf-lib';
-
 /** The brand indigo, `--primary` `#1E2A5A`, in pdf-lib's 0-to-1 components. */
-const INDIGO = rgb(0.118, 0.165, 0.353);
+const INDIGO: [number, number, number] = [0.118, 0.165, 0.353];
 
 /** Low enough that the page reads through it, high enough to deter a reseller. */
 const WATERMARK_OPACITY = 0.18;
@@ -24,6 +22,9 @@ export async function buildPreview(
 	watermark: string | null,
 	markedPages: number[] = pages
 ): Promise<Uint8Array> {
+	// pdf-lib is a megabyte of script, needed only once a preview is made, so
+	// it is fetched here rather than with the resource form that offers it.
+	const { PDFDocument, StandardFonts, degrees, rgb } = await import('pdf-lib');
 	const source = await PDFDocument.load(bytes);
 	const preview = await PDFDocument.create();
 	const copied = await preview.copyPages(
@@ -61,7 +62,7 @@ export async function buildPreview(
 				y: height / 2 - (drawnWidth / 2) * up - (drawnHeight / 2) * along,
 				size,
 				font,
-				color: INDIGO,
+				color: rgb(...INDIGO),
 				opacity: WATERMARK_OPACITY,
 				rotate: degrees(WATERMARK_ANGLE)
 			});

@@ -17,8 +17,17 @@
 //
 // A build with no key initialises nothing and loads nothing, which is the
 // same dormant shape the rest of this client's public configuration takes.
+//
+// And nothing here is on the way to a first paint. The library is a third of
+// a megabyte of script, so it is a separate chunk fetched only once the page
+// has loaded and gone idle, and the signed-out screens do not ask for it until
+// the visitor first presses or types (`(auth)/+layout.svelte`). Every call
+// below is queued behind that fetch rather than dropped, so an identity set or
+// an event captured before the library arrives still lands.
 
-import posthog from 'posthog-js';
+import { afterLoadIdle } from '$lib/idle';
+
+type PostHog = (typeof import('posthog-js'))['default'];
 
 /** Substituted by Vite at build time; absent from every build that does not
  *  define it. */
@@ -33,34 +42,51 @@ const API_HOST = '/ingest';
  *  is a proxy, or both break. */
 const UI_HOST = 'https://eu.posthog.com';
 
-let started = false;
+/** The initialised client once it has been fetched, or null before
+ *  `startTelemetry` and in a build with no key. */
+let client: Promise<PostHog> | null = null;
 
-/** Starts capture, once. Safe to call from a load that runs on every
- *  navigation, and a no-op in a build with no key. */
+/** Starts capture, once, after the page has loaded and gone idle. Safe to
+ *  call from a load that runs on every navigation, and a no-op in a build
+ *  with no key. */
 export function startTelemetry(): void {
-	if (started || !KEY) {
+	const key = KEY;
+	if (client !== null || !key) {
 		return;
 	}
-	started = true;
-	posthog.init(KEY, {
-		api_host: API_HOST,
-		ui_host: UI_HOST,
-		// Identified events are the priced ones, and an anonymous visitor who
-		// never signs in should not become a person.
-		person_profiles: 'identified_only',
-		capture_pageview: true,
-		// Named events only; see the header.
-		autocapture: false,
-		// Nothing here is a property we would keep, and two of them are how an
-		// address reaches an analytics tool by accident.
-		property_denylist: ['email', 'seller_email', '$initial_referrer'],
-		session_recording: {
-			maskAllInputs: true,
-			// Every non-input text node too. A catalogue console's text is the
-			// seller's own listings.
-			maskTextSelector: '*'
-		}
-	});
+	client = afterLoadIdle(window)
+		.then(() => import('posthog-js'))
+		.then(({ default: posthog }) => {
+			posthog.init(key, {
+				api_host: API_HOST,
+				ui_host: UI_HOST,
+				// Identified events are the priced ones, and an anonymous visitor who
+				// never signs in should not become a person.
+				person_profiles: 'identified_only',
+				capture_pageview: true,
+				// Named events only; see the header.
+				autocapture: false,
+				// Nothing here is a property we would keep, and two of them are how an
+				// address reaches an analytics tool by accident.
+				property_denylist: ['email', 'seller_email', '$initial_referrer'],
+				session_recording: {
+					maskAllInputs: true,
+					// Every non-input text node too. A catalogue console's text is the
+					// seller's own listings.
+					maskTextSelector: '*'
+				}
+			});
+			return posthog;
+		});
+	// A chunk that did not arrive is an analytics gap, not a console fault;
+	// the queued calls below are dropped with it.
+	client.catch(() => undefined);
+}
+
+/** Runs `call` against the client once it is ready. Nothing runs before
+ *  `startTelemetry`, and nothing in a build with no key. */
+function whenStarted(call: (posthog: PostHog) => void): void {
+	void client?.then(call, () => undefined);
 }
 
 /** Binds everything captured from here on to one organisation.
@@ -69,26 +95,17 @@ export function startTelemetry(): void {
  *  org-as-person is the true unit and there is no second identity space to
  *  keep in step. */
 export function identifyOrg(org: string): void {
-	if (!started) {
-		return;
-	}
-	posthog.identify(org);
+	whenStarted((posthog) => posthog.identify(org));
 }
 
 /** Forgets who this browser was. Called from sign-out, because without it
  *  the next seller on a shared machine inherits the last one's identity. */
 export function resetIdentity(): void {
-	if (!started) {
-		return;
-	}
-	posthog.reset();
+	whenStarted((posthog) => posthog.reset());
 }
 
 /** Records one named event. A no-op in a build with no key, so a call site
  *  never has to ask whether analytics is on. */
 export function capture(event: string, props: Record<string, unknown>): void {
-	if (!started) {
-		return;
-	}
-	posthog.capture(event, props);
+	whenStarted((posthog) => posthog.capture(event, props));
 }
