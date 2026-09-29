@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM mail_campaign c WHERE c.test AND c.created_by = $1 AND NOT EXISTS (SELECT 1 FROM mail_campaign_recipient r WHERE r.campaign_id = c.id AND r.status = 'queued')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b98a6592ca0e61259b2723f8ae204444c4d3e4c6b64aea38b304fd1a6b9b6b02"
+}

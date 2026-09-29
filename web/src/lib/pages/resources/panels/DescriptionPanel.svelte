@@ -4,12 +4,12 @@
 	import Field from '$lib/Field.svelte';
 	import FormSection from '$lib/FormSection.svelte';
 	import Note from '$lib/Note.svelte';
+	import RichTextEditor from '$lib/RichTextEditor.svelte';
 	import {
 		descriptionLength,
 		htmlLoss,
 		htmlToMarkdown,
 		markdownToHtml,
-		safeHref,
 		sanitiseHtml
 	} from '$lib/rich-text';
 	import { GROUP_HELP, markUp, type MarkKind, type Refusal, type TptDraft } from '$lib/tpt-form';
@@ -45,32 +45,11 @@
 	} = $props();
 
 	let box = $state<HTMLTextAreaElement | null>(null);
-	let editor = $state<HTMLDivElement | null>(null);
-	/** What this editor last wrote into the draft. A description that differs
-	 *  arrived from elsewhere — the stored product, a template, a format
-	 *  switch — and is drawn into the editor; one that matches is the
-	 *  teacher's own typing, and redrawing it would throw the caret away. */
-	let written: string | null = null;
-	/** The element `written` was drawn into. A switch away from rich text and
-	 *  back mounts a new, empty one, which has to be drawn whatever it holds. */
-	let drawnInto: HTMLDivElement | null = null;
 
 	const rich = $derived(draft.bodyFormat === 'Html');
 	/** What an HTML body holds that the editor cannot show: an imported
 	 *  listing's tables or pictures. Kept until the teacher edits here. */
 	const unkept = $derived(rich ? htmlLoss(draft.description) : []);
-
-	$effect(() => {
-		const description = draft.description;
-		if (editor === null || !rich || (editor === drawnInto && description === written)) {
-			return;
-		}
-		// Drawn from the allow-listed copy, never the raw one: an imported
-		// body's `<img onerror>` would run the moment it was parsed.
-		editor.innerHTML = sanitiseHtml(description) || '<p><br></p>';
-		written = description;
-		drawnInto = editor;
-	});
 
 	/** One Markdown toolbar button: Markdown written around what the teacher
 	 *  selected, and the caret put back where they would type next. */
@@ -87,70 +66,6 @@
 			typed.focus();
 			typed.setSelectionRange(marked.start, marked.end);
 		});
-	}
-
-	/** The editor's content as the draft keeps it: the allow-listed HTML. */
-	function capture() {
-		if (editor === null) {
-			return;
-		}
-		written = sanitiseHtml(editor.innerHTML);
-		set('description', written);
-	}
-
-	/** One rich-text toolbar button. `execCommand` is what every browser's
-	 *  own editing runs on; whatever element it picks, `capture` reduces to
-	 *  the allow-list. */
-	function command(name: 'bold' | 'italic' | 'insertUnorderedList' | 'insertOrderedList') {
-		editor?.focus();
-		document.execCommand('styleWithCSS', false, 'false');
-		document.execCommand('defaultParagraphSeparator', false, 'p');
-		document.execCommand(name);
-		capture();
-	}
-
-	function link() {
-		const answer = prompt('The web address to link to', 'https://');
-		if (answer === null) {
-			return;
-		}
-		const href = safeHref(answer);
-		if (href === null) {
-			alert('A link needs a web address starting with https:// or http://.');
-			return;
-		}
-		editor?.focus();
-		const selection = getSelection();
-		if (selection === null || selection.isCollapsed) {
-			const shown = href.replace(/&/g, '&amp;').replace(/</g, '&lt;');
-			const attribute = shown.replace(/"/g, '&quot;');
-			document.execCommand('insertHTML', false, `<a href="${attribute}">${shown}</a>`);
-		} else {
-			document.execCommand('createLink', false, href);
-		}
-		capture();
-	}
-
-	/** A paste arrives already reduced, so a document's fonts and colours
-	 *  never enter the editor to be stripped later. */
-	function paste(event: ClipboardEvent) {
-		const data = event.clipboardData;
-		if (data === null) {
-			return;
-		}
-		event.preventDefault();
-		const html = data.getData('text/html');
-		const text = data.getData('text/plain');
-		const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-		const clean =
-			html !== ''
-				? sanitiseHtml(html)
-				: escaped
-						.split(/\n{2,}/)
-						.map((block) => `<p>${block.replace(/\n/g, '<br>')}</p>`)
-						.join('');
-		document.execCommand('insertHTML', false, clean);
-		capture();
 	}
 
 	/** Switch the description's format, converting what is written. Asks first
@@ -180,7 +95,9 @@
 	}
 
 	function wordsOf(parts: readonly string[]): string {
-		return parts.length < 2 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`;
+		return parts.length < 2
+			? parts.join('')
+			: `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`;
 	}
 
 	const count = $derived(descriptionLength(draft.description, draft.bodyFormat));
@@ -215,9 +132,9 @@
 					see.
 				</p>
 				<p>
-					Markdown is plain text with marks in it: <code>**bold**</code>, <code>*italic*</code>,
-					and a <code>-</code> or <code>1.</code> at the start of a line for a list. We turn the
-					marks into formatting for each marketplace.
+					Markdown is plain text with marks in it: <code>**bold**</code>, <code>*italic*</code>, and
+					a <code>-</code> or <code>1.</code> at the start of a line for a list. We turn the marks into
+					formatting for each marketplace.
 				</p>
 				<p>
 					Either way, Tes gets plain text: paragraphs, and lists with a dash or a number on each
@@ -228,63 +145,15 @@
 	{/if}
 	<Field label="Description" id="draft-description" required={!optional}>
 		{#if rich}
-			<div class="res-md" role="group" aria-label="Formatting">
-				<button
-					type="button"
-					class="res-md-b"
-					onmousedown={(e) => e.preventDefault()}
-					onclick={() => command('bold')}
-				>
-					<b>B</b><span class="sr-only">Bold</span>
-				</button>
-				<button
-					type="button"
-					class="res-md-b"
-					onmousedown={(e) => e.preventDefault()}
-					onclick={() => command('italic')}
-				>
-					<i>I</i><span class="sr-only">Italic</span>
-				</button>
-				<button
-					type="button"
-					class="res-md-b"
-					onmousedown={(e) => e.preventDefault()}
-					onclick={() => command('insertUnorderedList')}
-				>
-					•<span class="sr-only">Bulleted list</span>
-				</button>
-				<button
-					type="button"
-					class="res-md-b"
-					onmousedown={(e) => e.preventDefault()}
-					onclick={() => command('insertOrderedList')}
-				>
-					1.<span class="sr-only">Numbered list</span>
-				</button>
-				<button
-					type="button"
-					class="res-md-b"
-					onmousedown={(e) => e.preventDefault()}
-					onclick={link}
-				>
-					<u>Link</u><span class="sr-only"> to a web address</span>
-				</button>
-			</div>
-			<div
+			<RichTextEditor
 				id="draft-description"
-				class="res-rich"
-				bind:this={editor}
-				contenteditable="true"
-				role="textbox"
-				tabindex="0"
-				aria-multiline="true"
-				aria-label="Description"
-				aria-required={optional ? undefined : 'true'}
-				data-placeholder="Describe your product and how it can be helpful to another educator"
-				class:empty={draft.description === ''}
-				oninput={capture}
-				onpaste={paste}
-			></div>
+				label="Description"
+				value={draft.description}
+				onchange={(html) => set('description', html)}
+				sanitise={sanitiseHtml}
+				placeholder="Describe your product and how it can be helpful to another educator"
+				required={!optional}
+			/>
 		{:else}
 			<div class="res-md" role="group" aria-label="Formatting">
 				<button type="button" class="res-md-b" onclick={() => format('bold')}>

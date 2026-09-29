@@ -1,0 +1,95 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH due AS ( SELECT campaign_id, user_id FROM mail_campaign_recipient WHERE status = 'queued' AND next_attempt_at <= $1 AND (leased_until IS NULL OR leased_until <= $1) ORDER BY next_attempt_at, campaign_id, user_id LIMIT 1 FOR UPDATE SKIP LOCKED) UPDATE mail_campaign_recipient r SET leased_until = $2, attempts = r.attempts + 1, updated_at = $1 FROM due, mail_campaign c, app_user u WHERE r.campaign_id = due.campaign_id AND r.user_id = due.user_id AND c.id = r.campaign_id AND u.id = r.user_id RETURNING r.campaign_id, r.user_id, r.auth_subject, r.org_name, r.plan, r.attempts, c.subject, c.body_html, c.link_url, c.link_label, c.audience, u.marketing_opt_out, u.marketing_token",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "campaign_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "auth_subject",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "org_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "plan",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "attempts",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "subject",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "body_html",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "link_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "link_label",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "audience",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 11,
+        "name": "marketing_opt_out",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 12,
+        "name": "marketing_token",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "6d1717fdcdf09968bbf39e302e5ba73d9bdf140efd93556bc0f900c65f64f179"
+}

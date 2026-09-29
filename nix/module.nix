@@ -187,6 +187,10 @@ let
   ++ lib.optionals (mailEnabled && cfg.server.mail.opsEmail != null) [
     "--ops-email"
     cfg.server.mail.opsEmail
+  ]
+  ++ lib.optionals (mailEnabled && cfg.server.mail.marketingFrom != null) [
+    "--marketing-email-from"
+    cfg.server.mail.marketingFrom
   ];
 
   # tam-server and tam-worker reach nothing off this machine while their stores
@@ -663,6 +667,18 @@ in
             when no platform operator has an address the identity service
             vouches for. Null leaves such a request on the operator listing
             only. Passed only when the mail path is on.
+          '';
+        };
+        marketingFrom = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          example = "Teachouse <no-reply@marketing.teachouse.io>";
+          description = ''
+            The sender the operators' campaigns (Admin → Mail) go out from.
+            Null keeps tam-server's default,
+            `no-reply@marketing.teachouse.io`, which Resend must hold as a
+            verified domain before a campaign is accepted. Passed only when
+            the mail path is on.
           '';
         };
       };

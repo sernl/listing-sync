@@ -5,7 +5,7 @@
 // would replace working resumption with polling.
 
 import { QueryClient } from '@tanstack/svelte-query';
-import { ApiFailure, type LibraryQuery } from '$lib/api';
+import { ApiFailure, type LibraryQuery, type MailAudience, type MailDraft } from '$lib/api';
 
 const MAX_RETRIES = 3;
 
@@ -127,6 +127,19 @@ export const queryKeys = {
 	adminSignups: ['admin-signups'] as const,
 	/** The site-wide switches as the operator reads them, uncached. */
 	adminSite: ['admin-site'] as const,
+	/** How many sellers one audience reaches, keyed by every filter. */
+	adminMailAudience: (audience: MailAudience) =>
+		[
+			'admin-mail-audience',
+			audience.segment,
+			audience.exclude_operators,
+			audience.verified_only
+		] as const,
+	/** The rendered email for one draft, keyed by the draft itself. */
+	adminMailPreview: (draft: MailDraft) => ['admin-mail-preview', draft] as const,
+	adminMailCampaigns: ['admin-mail-campaigns'] as const,
+	/** Under `adminMailCampaigns`, so invalidating the list refreshes it. */
+	adminMailCampaign: (id: string) => ['admin-mail-campaigns', id] as const,
 	adminOrgs: ['admin-orgs'] as const,
 	adminOrg: (org: string) => ['admin-org', org] as const,
 	adminFailures: ['admin-failed-writes'] as const,

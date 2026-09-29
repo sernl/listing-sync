@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE app_user SET marketing_opt_out = $3 WHERE id = $1 AND org_id = $2 RETURNING marketing_opt_out",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "marketing_opt_out",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5499214e7e0007f8be61273aee58ac9c08d7c2cee280993f9f912f44e2e98379"
+}

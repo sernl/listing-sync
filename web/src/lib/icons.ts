@@ -11,6 +11,7 @@ import type { LucideIcon } from '@lucide/svelte';
 import Activity from '@lucide/svelte/icons/activity';
 import ArrowLeft from '@lucide/svelte/icons/arrow-left';
 import ArrowRightLeft from '@lucide/svelte/icons/arrow-right-left';
+import AtSign from '@lucide/svelte/icons/at-sign';
 import Bell from '@lucide/svelte/icons/bell';
 import Bold from '@lucide/svelte/icons/bold';
 import BookOpen from '@lucide/svelte/icons/book-open';
@@ -52,6 +53,7 @@ import LibraryBig from '@lucide/svelte/icons/library-big';
 import List from '@lucide/svelte/icons/list';
 import Lock from '@lucide/svelte/icons/lock';
 import LogOut from '@lucide/svelte/icons/log-out';
+import Mail from '@lucide/svelte/icons/mail';
 import Minus from '@lucide/svelte/icons/minus';
 import Monitor from '@lucide/svelte/icons/monitor';
 import Package from '@lucide/svelte/icons/package';
@@ -60,6 +62,7 @@ import Pencil from '@lucide/svelte/icons/pencil';
 import Plus from '@lucide/svelte/icons/plus';
 import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 import Search from '@lucide/svelte/icons/search';
+import Send from '@lucide/svelte/icons/send';
 import Share2 from '@lucide/svelte/icons/share-2';
 import ShoppingBag from '@lucide/svelte/icons/shopping-bag';
 import ShieldCheck from '@lucide/svelte/icons/shield-check';
@@ -80,6 +83,7 @@ export const ICONS = {
 	activity: Activity,
 	'arrow-left': ArrowLeft,
 	'arrow-right-left': ArrowRightLeft,
+	'at-sign': AtSign,
 	bell: Bell,
 	bold: Bold,
 	'book-open': BookOpen,
@@ -121,6 +125,7 @@ export const ICONS = {
 	list: List,
 	lock: Lock,
 	'log-out': LogOut,
+	mail: Mail,
 	minus: Minus,
 	monitor: Monitor,
 	package: Package,
@@ -129,6 +134,7 @@ export const ICONS = {
 	plus: Plus,
 	'refresh-cw': RefreshCw,
 	search: Search,
+	send: Send,
 	'share-2': Share2,
 	'shopping-bag': ShoppingBag,
 	'shield-check': ShieldCheck,

@@ -99,6 +99,18 @@ pub struct ReadAck {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PreferencesView {
     pub notify_email: bool,
+    /// Whether they take the operators' news and tips
+    /// (`crate::mail_campaigns`); off once they follow an unsubscribe link.
+    pub marketing_email: bool,
+}
+
+/// A change to either switch; a field left out is left as it is.
+#[derive(Debug, Deserialize)]
+pub struct PreferencesPatch {
+    #[serde(default)]
+    pub notify_email: Option<bool>,
+    #[serde(default)]
+    pub marketing_email: Option<bool>,
 }
 
 /// Encodes the keyset as the opaque token the client carries back. The format
@@ -204,22 +216,37 @@ pub(crate) async fn preferences(
         .await
         .map_err(|error| storage_fault(&state, &error))?
         .ok_or_else(missing)?;
-    Ok(Json(PreferencesView { notify_email }))
+    let marketing_email =
+        crate::mail_campaigns::marketing_preference(&state, &context, None).await?;
+    Ok(Json(PreferencesView {
+        notify_email,
+        marketing_email,
+    }))
 }
 
-/// Sets it, for the requesting user and no other: the body carries the value
-/// and nothing that could name a different row.
+/// Sets either, for the requesting user and no other: the body carries the
+/// values and nothing that could name a different row.
 pub(crate) async fn update_preferences(
     State(state): State<AppState>,
     context: OrgContext,
-    Json(body): Json<PreferencesView>,
+    Json(body): Json<PreferencesPatch>,
 ) -> Result<Json<PreferencesView>, APIError> {
-    let notify_email = NotificationRepo::new(state.pool.clone())
-        .set_notify_email(context.org, context.user, body.notify_email)
-        .await
-        .map_err(|error| storage_fault(&state, &error))?
-        .ok_or_else(missing)?;
-    Ok(Json(PreferencesView { notify_email }))
+    let repo = NotificationRepo::new(state.pool.clone());
+    let notify_email = match body.notify_email {
+        Some(wanted) => {
+            repo.set_notify_email(context.org, context.user, wanted)
+                .await
+        }
+        None => repo.notify_email(context.org, context.user).await,
+    }
+    .map_err(|error| storage_fault(&state, &error))?
+    .ok_or_else(missing)?;
+    let marketing_email =
+        crate::mail_campaigns::marketing_preference(&state, &context, body.marketing_email).await?;
+    Ok(Json(PreferencesView {
+        notify_email,
+        marketing_email,
+    }))
 }
 
 #[cfg(test)]

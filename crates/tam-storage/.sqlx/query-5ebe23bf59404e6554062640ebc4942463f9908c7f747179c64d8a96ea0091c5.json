@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE app_user SET marketing_opt_out = true WHERE marketing_token = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5ebe23bf59404e6554062640ebc4942463f9908c7f747179c64d8a96ea0091c5"
+}

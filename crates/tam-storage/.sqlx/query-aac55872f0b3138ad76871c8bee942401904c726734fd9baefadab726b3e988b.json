@@ -1,0 +1,70 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT user_id, auth_subject, org_name, plan, status, attempts, provider_id, error, updated_at FROM mail_campaign_recipient WHERE campaign_id = $1 ORDER BY (status = 'failed') DESC, org_name, user_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "auth_subject",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "org_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "plan",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "attempts",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "provider_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "error",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "aac55872f0b3138ad76871c8bee942401904c726734fd9baefadab726b3e988b"
+}

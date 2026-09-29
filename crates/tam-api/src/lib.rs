@@ -42,6 +42,7 @@ pub mod import_batch;
 pub mod import_runs;
 pub mod jobs;
 pub mod library;
+pub mod mail_campaigns;
 pub mod marketplace_requests;
 pub mod matcher;
 pub mod migrations;
@@ -948,6 +949,45 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/{version}/admin/site",
             get(site::admin_site_view).patch(site::update_site),
+        )
+        // The operators' mail to sellers (`mail_campaigns`), and the two
+        // public routes every such mail links to: its pictures, which a mail
+        // client fetches with no session, and the unsubscribe link.
+        .route(
+            "/{version}/admin/mail/audience",
+            get(mail_campaigns::audience_count),
+        )
+        .route(
+            "/{version}/admin/mail/preview",
+            post(mail_campaigns::preview),
+        )
+        .route(
+            "/{version}/admin/mail/images",
+            post(mail_campaigns::upload_image).layer(guides::image_body_limit()),
+        )
+        .route(
+            "/{version}/admin/mail/test",
+            post(mail_campaigns::send_test),
+        )
+        .route(
+            "/{version}/admin/mail/campaigns",
+            get(mail_campaigns::list_campaigns).post(mail_campaigns::create_campaign),
+        )
+        .route(
+            "/{version}/admin/mail/campaigns/{id}",
+            get(mail_campaigns::campaign_detail).delete(mail_campaigns::delete_campaign),
+        )
+        .route(
+            "/{version}/admin/mail/campaigns/{id}/retry",
+            post(mail_campaigns::retry_campaign),
+        )
+        .route(
+            "/{version}/mail/images/{handle}",
+            get(mail_campaigns::image),
+        )
+        .route(
+            "/{version}/mail/unsubscribe",
+            get(mail_campaigns::unsubscribe_page).post(mail_campaigns::unsubscribe),
         )
         .route("/{version}/openapi.json", get(openapi::serve_document))
         .with_state(state)
