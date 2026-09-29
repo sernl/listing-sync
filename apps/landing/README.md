@@ -32,7 +32,7 @@ The brand files under `public/brand/`, the marks under `public/marks/` and the f
 `public/images/og.png` is the social card, 1200 by 630, rendered from `public/brand/logo.svg` with resvg; nothing rebuilds it, so refreshing the logo means re-rendering the card.
 
 Every value the founder must supply is in `src/site.js` and nowhere else: the login path, the support address and the availability sentence.
-`supportEmail` is `null` and renders no address anywhere rather than a `mailto:` that reaches nobody.
+`supportEmail` is `contact@teachouse.io`, the monitored address the footer, the maintenance page, the privacy policy and the terms all name.
 The site links no download: the app card says to download the app once signed in, and the console offers the build.
 
 `/privacy` is the privacy policy, written against how the product is built; a change to what Teachouse collects, where it keeps it or who processes it must move its text and its `updated` date in the same commit.

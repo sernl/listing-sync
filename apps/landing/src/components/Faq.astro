@@ -28,7 +28,17 @@ const top = tesBands[tesBands.length - 1];
 					faqs.map((item) => (
 						<details class="qa">
 							<summary>{item.q}</summary>
-							<p>{item.a}</p>
+							<p>
+								{item.a}
+								{item.link && (
+									<>
+										{' '}
+										<a class="link" href={item.link.href}>
+											{item.link.label}
+										</a>
+									</>
+								)}
+							</p>
 						</details>
 					))
 				}

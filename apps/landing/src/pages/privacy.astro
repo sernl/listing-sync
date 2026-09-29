@@ -157,6 +157,12 @@ const updated = '29 September 2026';
 				holds, the two connect to each other directly over an encrypted connection. The file does
 				not pass through our servers.
 			</p>
+			<p>
+				Files you import from a marketplace stay on your own devices: when you open one in the
+				console, Teachouse passes it from your device to your browser without keeping it. Files you
+				upload to Teachouse yourself are stored by Teachouse so you can use them anywhere, until you
+				delete them.
+			</p>
 
 			<h3>Billing</h3>
 			<p>
@@ -539,19 +545,8 @@ const updated = '29 September 2026';
 
 			<h2 id="contact">15. Contact</h2>
 			<p>
-				{
-					supportEmail ? (
-						<Fragment>
-							For privacy questions and requests, email{' '}
-							<a class="link" href={`mailto:${supportEmail}`}>
-								{supportEmail}
-							</a>
-							.
-						</Fragment>
-					) : (
-						'Our address for privacy questions and requests is being set up and will be published here.'
-					)
-				}
+				For privacy questions and requests, email{' '}
+				<a class="link" href={`mailto:${supportEmail}`}>{supportEmail}</a>.
 			</p>
 			<p>Teachouse, Auckland 1072, New Zealand.</p>
 			<p>
