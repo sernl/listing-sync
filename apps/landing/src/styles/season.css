@@ -93,9 +93,13 @@
 		z-index: -1;
 	}
 
-	/* A page without a hero (pricing, the legal pages) keeps the corners and
-	   the snow; the sky and the scene belong to the hero's empty spaces. */
-	html[data-season] main:not(:has(> .hero)) .season-layer > i:not(.season-corner, .season-snow) {
+	/* A page without a hero (pricing, the legal pages) keeps the corners, the
+	   snow and the garland; the sky and the scene belong to the hero's empty
+	   spaces. */
+	html[data-season]
+		main:not(:has(> .hero))
+		.season-layer
+		> i:not(.season-corner, .season-snow, .season-garland) {
 		display: none;
 	}
 
@@ -737,10 +741,717 @@
 		}
 	}
 
+	/* The kit: every theme but Halloween and Christmas draws the same twelve
+	   parts -- a garland, a corner, something hanging, a sky piece, a flock,
+	   a flyer, a lead character, a buddy, two props, an accent and a footer
+	   scene -- and names them below as custom properties, so these rules
+	   place them all the same way, in the spaces Halloween and Christmas
+	   proved empty. `:where()` keeps the kit's weight at a plain
+	   `html[data-season]`'s, so it wins over the shared rules above by coming
+	   later, and a theme's own rule after it wins over it the same way. */
+	html[data-season]:where(:not([data-season='halloween'], [data-season='christmas'])) .site-head {
+		border-image: var(--season-ribbon) 1;
+	}
+
+	html[data-season]:where(:not([data-season='halloween'], [data-season='christmas'])) .hero {
+		background-image: var(--season-tint);
+	}
+
+	/* The garland hangs from the ribbon into the hero's top padding. It is
+	   the layer's rather than the header's, so it scrolls away with the page
+	   instead of riding over the text under a sticky header. */
+	html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+		.season-garland {
+		display: block;
+		top: 2px;
+		left: 0;
+		right: 0;
+		height: 30px;
+		background-image: var(--season-strip);
+		background-repeat: repeat-x;
+		background-size: 120px 30px;
+		background-position: 0 0;
+	}
+
+	/* A phone: the right-hand corner under the garland, small enough to stay
+	   clear of the eyebrow's end, and the lead character on the footer's
+	   edge. */
+	html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+		.season-corner {
+		top: 28px;
+		width: 72px;
+		height: 44px;
+		background-image: var(--season-corner);
+	}
+
+	html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+		.season-corner-start {
+		display: none;
+	}
+
+	html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+		.site-foot::after {
+		background-image: var(--season-lead);
+	}
+
+	@media (min-width: 900px) {
+		html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+			.site-head::after {
+			display: block;
+			left: max(210px, calc(50% - 360px));
+			bottom: 8px;
+			width: 110px;
+			height: 64px;
+			background-image: var(--season-flock);
+		}
+
+		html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+			.season-corner-start {
+			display: block;
+			width: clamp(0px, calc(50vw - 556px), 90px);
+			height: auto;
+			aspect-ratio: 180 / 110;
+		}
+
+		html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+			.season-corner-end {
+			width: 150px;
+			height: 92px;
+		}
+
+		html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+			.hero::after {
+			background-image: var(--season-lead), var(--season-prop-a);
+			background-size:
+				150px 200px,
+				140px 105px;
+			background-position:
+				100% 100%,
+				0 100%;
+		}
+	}
+
+	/* The sky above the hero art: something hanging from the top edge, the
+	   sky piece, the flock and the flyer; the scene under the art. */
+	@media (min-width: 1100px) {
+		html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+			.season-dangle {
+			display: block;
+			top: 0;
+			left: calc(50% + 30px);
+			width: 96px;
+			height: 132px;
+			background-image: var(--season-dangle);
+			background-position: top center;
+		}
+
+		html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+			.season-sky {
+			top: 14px;
+			left: calc(50% + 170px);
+			width: 140px;
+			height: 140px;
+			background-image: var(--season-sky);
+		}
+
+		html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+			.season-flock {
+			top: 36px;
+			left: calc(50% + 330px);
+			width: 140px;
+			height: 82px;
+			background-image: var(--season-flock);
+		}
+
+		html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+			.season-flyer {
+			top: 128px;
+			left: calc(50% + 350px);
+			width: 72px;
+			height: 72px;
+			background-image: var(--season-flyer);
+		}
+
+		html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+			.hero::after {
+			left: calc(50% + 50px);
+			width: 580px;
+			background-image:
+				var(--season-prop-a), var(--season-lead), var(--season-accent), var(--season-prop-b);
+			background-size:
+				176px 132px,
+				165px 220px,
+				104px 89px,
+				100px 92px;
+			background-position:
+				0 100%,
+				190px 100%,
+				372px 100%,
+				100% 100%;
+		}
+	}
+
+	/* The sections and the footer, in the places the shared rules above
+	   give them. */
+	@media (min-width: 1240px) {
+		html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+			#about::before {
+			background-image: var(--season-buddy);
+		}
+
+		html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+			#about::after {
+			background-image: var(--season-prop-a), var(--season-prop-b);
+			background-size:
+				auto 100%,
+				auto 84%;
+			background-position:
+				0 100%,
+				100% 100%;
+		}
+
+		html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+			#how::before {
+			background-image: var(--season-accent);
+		}
+
+		html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+			#how::after {
+			top: 0;
+			height: 137px;
+			background-image: var(--season-dangle);
+			background-position: top center;
+		}
+
+		html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+			#pricing::before {
+			background-image: var(--season-sky);
+		}
+
+		html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+			#pricing::after {
+			background-image: var(--season-flyer);
+		}
+
+		html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+			#faq::before {
+			background-image: var(--season-flock);
+		}
+
+		html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+			#faq::after {
+			background-image: var(--season-prop-b);
+		}
+
+		html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+			.site-foot::before {
+			bottom: 0;
+			left: calc(50% + 250px);
+			width: 96px;
+			height: 88px;
+			background-image: var(--season-accent);
+		}
+
+		html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+			.site-foot::after {
+			background-image: var(--season-footer);
+		}
+	}
+
+	/* New Year's cities stand along the footer's top edge at every width,
+	   in place of the accent. */
+	html[data-season='new-year'] .site-foot::before {
+		display: block;
+		top: -44px;
+		bottom: auto;
+		left: 0;
+		right: 0;
+		width: auto;
+		height: 48px;
+		background-image: url('/seasons/new-year/skyline.svg');
+		background-size: auto 100%;
+		background-repeat: repeat-x;
+		background-position: 0 100%;
+	}
+
+	@media (min-width: 900px) {
+		html[data-season='new-year'] .site-foot::before {
+			top: -66px;
+			height: 72px;
+		}
+	}
+
+	/* Each kit theme: its ribbon and hero tint in palette tokens, its idle
+	   animation, and its twelve stickers. */
+	html[data-season='valentines'] {
+		--season-ribbon: repeating-linear-gradient(
+			-45deg,
+			var(--bad) 0 12px,
+			var(--surface) 12px 18px,
+			color-mix(in srgb, var(--bad) 45%, var(--surface)) 18px 30px,
+			var(--surface) 30px 36px
+		);
+		--season-tint:
+			radial-gradient(
+				circle at calc(50% + 240px) 90px,
+				color-mix(in srgb, var(--bad) 14%, transparent),
+				transparent 300px
+			),
+			linear-gradient(to bottom, color-mix(in srgb, var(--bad) 6%, transparent), transparent 60%);
+		--season-idle: season-pulse 1.6s ease-in-out infinite alternate;
+		--season-strip: url('/seasons/valentines/hearts-garland.svg');
+		--season-corner: url('/seasons/valentines/rose-sprig.svg');
+		--season-dangle: url('/seasons/valentines/hanging-hearts.svg');
+		--season-sky: url('/seasons/valentines/heart-balloon.svg');
+		--season-flock: url('/seasons/valentines/lovebirds.svg');
+		--season-flyer: url('/seasons/valentines/heart.svg');
+		--season-lead: url('/seasons/valentines/bear.svg');
+		--season-buddy: url('/seasons/valentines/love-letter.svg');
+		--season-prop-a: url('/seasons/valentines/chocolates.svg');
+		--season-prop-b: url('/seasons/valentines/cupcake.svg');
+		--season-accent: url('/seasons/valentines/roses.svg');
+		--season-footer: url('/seasons/valentines/schoolhouse.svg');
+	}
+
+	html[data-season='april-fools'] {
+		--season-ribbon: repeating-linear-gradient(
+			-45deg,
+			var(--warn) 0 12px,
+			var(--additive) 12px 24px,
+			var(--accent) 24px 36px,
+			var(--bad) 36px 48px
+		);
+		--season-tint:
+			radial-gradient(
+				circle at calc(50% + 240px) 90px,
+				color-mix(in srgb, var(--warn) 18%, transparent),
+				transparent 300px
+			),
+			linear-gradient(
+				to bottom,
+				color-mix(in srgb, var(--additive) 7%, transparent),
+				transparent 55%,
+				color-mix(in srgb, var(--accent) 6%, transparent)
+			);
+		--season-idle: season-wobble 1.8s ease-in-out infinite alternate;
+		--season-strip: url('/seasons/april-fools/jester-bunting.svg');
+		--season-corner: url('/seasons/april-fools/confetti.svg');
+		--season-dangle: url('/seasons/april-fools/paper-fish.svg');
+		--season-sky: url('/seasons/april-fools/silly-sun.svg');
+		--season-flock: url('/seasons/april-fools/paper-planes.svg');
+		--season-flyer: url('/seasons/april-fools/balloon-dog.svg');
+		--season-lead: url('/seasons/april-fools/jester.svg');
+		--season-buddy: url('/seasons/april-fools/jack-in-the-box.svg');
+		--season-prop-a: url('/seasons/april-fools/whoopee-cushion.svg');
+		--season-prop-b: url('/seasons/april-fools/rubber-chicken.svg');
+		--season-accent: url('/seasons/april-fools/joke-gift.svg');
+		--season-footer: url('/seasons/april-fools/funhouse.svg');
+	}
+
+	html[data-season='fourth-of-july'] {
+		--season-ribbon: repeating-linear-gradient(
+			-45deg,
+			var(--bad) 0 12px,
+			var(--surface) 12px 20px,
+			var(--primary) 20px 32px,
+			var(--surface) 32px 40px
+		);
+		--season-tint:
+			radial-gradient(
+				ellipse at 0 0,
+				color-mix(in srgb, var(--bad) 9%, transparent),
+				transparent 45%
+			),
+			radial-gradient(
+				ellipse at 100% 0,
+				color-mix(in srgb, var(--primary) 10%, transparent),
+				transparent 45%
+			),
+			linear-gradient(to bottom, var(--hover), transparent 60%);
+		--season-idle: season-pulse 1.4s ease-in-out infinite alternate;
+		--season-strip: url('/seasons/fourth-of-july/bunting.svg');
+		--season-corner: url('/seasons/fourth-of-july/star-streamers.svg');
+		--season-dangle: url('/seasons/fourth-of-july/hanging-stars.svg');
+		--season-sky: url('/seasons/fourth-of-july/firework.svg');
+		--season-flock: url('/seasons/fourth-of-july/fireworks.svg');
+		--season-flyer: url('/seasons/fourth-of-july/star.svg');
+		--season-lead: url('/seasons/fourth-of-july/eagle.svg');
+		--season-buddy: url('/seasons/fourth-of-july/ice-pop.svg');
+		--season-prop-a: url('/seasons/fourth-of-july/picnic-basket.svg');
+		--season-prop-b: url('/seasons/fourth-of-july/watermelon.svg');
+		--season-accent: url('/seasons/fourth-of-july/drum.svg');
+		--season-footer: url('/seasons/fourth-of-july/bandstand.svg');
+	}
+
+	html[data-season='back-to-school'] {
+		--season-ribbon: repeating-linear-gradient(
+			-45deg,
+			var(--warn) 0 14px,
+			var(--primary) 14px 20px,
+			var(--bad) 20px 30px,
+			var(--primary) 30px 36px
+		);
+		--season-tint:
+			radial-gradient(
+				circle at calc(50% + 240px) 90px,
+				color-mix(in srgb, var(--warn) 16%, transparent),
+				transparent 300px
+			),
+			linear-gradient(to bottom, color-mix(in srgb, var(--accent) 6%, transparent), transparent 60%);
+		--season-idle: season-hover 3.2s ease-in-out infinite alternate;
+		--season-strip: url('/seasons/back-to-school/crayon-bunting.svg');
+		--season-corner: url('/seasons/back-to-school/pencils.svg');
+		--season-dangle: url('/seasons/back-to-school/paper-chain.svg');
+		--season-sky: url('/seasons/back-to-school/globe.svg');
+		--season-flock: url('/seasons/back-to-school/paper-planes.svg');
+		--season-flyer: url('/seasons/back-to-school/paper-plane.svg');
+		--season-lead: url('/seasons/back-to-school/owl.svg');
+		--season-buddy: url('/seasons/back-to-school/backpack.svg');
+		--season-prop-a: url('/seasons/back-to-school/book-stack.svg');
+		--season-prop-b: url('/seasons/back-to-school/apple.svg');
+		--season-accent: url('/seasons/back-to-school/pencil-cup.svg');
+		--season-footer: url('/seasons/back-to-school/school-bus.svg');
+	}
+
+	html[data-season='winter'] {
+		--season-ribbon: repeating-linear-gradient(
+			-45deg,
+			var(--lavender) 0 12px,
+			var(--surface) 12px 20px,
+			var(--queued) 20px 32px,
+			var(--surface) 32px 40px
+		);
+		--season-tint:
+			radial-gradient(
+				ellipse at 100% 0,
+				color-mix(in srgb, var(--lavender) 18%, transparent),
+				transparent 50%
+			),
+			linear-gradient(to bottom, var(--hover), transparent 60%);
+		--season-idle: season-spin 24s linear infinite;
+		--season-strip: url('/seasons/winter/icicles.svg');
+		--season-corner: url('/seasons/winter/snowy-pine.svg');
+		--season-dangle: url('/seasons/winter/paper-snowflakes.svg');
+		--season-sky: url('/seasons/winter/snow-cloud.svg');
+		--season-flock: url('/seasons/winter/snowflakes.svg');
+		--season-flyer: url('/seasons/winter/snowflake.svg');
+		--season-lead: url('/seasons/winter/penguin.svg');
+		--season-buddy: url('/seasons/winter/polar-bear.svg');
+		--season-prop-a: url('/seasons/winter/sled.svg');
+		--season-prop-b: url('/seasons/winter/cocoa.svg');
+		--season-accent: url('/seasons/winter/mittens.svg');
+		--season-footer: url('/seasons/winter/cabin.svg');
+	}
+
+	html[data-season='summer'] {
+		--season-ribbon: repeating-linear-gradient(
+			-45deg,
+			var(--warn) 0 12px,
+			var(--surface) 12px 18px,
+			var(--accent) 18px 30px,
+			var(--peach) 30px 40px
+		);
+		--season-tint:
+			radial-gradient(
+				circle at calc(50% + 240px) 90px,
+				color-mix(in srgb, var(--warn) 24%, transparent),
+				transparent 320px
+			),
+			linear-gradient(
+				to bottom,
+				color-mix(in srgb, var(--accent) 7%, transparent),
+				transparent 55%,
+				color-mix(in srgb, var(--peach) 14%, transparent)
+			);
+		--season-idle: season-spin 12s linear infinite;
+		--season-strip: url('/seasons/summer/pennants.svg');
+		--season-corner: url('/seasons/summer/palm-leaves.svg');
+		--season-dangle: url('/seasons/summer/shell-mobile.svg');
+		--season-sky: url('/seasons/summer/sun.svg');
+		--season-flock: url('/seasons/summer/gulls.svg');
+		--season-flyer: url('/seasons/summer/beach-ball.svg');
+		--season-lead: url('/seasons/summer/crab.svg');
+		--season-buddy: url('/seasons/summer/ice-cream.svg');
+		--season-prop-a: url('/seasons/summer/sandcastle.svg');
+		--season-prop-b: url('/seasons/summer/bucket.svg');
+		--season-accent: url('/seasons/summer/lemonade.svg');
+		--season-footer: url('/seasons/summer/beach.svg');
+	}
+
+	html[data-season='spring'] {
+		--season-ribbon: repeating-linear-gradient(
+			-45deg,
+			color-mix(in srgb, var(--bad) 35%, var(--surface)) 0 12px,
+			var(--surface) 12px 18px,
+			var(--ok) 18px 30px,
+			var(--lavender) 30px 40px
+		);
+		--season-tint:
+			radial-gradient(
+				ellipse at 0 0,
+				color-mix(in srgb, var(--bad) 7%, transparent),
+				transparent 45%
+			),
+			radial-gradient(
+				ellipse at 100% 0,
+				color-mix(in srgb, var(--ok) 10%, transparent),
+				transparent 45%
+			),
+			linear-gradient(to bottom, var(--accent-soft), transparent 60%);
+		--season-idle: season-drift 5s ease-in-out infinite alternate;
+		--season-strip: url('/seasons/spring/blossom-garland.svg');
+		--season-corner: url('/seasons/spring/blossom-branch.svg');
+		--season-dangle: url('/seasons/spring/birdhouse.svg');
+		--season-sky: url('/seasons/spring/rainbow.svg');
+		--season-flock: url('/seasons/spring/swallows.svg');
+		--season-flyer: url('/seasons/spring/butterfly.svg');
+		--season-lead: url('/seasons/spring/lamb.svg');
+		--season-buddy: url('/seasons/spring/bee.svg');
+		--season-prop-a: url('/seasons/spring/tulips.svg');
+		--season-prop-b: url('/seasons/spring/watering-can.svg');
+		--season-accent: url('/seasons/spring/umbrella.svg');
+		--season-footer: url('/seasons/spring/garden.svg');
+	}
+
+	html[data-season='autumn'] {
+		--season-ribbon: repeating-linear-gradient(
+			-45deg,
+			var(--bad) 0 12px,
+			var(--warn) 12px 24px,
+			var(--peach) 24px 32px,
+			var(--warn) 32px 44px
+		);
+		--season-tint:
+			radial-gradient(
+				circle at calc(50% + 240px) 90px,
+				color-mix(in srgb, var(--warn) 20%, transparent),
+				transparent 300px
+			),
+			linear-gradient(
+				to bottom,
+				color-mix(in srgb, var(--bad) 6%, transparent),
+				transparent 55%,
+				color-mix(in srgb, var(--warn) 8%, transparent)
+			);
+		--season-idle: season-sway 3s ease-in-out infinite alternate;
+		--season-strip: url('/seasons/autumn/leaf-garland.svg');
+		--season-corner: url('/seasons/autumn/maple-branch.svg');
+		--season-dangle: url('/seasons/autumn/acorns.svg');
+		--season-sky: url('/seasons/autumn/wind-cloud.svg');
+		--season-flock: url('/seasons/autumn/leaves.svg');
+		--season-flyer: url('/seasons/autumn/leaf.svg');
+		--season-lead: url('/seasons/autumn/hedgehog.svg');
+		--season-buddy: url('/seasons/autumn/squirrel.svg');
+		--season-prop-a: url('/seasons/autumn/leaf-pile.svg');
+		--season-prop-b: url('/seasons/autumn/mushrooms.svg');
+		--season-accent: url('/seasons/autumn/boots.svg');
+		--season-footer: url('/seasons/autumn/tree.svg');
+	}
+
+	html[data-season='thanksgiving'] {
+		--season-ribbon: repeating-linear-gradient(
+			-45deg,
+			var(--warn) 0 12px,
+			color-mix(in srgb, var(--bad) 60%, var(--warn)) 12px 22px,
+			var(--peach) 22px 32px,
+			var(--soon) 32px 38px
+		);
+		--season-tint:
+			radial-gradient(
+				circle at calc(50% + 240px) 110px,
+				color-mix(in srgb, var(--warn) 22%, transparent),
+				transparent 320px
+			),
+			linear-gradient(to bottom, color-mix(in srgb, var(--peach) 14%, transparent), transparent 60%);
+		--season-idle: season-sway 3.4s ease-in-out infinite alternate;
+		--season-strip: url('/seasons/thanksgiving/harvest-bunting.svg');
+		--season-corner: url('/seasons/thanksgiving/wheat.svg');
+		--season-dangle: url('/seasons/thanksgiving/corn-cobs.svg');
+		--season-sky: url('/seasons/thanksgiving/harvest-sun.svg');
+		--season-flock: url('/seasons/thanksgiving/geese.svg');
+		--season-flyer: url('/seasons/thanksgiving/feather.svg');
+		--season-lead: url('/seasons/thanksgiving/turkey.svg');
+		--season-buddy: url('/seasons/thanksgiving/scarecrow.svg');
+		--season-prop-a: url('/seasons/thanksgiving/cornucopia.svg');
+		--season-prop-b: url('/seasons/thanksgiving/pie.svg');
+		--season-accent: url('/seasons/thanksgiving/gourds.svg');
+		--season-footer: url('/seasons/thanksgiving/barn.svg');
+	}
+
+	html[data-season='new-year'] {
+		--season-ribbon: repeating-linear-gradient(
+			-45deg,
+			var(--primary) 0 12px,
+			var(--warn) 12px 20px,
+			var(--additive) 20px 32px,
+			var(--warn) 32px 40px
+		);
+		--season-tint:
+			radial-gradient(
+				circle at calc(50% + 240px) 90px,
+				color-mix(in srgb, var(--additive) 16%, transparent),
+				transparent 320px
+			),
+			linear-gradient(
+				to bottom,
+				color-mix(in srgb, var(--primary) 8%, transparent),
+				transparent 60%
+			);
+		--season-idle: season-pulse 1.2s ease-in-out infinite alternate;
+		--season-strip: url('/seasons/new-year/streamers.svg');
+		--season-corner: url('/seasons/new-year/balloons.svg');
+		--season-dangle: url('/seasons/new-year/hanging-stars.svg');
+		--season-sky: url('/seasons/new-year/firework.svg');
+		--season-flock: url('/seasons/new-year/fireworks.svg');
+		--season-flyer: url('/seasons/new-year/sparkle.svg');
+		--season-lead: url('/seasons/new-year/clock.svg');
+		--season-buddy: url('/seasons/new-year/party-popper.svg');
+		--season-prop-a: url('/seasons/new-year/cake.svg');
+		--season-prop-b: url('/seasons/new-year/party-hats.svg');
+		--season-accent: url('/seasons/new-year/noisemakers.svg');
+		--season-footer: url('/seasons/new-year/fireworks-harbour.svg');
+	}
+
+	html[data-season='matariki'] {
+		--season-ribbon: repeating-linear-gradient(
+			-45deg,
+			var(--primary) 0 14px,
+			var(--warn) 14px 20px,
+			var(--peach) 20px 30px,
+			var(--warn) 30px 36px
+		);
+		--season-tint:
+			radial-gradient(
+				circle at calc(50% + 240px) 90px,
+				color-mix(in srgb, var(--peach) 30%, transparent),
+				transparent 320px
+			),
+			linear-gradient(
+				to bottom,
+				color-mix(in srgb, var(--primary) 9%, transparent),
+				transparent 55%,
+				color-mix(in srgb, var(--warn) 7%, transparent)
+			);
+		--season-idle: season-sway 3.6s ease-in-out infinite alternate;
+		--season-strip: url('/seasons/matariki/star-garland.svg');
+		--season-corner: url('/seasons/matariki/harakeke.svg');
+		--season-dangle: url('/seasons/matariki/hanging-stars.svg');
+		--season-sky: url('/seasons/matariki/matariki.svg');
+		--season-flock: url('/seasons/matariki/tui.svg');
+		--season-flyer: url('/seasons/matariki/manu-tukutuku.svg');
+		--season-lead: url('/seasons/matariki/kereru.svg');
+		--season-buddy: url('/seasons/matariki/ruru.svg');
+		--season-prop-a: url('/seasons/matariki/hangi.svg');
+		--season-prop-b: url('/seasons/matariki/kumara.svg');
+		--season-accent: url('/seasons/matariki/kete.svg');
+		--season-footer: url('/seasons/matariki/dawn-hills.svg');
+	}
+
+	html[data-season='guy-fawkes'] {
+		--season-ribbon: repeating-linear-gradient(
+			-45deg,
+			var(--primary) 0 12px,
+			var(--warn) 12px 20px,
+			var(--bad) 20px 30px,
+			var(--warn) 30px 38px
+		);
+		--season-tint:
+			radial-gradient(
+				circle at calc(50% + 240px) 90px,
+				color-mix(in srgb, var(--warn) 20%, transparent),
+				transparent 300px
+			),
+			linear-gradient(
+				to bottom,
+				color-mix(in srgb, var(--primary) 9%, transparent),
+				transparent 55%,
+				color-mix(in srgb, var(--bad) 6%, transparent)
+			);
+		--season-idle: season-spin 6s linear infinite;
+		--season-strip: url('/seasons/guy-fawkes/star-bunting.svg');
+		--season-corner: url('/seasons/guy-fawkes/sparklers.svg');
+		--season-dangle: url('/seasons/guy-fawkes/lanterns.svg');
+		--season-sky: url('/seasons/guy-fawkes/firework.svg');
+		--season-flock: url('/seasons/guy-fawkes/rockets.svg');
+		--season-flyer: url('/seasons/guy-fawkes/catherine-wheel.svg');
+		--season-lead: url('/seasons/guy-fawkes/kiwi.svg');
+		--season-buddy: url('/seasons/guy-fawkes/rocket.svg');
+		--season-prop-a: url('/seasons/guy-fawkes/bonfire.svg');
+		--season-prop-b: url('/seasons/guy-fawkes/toffee-apples.svg');
+		--season-accent: url('/seasons/guy-fawkes/sand-bucket.svg');
+		--season-footer: url('/seasons/guy-fawkes/bonfire-night.svg');
+	}
+
+	html[data-season='st-patricks'] {
+		--season-ribbon: repeating-linear-gradient(
+			-45deg,
+			var(--ok) 0 12px,
+			var(--surface) 12px 20px,
+			var(--warn) 20px 30px,
+			var(--surface) 30px 38px
+		);
+		--season-tint:
+			radial-gradient(
+				ellipse at 100% 0,
+				color-mix(in srgb, var(--ok) 12%, transparent),
+				transparent 50%
+			),
+			linear-gradient(to bottom, var(--ok-soft), transparent 60%);
+		--season-idle: season-sway 2.6s ease-in-out infinite alternate;
+		--season-strip: url('/seasons/st-patricks/shamrock-bunting.svg');
+		--season-corner: url('/seasons/st-patricks/shamrocks.svg');
+		--season-dangle: url('/seasons/st-patricks/hanging-shamrocks.svg');
+		--season-sky: url('/seasons/st-patricks/rainbow.svg');
+		--season-flock: url('/seasons/st-patricks/clovers.svg');
+		--season-flyer: url('/seasons/st-patricks/shamrock.svg');
+		--season-lead: url('/seasons/st-patricks/leprechaun.svg');
+		--season-buddy: url('/seasons/st-patricks/harp.svg');
+		--season-prop-a: url('/seasons/st-patricks/pot-of-gold.svg');
+		--season-prop-b: url('/seasons/st-patricks/hat.svg');
+		--season-accent: url('/seasons/st-patricks/horseshoe.svg');
+		--season-footer: url('/seasons/st-patricks/cottage.svg');
+	}
+
+	html[data-season='easter'] {
+		--season-ribbon: repeating-linear-gradient(
+			-45deg,
+			var(--lavender) 0 12px,
+			var(--surface) 12px 18px,
+			var(--peach) 18px 30px,
+			color-mix(in srgb, var(--accent) 45%, var(--surface)) 30px 40px
+		);
+		--season-tint:
+			radial-gradient(
+				ellipse at 0 0,
+				color-mix(in srgb, var(--lavender) 16%, transparent),
+				transparent 45%
+			),
+			radial-gradient(
+				ellipse at 100% 0,
+				color-mix(in srgb, var(--peach) 22%, transparent),
+				transparent 45%
+			),
+			linear-gradient(to bottom, var(--accent-soft), transparent 60%);
+		--season-idle: season-hover 2.4s ease-in-out infinite alternate;
+		--season-strip: url('/seasons/easter/egg-garland.svg');
+		--season-corner: url('/seasons/easter/daffodils.svg');
+		--season-dangle: url('/seasons/easter/hanging-eggs.svg');
+		--season-sky: url('/seasons/easter/big-egg.svg');
+		--season-flock: url('/seasons/easter/butterflies.svg');
+		--season-flyer: url('/seasons/easter/chick.svg');
+		--season-lead: url('/seasons/easter/bunny.svg');
+		--season-buddy: url('/seasons/easter/hatching-chick.svg');
+		--season-prop-a: url('/seasons/easter/basket.svg');
+		--season-prop-b: url('/seasons/easter/carrots.svg');
+		--season-accent: url('/seasons/easter/nest.svg');
+		--season-footer: url('/seasons/easter/meadow.svg');
+	}
+
 	/* Motion, for visitors who have not asked for less of it: bats flap and
 	   drift, ghosts and the spider bob, snow falls, lights twinkle, baubles
-	   sway. Every one is slow and small, and none moves a piece far from the
-	   empty space it was placed in. */
+	   sway, and each kit theme moves its flyer one way of its own. Every one
+	   is slow and small, and none moves a piece far from the empty space it
+	   was placed in. */
 	@media (prefers-reduced-motion: no-preference) {
 		html[data-season='halloween'] .season-flyer,
 		html[data-season='halloween'] #how::after {
@@ -783,6 +1494,13 @@
 		html[data-season='christmas'] .season-flyer {
 			animation: season-spin 24s linear infinite;
 		}
+
+		html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+			.season-flyer,
+		html[data-season]:where(:not([data-season='halloween'], [data-season='christmas']))
+			#pricing::after {
+			animation: var(--season-idle);
+		}
 	}
 
 	@keyframes season-flap {
@@ -791,6 +1509,24 @@
 		}
 		50% {
 			background-position: 100% 0;
+		}
+	}
+
+	@keyframes season-pulse {
+		from {
+			scale: 1;
+		}
+		to {
+			scale: 1.08;
+		}
+	}
+
+	@keyframes season-wobble {
+		from {
+			rotate: -6deg;
+		}
+		to {
+			rotate: 6deg;
 		}
 	}
 

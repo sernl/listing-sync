@@ -1468,7 +1468,26 @@ export interface SiteMaintenance {
 	message: string | null;
 }
 
-export type SeasonName = 'none' | 'halloween' | 'christmas';
+/** The seasonal themes, spelled as `ThemeName` in `crates/tam-api/src/site.rs`
+ *  serialises them. */
+export type SeasonName =
+	| 'none'
+	| 'halloween'
+	| 'christmas'
+	| 'valentines'
+	| 'april-fools'
+	| 'fourth-of-july'
+	| 'back-to-school'
+	| 'winter'
+	| 'summer'
+	| 'spring'
+	| 'autumn'
+	| 'thanksgiving'
+	| 'new-year'
+	| 'matariki'
+	| 'guy-fawkes'
+	| 'st-patricks'
+	| 'easter';
 
 /** The landing page's seasonal theme. `from` and `until` are UTC calendar
  *  days, both included; `active` is the server's own reading of today. */
