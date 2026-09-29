@@ -462,7 +462,10 @@ impl Library {
             let hash = ContentHash(*blake3::hash(&bytes).as_bytes());
             let entry = LibraryEntry {
                 hash,
-                content_type: if name.ends_with(".pdf") {
+                content_type: if std::path::Path::new(&name)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
+                {
                     "application/pdf".to_owned()
                 } else {
                     "application/octet-stream".to_owned()

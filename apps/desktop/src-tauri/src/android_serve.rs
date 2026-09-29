@@ -56,7 +56,10 @@ impl<R: Runtime> Presence for PhonePresence<R> {
 
     fn keep_serving(&self, on: bool) {
         let command = if on { START_COMMAND } else { STOP_COMMAND };
-        if let Err(why) = self.handle.run_mobile_plugin::<serde_json::Value>(command, ()) {
+        if let Err(why) = self
+            .handle
+            .run_mobile_plugin::<serde_json::Value>(command, ())
+        {
             // Not fatal: without the service a phone still serves while the
             // app is on screen, and only answering with the screen off is
             // lost. The line is what tells a developer the command was

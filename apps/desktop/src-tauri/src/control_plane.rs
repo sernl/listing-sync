@@ -2061,7 +2061,11 @@ mod tests {
         for (status, body, expected) in [
             (404, "{}", ControlPlaneError::Unregistered),
             (403, "this device is revoked", ControlPlaneError::Revoked),
-            (401, "sign in", ControlPlaneError::Denied("sign in".to_owned())),
+            (
+                401,
+                "sign in",
+                ControlPlaneError::Denied("sign in".to_owned()),
+            ),
         ] {
             let refused = plane(Arc::new(Fake::answering(status, body)))
                 .stream_requests(&device)

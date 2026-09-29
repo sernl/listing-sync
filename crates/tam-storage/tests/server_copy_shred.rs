@@ -109,7 +109,9 @@ fn imported_file(product: char, file: char, hash: &str) -> String {
 async fn seed(connection: &mut sqlx::pool::PoolConnection<sqlx::Postgres>) {
     let statements = [
         format!("SELECT set_config('app.current_org', '{ORG}', false);"),
-        format!("INSERT INTO organisation (id, name, created_at) VALUES ('{ORG}', 'Shred', now());"),
+        format!(
+            "INSERT INTO organisation (id, name, created_at) VALUES ('{ORG}', 'Shred', now());"
+        ),
         format!(
             "INSERT INTO connection (org_id, id, marketplace, state, created_at, updated_at)
                  VALUES ('{ORG}', '{CONNECTION}', 'tpt', 'linked', now(), now());"
@@ -170,12 +172,13 @@ async fn only_the_copies_of_imported_files_are_shredded(pool: PgPool) {
         .await
         .expect("the tenant pins again");
 
-    let left: Vec<String> =
-        sqlx::query_scalar("SELECT encode(hash, 'hex') FROM blob WHERE org_id = $1::uuid ORDER BY 1")
-            .bind(ORG)
-            .fetch_all(connection.as_mut())
-            .await
-            .expect("the blobs read");
+    let left: Vec<String> = sqlx::query_scalar(
+        "SELECT encode(hash, 'hex') FROM blob WHERE org_id = $1::uuid ORDER BY 1",
+    )
+    .bind(ORG)
+    .fetch_all(connection.as_mut())
+    .await
+    .expect("the blobs read");
     let hex = |literal: &str| literal.trim_start_matches("\\x").to_owned();
     assert_eq!(
         left,

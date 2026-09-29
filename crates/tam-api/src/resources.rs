@@ -726,7 +726,9 @@ pub(crate) async fn product_file_content(
     let bytes = open_copy(&state, context.org, hash, held.bytes.byte_len())
         .await?
         // Ours, not theirs: the row says these bytes are here.
-        .ok_or_else(|| state.internal("a product file row names a blob this store does not hold"))?;
+        .ok_or_else(|| {
+            state.internal("a product file row names a blob this store does not hold")
+        })?;
     file_answer(&state, bytes, &served, headers.get(header::RANGE))
 }
 
@@ -981,9 +983,10 @@ fn scan_vouched_by(bytes: &tam_types::FileBytes) -> &'static str {
 /// [`product_view`] reads them and fills them in.
 pub(crate) fn file_view(file: &tam_types::ProductFile, name: Option<&str>) -> FileView {
     let (name, custody) = match &file.bytes {
-        tam_types::FileBytes::Held { .. } => {
-            (name.map(str::to_owned), crate::library::FileCustody::Uploaded)
-        }
+        tam_types::FileBytes::Held { .. } => (
+            name.map(str::to_owned),
+            crate::library::FileCustody::Uploaded,
+        ),
         tam_types::FileBytes::Sourced {
             payload_file_name, ..
         } => (

@@ -281,7 +281,8 @@ fn unavailable() -> APIError {
 fn gone() -> APIError {
     APIError::new(
         StatusCode::GONE,
-        APIErrorEntry::new("Nobody is waiting for this file any more.").kind(APIErrorKind::NotFound),
+        APIErrorEntry::new("Nobody is waiting for this file any more.")
+            .kind(APIErrorKind::NotFound),
     )
 }
 
@@ -387,7 +388,12 @@ impl WindowFailure {
     }
 }
 
-fn mint(state: &AppState, ask: &Ask, id: Uuid, bounds: (u64, u64)) -> Result<String, WindowFailure> {
+fn mint(
+    state: &AppState,
+    ask: &Ask,
+    id: Uuid,
+    bounds: (u64, u64),
+) -> Result<String, WindowFailure> {
     let key = state
         .config
         .entitlement_key
@@ -403,10 +409,14 @@ fn mint(state: &AppState, ask: &Ask, id: Uuid, bounds: (u64, u64)) -> Result<Str
         hash: tam_secrets::hex_encode(&ask.hash.0),
         first: bounds.0,
         last: bounds.1,
-        exp: now.0.div_euclid(MILLIS_PER_SEC).saturating_add(VALIDITY_SECS),
+        exp: now
+            .0
+            .div_euclid(MILLIS_PER_SEC)
+            .saturating_add(VALIDITY_SECS),
     };
-    encode(&Header::new(Algorithm::EdDSA), &claims, &key.signing_key())
-        .map_err(|error| WindowFailure::Fault(format!("the serve capability did not sign: {error}")))
+    encode(&Header::new(Algorithm::EdDSA), &claims, &key.signing_key()).map_err(|error| {
+        WindowFailure::Fault(format!("the serve capability did not sign: {error}"))
+    })
 }
 
 /// Asks the device for bytes `first..=last` and waits for it to start.
@@ -509,11 +519,9 @@ fn body_of(flow: Flow) -> Body {
     let frames = futures_util::stream::unfold(Some(flow), |flow| async move {
         let mut flow = flow?;
         loop {
-            let frame = tokio::time::timeout(
-                flow.state.config.broker_timeouts.frame,
-                flow.frames.recv(),
-            )
-            .await;
+            let frame =
+                tokio::time::timeout(flow.state.config.broker_timeouts.frame, flow.frames.recv())
+                    .await;
             match frame {
                 Err(_) => return Some((Err(broken("the device stopped sending")), None)),
                 Ok(Some(Ok(bytes))) => {
@@ -536,7 +544,9 @@ fn body_of(flow: Flow) -> Body {
                         }
                         Err(failure) => {
                             return Some((
-                                Err(broken(&format!("the next part did not arrive: {failure:?}"))),
+                                Err(broken(&format!(
+                                    "the next part did not arrive: {failure:?}"
+                                ))),
                                 None,
                             ));
                         }
@@ -600,17 +610,23 @@ pub(crate) async fn serve(
                 .status(StatusCode::RANGE_NOT_SATISFIABLE)
                 .header(header::CONTENT_RANGE, format!("bytes */{len}"))
                 .body(Body::empty())
-                .map_err(|error| state.internal(&format!("the file answer did not build: {error}")));
+                .map_err(|error| {
+                    state.internal(&format!("the file answer did not build: {error}"))
+                });
         }
         crate::resources::Ranged::Whole if len == 0 => {
             return builder
                 .status(StatusCode::OK)
                 .header(header::CONTENT_LENGTH, 0)
                 .body(Body::empty())
-                .map_err(|error| state.internal(&format!("the file answer did not build: {error}")));
+                .map_err(|error| {
+                    state.internal(&format!("the file answer did not build: {error}"))
+                });
         }
         crate::resources::Ranged::Whole => (StatusCode::OK, 0, len - 1),
-        crate::resources::Ranged::Part { first, last } => (StatusCode::PARTIAL_CONTENT, first, last),
+        crate::resources::Ranged::Part { first, last } => {
+            (StatusCode::PARTIAL_CONTENT, first, last)
+        }
     };
     ensure_listening(&state.pool).await;
     let ask = Ask {
@@ -672,7 +688,10 @@ pub(crate) async fn poll_streams(
     }
     ensure_listening(&state.pool).await;
     let wait = core::time::Duration::from_millis(
-        params.wait_ms.unwrap_or(POLL_WAIT_MAX_MS).min(POLL_WAIT_MAX_MS),
+        params
+            .wait_ms
+            .unwrap_or(POLL_WAIT_MAX_MS)
+            .min(POLL_WAIT_MAX_MS),
     );
     let deadline = tokio::time::Instant::now() + wait;
     let notify = waiter(context.org, device).await;
@@ -843,13 +862,21 @@ async fn pipe(pending: Pending, answer: Answer) -> Result<StatusCode, APIError> 
         let chunk = match chunk {
             Ok(chunk) => chunk,
             Err(error) => {
-                drop(frames.send(Err(broken(&format!("the device's upload broke: {error}")))).await);
+                drop(
+                    frames
+                        .send(Err(broken(&format!("the device's upload broke: {error}"))))
+                        .await,
+                );
                 return Err(validation("the upload broke off"));
             }
         };
         sent = sent.saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
         if sent > expected {
-            drop(frames.send(Err(broken("the device sent more than it was asked for"))).await);
+            drop(
+                frames
+                    .send(Err(broken("the device sent more than it was asked for")))
+                    .await,
+            );
             return Err(validation("an answer carries exactly the bytes asked for"));
         }
         if frames.send(Ok(chunk)).await.is_err() {
@@ -857,7 +884,11 @@ async fn pipe(pending: Pending, answer: Answer) -> Result<StatusCode, APIError> 
         }
     }
     if sent < expected {
-        drop(frames.send(Err(broken("the device sent less than it was asked for"))).await);
+        drop(
+            frames
+                .send(Err(broken("the device sent less than it was asked for")))
+                .await,
+        );
         return Err(validation("an answer carries exactly the bytes asked for"));
     }
     Ok(StatusCode::NO_CONTENT)

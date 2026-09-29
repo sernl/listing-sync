@@ -22,7 +22,9 @@ use tam_api::devices::EntitlementKey;
 use tam_api::library::{FileCustody, HolderView, LibraryView};
 use tam_api::resources::ProductView;
 use tam_api::{broker, router, AppState, Config, SESSION_COOKIE};
-use tam_domain::serve::{Claims, StreamRequests, AUDIENCE, CAPABILITY_HEADER, ISSUER, REFUSED_HEADER};
+use tam_domain::serve::{
+    Claims, StreamRequests, AUDIENCE, CAPABILITY_HEADER, ISSUER, REFUSED_HEADER,
+};
 use tam_storage::{SessionRepo, SessionToken};
 use tam_types::{OrgId, Timestamp, UserId, Uuid};
 use tower::ServiceExt;
@@ -155,7 +157,11 @@ async fn call(state: &AppState, call: Call<'_>) -> Answer {
         request = request.header(name, value);
     }
     let response = router(state.clone())
-        .oneshot(request.body(Body::from(call.body)).expect("the request builds"))
+        .oneshot(
+            request
+                .body(Body::from(call.body))
+                .expect("the request builds"),
+        )
         .await
         .expect("the router serves");
     let status = response.status();
@@ -338,7 +344,10 @@ enum Reply {
 )]
 async fn device_turn(state: &AppState, public: &[u8], reply: Reply) -> (Claims, Answer) {
     let mut asks = poll(state, 5_000).await;
-    let ask = asks.requests.pop().expect("the browser's read reaches the device");
+    let ask = asks
+        .requests
+        .pop()
+        .expect("the browser's read reaches the device");
     let claims = verified(&ask.capability, public);
     let path = format!("/v1/devices/{DEVICE}/streams/{}", ask.stream);
     let (headers, body) = match reply {
@@ -381,7 +390,10 @@ async fn a_serving_device_answers_a_range_through_the_broker(pool: PgPool) {
     provision(&pool).await;
     let (key, public) = key_pair();
     let state = configured(pool.clone(), Some(key), 5_000);
-    assert!(poll(&state, 0).await.requests.is_empty(), "nothing is asked yet");
+    assert!(
+        poll(&state, 0).await.requests.is_empty(),
+        "nothing is asked yet"
+    );
 
     let content = content_path();
     let browser = call(
@@ -391,25 +403,55 @@ async fn a_serving_device_answers_a_range_through_the_broker(pool: PgPool) {
             ..Call::get(&content)
         },
     );
-    let device = device_turn(&state, &public, Reply::Bytes(|all| all[100..=1099].to_vec()));
+    let device = device_turn(
+        &state,
+        &public,
+        Reply::Bytes(|all| all[100..=1099].to_vec()),
+    );
     let (browser, (claims, answered)) = tokio::join!(browser, device);
 
-    assert_eq!(answered.status, StatusCode::NO_CONTENT, "{}", answered.text());
-    assert_eq!(browser.status, StatusCode::PARTIAL_CONTENT, "{}", browser.text());
+    assert_eq!(
+        answered.status,
+        StatusCode::NO_CONTENT,
+        "{}",
+        answered.text()
+    );
+    assert_eq!(
+        browser.status,
+        StatusCode::PARTIAL_CONTENT,
+        "{}",
+        browser.text()
+    );
     let body = original();
-    assert_eq!(browser.bytes(), &body[100..=1099], "the range the device sent is the range served");
+    assert_eq!(
+        browser.bytes(),
+        &body[100..=1099],
+        "the range the device sent is the range served"
+    );
     assert_eq!(
         browser.header(header::CONTENT_RANGE),
         Some(format!("bytes 100-1099/{}", body.len()).as_str()),
         "the range names the whole length the catalogue records"
     );
-    assert_eq!(browser.header(header::CACHE_CONTROL), Some("private, no-store"));
     assert_eq!(
-        (claims.device.as_str(), claims.hash.as_str(), claims.first, claims.last),
+        browser.header(header::CACHE_CONTROL),
+        Some("private, no-store")
+    );
+    assert_eq!(
+        (
+            claims.device.as_str(),
+            claims.hash.as_str(),
+            claims.first,
+            claims.last
+        ),
         (DEVICE, hex(&body).as_str(), 100, 1099),
         "the capability binds the device, the file and the bytes"
     );
-    assert_eq!(rows(&pool, "device_stream").await, 0, "the ask is forgotten once answered");
+    assert_eq!(
+        rows(&pool, "device_stream").await,
+        0,
+        "the ask is forgotten once answered"
+    );
     assert_eq!(rows(&pool, "blob").await, 0, "no byte of the file was kept");
 }
 
@@ -427,7 +469,11 @@ async fn the_whole_file_is_one_answer_and_a_download_names_it(pool: PgPool) {
 
     assert_eq!(browser.status, StatusCode::OK, "{}", browser.text());
     assert_eq!(browser.bytes(), original().as_slice());
-    assert_eq!((claims.first, claims.last), (0, 4_008), "the whole file is asked for");
+    assert_eq!(
+        (claims.first, claims.last),
+        (0, 4_008),
+        "the whole file is asked for"
+    );
     assert!(
         browser
             .header(header::CONTENT_DISPOSITION)
@@ -464,7 +510,11 @@ async fn a_probe_answers_no_content_while_a_device_serves(pool: PgPool) {
 
     let probe = call(&state, Call::get(&format!("{}?probe=1", content_path()))).await;
     assert_eq!(probe.status, StatusCode::NO_CONTENT, "{}", probe.text());
-    assert_eq!(rows(&pool, "device_stream").await, 0, "a probe asks the device nothing");
+    assert_eq!(
+        rows(&pool, "device_stream").await,
+        0,
+        "a probe asks the device nothing"
+    );
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
@@ -478,7 +528,11 @@ async fn a_device_that_never_picks_up_is_offline(pool: PgPool) {
     assert_eq!(answer.status, StatusCode::CONFLICT, "{}", answer.text());
     let body: serde_json::Value = answer.json();
     assert_eq!(body["errors"][0]["code"], "device_offline");
-    assert_eq!(rows(&pool, "device_stream").await, 0, "the unanswered ask is withdrawn");
+    assert_eq!(
+        rows(&pool, "device_stream").await,
+        0,
+        "the unanswered ask is withdrawn"
+    );
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
@@ -492,7 +546,11 @@ async fn a_file_the_device_no_longer_has_is_nowhere(pool: PgPool) {
     let browser = call(&state, Call::get(&content));
     let device = device_turn(&state, &public, Reply::Refuse("missing"));
     let (browser, (_, answered)) = tokio::join!(browser, device);
-    assert_eq!(answered.status, StatusCode::NO_CONTENT, "a refusal is received");
+    assert_eq!(
+        answered.status,
+        StatusCode::NO_CONTENT,
+        "a refusal is received"
+    );
     assert_eq!(browser.status, StatusCode::NOT_FOUND, "{}", browser.text());
     assert_eq!(
         browser.json::<serde_json::Value>()["errors"][0]["message"],
@@ -532,8 +590,15 @@ async fn an_answer_short_of_the_range_breaks_the_download(pool: PgPool) {
         StatusCode::UNPROCESSABLE_ENTITY,
         "the device is told its answer was wrong"
     );
-    assert_eq!(browser.status, StatusCode::OK, "the headers were already sent");
-    assert!(browser.body.is_err(), "the browser sees a broken download, not a short file");
+    assert_eq!(
+        browser.status,
+        StatusCode::OK,
+        "the headers were already sent"
+    );
+    assert!(
+        browser.body.is_err(),
+        "the browser sees a broken download, not a short file"
+    );
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
@@ -551,7 +616,11 @@ async fn another_tenant_can_neither_poll_nor_answer(pool: PgPool) {
         },
     )
     .await;
-    assert_eq!(foreign.status, StatusCode::NOT_FOUND, "the device is not theirs");
+    assert_eq!(
+        foreign.status,
+        StatusCode::NOT_FOUND,
+        "the device is not theirs"
+    );
 
     let content = content_path();
     let browser = call(&state, Call::get(&content));
@@ -570,7 +639,11 @@ async fn another_tenant_can_neither_poll_nor_answer(pool: PgPool) {
             },
         )
         .await;
-        assert_eq!(stolen.status, StatusCode::GONE, "another tenant's answer is refused");
+        assert_eq!(
+            stolen.status,
+            StatusCode::GONE,
+            "another tenant's answer is refused"
+        );
         let forged = call(
             &state,
             Call {
@@ -582,7 +655,11 @@ async fn another_tenant_can_neither_poll_nor_answer(pool: PgPool) {
             },
         )
         .await;
-        assert_eq!(forged.status, StatusCode::GONE, "an answer without the capability is refused");
+        assert_eq!(
+            forged.status,
+            StatusCode::GONE,
+            "an answer without the capability is refused"
+        );
         call(
             &state,
             Call {
@@ -596,8 +673,17 @@ async fn another_tenant_can_neither_poll_nor_answer(pool: PgPool) {
         .await
     };
     let (browser, answered) = tokio::join!(browser, device);
-    assert_eq!(answered.status, StatusCode::NO_CONTENT, "{}", answered.text());
-    assert_eq!(browser.bytes(), original().as_slice(), "the real device's bytes are served");
+    assert_eq!(
+        answered.status,
+        StatusCode::NO_CONTENT,
+        "{}",
+        answered.text()
+    );
+    assert_eq!(
+        browser.bytes(),
+        original().as_slice(),
+        "the real device's bytes are served"
+    );
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
@@ -646,7 +732,12 @@ async fn a_deployment_without_a_signing_key_says_streaming_is_unavailable(pool: 
     let state = configured(pool, None, 5_000);
     poll(&state, 0).await;
     let answer = call(&state, Call::get(&content_path())).await;
-    assert_eq!(answer.status, StatusCode::SERVICE_UNAVAILABLE, "{}", answer.text());
+    assert_eq!(
+        answer.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        answer.text()
+    );
     assert_eq!(
         answer.json::<serde_json::Value>()["errors"][0]["code"],
         "streaming_unavailable"

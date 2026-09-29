@@ -250,11 +250,7 @@ impl core::fmt::Debug for Responder {
 
 impl Responder {
     #[must_use]
-    pub fn new(
-        device: DeviceId,
-        keys: Vec<[u8; PUBLIC_KEY_BYTES]>,
-        library: Arc<Library>,
-    ) -> Self {
+    pub fn new(device: DeviceId, keys: Vec<[u8; PUBLIC_KEY_BYTES]>, library: Arc<Library>) -> Self {
         Self {
             device,
             keys,
@@ -424,7 +420,9 @@ impl Server {
                     | ControlPlaneError::Denied(_)),
                 ) => return Ended::Stopped(why),
                 Err(why) => {
-                    eprintln!("this device could not wait for files to open, and will retry: {why}");
+                    eprintln!(
+                        "this device could not wait for files to open, and will retry: {why}"
+                    );
                     tokio::time::sleep(BACKOFF).await;
                 }
             }
@@ -447,11 +445,7 @@ impl Server {
         let answer = match self.responder.prepare(&request, now).await {
             Ok(body) => Answer::Bytes(body),
             Err(refusal) => {
-                eprintln!(
-                    "refused stream {}: {}",
-                    request.stream,
-                    refusal.word()
-                );
+                eprintln!("refused stream {}: {}", request.stream, refusal.word());
                 Answer::Refused(refusal)
             }
         };
