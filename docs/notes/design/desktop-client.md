@@ -30,7 +30,7 @@ And remote content is granted no application command by default, so the six comm
 
 Six modules carry the slice.
 `connect` holds the login page and the logged-in condition for each marketplace, and refuses outright for any marketplace whose transport class is `OfficialApi`.
-`session` holds the cookie jar, the session record, and the `SessionStore` trait with a keychain implementation and an in-memory one.
+`session` holds the cookie jar, the session record, and the `SessionStore` trait with a sealed-file implementation, the legacy keychain one it migrates from, and an in-memory one.
 `device` holds the device identity.
 `entitlement` verifies the signed token and answers the gate.
 `scheduler` holds the local timer and the `WorkSource` seam.
@@ -42,7 +42,7 @@ Adding a marketplace therefore forces the decision at compile time, and getting 
 
 ## The session record
 
-A session is captured by opening the marketplace's own login page in a second webview window on the seller's machine, watching that window's cookie store from Rust until the marketplace's logged-in condition holds, and filing what it finds in the operating system's keychain.
+A session is captured by opening the marketplace's own login page in a second webview window on the seller's machine, watching that window's cookie store from Rust until the marketplace's logged-in condition holds, and sealing what it finds into the session file described below.
 
 The record is:
 
@@ -71,6 +71,19 @@ Both conditions are first-contact heuristics drawn from the committed cassette f
 
 Reading the cookies from Rust rather than from the page is the point of hosting the login at all.
 `document.cookie` cannot see an HttpOnly cookie, and the session cookie is HttpOnly on both marketplaces.
+
+## Where the session is kept
+
+Every platform keeps sessions the same way: `session::encrypted::EncryptedSessionStore` seals each marketplace's record with `tam-secrets` (a fresh XChaCha20-Poly1305 data key per write, wrapped under the device key, the marketplace's entry name as additional data) into `sessions.sealed` in the application data directory.
+Only the 32-byte device key differs by platform, behind `DeviceKeySource`: the Android Keystore on a phone (`session::android_key`), and on Windows, macOS and Linux the operating system's credential store (`session::keychain::KeychainKey`, entry `session.key` under `io.teachouse.desktop`, 64 hex characters, generated on first use).
+
+Before 0.16.0 the desktop put the whole record, cookie jar included, in the credential store.
+Windows Credential Manager refuses a blob longer than 2560 UTF-16 characters and a TPT or Tes jar is routinely longer, so connecting failed with "the session store refused: Attribute password encoded as UTF-16 is longer than platform limit of 2560 chars".
+A key fits every platform's limit; the file has none.
+
+Migration is on read. The desktop store is built `migrating_from` the old `KeychainSessionStore`: a marketplace the file has no session for is looked up there, sealed into the file, and then deleted from the keychain, so the seller stays signed in across the upgrade and the file is the only custody afterwards.
+Forgetting a marketplace forgets it in both, so a disconnect cannot be undone by a leftover keychain entry.
+The file is written through a temporary name and a rename, and each read-modify-write holds a lock, so two marketplaces' check-ins writing back rotated cookies at once cannot drop each other's entry.
 
 ## The device identity
 

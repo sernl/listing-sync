@@ -3,7 +3,7 @@
 //!
 //! Decision D1 puts every request to a no-API marketplace on this machine
 //! under the seller's own session. The login webview captures that session and
-//! files it in the operating system's keychain ([`crate::session`]); the
+//! seals it into this device's session store ([`crate::session`]); the
 //! adapters that compose the requests are generic over
 //! [`tam_marketplace::transport::Transport`] and hold no credential of their
 //! own. This module is the one place the two meet, and therefore the one place
@@ -81,7 +81,7 @@ impl core::error::Error for NoLocalTransport {}
 pub enum SessionTransportError {
     /// Nothing is stored for this marketplace on this device.
     NoSession(Marketplace),
-    /// The keychain refused or the stored record did not parse.
+    /// The session store refused or the stored record did not parse.
     Store(StoreError),
     /// The stored jar could not be turned into a client. The diagnostic is
     /// the builder's own, and no builder interpolates a cookie into one.
@@ -262,7 +262,7 @@ impl<B: LiveTransport> SessionTransport<B> {
     /// The record travels back out because the caller needs it anyway: a
     /// rotation is detected by comparing what the client now holds against
     /// what the store holds, and re-reading the store for that would be a
-    /// second keychain read per request.
+    /// second session-store read per request.
     async fn resolve(&self) -> Result<(Arc<B::Live>, SessionRecord), SessionTransportError> {
         let marketplace = self.builder.marketplace();
         let record = self
@@ -294,7 +294,7 @@ impl<B: LiveTransport> SessionTransport<B> {
 
     /// Stores whatever the marketplace rotated the session to.
     ///
-    /// Without this the keychain keeps the cookies the login window captured
+    /// Without this the store keeps the cookies the login window captured
     /// while the live client works from the ones Tes has since issued, and
     /// the two diverge silently: the next rebuild of this transport — a
     /// restart, a second marketplace login, a cache miss — seeds itself from
@@ -310,7 +310,7 @@ impl<B: LiveTransport> SessionTransport<B> {
     /// A store that refuses is not an error for the request that provoked it.
     /// The response is already in hand, the client still holds the rotated
     /// cookies for as long as it lives, and failing the seller's work over a
-    /// keychain write would turn a recoverable staleness into a lost item.
+    /// session-store write would turn a recoverable staleness into a lost item.
     async fn store_rotation(&self, record: &SessionRecord, live: &B::Live) {
         let Some(current) = self.builder.session_cookies(live) else {
             return;
@@ -486,7 +486,7 @@ pub(crate) async fn read_tpt_storefront(jar: &CookieJar) -> Result<Option<String
         .map_err(|why| why.to_string())
 }
 
-/// The shipping TPT transport: the keychain jar, bound to TPT's own origin.
+/// The shipping TPT transport: the stored jar, bound to TPT's own origin.
 pub type TptTransport = SessionTransport<TptLive>;
 
 /// The shipping Tes transport, likewise.
@@ -1095,7 +1095,7 @@ mod tests {
     /// TPT's client fixes its cookies at construction, so it has nothing to
     /// hand back — and must say so rather than report the unchanged header,
     /// which would make every TPT request look like a rotation and provoke a
-    /// keychain write.
+    /// session-store write.
     #[test]
     fn the_shipping_tpt_builder_reports_no_rotation() {
         let live = TptLive
@@ -1150,7 +1150,7 @@ mod tests {
             held.jar.header_value(),
             "TESSession=rotated",
             "the store must hold what the marketplace last issued, or the session goes stale \
-             in the keychain while the live client quietly works"
+             in the store while the live client quietly works"
         );
         assert_eq!(
             held.verified_at,
@@ -1165,7 +1165,7 @@ mod tests {
         );
     }
 
-    /// A marketplace that rotated nothing must not provoke a keychain write,
+    /// A marketplace that rotated nothing must not provoke a session-store write,
     /// and must not look like a rotation to the next reader.
     #[tokio::test]
     async fn a_session_that_did_not_rotate_is_left_exactly_as_it_was() {
