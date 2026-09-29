@@ -41,7 +41,10 @@ function authPreloads(): Plugin {
 			root = config.root;
 			server = Boolean(config.build.ssr);
 		},
-		generateBundle(_options, bundle) {
+		// `writeBundle`, not `generateBundle`: Vite's CSS plugin deletes a chunk
+		// that held nothing but stylesheet imports during `generateBundle`, and a
+		// list taken earlier would name a file the build never writes.
+		writeBundle(_options, bundle) {
 			if (server) {
 				return;
 			}
