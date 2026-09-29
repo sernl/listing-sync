@@ -435,7 +435,7 @@ const TILE_INNER_PX = 78;
  *  over the words this tile holds, not an average over them.
  *
  *  An average is what the tile had, and it clipped. Read off the font's own
- *  advance widths in `static/fonts/poppins-600-latin.woff2`, `Boom` runs 0.742
+ *  advance widths in `lib/fonts/poppins-600-latin.woff2`, `Boom` runs 0.742
  *  of its point size per character, `Chrome™` 0.711 and `Firefox` 0.479 — a
  *  spread wide enough that the mean overflows the tile, and `overflow: hidden`
  *  takes the rest silently. Only a bound at the widest word makes the

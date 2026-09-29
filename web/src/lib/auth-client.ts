@@ -7,10 +7,7 @@
 // discarded, exactly as `docs/notes/design/better-auth-integration.md`
 // ("Session bridging") specifies.
 
-import { passkeyClient } from '@better-auth/passkey/client';
-import { adminClient, jwtClient } from 'better-auth/client/plugins';
-import { createAuthClient } from 'better-auth/svelte';
-import { api, type Whoami } from '$lib/api';
+import type { Whoami } from '$lib/api';
 import type { CaptchaOptions } from '$lib/captcha';
 import type { BrowserSession } from '$lib/device-merge';
 import type { SocialProvider } from '$lib/social-providers';
@@ -21,10 +18,84 @@ import type { SocialProvider } from '$lib/social-providers';
  * development and at the ingress in production. */
 export const AUTH_BASE_PATH = '/api/auth';
 
-export const authClient = createAuthClient({
-	basePath: AUTH_BASE_PATH,
-	plugins: [passkeyClient(), jwtClient(), adminClient()]
-});
+/** better-auth's client, fetched the first time something needs it.
+ *
+ * A chunk of its own rather than a static import: with its plugins it is the
+ * largest script the sign-in screens reached for, and a visitor who has not
+ * yet pressed anything needs none of it. The session read below does without
+ * it, so a signed-out visit downloads it only once the visitor submits. */
+async function createClient() {
+	const [{ passkeyClient }, { adminClient, jwtClient }, { createAuthClient }] = await Promise.all([
+		import('@better-auth/passkey/client'),
+		import('better-auth/client/plugins'),
+		import('better-auth/svelte')
+	]);
+	return createAuthClient({
+		basePath: AUTH_BASE_PATH,
+		plugins: [passkeyClient(), jwtClient(), adminClient()]
+	});
+}
+
+let client: ReturnType<typeof createClient> | null = null;
+
+export function authClient(): ReturnType<typeof createClient> {
+	client ??= createClient();
+	return client;
+}
+
+/** The identity session as `GET /api/auth/get-session` answers it, reduced to
+ * the fields this client reads. */
+interface SessionRead {
+	user: { id?: string; name: string; email: string; emailVerified: boolean };
+	session: { impersonatedBy?: string | null };
+}
+
+/** The identity session, read without better-auth's client: one same-origin
+ * GET, the same request `authClient().getSession()` makes, answered with the
+ * session or `null`. A failure of any kind reads as no session, which is what
+ * the client's own `data` is on a failure. */
+async function readSession(): Promise<SessionRead | null> {
+	let body: unknown;
+	try {
+		const response = await fetch(`${AUTH_BASE_PATH}/get-session`, {
+			credentials: 'same-origin',
+			headers: { accept: 'application/json' }
+		});
+		if (!response.ok) {
+			return null;
+		}
+		body = await response.json();
+	} catch {
+		return null;
+	}
+	if (
+		typeof body !== 'object' ||
+		body === null ||
+		!('user' in body) ||
+		!('session' in body) ||
+		typeof body.user !== 'object' ||
+		body.user === null ||
+		typeof body.session !== 'object' ||
+		body.session === null ||
+		!('email' in body.user) ||
+		typeof body.user.email !== 'string'
+	) {
+		return null;
+	}
+	const user = body.user as Record<string, unknown>;
+	const session = body.session as Record<string, unknown>;
+	return {
+		user: {
+			id: typeof user.id === 'string' ? user.id : undefined,
+			name: typeof user.name === 'string' ? user.name : '',
+			email: body.user.email,
+			emailVerified: user.emailVerified === true
+		},
+		session: {
+			impersonatedBy: typeof session.impersonatedBy === 'string' ? session.impersonatedBy : null
+		}
+	};
+}
 
 /** Where a provider returns the browser. Both land on the sign-in page, which
  * is the page that knows how to finish the exchange. */
@@ -63,7 +134,7 @@ export class BridgeFailure extends Error {
 
 /** The current identity-service session, or null when there is none. */
 export async function identity(): Promise<Identity | null> {
-	const { data } = await authClient.getSession();
+	const data = await readSession();
 	if (!data) {
 		return null;
 	}
@@ -92,10 +163,11 @@ export async function establishSession(): Promise<Whoami> {
 	if (!who.emailVerified) {
 		throw new BridgeFailure('unverified-email');
 	}
-	const { data, error } = await authClient.token();
+	const { data, error } = await (await authClient()).token();
 	if (error || !data?.token) {
 		throw new BridgeFailure('refused');
 	}
+	const { api } = await import('$lib/api');
 	return api.exchange(data.token);
 }
 
@@ -109,7 +181,8 @@ export async function establishSession(): Promise<Whoami> {
  * cannot skip the other.
  */
 export async function signOutEverywhere(): Promise<boolean> {
-	const endingIdentity = authClient.signOut().then(
+	const { api } = await import('$lib/api');
+	const endingIdentity = (await authClient()).signOut().then(
 		({ error }) => !error,
 		() => false
 	);
@@ -126,7 +199,7 @@ export async function signInWithPassword(
 	password: string,
 	captcha?: CaptchaOptions
 ) {
-	return authClient.signIn.email({ email, password }, captcha);
+	return (await authClient()).signIn.email({ email, password }, captcha);
 }
 
 export async function signUpWithPassword(
@@ -135,7 +208,7 @@ export async function signUpWithPassword(
 	password: string,
 	captcha?: CaptchaOptions
 ) {
-	return authClient.signUp.email({ name, email, password, callbackURL: SOCIAL_RETURN }, captcha);
+	return (await authClient()).signUp.email({ name, email, password, callbackURL: SOCIAL_RETURN }, captcha);
 }
 
 /**
@@ -145,19 +218,19 @@ export async function signUpWithPassword(
  * page that renders the answer carries none either.
  */
 export async function requestPasswordReset(email: string, captcha?: CaptchaOptions) {
-	return authClient.requestPasswordReset({ email, redirectTo: PASSWORD_RESET_RETURN }, captcha);
+	return (await authClient()).requestPasswordReset({ email, redirectTo: PASSWORD_RESET_RETURN }, captcha);
 }
 
 /** Spend a reset token on a new password. Not a guarded endpoint: the token is
  * the proof, so the captcha plugin does not stand in front of it. */
 export async function resetPassword(token: string, newPassword: string) {
-	return authClient.resetPassword({ token, newPassword });
+	return (await authClient()).resetPassword({ token, newPassword });
 }
 
 /** Hands the browser to the provider; the redirect is performed by the
  * client's own redirect plugin on the response. */
 export async function signInWithProvider(provider: SocialProvider) {
-	return authClient.signIn.social({
+	return (await authClient()).signIn.social({
 		provider,
 		callbackURL: SOCIAL_RETURN,
 		errorCallbackURL: SOCIAL_RETURN
@@ -165,11 +238,11 @@ export async function signInWithProvider(provider: SocialProvider) {
 }
 
 export async function signInWithPasskey() {
-	return authClient.signIn.passkey();
+	return (await authClient()).signIn.passkey();
 }
 
 export async function resendVerification(email: string) {
-	return authClient.sendVerificationEmail({ email, callbackURL: SOCIAL_RETURN });
+	return (await authClient()).sendVerificationEmail({ email, callbackURL: SOCIAL_RETURN });
 }
 
 // ------------------------------------------------- the account settings page
@@ -225,7 +298,7 @@ function refused(error: ClientRefusal | null | undefined, fallback: string): Aut
  * `POST /update-user`; it answers `{ status: true }` rather than the updated
  * user, so the caller refetches the session to render the stored name. */
 export async function updateDisplayName(name: string): Promise<void> {
-	const { error } = await authClient.updateUser({ name });
+	const { error } = await (await authClient()).updateUser({ name });
 	if (error) {
 		throw refused(error, 'The name could not be changed.');
 	}
@@ -257,7 +330,7 @@ export function passkeysSupported(): boolean {
 /** The account's registered passkeys. `authClient.passkey.listUserPasskeys` is
  * the client method the plugin derives from `GET /passkey/list-user-passkeys`. */
 export async function listPasskeys(): Promise<PasskeyRecord[]> {
-	const { data, error } = await authClient.passkey.listUserPasskeys();
+	const { data, error } = await (await authClient()).passkey.listUserPasskeys();
 	if (error) {
 		throw refused(error, 'We could not load your passkeys.');
 	}
@@ -275,7 +348,7 @@ export async function listPasskeys(): Promise<PasskeyRecord[]> {
  */
 export async function registerPasskey(label: string): Promise<void> {
 	const name = label.trim();
-	const { error } = await authClient.passkey.addPasskey(name.length > 0 ? { name } : {});
+	const { error } = await (await authClient()).passkey.addPasskey(name.length > 0 ? { name } : {});
 	if (error) {
 		throw refused(error, 'The passkey was not added.');
 	}
@@ -285,7 +358,7 @@ export async function registerPasskey(label: string): Promise<void> {
  * client method the plugin derives from `POST /passkey/delete-passkey`; the
  * server refuses an identifier the session does not own. */
 export async function deletePasskey(id: string): Promise<void> {
-	const { error } = await authClient.passkey.deletePasskey({ id });
+	const { error } = await (await authClient()).passkey.deletePasskey({ id });
 	if (error) {
 		throw refused(error, 'The passkey was not removed.');
 	}
@@ -347,7 +420,7 @@ export interface IdentityUserPage {
  */
 export async function listIdentityUsers(query: IdentityUserQuery): Promise<IdentityUserPage> {
 	const trimmed = query.search.trim();
-	const { data, error } = await authClient.admin.listUsers({
+	const { data, error } = await (await authClient()).admin.listUsers({
 		query: {
 			limit: query.limit,
 			offset: query.offset ?? 0,
@@ -392,7 +465,7 @@ export async function listAllIdentityUsers(search: string): Promise<IdentityUser
  * back on the row; the ban has no expiry unless the server configures one. */
 export async function banIdentityUser(userId: string, reason: string): Promise<void> {
 	const trimmed = reason.trim();
-	const { error } = await authClient.admin.banUser({
+	const { error } = await (await authClient()).admin.banUser({
 		userId,
 		...(trimmed.length === 0 ? {} : { banReason: trimmed })
 	});
@@ -402,7 +475,7 @@ export async function banIdentityUser(userId: string, reason: string): Promise<v
 }
 
 export async function unbanIdentityUser(userId: string): Promise<void> {
-	const { error } = await authClient.admin.unbanUser({ userId });
+	const { error } = await (await authClient()).admin.unbanUser({ userId });
 	if (error) {
 		throw refused(error, 'The account was not unbanned.');
 	}
@@ -414,14 +487,14 @@ export async function unbanIdentityUser(userId: string): Promise<void> {
  * there leaves the account standing. The identity service records the act
  * as `user_removed` in its audit trail. */
 export async function removeIdentityUser(userId: string): Promise<void> {
-	const { error } = await authClient.admin.removeUser({ userId });
+	const { error } = await (await authClient()).admin.removeUser({ userId });
 	if (error) {
 		throw refused(error, 'The sign-in account was not deleted.');
 	}
 }
 
 export async function setIdentityRole(userId: string, role: IdentityRole): Promise<void> {
-	const { error } = await authClient.admin.setRole({ userId, role });
+	const { error } = await (await authClient()).admin.setRole({ userId, role });
 	if (error) {
 		throw refused(error, 'The role was not changed.');
 	}
@@ -442,7 +515,7 @@ export async function setIdentityRole(userId: string, role: IdentityRole): Promi
  * plugin's endpoint: `GET /admin/list-user-sessions` takes one `userId`.
  */
 export async function listUserSessions(userId: string): Promise<BrowserSession[]> {
-	const { data, error } = await authClient.admin.listUserSessions({ userId });
+	const { data, error } = await (await authClient()).admin.listUserSessions({ userId });
 	if (error) {
 		throw refused(error, "That account's sign-ins could not be listed.");
 	}
@@ -460,7 +533,7 @@ export async function listUserSessions(userId: string): Promise<BrowserSession[]
  * concern on Settings.
  */
 export async function revokeUserSessions(userId: string): Promise<void> {
-	const { error } = await authClient.admin.revokeUserSessions({ userId });
+	const { error } = await (await authClient()).admin.revokeUserSessions({ userId });
 	if (error) {
 		throw refused(error, "That account's sign-ins were not ended.");
 	}
@@ -483,7 +556,7 @@ export async function revokeUserSessions(userId: string): Promise<void> {
  * page to render.
  */
 export async function impersonateAndCarry(userId: string): Promise<Whoami> {
-	const { error } = await authClient.admin.impersonateUser({ userId });
+	const { error } = await (await authClient()).admin.impersonateUser({ userId });
 	if (error) {
 		throw refused(error, 'The impersonation was refused.');
 	}
@@ -503,7 +576,7 @@ export async function impersonateAndCarry(userId: string): Promise<Whoami> {
  * the app session is re-minted from it.
  */
 export async function stopImpersonatingAndRestore(): Promise<Whoami> {
-	const { error } = await authClient.admin.stopImpersonating();
+	const { error } = await (await authClient()).admin.stopImpersonating();
 	if (error) {
 		throw refused(error, 'The impersonation was not stopped.');
 	}
@@ -516,7 +589,7 @@ export async function impersonatedSession(): Promise<{
 	user: { id?: string; name?: string | null; email?: string | null };
 	session: { impersonatedBy?: string | null };
 } | null> {
-	const { data } = await authClient.getSession();
+	const data = await readSession();
 	if (!data) {
 		return null;
 	}

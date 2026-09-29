@@ -13,7 +13,9 @@ import { readFileSync, existsSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { ALL_DESTINATIONS } from './nav';
 
-const ROUTES = new URL('../routes', import.meta.url).pathname;
+// Every destination is a console page, so the routes are read from the
+// console's group rather than from the tree the signed-out screens share.
+const ROUTES = new URL('../routes/(console)', import.meta.url).pathname;
 
 /** Destinations flagged `soon` although their route is built.
  *

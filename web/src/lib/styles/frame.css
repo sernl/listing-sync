@@ -1,0 +1,545 @@
+/* The page, the faces and the primitives the signed-out screens share with
+ * the console: the frame `.auth` draws the wordmark and the card in, the two
+ * button tiers, the field and its input, the toast stack, and the element
+ * rules under all of them.
+ *
+ * One sheet with two readers. `app.css` imports it after the component
+ * catalogue, where these rules always stood in the cascade, and `auth.css`
+ * imports it beside the tokens alone, so the sign-in screens paint from a
+ * sheet a fraction of the console's size. A rule that only a console page
+ * needs belongs in `app.css`, not here.
+ *
+ * The faces are named by relative URL so the build content-hashes them into
+ * `_app/immutable/assets/`, which is what lets the edge and the browser keep
+ * them for a year. */
+
+/* The two brand faces, served from `lib/fonts` rather than fetched from
+ * Google. The desktop and Android builds show this same console under a policy
+ * that admits no third-party origin, so both stylesheets and both font files
+ * were refused there and every surface in the app fell back to the stacks in
+ * `tokens.css` -- which is a large part of why the app read as "the web,
+ * condensed". Nothing external remains, so the CSP needs no host for type.
+ *
+ * Poppins is the founder's heading face and ships as one file per weight and
+ * subset, because it is not a variable font: four weights, and the console
+ * uses 600 and 700. Inter is the body face and is variable, so one file per
+ * subset carries 400 to 700. The `unicode-range` values are transcribed from
+ * the `fonts.googleapis.com/css2` stylesheets the files came from, so the
+ * browser fetches exactly the subsets the text on screen needs and no more;
+ * the devanagari and vietnamese subsets those stylesheets also emit are not
+ * downloaded and not declared. Provenance, hashes and the refresh procedure
+ * are in `lib/fonts/README.md`. */
+@font-face {
+	font-family: 'Poppins';
+	font-style: normal;
+	font-weight: 400;
+	font-display: swap;
+	src: url('../fonts/poppins-400-latin.woff2') format('woff2');
+	unicode-range:
+		U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+		U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+	font-family: 'Poppins';
+	font-style: normal;
+	font-weight: 400;
+	font-display: swap;
+	src: url('../fonts/poppins-400-latin-ext.woff2') format('woff2');
+	unicode-range:
+		U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+		U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
+		U+A720-A7FF;
+}
+
+@font-face {
+	font-family: 'Poppins';
+	font-style: normal;
+	font-weight: 500;
+	font-display: swap;
+	src: url('../fonts/poppins-500-latin.woff2') format('woff2');
+	unicode-range:
+		U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+		U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+	font-family: 'Poppins';
+	font-style: normal;
+	font-weight: 500;
+	font-display: swap;
+	src: url('../fonts/poppins-500-latin-ext.woff2') format('woff2');
+	unicode-range:
+		U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+		U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
+		U+A720-A7FF;
+}
+
+@font-face {
+	font-family: 'Poppins';
+	font-style: normal;
+	font-weight: 600;
+	font-display: swap;
+	src: url('../fonts/poppins-600-latin.woff2') format('woff2');
+	unicode-range:
+		U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+		U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+	font-family: 'Poppins';
+	font-style: normal;
+	font-weight: 600;
+	font-display: swap;
+	src: url('../fonts/poppins-600-latin-ext.woff2') format('woff2');
+	unicode-range:
+		U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+		U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
+		U+A720-A7FF;
+}
+
+@font-face {
+	font-family: 'Poppins';
+	font-style: normal;
+	font-weight: 700;
+	font-display: swap;
+	src: url('../fonts/poppins-700-latin.woff2') format('woff2');
+	unicode-range:
+		U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+		U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+	font-family: 'Poppins';
+	font-style: normal;
+	font-weight: 700;
+	font-display: swap;
+	src: url('../fonts/poppins-700-latin-ext.woff2') format('woff2');
+	unicode-range:
+		U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+		U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
+		U+A720-A7FF;
+}
+
+@font-face {
+	font-family: 'Inter';
+	font-style: normal;
+	font-weight: 400 700;
+	font-display: swap;
+	src: url('../fonts/inter-400-700-latin.woff2') format('woff2');
+	unicode-range:
+		U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+		U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+	font-family: 'Inter';
+	font-style: normal;
+	font-weight: 400 700;
+	font-display: swap;
+	src: url('../fonts/inter-400-700-latin-ext.woff2') format('woff2');
+	unicode-range:
+		U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+		U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F,
+		U+A720-A7FF;
+}
+
+html {
+	background: var(--ground);
+}
+
+body {
+	margin: 0;
+	background: var(--ground);
+	color: var(--ink);
+	font-family: var(--sans);
+	font-size: 14px;
+	line-height: 1.5;
+	-webkit-font-smoothing: antialiased;
+}
+
+/* One heading face for the whole console: Poppins, at the weight the kit
+   draws headings in, with the tracking the kit's own headings carry. Named
+   once here rather than per component, so a page that writes an `h2` is on
+   the brand without asking, and a `legend` -- which is a section's heading
+   wearing another element -- with it. A heading that wants the heavier of the
+   kit's two weights says 700 where it stands. */
+h1,
+h2,
+h3,
+legend {
+	font-family: var(--display);
+	font-weight: 600;
+	letter-spacing: -0.01em;
+}
+
+a {
+	color: inherit;
+	text-decoration: none;
+}
+
+button {
+	font: inherit;
+	cursor: pointer;
+}
+
+:focus-visible {
+	outline: 2px solid var(--primary);
+	outline-offset: 2px;
+	border-radius: 6px;
+}
+
+.sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
+}
+
+/* `inline-flex` rather than the default box, because `Button.svelte` takes an
+   `icon` as a first-class part of the catalogue: left inline, the glyph and the
+   label are two inline boxes that stack, and on the `<a>` form — which is what
+   the component emits whenever `href` is set — the pill's own background breaks
+   apart and the label spills outside it. Every other icon-bearing control in
+   the console already sets its own; these are the ones that did not. */
+.cta,
+.btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	border-radius: var(--r-pill);
+	font-weight: 600;
+	font-size: 13px;
+	padding: 8px 14px;
+	min-height: var(--control-h);
+	border: 1px solid var(--line);
+	background: var(--card);
+	color: var(--ink);
+}
+
+/* The kit's two button tiers: the primary is solid Indigo with white text, the
+   secondary an Indigo outline on nothing. Teal is not a button fill here --
+   white on the kit's Teal measures 2.54 -- so the accent carries ticks and
+   dots and the action carries Indigo. */
+.cta {
+	background: var(--primary);
+	color: var(--on-fill);
+	border-color: var(--primary);
+}
+
+.cta:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--primary) 88%, var(--surface));
+	border-color: color-mix(in srgb, var(--primary) 88%, var(--surface));
+}
+
+.btn {
+	background: transparent;
+	border-color: var(--primary);
+	color: var(--primary);
+}
+
+.btn:hover:not(:disabled) {
+	background: var(--hover);
+}
+
+.btn.danger {
+	color: var(--bad-ink);
+	border-color: color-mix(in srgb, var(--bad) 32%, var(--line));
+}
+
+.btn.danger:hover:not(:disabled) {
+	background: var(--bad-soft);
+}
+
+.btn.small,
+.cta.small {
+	padding: 5px 10px;
+	min-height: var(--control-h-sm);
+	font-size: 12px;
+}
+
+/* The fill and the ink are `lib/styles/components.css`'s; only the cursor is
+   here, because that sheet is imported above this one and an `opacity` set here
+   would win on source order and fade text the specification keeps solid. */
+.cta:disabled,
+.btn:disabled {
+	cursor: not-allowed;
+}
+
+.link {
+	color: var(--primary);
+	font-weight: 600;
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}
+
+/* A disabled control states its reason in a `title`, which is the discipline
+   `$lib/bulk-verbs` already enforces; the fill says it is not a fault. */
+.cta:disabled,
+.btn:disabled {
+	background: var(--soon-soft);
+	border-color: var(--line);
+	color: var(--soon);
+	opacity: 1;
+}
+
+/* Every button's children are wrapped so the word can be taken away without
+   taking the glyph with it. `display: contents` by default, so the wrapper
+   changes no layout on the hundreds of buttons that never hide anything: the
+   children stay the flex items they were, and the 7px gap still falls between
+   them rather than around a single box. */
+.btn-word {
+	display: contents;
+}
+
+.form {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	max-width: 420px;
+}
+
+.field {
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+	font-size: 12.5px;
+	font-weight: 600;
+	color: var(--ink);
+}
+
+.field .hint {
+	font-weight: 400;
+	color: var(--muted);
+}
+
+input[type='text'],
+input[type='email'],
+input[type='password'] {
+	border: 1px solid var(--line);
+	background: var(--card);
+	border-radius: var(--r-field);
+	padding: 8px 11px;
+	min-height: var(--control-h);
+	font: inherit;
+	font-weight: 400;
+	color: var(--ink);
+	min-width: 0;
+}
+
+input:focus-visible {
+	border-color: var(--primary);
+}
+
+.refusal {
+	color: var(--bad-ink);
+	font-size: 12.5px;
+}
+
+.actions {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+
+.panel > .actions:last-child {
+	margin-top: 12px;
+}
+
+.notice {
+	margin-top: 12px;
+	border: 1px solid color-mix(in srgb, var(--warn) 30%, var(--line));
+	background: var(--warn-soft);
+	color: var(--warn-ink);
+	border-radius: 9px;
+	padding: 9px 11px;
+	font-size: 12.5px;
+}
+
+.divider {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	color: var(--faint);
+	font-size: 11px;
+	margin: 18px 0;
+}
+
+.divider::before,
+.divider::after {
+	content: '';
+	height: 1px;
+	flex: 1;
+	background: var(--line);
+}
+
+.form.spaced {
+	margin-top: 12px;
+}
+
+/* The logo, which since the shell was redrawn appears only on the signed-out
+   screens: inside the console the house sits on the rail instead, and is
+   styled with it. The file carries the wordmark and the tagline, so the word
+   "Teachouse" is drawn rather than set. */
+.wordmark {
+	display: block;
+}
+
+.wordmark img {
+	display: block;
+	width: 220px;
+	height: auto;
+}
+
+.auth {
+	min-height: 100vh;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	padding: 40px 20px;
+	gap: 18px;
+}
+
+.auth > .page {
+	width: 100%;
+	max-width: 760px;
+	padding: 0;
+}
+
+.auth-card {
+	background: var(--card);
+	border: 1px solid var(--line);
+	border-radius: 12px;
+	padding: 26px;
+	width: 100%;
+	max-width: 400px;
+}
+
+.auth-card h1 {
+	margin: 0 0 4px;
+	font-size: 19px;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+}
+
+/* The facts under the reachability card: small, muted, and wrapping on the
+   error text, which is one long unbroken token on a phone. */
+.unreachable-detail {
+	margin: 14px 0 0;
+	font-size: 11px;
+	color: var(--muted);
+	overflow-wrap: anywhere;
+}
+
+.auth-card > p {
+	margin: 0 0 16px;
+	color: var(--muted);
+	font-size: 13px;
+}
+
+.auth-card .form {
+	max-width: none;
+}
+
+.auth-card .cta,
+.auth-card .btn {
+	width: 100%;
+	text-align: center;
+}
+
+.auth-foot {
+	margin-top: 18px;
+	font-size: 13px;
+	color: var(--muted);
+}
+
+/* Top-centre at every width, and one rule for both platforms because the
+   inset is zero where there is none. The `env()` fallback is spelled out
+   because an engine without it would drop the whole declaration and leave the
+   stack unplaced. Reversed so the newest card is the one against the anchor,
+   as it was when the stack hung from the bottom, and so a stack that outgrows
+   the viewport loses its oldest rather than its newest. */
+.toasts {
+	position: fixed;
+	top: calc(12px + env(safe-area-inset-top, 0px));
+	left: 50%;
+	transform: translateX(-50%);
+	display: flex;
+	flex-direction: column-reverse;
+	align-items: stretch;
+	gap: 8px;
+	width: max-content;
+	max-width: min(420px, calc(100vw - 24px));
+	z-index: 40;
+}
+
+.toast {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	border-radius: var(--r-panel);
+	/* Trimmed on the closing side, because the control inside already carries
+	   the full 38px and the padding would be added to it. */
+	padding: 4px 4px 4px 14px;
+	font-size: 13.5px;
+	color: var(--text);
+	background: var(--surface);
+	border: 1px solid var(--line);
+	box-shadow: var(--sh-3);
+}
+
+.toast-mark {
+	flex: none;
+	display: grid;
+	/* Beside the first line rather than the middle one: a wrapped card is what
+	   the founder's own save message draws at phone width, and a centred mark
+	   there leads nothing. */
+	align-self: start;
+	color: var(--ok-ink);
+}
+
+.toast.error .toast-mark {
+	color: var(--bad-ink);
+}
+
+.toast-say {
+	flex: 1;
+	min-width: 0;
+}
+
+.toast-close {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: var(--control-h);
+	min-height: var(--control-h);
+	padding: 0;
+	border: 1px solid transparent;
+	border-radius: 7px;
+	background: none;
+	color: var(--muted);
+	cursor: pointer;
+}
+
+.toast-close:hover {
+	background: var(--hover);
+}
+
+/* The "Required" marker TPT renders beside a label, in its own right rather
+   than as an asterisk a screen reader reads as punctuation. */
+.req {
+	margin-left: 8px;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.03em;
+	text-transform: uppercase;
+	color: var(--primary);
+}

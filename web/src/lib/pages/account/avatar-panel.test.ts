@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const SETTINGS = readFileSync(
-	new URL('../../../routes/settings/+page.svelte', import.meta.url),
+	new URL('../../../routes/(console)/settings/+page.svelte', import.meta.url),
 	'utf8'
 );
 const CONSOLE = readFileSync(new URL('../../Console.svelte', import.meta.url), 'utf8');

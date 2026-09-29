@@ -2,7 +2,7 @@
 title: Where the two typefaces come from
 ---
 
-The product used two faces, Fraunces for display and Instrument Sans for text, until 2026-09-11, when the founder's brand kit replaced them with Poppins for headings and Inter for body; the provenance of the current files is the README beside them in `web/static/fonts/` and `apps/landing/public/fonts/`, and `brand-kit-and-teacher-ui.md` records the decision.
+The product used two faces, Fraunces for display and Instrument Sans for text, until 2026-09-11, when the founder's brand kit replaced them with Poppins for headings and Inter for body; the provenance of the current files is the README beside them in `web/src/lib/fonts/` and `apps/landing/public/fonts/`, and `brand-kit-and-teacher-ui.md` records the decision.
 Both are self-hosted on every surface, and nothing fetches type from a third party.
 This note records why the console stopped using Google's CDN and what to check when a face is refreshed; the paragraphs below name the earlier faces because the reasoning was recorded against them and is unchanged.
 
@@ -18,7 +18,7 @@ It would have let the app reach two external origins on a product whose whole ar
 The founder approved bundling in words on 2026-09-06.
 
 The marketing site reached the same conclusion first, on 2026-09-03, and `apps/landing/public/fonts` carried both faces from then on.
-Each latin file in `web/static/fonts` was byte-identical to its copy there, which is the check that both surfaces are drawing the same face rather than two builds of it; the check is unchanged under Poppins and Inter, where all ten files match.
+Each latin file in `web/src/lib/fonts` was byte-identical to its copy there, which is the check that both surfaces are drawing the same face rather than two builds of it; the check is unchanged under Poppins and Inter, where all ten files match.
 
 ## The files, as they were downloaded in 2026-09
 
@@ -31,7 +31,7 @@ Requesting those two `fonts.googleapis.com/css2` URLs is how the file URLs are d
 Each subset of those two families is one variable font, so a weight block was a declaration rather than a file: every block of a subset named the same URL.
 `web/src/app.css` therefore declared one block per family and subset with a weight range, and transcribed each `unicode-range` from the stylesheet unchanged.
 Poppins broke that pattern when it arrived, because it is not variable and Google serves one file per weight.
-The five files, their sizes and their sha256 digests were tabulated in `web/static/fonts/README.md`, which now tabulates the ten that replaced them.
+The five files, their sizes and their sha256 digests were tabulated in `web/src/lib/fonts/README.md`, which now tabulates the ten that replaced them.
 
 Fraunces was declared `font-weight: 500 600` and Instrument Sans `400 600`, which is what the old links asked for and what the console's rules used — every rule naming `--display` asked for 500 or 600, and none for more.
 The files themselves carried a wider range, and the landing declared Fraunces `400 700` from the byte-identical file, so widening a declaration was an edit to `app.css` and needed no new download.
