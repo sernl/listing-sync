@@ -94,7 +94,7 @@ export const SECTIONS: readonly NavSection[] = [
 		},
 		items: [
 			{ href: '/resources', label: 'Resources', icon: 'layout-list' },
-			{ href: '/resources/files', label: "Your devices' files", icon: 'files' },
+			{ href: '/resources/files', label: 'Files', icon: 'files' },
 			{ href: '/labels', label: 'Labels', icon: 'tag' },
 			// Between Labels and Analytics because a collection is the other
 			// selection dimension a seller files by: a label is a word on a

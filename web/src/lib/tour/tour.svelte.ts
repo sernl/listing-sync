@@ -1,21 +1,32 @@
-// Whether the guided tour is open and on which step. A module store rather
-// than state in the shell, because two places open it: the shell, when the
-// profile says it is due, and "Show me around" on Help and guides.
+// Whether a guided tour is open, which one, and on which step. A module store
+// rather than state in the shell, because two places open it: the shell, when
+// a tour is due, and "Show me around" on Help and guides.
 
-import { backIndex, nextIndex, TOUR_STEPS } from './model';
+import { desktopInvoker } from '$lib/desktop';
+import { backIndex, nextIndex, tourSteps, type TourKind, type TourStep } from './model';
+
+/** Which host this console is in, read the way every other surface reads it:
+ *  the application's invoker is there or it is not. */
+export function tourHost(): 'app' | 'browser' {
+	return desktopInvoker() === null ? 'browser' : 'app';
+}
 
 class TourStore {
 	open = $state(false);
 	index = $state(0);
+	kind = $state<TourKind>('console');
+	steps = $state<readonly TourStep[]>(tourSteps('console', 'browser'));
 
-	/** Opens the tour on its first step, whatever the profile says. */
-	start() {
+	/** Opens a tour on its first step, whatever the profile says. */
+	start(kind: TourKind = 'console') {
+		this.kind = kind;
+		this.steps = tourSteps(kind, tourHost());
 		this.index = 0;
 		this.open = true;
 	}
 
 	next() {
-		this.index = nextIndex(this.index);
+		this.index = nextIndex(this.index, this.steps.length);
 	}
 
 	back() {
@@ -23,7 +34,7 @@ class TourStore {
 	}
 
 	get last(): boolean {
-		return this.index === TOUR_STEPS.length - 1;
+		return this.index === this.steps.length - 1;
 	}
 
 	close() {

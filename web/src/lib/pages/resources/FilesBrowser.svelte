@@ -307,7 +307,7 @@
 </script>
 
 <div class="page resources-page files-page">
-	<PageHead icon="files" title="Your devices' files" guide="your-files">
+	<PageHead icon="files" title="Files" guide="your-files">
 		{#snippet aside()}
 			<Explain title="What “on your computer” means" label="Where are they?">
 				<p>{FILES_STAY_ON_YOUR_DEVICES}</p>
