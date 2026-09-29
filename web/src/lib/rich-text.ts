@@ -20,6 +20,9 @@ type Node = string | Element;
 interface Element {
 	name: string;
 	href: string | null;
+	/** An `img`'s address and words, as written; the allow-list decides. */
+	src: string | null;
+	alt: string | null;
 	children: Node[];
 }
 
@@ -117,14 +120,19 @@ const NAMED_ENTITIES: Record<string, string> = {
 
 /** Named and numeric references decoded; an unknown one stays as written. */
 export function decodeEntities(text: string): string {
-	return text.replace(/&(#[xX][0-9a-fA-F]{1,6}|#[0-9]{1,7}|[a-zA-Z]{2,8});/g, (whole, body: string) => {
-		if (body.startsWith('#')) {
-			const code =
-				body[1] === 'x' || body[1] === 'X' ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
-			return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+	return text.replace(
+		/&(#[xX][0-9a-fA-F]{1,6}|#[0-9]{1,7}|[a-zA-Z]{2,8});/g,
+		(whole, body: string) => {
+			if (body.startsWith('#')) {
+				const code =
+					body[1] === 'x' || body[1] === 'X'
+						? parseInt(body.slice(2), 16)
+						: parseInt(body.slice(1), 10);
+				return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+			}
+			return NAMED_ENTITIES[body] ?? whole;
 		}
-		return NAMED_ENTITIES[body] ?? whole;
-	});
+	);
 }
 
 function escapeText(text: string): string {
@@ -143,10 +151,10 @@ export function safeHref(raw: string): string | null {
 	return /^(https?:\/\/|mailto:)/i.test(href) ? href : null;
 }
 
-function hrefOf(attributes: string): string | null {
+function attributeOf(attributes: string, wanted: string): string | null {
 	const pattern = /([^\s"'>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
 	for (const match of attributes.matchAll(pattern)) {
-		if (match[1].toLowerCase() === 'href') {
+		if (match[1].toLowerCase() === wanted) {
 			return match[2] ?? match[3] ?? match[4] ?? '';
 		}
 	}
@@ -157,7 +165,7 @@ function hrefOf(attributes: string): string | null {
  *  with their parent, and a new paragraph or list item closes the open one
  *  the way a browser would. Text is decoded. */
 function parse(html: string): Element {
-	const root: Element = { name: '#root', href: null, children: [] };
+	const root: Element = { name: '#root', href: null, src: null, alt: null, children: [] };
 	const stack: Element[] = [root];
 	const top = () => stack[stack.length - 1];
 	const closeTo = (name: string, fence: readonly string[] = []) => {
@@ -235,7 +243,9 @@ function parse(html: string): Element {
 		}
 		const element: Element = {
 			name,
-			href: name === 'a' ? hrefOf(attributes) : null,
+			href: name === 'a' ? attributeOf(attributes, 'href') : null,
+			src: name === 'img' ? attributeOf(attributes, 'src') : null,
+			alt: name === 'img' ? attributeOf(attributes, 'alt') : null,
 			children: []
 		};
 		top().children.push(element);
@@ -247,6 +257,18 @@ function parse(html: string): Element {
 }
 
 // ------------------------------------------------------------- sanitising
+
+/** What one body may hold beyond the eight elements every body keeps. The
+ *  description holds nothing more; an email adds two heading levels and
+ *  pictures from addresses it trusts. */
+export interface AllowList {
+	/** Keeps `h2` and `h3` as headings; any other heading is a paragraph. */
+	headings: boolean;
+	/** The address an `img` keeps, or null to drop it. Absent: no pictures. */
+	image?: (src: string) => string | null;
+}
+
+const DESCRIPTION: AllowList = { headings: false };
 
 const HEADINGS: Record<string, true> = {
 	h1: true,
@@ -266,6 +288,11 @@ function hasText(html: string): boolean {
 	return decodeEntities(html.replace(/<[^>]*>/g, '')).trim().length > 0;
 }
 
+/** Whether a fragment of our own output shows anything: words or a picture. */
+function hasContent(html: string): boolean {
+	return hasText(html) || html.includes('<img ');
+}
+
 /** Leading and trailing spaces and line breaks off a run of inline HTML,
  *  and the doubled spaces two adjacent text nodes leave. */
 function tidyInline(html: string): string {
@@ -278,14 +305,24 @@ function tidyInline(html: string): string {
 
 /** Inline content with the allow-list applied. A block met inside inline
  *  content (a `div` inside a `strong`) is read as a line break. */
-function inline(node: Node): string {
+function inline(node: Node, allow: AllowList): string {
 	if (typeof node === 'string') {
 		return escapeText(collapse(node));
 	}
-	const inner = () => node.children.map(inline).join('');
+	const inner = () => node.children.map((child) => inline(child, allow)).join('');
 	switch (node.name) {
 		case 'br':
 			return '<br>';
+		case 'img': {
+			const src =
+				node.src === null || allow.image === undefined
+					? null
+					: allow.image(decodeEntities(node.src).trim());
+			const alt = collapse(decodeEntities(node.alt ?? '')).trim();
+			return src === null
+				? ''
+				: `<img src="${escapeAttribute(src)}" alt="${escapeAttribute(alt)}">`;
+		}
 		case 'strong':
 		case 'b':
 			return wrap('strong', inner());
@@ -295,7 +332,7 @@ function inline(node: Node): string {
 		case 'a': {
 			const href = node.href === null ? null : safeHref(node.href);
 			const words = inner();
-			return href === null || !hasText(words)
+			return href === null || !hasContent(words)
 				? words
 				: `<a href="${escapeAttribute(href)}">${words}</a>`;
 		}
@@ -319,13 +356,13 @@ function wrap(tag: 'strong' | 'em', content: string): string {
 	return `${lead}<${tag}>${middle}</${tag}>${trail}`;
 }
 
-/** A sequence of block children as paragraphs and lists. */
-function blocks(children: readonly Node[], out: string[]): void {
+/** A sequence of block children as paragraphs, headings and lists. */
+function blocks(children: readonly Node[], out: string[], allow: AllowList): void {
 	let run = '';
 	const flush = () => {
 		for (const piece of run.split(/(?:<br>\s*){2,}/)) {
 			const tidy = tidyInline(piece);
-			if (hasText(tidy)) {
+			if (hasContent(tidy)) {
 				out.push(`<p>${tidy}</p>`);
 			}
 		}
@@ -334,31 +371,41 @@ function blocks(children: readonly Node[], out: string[]): void {
 	for (const child of children) {
 		if (typeof child !== 'string' && (child.name === 'ul' || child.name === 'ol')) {
 			flush();
-			const list = listOf(child);
+			const list = listOf(child, allow);
 			if (list !== '') {
 				out.push(list);
+			}
+		} else if (
+			typeof child !== 'string' &&
+			allow.headings &&
+			(child.name === 'h2' || child.name === 'h3')
+		) {
+			flush();
+			const words = tidyInline(child.children.map((node) => inline(node, allow)).join(''));
+			if (hasContent(words)) {
+				out.push(`<${child.name}>${words}</${child.name}>`);
 			}
 		} else if (typeof child !== 'string' && BLOCKS[child.name] === true) {
 			flush();
 			if (child.name === 'tr') {
-				run = child.children.map(inline).join('');
+				run = child.children.map((node) => inline(node, allow)).join('');
 				flush();
 			} else {
-				blocks(child.children, out);
+				blocks(child.children, out, allow);
 			}
 		} else {
-			run += inline(child);
+			run += inline(child, allow);
 		}
 	}
 	flush();
 }
 
-function listOf(list: Element): string {
+function listOf(list: Element, allow: AllowList): string {
 	const items: string[] = [];
 	let loose = '';
 	const flushLoose = () => {
 		const tidy = tidyInline(loose);
-		if (hasText(tidy)) {
+		if (hasContent(tidy)) {
 			items.push(`<li>${tidy}</li>`);
 		}
 		loose = '';
@@ -366,7 +413,7 @@ function listOf(list: Element): string {
 	for (const child of list.children) {
 		if (typeof child !== 'string' && child.name === 'li') {
 			flushLoose();
-			const item = itemOf(child);
+			const item = itemOf(child, allow);
 			if (item !== '') {
 				items.push(`<li>${item}</li>`);
 			}
@@ -374,37 +421,49 @@ function listOf(list: Element): string {
 			// A list directly inside a list is how a browser indents: it
 			// belongs to the item before it.
 			flushLoose();
-			const nested = listOf(child);
+			const nested = listOf(child, allow);
 			if (nested === '') {
 				continue;
 			}
 			const last = items.pop();
-			items.push(last === undefined ? `<li>${nested}</li>` : last.replace(/<\/li>$/, `${nested}</li>`));
+			items.push(
+				last === undefined ? `<li>${nested}</li>` : last.replace(/<\/li>$/, `${nested}</li>`)
+			);
 		} else {
-			loose += inline(child);
+			loose += inline(child, allow);
 		}
 	}
 	flushLoose();
 	return items.length === 0 ? '' : `<${list.name}>${items.join('')}</${list.name}>`;
 }
 
-function itemOf(item: Element): string {
+function itemOf(item: Element, allow: AllowList): string {
 	let words = '';
 	const nested: string[] = [];
 	for (const child of item.children) {
 		if (typeof child !== 'string' && (child.name === 'ul' || child.name === 'ol')) {
-			const list = listOf(child);
+			const list = listOf(child, allow);
 			if (list !== '') nested.push(list);
 		} else if (typeof child !== 'string' && BLOCKS[child.name] === true) {
 			// A paragraph inside an item is a loose list's; its lines stay.
-			words += `<br>${child.children.map(inline).join('')}<br>`;
+			words += `<br>${child.children.map((node) => inline(node, allow)).join('')}<br>`;
 		} else {
-			words += inline(child);
+			words += inline(child, allow);
 		}
 	}
 	const tidy = tidyInline(words).replace(/(?:<br>){2,}/g, '<br>');
-	const text = hasText(tidy) ? tidy : '';
+	const text = hasContent(tidy) ? tidy : '';
 	return text === '' && nested.length === 0 ? '' : text + nested.join('');
+}
+
+/** Any HTML reduced to one allow-list: the eight elements every body keeps
+ *  plus what `allow` adds, no attributes but a web or mail `href` and an
+ *  allowed picture's `src` and `alt`, text escaped, every paragraph and item
+ *  holding something to see. Empty when nothing is written. */
+export function reduceHtml(html: string, allow: AllowList): string {
+	const out: string[] = [];
+	blocks(parse(html).children, out, allow);
+	return out.join('');
 }
 
 /** The description as the editor and the server both keep it: the eight
@@ -412,9 +471,7 @@ function itemOf(item: Element): string {
  *  every paragraph and item holding words. Empty when nothing is written, so
  *  a cleared editor reads as an unanswered field rather than as `<p></p>`. */
 export function sanitiseHtml(html: string): string {
-	const out: string[] = [];
-	blocks(parse(html).children, out);
-	return out.join('');
+	return reduceHtml(html, DESCRIPTION);
 }
 
 /** What a reader sees, without markup: the words a counter counts. */
@@ -678,7 +735,11 @@ function listHtml(
 		}
 		// Items are always written tight: what is a paragraph inside a loose
 		// item is a line of its own inside a tight one.
-		items.push(`<li>${blockHtml(body, lost).replace(/<\/p><p>/g, '<br>').replace(/<\/?p>/g, '')}</li>`);
+		items.push(
+			`<li>${blockHtml(body, lost)
+				.replace(/<\/p><p>/g, '<br>')
+				.replace(/<\/?p>/g, '')}</li>`
+		);
 		if (at < lines.length && isBlank(lines[at - 1] ?? '') && markerOf(lines[at]) === null) {
 			break;
 		}
@@ -711,10 +772,13 @@ function inlineHtml(text: string, lost: Set<string>): string {
 		})
 		.replace(/<\/?[a-zA-Z][^>]*>/g, (tag) => hold(tag));
 	work = escapeText(work);
-	work = work.replace(/\[([^\]]+)\]\(([^)\s]*)(?:\s+"[^"]*")?\)/g, (_, words: string, url: string) => {
-		const href = safeHref(url.replace(/&amp;/g, '&'));
-		return href === null ? words : `<a href="${escapeAttribute(href)}">${words}</a>`;
-	});
+	work = work.replace(
+		/\[([^\]]+)\]\(([^)\s]*)(?:\s+"[^"]*")?\)/g,
+		(_, words: string, url: string) => {
+			const href = safeHref(url.replace(/&amp;/g, '&'));
+			return href === null ? words : `<a href="${escapeAttribute(href)}">${words}</a>`;
+		}
+	);
 	work = work
 		.replace(/\*\*\*(?=\S)([\s\S]*?\S)\*\*\*/g, '<em><strong>$1</strong></em>')
 		.replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, '<strong>$1</strong>')
@@ -752,12 +816,17 @@ function blockMarkdown(node: Element, indent: string): string {
 				const marker = node.name === 'ul' ? '- ' : `${number}. `;
 				const inner = indent + ' '.repeat(marker.length);
 				const words = item.children
-					.filter((child) => typeof child === 'string' || (child.name !== 'ul' && child.name !== 'ol'))
+					.filter(
+						(child) => typeof child === 'string' || (child.name !== 'ul' && child.name !== 'ol')
+					)
 					.map(inlineMarkdown)
 					.join('')
 					.replace(/\n/g, `\n${inner}`);
 				const nested = item.children
-					.filter((child): child is Element => typeof child !== 'string' && (child.name === 'ul' || child.name === 'ol'))
+					.filter(
+						(child): child is Element =>
+							typeof child !== 'string' && (child.name === 'ul' || child.name === 'ol')
+					)
 					.map((list) => `\n${blockMarkdown(list, inner)}`)
 					.join('');
 				return `${indent}${marker}${escapeLineStart(words)}${nested}`;

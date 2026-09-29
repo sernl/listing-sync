@@ -102,10 +102,13 @@ const TENANT_TABLES: [&str; 75] = [
 /// platform writes and every tenant reads. site_setting is the site-wide
 /// switches (maintenance, seasonal theme, banner), read by every visitor
 /// signed in or not. discount and discount_code are the platform's offers to
-/// every tenant at once, written by operators. The rest are genuinely global:
+/// every tenant at once, written by operators. mail_campaign,
+/// mail_campaign_recipient and mail_image are the operators' mail to sellers
+/// (migration 0097): one platform write across every tenant, kept on the
+/// application pool. The rest are genuinely global:
 /// reference data, the canonical taxonomy, the fleet kill switch, and sqlx's
 /// migration bookkeeping.
-const GLOBAL_TABLES: [&str; 18] = [
+const GLOBAL_TABLES: [&str; 21] = [
     "_sqlx_migrations",
     "app_user",
     "canonical_term",
@@ -115,6 +118,9 @@ const GLOBAL_TABLES: [&str; 18] = [
     "guide_tag_assignment",
     "guide_taxon",
     "inventory_halt",
+    "mail_campaign",
+    "mail_campaign_recipient",
+    "mail_image",
     "marketplace_inventory",
     "organisation",
     "platform_operator",

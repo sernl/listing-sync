@@ -24,8 +24,10 @@ const MARKETPLACE_PICKER = read('MarketplacePicker.svelte');
  *
  *  The bands are components under `panels/` because the Template Manager
  *  renders the same ones over the same draft, and a second copy of eleven
- *  bands is eleven bands to keep in step. Every fact below is about the form
- *  as a whole, so every one of them reads the whole of it. */
+ *  bands is eleven bands to keep in step. The description's rich-text box
+ *  is `$lib/RichTextEditor.svelte`, shared with Admin → Mail, and draws the
+ *  form's `res-` classes. Every fact below is about the form as a whole, so
+ *  every one of them reads the whole of it. */
 const PANELS = `${HERE}panels/`;
 const FORM_FILES = [
 	...readdirSync(HERE)
@@ -33,7 +35,8 @@ const FORM_FILES = [
 		.map((name) => `${HERE}${name}`),
 	...readdirSync(PANELS)
 		.filter((name) => name.endsWith('.svelte'))
-		.map((name) => `${PANELS}${name}`)
+		.map((name) => `${PANELS}${name}`),
+	`${LIB}RichTextEditor.svelte`
 ];
 /** The form's own markup, every band of it, as one string to read facts off. */
 const RESOURCE_FORM = FORM_FILES.map((path) => readFileSync(path, 'utf8')).join('\n');
@@ -81,9 +84,9 @@ describe('the resource form is one surface of bands', () => {
 		// Eleven bands on the canonical tab. The two per-marketplace panels are
 		// headed by the marketplace's own mark instead, which is what says
 		// whose options they hold.
-		const passed = [
-			...RESOURCE_FORM.matchAll(/<FormSection\b[^>]*?\bicon="([^"]+)"/gs)
-		].map((match) => match[1]);
+		const passed = [...RESOURCE_FORM.matchAll(/<FormSection\b[^>]*?\bicon="([^"]+)"/gs)].map(
+			(match) => match[1]
+		);
 		expect(passed.length).toBe(11);
 		expect(passed.filter((name) => !ICON_NAMES.includes(name as never))).toEqual([]);
 	});
@@ -134,9 +137,11 @@ describe('what the form says is required, it says out loud', () => {
 		// A `Field` that says Required to a reader and carries no `required`
 		// nor `aria-required` on the control announces nothing to a screen
 		// reader, which is the state five of these six controls were in.
-		const required = [...`${RESOURCE_FORM}${MARKETPLACE_PICKER}`.matchAll(
-			/<Field\b[^>]*?\bid="([^"]+)"[^>]*?\brequired\b/gs
-		)].map((match) => match[1]);
+		const required = [
+			...`${RESOURCE_FORM}${MARKETPLACE_PICKER}`.matchAll(
+				/<Field\b[^>]*?\bid="([^"]+)"[^>]*?\brequired\b/gs
+			)
+		].map((match) => match[1]);
 		expect(required.length).toBeGreaterThan(0);
 		const unmarked = required.filter((id) => {
 			const control = new RegExp(`<(?:input|select|textarea)\\b[^>]*?id="${id}"[^>]*?>`, 's');

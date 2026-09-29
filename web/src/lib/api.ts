@@ -454,12 +454,94 @@ export interface NotificationsRead {
 	marked: number;
 }
 
-/** Whether this seller is emailed when one of their runs finishes. Per user
- *  rather than per organisation: the address the mail goes to is the user's.
- *  The address itself is not here -- the console reads it from the identity
- *  service, and the domain database holds none. */
+/** Which emails this seller takes. Per user rather than per organisation:
+ *  the address the mail goes to is the user's. The address itself is not
+ *  here -- the console reads it from the identity service, and the domain
+ *  database holds none. `notify_email` is a run finishing; `marketing_email`
+ *  is the news the platform sends from Admin → Mail. */
 export interface NotifyPreferences {
 	notify_email: boolean;
+	marketing_email: boolean;
+}
+
+// ------------------------------------------------------------ admin mail
+
+/** Who a campaign goes to, by plan. `subscriber` is sold as Sync and `free`
+ *  as Look. */
+export type MailSegment = 'all' | 'free' | 'paid' | 'starter' | 'subscriber' | 'studio';
+
+export interface MailAudience {
+	segment: MailSegment;
+	exclude_operators: boolean;
+	/** Enforced when it sends: the domain database holds no addresses, so an
+	 *  unverified one is found and recorded `skipped` then. */
+	verified_only: boolean;
+}
+
+export interface MailDraft {
+	subject: string;
+	body_html: string;
+	link_url: string | null;
+	link_label: string | null;
+}
+
+export interface MailAudienceCount {
+	recipients: number;
+	sellers: number;
+	operators_excluded: number;
+	opted_out: number;
+	no_sign_in: number;
+}
+
+export type MailRecipientStatus = 'queued' | 'sent' | 'failed' | 'skipped';
+
+export interface MailCounts {
+	total: number;
+	queued: number;
+	sent: number;
+	failed: number;
+	skipped: number;
+}
+
+export interface MailCampaignSummary {
+	id: string;
+	subject: string;
+	audience: MailAudience;
+	counts: MailCounts;
+	/** Epoch milliseconds. */
+	created_at: number;
+	/** The app user id of the admin who sent it. */
+	created_by: string;
+	created_by_label: string;
+	test: boolean;
+	deleted_at: number | null;
+}
+
+export interface MailRecipientView {
+	user: string;
+	auth_subject: string | null;
+	org_name: string;
+	/** The plan's display name. */
+	plan: string;
+	status: MailRecipientStatus;
+	attempts: number;
+	/** Resend's id for the message, once it accepted it. */
+	provider_id: string | null;
+	error: string | null;
+	updated_at: number;
+}
+
+export interface MailCampaignDetail extends MailCampaignSummary {
+	/** Null once deleted. */
+	draft: MailDraft | null;
+	/** Empty once deleted. */
+	recipients: MailRecipientView[];
+}
+
+export interface MailPreview {
+	subject: string;
+	/** The whole email document, brand wrapper and sample values in. */
+	html: string;
 }
 
 /** Where the user stands with the guided tour. `due` for an account made
@@ -3272,13 +3354,11 @@ export const api = {
 	 *  rather than refusing. */
 	markNotificationsRead: (through: string) =>
 		post<NotificationsRead>('/v1/notifications/read', { through }),
-	/** Whether this seller is emailed when a run finishes. The session's own
-	 *  user, which is the only user either call can name. */
+	/** Which emails this seller takes. The session's own user, which is the
+	 *  only user either call can name. The write sends only what it changes. */
 	notifyPreferences: () => request<NotifyPreferences>('/v1/notifications/preferences'),
-	setNotifyPreferences: (notifyEmail: boolean) =>
-		patch<NotifyPreferences>('/v1/notifications/preferences', {
-			notify_email: notifyEmail
-		}),
+	setNotifyPreferences: (change: { notify_email?: boolean; marketing_email?: boolean }) =>
+		patch<NotifyPreferences>('/v1/notifications/preferences', change),
 	/** The seller's own picture. The session's user is the only user any of
 	 *  these can name; the bytes reach `POST /v1/uploads` first, slot-bound as
 	 *  a picture, and the write names the handle that upload answered. */
@@ -3422,6 +3502,48 @@ export const api = {
 	site: () => request<SiteView>('/v1/site'),
 	adminSite: () => request<SiteView>('/v1/admin/site'),
 	updateSite: (body: SitePatch) => patch<SiteView>('/v1/admin/site', body),
+
+	// Admin → Mail: news to sellers, composed here and sent by the server's
+	// outbox one recipient at a time.
+	mailAudience: (audience: MailAudience) => {
+		const query = new URLSearchParams({
+			segment: audience.segment,
+			exclude_operators: String(audience.exclude_operators),
+			verified_only: String(audience.verified_only)
+		});
+		return request<MailAudienceCount>(`/v1/admin/mail/audience?${query.toString()}`);
+	},
+	previewMail: (draft: MailDraft) => post<MailPreview>('/v1/admin/mail/preview', draft),
+	/** A picture for an email. The raw `File` as the body, as
+	 *  `uploadGuideImage` sends one; the answer's `url` is public so a mail
+	 *  client can load it without signing in. */
+	uploadMailImage: (file: File) =>
+		request<{ handle: string; url: string }>('/v1/admin/mail/images', {
+			method: 'POST',
+			headers: { accept: 'application/json', 'content-type': file.type },
+			body: file
+		}),
+	/** Queues one copy of the draft to the signed-in admin. */
+	testMail: (body: { draft: MailDraft; created_by_label: string }) =>
+		post<{ id: string }>('/v1/admin/mail/test', body),
+	createMailCampaign: (body: {
+		draft: MailDraft;
+		audience: MailAudience;
+		created_by_label: string;
+	}) => post<MailCampaignDetail>('/v1/admin/mail/campaigns', body),
+	/** Newest first; test sends are not listed. */
+	mailCampaigns: () => request<{ campaigns: MailCampaignSummary[] }>('/v1/admin/mail/campaigns'),
+	mailCampaign: (id: string) =>
+		request<MailCampaignDetail>(`/v1/admin/mail/campaigns/${encodeURIComponent(id)}`),
+	/** Queues every failed recipient again. */
+	retryMailCampaign: (id: string) =>
+		post<MailCampaignDetail>(`/v1/admin/mail/campaigns/${encodeURIComponent(id)}/retry`, {}),
+	/** Drops the body and the per-recipient rows; the counts and the log line
+	 *  stay. */
+	deleteMailCampaign: (id: string) =>
+		request<MailCampaignDetail>(`/v1/admin/mail/campaigns/${encodeURIComponent(id)}`, {
+			method: 'DELETE'
+		}),
 	createGuideTaxon: (kind: GuideTaxonKind, body: { slug: string; name: string }) =>
 		post<GuideTaxon>(`/v1/admin/guides/_taxonomy/${kind}`, body),
 	updateGuideTaxon: (kind: GuideTaxonKind, id: string, body: { name: string; retired: boolean }) =>

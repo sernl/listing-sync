@@ -82,9 +82,7 @@
 	});
 
 	const orgVerdict = $derived(checkOrgName(orgDraft));
-	const orgUnchanged = $derived(
-		orgVerdict.accepted && orgVerdict.name === organisation.data?.name
-	);
+	const orgUnchanged = $derived(orgVerdict.accepted && orgVerdict.name === organisation.data?.name);
 
 	const renaming = createMutation(() => ({
 		mutationFn: (name: string) => api.updateOrg({ name }),
@@ -138,27 +136,37 @@
 		queryFn: () => api.notifyPreferences()
 	}));
 
-	/** The pending setting while a write is in flight, so the switch moves
+	/** The pending settings while a write is in flight, so a switch moves
 	 *  under the thumb rather than after the round trip, and null the rest of
 	 *  the time, when the stored value is what the switch shows. No default:
-	 *  the switch is drawn only where the read succeeded, so there is no state
-	 *  in which this page would have to guess which way it is set. */
+	 *  the switches are drawn only where the read succeeded, so there is no
+	 *  state in which this page would have to guess which way one is set. */
 	let notifyDraft = $state<boolean | null>(null);
+	let marketingDraft = $state<boolean | null>(null);
 
-	const settingNotifyEmail = createMutation(() => ({
-		mutationFn: (value: boolean) => api.setNotifyPreferences(value),
-		onMutate: (value: boolean) => {
-			notifyDraft = value;
+	type NotifyChange = { notify_email: boolean } | { marketing_email: boolean };
+
+	const settingNotify = createMutation(() => ({
+		mutationFn: (change: NotifyChange) => api.setNotifyPreferences(change),
+		onMutate: (change: NotifyChange) => {
+			if ('notify_email' in change) notifyDraft = change.notify_email;
+			else marketingDraft = change.marketing_email;
 		},
-		onSuccess: (stored: NotifyPreferences) => {
+		onSuccess: (stored: NotifyPreferences, change: NotifyChange) => {
 			// The stored value rather than the submitted one, so the switch
 			// shows what the server holds.
 			queryClient.setQueryData(queryKeys.notifyPreferences, stored);
 			notifyDraft = null;
-			toast('info', stored.notify_email ? 'Emails on.' : 'Emails off.');
+			marketingDraft = null;
+			if ('notify_email' in change) {
+				toast('info', stored.notify_email ? 'Emails on.' : 'Emails off.');
+			} else {
+				toast('info', stored.marketing_email ? 'News and tips on.' : 'News and tips off.');
+			}
 		},
 		onError: () => {
 			notifyDraft = null;
+			marketingDraft = null;
 			toast('error', 'That setting was not saved.');
 		}
 	}));
@@ -488,7 +496,12 @@
 			]);
 		},
 		onError: (failure: Error) => {
-			toast('error', failure instanceof ApiFailure ? failure.message : 'The permission was not withdrawn. Try again.');
+			toast(
+				'error',
+				failure instanceof ApiFailure
+					? failure.message
+					: 'The permission was not withdrawn. Try again.'
+			);
 		}
 	}));
 
@@ -516,10 +529,7 @@
 		{/snippet}
 	</PageHead>
 
-	<Panel
-		title="Account name"
-		description="What your account is called."
-	>
+	<Panel title="Account name" description="What your account is called.">
 		{#if organisation.isPending}
 			<p class="quiet">Loading…</p>
 		{:else if organisation.isError}
@@ -541,7 +551,12 @@
 					<Banner tone="bad">{orgRefusal}</Banner>
 				{/if}
 				<div class="actions">
-					<Button tier="primary" type="submit" disabled={orgBlocked !== null} reason={orgBlocked ?? undefined}>
+					<Button
+						tier="primary"
+						type="submit"
+						disabled={orgBlocked !== null}
+						reason={orgBlocked ?? undefined}
+					>
 						{renaming.isPending ? 'Saving…' : 'Save display name'}
 					</Button>
 				</div>
@@ -593,10 +608,7 @@
 		{/if}
 	</Panel>
 
-	<Panel
-		title="Profile"
-		description="Who you are signed in as."
-	>
+	<Panel title="Profile" description="Who you are signed in as.">
 		<div class="acct-avatar">
 			<!-- Decoration beside the control that names it: the tile shows the
 			     picture or the initials the shell would draw in its place. -->
@@ -697,10 +709,7 @@
 		{/if}
 	</Panel>
 
-	<Panel
-		title="Notifications"
-		description="Choose when we email you."
-	>
+	<Panel title="Notifications" description="Choose when we email you.">
 		{#if notifyPrefs.isPending}
 			<p class="quiet">Loading…</p>
 		{:else if notifyPrefs.isError || !notifyPrefs.data}
@@ -709,9 +718,18 @@
 			<Toggle
 				label="Email me when an import or move finishes"
 				checked={notifyDraft ?? notifyPrefs.data.notify_email}
-				disabled={settingNotifyEmail.isPending}
-				onchange={(value) => settingNotifyEmail.mutate(value)}
+				disabled={settingNotify.isPending}
+				onchange={(value) => settingNotify.mutate({ notify_email: value })}
 			/>
+			<Toggle
+				label="News and tips from Teachouse"
+				checked={marketingDraft ?? notifyPrefs.data.marketing_email}
+				disabled={settingNotify.isPending}
+				onchange={(value) => settingNotify.mutate({ marketing_email: value })}
+			/>
+			<p class="quiet">
+				Occasional emails about new features. Every email has an unsubscribe link.
+			</p>
 			<!-- The address comes from the profile read above rather than from
 			     this setting's own answer: the domain database holds no seller
 			     address by design, so the identity service is the only thing
@@ -731,9 +749,7 @@
 		description="A passkey signs you in with the fingerprint, face or PIN that unlocks your device."
 	>
 		{#if !supported}
-			<p class="quiet">
-				This browser does not support passkeys. Use your password instead.
-			</p>
+			<p class="quiet">This browser does not support passkeys. Use your password instead.</p>
 		{:else}
 			{#if passkeys.isPending}
 				<p class="quiet">Loading…</p>
@@ -795,10 +811,7 @@
 		{/if}
 	</Panel>
 
-	<Panel
-		title="Browser sign-ins"
-		description="Browsers signed in to your Teachouse account."
-	>
+	<Panel title="Browser sign-ins" description="Browsers signed in to your Teachouse account.">
 		{#if signIns.isPending || current.isPending}
 			<p class="quiet">Loading…</p>
 		{:else if signIns.isError}
@@ -868,7 +881,12 @@
 					<span class="why"><StatusPill tone={row.pill.tone} label={row.pill.label} /></span>
 				</span>
 				{#if row.action === 'grant'}
-					<Button tier="outline" small icon="shield-check" onclick={() => (grantingFor = row.marketplace)}>
+					<Button
+						tier="outline"
+						small
+						icon="shield-check"
+						onclick={() => (grantingFor = row.marketplace)}
+					>
 						Grant
 					</Button>
 				{:else if row.action === 'withdraw'}

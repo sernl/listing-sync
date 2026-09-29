@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO mail_image (hash, uploaded_by, uploaded_at) VALUES ($1, $2, $3) ON CONFLICT (hash) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a0ab521ac37185c10438da906e29fb4e1a74cb59ce448f4bcdd327e8b348474e"
+}

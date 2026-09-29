@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 192] = [
+pub const ROUTES: [Route; 204] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -177,12 +177,12 @@ pub const ROUTES: [Route; 192] = [
     Route {
         method: "get",
         path: "/{version}/notifications/preferences",
-        summary: "Whether the requesting user takes completion mail",
+        summary: "Whether the requesting user takes completion mail and operator news",
     },
     Route {
         method: "patch",
         path: "/{version}/notifications/preferences",
-        summary: "Set whether the requesting user takes completion mail",
+        summary: "Set whether the requesting user takes completion mail or operator news",
     },
     Route {
         method: "get",
@@ -878,6 +878,66 @@ pub const ROUTES: [Route; 192] = [
         method: "patch",
         path: "/{version}/admin/site",
         summary: "Operator: change maintenance mode, the seasonal theme or the banner",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/admin/mail/audience",
+        summary: "Operator: how many sellers a mail audience filter reaches, and who it leaves out",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/mail/preview",
+        summary: "Operator: a mail draft rendered in the brand wrapper with sample values",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/mail/images",
+        summary: "Operator: store a picture for a mail body, served publicly",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/mail/test",
+        summary: "Operator: queue one mail of a draft to the operator sending it",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/admin/mail/campaigns",
+        summary: "Operator: the mail campaign log, newest first",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/mail/campaigns",
+        summary: "Operator: write a mail campaign and queue one row per recipient",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/admin/mail/campaigns/{id}",
+        summary: "Operator: one mail campaign with each recipient's status",
+    },
+    Route {
+        method: "delete",
+        path: "/{version}/admin/mail/campaigns/{id}",
+        summary: "Operator: delete a campaign's body and recipient rows, keeping its log line",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/mail/campaigns/{id}/retry",
+        summary: "Operator: queue a campaign's failed recipients again",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/mail/images/{handle}",
+        summary: "Public: the bytes of a picture uploaded for mail",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/mail/unsubscribe",
+        summary: "Public: the page an unsubscribe link opens",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/mail/unsubscribe",
+        summary: "Public: unsubscribe from operator news, by form or one-click List-Unsubscribe-Post",
     },
     Route {
         method: "get",

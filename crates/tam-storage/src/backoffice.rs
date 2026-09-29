@@ -536,6 +536,35 @@ impl BackofficeRepo {
         Ok(UsersPage { users, total, next })
     }
 
+    /// The plan every organisation holding a live grant holds, folded by
+    /// the same strength-then-latest comparison [`Self::users`] makes. An
+    /// organisation absent from the answer holds no grant and is on the free
+    /// plan. What the operators' mail audience filters by plan reads.
+    pub async fn plans(&self, now: Timestamp) -> Result<HashMap<OrgId, Plan>, StorageError> {
+        let grants = sqlx::query!(
+            "SELECT org_id, plan, granted_at FROM entitlement_grant \
+              WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > $1)",
+            timestamp_to_db(now)?,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut held: HashMap<OrgId, (Plan, (u8, Timestamp))> = HashMap::new();
+        for row in grants {
+            let plan = Plan::parse(&row.plan).ok_or_else(|| StorageError::CorruptRow {
+                reason: format!("entitlement_grant.plan holds the unknown plan {}", row.plan),
+            })?;
+            let rank = (plan.strength(), timestamp_from_db(row.granted_at));
+            let org = OrgId(uuid_from_db(row.org_id));
+            if held.get(&org).is_none_or(|&(_, best)| rank > best) {
+                held.insert(org, (plan, rank));
+            }
+        }
+        Ok(held
+            .into_iter()
+            .map(|(org, (plan, _))| (org, plan))
+            .collect())
+    }
+
     /// One organisation: its counts, its connections carrying the same
     /// derived status the seller's own page renders, and its halts.
     pub async fn org(&self, org: OrgId, now: Timestamp) -> Result<Option<OrgDetail>, StorageError> {

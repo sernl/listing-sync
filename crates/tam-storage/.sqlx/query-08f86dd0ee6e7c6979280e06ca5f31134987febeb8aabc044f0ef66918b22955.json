@@ -1,0 +1,118 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.id, c.subject, c.body_html, c.link_url, c.link_label, c.audience, c.test, c.created_by, c.created_by_label, c.created_at, c.deleted_at, c.final_counts, count(r.user_id) AS \"total!\", count(r.user_id) FILTER (WHERE r.status = 'queued') AS \"queued!\", count(r.user_id) FILTER (WHERE r.status = 'sent') AS \"sent!\", count(r.user_id) FILTER (WHERE r.status = 'failed') AS \"failed!\", count(r.user_id) FILTER (WHERE r.status = 'skipped') AS \"skipped!\" FROM mail_campaign c LEFT JOIN mail_campaign_recipient r ON r.campaign_id = c.id WHERE NOT c.test GROUP BY c.id ORDER BY c.created_at DESC, c.id LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "subject",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "body_html",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "link_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "link_label",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "audience",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 6,
+        "name": "test",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
+        "name": "created_by",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 8,
+        "name": "created_by_label",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "deleted_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 11,
+        "name": "final_counts",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 12,
+        "name": "total!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 13,
+        "name": "queued!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 14,
+        "name": "sent!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 15,
+        "name": "failed!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 16,
+        "name": "skipped!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "08f86dd0ee6e7c6979280e06ca5f31134987febeb8aabc044f0ef66918b22955"
+}
