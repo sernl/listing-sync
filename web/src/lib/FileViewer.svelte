@@ -22,9 +22,10 @@
 		contentType: string;
 		/** Read when the dialog opens, never earlier. */
 		bytes: () => Promise<ArrayBuffer>;
-		/** Where the file can be streamed from instead: Teachouse's copy. A
-		 *  PDF is then read a range at a time, so its first pages draw before
-		 *  the rest of a large file has arrived. */
+		/** Where the file can be streamed from instead: its content URL on
+		 *  Teachouse, which serves an upload or passes an imported file on from
+		 *  a device. A PDF is then read a range at a time, so its first pages
+		 *  draw before the rest of a large file has arrived. */
 		url?: string;
 		onClose: () => void;
 		/** Hand the file to another application on this machine, where the

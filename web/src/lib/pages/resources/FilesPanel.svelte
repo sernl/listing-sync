@@ -21,13 +21,14 @@
 	} from '$lib/desktop';
 	import FileViewer from '$lib/FileViewer.svelte';
 	import FileRename from './FileRename.svelte';
+	import FileReach from './FileReach.svelte';
 	import {
-		COPY_EXPLAINED,
 		OPEN_UNAVAILABLE,
 		contentTypeOfKind,
-		copyOf,
-		copySentence,
-		viewFrom
+		sourceOfStored,
+		viewFrom,
+		type Reach,
+		type Unreachable
 	} from './file-viewer';
 	import {
 		IDLE,
@@ -102,6 +103,32 @@
 		})();
 	});
 	let viewing = $state<FileView | null>(null);
+
+	// What the last View or Download of an imported file found, by file,
+	// where its device could not be reached; and the file being asked about.
+	let unreachable = $state<Map<string, Unreachable>>(new Map());
+	let reaching = $state<string | null>(null);
+
+	/** Asks whether a file can be read now and only then runs `then`; the
+	 *  answer stays under the row when it cannot. An upload, or this device's
+	 *  own copy, has no probe and runs at once. */
+	async function whenReachable(
+		file: FileView,
+		probe: (() => Promise<Reach>) | undefined,
+		then: () => void
+	) {
+		reaching = file.id;
+		const answer: Reach = probe === undefined ? { kind: 'ready' } : await probe();
+		reaching = null;
+		const next = new Map(unreachable);
+		if (answer.kind === 'ready') {
+			next.delete(file.id);
+			unreachable = next;
+			then();
+			return;
+		}
+		unreachable = next.set(file.id, answer);
+	}
 
 	async function openElsewhere(file: FileView) {
 		const answer = await libraryOpenExternal(invoke, file.hash);
@@ -263,7 +290,11 @@
 		{@const swappable = replaceable(stored, file.id)}
 		{@const mine = fileAction.kind !== 'idle' && fileAction.file === file.id}
 		{@const from = viewFrom(product, file, invoke, kept.has(file.hash))}
-		{@const onServer = copyOf(file) === 'stored'}
+		{@const through = sourceOfStored(product, file)}
+		{@const download = api.productFileUrl(product, file.id, true)}
+		{@const said =
+			unreachable.get(file.id) ??
+			(from.kind === 'unavailable' ? { kind: 'refused' as const, sentence: from.sentence } : null)}
 		<div class="res-line res-file">
 			<span class="res-line-what">
 				<StatusPill tone="flat" label={ROLE_WORD[file.role]} />
@@ -276,16 +307,32 @@
 			<span class="res-file-acts">
 				<Button
 					small
-					disabled={from.kind === 'unavailable'}
-					reason={from.kind === 'unavailable' ? from.sentence : undefined}
-					onclick={() => (viewing = file)}>View</Button
+					disabled={from.kind === 'unavailable' || reaching === file.id}
+					reason={from.kind === 'unavailable'
+						? from.sentence
+						: reaching === file.id
+							? 'Checking where your file is…'
+							: undefined}
+					onclick={() =>
+						void whenReachable(
+							file,
+							from.kind === 'unavailable' ? undefined : from.source.probe,
+							() => (viewing = file)
+						)}>View</Button
 				>
+				<!-- An imported file is asked about first, so an offline device
+				     reads as the sentence rather than a download that never comes. -->
 				<Button
 					small
 					icon="download"
-					href={onServer ? api.productFileUrl(product, file.id, true) : undefined}
-					disabled={!onServer}
-					reason={onServer ? undefined : (copySentence(copyOf(file)) ?? undefined)}
+					href={through.probe === undefined ? download : undefined}
+					disabled={from.kind === 'unavailable' || reaching === file.id}
+					reason={from.kind === 'unavailable'
+						? from.sentence
+						: reaching === file.id
+							? 'Checking where your file is…'
+							: undefined}
+					onclick={() => void whenReachable(file, through.probe, () => location.assign(download))}
 					>Download</Button
 				>
 				{#if file.role !== 'cover'}
@@ -319,13 +366,8 @@
 					>Remove…</Button
 				>
 			</span>
-			{#if !onServer}
-				<div class="res-file-say res-file-copy">
-					<span>{copySentence(copyOf(file))}</span>
-					<Explain title="Where your file is" label="Why?">
-						{#each COPY_EXPLAINED as line (line)}<p>{line}</p>{/each}
-					</Explain>
-				</div>
+			{#if said !== null}
+				<FileReach reach={said} />
 			{/if}
 			{#if renaming === file.id}
 				<FileRename

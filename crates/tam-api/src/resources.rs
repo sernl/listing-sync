@@ -454,6 +454,12 @@ pub struct ContentQuery {
     /// `1` asks for the file as a download rather than to be shown.
     #[serde(default)]
     pub download: Option<String>,
+    /// `1` asks only whether the file can be read now: `204` where it can,
+    /// the refusal a read would meet where it cannot. The console asks this
+    /// before handing the URL to a viewer or a download, which would
+    /// otherwise swallow the sentence.
+    #[serde(default)]
+    pub probe: Option<String>,
 }
 
 impl ContentQuery {
@@ -461,11 +467,21 @@ impl ContentQuery {
     pub fn wants_download(&self) -> bool {
         matches!(self.download.as_deref(), Some("1" | "true"))
     }
+
+    #[must_use]
+    pub fn wants_probe(&self) -> bool {
+        matches!(self.probe.as_deref(), Some("1" | "true"))
+    }
 }
 
-/// What a file read says where only the seller's device holds the bytes.
-pub const DEVICE_ONLY: &str =
-    "This file is on your device only. Open the Teachouse app on that device to copy it to Teachouse.";
+/// A probe's answer for a file that can be read now.
+pub(crate) fn probe_answer(state: &AppState) -> Result<axum::response::Response, APIError> {
+    axum::response::Response::builder()
+        .status(StatusCode::NO_CONTENT)
+        .header(header::CACHE_CONTROL, "private, no-store")
+        .body(axum::body::Body::empty())
+        .map_err(|error| state.internal(&format!("the probe answer did not build: {error}")))
+}
 
 /// Opens this organisation's copy of one file, or `None` where it holds none.
 ///
@@ -631,11 +647,12 @@ pub(crate) fn file_answer(
 /// not exist; the file must be one this product holds, so a file id is not a
 /// key to the organisation's whole store.
 ///
-/// An imported file is served from Teachouse's copy of it, which the
-/// seller's app makes after the import; until it has, the answer says the
-/// file is on the device only. `Range` is honoured so the viewer can draw
-/// the first pages before the rest arrives, and `?download=1` answers as an
-/// attachment.
+/// An imported file is passed through from one of the seller's devices that
+/// holds it ([`crate::broker`]) and never kept here; where none is online the
+/// answer names the device to open the app on. `Range` is honoured so the
+/// viewer can draw the first pages before the rest arrives, `?download=1`
+/// answers as an attachment, and `?probe=1` answers only whether the file
+/// can be read now.
 pub(crate) async fn product_file_content(
     State(state): State<AppState>,
     context: OrgContext,
@@ -684,31 +701,39 @@ pub(crate) async fn product_file_content(
         .cloned()
         .or_else(|| shown_name(held, &record.product.title.0))
         .unwrap_or(fallback_name);
-    let Some(bytes) = open_copy(&state, context.org, hash, held.bytes.byte_len()).await? else {
-        return Err(match held.bytes {
-            tam_types::FileBytes::Sourced { .. } => missing(DEVICE_ONLY),
-            // Ours, not theirs: the row says these bytes are here.
-            tam_types::FileBytes::Held { .. } => {
-                state.internal("a product file row names a blob this store does not hold")
-            }
-        });
+    let served = Served {
+        name: &name,
+        content_type: &content_type,
+        download: query.wants_download(),
     };
-    file_answer(
-        &state,
-        bytes,
-        &Served {
-            name: &name,
-            content_type: &content_type,
-            download: query.wants_download(),
-        },
-        headers.get(header::RANGE),
-    )
+    if matches!(held.bytes, tam_types::FileBytes::Sourced { .. }) {
+        return crate::broker::serve(
+            &state,
+            context.org,
+            &crate::broker::Brokered {
+                hash,
+                byte_len: held.bytes.byte_len(),
+                served,
+                probe: query.wants_probe(),
+            },
+            headers.get(header::RANGE),
+        )
+        .await;
+    }
+    if query.wants_probe() {
+        return probe_answer(&state);
+    }
+    let bytes = open_copy(&state, context.org, hash, held.bytes.byte_len())
+        .await?
+        // Ours, not theirs: the row says these bytes are here.
+        .ok_or_else(|| state.internal("a product file row names a blob this store does not hold"))?;
+    file_answer(&state, bytes, &served, headers.get(header::RANGE))
 }
 
 /// `inline` or `attachment` with the seller's own file name, in both
 /// spellings RFC 6266 allows: an ASCII fallback with anything a quoted string
 /// cannot carry replaced, and the exact name percent-encoded as UTF-8.
-fn disposition(name: &str, download: bool) -> String {
+pub(crate) fn disposition(name: &str, download: bool) -> String {
     let fallback: String = name
         .chars()
         .map(|c| {
@@ -933,10 +958,9 @@ pub struct FileView {
     /// and three of them are not three names.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Whether Teachouse holds these bytes, and why not where it does not:
-    /// an imported file stays on the seller's device until their app copies
-    /// it here.
-    pub server_copy: crate::library::ServerCopy,
+    /// Where the bytes are: stored by Teachouse because the seller uploaded
+    /// them, or on the seller's devices because they were imported.
+    pub custody: crate::library::FileCustody,
 }
 
 /// Who vouched for a file's scan, from which arm holds its bytes.
@@ -953,18 +977,20 @@ fn scan_vouched_by(bytes: &tam_types::FileBytes) -> &'static str {
 ///
 /// An imported file carries the name its producer recorded for it, which is
 /// what the seller called it on the marketplace; `name` is the seller's own
-/// rename and wins where there is one. Its copy is read as device-only here;
-/// [`product_view`] reads the store and says otherwise where it holds one.
+/// rename and wins where there is one. Its holders are left empty here;
+/// [`product_view`] reads them and fills them in.
 pub(crate) fn file_view(file: &tam_types::ProductFile, name: Option<&str>) -> FileView {
-    let (name, server_copy) = match &file.bytes {
+    let (name, custody) = match &file.bytes {
         tam_types::FileBytes::Held { .. } => {
-            (name.map(str::to_owned), crate::library::ServerCopy::Stored)
+            (name.map(str::to_owned), crate::library::FileCustody::Uploaded)
         }
         tam_types::FileBytes::Sourced {
             payload_file_name, ..
         } => (
             Some(name.unwrap_or(payload_file_name).to_owned()),
-            crate::library::ServerCopy::DeviceOnly,
+            crate::library::FileCustody::Devices {
+                holders: Vec::new(),
+            },
         ),
     };
     FileView {
@@ -976,7 +1002,7 @@ pub(crate) fn file_view(file: &tam_types::ProductFile, name: Option<&str>) -> Fi
         scan: scan_str(file.bytes.scan()).to_owned(),
         scan_vouched_by: scan_vouched_by(&file.bytes).to_owned(),
         name,
-        server_copy,
+        custody,
     }
 }
 
@@ -1102,7 +1128,11 @@ pub(crate) async fn product_view(
         .filter(|file| matches!(file.bytes, tam_types::FileBytes::Sourced { .. }))
         .map(|file| file.bytes.digest())
         .collect();
-    let ledger = crate::library::CopyLedger::read(&state, &context, &sourced).await?;
+    let holders = tam_storage::DeviceStreamRepo::new(state.pool.clone())
+        .holders_of(context.org, &sourced)
+        .await
+        .map_err(|error| storage_fault(&state, &error))?;
+    let now = (state.wall)();
     let named = |file: &tam_types::ProductFile| {
         let shown = shown_name(file, &aggregate.title.0);
         let mut view = file_view(
@@ -1112,8 +1142,14 @@ pub(crate) async fn product_view(
                 .map(String::as_str)
                 .or(shown.as_deref()),
         );
-        if matches!(file.bytes, tam_types::FileBytes::Sourced { .. }) {
-            view.server_copy = ledger.state(file.bytes.digest(), file.bytes.byte_len());
+        if let crate::library::FileCustody::Devices { holders: shown } = &mut view.custody {
+            *shown = crate::library::holder_views(
+                holders
+                    .get(&file.bytes.digest())
+                    .cloned()
+                    .unwrap_or_default(),
+                now,
+            );
         }
         view
     };

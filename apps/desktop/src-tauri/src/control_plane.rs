@@ -31,6 +31,9 @@ use core::time::Duration;
 use std::sync::Arc;
 
 use serde::Serialize;
+use tam_domain::serve::{
+    Refusal, StreamRequest, StreamRequests, CAPABILITY_HEADER, REFUSED_HEADER,
+};
 
 use crate::console_session::{SessionSource, SESSION_COOKIE};
 use crate::device::{DeviceId, DeviceIdentity};
@@ -107,10 +110,21 @@ pub fn base_url() -> String {
 /// would stall the scheduler tick behind it.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// How long one file copy to Teachouse may take. A 96 MiB file over a home
-/// upload of 1 Mbit/s is about thirteen minutes; this bound is for a copy
-/// that has stalled, not for one that is slow.
-pub const COPY_TIMEOUT: Duration = Duration::from_mins(30);
+/// How long one long poll for streams may take end to end. The server holds
+/// the poll open for up to [`STREAM_WAIT_MS`], so the ordinary
+/// [`REQUEST_TIMEOUT`] would cut every quiet poll off just before its answer;
+/// this is the wait plus room for a slow connection.
+pub const POLL_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// How long the server may hold one poll for streams before answering that
+/// none are waiting. The server's own ceiling, asked for in full.
+pub const STREAM_WAIT_MS: u64 = 25_000;
+
+/// How long one answer to a stream may take. The server asks for at most
+/// 32 MiB at a time, which over a home upload of 1 Mbit/s is about four and a
+/// half minutes; this bound is for an answer that has stalled, not for one
+/// that is slow.
+pub const ANSWER_TIMEOUT: Duration = Duration::from_mins(10);
 
 /// How long the connection itself may take. Shorter than the whole request:
 /// a machine that cannot reach us at all should fail fast and be retried at
@@ -187,18 +201,47 @@ pub trait Transport: Send + Sync {
         Box::pin(async { Err("this transport cannot delete".to_owned()) })
     }
 
-    /// Puts raw bytes at one of our own paths, under the same per-call
-    /// session. One caller: the library's copy of an imported file to
-    /// Teachouse. Defaulted to a refusal so the test doubles that never send
-    /// a file need no arm for it.
-    fn put_bytes<'a>(
+    /// Waits on one of our own paths for up to [`POLL_TIMEOUT`], under the
+    /// same per-call session. One caller: the long poll for streams, which
+    /// the server holds open until one is waiting. Defaulted to a refusal so
+    /// the test doubles that never serve need no arm for it.
+    fn poll<'a>(&'a self, _path: &'a str, _session: &'a str) -> BytesFuture<'a> {
+        Box::pin(async { Err("this transport cannot wait for streams".to_owned()) })
+    }
+
+    /// Answers one stream the server asked this device for, under the same
+    /// per-call session, handing back the capability the ask carried. One
+    /// caller: [`crate::serve`]. Defaulted to a refusal so the test doubles
+    /// that never serve need no arm for it.
+    fn answer<'a>(
         &'a self,
         _path: &'a str,
         _session: &'a str,
-        _body: Vec<u8>,
+        _capability: &'a str,
+        _answer: Answer,
     ) -> TransportFuture<'a> {
-        Box::pin(async { Err("this transport cannot send a file".to_owned()) })
+        Box::pin(async { Err("this transport cannot answer a stream".to_owned()) })
     }
+}
+
+/// What a device sends back for one stream: exactly the bytes asked for, or
+/// an empty body naming why not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Answer {
+    /// The range asked for, first byte to last inclusive. [`bytes::Bytes`]
+    /// so a range cut from a file already open is sent without a copy.
+    Bytes(bytes::Bytes),
+    Refused(Refusal),
+}
+
+/// What the server made of an answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Answered {
+    /// Every byte was passed on to the browser, or the refusal recorded.
+    Delivered,
+    /// The browser went away or the stream expired before the answer
+    /// arrived. Nothing to retry: the next read is a new stream.
+    Gone,
 }
 
 /// The socket-opening [`Transport`].
@@ -342,24 +385,49 @@ impl Transport for HttpTransport {
         })
     }
 
-    fn put_bytes<'a>(
-        &'a self,
-        path: &'a str,
-        session: &'a str,
-        body: Vec<u8>,
-    ) -> TransportFuture<'a> {
+    fn poll<'a>(&'a self, path: &'a str, session: &'a str) -> BytesFuture<'a> {
         Box::pin(async move {
             let response = self
                 .client
-                .put(format!("{}{path}", self.base))
-                .timeout(COPY_TIMEOUT)
-                .header("content-type", "application/octet-stream")
+                .get(format!("{}{path}", self.base))
+                .timeout(POLL_TIMEOUT)
                 .header("accept", "application/json")
                 .header("cookie", format!("{SESSION_COOKIE}={session}"))
-                .body(body)
                 .send()
                 .await
                 .map_err(|why| why.to_string())?;
+            let status = response.status().as_u16();
+            let body = response.bytes().await.map_err(|why| why.to_string())?;
+            Ok(BytesReply {
+                status,
+                body: body.to_vec(),
+            })
+        })
+    }
+
+    fn answer<'a>(
+        &'a self,
+        path: &'a str,
+        session: &'a str,
+        capability: &'a str,
+        answer: Answer,
+    ) -> TransportFuture<'a> {
+        Box::pin(async move {
+            let request = self
+                .client
+                .post(format!("{}{path}", self.base))
+                .timeout(ANSWER_TIMEOUT)
+                .header("content-type", "application/octet-stream")
+                .header("accept", "application/json")
+                .header("cookie", format!("{SESSION_COOKIE}={session}"))
+                .header(CAPABILITY_HEADER, capability);
+            let request = match answer {
+                Answer::Bytes(body) => request.body(body),
+                Answer::Refused(refusal) => request
+                    .header(REFUSED_HEADER, refusal.word())
+                    .body(bytes::Bytes::new()),
+            };
+            let response = request.send().await.map_err(|why| why.to_string())?;
             let status = response.status().as_u16();
             let body = response.text().await.map_err(|why| why.to_string())?;
             Ok(Reply { status, body })
@@ -536,59 +604,20 @@ impl HttpControlPlane {
     }
 }
 
-/// The imported files Teachouse holds no copy of, and the room there is for
-/// them: `GET /v1/library/missing`.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
-pub struct MissingCopies {
-    /// Smallest first.
-    pub files: Vec<MissingCopy>,
-    pub stored_bytes: u64,
-    pub storage_bytes_max: u64,
-    /// The largest single copy the server takes.
-    pub copy_bytes_max: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
-pub struct MissingCopy {
-    pub hash: String,
-    pub byte_len: u64,
-}
-
-/// What one copy to Teachouse came to.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CopyOutcome {
-    /// Teachouse holds the file now, whether this copy put it there or an
-    /// earlier one had.
-    Stored,
-    /// The plan's storage has no room for it. Nothing more fits until the
-    /// seller frees space or changes plan, so the caller stops.
-    StorageFull,
-    /// The server will never take these bytes as sent: too large, not the
-    /// file named, no resource uses it, or a scan refused them.
-    Refused(String),
-}
-
 impl HttpControlPlane {
-    /// The imported files Teachouse has no copy of.
-    pub async fn library_missing(&self) -> Result<MissingCopies, ControlPlaneError> {
-        let view = self
-            .view(
-                "/v1/library/missing",
-                "the server does not know this library",
-            )
-            .await?;
-        serde_json::from_value(view).map_err(|why| ControlPlaneError::Refused(why.to_string()))
-    }
-
-    /// Sends one file's bytes as Teachouse's copy of it.
+    /// The streams waiting for this device, after the server has held the
+    /// poll for up to [`STREAM_WAIT_MS`] — possibly none.
     ///
-    /// An outage is an error, so the caller tries again on a later beat; a
-    /// refusal the server will repeat is an outcome, so it does not.
-    pub async fn library_copy(
+    /// Each poll is also what tells the server this device is serving now,
+    /// so a device that stops polling is one the console calls offline
+    /// within a minute. A device the server does not know is
+    /// [`ControlPlaneError::Unregistered`], and one the seller signed out is
+    /// [`ControlPlaneError::Revoked`]: both stop serving until a check-in
+    /// settles the device's standing again.
+    pub async fn stream_requests(
         &self,
-        hash: &str,
-        bytes: Vec<u8>,
-    ) -> Result<CopyOutcome, ControlPlaneError> {
+        device: &DeviceId,
+    ) -> Result<StreamRequests, ControlPlaneError> {
         let session = self
             .sessions
             .session()
@@ -597,31 +626,79 @@ impl HttpControlPlane {
             .ok_or(ControlPlaneError::NoSession)?;
         let reply = self
             .transport
-            .put_bytes(&copy_path(hash), &session, bytes)
+            .poll(&streams_path(device), &session)
             .await
             .map_err(ControlPlaneError::Refused)?;
-        Ok(match reply.status {
-            200 | 201 => CopyOutcome::Stored,
-            401 | 403 => return Err(forbidden(&reply.body)),
-            422 if reply.body.contains("quota_exceeded") => CopyOutcome::StorageFull,
-            404 | 413 | 422 => {
-                CopyOutcome::Refused(format!("{}: {}", reply.status, excerpt(&reply.body)))
-            }
-            status => {
-                return Err(ControlPlaneError::Refused(format!(
-                    "{status}: {}",
-                    excerpt(&reply.body)
-                )))
-            }
-        })
+        if reply.status == 200 {
+            return serde_json::from_slice(&reply.body)
+                .map_err(|why| ControlPlaneError::Refused(why.to_string()));
+        }
+        Err(stream_refusal(&Reply {
+            status: reply.status,
+            body: String::from_utf8_lossy(&reply.body).into_owned(),
+        }))
+    }
+
+    /// Answers one stream with `answer`, handing back the capability it came
+    /// with.
+    ///
+    /// A stream the browser has left is [`Answered::Gone`] rather than an
+    /// error: it is over, and the next read the browser makes is a new
+    /// stream. A length the server did not expect is an error, because it is
+    /// a fault on this side worth a line in the log.
+    pub async fn answer_stream(
+        &self,
+        device: &DeviceId,
+        request: &StreamRequest,
+        answer: Answer,
+    ) -> Result<Answered, ControlPlaneError> {
+        let session = self
+            .sessions
+            .session()
+            .await
+            .map_err(|why| ControlPlaneError::Refused(why.to_string()))?
+            .ok_or(ControlPlaneError::NoSession)?;
+        let reply = self
+            .transport
+            .answer(
+                &stream_path(device, &request.stream),
+                &session,
+                &request.capability,
+                answer,
+            )
+            .await
+            .map_err(ControlPlaneError::Refused)?;
+        match reply.status {
+            200 | 204 => Ok(Answered::Delivered),
+            410 => Ok(Answered::Gone),
+            _ => Err(stream_refusal(&reply)),
+        }
     }
 }
 
-/// Where one file's copy is sent. Free so the tests name the same expression
-/// the client uses rather than a copy of it.
+/// What a status other than success means on the two stream paths: the
+/// ordinary reading, except that a session the server no longer accepts is
+/// about this device's standing rather than about one request, so it stops
+/// the serving loop instead of backing it off.
+fn stream_refusal(reply: &Reply) -> ControlPlaneError {
+    if reply.status == 401 {
+        forbidden(&reply.body)
+    } else {
+        refusal(reply)
+    }
+}
+
+/// Where this device waits for streams. Free so the tests name the same
+/// expression the client uses rather than a copy of it.
 #[must_use]
-pub fn copy_path(hash: &str) -> String {
-    format!("/v1/library/files/{hash}")
+pub fn streams_path(device: &DeviceId) -> String {
+    format!("/v1/devices/{device}/streams?wait_ms={STREAM_WAIT_MS}")
+}
+
+/// Where this device answers one stream.
+#[must_use]
+pub fn stream_path(device: &DeviceId, stream: &str) -> String {
+    format!("/v1/devices/{device}/streams/{stream}")
 }
 
 /// The answer to the peers read.
@@ -1098,9 +1175,9 @@ impl ControlPlane for HttpControlPlane {
 #[cfg(test)]
 mod tests {
     use super::{
-        base_url, heartbeat_path, install_crypto_provider, BytesFuture, BytesReply,
-        HttpControlPlane, HttpTransport, Reply, Transport, TransportFuture, DEFAULT_BASE_URL,
-        REGISTER_PATH,
+        base_url, heartbeat_path, install_crypto_provider, stream_path, streams_path, Answer,
+        Answered, BytesFuture, BytesReply, HttpControlPlane, HttpTransport, Reply, Transport,
+        TransportFuture, DEFAULT_BASE_URL, REGISTER_PATH,
     };
     use crate::console_session::{NoSession, SessionFuture, SessionSource, SessionUnreadable};
     use crate::device::{DeviceId, DeviceIdentity};
@@ -1208,6 +1285,30 @@ mod tests {
                     status: answer.status,
                     body: answer.body.into_bytes(),
                 })
+            })
+        }
+
+        fn poll<'a>(&'a self, path: &'a str, session: &'a str) -> BytesFuture<'a> {
+            self.fetch(path, session)
+        }
+
+        /// Recorded as the capability, then what was answered, so a test
+        /// can see both went out.
+        fn answer<'a>(
+            &'a self,
+            path: &'a str,
+            session: &'a str,
+            capability: &'a str,
+            answer: Answer,
+        ) -> TransportFuture<'a> {
+            let reply = self.reply.clone();
+            Box::pin(async move {
+                self.seen.lock().await.push(Sent {
+                    path: path.to_owned(),
+                    session: session.to_owned(),
+                    body: format!("{capability} {answer:?}"),
+                });
+                reply
             })
         }
     }
@@ -1929,5 +2030,83 @@ mod tests {
                  would lose the only copy of work the server never recorded"
             );
         }
+    }
+
+    fn stream() -> tam_domain::serve::StreamRequest {
+        tam_domain::serve::StreamRequest {
+            stream: "0b7c4a56-8f0e-4c1a-9d33-2a6f1e5b7c90".to_owned(),
+            hash: "ab".repeat(32),
+            first: 0,
+            last: 9,
+            capability: "the.signed.capability".to_owned(),
+        }
+    }
+
+    /// The poll is where a signed-out, unknown or refused device learns to
+    /// stop serving, and an outage is the one answer it retries.
+    #[tokio::test]
+    async fn a_poll_the_server_refuses_for_this_device_stops_rather_than_retries() {
+        let device = identity().id;
+        let fake = Arc::new(Fake::answering(200, r#"{"requests":[]}"#));
+        let waiting = plane(fake.clone())
+            .stream_requests(&device)
+            .await
+            .expect("a quiet poll is an empty list");
+        assert!(waiting.requests.is_empty(), "nothing was waiting");
+        assert_eq!(fake.last().await.path, streams_path(&device));
+        assert_eq!(
+            streams_path(&device),
+            format!("/v1/devices/{DEVICE}/streams?wait_ms=25000")
+        );
+        for (status, body, expected) in [
+            (404, "{}", ControlPlaneError::Unregistered),
+            (403, "this device is revoked", ControlPlaneError::Revoked),
+            (401, "sign in", ControlPlaneError::Denied("sign in".to_owned())),
+        ] {
+            let refused = plane(Arc::new(Fake::answering(status, body)))
+                .stream_requests(&device)
+                .await;
+            assert_eq!(refused.map(|_| ()), Err(expected), "{status}");
+        }
+        let outage = plane(Arc::new(Fake::answering(502, "bad gateway")))
+            .stream_requests(&device)
+            .await;
+        assert!(
+            matches!(outage, Err(ControlPlaneError::Refused(_))),
+            "an outage is backed off and retried: {outage:?}"
+        );
+    }
+
+    /// A browser that went away is the end of that stream, not a failure;
+    /// the answer names the stream in its path and carries the capability.
+    #[tokio::test]
+    async fn a_stream_the_browser_left_is_over_rather_than_failed() {
+        let device = identity().id;
+        let request = stream();
+        for (status, expected) in [(204, Answered::Delivered), (410, Answered::Gone)] {
+            let fake = Arc::new(Fake::answering(status, ""));
+            let answered = plane(fake.clone())
+                .answer_stream(
+                    &device,
+                    &request,
+                    Answer::Refused(tam_domain::serve::Refusal::Missing),
+                )
+                .await;
+            assert_eq!(answered, Ok(expected), "{status}");
+            let sent = fake.last().await;
+            assert_eq!(sent.path, stream_path(&device, &request.stream));
+            assert!(
+                sent.body.starts_with("the.signed.capability "),
+                "the capability goes back with the answer: {}",
+                sent.body
+            );
+        }
+        let wrong_length = plane(Arc::new(Fake::answering(422, "length")))
+            .answer_stream(&device, &request, Answer::Bytes(bytes::Bytes::new()))
+            .await;
+        assert!(
+            matches!(wrong_length, Err(ControlPlaneError::Refused(_))),
+            "{wrong_length:?}"
+        );
     }
 }

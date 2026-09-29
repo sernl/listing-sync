@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM device_stream WHERE org_id = $1 AND expires_at < $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6f50534f72ca60d6cc2f7b68094da6f7e3ac94c6039d6d2fb33e4c379f64623c"
+}

@@ -1105,7 +1105,8 @@ describe('the edit form, seeded from what is stored', () => {
 					byte_len: file.byte_len,
 					hash: file.hash,
 					scan: 'clean',
-					name: file.name
+					name: file.name,
+					custody: { kind: 'uploaded' as const }
 				})),
 				...(body.cover === null || body.cover === undefined
 					? []
@@ -1116,7 +1117,8 @@ describe('the edit form, seeded from what is stored', () => {
 								kind: body.cover.kind,
 								byte_len: body.cover.byte_len,
 								hash: body.cover.hash,
-								scan: 'clean'
+								scan: 'clean',
+								custody: { kind: 'uploaded' as const }
 							}
 						]),
 				...(body.previews ?? []).map((file, index) => ({
@@ -1126,7 +1128,8 @@ describe('the edit form, seeded from what is stored', () => {
 					byte_len: file.byte_len,
 					hash: file.hash,
 					scan: 'clean',
-					name: file.name
+					name: file.name,
+					custody: { kind: 'uploaded' as const }
 				}))
 			],
 			subjects: body.subjects ?? [],

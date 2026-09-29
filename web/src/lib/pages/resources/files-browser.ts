@@ -11,19 +11,18 @@
  * and not the second, and nothing here invents the second for it.
  */
 
-import type { LibraryFileView, ServerCopy } from '$lib/api';
+import type { LibraryFileView, LibraryHolderView } from '$lib/api';
 import { formatBytes } from '$lib/authoring';
 import { agoLabel } from '$lib/elapsed';
 import type { LibraryEntry } from '$lib/desktop';
-import { STORAGE_FULL, TOO_LARGE } from './file-viewer';
 
 /** Where the browser lives, named once for every surface that links to it. */
 export const FILES_HREF = '/resources/files';
 
 /** The promise the browser closes with. One sentence; which machine holds
- *  what, and how a copy crosses between them, is the `your-files` guide's. */
+ *  what, and how a file reaches a browser, is the `your-files` guide's. */
 export const FILES_STAY_ON_YOUR_DEVICES =
-	'Imported files stay on your devices, and the Teachouse app copies them to Teachouse so you can open them anywhere.';
+	'Imported files stay on your devices, and Teachouse passes them to your browser while a device that has them is on.';
 
 /** What the page says in a browser, where no machine is keeping files. */
 export const BROWSER_SENTENCE = 'Your files are kept on the devices that run the Teachouse app.';
@@ -253,45 +252,14 @@ export function holderNames(file: LibraryFileView, thisDevice: string | null): s
 	return file.holders.map((holder) => (holder.device === thisDevice ? HERE : holder.name));
 }
 
-/** Where a file's bytes are: on a device of the seller's, in Teachouse's own
- *  copy, both, or — for a digest a resource names that nothing reports —
- *  neither. */
-export type Place = 'both' | 'device' | 'teachouse' | 'nowhere';
-
-export function placeOf(file: LibraryFileView): Place {
-	const onDevice = file.holders.length > 0;
-	const onTeachouse = file.server_copy === 'stored';
-	if (onDevice && onTeachouse) return 'both';
-	if (onTeachouse) return 'teachouse';
-	return onDevice ? 'device' : 'nowhere';
-}
-
-/** The Where cell, with the machine the seller is sitting at named as such. */
-export function placeLine(place: Place, heldHere: boolean): string {
-	const device = heldHere ? 'This device' : 'Your device';
-	switch (place) {
-		case 'both':
-			return `${device} and Teachouse`;
-		case 'device':
-			return `${device} only`;
-		case 'teachouse':
-			return 'Teachouse only';
-		case 'nowhere':
-			return 'Not on any device';
+/** The Where cell: the devices holding the file, this one named by its
+ *  role. A file the seller uploaded that no device reports reads
+ *  `Uploaded`, because Teachouse stores it; a file nothing holds says so. */
+export function whereLine(machines: readonly string[], uploaded: boolean): string {
+	if (machines.length > 0) {
+		return machines.join(', ');
 	}
-}
-
-/** What the Where cell adds for a file that will not be copied by itself. */
-export function copyNote(copy: ServerCopy): string | null {
-	switch (copy) {
-		case 'storage_full':
-			return STORAGE_FULL;
-		case 'too_large':
-			return TOO_LARGE;
-		case 'stored':
-		case 'device_only':
-			return null;
-	}
+	return uploaded ? 'Uploaded' : 'Not on any device';
 }
 
 export interface FileRow {
@@ -315,9 +283,12 @@ export interface FileRow {
 	 *  it. Absent for every file this machine does not hold, so no row shows
 	 *  a source or a kept date for bytes that are somewhere else. */
 	kept: LibraryEntry | null;
-	/** Whether Teachouse holds a copy, which is what Download needs. */
-	copy: ServerCopy;
-	place: Place;
+	/** Whether the seller uploaded these bytes, so Teachouse stores them and
+	 *  Download needs no device. */
+	uploaded: boolean;
+	/** The devices holding it, online first, for naming the one to open
+	 *  when a download finds them all off. */
+	holders: readonly LibraryHolderView[];
 	/** The Where cell. */
 	where: string;
 }
@@ -335,13 +306,14 @@ export function fileRows(
 ): FileRow[] {
 	return files.map((file) => {
 		const kept = here.kept?.get(file.hash) ?? null;
+		const machines = holderNames(file, here.thisDevice);
 		return {
 			hash: file.hash,
 			name: file.file_name ?? kept?.file_name ?? `${file.hash.slice(0, 12)}…`,
 			anonymous: file.file_name === null && kept === null,
 			size: formatBytes(file.byte_len),
 			availability: availabilityOf(file),
-			machines: holderNames(file, here.thisDevice),
+			machines,
 			lastSeen: file.holders.reduce<number | null>((latest, holder) => {
 				const at = here.seen?.get(holder.device);
 				return at === undefined || (latest !== null && latest >= at) ? latest : at;
@@ -349,23 +321,22 @@ export function fileRows(
 			resources: file.resources,
 			label: transferLabel(file, here.thisDevice, here.kept === null ? null : kept !== null),
 			kept,
-			copy: file.server_copy,
-			place: placeOf(file),
-			where: placeLine(
-				placeOf(file),
-				kept !== null ||
-					(here.thisDevice !== null &&
-						file.holders.some((holder) => holder.device === here.thisDevice))
-			)
+			uploaded: file.uploaded,
+			holders: file.holders,
+			where: whereLine(machines, file.uploaded)
 		};
 	});
 }
 
 /** The Last seen cell: a machine holding it that is online now says so,
- *  otherwise the age of the latest check-in among its holders. */
+ *  otherwise the age of the latest check-in among its holders. An upload
+ *  no device holds is always there, so it says that instead. */
 export function seenLine(row: FileRow, now: number): string {
 	if (row.availability === 'online') {
 		return 'Online now';
+	}
+	if (row.machines.length === 0 && row.uploaded) {
+		return 'Always available';
 	}
 	if (row.lastSeen === null) {
 		return row.availability === 'missing' ? 'No device' : 'Not seen yet';

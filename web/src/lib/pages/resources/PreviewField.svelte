@@ -11,16 +11,16 @@
 	import { quotaSentence } from '$lib/authoring';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
-	import Explain from '$lib/Explain.svelte';
 	import FileViewer from '$lib/FileViewer.svelte';
 	import StatusPill from '$lib/StatusPill.svelte';
 	import { desktopInvoker, libraryEntries, type LibraryEntry } from '$lib/desktop';
 	import { sizeWords } from '$lib/tpt-form';
 	import FileRename from './FileRename.svelte';
+	import FileReach from './FileReach.svelte';
 	import PreviewMaker from './PreviewMaker.svelte';
 	import { buildPreview } from './preview-pdf';
 	import { forgetRecipe, readRecipe, writeRecipe, type PreviewRecipe } from './preview-recipe';
-	import { COPY_EXPLAINED, type ByteSource, sourceOfFile, sourceOfKept } from './file-viewer';
+	import { type ByteSource, type Unreachable, sourceOfFile, sourceOfKept } from './file-viewer';
 
 	let {
 		previews,
@@ -74,9 +74,10 @@
 	const pdfSource = $derived(
 		source === null ? null : source instanceof File ? sourceOfFile(source) : source
 	);
-	/** Why the file a preview would be cut from cannot be read from here: an
-	 *  imported PDF Teachouse has no copy of yet. */
-	const unavailable = $derived(pdfSource?.unavailable ?? null);
+	/** Why the file a preview would be cut from could not be read when the
+	 *  maker was asked for: an imported PDF whose device is offline. */
+	let unreachable = $state<Unreachable | null>(null);
+	let reaching = $state(false);
 
 	// The bytes of every preview sent from this page, by digest, so View works
 	// on a draft that has no product to read it back through.
@@ -178,7 +179,20 @@
 		}
 	}
 
-	function openMaker(replacing: string | null) {
+	/** Opens the maker once the source PDF can be read: an imported one is
+	 *  asked about first, so an offline device reads as the sentence rather
+	 *  than as a maker that never fills. */
+	async function openMaker(replacing: string | null) {
+		if (pdfSource?.probe !== undefined) {
+			reaching = true;
+			const answer = await pdfSource.probe();
+			reaching = false;
+			if (answer.kind !== 'ready') {
+				unreachable = answer;
+				return;
+			}
+		}
+		unreachable = null;
 		changing = replacing;
 		making = true;
 	}
@@ -214,23 +228,20 @@
 
 <div class="res-acts">
 	<Button
-		disabled={source === null || unavailable !== null || sending}
+		disabled={source === null || reaching || sending}
 		reason={source === null
 			? 'Upload a PDF first to make a preview from it.'
-			: (unavailable ?? undefined)}
-		onclick={() => openMaker(null)}
+			: reaching
+				? 'Checking where your file is…'
+				: undefined}
+		onclick={() => void openMaker(null)}
 	>
 		Make a preview from your file
 	</Button>
 </div>
 
-{#if unavailable !== null}
-	<div class="res-file-say res-file-copy">
-		<span>{unavailable}</span>
-		<Explain title="Where your file is" label="Why?">
-			{#each COPY_EXPLAINED as line (line)}<p>{line}</p>{/each}
-		</Explain>
-	</div>
+{#if unreachable !== null}
+	<FileReach reach={unreachable} />
 {/if}
 
 {#if refusal !== null}
@@ -253,15 +264,15 @@
 			>
 			<Button
 				small
-				disabled={source === null || unavailable !== null || sending}
+				disabled={source === null || reaching || sending}
 				reason={source === null
 					? 'Upload the PDF first to remake this preview.'
-					: unavailable !== null
-						? unavailable
+					: reaching
+						? 'Checking where your file is…'
 						: sending
 						? 'Wait for the upload to finish.'
 						: undefined}
-				onclick={() => openMaker(preview.hash)}>Change</Button
+				onclick={() => void openMaker(preview.hash)}>Change</Button
 			>
 			<Button small disabled={sending} reason={sending ? 'Wait for the upload to finish.' : undefined} onclick={() => (renaming = preview.hash)}>Rename</Button>
 			<Button
