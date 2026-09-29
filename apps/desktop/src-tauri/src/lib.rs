@@ -25,9 +25,9 @@
 // build, where the macro expands to nothing and there would be nothing to
 // expect. clippy.toml is unchanged, this fails the build the day Tauri stops
 // needing the wrapper, and the residual is stated rather than hidden: the
-// Android-only sources in this crate are `session/android_key.rs` and
-// `android_name.rs`, which the host lane does not lint, so a disallowed call
-// added to either would not be caught. Everything else is shared code the
+// Android-only sources in this crate are `session/android_key.rs`,
+// `android_name.rs` and `android_serve.rs`, which the host lane does not
+// lint, so a disallowed call added to any of them would not be caught. Everything else is shared code the
 // host lane checks.
 #![cfg_attr(
     mobile,
@@ -40,6 +40,8 @@
 
 #[cfg(target_os = "android")]
 pub mod android_name;
+#[cfg(target_os = "android")]
+pub mod android_serve;
 pub mod commands;
 pub mod connect;
 pub mod console_session;
@@ -55,9 +57,9 @@ pub mod library_sync;
 pub mod marketplace;
 pub mod notify;
 pub mod payload;
-pub mod replication;
 pub mod run;
 pub mod scheduler;
+pub mod serve;
 pub mod session;
 pub mod startup;
 pub mod state;
@@ -223,7 +225,21 @@ pub fn run() {
             // schedule's own task, because binding is asynchronous and this
             // closure is not, and it is bound whenever the library opens
             // rather than only if it opened above.
-            let syncing = Syncing::of(device.id.clone(), Arc::clone(&plane), Arc::clone(&library));
+            // Whether the seller has the app on screen and what keeps the
+            // process serving with the screen off. A phone's comes from the
+            // bridge `serve_bridge` registered before this closure runs, for
+            // the reason the key source above does; a computer's is a
+            // constant.
+            #[cfg(target_os = "android")]
+            let presence = Arc::clone(app.state::<Arc<dyn serve::Presence>>().inner());
+            #[cfg(not(target_os = "android"))]
+            let presence: Arc<dyn serve::Presence> = Arc::new(serve::Desktop);
+            let syncing = Syncing::of(
+                device.id.clone(),
+                Arc::clone(&plane),
+                Arc::clone(&library),
+                presence,
+            );
             let work = DeviceWork::new(
                 device.id.clone(),
                 plane,
@@ -338,6 +354,12 @@ pub fn run() {
     // reads it on the `Ready` event.
     #[cfg(target_os = "android")]
     if let Err(why) = app.handle().plugin(session_key_bridge()) {
+        startup::fatal(&why);
+    }
+    // After the session key's bridge, whose foreground source it reads, and
+    // before `setup`, which reads the presence it files.
+    #[cfg(target_os = "android")]
+    if let Err(why) = app.handle().plugin(android_serve::serve_bridge()) {
         startup::fatal(&why);
     }
     // Two callbacks rather than one with a platform-dead branch: the desktop
@@ -484,13 +506,20 @@ struct Syncing {
     /// failed is reported once rather than on every beat for the life of the
     /// process.
     bound: bool,
-    /// The copy of this machine's imported files to Teachouse, once the
-    /// library has opened. Independent of the endpoint: a machine whose
-    /// endpoint could not bind still copies its files.
-    copier: Option<replication::Replicator>,
-    /// The library's size when the last copy run was started, so a change —
-    /// an import keeping a file — starts another without waiting for a beat.
-    copied_at: Option<u64>,
+    /// This machine's answers to the files the seller opens in a browser,
+    /// once the library has opened. Independent of the endpoint: a machine
+    /// whose endpoint could not bind still serves its files.
+    server: Option<Arc<serve::Server>>,
+    /// The serving run, while one is going or until the next pass notices it
+    /// ended.
+    serving: Option<tauri::async_runtime::JoinHandle<serve::Ended>>,
+    /// Raised when the server stopped taking this machine's polls for a
+    /// reason only a check-in settles, so the next run waits for a beat
+    /// rather than asking again on every pass.
+    serve_on_beat: bool,
+    /// Whether the seller has the app on screen, and the platform's
+    /// keep-alive while serving.
+    presence: Arc<dyn serve::Presence>,
 }
 
 impl Syncing {
@@ -498,6 +527,7 @@ impl Syncing {
         device: crate::device::DeviceId,
         plane: Arc<HttpControlPlane>,
         library: Arc<library::LibrarySlot>,
+        presence: Arc<dyn serve::Presence>,
     ) -> Self {
         Self {
             device,
@@ -505,8 +535,10 @@ impl Syncing {
             library,
             endpoint: None,
             bound: false,
-            copier: None,
-            copied_at: None,
+            server: None,
+            serving: None,
+            serve_on_beat: false,
+            presence,
         }
     }
 
@@ -522,28 +554,77 @@ impl Syncing {
         if !self.bound {
             if let Ok(library) = self.library.get().await {
                 self.bound = true;
-                self.copier = Some(replication::Replicator::new(
+                self.server = Some(Arc::new(serve::Server::new(
                     Arc::clone(&self.plane),
-                    Arc::clone(&library),
-                ));
+                    serve::Responder::new(
+                        self.device.clone(),
+                        entitlement::EMBEDDED_PUBLIC_KEYS.to_vec(),
+                        Arc::clone(&library),
+                    ),
+                )));
                 self.endpoint =
                     Self::bind(self.device.clone(), Arc::clone(&self.plane), library).await;
+            }
+        }
+        // A debug build's way to put a file here without a marketplace
+        // import, picked up on every beat so a file dropped in while the app
+        // runs is kept by the next resume or check-in.
+        #[cfg(debug_assertions)]
+        if self.bound {
+            if let Ok(library) = self.library.get().await {
+                library.keep_dropped().await;
             }
         }
         self.endpoint.as_ref()
     }
 
-    /// Starts a copy of this machine's imported files to Teachouse on a beat,
-    /// and between beats whenever the library has changed since the last
-    /// one. The run itself is in the background and never two at once.
-    async fn copy(&mut self, beat: bool) {
-        let Some(copier) = &self.copier else {
+    /// Starts serving this machine's files unless a run is already going.
+    ///
+    /// Asked on every pass the machine is in good standing, so a run that
+    /// ended — a phone left alone for ten minutes, a console that was not
+    /// signed in yet — starts again on the next. A run the server stopped for
+    /// this machine's standing waits for a beat instead, because only a
+    /// check-in can change the answer. The run itself is in the background
+    /// and never two at once.
+    async fn serve(&mut self, beat: bool) {
+        let Some(server) = &self.server else {
             return;
         };
-        let size = copier.library.usage().await;
-        if beat || self.copied_at != Some(size) {
-            self.copied_at = Some(size);
-            copier.start();
+        if let Some(run) = self.serving.as_mut() {
+            if !run.inner().is_finished() {
+                return;
+            }
+            let ended = run.await;
+            self.serving = None;
+            self.serve_on_beat = match ended {
+                Ok(serve::Ended::Stopped(why)) => {
+                    let quiet = why == heartbeat::ControlPlaneError::NoSession;
+                    if !quiet {
+                        eprintln!("this device stopped serving files until it checks in: {why}");
+                    }
+                    !quiet
+                }
+                Ok(serve::Ended::Idle) => false,
+                Err(why) => {
+                    eprintln!("serving files ended unexpectedly: {why}");
+                    true
+                }
+            };
+        }
+        if self.serve_on_beat && !beat {
+            return;
+        }
+        self.serve_on_beat = false;
+        self.serving = Some(tauri::async_runtime::spawn(
+            Arc::clone(server).run(Arc::clone(&self.presence)),
+        ));
+    }
+
+    /// Stops serving at once: the seller signed this machine out.
+    fn stop_serving(&mut self) {
+        if let Some(run) = self.serving.take() {
+            run.abort();
+            self.presence.keep_serving(false);
         }
     }
 
@@ -692,13 +773,21 @@ async fn run_schedule<W: scheduler::WorkSource + 'static>(
         // rather than after it. Asking the plan again instead would drop the
         // seller's own trigger, because serving the check-in is what clears
         // it.
-        let standing = !app.state::<DesktopState>().revoked();
+        let in_good_standing = !app.state::<DesktopState>().revoked();
         #[cfg(mobile)]
-        let standing = standing && in_the_foreground(&app);
-        // Teachouse's copy of the files this machine imported: on each beat,
-        // and on any pass after an import has kept a file here.
+        let standing = in_good_standing && in_the_foreground(&app);
+        #[cfg(desktop)]
+        let standing = in_good_standing;
+        // Serving this machine's files to the seller's browser. Started only
+        // from a pass the seller could see — on a phone, Android lets a
+        // foreground service start from the foreground and not after — and
+        // once started it outlives the pass: a phone goes on answering after
+        // the seller locks it, for as long as `serve::should_serve` says.
+        // Only a sign-out stops it from here.
         if standing {
-            syncing.copy(due.sweep || due.check_in).await;
+            syncing.serve(due.sweep || due.check_in).await;
+        } else if !in_good_standing {
+            syncing.stop_serving();
         }
         if (due.sweep || due.discover) && standing {
             // Stamp every import poll, even while a work task is running;

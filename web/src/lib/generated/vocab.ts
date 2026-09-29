@@ -65,6 +65,8 @@ export type APIErrorCode =
   | "import_start_key_spent"
   | "duplicate_pair_settled"
   | "consent_required"
+  | "device_offline"
+  | "streaming_unavailable"
   | "internal";
 
 export const API_ERROR_CODES: readonly APIErrorCode[] = [
@@ -97,6 +99,8 @@ export const API_ERROR_CODES: readonly APIErrorCode[] = [
   "import_start_key_spent",
   "duplicate_pair_settled",
   "consent_required",
+  "device_offline",
+  "streaming_unavailable",
   "internal",
 ];
 

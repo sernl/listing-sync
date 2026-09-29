@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT f.hash AS \"hash!\"\n                 FROM product_file f\n                WHERE f.org_id = $1 AND f.hash = ANY ($2) AND f.deleted_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "hash!",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "ByteaArray"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "ede9213ba879d3706e919a0268aab891dbc033de78f7ef015b458957d4d8d2fd"
+}

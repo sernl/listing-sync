@@ -236,9 +236,10 @@
 	const keptSource = $derived(
 		editing === null ? null : keptPdfSource(invoke, editing.product.files, kept)
 	);
-	/** The last: on a saved resource, the stored PDF itself, read back from
-	 *  Teachouse when the maker opens. What a reopened draft has in any
-	 *  browser, where neither of the two above is here. */
+	/** The last: on a saved resource, the stored PDF itself, read through
+	 *  Teachouse when the maker opens — from its store for an upload, from a
+	 *  device that is on for an imported file. What a reopened draft has in
+	 *  any browser, where neither of the two above is here. */
 	const storedSource = $derived(
 		editing === null ? null : storedPdfSource(editing.product.id, editing.product.files)
 	);

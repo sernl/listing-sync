@@ -1253,8 +1253,8 @@
 	color: var(--bad-ink);
 }
 
-/* Where an imported file is when Teachouse has no copy yet: the sentence and
-   its Why? on one line under the row. */
+/* Why an imported file couldn't be read just now: the sentence and its
+   Explain on one line under the row, wrapping on a phone. */
 .resources-page .res-file-copy {
 	display: flex;
 	align-items: center;
@@ -1449,8 +1449,11 @@
 
 .resources-page .files-where {
 	display: inline-flex;
+	flex-wrap: wrap;
 	align-items: center;
 	gap: 6px;
+	min-width: 0;
+	overflow-wrap: anywhere;
 }
 
 .resources-page .files-dot {
@@ -1514,6 +1517,14 @@
 	white-space: normal;
 }
 
+/* The actions cell keeps its buttons on one line; the sentence under them
+   wraps, and sits under the buttons it answers. */
+.resources-page .files-acts .res-file-copy {
+	justify-content: flex-end;
+	white-space: normal;
+	text-align: left;
+}
+
 /* A card per file on a phone: each cell on its own line under its column's
    name, so nothing scrolls sideways at 390px. */
 @media (max-width: 720px) {
@@ -1568,6 +1579,10 @@
 		text-align: left;
 		white-space: normal;
 		padding-top: var(--s-2);
+	}
+
+	.resources-page .files-acts .res-file-copy {
+		justify-content: flex-start;
 	}
 }
 

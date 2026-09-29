@@ -20,6 +20,7 @@ pub mod connections;
 pub mod consent;
 pub mod device;
 pub mod device_library;
+pub mod device_stream;
 pub mod discount;
 pub mod duplicates;
 pub mod entitlement;
@@ -47,7 +48,6 @@ pub mod resource_templates;
 pub mod rule_capture;
 pub mod schedules;
 pub mod seller_rules;
-pub mod server_copy;
 pub mod sessions;
 pub mod site_setting;
 pub mod sync_settings;
@@ -83,6 +83,7 @@ pub use device_library::{
     LibraryLinked, LibraryPage, LibraryReport, LibraryResource, Peer, LIBRARY_LIMIT_DEFAULT,
     LIBRARY_LIMIT_MAX,
 };
+pub use device_stream::{DeviceStreamRepo, NamedFile, NewStream, StreamHolder, StreamRow};
 pub use discount::{
     CodeWrite, Discount, DiscountAmount, DiscountCode, DiscountDuration, DiscountKind, DiscountRepo,
 };
@@ -192,7 +193,6 @@ pub use schedules::{
     ScheduleRepeat, ScheduleRepo, ScheduleRunRow, ScheduleRunWrite, ScheduleSelection,
     ScheduleWrite, UnknownTimezone, SCHEDULE_RUNS_LISTED_MAX,
 };
-pub use server_copy::{MissingCopy, NamedCopy, ServerCopyRepo};
 pub use sessions::{NewTenant, SessionIdentity, SessionRepo, SessionToken};
 pub use site_setting::SiteSettingRepo;
 pub use sync_settings::{

@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(f.name, f.payload_file_name) AS file_name,\n                      f.payload_content_type AS content_type,\n                      f.kind AS \"kind!\",\n                      f.hash IS NOT NULL AS \"uploaded!\",\n                      COALESCE((SELECT b.byte_len FROM blob b\n                                 WHERE b.org_id = f.org_id AND b.hash = f.hash),\n                               f.observed_byte_len, 0) AS \"byte_len!\"\n                 FROM product_file f\n                 JOIN product p ON p.org_id = f.org_id AND p.id = f.product_id\n                WHERE f.org_id = $1\n                  AND COALESCE(f.hash, f.observed_hash) = $2\n                  AND f.deleted_at IS NULL\n                  AND p.deleted_at IS NULL\n                ORDER BY f.hash IS NULL, 1 NULLS LAST\n                LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "file_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "content_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "kind!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "uploaded!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "byte_len!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      null,
+      true,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "f03bb637188c465e66ca36a2e0c15e11318344a32ba7485d9336703e999e776c"
+}

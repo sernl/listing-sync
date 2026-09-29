@@ -27,6 +27,7 @@ pub mod analytics;
 pub mod auth;
 pub mod billing;
 pub mod blocking;
+pub mod broker;
 pub mod catalogue;
 pub mod collections;
 pub mod consent;
@@ -136,6 +137,14 @@ pub struct Config {
     /// and posting one TPT has since rebuilt puts a listing under a standard
     /// nobody chose.
     pub standards_crawl_window: Option<tam_standards::crawl::CrawlWindow>,
+    /// Where other server processes reach this one, as `host:port`, so a
+    /// device's answer to a file stream that lands on the wrong process can
+    /// be passed to the one holding the browser's request
+    /// ([`broker`]). Absent in a single-process deployment, where every
+    /// answer lands here anyway.
+    pub broker_advertise: Option<String>,
+    /// How long the broker waits for a device.
+    pub broker_timeouts: broker::Timeouts,
 }
 
 /// How the current instant enters a handler: as a function the binary
@@ -708,19 +717,22 @@ pub fn router(state: AppState) -> Router {
             "/{version}/consents/{marketplace}/withdraw",
             post(consent::withdraw_consent),
         )
-        // The seller's own files, on the seller's own machines: who holds
-        // what, and where one machine can reach another. Coordination only,
-        // except Teachouse's own copy of each imported file, which the
-        // seller's app sends and any signed-in browser reads back.
+        // The seller's own files, on the seller's own devices: who holds
+        // what, and where one device can reach another. Coordination only;
+        // an imported file a browser opens is passed through from a device
+        // that holds it and never kept (`broker`).
         .route("/{version}/library", get(library::list_library))
-        .route("/{version}/library/missing", get(library::missing_copies))
-        .route(
-            "/{version}/library/files/{hash}",
-            put(library::copy_file).layer(library::copy_body_limit()),
-        )
         .route(
             "/{version}/library/files/{hash}/content",
             get(library::file_content),
+        )
+        .route(
+            "/{version}/devices/{device}/streams",
+            get(broker::poll_streams),
+        )
+        .route(
+            "/{version}/devices/{device}/streams/{stream}",
+            post(broker::answer_stream),
         )
         .route(
             "/{version}/devices/{device}/library/want",

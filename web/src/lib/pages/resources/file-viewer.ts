@@ -6,7 +6,7 @@
  * Pure, so the page-window arithmetic tests without a canvas.
  */
 
-import { api, type FileView, type ServerCopy } from '$lib/api';
+import { ApiFailure, api, type FileView, type LibraryHolderView } from '$lib/api';
 import type { Invoke } from '$lib/desktop';
 import { libraryRead } from '$lib/desktop';
 
@@ -16,56 +16,108 @@ export interface ByteSource {
 	name: string;
 	bytes: () => Promise<ArrayBuffer>;
 	/** Where the viewer can stream it from instead, a page at a time. Only a
-	 *  file Teachouse holds has one. */
+	 *  file read through Teachouse has one. */
 	url?: string;
-	/** Why these bytes cannot be read from here, where they cannot. The
-	 *  sentence the seller reads in place of the control. */
-	unavailable?: string;
+	/** Asks whether the bytes can be read now, before a control hands them
+	 *  on. Present only for an imported file, which Teachouse passes on from
+	 *  a device of the seller's and so can find unreachable; an upload and
+	 *  this device's own kept copy are always there. */
+	probe?: () => Promise<Reach>;
 }
 
 // ------------------------------------------------------- where a file is
 
-/** Where only the seller's device holds an imported file. */
-export const DEVICE_ONLY =
-	'This file is on your device only. Open the Teachouse app on that device to copy it to Teachouse.';
-
-/** Where the plan has no room for the copy. */
-export const STORAGE_FULL = 'Your plan’s storage is full — files stay on your device.';
-
-/** Where the file is larger than a copy can be. */
-export const TOO_LARGE = 'This file is too big to copy to Teachouse, so it stays on your device.';
-
-/** How the app's copy works, for the Explain beside any of the three. */
-export const COPY_EXPLAINED = [
-	'When you import from a marketplace, the Teachouse app on that device keeps the original file.',
-	'The app then copies it to Teachouse, so you can view it, make a preview from it and download it wherever you sign in. It does this in the background, whenever the app is open.',
-	'Copies count towards your plan’s storage.'
-];
-
-/** Whether Teachouse holds a file. A server that predates the field only
- *  ever answered files it held. */
-export function copyOf(file: Pick<FileView, 'server_copy'>): ServerCopy {
-	return file.server_copy ?? 'stored';
+/** Why an imported file can't be read right now: the device holding it is
+ *  off, or the Teachouse app there is closed. */
+export function offlineSentence(device: string): string {
+	return `Your file is on ${device}, which is offline. Open the Teachouse app there.`;
 }
 
-/** The sentence a file Teachouse does not hold carries, or `null` where it
- *  holds it. */
-export function copySentence(copy: ServerCopy): string | null {
-	switch (copy) {
-		case 'stored':
-			return null;
-		case 'device_only':
-			return DEVICE_ONLY;
-		case 'storage_full':
-			return STORAGE_FULL;
-		case 'too_large':
-			return TOO_LARGE;
+/** Where no device of the seller's reports holding the file. */
+export const NO_DEVICE_HAS_IT = 'None of your devices has this file any more.';
+
+/** Where the server cannot pass files on at all just now. */
+export const STREAMING_UNAVAILABLE =
+	'Opening files from your devices isn’t available right now. Try again later.';
+
+/** Where the probe itself did not arrive. */
+export const PROBE_FAILED = 'Teachouse couldn’t reach your file. Try again.';
+
+/** How an imported file reaches a browser, for the Explain beside the
+ *  offline sentence. */
+export const STREAM_EXPLAINED = [
+	'Files you import stay on your devices. Teachouse passes them to your browser while that device is on and the Teachouse app is open.',
+	'On Android, the app shows “Teachouse is sharing your files” while it can pass them on.',
+	'Teachouse doesn’t keep a copy.',
+	'Files you upload yourself are always available.'
+];
+
+/** What asking for a file's bytes found. `offline` carries the Explain;
+ *  `refused` is a sentence on its own. */
+export type Reach =
+	{ kind: 'ready' } | { kind: 'offline'; device: string } | { kind: 'refused'; sentence: string };
+
+/** A reach that is not `ready`, which is what a row shows. */
+export type Unreachable = Exclude<Reach, { kind: 'ready' }>;
+
+export function reachSentence(reach: Unreachable): string {
+	return reach.kind === 'offline' ? offlineSentence(reach.device) : reach.sentence;
+}
+
+/** The device named in a `device_offline` refusal's detail. */
+function detailDevice(detail: unknown): string | null {
+	if (typeof detail === 'object' && detail !== null && 'device' in detail) {
+		const device = detail.device;
+		return typeof device === 'string' && device.trim() !== '' ? device : null;
+	}
+	return null;
+}
+
+/** What a refused probe means for the seller. For an offline device, the
+ *  name is a holder the console already knows is online where there is
+ *  one — the device the seller will most likely open the app on — and
+ *  otherwise the device the server tried. */
+export function reachOf(failure: unknown, holders: readonly LibraryHolderView[]): Unreachable {
+	if (!(failure instanceof ApiFailure)) {
+		return { kind: 'refused', sentence: PROBE_FAILED };
+	}
+	switch (failure.code()) {
+		case 'device_offline':
+			return {
+				kind: 'offline',
+				device:
+					holders.find((holder) => holder.online)?.name ??
+					detailDevice(failure.body?.errors[0]?.detail) ??
+					holders[0]?.name ??
+					'your device'
+			};
+		case 'resource_missing':
+			return { kind: 'refused', sentence: NO_DEVICE_HAS_IT };
+		case 'streaming_unavailable':
+			return { kind: 'refused', sentence: STREAMING_UNAVAILABLE };
+		default:
+			return { kind: 'refused', sentence: failure.message };
 	}
 }
 
-/** What View opens for one stored file, in order of preference: Teachouse's
- *  copy, which streams and is the same everywhere; this device's own kept
- *  copy, inside the app; or nothing, with the sentence saying why. */
+/** Asks the content URL whether the bytes can be read now. */
+export async function probeReach(
+	url: string,
+	holders: readonly LibraryHolderView[]
+): Promise<Reach> {
+	try {
+		await api.probeFile(url);
+		return { kind: 'ready' };
+	} catch (failure) {
+		return reachOf(failure, holders);
+	}
+}
+
+/** What View opens for one stored file, in order of preference: an upload
+ *  through Teachouse, which streams a range at a time; this device's own
+ *  kept copy, inside the app, which needs no other device; an imported file
+ *  through Teachouse from a device that holds it, probed first; or nothing,
+ *  where no device reports it. */
 export type ViewFrom =
 	| { kind: 'server'; source: ByteSource }
 	| { kind: 'device'; source: ByteSource }
@@ -77,14 +129,16 @@ export function viewFrom(
 	invoke: Invoke | null,
 	keptHere: boolean
 ): ViewFrom {
-	const copy = copyOf(file);
-	if (copy === 'stored') {
+	if (file.custody.kind === 'uploaded') {
 		return { kind: 'server', source: sourceOfStored(product, file) };
 	}
 	if (keptHere) {
 		return { kind: 'device', source: sourceOfKept(invoke, file.name ?? 'file', file.hash) };
 	}
-	return { kind: 'unavailable', sentence: copySentence(copy) ?? DEVICE_ONLY };
+	if (file.custody.holders.length === 0) {
+		return { kind: 'unavailable', sentence: NO_DEVICE_HAS_IT };
+	}
+	return { kind: 'server', source: sourceOfStored(product, file) };
 }
 
 /** The in-session upload as a source. */
@@ -125,37 +179,28 @@ export function keptPdfSource(
 	return sourceOfKept(invoke, file.name ?? 'file.pdf', file.hash);
 }
 
-/** A file Teachouse stores for this resource, read back from the server
- *  when asked, never earlier. What a reopened resource has on any machine,
- *  in any browser. */
+/** One of this resource's files read through Teachouse when asked, never
+ *  earlier: an upload from Teachouse's store, an imported file passed on
+ *  from a device that holds it — which is why only the second carries a
+ *  probe. What a reopened resource has on any machine, in any browser. */
 export function sourceOfStored(product: string, file: FileView): ByteSource {
+	const url = api.productFileUrl(product, file.id);
+	const custody = file.custody;
 	return {
 		name: file.name ?? `file.${file.kind}`,
 		bytes: () => api.productFileBytes(product, file.id),
-		url: api.productFileUrl(product, file.id)
+		url,
+		...(custody.kind === 'devices' ? { probe: () => probeReach(url, custody.holders) } : {})
 	};
 }
 
 /** The stored PDF a preview is cut from on a saved resource: the first PDF
- *  payload, which is the file the thumbnail is drawn from too.
- *
- *  Where Teachouse has no copy of it yet, the source says so rather than
- *  offering bytes that would fail to arrive: the maker shows the sentence in
- *  place of the button. */
+ *  payload, which is the file the thumbnail is drawn from too. An imported
+ *  one carries its probe, so the maker asks before it opens and the seller
+ *  reads why rather than a maker that never fills. */
 export function storedPdfSource(product: string, files: readonly FileView[]): ByteSource | null {
 	const file = files.find((candidate) => candidate.role === 'payload' && candidate.kind === 'pdf');
-	if (file === undefined) {
-		return null;
-	}
-	const sentence = copySentence(copyOf(file));
-	if (sentence === null) {
-		return sourceOfStored(product, file);
-	}
-	return {
-		name: file.name ?? 'file.pdf',
-		bytes: () => Promise.reject(new Error(sentence)),
-		unavailable: sentence
-	};
+	return file === undefined ? null : sourceOfStored(product, file);
 }
 
 /** The type a stored file is drawn as, from the kind the product view names. */

@@ -26,6 +26,7 @@ const TENANT_TABLES: [&str; 76] = [
     "device_library_holding",
     "device_library_want",
     "device_node_addr",
+    "device_stream",
     "duplicate_evidence",
     "duplicate_verdict",
     "election_item",

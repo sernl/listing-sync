@@ -863,12 +863,10 @@ export interface LibraryResourceView {
 	title: string;
 }
 
-/** Whether Teachouse holds a file's bytes, and why not where it does not.
- *  An imported file stays on the seller's device until the Teachouse app
- *  there copies it; `storage_full` and `too_large` are the two reasons a
- *  copy will not happen by itself. */
-export type ServerCopy = 'stored' | 'device_only' | 'storage_full' | 'too_large';
-
+/** One of the seller's files by digest. `uploaded` is bytes the seller
+ *  uploaded through the console, which Teachouse stores; anything else was
+ *  imported and stays on the `holders`, and Teachouse passes it to a browser
+ *  only while one of them is on. */
 export interface LibraryFileView {
 	hash: string;
 	file_name: string | null;
@@ -876,7 +874,7 @@ export interface LibraryFileView {
 	holders: LibraryHolderView[];
 	wanted_by: string[];
 	resources: LibraryResourceView[];
-	server_copy: ServerCopy;
+	uploaded: boolean;
 }
 
 export interface LibraryView {
@@ -1868,11 +1866,16 @@ export interface FileView {
 	 *  a file stored before names existed and for a generated cover, and the
 	 *  console renders the absence rather than substituting the kind. */
 	name?: string;
-	/** Whether Teachouse holds these bytes. Every upload is `stored`; an
-	 *  imported file is `device_only` until the app copies it. Read through
-	 *  `copyOf`, which takes an absent value as `stored`. */
-	server_copy?: ServerCopy;
+	/** Where these bytes are. An upload is stored by Teachouse; an imported
+	 *  file stays on the seller's devices and is streamed from one that is on. */
+	custody: FileCustody;
 }
+
+/** Who holds one of a resource's files. `uploaded` is a file the seller
+ *  uploaded, which Teachouse stores and can always serve. `devices` is an
+ *  imported file, which rests only on the seller's devices: the holders come
+ *  online first, and an empty list is a file no device reports any more. */
+export type FileCustody = { kind: 'uploaded' } | { kind: 'devices'; holders: LibraryHolderView[] };
 
 /** What one file change did, and where it lands.
  *
@@ -2875,14 +2878,23 @@ export const api = {
 	 *  drawn rather than chosen, and for a blank name. */
 	renameProductFile: (product: string, file: string, name: string) =>
 		patch<RenamedFileView>(`/v1/products/${product}/files/${file}`, { name }),
-	/** Where one of a resource's own files is read from Teachouse: shown, or
-	 *  saved as a download. The route honours `Range`, so a viewer handed this
-	 *  URL can draw the first pages before the rest has arrived. */
+	/** Where one of a resource's own files is read: shown, or saved as a
+	 *  download. An upload comes from Teachouse's store; an imported file is
+	 *  passed through from a device of the seller's that is on. The route
+	 *  honours `Range`, so a viewer handed this URL can draw the first pages
+	 *  before the rest has arrived. */
 	productFileUrl: (product: string, file: string, download = false) =>
 		`/v1/products/${product}/files/${file}/content${download ? '?download=1' : ''}`,
-	/** One of the seller's files by digest, for the file browser. */
+	/** One of the seller's files by digest, for the file browser, read the
+	 *  same way. */
 	libraryFileUrl: (hash: string, download = false) =>
 		`/v1/library/files/${hash}/content${download ? '?download=1' : ''}`,
+	/** Asks whether a file's bytes can be read now, before its URL is handed
+	 *  to a viewer or a download: answers when they can, and throws the
+	 *  structured refusal (`device_offline`, `resource_missing`,
+	 *  `streaming_unavailable`) when they cannot. `url` is one of the two
+	 *  content URLs above, without `download`. */
+	probeFile: (url: string) => request<void>(`${url}?probe=1`),
 	/** The bytes of one of a resource's own files, read back from Teachouse.
 	 *  A refusal is thrown as the structured failure every other route
 	 *  answers with. */

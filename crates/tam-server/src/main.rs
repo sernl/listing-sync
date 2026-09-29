@@ -13,7 +13,7 @@
 //! Given an engine-role url it also hosts the two service loops the design
 //! puts in this process: the outbox drainer and the job-event pruner.
 //!
-//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--stripe-webhook-secret <secret>] [--stripe-secret-key <path>] [--stripe-price-map <path>] [--ui-dir <path>] [--landing-dir <path>] [--downloads-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> (--blob-store-root <path> | --blob-store-s3 <endpoint> --blob-store-bucket <name> --blob-store-credentials <path> [--blob-store-region <region>])] [--entitlement-key-path <path>] [--entitlement-public-key <hex>] [--require-entitlement-key] [--resend-api-key-file <path> --email-from <address> --console-url <url> --auth-internal-url <url> --auth-internal-secret-file <path> [--ops-email <address>] [--marketing-email-from <address>]] [--posthog-key <key> [--posthog-host <url>]] [--disclose-internals]
+//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--stripe-webhook-secret <secret>] [--stripe-secret-key <path>] [--stripe-price-map <path>] [--ui-dir <path>] [--landing-dir <path>] [--downloads-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> (--blob-store-root <path> | --blob-store-s3 <endpoint> --blob-store-bucket <name> --blob-store-credentials <path> [--blob-store-region <region>])] [--entitlement-key-path <path>] [--entitlement-public-key <hex>] [--require-entitlement-key] [--broker-advertise <host:port>] [--resend-api-key-file <path> --email-from <address> --console-url <url> --auth-internal-url <url> --auth-internal-secret-file <path> [--ops-email <address>] [--marketing-email-from <address>]] [--posthog-key <key> [--posthog-host <url>]] [--disclose-internals]
 
 #![forbid(unsafe_code)]
 
@@ -217,6 +217,11 @@ const EMAIL_FROM_FLAG: &str = "--email-from";
 /// same origin in today's deployment shape and nothing holds them to that, and
 /// a mail whose button goes nowhere is worse than a mail not sent.
 const CONSOLE_URL_FLAG: &str = "--console-url";
+/// Where the other server processes reach this one, `host:port`, so a
+/// device's answer to a file read that lands here can be passed to the
+/// process holding the browser's request. A deployment of one process leaves
+/// it out; a deployment of several gives each its pod address.
+const BROKER_ADVERTISE_FLAG: &str = "--broker-advertise";
 /// Where the identity service's internal address route is reached, which is
 /// not necessarily its public base: the fence is the shared secret either way.
 const AUTH_INTERNAL_URL_FLAG: &str = "--auth-internal-url";
@@ -928,6 +933,12 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
                     .next()
                     .ok_or("--marketing-email-from needs an address argument")?,
             );
+        } else if argument == BROKER_ADVERTISE_FLAG {
+            let given = arguments
+                .next()
+                .ok_or("--broker-advertise needs a host:port argument")?;
+            // Empty is how a template that leaves the address unset arrives.
+            config.broker_advertise = Some(given.trim().to_owned()).filter(|addr| !addr.is_empty());
         } else if argument == OPS_EMAIL_FLAG {
             ops_email = Some(
                 arguments

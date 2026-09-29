@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE device SET stream_polled_at = $3\n                WHERE org_id = $1 AND id = $2 AND revoked_at IS NULL\n            RETURNING 1 AS \"one!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "one!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4e7afb6fe71671eee672001bac7ee2469ac3fc616e2ccdda1bc297e7822a1173"
+}

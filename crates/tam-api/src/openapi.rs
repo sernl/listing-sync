@@ -675,18 +675,18 @@ pub const ROUTES: [Route; 204] = [
     },
     Route {
         method: "get",
-        path: "/{version}/library/missing",
-        summary: "The imported files Teachouse holds no copy of, and the storage left for them",
-    },
-    Route {
-        method: "put",
-        path: "/{version}/library/files/{hash}",
-        summary: "Take the seller's app's copy of one imported file, within the plan's storage",
+        path: "/{version}/library/files/{hash}/content",
+        summary: "The bytes of one of the seller's files by digest, ranged or as a download, passed through from a device for an imported file",
     },
     Route {
         method: "get",
-        path: "/{version}/library/files/{hash}/content",
-        summary: "The bytes of one of the seller's files by digest, ranged or as a download",
+        path: "/{version}/devices/{device}/streams",
+        summary: "A device's long poll for the file reads waiting on it",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/devices/{device}/streams/{stream}",
+        summary: "A device's answer to one file read: exactly the bytes asked for, or its refusal",
     },
     Route {
         method: "post",

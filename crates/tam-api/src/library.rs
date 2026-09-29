@@ -1,6 +1,6 @@
-//! The seller's own files, on the seller's own machines: which machine holds
-//! which, where one can reach another to take a copy directly, and
-//! Teachouse's own copy of each.
+//! The seller's own files, on the seller's own devices: which device holds
+//! which, where one can reach another to take a copy directly, and reading
+//! one back in a browser.
 //!
 //! Between devices the server coordinates and carries nothing. A device
 //! reports, on its heartbeat, the node address its endpoint listens on and
@@ -9,25 +9,22 @@
 //! they are, and connects to one of them itself. There is no relay: two
 //! devices that cannot reach each other directly do not transfer.
 //!
-//! The server copy is the one place bytes arrive. An import leaves the
-//! original on the device that read it; that device's app then copies each
-//! one here (`GET /library/missing`, `PUT /library/files/{hash}`), so the
-//! seller can view, cut a preview from and download the file wherever they
-//! sign in. The copy is a blob like any upload, charged against the plan's
-//! storage, and refused rather than taken where the plan has no room.
+//! A file imported from a marketplace is never stored here. When the seller
+//! opens one in a browser, [`crate::broker`] asks a device that holds it for
+//! the bytes and passes them through; only files the seller uploaded
+//! themselves are read from the blob store.
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use tam_storage::{
-    BlobRepo, DeviceLibraryRepo, HoldingReport, LibraryAvailability, LibraryFilter, LibraryLinked,
-    LibraryReport, ProductRepo, ServerCopyRepo, LIBRARY_LIMIT_DEFAULT, LIBRARY_LIMIT_MAX,
+    DeviceLibraryRepo, DeviceStreamRepo, HoldingReport, LibraryAvailability, LibraryFilter,
+    LibraryLinked, LibraryReport, LIBRARY_LIMIT_DEFAULT, LIBRARY_LIMIT_MAX,
 };
 use tam_types::{ContentHash, OrgId, Timestamp};
 
 use crate::devices::{HeartbeatLibrary, ID_MAX_CHARS};
-use crate::entitlement::{quota_refusal, QuotaKind};
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::{AppState, OrgContext};
 
@@ -136,6 +133,40 @@ pub struct HolderView {
     pub online: bool,
 }
 
+/// Where a file's bytes are, as the console reads it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FileCustody {
+    /// The seller uploaded it through the console, so Teachouse stores it
+    /// and any signed-in browser can read it.
+    Uploaded,
+    /// It was imported from a marketplace and stays on the seller's devices:
+    /// these hold it, online first. Empty where none reports it any more.
+    Devices { holders: Vec<HolderView> },
+}
+
+/// A file's holders as the console shows them: online first, then by name.
+pub(crate) fn holder_views(
+    holders: Vec<tam_storage::StreamHolder>,
+    now: Timestamp,
+) -> Vec<HolderView> {
+    let mut views: Vec<HolderView> = holders
+        .into_iter()
+        .map(|holder| HolderView {
+            online: now.0.saturating_sub(holder.last_seen_at.0) <= ONLINE_WINDOW_MS,
+            device: holder.device,
+            name: holder.name,
+        })
+        .collect();
+    views.sort_by(|left, right| {
+        right
+            .online
+            .cmp(&left.online)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    views
+}
+
 /// One resource a file belongs to, as the browser links it: the identifier
 /// `/resources/{id}` takes, and the title it shows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,8 +186,10 @@ pub struct LibraryFileView {
     /// where a machine keeps a file no resource uses, and where the only
     /// resource that used it was deleted.
     pub resources: Vec<LibraryResourceView>,
-    /// Whether Teachouse holds a copy, and why not where it does not.
-    pub server_copy: ServerCopy,
+    /// Whether the seller uploaded these bytes through the console, so
+    /// Teachouse stores them. An imported file is never stored: it is read
+    /// from a device that holds it.
+    pub uploaded: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -244,13 +277,16 @@ pub(crate) async fn list_library(
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
     let hashes: Vec<ContentHash> = page.files.iter().map(|file| file.hash).collect();
-    let ledger = CopyLedger::read(&state, &context, &hashes).await?;
+    let uploaded = DeviceStreamRepo::new(state.pool.clone())
+        .uploaded(context.org, &hashes)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?;
     Ok(Json(LibraryView {
         files: page
             .files
             .into_iter()
             .map(|file| LibraryFileView {
-                server_copy: ledger.state(file.hash, file.byte_len),
+                uploaded: uploaded.contains(&file.hash),
                 hash: hex_of(file.hash),
                 file_name: file.file_name,
                 byte_len: file.byte_len,
@@ -409,256 +445,20 @@ pub(crate) async fn peers(
     }))
 }
 
-// ------------------------------------------------------------ server copies
+// ------------------------------------------------------------ reading one back
 
-/// The largest file the seller's app copies here: the upload's own ceiling,
-/// in one request.
-///
-/// Not raised and not chunked, deliberately. Every request reaches us
-/// through Cloudflare, which refuses a body over 100 MB at the edge on this
-/// plan, so a larger single request cannot arrive; and a sealed blob is one
-/// envelope sealed whole, so a chunked copy would still be assembled and
-/// sealed in memory at about three times its size in a 256 MiB pod
-/// (`docs/notes/design/research/2026-09-26-pricing-evidence-capacity.md`).
-/// The founder's largest TPT product on 2026-09-19 was 60 MB. A file above
-/// this stays on the device, and the console says so rather than the device
-/// retrying a copy that cannot land.
-pub const COPY_BYTES_MAX: u64 = tam_limits::http::UPLOAD_BODY_BYTES_MAX;
-
-/// The largest file this server opens to serve. A sealed blob opens only
-/// whole, so serving one holds all of it in memory for the request; above
-/// this the read is refused rather than attempted.
+/// The largest uploaded file this server opens to serve. A sealed blob opens
+/// only whole, so serving one holds all of it in memory for the request;
+/// above this the read is refused rather than attempted. An imported file is
+/// passed through from a device in windows and has no such bound.
 pub const OPEN_BYTES_MAX: u64 = 256 * 1024 * 1024;
-
-/// Where a file's bytes are, as the console reads it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ServerCopy {
-    /// Teachouse holds the bytes: they can be viewed, cut into a preview and
-    /// downloaded from any browser.
-    Stored,
-    /// Only the seller's device holds them, and its app will copy them here
-    /// the next time it runs.
-    DeviceOnly,
-    /// Only the seller's device holds them, and copying them here would take
-    /// the plan past its storage.
-    StorageFull,
-    /// Only the seller's device holds them, and they are larger than
-    /// [`COPY_BYTES_MAX`].
-    TooLarge,
-}
-
-/// What decides a file's [`ServerCopy`]: which digests are held, and how
-/// much room the plan has left.
-pub(crate) struct CopyLedger {
-    held: std::collections::HashSet<ContentHash>,
-    stored: u64,
-    cap: u64,
-}
-
-impl CopyLedger {
-    /// One read of the blobs among `hashes` and one of the tenant's total.
-    pub(crate) async fn read(
-        state: &AppState,
-        context: &OrgContext,
-        hashes: &[ContentHash],
-    ) -> Result<Self, APIError> {
-        let held = ServerCopyRepo::new(state.pool.clone())
-            .held(context.org, hashes)
-            .await
-            .map_err(|error| state.internal(&error.to_string()))?;
-        let stored = ProductRepo::new(state.pool.clone())
-            .stored_bytes(context.org)
-            .await
-            .map_err(|error| state.internal(&error.to_string()))?;
-        Ok(Self {
-            held,
-            stored: u64::try_from(stored).unwrap_or(0),
-            cap: context.entitlement.caps.storage_bytes_max,
-        })
-    }
-
-    pub(crate) fn state(&self, hash: ContentHash, byte_len: u64) -> ServerCopy {
-        if self.held.contains(&hash) {
-            ServerCopy::Stored
-        } else if byte_len > COPY_BYTES_MAX {
-            ServerCopy::TooLarge
-        } else if self.stored.saturating_add(byte_len) > self.cap {
-            ServerCopy::StorageFull
-        } else {
-            ServerCopy::DeviceOnly
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MissingFileView {
-    pub hash: String,
-    pub byte_len: u64,
-}
-
-/// The imported files Teachouse has no copy of, and the room there is for
-/// them. Read by the seller's app, which copies the ones it holds.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MissingView {
-    /// Smallest first.
-    pub files: Vec<MissingFileView>,
-    pub stored_bytes: u64,
-    pub storage_bytes_max: u64,
-    /// The largest single copy [`copy_file`] accepts.
-    pub copy_bytes_max: u64,
-}
-
-pub(crate) async fn missing_copies(
-    State(state): State<AppState>,
-    context: OrgContext,
-) -> Result<Json<MissingView>, APIError> {
-    let files = ServerCopyRepo::new(state.pool.clone())
-        .missing(context.org)
-        .await
-        .map_err(|error| state.internal(&error.to_string()))?;
-    let stored = ProductRepo::new(state.pool.clone())
-        .stored_bytes(context.org)
-        .await
-        .map_err(|error| state.internal(&error.to_string()))?;
-    Ok(Json(MissingView {
-        files: files
-            .into_iter()
-            .map(|file| MissingFileView {
-                hash: hex_of(file.hash),
-                byte_len: file.byte_len,
-            })
-            .collect(),
-        stored_bytes: u64::try_from(stored).unwrap_or(0),
-        storage_bytes_max: context.entitlement.caps.storage_bytes_max,
-        copy_bytes_max: COPY_BYTES_MAX,
-    }))
-}
-
-/// The tenant's storage after a copy, for the app to plan the next one
-/// against.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CopiedView {
-    pub stored_bytes: u64,
-    pub storage_bytes_max: u64,
-}
-
-/// The body limit on [`copy_file`], one byte above the ceiling so the
-/// handler, not the extractor, refuses a file that is exactly too large.
-pub fn copy_body_limit() -> axum::extract::DefaultBodyLimit {
-    axum::extract::DefaultBodyLimit::max(
-        usize::try_from(COPY_BYTES_MAX.saturating_add(1)).unwrap_or(usize::MAX),
-    )
-}
-
-fn blob_store_unavailable() -> APIError {
-    APIError::new(
-        StatusCode::SERVICE_UNAVAILABLE,
-        APIErrorEntry::new("File storage isn't available right now. Try again later.")
-            .code(APIErrorCode::BlobStoreUnavailable)
-            .kind(APIErrorKind::Internal),
-    )
-}
-
-/// Takes the seller's app's copy of one imported file.
-///
-/// Only bytes an import already described: the digest must be one a live
-/// resource's imported file names, so this is not a second upload route
-/// without the upload's checks. The digest is recomputed over the body, the
-/// plan's storage is checked before anything is sealed, and the bytes are
-/// scanned here too, because from now on they are served in our voice.
-///
-/// Idempotent: a copy that is already held answers `200` with nothing
-/// written, which is what a device retrying after a lost answer meets.
-pub(crate) async fn copy_file(
-    State(state): State<AppState>,
-    context: OrgContext,
-    Path((_version, hash)): Path<(String, String)>,
-    body: axum::body::Bytes,
-) -> Result<(StatusCode, Json<CopiedView>), APIError> {
-    let hash = hash_of(&hash)?;
-    let blobs = state.blobs.clone().ok_or_else(blob_store_unavailable)?;
-    let copies = ServerCopyRepo::new(state.pool.clone());
-    let products = ProductRepo::new(state.pool.clone());
-    let cap = context.entitlement.caps.storage_bytes_max;
-    let stored_now = |stored: i64| CopiedView {
-        stored_bytes: u64::try_from(stored).unwrap_or(0),
-        storage_bytes_max: cap,
-    };
-    if copies
-        .sourced_len(context.org, hash)
-        .await
-        .map_err(|error| state.internal(&error.to_string()))?
-        .is_none()
-    {
-        return Err(missing("None of your resources uses that file."));
-    }
-    if !copies
-        .held(context.org, &[hash])
-        .await
-        .map_err(|error| state.internal(&error.to_string()))?
-        .is_empty()
-    {
-        let stored = products
-            .stored_bytes(context.org)
-            .await
-            .map_err(|error| state.internal(&error.to_string()))?;
-        return Ok((StatusCode::OK, Json(stored_now(stored))));
-    }
-    let incoming = u64::try_from(body.len()).unwrap_or(u64::MAX);
-    if incoming > COPY_BYTES_MAX {
-        return Err(APIError::new(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            APIErrorEntry::new(
-                "This file is too big to copy to Teachouse, so it stays on your device.",
-            )
-            .code(APIErrorCode::UploadRejected)
-            .kind(APIErrorKind::Validation),
-        ));
-    }
-    if tam_pipeline::hash::content_hash(&body) != hash {
-        return Err(APIError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            APIErrorEntry::new("Those bytes are not the file they were sent as.")
-                .code(APIErrorCode::UploadRejected)
-                .kind(APIErrorKind::Validation),
-        ));
-    }
-    let used = products
-        .stored_bytes(context.org)
-        .await
-        .map_err(|error| state.internal(&error.to_string()))?;
-    let used_bytes = u64::try_from(used).unwrap_or(0);
-    if used_bytes.saturating_add(incoming) > cap {
-        return Err(quota_refusal(QuotaKind::StorageBytes, used, cap));
-    }
-    let now = (state.wall)();
-    if let tam_types::ScanOutcome::Infected { signature } =
-        tam_pipeline::scan::Scanner::scan(&tam_pipeline::scan::EicarScanner, &body, now).await
-    {
-        return Err(APIError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            APIErrorEntry::new(&format!("This file did not pass a scan: {signature}"))
-                .code(APIErrorCode::UploadRejected)
-                .kind(APIErrorKind::Validation),
-        ));
-    }
-    BlobRepo::new(state.pool.clone(), blobs.object_store(), blobs.kek.clone())
-        .put(context.org, &body, now)
-        .await
-        .map_err(|error| state.internal(&error.to_string()))?;
-    let stored = products
-        .stored_bytes(context.org)
-        .await
-        .map_err(|error| state.internal(&error.to_string()))?;
-    Ok((StatusCode::CREATED, Json(stored_now(stored))))
-}
 
 /// The bytes of one of the seller's files by digest, for the file browser,
 /// which names files by digest rather than by resource.
 ///
 /// Fenced like the resource route: the digest must be one a live resource of
-/// this organisation uses, and the blob is read under the organisation.
+/// this organisation uses. An upload is read from the blob store under the
+/// organisation; an import is passed through from a device that holds it.
 pub(crate) async fn file_content(
     State(state): State<AppState>,
     context: OrgContext,
@@ -667,28 +467,39 @@ pub(crate) async fn file_content(
     headers: axum::http::HeaderMap,
 ) -> Result<axum::response::Response, APIError> {
     let hash = hash_of(&hash)?;
-    let named = ServerCopyRepo::new(state.pool.clone())
+    let named = DeviceStreamRepo::new(state.pool.clone())
         .named(context.org, hash)
         .await
         .map_err(|error| state.internal(&error.to_string()))?
         .ok_or_else(|| missing("We can't find that file."))?;
-    let Some(stored_len) = named.stored_len else {
-        return Err(missing(crate::resources::DEVICE_ONLY));
-    };
-    let bytes = crate::resources::open_copy(&state, context.org, hash, stored_len)
-        .await?
-        .ok_or_else(|| missing(crate::resources::DEVICE_ONLY))?;
     let name = named
         .file_name
         .unwrap_or_else(|| format!("{}.{}", hex_of(hash), "bin"));
-    crate::resources::file_answer(
-        &state,
-        bytes,
-        &crate::resources::Served {
-            name: &name,
-            content_type: &named.content_type,
-            download: query.wants_download(),
-        },
-        headers.get(axum::http::header::RANGE),
-    )
+    let served = crate::resources::Served {
+        name: &name,
+        content_type: &named.content_type,
+        download: query.wants_download(),
+    };
+    let range = headers.get(axum::http::header::RANGE);
+    if !named.uploaded {
+        return crate::broker::serve(
+            &state,
+            context.org,
+            &crate::broker::Brokered {
+                hash,
+                byte_len: named.byte_len,
+                served,
+                probe: query.wants_probe(),
+            },
+            range,
+        )
+        .await;
+    }
+    if query.wants_probe() {
+        return crate::resources::probe_answer(&state);
+    }
+    let bytes = crate::resources::open_copy(&state, context.org, hash, named.byte_len)
+        .await?
+        .ok_or_else(|| state.internal("an uploaded file names a blob this store does not hold"))?;
+    crate::resources::file_answer(&state, bytes, &served, range)
 }

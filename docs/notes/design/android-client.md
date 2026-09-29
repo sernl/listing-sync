@@ -326,6 +326,30 @@ On the Samsung SM-N975F and SM-X906B, work activity resumed within a four-second
 Neither device recorded work events during the preceding twenty-second background interval.
 That observation verifies activity reporting and resume discovery, not a packet capture of all background traffic.
 
+## Amended 2026-09-30: a phone serves the files it holds, and says so
+
+Files imported from a marketplace stay on the seller's devices, and the console opens them by asking a device that holds one for the bytes (`desktop-data-plane.md`, the amendment of the same date).
+A phone is often the only device holding a file, and a locked phone that answers nothing is a file the seller cannot open.
+So a phone serves while the seller could reasonably expect it to, and no longer.
+
+The policy is one pure function, `serve::should_serve`, unit-tested: serve while the app is on screen, while a stream is being answered, and for ten minutes after the later of the two.
+The serving loop starts from a pass the seller could see, because Android lets an app start a foreground service from the foreground and refuses it from the background.
+It asks the policy after every poll, which is at most twenty-five seconds apart, and stops when the policy says so.
+
+While the loop runs, `ServeService` holds a foreground service of type `dataSync` with an ongoing notification, "Teachouse is sharing your files" — "Your files can be opened in the console while this is on." — and a partial wake lock, so the phone keeps answering with the screen off.
+The Rust loop is what does the answering; the service only buys it standing with Android.
+Rust starts it through `ServePlugin`, a second Kotlin plugin class registered with `register_android_plugin` exactly as `SessionKeyPlugin` is, and stops it as the loop ends, which releases the wake lock and removes the notification.
+The manifest declares `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC` (which Android 14 and later require for the type) and `WAKE_LOCK`.
+
+The limits are Android's, and they are stated rather than worked around.
+Doze does not cut a foreground service's network, but it is the service that keeps it, so a phone that is not serving does not poll once it dozes.
+Some manufacturers' battery savers stop a foreground service regardless of its type.
+Android 15 stops a `dataSync` service after six hours in a day, and `ServeService.onTimeout` stops it when it does.
+Ten minutes after the last use the service stops on purpose.
+In every one of those cases the phone stops polling, the server stops counting it as serving within a minute, and the console tells the seller the file is on that device, which is offline, and to open the Teachouse app there.
+Opening the app starts serving again on the next pass.
+The notification needs the notification permission to show in the shade on Android 13 and later; without it the service still runs and Android lists it in the task manager instead.
+
 ## Sources
 
 `docs/notes/design/vendoo-for-teachers-rethink.md`, decisions D2, D3, D12, D14 and D29, and its §5.1 and §5.2 readings of mobile session capture and mobile scheduling.

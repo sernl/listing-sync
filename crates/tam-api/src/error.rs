@@ -152,13 +152,20 @@ pub enum APIErrorCode {
     /// `detail.marketplace` names it, `detail.notice_version` names the
     /// version a grant must carry.
     ConsentRequired,
+    /// The file is on the seller's devices only, and none that holds it is
+    /// answering. `detail.device` names the device the seller should open
+    /// the app on.
+    DeviceOffline,
+    /// This deployment cannot ask devices for files: it holds no key to sign
+    /// the ask with.
+    StreamingUnavailable,
     Internal,
 }
 
 impl APIErrorCode {
     /// The closed set, in a stable order; the closed-set test and the
     /// vocabulary generator read this single source.
-    pub const ALL: [Self; 30] = [
+    pub const ALL: [Self; 32] = [
         Self::UnsupportedApiVersion,
         Self::VersionParameterMissing,
         Self::VersionParameterUnreadable,
@@ -188,6 +195,8 @@ impl APIErrorCode {
         Self::ImportStartKeySpent,
         Self::DuplicatePairSettled,
         Self::ConsentRequired,
+        Self::DeviceOffline,
+        Self::StreamingUnavailable,
         Self::Internal,
     ];
 
@@ -223,6 +232,8 @@ impl APIErrorCode {
             Self::ImportStartKeySpent => "import_start_key_spent",
             Self::DuplicatePairSettled => "duplicate_pair_settled",
             Self::ConsentRequired => "consent_required",
+            Self::DeviceOffline => "device_offline",
+            Self::StreamingUnavailable => "streaming_unavailable",
             Self::Internal => "internal",
         }
     }
@@ -459,6 +470,8 @@ mod tests {
                 | APIErrorCode::ImportStartKeySpent
                 | APIErrorCode::DuplicatePairSettled
                 | APIErrorCode::ConsentRequired
+                | APIErrorCode::DeviceOffline
+                | APIErrorCode::StreamingUnavailable
                 | APIErrorCode::Internal => {}
             }
             let encoded = serde_json::to_string(&code).expect("an error code serialises");
