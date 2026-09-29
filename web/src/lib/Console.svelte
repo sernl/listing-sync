@@ -7,7 +7,13 @@
 	import { api, avatarSrc } from '$lib/api';
 	import { impersonatedSession, stopImpersonatingAndRestore } from '$lib/auth-client';
 	import { present, type StatusPresentation } from '$lib/connection-status';
-	import { checkInHere, desktopInvoker } from '$lib/desktop';
+	import {
+		checkInHere,
+		desktopInvoker,
+		libraryUsage,
+		NO_SCREEN_LOCK,
+		openSecuritySettings
+	} from '$lib/desktop';
 	import { signBackInRefusal, signedOutHere, SIGN_BACK_IN, whereYouAre } from '$lib/machine-here';
 	import { machineHere } from '$lib/machine.svelte';
 	import { renderFailureCause, renderFailureReport } from '$lib/render-failure';
@@ -90,6 +96,10 @@
 
 	const queryClient = useQueryClient();
 
+	// Whether this phone's missing screen lock keeps its library shut; read
+	// alongside the check-in below.
+	let noScreenLock = $state(false);
+
 	// The console registers the machine it is running on, once per load, and
 	// keeps what it answered.
 	//
@@ -122,6 +132,13 @@
 				// disturbed.
 				void queryClient.invalidateQueries({ queryKey: queryKeys.devices });
 			}
+		});
+		// A phone with no screen lock cannot open its library: the key it is
+		// sealed under needs an unlocked device, and there is no unlock. Asked
+		// once, like the check-in; a browser answers `unavailable` and a
+		// computer that keeps files answers `ok`.
+		void libraryUsage(invoke).then((answer) => {
+			noScreenLock = answer.kind === 'noScreenLock';
 		});
 	});
 
@@ -389,6 +406,20 @@
 				disabled={machineHere.restoring}
 			>
 				{machineHere.restoring ? 'Signing in…' : SIGN_BACK_IN}
+			</button>
+		</div>
+	{/if}
+
+	<!-- A phone with no screen lock keeps no files: the library's key needs
+	     an unlocked device and is deliberately not weakened for one without a
+	     lock. The seller is told the fix, with the button to the settings
+	     where they make it. -->
+	{#if noScreenLock}
+		<div class="machine-out" role="alert">
+			<span class="mark"><Icon name="lock" size={14} /></span>
+			<span class="said">{NO_SCREEN_LOCK}</span>
+			<button type="button" onclick={() => void openSecuritySettings(desktopInvoker())}>
+				Open settings
 			</button>
 		</div>
 	{/if}

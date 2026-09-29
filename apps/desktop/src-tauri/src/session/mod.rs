@@ -244,6 +244,11 @@ impl SessionStatus {
 pub enum StoreError {
     Backend(String),
     Codec(String),
+    /// The device has no screen lock, so its key store will not make or use
+    /// a key that requires an unlocked device. Android only: the session and
+    /// library keys are made that way on purpose, and the seller is asked to
+    /// set a lock rather than given a weaker key.
+    NoScreenLock,
 }
 
 impl core::fmt::Display for StoreError {
@@ -251,6 +256,7 @@ impl core::fmt::Display for StoreError {
         match self {
             Self::Backend(why) => write!(f, "the session store refused: {why}"),
             Self::Codec(why) => write!(f, "the stored session did not parse: {why}"),
+            Self::NoScreenLock => f.write_str("this device has no screen lock"),
         }
     }
 }

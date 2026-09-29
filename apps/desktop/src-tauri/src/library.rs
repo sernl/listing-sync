@@ -95,6 +95,9 @@ pub enum LibraryError {
     Tampered(ContentHash),
     /// The index or a settings file did not parse.
     Codec(String),
+    /// The device has no screen lock, so the key the library is sealed under
+    /// cannot be made or used. See [`crate::session::StoreError::NoScreenLock`].
+    NoScreenLock,
 }
 
 impl core::fmt::Display for LibraryError {
@@ -107,6 +110,9 @@ impl core::fmt::Display for LibraryError {
                 hex_encode(&hash.0)
             ),
             Self::Codec(why) => write!(f, "the library index could not be read: {why}"),
+            Self::NoScreenLock => {
+                f.write_str("the library key needs a screen lock, and this device has none")
+            }
         }
     }
 }
@@ -559,9 +565,12 @@ pub async fn sealed_library_key(
     keys: &dyn crate::session::encrypted::DeviceKeySource,
 ) -> Result<Kek, LibraryError> {
     let path = data_dir.join(format!("{KEY_ENTRY}.sealed"));
-    let device_key = keys
-        .obtain()
-        .map_err(|why| LibraryError::Io(why.to_string()))?;
+    let device_key = keys.obtain().map_err(|why| match why {
+        crate::session::StoreError::NoScreenLock => LibraryError::NoScreenLock,
+        other @ (crate::session::StoreError::Backend(_) | crate::session::StoreError::Codec(_)) => {
+            LibraryError::Io(other.to_string())
+        }
+    })?;
     match tokio::fs::read(&path).await {
         Ok(bytes) => {
             let envelope: Envelope = serde_json::from_slice(&bytes)

@@ -411,6 +411,12 @@
           "markdownDescription": "Enables the library_usage command without any pre-configured scope."
         },
         {
+          "description": "Enables the open_security_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-security-settings",
+          "markdownDescription": "Enables the open_security_settings command without any pre-configured scope."
+        },
+        {
           "description": "Enables the retry_console command without any pre-configured scope.",
           "type": "string",
           "const": "allow-retry-console",
@@ -511,6 +517,12 @@
           "type": "string",
           "const": "deny-library-usage",
           "markdownDescription": "Denies the library_usage command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_security_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-security-settings",
+          "markdownDescription": "Denies the open_security_settings command without any pre-configured scope."
         },
         {
           "description": "Denies the retry_console command without any pre-configured scope.",

@@ -323,6 +323,7 @@ pub fn run() {
             commands::library_settings,
             commands::set_library_settings,
             commands::library_open_external,
+            commands::open_security_settings,
         ])
         .build(tauri::generate_context!());
 

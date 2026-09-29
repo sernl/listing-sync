@@ -350,6 +350,19 @@ In every one of those cases the phone stops polling, the server stops counting i
 Opening the app starts serving again on the next pass.
 The notification needs the notification permission to show in the shade on Android 13 and later; without it the service still runs and Android lists it in the task manager instead.
 
+## Amended 2026-09-30: a phone with no screen lock is told to set one
+
+`setUnlockedDeviceRequired(true)` has a consequence the paragraph on the Keystore key did not state: a phone with no screen lock has no unlock to require, and the Keystore refuses to make or use such a key.
+On the `api31` emulator with no PIN the refusal reads "User ECDH key missing"; the library never opens, and the phone neither keeps nor serves files.
+The requirement stays: the alternative, a key without it, would leave the files on a phone anyone can pick up readable by anything that runs as the app while the phone sits unattended.
+Instead the seller is told.
+`SessionKeyPlugin.obtain` checks `KeyguardManager.isDeviceSecure` when it fails and, where the phone has no lock, rejects with the code `no_screen_lock` rather than the Keystore's message, which differs by Android version and says nothing a seller can act on.
+Rust maps that code to `StoreError::NoScreenLock` and `LibraryError::NoScreenLock`, and the library commands answer with one sentence, `commands::NO_SCREEN_LOCK`: "Set a screen lock on this device to keep your files on it, then open Teachouse again."
+The console compares it (`NO_SCREEN_LOCK` in `web/src/lib/desktop.ts`), shows it as a banner on every page in the app with an **Open settings** button, and says it in the Files page's section for this device.
+The button calls `open_security_settings`, which starts `Settings.ACTION_SECURITY_SETTINGS`.
+Any other failure, including one on a phone that has a lock and is simply locked, keeps its old wording, so a lock is never blamed for a fault it would not fix.
+The library slot retries on every ask, so once a lock is set the next ask opens the library; reopening the app is the plainest way to make that ask.
+
 ## Sources
 
 `docs/notes/design/vendoo-for-teachers-rethink.md`, decisions D2, D3, D12, D14 and D29, and its §5.1 and §5.2 readings of mobile session capture and mobile scheduling.

@@ -13,6 +13,7 @@
 		libraryRemove,
 		librarySettings,
 		libraryUsage,
+		NO_SCREEN_LOCK,
 		setLibrarySettings
 	} from '$lib/desktop';
 	import Explain from '$lib/Explain.svelte';
@@ -133,6 +134,12 @@
 			librarySettings(invoke)
 		]);
 		if (current !== generation) {
+			return;
+		}
+		// A phone with no screen lock: the console's banner carries the button
+		// to the lock settings, and this section says the same sentence.
+		if ([entries, usage, settings].some((answer) => answer.kind === 'noScreenLock')) {
+			local = { state: 'failed', detail: NO_SCREEN_LOCK };
 			return;
 		}
 		if (
