@@ -46,7 +46,7 @@ const CONSOLE_HANDOVER: Duration = Duration::from_millis(250);
 
 /// Every command failure, as one string the interface can show.
 ///
-/// Deliberately opaque: the underlying errors are keychain and webview
+/// Deliberately opaque: the underlying errors are session-store and webview
 /// diagnostics, and a jar must never be interpolated into one.
 #[derive(Debug, Clone, Serialize)]
 pub struct CommandError(pub String);
@@ -488,7 +488,7 @@ async fn capture_in_place<R: tauri::Runtime>(
                 // would be refused identically.
                 Err(NotFiled::BoundElsewhere) => ConnectVerdict::BoundElsewhere,
                 // Not `Refused`: the sign-in opened and the seller finished it.
-                // The keychain or the store refused it, and the diagnostic has
+                // The key source or the store refused it, and the diagnostic has
                 // nowhere to go on this surface.
                 Err(NotFiled::Failed(_)) => ConnectVerdict::NotKept,
             }
@@ -1060,7 +1060,7 @@ pub async fn session_status(
 }
 
 /// Removes the stored session. The seller's disconnect, and the only way a
-/// captured jar leaves this device's keychain.
+/// captured jar leaves this device's session store.
 ///
 /// Generic over the runtime for the reason [`start_import`] is: the mock
 /// runtime a host test builds cannot hand an `AppHandle<Wry>` to a command

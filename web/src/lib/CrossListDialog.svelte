@@ -182,7 +182,7 @@
 		<Note>Any resource not yet set up for a marketplace is set up first.</Note>
 		<Note icon="laptop">Sending to Tes and TPT waits until your computer is on.</Note>
 		<Note icon="files"
-			>See your files and which computer has them on <a href="/resources/files">Your devices' files</a>.</Note
+			>See your files and which computer has them in <a href="/resources/files">Files</a>.</Note
 		>
 		<!-- The price and the terms a listing arrives with are decided on their
 		     own screens, beside a preview of what each resource would get: this

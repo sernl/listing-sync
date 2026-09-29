@@ -6,9 +6,11 @@ import {
 	nextIndex,
 	PAD,
 	placeTour,
+	GET_THE_APP_HREF,
 	shouldOfferTour,
-	TOUR_STEPS,
+	tourSteps,
 	visibleRect,
+	whichTour,
 	type Rect
 } from './model';
 
@@ -38,9 +40,7 @@ describe('whether the shell offers the tour by itself', () => {
 
 	it('never offers it to an operator impersonating, whatever the user is due', () => {
 		for (const tour of ['due', 'predates'] as const) {
-			expect(
-				shouldOfferTour({ tour, impersonating: true, checkoutSuccess: true })
-			).toBe(false);
+			expect(shouldOfferTour({ tour, impersonating: true, checkoutSuccess: true })).toBe(false);
 		}
 	});
 
@@ -49,25 +49,87 @@ describe('whether the shell offers the tour by itself', () => {
 	});
 });
 
+describe('which tour the shell opens by itself', () => {
+	const due = { tour: 'due', impersonating: false, checkoutSuccess: false } as const;
+
+	it('opens the app tour on the first open of the app on a device, ahead of the console tour', () => {
+		expect(whichTour({ ...due, host: 'app', appTourSeen: false })).toBe('app-first-open');
+		expect(whichTour({ ...due, tour: 'completed', host: 'app', appTourSeen: false })).toBe(
+			'app-first-open'
+		);
+	});
+
+	it('opens the console tour, if due, once this device has shown the app tour', () => {
+		expect(whichTour({ ...due, host: 'app', appTourSeen: true })).toBe('console');
+		expect(whichTour({ ...due, tour: 'skipped', host: 'app', appTourSeen: true })).toBeNull();
+	});
+
+	it('never opens the app tour in a browser, whatever this device has seen', () => {
+		expect(whichTour({ ...due, host: 'browser', appTourSeen: false })).toBe('console');
+		expect(
+			whichTour({ ...due, tour: 'completed', host: 'browser', appTourSeen: false })
+		).toBeNull();
+	});
+
+	it('opens neither for an operator impersonating', () => {
+		expect(whichTour({ ...due, impersonating: true, host: 'app', appTourSeen: false })).toBeNull();
+	});
+});
+
 describe('the steps', () => {
 	it('walks the sections, then the resource, the app, billing, and ends on a card of its own', () => {
-		expect(TOUR_STEPS.map((step) => step.anchor)).toEqual([
-			'import',
-			'crosslist',
-			'new',
-			'automations',
-			'marketplaces',
-			'billing',
-			null
-		]);
-		expect(TOUR_STEPS.at(-1)?.title).toBe('Start here');
+		for (const host of ['app', 'browser'] as const) {
+			expect(tourSteps('console', host).map((step) => step.anchor)).toEqual([
+				'import',
+				'crosslist',
+				'new',
+				'automations',
+				'marketplaces',
+				'billing',
+				null
+			]);
+		}
+	});
+
+	it('ends a browser tour on getting the app, and an app tour on the first resource', () => {
+		const browser = tourSteps('console', 'browser').at(-1);
+		expect(browser?.title).toBe('Start here: download the app');
+		expect(browser?.action?.href).toBe(GET_THE_APP_HREF);
+		expect(GET_THE_APP_HREF).toBe('/marketplaces#step-app');
+
+		const app = tourSteps('console', 'app').at(-1);
+		expect(app?.title).toBe('Start here');
+		expect(app?.action).toMatchObject({
+			label: 'Create your first resource',
+			href: '/resources/new'
+		});
+	});
+
+	it('keeps the app first-open tour short and ends it at Marketplaces', () => {
+		const steps = tourSteps('app-first-open', 'app');
+		expect(steps.length).toBeGreaterThanOrEqual(2);
+		expect(steps.length).toBeLessThanOrEqual(3);
+		expect(steps.some((step) => step.anchor === 'marketplaces')).toBe(true);
+		expect(steps.at(-1)?.action?.href).toBe('/marketplaces');
+	});
+
+	it('only the last step of each tour carries a button of its own', () => {
+		for (const steps of [
+			tourSteps('console', 'app'),
+			tourSteps('console', 'browser'),
+			tourSteps('app-first-open', 'app')
+		]) {
+			expect(steps.map((step) => step.action !== undefined)).toEqual(
+				steps.map((_, index) => index === steps.length - 1)
+			);
+		}
 	});
 
 	it('holds at either end rather than running off it', () => {
 		expect(backIndex(0)).toBe(0);
-		expect(nextIndex(0)).toBe(1);
-		expect(nextIndex(TOUR_STEPS.length - 1)).toBe(TOUR_STEPS.length - 1);
-		expect(backIndex(TOUR_STEPS.length - 1)).toBe(TOUR_STEPS.length - 2);
+		expect(nextIndex(0, 3)).toBe(1);
+		expect(nextIndex(2, 3)).toBe(2);
+		expect(backIndex(2)).toBe(1);
 	});
 });
 
@@ -148,8 +210,6 @@ describe('where the spotlight and the card go', () => {
 		expect(placeTour(target, { width: DOCK_BELOW - 1, height: 800 }, CARD).card.kind).toBe(
 			'docked'
 		);
-		expect(placeTour(target, { width: DOCK_BELOW, height: 800 }, CARD).card.kind).toBe(
-			'floating'
-		);
+		expect(placeTour(target, { width: DOCK_BELOW, height: 800 }, CARD).card.kind).toBe('floating');
 	});
 });

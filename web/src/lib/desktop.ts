@@ -55,7 +55,7 @@ export const START_IMPORT = 'start_import';
 export const CONTINUE_IMPORT = 'continue_import';
 
 /** The desktop command that opens one marketplace's own login page on this
- *  computer and files the session in the platform keychain.
+ *  computer and seals the session into this device's session store.
  *
  * The whole of the D1 connect path, and the reason there is no server-side
  * equivalent to fall back to: for a marketplace with no official API the login
@@ -63,7 +63,7 @@ export const CONTINUE_IMPORT = 'continue_import';
 export const CONNECT_MARKETPLACE = 'connect_marketplace';
 
 /** The desktop command that removes one marketplace's session from this
- *  computer's keychain. The only way a captured jar leaves a device. */
+ *  computer's session store. The only way a captured jar leaves a device. */
 export const FORGET_SESSION = 'forget_session';
 
 /** The desktop command that puts this machine in the seller's registry.

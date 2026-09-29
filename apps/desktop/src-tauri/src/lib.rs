@@ -71,20 +71,21 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Manager};
 
+#[cfg(target_os = "android")]
+use crate::android_name::DeviceNameSource;
 use crate::control_plane::{base_url, install_crypto_provider, HttpControlPlane};
 use crate::device::DeviceIdentity;
 use crate::notify::{DeviceNotifier, PluginSurface};
 use crate::run::wall_now;
 use crate::scheduler::Scheduler;
-// The credential store this platform actually has. `keyring` covers Windows,
-// macOS and Linux; on Android it has no backend at all, so the jar is sealed
-// into a file instead, under a key the Android Keystore holds.
+// Every platform seals the jar into a file under its data directory; only
+// the key differs. `keyring` holds it on Windows, macOS and Linux; on Android
+// it has no backend at all, and the Android Keystore holds it instead.
 #[cfg(target_os = "android")]
-use crate::android_name::DeviceNameSource;
-#[cfg(target_os = "android")]
-use crate::session::encrypted::{DeviceKeySource, EncryptedSessionStore};
+use crate::session::encrypted::DeviceKeySource;
+use crate::session::encrypted::EncryptedSessionStore;
 #[cfg(not(target_os = "android"))]
-use crate::session::keychain::KeychainSessionStore;
+use crate::session::keychain::{KeychainKey, KeychainSessionStore};
 use crate::state::DesktopState;
 use crate::webview_session::WebviewSession;
 use crate::work::{DeviceWork, LiveMarketplaces};
@@ -145,9 +146,17 @@ pub fn run() {
             let origin = base_url();
             let sessions = Arc::new(WebviewSession::new(app.handle().clone(), &origin)?);
             let plane = Arc::new(HttpControlPlane::against(&origin, sessions)?);
+            // The sessions an earlier version filed in the keychain itself
+            // move into the file the first time each is read.
             #[cfg(not(target_os = "android"))]
-            let store = Arc::new(KeychainSessionStore::new());
-            // The key source is filed in managed state by the plugin below,
+            let store = Arc::new(
+                EncryptedSessionStore::in_data_dir(
+                    &data_dir,
+                    Arc::new(KeychainKey::under(session::keychain::SERVICE)),
+                )
+                .migrating_from(Arc::new(KeychainSessionStore::new())),
+            );
+            // On Android the key source is filed in managed state by the plugin below,
             // which is registered after `build` returns and before `run` is
             // called, while this closure runs from inside `run` on the `Ready`
             // event (tauri 2.11.5, `src/app.rs:1424`). So it is always there by

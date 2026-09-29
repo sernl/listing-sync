@@ -38,8 +38,8 @@
 	import { opensPalette } from '$lib/search-palette';
 	import { capture } from '$lib/posthog';
 	import Tour from '$lib/tour/Tour.svelte';
-	import { shouldOfferTour } from '$lib/tour/model';
-	import { tour } from '$lib/tour/tour.svelte';
+	import { APP_TOUR_KEY, whichTour, type TourKind } from '$lib/tour/model';
+	import { tour, tourHost } from '$lib/tour/tour.svelte';
 
 	let {
 		children,
@@ -212,33 +212,41 @@
 	const picture = $derived(avatarSrc(profile.data));
 
 	// The guided tour, offered once per load and only once both reads it
-	// depends on have answered: the profile says whether it is due, and the
-	// identity session says whether this is an operator impersonating, who
-	// is never shown it. Plain rather than `$state`, for the reason
-	// `gateReported` below gives.
+	// depends on have answered: the profile says whether the console tour is
+	// due, and the identity session says whether this is an operator
+	// impersonating, who is never shown one. The app's first-open tour is
+	// decided by this device's own record. Plain rather than `$state`, for the
+	// reason `gateReported` below gives.
 	let tourDecided = false;
 	$effect(() => {
 		if (tourDecided || profile.data === undefined || !identity.isFetched) {
 			return;
 		}
 		tourDecided = true;
-		const offered = shouldOfferTour({
+		const kind = whichTour({
 			tour: profile.data.tour.state,
 			impersonating: impersonation !== null,
-			checkoutSuccess: page.url.searchParams.get('checkout') === 'success'
+			checkoutSuccess: page.url.searchParams.get('checkout') === 'success',
+			host: tourHost(),
+			appTourSeen: localStorage.getItem(APP_TOUR_KEY) !== null
 		});
-		if (offered) {
-			tour.start();
+		if (kind !== null) {
+			tour.start(kind);
 		}
 	});
 
-	/** Records how the tour ended, so it is not offered again. Not while
-	 *  impersonating: the tour is the user's to end, and an operator who
+	/** Records how a tour ended, so it is not offered again: the app's
+	 *  first-open tour on this device, the console tour on the profile. Not
+	 *  while impersonating: the tour is the user's to end, and an operator who
 	 *  opened it from Help would otherwise end it for them. A failed write is
 	 *  left unsaid -- the tour is offered again next time, which is the whole
 	 *  of the harm. */
-	function tourEnded(outcome: 'completed' | 'skipped') {
+	function tourEnded(outcome: 'completed' | 'skipped', kind: TourKind) {
 		if (impersonation !== null) {
+			return;
+		}
+		if (kind === 'app-first-open') {
+			localStorage.setItem(APP_TOUR_KEY, outcome);
 			return;
 		}
 		void api.settleTour(outcome).then(
