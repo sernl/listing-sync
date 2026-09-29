@@ -424,7 +424,7 @@
 		{:else}
 			<ul class="bill-usage">
 				{#each used as row (row.limit)}
-					<li class:full={row.full}>{row.line}{#if row.full}<span class="quiet"> · full</span>{/if}</li>
+					<li class:full={row.full}>{row.line}{#if row.full}<span class="quiet">{' · full'}</span>{/if}</li>
 				{/each}
 			</ul>
 			<p class="quiet">

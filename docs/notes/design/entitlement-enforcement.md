@@ -74,11 +74,11 @@ Why these numbers, tested against the pricing review:
 | `pack_edit_days` | not enforced, with a reason: editing a moved listing after the window is promised in the review (§10) but not built, so there is nothing yet to hold. The dead console line printing it is removed | – | – |
 | `support` | not enforced, with a reason: it is a promise of reply time, not a bound a request can exceed; the pricing table renders it | – | pricing table |
 
-Every refusal is the same 422 `quota_exceeded` with `detail.quota` naming the bound (`listings_max`, `storage_bytes_max`, `labels_max`, `previews_per_month`, …) and a one-sentence reason. The console's `limitReason` uses the same sentences: *"Your plan includes 100 resources. Upgrade to add more."* and *"Your plan includes 5 watermarked previews a month. Upgrade to make more, or wait until next month."*
+Every refusal is the same 422 `quota_exceeded` with `detail.quota` naming the bound (`listings_max`, `storage_bytes_max`, `labels_max`, `previews_per_month`, …) and a one-sentence reason. The console's `limitReason` (the early warning) and the create form's refusal (`quotaSentence` no longer composes its own resource sentence) both show the server's words: *"Your plan includes 100 resources. Upgrade to add more."* and *"Your plan includes 5 watermarked previews a month. Upgrade to make more, or wait until next month."* Only storage is re-worded in the console, in its byte units.
 
 ## 4. Grandfathering
 
-An organisation already over a new ceiling keeps everything it has. It can't add more until it upgrades or gets back under. Every standing-count gate compares against the live count after the write, so the next resource, label or template is refused and nothing existing is touched. Previews start counting from zero at deploy, because the counter table is new.
+An organisation already over a new ceiling keeps everything it has. It can't add more until it upgrades or gets back under. Every standing-count gate compares against the live count after the write, so the next resource, label or template is refused and nothing existing is touched. Existing resources can still be opened, edited, published and deleted: only the create paths carry the resource gate (checked live: a `PATCH` on a resource at 100/100 answers 200). Previews start counting from zero at deploy, because the counter table is new.
 
 ## 5. What re-opens this
 

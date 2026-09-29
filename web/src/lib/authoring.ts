@@ -306,9 +306,10 @@ export function liveOn(mappings: readonly MappingHead[]): InventoryId[] {
 
 /** The quota refusal's detail, rendered as the sentence the server composed it
  *  to allow. Returns `null` for a detail this client does not recognise, so a
- *  shape it cannot read falls back to the server's own message — which is the
- *  path every kind added in phase 1 takes, because the server's own wording
- *  for those already names the allowance and what to do about it. */
+ *  shape it cannot read falls back to the server's own message. Only storage is
+ *  rendered here, in the byte units the console prints; every counted
+ *  allowance (resources included) takes the server's plan sentence, which is
+ *  the one `limitReason` warns with before the write. */
 export function quotaSentence(detail: unknown): string | null {
 	if (typeof detail !== 'object' || detail === null) {
 		return null;
@@ -319,9 +320,6 @@ export function quotaSentence(detail: unknown): string | null {
 	}
 	if (quota === 'storage_bytes_max') {
 		return `Your plan holds up to ${formatBytes(limit)} of files, and you are using ${formatBytes(used)}.`;
-	}
-	if (quota === 'listings_max') {
-		return `Your plan allows up to ${limit} resources, and you have ${used}.`;
 	}
 	return null;
 }
