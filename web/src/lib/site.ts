@@ -4,7 +4,7 @@
 // `/login` and is taken into the console without a page load. Pure, so it
 // tests without a component.
 
-import type { SiteView } from '$lib/api';
+import type { SeasonName, SiteView } from '$lib/api';
 
 /** The console pages that stay usable while maintenance is on: signing in and
  *  resetting a password, so an operator can get in to turn it off, and the
@@ -43,8 +43,35 @@ export function siteGate({ site, operator, pathname }: SiteGateInput): SiteGate 
 	return MAINTENANCE_OPEN_ROUTES.includes(path) ? 'open' : 'maintenance';
 }
 
+/** A seasonal theme that can show: every name but `none`. */
+export type Season = Exclude<SeasonName, 'none'>;
+
+/** Every theme, in the order the admin picker offers them: the holidays
+ *  through the calendar year, then the four seasons. `when` is a reminder of
+ *  when it usually runs, not a rule; the operator sets the dates. Each has a
+ *  folder of stickers under the landing's `public/seasons/`, its rules in
+ *  `styles/season.css`, and a mark at `web/static/seasons/<name>.svg`. */
+export const SEASONS: readonly { name: Season; label: string; when: string }[] = [
+	{ name: 'new-year', label: 'New Year', when: 'Around 1 January' },
+	{ name: 'valentines', label: 'Valentine’s Day', when: 'Early February' },
+	{ name: 'st-patricks', label: 'St Patrick’s Day', when: 'Around 17 March' },
+	{ name: 'april-fools', label: 'April Fools’ Day', when: '1 April' },
+	{ name: 'easter', label: 'Easter', when: 'March or April' },
+	{ name: 'matariki', label: 'Matariki', when: 'June or July' },
+	{ name: 'fourth-of-july', label: 'Fourth of July', when: 'Around 4 July' },
+	{ name: 'back-to-school', label: 'Back to school', when: 'Before a school year starts' },
+	{ name: 'halloween', label: 'Halloween', when: 'October' },
+	{ name: 'guy-fawkes', label: 'Guy Fawkes', when: 'Around 5 November' },
+	{ name: 'thanksgiving', label: 'Thanksgiving', when: 'October or November' },
+	{ name: 'christmas', label: 'Christmas', when: 'December' },
+	{ name: 'summer', label: 'Summer', when: 'A season' },
+	{ name: 'autumn', label: 'Autumn', when: 'A season' },
+	{ name: 'winter', label: 'Winter', when: 'A season' },
+	{ name: 'spring', label: 'Spring', when: 'A season' }
+];
+
 /** The season the console's top bar marks, or null outside one. */
-export function activeSeason(site: SiteView | null): 'halloween' | 'christmas' | null {
+export function activeSeason(site: SiteView | null): Season | null {
 	if (site === null || !site.theme.active || site.theme.name === 'none') {
 		return null;
 	}

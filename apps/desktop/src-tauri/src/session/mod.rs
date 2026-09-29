@@ -2,8 +2,9 @@
 //!
 //! This is the custody that section 5 of `docs/notes/design/client-side-architecture.md`
 //! relocates rather than eliminates: the cookie jar the server used to hold in
-//! `tam-session-broker` now lives in the operating system's keychain on the
-//! machine that captured it, and no path in this crate sends it anywhere.
+//! `tam-session-broker` now lives on the device that captured it — sealed
+//! into a file under a key the operating system's keychain (or, on Android,
+//! the Keystore) holds — and no path in this crate sends it anywhere.
 //!
 //! Two properties are enforced here rather than remembered. The jar never
 //! reaches a formatter, so no `Debug` line, panic message or log can carry it;
@@ -12,7 +13,8 @@
 
 // `keyring` 3.6.3 has no Android backend, and this crate's manifest declares
 // it only for the three platforms that do, so on Android the module below has
-// no crate to reach. `encrypted` is what holds the jar there instead.
+// no crate to reach. It holds the desktop's sealing key and the legacy
+// sessions being migrated; `encrypted` holds the jar on every platform.
 #[cfg(not(target_os = "android"))]
 pub mod keychain;
 // The Keystore-backed key source, which only Android has. The store it feeds
@@ -123,7 +125,7 @@ impl CookieJar {
 /// proven recently is reported as what it is rather than as connected.
 pub const PROOF_MAX_AGE: core::time::Duration = core::time::Duration::from_mins(15);
 
-/// A captured session, as it is written to the keychain.
+/// A captured session, as it is sealed into the session file.
 ///
 /// `Debug` is derived on every field but the jar, whose own `Debug` redacts,
 /// so the derive is safe here and stays safe as fields are added.
@@ -242,6 +244,11 @@ impl SessionStatus {
 pub enum StoreError {
     Backend(String),
     Codec(String),
+    /// The device has no screen lock, so its key store will not make or use
+    /// a key that requires an unlocked device. Android only: the session and
+    /// library keys are made that way on purpose, and the seller is asked to
+    /// set a lock rather than given a weaker key.
+    NoScreenLock,
 }
 
 impl core::fmt::Display for StoreError {
@@ -249,6 +256,7 @@ impl core::fmt::Display for StoreError {
         match self {
             Self::Backend(why) => write!(f, "the session store refused: {why}"),
             Self::Codec(why) => write!(f, "the stored session did not parse: {why}"),
+            Self::NoScreenLock => f.write_str("this device has no screen lock"),
         }
     }
 }

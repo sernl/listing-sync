@@ -10,7 +10,7 @@ const SOURCE = new URL('../', import.meta.url);
 
 /** The stub routes are the one place an old path is still written down: each
  *  is the redirect that keeps a bookmark working. */
-const STUBS: readonly string[] = LEGACY_REDIRECTS.map(({ from }) => `routes${from}/`);
+const STUBS: readonly string[] = LEGACY_REDIRECTS.map(({ from }) => `routes/(console)${from}/`);
 
 /** The table itself, and the two tests that assert over it. */
 const EXEMPT: readonly string[] = ['lib/nav.ts', 'lib/nav.test.ts', 'lib/routes.test.ts'];

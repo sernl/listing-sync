@@ -1,11 +1,10 @@
-// The typed API client: one fetch wrapper, the structured error parsed into
-// a typed failure, and every endpoint the client consumes. Identifiers are
+// The typed API client: every endpoint the client consumes, over the fetch
+// wrapper and typed failure in `$lib/http`, which are re-exported here so a
+// caller has one module to read the API from. Identifiers are
 // hyphenated UUID strings and cursors are opaque server-minted tokens; this
 // module never invents either.
 
 import type {
-	APIErrorCode,
-	APIErrorKind,
 	BodyWire,
 	Cardinality,
 	ConnectionStatus,
@@ -53,128 +52,10 @@ import type {
 } from '$lib/pages/admin/pricing';
 import type { Capabilities, PlansView } from '$lib/generated/plans';
 
-export interface APIErrorEntry {
-	code?: APIErrorCode;
-	kind?: APIErrorKind;
-	message: string;
-	detail?: unknown;
-}
+import { ApiFailure, patch, post, put, request, type APIErrorBody } from '$lib/http';
 
-export interface APIErrorBody {
-	status: number;
-	errors: APIErrorEntry[];
-}
-
-export interface ApiResponseContext {
-	requested_path: string;
-	final_path: string | null;
-	content_type: string | null;
-	redirected: boolean;
-	problem?: 'unexpected_content_type' | 'invalid_json' | 'invalid_error_body';
-}
-
-/** A failing response, thrown with its structured body when one existed. */
-export class ApiFailure extends Error {
-	readonly status: number;
-	readonly body: APIErrorBody | null;
-
-	constructor(
-		status: number,
-		body: APIErrorBody | null,
-		readonly response: ApiResponseContext | null = null
-	) {
-		super(
-			response?.problem
-				? `Unexpected API response (${status}); reload or report this request.`
-				: (body?.errors?.[0]?.message ?? `request failed with ${status}`)
-		);
-		this.status = status;
-		this.body = body;
-	}
-
-	code(): APIErrorCode | undefined {
-		return this.body?.errors?.[0]?.code;
-	}
-}
-
-export async function request<T>(path: string, init?: RequestInit): Promise<T> {
-	const response = await fetch(path, {
-		...init,
-		headers: { accept: 'application/json', ...(init?.headers ?? {}) }
-	});
-	if (response.status === 204) {
-		return undefined as T;
-	}
-	const context: ApiResponseContext = {
-		requested_path: path.split(/[?#]/, 1)[0],
-		final_path: response.url ? new URL(response.url).pathname : null,
-		content_type: response.headers.get('content-type'),
-		redirected: response.redirected
-	};
-	const mediaType = context.content_type?.split(';', 1)[0].trim().toLowerCase();
-	if (mediaType !== 'application/json' && !mediaType?.endsWith('+json')) {
-		throw new ApiFailure(response.status, null, {
-			...context,
-			problem: 'unexpected_content_type'
-		});
-	}
-	let body: unknown;
-	try {
-		body = await response.json();
-	} catch {
-		throw new ApiFailure(response.status, null, {
-			...context,
-			problem: 'invalid_json'
-		});
-	}
-	if (!response.ok) {
-		const envelope =
-			typeof body === 'object' &&
-			body !== null &&
-			'errors' in body &&
-			Array.isArray(body.errors) &&
-			body.errors.every(
-				(entry: unknown) =>
-					typeof entry === 'object' &&
-					entry !== null &&
-					'message' in entry &&
-					typeof entry.message === 'string'
-			) &&
-			'status' in body &&
-			typeof body.status === 'number';
-		throw envelope
-			? new ApiFailure(response.status, body as APIErrorBody, context)
-			: new ApiFailure(response.status, null, {
-					...context,
-					problem: 'invalid_error_body'
-				});
-	}
-	return body as T;
-}
-
-export function post<T>(path: string, body: unknown, headers?: Record<string, string>): Promise<T> {
-	return request<T>(path, {
-		method: 'POST',
-		headers: { 'content-type': 'application/json', ...(headers ?? {}) },
-		body: JSON.stringify(body)
-	});
-}
-
-export function put<T>(path: string, body: unknown): Promise<T> {
-	return request<T>(path, {
-		method: 'PUT',
-		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify(body)
-	});
-}
-
-function patch<T>(path: string, body: unknown): Promise<T> {
-	return request<T>(path, {
-		method: 'PATCH',
-		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify(body)
-	});
-}
+export { ApiFailure, post, put, request };
+export type { APIErrorBody, APIErrorEntry, ApiResponseContext } from '$lib/http';
 
 // ------------------------------------------------------------------ shapes
 
@@ -454,12 +335,94 @@ export interface NotificationsRead {
 	marked: number;
 }
 
-/** Whether this seller is emailed when one of their runs finishes. Per user
- *  rather than per organisation: the address the mail goes to is the user's.
- *  The address itself is not here -- the console reads it from the identity
- *  service, and the domain database holds none. */
+/** Which emails this seller takes. Per user rather than per organisation:
+ *  the address the mail goes to is the user's. The address itself is not
+ *  here -- the console reads it from the identity service, and the domain
+ *  database holds none. `notify_email` is a run finishing; `marketing_email`
+ *  is the news the platform sends from Admin → Mail. */
 export interface NotifyPreferences {
 	notify_email: boolean;
+	marketing_email: boolean;
+}
+
+// ------------------------------------------------------------ admin mail
+
+/** Who a campaign goes to, by plan. `subscriber` is sold as Sync and `free`
+ *  as Look. */
+export type MailSegment = 'all' | 'free' | 'paid' | 'starter' | 'subscriber' | 'studio';
+
+export interface MailAudience {
+	segment: MailSegment;
+	exclude_operators: boolean;
+	/** Enforced when it sends: the domain database holds no addresses, so an
+	 *  unverified one is found and recorded `skipped` then. */
+	verified_only: boolean;
+}
+
+export interface MailDraft {
+	subject: string;
+	body_html: string;
+	link_url: string | null;
+	link_label: string | null;
+}
+
+export interface MailAudienceCount {
+	recipients: number;
+	sellers: number;
+	operators_excluded: number;
+	opted_out: number;
+	no_sign_in: number;
+}
+
+export type MailRecipientStatus = 'queued' | 'sent' | 'failed' | 'skipped';
+
+export interface MailCounts {
+	total: number;
+	queued: number;
+	sent: number;
+	failed: number;
+	skipped: number;
+}
+
+export interface MailCampaignSummary {
+	id: string;
+	subject: string;
+	audience: MailAudience;
+	counts: MailCounts;
+	/** Epoch milliseconds. */
+	created_at: number;
+	/** The app user id of the admin who sent it. */
+	created_by: string;
+	created_by_label: string;
+	test: boolean;
+	deleted_at: number | null;
+}
+
+export interface MailRecipientView {
+	user: string;
+	auth_subject: string | null;
+	org_name: string;
+	/** The plan's display name. */
+	plan: string;
+	status: MailRecipientStatus;
+	attempts: number;
+	/** Resend's id for the message, once it accepted it. */
+	provider_id: string | null;
+	error: string | null;
+	updated_at: number;
+}
+
+export interface MailCampaignDetail extends MailCampaignSummary {
+	/** Null once deleted. */
+	draft: MailDraft | null;
+	/** Empty once deleted. */
+	recipients: MailRecipientView[];
+}
+
+export interface MailPreview {
+	subject: string;
+	/** The whole email document, brand wrapper and sample values in. */
+	html: string;
 }
 
 /** Where the user stands with the guided tour. `due` for an account made
@@ -900,12 +863,10 @@ export interface LibraryResourceView {
 	title: string;
 }
 
-/** Whether Teachouse holds a file's bytes, and why not where it does not.
- *  An imported file stays on the seller's device until the Teachouse app
- *  there copies it; `storage_full` and `too_large` are the two reasons a
- *  copy will not happen by itself. */
-export type ServerCopy = 'stored' | 'device_only' | 'storage_full' | 'too_large';
-
+/** One of the seller's files by digest. `uploaded` is bytes the seller
+ *  uploaded through the console, which Teachouse stores; anything else was
+ *  imported and stays on the `holders`, and Teachouse passes it to a browser
+ *  only while one of them is on. */
 export interface LibraryFileView {
 	hash: string;
 	file_name: string | null;
@@ -913,7 +874,7 @@ export interface LibraryFileView {
 	holders: LibraryHolderView[];
 	wanted_by: string[];
 	resources: LibraryResourceView[];
-	server_copy: ServerCopy;
+	uploaded: boolean;
 }
 
 export interface LibraryView {
@@ -1058,7 +1019,8 @@ export type { AiOffer, Capabilities, Pack, PlanRow, PlansView } from '$lib/gener
 
 /** What the seller has used, against the figures above. Moves are not here:
  *  they are bought and spent rather than counted against a ceiling, so they
- *  ride beside this block as a balance. */
+ *  ride beside this block as a balance. `previews` and `ai_fills` count the
+ *  current UTC month and start again at `month_resets_at` (epoch ms). */
 export interface EntitlementUsage {
 	resources: number;
 	marketplaces: number;
@@ -1066,6 +1028,10 @@ export interface EntitlementUsage {
 	collections: number;
 	labels: number;
 	devices: number;
+	storage_bytes: number;
+	previews: number;
+	ai_fills: number;
+	month_resets_at: number;
 }
 
 /** Where an organisation's plan came from.
@@ -1468,7 +1434,26 @@ export interface SiteMaintenance {
 	message: string | null;
 }
 
-export type SeasonName = 'none' | 'halloween' | 'christmas';
+/** The seasonal themes, spelled as `ThemeName` in `crates/tam-api/src/site.rs`
+ *  serialises them. */
+export type SeasonName =
+	| 'none'
+	| 'halloween'
+	| 'christmas'
+	| 'valentines'
+	| 'april-fools'
+	| 'fourth-of-july'
+	| 'back-to-school'
+	| 'winter'
+	| 'summer'
+	| 'spring'
+	| 'autumn'
+	| 'thanksgiving'
+	| 'new-year'
+	| 'matariki'
+	| 'guy-fawkes'
+	| 'st-patricks'
+	| 'easter';
 
 /** The landing page's seasonal theme. `from` and `until` are UTC calendar
  *  days, both included; `active` is the server's own reading of today. */
@@ -1707,9 +1692,11 @@ export type ArchiveMode = 'explode' | 'keep_whole';
  *  on that ground alone. `image` is the thumbnail slots: the upload answers
  *  422 `upload_rejected` for bytes that are not a picture, so a worksheet
  *  dropped into a slot is refused before it is stored rather than kept and
- *  discovered later. Omitted means the upload is not slot-bound and any
- *  accepted type may land. */
-export type UploadSlot = 'image';
+ *  discovered later. `preview` is a watermarked preview on its way to a
+ *  resource: the upload answers 422 `previews_per_month` once this month's
+ *  previews are used up, before any byte is stored. Omitted means the upload
+ *  is not slot-bound and any accepted type may land. */
+export type UploadSlot = 'image' | 'preview';
 
 /** One vocabulary value as a create or an edit names it, matching the shape
  *  `PathView` reads back. */
@@ -1879,11 +1866,16 @@ export interface FileView {
 	 *  a file stored before names existed and for a generated cover, and the
 	 *  console renders the absence rather than substituting the kind. */
 	name?: string;
-	/** Whether Teachouse holds these bytes. Every upload is `stored`; an
-	 *  imported file is `device_only` until the app copies it. Read through
-	 *  `copyOf`, which takes an absent value as `stored`. */
-	server_copy?: ServerCopy;
+	/** Where these bytes are. An upload is stored by Teachouse; an imported
+	 *  file stays on the seller's devices and is streamed from one that is on. */
+	custody: FileCustody;
 }
+
+/** Who holds one of a resource's files. `uploaded` is a file the seller
+ *  uploaded, which Teachouse stores and can always serve. `devices` is an
+ *  imported file, which rests only on the seller's devices: the holders come
+ *  online first, and an empty list is a file no device reports any more. */
+export type FileCustody = { kind: 'uploaded' } | { kind: 'devices'; holders: LibraryHolderView[] };
 
 /** What one file change did, and where it lands.
  *
@@ -2886,14 +2878,23 @@ export const api = {
 	 *  drawn rather than chosen, and for a blank name. */
 	renameProductFile: (product: string, file: string, name: string) =>
 		patch<RenamedFileView>(`/v1/products/${product}/files/${file}`, { name }),
-	/** Where one of a resource's own files is read from Teachouse: shown, or
-	 *  saved as a download. The route honours `Range`, so a viewer handed this
-	 *  URL can draw the first pages before the rest has arrived. */
+	/** Where one of a resource's own files is read: shown, or saved as a
+	 *  download. An upload comes from Teachouse's store; an imported file is
+	 *  passed through from a device of the seller's that is on. The route
+	 *  honours `Range`, so a viewer handed this URL can draw the first pages
+	 *  before the rest has arrived. */
 	productFileUrl: (product: string, file: string, download = false) =>
 		`/v1/products/${product}/files/${file}/content${download ? '?download=1' : ''}`,
-	/** One of the seller's files by digest, for the file browser. */
+	/** One of the seller's files by digest, for the file browser, read the
+	 *  same way. */
 	libraryFileUrl: (hash: string, download = false) =>
 		`/v1/library/files/${hash}/content${download ? '?download=1' : ''}`,
+	/** Asks whether a file's bytes can be read now, before its URL is handed
+	 *  to a viewer or a download: answers when they can, and throws the
+	 *  structured refusal (`device_offline`, `resource_missing`,
+	 *  `streaming_unavailable`) when they cannot. `url` is one of the two
+	 *  content URLs above, without `download`. */
+	probeFile: (url: string) => request<void>(`${url}?probe=1`),
 	/** The bytes of one of a resource's own files, read back from Teachouse.
 	 *  A refusal is thrown as the structured failure every other route
 	 *  answers with. */
@@ -3272,13 +3273,11 @@ export const api = {
 	 *  rather than refusing. */
 	markNotificationsRead: (through: string) =>
 		post<NotificationsRead>('/v1/notifications/read', { through }),
-	/** Whether this seller is emailed when a run finishes. The session's own
-	 *  user, which is the only user either call can name. */
+	/** Which emails this seller takes. The session's own user, which is the
+	 *  only user either call can name. The write sends only what it changes. */
 	notifyPreferences: () => request<NotifyPreferences>('/v1/notifications/preferences'),
-	setNotifyPreferences: (notifyEmail: boolean) =>
-		patch<NotifyPreferences>('/v1/notifications/preferences', {
-			notify_email: notifyEmail
-		}),
+	setNotifyPreferences: (change: { notify_email?: boolean; marketing_email?: boolean }) =>
+		patch<NotifyPreferences>('/v1/notifications/preferences', change),
 	/** The seller's own picture. The session's user is the only user any of
 	 *  these can name; the bytes reach `POST /v1/uploads` first, slot-bound as
 	 *  a picture, and the write names the handle that upload answered. */
@@ -3422,6 +3421,48 @@ export const api = {
 	site: () => request<SiteView>('/v1/site'),
 	adminSite: () => request<SiteView>('/v1/admin/site'),
 	updateSite: (body: SitePatch) => patch<SiteView>('/v1/admin/site', body),
+
+	// Admin → Mail: news to sellers, composed here and sent by the server's
+	// outbox one recipient at a time.
+	mailAudience: (audience: MailAudience) => {
+		const query = new URLSearchParams({
+			segment: audience.segment,
+			exclude_operators: String(audience.exclude_operators),
+			verified_only: String(audience.verified_only)
+		});
+		return request<MailAudienceCount>(`/v1/admin/mail/audience?${query.toString()}`);
+	},
+	previewMail: (draft: MailDraft) => post<MailPreview>('/v1/admin/mail/preview', draft),
+	/** A picture for an email. The raw `File` as the body, as
+	 *  `uploadGuideImage` sends one; the answer's `url` is public so a mail
+	 *  client can load it without signing in. */
+	uploadMailImage: (file: File) =>
+		request<{ handle: string; url: string }>('/v1/admin/mail/images', {
+			method: 'POST',
+			headers: { accept: 'application/json', 'content-type': file.type },
+			body: file
+		}),
+	/** Queues one copy of the draft to the signed-in admin. */
+	testMail: (body: { draft: MailDraft; created_by_label: string }) =>
+		post<{ id: string }>('/v1/admin/mail/test', body),
+	createMailCampaign: (body: {
+		draft: MailDraft;
+		audience: MailAudience;
+		created_by_label: string;
+	}) => post<MailCampaignDetail>('/v1/admin/mail/campaigns', body),
+	/** Newest first; test sends are not listed. */
+	mailCampaigns: () => request<{ campaigns: MailCampaignSummary[] }>('/v1/admin/mail/campaigns'),
+	mailCampaign: (id: string) =>
+		request<MailCampaignDetail>(`/v1/admin/mail/campaigns/${encodeURIComponent(id)}`),
+	/** Queues every failed recipient again. */
+	retryMailCampaign: (id: string) =>
+		post<MailCampaignDetail>(`/v1/admin/mail/campaigns/${encodeURIComponent(id)}/retry`, {}),
+	/** Drops the body and the per-recipient rows; the counts and the log line
+	 *  stay. */
+	deleteMailCampaign: (id: string) =>
+		request<MailCampaignDetail>(`/v1/admin/mail/campaigns/${encodeURIComponent(id)}`, {
+			method: 'DELETE'
+		}),
 	createGuideTaxon: (kind: GuideTaxonKind, body: { slug: string; name: string }) =>
 		post<GuideTaxon>(`/v1/admin/guides/_taxonomy/${kind}`, body),
 	updateGuideTaxon: (kind: GuideTaxonKind, id: string, body: { name: string; retired: boolean }) =>

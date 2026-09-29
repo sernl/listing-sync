@@ -289,6 +289,16 @@ pub(crate) async fn undo(
         .await
         .map_err(|error| storage_fault(&state, &error))?;
     if restored {
+        // Undoing a merge brings a resource back, so it counts against the
+        // plan's ceiling like a create: merge, add one, undo would otherwise
+        // step around it.
+        crate::entitlement::refuse_past_resource_cap_in(
+            &mut tx,
+            &state,
+            context.org,
+            context.entitlement.caps.resources_max,
+        )
+        .await?;
         if let Some(marketplace) = marketplace_of(&state, context.org, loser).await? {
             tam_storage::attach_system_label(&mut tx, context.org, loser, marketplace, now)
                 .await

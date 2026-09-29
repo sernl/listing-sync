@@ -233,8 +233,17 @@ describe('the lines on a plan card', () => {
 	const texts = (id: string) => planBullets(caps(id)).map((line) => line.text);
 
 	it('states a resource ceiling only where the plan has one', () => {
-		expect(texts('free')).toContain(`Up to ${caps('free').resources_max} resources`);
-		expect(texts('subscriber').some((text) => /^Up to \d+ resources$/.test(text))).toBe(false);
+		for (const id of ['free', 'starter', 'subscriber']) {
+			expect(texts(id)).toContain(`Up to ${caps(id).resources_max} resources`);
+		}
+		expect(texts('studio').some((text) => /^Up to \d+ resources$/.test(text))).toBe(false);
+	});
+
+	it("states each plan's monthly previews from its own figure, and unlimited where it has no ceiling", () => {
+		for (const id of ['free', 'starter', 'subscriber']) {
+			expect(texts(id)).toContain(`${caps(id).previews_per_month} watermarked previews a month`);
+		}
+		expect(texts('studio')).toContain('Unlimited watermarked previews');
 	});
 
 	it('never prints the no-limit sentinel as a count', () => {

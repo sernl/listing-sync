@@ -11,8 +11,6 @@ import {
 	filtersToUrl,
 	machineFilesHref,
 	keptLine,
-	placeOf,
-	copyNote,
 	seenLine,
 	pageWindow,
 	transferLabel
@@ -40,7 +38,7 @@ function file(over: Partial<LibraryFileView> = {}): LibraryFileView {
 		holders: [{ device: 'phone', name: 'Pixel', online: false }],
 		wanted_by: [],
 		resources: [],
-		server_copy: 'device_only',
+		uploaded: false,
 		...over
 	};
 }
@@ -266,29 +264,33 @@ describe('the pager', () => {
 });
 
 describe('where a file is kept', () => {
-	it('tells a device copy, a Teachouse copy, both and neither apart', () => {
-		expect(placeOf(file({ server_copy: 'stored' }))).toBe('both');
-		expect(placeOf(file())).toBe('device');
-		expect(placeOf(file({ holders: [], server_copy: 'stored' }))).toBe('teachouse');
-		expect(placeOf(file({ holders: [] }))).toBe('nowhere');
-	});
-
-	it('names this device when it holds the file, and says why a copy will not happen', () => {
-		const [here, full, big] = fileRows(
+	it('names the devices holding it, this one by its role, and nothing about Teachouse', () => {
+		const [both] = fileRows(
 			[
 				file({
-					holders: [{ device: 'laptop', name: 'founder-pc', online: true }],
-					server_copy: 'stored'
-				}),
-				file({ hash: 'b'.repeat(64), server_copy: 'storage_full' }),
-				file({ hash: 'c'.repeat(64), server_copy: 'too_large' })
+					holders: [
+						{ device: 'laptop', name: 'founder-pc', online: true },
+						{ device: 'phone', name: 'Pixel', online: false }
+					],
+					uploaded: true
+				})
 			],
 			{ thisDevice: 'laptop', kept: new Map() }
 		);
-		expect(here.where).toBe('This device and Teachouse');
-		expect(full.where).toBe('Your device only');
-		expect(copyNote(full.copy)).toBe('Your plan’s storage is full — files stay on your device.');
-		expect(copyNote(big.copy)).toContain('too big');
-		expect(copyNote(here.copy)).toBeNull();
+		expect(both.where).toBe(`${HERE}, Pixel`);
+	});
+
+	it('says Uploaded only for an upload no device holds, and always has it', () => {
+		const [uploaded, gone] = fileRows(
+			[
+				file({ holders: [], uploaded: true }),
+				file({ hash: 'b'.repeat(64), holders: [], uploaded: false })
+			],
+			{ thisDevice: null, kept: null }
+		);
+		expect(uploaded.where).toBe('Uploaded');
+		expect(seenLine(uploaded, 0)).toBe('Always available');
+		expect(gone.where).toBe('Not on any device');
+		expect(seenLine(gone, 0)).toBe('No device');
 	});
 });

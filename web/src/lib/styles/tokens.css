@@ -150,7 +150,7 @@
 	--label-pink: #b3407f;
 
 	/* type: the kit's two faces, Poppins for headings and Inter for everything
-	   else, both served from `static/fonts` */
+	   else, both bundled from `lib/fonts` */
 	--display: 'Poppins', 'Segoe UI', system-ui, sans-serif;
 	--serif: var(--display);
 	--sans: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;

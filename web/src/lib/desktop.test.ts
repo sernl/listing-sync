@@ -8,6 +8,7 @@ import {
 	DEVICE_CHECK_IN,
 	DEVICE_SIGNED_OUT,
 	FORGET_SESSION,
+	NO_SCREEN_LOCK,
 	OPEN_URL,
 	ORIGIN_NOT_GRANTED,
 	START_IMPORT,
@@ -16,6 +17,7 @@ import {
 	continueImportHere,
 	desktopInvoker,
 	forgetHere,
+	libraryUsage,
 	openExternal,
 	startImportHere
 } from './desktop';
@@ -573,7 +575,7 @@ describe('asking this computer to connect or forget one marketplace', () => {
 	});
 });
 
-describe('opening a marketplace link in the seller\'s own browser', () => {
+describe("opening a marketplace link in the seller's own browser", () => {
 	it('asks nothing in a browser, where the anchor already does the right thing', async () => {
 		const invoke = vi.fn();
 		expect(await openExternal(null, 'https://www.tes.com/teaching-resource/x-1')).toEqual({
@@ -614,6 +616,31 @@ describe('opening a marketplace link in the seller\'s own browser', () => {
 			expect(detail.trim()).not.toBe('');
 			expect(detail).not.toContain('[object');
 		}
+	});
+});
+
+describe('reading why this device keeps no files', () => {
+	const refusing =
+		(said: string): Invoke =>
+		async () => {
+			throw said;
+		};
+
+	it('tells a phone with no screen lock to set one, and nothing else', async () => {
+		expect(await libraryUsage(refusing(NO_SCREEN_LOCK))).toEqual({ kind: 'noScreenLock' });
+		expect(await libraryUsage(refusing(`${NO_SCREEN_LOCK}\n`))).toEqual({
+			kind: 'noScreenLock'
+		});
+	});
+
+	it('does not blame a screen lock for a library that failed another way', async () => {
+		expect(await libraryUsage(refusing('this machine is not keeping files'))).toEqual({
+			kind: 'notKeeping'
+		});
+		expect(await libraryUsage(refusing('User ECDH key missing'))).toEqual({
+			kind: 'refused',
+			detail: 'User ECDH key missing'
+		});
 	});
 });
 
@@ -683,9 +710,7 @@ describe('reading what a connect answered', () => {
 			kind: 'refused',
 			detail: 'this device has been signed out'
 		});
-		const missing = vi
-			.fn()
-			.mockRejectedValue('connect_marketplace not allowed. Command not found');
+		const missing = vi.fn().mockRejectedValue('connect_marketplace not allowed. Command not found');
 		expect(await connectHere(missing, 'Tpt')).toEqual({ kind: 'unsupported' });
 		const ungranted = vi
 			.fn()

@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(max(used), 0)::bigint AS \"used!\" FROM usage_counter\n            WHERE org_id = $1 AND kind = $2\n              AND month = date_trunc('month', $3 AT TIME ZONE 'UTC')::date",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "used!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "18819d75663d3f9fc9dc0f4ef728c30a42fe0ae76161fd4201b8f241c657f98b"
+}

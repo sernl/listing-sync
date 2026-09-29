@@ -15,11 +15,18 @@
          inset on `.app`, and records what the Android 16 build measured: there
          the meta itself changes nothing. -->
     <title>Teachouse Console</title>
-    <!-- No font link and no preconnect: both faces are served from
-         `static/fonts` and declared in `app.css`. The desktop and Android
-         builds show this same document under a policy that admits no
-         third-party origin, so the two stylesheets these replace were refused
-         there and the app fell back to the stacks in `tokens.css`. -->
+    <!-- No font stylesheet link: both faces are bundled from `lib/fonts` and
+         declared in `lib/styles/frame.css`. The desktop and Android builds
+         show this same document under a policy that admits no third-party
+         origin, so the two Google stylesheets these replaced were refused
+         there and the app fell back to the stacks in `tokens.css`.
+
+         The two files the first screen sets -- Inter for the text, Poppins
+         600 for the heading -- are preloaded, so they arrive beside the
+         script rather than after the stylesheet that names them has been
+         read. Their hashed names are only known once the build has run;
+         `hooks.server.ts` writes the links in place of the marker below. -->
+    %teachouse.fonts%
     <!-- The PNG icons and no SVG link, which is a decision rather than an
          omission and still holds under the brand kit: `favicon-16.png` is
          rendered from `brand/mark-small.svg`, the mark drawn with its window
@@ -124,6 +131,12 @@
         }
       })();
     </script>
+    <!-- The signed-out screens' own chunks, preloaded for the one of them
+         this shell was opened at, beside SvelteKit's entry rather than after
+         it has run and asked, and a connection opened to the Turnstile check
+         they draw. `hooks.server.ts` writes the script here from the build's
+         lists; `$lib/shell-preload` says why. -->
+    %teachouse.auth%
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">

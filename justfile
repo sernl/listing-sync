@@ -877,3 +877,56 @@ dev-all: db-up db-wait db-migrate auth-migrate auth-env
     (cd auth && npm run dev) &
     (cd web && npm run dev) &
     wait
+
+# Upload every guide picture under docs/guides/images/ to a running
+# deployment, as an operator. A guide addresses a picture by the BLAKE3 hash of
+# its bytes (`/v1/guides/images/<hash>`), so the handle each upload answers must
+# be one a guide names, and every handle a guide names must be one of these
+# files; either mismatch fails the run. Uploading is idempotent: the same bytes
+# answer the same handle. Run it before `tam-admin guides seed`, so no
+# published guide points at a picture the deployment does not hold yet.
+#
+#   just guides-images https://teachouse.io ~/operator-session.txt
+#
+# The session file holds an operator's `tam_session` cookie value, alone or as
+# a `tam_session=<value>` line among other cookies.
+guides-images base_url session_file:
+    #!/usr/bin/env node
+    const { readFileSync, readdirSync } = require('node:fs');
+    const base = '{{base_url}}'.replace(/\/$/, '');
+    const sessionFile = readFileSync('{{session_file}}', 'utf8');
+    const session = sessionFile.match(/(?:^|[\s;])tam_session=([^\s;]+)/)?.[1] ?? sessionFile.trim();
+    const types = { webp: 'image/webp', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif' };
+    const named = new Set();
+    for (const file of readdirSync('docs/guides').filter((name) => name.endsWith('.md'))) {
+      for (const hit of readFileSync(`docs/guides/${file}`, 'utf8').matchAll(/\/v1\/guides\/images\/([0-9a-f]{64})/g)) {
+        named.add(hit[1]);
+      }
+    }
+    (async () => {
+      const uploaded = new Set();
+      for (const file of readdirSync('docs/guides/images').sort()) {
+        const type = types[file.split('.').pop().toLowerCase()];
+        if (!type) continue;
+        const response = await fetch(`${base}/v1/admin/guides/images`, {
+          method: 'POST',
+          headers: { cookie: `tam_session=${session}`, 'content-type': type, accept: 'application/json' },
+          body: readFileSync(`docs/guides/images/${file}`)
+        });
+        if (!response.ok) {
+          console.error(`${file}: ${response.status} ${await response.text()}`);
+          process.exit(1);
+        }
+        const { handle } = await response.json();
+        uploaded.add(handle);
+        console.log(`${handle}  ${file}${named.has(handle) ? '' : '  (named by no guide)'}`);
+      }
+      const missing = [...named].filter((handle) => !uploaded.has(handle));
+      const stray = [...uploaded].filter((handle) => !named.has(handle));
+      if (missing.length > 0 || stray.length > 0) {
+        for (const handle of missing) console.error(`a guide names ${handle}, which no file under docs/guides/images/ is`);
+        for (const handle of stray) console.error(`an uploaded file is named by no guide: ${handle}`);
+        process.exit(1);
+      }
+      console.log(`${uploaded.size} pictures uploaded; every one a guide names is in place`);
+    })();

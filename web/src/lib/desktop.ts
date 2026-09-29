@@ -55,7 +55,7 @@ export const START_IMPORT = 'start_import';
 export const CONTINUE_IMPORT = 'continue_import';
 
 /** The desktop command that opens one marketplace's own login page on this
- *  computer and files the session in the platform keychain.
+ *  computer and seals the session into this device's session store.
  *
  * The whole of the D1 connect path, and the reason there is no server-side
  * equivalent to fall back to: for a marketplace with no official API the login
@@ -63,7 +63,7 @@ export const CONTINUE_IMPORT = 'continue_import';
 export const CONNECT_MARKETPLACE = 'connect_marketplace';
 
 /** The desktop command that removes one marketplace's session from this
- *  computer's keychain. The only way a captured jar leaves a device. */
+ *  computer's session store. The only way a captured jar leaves a device. */
 export const FORGET_SESSION = 'forget_session';
 
 /** The desktop command that puts this machine in the seller's registry.
@@ -563,10 +563,12 @@ export const OPEN_URL = 'plugin:opener|open_url';
 /** The desktop commands over the machine's library of imported originals.
  *
  * Every one answers `{ kind: 'unavailable' }` in a browser, where there is
- * no machine keeping files, and `{ kind: 'notKeeping' }` where the
- * application runs but opened no library; the section words both. The bytes
- * a `library_read` answers with stay in the page: they are drawn, or handed
- * to the preview maker, and never sent anywhere by this module. */
+ * no machine keeping files, `{ kind: 'noScreenLock' }` on a phone whose
+ * missing screen lock keeps the library shut, and `{ kind: 'notKeeping' }`
+ * where the application runs but opened no library for another reason; the
+ * section words all three. The bytes a `library_read` answers with stay in
+ * the page: they are drawn, or handed to the preview maker, and never sent
+ * anywhere by this module. */
 export const LIBRARY_ENTRIES = 'library_entries';
 export const LIBRARY_USAGE = 'library_usage';
 export const LIBRARY_READ = 'library_read';
@@ -595,6 +597,7 @@ export interface LibrarySettings {
 export type LibraryOutcome<T> =
 	| { kind: 'ok'; value: T }
 	| { kind: 'notKeeping' }
+	| { kind: 'noScreenLock' }
 	| { kind: 'refused'; detail: string }
 	| { kind: 'unavailable' };
 
@@ -603,6 +606,15 @@ export type LibraryOutcome<T> =
 // still sends it.
 const NOT_KEEPING = 'this machine is not keeping files';
 const LIBRARY_REFUSED_SILENTLY = 'This computer could not read its files and did not say why.';
+
+/** What a phone with no screen lock says, word for word: `NO_SCREEN_LOCK` in
+ *  `apps/desktop/src-tauri/src/commands.rs`. Compared, and shown as is,
+ *  beside the button that opens the phone's lock settings. */
+export const NO_SCREEN_LOCK =
+	'Set a screen lock on this device to keep your files on it, then open Teachouse again.';
+
+/** The phone command behind that button. */
+export const OPEN_SECURITY_SETTINGS = 'open_security_settings';
 
 async function libraryCall<T>(
 	invoke: Invoke | null,
@@ -616,10 +628,30 @@ async function libraryCall<T>(
 		return { kind: 'ok', value: (await invoke(command, args)) as T };
 	} catch (caught) {
 		const detail = refusalText(caught, LIBRARY_REFUSED_SILENTLY);
-		if (detail.trim() === NOT_KEEPING || unknownCommand(detail)) {
+		const said = detail.trim();
+		// The screen-lock sentence only where the application said exactly
+		// that: every other refusal is not one a lock would fix.
+		if (said === NO_SCREEN_LOCK) {
+			return { kind: 'noScreenLock' };
+		}
+		if (said === NOT_KEEPING || unknownCommand(detail)) {
 			return { kind: 'notKeeping' };
 		}
 		return { kind: 'refused', detail };
+	}
+}
+
+/** Opens the phone's screen-lock settings. `false` where nothing opened: a
+ *  browser, a computer, or a phone that refused. */
+export async function openSecuritySettings(invoke: Invoke | null): Promise<boolean> {
+	if (invoke === null) {
+		return false;
+	}
+	try {
+		await invoke(OPEN_SECURITY_SETTINGS, {});
+		return true;
+	} catch {
+		return false;
 	}
 }
 
@@ -683,9 +715,7 @@ export function libraryOpenExternal(
  * what the link did before this existed. The sentence is carried anyway so a
  * test can tell a refusal apart from a success. */
 export type OpenOutcome =
-	| { kind: 'opened' }
-	| { kind: 'refused'; detail: string }
-	| { kind: 'unavailable' };
+	{ kind: 'opened' } | { kind: 'refused'; detail: string } | { kind: 'unavailable' };
 
 /** Ask this computer to open one address in the seller's own browser.
  *

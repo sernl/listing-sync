@@ -1,5 +1,5 @@
 //! An in-memory [`SessionStore`], for tests and for a machine with no usable
-//! keychain. It is deliberately not a fallback the application selects on its
+//! session store. It is deliberately not a fallback the application selects on its
 //! own: a session that silently stopped being persisted would look identical
 //! to one that was.
 

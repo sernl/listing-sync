@@ -518,3 +518,22 @@ pub async fn set_labels_for_product(
         .map(|row| decode(row.name, &row.colour, row.system))
         .collect()
 }
+
+/// How many of this organisation's labels are its own, which is what
+/// `Capabilities::labels_max` bounds: the marketplaces' system labels are
+/// written by the import and are not the seller's to spend.
+///
+/// # Errors
+///
+/// Storage only.
+pub async fn own_label_count_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+) -> Result<i64, StorageError> {
+    Ok(sqlx::query_scalar!(
+        r#"SELECT count(*) AS "counted!" FROM label WHERE org_id = $1 AND NOT system"#,
+        uuid_to_db(org.0),
+    )
+    .fetch_one(&mut **tx)
+    .await?)
+}

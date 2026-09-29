@@ -23,7 +23,7 @@ function refused(message: string | undefined, fallback: string): SessionFailure 
 
 /** Every live browser sign-in on this account. */
 export async function listBrowserSessions(): Promise<BrowserSession[]> {
-	const { data, error } = await authClient.listSessions();
+	const { data, error } = await (await authClient()).listSessions();
 	if (error) {
 		throw refused(error.message, 'We could not load your browser sign-ins.');
 	}
@@ -33,13 +33,13 @@ export async function listBrowserSessions(): Promise<BrowserSession[]> {
 /** The token of the session this browser is using, so the page can mark the
  *  row whose sign-out ends the session the seller is reading it in. */
 export async function currentSessionToken(): Promise<string | null> {
-	const { data } = await authClient.getSession();
+	const { data } = await (await authClient()).getSession();
 	return data?.session.token ?? null;
 }
 
 /** End one browser sign-in. */
 export async function revokeBrowserSession(token: string): Promise<void> {
-	const { error } = await authClient.revokeSession({ token });
+	const { error } = await (await authClient()).revokeSession({ token });
 	if (error) {
 		throw refused(error.message, 'We could not sign out that browser.');
 	}

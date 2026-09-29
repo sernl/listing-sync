@@ -1,8 +1,11 @@
 package io.teachouse.desktop
 
 import android.app.Activity
+import android.app.KeyguardManager
+import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.provider.Settings
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
@@ -51,6 +54,13 @@ class SessionKeyPlugin(private val activity: Activity) : Plugin(activity) {
         /** AES-GCM's nominal IV length; anything else costs performance and buys nothing. */
         const val IV_BYTES = 12
         const val TAG_BITS = 128
+        /**
+         * The rejection code Rust matches on (`NO_SCREEN_LOCK_CODE` in
+         * `src/session/android_key.rs`). A code rather than the Keystore's own
+         * message, which differs by Android version and says nothing a
+         * seller can act on ("User ECDH key missing" on Android 12).
+         */
+        const val NO_SCREEN_LOCK = "no_screen_lock"
     }
 
     private val blob: File
@@ -84,8 +94,40 @@ class SessionKeyPlugin(private val activity: Activity) : Plugin(activity) {
             secret.fill(0)
             invoke.resolve(JSObject().put("key", bytes))
         } catch (failure: Exception) {
+            // The wrapping key requires an unlocked device, and a device with
+            // no screen lock has no unlock to require: the Keystore refuses
+            // to make or use the key. The requirement stays, so the files
+            // stay protected; the seller is told to set a lock instead.
+            if (!deviceSecure()) {
+                invoke.reject("this device has no screen lock", NO_SCREEN_LOCK)
+            } else {
+                invoke.reject(failure.message ?: failure.javaClass.simpleName)
+            }
+        }
+    }
+
+    /**
+     * Opens the system's screen-lock settings, the one place a seller whose
+     * phone has no lock can fix what [obtain] refused.
+     */
+    @Command
+    fun openSecuritySettings(invoke: Invoke) {
+        try {
+            activity.startActivity(
+                Intent(Settings.ACTION_SECURITY_SETTINGS)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+            invoke.resolve()
+        } catch (failure: Exception) {
             invoke.reject(failure.message ?: failure.javaClass.simpleName)
         }
+    }
+
+    private fun deviceSecure(): Boolean {
+        val keyguard = activity.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+        // Unknown reads as secure, so an unrelated Keystore failure is never
+        // blamed on a lock the phone may well have.
+        return keyguard?.isDeviceSecure ?: true
     }
 
     /**

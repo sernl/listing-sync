@@ -95,6 +95,9 @@ pub enum LibraryError {
     Tampered(ContentHash),
     /// The index or a settings file did not parse.
     Codec(String),
+    /// The device has no screen lock, so the key the library is sealed under
+    /// cannot be made or used. See [`crate::session::StoreError::NoScreenLock`].
+    NoScreenLock,
 }
 
 impl core::fmt::Display for LibraryError {
@@ -107,6 +110,9 @@ impl core::fmt::Display for LibraryError {
                 hex_encode(&hash.0)
             ),
             Self::Codec(why) => write!(f, "the library index could not be read: {why}"),
+            Self::NoScreenLock => {
+                f.write_str("the library key needs a screen lock, and this device has none")
+            }
         }
     }
 }
@@ -432,6 +438,61 @@ impl Library {
         self.keep(entry, bytes).await.map(|()| true)
     }
 
+    /// Keeps every file in `debug-keep/` beside the library, then removes it.
+    ///
+    /// Debug builds only, and for one purpose: checking the path from a
+    /// browser to a file on this device against a local server without a
+    /// marketplace import to put a file here. On a phone the folder is
+    /// reached with `run-as`. Each file is kept as if a TPT import had kept
+    /// it, under its own name, and the line logged carries the digest the
+    /// server's rows have to name. A file that cannot be read or kept stays
+    /// where it is and is logged.
+    #[cfg(debug_assertions)]
+    pub async fn keep_dropped(&self) {
+        let Some(dir) = self.root.parent().map(|data| data.join("debug-keep")) else {
+            return;
+        };
+        let Ok(mut listing) = tokio::fs::read_dir(&dir).await else {
+            return;
+        };
+        while let Ok(Some(dropped)) = listing.next_entry().await {
+            let path = dropped.path();
+            let name = dropped.file_name().to_string_lossy().into_owned();
+            let bytes = match tokio::fs::read(&path).await {
+                Ok(bytes) => bytes,
+                Err(why) => {
+                    eprintln!("debug-keep: {name} could not be read: {why}");
+                    continue;
+                }
+            };
+            let hash = ContentHash(*blake3::hash(&bytes).as_bytes());
+            let entry = LibraryEntry {
+                hash,
+                content_type: if std::path::Path::new(&name)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
+                {
+                    "application/pdf".to_owned()
+                } else {
+                    "application/octet-stream".to_owned()
+                },
+                file_name: name.clone(),
+                byte_len: bytes.len() as u64,
+                marketplace: Marketplace::Tpt,
+                resource: "debug-keep".to_owned(),
+                kept_at: crate::run::wall_now(),
+                pinned: true,
+            };
+            match self.keep(entry, &bytes).await {
+                Ok(()) => {
+                    tokio::fs::remove_file(&path).await.ok();
+                    eprintln!("debug-keep: kept {name} as {}", hex_of(hash));
+                }
+                Err(why) => eprintln!("debug-keep: {name} could not be kept: {why}"),
+            }
+        }
+    }
+
     /// The transfer endpoint's node key: thirty-two random bytes sealed
     /// under the library key, created on first use. Kept beside the blobs
     /// so the node identity the server records outlives restarts.
@@ -504,9 +565,12 @@ pub async fn sealed_library_key(
     keys: &dyn crate::session::encrypted::DeviceKeySource,
 ) -> Result<Kek, LibraryError> {
     let path = data_dir.join(format!("{KEY_ENTRY}.sealed"));
-    let device_key = keys
-        .obtain()
-        .map_err(|why| LibraryError::Io(why.to_string()))?;
+    let device_key = keys.obtain().map_err(|why| match why {
+        crate::session::StoreError::NoScreenLock => LibraryError::NoScreenLock,
+        other @ (crate::session::StoreError::Backend(_) | crate::session::StoreError::Codec(_)) => {
+            LibraryError::Io(other.to_string())
+        }
+    })?;
     match tokio::fs::read(&path).await {
         Ok(bytes) => {
             let envelope: Envelope = serde_json::from_slice(&bytes)

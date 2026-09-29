@@ -13,6 +13,7 @@
 		libraryRemove,
 		librarySettings,
 		libraryUsage,
+		NO_SCREEN_LOCK,
 		setLibrarySettings
 	} from '$lib/desktop';
 	import Explain from '$lib/Explain.svelte';
@@ -29,7 +30,6 @@
 	import {
 		AVAILABILITY_LABEL,
 		BROWSER_SENTENCE,
-		copyNote,
 		EMPTY_FILTERS,
 		FILES_STAY_ON_YOUR_DEVICES,
 		HERE,
@@ -39,6 +39,7 @@
 		type Availability,
 		type FileFilters,
 		type Linked,
+		type FileRow,
 		countSentence,
 		fileRows,
 		filtersActive,
@@ -52,6 +53,8 @@
 		transferSentence,
 		usageLine
 	} from './files-browser';
+	import FileReach from './FileReach.svelte';
+	import { probeReach, type Unreachable } from './file-viewer';
 	import '$lib/flow.css';
 	import './resources.css';
 
@@ -131,6 +134,12 @@
 			librarySettings(invoke)
 		]);
 		if (current !== generation) {
+			return;
+		}
+		// A phone with no screen lock: the console's banner carries the button
+		// to the lock settings, and this section says the same sentence.
+		if ([entries, usage, settings].some((answer) => answer.kind === 'noScreenLock')) {
+			local = { state: 'failed', detail: NO_SCREEN_LOCK };
 			return;
 		}
 		if (
@@ -304,10 +313,32 @@
 			asking = null;
 		}
 	}
+
+	// What the last Download of an imported file found, by digest, where its
+	// device could not be reached; and the file being asked about.
+	let unreachable = $state<Map<string, Unreachable>>(new Map());
+	let reaching = $state<string | null>(null);
+
+	/** Downloads an imported file once a device that holds it answers the
+	 *  probe; otherwise the reason stays under the row. An upload needs no
+	 *  probe and is a plain link. */
+	async function download(hash: string, holders: FileRow['holders']) {
+		reaching = hash;
+		const answer = await probeReach(api.libraryFileUrl(hash), holders);
+		reaching = null;
+		const next = new Map(unreachable);
+		if (answer.kind === 'ready') {
+			next.delete(hash);
+			unreachable = next;
+			location.assign(api.libraryFileUrl(hash, true));
+			return;
+		}
+		unreachable = next.set(hash, answer);
+	}
 </script>
 
 <div class="page resources-page files-page">
-	<PageHead icon="files" title="Your devices' files" guide="your-files">
+	<PageHead icon="files" title="Files" guide="your-files">
 		{#snippet aside()}
 			<Explain title="What “on your computer” means" label="Where are they?">
 				<p>{FILES_STAY_ON_YOUR_DEVICES}</p>
@@ -317,8 +348,9 @@
 				</p>
 				<p>A computer that is off can’t hand its files over. Copy a file to this device to use it here.</p>
 				<p>
-					Where says whether Teachouse has its own copy too. A file on Teachouse can be viewed and
-					downloaded from any browser.
+					Teachouse passes a file to your browser while a device that has it is on and the Teachouse
+					app is open there. Teachouse doesn’t keep a copy. Files you upload yourself are always
+					available.
 				</p>
 				<p>{BROWSER_SENTENCE}</p>
 			</Explain>
@@ -536,7 +568,6 @@
 					<tr>
 						<th>File</th>
 						<th>Size</th>
-						<th>Device</th>
 						<th>Where</th>
 						<th>Last seen</th>
 						<th>Used by</th>
@@ -545,24 +576,26 @@
 				</thead>
 				<tbody>
 					{#each rows as row (row.hash)}
+						{@const said = unreachable.get(row.hash)}
 						<tr>
 							<td class="files-name" data-label="File">
 								<span class:res-file-anon={row.anonymous}>{row.name}</span>
 							</td>
 							<td class="files-num" data-label="Size">{row.size}</td>
-							<td data-label="Device">
+							<td data-label="Where">
 								<!-- The dot says whether it can be reached now; the names say
-								     where, in the seller's own words for their machines. -->
+								     where, in the seller's own words for their devices. An upload
+								     no device holds has no dot: Teachouse stores it. -->
 								<span class="files-where" title={AVAILABILITY_LABEL[row.availability]}>
-									<span class="files-dot {row.availability}" aria-hidden="true"></span>
-									{row.machines.length === 0 ? 'None' : row.machines.join(', ')}
-									<span class="sr-only">({AVAILABILITY_LABEL[row.availability]})</span>
+									{#if row.machines.length > 0 || !row.uploaded}
+										<span class="files-dot {row.availability}" aria-hidden="true"></span>
+									{/if}
+									{row.where}
+									{#if row.machines.length > 0 || !row.uploaded}
+										<span class="sr-only">({AVAILABILITY_LABEL[row.availability]})</span>
+									{/if}
 								</span>
 								{#if keptLine(row) !== null}<span class="files-sub">{keptLine(row)}</span>{/if}
-							</td>
-							<td data-label="Where">
-								<span>{row.where}</span>
-								{#if copyNote(row.copy) !== null}<span class="files-sub">{copyNote(row.copy)}</span>{/if}
 							</td>
 							<td class="files-num" data-label="Last seen">{seenLine(row, now)}</td>
 							<td data-label="Used by">
@@ -582,8 +615,21 @@
 								{#if row.label.kind === 'waiting' || row.label.kind === 'fetching'}
 									<span class="files-sub">{transferSentence(row.label)}</span>
 								{/if}
-								{#if row.copy === 'stored'}
+								{#if row.uploaded}
 									<Button tier="outline" small icon="download" href={api.libraryFileUrl(row.hash, true)}>
+										Download
+									</Button>
+								{:else if row.machines.length > 0}
+									<!-- Asked about first, so an offline device reads as the
+									     sentence rather than a download that never comes. -->
+									<Button
+										tier="outline"
+										small
+										icon="download"
+										disabled={reaching === row.hash}
+										reason={reaching === row.hash ? 'Checking where your file is…' : undefined}
+										onclick={() => void download(row.hash, row.holders)}
+									>
 										Download
 									</Button>
 								{/if}
@@ -627,6 +673,9 @@
 									>
 										Cancel
 									</Button>
+								{/if}
+								{#if said !== undefined}
+									<FileReach reach={said} />
 								{/if}
 							</td>
 						</tr>

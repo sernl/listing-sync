@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO mail_campaign_recipient (campaign_id, user_id, auth_subject, org_name, plan, next_attempt_at, updated_at) SELECT $1, u, s, o, p, $6, $6 FROM UNNEST($2::uuid[], $3::uuid[], $4::text[], $5::text[]) AS t(u, s, o, p)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray",
+        "UuidArray",
+        "TextArray",
+        "TextArray",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "714777a26dd2d0ccb626aa298d75df41bac681a76e89a77b996a06c59ce417aa"
+}

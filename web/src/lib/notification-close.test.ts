@@ -30,7 +30,7 @@ describe("the close controls", () => {
   // automated hold on the metric these controls were raised to meet.
   const SHEETS: [string, string][] = [
     ["lib/styles/components.css", ".banner-close"],
-    ["app.css", ".toast-close"],
+    ["lib/styles/frame.css", ".toast-close"],
   ];
 
   for (const [file, selector] of SHEETS) {
@@ -64,7 +64,7 @@ describe("closing a notification with the keyboard", () => {
   // the `input` that clearing dispatches would reopen the picker.
   const SURFACES: [string, string, string][] = [
     ["lib/Banner.svelte", "banner", "close"],
-    ["routes/+layout.svelte", "toast", "closeToast"],
+    ["lib/Toasts.svelte", "toast", "closeToast"],
     [
       "lib/FacetPicker.svelte",
       "field fp",

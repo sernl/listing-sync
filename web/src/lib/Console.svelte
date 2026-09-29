@@ -7,7 +7,13 @@
 	import { api, avatarSrc } from '$lib/api';
 	import { impersonatedSession, stopImpersonatingAndRestore } from '$lib/auth-client';
 	import { present, type StatusPresentation } from '$lib/connection-status';
-	import { checkInHere, desktopInvoker } from '$lib/desktop';
+	import {
+		checkInHere,
+		desktopInvoker,
+		libraryUsage,
+		NO_SCREEN_LOCK,
+		openSecuritySettings
+	} from '$lib/desktop';
 	import { signBackInRefusal, signedOutHere, SIGN_BACK_IN, whereYouAre } from '$lib/machine-here';
 	import { machineHere } from '$lib/machine.svelte';
 	import { renderFailureCause, renderFailureReport } from '$lib/render-failure';
@@ -34,11 +40,12 @@
 	import { queryKeys } from '$lib/query';
 	import SearchPalette from '$lib/SearchPalette.svelte';
 	import { toast } from '$lib/toast';
+	import type { Season } from '$lib/site';
 	import { opensPalette } from '$lib/search-palette';
 	import { capture } from '$lib/posthog';
 	import Tour from '$lib/tour/Tour.svelte';
-	import { shouldOfferTour } from '$lib/tour/model';
-	import { tour } from '$lib/tour/tour.svelte';
+	import { APP_TOUR_KEY, whichTour, type TourKind } from '$lib/tour/model';
+	import { tour, tourHost } from '$lib/tour/tour.svelte';
 
 	let {
 		children,
@@ -49,7 +56,7 @@
 		onLogout: () => void;
 		/** The seasonal theme showing on the landing page, marked here with one
 		 *  small picture; null outside a season. */
-		season?: 'halloween' | 'christmas' | null;
+		season?: Season | null;
 	} = $props();
 
 	const organisation = createQuery(() => ({ queryKey: queryKeys.org, queryFn: () => api.org() }));
@@ -89,6 +96,10 @@
 
 	const queryClient = useQueryClient();
 
+	// Whether this phone's missing screen lock keeps its library shut; read
+	// alongside the check-in below.
+	let noScreenLock = $state(false);
+
 	// The console registers the machine it is running on, once per load, and
 	// keeps what it answered.
 	//
@@ -121,6 +132,13 @@
 				// disturbed.
 				void queryClient.invalidateQueries({ queryKey: queryKeys.devices });
 			}
+		});
+		// A phone with no screen lock cannot open its library: the key it is
+		// sealed under needs an unlocked device, and there is no unlock. Asked
+		// once, like the check-in; a browser answers `unavailable` and a
+		// computer that keeps files answers `ok`.
+		void libraryUsage(invoke).then((answer) => {
+			noScreenLock = answer.kind === 'noScreenLock';
 		});
 	});
 
@@ -211,33 +229,41 @@
 	const picture = $derived(avatarSrc(profile.data));
 
 	// The guided tour, offered once per load and only once both reads it
-	// depends on have answered: the profile says whether it is due, and the
-	// identity session says whether this is an operator impersonating, who
-	// is never shown it. Plain rather than `$state`, for the reason
-	// `gateReported` below gives.
+	// depends on have answered: the profile says whether the console tour is
+	// due, and the identity session says whether this is an operator
+	// impersonating, who is never shown one. The app's first-open tour is
+	// decided by this device's own record. Plain rather than `$state`, for the
+	// reason `gateReported` below gives.
 	let tourDecided = false;
 	$effect(() => {
 		if (tourDecided || profile.data === undefined || !identity.isFetched) {
 			return;
 		}
 		tourDecided = true;
-		const offered = shouldOfferTour({
+		const kind = whichTour({
 			tour: profile.data.tour.state,
 			impersonating: impersonation !== null,
-			checkoutSuccess: page.url.searchParams.get('checkout') === 'success'
+			checkoutSuccess: page.url.searchParams.get('checkout') === 'success',
+			host: tourHost(),
+			appTourSeen: localStorage.getItem(APP_TOUR_KEY) !== null
 		});
-		if (offered) {
-			tour.start();
+		if (kind !== null) {
+			tour.start(kind);
 		}
 	});
 
-	/** Records how the tour ended, so it is not offered again. Not while
-	 *  impersonating: the tour is the user's to end, and an operator who
+	/** Records how a tour ended, so it is not offered again: the app's
+	 *  first-open tour on this device, the console tour on the profile. Not
+	 *  while impersonating: the tour is the user's to end, and an operator who
 	 *  opened it from Help would otherwise end it for them. A failed write is
 	 *  left unsaid -- the tour is offered again next time, which is the whole
 	 *  of the harm. */
-	function tourEnded(outcome: 'completed' | 'skipped') {
+	function tourEnded(outcome: 'completed' | 'skipped', kind: TourKind) {
 		if (impersonation !== null) {
+			return;
+		}
+		if (kind === 'app-first-open') {
+			localStorage.setItem(APP_TOUR_KEY, outcome);
 			return;
 		}
 		void api.settleTour(outcome).then(
@@ -380,6 +406,20 @@
 				disabled={machineHere.restoring}
 			>
 				{machineHere.restoring ? 'Signing in…' : SIGN_BACK_IN}
+			</button>
+		</div>
+	{/if}
+
+	<!-- A phone with no screen lock keeps no files: the library's key needs
+	     an unlocked device and is deliberately not weakened for one without a
+	     lock. The seller is told the fix, with the button to the settings
+	     where they make it. -->
+	{#if noScreenLock}
+		<div class="machine-out" role="alert">
+			<span class="mark"><Icon name="lock" size={14} /></span>
+			<span class="said">{NO_SCREEN_LOCK}</span>
+			<button type="button" onclick={() => void openSecuritySettings(desktopInvoker())}>
+				Open settings
 			</button>
 		</div>
 	{/if}

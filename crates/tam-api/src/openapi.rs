@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 192] = [
+pub const ROUTES: [Route; 204] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -177,12 +177,12 @@ pub const ROUTES: [Route; 192] = [
     Route {
         method: "get",
         path: "/{version}/notifications/preferences",
-        summary: "Whether the requesting user takes completion mail",
+        summary: "Whether the requesting user takes completion mail and operator news",
     },
     Route {
         method: "patch",
         path: "/{version}/notifications/preferences",
-        summary: "Set whether the requesting user takes completion mail",
+        summary: "Set whether the requesting user takes completion mail or operator news",
     },
     Route {
         method: "get",
@@ -675,18 +675,18 @@ pub const ROUTES: [Route; 192] = [
     },
     Route {
         method: "get",
-        path: "/{version}/library/missing",
-        summary: "The imported files Teachouse holds no copy of, and the storage left for them",
-    },
-    Route {
-        method: "put",
-        path: "/{version}/library/files/{hash}",
-        summary: "Take the seller's app's copy of one imported file, within the plan's storage",
+        path: "/{version}/library/files/{hash}/content",
+        summary: "The bytes of one of the seller's files by digest, ranged or as a download, passed through from a device for an imported file",
     },
     Route {
         method: "get",
-        path: "/{version}/library/files/{hash}/content",
-        summary: "The bytes of one of the seller's files by digest, ranged or as a download",
+        path: "/{version}/devices/{device}/streams",
+        summary: "A device's long poll for the file reads waiting on it",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/devices/{device}/streams/{stream}",
+        summary: "A device's answer to one file read: exactly the bytes asked for, or its refusal",
     },
     Route {
         method: "post",
@@ -878,6 +878,66 @@ pub const ROUTES: [Route; 192] = [
         method: "patch",
         path: "/{version}/admin/site",
         summary: "Operator: change maintenance mode, the seasonal theme or the banner",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/admin/mail/audience",
+        summary: "Operator: how many sellers a mail audience filter reaches, and who it leaves out",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/mail/preview",
+        summary: "Operator: a mail draft rendered in the brand wrapper with sample values",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/mail/images",
+        summary: "Operator: store a picture for a mail body, served publicly",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/mail/test",
+        summary: "Operator: queue one mail of a draft to the operator sending it",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/admin/mail/campaigns",
+        summary: "Operator: the mail campaign log, newest first",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/mail/campaigns",
+        summary: "Operator: write a mail campaign and queue one row per recipient",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/admin/mail/campaigns/{id}",
+        summary: "Operator: one mail campaign with each recipient's status",
+    },
+    Route {
+        method: "delete",
+        path: "/{version}/admin/mail/campaigns/{id}",
+        summary: "Operator: delete a campaign's body and recipient rows, keeping its log line",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/mail/campaigns/{id}/retry",
+        summary: "Operator: queue a campaign's failed recipients again",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/mail/images/{handle}",
+        summary: "Public: the bytes of a picture uploaded for mail",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/mail/unsubscribe",
+        summary: "Public: the page an unsubscribe link opens",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/mail/unsubscribe",
+        summary: "Public: unsubscribe from operator news, by form or one-click List-Unsubscribe-Post",
     },
     Route {
         method: "get",

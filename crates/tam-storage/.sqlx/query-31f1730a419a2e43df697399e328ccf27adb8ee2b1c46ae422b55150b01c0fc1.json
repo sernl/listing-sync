@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM mail_campaign_recipient WHERE campaign_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "31f1730a419a2e43df697399e328ccf27adb8ee2b1c46ae422b55150b01c0fc1"
+}

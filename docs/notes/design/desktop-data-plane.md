@@ -191,6 +191,32 @@ The cover hash is computed for `FileKind::Image` and no other kind, because `tam
 So the readers sit behind `compute`, the driver takes the crate with `default-features = false`, and the desktop crate — the one that actually holds the bytes — takes it whole.
 The text read runs on its own thread under a sixty-second budget with an unwind guard, because neither reader can be interrupted and a PDF supplied by a marketplace is exactly where a parser panics; the cost of one is that resource's text layer rather than the seller's import.
 
+## Amended 2026-09-30: imported files are served from the device, not copied
+
+Release 0.15 copied every file an import kept to Teachouse, so the console could open it anywhere.
+That copy is gone, and so is the code that made it: `replication.rs`, the `Replicator` the schedule started, and the control plane's `library_missing` and `library_copy`.
+A file imported from a marketplace now rests only on the seller's devices, and the server keeps no copy of it; a file the seller uploads through the console is stored on the server as before.
+
+When the seller opens an imported file in a browser, the server asks a device that holds it for the bytes and passes them to the browser without keeping them.
+`serve.rs` is the device's side.
+It waits on a long poll, `GET /v1/devices/{device}/streams?wait_ms=25000`, under the console session like every other device call and with its own 45-second timeout, because the ordinary thirty would cut every quiet poll off just before the server answers.
+Each poll also tells the server this device can answer now, so a device that stops polling is one the console calls offline within a minute.
+
+Every stream the poll hands over carries a capability: a compact JWS signed with the key entitlement tokens are signed with, audience `tam-desktop/serve`, valid for two minutes.
+The device checks it against the keys its build embeds, allows thirty seconds for a clock running behind, and requires the claims to name this device and exactly the stream, file and first and last byte the request asks for.
+A stream id is answered once; the device remembers the ones it answered until their capabilities expire.
+Only then does it open the file from its sealed library and post exactly bytes `first` to `last` to `POST /v1/devices/{device}/streams/{stream}`, handing the capability back in `x-teachouse-capability`.
+Anything short of that is the same post with an empty body and `x-teachouse-serve-refused: capability`, `missing` or `range`, so the browser hears at once rather than waiting out a timeout.
+The server answers `410` when the browser has gone, which ends that stream and is not retried.
+
+The checks and the cut are plain functions, `serve::verify`, `serve::Replays` and `serve::range`, tested with a key pair generated in the test.
+The loop around them answers up to four streams at once, polls again as soon as a poll answers, and waits five seconds after a poll that failed for the network.
+The library opens a file whole, and a PDF viewer asks for it a range at a time, each range a stream of its own; so the most recently opened file stays open for a minute, one file only and only up to 128 MiB, rather than being decrypted again for every range.
+
+The schedule starts the loop on any pass where the device is in good standing, where it used to start the copy.
+A sign-out stops it at once; a poll the server refuses for the device's standing — unknown, signed out, a session it no longer accepts — ends it until the next check-in; a device nobody is signed in on makes no request and tries again on the next pass.
+On a phone the loop runs only while `serve::should_serve` says so, and holds a foreground service while it runs; `android-client.md` has that half.
+
 ## Sources
 
 - `docs/notes/design/engine-driver-split.md`, sections 3 to 5.

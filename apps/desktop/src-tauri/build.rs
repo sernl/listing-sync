@@ -68,6 +68,7 @@ const COMMANDS: &[&str] = &[
     "stop_import",
     "retry_console",
     "set_theme",
+    "open_security_settings",
 ];
 
 /// A bundle that carries a console must carry the page shown when the console

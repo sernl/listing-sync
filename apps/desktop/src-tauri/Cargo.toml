@@ -1,6 +1,6 @@
 [package]
 name        = "tam-desktop"
-version     = "0.15.0"
+version     = "0.16.0"
 edition     = "2021"
 publish     = false
 description = "Teachouse cross-lists your teaching resources to the marketplaces you sell on. Marketplace work for Tes and TPT runs on your own device."
@@ -114,6 +114,12 @@ reqwest = { version = "0.13", default-features = false, features = [
 # provider, where reqwest's `rustls` feature would add aws-lc-sys and a cmake
 # C build to a binary we cross-compile to Windows.
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
+
+# The body a stream is answered with. A range cut from a file already open
+# is a view of the same allocation rather than a copy of up to 32 MiB, and
+# reqwest takes it as a body as it is. Already in the lock through reqwest and
+# tokio, so this names a package rather than adding one.
+bytes = "1"
 
 tam-types = { path = "../../../crates/tam-types" }
 

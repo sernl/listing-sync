@@ -16,6 +16,8 @@ import { api, type EntitlementView } from '$lib/api';
 import {
 	featureReason,
 	limitReason,
+	maxOf,
+	usedOf,
 	type Feature,
 	type Limit
 } from '$lib/entitlement';
@@ -61,12 +63,7 @@ export function limitOf(
 	}
 	const reason = limitReason(held.capabilities, held.usage, limit);
 	if (reason !== null) {
-		// The wire spells a limit's used figure `<limit>` on the usage and
-		// its ceiling `<limit>_max` on the capabilities, so both are read by
-		// that rule rather than through a second copy of the mapping.
-		const usage = held.usage as unknown as Record<string, number>;
-		const caps = held.capabilities as unknown as Record<string, number>;
-		gateHit(held, limit, usage[limit] ?? null, caps[`${limit}_max`] ?? null);
+		gateHit(held, limit, usedOf(held.usage, limit), maxOf(held.capabilities, limit));
 	}
 	return reason;
 }

@@ -33,6 +33,12 @@ import { supportEmail } from '../site.js';
 					from the seller's device under the seller's login.
 				</li>
 				<li>
+					Files you import from a marketplace stay on your own devices: when you open one in the
+					console, Teachouse passes it from your device to your browser without keeping it. Files
+					you upload to Teachouse yourself are stored by Teachouse so you can use them anywhere,
+					until you delete them.
+				</li>
+				<li>
 					For marketplaces with an official API, Teachouse acts under a token that marketplace
 					issued for the purpose.
 				</li>
@@ -71,19 +77,8 @@ import { supportEmail } from '../site.js';
 
 			<h2>Contact</h2>
 			<p>
-				{
-					supportEmail ? (
-						<Fragment>
-							Until this page is replaced, questions go to{' '}
-							<a class="link" href={`mailto:${supportEmail}`}>
-								{supportEmail}
-							</a>
-							.
-						</Fragment>
-					) : (
-						'A contact address goes here before this page is replaced.'
-					)
-				}
+				Questions about these terms go to{' '}
+				<a class="link" href={`mailto:${supportEmail}`}>{supportEmail}</a>.
 			</p>
 		</div>
 	</section>

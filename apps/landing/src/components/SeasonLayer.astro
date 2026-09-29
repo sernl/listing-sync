@@ -1,7 +1,7 @@
 ---
 /* The seasonal overlay's top pieces: the two top corners and what hangs from
-   one, the sky above the hero art, and a band of snow along the hero's top
-   edge. Empty elements whose pictures come from `season.css`, which draws
+   one, the sky above the hero art, and a band of snow or a garland along
+   the hero's top edge. Empty elements whose pictures come from `season.css`, which draws
    them only under `html[data-season]`, so a page with no season active
    fetches no picture and paints nothing here. The layer spans `main` and is
    placed from its top edge, which is the hero's, and every piece is put in
@@ -15,6 +15,7 @@ import '../styles/season.css';
 
 <div class="season-layer" aria-hidden="true">
 	<i class="season-snow"></i>
+	<i class="season-garland"></i>
 	<i class="season-corner season-corner-start"></i>
 	<i class="season-corner season-corner-end"></i>
 	<i class="season-dangle"></i>

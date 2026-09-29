@@ -114,6 +114,10 @@ pub(crate) struct MailConfig {
     /// five above: without it such a request is on the operator listing and
     /// in a log line, and in nobody's inbox.
     pub(crate) ops_email: Option<String>,
+    /// The sender the operators' campaigns go out from
+    /// (`--marketing-email-from`), a second address so a campaign's
+    /// reputation is not the one a seller's own completion mail rides on.
+    pub(crate) marketing_email_from: String,
 }
 
 /// Which deliverer a deployment gets.
@@ -217,6 +221,57 @@ impl ResendRelay {
             api_key: api_key.to_owned(),
             from: from.to_owned(),
         })
+    }
+
+    /// A second relay on the same account with another sender: the
+    /// operators' campaigns go out from their own address.
+    pub(crate) fn with_sender(&self, from: &str) -> Self {
+        Self {
+            client: self.client.clone(),
+            api_key: self.api_key.clone(),
+            from: from.to_owned(),
+        }
+    }
+
+    /// One campaign mail, answering the relay's message id.
+    ///
+    /// Carries a plain-text part beside the HTML and the one-click
+    /// unsubscribe headers (RFC 2369 and RFC 8058) that mailbox providers
+    /// require of bulk senders.
+    pub(crate) async fn send_campaign(
+        &self,
+        to: &str,
+        mail: &crate::campaigns::Outgoing,
+    ) -> Result<String, RelayError> {
+        let body = serde_json::json!({
+            "from": self.from,
+            "to": [to],
+            "subject": mail.subject,
+            "html": mail.html,
+            "text": mail.text,
+            "headers": {
+                "List-Unsubscribe": format!("<{}>", mail.unsubscribe_url),
+                "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+            },
+        });
+        let answer = self
+            .client
+            .post(RESEND_ENDPOINT)
+            .bearer_auth(&self.api_key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|error| {
+                RelayError::Retryable(format!("the mail relay is unreachable: {error}"))
+            })?;
+        relay_verdict(answer.status())?;
+        // Accepted is accepted: a 2xx whose body carries no id still sent the
+        // mail, and reporting it as a failure would invite a second copy.
+        let receipt: serde_json::Value = answer.json().await.unwrap_or_default();
+        Ok(receipt
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .map_or_else(|| "(accepted, no id)".to_owned(), str::to_owned))
     }
 }
 
@@ -977,6 +1032,7 @@ mod tests {
             auth_internal_url: "http://127.0.0.1:8081".to_owned(),
             auth_internal_secret: "s".to_owned(),
             ops_email: None,
+            marketing_email_from: "no-reply@marketing.example.test".to_owned(),
         };
         assert_eq!(select(Some(&configured)), Selected::Email);
     }

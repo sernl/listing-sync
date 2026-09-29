@@ -119,6 +119,14 @@ pub(crate) async fn export_catalogue(
     context: OrgContext,
     Query(params): Query<ExportParams>,
 ) -> Result<impl IntoResponse, APIError> {
+    // True on every plan, and pinned so by `export_is_granted_on_every_plan`;
+    // read here anyway so the price list and the route cannot disagree.
+    if !context.entitlement.caps.export {
+        return Err(crate::entitlement::feature_refusal(
+            "export",
+            "Your plan does not include spreadsheet export. Upgrade to use it.",
+        ));
+    }
     let only = selected(&state, context.org, &params).await?;
     let document = document(&state, context.org, only.as_deref()).await?;
     let today = civil_date((state.wall)());

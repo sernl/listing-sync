@@ -28,6 +28,11 @@ use super::StoreError;
 pub const PLUGIN_IDENTIFIER: &str = "io.teachouse.desktop";
 pub const PLUGIN_CLASS: &str = "SessionKeyPlugin";
 
+/// The code `SessionKeyPlugin.obtain` rejects with when the phone has no
+/// screen lock (`NO_SCREEN_LOCK` in the Kotlin), matched by value for the
+/// same reason the names above are.
+pub const NO_SCREEN_LOCK_CODE: &str = "no_screen_lock";
+
 /// The Kotlin side answers with the secret as an array of byte-valued
 /// numbers, which is what `org.json` can carry and what `serde_json` reads
 /// back into a `Vec<u8>` without a base64 or hex crate in between.
@@ -57,10 +62,18 @@ impl<R: Runtime> KeystoreKey<R> {
 
 impl<R: Runtime> DeviceKeySource for KeystoreKey<R> {
     fn obtain(&self) -> Result<Kek, StoreError> {
-        let response: KeyResponse = self
-            .handle
-            .run_mobile_plugin("obtain", ())
-            .map_err(|why| StoreError::Backend(why.to_string()))?;
+        let response: KeyResponse = self.handle.run_mobile_plugin("obtain", ()).map_err(|why| {
+            let no_lock = matches!(
+                &why,
+                tauri::plugin::mobile::PluginInvokeError::InvokeRejected(rejected)
+                    if rejected.code.as_deref() == Some(NO_SCREEN_LOCK_CODE)
+            );
+            if no_lock {
+                StoreError::NoScreenLock
+            } else {
+                StoreError::Backend(why.to_string())
+            }
+        })?;
         // `Kek::from_bytes` is the length check: a secret of the wrong size
         // is refused here rather than producing a key that opens nothing.
         Kek::from_bytes(&response.key).map_err(|why| StoreError::Backend(why.to_string()))

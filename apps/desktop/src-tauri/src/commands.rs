@@ -46,7 +46,7 @@ const CONSOLE_HANDOVER: Duration = Duration::from_millis(250);
 
 /// Every command failure, as one string the interface can show.
 ///
-/// Deliberately opaque: the underlying errors are keychain and webview
+/// Deliberately opaque: the underlying errors are session-store and webview
 /// diagnostics, and a jar must never be interpolated into one.
 #[derive(Debug, Clone, Serialize)]
 pub struct CommandError(pub String);
@@ -59,7 +59,11 @@ impl From<crate::connect::NotSellerDevice> for CommandError {
 
 impl From<crate::session::StoreError> for CommandError {
     fn from(why: crate::session::StoreError) -> Self {
-        Self(why.to_string())
+        match why {
+            crate::session::StoreError::NoScreenLock => Self(NO_SCREEN_LOCK.to_owned()),
+            other @ (crate::session::StoreError::Backend(_)
+            | crate::session::StoreError::Codec(_)) => Self(other.to_string()),
+        }
     }
 }
 
@@ -488,7 +492,7 @@ async fn capture_in_place<R: tauri::Runtime>(
                 // would be refused identically.
                 Err(NotFiled::BoundElsewhere) => ConnectVerdict::BoundElsewhere,
                 // Not `Refused`: the sign-in opened and the seller finished it.
-                // The keychain or the store refused it, and the diagnostic has
+                // The key source or the store refused it, and the diagnostic has
                 // nowhere to go on this surface.
                 Err(NotFiled::Failed(_)) => ConnectVerdict::NotKept,
             }
@@ -853,6 +857,26 @@ pub async fn device_activity(app: AppHandle) -> Result<Vec<DeviceActivity>, Comm
 /// build has no library at all, or the library cannot be opened right now.
 const NO_LIBRARY: &str = "this machine is not keeping files";
 
+/// What a phone with no screen lock is told, word for word. The console
+/// compares against it (`NO_SCREEN_LOCK` in `web/src/lib/desktop.ts`) and
+/// shows it with a button to the lock settings, so the two spellings move
+/// together. The key stays one that needs an unlocked device: the seller
+/// sets a lock, and the files on the phone stay protected.
+pub const NO_SCREEN_LOCK: &str =
+    "Set a screen lock on this device to keep your files on it, then open Teachouse again.";
+
+/// The one sentence a seller is given for a library that did not open: the
+/// screen-lock sentence where setting a lock is the fix, and the plain
+/// "not keeping files" for every other cause, which only a log can explain.
+fn library_refusal(why: &crate::library::LibraryError) -> &'static str {
+    match why {
+        crate::library::LibraryError::NoScreenLock => NO_SCREEN_LOCK,
+        crate::library::LibraryError::Io(_)
+        | crate::library::LibraryError::Tampered(_)
+        | crate::library::LibraryError::Codec(_) => NO_LIBRARY,
+    }
+}
+
 /// The library, asked for at the moment the seller asked for it.
 ///
 /// The answer is about now rather than about start-up. A phone launched from
@@ -869,8 +893,61 @@ async fn library_of(app: &AppHandle) -> Result<Arc<crate::library::Library>, Com
         .ok_or_else(|| CommandError(NO_LIBRARY.to_owned()))?;
     slot.get().await.map_err(|why| {
         eprintln!("the library on this machine could not be opened: {why}");
-        CommandError(NO_LIBRARY.to_owned())
+        CommandError(library_refusal(&why).to_owned())
     })
+}
+
+/// Opens the phone's screen-lock settings, behind the button beside
+/// [`NO_SCREEN_LOCK`]. A computer has no such screen to open from here, and
+/// the console never offers the button on one.
+#[tauri::command]
+pub async fn open_security_settings(app: AppHandle) -> Result<(), CommandError> {
+    #[cfg(target_os = "android")]
+    {
+        app.state::<AndroidLibraryOpener<tauri::Wry>>()
+            .0
+            .run_mobile_plugin::<()>("openSecuritySettings", ())
+            .map_err(|why| CommandError(why.to_string()))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        drop(app);
+        Err(CommandError(
+            "only a phone opens its screen-lock settings from here".to_owned(),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod screen_lock_tests {
+    use super::{library_refusal, CommandError, NO_LIBRARY, NO_SCREEN_LOCK};
+    use crate::library::LibraryError;
+    use crate::session::StoreError;
+    use tam_types::ContentHash;
+
+    #[test]
+    fn only_a_missing_screen_lock_asks_the_seller_to_set_one() {
+        assert_eq!(library_refusal(&LibraryError::NoScreenLock), NO_SCREEN_LOCK);
+        for other in [
+            LibraryError::Io("Keystore operation failed".to_owned()),
+            LibraryError::Codec("User ECDH key missing".to_owned()),
+            LibraryError::Tampered(ContentHash([0; 32])),
+        ] {
+            assert_eq!(
+                library_refusal(&other),
+                NO_LIBRARY,
+                "a lock would not fix {other}, so the seller is not told to set one"
+            );
+        }
+    }
+
+    #[test]
+    fn a_session_store_without_a_screen_lock_says_the_same_sentence() {
+        let CommandError(said) = StoreError::NoScreenLock.into();
+        assert_eq!(said, NO_SCREEN_LOCK);
+        let CommandError(said) = StoreError::Backend("keystore refused".to_owned()).into();
+        assert_ne!(said, NO_SCREEN_LOCK);
+    }
 }
 
 fn hash_of(hex: &str) -> Result<tam_types::ContentHash, CommandError> {
@@ -1060,7 +1137,7 @@ pub async fn session_status(
 }
 
 /// Removes the stored session. The seller's disconnect, and the only way a
-/// captured jar leaves this device's keychain.
+/// captured jar leaves this device's session store.
 ///
 /// Generic over the runtime for the reason [`start_import`] is: the mock
 /// runtime a host test builds cannot hand an `AppHandle<Wry>` to a command

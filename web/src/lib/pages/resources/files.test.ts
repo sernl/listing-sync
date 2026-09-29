@@ -37,7 +37,8 @@ function file(
 		// shared literal would make two files one file to anything that did.
 		hash: id.repeat(64).slice(0, 64),
 		scan: 'clean',
-		name
+		name,
+		custody: { kind: 'uploaded' }
 	};
 }
 

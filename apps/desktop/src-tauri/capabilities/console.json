@@ -27,6 +27,7 @@
     "allow-library-settings",
     "allow-set-library-settings",
     "allow-library-open-external",
+    "allow-open-security-settings",
     "notification:default"
   ]
 }

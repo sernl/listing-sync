@@ -101,7 +101,7 @@ impl EntitlementKey {
     }
 
     /// The one legitimate use: signing a token. Never logged, never echoed.
-    fn signing_key(&self) -> EncodingKey {
+    pub(crate) fn signing_key(&self) -> EncodingKey {
         EncodingKey::from_ed_der(&self.0)
     }
 

@@ -84,13 +84,17 @@ pub enum QuotaKind {
     Labels,
     Collections,
     Devices,
+    /// Watermarked previews made this UTC month.
+    Previews,
+    /// AI description fills made this UTC month.
+    AiFills,
     /// The plan does not include the capability at all, rather than having
     /// run out of it. `detail.feature` names which one.
     PlanFeature,
 }
 
 impl QuotaKind {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 11] = [
         Self::Listings,
         Self::StorageBytes,
         Self::Marketplaces,
@@ -99,6 +103,8 @@ impl QuotaKind {
         Self::Labels,
         Self::Collections,
         Self::Devices,
+        Self::Previews,
+        Self::AiFills,
         Self::PlanFeature,
     ];
 
@@ -113,6 +119,8 @@ impl QuotaKind {
             Self::Labels => "labels_max",
             Self::Collections => "collections_max",
             Self::Devices => "devices_max",
+            Self::Previews => "previews_per_month",
+            Self::AiFills => "ai_fills_per_month",
             Self::PlanFeature => "plan_feature",
         }
     }
@@ -180,6 +188,22 @@ impl QuotaKind {
             Self::Devices => {
                 format!("Your plan covers {limit} computers. Upgrade to add another.")
             }
+            // A monthly allowance says when it comes back as well as how to
+            // get more now, because unlike a standing count it renews.
+            Self::Previews if limit == 0 => {
+                "Your plan does not include watermarked previews. Upgrade to make them.".to_owned()
+            }
+            Self::Previews => format!(
+                "Your plan includes {limit} watermarked previews a month. \
+                 Upgrade to make more, or wait until next month."
+            ),
+            Self::AiFills if limit == 0 => {
+                "Your plan does not include AI description fills. Upgrade to use them.".to_owned()
+            }
+            Self::AiFills => format!(
+                "Your plan includes {limit} AI description fills a month. \
+                 Upgrade to make more, or wait until next month."
+            ),
             Self::PlanFeature => "Your plan does not include this. Upgrade to use it.".to_owned(),
         }
     }
@@ -200,6 +224,146 @@ pub fn quota_refusal(kind: QuotaKind, used: i64, limit: u64) -> APIError {
                 "limit": limit,
             })),
     )
+}
+
+/// Refuses a write that has just taken the organisation's live resources past
+/// its plan's ceiling, in the write's own transaction so the refusal rolls
+/// the write back.
+///
+/// Checked after the insert or restore rather than before it, because every
+/// path that adds a live resource — a create, a spreadsheet row, a shop
+/// import, a migrate leg, a re-import or merge undo that brings one back —
+/// can then ask the same question in the same words, and a restore that
+/// turned out to be a no-op adds nothing and is never refused. The caller
+/// holds the organisation's catalogue lock (`begin_guarded`) or the request
+/// lock of a migrate leg, so two writes cannot both take the last place.
+///
+/// The grandfather rule falls out of the comparison: an organisation already
+/// over a lowered ceiling keeps every resource it has, and the next one it
+/// adds is refused.
+///
+/// # Errors
+///
+/// The `listings_max` 422, or a storage fault.
+pub(crate) async fn refuse_past_resource_cap_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    state: &AppState,
+    org: tam_types::OrgId,
+    resources_max: u32,
+) -> Result<(), APIError> {
+    if resources_max == u32::MAX {
+        return Ok(());
+    }
+    let live = tam_storage::live_count_in(tx, org)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?;
+    if live > i64::from(resources_max) {
+        return Err(quota_refusal(
+            QuotaKind::Listings,
+            live.saturating_sub(1),
+            u64::from(resources_max),
+        ));
+    }
+    Ok(())
+}
+
+/// Spends `amount` watermarked previews of this month's allowance in the
+/// write's own transaction, or refuses the write.
+///
+/// Every preview a resource gains counts — attached to a saved resource,
+/// carried by a create, or swapped in for an older one — because the server
+/// cannot tell a preview drawn by the preview maker from one the seller drew
+/// elsewhere, and counting only one kind would be an allowance anyone could
+/// step around. Deleting a preview gives nothing back: it was made.
+///
+/// # Errors
+///
+/// The `previews_per_month` 422, or a storage fault.
+pub(crate) async fn spend_previews_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    state: &AppState,
+    org: tam_types::OrgId,
+    caps: &Capabilities,
+    amount: u32,
+) -> Result<(), APIError> {
+    // Counted on an unlimited plan too, so what every organisation makes is
+    // on record whatever it pays.
+    if amount == 0 {
+        return Ok(());
+    }
+    let charge = tam_storage::MonthlyCharge {
+        kind: tam_storage::MonthlyKind::Preview,
+        amount,
+        cap: caps.previews_per_month,
+        at: (state.wall)(),
+    };
+    match tam_storage::spend_monthly_in(tx, org, charge)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?
+    {
+        tam_storage::MonthlySpend::Granted { .. } => Ok(()),
+        tam_storage::MonthlySpend::Refused { used } => Err(quota_refusal(
+            QuotaKind::Previews,
+            used,
+            u64::from(caps.previews_per_month),
+        )),
+    }
+}
+
+/// A spend of previews made ahead of a write that runs in a transaction of
+/// its own (adding or swapping a file on a saved resource), to be handed back
+/// with [`PreviewSpend::refund`] where that write then fails.
+#[must_use = "a spend whose write failed must be refunded"]
+pub(crate) struct PreviewSpend(Option<tam_storage::MonthlyCharge>);
+
+impl PreviewSpend {
+    /// Spends one preview, or refuses with the `previews_per_month` 422.
+    pub(crate) async fn one(
+        state: &AppState,
+        org: tam_types::OrgId,
+        caps: &Capabilities,
+    ) -> Result<Self, APIError> {
+        let charge = tam_storage::MonthlyCharge {
+            kind: tam_storage::MonthlyKind::Preview,
+            amount: 1,
+            cap: caps.previews_per_month,
+            at: (state.wall)(),
+        };
+        match EntitlementRepo::new(state.pool.clone())
+            .spend_monthly(org, charge)
+            .await
+            .map_err(|error| state.internal(&error.to_string()))?
+        {
+            tam_storage::MonthlySpend::Granted { .. } => Ok(Self(Some(charge))),
+            tam_storage::MonthlySpend::Refused { used } => Err(quota_refusal(
+                QuotaKind::Previews,
+                used,
+                u64::from(caps.previews_per_month),
+            )),
+        }
+    }
+
+    /// Nothing spent, for a write that adds no preview.
+    pub(crate) const fn none() -> Self {
+        Self(None)
+    }
+
+    /// Passes a write's result through, giving the spend back where it
+    /// failed so a refused file does not use up the month.
+    pub(crate) async fn settle<T>(
+        self,
+        state: &AppState,
+        org: tam_types::OrgId,
+        result: Result<T, APIError>,
+    ) -> Result<T, APIError> {
+        if let (Err(_), Some(charge)) = (&result, self.0) {
+            EntitlementRepo::new(state.pool.clone())
+                .refund_monthly(org, charge)
+                .await
+                .map_err(|error| state.internal(&error.to_string()))?;
+        }
+        result
+    }
 }
 
 /// The refusal for a capability the plan does not hold at all.
@@ -368,6 +532,11 @@ pub(crate) async fn plans_view(
 
 // ------------------------------------------------------- GET /v1/entitlement
 
+/// What has been used of each allowance, beside `capabilities`, which carries
+/// the matching limit: `resources` against `resources_max`, `storage_bytes`
+/// against `storage_bytes_max`, `previews` against `previews_per_month` and
+/// so on. `previews` and `ai_fills` count the current UTC calendar month and
+/// start again at `month_resets_at`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageView {
     pub resources: i64,
@@ -376,6 +545,10 @@ pub struct UsageView {
     pub labels: i64,
     pub collections: i64,
     pub devices: i64,
+    pub storage_bytes: i64,
+    pub previews: i64,
+    pub ai_fills: i64,
+    pub month_resets_at: Timestamp,
 }
 
 impl UsageView {
@@ -387,6 +560,10 @@ impl UsageView {
             labels: usage.labels,
             collections: usage.collections,
             devices: usage.devices,
+            storage_bytes: usage.storage_bytes,
+            previews: usage.previews,
+            ai_fills: usage.ai_fills,
+            month_resets_at: usage.month_resets_at,
         }
     }
 }
@@ -436,7 +613,7 @@ pub(crate) async fn entitlement_view(
 ) -> Result<Json<EntitlementView>, APIError> {
     let entitlements = EntitlementRepo::new(state.pool.clone());
     let usage = entitlements
-        .usage(context.org)
+        .usage(context.org, (state.wall)())
         .await
         .map_err(|error| state.internal(&error.to_string()))?;
     let moves = entitlements
@@ -473,6 +650,8 @@ mod tests {
                 | QuotaKind::Labels
                 | QuotaKind::Collections
                 | QuotaKind::Devices
+                | QuotaKind::Previews
+                | QuotaKind::AiFills
                 | QuotaKind::PlanFeature => {}
             }
             let sentence = kind.sentence(20);
@@ -496,7 +675,7 @@ mod tests {
         let free = Plan::Free.capabilities(None);
         assert_eq!(
             QuotaKind::Listings.sentence(u64::from(free.resources_max)),
-            "Your plan includes 500 resources. Upgrade to add more."
+            "Your plan includes 100 resources. Upgrade to add more."
         );
         assert_eq!(
             QuotaKind::StorageBytes.sentence(free.storage_bytes_max),

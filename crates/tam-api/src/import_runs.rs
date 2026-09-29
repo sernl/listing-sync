@@ -25,6 +25,7 @@ use tam_engine_driver::import::{
     ObservedResource,
 };
 use tam_import::{AppliedResource, HeldFile, ImportRun, ImportedFile};
+use tam_limits::Capabilities;
 use tam_storage::{
     job_request_key, BatchRunOpening, BlobRepo, ClaimOutcome, EventScope, FenceOutcome,
     FingerprintWrite, ImportReasonCode, ImportRunHead, ImportRunItemRecord, ImportRunRepo,
@@ -2056,7 +2057,7 @@ pub(crate) async fn run_page(
                 context.org,
                 &head,
                 resource,
-                context.entitlement.caps.duplicate_review,
+                &context.entitlement.caps,
             )
             .await?,
         );
@@ -2530,20 +2531,27 @@ pub(crate) async fn prepare_match(
     org: OrgId,
     head: &ImportRunHead,
     resource: &ObservedResource,
-    reviews: bool,
+    caps: &Capabilities,
 ) -> Result<MatchedRead, APIError> {
     let now = (state.wall)();
+    let reviews = caps.duplicate_review;
 
     // The cover, stored as a held blob directly rather than through the ingest
     // pipeline, which would derive a cover from the cover. Its length is taken
     // here, where the bytes are, so no later branch has to read them back.
+    // Within the plan's storage like every other blob: a cover that would
+    // take the organisation past it is not kept, and the resource arrives
+    // without a picture rather than past the ceiling.
     let (cover_hash, cover_byte_len) = match resource.cover_png.as_ref() {
         Some(cover) => {
             let bytes = cover.bytes();
-            (
-                Some(store_cover(state, org, bytes, now).await?),
-                Some(u64::try_from(bytes.len()).unwrap_or(u64::MAX)),
-            )
+            match store_cover_within(state, org, bytes, now, caps.storage_bytes_max).await? {
+                Some(hash) => (
+                    Some(hash),
+                    Some(u64::try_from(bytes.len()).unwrap_or(u64::MAX)),
+                ),
+                None => (None, None),
+            }
         }
         None => (None, None),
     };
@@ -2557,7 +2565,10 @@ pub(crate) async fn prepare_match(
         .iter()
         .take(tam_engine_driver::import::THUMBNAILS_MAX)
     {
-        thumbnails.push(store_cover(state, org, thumbnail.bytes(), now).await?);
+        let stored = store_cover_within(state, org, thumbnail.bytes(), now, caps.storage_bytes_max);
+        if let Some(hash) = stored.await? {
+            thumbnails.push(hash);
+        }
     }
 
     // The description as posted, minus the cover bytes: those are a blob named
@@ -3468,14 +3479,14 @@ async fn commit_one(
         .text
         .map(|text| tam_fingerprint::simhash_bands(text.simhash))
         .map(|bands| bands.map(|band| i16::from_ne_bytes(band.to_ne_bytes())));
-    let reviews = crate::entitlement::Entitlement::of(
+    let caps = crate::entitlement::Entitlement::of(
         tam_storage::EntitlementRepo::new(state.pool.clone())
             .current(org, now)
             .await
             .map_err(|error| storage_fault(state, &error))?,
     )
-    .caps
-    .duplicate_review;
+    .caps;
+    let reviews = caps.duplicate_review;
 
     let at = tam_storage::ItemAddress {
         run: head.id,
@@ -3667,6 +3678,15 @@ async fn commit_one(
             let restored = tam_storage::restore_product(&mut tx, org, survivor, now)
                 .await
                 .map_err(|error| storage_fault(state, &error))?;
+            if restored {
+                crate::entitlement::refuse_past_resource_cap_in(
+                    &mut tx,
+                    state,
+                    org,
+                    caps.resources_max,
+                )
+                .await?;
+            }
             let repaired = repair_cover(
                 &mut tx,
                 org,
@@ -3726,6 +3746,15 @@ async fn commit_one(
             now,
         )
         .await?;
+        if reconciled.restored {
+            crate::entitlement::refuse_past_resource_cap_in(
+                &mut tx,
+                state,
+                org,
+                caps.resources_max,
+            )
+            .await?;
+        }
         let detailed = fill_listing_facts(
             &mut tx,
             org,
@@ -3849,6 +3878,12 @@ async fn commit_one(
     let bound = tam_import::apply_prepared(&mut tx, org, &prepared, now)
         .await
         .map_err(|error| import_refusal(state, error))?;
+    // A shop import adds a resource like any other create, so it stops at the
+    // plan's ceiling like one; the refusal rolls this item back and records
+    // it as failed with the plan's sentence, and the rest of the run carries
+    // on refusing the same way until the seller upgrades or makes room.
+    crate::entitlement::refuse_past_resource_cap_in(&mut tx, state, org, caps.resources_max)
+        .await?;
     // The shop's label follows the binding. A read whose bytes are still
     // uncaptured lands as a product with no mapping — migration 0061's rule —
     // and labelling it would put a marketplace chip on a resource that shop's
@@ -4573,16 +4608,29 @@ pub(crate) async fn fill_listing_facts(
     Ok(sidecar || rights)
 }
 
-async fn store_cover(
+/// Stores a cover or listing picture as a held blob, or nothing where these
+/// bytes would take the organisation past its plan's storage
+/// (`storage_bytes_max`).
+pub(crate) async fn store_cover_within(
     state: &AppState,
     org: OrgId,
     bytes: &[u8],
     now: Timestamp,
-) -> Result<ContentHash, APIError> {
+    storage_bytes_max: u64,
+) -> Result<Option<ContentHash>, APIError> {
+    let used = tam_storage::ProductRepo::new(state.pool.clone())
+        .stored_bytes(org)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    let incoming = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
+    if used.saturating_add(incoming) > i64::try_from(storage_bytes_max).unwrap_or(i64::MAX) {
+        return Ok(None);
+    }
     let blobs = state.blobs.clone().ok_or_else(blob_store_unavailable)?;
     BlobRepo::new(state.pool.clone(), blobs.object_store(), blobs.kek.clone())
         .put(org, bytes, now)
         .await
+        .map(Some)
         .map_err(|error| state.internal(&error.to_string()))
 }
 

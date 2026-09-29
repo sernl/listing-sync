@@ -15,7 +15,7 @@ use http_body_util::BodyExt;
 use sqlx::PgPool;
 use tam_api::library::{LibraryFileView, LibraryView};
 use tam_api::{router, AppState, Config, WallClock, SESSION_COOKIE};
-use tam_storage::{SessionRepo, SessionToken};
+use tam_storage::{DeviceStreamRepo, SessionRepo, SessionToken};
 use tam_types::{OrgId, Timestamp, UserId, Uuid};
 use tower::ServiceExt;
 
@@ -32,10 +32,11 @@ fn t0() -> Timestamp {
     NOW
 }
 
-/// Twenty minutes later: past the ten-minute online window, so a machine
-/// that checked in at `t0` reads as offline rather than as gone.
-fn much_later() -> Timestamp {
-    Timestamp(NOW.0 + 20 * 60 * 1_000)
+/// Two minutes later: past the broker's one-minute serving window yet well
+/// inside the ten-minute check-in window, the gap in which a stopped app used
+/// to read as online while View said it was offline.
+fn two_minutes_later() -> Timestamp {
+    Timestamp(NOW.0 + 2 * 60 * 1_000)
 }
 
 /// Sixty-four lowercase hex characters, the way the wire spells a digest.
@@ -414,23 +415,34 @@ async fn a_digest_no_machine_reports_is_missing_and_a_kept_file_no_resource_uses
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
-async fn online_and_offline_are_told_apart_by_the_last_check_in(pool: PgPool) {
+async fn online_and_offline_are_told_apart_by_the_last_poll(pool: PgPool) {
     provision(&pool).await;
     resource(&pool, ORG_A, (0x11, "Fractions"), (0xF1, "pack.pdf"), false)
         .await
         .expect("the resource fixture seeds");
     machine(&pool, &TOKEN_A, LAPTOP, "founder-pc", &[0xF1]).await;
 
+    let checked_in = library(&pool, &TOKEN_A, "?availability=offline", t0).await;
+    assert_eq!(
+        checked_in.total, 1,
+        "a check-in alone does not serve files: only a device polling for asks can open one"
+    );
+    assert!(!checked_in.files[0].holders[0].online);
+
+    assert!(DeviceStreamRepo::new(pool.clone())
+        .polled(ORG_A, LAPTOP, t0())
+        .await
+        .expect("the poll stamps"));
     let fresh = library(&pool, &TOKEN_A, "?availability=online", t0).await;
-    assert_eq!(fresh.total, 1, "the machine checked in a moment ago");
+    assert_eq!(fresh.total, 1, "the device polled a moment ago");
     assert!(fresh.files[0].holders[0].online);
 
-    let stale = library(&pool, &TOKEN_A, "?availability=online", much_later).await;
+    let stale = library(&pool, &TOKEN_A, "?availability=online", two_minutes_later).await;
     assert_eq!(
         stale.total, 0,
-        "twenty minutes on, the machine is not there"
+        "two minutes after its last poll the device cannot serve, though its check-in is recent"
     );
-    let offline = library(&pool, &TOKEN_A, "?availability=offline", much_later).await;
+    let offline = library(&pool, &TOKEN_A, "?availability=offline", two_minutes_later).await;
     assert_eq!(offline.total, 1);
     assert!(!offline.files[0].holders[0].online);
 }

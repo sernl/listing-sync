@@ -30,7 +30,7 @@ pulldown-cmark = { workspace = true }
 # TLS stack, so the process keeps exactly one: rustls, which `sqlx` already
 # carries. No package joins the lock for it — `tam-server` holds the same
 # edge with the same two features.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 # The checked PKCS#8 parse, which is what derives the public half an operator
 # compares against the fleet's repository variable. `jsonwebtoken` signs through
 # `from_pkcs8_maybe_unchecked` and so cannot answer that question. Promoted from

@@ -13,10 +13,11 @@
 //! Given an engine-role url it also hosts the two service loops the design
 //! puts in this process: the outbox drainer and the job-event pruner.
 //!
-//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--stripe-webhook-secret <secret>] [--stripe-secret-key <path>] [--stripe-price-map <path>] [--ui-dir <path>] [--landing-dir <path>] [--downloads-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> (--blob-store-root <path> | --blob-store-s3 <endpoint> --blob-store-bucket <name> --blob-store-credentials <path> [--blob-store-region <region>])] [--entitlement-key-path <path>] [--entitlement-public-key <hex>] [--require-entitlement-key] [--resend-api-key-file <path> --email-from <address> --console-url <url> --auth-internal-url <url> --auth-internal-secret-file <path> [--ops-email <address>]] [--posthog-key <key> [--posthog-host <url>]] [--disclose-internals]
+//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--stripe-webhook-secret <secret>] [--stripe-secret-key <path>] [--stripe-price-map <path>] [--ui-dir <path>] [--landing-dir <path>] [--downloads-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> (--blob-store-root <path> | --blob-store-s3 <endpoint> --blob-store-bucket <name> --blob-store-credentials <path> [--blob-store-region <region>])] [--entitlement-key-path <path>] [--entitlement-public-key <hex>] [--require-entitlement-key] [--broker-advertise <host:port>] [--resend-api-key-file <path> --email-from <address> --console-url <url> --auth-internal-url <url> --auth-internal-secret-file <path> [--ops-email <address>] [--marketing-email-from <address>]] [--posthog-key <key> [--posthog-host <url>]] [--disclose-internals]
 
 #![forbid(unsafe_code)]
 
+mod campaigns;
 mod downloads;
 mod exchange_rates;
 mod notify;
@@ -31,7 +32,9 @@ use tam_api::{
 };
 use tam_blob_store::{BackendFlags, BlobBackend, STORE_ROOT_FLAG, STORE_S3_FLAG};
 use tam_engine::outbox::{drain, Deliverer, LoggingDeliverer};
-use tam_storage::{ImportBatchRepo, NotificationRepo, OperatorRepo, OutboxRepo, PruneRepo};
+use tam_storage::{
+    ImportBatchRepo, MailCampaignRepo, NotificationRepo, OperatorRepo, OutboxRepo, PruneRepo,
+};
 use tam_types::Timestamp;
 use tokio_util::sync::CancellationToken;
 
@@ -214,6 +217,11 @@ const EMAIL_FROM_FLAG: &str = "--email-from";
 /// same origin in today's deployment shape and nothing holds them to that, and
 /// a mail whose button goes nowhere is worse than a mail not sent.
 const CONSOLE_URL_FLAG: &str = "--console-url";
+/// Where the other server processes reach this one, `host:port`, so a
+/// device's answer to a file read that lands here can be passed to the
+/// process holding the browser's request. A deployment of one process leaves
+/// it out; a deployment of several gives each its pod address.
+const BROKER_ADVERTISE_FLAG: &str = "--broker-advertise";
 /// Where the identity service's internal address route is reached, which is
 /// not necessarily its public base: the fence is the shared secret either way.
 const AUTH_INTERNAL_URL_FLAG: &str = "--auth-internal-url";
@@ -223,6 +231,14 @@ const AUTH_INTERNAL_SECRET_FLAG: &str = "--auth-internal-secret-file";
 /// has an address the identity service vouches for. Optional within the mail
 /// set, and refused without it: with no relay there is nothing to send with.
 const OPS_EMAIL_FLAG: &str = "--ops-email";
+/// The sender the operators' campaigns go out from. Optional within the mail
+/// set, defaulting to [`MARKETING_EMAIL_FROM_DEFAULT`], and refused without
+/// it for the reason `--ops-email` is.
+const MARKETING_EMAIL_FROM_FLAG: &str = "--marketing-email-from";
+/// A subdomain of its own, so a campaign's sending reputation is not the one
+/// the completion and sign-in mail ride on. Resend has to hold the domain as
+/// verified before a send from it is accepted.
+const MARKETING_EMAIL_FROM_DEFAULT: &str = "no-reply@marketing.teachouse.io";
 
 /// The most of a secret file that is read. A relay key and a shared secret are
 /// both under a hundred bytes; this refuses to allocate a mis-pointed gigabyte
@@ -672,6 +688,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // an engine url still owes its sellers their Friday drop.
     eprintln!("tam-server hosting the scheduler pass every {SCHEDULER_INTERVAL_SECS}s");
     spawn_scheduler_pass(state.clone(), loops.clone());
+    // The operators' campaigns: global rows on the application pool, so this
+    // needs no engine url, only the mail set. Without it the rows stay
+    // queued and the operator's log says so.
+    match invocation.mail.as_ref() {
+        Some(mail) => {
+            eprintln!(
+                "tam-server sending operator campaigns from {} at most ten a second",
+                mail.marketing_email_from
+            );
+            campaigns::spawn(
+                MailCampaignRepo::new(state.pool.clone()),
+                notify::AuthAddresses::new(&mail.auth_internal_url, &mail.auth_internal_secret)?,
+                notify::ResendRelay::new(&mail.resend_api_key, &mail.email_from)?
+                    .with_sender(&mail.marketing_email_from),
+                mail.console_url.clone(),
+                loops.clone(),
+            );
+        }
+        None => eprintln!(
+            "tam-server sending no operator campaigns ({RESEND_API_KEY_FLAG} unset); queued ones wait"
+        ),
+    }
 
     let console = match &invocation.ui_dir {
         Some(dir) => {
@@ -763,6 +801,7 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     let mut auth_internal_url = None;
     let mut auth_internal_secret_file = None;
     let mut ops_email = None;
+    let mut marketing_email_from = None;
     let mut posthog_key = None;
     let mut posthog_host = tam_api::telemetry::DEFAULT_HOST.to_owned();
     let mut arguments = std::env::args().skip(1);
@@ -888,6 +927,18 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
                     .next()
                     .ok_or("--auth-internal-secret-file needs a path argument")?,
             );
+        } else if argument == MARKETING_EMAIL_FROM_FLAG {
+            marketing_email_from = Some(
+                arguments
+                    .next()
+                    .ok_or("--marketing-email-from needs an address argument")?,
+            );
+        } else if argument == BROKER_ADVERTISE_FLAG {
+            let given = arguments
+                .next()
+                .ok_or("--broker-advertise needs a host:port argument")?;
+            // Empty is how a template that leaves the address unset arrives.
+            config.broker_advertise = Some(given.trim().to_owned()).filter(|addr| !addr.is_empty());
         } else if argument == OPS_EMAIL_FLAG {
             ops_email = Some(
                 arguments
@@ -942,6 +993,12 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     // Refused rather than half-configured, exactly as the identity and blob
     // pairs are: four fifths of a mail path is a deployment that composes mail
     // it cannot address, cannot send, or points at nothing.
+    if marketing_email_from.is_some() && resend_api_key_file.is_none() {
+        return Err(format!(
+            "{MARKETING_EMAIL_FROM_FLAG} needs {RESEND_API_KEY_FLAG} and the rest of its set"
+        )
+        .into());
+    }
     if ops_email.is_some() && resend_api_key_file.is_none() {
         return Err(format!(
             "{OPS_EMAIL_FLAG} needs {RESEND_API_KEY_FLAG} and the rest of its set"
@@ -964,6 +1021,8 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
                 auth_internal_url: auth_url,
                 auth_internal_secret: read_secret(&secret_path)?,
                 ops_email,
+                marketing_email_from: marketing_email_from
+                    .unwrap_or_else(|| MARKETING_EMAIL_FROM_DEFAULT.to_owned()),
             })
         }
         _ => {

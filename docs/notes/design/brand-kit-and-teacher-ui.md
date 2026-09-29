@@ -51,8 +51,8 @@ Traced from the PDF logo at three times its 1377 by 459 raster, one potrace pass
 | `web/static/brand/house.svg` | the house alone, teal |
 | `web/static/brand/mark.svg` | the house on an indigo tile, the favicon and app icon |
 | `web/static/brand/mark-small.svg` | the same with the window closed, for 16 and 32 pixel renders |
-| `web/static/fonts/poppins-{400,500,600,700}-{latin,latin-ext}.woff2` | Poppins v23 from `fonts.gstatic.com`, 2026-09-11 |
-| `web/static/fonts/inter-400-700-{latin,latin-ext}.woff2` | Inter v20 variable, same source and date |
+| `web/src/lib/fonts/poppins-{400,500,600,700}-{latin,latin-ext}.woff2` | Poppins v23 from `fonts.gstatic.com`, 2026-09-11 |
+| `web/src/lib/fonts/inter-400-700-{latin,latin-ext}.woff2` | Inter v20 variable, same source and date |
 
 `apps/landing/public/` carries byte copies of the brand files and the fonts it uses.
 The three authorable marketplace marks are now SVG, traced from the PNG favicons already landed under `marketplace-logo-sources.md`: `web/static/marketplaces/{tes-mark,tpt-mark,etsy}.svg`.

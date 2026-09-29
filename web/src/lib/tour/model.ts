@@ -9,6 +9,14 @@
 // section keys, and whichever one is on screen is the one lit.
 
 import type { TourState } from '$lib/api';
+import type { IconName } from '$lib/icons';
+
+/** Where the last card sends the seller, and what its button says. */
+export interface TourAction {
+	label: string;
+	href: string;
+	icon: IconName;
+}
 
 export interface TourStep {
 	/** The `data-tour` key of the element this step lights, or `null` for a
@@ -17,13 +25,22 @@ export interface TourStep {
 	title: string;
 	/** One sentence, in the founder's voice. */
 	body: string;
+	/** The last step's button. Earlier steps walk on with Next. */
+	action?: TourAction;
 }
 
-/** The founder's order: the sections as the phone bar lists them, what a
- *  resource is, the app and the connections, the plan, then the first thing
- *  to do. Marketplaces is one step rather than a tab step and an app step,
- *  because both sentences are about the same element. */
-export const TOUR_STEPS: readonly TourStep[] = [
+/** Which of the console's two hosts is showing the tour. */
+export type TourHost = 'app' | 'browser';
+
+/** The two tours: the console's own, which the profile's `tour_state`
+ *  governs, and the app's first-open tour, which is once per device. */
+export type TourKind = 'console' | 'app-first-open';
+
+/** The console tour's steps up to its last card. The founder's order: the
+ *  sections as the phone bar lists them, what a resource is, the app and the
+ *  connections, the plan. Marketplaces is one step rather than a tab step and
+ *  an app step, because both sentences are about the same element. */
+const CONSOLE_STEPS: readonly TourStep[] = [
 	{
 		anchor: 'import',
 		title: 'Import',
@@ -53,13 +70,62 @@ export const TOUR_STEPS: readonly TourStep[] = [
 		anchor: 'billing',
 		title: 'Billing',
 		body: 'Your plan, payments and invoices are under Account.'
+	}
+];
+
+/** Where a browser's last card sends the seller: the Marketplaces page's
+ *  Get-the-app step. The same anchor a browser's Connect scrolls to. */
+export const GET_THE_APP_HREF = '/marketplaces#step-app';
+
+/** The console tour's last card. In a browser the first thing to do is get
+ *  the app, because nothing can be imported or published until a
+ *  marketplace is connected, and connecting happens in the app. In the app
+ *  that is already done, so the first thing is a resource. */
+const START_HERE: Record<TourHost, TourStep> = {
+	browser: {
+		anchor: null,
+		title: 'Start here: download the app',
+		body: 'Your marketplaces are connected in the Teachouse app, so get it on your computer first.',
+		action: { label: 'Get the app', href: GET_THE_APP_HREF, icon: 'download' }
+	},
+	app: {
+		anchor: null,
+		title: 'Start here',
+		body: 'Create your first resource, and we will walk you through each part of it.',
+		action: { label: 'Create your first resource', href: '/resources/new', icon: 'circle-plus' }
+	}
+};
+
+/** The app's first-open tour: short, and about the one thing only the app
+ *  does. */
+const APP_FIRST_OPEN_STEPS: readonly TourStep[] = [
+	{
+		anchor: null,
+		title: 'Welcome to the Teachouse app',
+		body: 'Your marketplaces are connected here, in the app, once on this device.'
+	},
+	{
+		anchor: 'marketplaces',
+		title: 'Marketplaces',
+		body: 'Open Marketplaces and press Connect beside each place you sell.'
 	},
 	{
 		anchor: null,
-		title: 'Start here',
-		body: 'Create your first resource, and we will walk you through each part of it.'
+		title: 'Then work from anywhere',
+		body: 'Importing, distributing and managing your resources work in the app or in your browser.',
+		action: { label: 'Connect a marketplace', href: '/marketplaces', icon: 'store' }
 	}
 ];
+
+/** The steps of one tour, as one host shows it. */
+export function tourSteps(kind: TourKind, host: TourHost): readonly TourStep[] {
+	return kind === 'app-first-open' ? APP_FIRST_OPEN_STEPS : [...CONSOLE_STEPS, START_HERE[host]];
+}
+
+/** The key, per device, that records the app's first-open tour as done.
+ *  Local storage rather than the profile, because it is about this device:
+ *  the same seller opening the app on a second computer is shown it again. */
+export const APP_TOUR_KEY = 'teachouse.app-tour';
 
 /** What the shell knows when it decides whether to offer the tour. */
 export interface OfferContext {
@@ -95,9 +161,33 @@ export function shouldOfferTour({ tour, impersonating, checkoutSuccess }: OfferC
 	}
 }
 
-/** The step after `index`, held at the last one. */
-export function nextIndex(index: number): number {
-	return Math.min(index + 1, TOUR_STEPS.length - 1);
+/** What the shell knows when it decides which tour, if any, to open. */
+export interface WhichTourContext extends OfferContext {
+	host: TourHost;
+	/** This device has already shown the app's first-open tour. */
+	appTourSeen: boolean;
+}
+
+/** Which tour the shell opens by itself, or `null` for none.
+ *
+ * The app's first open on a device comes first: it is the one moment the
+ * seller is standing where marketplaces are connected, and it is short. The
+ * console tour, if it is still due, is offered on the next load instead,
+ * because two tours back to back would be one too many. A browser never gets
+ * the app's tour; an operator impersonating gets neither. */
+export function whichTour(context: WhichTourContext): TourKind | null {
+	if (context.impersonating) {
+		return null;
+	}
+	if (context.host === 'app' && !context.appTourSeen) {
+		return 'app-first-open';
+	}
+	return shouldOfferTour(context) ? 'console' : null;
+}
+
+/** The step after `index` in a tour of `length` steps, held at the last. */
+export function nextIndex(index: number, length: number): number {
+	return Math.min(index + 1, length - 1);
 }
 
 /** The step before `index`, held at the first one. */
@@ -185,7 +275,10 @@ export function placeTour(target: Rect | null, viewport: Size, card: Size): Plac
 				};
 
 	if (viewport.width < DOCK_BELOW) {
-		if (spotlight !== null && spotlight.top + spotlight.height > viewport.height - card.height - GAP) {
+		if (
+			spotlight !== null &&
+			spotlight.top + spotlight.height > viewport.height - card.height - GAP
+		) {
 			return { spotlight, card: { kind: 'docked', bottom: viewport.height - spotlight.top + GAP } };
 		}
 		return { spotlight, card: { kind: 'docked', bottom: 0 } };

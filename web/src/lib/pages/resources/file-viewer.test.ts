@@ -1,11 +1,14 @@
-import { describe, expect, it } from 'vitest';
-import type { FileView } from '$lib/api';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiFailure, type FileView, type LibraryHolderView } from '$lib/api';
+import type { APIErrorCode } from '$lib/generated/vocab';
 import {
-	DEVICE_ONLY,
-	STORAGE_FULL,
+	NO_DEVICE_HAS_IT,
+	STREAMING_UNAVAILABLE,
 	currentPage,
 	keptPdfSource,
 	pageWindow,
+	reachOf,
+	reachSentence,
 	sourceOfKept,
 	storedPdfSource,
 	viewFrom,
@@ -21,6 +24,7 @@ function file(over: Partial<FileView>): FileView {
 		hash: 'a'.repeat(64),
 		scan: 'clean',
 		name: 'a.pdf',
+		custody: { kind: 'uploaded' },
 		...over
 	};
 }
@@ -82,39 +86,107 @@ describe('the kept source', () => {
 	});
 });
 
+const laptop: LibraryHolderView = { device: 'd1', name: 'Laptop', online: false };
+const phone: LibraryHolderView = { device: 'd2', name: 'Pixel', online: true };
+
+function refusal(status: number, code: APIErrorCode, detail?: unknown): ApiFailure {
+	return new ApiFailure(status, {
+		status,
+		errors: [{ code, message: `server said ${code}`, detail }]
+	});
+}
+
 describe('where View and the preview maker read a file from', () => {
 	const product = 'p1';
+	const imported = (holders: LibraryHolderView[]) =>
+		file({ custody: { kind: 'devices', holders } });
 
-	it('streams Teachouse’s copy wherever there is one, even inside the app', () => {
-		const from = viewFrom(product, file({ server_copy: 'stored' }), null, true);
+	afterEach(() => vi.unstubAllGlobals());
+
+	it('reads an upload through Teachouse with no probe, even inside the app', () => {
+		const from = viewFrom(product, file({}), null, true);
 		expect(from.kind).toBe('server');
 		expect(from.kind === 'server' && from.source.url).toBe('/v1/products/p1/files/f1/content');
+		expect(from.kind === 'server' && from.source.probe).toBeUndefined();
 	});
 
-	it('reads a file older servers never labelled as Teachouse’s own', () => {
-		expect(viewFrom(product, file({}), null, false).kind).toBe('server');
+	it('prefers this device’s own copy of an imported file over asking another device', () => {
+		expect(viewFrom(product, imported([laptop]), null, true).kind).toBe('device');
 	});
 
-	it('falls back to this device’s kept copy, and otherwise says the file is on the device', () => {
-		const imported = file({ server_copy: 'device_only' });
-		expect(viewFrom(product, imported, null, true).kind).toBe('device');
-		expect(viewFrom(product, imported, null, false)).toEqual({
+	it('streams an imported file from its devices, probing first', () => {
+		const from = viewFrom(product, imported([laptop]), null, false);
+		expect(from.kind).toBe('server');
+		expect(from.kind === 'server' && from.source.url).toBe('/v1/products/p1/files/f1/content');
+		expect(from.kind === 'server' && typeof from.source.probe).toBe('function');
+	});
+
+	it('says no device has an imported file nothing reports', () => {
+		expect(viewFrom(product, imported([]), null, false)).toEqual({
 			kind: 'unavailable',
-			sentence: DEVICE_ONLY
-		});
-		expect(viewFrom(product, file({ server_copy: 'storage_full' }), null, false)).toEqual({
-			kind: 'unavailable',
-			sentence: STORAGE_FULL
+			sentence: NO_DEVICE_HAS_IT
 		});
 	});
 
-	it('cuts a preview from the stored PDF only once Teachouse holds it', async () => {
-		const copied = storedPdfSource(product, [file({ server_copy: 'stored' })]);
-		expect(copied?.unavailable).toBeUndefined();
-		expect(copied?.url).toBe('/v1/products/p1/files/f1/content');
-		const waiting = storedPdfSource(product, [file({ server_copy: 'device_only' })]);
-		expect(waiting?.unavailable).toBe(DEVICE_ONLY);
-		await expect(waiting?.bytes()).rejects.toThrow(DEVICE_ONLY);
+	it('probes the content URL and passes a ready answer through', async () => {
+		const seen: string[] = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (url: string) => {
+				seen.push(url);
+				return new Response(null, { status: 204 });
+			})
+		);
+		const source = storedPdfSource(product, [imported([laptop])]);
+		expect(await source?.probe?.()).toEqual({ kind: 'ready' });
+		expect(seen).toEqual(['/v1/products/p1/files/f1/content?probe=1']);
+	});
+
+	it('cuts a preview from the first PDF payload, uploaded or imported', () => {
+		expect(storedPdfSource(product, [file({})])?.probe).toBeUndefined();
+		expect(storedPdfSource(product, [imported([laptop])])?.url).toBe(
+			'/v1/products/p1/files/f1/content'
+		);
 		expect(storedPdfSource(product, [file({ kind: 'zip' })])).toBeNull();
+	});
+});
+
+describe('what a refused probe says', () => {
+	it('names an online holder over the device the server tried', () => {
+		const reach = reachOf(refusal(409, 'device_offline', { device: 'Laptop' }), [phone, laptop]);
+		expect(reachSentence(reach)).toBe(
+			'Your file is on Pixel, which is offline. Open the Teachouse app there.'
+		);
+		expect(reach.kind).toBe('offline');
+	});
+
+	it('falls back to the server’s device, then to the first holder', () => {
+		expect(reachOf(refusal(409, 'device_offline', { device: 'Laptop' }), [])).toEqual({
+			kind: 'offline',
+			device: 'Laptop'
+		});
+		expect(reachOf(refusal(409, 'device_offline'), [laptop])).toEqual({
+			kind: 'offline',
+			device: 'Laptop'
+		});
+	});
+
+	it('words a missing file and a broker that is down without the Explain', () => {
+		expect(reachOf(refusal(404, 'resource_missing'), [laptop])).toEqual({
+			kind: 'refused',
+			sentence: NO_DEVICE_HAS_IT
+		});
+		expect(reachOf(refusal(503, 'streaming_unavailable'), [laptop])).toEqual({
+			kind: 'refused',
+			sentence: STREAMING_UNAVAILABLE
+		});
+	});
+
+	it('keeps the server’s own words for anything else, and says so when nothing answered', () => {
+		expect(reachOf(refusal(401, 'session_required'), [])).toEqual({
+			kind: 'refused',
+			sentence: 'server said session_required'
+		});
+		expect(reachOf(new TypeError('network'), []).kind).toBe('refused');
 	});
 });

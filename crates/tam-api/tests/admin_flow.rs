@@ -63,7 +63,7 @@ const ADMIN_PATHS: [&str; 9] = [
 /// loops would be testing method routing rather than the operator fence.
 /// Their own refusal is asserted by `a_seller_cannot_grant_themselves_a_plan`
 /// and `an_operator_credits_moves_once_per_reason`.
-const ADMIN_PATHS_UNCOVERED: [&str; 22] = [
+const ADMIN_PATHS_UNCOVERED: [&str; 29] = [
     "/{version}/admin/marketplace-requests",
     // Pricing and the site switches read the application pool, like the
     // guides below, so they serve with no backoffice database; their
@@ -103,6 +103,17 @@ const ADMIN_PATHS_UNCOVERED: [&str; 22] = [
     // The site-wide switches are global and on the application pool, for the
     // guide corpus's reason; their refusal is asserted in `site_flow`.
     "/{version}/admin/site",
+    // The operators' mail: global tables on the application pool, with the
+    // audience count reading plans through the backoffice pool. Their refusal
+    // for a seller and an anonymous caller is asserted in
+    // `mail_campaigns_flow`.
+    "/{version}/admin/mail/audience",
+    "/{version}/admin/mail/preview",
+    "/{version}/admin/mail/images",
+    "/{version}/admin/mail/test",
+    "/{version}/admin/mail/campaigns",
+    "/{version}/admin/mail/campaigns/{id}",
+    "/{version}/admin/mail/campaigns/{id}/retry",
 ];
 
 #[expect(

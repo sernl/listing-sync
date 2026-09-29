@@ -2,12 +2,14 @@
 	import { untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import Button from '$lib/Button.svelte';
-	import { placeTour, visibleRect, TOUR_STEPS, type Rect, type Size } from './model';
+	import { placeTour, visibleRect, type Rect, type Size, type TourKind } from './model';
 	import { tour } from './tour.svelte';
 
-	/** Called once the tour closes, with how it ended. The shell records it on
-	 *  the profile; the tour itself knows nothing of who is signed in. */
-	let { onEnd }: { onEnd: (outcome: 'completed' | 'skipped') => void } = $props();
+	/** Called once a tour closes, with which tour and how it ended. The shell
+	 *  records it -- the console tour on the profile, the app's first-open
+	 *  tour on the device; the tour itself knows nothing of who is signed in. */
+	let { onEnd }: { onEnd: (outcome: 'completed' | 'skipped', kind: TourKind) => void } =
+		$props();
 
 	let box = $state<HTMLDialogElement>();
 	let primary = $state<HTMLElement>();
@@ -15,7 +17,7 @@
 	let viewport = $state<Size>({ width: 0, height: 0 });
 	let cardHeight = $state(0);
 
-	const step = $derived(TOUR_STEPS[tour.index]);
+	const step = $derived(tour.steps[tour.index]);
 	const placement = $derived(
 		placeTour(target, viewport, { width: viewport.width, height: cardHeight })
 	);
@@ -76,7 +78,7 @@
 	function end(finished: boolean) {
 		const outcome = finished || tour.last ? 'completed' : 'skipped';
 		tour.close();
-		onEnd(outcome);
+		onEnd(outcome, tour.kind);
 	}
 
 	function keys(event: KeyboardEvent) {
@@ -106,9 +108,9 @@
 		}
 	}
 
-	async function createFirst() {
+	async function act(href: string) {
 		end(true);
-		await goto('/resources/new');
+		await goto(href);
 	}
 </script>
 
@@ -146,7 +148,7 @@
 			style:bottom={placement.card.kind === 'docked' ? `${placement.card.bottom}px` : null}
 			bind:clientHeight={cardHeight}
 		>
-			<p class="count">{tour.index + 1} of {TOUR_STEPS.length}</p>
+			<p class="count">{tour.index + 1} of {tour.steps.length}</p>
 			<h2 id="tour-title">{step.title}</h2>
 			<p id="tour-body">{step.body}</p>
 			<div class="actions">
@@ -158,9 +160,10 @@
 					<Button tier="quiet" onclick={() => tour.back()}>Back</Button>
 				{/if}
 				<span class="primary" bind:this={primary}>
-					{#if tour.last}
-						<Button tier="primary" icon="circle-plus" onclick={createFirst}>
-							Create your first resource
+					{#if step.action}
+						{@const action = step.action}
+						<Button tier="primary" icon={action.icon} onclick={() => act(action.href)}>
+							{action.label}
 						</Button>
 					{:else}
 						<Button tier="primary" onclick={() => tour.next()}>Next</Button>

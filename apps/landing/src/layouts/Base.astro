@@ -109,15 +109,23 @@ const posthogKey = import.meta.env.PUBLIC_POSTHOG_KEY;
 		    which the browser caches for a minute. The seasonal theme is decided
 		    by the server's clock, so this only copies `theme.active` onto
 		    `<html>` as `data-season`, which is all `styles/season.css` keys on;
-		    `?season=halloween` or `?season=christmas` forces one, which is the
-		    operator's preview. The banner is text and a link written by
+		    `?season=<name>` forces one of the names below, which is the
+		    operator's preview; the list is `ThemeName` in
+		    `crates/tam-api/src/site.rs`. The banner is text and a link written by
 		    `textContent` and `href`, never as markup. A failed read changes
 		    nothing. Hashed into the policy by `tam-server` like the blocks above. */}
 		<script is:inline>
 			(function () {
 				var root = document.documentElement;
+				var seasons = [
+					'halloween', 'christmas', 'valentines', 'april-fools', 'fourth-of-july',
+					'back-to-school', 'winter', 'summer', 'spring', 'autumn', 'thanksgiving',
+					'new-year', 'matariki', 'guy-fawkes', 'st-patricks', 'easter'
+				];
 				var forced = new URLSearchParams(location.search).get('season');
-				if (forced === 'halloween' || forced === 'christmas') {
+				if (seasons.indexOf(forced) === -1) {
+					forced = null;
+				} else {
 					root.dataset.season = forced;
 				}
 				fetch('/v1/site', { credentials: 'same-origin' })

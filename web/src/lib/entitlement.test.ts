@@ -4,18 +4,14 @@ import { PLANS } from '$lib/generated/plans';
 import type { Plan } from '$lib/generated/vocab';
 import {
 	UNLIMITED,
-	capabilityLines,
 	dayMonth,
 	featureReason,
 	grantNotice,
 	limitReason,
-	movesLimit,
 	movesLine,
 	movesReason,
-	packEditLine,
 	sectionAllowed,
 	sectionReason,
-	supportLabel,
 	usageLine,
 	usageLines
 } from './entitlement';
@@ -40,6 +36,10 @@ function usage(over: Partial<EntitlementUsage> = {}): EntitlementUsage {
 		collections: 0,
 		labels: 0,
 		devices: 0,
+		storage_bytes: 0,
+		previews: 0,
+		ai_fills: 0,
+		month_resets_at: Date.UTC(2026, 9, 1),
 		...over
 	};
 }
@@ -133,15 +133,44 @@ describe('why a control is disabled', () => {
 
 describe('why a counted allowance is full', () => {
 	it('is nothing while one more would fit', () => {
-		expect(limitReason(caps('free'), usage({ resources: 499 }), 'resources')).toBeNull();
+		const max = caps('free').resources_max;
+		expect(limitReason(caps('free'), usage({ resources: max - 1 }), 'resources')).toBeNull();
 	});
 
 	// Drawn before the write, so the question is whether one more fits — not
 	// whether the last one did.
 	it('refuses at the cap rather than past it', () => {
-		expect(limitReason(caps('free'), usage({ resources: 500 }), 'resources')).toBe(
-			'Your plan includes 500 resources. Upgrade to add more.'
+		expect(limitReason(caps('free'), usage({ resources: 100 }), 'resources')).toBe(
+			'Your plan includes 100 resources. Upgrade to add more.'
 		);
+	});
+
+	// Grandfathered: a seller over a ceiling that was lowered keeps what they
+	// have and is refused the next one, in the same words.
+	it('refuses a seller already over the ceiling', () => {
+		expect(limitReason(caps('free'), usage({ resources: 340 }), 'resources')).toBe(
+			'Your plan includes 100 resources. Upgrade to add more.'
+		);
+	});
+
+	// A monthly allowance comes back on the first, so its sentence says the
+	// seller can wait as well as upgrade, as the server's refusal does.
+	it('says a monthly allowance renews', () => {
+		const max = caps('free').previews_per_month;
+		expect(limitReason(caps('free'), usage({ previews: max - 1 }), 'previews')).toBeNull();
+		expect(limitReason(caps('free'), usage({ previews: max }), 'previews')).toBe(
+			`Your plan includes ${max} watermarked previews a month. Upgrade to make more, or wait until next month.`
+		);
+		expect(
+			limitReason({ ...caps('free'), previews_per_month: 1 }, usage({ previews: 1 }), 'previews')
+		).toBe(
+			'Your plan includes 1 watermarked preview a month. Upgrade to make more, or wait until next month.'
+		);
+	});
+
+	it('never refuses previews on a plan with no monthly ceiling', () => {
+		expect(caps('studio').previews_per_month).toBe(UNLIMITED);
+		expect(limitReason(caps('studio'), usage({ previews: 10_000 }), 'previews')).toBeNull();
 	});
 
 	it('agrees its noun with the figure, and names the act', () => {
@@ -177,18 +206,27 @@ describe('the allowance lines the Account page reads out', () => {
 		);
 	});
 
+	it('says a monthly count is this month’s', () => {
+		expect(usageLine(3, 5, 'previews')).toBe('3 of 5 watermarked previews this month');
+		expect(usageLine(40, UNLIMITED, 'previews')).toBe(
+			'40 watermarked previews this month, no limit'
+		);
+	});
+
 	it('lists every counted allowance, marking the full ones', () => {
-		const rows = usageLines(usage({ resources: 500, labels: 2 }), caps('free'));
+		const rows = usageLines(usage({ resources: 100, labels: 2, previews: 5 }), caps('free'));
 		expect(rows.map((row) => row.limit)).toEqual([
 			'resources',
 			'marketplaces',
 			'templates',
 			'collections',
 			'labels',
-			'devices'
+			'devices',
+			'previews'
 		]);
 		expect(rows.find((row) => row.limit === 'resources')?.full).toBe(true);
 		expect(rows.find((row) => row.limit === 'labels')?.full).toBe(false);
+		expect(rows.find((row) => row.limit === 'previews')?.full).toBe(true);
 	});
 });
 
@@ -270,69 +308,5 @@ describe('the notice over a plan a person set', () => {
 	it('is nothing for a plan that arrived through checkout, or through nothing', () => {
 		expect(grantNotice(grant())).toBeNull();
 		expect(grantNotice(grant({ plan: 'free', granted_by: null }))).toBeNull();
-	});
-});
-
-describe('what a plan card lists', () => {
-	it('reads the plan table for the subscription', () => {
-		const lines = capabilityLines(caps('subscriber'));
-		expect(lines).toContain('Unlimited resources');
-		expect(lines).toContain('All marketplaces');
-		expect(lines).toContain('Import from a spreadsheet or a marketplace');
-		expect(lines).toContain('25 moves a month, and unused moves carry over up to 75');
-		expect(lines).toContain('Edit resources in Teachouse and sync the edits across all platforms');
-		expect(lines).toContain('Analytics');
-		expect(lines).toContain('200 AI form fills a month, coming soon');
-		expect(lines).toContain('Email support, two business days');
-	});
-
-	// Only what the plan carries: a card that also listed what it withholds
-	// would be a comparison table with one column.
-	it('leaves out what a plan does not carry', () => {
-		const lines = capabilityLines(caps('free'));
-		expect(lines).not.toContain('Analytics');
-		expect(lines.some((line) => line.includes('for changes every'))).toBe(false);
-		expect(lines.some((line) => line.includes('carry over up to'))).toBe(false);
-	});
-
-	// Export is on every plan, and it is the one line that has to be there:
-	// a seller who cannot get their catalogue out will not put one in.
-	it('lists export on every plan', () => {
-		for (const plan of PLANS) {
-			expect(capabilityLines(plan.capabilities)).toContain('Spreadsheet export');
-		}
-	});
-
-	it('states the editing window every plan gives a moved listing', () => {
-		expect(packEditLine(caps('free'))).toBe('Moved listings can be edited for 90 days.');
-		for (const plan of PLANS) {
-			expect(capabilityLines(plan.capabilities)).toContain(packEditLine(plan.capabilities));
-		}
-	});
-});
-
-describe('what a plan hands out in moves', () => {
-	// The ceiling is part of the offer: a month's moves that lapsed the moment
-	// the next month landed would be a smaller promise than the one made.
-	it('states the monthly run with what it saves up to', () => {
-		expect(movesLimit(caps('subscriber'))).toBe('25 moves a month, and unused moves carry over up to 75');
-	});
-
-	it('states the free plan’s handful as a one-off rather than as a month', () => {
-		expect(movesLimit(caps('free'))).toBe('5 free moves to start');
-	});
-
-	it('is nothing where every move has to be bought', () => {
-		expect(
-			movesLimit({ ...caps('free'), moves_per_month: 0, free_moves_lifetime: 0 })
-		).toBeNull();
-	});
-});
-
-describe('what a level of support promises', () => {
-	it('reads out each level the plan table uses', () => {
-		expect(supportLabel('guides')).toBe('Guides');
-		expect(supportLabel('email_2_days')).toBe('Email support, two business days');
-		expect(supportLabel('email_1_day')).toBe('Email support, one business day');
 	});
 });

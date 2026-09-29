@@ -57,15 +57,17 @@ pub struct LibraryResource {
 pub struct Holder {
     pub device: String,
     pub name: String,
-    pub last_seen_at: Timestamp,
+    /// When the device last polled for streaming asks; `None` if it never
+    /// has. Only this says whether it can serve a file now.
+    pub stream_polled_at: Option<Timestamp>,
 }
 
 /// Whether a file can be reached now, as the browser's filter asks it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LibraryAvailability {
-    /// Some machine holding it checked in inside the online window.
+    /// Some device holding it polled for asks inside the serving window.
     Online,
-    /// Machines hold it, and none of them has checked in lately.
+    /// Devices hold it, and none of them is polling for asks.
     Offline,
     /// The catalogue names the digest and no machine reports holding it.
     Missing,
@@ -116,10 +118,11 @@ pub struct LibraryFilter<'a> {
     pub linked: Option<LibraryLinked>,
     pub offset: u32,
     pub limit: u32,
-    /// A holder that checked in at or after this instant counts as online.
-    /// Passed in rather than read here, so one page cannot disagree with
-    /// itself about what "now" was.
-    pub online_after: Timestamp,
+    /// A holder that polled for streaming asks at or after this instant
+    /// counts as online: the same test the broker uses before it sends an
+    /// ask. Passed in rather than read here, so one page cannot disagree
+    /// with itself about what "now" was.
+    pub serving_after: Timestamp,
 }
 
 /// One page of the file browser, with the figure its pager needs.
@@ -248,7 +251,7 @@ impl DeviceLibraryRepo {
         filter: &LibraryFilter<'_>,
     ) -> Result<LibraryPage, StorageError> {
         let limit = filter.limit.clamp(1, LIBRARY_LIMIT_MAX);
-        let online_after = timestamp_to_db(filter.online_after)?;
+        let serving_after = timestamp_to_db(filter.serving_after)?;
         let mut tx = self.pool.begin().await?;
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             .execute(&mut *tx)
@@ -261,7 +264,7 @@ impl DeviceLibraryRepo {
             r#"WITH held AS (
                    SELECT h.hash AS hash,
                           max(h.byte_len) AS byte_len,
-                          bool_or(d.last_seen_at >= $2) AS online,
+                          COALESCE(bool_or(d.stream_polled_at >= $2), false) AS online,
                           array_agg(h.device_id) AS devices
                      FROM device_library_holding h
                      JOIN device d ON d.org_id = h.org_id AND d.id = h.device_id
@@ -337,7 +340,7 @@ impl DeviceLibraryRepo {
                  LEFT JOIN chosen c ON true
                 ORDER BY c.file_name NULLS LAST, c.hash"#,
             uuid_to_db(org.0),
-            online_after,
+            serving_after,
             filter.search,
             filter.device,
             filter.availability.map(LibraryAvailability::as_db),
@@ -369,7 +372,7 @@ impl DeviceLibraryRepo {
         }
         let hashes: Vec<Vec<u8>> = files.iter().map(|file| file.hash.0.to_vec()).collect();
         let holders = sqlx::query!(
-            "SELECT h.hash, h.device_id, d.name AS device_name, d.last_seen_at \
+            "SELECT h.hash, h.device_id, d.name AS device_name, d.stream_polled_at \
                FROM device_library_holding h \
                JOIN device d ON d.org_id = h.org_id AND d.id = h.device_id \
               WHERE h.org_id = $1 AND d.revoked_at IS NULL AND h.hash = ANY ($2) \
@@ -413,7 +416,7 @@ impl DeviceLibraryRepo {
                 file.holders.push(Holder {
                     device: row.device_id,
                     name: row.device_name,
-                    last_seen_at: timestamp_from_db(row.last_seen_at),
+                    stream_polled_at: row.stream_polled_at.map(timestamp_from_db),
                 });
             }
         }

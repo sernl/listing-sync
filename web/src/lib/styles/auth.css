@@ -1,0 +1,10 @@
+/* The signed-out screens' whole stylesheet: the reset the console builds on,
+ * the tokens, and the frame. Everything else in `app.css` -- the shell, the
+ * component catalogue, the page classes and Tailwind's utilities -- is for
+ * screens a signed-out visitor never sees, and is left for the console's own
+ * layout to fetch. The layer order is the one `@import 'tailwindcss'` declares,
+ * so the reset loses to every rule below it exactly as it does in `app.css`. */
+@layer theme, base, components, utilities;
+@import 'tailwindcss/preflight.css' layer(base);
+@import './tokens.css';
+@import './frame.css';

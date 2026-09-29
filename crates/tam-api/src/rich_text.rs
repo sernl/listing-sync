@@ -15,17 +15,21 @@
 
 use pulldown_cmark::{html::push_html, Options, Parser};
 
-enum Node {
+pub(crate) enum Node {
     Text(String),
     Element(Element),
 }
 
 /// The default is the nameless root every parse starts from.
 #[derive(Default)]
-struct Element {
-    name: String,
-    href: Option<String>,
-    children: Vec<Node>,
+pub(crate) struct Element {
+    pub(crate) name: String,
+    pub(crate) href: Option<String>,
+    /// An image's `src` and `alt`, as written; kept for the mail body's
+    /// allow-list (`crate::mail_campaigns`), which admits pictures.
+    pub(crate) src: Option<String>,
+    pub(crate) alt: Option<String>,
+    pub(crate) children: Vec<Node>,
 }
 
 /// Elements with no closing tag.
@@ -110,7 +114,7 @@ fn is_list(name: &str) -> bool {
 }
 
 /// Named and numeric references decoded; an unknown one stays as written.
-fn decode_entities(text: &str) -> String {
+pub(crate) fn decode_entities(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some((before, after)) = rest.split_once('&') {
@@ -147,7 +151,7 @@ fn decode_entities(text: &str) -> String {
     out
 }
 
-fn escape_text(text: &str, out: &mut String) {
+pub(crate) fn escape_text(text: &str, out: &mut String) {
     for c in text.chars() {
         match c {
             '&' => out.push_str("&amp;"),
@@ -158,7 +162,7 @@ fn escape_text(text: &str, out: &mut String) {
     }
 }
 
-fn escape_attribute(text: &str) -> String {
+pub(crate) fn escape_attribute(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
         match c {
@@ -191,8 +195,8 @@ fn safe_href(raw: &str) -> Option<String> {
         .then_some(href)
 }
 
-/// The `href` among a tag's attributes, as written.
-fn href_of(attributes: &str) -> Option<String> {
+/// One named attribute among a tag's attributes, as written.
+fn attribute_of(attributes: &str, wanted: &str) -> Option<String> {
     let bytes = attributes.as_bytes();
     let mut at = 0;
     while at < bytes.len() {
@@ -237,7 +241,7 @@ fn href_of(attributes: &str) -> Option<String> {
                 value = attributes.get(from..at).unwrap_or_default();
             }
         }
-        if name.eq_ignore_ascii_case("href") {
+        if name.eq_ignore_ascii_case(wanted) {
             return Some(value.to_owned());
         }
     }
@@ -247,7 +251,7 @@ fn href_of(attributes: &str) -> Option<String> {
 /// A forgiving tree: unknown closing tags are ignored, unclosed ones end with
 /// their parent, and a new paragraph or list item closes the open one the way
 /// a browser would. Text is decoded.
-fn parse(html: &str) -> Element {
+pub(crate) fn parse(html: &str) -> Element {
     fn close_to(stack: &mut Vec<Element>, name: &str, fence: &[&str]) {
         if let Some(found) = (1..stack.len())
             .rev()
@@ -345,7 +349,15 @@ fn parse(html: &str) -> Element {
             close_to(&mut stack, "li", &["ul", "ol"]);
         }
         let element = Element {
-            href: (name == "a").then(|| href_of(attributes)).flatten(),
+            href: (name == "a")
+                .then(|| attribute_of(attributes, "href"))
+                .flatten(),
+            src: (name == "img")
+                .then(|| attribute_of(attributes, "src"))
+                .flatten(),
+            alt: (name == "img")
+                .then(|| attribute_of(attributes, "alt"))
+                .flatten(),
             name,
             children: Vec::new(),
         };

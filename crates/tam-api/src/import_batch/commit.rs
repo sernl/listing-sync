@@ -425,9 +425,27 @@ async fn apply_row(
     // After the create, because `product_label` names a product. A label the
     // organisation does not hold yet is created by this write, which is what
     // the report's new-label warning told the seller it would do.
+    //
+    // Counted either side of the write, because only a row that creates a
+    // label spends the plan's allowance: a seller already over a lowered
+    // ceiling keeps using the labels they have, and a row that would make a
+    // new one past it fails with the plan's sentence like the label editor.
+    let own_before = tam_storage::own_label_count_in(&mut tx, org)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
     crate::catalogue::set_labels(&mut tx, org, row.product, &labels, now)
         .await
         .map_err(|error| storage_fault(state, &error))?;
+    let own_after = tam_storage::own_label_count_in(&mut tx, org)
+        .await
+        .map_err(|error| storage_fault(state, &error))?;
+    if own_after > own_before && own_after > i64::from(caps.labels_max) {
+        return Err(crate::entitlement::quota_refusal(
+            crate::entitlement::QuotaKind::Labels,
+            own_before,
+            u64::from(caps.labels_max),
+        ));
+    }
     tam_storage::record_row_created(&mut tx, org, batch, at, already)
         .await
         .map_err(|error| storage_fault(state, &error))?;

@@ -78,7 +78,7 @@ pub const EMBEDDED_PUBLIC_KEYS: &[[u8; PUBLIC_KEY_BYTES]] =
 /// that residual is acceptable is that no key reaches this constant except one a
 /// human deliberately set: `build.rs` refuses all-zero at the build boundary and
 /// emits an empty set for the absent case, so this check is the second of two.
-const SMALL_ORDER_KEY: [u8; PUBLIC_KEY_BYTES] = [0u8; PUBLIC_KEY_BYTES];
+pub(crate) const SMALL_ORDER_KEY: [u8; PUBLIC_KEY_BYTES] = [0u8; PUBLIC_KEY_BYTES];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EntitlementError {

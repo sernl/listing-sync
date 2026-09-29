@@ -1,0 +1,60 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, device_id, hash, first_byte, last_byte, capability, pod FROM device_stream WHERE org_id = $1 AND id = $2 AND expires_at > $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "device_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 3,
+        "name": "first_byte",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "last_byte",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "capability",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "pod",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "74a2d1ba5059fda74a577881d83fafa9a2dc9643ffb23605075389fdf15009fc"
+}
