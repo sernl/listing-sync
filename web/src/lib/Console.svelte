@@ -34,6 +34,7 @@
 	import { queryKeys } from '$lib/query';
 	import SearchPalette from '$lib/SearchPalette.svelte';
 	import { toast } from '$lib/toast';
+	import type { Season } from '$lib/site';
 	import { opensPalette } from '$lib/search-palette';
 	import { capture } from '$lib/posthog';
 	import Tour from '$lib/tour/Tour.svelte';
@@ -49,7 +50,7 @@
 		onLogout: () => void;
 		/** The seasonal theme showing on the landing page, marked here with one
 		 *  small picture; null outside a season. */
-		season?: 'halloween' | 'christmas' | null;
+		season?: Season | null;
 	} = $props();
 
 	const organisation = createQuery(() => ({ queryKey: queryKeys.org, queryFn: () => api.org() }));

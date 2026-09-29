@@ -1,6 +1,9 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { SiteView } from './api';
-import { activeSeason, siteGate } from './site';
+import { activeSeason, SEASONS, siteGate } from './site';
+
+const REPO = new URL('../../../', import.meta.url).pathname;
 
 function site(on: boolean, theme: Partial<SiteView['theme']> = {}): SiteView {
 	return {
@@ -45,5 +48,35 @@ describe('the season mark', () => {
 		expect(activeSeason(site(false, { name: 'halloween', active: false }))).toBeNull();
 		expect(activeSeason(site(false, { name: 'none', active: true }))).toBeNull();
 		expect(activeSeason(null)).toBeNull();
+	});
+
+	it('marks a theme whose name is more than one word under its wire spelling', () => {
+		expect(activeSeason(site(false, { name: 'new-year', active: true }))).toBe('new-year');
+		expect(activeSeason(site(false, { name: 'st-patricks', active: true }))).toBe('st-patricks');
+	});
+});
+
+describe('the seasonal themes', () => {
+	it('offers each of the sixteen themes once, and never None as a theme', () => {
+		const names = SEASONS.map((entry) => entry.name);
+		expect(new Set(names).size).toBe(16);
+		expect(names).not.toContain('none');
+	});
+
+	// A theme the admin page offers but the landing page or the console does
+	// not know saves fine and then shows nothing, so every place that spells
+	// the names is held to this list.
+	it('has a console mark, landing rules, stickers and a preview for every theme it offers', () => {
+		const css = readFileSync(`${REPO}apps/landing/src/styles/season.css`, 'utf8');
+		const base = readFileSync(`${REPO}apps/landing/src/layouts/Base.astro`, 'utf8');
+		const missing = SEASONS.flatMap(({ name }) =>
+			[
+				existsSync(`${REPO}web/static/seasons/${name}.svg`) ? null : `${name}: console mark`,
+				css.includes(`[data-season='${name}']`) ? null : `${name}: season.css rules`,
+				existsSync(`${REPO}apps/landing/public/seasons/${name}`) ? null : `${name}: stickers`,
+				base.includes(`'${name}'`) ? null : `${name}: ?season= preview in Base.astro`
+			].filter((gap) => gap !== null)
+		);
+		expect(missing).toEqual([]);
 	});
 });

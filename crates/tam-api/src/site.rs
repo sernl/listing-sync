@@ -51,13 +51,30 @@ pub struct Maintenance {
     pub message: Option<String>,
 }
 
+/// The seasonal themes, as the landing page's `html[data-season]` and the
+/// console's `/seasons/<name>.svg` mark spell them. Keep in step with
+/// `SeasonName` in `web/src/lib/api.ts`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum ThemeName {
     #[default]
     None,
     Halloween,
     Christmas,
+    Valentines,
+    AprilFools,
+    FourthOfJuly,
+    BackToSchool,
+    Winter,
+    Summer,
+    Spring,
+    Autumn,
+    Thanksgiving,
+    NewYear,
+    Matariki,
+    GuyFawkes,
+    StPatricks,
+    Easter,
 }
 
 /// The theme as stored: a name and the UTC days it runs between, both ends
@@ -427,5 +444,38 @@ mod tests {
         assert!(checked_theme(backwards).is_err());
         let impossible = theme(ThemeName::Halloween, Some("2026-02-30"), None);
         assert!(checked_theme(impossible).is_err());
+    }
+
+    /// The wire names are the landing page's and the console's contract: the
+    /// stylesheet keys on them and the sticker folders are named after them.
+    #[test]
+    fn every_theme_round_trips_under_its_wire_name() {
+        let names = [
+            (ThemeName::None, "none"),
+            (ThemeName::Halloween, "halloween"),
+            (ThemeName::Christmas, "christmas"),
+            (ThemeName::Valentines, "valentines"),
+            (ThemeName::AprilFools, "april-fools"),
+            (ThemeName::FourthOfJuly, "fourth-of-july"),
+            (ThemeName::BackToSchool, "back-to-school"),
+            (ThemeName::Winter, "winter"),
+            (ThemeName::Summer, "summer"),
+            (ThemeName::Spring, "spring"),
+            (ThemeName::Autumn, "autumn"),
+            (ThemeName::Thanksgiving, "thanksgiving"),
+            (ThemeName::NewYear, "new-year"),
+            (ThemeName::Matariki, "matariki"),
+            (ThemeName::GuyFawkes, "guy-fawkes"),
+            (ThemeName::StPatricks, "st-patricks"),
+            (ThemeName::Easter, "easter"),
+        ];
+        for (name, wire) in names {
+            let json = serde_json::to_value(name).ok();
+            assert_eq!(json, Some(serde_json::Value::from(wire)), "{name:?}");
+            let back: Option<ThemeName> = serde_json::from_value(serde_json::json!(wire)).ok();
+            assert_eq!(back, Some(name), "{wire}");
+        }
+        let unknown: Result<ThemeName, _> = serde_json::from_value(serde_json::json!("diwali"));
+        assert!(unknown.is_err());
     }
 }

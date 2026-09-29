@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { api, ApiFailure, type SeasonName, type SitePatch, type SiteView } from '$lib/api';
+	import { SEASONS } from '$lib/site';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
 	import Explain from '$lib/Explain.svelte';
@@ -95,18 +96,12 @@
 		saving.mutate({ body: { banner: null }, said: 'Banner removed.' });
 	}
 
-	const SEASONS: readonly { value: SeasonName; label: string }[] = [
-		{ value: 'none', label: 'None' },
-		{ value: 'halloween', label: 'Halloween' },
-		{ value: 'christmas', label: 'Christmas' }
-	];
-
 	const themeSummary = $derived.by(() => {
 		const theme = site.data?.theme;
 		if (theme === undefined || theme.name === 'none') {
 			return 'No seasonal theme.';
 		}
-		const name = SEASONS.find((entry) => entry.value === theme.name)?.label ?? theme.name;
+		const name = SEASONS.find((entry) => entry.name === theme.name)?.label ?? theme.name;
 		const days = `${theme.from ?? 'now'} to ${theme.until ?? 'no end date'}`;
 		return `${name}, ${days}${theme.active ? ', showing today' : ', not showing today'}.`;
 	});
@@ -183,17 +178,32 @@
 							dates, and a small mark appears in the console’s top bar. Leave a date empty to
 							start now or run with no end.
 						</p>
-						<p>The preview shows the decorations whatever the dates say.</p>
+						<p>Preview opens the home page wearing that theme, whatever the dates say.</p>
 					</Explain>
 				{/snippet}
 				<form class="form" onsubmit={saveTheme}>
-					<Field label="Theme" id="theme-name">
-						<select id="theme-name" bind:value={season}>
-							{#each SEASONS as entry (entry.value)}
-								<option value={entry.value}>{entry.label}</option>
-							{/each}
-						</select>
-					</Field>
+					<fieldset class="season-picker">
+						<legend>Theme</legend>
+						<label class="season-option">
+							<input type="radio" name="theme-name" value="none" bind:group={season} />
+							<span class="season-text"><span class="season-name">None</span></span>
+						</label>
+						{#each SEASONS as entry (entry.name)}
+							<div class="season-option">
+								<label>
+									<input type="radio" name="theme-name" value={entry.name} bind:group={season} />
+									<img src="/seasons/{entry.name}.svg" alt="" width="28" height="24" />
+									<span class="season-text">
+										<span class="season-name">{entry.label}</span>
+										<span class="season-when">{entry.when}</span>
+									</span>
+								</label>
+								<a href="/?season={entry.name}" target="_blank" rel="noopener">
+									Preview<span class="sr-only"> {entry.label}</span>
+								</a>
+							</div>
+						{/each}
+					</fieldset>
 					<div class="site-dates">
 						<Field label="From" id="theme-from">
 							<input id="theme-from" type="date" bind:value={from} />
@@ -206,9 +216,6 @@
 						<Button tier="primary" type="submit" disabled={saving.isPending} reason="Saving…">
 							Save theme
 						</Button>
-						{#if season !== 'none'}
-							<a class="btn" href="/?season={season}" target="_blank" rel="noopener">Preview the site</a>
-						{/if}
 					</div>
 				</form>
 			</FlowStep>
@@ -267,5 +274,82 @@
 
 	.site-dates input:focus-visible {
 		border-color: var(--primary);
+	}
+
+	/* The theme picker: one tile per theme with its console mark, and a
+	   preview link beside the choice rather than inside it, so opening a
+	   preview never changes the choice. */
+	.season-picker {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+		gap: var(--s-2);
+		margin: 0;
+		padding: 0;
+		border: 0;
+		min-width: 0;
+	}
+
+	.season-picker legend {
+		padding: 0;
+		margin-bottom: var(--s-2);
+		font-size: 12.5px;
+		font-weight: 600;
+	}
+
+	.season-option {
+		display: flex;
+		align-items: center;
+		gap: var(--s-2);
+		min-height: 52px;
+		padding: var(--s-2) var(--s-3);
+		border: 1.5px solid var(--line);
+		border-radius: var(--r-panel);
+		background: var(--surface);
+	}
+
+	.season-option:has(input:checked) {
+		border-color: var(--accent);
+		background: var(--accent-soft);
+	}
+
+	.season-option:has(input:focus-visible) {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
+	}
+
+	.season-option label,
+	label.season-option {
+		display: flex;
+		flex: 1;
+		align-items: center;
+		gap: var(--s-2);
+		min-width: 0;
+		cursor: pointer;
+	}
+
+	.season-option input {
+		margin: 0;
+		accent-color: var(--accent);
+	}
+
+	.season-text {
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+	}
+
+	.season-name {
+		font-size: 14px;
+		font-weight: 600;
+	}
+
+	.season-when {
+		color: var(--muted);
+		font-size: 12.5px;
+	}
+
+	.season-option a {
+		font-size: 13px;
+		font-weight: 600;
 	}
 </style>
