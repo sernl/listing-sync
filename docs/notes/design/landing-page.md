@@ -240,11 +240,12 @@ The header and footer wordmarks draw the same file as an `<img>` beside the word
 
 ## Placeholders the founder must replace
 
-Three items.
+Two items.
 
-1. `supportEmail` in `src/site.js`, which is null. Null renders no address at all rather than a `mailto:` that reaches nobody, so the footer drops the link and both legal pages say a contact address is still to come. `hello@teachouse.io` stood here until 2026-09-05 and was never monitored.
-2. The whole of `/privacy`, which is a placeholder for counsel and not a policy.
-3. The whole of `/terms`, which is a placeholder for counsel and not terms.
+1. The whole of `/privacy`, which is a placeholder for counsel and not a policy.
+2. The whole of `/terms`, which is a placeholder for counsel and not terms.
+
+`supportEmail` in `src/site.js` left this list on 2026-09-29: it is `contact@teachouse.io`, the monitored address the footer, the maintenance page and both legal pages name. `hello@teachouse.io` stood there until 2026-09-05 and was never monitored.
 
 A download URL is not in this list: the landing links no download at all since 2026-09-27, and releases go to CrabNebula Cloud on the `beta` channel, which is not listed on an application's public page.
 
@@ -298,8 +299,7 @@ The `/terms` placeholder briefly contradicted `/pricing` about metering, and no 
 It described the D4 shape to counsel, as "subscription is metered by connected marketplaces, with a cap on catalogue size at the entry tier", while the price list on the same site meters resources; the sentence was corrected on 2026-09-05 to name resources kept in sync with marketplaces as a second axis per tier.
 That is the one edit made to a page whose rule is replacement rather than editing, because two live pages disagreeing about what a seller is billed for is worse than the exception; counsel's replacement must not reintroduce the old shape.
 
-The site publishes no way to reach us.
-`supportEmail` is null, which is the right state while no monitored address exists, but a page that takes money with no contact route is not a state to launch in; one founder value closes it.
+The site's contact route is `contact@teachouse.io`, set on 2026-09-29 in `supportEmail`; before that the site published no way to reach us.
 
 There is no monthly-and-yearly toggle.
 heyretro has one and it needs JavaScript, and the site's one script is the desktop redirect; each card carries its annual price as a caption instead, which loses the comparison heyretro's toggle gives but costs no script.

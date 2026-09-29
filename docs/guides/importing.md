@@ -5,38 +5,73 @@ tags: setup, spreadsheets, connections
 
 # How importing works
 
-An import brings the listings you already sell into your Teachouse catalogue. Importing never sends anything to a marketplace.
+An import brings the resources you already sell into your Teachouse catalogue. Importing never publishes anything and never changes your marketplace listings.
 
-## Import from a marketplace
+**Import** walks you through three steps, shown across the top of the page: **Where from**, **Start** and **Your imports**.
 
-1. Connect the marketplace, then open **Import**.
-2. Pick the shop and start the import.
-3. Keep the desktop app running until the import finishes.
+<!-- shot: /import, the three import steps with TPT chosen and the Import from TPT button -->
+![The Import page with TPT chosen](/v1/guides/images/cde403b085c496baf7e4b5036b0d9f9d9e2edea5b45ab7dc94716ca4627eefa0)
 
-<!-- shot: /import, the import panel with a connected marketplace selected -->
-![Starting a marketplace import](/v1/guides/images/9c754cbab524b163c5a6d0da15b9fd47e90cc0da4702e0bb2e469b01caa3c608)
+## Import from TPT or Tes
+
+TPT and Tes have no official way in, so their imports run in the free Teachouse app on your device, signed in to that marketplace. [Why the app?](/guides/why-the-app)
+
+1. Open the Teachouse app on the device where you connected TPT or Tes.
+2. Open **Import**.
+3. Under **Where from**, choose **TPT** or **TES**.
+4. Under **Start**, press **Import from TPT** (or **Import from TES**).
+5. Keep the app open while the import runs.
+
+In a browser the same page says **Waiting for the app**: you can watch an import there, but it starts in the app.
+
+## Follow an import
+
+Each import has its own page with four steps: **Reading**, **Matching**, **Review** and **Imported**.
+
+1. Choose what to import. Tick the resources you want, or press **Select all**. We skip the rest.
+2. You can leave the page while the app reads your resources. The list fills in as it goes.
+3. If a resource looks like one you already have, **Review** asks you to keep one or keep both.
+4. Confirm. The resources go into **Resources**.
+
+<!-- shot: /imports/runs/[run], a finished TPT import with its four steps done and six resources in Resources -->
+![A finished import](/v1/guides/images/cee1c7f4fd0310f6f810e3f1c1fae92b27d5275b37d79271d95573e3bca04c2d)
+
+## Ready to publish
+
+Imported resources come in ready to publish. A TPT import fills in the title, description, price, Subject Area, Tags and Format from your listing. With the current app it also brings the pictures, tax code and copyright statement. An import only fills boxes you left empty. It never changes something you filled in yourself.
+
+For an older TPT import, open it from **Your imports** and press **Refresh from TPT**. It fills in Subject Area, Tags and Format without the app. The line under the button says how many resources still need to be imported again for their pictures, tax code and copyright.
 
 ## Import from a spreadsheet
 
-1. On **Import**, choose your file and upload it.
-2. Read the report before you accept anything. It shows what your sheet said and what Teachouse will create.
-3. Tick the rows you want and create them.
+1. On **Import**, choose **Spreadsheet** and press **Download the template**.
+2. Fill in one row for each resource.
+3. Press **Upload your sheet**.
 
-If a row names a marketplace, it needs every field that marketplace asks for. A row with a missing field is marked as needing an answer. Fix it in your sheet and upload it again.
+The sheet opens on its own page with three steps: **Check**, **Attach files** and **Import**.
 
-<!-- shot: /imports/[batch], the report table with one row needing an answer -->
-![The import report](/v1/guides/images/17469df6e0c8839da388425ae78dd84f27dceab41512670e79ce1ab2fdc9fbd2)
+1. **Check**: read our report before anything is added. A row marked **Problem** says what is missing. Fix it in your sheet and upload it again.
+2. **Attach files**: press **Add the files** and choose the files your sheet names.
+3. **Import**: press **Import** with the number of resources, then **Import them**. The resources go into your catalogue. Nothing goes to a marketplace. **Cancel import** throws the sheet away.
 
-## Files come separately
+An import you leave unfinished is cleared after a while, with the files you added to it. The note beside **Import** says on which day.
 
-An import copies what a listing says, not the file a buyer downloads. Add files from the computer that has them. See [Where your files live](/guides/your-files).
+<!-- shot: /imports/[batch], a checked spreadsheet with two ready rows and one row with a problem -->
+![The spreadsheet check](/v1/guides/images/40552b430021f6e48b6ea4cb03fe41b69cc2b86792f80da4b639f29b0f787944)
+
+## Your files stay on your device
+
+An import reads each file on your device, and the file stays there. Teachouse keeps no copy. See [Where your files live](/guides/your-files).
 
 ## When an import stops
 
-- **Given up** means we tried a resource several times and then stopped. Fix the problem it names and run the import again.
-- **Expired** means the import waited too long for your computer to start it. Sign in to the desktop app and start the import again.
+**Your imports** lists every import you have made. Filter it by **Still running**, **Waiting on you**, **Finished**, **Stopped with a problem** or **Cancelled**.
+
+- **Waiting for a device** means no device has started it yet. Open the Teachouse app on a device signed in to that marketplace.
+- **Paused** means the device stopped part way. Open the app on that device and press **Resume on this device**. Resources already added stay in **Resources**.
+- **Stopped** means the import did not finish. What it did import is in **Resources**, and each resource says what happened to it.
 
 ## Check the result
 
-1. Open **Catalogue → Resources** and search for a title you expect.
-2. Open the resource and check it lists the marketplace it came from.
+1. On the import's page, press **Open in Resources**.
+2. Open a resource and check it lists the marketplace it came from.

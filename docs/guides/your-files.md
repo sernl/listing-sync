@@ -5,46 +5,51 @@ tags: files, privacy, desktop-app
 
 # Where your files live
 
-Files you import stay on the device that imported them. The Teachouse app on that device then copies each one to Teachouse, so you can view it, make a preview from it and download it wherever you sign in. Teachouse records which device holds which file.
+Files you import stay on your own devices. Teachouse keeps no copy of them. Teachouse only records which of your devices has each file.
 
-## See which computer has a file
+When you view, preview or download an imported file in your browser, Teachouse passes it across from one of your devices that has it and is online. Nothing is stored on the way.
 
-1. Open **Catalogue → Your devices' files**.
-2. Search for the resource.
-3. Read the computer name next to each file.
+## See which device has a file
 
-<!-- shot: /resources/files, the file list showing two devices -->
-![Which computer has which file](/v1/guides/images/bda4ac14eff896a9def3fe06e8159891a7f5f42b5163fb03df12904ba1b6f500)
+1. Open **Catalogue → Files**.
+2. Search for the file or the resource that uses it.
+3. To see one device's files, press its name, such as **Alice’s laptop** or **Alice’s phone**. **All devices** shows every file again.
 
-## Add a computer
+Each row says which device the file is on and which resources use it. Press a resource's name to open it.
 
-1. Install the desktop app on your second computer and sign in.
-2. Leave it running once so it can find the files on that computer.
-3. Refresh **Your devices' files**.
+<!-- shot: /resources/files, the Files page with the device buttons for Alice’s laptop and Alice’s phone and the list of files -->
+![The Files page](/v1/guides/images/4348c47dffcf6fae15aa8fbcb1ddff227ea80a79faac5abafb5618ac7b4b561e)
 
-## Move a file to another computer
+## View or download a file
+
+1. Open the resource.
+2. In **Files**, press **View** to look at a file, or **Download** to save it.
+
+<!-- shot: /resources/[id], a resource's Files section with View and Download beside the file and the thumbnail -->
+![A resource's files](/v1/guides/images/f25fea3dc788792cb75e47ee4fe625a60c51cbd7c55cc6efa5d2473d8353f6d9)
+
+The device that has the file needs to be on, with the Teachouse app open. If it is not, Teachouse tells you which device to open, for example: "Your file is on Alice’s laptop, which is offline. Open the Teachouse app there."
+
+## Files you upload
+
+A file you upload in Teachouse, for example on **New resource**, is stored by Teachouse. You can view and download it from any browser, even when all your devices are off.
+
+## Add a device
+
+1. Install the Teachouse app on the device and sign in. See [Why the app?](/guides/why-the-app)
+2. Leave the app open once so it can find the files on that device.
+3. Open **Files** again. The device now has its own button.
+
+## Move a file to another device
 
 1. Copy the file across yourself, keeping the same name.
-2. Open the desktop app on the new computer.
-3. Check the resource lists the new computer before you publish.
+2. Open the Teachouse app on the new device.
+3. Check that **Files** shows the new device before you publish.
 
-## Publishing needs the computer on
+## Publishing needs the device on
 
-Publishing waits for a computer that has the file. Keep that computer on and signed in until publishing finishes.
+Publishing an imported file waits for a device that has it. Keep that device on, with the app open, until publishing finishes.
 
 ## Deleting
 
-Deleting a resource in Teachouse does not delete your file. Delete the file yourself if you want it gone.
-
-## Teachouse's copy
-
-The app copies imported files in the background whenever it is open. **Your devices' files** shows where each file is: on your device, on Teachouse, or both.
-
-Copies count towards your plan's storage. When it is full, files stay on your device and Teachouse says so beside each one. A file bigger than 96 MB stays on your device too.
-
-A file on your device only can't be viewed or downloaded from another browser yet. Open the Teachouse app on that device to copy it.
-
-Teachouse also stores each thumbnail, so the marketplace can show it without waking your device.
-
-<!-- shot: /resources/files, a resource card showing its stored thumbnail -->
-![A stored thumbnail](/v1/guides/images/01756d3ff1e23642b4bb368ba4b43c9af84cfdad04c5d56083fe33838fd98a89)
+Deleting a resource in Teachouse does not delete your file. Delete the file on your device yourself if you want it gone.

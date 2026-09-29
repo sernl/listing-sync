@@ -5,42 +5,59 @@ tags: connections, publishing, desktop-app
 
 # Keeping marketplaces up to date
 
-**Updates** does two things. It checks your marketplaces for changes, and it lists every change you have sent.
+**Automations → Updates** does two things. In **Pull new resources** it checks your marketplaces for new listings. In **Check** it shows what is listed where and every run that has sent or brought in resources.
 
-## Turn on checking for changes
+## Pull new resources
 
-1. Open **Automations → Updates**.
-2. Choose the marketplace.
-3. Choose how often to check and save.
+Each connected marketplace has its own card.
 
-Checking for changes means your computer reads each listing on the marketplace, so keep the desktop app signed in.
+1. Turn the switch **On**.
+2. Under **How often**, choose **Every 6 hours**, **Daily** or **Weekly**. Your plan may not check as often as every 6 hours; the card says so.
+3. Under **Then publish to**, tick another marketplace if you want new finds listed there too. Leave it empty to keep them in your catalogue only.
+4. Under **Fill gaps from a template**, pick a template for the marketplace you publish to, or leave **No template**.
+5. Press **Save TPT** or **Save TES**.
 
-<!-- shot: /sync, the pull settings for one marketplace -->
-![Settings for checking changes](/v1/guides/images/73301eabfaaf766e03a1e6a4f0dfc9e9e0bdcedda3440652bc04093002386a09)
+<!-- shot: /sync, Pull new resources with TPT off and TES on daily, publishing to TPT with Alice’s worksheet defaults -->
+![Pull settings: TES is checked daily and new finds go on to TPT](/v1/guides/images/7e2d17b5fc7dcd318671f2d998074038614a561594287c1c4290a48bc8e6be20)
 
-## Where changes arrive
+The top of each card says when that marketplace was last checked.
 
-Listings brought in this way appear in **Catalogue → Resources**. If a listing is already in your catalogue, Teachouse updates it instead of adding it twice.
+Checking TPT or Tes is done by a device: your computer or phone with the Teachouse app open and signed in reads each listing. If no device is on at the time, the check waits until one is. See [Why you need the Teachouse app](/guides/why-the-app).
+
+## Where new finds go
+
+Anything new a device finds arrives in **Import**, then in **Catalogue → Resources**. If a listing is already in your catalogue, Teachouse matches it instead of adding it twice. See [How importing works](/guides/importing).
 
 ## Your wording comes first
 
-A resource you publish from Teachouse uses your wording, not the marketplace's. Checking for changes never replaces your wording with theirs.
+A new pull is published with your catalogue's own title and description, not the marketplace's.
 
 ## Empty fields are filled from your template
 
-If a listing on the marketplace has a field left empty, your template fills it in. Fields the marketplace does have are kept as the marketplace has them.
+If a listing arrives with a field left empty, the template you chose fills it in. Fields the listing does have are kept as they are. See [Templates](/guides/templates).
 
-## See what happened
+## Check what has run
 
-1. Open an entry from the history list.
-2. Read what happened to each resource.
-3. Open a resource to see each step.
+**Check** has three tabs:
 
-The result and the steps are shown separately, so if something failed you can see which step it stopped at.
+- **On more than one**: every resource listed on more than one marketplace.
+- **Runs**: every run that sent resources to a marketplace or brought them in, newest first.
+- **Activity**: one line for each thing that happened, in order.
 
-<!-- shot: /sync/[id], one run's timeline with outcomes and steps -->
-![What happened, step by step](/v1/guides/images/4b5e71c2bf3d615916dea5900bd8739eba5c1d11ecf0a606109dbf4a4511592b)
+<!-- shot: /sync, Check with the Runs tab open listing recent TES and TPT runs -->
+![Recent runs under Check](/v1/guides/images/d8c292537bcd6db5f5c056d65c5a343edfe478efe66a29945adf638260b99b96)
 
-## When a change could go to more than one marketplace
+## See what happened in a run
 
-If a change could apply to more than one marketplace, Teachouse tells you which one it used. To choose for yourself, set a rule in [Mapping your words to a marketplace's](/guides/target-terms).
+1. Under **Runs**, open a run.
+2. **Outcomes** counts the resources in each state, such as **done**, **waiting** (for a device to pick it up), **sending** or **failed**.
+3. Under **Items**, open a resource to see its **Step timeline**, the steps your device took for it.
+
+<!-- shot: /sync/[id], a settled TES run: 4 done, the first resource opened to show its step timeline -->
+![A finished run with one resource's steps opened](/v1/guides/images/9a4de49c1db4d3c6cd23d6110c361ca21528c65c11df1042c21b3fe43780bda5)
+
+The result and the steps are kept apart, so if something fails you can see which step it stopped at. **Download these steps** saves them as a file if you need help from us.
+
+## Unmatched words
+
+The **Unmatched words** button at the top of **Updates** shows how many words are waiting for an answer. See [Mapping your words to a marketplace's](/guides/target-terms).

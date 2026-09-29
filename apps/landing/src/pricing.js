@@ -189,6 +189,10 @@ export const moveDefinition =
  * a card or the comparison table does not already answer, and the two
  * questions about trust (the desktop app, where files go) that no table
  * can. Every figure in an answer is interpolated from the plan table.
+ *
+ * An answer may carry a `link`, drawn after its text: the console page that
+ * acts on it. `/marketplaces` is where the app's downloads are, and a reader
+ * who is not signed in is asked to sign in first.
  */
 export const faqs = [
 	{
@@ -218,11 +222,13 @@ export const faqs = [
 		a: 'Yes, for a Move Pack you have not used: write to us within 14 days of buying it.'
 	},
 	{
-		q: 'Why do I need the desktop app?',
-		a: 'The app signs in to your marketplaces for you, on your own computer. That way your marketplace passwords never leave it.'
+		q: 'Why do I need the Teachouse app?',
+		a: 'Some marketplaces, including the two that connect today, have no official way for other services to connect to them. For those, the free Teachouse app signs in on your own computer or phone, so Teachouse never holds your password. Connect those marketplaces in the app; importing, editing, publishing and everything else works in your browser too.',
+		link: { href: '/marketplaces', label: 'Get the app from Marketplaces' }
 	},
 	{
 		q: 'Do my files get uploaded to Teachouse?',
-		a: 'No. Your files stay on your computer and go straight to a marketplace when you publish. We keep only the cover picture, so you can see your resources in Teachouse.'
+		a: 'Not the files you import. They stay on your own device, and when you open one in your browser, Teachouse passes it across from that device without keeping it. Files you upload to Teachouse yourself are kept so you can use them anywhere, until you delete them.',
+		link: { href: '/guides/why-the-app', label: 'Why the app, and where your files stay' }
 	}
 ];
