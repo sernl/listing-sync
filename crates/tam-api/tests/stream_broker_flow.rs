@@ -690,6 +690,9 @@ async fn another_tenant_can_neither_poll_nor_answer(pool: PgPool) {
 async fn the_views_say_where_an_imported_file_is(pool: PgPool) {
     provision(&pool).await;
     let state = configured(pool, None, 5_000);
+    // Online means polling for asks, the test View uses to open the file,
+    // not merely having checked in.
+    poll(&state, 0).await;
 
     let product: ProductView = call(
         &state,

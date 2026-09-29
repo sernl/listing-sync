@@ -28,9 +28,10 @@ use crate::devices::{HeartbeatLibrary, ID_MAX_CHARS};
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::{AppState, OrgContext};
 
-/// How recently a device must have checked in to count as online for a
-/// transfer. Ten minutes: two ordinary check-ins, so one missed beat does
-/// not read as a machine that went away.
+/// How recently a device must have checked in to be offered as a peer for a
+/// device-to-device transfer. Ten minutes: two ordinary check-ins, so one
+/// missed beat does not read as a machine that went away. The console's
+/// online dot does not use this: it uses [`crate::broker::is_serving`].
 pub const ONLINE_WINDOW_MS: i64 = 10 * 60 * 1_000;
 
 /// The bound on a node id and a direct address, so a device cannot file
@@ -129,7 +130,8 @@ pub(crate) async fn record_report(
 pub struct HolderView {
     pub device: String,
     pub name: String,
-    /// Checked in within [`ONLINE_WINDOW_MS`] of the read.
+    /// Polled for streaming asks within [`crate::broker::SERVING_WINDOW_MS`]
+    /// of the read, so View can open the file from it now.
     pub online: bool,
 }
 
@@ -153,7 +155,7 @@ pub(crate) fn holder_views(
     let mut views: Vec<HolderView> = holders
         .into_iter()
         .map(|holder| HolderView {
-            online: now.0.saturating_sub(holder.last_seen_at.0) <= ONLINE_WINDOW_MS,
+            online: crate::broker::is_serving(holder.stream_polled_at, now),
             device: holder.device,
             name: holder.name,
         })
@@ -270,7 +272,7 @@ pub(crate) async fn list_library(
         linked: params.linked.as_deref().map(linked_of).transpose()?,
         offset: params.offset.unwrap_or(0),
         limit,
-        online_after: Timestamp(now.0.saturating_sub(ONLINE_WINDOW_MS)),
+        serving_after: Timestamp(now.0.saturating_sub(crate::broker::SERVING_WINDOW_MS)),
     };
     let page = DeviceLibraryRepo::new(state.pool.clone())
         .page(context.org, &filter)
@@ -294,7 +296,7 @@ pub(crate) async fn list_library(
                     .holders
                     .into_iter()
                     .map(|holder| HolderView {
-                        online: now.0.saturating_sub(holder.last_seen_at.0) <= ONLINE_WINDOW_MS,
+                        online: crate::broker::is_serving(holder.stream_polled_at, now),
                         device: holder.device,
                         name: holder.name,
                     })

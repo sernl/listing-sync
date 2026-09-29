@@ -68,6 +68,14 @@ pub const POLL_WAIT_MAX_MS: u64 = 25_000;
 /// worth, so one slow reconnect does not read as a device that went away.
 pub const SERVING_WINDOW_MS: i64 = 60_000;
 
+/// Whether a device that last polled at `polled` counts as serving at `now`.
+/// The one test behind both the ask routing and the console's online dot, so
+/// the dot never says online while View says offline.
+#[must_use]
+pub fn is_serving(polled: Option<Timestamp>, now: Timestamp) -> bool {
+    polled.is_some_and(|at| at.0 >= now.0.saturating_sub(SERVING_WINDOW_MS))
+}
+
 /// The most asks one server process holds open at once. A bound rather than
 /// a hope: each holds a channel of [`FRAMES_BUFFERED`] frames.
 pub const STREAMS_MAX: usize = 64;
@@ -317,14 +325,9 @@ pub enum Choice {
 /// name the seller will recognise as where the file is.
 #[must_use]
 pub fn choose(holders: &[StreamHolder], now: Timestamp) -> Choice {
-    let serving_after = now.0.saturating_sub(SERVING_WINDOW_MS);
     if let Some(holder) = holders
         .iter()
-        .filter(|holder| {
-            holder
-                .stream_polled_at
-                .is_some_and(|polled| polled.0 >= serving_after)
-        })
+        .filter(|holder| is_serving(holder.stream_polled_at, now))
         .max_by_key(|holder| holder.stream_polled_at.map_or(i64::MIN, |at| at.0))
     {
         return Choice::Serving {
