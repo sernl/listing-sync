@@ -24,6 +24,7 @@ use axum::{
 use http_body_util::BodyExt;
 use sqlx::PgPool;
 use tam_api::pricing::{DiscountView, PricingAdminView};
+use tam_api::site::ThemeName;
 use tam_api::{router, stripe, AppState, Config, PlansView, PriceMap, SecretKey, SESSION_COOKIE};
 use tam_storage::{OperatorRepo, SessionRepo, SessionToken};
 use tam_types::{OrgId, Timestamp, UserId, Uuid};
@@ -386,7 +387,7 @@ async fn a_saved_sale_mints_its_coupon_with_the_terms_typed(pool: PgPool) {
     );
     assert_eq!(sale.from, "2026-10-01");
     assert_eq!(sale.until, "2026-10-31");
-    assert_eq!(sale.theme.as_deref(), Some("halloween"));
+    assert_eq!(sale.theme, Some(ThemeName::Halloween));
 
     // The admin read shows it back with its banner, and Stripe still holding it.
     let (status, _headers, body) = call(

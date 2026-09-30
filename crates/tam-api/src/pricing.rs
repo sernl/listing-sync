@@ -33,6 +33,7 @@ use tam_types::{Timestamp, Uuid};
 
 use crate::error::{APIError, APIErrorEntry, APIErrorKind};
 use crate::session::OperatorContext;
+use crate::site::ThemeName;
 use crate::stripe::{
     self, CheckoutDiscount, CouponAmount, CouponDuration, CouponRequest, PromotionCodeRequest,
 };
@@ -50,10 +51,6 @@ const CURRENCY: &str = "usd";
 
 const NAME_MAX: usize = 80;
 const BANNER_MAX: usize = 140;
-
-/// The themes a sale may be tied to: the site themes SiteOps' `/v1/site`
-/// knows, less `none`.
-const THEMES: [&str; 2] = ["halloween", "christmas"];
 
 /// Whether a price key is a plan, which is what "every plan" — a sale, or a
 /// discount naming no keys — reaches. Every recurring key is a plan
@@ -110,7 +107,7 @@ struct SalePresentation {
     #[serde(default)]
     banner_href: Option<String>,
     #[serde(default)]
-    theme: Option<String>,
+    theme: Option<ThemeName>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -159,7 +156,7 @@ pub struct DiscountView {
     pub in_stripe: Option<bool>,
     pub banner: Option<String>,
     pub banner_href: Option<String>,
-    pub theme: Option<String>,
+    pub theme: Option<ThemeName>,
     pub codes: Vec<DiscountCodeView>,
 }
 
@@ -501,9 +498,10 @@ pub struct SaleBody {
     pub banner: String,
     #[serde(default)]
     pub banner_href: Option<String>,
-    /// `halloween`, `christmas`, or absent for a standalone sale.
+    /// One of the site themes `/v1/site` knows; `none` or absent for a
+    /// standalone sale.
     #[serde(default)]
-    pub theme: Option<String>,
+    pub theme: Option<ThemeName>,
     #[serde(default)]
     pub duration: Option<String>,
     #[serde(default)]
@@ -723,12 +721,7 @@ pub(crate) async fn create_sale(
     if banner_href.is_some_and(|href| !(href.starts_with('/') || href.starts_with("https://"))) {
         return Err(invalid("A banner link starts with / or https://."));
     }
-    let theme = body.theme.as_deref().filter(|theme| *theme != "none");
-    if theme.is_some_and(|theme| !THEMES.contains(&theme)) {
-        return Err(invalid(
-            "A sale is tied to the halloween or christmas theme, or to none.",
-        ));
-    }
+    let theme = body.theme.filter(|theme| *theme != ThemeName::None);
 
     // One sale at a time: the pricing pages show one banner and one struck
     // price, and two overlapping sales would leave which one a checkout gets
@@ -757,7 +750,7 @@ pub(crate) async fn create_sale(
     let presentation = SalePresentation {
         banner: banner.to_owned(),
         banner_href: banner_href.map(str::to_owned),
-        theme: theme.map(str::to_owned),
+        theme,
     };
     let value =
         serde_json::to_value(&presentation).map_err(|error| state.internal(&error.to_string()))?;

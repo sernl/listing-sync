@@ -396,7 +396,8 @@ landing-check:
 # deliberate: `availability` in `apps/landing/src/site.js`, which is the one
 # sentence that says what connects today, and the bands the founder's mockup of
 # 2026-09-11 draws marks in -- the hero strip, the catalogue card, the challenge
-# illustration, the testimonials. Everything else speaks of the marketplaces a
+# illustration, the testimonials -- and the app box's reason, which the founder
+# asked on 2026-09-30 to name the two marketplaces with no API. Everything else speaks of the marketplaces a
 # seller sells in without naming one or implying a count, which is what lets the
 # copy stay true as marketplaces are added.
 #

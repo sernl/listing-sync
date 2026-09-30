@@ -286,25 +286,18 @@ const steps = [
 					<a class="link" href="#pricing">See pricing</a>
 				</div>
 			</div>
-			{/* The small app some marketplace work needs, and why. There is no
-			    download link here: the console's Marketplaces page offers the
-			    build that fits the reader's device once they are signed in, and a
-			    link to a file on a public page would hand one out before anyone
-			    knows which one they need. */}
+			{/* The small app some marketplace work needs, and why, in two
+			    sentences. There is no download link here: the console's
+			    Marketplaces page offers the build that fits the reader's device
+			    once they are signed in, and the FAQ's app answer links there.
+			    The reason names the two marketplaces because the reason is theirs:
+			    the founder's feedback of 2026-09-30 asked for it said plainly, so
+			    the sentence is a marketplace band to the copy gate. */}
 			<aside class="download" aria-labelledby="download-title">
 				<h3 id="download-title">The free Teachouse app</h3>
-				<p>
-					Some marketplaces have no official way for other services to connect. For those, the app
-					signs in on your own computer or phone, so Teachouse never holds your password, and the
-					files you import stay on your device.
-				</p>
-				<p>
-					Connect those marketplaces in the app. Importing, editing and publishing work here in your
-					browser too.
-				</p>
-				<p class="download-when">
-					<a class="link" href="/marketplaces">Get the app from Marketplaces</a> once you&rsquo;re signed
-					in.
+				<p data-marketplace-band>
+					TPT and Tes have no official API, so the app signs in on your own device and your files
+					stay there. Everything else works in your browser.
 				</p>
 				<PlatformRow />
 			</aside>
@@ -315,16 +308,15 @@ const steps = [
 		    resources and the covers Teachouse drew from their PDFs, taken on
 		    2026-09-27 in the light theme. It spans the whole measure under the
 		    two columns above, so the covers and titles read at the size a
-		    seller sees them, and it is framed rather than bled, under the house
-		    mark, because a screenshot with no edge reads as part of the page
-		    rather than as the product.
+		    seller sees them, and it is framed rather than bled, because a
+		    screenshot with no edge reads as part of the page rather than as
+		    the product.
 
 		    Two files: the desktop capture at 2x (1440 wide), and the 390
 		    phone layout at 2x, because scaling the wide shot down to a phone
 		    column makes the page unreadable. */}
 		<div class="wrap">
 			<figure class="console-shot">
-				<img class="house" src="/brand/house.svg" alt="" width="30" height="30" />
 				<div class="frame">
 					<picture>
 						<source

@@ -16,6 +16,7 @@
 		icon,
 		label,
 		href,
+		download = false,
 		type = 'button',
 		danger = false,
 		small = false,
@@ -34,6 +35,11 @@
 		 *  glyph fails to load, and nothing for a search to match. */
 		label?: string;
 		href?: string;
+		/** The link is a file to save rather than a page. The browser then
+		 *  fetches it itself: without this the console's router takes a
+		 *  same-origin `/downloads/…` link as a page of its own and answers
+		 *  it with the not-found page. */
+		download?: boolean;
 		type?: 'button' | 'submit';
 		danger?: boolean;
 		small?: boolean;
@@ -58,7 +64,13 @@
 </script>
 
 {#if href !== undefined && !disabled}
-	<a class={classes} {href} title={reason ?? label} aria-label={label}>
+	<a
+		class={classes}
+		{href}
+		download={download ? '' : undefined}
+		title={reason ?? label}
+		aria-label={label}
+	>
 		{#if icon}<Icon name={icon} size={small ? 14 : 16} />{/if}
 		<span class="btn-word">{@render children()}</span>
 	</a>

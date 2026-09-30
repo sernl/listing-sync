@@ -492,7 +492,10 @@ p {
 
 /* `.site-nav a` out-specifies `.cta` and `.btn`, so without these the two
    buttons in the header take the nav link's ink and a filled pill loses its
-   label. It is the ink alone that has to be restated. */
+   label. The hover is restated at the buttons' own `:hover` rules below:
+   `.site-nav a:hover` would otherwise paint the filled pill in the nav's pale
+   hover wash, where the header's Start free darkens like every other primary
+   button. */
 .site-nav a.cta {
 	color: var(--on-fill);
 }
@@ -531,11 +534,13 @@ p {
 	background: transparent;
 }
 
-.cta:hover {
+.cta:hover,
+.site-nav a.cta:hover {
 	background: color-mix(in srgb, var(--primary) 86%, var(--text));
 }
 
-.btn:hover {
+.btn:hover,
+.site-nav a.btn:hover {
 	background: color-mix(in srgb, var(--primary) 7%, transparent);
 }
 
@@ -744,7 +749,7 @@ main {
 }
 
 /* The proof shot: a capture of the console's own Resources board, framed in
-   the brand's indigo under the house mark rather than bled into the band, and
+   the brand's indigo rather than bled into the band, and
    given the whole measure under the section's two columns so the covers and
    titles in it read at the size a seller sees them. */
 .console-shot {
@@ -752,11 +757,6 @@ main {
 	justify-items: start;
 	gap: 14px;
 	margin: 64px 0 0;
-}
-
-.console-shot .house {
-	width: 30px;
-	height: 30px;
 }
 
 .console-shot .frame {
@@ -768,7 +768,7 @@ main {
 	box-shadow: var(--lift);
 }
 
-.console-shot img:not(.house) {
+.console-shot img {
 	display: block;
 	width: 100%;
 	height: auto;
@@ -1034,12 +1034,6 @@ main {
 .download > p {
 	margin: 0;
 	color: var(--text);
-}
-
-.download > .download-when {
-	margin: 14px 0 0;
-	font-weight: 600;
-	color: var(--primary);
 }
 
 .platform-row {
