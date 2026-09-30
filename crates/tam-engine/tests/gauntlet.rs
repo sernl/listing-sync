@@ -308,7 +308,7 @@ impl FakeTes {
                     if let RequestBody::Json(metadata) = &request.body {
                         let metadata = metadata.clone();
                         if let Some(draft) = state.drafts.get_mut(&id) {
-                            for key in ["title", "descriptionRaw", "licence"] {
+                            for key in ["title", "descriptionRaw", "licence", "customThumbnails"] {
                                 if let Some(value) = metadata.get(key) {
                                     draft[key] = value.clone();
                                 }
@@ -368,6 +368,19 @@ impl FakeTes {
                 .map_or(HttpResponse::plain(404, Vec::new()), |draft| {
                     ok(draft.to_string())
                 });
+        }
+        // The cover's two hops, as the uploader page makes them: the bytes to
+        // Uploadcare, which answers a file id, then that id to Tes, which
+        // answers the key the draft stores under `customThumbnails`.
+        if url == tam_marketplace_tes::endpoints::UPLOADCARE_UPLOAD_URL {
+            return ok(json!({ "file": "fake-uploadcare-uuid" }).to_string());
+        }
+        if url.ends_with("/teaching-resource/upload-cover-image") {
+            return ok(json!({
+                "fileName": "covers/fake.png",
+                "url": "https://fake-bucket.s3.amazonaws.com/covers/fake.png"
+            })
+            .to_string());
         }
         if url.starts_with("https://fake-bucket.s3.amazonaws.com/") {
             return HttpResponse::plain(204, Vec::new());
