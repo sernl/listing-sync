@@ -400,6 +400,7 @@ export type QuotaKind =
   | "collections_max"
   | "devices_max"
   | "previews_per_month"
+  | "previews_lifetime"
   | "ai_fills_per_month"
   | "plan_feature";
 
@@ -413,6 +414,7 @@ export const QUOTA_KINDS: readonly QuotaKind[] = [
   "collections_max",
   "devices_max",
   "previews_per_month",
+  "previews_lifetime",
   "ai_fills_per_month",
   "plan_feature",
 ];

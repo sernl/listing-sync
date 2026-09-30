@@ -38,8 +38,9 @@ use serde::{Deserialize, Serialize};
 /// is gated on.
 ///
 /// Three paid tiers above the free one, weakest first: `Starter`,
-/// `Subscriber` (sold as "Sync", the spelling predates the ladder and is kept
-/// because stored grants carry it) and `Studio`
+/// `Subscriber` (sold as "Pro" since the 2026-09-30 founder review; first
+/// sold as "Sync", and the spelling predates both and is kept because stored
+/// grants and the `sync_*` price keys carry it) and `Studio`
 /// (`docs/notes/design/research/2026-09-27-subscription-tiers.md`, which also
 /// withdraws the founding offer and the paid onboarding session).
 ///
@@ -128,7 +129,12 @@ impl Plan {
     /// collection to Look and lifts the label cap on every paid plan, and by
     /// `docs/notes/design/entitlement-enforcement.md` section 1, which puts a
     /// resource ceiling on every plan below Studio and counts watermarked
-    /// previews per month):
+    /// previews per month, and by the addendum to the review dated
+    /// 2026-09-30, the founder's own tier changes: Look's previews become five
+    /// for the account's lifetime, previews climb 20 / 50 / 100 a month and
+    /// stop being unlimited anywhere, Starter holds 250 resources and Pro 500,
+    /// Pro keeps ten templates and ten collections, and Starter carries no AI
+    /// fill):
     /// every figure here is that table's. Section 8 of the tiers note and
     /// section 9 of the review name the triggers that re-open them.
     ///
@@ -172,18 +178,20 @@ impl Plan {
                 export: true,
                 devices_max: 5,
                 ai_fills_per_month: 0,
-                // Enough to see what a watermarked preview does to a listing
-                // on a few resources, not enough to preview a whole shop.
-                previews_per_month: 5,
+                // Five for the account's whole life rather than five a
+                // month: enough to see what a watermarked preview does to a
+                // listing, not a standing allowance (founder, 2026-09-30).
+                previews_per_month: 0,
+                previews_lifetime: 5,
                 uploads_in_flight_max: 1,
                 support: Support::Guides,
             },
             // Starter: one teacher adding about a resource a week. Edits go
-            // out once a day; statistics and automatic rules start at Sync.
-            // Five hundred resources is five times Look, and a preview for
-            // every new resource plus a refresh of the rest each month.
+            // out once a day; statistics and automatic rules start at Pro.
+            // Two hundred and fifty resources is two and a half times Look,
+            // and twenty previews a month covers every new resource.
             Self::Starter => Capabilities {
-                resources_max: 500,
+                resources_max: 250,
                 marketplaces_max: u32::MAX,
                 storage_bytes_max: 5 << 30,
                 import_spreadsheet: true,
@@ -205,13 +213,15 @@ impl Plan {
                 analytics: false,
                 export: true,
                 devices_max: 5,
-                ai_fills_per_month: 50,
-                previews_per_month: 50,
+                // No AI fill on Starter: the offer starts at Pro.
+                ai_fills_per_month: 0,
+                previews_per_month: 20,
+                previews_lifetime: 0,
                 uploads_in_flight_max: 2,
                 support: Support::Email2Days,
             },
             Self::Subscriber => Capabilities {
-                resources_max: 2_000,
+                resources_max: 500,
                 marketplaces_max: u32::MAX,
                 storage_bytes_max: 20 << 30,
                 import_spreadsheet: true,
@@ -225,14 +235,15 @@ impl Plan {
                 scheduling: true,
                 sync_pull_interval_secs: Some(6 * 3_600),
                 auto_publish_rules: true,
-                templates_max: 20,
-                collections_max: 20,
+                templates_max: 10,
+                collections_max: 10,
                 labels_max: u32::MAX,
                 analytics: true,
                 export: true,
                 devices_max: 5,
                 ai_fills_per_month: 200,
-                previews_per_month: 200,
+                previews_per_month: 50,
+                previews_lifetime: 0,
                 uploads_in_flight_max: 3,
                 support: Support::Email2Days,
             },
@@ -261,7 +272,11 @@ impl Plan {
                 export: true,
                 devices_max: 5,
                 ai_fills_per_month: 600,
-                previews_per_month: u32::MAX,
+                // A ceiling rather than none: every preview is a render and
+                // a stored image, and a hundred a month covers a whole shop
+                // refreshed over a term (founder, 2026-09-30).
+                previews_per_month: 100,
+                previews_lifetime: 0,
                 uploads_in_flight_max: 3,
                 support: Support::Email1Day,
             },
@@ -365,9 +380,15 @@ pub struct Capabilities {
     pub devices_max: u32,
     pub ai_fills_per_month: u32,
     /// Watermarked previews made in the preview maker, counted per UTC
-    /// calendar month in `usage_counter` (migration 0098). `u32::MAX` is no
-    /// ceiling.
+    /// calendar month in `usage_counter` (migration 0098). Zero on a plan
+    /// whose previews are a lifetime allowance instead.
     pub previews_per_month: u32,
+    /// Watermarked previews for the organisation's whole life, on a plan
+    /// that carries no monthly allowance: the sum of every month's
+    /// `usage_counter` row, so no second counter can drift from the first.
+    /// Zero on every plan that counts previews per month; see
+    /// [`Capabilities::previews`] for which of the two a gate reads.
+    pub previews_lifetime: u32,
     /// Uploads one organisation may have open at once. The upload route is
     /// the one server path that is memory-heavy and holds a pool connection
     /// across the object-store write, so this is the fairness bound between
@@ -375,6 +396,44 @@ pub struct Capabilities {
     /// accounts starve paid ones").
     pub uploads_in_flight_max: u32,
     pub support: Support,
+}
+
+/// Which window a plan counts its watermarked previews in, and how many the
+/// window holds.
+///
+/// Read by every gate and every usage figure through
+/// [`Capabilities::previews`] rather than off the two fields, so no reader
+/// has to know that a zero monthly allowance beside a lifetime one means
+/// "count the lifetime" rather than "none".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreviewAllowance {
+    /// This many for the organisation's whole life.
+    Lifetime(u32),
+    /// This many each UTC calendar month.
+    Monthly(u32),
+}
+
+impl PreviewAllowance {
+    /// The ceiling, whichever window it is counted in.
+    #[must_use]
+    pub const fn cap(self) -> u32 {
+        match self {
+            Self::Lifetime(cap) | Self::Monthly(cap) => cap,
+        }
+    }
+}
+
+impl Capabilities {
+    /// The window this plan counts watermarked previews in: the lifetime
+    /// allowance where the plan carries one, the month otherwise.
+    #[must_use]
+    pub const fn previews(&self) -> PreviewAllowance {
+        if self.previews_lifetime > 0 {
+            PreviewAllowance::Lifetime(self.previews_lifetime)
+        } else {
+            PreviewAllowance::Monthly(self.previews_per_month)
+        }
+    }
 }
 
 /// One row of the price list.
@@ -576,13 +635,17 @@ impl AiStatus {
 /// The price list, in the order a pricing page reads it.
 ///
 /// DECIDED (`docs/notes/design/research/2026-09-27-subscription-tiers.md`
-/// section 0): Sync keeps the price decisions.md approved on 2026-09-12;
-/// Starter and Studio sit on the category's entry and "pro" rungs. Every
+/// section 0): Pro (first sold as Sync) keeps the price decisions.md
+/// approved on 2026-09-12; Starter and Studio sit on the category's entry
+/// and "pro" rungs. Every
 /// yearly price is about a third off twelve monthly ones, so each card can
 /// say "$20 a month, billed yearly" and mean it. Section 8 of the note names
 /// what re-opens these. `2026-09-29-pricing-structure-review.md` sections 3
 /// and 4 re-test the prices and the yearly saving against the category and
-/// keep both; section 6 makes Sync the recommended plan.
+/// keep both; section 6 makes Pro the recommended plan. The 2026-09-30
+/// addendum renames Sync to Pro and leaves every price where it is; the
+/// `sync_*` keys keep their spelling because the processor's prices are
+/// mapped onto them.
 ///
 /// No trial days on any row. Look is the trial, there is no other, and a
 /// 14-day clock beside a free plan that never expires was two offers where
@@ -597,7 +660,8 @@ pub const PLANS: [PlanRow; 4] = [
         yearly_key: None,
         trial_days: 0,
         recommended: false,
-        tagline: "For a small shop: bring your resources in, make previews and try five moves.",
+        tagline:
+            "For a small shop: bring your resources in, make five previews and try five moves.",
     },
     PlanRow {
         id: Plan::Starter,
@@ -612,7 +676,7 @@ pub const PLANS: [PlanRow; 4] = [
     },
     PlanRow {
         id: Plan::Subscriber,
-        name: "Sync",
+        name: "Pro",
         monthly_cents: Some(2_900),
         yearly_cents: Some(24_000),
         monthly_key: Some(PriceKey::SyncMonthly),
@@ -864,7 +928,10 @@ impl FeatureKey {
     /// nothing per seller, and are what a trial has to show
     /// (`2026-09-29-pricing-structure-review.md` section 5). Watermarked
     /// previews left the core in the enforcement note: every plan makes
-    /// them, and how many a month climbs the ladder.
+    /// them, and how many a month climbs the ladder. Look's cell is the dash
+    /// of a plan with no monthly allowance; its five lifetime previews are
+    /// `previews_lifetime`, which a table says in place of the dash, as it
+    /// does Look's trial moves.
     #[must_use]
     #[expect(
         clippy::integer_division,
@@ -1252,7 +1319,7 @@ const _: () = {
 mod tests {
     use super::{
         http, ingest, job, Capabilities, FeatureGroup, FeatureKey, FeatureUnit, Included, Plan,
-        PriceKey, Support, PACKS, PLANS, PLAN_FEATURES,
+        PreviewAllowance, PriceKey, Support, PACKS, PLANS, PLAN_FEATURES,
     };
 
     /// The pricing page raises one plan. Two would be no recommendation and
@@ -1393,11 +1460,12 @@ mod tests {
                 );
             }
         }
-        // Counted, but never withheld: every plan makes some previews.
+        // Counted, but never withheld: every plan makes some previews, Look
+        // from its lifetime allowance, whose cell is the dash a comparison
+        // table replaces with the lifetime figure.
         for plan in Plan::ALL {
-            assert_ne!(
-                FeatureKey::WatermarkedPreviews.included(&plan.capabilities(None)),
-                Included::Flag(false),
+            assert!(
+                plan.capabilities(None).previews().cap() > 0,
                 "{} must be able to make a watermarked preview",
                 plan.as_str()
             );
@@ -1421,6 +1489,11 @@ mod tests {
             // Descends by design: the trial's five moves are Look's alone,
             // and `only_the_free_plan_carries_the_lifetime_moves` pins it.
             free_moves_lifetime: _,
+            // Descends for the same reason: Look's five lifetime previews
+            // are its whole allowance, and
+            // `only_look_counts_its_previews_for_life_and_no_plan_is_unlimited`
+            // pins it.
+            previews_lifetime: _,
             pack_edit_days,
             scheduling,
             sync_pull_interval_secs,
@@ -1589,6 +1662,32 @@ mod tests {
         }
         // The founder's floor: the free plan starts at a hundred resources.
         assert_eq!(Plan::Free.capabilities(None).resources_max, 100);
+    }
+
+    /// Previews are counted in exactly one window per plan: Look's five for
+    /// the account's life, every paid plan a month at a time, and none of
+    /// them without a ceiling (founder, 2026-09-30).
+    #[test]
+    fn only_look_counts_its_previews_for_life_and_no_plan_is_unlimited() {
+        assert_eq!(
+            Plan::Free.capabilities(None).previews(),
+            PreviewAllowance::Lifetime(5)
+        );
+        assert_eq!(Plan::Free.capabilities(None).previews_per_month, 0);
+        for plan in [Plan::Starter, Plan::Subscriber, Plan::Studio] {
+            let caps = plan.capabilities(None);
+            assert_eq!(
+                caps.previews_lifetime,
+                0,
+                "{} counts per month",
+                plan.as_str()
+            );
+            assert!(
+                matches!(caps.previews(), PreviewAllowance::Monthly(cap) if cap < u32::MAX),
+                "{} must count previews a month against a ceiling",
+                plan.as_str()
+            );
+        }
     }
 
     /// Five moves once, on the free plan and nowhere else: a plan that is

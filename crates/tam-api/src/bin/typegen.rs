@@ -626,6 +626,7 @@ const CAPABILITIES_TS: &str = "export interface Capabilities {
   readonly devices_max: number;
   readonly ai_fills_per_month: number;
   readonly previews_per_month: number;
+  readonly previews_lifetime: number;
   readonly uploads_in_flight_max: number;
   readonly support: SupportLevel;
 }

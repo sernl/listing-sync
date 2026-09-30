@@ -347,7 +347,7 @@ export interface NotifyPreferences {
 
 // ------------------------------------------------------------ admin mail
 
-/** Who a campaign goes to, by plan. `subscriber` is sold as Sync and `free`
+/** Who a campaign goes to, by plan. `subscriber` is sold as Pro and `free`
  *  as Look. */
 export type MailSegment = 'all' | 'free' | 'paid' | 'starter' | 'subscriber' | 'studio';
 
@@ -1017,10 +1017,14 @@ export interface RedirectView {
  *  request gate came to disagree in the first place. */
 export type { AiOffer, Capabilities, Pack, PlanRow, PlansView } from '$lib/generated/plans';
 
-/** What the seller has used, against the figures above. Moves are not here:
- *  they are bought and spent rather than counted against a ceiling, so they
- *  ride beside this block as a balance. `previews` and `ai_fills` count the
- *  current UTC month and start again at `month_resets_at` (epoch ms). */
+/** What the seller has used, against the figures above. The move balance is
+ *  not here: it is bought and spent rather than counted against a ceiling, so
+ *  it rides beside this block; `moves_this_month` is only what this month's
+ *  moves spent. `previews`, `ai_fills` and `moves_this_month` count the
+ *  current UTC month and start again at `month_resets_at` (epoch ms);
+ *  `previews_lifetime` is every month's previews summed, which is what a plan
+ *  counting previews for life (`previews_lifetime > 0` in `Capabilities`) is
+ *  measured against. */
 export interface EntitlementUsage {
 	resources: number;
 	marketplaces: number;
@@ -1030,7 +1034,9 @@ export interface EntitlementUsage {
 	devices: number;
 	storage_bytes: number;
 	previews: number;
+	previews_lifetime: number;
 	ai_fills: number;
+	moves_this_month: number;
 	month_resets_at: number;
 }
 
@@ -1694,7 +1700,8 @@ export type ArchiveMode = 'explode' | 'keep_whole';
  *  dropped into a slot is refused before it is stored rather than kept and
  *  discovered later. `preview` is a watermarked preview on its way to a
  *  resource: the upload answers 422 `previews_per_month` once this month's
- *  previews are used up, before any byte is stored. Omitted means the upload
+ *  previews are used up, or `previews_lifetime` once a plan's lifetime ones
+ *  are, before any byte is stored. Omitted means the upload
  *  is not slot-bound and any accepted type may land. */
 export type UploadSlot = 'image' | 'preview';
 

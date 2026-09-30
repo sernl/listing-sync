@@ -93,9 +93,9 @@ pub use duplicates::{
     VerdictRecord, REVERSIBLE_MS,
 };
 pub use entitlement::{
-    spend_monthly_in, Accrual, EntitlementRepo, Grant, GrantRecord, GrantedBy, MonthlyCharge,
-    MonthlyKind, MonthlySpend, MoveBalance, MoveCredit, MoveSource, NewGrant, StorefrontAllowance,
-    Usage,
+    spend_monthly_in, Accrual, CounterWindow, EntitlementRepo, Grant, GrantRecord, GrantedBy,
+    MonthlyCharge, MonthlyKind, MonthlySpend, MoveBalance, MoveCredit, MoveSource, NewGrant,
+    StorefrontAllowance, Usage,
 };
 pub use erasure::{Erased, ErasureRefusal, ErasureRepo};
 pub use file_source::ProductFileSourceRepo;

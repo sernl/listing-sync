@@ -105,7 +105,7 @@ pub enum Segment {
     /// Any paid plan.
     Paid,
     Starter,
-    /// Sold as "Sync".
+    /// Sold as "Pro" (first sold as "Sync").
     Subscriber,
     Studio,
 }
@@ -1295,7 +1295,7 @@ fn sample(date: &str) -> Personal<'_> {
         name: Some("Ana Ruiz"),
         email: "ana@example.com",
         org: "Ana's Classroom",
-        plan: "Sync",
+        plan: "Pro",
         date,
         unsubscribe_url: "#unsubscribe",
     }
@@ -2004,7 +2004,7 @@ mod tests {
             name,
             email: "ana@example.test",
             org,
-            plan: "Sync",
+            plan: "Pro",
             date: "29 September 2026",
             unsubscribe_url: "https://app.example.test/v1/mail/unsubscribe?t=abc",
         }
@@ -2051,7 +2051,7 @@ mod tests {
         let hostile = person(Some("<script>alert(1)</script> Smith"), "A & B <Co>");
         let mail = render(&letter(&body), &hostile, "https://app.example.test");
         assert!(mail.html.contains(
-            "Hi &lt;script&gt;alert(1)&lt;/script&gt;, from A &amp; B &lt;Co&gt; on Sync (ana@example.test) on 29 September 2026."
+            "Hi &lt;script&gt;alert(1)&lt;/script&gt;, from A &amp; B &lt;Co&gt; on Pro (ana@example.test) on 29 September 2026."
         ));
         assert!(
             !mail.html.contains("<script>"),
@@ -2198,7 +2198,7 @@ mod tests {
         assert_eq!(count(Segment::Starter, true).count.sellers, 2);
         let sync = count(Segment::Subscriber, true);
         assert_eq!((sync.count.sellers, sync.count.recipients), (2, 1));
-        assert_eq!(sync.recipients[0].plan, "Sync");
+        assert_eq!(sync.recipients[0].plan, "Pro");
         assert_eq!(count(Segment::Studio, true).count.recipients, 0);
         assert_eq!(count(Segment::Studio, false).count.recipients, 1);
     }

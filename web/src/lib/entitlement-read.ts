@@ -54,26 +54,25 @@ export function readOf(query: {
  *  that treated a pending read as "full" would disable a seller's own
  *  controls for as long as the request took, and one that treated a failed
  *  read as "full" would do it permanently. */
-export function limitOf(
-	held: EntitlementView | undefined,
-	limit: Limit
-): string | null {
+export function limitOf(held: EntitlementView | undefined, limit: Limit): string | null {
 	if (held === undefined) {
 		return null;
 	}
 	const reason = limitReason(held.capabilities, held.usage, limit);
 	if (reason !== null) {
-		gateHit(held, limit, usedOf(held.usage, limit), maxOf(held.capabilities, limit));
+		gateHit(
+			held,
+			limit,
+			usedOf(held.usage, limit, held.capabilities),
+			maxOf(held.capabilities, limit)
+		);
 	}
 	return reason;
 }
 
 /** Why a control's capability is not on this plan, or null — including null
  *  for a read that has not answered, for the same reason as above. */
-export function featureOf(
-	held: EntitlementView | undefined,
-	feature: Feature
-): string | null {
+export function featureOf(held: EntitlementView | undefined, feature: Feature): string | null {
 	if (held === undefined) {
 		return null;
 	}

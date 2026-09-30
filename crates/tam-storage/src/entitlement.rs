@@ -375,10 +375,16 @@ impl EntitlementRepo {
                    WHERE org_id = $1 AND kind = 'preview'
                      AND month = date_trunc('month', $2 AT TIME ZONE 'UTC')::date)
                                                                       AS "previews!",
+                 (SELECT COALESCE(sum(used), 0)::bigint FROM usage_counter
+                   WHERE org_id = $1 AND kind = 'preview')            AS "previews_lifetime!",
                  (SELECT COALESCE(max(used), 0)::bigint FROM usage_counter
                    WHERE org_id = $1 AND kind = 'ai_fill'
                      AND month = date_trunc('month', $2 AT TIME ZONE 'UTC')::date)
                                                                       AS "ai_fills!",
+                 (SELECT COALESCE(-sum(delta), 0)::bigint FROM move_ledger
+                   WHERE org_id = $1 AND source = 'commit'
+                     AND created_at >= date_trunc('month', $2 AT TIME ZONE 'UTC')
+                                         AT TIME ZONE 'UTC')          AS "moves_this_month!",
                  (date_trunc('month', $2 AT TIME ZONE 'UTC') + interval '1 month')
                    AT TIME ZONE 'UTC'                                 AS "month_resets_at!""#,
             uuid_to_db(org.0),
@@ -396,7 +402,9 @@ impl EntitlementRepo {
             devices: row.devices,
             storage_bytes: row.storage_bytes,
             previews: row.previews,
+            previews_lifetime: row.previews_lifetime,
             ai_fills: row.ai_fills,
+            moves_this_month: row.moves_this_month,
             month_resets_at: timestamp_from_db(row.month_resets_at),
         })
     }
@@ -415,16 +423,18 @@ impl EntitlementRepo {
         Ok(answer)
     }
 
-    /// How much of a monthly allowance the UTC month `now` falls in has used.
-    pub async fn monthly_used(
+    /// How much of an allowance its window has used: the UTC month `now`
+    /// falls in, or every month there has been.
+    pub async fn counted_used(
         &self,
         org: OrgId,
         kind: MonthlyKind,
+        window: CounterWindow,
         now: Timestamp,
     ) -> Result<i64, StorageError> {
         let mut tx = self.pool.begin().await?;
         pin_org(&mut tx, org).await?;
-        let used = monthly_used_in(&mut tx, org, kind, timestamp_to_db(now)?).await?;
+        let used = counted_used_in(&mut tx, org, (kind, window), timestamp_to_db(now)?).await?;
         tx.commit().await?;
         Ok(used)
     }
@@ -929,10 +939,13 @@ fn hex_nibble(nibble: u8) -> char {
 
 /// What one organisation has used of each metered capability.
 ///
-/// Moves are not here. They are a balance rather than a count against a
-/// monthly ceiling, and [`EntitlementRepo::move_balance`] is the read.
+/// The move balance is not here. It is bought and spent rather than counted
+/// against a ceiling, and [`EntitlementRepo::move_balance`] is the read;
+/// `moves_this_month` is only how many this UTC month's commits spent.
 /// `previews` and `ai_fills` are this UTC month's counters, which renew at
-/// `month_resets_at`; every other figure is a standing count.
+/// `month_resets_at`; `previews_lifetime` is every month's previews summed,
+/// which is what a plan counting previews for life is measured against.
+/// Every other figure is a standing count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Usage {
     pub resources: i64,
@@ -943,7 +956,9 @@ pub struct Usage {
     pub devices: i64,
     pub storage_bytes: i64,
     pub previews: i64,
+    pub previews_lifetime: i64,
     pub ai_fills: i64,
+    pub moves_this_month: i64,
     pub month_resets_at: Timestamp,
 }
 
@@ -986,27 +1001,52 @@ fn rung_to_db(rung: u32) -> i32 {
     i32::try_from(rung).unwrap_or(i32::MAX)
 }
 
-/// One spend from a monthly allowance, as [`spend_monthly_in`] takes it.
+/// Which span of time an allowance is counted over.
+///
+/// Both read the same `usage_counter` rows: a spend always lands on the row
+/// of the UTC month it was made in, and a lifetime count is the sum of every
+/// month's row. One set of rows rather than a second lifetime counter, so the
+/// month's figure and the lifetime's can never disagree, and a plan change
+/// between the two windows needs no conversion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CounterWindow {
+    /// The UTC calendar month the spend falls in.
+    Month,
+    /// Every month there has been.
+    Lifetime,
+}
+
+/// One spend from a counted allowance, as [`spend_monthly_in`] takes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MonthlyCharge {
     pub kind: MonthlyKind,
     /// How many this write spends, at least one.
     pub amount: u32,
-    /// The plan's allowance a month: zero refuses, `u32::MAX` never does.
+    /// The plan's allowance over `window`: zero refuses, `u32::MAX` never
+    /// does.
     pub cap: u32,
+    /// Which span `cap` is counted over.
+    pub window: CounterWindow,
     /// Which UTC calendar month is charged.
     pub at: Timestamp,
 }
 
-/// Spends `amount` of a monthly allowance, or refuses the whole amount where
-/// it would take the month past `cap`, in a transaction the caller owns and
+/// Spends `amount` of a counted allowance, or refuses the whole amount where
+/// it would take the window past `cap`, in a transaction the caller owns and
 /// has already pinned to `org`.
 ///
-/// One conditional upsert, so the check and the spend are one statement: two
-/// requests racing for the last one serialise on the row lock and the loser's
-/// `WHERE` is false. In the caller's transaction so a write that then fails
-/// rolls the spend back with it. The month is the UTC calendar month `at`
+/// Over a month: one conditional upsert, so the check and the spend are one
+/// statement: two requests racing for the last one serialise on the row lock
+/// and the loser's `WHERE` is false. The month is the UTC calendar month `at`
 /// falls in, so the allowance renews at midnight UTC on the first.
+///
+/// Over a lifetime: the sum of every month's row is the figure, and no single
+/// row lock covers a sum, so a transaction-scoped advisory lock on the
+/// organisation and kind serialises the read and the write instead; the
+/// spend then lands on this month's row like any other.
+///
+/// In the caller's transaction either way, so a write that then fails rolls
+/// the spend back with it.
 ///
 /// # Errors
 ///
@@ -1017,6 +1057,9 @@ pub async fn spend_monthly_in(
     charge: MonthlyCharge,
 ) -> Result<MonthlySpend, StorageError> {
     let at = timestamp_to_db(charge.at)?;
+    if charge.window == CounterWindow::Lifetime {
+        return spend_lifetime_in(tx, org, charge, at).await;
+    }
     let granted = sqlx::query_scalar!(
         r#"INSERT INTO usage_counter (org_id, kind, month, used, updated_at)
            SELECT $1, $2, date_trunc('month', $5 AT TIME ZONE 'UTC')::date, $3::int, $5
@@ -1037,24 +1080,63 @@ pub async fn spend_monthly_in(
     Ok(match granted {
         Some(used) => MonthlySpend::Granted { used },
         None => MonthlySpend::Refused {
-            used: monthly_used_in(tx, org, charge.kind, at).await?,
+            used: counted_used_in(tx, org, (charge.kind, CounterWindow::Month), at).await?,
         },
     })
 }
 
-async fn monthly_used_in(
+/// The lifetime half of [`spend_monthly_in`].
+async fn spend_lifetime_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     org: OrgId,
-    kind: MonthlyKind,
+    charge: MonthlyCharge,
+    at: DateTime<Utc>,
+) -> Result<MonthlySpend, StorageError> {
+    sqlx::query!(
+        "SELECT pg_advisory_xact_lock(\
+         hashtextextended('usage-counter:' || $1::uuid::text || ':' || $2, 0))",
+        uuid_to_db(org.0),
+        charge.kind.as_str(),
+    )
+    .execute(&mut **tx)
+    .await?;
+    let used = counted_used_in(tx, org, (charge.kind, CounterWindow::Lifetime), at).await?;
+    let amount = i64::from(charge.amount.max(1));
+    if used.saturating_add(amount) > i64::from(charge.cap) {
+        return Ok(MonthlySpend::Refused { used });
+    }
+    sqlx::query!(
+        r#"INSERT INTO usage_counter (org_id, kind, month, used, updated_at)
+           VALUES ($1, $2, date_trunc('month', $4 AT TIME ZONE 'UTC')::date, $3::int, $4)
+           ON CONFLICT (org_id, kind, month) DO UPDATE
+              SET used = usage_counter.used + EXCLUDED.used,
+                  updated_at = EXCLUDED.updated_at"#,
+        uuid_to_db(org.0),
+        charge.kind.as_str(),
+        i32::try_from(amount).unwrap_or(i32::MAX),
+        at,
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(MonthlySpend::Granted {
+        used: used.saturating_add(amount),
+    })
+}
+
+async fn counted_used_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    (kind, window): (MonthlyKind, CounterWindow),
     at: DateTime<Utc>,
 ) -> Result<i64, StorageError> {
     Ok(sqlx::query_scalar!(
-        r#"SELECT COALESCE(max(used), 0)::bigint AS "used!" FROM usage_counter
+        r#"SELECT COALESCE(sum(used), 0)::bigint AS "used!" FROM usage_counter
             WHERE org_id = $1 AND kind = $2
-              AND month = date_trunc('month', $3 AT TIME ZONE 'UTC')::date"#,
+              AND ($4 OR month = date_trunc('month', $3 AT TIME ZONE 'UTC')::date)"#,
         uuid_to_db(org.0),
         kind.as_str(),
         at,
+        window == CounterWindow::Lifetime,
     )
     .fetch_one(&mut **tx)
     .await?)

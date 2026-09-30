@@ -109,13 +109,18 @@ export function planBullets(caps: Capabilities, ai: AiOffer = AI): PlanBullet[] 
 		lines.push({ text: `Unused moves stack to ${caps.moves_accrual_cap}` });
 	if (!unlimited(caps.resources_max)) lines.push({ text: `Up to ${caps.resources_max} resources` });
 	lines.push({
-		text: unlimited(caps.previews_per_month)
-			? 'Unlimited watermarked previews'
-			: `${caps.previews_per_month} watermarked previews a month`
+		text:
+			caps.previews_lifetime > 0
+				? `${caps.previews_lifetime} watermarked previews to try`
+				: unlimited(caps.previews_per_month)
+					? 'Unlimited watermarked previews'
+					: `${caps.previews_per_month} watermarked previews a month`
 	});
 	if (caps.scheduling) lines.push({ text: 'Scheduling' });
 	if (caps.templates_max > 1) lines.push({ text: count(caps.templates_max, 'templates') });
-	if (caps.collections_max > 0) lines.push({ text: count(caps.collections_max, 'collections') });
+	if (caps.collections_max === 1) lines.push({ text: '1 collection' });
+	else if (caps.collections_max > 0)
+		lines.push({ text: count(caps.collections_max, 'collections') });
 	if (caps.analytics) lines.push({ text: 'Statistics on every shop' });
 	if (caps.auto_publish_rules) lines.push({ text: 'Automatic publishing rules' });
 	if (caps.support === 'email_1_day') lines.push({ text: 'Priority support' });

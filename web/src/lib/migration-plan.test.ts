@@ -135,7 +135,7 @@ describe('the cap sentence', () => {
 	it('sends an empty balance to buy rather than to pick fewer', () => {
 		const none = capSentence({ available: 0, required: 3, remaining: 0 }, 3);
 		expect(none.line).toBe('You have no moves. This uses 3.');
-		expect(none.refusal).toBe('You have no moves left. Buy a pack, or choose Sync.');
+		expect(none.refusal).toBe('You have no moves left. Buy a pack, or choose Pro.');
 	});
 
 	// A balance another tab has spent would put the seller over without

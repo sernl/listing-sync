@@ -85,3 +85,24 @@ An organisation already over a new ceiling keeps everything it has. It can't add
 - Look converts under 2% within 90 days, even at 100 (review §9): look at previews before the resource ceiling.
 - More than 10% of Starter or Sync sellers reach their resource ceiling within a quarter: the ceiling is setting the price, not the seller's volume. Raise the ceiling before adding a tier.
 - More than 25% of any plan's sellers use their whole preview allowance in a month: the preview allowance is too tight for what the plan is sold as.
+
+## 6. Addendum, 2026-09-30 (0.17.0): new figures, lifetime previews, accurate usage
+
+The founder's tier changes (pricing review §12) replace the §1 table:
+
+| | Look | Starter | Pro (was Sync) | Studio |
+|---|---|---|---|---|
+| Resources (`resources_max`) | 100 | **250** | **500** | no cap |
+| Watermarked previews | **5 for the account's life** (`previews_lifetime`) | **20 a month** | **50 a month** | **100 a month** |
+| Templates / collections | 1 / 1 | 5 / 5 | **10 / 10** | no cap |
+
+**Lifetime previews.** `Capabilities::previews()` answers `Lifetime(5)` on Look and `Monthly(n)` on every paid plan. Every preview spend still lands on this UTC month's `usage_counter` row; a lifetime gate sums every month's row under a transaction-scoped advisory lock (`usage-counter:<org>:<kind>`), because no single row lock covers a sum. The refusal is `detail.quota = "previews_lifetime"`: *"Your plan includes 5 watermarked previews to try. Upgrade to make more."* The upload pre-check (`POST /v1/uploads?slot=preview`) reads the same window through `PreviewSpend::refusal_before_upload`.
+
+**Every figure is a live count.** `GET /v1/entitlement` `usage` adds `previews_lifetime` (every month's previews) and `moves_this_month` (this UTC month's `commit` rows in `move_ledger`). The audit found the server's counts correct and two causes of the wrong figures the founder saw:
+
+- **The console read a snapshot.** The shell reads `/v1/entitlement` once per visit (`staleTime: Infinity`), so a Billing page opened after importing a shop or making previews showed the counts from before ("0 of 100 resources"). The Billing page now refetches on every open (`refetchOnMount: 'always'`), and the resource form refreshes the figure after a preview is attached rather than after its upload, which ran before the spend.
+- **Previews made before 0098 were never counted.** Migration 0101 backfills `usage_counter` from `product_file` preview rows holding our bytes (`hash IS NOT NULL`, deleted rows included, since a made preview stays made), per UTC month, with `GREATEST`, so a month the gate already counted is never lowered.
+
+Figures, and the source each is counted from: resources, non-deleted `product`; marketplaces, `connection` rows in state `linked`; templates, `resource_template`; collections, `collection`; labels, the seller's own `label` rows; devices, `device` rows not revoked; watermarked previews, `usage_counter` for the UTC month (and summed for the lifetime); moves this month, `move_ledger` `commit` rows since the 1st (UTC). `tam-storage/tests/entitlement.rs` seeds each source, including rows that must not count, and asserts every figure; `tam-api/tests/catalogue_flow.rs` asserts that a create, an add and a Change or re-make each spend one preview and a removal gives none back.
+
+The Billing page draws these as a table (Used, Included, Left, a thin bar, and the day a monthly count starts again) in the Invoices table's style.

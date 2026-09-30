@@ -261,7 +261,7 @@ mod tests {
             user: UserId(Uuid([2; 16])),
             auth_subject: Uuid([3; 16]),
             org_name: "Ruiz & Co".to_owned(),
-            plan: "Sync".to_owned(),
+            plan: "Pro".to_owned(),
             attempts,
             subject: "News for @first_name".to_owned(),
             body_html: "<p>Hi @name at @org</p><p>@link</p>".to_owned(),

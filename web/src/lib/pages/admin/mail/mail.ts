@@ -46,7 +46,7 @@ export const SEGMENTS: readonly SegmentChoice[] = [
 	{ value: 'free', label: 'Free (Look)', who: 'Sellers on Free (Look)' },
 	{ value: 'paid', label: 'Paid', who: 'Sellers on any paid plan' },
 	{ value: 'starter', label: 'Starter', who: 'Sellers on Starter' },
-	{ value: 'subscriber', label: 'Sync', who: 'Sellers on Sync' },
+	{ value: 'subscriber', label: 'Pro', who: 'Sellers on Pro' },
 	{ value: 'studio', label: 'Studio', who: 'Sellers on Studio' }
 ];
 

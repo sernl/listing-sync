@@ -130,7 +130,7 @@ describe('the sentences', () => {
 	it('names the audience', () => {
 		expect(
 			audienceSummary({ segment: 'subscriber', exclude_operators: true, verified_only: false })
-		).toBe('Sellers on Sync, admins left out, any address.');
+		).toBe('Sellers on Pro, admins left out, any address.');
 	});
 
 	it('leaves out the states nobody is in', () => {
