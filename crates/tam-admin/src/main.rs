@@ -20,6 +20,11 @@
 //!        tam-admin <db-url> backfill-workflow-owners
 //!        tam-admin guides seed --dir <path> [--dry-run] [--db <url>]
 //!                              [--user <uuid> | --email <address>]
+//!        tam-admin guides check --dir <path>
+//!        tam-admin guides images --dir <path> --db <url> --blob-kek-path <path>
+//!                                (--blob-store-root <dir> | --blob-store-s3 <endpoint>
+//!                                 --blob-store-bucket <name> --blob-store-credentials <path>
+//!                                 [--blob-store-region <r>])
 //!        tam-admin covers repair --db <url> [--org <uuid>] [--dry-run]
 //!                                [--blob-kek-path <path> (--blob-store-root <dir> |
 //!                                 --blob-store-s3 <endpoint> --blob-store-bucket <name>
@@ -27,7 +32,14 @@
 //!
 //! The guide seed is the one command whose database is optional: `--dry-run`
 //! reads the corpus, prints what it would write and never connects, so a
-//! build lane can check the files parse without a server.
+//! build lane can check the files parse without a server. `guides check`
+//! never connects at all: it proves every picture handle a guide names is a
+//! file under `<dir>/images`, and that every file there is named.
+//!
+//! `guides images` is the upload route without the server: it seals every
+//! picture in the directory into the blob store under the platform
+//! organisation, so the migration step can place them before anything serves.
+//! Same bytes, same handle, nothing written.
 //!
 //! `covers repair --dry-run` reads the catalogue and counts; only the real run
 //! needs the key and the object store, because only it reads files and
@@ -36,7 +48,10 @@
 #![forbid(unsafe_code)]
 
 mod covers_repair;
+mod guides_images;
 mod guides_seed;
+#[cfg(all(test, feature = "pg-tests"))]
+mod pg_tests;
 
 use std::path::PathBuf;
 
@@ -51,6 +66,8 @@ const USAGE: &str =
                      \x20      tam-admin <db-url> backfill-workflow-owners\n\
                      \x20      tam-admin guides seed --dir <path> [--dry-run] [--db <url>]\n\
                      \x20                            [--user <uuid> | --email <address>]\n\
+                     \x20      tam-admin guides check --dir <path>\n\
+                     \x20      tam-admin guides images --dir <path> --db <url> --blob-kek-path <path> <blob-store flags>\n\
                      \x20      tam-admin covers repair --db <url> [--org <uuid>] [--dry-run]\n\
                      \x20                              [--blob-kek-path <path> <blob-store flags>]";
 
@@ -122,6 +139,18 @@ enum Command {
         dir: PathBuf,
         dry_run: bool,
         author: Option<Subject>,
+    },
+    /// The offline check that the guides and their pictures are one set. See
+    /// [`guides_images::check`].
+    GuidesCheck {
+        dir: PathBuf,
+    },
+    /// Every picture in a directory, placed in the blob store under the
+    /// platform organisation. See [`guides_images::place`].
+    GuidesImages {
+        dir: PathBuf,
+        kek_path: String,
+        backend: tam_blob_store::BlobBackend,
     },
     /// Redraws every thumbnail that is still a generated card, from the
     /// resource's first file where this server holds it. See
@@ -206,18 +235,36 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     // its dry run has no database to be addressed by.
     if head == "guides" {
         let verb = positional.get(1).map_or("", String::as_str);
-        if verb != "seed" {
-            eprintln!("{USAGE}");
-            return Err(format!("unknown guides command {verb:?}").into());
-        }
-        let dir = dir.ok_or("name the corpus with --dir <path>")?;
-        return Ok(Invocation {
-            db_url: db,
-            command: Command::GuidesSeed {
-                dir: PathBuf::from(dir),
+        let dir = PathBuf::from(dir.ok_or("name the directory with --dir <path>")?);
+        let command = match verb {
+            "seed" => Command::GuidesSeed {
+                dir,
                 dry_run,
                 author: optional_subject()?,
             },
+            "check" => Command::GuidesCheck { dir },
+            "images" => {
+                let (Some(kek_path), Some(backend)) = (kek_path, blob_store.resolve()?) else {
+                    return Err(
+                        "placing pictures seals and stores them: give --blob-kek-path \
+                                and the blob-store flags"
+                            .into(),
+                    );
+                };
+                Command::GuidesImages {
+                    dir,
+                    kek_path,
+                    backend,
+                }
+            }
+            _ => {
+                eprintln!("{USAGE}");
+                return Err(format!("unknown guides command {verb:?}").into());
+            }
+        };
+        return Ok(Invocation {
+            db_url: db,
+            command,
         });
     }
 
@@ -311,18 +358,34 @@ async fn seeding_author(operators: &OperatorRepo) -> Result<UserId, Box<dyn std:
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let invocation = parse_invocation()?;
 
-    // The one path that needs no server, answered before the connection is
+    // The paths that need no server, answered before the connection is
     // attempted rather than after it fails.
-    if let Command::GuidesSeed {
-        dir,
-        dry_run: true,
-        author: _,
-    } = &invocation.command
-    {
-        for file in guides_seed::read_directory(dir)? {
-            println!("{}", file.summary());
+    match &invocation.command {
+        Command::GuidesSeed {
+            dir,
+            dry_run: true,
+            author: _,
+        } => {
+            for file in guides_seed::read_directory(dir)? {
+                println!("{}", file.summary());
+            }
+            return Ok(());
         }
-        return Ok(());
+        Command::GuidesCheck { dir } => {
+            let check = guides_images::check(dir)?;
+            println!("{}", check.report());
+            if !check.passes() {
+                return Err("the guides and their pictures are not one set".into());
+            }
+            return Ok(());
+        }
+        Command::Grant { .. }
+        | Command::Revoke { .. }
+        | Command::List
+        | Command::BackfillWorkflowOwners
+        | Command::GuidesSeed { .. }
+        | Command::GuidesImages { .. }
+        | Command::CoversRepair { .. } => {}
     }
 
     let db_url = invocation
@@ -405,6 +468,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let outcomes = guides_seed::seed(&guides, &files, author, wall_now()?).await?;
             println!("{}", guides_seed::report(&outcomes));
         }
+        Command::GuidesImages {
+            dir,
+            kek_path,
+            backend,
+        } => {
+            let repo = tam_storage::BlobRepo::new(
+                pool.clone(),
+                backend.object_store(),
+                load_kek(&kek_path)?,
+            );
+            let placed = guides_images::place(&pool, &repo, &dir, wall_now()?).await?;
+            println!("{}", guides_images::report(&placed));
+        }
+        // Answered before the pool was opened.
+        Command::GuidesCheck { .. } => {}
         Command::CoversRepair {
             org,
             dry_run,

@@ -21,9 +21,9 @@ No. Look is free for as long as you like. Buy a Move Pack on Look and use the mo
 
 ## Which plan do I want?
 
-Pick by how often you publish: Starter gives 10 moves a month, Sync 25 and Studio 100. Moving your shop once? A Move Pack is cheaper than subscribing.
+Pick by how often you publish: Starter gives 10 moves a month, Pro 25 and Studio 100. Moving your shop once? A Move Pack is cheaper than subscribing.
 
-Sync and Studio also show statistics for every shop and can publish automatically. See [Your plan and what it allows](/guides/plans).
+Pro and Studio also show statistics for every shop and can publish automatically. See [Your plan and what it allows](/guides/plans).
 
 ## What do the free moves give me?
 
@@ -31,7 +31,7 @@ You get 5 moves, once, when your first shop connects. Use them to publish onto a
 
 ## Do moves expire?
 
-Pack moves last 12 months from the day you buy them. A plan's monthly moves build up to three months' worth: 30 on Starter, 75 on Sync and 300 on Studio. Once you reach that, a new month adds none.
+Pack moves last 12 months from the day you buy them. A plan's monthly moves build up to three months' worth: 30 on Starter, 75 on Pro and 300 on Studio. Once you reach that, a new month adds none.
 
 **Account → Billing** shows the day your first moves expire, under **Your moves**.
 
@@ -41,13 +41,13 @@ Nothing is charged by surprise. Your next move waits for next month's moves, or 
 
 ## How many resources can I keep?
 
-Look keeps up to 100 resources, Starter 500 and Sync 2,000. Studio has no limit.
+Look keeps up to 100 resources, Starter 250 and Pro 500. Studio has no limit.
 
 If you go over, for example after moving to a smaller plan, you keep everything you have. You can't add more until you upgrade or make room.
 
 ## How many watermarked previews can I make?
 
-Look makes 5 a month, Starter 50 and Sync 200. Studio has no limit. The count starts again on the 1st of each month.
+Look makes 5 in all, for as long as you have your account. Starter makes 20 a month, Pro 50 and Studio 100, and the count starts again on the 1st of each month.
 
 ## What happens to my moves if I cancel?
 

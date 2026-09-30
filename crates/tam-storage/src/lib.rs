@@ -63,7 +63,7 @@ pub use backoffice::{
 };
 pub use billing::{BillingRepo, SubscriptionState};
 pub use blobs::{
-    describe_files, BlobError, BlobRepo, PipelineFileSource, StoredFile, TenantBlobSink,
+    describe_files, BlobError, BlobPut, BlobRepo, PipelineFileSource, StoredFile, TenantBlobSink,
 };
 pub use collections::{
     CollectionChange, CollectionEdit, CollectionMemberRow, CollectionRecord, CollectionSummary,
