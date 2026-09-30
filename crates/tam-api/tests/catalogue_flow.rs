@@ -4604,7 +4604,7 @@ async fn the_free_plan_makes_its_lifetime_previews_and_no_more_when_the_month_tu
 /// them.
 async fn previews_used(state: &AppState) -> (Option<i64>, Option<i64>) {
     let (status, body) = get(state.clone(), &TOKEN_A, "/v1/entitlement").await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::OK, "the entitlement reads");
     let view: serde_json::Value = parse(&body);
     (
         view["usage"]["previews"].as_i64(),

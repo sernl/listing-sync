@@ -258,7 +258,7 @@ async fn seed(pool: &PgPool, org: OrgId, statement: &str) {
         .bind(uuid::Uuid::from_bytes(org.0 .0))
         .execute(&mut *tx)
         .await
-        .unwrap_or_else(|error| panic!("{statement}: {error}"));
+        .expect("the seed statement runs");
     tx.commit().await.expect("the seed commits");
 }
 
