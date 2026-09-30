@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 204] = [
+pub const ROUTES: [Route; 209] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -167,12 +167,37 @@ pub const ROUTES: [Route; 204] = [
     Route {
         method: "get",
         path: "/{version}/notifications",
-        summary: "Finished runs, newest first, with their settled counts",
+        summary: "Finished runs and the requesting user's own notices, newest first, with the unread count",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/notifications",
+        summary: "Keep a toast the requesting user did not look at, deduped by the console's id for it",
     },
     Route {
         method: "post",
         path: "/{version}/notifications/read",
         summary: "Mark every notification up to a given one read",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/notifications/read-all",
+        summary: "Mark every notification the requesting user has unread, read",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/notifications/dismiss-read",
+        summary: "Dismiss every notification the requesting user has read",
+    },
+    Route {
+        method: "delete",
+        path: "/{version}/notifications/{id}",
+        summary: "Dismiss one notification",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/notifications/{id}/read",
+        summary: "Mark one notification read",
     },
     Route {
         method: "get",

@@ -184,7 +184,7 @@ describe('the tier cards', () => {
 	const row = (over: Partial<PlanRow> = {}): PlanRow => ({
 		...PLANS[0],
 		id: 'subscriber',
-		name: 'Sync',
+		name: 'Pro',
 		monthly_cents: 2900,
 		yearly_cents: 24000,
 		monthly_key: 'sync_monthly',
@@ -239,11 +239,19 @@ describe('the lines on a plan card', () => {
 		expect(texts('studio').some((text) => /^Up to \d+ resources$/.test(text))).toBe(false);
 	});
 
-	it("states each plan's monthly previews from its own figure, and unlimited where it has no ceiling", () => {
-		for (const id of ['free', 'starter', 'subscriber']) {
+	it("states each paid plan's monthly previews from its own figure, and Look's as a lifetime few", () => {
+		for (const id of ['starter', 'subscriber', 'studio']) {
 			expect(texts(id)).toContain(`${caps(id).previews_per_month} watermarked previews a month`);
 		}
-		expect(texts('studio')).toContain('Unlimited watermarked previews');
+		expect(texts('free')).toContain(
+			`${caps('free').previews_lifetime} watermarked previews to try`
+		);
+		expect(texts('free').some((text) => /previews a month$/.test(text))).toBe(false);
+	});
+
+	it('says unlimited previews rather than the sentinel on a plan with no ceiling', () => {
+		const open = { ...caps('studio'), previews_per_month: 4294967295 };
+		expect(planBullets(open).map((line) => line.text)).toContain('Unlimited watermarked previews');
 	});
 
 	it('never prints the no-limit sentinel as a count', () => {
@@ -346,7 +354,7 @@ describe('the Plans grid', () => {
 		return {
 			...PLANS[0],
 			id: 'subscriber',
-			name: 'Sync',
+			name: 'Pro',
 			monthly_cents: 2900,
 			yearly_cents: 24000,
 			monthly_key: 'sync_monthly',

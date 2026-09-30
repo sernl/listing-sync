@@ -39,7 +39,9 @@
 	import { palette } from '$lib/palette.svelte';
 	import { queryKeys } from '$lib/query';
 	import SearchPalette from '$lib/SearchPalette.svelte';
-	import { toast } from '$lib/toast';
+	import { noticeOf, setUnreadSink, toast } from '$lib/toast';
+	import { bellHost } from '$lib/bell-host.svelte';
+	import NotificationBell from '$lib/NotificationBell.svelte';
 	import type { Season } from '$lib/site';
 	import { opensPalette } from '$lib/search-palette';
 	import { capture } from '$lib/posthog';
@@ -95,6 +97,25 @@
 	const impersonation = $derived(impersonationState(identity.data ?? null));
 
 	const queryClient = useQueryClient();
+
+	// The bell reads the inbox only under a session, and a toast nobody looked
+	// at is kept there as it leaves the screen. Both are this component's to
+	// switch on because it is the one that renders only under a session; the
+	// signed-out screens draw toasts that go without a trace. A notice that
+	// could not be kept is not worth a second toast about it.
+	$effect(() => {
+		bellHost.set(true);
+		setUnreadSink((entry) => {
+			void api.postNotice(noticeOf(entry)).then(
+				() => queryClient.invalidateQueries({ queryKey: queryKeys.bell }),
+				(failure: unknown) => console.warn('an unread toast was not kept', failure)
+			);
+		});
+		return () => {
+			bellHost.set(false);
+			setUnreadSink(null);
+		};
+	});
 
 	// Whether this phone's missing screen lock keeps its library shut; read
 	// alongside the check-in below.
@@ -168,7 +189,7 @@
 	const signingBackIn = createMutation(() => ({
 		mutationFn: () => machineHere.signBackIn(),
 		onSuccess: async () => {
-			toast('info', 'This device is signed back in. Connect your marketplaces again on it.');
+			toast('success', 'This device is signed back in. Connect your marketplaces again on it.');
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: queryKeys.devices }),
 				queryClient.invalidateQueries({ queryKey: queryKeys.connections })
@@ -551,6 +572,7 @@
 			{:else}
 				<button class="cta" type="button" disabled title={createRefusal}>{CREATE_TAB.label}</button>
 			{/if}
+			<NotificationBell placement="bar" />
 			<!-- Named here rather than by its contents: the avatar is `aria-hidden`
 			     because the initials are decoration, so without this label the link
 			     announces as the organisation's name rather than as Account. It

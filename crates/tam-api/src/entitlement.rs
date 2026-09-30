@@ -28,7 +28,8 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use tam_limits::{
-    AiOffer, Capabilities, Pack, Plan, PlanRow, PriceKey, AI, PACKS, PACK_ABOVE, PLANS,
+    AiOffer, Capabilities, Pack, Plan, PlanRow, PreviewAllowance, PriceKey, AI, PACKS, PACK_ABOVE,
+    PLANS,
 };
 use tam_storage::{EntitlementRepo, Grant, MoveBalance, Usage};
 use tam_types::Timestamp;
@@ -86,6 +87,9 @@ pub enum QuotaKind {
     Devices,
     /// Watermarked previews made this UTC month.
     Previews,
+    /// Watermarked previews made over the organisation's life, on a plan
+    /// that counts them that way rather than a month at a time.
+    PreviewsLifetime,
     /// AI description fills made this UTC month.
     AiFills,
     /// The plan does not include the capability at all, rather than having
@@ -94,7 +98,7 @@ pub enum QuotaKind {
 }
 
 impl QuotaKind {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Listings,
         Self::StorageBytes,
         Self::Marketplaces,
@@ -104,6 +108,7 @@ impl QuotaKind {
         Self::Collections,
         Self::Devices,
         Self::Previews,
+        Self::PreviewsLifetime,
         Self::AiFills,
         Self::PlanFeature,
     ];
@@ -120,6 +125,7 @@ impl QuotaKind {
             Self::Collections => "collections_max",
             Self::Devices => "devices_max",
             Self::Previews => "previews_per_month",
+            Self::PreviewsLifetime => "previews_lifetime",
             Self::AiFills => "ai_fills_per_month",
             Self::PlanFeature => "plan_feature",
         }
@@ -197,6 +203,11 @@ impl QuotaKind {
                 "Your plan includes {limit} watermarked previews a month. \
                  Upgrade to make more, or wait until next month."
             ),
+            // A lifetime allowance never comes back, so the sentence offers
+            // only the upgrade.
+            Self::PreviewsLifetime => format!(
+                "Your plan includes {limit} watermarked previews to try. Upgrade to make more."
+            ),
             Self::AiFills if limit == 0 => {
                 "Your plan does not include AI description fills. Upgrade to use them.".to_owned()
             }
@@ -267,8 +278,35 @@ pub(crate) async fn refuse_past_resource_cap_in(
     Ok(())
 }
 
-/// Spends `amount` watermarked previews of this month's allowance in the
-/// write's own transaction, or refuses the write.
+/// One spend of `amount` watermarked previews against the window the plan
+/// counts them in, and the refusal that window answers with.
+fn preview_charge(
+    state: &AppState,
+    caps: &Capabilities,
+    amount: u32,
+) -> (tam_storage::MonthlyCharge, QuotaKind) {
+    let (window, kind) = match caps.previews() {
+        PreviewAllowance::Lifetime(_) => (
+            tam_storage::CounterWindow::Lifetime,
+            QuotaKind::PreviewsLifetime,
+        ),
+        PreviewAllowance::Monthly(_) => (tam_storage::CounterWindow::Month, QuotaKind::Previews),
+    };
+    (
+        tam_storage::MonthlyCharge {
+            kind: tam_storage::MonthlyKind::Preview,
+            amount,
+            cap: caps.previews().cap(),
+            window,
+            at: (state.wall)(),
+        },
+        kind,
+    )
+}
+
+/// Spends `amount` watermarked previews of the plan's allowance — this
+/// month's, or the account's lifetime five on Look — in the write's own
+/// transaction, or refuses the write.
 ///
 /// Every preview a resource gains counts — attached to a saved resource,
 /// carried by a create, or swapped in for an older one — because the server
@@ -278,7 +316,7 @@ pub(crate) async fn refuse_past_resource_cap_in(
 ///
 /// # Errors
 ///
-/// The `previews_per_month` 422, or a storage fault.
+/// The `previews_per_month` or `previews_lifetime` 422, or a storage fault.
 pub(crate) async fn spend_previews_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     state: &AppState,
@@ -291,22 +329,15 @@ pub(crate) async fn spend_previews_in(
     if amount == 0 {
         return Ok(());
     }
-    let charge = tam_storage::MonthlyCharge {
-        kind: tam_storage::MonthlyKind::Preview,
-        amount,
-        cap: caps.previews_per_month,
-        at: (state.wall)(),
-    };
+    let (charge, refusal) = preview_charge(state, caps, amount);
     match tam_storage::spend_monthly_in(tx, org, charge)
         .await
         .map_err(|error| state.internal(&error.to_string()))?
     {
         tam_storage::MonthlySpend::Granted { .. } => Ok(()),
-        tam_storage::MonthlySpend::Refused { used } => Err(quota_refusal(
-            QuotaKind::Previews,
-            used,
-            u64::from(caps.previews_per_month),
-        )),
+        tam_storage::MonthlySpend::Refused { used } => {
+            Err(quota_refusal(refusal, used, u64::from(charge.cap)))
+        }
     }
 }
 
@@ -317,30 +348,41 @@ pub(crate) async fn spend_previews_in(
 pub(crate) struct PreviewSpend(Option<tam_storage::MonthlyCharge>);
 
 impl PreviewSpend {
-    /// Spends one preview, or refuses with the `previews_per_month` 422.
+    /// Spends one preview, or refuses with the plan's preview 422.
     pub(crate) async fn one(
         state: &AppState,
         org: tam_types::OrgId,
         caps: &Capabilities,
     ) -> Result<Self, APIError> {
-        let charge = tam_storage::MonthlyCharge {
-            kind: tam_storage::MonthlyKind::Preview,
-            amount: 1,
-            cap: caps.previews_per_month,
-            at: (state.wall)(),
-        };
+        let (charge, refusal) = preview_charge(state, caps, 1);
         match EntitlementRepo::new(state.pool.clone())
             .spend_monthly(org, charge)
             .await
             .map_err(|error| state.internal(&error.to_string()))?
         {
             tam_storage::MonthlySpend::Granted { .. } => Ok(Self(Some(charge))),
-            tam_storage::MonthlySpend::Refused { used } => Err(quota_refusal(
-                QuotaKind::Previews,
-                used,
-                u64::from(caps.previews_per_month),
-            )),
+            tam_storage::MonthlySpend::Refused { used } => {
+                Err(quota_refusal(refusal, used, u64::from(charge.cap)))
+            }
         }
+    }
+
+    /// How many previews the plan's window has already used, and the
+    /// refusal to answer with where that is the whole allowance: the check
+    /// the upload runs before it seals a byte, so a preview that could never
+    /// be attached is not stored first.
+    pub(crate) async fn refusal_before_upload(
+        state: &AppState,
+        org: tam_types::OrgId,
+        caps: &Capabilities,
+    ) -> Result<Option<APIError>, APIError> {
+        let (charge, refusal) = preview_charge(state, caps, 1);
+        let used = EntitlementRepo::new(state.pool.clone())
+            .counted_used(org, charge.kind, charge.window, charge.at)
+            .await
+            .map_err(|error| state.internal(&error.to_string()))?;
+        Ok((used >= i64::from(charge.cap))
+            .then(|| quota_refusal(refusal, used, u64::from(charge.cap))))
     }
 
     /// Nothing spent, for a write that adds no preview.
@@ -418,7 +460,7 @@ impl MoveRefusal {
     #[must_use]
     pub fn sentence(self) -> String {
         if self.available == 0 {
-            "You have no moves left. Buy a pack, or choose Sync.".to_owned()
+            "You have no moves left. Buy a pack, or choose Pro.".to_owned()
         } else if self.available == 1 {
             format!(
                 "You have one move left and asked to move {}. Buy a pack or pick fewer.",
@@ -534,9 +576,11 @@ pub(crate) async fn plans_view(
 
 /// What has been used of each allowance, beside `capabilities`, which carries
 /// the matching limit: `resources` against `resources_max`, `storage_bytes`
-/// against `storage_bytes_max`, `previews` against `previews_per_month` and
-/// so on. `previews` and `ai_fills` count the current UTC calendar month and
-/// start again at `month_resets_at`.
+/// against `storage_bytes_max`, `previews` against `previews_per_month`,
+/// `previews_lifetime` against `previews_lifetime` and so on. `previews`,
+/// `ai_fills` and `moves_this_month` count the current UTC calendar month and
+/// start again at `month_resets_at`; `previews_lifetime` is every month's
+/// previews summed and never starts again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageView {
     pub resources: i64,
@@ -547,7 +591,10 @@ pub struct UsageView {
     pub devices: i64,
     pub storage_bytes: i64,
     pub previews: i64,
+    pub previews_lifetime: i64,
     pub ai_fills: i64,
+    /// Moves this month's commits spent, from `move_ledger`.
+    pub moves_this_month: i64,
     pub month_resets_at: Timestamp,
 }
 
@@ -562,7 +609,9 @@ impl UsageView {
             devices: usage.devices,
             storage_bytes: usage.storage_bytes,
             previews: usage.previews,
+            previews_lifetime: usage.previews_lifetime,
             ai_fills: usage.ai_fills,
+            moves_this_month: usage.moves_this_month,
             month_resets_at: usage.month_resets_at,
         }
     }
@@ -651,6 +700,7 @@ mod tests {
                 | QuotaKind::Collections
                 | QuotaKind::Devices
                 | QuotaKind::Previews
+                | QuotaKind::PreviewsLifetime
                 | QuotaKind::AiFills
                 | QuotaKind::PlanFeature => {}
             }
@@ -702,7 +752,7 @@ mod tests {
         };
         assert_eq!(
             empty.sentence(),
-            "You have no moves left. Buy a pack, or choose Sync."
+            "You have no moves left. Buy a pack, or choose Pro."
         );
         let short = MoveRefusal {
             available: 3,

@@ -33,7 +33,9 @@ function usage(over: Partial<EntitlementUsage> = {}): EntitlementUsage {
 		devices: 0,
 		storage_bytes: 0,
 		previews: 0,
+		previews_lifetime: 0,
 		ai_fills: 0,
+		moves_this_month: 0,
 		month_resets_at: 0,
 		...over
 	};

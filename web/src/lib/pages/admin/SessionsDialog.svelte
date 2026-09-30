@@ -89,7 +89,7 @@
 				queryKey: queryKeys.identityUserSessions(userId)
 			});
 			onCount(userId, 0);
-			toast('info', 'Signed out everywhere.');
+			toast('success', 'Signed out everywhere.');
 		} catch (failure) {
 			toast(
 				'error',

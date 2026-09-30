@@ -63,7 +63,7 @@ pub use backoffice::{
 };
 pub use billing::{BillingRepo, SubscriptionState};
 pub use blobs::{
-    describe_files, BlobError, BlobRepo, PipelineFileSource, StoredFile, TenantBlobSink,
+    describe_files, BlobError, BlobPut, BlobRepo, PipelineFileSource, StoredFile, TenantBlobSink,
 };
 pub use collections::{
     CollectionChange, CollectionEdit, CollectionMemberRow, CollectionRecord, CollectionSummary,
@@ -93,9 +93,9 @@ pub use duplicates::{
     VerdictRecord, REVERSIBLE_MS,
 };
 pub use entitlement::{
-    spend_monthly_in, Accrual, EntitlementRepo, Grant, GrantRecord, GrantedBy, MonthlyCharge,
-    MonthlyKind, MonthlySpend, MoveBalance, MoveCredit, MoveSource, NewGrant, StorefrontAllowance,
-    Usage,
+    spend_monthly_in, Accrual, CounterWindow, EntitlementRepo, Grant, GrantRecord, GrantedBy,
+    MonthlyCharge, MonthlyKind, MonthlySpend, MoveBalance, MoveCredit, MoveSource, NewGrant,
+    StorefrontAllowance, Usage,
 };
 pub use erasure::{Erased, ErasureRefusal, ErasureRepo};
 pub use file_source::ProductFileSourceRepo;
@@ -170,17 +170,19 @@ pub use marketplace_requests::{
     REQUEST_RATE_WINDOW_MS,
 };
 pub use notifications::{
-    NotificationCursor, NotificationRecord, NotificationRepo, Recipient, JOB_SETTLED_TOPIC,
+    NewNotice, NotificationCursor, NotificationRecord, NotificationRepo, NotificationSource,
+    Recipient, JOB_SETTLED_TOPIC,
 };
 pub use operators::{OperatorEvent, OperatorRecord, OperatorRepo};
 pub use org::{OrgRecord, OrgRepo, OrgWrite};
 pub use overrides::OverrideRepo;
 pub use product::{
-    fill_rights, has_live_payload, insert_product, live_count_in, offer_cover, offer_payload,
-    restore_product, soft_delete_product, title_of, update_product, CoverOffer, ExportedListing,
-    ExportedResource, FileRefusal, FileReplacement, FileSwap, FileTarget, PayloadOffer,
-    PayloadOfferPolicy, ProductCreationFacts, ProductEdit, ProductFiles, ProductRecord,
-    ProductRepo, ProductSummary, ReplacedFiles, StoredCover, ThumbnailChange,
+    fill_rights, fill_tes_licence, has_live_payload, insert_product, live_count_in, offer_cover,
+    offer_payload, restore_product, soft_delete_product, title_of, update_product, CoverOffer,
+    ExportedListing, ExportedResource, FileRefusal, FileReplacement, FileSwap, FileTarget,
+    PayloadOffer, PayloadOfferPolicy, ProductCreationFacts, ProductEdit, ProductFiles,
+    ProductRecord, ProductRepo, ProductSummary, ReplacedFiles, StoredCover, TesLicenceDefault,
+    ThumbnailChange,
 };
 pub use profile::{AvatarWrite, ProfileRepo, TourOutcome, TourState};
 pub use pruning::{PruneRepo, PruneReport};

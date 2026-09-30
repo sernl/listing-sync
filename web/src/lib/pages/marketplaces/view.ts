@@ -7,6 +7,7 @@ import { platformOf } from '$lib/device-merge';
 import { SIGN_IN_LABEL } from '$lib/devices-view';
 import type { MarketplaceRow, MarketplaceSignIn, SignInState } from '$lib/devices-view';
 import type { Tone } from '$lib/StatusPill.svelte';
+import type { ToastTone } from '$lib/toast';
 import type { Marketplace, TransportClass } from '$lib/generated/vocab';
 
 /**
@@ -330,7 +331,7 @@ export type DisconnectServer = { kind: 'moved'; moved: number } | { kind: 'refus
 
 /** What a seller is told after a disconnect, and in which voice. */
 export interface DisconnectSay {
-	tone: 'info' | 'error';
+	tone: ToastTone;
 	message: string;
 }
 
@@ -350,7 +351,7 @@ export function disconnectSay(marketplace: Marketplace, server: DisconnectServer
 	return server.moved === 0
 		? { tone: 'info', message: `${name} was already disconnected.` }
 		: {
-				tone: 'info',
+				tone: 'success',
 				message: `${name} is disconnected from your account. You can connect it again at any time.`
 			};
 }
@@ -369,16 +370,16 @@ export function signOutHereSay(marketplace: Marketplace, forgotten: SessionOutco
 	switch (forgotten.kind) {
 		case 'done':
 			return {
-				tone: 'info',
+				tone: 'success',
 				message: `Your ${name} login is removed from this device.`
 			};
 		case 'unsupported':
-			return { tone: 'error', message: APP_CANNOT_FORGET };
+			return { tone: 'warning', message: APP_CANNOT_FORGET };
 		case 'refused':
-			return { tone: 'error', message: forgotten.detail };
+			return { tone: 'warning', message: forgotten.detail };
 		case 'signedOut':
 			return {
-				tone: 'error',
+				tone: 'warning',
 				message:
 					`This device was signed out of Teachouse, which already removed its ${name} ` +
 					'login. Sign it back in under Preferences > Device sign-ins.'
@@ -391,7 +392,7 @@ export function signOutHereSay(marketplace: Marketplace, forgotten: SessionOutco
 		case 'opening':
 		case 'unavailable':
 			return {
-				tone: 'error',
+				tone: 'warning',
 				message: `You can only remove the ${name} login in the Teachouse app on this device.`
 			};
 	}
@@ -462,15 +463,15 @@ export type ConnectVerdictCode = (typeof CONNECT_VERDICT_CODES)[number];
  */
 const CONNECT_SAID: Record<ConnectVerdictCode, (name: string) => ConnectReturn> = {
 	captured: (name) => ({
-		tone: 'info',
+		tone: 'success',
 		message: `${name} is connected on this device.`
 	}),
 	deadline: (name) => ({
-		tone: 'error',
+		tone: 'warning',
 		message: `The ${name} sign-in took too long, so nothing was saved. Press Connect ${name} to try again.`
 	}),
 	abandoned: (name) => ({
-		tone: 'error',
+		tone: 'warning',
 		message: `The ${name} sign-in did not finish, so nothing was saved. Press Connect ${name} to try again.`
 	}),
 	refused: (name) => ({
@@ -482,7 +483,7 @@ const CONNECT_SAID: Record<ConnectVerdictCode, (name: string) => ConnectReturn> 
 		message: `The ${name} sign-in could not be saved on this device. If this device was signed out of Teachouse, sign in again here and then press Connect ${name}.`
 	}),
 	signed_out: (name) => ({
-		tone: 'error',
+		tone: 'warning',
 		message: `This device was signed out of Teachouse, so the ${name} sign-in did not open and nothing was saved. Sign this device back in under Preferences > Device sign-ins, then press Connect ${name}.`
 	}),
 	// The seller has not agreed to the seller-device notice for this
@@ -490,7 +491,7 @@ const CONNECT_SAID: Record<ConnectVerdictCode, (name: string) => ConnectReturn> 
 	// Worded once here; the desktop's direct answer and the phone's return
 	// leg both read it through `connectConsentRequired`.
 	consent: (name) => ({
-		tone: 'error',
+		tone: 'warning',
 		message: `${name} needs your permission first, so nothing was saved. Grant it under Account > Permissions, then press Connect ${name}.`
 	}),
 	// The shop is already bound to another organisation, which the server
@@ -498,7 +499,7 @@ const CONNECT_SAID: Record<ConnectVerdictCode, (name: string) => ConnectReturn> 
 	// deliberately not said: the constraint must never become a directory of
 	// the platform's sellers, and the remedy is a person either way.
 	bound_elsewhere: (name) => ({
-		tone: 'error',
+		tone: 'warning',
 		message: `This ${name} shop is already connected to another Teachouse account, so nothing was saved.`
 	})
 };
@@ -514,16 +515,16 @@ const CONNECT_SAID: Record<ConnectVerdictCode, (name: string) => ConnectReturn> 
  */
 const CONNECT_SAID_UNNAMED: Record<ConnectVerdictCode, ConnectReturn> = {
 	captured: {
-		tone: 'info',
+		tone: 'success',
 		message: 'Your marketplace sign-in is saved on this device.'
 	},
 	deadline: {
-		tone: 'error',
+		tone: 'warning',
 		message:
 			'Your marketplace sign-in took too long, so nothing was saved. Press Connect on the card to try again.'
 	},
 	abandoned: {
-		tone: 'error',
+		tone: 'warning',
 		message:
 			'Your marketplace sign-in did not finish, so nothing was saved. Press Connect on the card to try again.'
 	},
@@ -538,17 +539,17 @@ const CONNECT_SAID_UNNAMED: Record<ConnectVerdictCode, ConnectReturn> = {
 			'Your marketplace sign-in could not be saved on this device. If this device was signed out of Teachouse, sign in again here and then press Connect on the card.'
 	},
 	signed_out: {
-		tone: 'error',
+		tone: 'warning',
 		message:
 			'This device was signed out of Teachouse, so your marketplace sign-in did not open and nothing was saved. Sign this device back in under Preferences > Device sign-ins, then press Connect on the card.'
 	},
 	consent: {
-		tone: 'error',
+		tone: 'warning',
 		message:
 			'That marketplace needs your permission first, so nothing was saved. Grant it under Account > Permissions, then press Connect on the card.'
 	},
 	bound_elsewhere: {
-		tone: 'error',
+		tone: 'warning',
 		message: 'That shop is already connected to another Teachouse account, so nothing was saved.'
 	}
 };
@@ -842,9 +843,7 @@ export function attentionAsk(
 	const title = `${names} ${rows.length === 1 ? 'needs' : 'need'} you`;
 	const quiet = rows.filter((row) => row.quiet && row.signIn.device !== null);
 	const signIn = rows.filter((row) => !quiet.includes(row));
-	const machines = spoken([
-		...new Set(quiet.map((row) => row.signIn.device?.name ?? ''))
-	]);
+	const machines = spoken([...new Set(quiet.map((row) => row.signIn.device?.name ?? ''))]);
 	if (signIn.length === 0) {
 		return { title, say: `Open the Teachouse app on ${machines} so scheduled work runs again.` };
 	}

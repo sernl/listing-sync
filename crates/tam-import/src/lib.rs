@@ -1280,20 +1280,68 @@ pub fn resolve_price(
 /// D4: the grant the source stated, kept as the source's own value. Read and
 /// discarded before this existed, which is why every product before it reads
 /// back `Unstated`.
+///
+/// One rewrite, and it is Tes's own: the Tes editor turns the legacy
+/// `TES-V1` and `TES-V2` into `CC-BY-SA` when it opens a resource, and
+/// neither is offered on write, so a product holding one would open with the
+/// licence box empty and refuse to list on the marketplace it came from.
 #[must_use]
 pub fn rights_from(listing: &tam_marketplace::ImportedListing) -> tam_domain::RightsDeclaration {
     listing
         .rights
         .as_ref()
         .map_or(tam_domain::RightsDeclaration::Unstated, |term| {
+            let legacy = term.inventory == InventoryId::Tes
+                && matches!(term.native_id.as_deref(), Some("TES-V1" | "TES-V2"));
+            let (segments, native_id) = if legacy {
+                (
+                    vec![TES_FREE_DEFAULT.to_owned()],
+                    Some(TES_FREE_DEFAULT.to_owned()),
+                )
+            } else {
+                (term.segments.clone(), term.native_id.clone())
+            };
             tam_domain::RightsDeclaration::Declared {
                 source: tam_domain::VocabularyPath {
                     vocabulary: tam_domain::VocabularyId(term.inventory, TermKind::Licence),
-                    segments: term.segments.clone(),
-                    native_id: term.native_id.clone(),
+                    segments,
+                    native_id,
                 },
             }
         })
+}
+
+/// Tes's own licence for a free resource: the uploader preselects it
+/// (`docs/design/data/tes-vocabulary.json`, the licence note).
+const TES_FREE_DEFAULT: &str = "CC-BY-SA";
+
+/// The only licence Tes writes for a priced resource.
+const TES_PAID: &str = "TES-PAID";
+
+/// The Tes licence a resource opens with when TPT's copyright statement is
+/// all it has said about its rights.
+///
+/// A priced resource is `TES-PAID` either way — Tes writes nothing else with
+/// a price. A free one that is the seller's own original work takes Tes's own
+/// default, `CC-BY-SA`; a free one that uses material the seller has
+/// permission to use takes `CC-BY-ND`, because permission to use someone
+/// else's material is not permission to let buyers adapt and re-share it.
+#[must_use]
+pub const fn tes_licence_for(
+    copyright: tam_domain::product::CopyrightDeclaration,
+) -> tam_storage::TesLicenceDefault {
+    match copyright {
+        tam_domain::product::CopyrightDeclaration::OriginalWork => tam_storage::TesLicenceDefault {
+            free: TES_FREE_DEFAULT,
+            paid: TES_PAID,
+        },
+        tam_domain::product::CopyrightDeclaration::UsedCopyrightedMaterials => {
+            tam_storage::TesLicenceDefault {
+                free: "CC-BY-ND",
+                paid: TES_PAID,
+            }
+        }
+    }
 }
 
 /// Preserve unclassified values and native resource types. Resource types may
@@ -1556,7 +1604,7 @@ mod tests {
 
 #[cfg(test)]
 mod tpt_fill_tests {
-    use super::tpt_base_fill;
+    use super::{rights_from, tes_licence_for, tpt_base_fill};
     use tam_domain::product::{CopyrightDeclaration, FacetSlug, ListingStatus, TaxCode};
     use tam_marketplace::{ImportedListing, ListingExtras, ListingState, RemoteListingId};
     use tam_types::{ContentHash, CopyFormat, ImportedPrice, ImportedTerm, InventoryId};
@@ -1670,5 +1718,44 @@ mod tpt_fill_tests {
             ..captured()
         };
         assert_eq!(tpt_base_fill(&tes, &[]), None);
+    }
+
+    #[test]
+    fn tpt_s_copyright_statement_picks_the_tes_licence_on_each_price_branch() {
+        let own = tes_licence_for(CopyrightDeclaration::OriginalWork);
+        let borrowed = tes_licence_for(CopyrightDeclaration::UsedCopyrightedMaterials);
+        assert_eq!(
+            (own.free, own.paid),
+            ("CC-BY-SA", "TES-PAID"),
+            "original work takes Tes's own default, and a price is always TES-PAID"
+        );
+        assert_eq!(
+            (borrowed.free, borrowed.paid),
+            ("CC-BY-ND", "TES-PAID"),
+            "material used with permission is not re-shared as adaptable"
+        );
+    }
+
+    #[test]
+    fn a_legacy_tes_licence_reads_as_the_value_tes_s_own_editor_shows() {
+        let legacy = ImportedListing {
+            remote: RemoteListingId::Tes {
+                url: "https://www.tes.com/teaching-resource/x-1".to_owned(),
+            },
+            rights: Some(ImportedTerm {
+                inventory: InventoryId::Tes,
+                kind: Some(tam_types::TermKind::Licence),
+                segments: vec!["TES-V1".to_owned()],
+                native_id: Some("TES-V1".to_owned()),
+            }),
+            ..captured()
+        };
+        let tam_domain::RightsDeclaration::Declared { source } = rights_from(&legacy) else {
+            panic!("a stated licence is declared");
+        };
+        assert_eq!(
+            (source.native_id.as_deref(), source.segments.as_slice()),
+            (Some("CC-BY-SA"), ["CC-BY-SA".to_owned()].as_slice())
+        );
     }
 }

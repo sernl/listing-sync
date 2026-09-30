@@ -29,6 +29,7 @@
 		type PricingForm,
 		type Theme
 	} from '$lib/pages/admin/pricing';
+	import { SEASONS } from '$lib/site';
 	import '$lib/flow.css';
 	import '$lib/styles/data.css';
 
@@ -135,7 +136,7 @@
 			form = blank(form.kind);
 			touched = {};
 			tried = false;
-			toast('info', `${saved.name} saved. Stripe has its coupon.`);
+			toast('success', `${saved.name} saved. Stripe has its coupon.`);
 		},
 		onError: (failure: Error) =>
 			toast('error', failure instanceof ApiFailure ? failure.message : 'It was not saved.')
@@ -154,7 +155,7 @@
 		onSuccess: async (ended: DiscountView) => {
 			endingId = null;
 			await queryClient.invalidateQueries({ queryKey: queryKeys.adminPricing });
-			toast('info', `${ended.name} ended. Checkouts stop applying it now.`);
+			toast('success', `${ended.name} ended. Checkouts stop applying it now.`);
 		},
 		onError: (failure: Error) => {
 			endingId = null;
@@ -188,11 +189,15 @@
 		{ id: 'code', label: 'Discount code', sub: 'Sellers type it at checkout.' }
 	];
 
+	/** The site themes, one for one with the Site page's picker. */
 	const THEMES: { id: Theme | 'none'; label: string }[] = [
 		{ id: 'none', label: 'No theme' },
-		{ id: 'halloween', label: 'Halloween' },
-		{ id: 'christmas', label: 'Christmas' }
+		...SEASONS.map((entry) => ({ id: entry.name, label: entry.label }))
 	];
+
+	function themeLabel(theme: Theme): string {
+		return SEASONS.find((entry) => entry.name === theme)?.label ?? theme;
+	}
 </script>
 
 {#snippet endButton(id: string, word: string)}
@@ -230,7 +235,7 @@
 			{#if row.banner}
 				<p class="pr-card-line">
 					<Icon name="tag" size={14} />
-					“{row.banner}”{row.theme ? ` · ${row.theme} theme` : ''}
+					“{row.banner}”{row.theme ? ` · ${themeLabel(row.theme)} theme` : ''}
 				</p>
 			{/if}
 			<p class="pr-card-coupon mono">{row.stripe_coupon_id}</p>

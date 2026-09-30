@@ -38,7 +38,7 @@
 			return;
 		}
 		if (password !== confirmation) {
-			toast('error', 'The two passwords do not match.');
+			toast('warning', 'The two passwords do not match.');
 			return;
 		}
 		busy = true;
@@ -54,7 +54,7 @@
 			}
 			password = '';
 			confirmation = '';
-			toast('info', 'Password changed. Sign in with the new one.');
+			toast('success', 'Password changed. Sign in with the new one.');
 			await goto('/login');
 		} finally {
 			busy = false;

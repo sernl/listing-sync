@@ -170,6 +170,19 @@ export const NOTIFICATION_KINDS: readonly NotificationKind[] = [
   "import",
 ];
 
+export type NoticeTone =
+  | "success"
+  | "info"
+  | "warning"
+  | "error";
+
+export const NOTICE_TONES: readonly NoticeTone[] = [
+  "success",
+  "info",
+  "warning",
+  "error",
+];
+
 export type LabelColour =
   | "slate"
   | "red"
@@ -400,6 +413,7 @@ export type QuotaKind =
   | "collections_max"
   | "devices_max"
   | "previews_per_month"
+  | "previews_lifetime"
   | "ai_fills_per_month"
   | "plan_feature";
 
@@ -413,6 +427,7 @@ export const QUOTA_KINDS: readonly QuotaKind[] = [
   "collections_max",
   "devices_max",
   "previews_per_month",
+  "previews_lifetime",
   "ai_fills_per_month",
   "plan_feature",
 ];

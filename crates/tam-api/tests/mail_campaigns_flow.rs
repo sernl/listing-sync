@@ -59,7 +59,7 @@ fn state(pool: PgPool, backoffice: Option<PgPool>) -> AppState {
 }
 
 /// Four sellers in four organisations: the operator, a free seller, a paid
-/// (Sync) seller, and one who never signed in.
+/// (Pro) seller, and one who never signed in.
 #[expect(
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
@@ -341,7 +341,7 @@ async fn the_count_is_what_the_send_queues_and_delete_frees_it(pool: PgPool) {
         .iter()
         .find(|r| r.user == USER_PAID)
         .expect("the paid seller's row");
-    assert_eq!(paid_row.plan, "Sync");
+    assert_eq!(paid_row.plan, "Pro");
 
     let path = format!(
         "/v1/admin/mail/campaigns/{}",

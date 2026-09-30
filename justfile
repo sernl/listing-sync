@@ -25,7 +25,7 @@ backoffice_db_url := "postgres://tam_backoffice:tam_backoffice_dev@127.0.0.1:543
 
 # The pg-gated crates and the feature spelled per crate, shared by the two
 # database-backed lanes so a crate cannot be added to one and missed by the other
-pg_tests := "-p tam-storage --features pg-tests -p tam-api --features tam-api/pg-tests -p tam-import --features tam-import/pg-tests -p tam-engine --features tam-engine/pg-tests -p tam-sync-worker --features tam-sync-worker/pg-tests"
+pg_tests := "-p tam-storage --features pg-tests -p tam-api --features tam-api/pg-tests -p tam-import --features tam-import/pg-tests -p tam-engine --features tam-engine/pg-tests -p tam-sync-worker --features tam-sync-worker/pg-tests -p tam-admin --features tam-admin/pg-tests"
 
 default:
     @just --list
@@ -396,7 +396,8 @@ landing-check:
 # deliberate: `availability` in `apps/landing/src/site.js`, which is the one
 # sentence that says what connects today, and the bands the founder's mockup of
 # 2026-09-11 draws marks in -- the hero strip, the catalogue card, the challenge
-# illustration, the testimonials. Everything else speaks of the marketplaces a
+# illustration, the testimonials -- and the app box's reason, which the founder
+# asked on 2026-09-30 to name the two marketplaces with no API. Everything else speaks of the marketplaces a
 # seller sells in without naming one or implying a count, which is what lets the
 # copy stay true as marketplaces are added.
 #
@@ -878,6 +879,15 @@ dev-all: db-up db-wait db-migrate auth-migrate auth-env
     (cd web && npm run dev) &
     wait
 
+# Prove the guides and their pictures are one set, with no database: every
+# `/v1/guides/images/<hash>` a guide under docs/guides/ names is the BLAKE3 hash
+# of a file under docs/guides/images/, and every file there is named by a
+# guide. A retaken screenshot is a new hash, so this is what catches a guide
+# still pointing at the picture it replaced. The deploy runs the same check
+# before it places the pictures (`tam-admin guides images`) and seeds the text.
+guides-check:
+    cargo run -q -p tam-admin -- guides check --dir docs/guides
+
 # Upload every guide picture under docs/guides/images/ to a running
 # deployment, as an operator. A guide addresses a picture by the BLAKE3 hash of
 # its bytes (`/v1/guides/images/<hash>`), so the handle each upload answers must
@@ -885,6 +895,10 @@ dev-all: db-up db-wait db-migrate auth-migrate auth-env
 # files; either mismatch fails the run. Uploading is idempotent: the same bytes
 # answer the same handle. Run it before `tam-admin guides seed`, so no
 # published guide points at a picture the deployment does not hold yet.
+#
+# A deploy does not need it: the migration step places the pictures straight
+# into the blob store (`tam-admin guides images`) and seeds the guides. This is
+# for a deployment reached only over HTTP.
 #
 #   just guides-images https://teachouse.io ~/operator-session.txt
 #

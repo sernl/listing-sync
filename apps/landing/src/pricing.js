@@ -53,7 +53,7 @@ export const bestYearlyPercent = Math.max(
  * The console's signup reads `next` and `price` from its query: `next` is
  * where to land after the account exists, and `price` is the checkout to open
  * on arrival. Sending the price key from here means a reader who clicked
- * "Choose Sync" does not have to find Sync again on the other side.
+ * "Choose Pro" does not have to find Pro again on the other side.
  */
 const SIGNUP = 'https://teachouse.io/signup';
 export const signupUrl = (priceKey) =>
@@ -70,18 +70,31 @@ const size = (megabytes) =>
 	megabytes >= 1024 ? `${Math.round(megabytes / 1024)} GB` : `${megabytes} MB`;
 
 /**
+ * How many of a row's allowance a plan holds for the account's life rather
+ * than each month: Look's trial moves and its watermarked previews. Zero on
+ * every other row and plan.
+ */
+const lifetime = (feature, plan) =>
+	feature.key === 'moves'
+		? plan.capabilities.free_moves_lifetime
+		: feature.key === 'watermarked_previews'
+			? plan.capabilities.previews_lifetime
+			: 0;
+
+/**
  * One comparison cell, as the table draws it: `kind` picks the mark (a tick,
  * a dash, a hollow "soon" mark or a figure), `text` is what a figure says and
  * `label` is what a screen reader hears in place of a mark.
  *
- * The one cell the table cannot read off its row is Look's moves: Look has
- * no monthly allowance but does have its trial moves, which the table says
- * rather than a dash that would read as "none".
+ * The cells the table cannot read off their row are Look's moves and
+ * watermarked previews: Look has no monthly allowance of either but does
+ * have a few to try for the account's life, which the table says rather than
+ * a dash that would read as "none".
  */
 export const cell = (feature, plan) => {
 	const value = feature.included[plan.id];
-	if (feature.key === 'moves' && value === false && plan.capabilities.free_moves_lifetime > 0)
-		return { kind: 'text', text: `${plan.capabilities.free_moves_lifetime} to try` };
+	const forLife = lifetime(feature, plan);
+	if (value === false && forLife > 0) return { kind: 'text', text: `${forLife} to try` };
 	if (value === false) return { kind: 'no', label: 'Not included' };
 	if (value === true) {
 		if (feature.unit !== null) return { kind: 'text', text: 'Unlimited' };
@@ -133,8 +146,8 @@ const byKey = new Map(PLAN_FEATURES.map((feature) => [feature.key, feature]));
 const highlight = (feature, plan) => {
 	const value = feature.included[plan.id];
 	const noun = feature.label.toLowerCase();
-	if (feature.key === 'moves' && value === false)
-		return `${plan.capabilities.free_moves_lifetime} moves to try`;
+	if (value === false && lifetime(feature, plan) > 0)
+		return `${lifetime(feature, plan)} ${noun} to try`;
 	if (feature.key === 'edit_sync') return `Edits synced ${cadence(value).toLowerCase()}`;
 	if (feature.unit === null) return feature.label;
 	if (value === true) return `Unlimited ${noun}`;
@@ -145,8 +158,7 @@ const highlight = (feature, plan) => {
 
 /** Whether a row's cell on one plan is worth saying on that plan's card. */
 const reaches = (feature, plan) =>
-	feature.included[plan.id] !== false ||
-	(feature.key === 'moves' && plan.capabilities.free_moves_lifetime > 0);
+	feature.included[plan.id] !== false || lifetime(feature, plan) > 0;
 
 /**
  * A card's highlights. The free card says what the trial gives; each paid
@@ -178,9 +190,16 @@ export const packRows = PACKS.map((pack) => ({
 	perMove: dollars(pack.per_move_cents)
 }));
 
-/** What a move is, said once under the heading of the cards that sell them. */
-export const moveDefinition =
-	'A move is publishing one imported resource onto one marketplace. Publishing a resource to Tes and TPT is 2 moves; to Tes alone is 1 move.';
+/** What a move is, said once in a box above the cards that sell them: one
+ *  sentence, and the rest behind Explain. */
+export const moveDefinition = 'Publishing one of your resources onto one marketplace is one move.';
+
+/** The long form behind the box's Explain. */
+export const moveExplained = [
+	'Publishing a resource to Tes and TPT is 2 moves; to Tes alone is 1 move. A draft counts the same as a live listing.',
+	'Importing, editing, previewing and exporting never use a move.',
+	'Plans add moves every month and save up unused ones. Pack moves last 12 months and work on any plan.'
+];
 
 /**
  * The questions, and the only place the site answers one.

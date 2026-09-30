@@ -86,7 +86,7 @@
 			banning = false;
 			banReason = '';
 			await onChanged();
-			toast('info', 'Account banned. They can no longer sign in.');
+			toast('success', 'Account banned. They can no longer sign in.');
 		},
 		onError: (failure: Error) =>
 			toast('error', refusalOf(failure, 'The account was not banned. Try again.'))
@@ -96,7 +96,7 @@
 		mutationFn: (id: string) => unbanIdentityUser(id),
 		onSuccess: async () => {
 			await onChanged();
-			toast('info', 'Account unbanned.');
+			toast('success', 'Account unbanned.');
 		},
 		onError: (failure: Error) =>
 			toast('error', refusalOf(failure, 'The account was not unbanned. Try again.'))
@@ -108,7 +108,7 @@
 		onSuccess: async (_, input) => {
 			await onChanged();
 			toast(
-				'info',
+				'success',
 				input.role === 'admin'
 					? 'They are now identity admin.'
 					: 'They are no longer identity admin.'
@@ -126,7 +126,7 @@
 		onSuccess: async (_, input) => {
 			await onChanged();
 			toast(
-				'info',
+				'success',
 				input.operator ? 'They are now an operator.' : 'They are no longer an operator.'
 			);
 		},
@@ -178,7 +178,7 @@
 	async function deleted(email: string) {
 		showDelete = false;
 		await onChanged();
-		toast('info', `${email} is deleted.`);
+		toast('success', `${email} is deleted.`);
 		sheet?.close();
 	}
 </script>

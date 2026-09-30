@@ -1,10 +1,11 @@
-// The Notifications page's own view logic: one finished run turned into the
-// line the inbox draws for it, and the read mark that line participates in.
+// The inbox's view logic, shared by the Notifications page and the bell: one
+// row -- a finished run or a kept notice -- turned into the line both draw for
+// it, and what a Mark read or a Dismiss does to the rows and the unread count.
 // Pure, so it tests without a component.
 
 import type { NotificationCounts, NotificationView } from '$lib/api';
 import { agoLabel } from '$lib/elapsed';
-import type { NotificationKind } from '$lib/generated/vocab';
+import type { NoticeTone, NotificationKind } from '$lib/generated/vocab';
 import { segments, type Segment } from '$lib/outcome';
 import { SHORT_NAME } from '$lib/platforms';
 
@@ -44,7 +45,8 @@ export const NOTHING_TO_CHANGE = 'Nothing to change';
  * through `outcome_blocked`, which is the segment that counts it. */
 export function outcomes(counts: NotificationCounts): Segment[] {
 	return segments({
-		total: counts.succeeded +
+		total:
+			counts.succeeded +
 			counts.degraded +
 			counts.failed +
 			counts.ambiguous +
@@ -64,19 +66,24 @@ export function outcomes(counts: NotificationCounts): Segment[] {
 	});
 }
 
-/** One row of the inbox.
+/** One row of the inbox, as the page and the bell both draw it.
  *
- * `href` is null for a kind this bundle has no path for, and the row draws as
- * a card rather than as a link: the console is a static bundle served from the
- * control plane, so a deploy that widens the enum does not rebuild the page a
- * seller already has open, and a made-up path is worse than none. */
+ * `href` is null for a notice, which names nothing to open, and for a run of
+ * a kind this bundle has no path for: the console is a static bundle served
+ * from the control plane, so a deploy that widens the enum does not rebuild
+ * the page a seller already has open, and a made-up path is worse than none. */
 export interface NotificationRow {
 	id: string;
+	tone: NoticeTone;
 	title: string;
+	/** One line under the title: a run's counts in words, or the notice's own
+	 *  text. Empty where a notice said everything in its title. */
+	line: string;
 	href: string | null;
 	when: string;
 	unread: boolean;
-	/** Empty where the run changed nothing, which the page says in words. */
+	/** A run's counts as the outcome bar draws them; empty for a notice, and
+	 *  for a run that changed nothing, which `line` says in words. */
 	outcomes: Segment[];
 }
 
@@ -86,10 +93,13 @@ function sentence(word: string): string {
 
 /** The row's own sentence.
  *
- * Named by the inventory the run wrote to, which is the only thing that tells
- * two runs apart in a list. An import names no platform: it commits to the
- * catalogue and writes to none. */
+ * A notice says its own. A run is named by the inventory it wrote to, which
+ * is the only thing that tells two runs apart in a list; an import names no
+ * platform, because it commits to the catalogue and writes to none. */
 export function title(row: NotificationView): string {
+	if (row.source === 'notice') {
+		return row.title;
+	}
 	const word = Object.hasOwn(KIND_WORD, row.kind) ? KIND_WORD[row.kind] : 'task';
 	if (row.inventory === null || !Object.hasOwn(SHORT_NAME, row.inventory)) {
 		return `${sentence(word)} finished`;
@@ -98,46 +108,103 @@ export function title(row: NotificationView): string {
 }
 
 export function href(row: NotificationView): string | null {
-	if (!Object.hasOwn(KIND_HREF, row.kind)) {
+	if (row.source === 'notice' || !Object.hasOwn(KIND_HREF, row.kind)) {
 		return null;
 	}
 	return KIND_HREF[row.kind](encodeURIComponent(row.subject_id));
 }
 
 export function rows(view: readonly NotificationView[], now: number): NotificationRow[] {
-	return view.map((one) => ({
-		id: one.id,
-		title: title(one),
-		href: href(one),
-		when: agoLabel(one.created_at, now),
-		unread: one.read_at === null,
-		outcomes: outcomes(one.counts)
-	}));
+	return view.map((one) => {
+		const counted = one.source === 'run' ? outcomes(one.counts) : [];
+		return {
+			id: one.id,
+			tone: one.tone,
+			title: title(one),
+			line:
+				one.source === 'notice'
+					? one.body
+					: counted.length === 0
+						? NOTHING_TO_CHANGE
+						: counted.map((segment) => `${segment.count} ${segment.label}`).join(' · '),
+			href: href(one),
+			when: agoLabel(one.created_at, now),
+			unread: one.read_at === null,
+			outcomes: counted
+		};
+	});
 }
 
-/** The id to mark read through, or null where there is nothing to mark.
- *
- * The list is newest first, so the first row is the furthest the mark can
- * reach. Null where every row already carries a `read_at`, so a revisit of a
- * read page posts nothing rather than posting a write the server would answer
- * with zero. */
-export function readThrough(view: readonly NotificationView[]): string | null {
-	const newest = view[0];
-	if (newest === undefined || !view.some((one) => one.read_at === null)) {
-		return null;
-	}
-	return newest.id;
-}
-
-/** The eyebrow over the list, counting what has been loaded rather than what
- *  exists: this list is paginated, so a total would mean "on the page you
- *  have loaded" and would visibly jump on Load more. */
-export function unreadLine(rows: readonly NotificationRow[]): string {
-	const unread = rows.filter((row) => row.unread).length;
+/** The eyebrow over the list, counting every unread row the seller has --
+ *  the figure the bell's badge shows -- rather than only the pages loaded. */
+export function unreadLine(unread: number): string {
 	if (unread === 0) {
 		return 'Nothing new';
 	}
 	return unread === 1 ? '1 new' : `${unread} new`;
+}
+
+/** What the bell's badge prints: nothing at zero, and a cap past 99 so the
+ *  circle stays a circle. */
+export function badgeLabel(unread: number): string | null {
+	if (unread <= 0) {
+		return null;
+	}
+	return unread > 99 ? '99+' : String(unread);
+}
+
+/** One write to the inbox, as the page and the bell apply it to what they
+ *  hold before the server answers. */
+export type InboxChange =
+	| { kind: 'read'; id: string; at: number }
+	| { kind: 'readAll'; at: number }
+	| { kind: 'dismiss'; id: string }
+	| { kind: 'dismissRead' };
+
+/** The rows and the unread count after one change, so a pressed Mark read
+ *  or Dismiss moves the row and the badge together at once. Rows the change
+ *  does not reach are returned as they were. */
+export function inboxAfter(
+	held: { notifications: readonly NotificationView[]; unread: number },
+	change: InboxChange
+): { notifications: NotificationView[]; unread: number } {
+	const list = held.notifications;
+	switch (change.kind) {
+		case 'read': {
+			const target = list.find((one) => one.id === change.id);
+			if (target === undefined || target.read_at !== null) {
+				return { notifications: [...list], unread: held.unread };
+			}
+			return {
+				notifications: list.map((one) =>
+					one.id === change.id ? { ...one, read_at: change.at } : one
+				),
+				unread: Math.max(0, held.unread - 1)
+			};
+		}
+		case 'readAll':
+			return {
+				notifications: list.map((one) =>
+					one.read_at === null ? { ...one, read_at: change.at } : one
+				),
+				unread: 0
+			};
+		case 'dismiss': {
+			const target = list.find((one) => one.id === change.id);
+			return {
+				notifications: list.filter((one) => one.id !== change.id),
+				unread:
+					target !== undefined && target.read_at === null
+						? Math.max(0, held.unread - 1)
+						: held.unread
+			};
+		}
+		case 'dismissRead':
+			return {
+				notifications: list.filter((one) => one.read_at === null),
+				unread: held.unread
+			};
+	}
 }
 
 /** The rows held after a page arrives: a first page replaces, a continuation

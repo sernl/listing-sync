@@ -8,11 +8,13 @@
  */
 
 import type { PriceKey } from '$lib/generated/vocab';
+import type { Season } from '$lib/site';
 
 export type DiscountKind = 'sale' | 'one_off' | 'code';
 export type DiscountState = 'scheduled' | 'open' | 'over' | 'ended';
 export type Duration = 'once' | 'repeating';
-export type Theme = 'halloween' | 'christmas';
+/** A sale's theme: any of the site themes the Site page offers. */
+export type Theme = Season;
 
 export interface DiscountCodeView {
 	id: string;

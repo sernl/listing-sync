@@ -80,6 +80,18 @@ impl<S: ObjectStore> BlobRepo<S> {
         bytes: &[u8],
         at: Timestamp,
     ) -> Result<ContentHash, BlobError> {
+        self.put_once(org, bytes, at).await.map(BlobPut::hash)
+    }
+
+    /// [`Self::put`], saying whether these bytes were new to the tenant. A
+    /// caller that reports what it wrote — a deployment step re-run on every
+    /// boot — needs the difference between storing and finding already held.
+    pub async fn put_once(
+        &self,
+        org: OrgId,
+        bytes: &[u8],
+        at: Timestamp,
+    ) -> Result<BlobPut, BlobError> {
         let hash = tam_pipeline::hash::content_hash(bytes);
         let aad = BlobAad {
             org,
@@ -126,7 +138,11 @@ impl<S: ObjectStore> BlobRepo<S> {
                 .map_err(|error| BlobError::Store(error.to_string()))?;
         }
         tx.commit().await?;
-        Ok(hash)
+        Ok(if inserted == 1 {
+            BlobPut::Stored(hash)
+        } else {
+            BlobPut::AlreadyHeld(hash)
+        })
     }
 
     /// Fetches and opens a blob's bytes. The AAD is rebuilt from the row, so a
@@ -158,6 +174,24 @@ impl<S: ObjectStore> BlobRepo<S> {
         };
         open_bytes(&self.kek, &aad.encode(), &sealed)
             .map_err(|error| BlobError::Crypto(format!("{error:?}")))
+    }
+}
+
+/// What one [`BlobRepo::put_once`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlobPut {
+    /// The row and the object were written by this call.
+    Stored(ContentHash),
+    /// The tenant already held these bytes; nothing was written.
+    AlreadyHeld(ContentHash),
+}
+
+impl BlobPut {
+    #[must_use]
+    pub const fn hash(self) -> ContentHash {
+        match self {
+            Self::Stored(hash) | Self::AlreadyHeld(hash) => hash,
+        }
     }
 }
 

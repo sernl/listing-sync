@@ -429,7 +429,7 @@
 	async function labelled(count: number) {
 		labelling = false;
 		cancelBulk();
-		toast('info', `Labels updated on ${count} ${count === 1 ? 'resource' : 'resources'}.`);
+		toast('success', `Labels updated on ${count} ${count === 1 ? 'resource' : 'resources'}.`);
 		await Promise.all([
 			queryClient.invalidateQueries({ queryKey: queryKeys.products }),
 			queryClient.invalidateQueries({ queryKey: queryKeys.labels })
@@ -449,14 +449,14 @@
 	async function markedListed(bound: number) {
 		markingListed = false;
 		cancelBulk();
-		toast('info', `${bound} ${bound === 1 ? 'listing' : 'listings'} attached.`);
+		toast('success', `${bound} ${bound === 1 ? 'listing' : 'listings'} attached.`);
 		await queryClient.invalidateQueries({ queryKey: queryKeys.mappings });
 	}
 
 	async function deletedInBulk(count: number) {
 		deleting = false;
 		cancelBulk();
-		toast('info', `${count} ${count === 1 ? 'resource' : 'resources'} deleted.`);
+		toast('success', `${count} ${count === 1 ? 'resource' : 'resources'} deleted.`);
 		await Promise.all([
 			queryClient.invalidateQueries({ queryKey: queryKeys.products }),
 			queryClient.invalidateQueries({ queryKey: queryKeys.mappings })
@@ -472,7 +472,7 @@
 
 	async function deletedOne() {
 		removing = null;
-		toast('info', 'Resource deleted.');
+		toast('success', 'Resource deleted.');
 		await Promise.all([
 			queryClient.invalidateQueries({ queryKey: queryKeys.products }),
 			queryClient.invalidateQueries({ queryKey: queryKeys.mappings })

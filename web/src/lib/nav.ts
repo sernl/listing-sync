@@ -168,7 +168,7 @@ export const SECTIONS: readonly NavSection[] = [
 				icon: 'sliders-horizontal'
 			},
 			{ href: '/settings/billing', label: 'Billing', icon: 'credit-card' },
-			{ href: '/notifications', label: 'Notifications', icon: 'bell' },
+			{ href: '/notifications', label: 'Notifications', icon: 'inbox' },
 			{ href: '/status', label: 'Marketplace status', icon: 'activity' },
 			{ href: '/guides', label: 'Help and guides', icon: 'book-open' }
 		]

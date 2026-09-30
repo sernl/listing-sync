@@ -165,7 +165,7 @@
 		try {
 			const { error } = await resendVerification(address);
 			toast(
-				error ? 'error' : 'info',
+				error ? 'error' : 'success',
 				error
 					? messageOf(error, 'We could not send the verification email. Try again.')
 					: 'Verification email sent.'

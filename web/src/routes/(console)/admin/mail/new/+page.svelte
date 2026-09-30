@@ -106,7 +106,7 @@
 
 	const testing = createMutation(() => ({
 		mutationFn: () => api.testMail({ draft, created_by_label: createdBy }),
-		onSuccess: () => toast('info', `A test is on its way to ${who.data?.email ?? 'your address'}.`),
+		onSuccess: () => toast('success', `A test is on its way to ${who.data?.email ?? 'your address'}.`),
 		onError: (failure: Error) => failed(failure, 'The test was not sent.')
 	}));
 

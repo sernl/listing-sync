@@ -460,39 +460,81 @@ input:focus-visible {
 	color: var(--muted);
 }
 
-/* Top-centre at every width, and one rule for both platforms because the
-   inset is zero where there is none. The `env()` fallback is spelled out
-   because an engine without it would drop the whole declaration and leave the
-   stack unplaced. Reversed so the newest card is the one against the anchor,
-   as it was when the stack hung from the bottom, and so a stack that outgrows
-   the viewport loses its oldest rather than its newest. */
+/* Top-right, under the strip, at every width above a phone; across the top
+   on a phone. The `env()` fallback is spelled out because an engine without
+   it would drop the whole declaration and leave the stack unplaced. Reversed
+   so the newest card is the one against the anchor, and so a stack that
+   outgrows the viewport loses its oldest rather than its newest. */
 .toasts {
 	position: fixed;
 	top: calc(12px + env(safe-area-inset-top, 0px));
-	left: 50%;
-	transform: translateX(-50%);
+	right: calc(16px + env(safe-area-inset-right, 0px));
 	display: flex;
 	flex-direction: column-reverse;
 	align-items: stretch;
 	gap: 8px;
-	width: max-content;
-	max-width: min(420px, calc(100vw - 24px));
+	width: min(380px, calc(100vw - 24px));
 	z-index: 40;
 }
 
+@media (max-width: 620px) {
+	.toasts {
+		right: 12px;
+		left: 12px;
+		width: auto;
+	}
+}
+
+/* One card per tone: a tinted ground, a matching rule down the leading edge
+   and the tone's own ink on the glyph. Success is the accent, information
+   the primary, a warning the warn pair and an error the bad pair; every one
+   a token, so a season or the dark theme recolours them all. */
 .toast {
+	--toast-rule: var(--primary);
+	--toast-ground: color-mix(in srgb, var(--primary) 7%, var(--surface));
 	display: flex;
 	align-items: center;
 	gap: 10px;
 	border-radius: var(--r-panel);
 	/* Trimmed on the closing side, because the control inside already carries
 	   the full 38px and the padding would be added to it. */
-	padding: 4px 4px 4px 14px;
+	padding: 4px 4px 4px 12px;
 	font-size: 13.5px;
 	color: var(--text);
-	background: var(--surface);
+	background: var(--toast-ground);
 	border: 1px solid var(--line);
+	border-left: 4px solid var(--toast-rule);
 	box-shadow: var(--sh-3);
+}
+
+.toast.success {
+	--toast-rule: var(--accent);
+	--toast-ground: var(--accent-soft);
+}
+
+.toast.warning {
+	--toast-rule: var(--warn);
+	--toast-ground: var(--warn-soft);
+}
+
+.toast.error {
+	--toast-rule: var(--bad);
+	--toast-ground: var(--bad-soft);
+}
+
+/* Slides in only for a seller who has not asked the system for less motion;
+   everyone else gets the card where it lands. */
+@media (prefers-reduced-motion: no-preference) {
+	.toast {
+		animation: toast-in 180ms ease-out;
+	}
+}
+
+@keyframes toast-in {
+	from {
+		opacity: 0;
+		transform: translateX(12px);
+	}
 }
 
 .toast-mark {
@@ -502,7 +544,18 @@ input:focus-visible {
 	   the founder's own save message draws at phone width, and a centred mark
 	   there leads nothing. */
 	align-self: start;
+	padding-top: 10px;
+	color: var(--primary);
+}
+
+/* The glyph takes the tone's measured ink rather than its fill, which is too
+   light to read as a mark on its own tint. */
+.toast.success .toast-mark {
 	color: var(--ok-ink);
+}
+
+.toast.warning .toast-mark {
+	color: var(--warn-ink);
 }
 
 .toast.error .toast-mark {

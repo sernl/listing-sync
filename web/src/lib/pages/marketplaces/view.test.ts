@@ -146,9 +146,11 @@ describe('what a returning sign-in tells the seller', () => {
 	});
 
 	it('is the only good news on the success verdict', () => {
-		expect(said('connect=captured&marketplace=Tes')?.tone).toBe('info');
+		expect(said('connect=captured&marketplace=Tes')?.tone).toBe('success');
 		for (const verdict of CONNECT_VERDICT_CODES.filter((code) => code !== 'captured')) {
-			expect(said(`connect=${verdict}&marketplace=Tes`)?.tone, verdict).toBe('error');
+			expect(['warning', 'error'], verdict).toContain(
+				said(`connect=${verdict}&marketplace=Tes`)?.tone
+			);
 		}
 	});
 
@@ -308,8 +310,10 @@ describe('the card footer action', () => {
 				for (const local of [HERE, NOT_HERE, ...NO_LOCAL_ANSWER]) {
 					const action = footerAction(row(state, 'bad'), host, local);
 					if (action?.kind === 'link') {
-						expect(new URL(action.href, 'https://teachouse.example').origin, `${host}/${state}`)
-							.toBe('https://teachouse.example');
+						expect(
+							new URL(action.href, 'https://teachouse.example').origin,
+							`${host}/${state}`
+						).toBe('https://teachouse.example');
 					}
 				}
 			}
@@ -676,7 +680,7 @@ describe('what a finished account disconnect says', () => {
 
 	it('confirms a disconnect the server performed', () => {
 		const say = disconnectSay('Tes', { kind: 'moved', moved: 1 });
-		expect(say.tone).toBe('info');
+		expect(say.tone).toBe('success');
 		expect(say.message).toContain('TES is disconnected from your account');
 	});
 
@@ -711,20 +715,20 @@ describe('what a finished local sign-out says', () => {
 
 	it('confirms the login is gone from this device', () => {
 		const say = signOutHereSay('Tpt', { kind: 'done' });
-		expect(say.tone).toBe('info');
+		expect(say.tone).toBe('success');
 		expect(say.message).toContain('removed from this device');
 	});
 
 	it('reports an app that cannot forget', () => {
 		expect(signOutHereSay('Tpt', { kind: 'unsupported' })).toEqual({
-			tone: 'error',
+			tone: 'warning',
 			message: APP_CANNOT_FORGET
 		});
 	});
 
 	it('passes the device’s own refusal through', () => {
 		expect(signOutHereSay('Tpt', { kind: 'refused', detail: REFUSAL })).toEqual({
-			tone: 'error',
+			tone: 'warning',
 			message: REFUSAL
 		});
 	});
@@ -748,15 +752,14 @@ describe('what a finished local sign-out says', () => {
 		for (const forgotten of ANSWERS) {
 			const say = signOutHereSay('Tpt', forgotten);
 			expect(say.message.length, forgotten.kind).toBeGreaterThan(0);
-			expect(['info', 'error'], forgotten.kind).toContain(say.tone);
+			expect(['success', 'warning'], forgotten.kind).toContain(say.tone);
 		}
-		expect(signOutHereSay('Tpt', { kind: 'done' }).tone).toBe('info');
+		expect(signOutHereSay('Tpt', { kind: 'done' }).tone).toBe('success');
 		for (const forgotten of ANSWERS.filter((answer) => answer.kind !== 'done')) {
-			expect(signOutHereSay('Tpt', forgotten).tone, forgotten.kind).toBe('error');
+			expect(signOutHereSay('Tpt', forgotten).tone, forgotten.kind).toBe('warning');
 		}
 	});
 });
-
 
 describe('what the attention banner asks for', () => {
 	function quietOn(marketplace: Marketplace, machine: string): MarketplaceRow {

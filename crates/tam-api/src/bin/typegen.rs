@@ -41,7 +41,8 @@ use tam_limits::{
 use tam_storage::{Colour, DeviceSessionStatus, GrantedBy, ItemStateKind, ALL_GATES};
 use tam_types::{
     ConnectionEvent, ConnectionStatus, CopyFormat, FailureCode, FileKind, FileRole, InventoryId,
-    JobEventPayload, LengthUnit, Marketplace, NotificationKind, TermKind, TransportClass,
+    JobEventPayload, LengthUnit, Marketplace, NoticeTone, NotificationKind, TermKind,
+    TransportClass,
 };
 
 /// One closed enum, emitted twice: the union every client type is checked
@@ -146,6 +147,13 @@ fn vocab() -> String {
         "NotificationKind",
         "NOTIFICATION_KINDS",
         &NotificationKind::ALL,
+        serde_name,
+    ));
+    out.push('\n');
+    out.push_str(&closed(
+        "NoticeTone",
+        "NOTICE_TONES",
+        &NoticeTone::ALL,
         serde_name,
     ));
     out.push('\n');
@@ -626,6 +634,7 @@ const CAPABILITIES_TS: &str = "export interface Capabilities {
   readonly devices_max: number;
   readonly ai_fills_per_month: number;
   readonly previews_per_month: number;
+  readonly previews_lifetime: number;
   readonly uploads_in_flight_max: number;
   readonly support: SupportLevel;
 }

@@ -26,6 +26,7 @@ import type {
 	NativeDirection,
 	NativeVocabularyKind,
 	NonDelegableReason,
+	NoticeTone,
 	NotificationKind,
 	PayloadFileRule,
 	FormGroup,
@@ -51,6 +52,7 @@ import type {
 	TermsBody
 } from '$lib/pages/admin/pricing';
 import type { Capabilities, PlansView } from '$lib/generated/plans';
+import type { ToastNotice } from '$lib/toast';
 
 import { ApiFailure, patch, post, put, request, type APIErrorBody } from '$lib/http';
 
@@ -312,27 +314,50 @@ export interface NotificationCounts {
  *  `inventory` and `marketplace` are null for an import, which commits to the
  *  catalogue and writes to no marketplace, and never null otherwise; both are
  *  always present, so this type is total and the page needs no optional-field
- *  branch. `read_at` is null while the row is unread. */
-export interface NotificationView {
-	id: string;
+ *  branch. */
+export interface RunNotification {
+	source: 'run';
 	kind: NotificationKind;
 	subject_id: string;
 	inventory: InventoryId | null;
 	marketplace: Marketplace | null;
 	counts: NotificationCounts;
+}
+
+/** A toast the seller did not look at, kept for them alone. */
+export interface NoticeNotification {
+	source: 'notice';
+	title: string;
+	body: string;
+}
+
+/** One inbox row: a finished run or a kept notice, told apart by `source`.
+ *  `tone` is a run's worst outcome or the notice's own; `read_at` is null
+ *  while the row is unread. */
+export type NotificationView = {
+	id: string;
+	tone: NoticeTone;
 	created_at: number;
 	read_at: number | null;
-}
+} & (RunNotification | NoticeNotification);
 
 export interface NotificationsPage {
 	notifications: NotificationView[];
 	next_cursor: string | null;
+	/** Every unread row the seller has, not only this page's: the bell's
+	 *  badge. */
+	unread: number;
 }
 
 /** How many rows the read mark moved. Zero is the ordinary answer to marking
  *  a page that was already read, rather than a refusal. */
 export interface NotificationsRead {
 	marked: number;
+}
+
+/** How many read rows the page's Delete read took away. */
+export interface NotificationsDismissed {
+	dismissed: number;
 }
 
 /** Which emails this seller takes. Per user rather than per organisation:
@@ -347,7 +372,7 @@ export interface NotifyPreferences {
 
 // ------------------------------------------------------------ admin mail
 
-/** Who a campaign goes to, by plan. `subscriber` is sold as Sync and `free`
+/** Who a campaign goes to, by plan. `subscriber` is sold as Pro and `free`
  *  as Look. */
 export type MailSegment = 'all' | 'free' | 'paid' | 'starter' | 'subscriber' | 'studio';
 
@@ -1017,10 +1042,14 @@ export interface RedirectView {
  *  request gate came to disagree in the first place. */
 export type { AiOffer, Capabilities, Pack, PlanRow, PlansView } from '$lib/generated/plans';
 
-/** What the seller has used, against the figures above. Moves are not here:
- *  they are bought and spent rather than counted against a ceiling, so they
- *  ride beside this block as a balance. `previews` and `ai_fills` count the
- *  current UTC month and start again at `month_resets_at` (epoch ms). */
+/** What the seller has used, against the figures above. The move balance is
+ *  not here: it is bought and spent rather than counted against a ceiling, so
+ *  it rides beside this block; `moves_this_month` is only what this month's
+ *  moves spent. `previews`, `ai_fills` and `moves_this_month` count the
+ *  current UTC month and start again at `month_resets_at` (epoch ms);
+ *  `previews_lifetime` is every month's previews summed, which is what a plan
+ *  counting previews for life (`previews_lifetime > 0` in `Capabilities`) is
+ *  measured against. */
 export interface EntitlementUsage {
 	resources: number;
 	marketplaces: number;
@@ -1030,7 +1059,9 @@ export interface EntitlementUsage {
 	devices: number;
 	storage_bytes: number;
 	previews: number;
+	previews_lifetime: number;
 	ai_fills: number;
+	moves_this_month: number;
 	month_resets_at: number;
 }
 
@@ -1694,7 +1725,8 @@ export type ArchiveMode = 'explode' | 'keep_whole';
  *  dropped into a slot is refused before it is stored rather than kept and
  *  discovered later. `preview` is a watermarked preview on its way to a
  *  resource: the upload answers 422 `previews_per_month` once this month's
- *  previews are used up, before any byte is stored. Omitted means the upload
+ *  previews are used up, or `previews_lifetime` once a plan's lifetime ones
+ *  are, before any byte is stored. Omitted means the upload
  *  is not slot-bound and any accepted type may land. */
 export type UploadSlot = 'image' | 'preview';
 
@@ -3261,18 +3293,34 @@ export const api = {
 		post<void>(`/v1/reconciliation/items/${item}/no-counterpart`, {}),
 	drainStats: () => request<DrainStats>('/v1/reconciliation/stats'),
 
-	/** The inbox: every run of this organisation's that has finished, newest
-	 *  first, a page at a time. The server clamps `limit`, so the console asks
-	 *  for none and takes the default. */
-	notifications: (cursor?: string | null) =>
-		request<NotificationsPage>(
-			`/v1/notifications${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`
-		),
-	/** Mark everything at or before one row read, in the same order the list
-	 *  is served in. Idempotent: a second post of the same id answers zero
-	 *  rather than refusing. */
-	markNotificationsRead: (through: string) =>
-		post<NotificationsRead>('/v1/notifications/read', { through }),
+	/** The inbox: every run of this organisation's that has finished, and the
+	 *  seller's own kept notices, newest first, a page at a time, with the
+	 *  unread count. The server clamps `limit`; the page takes the default and
+	 *  the bell asks for its twenty. */
+	notifications: (cursor?: string | null, limit?: number) => {
+		const query = new URLSearchParams();
+		if (cursor) {
+			query.set('cursor', cursor);
+		}
+		if (limit !== undefined) {
+			query.set('limit', String(limit));
+		}
+		const said = query.toString();
+		return request<NotificationsPage>(`/v1/notifications${said === '' ? '' : `?${said}`}`);
+	},
+	/** Keep a toast the seller did not look at. Posting the same `client_id`
+	 *  again answers the row the first post wrote. */
+	postNotice: (notice: ToastNotice) => post<NotificationView>('/v1/notifications', notice),
+	/** Mark one row read. Idempotent: a row read already answers zero. */
+	markNotificationRead: (id: string) =>
+		post<NotificationsRead>(`/v1/notifications/${encodeURIComponent(id)}/read`, {}),
+	markAllNotificationsRead: () => post<NotificationsRead>('/v1/notifications/read-all', {}),
+	/** Take one row out of the inbox. */
+	dismissNotification: (id: string) =>
+		request<void>(`/v1/notifications/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+	/** Take every read row out of the inbox. */
+	dismissReadNotifications: () =>
+		post<NotificationsDismissed>('/v1/notifications/dismiss-read', {}),
 	/** Which emails this seller takes. The session's own user, which is the
 	 *  only user either call can name. The write sends only what it changes. */
 	notifyPreferences: () => request<NotifyPreferences>('/v1/notifications/preferences'),

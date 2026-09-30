@@ -4,6 +4,11 @@ version = "0.0.0"
 edition = "2021"
 publish = false
 
+[features]
+# The deployment-time guide writes run twice against a real database; needs
+# DATABASE_URL, like every other crate's pg lane.
+pg-tests = []
+
 [dependencies]
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
 # `covers repair`: the object store and the flags that name it, the key its
@@ -16,6 +21,9 @@ tam-storage = { path = "../tam-storage" }
 tam-types = { path = "../tam-types" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "migrate", "uuid"] }
 
 [lints]
 workspace = true

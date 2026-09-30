@@ -138,12 +138,12 @@
 				toast('error', 'We could not sign this device out. It still has your marketplace logins.');
 			} else if (done.signInEnded === false) {
 				toast(
-					'error',
+					'warning',
 					'The device is signed out, but its browser is still signed in. End that under Browser sign-ins above.'
 				);
 			} else {
 				toast(
-					'info',
+					'success',
 					'Signed out. The device removes your marketplace logins the next time it goes online.'
 				);
 			}
@@ -188,7 +188,7 @@
 	const signingBackIn = createMutation(() => ({
 		mutationFn: () => machineHere.signBackIn(),
 		onSuccess: async () => {
-			toast('info', 'This device is signed back in. Connect your marketplaces on it again.');
+			toast('success', 'This device is signed back in. Connect your marketplaces on it again.');
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: queryKeys.devices }),
 				queryClient.invalidateQueries({ queryKey: queryKeys.connections })

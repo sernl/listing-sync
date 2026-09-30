@@ -496,9 +496,12 @@ th.num {
 }
 
 /* `.actions` is a flex row, and a flex row does not inherit `text-align`
-   either, so the empty state's own actions need saying too. */
+   either, so the empty state's own actions need saying too. The gap above
+   them is the one step every empty state keeps between its sentence and its
+   way forward, so the button never sits on the line it answers. */
 .placeholder .actions {
 	justify-content: center;
+	margin-top: var(--s-4);
 }
 
 .placeholder b {
