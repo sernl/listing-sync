@@ -2869,6 +2869,58 @@ pub async fn fill_rights(
     Ok(touched > 0)
 }
 
+/// The Tes licence a product imported from elsewhere opens with: `free`
+/// where it is free and `paid` where it has a price, because Tes gates the
+/// licence on the price and a value from the wrong branch is refused.
+///
+/// Fill-only, like [`fill_rights`]: a product that already states a grant
+/// keeps it. And only for a seller who lists on Tes — the product is mapped
+/// there, or the organisation has signed in to Tes (a sign-in that has since
+/// lapsed still says Tes is theirs) — because a Tes licence on a resource
+/// that never goes to Tes is a TPT-disclosed loss with nothing gained.
+/// Answers whether the product changed.
+pub async fn fill_tes_licence(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    id: ProductId,
+    licence: TesLicenceDefault,
+    at: Timestamp,
+) -> Result<bool, StorageError> {
+    let touched = sqlx::query!(
+        "UPDATE product p SET \
+         rights_state = 'declared', rights_source_inventory = 'tes', \
+         rights_segments = ARRAY[CASE WHEN p.price_kind = 'free' THEN $3 ELSE $4 END], \
+         rights_native_id = CASE WHEN p.price_kind = 'free' THEN $3 ELSE $4 END, \
+         updated_at = $5 \
+         WHERE p.org_id = $1 AND p.id = $2 AND p.deleted_at IS NULL \
+           AND p.rights_state = 'unstated' \
+           AND (EXISTS (SELECT 1 FROM mapping m \
+                        WHERE m.org_id = p.org_id AND m.product_id = p.id \
+                          AND m.inventory = 'tes') \
+                OR EXISTS (SELECT 1 FROM connection c \
+                           WHERE c.org_id = p.org_id AND c.marketplace = 'tes' \
+                             AND c.state IN ('linked', 'needs_reauth')))",
+        uuid_to_db(org.0),
+        uuid_to_db(id.0),
+        licence.free,
+        licence.paid,
+        timestamp_to_db(at)?,
+    )
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+    Ok(touched > 0)
+}
+
+/// The two Tes licences a default chooses between, one per price branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TesLicenceDefault {
+    /// The Creative Commons value a free product carries.
+    pub free: &'static str,
+    /// The value a priced product carries; Tes writes only `TES-PAID`.
+    pub paid: &'static str,
+}
+
 /// Tombstones one product inside a transaction the caller owns.
 ///
 /// A tombstone rather than an erasure, which is what makes the thirty-day

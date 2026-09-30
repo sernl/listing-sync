@@ -582,6 +582,56 @@
 	background: var(--hover);
 }
 
+/* "Filed under": every marketplace the resource is mapped to, from the left
+   edge under the heading, each large enough to read at a glance — the mark,
+   the name and how it stands there. */
+.resources-page .res-filed {
+	align-items: stretch;
+	text-align: left;
+}
+
+.resources-page .res-filed-list {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-start;
+	gap: var(--s-3);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.resources-page .res-filed-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 10px;
+	padding: 8px 14px 8px 10px;
+	border: 1px solid var(--line);
+	border-radius: var(--r-pill);
+	background: var(--surface);
+	font-size: 15px;
+}
+
+.resources-page .res-filed-name {
+	font-weight: 600;
+	color: var(--ink);
+}
+
+.resources-page .res-filed-labels {
+	justify-content: flex-start;
+	margin-top: 0;
+}
+
+@media (max-width: 620px) {
+	.resources-page .res-filed-list {
+		flex-direction: column;
+		align-items: stretch;
+	}
+
+	.resources-page .res-filed-chip {
+		justify-content: flex-start;
+	}
+}
+
 .resources-page .res-line-what {
 	display: flex;
 	align-items: baseline;
