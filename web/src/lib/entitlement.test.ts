@@ -12,8 +12,7 @@ import {
 	movesReason,
 	sectionAllowed,
 	sectionReason,
-	usageLine,
-	usageLines
+	usageTable
 } from './entitlement';
 
 /** The real capability set for one plan. Read off the generated table rather
@@ -38,7 +37,9 @@ function usage(over: Partial<EntitlementUsage> = {}): EntitlementUsage {
 		devices: 0,
 		storage_bytes: 0,
 		previews: 0,
+		previews_lifetime: 0,
 		ai_fills: 0,
+		moves_this_month: 0,
 		month_resets_at: Date.UTC(2026, 9, 1),
 		...over
 	};
@@ -120,7 +121,9 @@ describe('why a control is disabled', () => {
 		expect(featureReason(caps('free'), 'analytics')).toBe(
 			'Upgrade your plan to see how your listings are doing.'
 		);
-		expect(featureReason(caps('free'), 'scheduling')).toContain('Upgrade your plan to schedule when things publish');
+		expect(featureReason(caps('free'), 'scheduling')).toContain(
+			'Upgrade your plan to schedule when things publish'
+		);
 	});
 
 	// Null rather than an interval: a plan that never pulls is not a plan that
@@ -156,21 +159,42 @@ describe('why a counted allowance is full', () => {
 	// A monthly allowance comes back on the first, so its sentence says the
 	// seller can wait as well as upgrade, as the server's refusal does.
 	it('says a monthly allowance renews', () => {
-		const max = caps('free').previews_per_month;
-		expect(limitReason(caps('free'), usage({ previews: max - 1 }), 'previews')).toBeNull();
-		expect(limitReason(caps('free'), usage({ previews: max }), 'previews')).toBe(
+		const max = caps('starter').previews_per_month;
+		expect(limitReason(caps('starter'), usage({ previews: max - 1 }), 'previews')).toBeNull();
+		expect(limitReason(caps('starter'), usage({ previews: max }), 'previews')).toBe(
 			`Your plan includes ${max} watermarked previews a month. Upgrade to make more, or wait until next month.`
 		);
 		expect(
-			limitReason({ ...caps('free'), previews_per_month: 1 }, usage({ previews: 1 }), 'previews')
+			limitReason({ ...caps('starter'), previews_per_month: 1 }, usage({ previews: 1 }), 'previews')
 		).toBe(
 			'Your plan includes 1 watermarked preview a month. Upgrade to make more, or wait until next month.'
 		);
 	});
 
-	it('never refuses previews on a plan with no monthly ceiling', () => {
-		expect(caps('studio').previews_per_month).toBe(UNLIMITED);
-		expect(limitReason(caps('studio'), usage({ previews: 10_000 }), 'previews')).toBeNull();
+	// Look's previews are the account's whole life: a new month gives none
+	// back, so the month's figure is not what it is measured against, and
+	// the sentence offers no wait.
+	it('measures a lifetime preview allowance against every month, and never says wait', () => {
+		const max = caps('free').previews_lifetime;
+		expect(max).toBeGreaterThan(0);
+		expect(
+			limitReason(caps('free'), usage({ previews: 0, previews_lifetime: max - 1 }), 'previews')
+		).toBeNull();
+		expect(
+			limitReason(caps('free'), usage({ previews: 0, previews_lifetime: max }), 'previews')
+		).toBe(`Your plan includes ${max} watermarked previews to try. Upgrade to make more.`);
+	});
+
+	// A paid plan's month is what counts, whatever was made before it.
+	it('measures a monthly preview allowance against this month alone', () => {
+		const max = caps('subscriber').previews_per_month;
+		expect(
+			limitReason(
+				caps('subscriber'),
+				usage({ previews: 0, previews_lifetime: max * 3 }),
+				'previews'
+			)
+		).toBeNull();
 	});
 
 	it('agrees its noun with the figure, and names the act', () => {
@@ -183,9 +207,9 @@ describe('why a counted allowance is full', () => {
 	// seller could reach. No shipped plan is at zero any more (Look has one
 	// collection since 0.15.0), so the figure is set here.
 	it('states a zero allowance as zero', () => {
-		expect(
-			limitReason({ ...caps('free'), collections_max: 0 }, usage(), 'collections')
-		).toBe('Your plan includes 0 collections. Upgrade to add more.');
+		expect(limitReason({ ...caps('free'), collections_max: 0 }, usage(), 'collections')).toBe(
+			'Your plan includes 0 collections. Upgrade to add more.'
+		);
 	});
 
 	it('never refuses an unlimited allowance', () => {
@@ -194,39 +218,101 @@ describe('why a counted allowance is full', () => {
 	});
 });
 
-describe('the allowance lines the Account page reads out', () => {
-	it('states the count against the cap', () => {
-		expect(usageLine(12, 20, 'resources')).toBe('12 of 20 resources');
-	});
+describe('the usage table on the Billing page', () => {
+	const row = (rows: ReturnType<typeof usageTable>, key: string) => {
+		const found = rows.find((entry) => entry.key === key);
+		if (found === undefined) throw new Error(`no ${key} row`);
+		return found;
+	};
 
-	// `4294967295` is the sentinel and not a promise, so it is never printed.
-	it('says an unlimited allowance is unlimited rather than printing the sentinel', () => {
-		expect(usageLine(3, UNLIMITED, 'marketplaces')).toBe(
-			'3 marketplaces, no limit'
-		);
-	});
-
-	it('says a monthly count is this month’s', () => {
-		expect(usageLine(3, 5, 'previews')).toBe('3 of 5 watermarked previews this month');
-		expect(usageLine(40, UNLIMITED, 'previews')).toBe(
-			'40 watermarked previews this month, no limit'
-		);
-	});
-
-	it('lists every counted allowance, marking the full ones', () => {
-		const rows = usageLines(usage({ resources: 100, labels: 2, previews: 5 }), caps('free'));
-		expect(rows.map((row) => row.limit)).toEqual([
+	it('lists every allowance and the month’s moves, in order', () => {
+		expect(
+			usageTable(usage(), caps('starter'), { available: 0 }).map((entry) => entry.key)
+		).toEqual([
 			'resources',
 			'marketplaces',
 			'templates',
 			'collections',
 			'labels',
 			'devices',
-			'previews'
+			'previews',
+			'moves'
 		]);
-		expect(rows.find((row) => row.limit === 'resources')?.full).toBe(true);
-		expect(rows.find((row) => row.limit === 'labels')?.full).toBe(false);
-		expect(rows.find((row) => row.limit === 'previews')?.full).toBe(true);
+	});
+
+	it('states used, included and left against a ceiling, and marks a full one', () => {
+		const rows = usageTable(usage({ resources: 100, labels: 2 }), caps('free'), { available: 5 });
+		expect(row(rows, 'resources')).toMatchObject({
+			used: 100,
+			included: '100',
+			left: '0',
+			fraction: 1,
+			full: true
+		});
+		expect(row(rows, 'labels')).toMatchObject({ used: 2, left: '3', full: false });
+	});
+
+	// Grandfathered: over a lowered ceiling reads as none left, not a
+	// negative number, and the bar stops at full.
+	it('never prints a negative figure left', () => {
+		const rows = usageTable(usage({ resources: 340 }), caps('free'), { available: 0 });
+		expect(row(rows, 'resources')).toMatchObject({ left: '0', fraction: 1, full: true });
+	});
+
+	// `4294967295` is the sentinel and not a promise, so it is never printed.
+	it('says no limit rather than printing the sentinel, and draws no bar', () => {
+		const rows = usageTable(usage({ resources: 154 }), caps('studio'), { available: 0 });
+		expect(row(rows, 'resources')).toMatchObject({
+			used: 154,
+			included: 'No limit',
+			left: 'No limit',
+			fraction: null,
+			full: false
+		});
+	});
+
+	it('counts a paid plan’s previews this month, with the day they start again', () => {
+		const rows = usageTable(
+			usage({ previews: 7, previews_lifetime: 40, month_resets_at: Date.UTC(2026, 9, 1) }),
+			caps('starter'),
+			{ available: 0 }
+		);
+		expect(row(rows, 'previews')).toMatchObject({
+			label: 'Watermarked previews this month',
+			used: 7,
+			included: `${caps('starter').previews_per_month} a month`,
+			left: `${caps('starter').previews_per_month - 7}`,
+			resets: 'Starts again on 1 October'
+		});
+	});
+
+	it('counts Look’s previews over the account’s life, with no day they come back', () => {
+		const rows = usageTable(usage({ previews: 1, previews_lifetime: 4 }), caps('free'), {
+			available: 0
+		});
+		expect(row(rows, 'previews')).toMatchObject({
+			label: 'Watermarked previews (lifetime)',
+			used: 4,
+			included: `${caps('free').previews_lifetime} in total`,
+			left: `${caps('free').previews_lifetime - 4}`,
+			resets: null
+		});
+	});
+
+	// Moves are a balance: the month's spend beside what is left to spend,
+	// packs included.
+	it('reads moves as this month’s spend beside the balance', () => {
+		const rows = usageTable(usage({ moves_this_month: 6 }), caps('subscriber'), { available: 19 });
+		expect(row(rows, 'moves')).toMatchObject({
+			used: 6,
+			included: `${caps('subscriber').moves_per_month} a month`,
+			left: '19',
+			full: false
+		});
+		expect(row(usageTable(usage(), caps('free'), { available: 0 }), 'moves')).toMatchObject({
+			included: `${caps('free').free_moves_lifetime} to try`,
+			full: true
+		});
 	});
 });
 
@@ -268,14 +354,14 @@ describe('the balance a selection is checked against', () => {
 	it('sends an empty balance to a pack or to Sync', () => {
 		const none = movesReason({ available: 0 }, 0);
 		expect(none.line).toBe('You have no moves.');
-		expect(none.refusal).toBe('You have no moves left. Buy a pack, or choose Sync.');
+		expect(none.refusal).toBe('You have no moves left. Buy a pack, or choose Pro.');
 	});
 
 	// The confirm is drawn before the submit, so a balance of nothing refuses
 	// even where the seller has selected nothing yet.
 	it('refuses an empty balance before anything is selected', () => {
 		expect(movesReason({ available: 0 }, 3).refusal).toBe(
-			'You have no moves left. Buy a pack, or choose Sync.'
+			'You have no moves left. Buy a pack, or choose Pro.'
 		);
 	});
 });

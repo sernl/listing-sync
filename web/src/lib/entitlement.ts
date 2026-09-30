@@ -45,9 +45,7 @@ export function sectionReason(caps: Capabilities, section: SectionId): string | 
 				? null
 				: 'Upgrade your plan to schedule, check for changes, and move resources.';
 		case 'marketplaces':
-			return caps.marketplaces_max > 0
-				? null
-				: 'Upgrade your plan to connect a marketplace.';
+			return caps.marketplaces_max > 0 ? null : 'Upgrade your plan to connect a marketplace.';
 		// Account is how a plan is bought, so it is never the thing a plan
 		// withholds. Admin is the operator's own section and answers to the
 		// operator probe, not to a plan.
@@ -84,21 +82,15 @@ export type Feature =
 export function featureReason(caps: Capabilities, feature: Feature): string | null {
 	switch (feature) {
 		case 'import_spreadsheet':
-			return caps.import_spreadsheet
-				? null
-				: 'Upgrade your plan to import a spreadsheet.';
+			return caps.import_spreadsheet ? null : 'Upgrade your plan to import a spreadsheet.';
 		case 'import_marketplace':
-			return caps.import_marketplace
-				? null
-				: 'Upgrade your plan to import from a marketplace.';
+			return caps.import_marketplace ? null : 'Upgrade your plan to import from a marketplace.';
 		case 'duplicate_review':
 			return caps.duplicate_review
 				? null
 				: 'Upgrade your plan to review duplicates before they are added.';
 		case 'scheduling':
-			return caps.scheduling
-				? null
-				: 'Upgrade your plan to schedule when things publish.';
+			return caps.scheduling ? null : 'Upgrade your plan to schedule when things publish.';
 		case 'sync':
 			return caps.sync_pull_interval_secs !== null
 				? null
@@ -108,9 +100,7 @@ export function featureReason(caps: Capabilities, feature: Feature): string | nu
 				? null
 				: 'Upgrade your plan to republish a listing when its resource changes.';
 		case 'analytics':
-			return caps.analytics
-				? null
-				: 'Upgrade your plan to see how your listings are doing.';
+			return caps.analytics ? null : 'Upgrade your plan to see how your listings are doing.';
 	}
 }
 
@@ -118,13 +108,7 @@ export function featureReason(caps: Capabilities, feature: Feature): string | nu
 
 /** The counted allowances, named as the console asks about them. */
 export type Limit =
-	| 'resources'
-	| 'marketplaces'
-	| 'templates'
-	| 'collections'
-	| 'labels'
-	| 'devices'
-	| 'previews';
+	'resources' | 'marketplaces' | 'templates' | 'collections' | 'labels' | 'devices' | 'previews';
 
 /** What each counted allowance is called, and what adding to it is called.
  *
@@ -164,12 +148,20 @@ export function maxOf(caps: Capabilities, limit: Limit): number {
 		case 'devices':
 			return caps.devices_max;
 		case 'previews':
-			return caps.previews_per_month;
+			return previewsForLife(caps) ? caps.previews_lifetime : caps.previews_per_month;
 	}
 }
 
-/** What has been used of one counted allowance. */
-export function usedOf(usage: EntitlementUsage, limit: Limit): number {
+/** Whether this plan counts watermarked previews over the account's life
+ *  rather than a month at a time: Look's five, which never come back. The
+ *  server's `Capabilities::previews` makes the same choice. */
+export function previewsForLife(caps: Capabilities): boolean {
+	return caps.previews_lifetime > 0;
+}
+
+/** What has been used of one counted allowance. `caps` picks which preview
+ *  figure counts, the month's or the lifetime's. */
+export function usedOf(usage: EntitlementUsage, limit: Limit, caps: Capabilities): number {
 	switch (limit) {
 		case 'resources':
 			return usage.resources;
@@ -184,7 +176,7 @@ export function usedOf(usage: EntitlementUsage, limit: Limit): number {
 		case 'devices':
 			return usage.devices;
 		case 'previews':
-			return usage.previews;
+			return previewsForLife(caps) ? usage.previews_lifetime : usage.previews;
 	}
 }
 
@@ -207,53 +199,127 @@ export function limitReason(
 	limit: Limit
 ): string | null {
 	const max = maxOf(caps, limit);
-	if (unlimited(max) || usedOf(usage, limit) < max) {
+	if (unlimited(max) || usedOf(usage, limit, caps) < max) {
 		return null;
 	}
 	const { one, many, verb, monthly } = LIMITS[limit];
+	// A lifetime allowance never comes back, so there is nothing to wait for.
+	if (limit === 'previews' && previewsForLife(caps)) {
+		return `Your plan includes ${counted(max, one, many)} to try. Upgrade to ${verb}.`;
+	}
 	return monthly
 		? `Your plan includes ${counted(max, one, many)} a month. Upgrade to ${verb}, or wait until next month.`
 		: `Your plan includes ${counted(max, one, many)}. Upgrade to ${verb}.`;
 }
 
-// --------------------------------------------------------------- usage lines
+// --------------------------------------------------------------- usage table
 
-/** One allowance, as the Account page reads it out: "12 of 20 resources".
+/** One row of the Billing page's usage table: what was used, what the plan
+ *  includes, and what is left, each already worded.
  *
- * An unlimited allowance states the count and says so rather than printing
- * `4294967295`, which is the sentinel and not a promise. */
-export function usageLine(used: number, max: number, limit: Limit): string {
-	const { one, many, monthly } = LIMITS[limit];
-	const when = monthly ? ' this month' : '';
-	if (unlimited(max)) {
-		return `${counted(used, one, many)}${when}, no limit`;
-	}
-	return `${used} of ${counted(max, one, many)}${when}`;
-}
-
-export interface UsageRow {
-	limit: Limit;
-	line: string;
-	/** Whether this allowance is full, which is what the page marks. */
+ *  `fraction` draws the thin bar under the figure and is null where there is
+ *  no ceiling to fill; `resets` names the day a periodic count starts again
+ *  and is null on a standing count or a lifetime one. */
+export interface UsageTableRow {
+	key: Limit | 'moves';
+	label: string;
+	used: number;
+	included: string;
+	left: string;
+	fraction: number | null;
+	resets: string | null;
+	/** Whether nothing is left, which is what the row marks. */
 	full: boolean;
 }
 
-/** Every counted allowance, in the order the Account page lists them. */
-export function usageLines(usage: EntitlementUsage, caps: Capabilities): UsageRow[] {
-	const order: Limit[] = [
-		'resources',
-		'marketplaces',
-		'templates',
-		'collections',
-		'labels',
-		'devices',
-		'previews'
-	];
-	return order.map((limit) => ({
-		limit,
-		line: usageLine(usedOf(usage, limit), maxOf(caps, limit), limit),
+/** A standing or monthly allowance as one table row. */
+function allowanceRow(
+	usage: EntitlementUsage,
+	caps: Capabilities,
+	limit: Limit,
+	label: string
+): UsageTableRow {
+	const used = usedOf(usage, limit, caps);
+	const max = maxOf(caps, limit);
+	if (unlimited(max)) {
+		return {
+			key: limit,
+			label,
+			used,
+			included: 'No limit',
+			left: 'No limit',
+			fraction: null,
+			resets: null,
+			full: false
+		};
+	}
+	return {
+		key: limit,
+		label,
+		used,
+		included: `${max}`,
+		left: `${Math.max(max - used, 0)}`,
+		fraction: max === 0 ? 1 : Math.min(used / max, 1),
+		resets: null,
 		full: limitReason(caps, usage, limit) !== null
-	}));
+	};
+}
+
+/** Every counted allowance and the month's moves, in the order the Billing
+ *  page lists them. Each figure is the server's live count: this table only
+ *  words them.
+ *
+ *  Watermarked previews are the month's on every paid plan and the account's
+ *  whole life on Look, and the row says which. Moves are a balance rather
+ *  than a ceiling: `used` is what this month's moves spent, and `left` is
+ *  the balance, packs included, which is the figure a seller spends from. */
+export function usageTable(
+	usage: EntitlementUsage,
+	caps: Capabilities,
+	balance: { available: number }
+): UsageTableRow[] {
+	const resets = `Starts again on ${dayMonth(usage.month_resets_at)}`;
+	const forLife = previewsForLife(caps);
+	const previews = allowanceRow(
+		usage,
+		caps,
+		'previews',
+		forLife ? 'Watermarked previews (lifetime)' : 'Watermarked previews this month'
+	);
+	const movesUsed = usage.moves_this_month;
+	const movesHeld = movesUsed + balance.available;
+	return [
+		allowanceRow(usage, caps, 'resources', 'Resources'),
+		allowanceRow(usage, caps, 'marketplaces', 'Marketplaces'),
+		allowanceRow(usage, caps, 'templates', 'Templates'),
+		allowanceRow(usage, caps, 'collections', 'Collections'),
+		allowanceRow(usage, caps, 'labels', 'Labels'),
+		allowanceRow(usage, caps, 'devices', 'Devices'),
+		{
+			...previews,
+			included: unlimited(maxOf(caps, 'previews'))
+				? previews.included
+				: forLife
+					? `${maxOf(caps, 'previews')} in total`
+					: `${maxOf(caps, 'previews')} a month`,
+			resets: forLife ? null : resets
+		},
+		{
+			key: 'moves',
+			label: 'Moves this month',
+			used: movesUsed,
+			included:
+				caps.moves_per_month > 0
+					? `${caps.moves_per_month} a month`
+					: caps.free_moves_lifetime > 0
+						? `${caps.free_moves_lifetime} to try`
+						: 'From packs',
+			left: `${balance.available}`,
+			fraction: movesHeld === 0 ? null : movesUsed / movesHeld,
+			resets: null,
+			full: balance.available === 0
+		}
+	];
 }
 
 /** The months, spelled out, so a date reads the same in every browser.
@@ -311,9 +377,10 @@ export function movesReason(
 	requested: number
 ): { line: string; refusal: string | null } {
 	const { available } = balance;
-	const line = requested === 0 ? movesLine(balance) : `${movesLine(balance)} This uses ${requested}.`;
+	const line =
+		requested === 0 ? movesLine(balance) : `${movesLine(balance)} This uses ${requested}.`;
 	if (available === 0) {
-		return { line, refusal: 'You have no moves left. Buy a pack, or choose Sync.' };
+		return { line, refusal: 'You have no moves left. Buy a pack, or choose Pro.' };
 	}
 	if (requested > available) {
 		return {

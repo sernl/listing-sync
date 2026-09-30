@@ -31,9 +31,8 @@ use tam_pipeline::archive::ExtractBudget;
 use tam_pipeline::pipeline::{ingest, ArchiveMode, IngestContext, IngestError};
 use tam_pipeline::scan::EicarScanner;
 use tam_storage::{
-    intent_digest, AnsweredElection, BlobRepo, EntitlementRepo, JobRepo, MappingAdd, MappingRecord,
-    MappingRepo, MonthlyKind, NewJob, NewJobItem, ProductEdit, ProductRepo, StorageError,
-    TenantBlobSink, TptBaseRepo,
+    intent_digest, AnsweredElection, BlobRepo, JobRepo, MappingAdd, MappingRecord, MappingRepo,
+    NewJob, NewJobItem, ProductEdit, ProductRepo, StorageError, TenantBlobSink, TptBaseRepo,
 };
 use tam_types::{
     Actor, CanonicalTermId, ContentHash, CopyFormat, FileBytes, FileId, FileRole, ImportedTerm,
@@ -385,16 +384,10 @@ pub(crate) async fn upload(
     let now = (state.wall)();
     let caps = context.entitlement.caps;
     if params.slot == UploadSlot::Preview {
-        let used = EntitlementRepo::new(state.pool.clone())
-            .monthly_used(context.org, MonthlyKind::Preview, now)
-            .await
-            .map_err(|error| storage_fault(&state, &error))?;
-        if used >= i64::from(caps.previews_per_month) {
-            return Err(quota_refusal(
-                QuotaKind::Previews,
-                used,
-                u64::from(caps.previews_per_month),
-            ));
+        if let Some(refusal) =
+            PreviewSpend::refusal_before_upload(&state, context.org, &caps).await?
+        {
+            return Err(refusal);
         }
     }
     let products = ProductRepo::new(state.pool.clone());

@@ -251,3 +251,23 @@ No change. All eleven price keys and amounts stay the same:
 - `sync_*`: $29 / $240
 - `studio_*`: $59 / $480
 - `pack_*`: $47 / $77 / $127 / $247 / $397
+
+## 12. Addendum, 2026-09-30: the founder's tier changes (0.17.0)
+
+The founder reviewed the live Billing page and changed these figures. Prices, price keys, the recommended plan and the grandfather rule (§8) do not change.
+
+| | Look | Starter | Pro (was Sync) | Studio |
+|---|---|---|---|---|
+| Name | Look | Starter | **Pro** | Studio |
+| Resources | 100 | **250** (was 500) | **500** (was 2,000) | no cap |
+| Watermarked previews | **5 for the account's life** (was 5 a month) | **20 a month** (was 50) | **50 a month** (was 200) | **100 a month** (was no cap) |
+| Templates | 1 | 5 | **10** (was 20) | no cap |
+| Collections | 1 | 5 | **10** (was 20) | no cap |
+| AI description fill | – | **none** (was 50 a month, "coming soon") | 200 a month | 600 a month |
+
+- **Sync is sold as Pro.** The plan id stays `subscriber` and the price keys stay `sync_monthly` / `sync_yearly`, because stored grants and the Stripe price map carry them. Only the name a seller reads changes; the integrator renames the Stripe product.
+- **Look's previews are a lifetime allowance**, like its five trial moves: `Capabilities::previews_lifetime` is 5 and `previews_per_month` is 0 on Look, and `Capabilities::previews()` says which window a gate reads. The lifetime figure is every month's `usage_counter` row summed, so no second counter can drift from the monthly one, and a plan change needs no conversion.
+- **No plan has unlimited previews.** Every preview is a render and a stored image; 100 a month covers a Studio shop refreshed over a term.
+- **Starter carries no AI fill.** The offer starts at Pro, so the Starter card no longer says "AI description fill, coming soon".
+- The §2.2 value-gap rule still holds on resources (2.5×, 2×, then no cap) and previews (4×, 2.5×, 2×); `every_cap_climbs_the_ladder` and `every_plan_grants_strictly_more_of_each_counted_axis_than_the_one_below` pin it.
+- §9's Sync trigger now reads as Pro.

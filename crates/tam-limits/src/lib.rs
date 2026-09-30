@@ -660,7 +660,8 @@ pub const PLANS: [PlanRow; 4] = [
         yearly_key: None,
         trial_days: 0,
         recommended: false,
-        tagline: "For a small shop: bring your resources in, make five previews and try five moves.",
+        tagline:
+            "For a small shop: bring your resources in, make five previews and try five moves.",
     },
     PlanRow {
         id: Plan::Starter,
@@ -1675,7 +1676,12 @@ mod tests {
         assert_eq!(Plan::Free.capabilities(None).previews_per_month, 0);
         for plan in [Plan::Starter, Plan::Subscriber, Plan::Studio] {
             let caps = plan.capabilities(None);
-            assert_eq!(caps.previews_lifetime, 0, "{} counts per month", plan.as_str());
+            assert_eq!(
+                caps.previews_lifetime,
+                0,
+                "{} counts per month",
+                plan.as_str()
+            );
             assert!(
                 matches!(caps.previews(), PreviewAllowance::Monthly(cap) if cap < u32::MAX),
                 "{} must count previews a month against a ceiling",

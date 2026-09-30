@@ -11,7 +11,8 @@
 use sqlx::PgPool;
 use tam_limits::Plan;
 use tam_storage::{
-    Accrual, EntitlementRepo, GrantedBy, MoveCredit, MoveSource, NewGrant, StorefrontAllowance,
+    Accrual, CounterWindow, EntitlementRepo, GrantedBy, MonthlyCharge, MonthlyKind, MonthlySpend,
+    MoveCredit, MoveSource, NewGrant, StorefrontAllowance,
 };
 use tam_types::{OrgId, Timestamp, Uuid};
 
@@ -237,15 +238,239 @@ async fn the_history_keeps_revoked_and_expired_rows_with_their_attribution(pool:
     assert_eq!(row.revoked_at, Some(NOW));
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn the_usage_read_counts_what_the_account_page_shows(pool: PgPool) {
-    provision(&pool).await;
-    let usage = EntitlementRepo::new(pool)
-        .usage(ORG_A, NOW)
+/// 2026-08-06, a month before `NOW`.
+const LAST_MONTH: Timestamp = Timestamp(1_786_000_000_000);
+
+/// Runs one statement with `org` pinned, which is how every tenant table's
+/// row-level policy admits a write.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn seed(pool: &PgPool, org: OrgId, statement: &str) {
+    let mut tx = pool.begin().await.expect("a transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(org.0 .0).to_string())
+        .execute(&mut *tx)
         .await
-        .expect("the read runs");
-    assert_eq!(usage.resources, 0);
-    assert_eq!(usage.devices, 0);
+        .expect("the organisation pins");
+    sqlx::query(statement)
+        .bind(uuid::Uuid::from_bytes(org.0 .0))
+        .execute(&mut *tx)
+        .await
+        .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    tx.commit().await.expect("the seed commits");
+}
+
+fn preview(amount: u32, window: CounterWindow, at: Timestamp) -> MonthlyCharge {
+    MonthlyCharge {
+        kind: MonthlyKind::Preview,
+        amount,
+        cap: u32::MAX,
+        window,
+        at,
+    }
+}
+
+/// Every figure the Billing page prints is a live count of its own source:
+/// deleted resources, revoked devices, unlinked marketplaces and the
+/// marketplaces' own system labels are not the seller's, last month's
+/// previews and moves are not this month's, and another organisation's rows
+/// are nobody's here.
+#[sqlx::test(migrations = "./migrations")]
+async fn the_usage_read_counts_every_figure_from_its_own_source(pool: PgPool) {
+    provision(&pool).await;
+    for (org, n) in [(ORG_A, 3), (ORG_B, 1)] {
+        for _ in 0..n {
+            seed(
+                &pool,
+                org,
+                "INSERT INTO product (org_id, id, title, body, price_kind, created_at, updated_at) \
+                 VALUES ($1, gen_random_uuid(), 'A worksheet', '', 'free', now(), now())",
+            )
+            .await;
+        }
+    }
+    seed(
+        &pool,
+        ORG_A,
+        "UPDATE product SET deleted_at = now() \
+          WHERE org_id = $1 AND id = (SELECT id FROM product WHERE org_id = $1 LIMIT 1)",
+    )
+    .await;
+    for name in ["Weekly", "Holiday"] {
+        seed(
+            &pool,
+            ORG_A,
+            &format!(
+                "INSERT INTO resource_template (org_id, id, name, draft, created_at, updated_at) \
+                 VALUES ($1, gen_random_uuid(), '{name}', '{{}}', now(), now())"
+            ),
+        )
+        .await;
+    }
+    seed(
+        &pool,
+        ORG_A,
+        "INSERT INTO collection (org_id, id, name, created_at, updated_at) \
+         VALUES ($1, gen_random_uuid(), 'Autumn', now(), now())",
+    )
+    .await;
+    for (name, system) in [("Maths", false), ("Year 3", false), ("TPT", true)] {
+        seed(
+            &pool,
+            ORG_A,
+            &format!(
+                "INSERT INTO label (org_id, id, name, colour, created_at, system) \
+                 VALUES ($1, gen_random_uuid(), '{name}', 'teal', now(), {system})"
+            ),
+        )
+        .await;
+    }
+    for (device, revoked) in [("laptop", "NULL"), ("desktop", "NULL"), ("old", "now()")] {
+        seed(
+            &pool,
+            ORG_A,
+            &format!(
+                "INSERT INTO device (org_id, id, name, os, arch, app_version, first_seen_at, \
+                                     last_seen_at, revoked_at) \
+                 VALUES ($1, '{device}', '{device}', 'linux', 'x86_64', '0.17.0', now(), now(), \
+                         {revoked})"
+            ),
+        )
+        .await;
+    }
+    for (marketplace, state) in [("tpt", "linked"), ("tes", "unlinked")] {
+        seed(
+            &pool,
+            ORG_A,
+            &format!(
+                "INSERT INTO connection (org_id, id, marketplace, state, created_at, updated_at) \
+                 VALUES ($1, gen_random_uuid(), '{marketplace}', '{state}', now(), now())"
+            ),
+        )
+        .await;
+    }
+
+    let repo = EntitlementRepo::new(pool.clone());
+    for (amount, at) in [(2, LAST_MONTH), (3, NOW)] {
+        repo.spend_monthly(ORG_A, preview(amount, CounterWindow::Month, at))
+            .await
+            .expect("the spend runs");
+    }
+    repo.credit_moves(
+        ORG_A,
+        MoveCredit {
+            delta: 10,
+            source: MoveSource::Pack,
+            source_ref: Some("cs_test_usage"),
+            expires_at: Some(LATER),
+            at: LAST_MONTH,
+        },
+    )
+    .await
+    .expect("the credit writes");
+    for (item, at) in [(0x41, LAST_MONTH), (0x42, NOW), (0x43, NOW)] {
+        repo.debit_move(ORG_A, id(item), at)
+            .await
+            .expect("the debit runs");
+    }
+
+    let usage = repo.usage(ORG_A, NOW).await.expect("the read runs");
+    assert_eq!(usage.resources, 2, "the deleted resource is not counted");
+    assert_eq!(usage.templates, 2);
+    assert_eq!(usage.collections, 1);
+    assert_eq!(
+        usage.labels, 2,
+        "a marketplace's system label is not the seller's"
+    );
+    assert_eq!(
+        usage.devices, 2,
+        "a signed-out device is in the record, not the count"
+    );
+    assert_eq!(
+        usage.marketplaces, 1,
+        "only a linked marketplace is connected"
+    );
+    assert_eq!(usage.previews, 3, "this month's previews");
+    assert_eq!(usage.previews_lifetime, 5, "every month's previews");
+    assert_eq!(usage.moves_this_month, 2, "this month's commits");
+
+    let other = repo.usage(ORG_B, NOW).await.expect("the read runs");
+    assert_eq!(other.resources, 1);
+    assert_eq!(
+        (other.templates, other.labels, other.devices, other.previews),
+        (0, 0, 0, 0),
+        "one organisation's rows are not another's"
+    );
+}
+
+/// A lifetime allowance is measured against every month's previews together,
+/// so a new month gives none back, and a refusal spends nothing.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_lifetime_allowance_counts_every_month_and_refuses_past_its_cap(pool: PgPool) {
+    provision(&pool).await;
+    let repo = EntitlementRepo::new(pool);
+    let lifetime = |amount, at| MonthlyCharge {
+        cap: 5,
+        ..preview(amount, CounterWindow::Lifetime, at)
+    };
+    assert_eq!(
+        repo.spend_monthly(ORG_A, lifetime(3, LAST_MONTH))
+            .await
+            .expect("the spend runs"),
+        MonthlySpend::Granted { used: 3 }
+    );
+    assert_eq!(
+        repo.spend_monthly(ORG_A, lifetime(3, NOW))
+            .await
+            .expect("the spend runs"),
+        MonthlySpend::Refused { used: 3 },
+        "three more would be six of five, though this month has used none"
+    );
+    assert_eq!(
+        repo.spend_monthly(ORG_A, lifetime(2, NOW))
+            .await
+            .expect("the spend runs"),
+        MonthlySpend::Granted { used: 5 }
+    );
+    assert_eq!(
+        repo.spend_monthly(ORG_A, lifetime(1, LATER))
+            .await
+            .expect("the spend runs"),
+        MonthlySpend::Refused { used: 5 },
+        "a later month gives none back"
+    );
+    let usage = repo.usage(ORG_A, NOW).await.expect("the read runs");
+    assert_eq!((usage.previews, usage.previews_lifetime), (2, 5));
+    assert_eq!(
+        repo.counted_used(ORG_A, MonthlyKind::Preview, CounterWindow::Lifetime, LATER)
+            .await
+            .expect("the read runs"),
+        5
+    );
+
+    // The same rows answer a monthly plan: an upgrade counts this month
+    // alone, with no conversion.
+    assert_eq!(
+        repo.spend_monthly(
+            ORG_A,
+            MonthlyCharge {
+                cap: 20,
+                ..preview(1, CounterWindow::Month, NOW)
+            }
+        )
+        .await
+        .expect("the spend runs"),
+        MonthlySpend::Granted { used: 3 }
+    );
+    assert_eq!(
+        repo.spend_monthly(ORG_B, lifetime(5, NOW))
+            .await
+            .expect("the spend runs"),
+        MonthlySpend::Granted { used: 5 },
+        "one organisation's lifetime is not another's"
+    );
 }
 
 /// The balance is a sum over what has not expired, and a credit whose

@@ -5,7 +5,7 @@
 	import { ApiFailure, api, type BillingView } from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
-	import { dayMonth, usageLines } from '$lib/entitlement';
+	import { usageTable } from '$lib/entitlement';
 	import { entitlementRead } from '$lib/entitlement-read';
 	import Explain from '$lib/Explain.svelte';
 	import { PLANS } from '$lib/generated/plans';
@@ -59,12 +59,23 @@
 	const queryClient = useQueryClient();
 
 	// What has been used of each allowance, against the plan's own figures:
-	// the server counts the same numbers and refuses at them.
-	const entitlement = createQuery(() => entitlementRead);
+	// the server counts the same numbers and refuses at them. Read again
+	// every time this page opens rather than served from the shell's
+	// snapshot, which is taken once per visit: this is the page a seller
+	// checks their figures on, and a count taken before they imported a
+	// shop or made a preview read "0" beside resources they could see.
+	const entitlement = createQuery(() => ({
+		...entitlementRead,
+		refetchOnMount: 'always' as const
+	}));
 	const used = $derived(
 		entitlement.data === undefined
 			? null
-			: usageLines(entitlement.data.usage, entitlement.data.capabilities)
+			: usageTable(
+					entitlement.data.usage,
+					entitlement.data.capabilities,
+					entitlement.data.moves
+				)
 	);
 
 	const billing = createQuery(() => ({
@@ -409,7 +420,12 @@
 			<Explain title="What your plan counts" label="How it works">
 				<p>
 					Each plan includes a number of resources, templates, collections, labels and devices.
-					Watermarked previews are counted each month and start again on the 1st.
+					Watermarked previews are counted each month and start again on the 1st. On Look they
+					are five to try, and they don't come back.
+				</p>
+				<p>
+					Moves this month are the moves you have used since the 1st. Left is every move you can
+					still use, packs included.
 				</p>
 				<p>
 					If you are over a number because your plan changed, you keep everything you have. You
@@ -422,14 +438,42 @@
 		{:else if used === null || entitlement.data === undefined}
 			<p class="quiet">Your usage did not load. Refresh the page to try again.</p>
 		{:else}
-			<ul class="bill-usage">
-				{#each used as row (row.limit)}
-					<li class:full={row.full}>{row.line}{#if row.full}<span class="quiet">{' · full'}</span>{/if}</li>
-				{/each}
-			</ul>
-			<p class="quiet">
-				Previews start again on {dayMonth(entitlement.data.usage.month_resets_at)}.
-			</p>
+			<div class="data-table-wrap">
+				<table class="data-table stack bill-usage">
+					<thead>
+						<tr>
+							<th scope="col">What</th>
+							<th scope="col" class="num">Used</th>
+							<th scope="col" class="num">Included</th>
+							<th scope="col" class="num">Left</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each used as row (row.key)}
+							<tr class:full={row.full}>
+								<td class="bill-usage-what" data-label="">
+									<span>{row.label}</span>
+									{#if row.resets !== null}<span class="sub">{row.resets}</span>{/if}
+								</td>
+								<td class="num" data-label="Used">
+									<span class="bill-usage-fig">
+										<span>{row.used}</span>
+										{#if row.fraction !== null}
+											<span class="bill-usage-bar" aria-hidden="true">
+												<span style:width="{Math.round(row.fraction * 100)}%"></span>
+											</span>
+										{/if}
+									</span>
+								</td>
+								<td class="num" data-label="Included">{row.included}</td>
+								<td class="num" data-label="Left">
+									{row.left}{#if row.full}<span class="sub">None left</span>{/if}
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
 		{/if}
 	</section>
 
@@ -501,6 +545,24 @@
 					onclick={() => (cadence = 'yearly')}>Yearly</button
 				>
 			</div>
+		</div>
+
+		<!-- What a move is, above the plans that sell them, so a seller knows
+		     what a card's "moves a month" buys before choosing one. -->
+		<div class="bill-move-box">
+			<p><strong>What is a move?</strong> Publishing one of your resources onto one marketplace is one move.</p>
+			<Explain title="What is a move?" label="Explain">
+				<p>
+					Publishing a resource to Tes and TPT is 2 moves; to Tes alone is 1 move. A draft counts the
+					same as a live listing.
+				</p>
+				<p>Importing, editing, previewing and exporting never use a move.</p>
+				<p>
+					Plans add moves every month and save up unused ones. Pack moves last 12 months and work on
+					any plan.
+				</p>
+				<p><a href="/guides/plans">Read the guide to plans and moves.</a></p>
+			</Explain>
 		</div>
 
 		{#if sale !== null && !subscribed}
@@ -793,16 +855,66 @@
 		}
 	}
 
-	.bill-usage {
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+	/* The move explainer: the warning tint, because it is the one thing a
+	   buyer must understand before choosing a plan. */
+	.bill-move-box {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
 		gap: var(--s-2) var(--s-4);
-		margin: 0;
-		padding: 0;
-		list-style: none;
+		flex-wrap: wrap;
+		padding: var(--s-3) var(--s-4);
+		border-radius: var(--r-panel);
+		background: var(--warn-soft);
+		border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+		color: var(--text);
 	}
-	.bill-usage .full {
+	.bill-move-box p {
+		flex: 1 1 18rem;
+		margin: 0;
+	}
+
+	/* The usage table is the Invoices table (`styles/data.css`); these are
+	   only its figure column's bar and the row a full allowance marks. */
+	.bill-usage-what {
 		font-weight: 600;
+		color: var(--ink);
+	}
+	.bill-usage-what .sub {
+		font-weight: 400;
+	}
+	.bill-usage-fig {
+		display: inline-flex;
+		flex-direction: column;
+		align-items: flex-end;
+		gap: 4px;
+	}
+	.bill-usage-bar {
+		display: block;
+		width: 4.5rem;
+		height: 4px;
+		border-radius: var(--r-pill);
+		background: var(--hover);
+		overflow: hidden;
+	}
+	.bill-usage-bar > span {
+		display: block;
+		height: 100%;
+		border-radius: inherit;
+		background: var(--primary);
+	}
+	.bill-usage tr.full .bill-usage-bar > span {
+		background: var(--warn);
+	}
+	.bill-usage tr.full td:last-child {
+		font-weight: 600;
+	}
+	@media (max-width: 620px) {
+		.bill-usage td.bill-usage-what {
+			flex-direction: column;
+			align-items: flex-start;
+			gap: 0;
+		}
 	}
 
 	.bill-card {

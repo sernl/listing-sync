@@ -4447,14 +4447,15 @@ const NEXT_MONTH: Timestamp = Timestamp(31 * 86_400_000);
 const TOKEN_LATER: SessionToken = SessionToken([0x43; 32]);
 
 /// Look's watermarked previews, counted at every door a preview comes in by,
-/// refused at the month's allowance, and given back when the month turns.
+/// refused at the account's lifetime allowance, and not given back when the
+/// month turns.
 #[sqlx::test(migrations = "../tam-storage/migrations")]
-async fn the_free_plan_makes_its_monthly_previews_and_no_more_until_the_month_turns(pool: PgPool) {
+async fn the_free_plan_makes_its_lifetime_previews_and_no_more_when_the_month_turns(pool: PgPool) {
     provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
-    let root = store_root("preview-month");
+    let root = store_root("preview-lifetime");
     let state = configured(pool.clone(), &root);
     let (product, _) = with_one_file(state.clone(), &TOKEN_A, "sellable", &["Tes"]).await;
-    let allowance = tam_limits::Plan::Free.capabilities(None).previews_per_month;
+    let allowance = tam_limits::Plan::Free.capabilities(None).previews_lifetime;
     assert_eq!(allowance, 5);
 
     for n in 0..allowance {
@@ -4498,14 +4499,12 @@ async fn the_free_plan_makes_its_monthly_previews_and_no_more_until_the_month_tu
         refusal_of(&body),
         (
             Some(APIErrorCode::QuotaExceeded),
-            "Your plan includes 5 watermarked previews a month. Upgrade to make more, or wait \
-             until next month."
-                .to_owned()
+            "Your plan includes 5 watermarked previews to try. Upgrade to make more.".to_owned()
         )
     );
     assert_eq!(
         quota_of(&body),
-        (Some("previews_per_month".to_owned()), Some(5), Some(5))
+        (Some("previews_lifetime".to_owned()), Some(5), Some(5))
     );
 
     // Bytes uploaded without the slot are still refused at the attach, which
@@ -4520,7 +4519,7 @@ async fn the_free_plan_makes_its_monthly_previews_and_no_more_until_the_month_tu
     )
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(quota_of(&body).0.as_deref(), Some("previews_per_month"));
+    assert_eq!(quota_of(&body).0.as_deref(), Some("previews_lifetime"));
 
     // And a create carrying one is refused whole: no resource is left behind
     // by the preview it could not keep.
@@ -4536,7 +4535,7 @@ async fn the_free_plan_makes_its_monthly_previews_and_no_more_until_the_month_tu
     )
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(quota_of(&body).0.as_deref(), Some("previews_per_month"));
+    assert_eq!(quota_of(&body).0.as_deref(), Some("previews_lifetime"));
 
     // A payload file is not a preview and costs nothing.
     let (status, _) = json_call(
@@ -4560,10 +4559,12 @@ async fn the_free_plan_makes_its_monthly_previews_and_no_more_until_the_month_tu
         view["usage"]["resources"], 1,
         "the refused create left nothing"
     );
-    assert_eq!(view["capabilities"]["previews_per_month"], 5);
+    assert_eq!(view["usage"]["previews_lifetime"], 5);
+    assert_eq!(view["capabilities"]["previews_lifetime"], 5);
+    assert_eq!(view["capabilities"]["previews_per_month"], 0);
     assert_eq!(view["usage"]["month_resets_at"], NEXT_MONTH.0);
 
-    // February: the allowance is whole again.
+    // February: a lifetime allowance does not come back.
     SessionRepo::new(pool.clone())
         .mint(
             &TOKEN_LATER,
@@ -4577,13 +4578,7 @@ async fn the_free_plan_makes_its_monthly_previews_and_no_more_until_the_month_tu
         wall: || NEXT_MONTH,
         ..configured(pool.clone(), &root)
     };
-    let fresh = upload(
-        later.clone(),
-        &TOKEN_LATER,
-        pdf("a february preview"),
-        "?archive=keep_whole&slot=preview",
-    )
-    .await;
+    let fresh = upload(later.clone(), &TOKEN_LATER, pdf("a february preview"), "").await;
     let (status, body) = json_call(
         later.clone(),
         &TOKEN_LATER,
@@ -4594,11 +4589,154 @@ async fn the_free_plan_makes_its_monthly_previews_and_no_more_until_the_month_tu
     .await;
     assert_eq!(
         status,
-        StatusCode::CREATED,
-        "a new month is a new allowance: {}",
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a new month is not a new allowance on Look: {}",
         String::from_utf8_lossy(&body)
     );
+    assert_eq!(quota_of(&body).0.as_deref(), Some("previews_lifetime"));
     let (_, body) = get(later, &TOKEN_LATER, "/v1/entitlement").await;
     let view: serde_json::Value = parse(&body);
-    assert_eq!(view["usage"]["previews"], 1);
+    assert_eq!(view["usage"]["previews"], 0, "February made none");
+    assert_eq!(view["usage"]["previews_lifetime"], 5);
+}
+
+/// This month's and the lifetime's preview figures, as the Billing page reads
+/// them.
+async fn previews_used(state: &AppState) -> (Option<i64>, Option<i64>) {
+    let (status, body) = get(state.clone(), &TOKEN_A, "/v1/entitlement").await;
+    assert_eq!(status, StatusCode::OK);
+    let view: serde_json::Value = parse(&body);
+    (
+        view["usage"]["previews"].as_i64(),
+        view["usage"]["previews_lifetime"].as_i64(),
+    )
+}
+
+/// A paid plan's watermarked previews, counted on every path the preview
+/// maker saves through: carried by a create, added to a saved resource, and
+/// swapped in by Change or a re-make. A removed preview gives nothing back,
+/// and the Billing figure is the count, read live.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn every_preview_a_paid_plan_saves_is_counted_on_the_billing_figure(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    tam_storage::EntitlementRepo::new(pool.clone())
+        .grant(
+            ORG_A,
+            &tam_storage::NewGrant {
+                id: Uuid([0xE2; 16]),
+                plan: tam_limits::Plan::Subscriber,
+                rung: None,
+                granted_by: tam_storage::GrantedBy::Operator,
+                grantor_user: None,
+                reason: Some("the test fixture"),
+                source_ref: None,
+                granted_at: Timestamp(1_000),
+                expires_at: None,
+            },
+        )
+        .await
+        .unwrap_or_else(|error| panic!("the grant writes: {error}"));
+    let root = store_root("preview-paths");
+    let state = configured(pool.clone(), &root);
+    assert_eq!(previews_used(&state).await, (Some(0), Some(0)));
+
+    // A create carrying one preview, as the maker saves on a new resource.
+    let payload = upload(state.clone(), &TOKEN_A, pdf("the worksheet"), "").await;
+    let first = upload(
+        state.clone(),
+        &TOKEN_A,
+        pdf("preview one"),
+        "?archive=keep_whole&slot=preview",
+    )
+    .await;
+    let mut create = create_body(&payload, "Fractions", &["Tes"]);
+    create["previews"] = serde_json::json!([first.payload[0]]);
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        "/v1/products",
+        &create,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    let created: CreatedProductView = parse(&body);
+    let product = created.product;
+    assert_eq!(previews_used(&state).await, (Some(1), Some(1)));
+
+    // Added to the saved resource, as the maker saves on an edit.
+    let second = upload(
+        state.clone(),
+        &TOKEN_A,
+        pdf("preview two"),
+        "?archive=keep_whole&slot=preview",
+    )
+    .await;
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::POST,
+        &files_path(product),
+        &serde_json::json!({"role": "preview", "handle": second.payload[0]}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    let added: AddedFileView = parse(&body);
+    assert_eq!(previews_used(&state).await, (Some(2), Some(2)));
+
+    // Change, or a re-make: the new preview replaces the old one and is a
+    // preview made.
+    let remade = upload(
+        state.clone(),
+        &TOKEN_A,
+        pdf("preview two, made again"),
+        "?archive=keep_whole&slot=preview",
+    )
+    .await;
+    let (status, body) = json_call(
+        state.clone(),
+        &TOKEN_A,
+        Method::PUT,
+        &format!("{}/{}", files_path(product), added.file.id.to_hyphenated()),
+        &serde_json::json!({"handle": remade.payload[0]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(previews_used(&state).await, (Some(3), Some(3)));
+
+    // Removing one gives nothing back: it was made.
+    let replaced: ReplacedFileView = parse(&body);
+    let (status, body) = call(
+        state.clone(),
+        &TOKEN_A,
+        Call {
+            method: Method::DELETE,
+            path: &format!(
+                "{}/{}",
+                files_path(product),
+                replaced.file.id.to_hyphenated()
+            ),
+            body: None,
+            content_type: None,
+        },
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(previews_used(&state).await, (Some(3), Some(3)));
+
+    let (_, body) = get(state.clone(), &TOKEN_A, "/v1/entitlement").await;
+    let view: serde_json::Value = parse(&body);
+    assert_eq!(view["usage"]["resources"], 1);
+    assert_eq!(view["capabilities"]["previews_per_month"], 50);
+    assert_eq!(view["capabilities"]["previews_lifetime"], 0);
 }

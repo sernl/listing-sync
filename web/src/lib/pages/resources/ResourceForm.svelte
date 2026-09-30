@@ -624,6 +624,10 @@
 				failure instanceof ApiFailure
 					? sentenceFor(failure, 'The preview wasn’t added.')
 					: 'The preview wasn’t added.';
+		} finally {
+			// The attach is what spends the preview, so the count is read again
+			// after it rather than after the upload that preceded it.
+			void queryClient.invalidateQueries({ queryKey: queryKeys.entitlement });
 		}
 	}
 
@@ -678,6 +682,8 @@
 				failure instanceof ApiFailure
 					? sentenceFor(failure, 'The preview wasn’t changed.')
 					: 'The preview wasn’t changed.';
+		} finally {
+			void queryClient.invalidateQueries({ queryKey: queryKeys.entitlement });
 		}
 	}
 

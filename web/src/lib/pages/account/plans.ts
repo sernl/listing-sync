@@ -109,9 +109,12 @@ export function planBullets(caps: Capabilities, ai: AiOffer = AI): PlanBullet[] 
 		lines.push({ text: `Unused moves stack to ${caps.moves_accrual_cap}` });
 	if (!unlimited(caps.resources_max)) lines.push({ text: `Up to ${caps.resources_max} resources` });
 	lines.push({
-		text: unlimited(caps.previews_per_month)
-			? 'Unlimited watermarked previews'
-			: `${caps.previews_per_month} watermarked previews a month`
+		text:
+			caps.previews_lifetime > 0
+				? `${caps.previews_lifetime} watermarked previews to try`
+				: unlimited(caps.previews_per_month)
+					? 'Unlimited watermarked previews'
+					: `${caps.previews_per_month} watermarked previews a month`
 	});
 	if (caps.scheduling) lines.push({ text: 'Scheduling' });
 	if (caps.templates_max > 1) lines.push({ text: count(caps.templates_max, 'templates') });

@@ -8,6 +8,7 @@ import {
 	dollars,
 	featuredPack,
 	moveDefinition,
+	moveExplained,
 	packRows,
 	perMonthYearly,
 	plans,
@@ -42,9 +43,17 @@ const Heading = level === 1 ? 'h1' : 'h2';
 			<strong data-sale-text></strong>
 			<a data-sale-link href="/pricing">See the plans</a>
 		</p>
-		{/* The founder's own example names two marketplaces, so the line is a
-		    marked band for `just landing-copy-gate`. */}
-		<p class="move-def" data-marketplace-band><strong>What is a move?</strong> {moveDefinition}</p>
+		{/* What a move is, in a box above the cards so every figure below can
+		    count in moves: one sentence, the rest behind Explain. The founder's
+		    own example names two marketplaces, so the box is a marked band for
+		    `just landing-copy-gate`. */}
+		<div class="move-box" data-marketplace-band>
+			<p><strong>What is a move?</strong> {moveDefinition}</p>
+			<details class="move-explain">
+				<summary>Explain</summary>
+				{moveExplained.map((line) => <p>{line}</p>)}
+			</details>
+		</div>
 
 		<fieldset class="billing">
 			<legend class="sr-only">Billing period</legend>
@@ -214,11 +223,16 @@ const Heading = level === 1 ? 'h1' : 'h2';
 				<a class="btn" href={signupUrl(featuredPack.key)}>Buy a pack</a>
 			</div>
 			<table class="packs">
+				<colgroup>
+					<col class="packs-moves" />
+					<col />
+					<col />
+				</colgroup>
 				<thead>
 					<tr>
 						<th scope="col">Moves</th>
-						<th scope="col">Price</th>
-						<th scope="col">Per move</th>
+						<th scope="col" class="num">Price</th>
+						<th scope="col" class="num">Per move</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -226,8 +240,8 @@ const Heading = level === 1 ? 'h1' : 'h2';
 						packRows.map((pack) => (
 							<tr>
 								<th scope="row">{pack.moves}</th>
-								<td>{pack.price}</td>
-								<td class="unit">{pack.perMove}</td>
+								<td class="num">{pack.price}</td>
+								<td class="num unit">{pack.perMove}</td>
 							</tr>
 						))
 					}
