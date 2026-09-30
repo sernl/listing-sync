@@ -4577,7 +4577,9 @@ pub(crate) fn stored_thumbnails(observed: Option<&serde_json::Value>) -> Vec<Con
 /// What a read states that the resource it landed on leaves unanswered,
 /// written onto that resource and nothing it already answers: the TPT form's
 /// own fields — pickers, tax code, attestation, localisation, pictures — and a
-/// rights grant where the resource states none.
+/// rights grant where the resource states none — for a Tes listing, its own
+/// licence. A TPT listing states no licence, so where the seller lists on Tes
+/// too, the Tes licence opens defaulted from TPT's copyright statement.
 ///
 /// Every commit branch calls this for the product the listing ends up on,
 /// which is what makes a re-import the backfill: the first read of a listing
@@ -4605,7 +4607,24 @@ pub(crate) async fn fill_listing_facts(
     };
     let rights =
         tam_storage::fill_rights(tx, org, product, &tam_import::rights_from(listing), now).await?;
-    Ok(sidecar || rights)
+    // The copyright statement the resource now holds rather than the one this
+    // read carried: a saved read from before the statement was carried has
+    // none, and a seller's own answer outranks the listing's anyway.
+    let copyright = if matches!(listing.remote, tam_marketplace::RemoteListingId::Tpt { .. }) {
+        tam_storage::read_tpt_base(tx, org, product)
+            .await?
+            .and_then(|base| base.copyright)
+    } else {
+        None
+    };
+    let licence = match copyright {
+        Some(copyright) => {
+            let default = tam_import::tes_licence_for(copyright);
+            tam_storage::fill_tes_licence(tx, org, product, default, now).await?
+        }
+        None => false,
+    };
+    Ok(sidecar || rights || licence)
 }
 
 /// Stores a cover or listing picture as a held blob, or nothing where these

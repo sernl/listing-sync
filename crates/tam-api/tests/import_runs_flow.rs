@@ -4912,6 +4912,222 @@ async fn refresh_fills_from_saved_reads_and_a_fresh_read_fills_the_rest(pool: Pg
     );
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn rights_of(app: &axum::Router, product: ProductId) -> Option<(String, Option<String>)> {
+    let held: serde_json::Value = call(
+        app,
+        Method::GET,
+        &format!("/v1/products/{}", product_text(product)),
+        None,
+    )
+    .await
+    .json();
+    let rights = held.get("rights")?;
+    Some((
+        rights
+            .get("inventory")
+            .and_then(serde_json::Value::as_str)
+            .expect("a grant names its marketplace")
+            .to_owned(),
+        rights
+            .get("native_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+    ))
+}
+
+/// A TPT listing whose seller stated a copyright statement.
+fn tpt_with_copyright(locator: &str, title: &str, copyright: &str) -> ObservedResource {
+    let mut read = observed_on(Marketplace::Tpt, locator, title, Some((0x3A, BIG)), None);
+    read.listing.extras = tam_marketplace::ListingExtras {
+        copyright: Some(copyright.to_owned()),
+        ..tam_marketplace::ListingExtras::default()
+    };
+    read
+}
+
+/// The founder's report: a TPT import opened with its TPT answers and the
+/// Tes licence still on "Choose a licence". A seller signed in to Tes gets
+/// the Tes licence from TPT's copyright statement, on the price branch Tes
+/// gates it on, and a licence the seller picks is never replaced.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_tpt_import_defaults_the_tes_licence_from_its_copyright_statement(pool: PgPool) {
+    provision(&pool).await;
+    let state = configured(pool.clone(), &store_root("teslicence"));
+    let app = router(state.clone());
+
+    let own = imported_read(
+        &app,
+        &state,
+        "Tpt",
+        tpt_with_copyright("5550001", "Fractions unit", "ORIGINAL_WORK"),
+    )
+    .await;
+    let own = own
+        .items
+        .iter()
+        .find_map(|item| item.product_id)
+        .expect("the import created a resource");
+    assert_eq!(
+        rights_of(&app, own).await,
+        Some(("Tes".to_owned(), Some("CC-BY-SA".to_owned()))),
+        "free original work opens on Tes's own default licence"
+    );
+
+    let mut priced = tpt_with_copyright("5550002", "Poetry pack", "USED_COPYRIGHTED_MATERIALS");
+    priced.listing.price = ImportedPrice::Paid {
+        minor_units: 500,
+        denomination: "USD".to_owned(),
+    };
+    let priced = imported_read(&app, &state, "Tpt", priced).await;
+    let priced = priced
+        .items
+        .iter()
+        .find_map(|item| item.product_id)
+        .expect("the import created a resource");
+    assert_eq!(
+        rights_of(&app, priced).await,
+        Some(("Tes".to_owned(), Some("TES-PAID".to_owned()))),
+        "a priced resource carries the one licence Tes writes with a price"
+    );
+
+    // ---- the seller picks their own licence; a re-import leaves it.
+    under_tenant(
+        &pool,
+        "UPDATE product SET rights_segments = ARRAY['CC-BY'], rights_native_id = 'CC-BY' \
+          WHERE org_id = $1 AND id = $2",
+        own,
+    )
+    .await;
+    imported_read(
+        &app,
+        &state,
+        "Tpt",
+        tpt_with_copyright("5550001", "Fractions unit", "ORIGINAL_WORK"),
+    )
+    .await;
+    assert_eq!(
+        rights_of(&app, own).await,
+        Some(("Tes".to_owned(), Some("CC-BY".to_owned()))),
+        "the seller's licence is kept"
+    );
+}
+
+/// A seller who signs in to Tes after the import: Refresh gives the resource
+/// the Tes licence the import could not, because Tes was not theirs yet when
+/// it ran — and with it answered, Tes can be added and the resource lists
+/// both mappings.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn refresh_backfills_the_tes_licence_once_the_resource_goes_to_tes(pool: PgPool) {
+    provision(&pool).await;
+    let state = configured(pool.clone(), &store_root("teslicencerefresh"));
+    let app = router(state.clone());
+    let mut tx = pool.begin().await.expect("a transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pins");
+    sqlx::query("DELETE FROM connection WHERE marketplace = 'tes'")
+        .execute(&mut *tx)
+        .await
+        .expect("the Tes sign-in is removed");
+    tx.commit().await.expect("the fixture commits");
+
+    let run = imported_read(
+        &app,
+        &state,
+        "Tpt",
+        tpt_with_copyright("5550003", "Place value", "ORIGINAL_WORK"),
+    )
+    .await;
+    let product = run
+        .items
+        .iter()
+        .find_map(|item| item.product_id)
+        .expect("the import created a resource");
+    assert_eq!(
+        rights_of(&app, product).await,
+        None,
+        "a seller not on Tes is given no Tes licence"
+    );
+    let without = call(
+        &app,
+        Method::POST,
+        &format!("/v1/products/{}/mappings", product_text(product)),
+        Some(serde_json::json!({ "inventory": "Tes" })),
+    )
+    .await;
+    assert_eq!(
+        without.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "Tes refuses a resource with no licence: {}",
+        without.body
+    );
+
+    // ---- the seller signs in to Tes, then presses Refresh.
+    let mut tx = pool.begin().await.expect("a transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the tenant pins");
+    sqlx::query(
+        "INSERT INTO connection (org_id, id, marketplace, state, created_at, updated_at) \
+         VALUES ($1, gen_random_uuid(), 'tes', 'linked', now(), now())",
+    )
+    .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+    .execute(&mut *tx)
+    .await
+    .expect("the Tes sign-in lands");
+    tx.commit().await.expect("the fixture commits");
+    assert_eq!(
+        refreshed(&app, run.id).await,
+        (1, 0, 0),
+        "the refresh fills the licence"
+    );
+    assert_eq!(
+        rights_of(&app, product).await,
+        Some(("Tes".to_owned(), Some("CC-BY-SA".to_owned())))
+    );
+    assert_eq!(
+        refreshed(&app, run.id).await,
+        (0, 1, 0),
+        "pressing twice changes nothing the second time"
+    );
+
+    let added = call(
+        &app,
+        Method::POST,
+        &format!("/v1/products/{}/mappings", product_text(product)),
+        Some(serde_json::json!({ "inventory": "Tes" })),
+    )
+    .await;
+    assert_eq!(
+        added.status,
+        StatusCode::CREATED,
+        "Tes is added: {}",
+        added.body
+    );
+    let listed: tam_api::resources::MappingsView =
+        call(&app, Method::GET, "/v1/mappings", None).await.json();
+    let mut on: Vec<tam_types::InventoryId> = listed
+        .mappings
+        .iter()
+        .filter(|mapping| mapping.product == product)
+        .map(|mapping| mapping.inventory)
+        .collect();
+    on.sort_by_key(|inventory| format!("{inventory:?}"));
+    assert_eq!(
+        on,
+        [tam_types::InventoryId::Tes, tam_types::InventoryId::Tpt],
+        "both mappings are listed, which is what the Filed under band draws"
+    );
+}
+
 /// `count` filler resources, each with the payload file the deferred
 /// constraints ask of a live product, written straight to the table: the
 /// plan ceiling is what is under test, not the create that would reach it.

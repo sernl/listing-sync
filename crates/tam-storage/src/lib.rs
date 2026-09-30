@@ -176,11 +176,12 @@ pub use operators::{OperatorEvent, OperatorRecord, OperatorRepo};
 pub use org::{OrgRecord, OrgRepo, OrgWrite};
 pub use overrides::OverrideRepo;
 pub use product::{
-    fill_rights, has_live_payload, insert_product, live_count_in, offer_cover, offer_payload,
-    restore_product, soft_delete_product, title_of, update_product, CoverOffer, ExportedListing,
-    ExportedResource, FileRefusal, FileReplacement, FileSwap, FileTarget, PayloadOffer,
-    PayloadOfferPolicy, ProductCreationFacts, ProductEdit, ProductFiles, ProductRecord,
-    ProductRepo, ProductSummary, ReplacedFiles, StoredCover, ThumbnailChange,
+    fill_rights, fill_tes_licence, has_live_payload, insert_product, live_count_in, offer_cover,
+    offer_payload, restore_product, soft_delete_product, title_of, update_product, CoverOffer,
+    ExportedListing, ExportedResource, FileRefusal, FileReplacement, FileSwap, FileTarget,
+    PayloadOffer, PayloadOfferPolicy, ProductCreationFacts, ProductEdit, ProductFiles,
+    ProductRecord, ProductRepo, ProductSummary, ReplacedFiles, StoredCover, TesLicenceDefault,
+    ThumbnailChange,
 };
 pub use profile::{AvatarWrite, ProfileRepo, TourOutcome, TourState};
 pub use pruning::{PruneRepo, PruneReport};

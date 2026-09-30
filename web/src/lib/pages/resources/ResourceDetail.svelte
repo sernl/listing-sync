@@ -45,6 +45,7 @@
 	import type { InventoryId } from '$lib/generated/vocab';
 	import { PILL_TONE } from './list';
 	import { sentenceFor } from './refusal';
+	import { filedUnder } from './filed-under';
 	import './resources.css';
 
 	const queryClient = useQueryClient();
@@ -278,6 +279,7 @@
 		(product.data?.files ?? []).filter((file) => file.role === 'payload').length
 	);
 	const hasRights = $derived(product.data?.rights !== undefined);
+	const filed = $derived(filedUnder(mappings, chips, labels.data ?? []));
 
 	function published(started: { inventory: InventoryId; job: string }[]) {
 		publishing = false;
@@ -537,14 +539,25 @@
 					</section>
 				{/if}
 
-				{#if (labels.data ?? []).length > 0 || (collections.data ?? []).length > 0}
+				{#if filed.marketplaces.length > 0 || filed.labels.length > 0 || (collections.data ?? []).length > 0}
 					<!-- Drawn only where there is one: an empty section on every
 					     resource page would be a heading standing in for a fact. -->
-					<section class="flow-section">
+					<section class="flow-section res-filed">
 						<div class="flow-section-head"><h2>Filed under</h2></div>
-						{#if (labels.data ?? []).length > 0}
-							<div class="res-chips">
-								{#each labels.data ?? [] as label (label.name)}
+						{#if filed.marketplaces.length > 0}
+							<ul class="res-filed-list" aria-label="Marketplaces">
+								{#each filed.marketplaces as one (one.inventory)}
+									<li class="res-filed-chip" title={one.detail}>
+										<MarketplaceMark inventory={one.inventory} size={22} />
+										<span class="res-filed-name">{one.name}</span>
+										<StatusPill tone={PILL_TONE[one.tone]} label={one.state} />
+									</li>
+								{/each}
+							</ul>
+						{/if}
+						{#if filed.labels.length > 0}
+							<div class="res-chips res-filed-labels">
+								{#each filed.labels as label (label.name)}
 									<LabelChip name={label.name} colour={label.colour} system={label.system} />
 								{/each}
 							</div>
