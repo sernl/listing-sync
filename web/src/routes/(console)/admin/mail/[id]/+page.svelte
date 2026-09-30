@@ -48,7 +48,7 @@
 	function settled(next: MailCampaignDetail, said: string) {
 		queryClient.setQueryData(queryKeys.adminMailCampaign(next.id), next);
 		void queryClient.invalidateQueries({ queryKey: queryKeys.adminMailCampaigns, exact: true });
-		toast('info', said);
+		toast('success', said);
 	}
 
 	function failed(failure: Error, fallback: string) {

@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO notification (org_id, id, kind, user_id, tone, title, body, client_id, created_at) VALUES ($1, $2, 'notice', $3, $4, $5, $6, $7, $8) ON CONFLICT (org_id, user_id, client_id) WHERE client_id IS NOT NULL DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cb86ab4d66623e6254a450cb8707746254ae3b0911df120c491e8e011d639779"
+}

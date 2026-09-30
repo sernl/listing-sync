@@ -304,7 +304,7 @@
 		try {
 			await api.addMapping(id, inventory);
 			await queryClient.invalidateQueries({ queryKey: queryKeys.mappings });
-			toast('info', `${platformTitle(inventory)} added. Now choose how to send it.`);
+			toast('success', `${platformTitle(inventory)} added. Now choose how to send it.`);
 			publishing = true;
 		} catch (failure) {
 			addRefusal =
@@ -352,7 +352,7 @@
 			await queryClient.invalidateQueries({ queryKey: queryKeys.mappings });
 			attaching = null;
 			attachUrl = '';
-			toast('info', 'Listing attached. Teachouse checks it on its next update.');
+			toast('success', 'Listing attached. Teachouse checks it on its next update.');
 		} catch (failure) {
 			attachRefusal =
 				failure instanceof ApiFailure
@@ -367,7 +367,7 @@
 		deleting = false;
 		await queryClient.invalidateQueries({ queryKey: queryKeys.products });
 		await queryClient.invalidateQueries({ queryKey: queryKeys.mappings });
-		toast('info', 'Resource deleted.');
+		toast('success', 'Resource deleted.');
 		await goto('/resources');
 	}
 </script>

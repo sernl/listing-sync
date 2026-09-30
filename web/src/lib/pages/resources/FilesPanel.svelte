@@ -133,7 +133,10 @@
 	async function openElsewhere(file: FileView) {
 		const answer = await libraryOpenExternal(invoke, file.hash);
 		if (answer.kind !== 'ok') {
-			toast('error', answer.kind === 'refused' ? answer.detail : OPEN_UNAVAILABLE);
+			toast(
+				answer.kind === 'refused' ? 'warning' : 'error',
+				answer.kind === 'refused' ? answer.detail : OPEN_UNAVAILABLE
+			);
 		}
 	}
 
@@ -245,7 +248,7 @@
 			renaming = null;
 			fileEvent({ kind: 'settled' });
 			await queryClient.invalidateQueries({ queryKey: queryKeys.product(product) });
-			toast('info', 'File renamed.');
+			toast('success', 'File renamed.');
 		} catch (failure) {
 			fileEvent({ kind: 'failed', sentence: fileRefusal(failure, 'rename') });
 		}
@@ -262,7 +265,7 @@
 		fileEvent({ kind: 'settled' });
 		await queryClient.invalidateQueries({ queryKey: queryKeys.product(product) });
 		await queryClient.invalidateQueries({ queryKey: queryKeys.products });
-		toast('info', said);
+		toast('success', said);
 	}
 
 	function confirmFile() {

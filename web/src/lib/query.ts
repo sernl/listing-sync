@@ -92,9 +92,12 @@ export const queryKeys = {
 	orgSlug: (slug: string) => ['org-slug', slug] as const,
 	identity: ['identity'] as const,
 	/** Whether this seller takes email when a run finishes. Read on the
-	 *  preferences screen alone; the rail carries no unread badge, so
-	 *  nothing else asks. */
+	 *  preferences screen alone. */
 	notifyPreferences: ['notify-preferences'] as const,
+	/** The bell's newest twenty and the unread count. Invalidated by every
+	 *  write to the inbox, the Notifications page's included, so the badge
+	 *  and the page never disagree for longer than a refetch. */
+	bell: ['notifications', 'bell'] as const,
 	/** The seller's own picture. Read by the shell, which draws it in the top
 	 *  strip and the phone bar, and set by the preferences screen from the
 	 *  server's answer, so the tile moves without a refetch. */

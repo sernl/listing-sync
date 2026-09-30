@@ -59,13 +59,13 @@
 			.map((part) => part.trim())
 			.filter((part) => part.length > 0);
 		if (segments.length === 0) {
-			toast('error', TARGET_REFUSAL);
+			toast('warning', TARGET_REFUSAL);
 			return;
 		}
 		busy = item.id;
 		try {
 			await api.resolve(item.id, segments);
-			toast('info', 'Saved. We will use this for every new resource with this word.');
+			toast('success', 'Saved. We will use this for every new resource with this word.');
 			await refetch();
 		} catch {
 			toast('error', 'That answer was not saved. Something else may already use it.');
@@ -84,7 +84,7 @@
 		busy = item.id;
 		try {
 			await api.noCounterpart(item.id);
-			toast('info', 'Saved. That word will be left out from now on.');
+			toast('success', 'Saved. That word will be left out from now on.');
 			await refetch();
 		} finally {
 			busy = null;

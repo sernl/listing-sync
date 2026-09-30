@@ -990,7 +990,7 @@
 				const named = refusedIdentity(failure.body);
 				if (named !== null && named.id !== held.id && !stale(epoch, target)) {
 					replaced(named, null);
-					toast('error', 'A different guide uses this address now. Nothing was deleted.');
+					toast('warning', 'A different guide uses this address now. Nothing was deleted.');
 					return;
 				}
 			}
@@ -1067,7 +1067,7 @@
 			const to = written === null ? body.length : written.selectionEnd;
 			const inserted = insertAt(body, at, to, imageMarkdown(handle));
 			applyMark({ text: inserted.text, start: inserted.caret, end: inserted.caret });
-			toast('info', 'Picture added. It goes live when you publish.');
+			toast('success', 'Picture added. It goes live when you publish.');
 		} catch (failure) {
 			toast(
 				'error',

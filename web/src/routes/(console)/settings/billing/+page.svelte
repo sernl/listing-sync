@@ -266,7 +266,7 @@
 		resuming = true;
 		try {
 			settled(await api.billingResume());
-			toast('info', 'Your plan will renew as before.');
+			toast('success', 'Your plan will renew as before.');
 		} catch (failure) {
 			toast(
 				'error',
@@ -710,7 +710,7 @@
 	onCancelled={(view) => {
 		settled(view);
 		cancelOpen = false;
-		toast('info', 'Your plan is cancelled. It keeps working until the end date.');
+		toast('success', 'Your plan is cancelled. It keeps working until the end date.');
 	}}
 />
 

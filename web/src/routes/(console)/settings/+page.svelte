@@ -93,7 +93,7 @@
 			queryClient.setQueryData(queryKeys.org, stored);
 			orgDraft = stored.name;
 			orgRefusal = null;
-			toast('info', 'Account name saved.');
+			toast('success', 'Account name saved.');
 		},
 		onError: (failure: Error) => {
 			// A 422 is about the name in the field, so it is answered beside the
@@ -159,9 +159,9 @@
 			notifyDraft = null;
 			marketingDraft = null;
 			if ('notify_email' in change) {
-				toast('info', stored.notify_email ? 'Emails on.' : 'Emails off.');
+				toast('success', stored.notify_email ? 'Emails on.' : 'Emails off.');
 			} else {
-				toast('info', stored.marketing_email ? 'News and tips on.' : 'News and tips off.');
+				toast('success', stored.marketing_email ? 'News and tips on.' : 'News and tips off.');
 			}
 		},
 		onError: () => {
@@ -201,7 +201,7 @@
 			queryClient.setQueryData(queryKeys.org, stored);
 			slugDraft = stored.slug ?? '';
 			slugRefusal = null;
-			toast('info', 'Account name saved.');
+			toast('success', 'Account name saved.');
 		},
 		onError: (failure: Error) => {
 			// A 409 says another organisation holds the name and a 422 says the
@@ -268,7 +268,7 @@
 			if (stored) {
 				displayName = stored.name;
 			}
-			toast('info', 'Display name saved.');
+			toast('success', 'Display name saved.');
 		},
 		onError: (failure: Error) => {
 			toast('error', refusalOf(failure, 'The display name was not saved.'));
@@ -338,7 +338,7 @@
 			}
 			const stored = await api.setAvatar(handle);
 			queryClient.setQueryData(queryKeys.profile, stored);
-			toast('info', 'Profile picture saved.');
+			toast('success', 'Profile picture saved.');
 		} catch (failure) {
 			avatarRefused = avatarRefusal(failure);
 		} finally {
@@ -351,7 +351,7 @@
 		onSuccess: (stored: ProfileView) => {
 			queryClient.setQueryData(queryKeys.profile, stored);
 			avatarRefused = null;
-			toast('info', 'Profile picture removed.');
+			toast('success', 'Profile picture removed.');
 		},
 		onError: () => {
 			toast('error', NOT_REMOVED);
@@ -375,7 +375,7 @@
 		onSuccess: async () => {
 			newPasskeyLabel = '';
 			await queryClient.invalidateQueries({ queryKey: queryKeys.passkeys });
-			toast('info', 'Passkey added.');
+			toast('success', 'Passkey added.');
 		},
 		onError: (failure: Error) => {
 			const code = failure instanceof AuthFailure ? failure.code : undefined;
@@ -385,7 +385,7 @@
 				return;
 			}
 			if (code === ALREADY_REGISTERED) {
-				toast('error', 'That device already has a passkey for this account.');
+				toast('warning', 'That device already has a passkey for this account.');
 				return;
 			}
 			toast('error', refusalOf(failure, 'The passkey was not added. Try again.'));
@@ -396,7 +396,7 @@
 		mutationFn: (id: string) => deletePasskey(id),
 		onSuccess: async () => {
 			await queryClient.invalidateQueries({ queryKey: queryKeys.passkeys });
-			toast('info', 'Passkey removed.');
+			toast('success', 'Passkey removed.');
 		},
 		onError: (failure: Error) => {
 			toast('error', refusalOf(failure, 'The passkey was not removed. Try again.'));
@@ -443,7 +443,7 @@
 	const endingSignIn = createMutation(() => ({
 		mutationFn: (token: string) => revokeBrowserSession(token),
 		onSuccess: async () => {
-			toast('info', 'That browser is signed out.');
+			toast('success', 'That browser is signed out.');
 			await queryClient.invalidateQueries({ queryKey: queryKeys.browserSessions });
 		},
 		onError: () => {
@@ -489,7 +489,7 @@
 	const withdrawing = createMutation(() => ({
 		mutationFn: (marketplace: Marketplace) => api.withdrawConsent(marketplace),
 		onSuccess: async () => {
-			toast('info', 'Permission withdrawn.');
+			toast('success', 'Permission withdrawn.');
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: queryKeys.consents }),
 				queryClient.invalidateQueries({ queryKey: queryKeys.connections })

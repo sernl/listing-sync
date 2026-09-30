@@ -189,7 +189,18 @@ async fn a_protected_route_without_a_session_is_a_structured_401() {
 async fn every_notification_route_is_behind_the_session() {
     for (method, path) in [
         ("GET", "/v1/notifications"),
+        ("POST", "/v1/notifications"),
         ("POST", "/v1/notifications/read"),
+        ("POST", "/v1/notifications/read-all"),
+        ("POST", "/v1/notifications/dismiss-read"),
+        (
+            "POST",
+            "/v1/notifications/0b0b0b0b-0b0b-0b0b-0b0b-0b0b0b0b0b0b/read",
+        ),
+        (
+            "DELETE",
+            "/v1/notifications/0b0b0b0b-0b0b-0b0b-0b0b-0b0b0b0b0b0b",
+        ),
         ("GET", "/v1/notifications/preferences"),
         ("PATCH", "/v1/notifications/preferences"),
     ] {

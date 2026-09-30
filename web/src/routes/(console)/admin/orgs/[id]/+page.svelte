@@ -68,7 +68,7 @@
 		mutationFn: (grant: string) => api.revokeGrant(orgId, grant),
 		onSuccess: async () => {
 			await reload();
-			toast('info', 'Grant revoked. The account falls back to its next strongest grant.');
+			toast('success', 'Grant revoked. The account falls back to its next strongest grant.');
 		},
 		onError: (failure: Error) => toast('error', refusalOf(failure, 'The grant was not revoked.'))
 	}));

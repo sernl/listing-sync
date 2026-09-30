@@ -836,6 +836,24 @@ impl NotificationKind {
     pub const ALL: [Self; 3] = [Self::Sync, Self::Migration, Self::Import];
 }
 
+/// How a notice reads at a glance: the colour of its toast, and of its dot in
+/// the bell and the inbox. A finished run takes the tone of its worst outcome
+/// ([`NotificationCounts::tone`]); a notice the console posted carries the
+/// tone of the toast it was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NoticeTone {
+    Success,
+    Info,
+    Warning,
+    Error,
+}
+
+impl NoticeTone {
+    /// The closed set, in a stable order, for the vocabulary generator.
+    pub const ALL: [Self; 4] = [Self::Success, Self::Info, Self::Warning, Self::Error];
+}
+
 /// How a finished run's items settled, as the console's own outcome words
 /// count them.
 ///
@@ -874,6 +892,22 @@ impl NotificationCounts {
             .saturating_add(self.ambiguous)
             .saturating_add(self.skipped)
             .saturating_add(self.blocked)
+    }
+
+    /// The tone a finished run reads in: an error where anything failed, a
+    /// warning where anything needs a look, a success where something went
+    /// through, and plain information for a run that changed nothing.
+    #[must_use]
+    pub const fn tone(self) -> NoticeTone {
+        if self.failed > 0 {
+            NoticeTone::Error
+        } else if self.ambiguous > 0 || self.blocked > 0 || self.degraded > 0 {
+            NoticeTone::Warning
+        } else if self.succeeded > 0 {
+            NoticeTone::Success
+        } else {
+            NoticeTone::Info
+        }
     }
 }
 

@@ -170,6 +170,19 @@ export const NOTIFICATION_KINDS: readonly NotificationKind[] = [
   "import",
 ];
 
+export type NoticeTone =
+  | "success"
+  | "info"
+  | "warning"
+  | "error";
+
+export const NOTICE_TONES: readonly NoticeTone[] = [
+  "success",
+  "info",
+  "warning",
+  "error",
+];
+
 export type LabelColour =
   | "slate"
   | "red"

@@ -136,7 +136,7 @@
 			form = blank(form.kind);
 			touched = {};
 			tried = false;
-			toast('info', `${saved.name} saved. Stripe has its coupon.`);
+			toast('success', `${saved.name} saved. Stripe has its coupon.`);
 		},
 		onError: (failure: Error) =>
 			toast('error', failure instanceof ApiFailure ? failure.message : 'It was not saved.')
@@ -155,7 +155,7 @@
 		onSuccess: async (ended: DiscountView) => {
 			endingId = null;
 			await queryClient.invalidateQueries({ queryKey: queryKeys.adminPricing });
-			toast('info', `${ended.name} ended. Checkouts stop applying it now.`);
+			toast('success', `${ended.name} ended. Checkouts stop applying it now.`);
 		},
 		onError: (failure: Error) => {
 			endingId = null;

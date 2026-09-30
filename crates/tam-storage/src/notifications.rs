@@ -1,8 +1,16 @@
-//! The seller's completion inbox, and who wants it by mail.
+//! The seller's inbox, and who wants it by mail.
 //!
-//! The row is written in the transaction that settles the run, so the console
-//! fills whether or not a mail relay is configured and whether or not the
-//! seller takes email. The outbox row beside it is only the email channel.
+//! Two sources fill it. A finished run's row is written in the transaction
+//! that settles the run, so the console fills whether or not a mail relay is
+//! configured and whether or not the seller takes email; the outbox row beside
+//! it is only the email channel. A notice is a toast the console showed and
+//! the seller never looked at, posted back so the bell can say what they
+//! missed; it belongs to that seller alone.
+//!
+//! Every read and write of the inbox pins the organisation and the user
+//! (`pin_reader`), because the table's policy fences a notice on
+//! `app.current_user` as well as `app.current_org`. A path that pins no user
+//! sees the organisation's run rows and nothing else.
 //!
 //! Nothing here holds an address. `app_user.email` carries
 //! `{subject}@subject.invalid` for every self-serve signup, and the real one is
@@ -11,8 +19,8 @@
 
 use sqlx::{PgPool, Postgres, Transaction};
 use tam_types::{
-    InventoryId, JobSettledNotice, NotificationCounts, NotificationKind, OrgId, Timestamp, UserId,
-    Uuid,
+    InventoryId, JobSettledNotice, NoticeTone, NotificationCounts, NotificationKind, OrgId,
+    Timestamp, UserId, Uuid,
 };
 
 use crate::codec::{
@@ -26,20 +34,54 @@ use crate::{pin_org, StorageError};
 /// table at `docs/design/schema.md` already names.
 pub const JOB_SETTLED_TOPIC: &str = "email.job_settled";
 
-/// One completion as the console reads it.
+/// What a row is about: a finished run, or a notice the console posted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotificationSource {
+    Run {
+        kind: NotificationKind,
+        /// The `sync_request` or the `import_batch` the run belongs to.
+        subject: Uuid,
+        /// The inventory written to, and null for an import. The marketplace
+        /// is derived from it rather than stored beside it in this record, so
+        /// the two cannot disagree in a reader's hands.
+        inventory: Option<InventoryId>,
+        counts: NotificationCounts,
+    },
+    Notice {
+        tone: NoticeTone,
+        title: String,
+        body: String,
+    },
+}
+
+impl NotificationSource {
+    /// The tone the row reads in: a run's worst outcome, or the notice's own.
+    #[must_use]
+    pub const fn tone(&self) -> NoticeTone {
+        match self {
+            Self::Run { counts, .. } => counts.tone(),
+            Self::Notice { tone, .. } => *tone,
+        }
+    }
+}
+
+/// One inbox row as the console reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotificationRecord {
     pub id: Uuid,
-    pub kind: NotificationKind,
-    /// The `sync_request` or the `import_batch` the run belongs to.
-    pub subject: Uuid,
-    /// The inventory written to, and null for an import. The marketplace is
-    /// derived from it rather than stored beside it in this record, so the two
-    /// cannot disagree in a reader's hands.
-    pub inventory: Option<InventoryId>,
-    pub counts: NotificationCounts,
+    pub source: NotificationSource,
     pub created_at: Timestamp,
     pub read_at: Option<Timestamp>,
+}
+
+/// A toast the seller did not look at, as the console posts it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewNotice {
+    /// The console's own id for the toast; a second post of it is the first.
+    pub client_id: String,
+    pub tone: NoticeTone,
+    pub title: String,
+    pub body: String,
 }
 
 /// The keyset the list pages on, newest first.
@@ -57,6 +99,77 @@ pub struct Recipient {
     pub subject: Uuid,
 }
 
+/// One row as the list query returns it, before it is checked into a record.
+struct NotificationRow {
+    id: uuid::Uuid,
+    kind: String,
+    subject_id: Option<uuid::Uuid>,
+    inventory: Option<String>,
+    counts: Option<serde_json::Value>,
+    tone: Option<String>,
+    title: Option<String>,
+    body: Option<String>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    read_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl NotificationRow {
+    fn record(self) -> Result<NotificationRecord, StorageError> {
+        let source = if self.kind == NOTICE_KIND {
+            let (Some(tone), Some(title), Some(body)) = (self.tone, self.title, self.body) else {
+                return Err(StorageError::CorruptRow {
+                    reason: "a notice without its tone, title or body".to_owned(),
+                });
+            };
+            NotificationSource::Notice {
+                tone: tone_from_db(&tone)?,
+                title,
+                body,
+            }
+        } else {
+            let (Some(subject), Some(counts)) = (self.subject_id, self.counts) else {
+                return Err(StorageError::CorruptRow {
+                    reason: "a finished run without its subject or counts".to_owned(),
+                });
+            };
+            NotificationSource::Run {
+                kind: kind_from_db(&self.kind)?,
+                subject: uuid_from_db(subject),
+                inventory: self
+                    .inventory
+                    .as_deref()
+                    .map(inventory_from_db)
+                    .transpose()?,
+                counts: counts_from_db(counts)?,
+            }
+        };
+        Ok(NotificationRecord {
+            id: uuid_from_db(self.id),
+            source,
+            created_at: timestamp_from_db(self.created_at),
+            read_at: self.read_at.map(timestamp_from_db),
+        })
+    }
+}
+
+/// The `kind` a notice row carries.
+const NOTICE_KIND: &str = "notice";
+
+/// Pins the organisation and the user the inbox policy fences on, in the
+/// transaction every statement below runs in.
+async fn pin_reader(
+    tx: &mut Transaction<'_, Postgres>,
+    org: OrgId,
+    user: UserId,
+) -> Result<(), StorageError> {
+    pin_org(tx, org).await?;
+    let user_text = uuid_to_db(user.0).to_string();
+    sqlx::query!("SELECT set_config('app.current_user', $1, true)", user_text)
+        .fetch_one(&mut **tx)
+        .await?;
+    Ok(())
+}
+
 pub struct NotificationRepo {
     pool: PgPool,
 }
@@ -67,15 +180,17 @@ impl NotificationRepo {
         Self { pool }
     }
 
-    /// The organisation's completions, newest first.
+    /// What this user may read of the organisation's inbox, newest first:
+    /// every finished run, and their own notices. A dismissed row is gone.
     pub async fn list(
         &self,
         org: OrgId,
+        user: UserId,
         cursor: Option<NotificationCursor>,
         limit: i64,
     ) -> Result<Vec<NotificationRecord>, StorageError> {
         let mut tx = self.pool.begin().await?;
-        pin_org(&mut tx, org).await?;
+        pin_reader(&mut tx, org, user).await?;
         let (after_at, after_id) = match cursor {
             Some(cursor) => (
                 Some(timestamp_to_db(cursor.created_at)?),
@@ -83,10 +198,12 @@ impl NotificationRepo {
             ),
             None => (None, None),
         };
-        let rows = sqlx::query!(
-            "SELECT id, kind, subject_id, inventory, counts, created_at, read_at \
+        let rows = sqlx::query_as!(
+            NotificationRow,
+            "SELECT id, kind, subject_id, inventory, counts, tone, title, body, \
+                    created_at, read_at \
                FROM notification \
-              WHERE org_id = $1 \
+              WHERE org_id = $1 AND dismissed_at IS NULL \
                 AND ($2::timestamptz IS NULL OR (created_at, id) < ($2, $3)) \
               ORDER BY created_at DESC, id DESC \
               LIMIT $4",
@@ -98,38 +215,38 @@ impl NotificationRepo {
         .fetch_all(&mut *tx)
         .await?;
         tx.commit().await?;
-        rows.into_iter()
-            .map(|row| {
-                Ok(NotificationRecord {
-                    id: uuid_from_db(row.id),
-                    kind: kind_from_db(&row.kind)?,
-                    subject: uuid_from_db(row.subject_id),
-                    inventory: row
-                        .inventory
-                        .as_deref()
-                        .map(inventory_from_db)
-                        .transpose()?,
-                    counts: counts_from_db(row.counts)?,
-                    created_at: timestamp_from_db(row.created_at),
-                    read_at: row.read_at.map(timestamp_from_db),
-                })
-            })
-            .collect()
+        rows.into_iter().map(NotificationRow::record).collect()
     }
 
-    /// Marks every unread completion at or before the named one read, in the
-    /// same order the list pages in.
+    /// How many of the rows `list` would return are unread.
+    pub async fn unread(&self, org: OrgId, user: UserId) -> Result<u64, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_reader(&mut tx, org, user).await?;
+        let count = sqlx::query_scalar!(
+            "SELECT count(*) AS \"count!\" FROM notification \
+              WHERE org_id = $1 AND read_at IS NULL AND dismissed_at IS NULL",
+            uuid_to_db(org.0),
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(u64::try_from(count).unwrap_or(0))
+    }
+
+    /// Marks every unread row at or before the named one read, in the same
+    /// order the list pages in.
     ///
-    /// `None` where this organisation holds no such row, which is the answer an
+    /// `None` where this reader holds no such row, which is the answer an
     /// unknown id and another tenant's id both get.
     pub async fn mark_read_through(
         &self,
         org: OrgId,
+        user: UserId,
         through: Uuid,
         at: Timestamp,
     ) -> Result<Option<u64>, StorageError> {
         let mut tx = self.pool.begin().await?;
-        pin_org(&mut tx, org).await?;
+        pin_reader(&mut tx, org, user).await?;
         let named = sqlx::query!(
             "SELECT created_at FROM notification WHERE org_id = $1 AND id = $2",
             uuid_to_db(org.0),
@@ -154,6 +271,156 @@ impl NotificationRepo {
         .await?;
         tx.commit().await?;
         Ok(Some(marked.rows_affected()))
+    }
+
+    /// Marks one row read. `None` where this reader holds no such row, or
+    /// only a dismissed one; `Some(false)` where it was read already.
+    pub async fn mark_read(
+        &self,
+        org: OrgId,
+        user: UserId,
+        id: Uuid,
+        at: Timestamp,
+    ) -> Result<Option<bool>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_reader(&mut tx, org, user).await?;
+        let row = sqlx::query!(
+            "SELECT read_at FROM notification \
+              WHERE org_id = $1 AND id = $2 AND dismissed_at IS NULL \
+                FOR UPDATE",
+            uuid_to_db(org.0),
+            uuid_to_db(id),
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(row) = row else {
+            tx.commit().await?;
+            return Ok(None);
+        };
+        if row.read_at.is_some() {
+            tx.commit().await?;
+            return Ok(Some(false));
+        }
+        sqlx::query!(
+            "UPDATE notification SET read_at = $3 WHERE org_id = $1 AND id = $2",
+            uuid_to_db(org.0),
+            uuid_to_db(id),
+            timestamp_to_db(at)?,
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(Some(true))
+    }
+
+    /// Marks everything this reader has unread, read.
+    pub async fn mark_all_read(
+        &self,
+        org: OrgId,
+        user: UserId,
+        at: Timestamp,
+    ) -> Result<u64, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_reader(&mut tx, org, user).await?;
+        let marked = sqlx::query!(
+            "UPDATE notification SET read_at = $2 \
+              WHERE org_id = $1 AND read_at IS NULL AND dismissed_at IS NULL",
+            uuid_to_db(org.0),
+            timestamp_to_db(at)?,
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(marked.rows_affected())
+    }
+
+    /// Takes one row out of the list. Idempotent: a row dismissed already
+    /// answers as dismissed. `false` where this reader holds no such row.
+    pub async fn dismiss(
+        &self,
+        org: OrgId,
+        user: UserId,
+        id: Uuid,
+        at: Timestamp,
+    ) -> Result<bool, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_reader(&mut tx, org, user).await?;
+        let touched = sqlx::query!(
+            "UPDATE notification SET dismissed_at = coalesce(dismissed_at, $3) \
+              WHERE org_id = $1 AND id = $2",
+            uuid_to_db(org.0),
+            uuid_to_db(id),
+            timestamp_to_db(at)?,
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(touched.rows_affected() > 0)
+    }
+
+    /// Takes every read row out of the list, and answers how many went.
+    pub async fn dismiss_read(
+        &self,
+        org: OrgId,
+        user: UserId,
+        at: Timestamp,
+    ) -> Result<u64, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_reader(&mut tx, org, user).await?;
+        let gone = sqlx::query!(
+            "UPDATE notification SET dismissed_at = $2 \
+              WHERE org_id = $1 AND read_at IS NOT NULL AND dismissed_at IS NULL",
+            uuid_to_db(org.0),
+            timestamp_to_db(at)?,
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(gone.rows_affected())
+    }
+
+    /// Keeps a toast this user did not look at. A second post of the same
+    /// `client_id` writes nothing and answers the row the first one wrote,
+    /// so two tabs, or a retry after a timeout, leave one notice.
+    pub async fn post_notice(
+        &self,
+        org: OrgId,
+        user: UserId,
+        notice: &NewNotice,
+        at: Timestamp,
+    ) -> Result<NotificationRecord, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_reader(&mut tx, org, user).await?;
+        sqlx::query!(
+            "INSERT INTO notification \
+             (org_id, id, kind, user_id, tone, title, body, client_id, created_at) \
+             VALUES ($1, $2, 'notice', $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (org_id, user_id, client_id) WHERE client_id IS NOT NULL DO NOTHING",
+            uuid_to_db(org.0),
+            uuid::Uuid::new_v4(),
+            uuid_to_db(user.0),
+            tone_to_db(notice.tone),
+            notice.title,
+            notice.body,
+            notice.client_id,
+            timestamp_to_db(at)?,
+        )
+        .execute(&mut *tx)
+        .await?;
+        let row = sqlx::query_as!(
+            NotificationRow,
+            "SELECT id, kind, subject_id, inventory, counts, tone, title, body, \
+                    created_at, read_at \
+               FROM notification \
+              WHERE org_id = $1 AND user_id = $2 AND client_id = $3",
+            uuid_to_db(org.0),
+            uuid_to_db(user.0),
+            notice.client_id,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        row.record()
     }
 
     /// Whether this user wants the mail. `None` where this organisation holds
@@ -383,4 +650,25 @@ fn counts_from_db(raw: serde_json::Value) -> Result<NotificationCounts, StorageE
     serde_json::from_value(raw).map_err(|error| StorageError::CorruptRow {
         reason: format!("stored notification counts do not parse: {error}"),
     })
+}
+
+const fn tone_to_db(tone: NoticeTone) -> &'static str {
+    match tone {
+        NoticeTone::Success => "success",
+        NoticeTone::Info => "info",
+        NoticeTone::Warning => "warning",
+        NoticeTone::Error => "error",
+    }
+}
+
+fn tone_from_db(raw: &str) -> Result<NoticeTone, StorageError> {
+    match raw {
+        "success" => Ok(NoticeTone::Success),
+        "info" => Ok(NoticeTone::Info),
+        "warning" => Ok(NoticeTone::Warning),
+        "error" => Ok(NoticeTone::Error),
+        other => Err(StorageError::CorruptRow {
+            reason: format!("unknown notice tone {other:?}"),
+        }),
+    }
 }

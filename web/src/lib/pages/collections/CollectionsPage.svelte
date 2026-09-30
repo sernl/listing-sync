@@ -74,7 +74,7 @@
 			description = '';
 			refusal = null;
 			await queryClient.invalidateQueries({ queryKey: COLLECTIONS_KEY });
-			toast('info', `Created ${stored.name}.`);
+			toast('success', `Created ${stored.name}.`);
 		},
 		onError: (failure: Error) => {
 			if (failure instanceof ApiFailure && failure.status === 422) {
@@ -91,7 +91,7 @@
 			const gone = all.find((collection) => collection.id === id)?.name ?? 'the collection';
 			confirming = null;
 			await queryClient.invalidateQueries({ queryKey: COLLECTIONS_KEY });
-			toast('info', `Deleted ${gone}.`);
+			toast('success', `Deleted ${gone}.`);
 		},
 		onError: () => {
 			toast('error', 'We couldn’t delete the collection.');

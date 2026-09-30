@@ -127,7 +127,7 @@
 			editing = null;
 			refusal = null;
 			await refresh();
-			toast('info', `Renamed to ${stored.name}.`);
+			toast('success', `Renamed to ${stored.name}.`);
 		},
 		onError: (failure: Error) => {
 			// A 422 is about the name in the field, so it is answered beside the
@@ -145,7 +145,7 @@
 		onSuccess: async (_answer: void, name: string) => {
 			confirming = null;
 			await refresh();
-			toast('info', `Deleted ${name}.`);
+			toast('success', `Deleted ${name}.`);
 		},
 		onError: () => {
 			toast('error', 'We couldn’t delete the label.');
@@ -283,7 +283,7 @@
 				await refresh();
 			}
 			if (done.refusal === null) {
-				toast('info', `Added ${name} to ${countLine(done.count, false)}.`);
+				toast('success', `Added ${name} to ${countLine(done.count, false)}.`);
 				newName = '';
 				picked = new Set();
 			} else {
