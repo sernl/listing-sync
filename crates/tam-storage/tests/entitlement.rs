@@ -285,8 +285,10 @@ async fn the_usage_read_counts_every_figure_from_its_own_source(pool: PgPool) {
             seed(
                 &pool,
                 org,
-                "INSERT INTO product (org_id, id, title, body, price_kind, created_at, updated_at) \
-                 VALUES ($1, gen_random_uuid(), 'A worksheet', '', 'free', now(), now())",
+                "INSERT INTO product (org_id, id, title, body, body_format, price_kind, \
+                     rights_state, created_at, updated_at) \
+                 VALUES ($1, gen_random_uuid(), 'A worksheet', '', 'markdown', 'free', \
+                     'unstated', now(), now())",
             )
             .await;
         }
