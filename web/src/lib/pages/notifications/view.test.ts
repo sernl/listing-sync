@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { NotificationCounts, NotificationView } from '$lib/api';
+import type { NotificationCounts, NotificationView, RunNotification } from '$lib/api';
 import { readState } from '$lib/pages/automations/read-state';
 import {
 	NOTHING_TO_CHANGE,
+	badgeLabel,
 	heldAfter,
 	href,
+	inboxAfter,
 	outcomes,
-	readThrough,
 	rows,
 	title,
 	unreadLine
@@ -24,9 +25,13 @@ const NONE: NotificationCounts = {
 	blocked: 0
 };
 
-function view(over: Partial<NotificationView> = {}): NotificationView {
+type RunView = NotificationView & RunNotification;
+
+function view(over: Partial<RunView> = {}): RunView {
 	return {
 		id: 'n-1',
+		tone: 'success',
+		source: 'run',
 		kind: 'sync',
 		subject_id: 'r-1',
 		inventory: 'Tes',
@@ -159,40 +164,112 @@ describe('a kind this bundle has no word for', () => {
 	});
 });
 
-describe('the read mark', () => {
-	it('reaches the newest row, which is the furthest it can reach', () => {
-		expect(
-			readThrough([view({ id: 'n-2', read_at: null }), view({ id: 'n-1', read_at: null })])
-		).toBe('n-2');
-	});
+function notice(over: Partial<NotificationView> = {}): NotificationView {
+	return {
+		id: 'k-1',
+		tone: 'warning',
+		source: 'notice',
+		title: 'That file is too big to send.',
+		body: '',
+		created_at: NOW - 5 * MINUTE,
+		read_at: null,
+		...over
+	} as NotificationView;
+}
 
-	it('posts nothing for a page whose every row is already read', () => {
-		expect(readThrough([view({ id: 'n-2', read_at: NOW }), view({ id: 'n-1', read_at: NOW })])).toBeNull();
+describe('a kept notice', () => {
+	it('says its own title and text, in its own tone, and opens nothing', () => {
+		const [row] = rows([notice({ body: 'TES takes files up to 1 GB.' })], NOW);
+		expect(row).toMatchObject({
+			tone: 'warning',
+			title: 'That file is too big to send.',
+			line: 'TES takes files up to 1 GB.',
+			href: null,
+			outcomes: [],
+			unread: true
+		});
 	});
+});
 
-	it('posts nothing for an empty inbox', () => {
-		expect(readThrough([])).toBeNull();
-	});
-
-	it('still reaches the newest row when only an older one is unread', () => {
-		expect(readThrough([view({ id: 'n-2', read_at: NOW }), view({ id: 'n-1', read_at: null })])).toBe(
-			'n-2'
+describe('the one line under a run', () => {
+	it('puts the counts in words', () => {
+		const [row] = rows([view({ counts: { ...NONE, succeeded: 19, failed: 9 } })], NOW);
+		expect(row?.line).toBe(
+			row?.outcomes.map((segment) => `${segment.count} ${segment.label}`).join(' · ')
 		);
+		expect(row?.line).toContain('19');
+	});
+
+	it('says a run that changed nothing in words', () => {
+		expect(rows([view({ counts: NONE })], NOW)[0]?.line).toBe(NOTHING_TO_CHANGE);
 	});
 });
 
 describe('the eyebrow over the list', () => {
-	it('counts what is unread on the pages loaded', () => {
-		const drawn = rows([view({ id: 'a' }), view({ id: 'b', read_at: NOW })], NOW);
-		expect(unreadLine(drawn)).toBe('1 new');
+	it('counts every unread row the seller has', () => {
+		expect(unreadLine(1)).toBe('1 new');
+		expect(unreadLine(2)).toBe('2 new');
 	});
 
 	it('says so plainly when nothing is new', () => {
-		expect(unreadLine(rows([view({ read_at: NOW })], NOW))).toBe('Nothing new');
+		expect(unreadLine(0)).toBe('Nothing new');
+	});
+});
+
+describe('the bell’s badge', () => {
+	it('draws nothing when nothing is unread', () => {
+		expect(badgeLabel(0)).toBeNull();
 	});
 
-	it('pluralises rather than printing a bare figure', () => {
-		expect(unreadLine(rows([view({ id: 'a' }), view({ id: 'b' })], NOW))).toBe('2 new');
+	it('prints the figure up to 99 and caps it past that', () => {
+		expect(badgeLabel(1)).toBe('1');
+		expect(badgeLabel(99)).toBe('99');
+		expect(badgeLabel(100)).toBe('99+');
+	});
+});
+
+describe('what a Mark read or a Dismiss does before the server answers', () => {
+	const held = {
+		notifications: [notice({ id: 'k-1' }), view({ id: 'n-1', read_at: NOW - MINUTE })],
+		unread: 5
+	};
+
+	it('marks one unread row read and takes one off the count', () => {
+		const after = inboxAfter(held, { kind: 'read', id: 'k-1', at: NOW });
+		expect(after.notifications[0]?.read_at).toBe(NOW);
+		expect(after.unread).toBe(4);
+	});
+
+	it('leaves the count alone for a row that was read already, or is not held', () => {
+		expect(inboxAfter(held, { kind: 'read', id: 'n-1', at: NOW }).unread).toBe(5);
+		expect(inboxAfter(held, { kind: 'read', id: 'gone', at: NOW }).unread).toBe(5);
+	});
+
+	it('reads everything and empties the count, even rows beyond the ones held', () => {
+		const after = inboxAfter(held, { kind: 'readAll', at: NOW });
+		expect(after.notifications.every((one) => one.read_at !== null)).toBe(true);
+		expect(after.unread).toBe(0);
+	});
+
+	it('takes a dismissed unread row off the list and the count', () => {
+		const after = inboxAfter(held, { kind: 'dismiss', id: 'k-1' });
+		expect(after.notifications.map((one) => one.id)).toEqual(['n-1']);
+		expect(after.unread).toBe(4);
+	});
+
+	it('takes a dismissed read row off the list and leaves the count', () => {
+		expect(inboxAfter(held, { kind: 'dismiss', id: 'n-1' }).unread).toBe(5);
+	});
+
+	it('takes only the read rows away on Delete read', () => {
+		const after = inboxAfter(held, { kind: 'dismissRead' });
+		expect(after.notifications.map((one) => one.id)).toEqual(['k-1']);
+		expect(after.unread).toBe(5);
+	});
+
+	it('does not mutate what it was given', () => {
+		inboxAfter(held, { kind: 'readAll', at: NOW });
+		expect(held.notifications[0]?.read_at).toBeNull();
 	});
 });
 

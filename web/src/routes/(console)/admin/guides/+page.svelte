@@ -151,7 +151,7 @@
 			// the page itself are stale in every narrowing.
 			await queryClient.invalidateQueries({ queryKey: queryKeys.guides });
 			await queryClient.invalidateQueries({ queryKey: queryKeys.guideTaxonomy });
-			toast('info', 'Guide deleted.');
+			toast('success', 'Guide deleted.');
 		},
 		onError: (failure: Error) =>
 			toast(
@@ -194,7 +194,7 @@
 		onSuccess: async (taxon, variables) => {
 			newName[variables.kind] = '';
 			await queryClient.invalidateQueries({ queryKey: queryKeys.adminGuideTaxonomy });
-			toast('info', `${taxon.name} added.`);
+			toast('success', `${taxon.name} added.`);
 		},
 		onError: (failure: Error) =>
 			toast('error', failure instanceof ApiFailure ? failure.message : 'It was not added.')

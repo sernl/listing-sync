@@ -822,10 +822,29 @@ pub fn router(state: AppState) -> Router {
             get(analytics::read_order).post(analytics::record_capture),
         )
         .route("/{version}/status", get(resources::status))
-        .route("/{version}/notifications", get(notifications::list))
+        .route(
+            "/{version}/notifications",
+            get(notifications::list).post(notifications::post_notice),
+        )
         .route(
             "/{version}/notifications/read",
             post(notifications::mark_read),
+        )
+        .route(
+            "/{version}/notifications/read-all",
+            post(notifications::mark_all_read),
+        )
+        .route(
+            "/{version}/notifications/dismiss-read",
+            post(notifications::dismiss_read),
+        )
+        .route(
+            "/{version}/notifications/{id}",
+            delete(notifications::dismiss),
+        )
+        .route(
+            "/{version}/notifications/{id}/read",
+            post(notifications::mark_one_read),
         )
         .route(
             "/{version}/notifications/preferences",

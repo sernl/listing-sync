@@ -235,7 +235,10 @@
 		const answer = await setLibrarySettings(invoke, keep);
 		saving = false;
 		if (answer.kind !== 'ok') {
-			toast('error', answer.kind === 'refused' ? answer.detail : NOT_KEEPING_SENTENCE);
+			toast(
+				answer.kind === 'refused' ? 'warning' : 'error',
+				answer.kind === 'refused' ? answer.detail : NOT_KEEPING_SENTENCE
+			);
 			await load();
 			return;
 		}
@@ -252,9 +255,12 @@
 		const answer = await libraryRemove(invoke, hash);
 		removing = null;
 		if (answer.kind !== 'ok') {
-			toast('error', answer.kind === 'refused' ? answer.detail : NOT_KEEPING_SENTENCE);
+			toast(
+				answer.kind === 'refused' ? 'warning' : 'error',
+				answer.kind === 'refused' ? answer.detail : NOT_KEEPING_SENTENCE
+			);
 		} else {
-			toast('info', `"${name}" was removed from this device.`);
+			toast('success', `"${name}" was removed from this device.`);
 		}
 		await load();
 	}
@@ -267,7 +273,7 @@
 		opening = null;
 		if (answer.kind !== 'ok') {
 			toast(
-				'error',
+				answer.kind === 'refused' ? 'warning' : 'error',
 				answer.kind === 'refused'
 					? 'This device couldn’t open that file in another app.'
 					: NOT_KEEPING_SENTENCE
@@ -280,11 +286,11 @@
 	 *  reads "Waiting for…" until then. */
 	async function get(hash: string, name: string) {
 		if (thisDevice === null) {
-			toast('error', 'This device isn’t connected yet, so it can’t get files. Try again soon.');
+			toast('warning', 'This device isn’t connected yet, so it can’t get files. Try again soon.');
 			return;
 		}
 		if (local.state !== 'read') {
-			toast('error', 'This device’s files haven’t loaded, so it can’t receive files yet.');
+			toast('warning', 'This device’s files haven’t loaded, so it can’t receive files yet.');
 			return;
 		}
 		asking = hash;

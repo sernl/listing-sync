@@ -275,7 +275,7 @@
 		anchor.download = `item-${detail.item.slice(0, 8)}.json`;
 		anchor.click();
 		URL.revokeObjectURL(url);
-		toast('info', 'These steps were downloaded.');
+		toast('success', 'These steps were downloaded.');
 	}
 
 	/** This run, while a Delete is being confirmed for it, or null while none

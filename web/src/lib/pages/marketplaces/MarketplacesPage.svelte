@@ -255,33 +255,33 @@
 				return;
 			}
 			if (outcome.kind === 'done') {
-				toast('info', `${name} is connected on this device.`);
+				toast('success', `${name} is connected on this device.`);
 			} else if (outcome.kind === 'signedOut') {
 				// The application refused before opening anything, because this
 				// machine was signed out from the console. The same sentence the
 				// phone's return leg carries, so the two surfaces say one thing
 				// about one state.
-				toast('error', connectSignedOut(marketplace).message);
+				toast('warning', connectSignedOut(marketplace).message);
 			} else if (outcome.kind === 'unsupported') {
-				toast('error', APP_CANNOT_CONNECT);
+				toast('warning', APP_CANNOT_CONNECT);
 			} else if (outcome.kind === 'refused') {
-				toast('error', outcome.detail);
+				toast('warning', outcome.detail);
 			} else if (outcome.kind === 'consentRequired') {
 				// The application read the record itself and refused in front of
 				// the password: the grant was withdrawn since this page read it.
-				toast('error', connectConsentRequired(marketplace).message);
+				toast('warning', connectConsentRequired(marketplace).message);
 			} else if (outcome.kind === 'boundElsewhere') {
 				// The sign-in worked and the server refused the shop: another
 				// account holds it, and nothing on this machine changes that.
 				// Kept on the page as well as said in a toast, because the
 				// remedy is a person and a toast is gone in seconds.
 				boundElsewhere = marketplace;
-				toast('error', connectBoundElsewhere(marketplace).message);
+				toast('warning', connectBoundElsewhere(marketplace).message);
 			} else {
 				// Unreachable from this page, which offers the command only where
 				// there is an invoker. Said rather than swallowed, because a
 				// silent button is the failure this whole change is fixing.
-				toast('error', `Connect ${name} from the Teachouse app on your computer.`);
+				toast('warning', `Connect ${name} from the Teachouse app on your computer.`);
 			}
 			await Promise.all([loadLocalSessions(), refetchConnections()]);
 		},

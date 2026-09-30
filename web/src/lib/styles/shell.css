@@ -217,6 +217,8 @@
    the page — the search this console's board reads its query from, the
    marketplace dots, the create action, and the account card. */
 .top {
+	/* The avatar's side, which the bell beside it matches. */
+	--avatar-size: 36px;
 	display: flex;
 	align-items: center;
 	gap: 12px;
@@ -332,6 +334,12 @@
 	gap: 9px;
 	min-width: 0;
 	color: inherit;
+}
+
+.account .avatar {
+	width: var(--avatar-size);
+	height: var(--avatar-size);
+	border-radius: 10px;
 }
 
 .avatar {

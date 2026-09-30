@@ -14,19 +14,55 @@ use tam_domain::{
 };
 use tam_marketplace::{IdempotencyKey, RemoteLifecycle};
 use tam_storage::{
-    settle_if_complete, JobRepo, MappingRepo, NewJob, NewJobItem, NotificationRepo, ProductRepo,
+    settle_if_complete, JobRepo, MappingRepo, NewJob, NewJobItem, NewNotice, NotificationRecord,
+    NotificationRepo, NotificationSource, ProductRepo,
 };
 use tam_types::{
     Actor, ContentHash, CopyFormat, FileBytes, FileId, FileKind, FileRole, InventoryId, JobId,
-    ListingCopy, MappingId, NotificationCounts, NotificationKind, OrgId, PayloadSet, PriceIntent,
-    PriceRule, ProductFile, ProductId, ScanOutcome, Stamp, SystemComponent, Timestamp, Title,
-    UserId, Uuid,
+    ListingCopy, MappingId, NoticeTone, NotificationCounts, NotificationKind, OrgId, PayloadSet,
+    PriceIntent, PriceRule, ProductFile, ProductId, ScanOutcome, Stamp, SystemComponent, Timestamp,
+    Title, UserId, Uuid,
 };
 
 const T0: Timestamp = Timestamp(1_756_000_000_000);
 const REQUEST: Uuid = Uuid([0x71; 16]);
 const CREATE_JOB: JobId = JobId(Uuid([0x81; 16]));
 const REMOVE_JOB: JobId = JobId(Uuid([0x82; 16]));
+
+/// Who reads the inbox in the tests that are about runs. A run row is the
+/// organisation's and names no user, so any pinned user reads it; this one
+/// need not exist.
+const READER: UserId = UserId(Uuid([0x99; 16]));
+
+/// A finished run's fields, read out of a row the test knows is a run.
+struct Run {
+    kind: NotificationKind,
+    subject: Uuid,
+    inventory: Option<InventoryId>,
+    counts: NotificationCounts,
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+fn run_of(record: &NotificationRecord) -> Run {
+    match &record.source {
+        NotificationSource::Run {
+            kind,
+            subject,
+            inventory,
+            counts,
+        } => Some(Run {
+            kind: *kind,
+            subject: *subject,
+            inventory: *inventory,
+            counts: *counts,
+        }),
+        NotificationSource::Notice { .. } => None,
+    }
+    .expect("the row is a finished run")
+}
 
 fn db_uuid(id: Uuid) -> uuid::Uuid {
     uuid::Uuid::from_bytes(id.0)
@@ -296,18 +332,23 @@ async fn a_settled_sync_writes_one_notification_and_one_message(app: PgPool) {
     );
 
     let rows = NotificationRepo::new(app.clone())
-        .list(tenant.org, None, 10)
+        .list(tenant.org, READER, None, 10)
         .await
         .expect("the inbox is readable");
     assert_eq!(rows.len(), 1, "one run, one row");
-    assert_eq!(rows[0].kind, NotificationKind::Sync);
+    assert_eq!(run_of(&rows[0]).kind, NotificationKind::Sync);
     assert_eq!(
-        rows[0].subject, REQUEST,
+        run_of(&rows[0]).subject,
+        REQUEST,
         "the row names the request the seller asked for, not the job that finished"
     );
-    assert_eq!(rows[0].inventory, Some(InventoryId::Tpt), "the target");
     assert_eq!(
-        rows[0].counts,
+        run_of(&rows[0]).inventory,
+        Some(InventoryId::Tpt),
+        "the target"
+    );
+    assert_eq!(
+        run_of(&rows[0]).counts,
         NotificationCounts {
             succeeded: 2,
             ..NotificationCounts::default()
@@ -331,7 +372,7 @@ async fn a_migration_notifies_once_its_second_leg_settles(app: PgPool) {
     let notifications = NotificationRepo::new(app.clone());
     assert!(
         notifications
-            .list(tenant.org, None, 10)
+            .list(tenant.org, READER, None, 10)
             .await
             .expect("the inbox is readable")
             .is_empty(),
@@ -344,14 +385,14 @@ async fn a_migration_notifies_once_its_second_leg_settles(app: PgPool) {
 
     settle_job(&engine, tenant.org, REMOVE_JOB, "failed").await;
     let rows = notifications
-        .list(tenant.org, None, 10)
+        .list(tenant.org, READER, None, 10)
         .await
         .expect("the inbox is readable");
     assert_eq!(rows.len(), 1, "two jobs, one run, one row");
-    assert_eq!(rows[0].kind, NotificationKind::Migration);
-    assert_eq!(rows[0].subject, REQUEST);
+    assert_eq!(run_of(&rows[0]).kind, NotificationKind::Migration);
+    assert_eq!(run_of(&rows[0]).subject, REQUEST);
     assert_eq!(
-        rows[0].counts,
+        run_of(&rows[0]).counts,
         NotificationCounts {
             succeeded: 2,
             failed: 1,
@@ -375,7 +416,7 @@ async fn the_legs_may_settle_in_either_order(app: PgPool) {
     settle_job(&engine, tenant.org, REMOVE_JOB, "failed").await;
     assert!(
         NotificationRepo::new(app.clone())
-            .list(tenant.org, None, 10)
+            .list(tenant.org, READER, None, 10)
             .await
             .expect("the inbox is readable")
             .is_empty(),
@@ -384,12 +425,12 @@ async fn the_legs_may_settle_in_either_order(app: PgPool) {
 
     settle_job(&engine, tenant.org, CREATE_JOB, "succeeded").await;
     let rows = NotificationRepo::new(app.clone())
-        .list(tenant.org, None, 10)
+        .list(tenant.org, READER, None, 10)
         .await
         .expect("the inbox is readable");
     assert_eq!(rows.len(), 1);
     assert_eq!(
-        rows[0].counts,
+        run_of(&rows[0]).counts,
         NotificationCounts {
             succeeded: 2,
             failed: 1,
@@ -415,7 +456,7 @@ async fn a_job_outside_a_request_keeps_the_message_it_always_had(app: PgPool) {
     );
     assert!(
         NotificationRepo::new(app.clone())
-            .list(tenant.org, None, 10)
+            .list(tenant.org, READER, None, 10)
             .await
             .expect("the inbox is readable")
             .is_empty(),
@@ -445,13 +486,16 @@ async fn a_run_that_changed_nothing_fills_the_inbox_and_sends_no_mail(app: PgPoo
         .expect("the import records");
 
     let rows = NotificationRepo::new(app.clone())
-        .list(tenant.org, None, 10)
+        .list(tenant.org, READER, None, 10)
         .await
         .expect("the inbox is readable");
     assert_eq!(rows.len(), 1, "the console still says the run finished");
-    assert!(rows[0].counts.is_empty(), "and that it changed nothing");
     assert!(
-        rows[0].inventory.is_none(),
+        run_of(&rows[0]).counts.is_empty(),
+        "and that it changed nothing"
+    );
+    assert!(
+        run_of(&rows[0]).inventory.is_none(),
         "an import writes to no marketplace"
     );
     assert!(
@@ -492,16 +536,16 @@ async fn marking_read_is_idempotent_and_reaches_backwards(app: PgPool) {
         .expect("the second import records");
 
     let rows = notifications
-        .list(tenant.org, None, 10)
+        .list(tenant.org, READER, None, 10)
         .await
         .expect("the inbox is readable");
     assert_eq!(rows.len(), 2, "two imports, two rows");
-    assert_eq!(rows[0].subject, Uuid([0xA2; 16]), "newest first");
+    assert_eq!(run_of(&rows[0]).subject, Uuid([0xA2; 16]), "newest first");
 
     let newest = rows[0].id;
     assert_eq!(
         notifications
-            .mark_read_through(tenant.org, newest, Timestamp(T0.0 + 2_000))
+            .mark_read_through(tenant.org, READER, newest, Timestamp(T0.0 + 2_000))
             .await
             .expect("the mark runs"),
         Some(2),
@@ -509,7 +553,7 @@ async fn marking_read_is_idempotent_and_reaches_backwards(app: PgPool) {
     );
     assert_eq!(
         notifications
-            .mark_read_through(tenant.org, newest, Timestamp(T0.0 + 3_000))
+            .mark_read_through(tenant.org, READER, newest, Timestamp(T0.0 + 3_000))
             .await
             .expect("the mark runs again"),
         Some(0),
@@ -517,7 +561,7 @@ async fn marking_read_is_idempotent_and_reaches_backwards(app: PgPool) {
     );
     assert_eq!(
         notifications
-            .mark_read_through(tenant.org, Uuid([0xEE; 16]), Timestamp(T0.0))
+            .mark_read_through(tenant.org, READER, Uuid([0xEE; 16]), Timestamp(T0.0))
             .await
             .expect("the mark runs"),
         None,
@@ -548,7 +592,7 @@ async fn an_import_records_once(app: PgPool) {
     );
     assert_eq!(
         notifications
-            .list(tenant.org, None, 10)
+            .list(tenant.org, READER, None, 10)
             .await
             .expect("the inbox is readable")
             .len(),
@@ -623,7 +667,7 @@ async fn one_tenant_cannot_read_anothers_completions(app: PgPool) {
         .expect("the import records");
 
     let seen = NotificationRepo::new(app.clone())
-        .list(second.org, None, 10)
+        .list(second.org, READER, None, 10)
         .await
         .expect("the inbox is readable");
     assert!(
@@ -632,11 +676,283 @@ async fn one_tenant_cannot_read_anothers_completions(app: PgPool) {
     );
     assert_eq!(
         NotificationRepo::new(app.clone())
-            .list(first.org, None, 10)
+            .list(first.org, READER, None, 10)
             .await
             .expect("the inbox is readable")
             .len(),
         1,
         "and tenant A still sees its own"
+    );
+}
+
+fn notice(client_id: &str, tone: NoticeTone, title: &str) -> NewNotice {
+    NewNotice {
+        client_id: client_id.to_owned(),
+        tone,
+        title: title.to_owned(),
+        body: String::new(),
+    }
+}
+
+/// A finished run reads in the tone of its worst outcome, and a posted notice
+/// in its own, beside it in one list, newest first.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_notice_and_a_run_share_one_list_each_in_its_own_tone(app: PgPool) {
+    let tenant = seed_tenant(&app, 0xD1).await;
+    let seller = seed_user(&app, tenant.org, 0x41, true).await;
+    let inbox = NotificationRepo::new(app.clone());
+    inbox
+        .record_import(
+            tenant.org,
+            Uuid([0xA1; 16]),
+            NotificationCounts {
+                succeeded: 3,
+                failed: 1,
+                ..NotificationCounts::default()
+            },
+            T0,
+        )
+        .await
+        .expect("the import records");
+    inbox
+        .post_notice(
+            tenant.org,
+            seller,
+            &notice("t-1", NoticeTone::Warning, "That file is too big."),
+            Timestamp(T0.0 + 1_000),
+        )
+        .await
+        .expect("the notice posts");
+
+    let rows = inbox
+        .list(tenant.org, seller, None, 10)
+        .await
+        .expect("the inbox is readable");
+    let tones: Vec<NoticeTone> = rows.iter().map(|row| row.source.tone()).collect();
+    assert_eq!(
+        tones,
+        vec![NoticeTone::Warning, NoticeTone::Error],
+        "the notice is newest, and a run with a failure reads as an error"
+    );
+    assert_eq!(
+        inbox
+            .unread(tenant.org, seller)
+            .await
+            .expect("the count runs"),
+        2,
+        "both rows are unread"
+    );
+}
+
+/// A second post of the same toast is the first row, not a second one.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_notice_posted_twice_is_one_row(app: PgPool) {
+    let tenant = seed_tenant(&app, 0xD2).await;
+    let seller = seed_user(&app, tenant.org, 0x42, true).await;
+    let inbox = NotificationRepo::new(app.clone());
+    let first = inbox
+        .post_notice(
+            tenant.org,
+            seller,
+            &notice("t-1", NoticeTone::Success, "Saved."),
+            T0,
+        )
+        .await
+        .expect("the notice posts");
+    let again = inbox
+        .post_notice(
+            tenant.org,
+            seller,
+            &notice("t-1", NoticeTone::Success, "Saved."),
+            Timestamp(T0.0 + 5_000),
+        )
+        .await
+        .expect("the repeat answers");
+    assert_eq!(again, first, "the repeat answers the row the first wrote");
+    assert_eq!(
+        inbox
+            .list(tenant.org, seller, None, 10)
+            .await
+            .expect("the inbox is readable")
+            .len(),
+        1,
+        "the repeat wrote no second row"
+    );
+}
+
+/// A notice is its poster's alone: another user of the same organisation
+/// neither reads it, counts it, marks it nor dismisses it, and a path that
+/// pins no user -- which is where the table policy stands, not this
+/// repository's predicates -- does not see it either.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_notice_is_fenced_to_the_user_who_posted_it(app: PgPool) {
+    let tenant = seed_tenant(&app, 0xD3).await;
+    let seller = seed_user(&app, tenant.org, 0x43, true).await;
+    let colleague = seed_user(&app, tenant.org, 0x44, true).await;
+    let inbox = NotificationRepo::new(app.clone());
+    let posted = inbox
+        .post_notice(
+            tenant.org,
+            seller,
+            &notice("t-1", NoticeTone::Error, "The copy wasn't requested."),
+            T0,
+        )
+        .await
+        .expect("the notice posts");
+
+    assert!(
+        inbox
+            .list(tenant.org, colleague, None, 10)
+            .await
+            .expect("the inbox is readable")
+            .is_empty(),
+        "a colleague does not read it"
+    );
+    assert_eq!(
+        inbox
+            .unread(tenant.org, colleague)
+            .await
+            .expect("the count runs"),
+        0,
+        "or count it"
+    );
+    assert_eq!(
+        inbox
+            .mark_read(tenant.org, colleague, posted.id, T0)
+            .await
+            .expect("the mark runs"),
+        None,
+        "another user's notice is not found"
+    );
+    assert!(
+        !inbox
+            .dismiss(tenant.org, colleague, posted.id, T0)
+            .await
+            .expect("the dismissal runs"),
+        "nor dismissed"
+    );
+
+    let mut tx = app.begin().await.expect("a transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(db_uuid(tenant.org.0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the org pins");
+    let unpinned: i64 = sqlx::query_scalar("SELECT count(*) FROM notification")
+        .fetch_one(&mut *tx)
+        .await
+        .expect("the count runs");
+    assert_eq!(
+        unpinned, 0,
+        "the policy hides a notice from a reader with no user"
+    );
+    tx.rollback().await.expect("the transaction ends");
+
+    assert_eq!(
+        inbox
+            .list(tenant.org, seller, None, 10)
+            .await
+            .expect("the inbox is readable")
+            .len(),
+        1,
+        "and the poster still reads it"
+    );
+}
+
+/// Read one, read all, dismiss one and dismiss the read: each changes the
+/// unread count and the list the way the bell and the page draw them.
+#[sqlx::test(migrations = "./migrations")]
+async fn reading_and_dismissing_move_the_unread_count(app: PgPool) {
+    let tenant = seed_tenant(&app, 0xD4).await;
+    let seller = seed_user(&app, tenant.org, 0x45, true).await;
+    let inbox = NotificationRepo::new(app.clone());
+    let mut ids = Vec::new();
+    for (index, client) in ["a", "b", "c"].into_iter().enumerate() {
+        let offset = i64::try_from(index).expect("a small index") * 1_000;
+        ids.push(
+            inbox
+                .post_notice(
+                    tenant.org,
+                    seller,
+                    &notice(client, NoticeTone::Info, "Sending started."),
+                    Timestamp(T0.0 + offset),
+                )
+                .await
+                .expect("the notice posts")
+                .id,
+        );
+    }
+    let org = tenant.org;
+    let inbox_ref = &inbox;
+    let unread =
+        move || async move { inbox_ref.unread(org, seller).await.expect("the count runs") };
+    assert_eq!(unread().await, 3, "three notices, all unread");
+
+    assert_eq!(
+        inbox
+            .mark_read(tenant.org, seller, ids[0], T0)
+            .await
+            .expect("the mark runs"),
+        Some(true),
+        "the first is marked"
+    );
+    assert_eq!(
+        inbox
+            .mark_read(tenant.org, seller, ids[0], T0)
+            .await
+            .expect("the mark runs again"),
+        Some(false),
+        "a second mark reports it was read already"
+    );
+    assert_eq!(unread().await, 2, "one read, two left");
+
+    assert!(
+        inbox
+            .dismiss(tenant.org, seller, ids[1], T0)
+            .await
+            .expect("the dismissal runs"),
+        "the second is dismissed"
+    );
+    assert!(
+        inbox
+            .dismiss(tenant.org, seller, ids[1], T0)
+            .await
+            .expect("the dismissal runs again"),
+        "dismissing twice is still dismissed"
+    );
+    assert_eq!(unread().await, 1, "a dismissed row is not counted");
+    assert_eq!(
+        inbox
+            .mark_read(tenant.org, seller, ids[1], T0)
+            .await
+            .expect("the mark runs"),
+        None,
+        "and cannot be marked"
+    );
+
+    assert_eq!(
+        inbox
+            .mark_all_read(tenant.org, seller, T0)
+            .await
+            .expect("the mark runs"),
+        1,
+        "read-all marks the one left"
+    );
+    assert_eq!(unread().await, 0, "nothing is unread");
+    assert_eq!(
+        inbox
+            .dismiss_read(tenant.org, seller, T0)
+            .await
+            .expect("the dismissal runs"),
+        2,
+        "the two read rows go"
+    );
+    assert!(
+        inbox
+            .list(tenant.org, seller, None, 10)
+            .await
+            .expect("the inbox is readable")
+            .is_empty(),
+        "every row is gone"
     );
 }

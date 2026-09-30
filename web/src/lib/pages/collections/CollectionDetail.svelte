@@ -178,7 +178,7 @@
 			});
 			renaming = false;
 			await refresh();
-			toast('info', 'Saved.');
+			toast('success', 'Saved.');
 		} catch (failure) {
 			headerRefusal =
 				failure instanceof ApiFailure
@@ -197,7 +197,7 @@
 		try {
 			await collectionsApi.setMembers(id, next);
 			await refresh();
-			toast('info', said);
+			toast('success', said);
 		} catch (failure) {
 			memberRefusal =
 				failure instanceof ApiFailure
@@ -252,7 +252,7 @@
 				queryClient.invalidateQueries({ queryKey: queryKeys.products })
 			]);
 			toast(
-				'info',
+				'success',
 				`${ack.added.join(', ')} added to ${ack.members} ${ack.members === 1 ? 'resource' : 'resources'}.`
 			);
 		} catch (failure) {
@@ -291,7 +291,7 @@
 				filename: filenameFrom(response.headers.get('content-disposition'))
 			};
 			saveDocument(csv);
-			toast('info', `Saved as ${csv.filename}.`);
+			toast('success', `Saved as ${csv.filename}.`);
 		} catch (failure) {
 			exportFailure = failureMessage(failure);
 		} finally {
@@ -307,7 +307,7 @@
 		]);
 		if (queued === 0 || job === null) {
 			toast(
-				'info',
+				'warning',
 				'Nothing to publish: every resource is already there or can’t be published yet.'
 			);
 			return;

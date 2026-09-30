@@ -813,7 +813,7 @@
 		try {
 			await api.addMapping(editing.product.id, inventory);
 			await queryClient.invalidateQueries({ queryKey: queryKeys.mappings });
-			toast('info', `${platformTitle(inventory)} added. Send it when you are ready.`);
+			toast('success', `${platformTitle(inventory)} added. Send it when you are ready.`);
 		} catch (failure) {
 			serverRefusal =
 				failure instanceof ApiFailure
@@ -928,7 +928,7 @@
 			const created = await api.createProduct(body);
 			await refreshAfterCreate(queryClient);
 			toast(
-				'info',
+				'success',
 				createdToast(marketplacesReached(created.mappings.map((mapping) => mapping.inventory)))
 			);
 			if (shouldLandOnCreated(submittedFrom, page.url.pathname)) {
@@ -967,7 +967,7 @@
 						? 'Saved.'
 						: 'Saved. This listing isn’t on any marketplace yet.';
 			toast(
-				'info',
+				'success',
 				keptNow.length === 0 ? saved : `${saved} ${keptSentence(keptNow)}`
 			);
 		} catch (failure) {

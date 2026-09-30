@@ -58,7 +58,7 @@
 			await onGranted();
 			why = '';
 			expiry = '';
-			toast('info', 'Plan set. The account sees it on its next request.');
+			toast('success', 'Plan set. The account sees it on its next request.');
 		},
 		onError: (failure: Error) =>
 			toast('error', failure instanceof ApiFailure ? failure.message : 'The plan was not set.')
@@ -89,7 +89,7 @@
 			await onGranted();
 			delta = 0;
 			creditWhy = '';
-			toast('info', 'Balance set. The account sees it on its next request.');
+			toast('success', 'Balance set. The account sees it on its next request.');
 		},
 		onError: (failure: Error) =>
 			toast(

@@ -53,7 +53,7 @@
 		mutationFn: (patch: { body: SitePatch; said: string }) => api.updateSite(patch.body),
 		onSuccess: (view: SiteView, patch: { body: SitePatch; said: string }) => {
 			queryClient.setQueryData(queryKeys.adminSite, view);
-			toast('info', patch.said);
+			toast('success', patch.said);
 		},
 		onError: (failure: Error) =>
 			toast('error', failure instanceof ApiFailure ? failure.message : 'That change was not saved.')

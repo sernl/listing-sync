@@ -1,87 +1,140 @@
-// The toast stack has no rendering lane, so what is asserted here is the part
-// that was a `setTimeout` closure before and could not be reached at all: when
-// a toast goes, and what happens when it is closed twice.
+// The toast stack's lifetime under fake timers: five seconds a toast, three
+// drawn at once with the rest waiting their turn, a held stack keeping what is
+// left of each toast's time, and only the toasts nobody looked at reaching the
+// inbox.
 
-import { afterEach, describe, expect, it } from 'vitest';
-import { INFO_TTL_MS, type Toast, dismiss, expiresAt, sweep, toast, toastStore } from './toast';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+	MAX_VISIBLE,
+	TOAST_TTL_MS,
+	type Toast,
+	acknowledge,
+	dismiss,
+	noticeOf,
+	pause,
+	resetToasts,
+	resume,
+	setUnreadSink,
+	toast,
+	toastStore
+} from './toast';
 
-/** The stack is one module-level list shared by every test in this file, so a
- *  test reads it through the same subscription a component would and clears it
- *  afterwards rather than assuming it began empty. */
-function standing(): Toast[] {
+function drawn(): Toast[] {
 	let seen: Toast[] = [];
 	toastStore.subscribe((entries) => (seen = entries))();
 	return seen;
 }
 
-const ids = () => standing().map((entry) => entry.id);
+const messages = () => drawn().map((entry) => entry.message);
+
+let kept: Toast[] = [];
+
+beforeEach(() => {
+	vi.useFakeTimers();
+	resetToasts();
+	kept = [];
+	setUnreadSink((entry) => kept.push(entry));
+});
 
 afterEach(() => {
-	for (const entry of standing()) {
-		dismiss(entry.id);
-	}
+	resetToasts();
+	vi.useRealTimers();
 });
 
-describe('when a toast goes', () => {
-	it('gives an informational toast six seconds and an error none', () => {
-		expect(expiresAt('info', 1000)).toBe(1000 + INFO_TTL_MS);
-		expect(expiresAt('error', 1000)).toBeNull();
+describe('how long a toast stands', () => {
+	it('stands to the millisecond before five seconds, of every tone', () => {
+		toast('success', 'Saved.');
+		toast('error', 'That was not saved.');
+		vi.advanceTimersByTime(TOAST_TTL_MS - 1);
+		expect(messages()).toEqual(['Saved.', 'That was not saved.']);
+		vi.advanceTimersByTime(1);
+		expect(messages()).toEqual([]);
 	});
 
-	it('keeps an informational toast to the millisecond before its moment', () => {
-		const id = toast('info', 'Organisation name saved.', 1000);
-		sweep(1000 + INFO_TTL_MS - 1);
-		expect(ids()).toContain(id);
-	});
-
-	it('drops an informational toast at its moment', () => {
-		const id = toast('info', 'Organisation name saved.', 1000);
-		sweep(1000 + INFO_TTL_MS);
-		expect(ids()).not.toContain(id);
-	});
-
-	it('never sweeps an error toast, however late the clock', () => {
-		const id = toast('error', 'The organisation name was not saved.', 1000);
-		sweep(Number.MAX_SAFE_INTEGER);
-		expect(ids()).toContain(id);
-	});
-});
-
-describe('closing a toast', () => {
-	it('removes the one named and leaves its neighbours standing', () => {
-		const first = toast('error', 'First.', 0);
-		const second = toast('error', 'Second.', 0);
-		const third = toast('error', 'Third.', 0);
-		dismiss(second);
-		expect(ids()).toEqual([first, third]);
-	});
-
-	it('changes nothing when the id has already been swept', () => {
-		const id = toast('info', 'Passkey registered.', 0);
-		sweep(INFO_TTL_MS);
-		expect(() => dismiss(id)).not.toThrow();
-		expect(ids()).not.toContain(id);
+	it('keeps what was left of its time while the stack is held', () => {
+		toast('info', 'Sending started.');
+		vi.advanceTimersByTime(3000);
+		pause();
+		vi.advanceTimersByTime(60_000);
+		expect(messages()).toEqual(['Sending started.']);
+		resume();
+		vi.advanceTimersByTime(TOAST_TTL_MS - 3000 - 1);
+		expect(messages()).toEqual(['Sending started.']);
+		vi.advanceTimersByTime(1);
+		expect(messages()).toEqual([]);
 	});
 });
 
-describe('the subscriber', () => {
-	it('hears each transition once, and hears nothing when nothing moved', () => {
-		const heard: number[] = [];
-		const stop = toastStore.subscribe((entries) => heard.push(entries.length));
-		expect(heard).toEqual([0]);
+describe('how many stand at once', () => {
+	it('draws three and starts the fourth one’s time only when it is drawn', () => {
+		for (const word of ['one', 'two', 'three', 'four']) {
+			toast('success', word);
+		}
+		expect(drawn()).toHaveLength(MAX_VISIBLE);
+		expect(messages()).toEqual(['one', 'two', 'three']);
 
-		const id = toast('info', 'Password changed. Sign in with the new one.', 0);
-		expect(heard).toEqual([0, 1]);
+		vi.advanceTimersByTime(TOAST_TTL_MS);
+		expect(messages()).toEqual(['four']);
+		vi.advanceTimersByTime(TOAST_TTL_MS - 1);
+		expect(messages()).toEqual(['four']);
+		vi.advanceTimersByTime(1);
+		expect(messages()).toEqual([]);
+	});
 
-		sweep(INFO_TTL_MS - 1);
-		expect(heard).toEqual([0, 1]);
+	it('draws the waiting one as soon as a drawn one is closed', () => {
+		const ids = ['one', 'two', 'three', 'four'].map((word) => toast('info', word));
+		dismiss(ids[1]);
+		expect(messages()).toEqual(['one', 'three', 'four']);
+	});
+});
 
-		sweep(INFO_TTL_MS);
-		expect(heard).toEqual([0, 1, 0]);
+describe('what the inbox keeps', () => {
+	it('keeps a toast that went on its own, and not one that was closed or clicked', () => {
+		toast('warning', 'Nobody saw this.');
+		const closed = toast('error', 'Closed.');
+		const clicked = toast('success', 'Clicked.');
+		dismiss(closed);
+		acknowledge(clicked);
+		vi.advanceTimersByTime(TOAST_TTL_MS);
+		expect(kept.map((entry) => [entry.tone, entry.message])).toEqual([
+			['warning', 'Nobody saw this.']
+		]);
+	});
 
+	it('closes an id that has already gone without a word', () => {
+		const id = toast('info', 'Gone.');
+		vi.advanceTimersByTime(TOAST_TTL_MS);
+		let calls = 0;
+		const stop = toastStore.subscribe(() => (calls += 1));
 		dismiss(id);
-		expect(heard).toEqual([0, 1, 0]);
-
 		stop();
+		expect(calls).toBe(1);
+	});
+
+	it('titles a notice with the message, cutting a long one and keeping it whole as the body', () => {
+		const short = noticeOf({ ...drawnOne('info', 'Saved.') });
+		expect(short).toMatchObject({ tone: 'info', title: 'Saved.', body: '' });
+
+		const long = 'a'.repeat(250);
+		const cut = noticeOf(drawnOne('error', long));
+		expect([...cut.title]).toHaveLength(200);
+		expect(cut.title.endsWith('…')).toBe(true);
+		expect(cut.body).toBe(long);
+	});
+
+	it('gives each toast its own client id', () => {
+		toast('info', 'one');
+		toast('info', 'two');
+		const [first, second] = drawn();
+		expect(first.clientId).not.toBe(second.clientId);
 	});
 });
+
+function drawnOne(tone: Toast['tone'], message: string): Toast {
+	toast(tone, message);
+	const last = drawn().at(-1);
+	if (last === undefined) {
+		throw new Error('the toast was not drawn');
+	}
+	return last;
+}

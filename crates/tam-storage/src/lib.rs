@@ -170,7 +170,8 @@ pub use marketplace_requests::{
     REQUEST_RATE_WINDOW_MS,
 };
 pub use notifications::{
-    NotificationCursor, NotificationRecord, NotificationRepo, Recipient, JOB_SETTLED_TOPIC,
+    NewNotice, NotificationCursor, NotificationRecord, NotificationRepo, NotificationSource,
+    Recipient, JOB_SETTLED_TOPIC,
 };
 pub use operators::{OperatorEvent, OperatorRecord, OperatorRepo};
 pub use org::{OrgRecord, OrgRepo, OrgWrite};

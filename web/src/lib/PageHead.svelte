@@ -1,6 +1,8 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { accountTileState } from '$lib/account-tile.svelte';
+	import { bellHost } from '$lib/bell-host.svelte';
+	import NotificationBell from '$lib/NotificationBell.svelte';
 	import Icon from '$lib/Icon.svelte';
 	import type { IconName } from '$lib/icons';
 	import { ACCOUNT_DESTINATION } from '$lib/nav';
@@ -73,7 +75,7 @@
 		</a>
 	{/if}
 	{#if !back}
-		<!-- The phone's own two controls, which `app.css` draws only below
+		<!-- The phone's own controls, which `app.css` draws only below
 		     620px. Above it the top strip carries the search box and the
 		     account tile and the rail carries the section, so these would be a
 		     second copy of both. They sit in the header band rather than on the
@@ -85,6 +87,12 @@
 				<button class="head-tool" type="button" aria-label="Search resources" onclick={search}>
 					<Icon name="search" size={20} />
 				</button>
+			{/if}
+			<!-- The bell, between search and the account, as it sits between New
+			     resource and the avatar in the strip above the phone line. Only
+			     under a session: a public page has no inbox to read. -->
+			{#if bellHost.live}
+				<NotificationBell placement="phone" />
 			{/if}
 			<!-- Named rather than described by its contents: the initials are
 			     decoration, so without this label the link announces as the

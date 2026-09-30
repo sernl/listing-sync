@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, kind, subject_id, inventory, counts, created_at, read_at FROM notification WHERE org_id = $1 AND ($2::timestamptz IS NULL OR (created_at, id) < ($2, $3)) ORDER BY created_at DESC, id DESC LIMIT $4",
+  "query": "SELECT id, kind, subject_id, inventory, counts, tone, title, body, created_at, read_at FROM notification WHERE org_id = $1 AND user_id = $2 AND client_id = $3",
   "describe": {
     "columns": [
       {
@@ -30,11 +30,26 @@
       },
       {
         "ordinal": 5,
+        "name": "tone",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "body",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 6,
+        "ordinal": 9,
         "name": "read_at",
         "type_info": "Timestamptz"
       }
@@ -42,20 +57,22 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Timestamptz",
         "Uuid",
-        "Int8"
+        "Text"
       ]
     },
     "nullable": [
       false,
       false,
-      false,
       true,
-      false,
+      true,
+      true,
+      true,
+      true,
+      true,
       false,
       true
     ]
   },
-  "hash": "966c6644cb2ec2de38bc6a6955bd91b57c9ccaea591fdc9c068facba80c23f0f"
+  "hash": "7ac018ab0bb7c62a5d803ec2cad81f414daf29b30b1db7ac43228201a7b8e2e9"
 }

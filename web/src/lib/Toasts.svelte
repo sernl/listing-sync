@@ -3,38 +3,46 @@
 	import Icon from '$lib/Icon.svelte';
 	import { afterToastDismissed, captureSlots, focusRegion } from '$lib/focus-return';
 	import type { IconName } from '$lib/icons';
-	import { dismiss, sweep, toastStore, type Toast } from '$lib/toast';
+	import {
+		acknowledge,
+		dismiss,
+		pause,
+		resume,
+		toastStore,
+		type ToastTone
+	} from '$lib/toast';
 
 	// The stack every layout draws its toasts in: the console's, and the
 	// signed-out screens', which report a refused sign-in the same way.
 
-	// The console's notice glyph for each tone, as `Banner` holds its own.
-	// Here rather than in `toast.ts`, which is a pure store with no view in
-	// it, and read through the record rather than written as a ternary in the
-	// markup: `icons.test.ts` sweeps the quoted arms of an `Icon name={...}`
+	// The glyph for each tone, as `Banner` holds its own. Here rather than in
+	// `toast.ts`, which is a pure store with no view in it, and read through
+	// the record rather than written as a ternary in the markup:
+	// `icons.test.ts` sweeps the quoted arms of an `Icon name={...}`
 	// expression, so a tone compared inline reads to it as an icon name.
-	const TOAST_GLYPH: Record<Toast['tone'], IconName> = {
-		info: 'circle-check',
+	const TOAST_GLYPH: Record<ToastTone, IconName> = {
+		success: 'circle-check',
+		info: 'info',
+		warning: 'triangle-alert',
 		error: 'circle-alert'
 	};
 
-	// The toast stack's clock lives here rather than in the store, because what
-	// pauses it is a pointer and a focus ring, and only the element knows about
-	// those. A sweep that removed the toast under the pointer would steal the
-	// click that was about to close it, so the stack holds every standing toast
-	// while it is hovered or focused within, and lets them go on the way out.
-	//
-	// The interval is armed only while something is standing, and `sweep` is
-	// silent when it drops nothing, so an idle console redraws nothing.
-	let held = $state(false);
+	// What pauses the clock is a pointer and a focus ring, and only the
+	// element knows about those. A toast removed from under the pointer would
+	// steal the click that was about to close it, so the stack is held while
+	// it is hovered or focused within, and each toast keeps what was left of
+	// its five seconds. Held while either is inside, so a focus leaving while
+	// the pointer still rests on the stack does not start the clock.
+	let within = { hovered: false, focused: false };
 
-	$effect(() => {
-		if (held || $toastStore.length === 0) {
-			return;
+	function hold(change: { hovered?: boolean; focused?: boolean }) {
+		within = { ...within, ...change };
+		if (within.hovered || within.focused) {
+			pause();
+		} else {
+			resume();
 		}
-		const timer = setInterval(() => sweep(Date.now()), 250);
-		return () => clearInterval(timer);
-	});
+	}
 
 	// Who was working when each toast arrived, keyed by that toast's id.
 	// Captured as the toast appears rather than as it is closed, because by then
@@ -104,10 +112,10 @@
 	class="toasts"
 	role="status"
 	aria-live="polite"
-	onmouseenter={() => (held = true)}
-	onmouseleave={() => (held = false)}
-	onfocusin={() => (held = true)}
-	onfocusout={() => (held = false)}
+	onmouseenter={() => hold({ hovered: true })}
+	onmouseleave={() => hold({ hovered: false })}
+	onfocusin={() => hold({ focused: true })}
+	onfocusout={() => hold({ focused: false })}
 >
 	{#each $toastStore as entry (entry.id)}
 		<!-- Escape closes the toast focus is inside, and the handler sits on
@@ -115,10 +123,13 @@
 		     stack keeps the key. The close button is the only thing in a toast
 		     that takes focus, so this reaches the same seller by another
 		     press; the element is not a control in its own right. -->
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<!-- A click anywhere on the toast is the seller having seen it: it
+		     stands its time out and is not kept in the inbox after. -->
+		<!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
 		<div
-			class="toast {entry.tone === 'error' ? 'error' : ''}"
+			class="toast {entry.tone}"
 			onkeydown={(event) => keyedToast(event, entry.id)}
+			onclick={() => acknowledge(entry.id)}
 		>
 			<span class="toast-mark">
 				<Icon name={TOAST_GLYPH[entry.tone]} size={18} />
