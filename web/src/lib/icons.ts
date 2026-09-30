@@ -42,6 +42,7 @@ import Filter from '@lucide/svelte/icons/filter';
 import Gift from '@lucide/svelte/icons/gift';
 import HeartPulse from '@lucide/svelte/icons/heart-pulse';
 import Image from '@lucide/svelte/icons/image';
+import Inbox from '@lucide/svelte/icons/inbox';
 import Info from '@lucide/svelte/icons/info';
 import Italic from '@lucide/svelte/icons/italic';
 import Laptop from '@lucide/svelte/icons/laptop';
@@ -114,6 +115,7 @@ export const ICONS = {
 	gift: Gift,
 	'heart-pulse': HeartPulse,
 	image: Image,
+	inbox: Inbox,
 	info: Info,
 	italic: Italic,
 	laptop: Laptop,

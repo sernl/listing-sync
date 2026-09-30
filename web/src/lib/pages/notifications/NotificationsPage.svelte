@@ -88,7 +88,7 @@
 
 <div class="page ntf-page">
 	<PageHead
-		icon="bell"
+		icon="inbox"
 		title="Notifications"
 		description="Everything Teachouse has finished for you, and anything you missed, newest first."
 		guide="updates"

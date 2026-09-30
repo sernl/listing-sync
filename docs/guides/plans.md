@@ -17,10 +17,10 @@ Each plan also sets how many resources you can keep and how many watermarked pre
 
 ## See your plan
 
-Open **Account → Billing**. The card at the top shows **Your plan**, what it gives you, and the day your subscription renews. **Adjust plan** takes you down to the plans.
+Open **Account → Billing**. The card at the top shows **Your plan**, what it gives you, what you pay, and the day your subscription renews. **Adjust plan** takes you down to the plans.
 
-<!-- shot: /settings/billing, the "Your plan" card for Pro with the renewal date and Adjust plan -->
-![Your plan, with the day it renews](/v1/guides/images/925667ef6d9ddfd11627630a495305b768426fa419cad7d1210eae65cab2133d)
+<!-- shot: /settings/billing, the "Your plan" card for Pro with its price, the renewal date and Adjust plan -->
+![Your plan, with the day it renews](/v1/guides/images/bd0296469d29b48d318c562535a37e97be04aae565a56df6dda2f41705d1d5a9)
 
 ## The plans
 
@@ -48,7 +48,7 @@ Every plan can import from wherever you sell, find and merge duplicates, use ric
 The switch above the plans shows **Monthly** or **Yearly** prices. The yearly price is shown as what it works out at each month, with what you save. The plan you are on is marked **Your plan**.
 
 <!-- shot: /settings/billing, the Pro plan card marked "Your plan" with its yearly price and what it includes -->
-![The plan you are on, marked Your plan](/v1/guides/images/f9b5ad454495cdcd1eb4cc36524f493a894cf27d168fb1bc45e82bab65a2e510)
+![The plan you are on, marked Your plan](/v1/guides/images/dbaec1093ae7082ee575ac7972e3d9cb974149b7cd582c85e9d13779c20acde8)
 
 ## Move Packs (one-off) — on any plan
 
