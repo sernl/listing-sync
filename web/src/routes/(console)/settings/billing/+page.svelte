@@ -467,7 +467,10 @@
 								</td>
 								<td class="num" data-label="Included">{row.included}</td>
 								<td class="num" data-label="Left">
-									{row.left}{#if row.full}<span class="sub">None left</span>{/if}
+									<span class="bill-usage-fig">
+										<span>{row.left}</span>
+										{#if row.full}<span class="sub">None left</span>{/if}
+									</span>
 								</td>
 							</tr>
 						{/each}

@@ -118,7 +118,9 @@ export function planBullets(caps: Capabilities, ai: AiOffer = AI): PlanBullet[] 
 	});
 	if (caps.scheduling) lines.push({ text: 'Scheduling' });
 	if (caps.templates_max > 1) lines.push({ text: count(caps.templates_max, 'templates') });
-	if (caps.collections_max > 0) lines.push({ text: count(caps.collections_max, 'collections') });
+	if (caps.collections_max === 1) lines.push({ text: '1 collection' });
+	else if (caps.collections_max > 0)
+		lines.push({ text: count(caps.collections_max, 'collections') });
 	if (caps.analytics) lines.push({ text: 'Statistics on every shop' });
 	if (caps.auto_publish_rules) lines.push({ text: 'Automatic publishing rules' });
 	if (caps.support === 'email_1_day') lines.push({ text: 'Priority support' });
