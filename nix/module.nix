@@ -100,10 +100,12 @@ let
   # the other. Where that endpoint is an address the filter names it rather
   # than being dropped; where it is a hostname there is nothing to name, and
   # the warning below says so.
-  serverEgress =
-    if mailEnabled then
-      { }
-    else if cfg.server.blobStore.kind != "s3" then
+  serverEgress = if mailEnabled then { } else storeEgress;
+
+  # The egress of a process whose only off-machine reach is the blob store:
+  # loopback, plus the store's address where it is a bucket named by one.
+  storeEgress =
+    if cfg.server.blobStore.kind != "s3" then
       loopbackOnly
     else if blobStoreHostIsAddress then
       loopbackOnly
@@ -260,6 +262,43 @@ let
           auth_psql --single-transaction -f "$file" \
               -c "INSERT INTO auth.applied_migration (name) VALUES ('$name')"
       done
+    '';
+  };
+
+  # The help corpus, published after the schema on every boot. It runs as the
+  # API's user rather than the migration's because placing the pictures seals
+  # them into the blob store, and the key and the store are that user's. Both
+  # writes are idempotent -- the same picture bytes are the same handle and
+  # are not stored twice; a guide whose file has not changed is not
+  # re-published -- so a boot over an unchanged corpus writes nothing.
+  #
+  # The pictures go first, so no published guide names a picture the store
+  # does not hold yet. The seed attributes its writes to the oldest active
+  # operator; on a first deployment there is none until one signs in and is
+  # granted, so the text waits for the next boot rather than failing this one.
+  guidesScript = pkgs.writeShellApplication {
+    name = "teachouse-guides";
+    runtimeInputs = [
+      cfg.adminPackage
+      pkgs.gnugrep
+    ];
+    text = ''
+      appUrl=${lib.escapeShellArg (dbUrl "tam_app")}
+      guides=${lib.escapeShellArg "${cfg.migrationsPackage}/guides"}
+
+      tam-admin guides check --dir "$guides"
+      ${lib.optionalString (cfg.server.blobKekFile != null) ''
+        tam-admin guides images --dir "$guides/images" --db "$appUrl" \
+            ${lib.escapeShellArgs ([ "--blob-kek-path" cfg.server.blobKekFile ] ++ blobStoreArgs)}
+      ''}
+      # Read whole before it is searched: `grep -q` leaving a pipe early would
+      # fail the lister under pipefail and read as "no operator".
+      operators="$(tam-admin "$appUrl" list)"
+      if grep -qF "$(printf '\tactive\t')" <<<"$operators"; then
+          tam-admin guides seed --dir "$guides" --db "$appUrl"
+      else
+          echo "no operator holds an active grant yet: the guides are published on the next boot after one is granted"
+      fi
     '';
   };
 
@@ -1092,6 +1131,36 @@ in
       }
       // hardening
       // loopbackOnly;
+    };
+
+    # Ordered before tam-server without being required by it: a corpus that
+    # failed to publish leaves sellers reading the previous one, which is no
+    # reason to stop serving them.
+    systemd.services.teachouse-guides = {
+      description = "Teachouse help guides and their pictures";
+      requires = [ "teachouse-migrate.service" ];
+      after = [
+        "network.target"
+        "teachouse-migrate.service"
+      ];
+      before = [ "tam-server.service" ];
+      wantedBy = [ "multi-user.target" ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        User = apiUser;
+        Group = group;
+        ExecStart = lib.getExe guidesScript;
+        # The server's own state directory, so a local store exists with the
+        # ownership the server will find it in.
+        StateDirectory = [
+          "teachouse"
+        ]
+        ++ lib.optional (cfg.server.blobStore.kind == "local") "teachouse/blobs";
+        StateDirectoryMode = "0700";
+      }
+      // hardening
+      // storeEgress;
     };
 
     systemd.services.tam-server = {

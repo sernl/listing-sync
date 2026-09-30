@@ -195,7 +195,7 @@ pub(crate) fn read_file(path: &Path) -> Result<GuideFile, Failure> {
     clippy::disallowed_methods,
     reason = "the corpus is repository text bounded by BODY_MAX_BYTES, read once per file by a one-shot command; the ban is about unbounded uploads"
 )]
-fn read_to_string(path: &Path) -> Result<String, Failure> {
+pub(crate) fn read_to_string(path: &Path) -> Result<String, Failure> {
     Ok(std::fs::read_to_string(path)?)
 }
 

@@ -13,41 +13,41 @@ A move is publishing one imported resource onto one marketplace. Publishing a re
 - Duplicates are merged first, so the same resource never counts twice.
 - Importing, editing, previewing and exporting use no moves.
 
-Each plan also sets how many resources you can keep and how many watermarked previews you can make each month. If you are over a number, for example after changing plan, you keep everything you have. You can't add more until you upgrade or make room. Previews start again on the 1st of each month.
+Each plan also sets how many resources you can keep and how many watermarked previews you can make. If you are over a number, for example after changing plan, you keep everything you have. You can't add more until you upgrade or make room. On Look you get 5 previews in all; on the paid plans previews start again on the 1st of each month.
 
 ## See your plan
 
 Open **Account → Billing**. The card at the top shows **Your plan**, what it gives you, and the day your subscription renews. **Adjust plan** takes you down to the plans.
 
-<!-- shot: /settings/billing, the "Your plan" card for Sync with the renewal date and Adjust plan -->
+<!-- shot: /settings/billing, the "Your plan" card for Pro with the renewal date and Adjust plan -->
 ![Your plan, with the day it renews](/v1/guides/images/925667ef6d9ddfd11627630a495305b768426fa419cad7d1210eae65cab2133d)
 
 ## The plans
 
-| | Look | Starter | Sync | Studio |
+| | Look | Starter | Pro | Studio |
 |---|---|---|---|---|
 | Price | Free | $12 a month, or $96 a year | $29 a month, or $240 a year | $59 a month, or $480 a year |
-| Resources you can keep | 100 | 500 | 2,000 | Unlimited |
-| Watermarked previews a month | 5 | 50 | 200 | Unlimited |
+| Resources you can keep | 100 | 250 | 500 | Unlimited |
+| Watermarked previews | 5 in all | 20 a month | 50 a month | 100 a month |
 | Moves | 5 free, once | 10 a month | 25 a month | 100 a month |
 | Unused moves stack to | — | 30 | 75 | 300 |
 | Edits sent to every marketplace | — | Once a day | Every 6 hours | Every hour |
-| Templates and collections | 1 each | 5 each | 20 each | Unlimited |
+| Templates and collections | 1 each | 5 each | 10 each | Unlimited |
 | Labels | 5 | Unlimited | Unlimited | Unlimited |
 
 **Look** is free for as long as you like: "For a small shop: bring your resources in, make previews and try five moves." Your five free moves go onto a marketplace of your choice.
 
 **Starter** adds editing once and syncing everywhere, scheduling and email support.
 
-**Sync** adds statistics on every shop and automatic publishing rules. It is the recommended plan.
+**Pro** adds statistics on every shop and automatic publishing rules. It is the recommended plan.
 
 **Studio** adds priority support: we answer within a day.
 
-Every plan can import from wherever you sell, find and merge duplicates, use rich-text descriptions, export to a spreadsheet, and use the Teachouse app on your own devices. AI description fill is coming soon on the paid plans.
+Every plan can import from wherever you sell, find and merge duplicates, use rich-text descriptions, export to a spreadsheet, and use the Teachouse app on your own devices. AI description fill is coming soon on Pro and Studio.
 
 The switch above the plans shows **Monthly** or **Yearly** prices. The yearly price is shown as what it works out at each month, with what you save. The plan you are on is marked **Your plan**.
 
-<!-- shot: /settings/billing, the Sync plan card marked "Your plan" with its yearly price and what it includes -->
+<!-- shot: /settings/billing, the Pro plan card marked "Your plan" with its yearly price and what it includes -->
 ![The plan you are on, marked Your plan](/v1/guides/images/f9b5ad454495cdcd1eb4cc36524f493a894cf27d168fb1bc45e82bab65a2e510)
 
 ## Move Packs (one-off) — on any plan
@@ -83,7 +83,7 @@ After you move a listing, you have 90 days to edit it once and send the change. 
 ## Buy, change or cancel
 
 1. Open **Account → Billing**.
-2. To buy, press **Choose Starter**, **Choose Sync** or **Choose Studio** on a plan, or the **Buy** button on a pack (for example **Buy $47**). Payment opens in Stripe. Have a discount code? Type it in **Have a code?** before you choose.
+2. To buy, press **Choose Starter**, **Choose Pro** or **Choose Studio** on a plan, or the **Buy** button on a pack (for example **Buy $47**). Payment opens in Stripe. Have a discount code? Type it in **Have a code?** before you choose.
 3. Already paying? Your other plans show **Switch to …** instead. Switching opens Stripe, which shows the new price before anything changes.
 4. To stop renewing, press **Cancel plan** in the **Your plan** card, then **Cancel plan** again to confirm. Your plan keeps working until the date shown, and your moves stay yours until they expire.
 5. Changed your mind before that date? Press **Keep my plan**.
