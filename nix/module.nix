@@ -289,7 +289,13 @@ let
       tam-admin guides check --dir "$guides"
       ${lib.optionalString (cfg.server.blobKekFile != null) ''
         tam-admin guides images --dir "$guides/images" --db "$appUrl" \
-            ${lib.escapeShellArgs ([ "--blob-kek-path" cfg.server.blobKekFile ] ++ blobStoreArgs)}
+            ${lib.escapeShellArgs (
+              [
+                "--blob-kek-path"
+                cfg.server.blobKekFile
+              ]
+              ++ blobStoreArgs
+            )}
       ''}
       # Read whole before it is searched: `grep -q` leaving a pipe early would
       # fail the lister under pipefail and read as "no operator".
