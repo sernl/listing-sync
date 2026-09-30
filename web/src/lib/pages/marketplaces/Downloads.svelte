@@ -35,7 +35,7 @@
 					<span class="mp-dl-name">{card.name}</span>
 					{#if card.offer}
 						<span class="mp-version">Version {card.offer.version}</span>
-						<Button tier="primary" small icon="download" href={card.offer.href}>
+						<Button tier="primary" small icon="download" href={card.offer.href} download>
 							{card.offer.label}
 						</Button>
 					{/if}
