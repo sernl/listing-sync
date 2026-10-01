@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE refund SET mail_requested_at = $2, mail_due_at = $2, mail_attempts = 0, mail_error = NULL, updated_at = $2 WHERE id = $1 AND mail_sent_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6f1f91bfc66da56551bd51db11d36bbef28a5e553ecbee794c3b28aef49bfd5f"
+}

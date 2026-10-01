@@ -21,6 +21,7 @@ mod campaigns;
 mod downloads;
 mod exchange_rates;
 mod notify;
+mod refund_mail;
 mod serving;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -33,7 +34,8 @@ use tam_api::{
 use tam_blob_store::{BackendFlags, BlobBackend, STORE_ROOT_FLAG, STORE_S3_FLAG};
 use tam_engine::outbox::{drain, Deliverer, LoggingDeliverer};
 use tam_storage::{
-    ImportBatchRepo, MailCampaignRepo, NotificationRepo, OperatorRepo, OutboxRepo, PruneRepo,
+    ImportBatchRepo, MailCampaignRepo, NotificationRepo, OperatorRepo, OutboxRepo, PaymentRepo,
+    PruneRepo,
 };
 use tam_types::Timestamp;
 use tokio_util::sync::CancellationToken;
@@ -705,9 +707,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 mail.console_url.clone(),
                 loops.clone(),
             );
+            // The refund mail the Payments page queues: global rows on the
+            // application pool too, from the seller-facing sender.
+            eprintln!("tam-server sending refund mail from {}", mail.email_from);
+            refund_mail::spawn(
+                PaymentRepo::new(state.pool.clone()),
+                notify::AuthAddresses::new(&mail.auth_internal_url, &mail.auth_internal_secret)?,
+                notify::ResendRelay::new(&mail.resend_api_key, &mail.email_from)?,
+                mail.console_url.clone(),
+                loops.clone(),
+            );
         }
         None => eprintln!(
-            "tam-server sending no operator campaigns ({RESEND_API_KEY_FLAG} unset); queued ones wait"
+            "tam-server sending no operator campaigns or refund mail ({RESEND_API_KEY_FLAG} unset); queued ones wait"
         ),
     }
 
