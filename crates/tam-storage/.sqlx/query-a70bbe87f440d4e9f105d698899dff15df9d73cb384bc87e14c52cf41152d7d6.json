@@ -1,0 +1,95 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n                 (SELECT count(*) FROM product\n                   WHERE org_id = $1 AND deleted_at IS NULL)          AS \"resources!\",\n                 (SELECT count(DISTINCT marketplace) FROM connection\n                   WHERE org_id = $1 AND state = 'linked')            AS \"marketplaces!\",\n                 (SELECT count(*) FROM resource_template\n                   WHERE org_id = $1)                                 AS \"templates!\",\n                 (SELECT count(*) FROM label\n                   WHERE org_id = $1 AND NOT system)                  AS \"labels!\",\n                 (SELECT count(*) FROM collection\n                   WHERE org_id = $1)                                 AS \"collections!\",\n                 (SELECT count(*) FROM device\n                   WHERE org_id = $1 AND revoked_at IS NULL)          AS \"devices!\",\n                 (SELECT COALESCE(sum(byte_len), 0)::bigint FROM blob\n                   WHERE org_id = $1)                                 AS \"storage_bytes!\",\n                 (SELECT COALESCE(max(used), 0)::bigint FROM usage_counter\n                   WHERE org_id = $1 AND kind = 'preview'\n                     AND month = date_trunc('month', $2 AT TIME ZONE 'UTC')::date)\n                                                                      AS \"previews!\",\n                 (SELECT COALESCE(sum(used), 0)::bigint FROM usage_counter\n                   WHERE org_id = $1 AND kind = 'preview')            AS \"previews_lifetime!\",\n                 (SELECT COALESCE(max(used), 0)::bigint FROM usage_counter\n                   WHERE org_id = $1 AND kind = 'ai_fill'\n                     AND month = date_trunc('month', $2 AT TIME ZONE 'UTC')::date)\n                                                                      AS \"ai_fills!\",\n                 (SELECT COALESCE(-sum(delta), 0)::bigint FROM move_ledger\n                   WHERE org_id = $1 AND source = 'commit'\n                     AND created_at >= date_trunc('month', $2 AT TIME ZONE 'UTC')\n                                         AT TIME ZONE 'UTC')          AS \"moves_this_month!\",\n                 (date_trunc('month', $2 AT TIME ZONE 'UTC') + interval '1 month')\n                   AT TIME ZONE 'UTC'                                 AS \"month_resets_at!\",\n                 (EXISTS (SELECT 1 FROM storefront_allowance WHERE org_id = $1)\n                   OR EXISTS (SELECT 1 FROM connection\n                               WHERE org_id = $1\n                                 AND platform_account_digest IS NOT NULL))\n                                                                      AS \"free_moves_unlocked!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "resources!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "marketplaces!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "templates!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "labels!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "collections!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "devices!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "storage_bytes!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "previews!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 8,
+        "name": "previews_lifetime!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 9,
+        "name": "ai_fills!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 10,
+        "name": "moves_this_month!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 11,
+        "name": "month_resets_at!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 12,
+        "name": "free_moves_unlocked!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "a70bbe87f440d4e9f105d698899dff15df9d73cb384bc87e14c52cf41152d7d6"
+}
