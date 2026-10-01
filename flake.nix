@@ -423,26 +423,34 @@
                 fi
               done <<< "$console_segments"
 
-              # Both tiers self-host their faces, and neither build fingerprints
-              # the files, so the name in the sheet is the name in the artefact
-              # and a face whose file never shipped renders the fallback stack
-              # on every page it reaches. The lists are read off the sheets
-              # rather than restated here, so a face added to either one is
-              # asserted the day it is added.
-              console_fonts=$(grep -o "url('/fonts/[^']*')" ${./web/src/app.css} \
+              # Both tiers self-host their faces, and a face whose file never
+              # shipped renders the fallback stack on every page it reaches.
+              # The lists are read off the sheets rather than restated here, so
+              # a face added to either one is asserted the day it is added.
+              #
+              # The landing build copies `public/fonts` as is, so the name in
+              # its sheet is the name in the artefact. The console's sheet
+              # (`web/src/lib/styles/frame.css`) imports its faces from
+              # `lib/fonts`, and Vite fingerprints them into
+              # `_app/immutable/assets/<name>.<hash>.woff2`; a hashed name under
+              # `_app/` can never collide with the landing's `/fonts/`, so the
+              # two tiers cannot shadow each other's faces.
+              console_fonts=$(grep -o "url('../fonts/[^']*')" ${./web/src/lib/styles/frame.css} \
                 | sed "s|.*/fonts/||; s|')$||" | sort -u)
               landing_fonts=$(grep -o "url('/fonts/[^']*')" ${./apps/landing/src/styles/site.css} \
                 | sed "s|.*/fonts/||; s|')$||" | sort -u)
 
-              # A sheet whose faces moved off /fonts/ would leave both loops
-              # below with nothing to say, and this check would pass by
-              # asserting nothing at all.
+              # A sheet whose faces moved would leave both loops below with
+              # nothing to say, and this check would pass by asserting nothing
+              # at all.
               test -n "$console_fonts"
               test -n "$landing_fonts"
 
               for font in $console_fonts; do
-                if ! test -f "$console/fonts/$font"; then
-                  echo "the console build carries no fonts/$font, which web/src/app.css asks for" >&2
+                stem=''${font%.woff2}
+                if [ -z "$(find "$console/_app/immutable/assets" -name "$stem.*.woff2" -print -quit)" ]; then
+                  echo "the console build carries no _app/immutable/assets/$stem.*.woff2," >&2
+                  echo "which web/src/lib/styles/frame.css asks for" >&2
                   exit 1
                 fi
               done
@@ -455,25 +463,11 @@
               done
 
               # `crates/tam-server/src/serving.rs` probes the landing build
-              # before the console's own static directory, so a name both
-              # builds carry is answered from the landing copy whichever tier
-              # asked for it. Two different files under one name is then a
-              # console page rendering the landing's face, silently and only in
-              # a deployment that serves both.
-              for font in $(printf '%s\n' $console_fonts $landing_fonts | sort -u); do
-                if test -f "$console/fonts/$font" && test -f "$landing/fonts/$font"; then
-                  if ! cmp -s "$console/fonts/$font" "$landing/fonts/$font"; then
-                    echo "fonts/$font differs between the console and landing builds," >&2
-                    echo "and tam-server answers both tiers with the landing copy" >&2
-                    exit 1
-                  fi
-                fi
-              done
-
-              # The same shadowing for the files rather than the faces, over
-              # every top-level name both builds carry: `favicon.svg` is the
-              # live one, and a name added to `apps/landing/public` and
-              # `web/static` alike would join it without anyone deciding to.
+              # before the console's own static directory, so a top-level name
+              # both builds carry is answered from the landing copy whichever
+              # tier asked for it. `favicon.svg` is the live one, and a name
+              # added to `apps/landing/public` and `web/static` alike would join
+              # it without anyone deciding to.
               #
               # `index.html` is excluded because the two are meant to differ:
               # the console's shell is reached as the fallback for a path no
