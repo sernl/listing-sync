@@ -240,10 +240,7 @@ The header and footer wordmarks draw the same file as an `<img>` beside the word
 
 ## Placeholders the founder must replace
 
-Two items.
-
-1. The whole of `/privacy`, which is a placeholder for counsel and not a policy.
-2. The whole of `/terms`, which is a placeholder for counsel and not terms.
+None. `/privacy` became the privacy policy on 2026-09-29 and `/terms` the terms of service on 2026-10-02.
 
 `supportEmail` in `src/site.js` left this list on 2026-09-29: it is `contact@teachouse.io`, the monitored address the footer, the maintenance page and both legal pages name. `hello@teachouse.io` stood there until 2026-09-05 and was never monitored.
 
@@ -251,13 +248,11 @@ A download URL is not in this list: the landing links no download at all since 2
 
 ## The two legal pages
 
-Neither page contains invented legal text, and both say so at the top in a banner, with a "Draft placeholder" pill above the heading.
+Until 2026-09-29 (privacy) and 2026-10-02 (terms) both pages were briefing material for counsel under a "Draft placeholder" pill. Both are now the real documents, written against how the product is built: short numbered sections, New Zealand law, and `contact@teachouse.io` as the only contact, with no postal address.
 
-Each page instead does something useful for the founder's counsel: it sets down, as briefing material, the facts about the product that a drafter would otherwise have to be told, and then lists the questions the real document must answer.
-The privacy page records what identity data an account carries, that the no-API marketplace session and the resource files stay on the seller's device, that an official-API token is held server-side, what the catalogue and the analytics series contain, that a third-party merchant of record takes the payment, and that the site itself carries no analytics.
-The terms page records the independence from every marketplace, that the seller keeps their own relationship with each one, where each kind of request originates, the metering shape the published prices use, that a marketplace's own pricing rule is enforced as a publish gate rather than a warning, and that a decision the marketplace makes the seller's — a tax designation, a copyright assertion — is never filled in on the seller's behalf.
+The terms carry a one-line "In short" under each heading and end with "Questions people ask". They keep the facts the briefing recorded: independence from every marketplace, the seller's own relationship with each one, that marketplace work runs on the seller's device, the moves-and-packs metering, that a marketplace pricing rule is a publish gate, and that a decision the marketplace makes the seller's (a tax designation, a copyright assertion) is never filled in on the seller's behalf. The refund promise (an unused Move Pack within 14 days) is the one the pricing FAQ in `src/pricing.js` makes; the two must move together.
 
-These pages must be replaced in full, not edited.
+Each page's `updated` date moves with any change in substance.
 
 ## Deployment
 

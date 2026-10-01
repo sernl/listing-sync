@@ -230,6 +230,8 @@ export interface UsageTableRow {
 	resets: string | null;
 	/** Whether nothing is left, which is what the row marks. */
 	full: boolean;
+	/** A word under `left` where the figure needs one, or null. */
+	note: string | null;
 }
 
 /** A standing or monthly allowance as one table row. */
@@ -250,7 +252,8 @@ function allowanceRow(
 			left: 'No limit',
 			fraction: null,
 			resets: null,
-			full: false
+			full: false,
+			note: null
 		};
 	}
 	return {
@@ -261,7 +264,8 @@ function allowanceRow(
 		left: `${Math.max(max - used, 0)}`,
 		fraction: max === 0 ? 1 : Math.min(used / max, 1),
 		resets: null,
-		full: limitReason(caps, usage, limit) !== null
+		full: limitReason(caps, usage, limit) !== null,
+		note: null
 	};
 }
 
@@ -272,7 +276,10 @@ function allowanceRow(
  *  Watermarked previews are the month's on every paid plan and the account's
  *  whole life on Look, and the row says which. Moves are a balance rather
  *  than a ceiling: `used` is what this month's moves spent, and `left` is
- *  the balance, packs included, which is the figure a seller spends from. */
+ *  the balance, packs included, which is the figure a seller spends from.
+ *  Look's free moves land when a marketplace is first connected; until then
+ *  `left` counts them with a note saying so, rather than reading "0 left"
+ *  beside "5 to try". */
 export function usageTable(
 	usage: EntitlementUsage,
 	caps: Capabilities,
@@ -287,6 +294,9 @@ export function usageTable(
 		forLife ? 'Watermarked previews (lifetime)' : 'Watermarked previews this month'
 	);
 	const movesUsed = usage.moves_this_month;
+	const promised =
+		caps.moves_per_month === 0 && !usage.free_moves_unlocked ? caps.free_moves_lifetime : 0;
+	const movesLeft = balance.available + promised;
 	const movesHeld = movesUsed + balance.available;
 	return [
 		allowanceRow(usage, caps, 'resources', 'Resources'),
@@ -314,10 +324,16 @@ export function usageTable(
 					: caps.free_moves_lifetime > 0
 						? `${caps.free_moves_lifetime} to try`
 						: 'From packs',
-			left: `${balance.available}`,
+			left: `${movesLeft}`,
 			fraction: movesHeld === 0 ? null : movesUsed / movesHeld,
 			resets: null,
-			full: balance.available === 0
+			full: movesLeft === 0,
+			note:
+				promised === 0
+					? null
+					: balance.available === 0
+						? 'Unlocked when you connect a marketplace'
+						: `${promised} of them unlocked when you connect a marketplace`
 		}
 	];
 }

@@ -30,6 +30,10 @@ import {
 
 const { level = 2 } = Astro.props;
 const Heading = level === 1 ? 'h1' : 'h2';
+/* The plan, comparison and pack headings rank one under the section's own,
+   so a page's outline never skips a level; `.rank-sub` draws them alike at
+   either rank. */
+const Sub = level === 1 ? 'h2' : 'h3';
 ---
 
 <section class="section band-pricing" id="pricing">
@@ -76,7 +80,7 @@ const Heading = level === 1 ? 'h1' : 'h2';
 							aria-labelledby={`tier-${plan.id}`}
 						>
 							{plan.recommended && <p class="tier-badge">Recommended</p>}
-							<h3 id={`tier-${plan.id}`}>{plan.name}</h3>
+							<Sub class="rank-sub" id={`tier-${plan.id}`}>{plan.name}</Sub>
 							<p class="tier-tagline">{plan.tagline}</p>
 							{paid ? (
 								<>
@@ -149,7 +153,7 @@ const Heading = level === 1 ? 'h1' : 'h2';
 			}
 		</div>
 
-		<h3 class="compare-title" id="compare-title">Compare the plans</h3>
+		<Sub class="rank-sub compare-title" id="compare-title">Compare the plans</Sub>
 		{/* A region with a name and a tab stop, so a keyboard user can scroll
 		    the table sideways on a phone; the feature column stays pinned. */}
 		<div class="compare-wrap" role="region" aria-labelledby="compare-title" tabindex="0">
@@ -218,7 +222,7 @@ const Heading = level === 1 ? 'h1' : 'h2';
 
 		<div class="packs-strip">
 			<div class="packs-copy">
-				<h3>Move Packs <span class="cadence">(one-off)</span></h3>
+				<Sub class="rank-sub">Move Packs <span class="cadence">(one-off)</span></Sub>
 				<p>Moving your shop once? Buy the moves you need, on any plan, with no subscription. Pack moves last 12 months.</p>
 				<a class="btn" href={signupUrl(featuredPack.key)}>Buy a pack</a>
 			</div>

@@ -523,15 +523,19 @@ impl Landing {
 /// How long a landing file may be reused without asking.
 ///
 /// Astro content-addresses everything it emits under `_astro/`, so those names
-/// change whenever their bytes do and a year is safe. The pages must not be
-/// held at all — a cutover has to be visible on the next request — and
-/// everything else, the fonts and the icon among them, keeps a stable name with
+/// change whenever their bytes do and a year is safe. A page is held for five
+/// minutes, which is what lets a crawler or a visitor clicking between pages
+/// skip the round trip, and bounds how long a deploy or a maintenance switch
+/// takes to reach a browser that already holds the page: the page names its
+/// stylesheet by hash, and a browser that kept the page kept that sheet for a
+/// year beside it, so a held page still renders after a deploy. Everything
+/// else, the fonts and the icon among them, keeps a stable name with
 /// changeable bytes, so it revalidates against the entity tag after an hour.
 fn cache_control(file: &str) -> &'static str {
     if file.starts_with("_astro/") {
         "public, max-age=31536000, immutable"
     } else if content_type(file).starts_with("text/html") {
-        "no-cache"
+        "public, max-age=300"
     } else {
         "public, max-age=3600"
     }
@@ -1287,8 +1291,10 @@ mod tests {
     #[test]
     fn each_kind_of_landing_file_carries_its_own_freshness_rule() {
         for (file, expected) in [
-            ("index.html", "no-cache"),
-            ("privacy/index.html", "no-cache"),
+            ("index.html", "public, max-age=300"),
+            ("privacy/index.html", "public, max-age=300"),
+            ("robots.txt", "public, max-age=3600"),
+            ("sitemap.xml", "public, max-age=3600"),
             (
                 "_astro/Base.B4LvswBy.css",
                 "public, max-age=31536000, immutable",

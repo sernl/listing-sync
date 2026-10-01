@@ -187,8 +187,8 @@ describe('the tier cards', () => {
 		name: 'Pro',
 		monthly_cents: 2900,
 		yearly_cents: 24000,
-		monthly_key: 'sync_monthly',
-		yearly_key: 'sync_yearly',
+		monthly_key: 'pro_monthly',
+		yearly_key: 'pro_yearly',
 		...over
 	});
 
@@ -205,7 +205,7 @@ describe('the tier cards', () => {
 			headline: '$20',
 			per: 'a month, billed yearly',
 			note: '$240 a year. You save $108.',
-			key: 'sync_yearly'
+			key: 'pro_yearly'
 		});
 	});
 
@@ -214,7 +214,7 @@ describe('the tier cards', () => {
 			headline: '$29',
 			per: 'a month',
 			note: 'Or $20 a month if you pay yearly.',
-			key: 'sync_monthly'
+			key: 'pro_monthly'
 		});
 	});
 
@@ -357,8 +357,8 @@ describe('the Plans grid', () => {
 			name: 'Pro',
 			monthly_cents: 2900,
 			yearly_cents: 24000,
-			monthly_key: 'sync_monthly',
-			yearly_key: 'sync_yearly',
+			monthly_key: 'pro_monthly',
+			yearly_key: 'pro_yearly',
 			...over
 		};
 	}

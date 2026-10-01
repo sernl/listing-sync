@@ -22,7 +22,7 @@ No inline `style` attribute either, for the same reason there is no inline `<sty
 The site must keep working under the policy `landing_policy` in `crates/tam-server/src/serving.rs` builds — `default-src 'self'`, `script-src 'self'` plus a `sha256-` token per inline script found in the build, `style-src 'self'`, `font-src 'self'`, `img-src 'self' data:`, `connect-src 'self'`, `frame-ancestors 'none'` — which is why there is no inline event handler and no inline `<style>` on any page.
 The policy admits no third-party origin at all: `style-src` carried `'unsafe-inline'` and `fonts.googleapis.com`, and `font-src` carried `fonts.gstatic.com`, until the console's fonts were bundled and those origins were dropped, so a stylesheet or a font fetched from anywhere but this origin is now refused rather than merely unnecessary.
 
-Every call to action goes to the console's signup at `https://teachouse.io/signup`, carrying `next=/settings/billing` and, where the reader picked something, `price=<PriceKey>` — the plan's yearly key (`starter_yearly`, `sync_yearly`, `studio_yearly`) from its card, `pack_100` from the packs band, and no `price` at all from "Start free".
+Every call to action goes to the console's signup at `https://teachouse.io/signup`, carrying `next=/settings/billing` and, where the reader picked something, `price=<PriceKey>` — the plan's yearly key (`starter_yearly`, `pro_yearly`, `studio_yearly`) from its card, `pack_100` from the packs band, and no `price` at all from "Start free".
 The console's signup is what honours those two: `next` is where to land, and `price` is the checkout to open on arrival.
 Both `/` and `/pricing` carry the same price list because both render `components/Pricing.astro` from `src/pricing.js`.
 Every price and cap on the site comes from `src/plans.generated.js`, which `cargo run -p tam-typegen` emits from the `tam-limits` plan table the server enforces and `just web-check` diffs; `src/pricing.js` holds only the landing's own phrasing of it, in USD.
@@ -36,7 +36,7 @@ Every value the founder must supply is in `src/site.js` and nowhere else: the lo
 The site links no download: the app card says to download the app once signed in, and the console offers the build.
 
 `/privacy` is the privacy policy, written against how the product is built; a change to what Teachouse collects, where it keeps it or who processes it must move its text and its `updated` date in the same commit.
-`/terms` is still a placeholder for counsel, not legal text, and must be replaced in full rather than edited.
+`/terms` is the terms of service, written against how the product works and bills; a change to plans, refunds, cancellation or what Teachouse keeps must move its text and its `updated` date in the same commit. It names the two marketplaces that connect today, by their full names, in the one sentence that says Teachouse is independent of them.
 
 The structure and the copy decisions are in `docs/notes/design/brand-kit-and-teacher-ui.md`, which supersedes the copy, tokens and pricing of `landing-page.md`.
 The founder owes no artwork: since 2026-09-12 the hero and the challenge are inline SVG compositions drawn in tokens, and the solution is a real capture of the console's Resources board under `public/images/`, recorded under "Amended 2026-09-12" in `landing-page.md`.

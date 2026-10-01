@@ -1,6 +1,7 @@
 //! Stripe's wire concerns: the webhook signature, the price map, the two
-//! secrets, the outbound calls the checkout needs, and the coupon and
-//! promotion-code calls the admin pricing page makes.
+//! secrets, the outbound calls the checkout needs, the coupon and
+//! promotion-code calls the admin pricing page makes, and the charge, refund
+//! and list calls the admin payments page makes.
 //!
 //! The signature half is pure. Nothing in it opens a socket, reads a clock or
 //! touches a database: the caller supplies the raw bytes, the header, the
@@ -237,7 +238,8 @@ impl core::fmt::Debug for SecretKey {
 /// same product differently, and a table compiled in would make the binary
 /// environment-specific. The server reads it from `--stripe-price-map`;
 /// absent, the map is empty, checkout refuses and a completed session grants
-/// nothing but says so on the log.
+/// nothing but says so on the log. Present, it names every key `tam-limits`
+/// sells and nothing else, or the server does not start.
 ///
 /// The value is a [`PriceKey`], not a plan and a rung: what a price sells is
 /// named once in `tam-limits`, and the map only says which Stripe identifier
@@ -252,6 +254,9 @@ pub enum PriceMapError {
     Shape(serde_json::Error),
     /// A value is not one of the price keys `tam-limits` names.
     UnknownKey(String),
+    /// No Stripe price sells these keys, so a checkout for one would be
+    /// refused in front of the seller who chose it.
+    MissingKeys(Vec<PriceKey>),
 }
 
 impl core::fmt::Display for PriceMapError {
@@ -262,6 +267,15 @@ impl core::fmt::Display for PriceMapError {
                 f,
                 "{raw:?} is not a price key; the keys are the ones tam-limits names"
             ),
+            Self::MissingKeys(keys) => {
+                let names: Vec<&str> = keys.iter().map(|key| key.as_str()).collect();
+                write!(
+                    f,
+                    "no Stripe price is mapped to {}; the map names all {} price keys",
+                    names.join(", "),
+                    PriceKey::ALL.len()
+                )
+            }
         }
     }
 }
@@ -270,7 +284,12 @@ impl std::error::Error for PriceMapError {}
 
 impl PriceMap {
     /// Reads the JSON object the `--stripe-price-map` file carries:
-    /// `{ "<stripe_price_id>": "sync_monthly", ... }`.
+    /// `{ "<stripe_price_id>": "pro_monthly", ... }`, one entry or more for
+    /// each of the price keys `tam-limits` names. A value that is not a key,
+    /// and a key no price sells, are both refused: the first is a map written
+    /// against another build, the second a checkout that fails in front of a
+    /// seller. Two prices for one key are allowed, which is how a price that
+    /// was replaced keeps naming what its older subscriptions bought.
     ///
     /// Keyed by Stripe's identifier rather than by ours because that is the
     /// direction a webhook reads it in, and a webhook that could not name
@@ -282,6 +301,13 @@ impl PriceMap {
         for (price, key) in raw {
             let key = PriceKey::parse(&key).ok_or(PriceMapError::UnknownKey(key))?;
             mapped.insert(price, key);
+        }
+        let missing: Vec<PriceKey> = PriceKey::ALL
+            .into_iter()
+            .filter(|key| !mapped.values().any(|held| held == key))
+            .collect();
+        if !missing.is_empty() {
+            return Err(PriceMapError::MissingKeys(missing));
         }
         Ok(Self(mapped))
     }
@@ -753,6 +779,117 @@ struct Price {
     product: Option<String>,
 }
 
+/// One charge, narrowed to what a refund decision reads.
+///
+/// `amount_refunded` and `refunded` are Stripe's own running totals, which
+/// is why a refund's ceiling is read from here rather than from our ledger:
+/// a refund made in Stripe's dashboard counts whether or not the webhook has
+/// told us about it yet.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Charge {
+    pub id: String,
+    #[serde(default)]
+    pub amount: i64,
+    #[serde(default)]
+    pub amount_refunded: i64,
+    #[serde(default)]
+    pub currency: String,
+    #[serde(default)]
+    pub refunded: bool,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default, deserialize_with = "expandable")]
+    pub customer: Option<String>,
+    #[serde(default, deserialize_with = "expandable")]
+    pub payment_intent: Option<String>,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, String>,
+}
+
+/// Why a refund is being made, in Stripe's three words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RefundReason {
+    Duplicate,
+    Fraudulent,
+    RequestedByCustomer,
+}
+
+impl RefundReason {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Duplicate => "duplicate",
+            Self::Fraudulent => "fraudulent",
+            Self::RequestedByCustomer => "requested_by_customer",
+        }
+    }
+}
+
+/// One refund to create. `id` is our refund row's, and names the request's
+/// `Idempotency-Key`: a retried request answers the refund the first one
+/// made instead of returning the money twice.
+#[derive(Debug, Clone)]
+pub struct RefundRequest<'a> {
+    pub id: &'a str,
+    pub charge: &'a str,
+    pub amount_cents: i64,
+    pub reason: RefundReason,
+    pub org: Option<&'a str>,
+}
+
+/// A refund as this code reads it.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Refund {
+    pub id: String,
+    #[serde(default)]
+    pub amount: i64,
+    #[serde(default)]
+    pub currency: String,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default, deserialize_with = "expandable")]
+    pub charge: Option<String>,
+    #[serde(default)]
+    pub created: i64,
+}
+
+/// The Stripe lists the payments sync reads, each filtered by creation time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Listed {
+    Charges,
+    Refunds,
+    Disputes,
+    Invoices,
+}
+
+impl Listed {
+    const fn path(self) -> &'static str {
+        match self {
+            Self::Charges => "/v1/charges",
+            Self::Refunds => "/v1/refunds",
+            Self::Disputes => "/v1/disputes",
+            Self::Invoices => "/v1/invoices",
+        }
+    }
+}
+
+/// A list page read as raw objects: the sync stores each object as it
+/// arrived, so it reads them without narrowing.
+#[derive(Debug, Deserialize)]
+struct RawList {
+    #[serde(default)]
+    data: Vec<serde_json::Value>,
+    #[serde(default)]
+    has_more: bool,
+}
+
+/// The most pages one list is followed across: ten thousand objects, which
+/// is far past ninety days of this business and a bound on a runaway loop.
+const LIST_PAGES_MAX: usize = 100;
+
 /// The API version promotion codes are created under.
 ///
 /// Pinned per request rather than inherited from the account, because this
@@ -766,8 +903,8 @@ pub const PROMOTION_CODE_API_VERSION: &str = "2025-09-30.clover";
 /// Coupons read per page when listing; Stripe's maximum.
 const LIST_PAGE: usize = 100;
 
-/// The outbound calls checkout, the billing page and the admin pricing page
-/// need, and nothing else.
+/// The outbound calls checkout, the billing page and the admin pricing and
+/// payments pages need, and nothing else.
 #[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
@@ -1200,13 +1337,119 @@ impl Client {
             .product
             .ok_or_else(|| StripeError::Malformed("a price carried no product".to_owned()))
     }
+
+    /// One charge, with Stripe's running refund total.
+    pub async fn retrieve_charge(&self, id: &str) -> Result<Charge, StripeError> {
+        self.get(&format!("/v1/charges/{id}")).await
+    }
+
+    /// Refunds part or all of one charge, answering the refund.
+    ///
+    /// The `Idempotency-Key` is our refund row's id, so a request retried
+    /// after a lost reply — a double click, a dropped connection — answers
+    /// the refund the first attempt made. The same id rides in `metadata`
+    /// so the webhook's `refund.updated` and the dashboard both say which
+    /// row it belongs to.
+    pub async fn create_refund(&self, request: &RefundRequest<'_>) -> Result<Refund, StripeError> {
+        let mut form = vec![
+            ("charge".to_owned(), request.charge.to_owned()),
+            ("amount".to_owned(), request.amount_cents.to_string()),
+            ("reason".to_owned(), request.reason.as_str().to_owned()),
+            ("metadata[refund]".to_owned(), request.id.to_owned()),
+            ("metadata[source]".to_owned(), "teachouse-admin".to_owned()),
+        ];
+        if let Some(org) = request.org {
+            form.push(("metadata[org]".to_owned(), org.to_owned()));
+        }
+        let response = self
+            .http
+            .post(format!("{}/v1/refunds", self.base))
+            .bearer_auth(self.key.expose())
+            .header("Idempotency-Key", format!("refund-{}", request.id))
+            .form(&form)
+            .send()
+            .await
+            .map_err(|error| StripeError::Transport(error.to_string()))?;
+        Self::read(response).await
+    }
+
+    /// Every object of one list created at or after `since` (Unix seconds),
+    /// newest first, followed across pages up to [`LIST_PAGES_MAX`].
+    pub async fn list_created_since(
+        &self,
+        listed: Listed,
+        since: i64,
+    ) -> Result<Vec<serde_json::Value>, StripeError> {
+        let mut objects: Vec<serde_json::Value> = Vec::new();
+        for _page in 0..LIST_PAGES_MAX {
+            let after = objects
+                .last()
+                .and_then(|object| object.get("id"))
+                .and_then(serde_json::Value::as_str)
+                .map(|id| format!("&starting_after={id}"))
+                .unwrap_or_default();
+            let page: RawList = self
+                .get(&format!(
+                    "{}?limit={LIST_PAGE}&created[gte]={since}{after}",
+                    listed.path()
+                ))
+                .await?;
+            let more = page.has_more && !page.data.is_empty();
+            objects.extend(page.data);
+            if !more {
+                break;
+            }
+        }
+        Ok(objects)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{verify, SignatureRefusal, SIGNATURE_TOLERANCE_SECS};
+    use super::{verify, PriceMap, PriceMapError, SignatureRefusal, SIGNATURE_TOLERANCE_SECS};
     use hmac::{Hmac, Mac};
+    use tam_limits::PriceKey;
     use tam_types::Timestamp;
+
+    /// A complete map, one `price_<key>` per key, with `skip` left out and
+    /// `extra` added.
+    fn price_map(skip: Option<PriceKey>, extra: &[(&str, &str)]) -> String {
+        let mut entries: serde_json::Map<String, serde_json::Value> = PriceKey::ALL
+            .into_iter()
+            .filter(|key| Some(*key) != skip)
+            .map(|key| (format!("price_{}", key.as_str()), key.as_str().into()))
+            .collect();
+        for (price, key) in extra {
+            entries.insert((*price).to_owned(), (*key).into());
+        }
+        serde_json::Value::Object(entries).to_string()
+    }
+
+    #[test]
+    fn a_price_map_names_every_key_and_nothing_else() {
+        let whole = PriceMap::parse(&price_map(None, &[]));
+        assert_eq!(whole.map(|map| map.len()).ok(), Some(PriceKey::ALL.len()));
+
+        let without_pro = PriceMap::parse(&price_map(Some(PriceKey::ProYearly), &[]));
+        let message = without_pro.map(|_| ()).map_err(|error| error.to_string());
+        assert_eq!(
+            message,
+            Err(
+                "no Stripe price is mapped to pro_yearly; the map names all 11 price keys"
+                    .to_owned()
+            )
+        );
+
+        let stale = PriceMap::parse(&price_map(None, &[("price_old", "sync_monthly")]));
+        assert!(matches!(stale, Err(PriceMapError::UnknownKey(raw)) if raw == "sync_monthly"));
+
+        // A replaced price keeps naming what its older subscriptions bought.
+        let replaced = PriceMap::parse(&price_map(None, &[("price_old", "pro_monthly")]));
+        assert_eq!(
+            replaced.ok().and_then(|map| map.key_for("price_old")),
+            Some(PriceKey::ProMonthly)
+        );
+    }
 
     const SECRET: &str = "whsec_the_development_endpoint_secret";
     const BODY: &[u8] = br#"{"id":"evt_01","type":"checkout.session.completed"}"#;

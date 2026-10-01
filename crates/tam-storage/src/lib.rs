@@ -41,6 +41,7 @@ pub mod notifications;
 pub mod operators;
 pub mod org;
 pub mod overrides;
+pub mod payments;
 mod product;
 pub mod profile;
 pub mod pruning;
@@ -176,6 +177,11 @@ pub use notifications::{
 pub use operators::{OperatorEvent, OperatorRecord, OperatorRepo};
 pub use org::{OrgRecord, OrgRepo, OrgWrite};
 pub use overrides::OverrideRepo;
+pub use payments::{
+    ClaimedRefundMail, MailRequest, ObservedRefund, PaymentBackofficeRepo, PaymentEvent,
+    PaymentKind, PaymentRepo, Refund, RefundMailOutcome, RefundStatus, AUTO_REFUND_MAIL_SETTING,
+    REFUND_MAIL_ATTEMPTS, SYNC_EVENT_PREFIX,
+};
 pub use product::{
     fill_rights, fill_tes_licence, has_live_payload, insert_product, live_count_in, offer_cover,
     offer_payload, restore_product, soft_delete_product, title_of, update_product, CoverOffer,

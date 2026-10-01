@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO payment_event (id, org_id, provider_event_id, kind, amount_cents, currency, provider_object_id, charge_id, payment_intent_id, invoice_id, customer_id, status, reason, occurred_at, raw, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) ON CONFLICT (provider_event_id) DO UPDATE SET org_id = coalesce(EXCLUDED.org_id, payment_event.org_id), amount_cents = EXCLUDED.amount_cents, currency = EXCLUDED.currency, charge_id = coalesce(EXCLUDED.charge_id, payment_event.charge_id), payment_intent_id = coalesce(EXCLUDED.payment_intent_id, payment_event.payment_intent_id), invoice_id = coalesce(EXCLUDED.invoice_id, payment_event.invoice_id), customer_id = coalesce(EXCLUDED.customer_id, payment_event.customer_id), status = EXCLUDED.status, reason = EXCLUDED.reason, occurred_at = EXCLUDED.occurred_at, raw = EXCLUDED.raw",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Jsonb",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "73d1503132214315206df1be3ce677f16b36d9c01edd163970836dc050a4b61d"
+}

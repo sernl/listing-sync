@@ -33,22 +33,22 @@ describe('reading a written intent', () => {
 	it('answers the price the landing page asked to buy', () => {
 		expect(
 			parseIntent(
-				JSON.stringify({ next: '/settings/billing', price: 'sync_yearly', at: NOW - HOUR }),
+				JSON.stringify({ next: '/settings/billing', price: 'pro_yearly', at: NOW - HOUR }),
 				NOW
 			)
-		).toEqual({ next: '/settings/billing', price: 'sync_yearly', at: NOW - HOUR });
+		).toEqual({ next: '/settings/billing', price: 'pro_yearly', at: NOW - HOUR });
 	});
 
 	// A key left behind by a sign-up nobody finished must not open a checkout
 	// weeks later, when the seller has no idea what asked for it.
 	it('drops a record older than a day', () => {
-		const raw = JSON.stringify({ next: null, price: 'sync_yearly', at: NOW - 25 * HOUR });
+		const raw = JSON.stringify({ next: null, price: 'pro_yearly', at: NOW - 25 * HOUR });
 		expect(parseIntent(raw, NOW)).toBeNull();
 	});
 
 	it('keeps one written just inside the day', () => {
-		const raw = JSON.stringify({ next: null, price: 'sync_yearly', at: NOW - 23 * HOUR });
-		expect(parseIntent(raw, NOW)?.price).toBe('sync_yearly');
+		const raw = JSON.stringify({ next: null, price: 'pro_yearly', at: NOW - 23 * HOUR });
+		expect(parseIntent(raw, NOW)?.price).toBe('pro_yearly');
 	});
 
 	// The key is a string in another tab's storage. A price this deployment
@@ -66,9 +66,9 @@ describe('reading a written intent', () => {
 	it('reads nothing from an absent, malformed or undated record', () => {
 		expect(parseIntent(null, NOW)).toBeNull();
 		expect(parseIntent('{', NOW)).toBeNull();
-		expect(parseIntent('"sync_yearly"', NOW)).toBeNull();
-		expect(parseIntent(JSON.stringify({ price: 'sync_yearly' }), NOW)).toBeNull();
-		expect(parseIntent(JSON.stringify({ price: 'sync_yearly', at: 'now' }), NOW)).toBeNull();
+		expect(parseIntent('"pro_yearly"', NOW)).toBeNull();
+		expect(parseIntent(JSON.stringify({ price: 'pro_yearly' }), NOW)).toBeNull();
+		expect(parseIntent(JSON.stringify({ price: 'pro_yearly', at: 'now' }), NOW)).toBeNull();
 	});
 });
 
@@ -92,10 +92,10 @@ describe('the stored intent', () => {
 		const held = store();
 		vi.useFakeTimers();
 		vi.setSystemTime(NOW);
-		writeIntent({ next: '/settings/billing', price: 'sync_monthly' });
+		writeIntent({ next: '/settings/billing', price: 'pro_monthly' });
 		expect(JSON.parse(held.get(INTENT_KEY) ?? 'null')).toEqual({
 			next: '/settings/billing',
-			price: 'sync_monthly',
+			price: 'pro_monthly',
 			at: NOW
 		});
 	});
@@ -123,13 +123,13 @@ describe('the stored intent', () => {
 		const held = store({
 			[INTENT_KEY]: JSON.stringify({
 				next: '/settings/billing',
-				price: 'sync_yearly',
+				price: 'pro_yearly',
 				at: Date.now()
 			})
 		});
 		expect(peekIntent()?.next).toBe('/settings/billing');
 		expect(held.has(INTENT_KEY)).toBe(true);
-		expect(readIntent()?.price).toBe('sync_yearly');
+		expect(readIntent()?.price).toBe('pro_yearly');
 	});
 
 	it('is cleared even where it no longer parses', () => {
@@ -152,7 +152,7 @@ describe('the stored intent', () => {
 				throw new Error('refused');
 			}
 		});
-		expect(() => writeIntent({ next: null, price: 'sync_yearly' })).not.toThrow();
+		expect(() => writeIntent({ next: null, price: 'pro_yearly' })).not.toThrow();
 		expect(readIntent()).toBeNull();
 	});
 });

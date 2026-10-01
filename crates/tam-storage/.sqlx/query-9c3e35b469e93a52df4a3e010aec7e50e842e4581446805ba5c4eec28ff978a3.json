@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM payment_event WHERE kind = $1 AND provider_object_id = $2 AND starts_with(provider_event_id, $3) AND id <> $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9c3e35b469e93a52df4a3e010aec7e50e842e4581446805ba5c4eec28ff978a3"
+}

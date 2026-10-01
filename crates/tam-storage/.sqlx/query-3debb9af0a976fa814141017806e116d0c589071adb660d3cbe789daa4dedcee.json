@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE refund SET mail_due_at = $2, mail_attempts = mail_attempts + 1 WHERE id = ( SELECT id FROM refund WHERE mail_requested_at IS NOT NULL AND mail_sent_at IS NULL AND mail_due_at <= $1 AND org_id IS NOT NULL AND mail_attempts < $3 ORDER BY mail_due_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id, org_id AS \"org_id!\", amount_cents, currency, mail_attempts",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "org_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "amount_cents",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "currency",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "mail_attempts",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Timestamptz",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3debb9af0a976fa814141017806e116d0c589071adb660d3cbe789daa4dedcee"
+}

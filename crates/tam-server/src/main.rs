@@ -21,6 +21,7 @@ mod campaigns;
 mod downloads;
 mod exchange_rates;
 mod notify;
+mod refund_mail;
 mod serving;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -33,7 +34,8 @@ use tam_api::{
 use tam_blob_store::{BackendFlags, BlobBackend, STORE_ROOT_FLAG, STORE_S3_FLAG};
 use tam_engine::outbox::{drain, Deliverer, LoggingDeliverer};
 use tam_storage::{
-    ImportBatchRepo, MailCampaignRepo, NotificationRepo, OperatorRepo, OutboxRepo, PruneRepo,
+    ImportBatchRepo, MailCampaignRepo, NotificationRepo, OperatorRepo, OutboxRepo, PaymentRepo,
+    PruneRepo,
 };
 use tam_types::Timestamp;
 use tokio_util::sync::CancellationToken;
@@ -81,7 +83,7 @@ const STRIPE_WEBHOOK_SECRET_FLAG: &str = "--stripe-webhook-secret";
 const STRIPE_SECRET_KEY_FLAG: &str = "--stripe-secret-key";
 
 /// The file mapping Stripe price identifiers to what they sell: a JSON
-/// object of `"<stripe_price_id>": "sync_monthly"`, whose values are the
+/// object of `"<stripe_price_id>": "pro_monthly"`, whose values are the
 /// price keys `tam-limits` names.
 ///
 /// A file rather than a flag value, because the map is per environment and
@@ -705,9 +707,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 mail.console_url.clone(),
                 loops.clone(),
             );
+            // The refund mail the Payments page queues: global rows on the
+            // application pool too, from the seller-facing sender.
+            eprintln!("tam-server sending refund mail from {}", mail.email_from);
+            refund_mail::spawn(
+                PaymentRepo::new(state.pool.clone()),
+                notify::AuthAddresses::new(&mail.auth_internal_url, &mail.auth_internal_secret)?,
+                notify::ResendRelay::new(&mail.resend_api_key, &mail.email_from)?,
+                mail.console_url.clone(),
+                loops.clone(),
+            );
         }
         None => eprintln!(
-            "tam-server sending no operator campaigns ({RESEND_API_KEY_FLAG} unset); queued ones wait"
+            "tam-server sending no operator campaigns or refund mail ({RESEND_API_KEY_FLAG} unset); queued ones wait"
         ),
     }
 
@@ -1926,8 +1938,8 @@ mod composition {
         );
         assert_eq!(
             landing.header(header::CACHE_CONTROL),
-            "no-cache",
-            "a cutover has to be visible on the next request"
+            "public, max-age=300",
+            "a page is held five minutes, so a cutover reaches a browser within them"
         );
         assert!(
             landing.header(header::ETAG).starts_with('"'),

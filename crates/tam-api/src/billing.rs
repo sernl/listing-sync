@@ -114,10 +114,10 @@ impl Cadence {
     #[must_use]
     const fn of(key: PriceKey) -> Option<Self> {
         match key {
-            PriceKey::StarterMonthly | PriceKey::SyncMonthly | PriceKey::StudioMonthly => {
+            PriceKey::StarterMonthly | PriceKey::ProMonthly | PriceKey::StudioMonthly => {
                 Some(Self::Monthly)
             }
-            PriceKey::StarterYearly | PriceKey::SyncYearly | PriceKey::StudioYearly => {
+            PriceKey::StarterYearly | PriceKey::ProYearly | PriceKey::StudioYearly => {
                 Some(Self::Yearly)
             }
             PriceKey::Pack20
@@ -977,6 +977,11 @@ pub(crate) async fn webhook(
     let Ok(event) = serde_json::from_slice::<Event>(&body) else {
         return Err(unreadable());
     };
+    // The payments ledger first, keyed on Stripe's event id, so the
+    // operators' Payments page sees every money event whatever the handling
+    // below makes of it. A fault here is answered as one, and Stripe's retry
+    // re-runs both halves; each is idempotent on its own key.
+    crate::payments::record_webhook(&state, &body).await?;
     match event.kind.as_str() {
         CHECKOUT_COMPLETED => checkout_completed(&state, &event).await,
         INVOICE_PAID => invoice_paid(&state, &event).await,
@@ -1066,8 +1071,8 @@ async fn checkout_completed(state: &AppState, event: &Event) -> Result<StatusCod
             }
             PriceKey::StarterMonthly
             | PriceKey::StarterYearly
-            | PriceKey::SyncMonthly
-            | PriceKey::SyncYearly
+            | PriceKey::ProMonthly
+            | PriceKey::ProYearly
             | PriceKey::StudioMonthly
             | PriceKey::StudioYearly => {
                 let Some(subscription) = expanded.subscription.as_deref() else {

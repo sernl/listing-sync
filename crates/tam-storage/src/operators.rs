@@ -140,10 +140,12 @@ impl OperatorRepo {
     }
 
     /// Every grant and withdrawal of one person's marking, oldest first.
+    /// The refunds the same person issued share the table (migration 0102)
+    /// and are not part of the marking's story.
     pub async fn events(&self, user: UserId) -> Result<Vec<OperatorEvent>, StorageError> {
         let rows = sqlx::query!(
             "SELECT action, actor, at FROM platform_operator_event \
-             WHERE user_id = $1 ORDER BY at, id",
+             WHERE user_id = $1 AND action IN ('grant', 'revoke') ORDER BY at, id",
             uuid_to_db(user.0),
         )
         .fetch_all(&self.pool)

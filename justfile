@@ -392,21 +392,26 @@ landing-check:
     cd apps/landing && npm run build
     just landing-copy-gate
 
-# Prose on this site names no marketplace. Two things do, and they are both
+# Prose on this site names no marketplace. Three things do, and they are all
 # deliberate: `availability` in `apps/landing/src/site.js`, which is the one
-# sentence that says what connects today, and the bands the founder's mockup of
-# 2026-09-11 draws marks in -- the hero strip, the catalogue card, the challenge
-# illustration, the testimonials -- and the app box's reason, which the founder
+# sentence that says what connects today, `homeTitle` beside it, which is the
+# line a search result shows and so names what a seller searches for, and the
+# bands the founder's mockup of 2026-09-11 draws marks in -- the hero strip, the
+# catalogue card, the challenge illustration, the testimonials -- and the app
+# box's reason, which the founder
 # asked on 2026-09-30 to name the two marketplaces with no API. Everything else speaks of the marketplaces a
 # seller sells in without naming one or implying a count, which is what lets the
-# copy stay true as marketplaces are added.
+# copy stay true as marketplaces are added. The terms of service are the one
+# page that names them in prose, by their full trade names rather than the
+# abbreviations this gate looks for, once, in the sentence disclaiming any
+# affiliation: a legal disclaimer has to say who it disclaims.
 #
 # So an element carrying `data-marketplace-band` is struck out whole, tag and
 # children together, before the search: the attribute is the author saying "the
 # mockup names marketplaces here", and it is visible in the markup where a
 # reviewer reads it. `alt` text is struck out too, because it must name the
-# marketplace whose mark it describes, and so is `availability`, read from
-# `site.js` so this recipe holds no second copy of it.
+# marketplace whose mark it describes, and so are `availability` and
+# `homeTitle`, read from `site.js` so this recipe holds no second copy of them.
 #
 # The gate reads the built HTML rather than the sources, so a comment
 # explaining why prices are in USD is not a failure and a sentence a reader
@@ -417,7 +422,7 @@ landing-copy-gate:
     cd apps/landing
     node --input-type=module -e '
     import { readdirSync, readFileSync } from "node:fs";
-    import { availability } from "./src/site.js";
+    import { availability, homeTitle } from "./src/site.js";
 
     const pages = [];
     const walk = (dir) => {
@@ -489,7 +494,8 @@ landing-copy-gate:
     for (const page of pages) {
       const prose = stripBands(readFileSync(page, "utf8"))
         .replaceAll(/alt="[^"]*"/g, "")
-        .replaceAll(availability, "");
+        .replaceAll(availability, "")
+        .replaceAll(homeTitle, "");
       for (const hit of prose.matchAll(named)) stray.push(page + ": " + hit[0].trim());
     }
 

@@ -135,7 +135,7 @@ export type FormField =
 export type FormProblems = Partial<Record<FormField, string>>;
 
 /** What is wrong with the form, field by field; empty when it can be saved.
- *  `today` is `YYYY-MM-DD` in UTC, the day the server compares windows
+ *  `today` is `YYYY-MM-DD` in New Zealand, the day the server compares windows
  *  against. Only the fields the current kind shows are checked. */
 export function formProblems(form: PricingForm, today: string): FormProblems {
 	const { kind, terms } = form;
@@ -206,7 +206,7 @@ const SHORT_MONTHS = [
 	'Dec'
 ];
 
-/** A window of UTC days as a person says it: "1–31 Oct", "28 Oct – 3 Nov",
+/** A window of New Zealand days as a person says it: "1–31 Oct", "28 Oct – 3 Nov",
  *  and the years only where the two days fall in different ones. */
 export function windowLabel(from: string, until: string): string {
 	if (!DATE.test(from) || !DATE.test(until)) {

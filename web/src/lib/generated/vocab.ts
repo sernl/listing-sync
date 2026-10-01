@@ -780,8 +780,8 @@ export const PLAN_IDS: readonly Plan[] = [
 export type PriceKey =
   | "starter_monthly"
   | "starter_yearly"
-  | "sync_monthly"
-  | "sync_yearly"
+  | "pro_monthly"
+  | "pro_yearly"
   | "studio_monthly"
   | "studio_yearly"
   | "pack_20"
@@ -793,8 +793,8 @@ export type PriceKey =
 export const PRICE_KEYS: readonly PriceKey[] = [
   "starter_monthly",
   "starter_yearly",
-  "sync_monthly",
-  "sync_yearly",
+  "pro_monthly",
+  "pro_yearly",
   "studio_monthly",
   "studio_yearly",
   "pack_20",

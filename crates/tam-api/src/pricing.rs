@@ -14,9 +14,11 @@
 //! A sale's banner and theme are presentation rather than terms, and live in
 //! `site_setting` under `sale.<id>` beside the site's own theme and banner.
 //!
-//! Windows are calendar dates on the wire and half-open instants in storage:
-//! `until` is inclusive on the page and turns into the midnight (UTC) after
-//! it, so one comparison decides "open" everywhere.
+//! Windows are calendar dates on the wire and half-open instants in storage.
+//! A date is a New Zealand day ([`crate::time::SITE_TIMEZONE`]): `from` turns
+//! into the midnight there that begins it and the inclusive `until` into the
+//! midnight there after it, so one comparison decides "open" everywhere and a
+//! sale for 1 October opens when 1 October begins for the founder.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -37,10 +39,8 @@ use crate::site::ThemeName;
 use crate::stripe::{
     self, CheckoutDiscount, CouponAmount, CouponDuration, CouponRequest, PromotionCodeRequest,
 };
-use crate::time::{date_of, date_start};
+use crate::time::{site_date_of, site_day_end, site_day_start};
 use crate::AppState;
-
-const MILLIS_PER_DAY: i64 = 86_400_000;
 
 /// The `site_setting` key prefix a sale's presentation is stored under.
 pub const SALE_SETTING_PREFIX: &str = "sale.";
@@ -190,7 +190,7 @@ fn state_of(discount: &Discount, now: Timestamp) -> DiscountState {
 }
 
 fn last_day(discount: &Discount) -> String {
-    date_of(Timestamp(discount.ends_at.0 - 1))
+    site_date_of(Timestamp(discount.ends_at.0 - 1))
 }
 
 impl DiscountView {
@@ -220,7 +220,7 @@ impl DiscountView {
             duration: duration.to_owned(),
             duration_months,
             price_keys: discount.price_keys.clone(),
-            from: date_of(discount.starts_at),
+            from: site_date_of(discount.starts_at),
             until: last_day(discount),
             state: state_of(discount, now),
             stripe_coupon_id: discount.stripe_coupon_id.clone(),
@@ -566,10 +566,10 @@ fn check_terms(body: &TermsBody, now: Timestamp) -> Result<Terms, APIError> {
             price_keys.push(key);
         }
     }
-    let (Ok(starts_at), Ok(last)) = (date_start(&body.from), date_start(&body.until)) else {
+    let (Ok(starts_at), Ok(ends_at)) = (site_day_start(&body.from), site_day_end(&body.until))
+    else {
         return Err(invalid("Dates are written YYYY-MM-DD."));
     };
-    let ends_at = Timestamp(last.0 + MILLIS_PER_DAY);
     if ends_at.0 <= starts_at.0 {
         return Err(invalid("The last day comes on or after the first day."));
     }
@@ -741,7 +741,7 @@ pub(crate) async fn create_sale(
         return Err(conflict(&format!(
             "\"{}\" already runs {} to {}. End it first, or pick other dates.",
             clash.name,
-            date_of(clash.starts_at),
+            site_date_of(clash.starts_at),
             last_day(&clash)
         )));
     }

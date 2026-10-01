@@ -318,6 +318,12 @@ async fn the_backoffice_role_sees_only_the_tables_it_was_granted(app: PgPool) {
         // Migration 0098's decision, migration 0084's reason: usage is read
         // through the application pool with the organisation pinned.
         "usage_counter",
+        // Migration 0102's decision: the payments ledger and its refunds
+        // are written and read on the application pool by operator routes
+        // and the webhook, so the role that crosses the tenant fence is
+        // granted nothing here either.
+        "payment_event",
+        "refund",
     ] {
         let denied = sqlx::query(&format!("SELECT count(*) FROM {table}"))
             .fetch_one(&backoffice)

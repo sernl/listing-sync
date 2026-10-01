@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT ON (customer_id) customer_id AS \"customer!\", org_id AS \"org!\" FROM payment_event WHERE customer_id IS NOT NULL AND org_id IS NOT NULL ORDER BY customer_id, occurred_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "customer!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "org!",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "278b3badb953a8e09aace8983c4651d65ab2abee7cd4684c1ec6651858516e2d"
+}

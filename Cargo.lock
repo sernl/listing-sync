@@ -6684,6 +6684,8 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "calamine",
+ "chrono",
+ "chrono-tz",
  "futures-util",
  "hmac",
  "http-body-util",
@@ -6769,7 +6771,7 @@ dependencies = [
 
 [[package]]
 name = "tam-desktop"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "blake3",
  "bytes",

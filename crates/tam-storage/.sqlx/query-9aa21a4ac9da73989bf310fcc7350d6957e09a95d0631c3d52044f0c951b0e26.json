@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT org_id FROM payment_event WHERE org_id IS NOT NULL AND (provider_object_id = ANY($1) OR charge_id = ANY($1) OR payment_intent_id = ANY($1) OR invoice_id = ANY($1)) ORDER BY occurred_at LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "org_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "9aa21a4ac9da73989bf310fcc7350d6957e09a95d0631c3d52044f0c951b0e26"
+}

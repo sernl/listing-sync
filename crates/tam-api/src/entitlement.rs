@@ -596,6 +596,10 @@ pub struct UsageView {
     /// Moves this month's commits spent, from `move_ledger`.
     pub moves_this_month: i64,
     pub month_resets_at: Timestamp,
+    /// Whether this organisation has bound a storefront, which is when the
+    /// free lifetime moves land in the balance. Until then Look's five are
+    /// still to come, and the console says so rather than reading "0 left".
+    pub free_moves_unlocked: bool,
 }
 
 impl UsageView {
@@ -613,6 +617,7 @@ impl UsageView {
             ai_fills: usage.ai_fills,
             moves_this_month: usage.moves_this_month,
             month_resets_at: usage.month_resets_at,
+            free_moves_unlocked: usage.free_moves_unlocked,
         }
     }
 }
