@@ -15,6 +15,14 @@ axum = "0.8"
 # adapter; a spreadsheet parser behind that gate would push both crates through
 # it for no reason. Both are read and written only by `import_batch`.
 calamine = { workspace = true }
+# The company's calendar. A sale's days and a theme's days are days in New
+# Zealand, where Teachouse operates, and turning "1 October" into the instant
+# it begins needs Pacific/Auckland's daylight-saving rules. The same two
+# crates, versions and features `tam-storage` already links for schedules, so
+# no package joins the lock: the zone table is compiled in rather than read
+# from the host's `/usr/share/zoneinfo`.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono-tz = { version = "0.10", default-features = false }
 futures-util = { version = "0.3", default-features = false }
 hmac = { workspace = true }
 jsonwebtoken = { version = "9.3", default-features = false }

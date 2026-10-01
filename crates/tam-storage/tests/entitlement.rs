@@ -631,6 +631,12 @@ async fn the_accrual_stops_at_the_cap_and_a_storefront_is_granted_once(pool: PgP
         moves: 5,
         at: NOW,
     };
+    let unlocked = |usage: tam_storage::Usage| usage.free_moves_unlocked;
+    assert_eq!(
+        repo.usage(ORG_B, NOW).await.map(unlocked).ok(),
+        Some(false),
+        "before any storefront the free moves are still to come"
+    );
     assert!(repo
         .grant_storefront_allowance(ORG_B, claim)
         .await
@@ -641,6 +647,11 @@ async fn the_accrual_stops_at_the_cap_and_a_storefront_is_granted_once(pool: PgP
             .expect("the read runs")
             .available,
         5
+    );
+    assert_eq!(
+        repo.usage(ORG_B, NOW).await.map(unlocked).ok(),
+        Some(true),
+        "the claim is what unlocks them"
     );
     assert!(
         !repo

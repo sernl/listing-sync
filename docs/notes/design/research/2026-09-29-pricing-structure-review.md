@@ -248,7 +248,7 @@ The landing page (`Pricing.astro`):
 No change. All eleven price keys and amounts stay the same:
 
 - `starter_*`: $12 / $96
-- `sync_*`: $29 / $240
+- `pro_*` (then `sync_*`): $29 / $240
 - `studio_*`: $59 / $480
 - `pack_*`: $47 / $77 / $127 / $247 / $397
 
@@ -265,7 +265,7 @@ The founder reviewed the live Billing page and changed these figures. Prices, pr
 | Collections | 1 | 5 | **10** (was 20) | no cap |
 | AI description fill | – | **none** (was 50 a month, "coming soon") | 200 a month | 600 a month |
 
-- **Sync is sold as Pro.** The plan id stays `subscriber` and the price keys stay `sync_monthly` / `sync_yearly`, because stored grants and the Stripe price map carry them. Only the name a seller reads changes; the integrator renames the Stripe product.
+- **Sync is sold as Pro.** The plan id stays `subscriber`, because stored grants carry it. The price keys were `sync_monthly` / `sync_yearly` and became `pro_monthly` / `pro_yearly` in 0.18.0, so the key, the Stripe product, its prices' nicknames and lookup keys all say Pro; subscriptions store Stripe's price identifier, which did not change.
 - **Look's previews are a lifetime allowance**, like its five trial moves: `Capabilities::previews_lifetime` is 5 and `previews_per_month` is 0 on Look, and `Capabilities::previews()` says which window a gate reads. The lifetime figure is every month's `usage_counter` row summed, so no second counter can drift from the monthly one, and a plan change needs no conversion.
 - **No plan has unlimited previews.** Every preview is a render and a stored image; 100 a month covers a Studio shop refreshed over a term.
 - **Starter carries no AI fill.** The offer starts at Pro, so the Starter card no longer says "AI description fill, coming soon".

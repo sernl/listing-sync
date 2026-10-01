@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 /// Three paid tiers above the free one, weakest first: `Starter`,
 /// `Subscriber` (sold as "Pro" since the 2026-09-30 founder review; first
 /// sold as "Sync", and the spelling predates both and is kept because stored
-/// grants and the `sync_*` price keys carry it) and `Studio`
+/// grants carry it; the price keys say `pro_*`) and `Studio`
 /// (`docs/notes/design/research/2026-09-27-subscription-tiers.md`, which also
 /// withdraws the founding offer and the paid onboarding session).
 ///
@@ -478,10 +478,10 @@ pub enum PriceKey {
     StarterMonthly,
     #[serde(rename = "starter_yearly")]
     StarterYearly,
-    #[serde(rename = "sync_monthly")]
-    SyncMonthly,
-    #[serde(rename = "sync_yearly")]
-    SyncYearly,
+    #[serde(rename = "pro_monthly")]
+    ProMonthly,
+    #[serde(rename = "pro_yearly")]
+    ProYearly,
     #[serde(rename = "studio_monthly")]
     StudioMonthly,
     #[serde(rename = "studio_yearly")]
@@ -503,8 +503,8 @@ impl PriceKey {
     pub const ALL: [Self; 11] = [
         Self::StarterMonthly,
         Self::StarterYearly,
-        Self::SyncMonthly,
-        Self::SyncYearly,
+        Self::ProMonthly,
+        Self::ProYearly,
         Self::StudioMonthly,
         Self::StudioYearly,
         Self::Pack20,
@@ -519,8 +519,8 @@ impl PriceKey {
         match self {
             Self::StarterMonthly => "starter_monthly",
             Self::StarterYearly => "starter_yearly",
-            Self::SyncMonthly => "sync_monthly",
-            Self::SyncYearly => "sync_yearly",
+            Self::ProMonthly => "pro_monthly",
+            Self::ProYearly => "pro_yearly",
             Self::StudioMonthly => "studio_monthly",
             Self::StudioYearly => "studio_yearly",
             Self::Pack20 => "pack_20",
@@ -547,7 +547,7 @@ impl PriceKey {
     pub const fn plan(self) -> Option<Plan> {
         match self {
             Self::StarterMonthly | Self::StarterYearly => Some(Plan::Starter),
-            Self::SyncMonthly | Self::SyncYearly => Some(Plan::Subscriber),
+            Self::ProMonthly | Self::ProYearly => Some(Plan::Subscriber),
             Self::StudioMonthly | Self::StudioYearly => Some(Plan::Studio),
             Self::Pack20 | Self::Pack50 | Self::Pack100 | Self::Pack250 | Self::Pack500 => None,
         }
@@ -643,9 +643,9 @@ impl AiStatus {
 /// what re-opens these. `2026-09-29-pricing-structure-review.md` sections 3
 /// and 4 re-test the prices and the yearly saving against the category and
 /// keep both; section 6 makes Pro the recommended plan. The 2026-09-30
-/// addendum renames Sync to Pro and leaves every price where it is; the
-/// `sync_*` keys keep their spelling because the processor's prices are
-/// mapped onto them.
+/// addendum renames Sync to Pro and leaves every price where it is, and 0.18.0 renames the `sync_*` keys
+/// to `pro_*` so our key and Stripe's product, nickname and lookup key
+/// read alike.
 ///
 /// No trial days on any row. Look is the trial, there is no other, and a
 /// 14-day clock beside a free plan that never expires was two offers where
@@ -679,8 +679,8 @@ pub const PLANS: [PlanRow; 4] = [
         name: "Pro",
         monthly_cents: Some(2_900),
         yearly_cents: Some(24_000),
-        monthly_key: Some(PriceKey::SyncMonthly),
-        yearly_key: Some(PriceKey::SyncYearly),
+        monthly_key: Some(PriceKey::ProMonthly),
+        yearly_key: Some(PriceKey::ProYearly),
         trial_days: 0,
         recommended: true,
         tagline: "For teachers who add resources every week.",
@@ -1620,8 +1620,8 @@ mod tests {
             match key {
                 PriceKey::StarterMonthly
                 | PriceKey::StarterYearly
-                | PriceKey::SyncMonthly
-                | PriceKey::SyncYearly
+                | PriceKey::ProMonthly
+                | PriceKey::ProYearly
                 | PriceKey::StudioMonthly
                 | PriceKey::StudioYearly
                 | PriceKey::Pack20
@@ -1813,7 +1813,7 @@ mod tests {
         for key in PriceKey::ALL {
             assert!(key.list_cents() > 0, "{} has no list price", key.as_str());
         }
-        assert_eq!(PriceKey::SyncYearly.list_cents(), 24_000);
+        assert_eq!(PriceKey::ProYearly.list_cents(), 24_000);
         assert_eq!(PriceKey::Pack100.list_cents(), 12_700);
     }
 

@@ -81,7 +81,7 @@ const STRIPE_WEBHOOK_SECRET_FLAG: &str = "--stripe-webhook-secret";
 const STRIPE_SECRET_KEY_FLAG: &str = "--stripe-secret-key";
 
 /// The file mapping Stripe price identifiers to what they sell: a JSON
-/// object of `"<stripe_price_id>": "sync_monthly"`, whose values are the
+/// object of `"<stripe_price_id>": "pro_monthly"`, whose values are the
 /// price keys `tam-limits` names.
 ///
 /// A file rather than a flag value, because the map is per environment and

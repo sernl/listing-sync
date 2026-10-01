@@ -608,8 +608,8 @@ in
           lib.types.enum [
             "starter_monthly"
             "starter_yearly"
-            "sync_monthly"
-            "sync_yearly"
+            "pro_monthly"
+            "pro_yearly"
             "studio_monthly"
             "studio_yearly"
             "pack_20"
@@ -621,7 +621,7 @@ in
         );
         default = { };
         example = {
-          "price_01abc" = "sync_monthly";
+          "price_01abc" = "pro_monthly";
           "price_01def" = "pack_100";
         };
         description = ''

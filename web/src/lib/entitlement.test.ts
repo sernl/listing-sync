@@ -41,6 +41,7 @@ function usage(over: Partial<EntitlementUsage> = {}): EntitlementUsage {
 		ai_fills: 0,
 		moves_this_month: 0,
 		month_resets_at: Date.UTC(2026, 9, 1),
+		free_moves_unlocked: true,
 		...over
 	};
 }
@@ -311,7 +312,31 @@ describe('the usage table on the Billing page', () => {
 		});
 		expect(row(usageTable(usage(), caps('free'), { available: 0 }), 'moves')).toMatchObject({
 			included: `${caps('free').free_moves_lifetime} to try`,
-			full: true
+			left: '0',
+			full: true,
+			note: null
+		});
+	});
+
+	// Look's five land when a marketplace is first connected. Before that the
+	// row counts them as still to come instead of reading "0 left, none left".
+	it('counts Look’s free moves as still to come until a marketplace is connected', () => {
+		const free = caps('free').free_moves_lifetime;
+		const locked = usage({ free_moves_unlocked: false });
+		expect(row(usageTable(locked, caps('free'), { available: 0 }), 'moves')).toMatchObject({
+			used: 0,
+			included: `${free} to try`,
+			left: `${free}`,
+			full: false,
+			note: 'Unlocked when you connect a marketplace'
+		});
+		expect(row(usageTable(locked, caps('free'), { available: 20 }), 'moves')).toMatchObject({
+			left: `${20 + free}`,
+			note: `${free} of them unlocked when you connect a marketplace`
+		});
+		expect(row(usageTable(locked, caps('subscriber'), { available: 25 }), 'moves')).toMatchObject({
+			left: '25',
+			note: null
 		});
 	});
 });

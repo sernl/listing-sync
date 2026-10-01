@@ -470,6 +470,7 @@
 									<span class="bill-usage-fig">
 										<span>{row.left}</span>
 										{#if row.full}<span class="sub">None left</span>{/if}
+										{#if row.note !== null}<span class="sub">{row.note}</span>{/if}
 									</span>
 								</td>
 							</tr>

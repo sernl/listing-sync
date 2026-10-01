@@ -237,7 +237,8 @@ impl core::fmt::Debug for SecretKey {
 /// same product differently, and a table compiled in would make the binary
 /// environment-specific. The server reads it from `--stripe-price-map`;
 /// absent, the map is empty, checkout refuses and a completed session grants
-/// nothing but says so on the log.
+/// nothing but says so on the log. Present, it names every key `tam-limits`
+/// sells and nothing else, or the server does not start.
 ///
 /// The value is a [`PriceKey`], not a plan and a rung: what a price sells is
 /// named once in `tam-limits`, and the map only says which Stripe identifier
@@ -252,6 +253,9 @@ pub enum PriceMapError {
     Shape(serde_json::Error),
     /// A value is not one of the price keys `tam-limits` names.
     UnknownKey(String),
+    /// No Stripe price sells these keys, so a checkout for one would be
+    /// refused in front of the seller who chose it.
+    MissingKeys(Vec<PriceKey>),
 }
 
 impl core::fmt::Display for PriceMapError {
@@ -262,6 +266,15 @@ impl core::fmt::Display for PriceMapError {
                 f,
                 "{raw:?} is not a price key; the keys are the ones tam-limits names"
             ),
+            Self::MissingKeys(keys) => {
+                let names: Vec<&str> = keys.iter().map(|key| key.as_str()).collect();
+                write!(
+                    f,
+                    "no Stripe price is mapped to {}; the map names all {} price keys",
+                    names.join(", "),
+                    PriceKey::ALL.len()
+                )
+            }
         }
     }
 }
@@ -270,7 +283,12 @@ impl std::error::Error for PriceMapError {}
 
 impl PriceMap {
     /// Reads the JSON object the `--stripe-price-map` file carries:
-    /// `{ "<stripe_price_id>": "sync_monthly", ... }`.
+    /// `{ "<stripe_price_id>": "pro_monthly", ... }`, one entry or more for
+    /// each of the price keys `tam-limits` names. A value that is not a key,
+    /// and a key no price sells, are both refused: the first is a map written
+    /// against another build, the second a checkout that fails in front of a
+    /// seller. Two prices for one key are allowed, which is how a price that
+    /// was replaced keeps naming what its older subscriptions bought.
     ///
     /// Keyed by Stripe's identifier rather than by ours because that is the
     /// direction a webhook reads it in, and a webhook that could not name
@@ -282,6 +300,13 @@ impl PriceMap {
         for (price, key) in raw {
             let key = PriceKey::parse(&key).ok_or(PriceMapError::UnknownKey(key))?;
             mapped.insert(price, key);
+        }
+        let missing: Vec<PriceKey> = PriceKey::ALL
+            .into_iter()
+            .filter(|key| !mapped.values().any(|held| held == key))
+            .collect();
+        if !missing.is_empty() {
+            return Err(PriceMapError::MissingKeys(missing));
         }
         Ok(Self(mapped))
     }
@@ -1204,9 +1229,47 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
-    use super::{verify, SignatureRefusal, SIGNATURE_TOLERANCE_SECS};
+    use super::{verify, PriceMap, PriceMapError, SignatureRefusal, SIGNATURE_TOLERANCE_SECS};
     use hmac::{Hmac, Mac};
+    use tam_limits::PriceKey;
     use tam_types::Timestamp;
+
+    /// A complete map, one `price_<key>` per key, with `skip` left out and
+    /// `extra` added.
+    fn price_map(skip: Option<PriceKey>, extra: &[(&str, &str)]) -> String {
+        let mut entries: serde_json::Map<String, serde_json::Value> = PriceKey::ALL
+            .into_iter()
+            .filter(|key| Some(*key) != skip)
+            .map(|key| (format!("price_{}", key.as_str()), key.as_str().into()))
+            .collect();
+        for (price, key) in extra {
+            entries.insert((*price).to_owned(), (*key).into());
+        }
+        serde_json::Value::Object(entries).to_string()
+    }
+
+    #[test]
+    fn a_price_map_names_every_key_and_nothing_else() {
+        let whole = PriceMap::parse(&price_map(None, &[]));
+        assert_eq!(whole.map(|map| map.len()).ok(), Some(PriceKey::ALL.len()));
+
+        let without_pro = PriceMap::parse(&price_map(Some(PriceKey::ProYearly), &[]));
+        let message = without_pro.map(|_| ()).map_err(|error| error.to_string());
+        assert_eq!(
+            message,
+            Err("no Stripe price is mapped to pro_yearly; the map names all 11 price keys".to_owned())
+        );
+
+        let stale = PriceMap::parse(&price_map(None, &[("price_old", "sync_monthly")]));
+        assert!(matches!(stale, Err(PriceMapError::UnknownKey(raw)) if raw == "sync_monthly"));
+
+        // A replaced price keeps naming what its older subscriptions bought.
+        let replaced = PriceMap::parse(&price_map(None, &[("price_old", "pro_monthly")]));
+        assert_eq!(
+            replaced.ok().and_then(|map| map.key_for("price_old")),
+            Some(PriceKey::ProMonthly)
+        );
+    }
 
     const SECRET: &str = "whsec_the_development_endpoint_secret";
     const BODY: &[u8] = br#"{"id":"evt_01","type":"checkout.session.completed"}"#;
