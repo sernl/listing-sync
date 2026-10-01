@@ -117,8 +117,11 @@ pub fn site_day_end(raw: &str) -> Result<Timestamp, NotAnInstant> {
 pub fn site_day(at: Timestamp) -> i64 {
     match Utc.timestamp_millis_opt(at.0).single() {
         Some(utc) => {
-            i64::from(utc.with_timezone(&SITE_TIMEZONE).date_naive().num_days_from_ce())
-                - EPOCH_DAYS_FROM_CE
+            i64::from(
+                utc.with_timezone(&SITE_TIMEZONE)
+                    .date_naive()
+                    .num_days_from_ce(),
+            ) - EPOCH_DAYS_FROM_CE
         }
         // Hundreds of thousands of years out, where `chrono` stops; no stored
         // instant is there, and the UTC day is the nearest honest answer.
@@ -162,7 +165,6 @@ pub fn days_from_date(raw: &str) -> Result<i64, NotAnInstant> {
     }
     Ok(days_from_civil(year, month, day))
 }
-
 
 /// Reads an RFC 3339 instant as milliseconds since the epoch.
 ///
@@ -277,8 +279,14 @@ mod tests {
 
     #[test]
     fn the_site_day_turns_at_midnight_in_new_zealand() {
-        assert_eq!(site_day(at("2026-09-30T10:59:59Z")), days_from_date("2026-09-30").unwrap_or(0));
-        assert_eq!(site_day(at("2026-09-30T11:00:00Z")), days_from_date("2026-10-01").unwrap_or(0));
+        assert_eq!(
+            site_day(at("2026-09-30T10:59:59Z")),
+            days_from_date("2026-09-30").unwrap_or(0)
+        );
+        assert_eq!(
+            site_day(at("2026-09-30T11:00:00Z")),
+            days_from_date("2026-10-01").unwrap_or(0)
+        );
         assert_eq!(site_date_of(at("2026-09-30T11:00:00Z")), "2026-10-01");
         assert_eq!(site_date_of(at("2026-10-31T10:59:59.999Z")), "2026-10-31");
     }

@@ -53,7 +53,6 @@ const SALE_REDEEM_BY: i64 = 1_793_444_399;
 
 const PLAN_KEY: &str = "pro_monthly";
 const PACK_KEY: &str = "pack_100";
-const PLAN_PRICE: &str = "price_pro_monthly";
 const PACK_PRICE: &str = "price_pack_100";
 
 /// One request the double received: method, path, the form it carried and
@@ -184,8 +183,8 @@ fn state(pool: PgPool, base: &str, wall: fn() -> Timestamp) -> AppState {
                 SecretKey::new("sk_test_development_only".to_owned()),
                 base.to_owned(),
             )),
-            // Every key as `price_<key>`, which `PLAN_PRICE` and `PACK_PRICE`
-            // are two of: the server refuses a map that leaves one out.
+            // Every key as `price_<key>`, `PACK_PRICE` among them: the server
+            // refuses a map that leaves one out.
             stripe_price_map: PriceMap::parse(
                 &serde_json::Value::Object(
                     tam_limits::PriceKey::ALL
@@ -458,7 +457,10 @@ async fn a_sale_opens_when_its_first_day_begins_in_new_zealand(pool: PgPool) {
     create_sale(&pool, &base).await;
 
     let (_headers, before) = plans(&pool, &base, || NZ_DAY_BEFORE).await;
-    assert_eq!(before.sale, None, "30 September in New Zealand is before it");
+    assert_eq!(
+        before.sale, None,
+        "30 September in New Zealand is before it"
+    );
     let (_headers, opening) = plans(&pool, &base, || NZ_FIRST_DAY).await;
     let sale = opening.sale.expect("1 October in New Zealand is inside it");
     assert_eq!(sale.until, "2026-10-31");

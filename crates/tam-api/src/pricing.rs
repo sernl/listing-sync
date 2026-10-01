@@ -566,7 +566,8 @@ fn check_terms(body: &TermsBody, now: Timestamp) -> Result<Terms, APIError> {
             price_keys.push(key);
         }
     }
-    let (Ok(starts_at), Ok(ends_at)) = (site_day_start(&body.from), site_day_end(&body.until)) else {
+    let (Ok(starts_at), Ok(ends_at)) = (site_day_start(&body.from), site_day_end(&body.until))
+    else {
         return Err(invalid("Dates are written YYYY-MM-DD."));
     };
     if ends_at.0 <= starts_at.0 {

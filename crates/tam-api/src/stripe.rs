@@ -1257,7 +1257,10 @@ mod tests {
         let message = without_pro.map(|_| ()).map_err(|error| error.to_string());
         assert_eq!(
             message,
-            Err("no Stripe price is mapped to pro_yearly; the map names all 11 price keys".to_owned())
+            Err(
+                "no Stripe price is mapped to pro_yearly; the map names all 11 price keys"
+                    .to_owned()
+            )
         );
 
         let stale = PriceMap::parse(&price_map(None, &[("price_old", "sync_monthly")]));
