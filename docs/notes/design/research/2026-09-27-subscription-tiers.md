@@ -103,7 +103,7 @@ Keep them, unchanged ($47 / 20 · $77 / 50 · $127 / 100 · $247 / 250 · $397 /
 
 - **Founding 100** (`founding_yearly`, $180 first year, $192 in years 2–3, 20 extra moves). Production runs Stripe in test mode, so no live payment has been taken. Before deploying, check `select count(*) from billing_subscription where provider_price_id = '<founding price id>'`.
   - **None** (expected): nothing to do beyond archiving the Stripe price.
-  - **Any**: grandfather them. In Stripe, move each subscription to the new `sync_yearly` price with a coupon that gives the same money: 25% off the first year, then 20% off for two more years (the Discounts slice's coupon mechanism). Their 20 bonus moves are already in `move_ledger` with source `founding` and do not expire; that history stays. The ledger's `founding` source and `service_booking` stay in the schema as history; no new rows are written.
+  - **Any**: grandfather them. In Stripe, move each subscription to the new `pro_yearly` price with a coupon that gives the same money: 25% off the first year, then 20% off for two more years (the Discounts slice's coupon mechanism). Their 20 bonus moves are already in `move_ledger` with source `founding` and do not expire; that history stays. The ledger's `founding` source and `service_booking` stay in the schema as history; no new rows are written.
 - **"Move with me"** (`move_with_me`, $99). No longer sold. Existing `service_booking` rows are history and stay. Anyone with a booked session keeps it; the founder honours it by hand.
 - **Existing Sync subscribers** keep their plan, price and moves exactly; Sync did not change. The only new thing they see is that Studio is now on sale above them.
 - **Operator Studio grants** (founder trials) keep working: the operator rung still only ever raises Studio's allowance.
@@ -123,8 +123,8 @@ Create in test mode first, then live. One Product per plan and one Price per cad
 |---|---|---|---|
 | Teachouse Starter | `starter_monthly` | month | 12.00 |
 | Teachouse Starter | `starter_yearly` | year | 96.00 |
-| Teachouse Sync | `sync_monthly` | month | 29.00 (exists) |
-| Teachouse Sync | `sync_yearly` | year | 240.00 (exists) |
+| Teachouse Pro | `pro_monthly` | month | 29.00 (exists) |
+| Teachouse Pro | `pro_yearly` | year | 240.00 (exists) |
 | Teachouse Studio | `studio_monthly` | month | 59.00 |
 | Teachouse Studio | `studio_yearly` | year | 480.00 |
 | Move Pack 20 / 50 / 100 / 250 / 500 | `pack_*` | one-off | 47 / 77 / 127 / 247 / 397 (exist) |

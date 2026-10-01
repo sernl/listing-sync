@@ -43,12 +43,16 @@ const BEFORE: Timestamp = Timestamp(1_790_510_400_000);
 const DURING: Timestamp = Timestamp(1_792_065_600_000);
 /// 2026-11-01T12:00Z, after it.
 const AFTER: Timestamp = Timestamp(1_793_534_400_000);
-/// The last second the sale's coupon may be redeemed: 2026-10-31T23:59:59Z.
-const SALE_REDEEM_BY: i64 = 1_793_491_199;
+/// 2026-09-30T11:00Z: midnight in New Zealand as 1 October begins there.
+const NZ_FIRST_DAY: Timestamp = Timestamp(1_790_766_000_000);
+/// The last millisecond of 30 September in New Zealand.
+const NZ_DAY_BEFORE: Timestamp = Timestamp(1_790_765_999_999);
+/// The last second the sale's coupon may be redeemed: 2026-10-31T10:59:59Z,
+/// the end of 31 October in New Zealand.
+const SALE_REDEEM_BY: i64 = 1_793_444_399;
 
-const PLAN_KEY: &str = "sync_monthly";
+const PLAN_KEY: &str = "pro_monthly";
 const PACK_KEY: &str = "pack_100";
-const PLAN_PRICE: &str = "price_sync_monthly";
 const PACK_PRICE: &str = "price_pack_100";
 
 /// One request the double received: method, path, the form it carried and
@@ -179,9 +183,17 @@ fn state(pool: PgPool, base: &str, wall: fn() -> Timestamp) -> AppState {
                 SecretKey::new("sk_test_development_only".to_owned()),
                 base.to_owned(),
             )),
-            stripe_price_map: PriceMap::parse(&format!(
-                r#"{{"{PLAN_PRICE}":"{PLAN_KEY}","{PACK_PRICE}":"{PACK_KEY}"}}"#
-            ))
+            // Every key as `price_<key>`, `PACK_PRICE` among them: the server
+            // refuses a map that leaves one out.
+            stripe_price_map: PriceMap::parse(
+                &serde_json::Value::Object(
+                    tam_limits::PriceKey::ALL
+                        .into_iter()
+                        .map(|key| (format!("price_{}", key.as_str()), key.as_str().into()))
+                        .collect(),
+                )
+                .to_string(),
+            )
             .expect("the fixture price map parses"),
             ..Config::default()
         },
@@ -434,6 +446,24 @@ async fn the_price_list_announces_a_sale_only_inside_its_window(pool: PgPool) {
 
     let (_headers, after) = plans(&pool, &base, || AFTER).await;
     assert_eq!(after.sale, None, "the sale closes after its last day");
+}
+
+/// A sale's days are New Zealand days: one entered for 1 October is open
+/// from midnight there, 11:00 UTC on 30 September, and not a moment before.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_sale_opens_when_its_first_day_begins_in_new_zealand(pool: PgPool) {
+    provision(&pool).await;
+    let (base, _log) = stripe_double().await;
+    create_sale(&pool, &base).await;
+
+    let (_headers, before) = plans(&pool, &base, || NZ_DAY_BEFORE).await;
+    assert_eq!(
+        before.sale, None,
+        "30 September in New Zealand is before it"
+    );
+    let (_headers, opening) = plans(&pool, &base, || NZ_FIRST_DAY).await;
+    let sale = opening.sale.expect("1 October in New Zealand is inside it");
+    assert_eq!(sale.until, "2026-10-31");
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]

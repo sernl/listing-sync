@@ -117,10 +117,10 @@ describe('the preview line', () => {
 			formPreview(
 				form(
 					{ kind: 'code', code: 'TEACHER10', limit: 50 },
-					{ by: 'amount', dollars: 10, keys: ['sync_monthly'], duration: 'repeating', months: 3 }
+					{ by: 'amount', dollars: 10, keys: ['pro_monthly'], duration: 'repeating', months: 3 }
 				)
 			)
-		).toBe('TEACHER10: $10 off sync_monthly, first 3 months, 1–31 Oct, up to 50 uses');
+		).toBe('TEACHER10: $10 off pro_monthly, first 3 months, 1–31 Oct, up to 50 uses');
 	});
 
 	it('says a window across months and years in full', () => {

@@ -12,6 +12,7 @@
 	import StatusPill, { type Tone } from '$lib/StatusPill.svelte';
 	import { toast } from '$lib/toast';
 	import { dollars } from '$lib/pages/account/plans';
+	import { DAYS_NOTE, siteToday } from '$lib/pages/admin/site-days';
 	import {
 		STATE_LABEL,
 		codeRows,
@@ -52,8 +53,8 @@
 	const priceKeys = $derived(pricing.data?.price_keys ?? []);
 	const stripeless = $derived(pricing.data?.stripe_configured === false);
 
-	// UTC, because the server's windows are UTC days.
-	const today = new Date().toISOString().slice(0, 10);
+	// New Zealand's, because the server's windows are New Zealand days.
+	const today = siteToday();
 
 	const TONE: Record<DiscountState, Tone> = {
 		scheduled: 'run',
@@ -230,7 +231,7 @@
 			<p class="pr-card-line">
 				<Icon name="calendar" size={14} />
 				{windowLabel(row.from, row.until)}
-				<span class="quiet">({row.from} to {row.until}, UTC)</span>
+				<span class="quiet">({row.from} to {row.until})</span>
 			</p>
 			{#if row.banner}
 				<p class="pr-card-line">
@@ -264,7 +265,7 @@
 	<PageHead
 		icon="tag"
 		title="Pricing"
-		description="Sales, one-off discounts and discount codes. Each one is a Stripe coupon."
+		description="Sales, one-off discounts and discount codes. Each one is a Stripe coupon. {DAYS_NOTE}"
 	/>
 
 	{#if pricing.isPending}
@@ -290,7 +291,7 @@
 						<h2 id="pr-running">Running now</h2>
 						<Explain title="How a sale works" label="How it works">
 							<p>
-								A sale takes a percentage off every plan between its first and last day (UTC).
+								A sale takes a percentage off every plan between its first and last day.
 								Every plan checkout applies it by itself, and the pricing pages strike the old
 								price and show the banner.
 							</p>
@@ -494,7 +495,7 @@
 										onblur={leave('from')}
 										aria-invalid={problemOf('from') !== null}
 									/>
-									{@render problem('from', 'Days are UTC.')}
+									{@render problem('from', '')}
 								</Field>
 								<Field label="Last day" id="pricing-until" required>
 									<input

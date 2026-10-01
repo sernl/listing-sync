@@ -155,8 +155,8 @@ async fn anyone_reads_the_switches_and_a_fresh_site_has_them_all_off(pool: PgPoo
     assert_eq!(answer.status, StatusCode::OK, "no session is needed");
     assert_eq!(
         answer.cache_control.as_deref(),
-        Some("public, max-age=60"),
-        "the public read is cached for a minute"
+        Some("private, max-age=60"),
+        "the public read is cached by the browser for a minute and by no shared cache"
     );
     let view = site(&answer);
     assert!(!view.maintenance.on);

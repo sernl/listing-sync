@@ -37,6 +37,7 @@ function usage(over: Partial<EntitlementUsage> = {}): EntitlementUsage {
 		ai_fills: 0,
 		moves_this_month: 0,
 		month_resets_at: 0,
+		free_moves_unlocked: true,
 		...over
 	};
 }

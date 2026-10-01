@@ -1070,6 +1070,9 @@ export interface EntitlementUsage {
 	ai_fills: number;
 	moves_this_month: number;
 	month_resets_at: number;
+	/** Whether a storefront has been bound, which is when Look's free moves
+	 *  land in the balance. Before it they are still to come. */
+	free_moves_unlocked: boolean;
 }
 
 /** Where an organisation's plan came from.
@@ -3349,7 +3352,7 @@ export const api = {
 	billing: () => request<BillingView>('/v1/billing'),
 
 	/** Opens a Stripe Checkout Session for one price key and answers where to
-	 *  send the browser. The key is ours — `sync_monthly`, `pack_100`,
+	 *  send the browser. The key is ours — `pro_monthly`, `pack_100`,
 	 *  `studio_yearly` — never a Stripe price id: the server owns that map, and
 	 *  a client that could name a Stripe price could name any Stripe price. */
 	billingCheckout: (priceKey: PriceKey, code?: string) =>

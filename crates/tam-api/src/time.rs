@@ -1,18 +1,34 @@
-//! Reading and writing the one instant format this crate parses by hand.
+//! Reading and writing the one instant format this crate parses by hand, and
+//! the company's calendar.
 //!
-//! Hand-written rather than delegated to a date library because this crate
-//! holds no calendar dependency and the accepted shape is narrow: a calendar
-//! date, a time, an optional fractional part truncated to milliseconds, and
-//! either `Z` or a numeric offset. Anything else is refused rather than
-//! guessed at, so a format we have not seen fails visibly instead of landing
-//! a wrong instant in a column something orders by.
+//! The instant parser is hand-written rather than delegated to a date library
+//! because the accepted shape is narrow: a calendar date, a time, an optional
+//! fractional part truncated to milliseconds, and either `Z` or a numeric
+//! offset. Anything else is refused rather than guessed at, so a format we
+//! have not seen fails visibly instead of landing a wrong instant in a column
+//! something orders by.
 //!
 //! It lived beside the Paddle webhook until the billing rail moved to Stripe,
 //! which stamps its events with Unix seconds and needs none of this. The
 //! parser stayed because it is still the definition `export::rfc3339` writes
 //! the inverse of, and a renderer with no reader is a format nobody can check.
+//!
+//! The calendar is [`SITE_TIMEZONE`]'s. A day an operator types — a sale's
+//! first day, a theme's last — is a day in New Zealand, where Teachouse
+//! operates, and begins at midnight there: 1 October starts at 11:00 UTC on
+//! 30 September while New Zealand keeps daylight time. Turning a day into an
+//! instant needs that zone's rules, which is the one thing here `chrono-tz`
+//! answers.
 
+use chrono::{Datelike, NaiveDate, TimeZone, Utc};
+use chrono_tz::Tz;
 use tam_types::Timestamp;
+
+/// The zone every calendar day on the admin pages is a day in.
+pub const SITE_TIMEZONE: Tz = chrono_tz::Pacific::Auckland;
+
+/// Days from 0001-01-01, `chrono`'s day one, to 1970-01-01.
+const EPOCH_DAYS_FROM_CE: i64 = 719_163;
 
 const MILLIS_PER_SEC: i64 = 1_000;
 
@@ -64,30 +80,59 @@ pub(crate) const fn civil_from_days(days: i64) -> (i64, i64, i64) {
     (if month <= 2 { year + 1 } else { year }, month, date)
 }
 
-/// Midnight UTC at the start of one `YYYY-MM-DD` calendar date.
+/// The instant one site day — days since 1970-01-01 — begins: midnight in
+/// [`SITE_TIMEZONE`]. `None` only outside `chrono`'s range of years.
 ///
-/// A date that does not exist — 2026-02-30 — is refused rather than rolled
-/// into March: it is read back through [`civil_from_days`] and must name
-/// itself.
-pub fn date_start(raw: &str) -> Result<Timestamp, NotAnInstant> {
-    let mut parts = raw.split('-');
-    let (Some(year), Some(month), Some(day), None) =
-        (parts.next(), parts.next(), parts.next(), parts.next())
-    else {
-        return Err(NotAnInstant);
-    };
-    let (year, month, day) = (digits(year, 4)?, digits(month, 2)?, digits(day, 2)?);
-    let days = days_from_civil(year, month, day);
-    if civil_from_days(days) != (year, month, day) {
-        return Err(NotAnInstant);
-    }
-    Ok(Timestamp(days * 86_400 * MILLIS_PER_SEC))
+/// New Zealand moves its clocks at 02:00 and 03:00 and never at midnight, so
+/// a midnight always exists and is never repeated; `earliest` is asked for
+/// rather than that being assumed.
+fn site_midnight(day: i64) -> Option<Timestamp> {
+    let since_ce = i32::try_from(day.checked_add(EPOCH_DAYS_FROM_CE)?).ok()?;
+    let midnight = NaiveDate::from_num_days_from_ce_opt(since_ce)?.and_hms_opt(0, 0, 0)?;
+    SITE_TIMEZONE
+        .from_local_datetime(&midnight)
+        .earliest()
+        .map(|at| Timestamp(at.timestamp_millis()))
 }
 
-/// The `YYYY-MM-DD` calendar date, in UTC, an instant falls on.
+/// The instant one `YYYY-MM-DD` site day begins: midnight in New Zealand.
+///
+/// A date that does not exist — 2026-02-30 — is refused rather than rolled
+/// into March, by [`days_from_date`].
+pub fn site_day_start(raw: &str) -> Result<Timestamp, NotAnInstant> {
+    site_midnight(days_from_date(raw)?).ok_or(NotAnInstant)
+}
+
+/// The instant one `YYYY-MM-DD` site day ends: midnight in New Zealand at the
+/// start of the next day. Not the start plus 24 hours, which is a day of 23
+/// or 25 hours when the clocks change.
+pub fn site_day_end(raw: &str) -> Result<Timestamp, NotAnInstant> {
+    let next = days_from_date(raw)?.checked_add(1).ok_or(NotAnInstant)?;
+    site_midnight(next).ok_or(NotAnInstant)
+}
+
+/// The site day an instant falls on, as days since 1970-01-01: the date a
+/// calendar in New Zealand shows at that instant.
 #[must_use]
-pub fn date_of(at: Timestamp) -> String {
-    let (year, month, day) = civil_from_days(at.0.div_euclid(MILLIS_PER_SEC).div_euclid(86_400));
+pub fn site_day(at: Timestamp) -> i64 {
+    match Utc.timestamp_millis_opt(at.0).single() {
+        Some(utc) => {
+            i64::from(
+                utc.with_timezone(&SITE_TIMEZONE)
+                    .date_naive()
+                    .num_days_from_ce(),
+            ) - EPOCH_DAYS_FROM_CE
+        }
+        // Hundreds of thousands of years out, where `chrono` stops; no stored
+        // instant is there, and the UTC day is the nearest honest answer.
+        None => at.0.div_euclid(86_400 * MILLIS_PER_SEC),
+    }
+}
+
+/// The `YYYY-MM-DD` site day an instant falls on.
+#[must_use]
+pub fn site_date_of(at: Timestamp) -> String {
+    let (year, month, day) = civil_from_days(site_day(at));
     format!("{year:04}-{month:02}-{day:02}")
 }
 
@@ -119,12 +164,6 @@ pub fn days_from_date(raw: &str) -> Result<i64, NotAnInstant> {
         return Err(NotAnInstant);
     }
     Ok(days_from_civil(year, month, day))
-}
-
-/// The UTC calendar day an instant falls on, as days since 1970-01-01.
-#[must_use]
-pub fn utc_day(at: Timestamp) -> i64 {
-    at.0.div_euclid(86_400 * MILLIS_PER_SEC)
 }
 
 /// Reads an RFC 3339 instant as milliseconds since the epoch.
@@ -213,8 +252,44 @@ fn fraction_millis(fraction: &str) -> Result<i64, NotAnInstant> {
 
 #[cfg(test)]
 mod tests {
-    use super::{instant_from_rfc3339, NotAnInstant};
+    use super::{
+        days_from_date, instant_from_rfc3339, site_date_of, site_day, site_day_end, site_day_start,
+        NotAnInstant,
+    };
     use tam_types::Timestamp;
+
+    fn at(raw: &str) -> Timestamp {
+        instant_from_rfc3339(raw).unwrap_or(Timestamp(i64::MIN))
+    }
+
+    /// A New Zealand day begins at its own midnight: 13 hours ahead of UTC in
+    /// daylight time, 12 in standard time.
+    #[test]
+    fn a_site_day_begins_at_midnight_in_new_zealand() {
+        assert_eq!(site_day_start("2026-10-01"), Ok(at("2026-09-30T11:00:00Z")));
+        assert_eq!(site_day_start("2026-07-01"), Ok(at("2026-06-30T12:00:00Z")));
+        // Daylight time began at 02:00 on Sunday 27 September 2026.
+        assert_eq!(site_day_start("2026-09-27"), Ok(at("2026-09-26T12:00:00Z")));
+        assert_eq!(site_day_start("2026-09-28"), Ok(at("2026-09-27T11:00:00Z")));
+        assert_eq!(site_day_start("2026-02-30"), Err(NotAnInstant));
+        // 4 April 2027 has 25 hours: daylight time ends at 03:00 that day.
+        assert_eq!(site_day_end("2027-04-04"), Ok(at("2027-04-04T12:00:00Z")));
+        assert_eq!(site_day_start("2027-04-04"), Ok(at("2027-04-03T11:00:00Z")));
+    }
+
+    #[test]
+    fn the_site_day_turns_at_midnight_in_new_zealand() {
+        assert_eq!(
+            site_day(at("2026-09-30T10:59:59Z")),
+            days_from_date("2026-09-30").unwrap_or(0)
+        );
+        assert_eq!(
+            site_day(at("2026-09-30T11:00:00Z")),
+            days_from_date("2026-10-01").unwrap_or(0)
+        );
+        assert_eq!(site_date_of(at("2026-09-30T11:00:00Z")), "2026-10-01");
+        assert_eq!(site_date_of(at("2026-10-31T10:59:59.999Z")), "2026-10-31");
+    }
 
     #[test]
     fn the_epoch_and_a_known_instant_read_back_exactly() {

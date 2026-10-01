@@ -57,7 +57,7 @@ const NOW: Timestamp = Timestamp(NOW_SECS * 1_000);
 const PERIOD_END_SECS: i64 = NOW_SECS + 14 * 86_400;
 
 const PACK_PRICE: &str = "price_pack_100";
-const MONTHLY_PRICE: &str = "price_sync_monthly";
+const MONTHLY_PRICE: &str = "price_pro_monthly";
 const STARTER_PRICE: &str = "price_starter_yearly";
 const STUDIO_PRICE: &str = "price_studio_monthly";
 const PACK_SESSION: &str = "cs_pack_01";
@@ -70,11 +70,16 @@ const CUSTOMER: &str = "cus_01";
     clippy::expect_used,
     reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
 )]
+/// Every key sold, each as `price_<key>`: the server refuses a map that
+/// leaves one out, so the fixture is the whole map the four constants above
+/// are entries of.
 fn price_map() -> PriceMap {
-    PriceMap::parse(&format!(
-        r#"{{"{PACK_PRICE}":"pack_100","{MONTHLY_PRICE}":"sync_monthly","{STARTER_PRICE}":"starter_yearly","{STUDIO_PRICE}":"studio_monthly"}}"#
-    ))
-    .expect("the fixture price map parses")
+    let entries: serde_json::Map<String, serde_json::Value> = tam_limits::PriceKey::ALL
+        .into_iter()
+        .map(|key| (format!("price_{}", key.as_str()), key.as_str().into()))
+        .collect();
+    PriceMap::parse(&serde_json::Value::Object(entries).to_string())
+        .expect("the fixture price map parses")
 }
 
 /// A Stripe double answering the outbound calls this file's routes make.

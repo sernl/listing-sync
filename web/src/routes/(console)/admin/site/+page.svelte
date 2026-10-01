@@ -11,6 +11,7 @@
 	import Toggle from '$lib/Toggle.svelte';
 	import { queryKeys } from '$lib/query';
 	import { toast } from '$lib/toast';
+	import { DAYS_NOTE } from '$lib/pages/admin/site-days';
 	import '$lib/flow.css';
 
 	const queryClient = useQueryClient();
@@ -167,15 +168,15 @@
 				n={2}
 				id="theme"
 				title="Seasonal theme"
-				hint="Decorations on the public site between two dates."
+				hint="Decorations on the public site between two dates. {DAYS_NOTE}"
 				summary={themeSummary}
 				done={site.data.theme.active}
 			>
 				{#snippet aside()}
 					<Explain title="How the seasonal theme works" label="How it works">
 						<p>
-							The theme shows on the public site from the first day to the last day, by UTC
-							dates, and a small mark appears in the console’s top bar. Leave a date empty to
+							The theme shows on the public site from the first day to the last day, by New
+							Zealand dates, and a small mark appears in the console’s top bar. Leave a date empty to
 							start now or run with no end.
 						</p>
 						<p>Preview opens the home page wearing that theme, whatever the dates say.</p>

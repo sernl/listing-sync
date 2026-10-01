@@ -114,10 +114,10 @@ impl Cadence {
     #[must_use]
     const fn of(key: PriceKey) -> Option<Self> {
         match key {
-            PriceKey::StarterMonthly | PriceKey::SyncMonthly | PriceKey::StudioMonthly => {
+            PriceKey::StarterMonthly | PriceKey::ProMonthly | PriceKey::StudioMonthly => {
                 Some(Self::Monthly)
             }
-            PriceKey::StarterYearly | PriceKey::SyncYearly | PriceKey::StudioYearly => {
+            PriceKey::StarterYearly | PriceKey::ProYearly | PriceKey::StudioYearly => {
                 Some(Self::Yearly)
             }
             PriceKey::Pack20
@@ -1071,8 +1071,8 @@ async fn checkout_completed(state: &AppState, event: &Event) -> Result<StatusCod
             }
             PriceKey::StarterMonthly
             | PriceKey::StarterYearly
-            | PriceKey::SyncMonthly
-            | PriceKey::SyncYearly
+            | PriceKey::ProMonthly
+            | PriceKey::ProYearly
             | PriceKey::StudioMonthly
             | PriceKey::StudioYearly => {
                 let Some(subscription) = expanded.subscription.as_deref() else {

@@ -4,8 +4,9 @@
 //! One public read and two operator routes over the `site_setting` table
 //! (migration 0087). The public read is what the landing page and the console
 //! fetch at load, so it takes no session and is cached by the browser for a
-//! minute; the operator's read is the same answer uncached, which is what the
-//! admin page and the console's maintenance gate need after a change.
+//! minute and by nothing in between; the operator's read is the same answer
+//! uncached, which is what the admin page and the console's maintenance gate
+//! need after a change.
 //!
 //! [`maintenance_gate`] is the server's half of maintenance mode: `tam-server`
 //! asks it before serving a landing page or the console shell, and it answers
@@ -17,10 +18,11 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use tam_storage::{OperatorRepo, SessionRepo, SiteSettingRepo};
+use tam_types::Timestamp;
 
 use crate::error::{APIError, APIErrorEntry, APIErrorKind};
 use crate::session::{token_from_cookie_header, OperatorContext};
-use crate::time::{days_from_date, utc_day};
+use crate::time::{days_from_date, site_day_end, site_day_start};
 use crate::version::APIVersion;
 use crate::AppState;
 
@@ -32,8 +34,11 @@ const THEME_KEY: &str = "theme";
 const BANNER_KEY: &str = "banner";
 
 /// How long the public answer may be reused. A minute is the longest a switch
-/// flipped by an operator takes to reach a visitor who already loaded it.
-const PUBLIC_CACHE: &str = "public, max-age=60";
+/// flipped by an operator, or a theme reaching its first day, takes to reach
+/// a visitor who already loaded it. `private` keeps it out of shared caches:
+/// Cloudflare stores nothing marked so, so no edge TTL can stretch that minute
+/// into hours, and the answer varies by nothing, so no `Vary` is needed.
+const SITE_CACHE: &str = "private, max-age=60";
 
 /// Longest maintenance message, in characters: one line on a phone, twice.
 const MESSAGE_MAX_CHARS: usize = 280;
@@ -77,8 +82,9 @@ pub enum ThemeName {
     Easter,
 }
 
-/// The theme as stored: a name and the UTC days it runs between, both ends
-/// included. An absent end is open.
+/// The theme as stored: a name and the days it runs between, both ends
+/// included. A day is a New Zealand calendar day, beginning at midnight in
+/// [`crate::time::SITE_TIMEZONE`]. An absent end is open.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThemeSetting {
     pub name: ThemeName,
@@ -154,20 +160,21 @@ fn validation(message: &str) -> APIError {
     )
 }
 
-/// Whether the theme shows on `today`, a UTC day number. A stored date that
+/// Whether the theme shows at `now`: from midnight in New Zealand at the start
+/// of `from` until midnight there at the end of `until`. A stored date that
 /// no longer parses shows nothing rather than everything.
-fn theme_active(theme: &ThemeSetting, today: i64) -> bool {
+fn theme_active(theme: &ThemeSetting, now: Timestamp) -> bool {
     if theme.name == ThemeName::None {
         return false;
     }
-    let starts = match theme.from.as_deref().map(days_from_date) {
+    let starts = match theme.from.as_deref().map(site_day_start) {
         None => true,
-        Some(Ok(from)) => today >= from,
+        Some(Ok(from)) => now >= from,
         Some(Err(_)) => false,
     };
-    let runs = match theme.until.as_deref().map(days_from_date) {
+    let runs = match theme.until.as_deref().map(site_day_end) {
         None => true,
-        Some(Ok(until)) => today <= until,
+        Some(Ok(end)) => now < end,
         Some(Err(_)) => false,
     };
     starts && runs
@@ -200,7 +207,7 @@ pub async fn read_site(state: &AppState) -> Result<SiteView, APIError> {
             _ => {}
         }
     }
-    let active = theme_active(&theme, utc_day((state.wall)()));
+    let active = theme_active(&theme, (state.wall)());
     Ok(SiteView {
         maintenance,
         theme: ThemeView {
@@ -219,7 +226,7 @@ pub(crate) async fn site_view(
     State(state): State<AppState>,
 ) -> Result<Response, APIError> {
     let view = read_site(&state).await?;
-    Ok(([(header::CACHE_CONTROL, PUBLIC_CACHE)], Json(view)).into_response())
+    Ok(([(header::CACHE_CONTROL, SITE_CACHE)], Json(view)).into_response())
 }
 
 /// `GET /{version}/admin/site`: the same answer, uncached, for an operator.
@@ -389,38 +396,33 @@ mod tests {
         }
     }
 
-    /// A literal date's day number; a typo in one reads as the far past, which
-    /// fails the assertion that uses it rather than passing quietly.
-    fn day(raw: &str) -> i64 {
-        days_from_date(raw).unwrap_or(i64::MIN)
+    /// A literal instant; a typo in one reads as the far past, which fails the
+    /// assertion that uses it rather than passing quietly.
+    fn at(raw: &str) -> Timestamp {
+        crate::time::instant_from_rfc3339(raw).unwrap_or(Timestamp(i64::MIN))
     }
 
-    /// Both ends are included, by UTC day.
+    /// Both ends are included, by New Zealand day: 1 October begins there at
+    /// 11:00 UTC on 30 September, and 31 October ends at 11:00 UTC that day.
     #[test]
-    fn a_theme_shows_from_its_first_day_through_its_last() {
+    fn a_theme_shows_from_its_first_day_through_its_last_in_new_zealand() {
         let october = theme(ThemeName::Halloween, Some("2026-10-01"), Some("2026-10-31"));
-        assert!(!theme_active(&october, day("2026-09-30")));
-        assert!(theme_active(&october, day("2026-10-01")));
-        assert!(theme_active(&october, day("2026-10-31")));
-        assert!(!theme_active(&october, day("2026-11-01")));
+        assert!(!theme_active(&october, at("2026-09-30T10:59:59Z")));
+        assert!(theme_active(&october, at("2026-09-30T11:00:00Z")));
+        assert!(theme_active(&october, at("2026-10-31T10:59:59Z")));
+        assert!(!theme_active(&october, at("2026-10-31T11:00:00Z")));
     }
 
     #[test]
     fn an_open_end_runs_forever_and_none_never_shows() {
         let open = theme(ThemeName::Christmas, None, None);
-        assert!(theme_active(&open, day("2031-06-15")));
+        assert!(theme_active(&open, at("2031-06-15T00:00:00Z")));
         let none = theme(ThemeName::None, None, None);
-        assert!(!theme_active(&none, day("2026-10-15")));
+        assert!(!theme_active(&none, at("2026-10-15T00:00:00Z")));
         let broken = theme(ThemeName::Halloween, Some("not-a-date"), None);
-        assert!(!theme_active(&broken, day("2026-10-15")));
-    }
-
-    #[test]
-    fn the_utc_day_turns_at_midnight_utc() {
-        let midnight = crate::time::instant_from_rfc3339("2026-10-01T00:00:00Z").map(utc_day);
-        let before = crate::time::instant_from_rfc3339("2026-09-30T23:59:59Z").map(utc_day);
-        assert_eq!(midnight, Ok(day("2026-10-01")));
-        assert_eq!(before, Ok(day("2026-09-30")));
+        assert!(!theme_active(&broken, at("2026-10-15T00:00:00Z")));
+        let broken_end = theme(ThemeName::Halloween, None, Some("2026-10-32"));
+        assert!(!theme_active(&broken_end, at("2026-10-15T00:00:00Z")));
     }
 
     #[test]

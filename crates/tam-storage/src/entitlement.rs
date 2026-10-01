@@ -386,7 +386,12 @@ impl EntitlementRepo {
                      AND created_at >= date_trunc('month', $2 AT TIME ZONE 'UTC')
                                          AT TIME ZONE 'UTC')          AS "moves_this_month!",
                  (date_trunc('month', $2 AT TIME ZONE 'UTC') + interval '1 month')
-                   AT TIME ZONE 'UTC'                                 AS "month_resets_at!""#,
+                   AT TIME ZONE 'UTC'                                 AS "month_resets_at!",
+                 (EXISTS (SELECT 1 FROM storefront_allowance WHERE org_id = $1)
+                   OR EXISTS (SELECT 1 FROM connection
+                               WHERE org_id = $1
+                                 AND platform_account_digest IS NOT NULL))
+                                                                      AS "free_moves_unlocked!""#,
             uuid_to_db(org.0),
             timestamp_to_db(now)?,
         )
@@ -406,6 +411,7 @@ impl EntitlementRepo {
             ai_fills: row.ai_fills,
             moves_this_month: row.moves_this_month,
             month_resets_at: timestamp_from_db(row.month_resets_at),
+            free_moves_unlocked: row.free_moves_unlocked,
         })
     }
 
@@ -960,6 +966,12 @@ pub struct Usage {
     pub ai_fills: i64,
     pub moves_this_month: i64,
     pub month_resets_at: Timestamp,
+    /// Whether a storefront has been bound, which is when the free lifetime
+    /// moves are granted (`device::bind_storefront`). Before it, Look's five
+    /// are promised rather than held, and the balance does not count them.
+    /// True also when the shop bound had already had its five elsewhere: the
+    /// moves were offered, and are not still to come.
+    pub free_moves_unlocked: bool,
 }
 
 /// What a monthly allowance counts: the `kind` column of `usage_counter`.

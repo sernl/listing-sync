@@ -183,7 +183,7 @@ The line that bites first is UK VAT on B2C digital services, which has no regist
 
 ### Configuring a deployment
 
-1. In the Stripe dashboard, create one Product per thing sold and a Price under each: two recurring prices (monthly and yearly) for each of Starter, Sync and Studio, and five one-time prices for the packs.
+1. In the Stripe dashboard, create one Product per thing sold and a Price under each: two recurring prices (monthly and yearly) for each of Starter, Pro and Studio, and five one-time prices for the packs.
    The prices are the ones `crates/tam-limits` names; the dashboard holds the identifiers and nothing else.
 2. Write the price map to a file the server can read, keyed by Stripe's identifier and valued by our price key:
 
@@ -191,8 +191,8 @@ The line that bites first is UK VAT on B2C digital services, which has no regist
    {
      "price_...": "starter_monthly",
      "price_...": "starter_yearly",
-     "price_...": "sync_monthly",
-     "price_...": "sync_yearly",
+     "price_...": "pro_monthly",
+     "price_...": "pro_yearly",
      "price_...": "studio_monthly",
      "price_...": "studio_yearly",
      "price_...": "pack_20",
