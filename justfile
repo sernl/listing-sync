@@ -399,7 +399,10 @@ landing-check:
 # illustration, the testimonials -- and the app box's reason, which the founder
 # asked on 2026-09-30 to name the two marketplaces with no API. Everything else speaks of the marketplaces a
 # seller sells in without naming one or implying a count, which is what lets the
-# copy stay true as marketplaces are added.
+# copy stay true as marketplaces are added. The terms of service are the one
+# page that names them in prose, by their full trade names rather than the
+# abbreviations this gate looks for, once, in the sentence disclaiming any
+# affiliation: a legal disclaimer has to say who it disclaims.
 #
 # So an element carrying `data-marketplace-band` is struck out whole, tag and
 # children together, before the search: the attribute is the author saying "the

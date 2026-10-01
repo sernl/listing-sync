@@ -1,85 +1,645 @@
 ---
 import Base from '../layouts/Base.astro';
+import { free } from '../pricing.js';
 import { supportEmail } from '../site.js';
+
+/* The dates the text below last changed in substance and took effect. Moving
+   them is part of changing the terms, and section 18 says how a change is
+   announced. */
+const updated = '2 October 2026';
+const effective = '2 October 2026';
+
+/* Read from the plan table the server enforces, so the free plan's name and
+   its one-off moves cannot drift from what the product actually gives. */
+const freeName = free.name;
+const freeMoves = free.capabilities.free_moves_lifetime;
 ---
 
 <Base
-	title="Terms — Teachouse"
-	description="Placeholder for the Teachouse terms of service, pending review by counsel."
+	title="Terms of Service — Teachouse"
+	description="The agreement between you and Teachouse: what the service is, what it is not, how plans and refunds work, and New Zealand law."
 >
 	<section class="section">
-		<div class="wrap prose">
-			<p><span class="pill draft">Draft placeholder</span></p>
-			<h1>Terms</h1>
-			<p class="notice">
-				<strong>These are not the terms of service.</strong> This page records what the terms
-				will have to settle, so that counsel can draft them against how the product actually
-				works. Nothing here binds anyone, and it will be replaced in full before Teachouse takes
-				an account.
+		<div class="wrap prose policy">
+			<h1>Terms of Service</h1>
+			<p class="policy-meta">Last updated {updated} · Effective {effective}</p>
+
+			<p>
+				These terms are the agreement between you and Teachouse. They cover the Teachouse website,
+				the web console and the Teachouse app on your computer or phone. Each section starts with a
+				one-line summary, and the questions people ask most are answered at the end.
+			</p>
+			<p>
+				"Teachouse", "we" and "us" mean the business that runs Teachouse in New Zealand. "You" means
+				the person who holds a Teachouse account, and anyone using Teachouse for them.
 			</p>
 
-			<h2>What counsel needs to know about the product</h2>
+			<nav class="policy-toc" aria-label="Sections of these terms">
+				<ol>
+					<li><a href="#agreement">Agreeing to these terms</a></li>
+					<li><a href="#what">What Teachouse is</a></li>
+					<li><a href="#not">What Teachouse is not</a></li>
+					<li><a href="#account">Your account</a></li>
+					<li><a href="#content">Your resources</a></li>
+					<li><a href="#use">Using Teachouse fairly</a></li>
+					<li><a href="#free">The free plan</a></li>
+					<li><a href="#billing">Plans, packs and payment</a></li>
+					<li><a href="#refunds">Refunds</a></li>
+					<li><a href="#marketplaces">Marketplaces we don't control</a></li>
+					<li><a href="#changes-service">Changes and availability</a></li>
+					<li><a href="#privacy">Your information</a></li>
+					<li><a href="#security">Keeping your account safe</a></li>
+					<li><a href="#ending">Ending your account</a></li>
+					<li><a href="#law">New Zealand consumer law</a></li>
+					<li><a href="#liability">What we're responsible for</a></li>
+					<li><a href="#indemnity">What you're responsible for</a></li>
+					<li><a href="#changes">Changes to these terms</a></li>
+					<li><a href="#disputes">If something goes wrong between us</a></li>
+					<li><a href="#contact">Contact</a></li>
+					<li><a href="#questions">Questions people ask</a></li>
+				</ol>
+			</nav>
+
+			<h2 id="agreement">1. Agreeing to these terms</h2>
+			<p><strong>In short:</strong> using Teachouse means you agree to these terms.</p>
 			<ul>
 				<li>
-					Teachouse is an independent tool. It is not affiliated with, and not endorsed by, any
-					marketplace it connects to.
+					By creating an account or using Teachouse, you agree to these terms and to our{' '}
+					<a class="link" href="/privacy/">Privacy Policy</a>.
 				</li>
 				<li>
-					The seller keeps their own relationship with each marketplace, including that
-					marketplace's own terms, and Teachouse acts within the seller's own account.
+					If you use Teachouse for a school, business or other organisation, you agree for it too,
+					and you confirm you are allowed to.
+				</li>
+				<li>If you don't agree, please don't use Teachouse.</li>
+			</ul>
+
+			<h2 id="what">2. What Teachouse is</h2>
+			<p>
+				<strong>In short:</strong> a tool that helps teachers publish their resources and keep their
+				listings in sync, using their own marketplace accounts from their own devices.
+			</p>
+			<ul>
+				<li>
+					Teachouse keeps one catalogue of your teaching resources and helps you publish, update
+					and track them on the marketplaces where you sell.
 				</li>
 				<li>
-					For marketplaces with no official API, the request that reaches the marketplace comes
-					from the seller's device under the seller's login.
+					It acts inside your own marketplace accounts, and only on your own shop. For a marketplace
+					with no official way for other services to connect, you sign in to that marketplace in
+					the Teachouse app on your own device, and the marketplace work runs there.
 				</li>
 				<li>
-					Files you import from a marketplace stay on your own devices: when you open one in the
-					console, Teachouse passes it from your device to your browser without keeping it. Files
-					you upload to Teachouse yourself are stored by Teachouse so you can use them anywhere,
-					until you delete them.
+					That work only runs while the Teachouse app is open and signed in on one of your devices.
+					If none is open, it waits.
 				</li>
 				<li>
-					For marketplaces with an official API, Teachouse acts under a token that marketplace
-					issued for the purpose.
-				</li>
-				<li>
-					There are two kinds of charge: one-off packs of moves, priced by how many resources
-					you publish, and a subscription plan billed monthly or yearly. Teachouse is the seller
-					and takes payment through Stripe; your card details never reach Teachouse. Personal
-					information is handled as the <a href="/privacy/">Privacy Policy</a> says.
-				</li>
-				<li>
-					Some marketplace rules are enforced as a step the seller must clear before publishing
-					rather than as a warning; a pricing rule that a marketplace imposes on its sellers is
-					the example.
-				</li>
-				<li>
-					The seller decides matters the marketplace makes theirs to decide, such as a tax
-					designation or a copyright assertion; Teachouse never fills one in on their behalf.
+					Some decisions are yours alone, such as who holds the copyright in a resource or how it
+					is treated for tax. Teachouse asks you and never fills them in for you.
 				</li>
 			</ul>
 
-			<h2>Your personal information</h2>
+			<h2 id="not">3. What Teachouse is not</h2>
 			<p>
-				How Teachouse collects, uses and protects personal information is set out in the{' '}
-				<a class="link" href="/privacy/">Privacy Policy</a>, which applies alongside these terms.
+				<strong>In short:</strong> we're independent of every marketplace, and we don't host or sell
+				your resources.
 			</p>
-
-			<h2>Questions this document must answer</h2>
 			<ul>
-				<li>Which jurisdiction's law governs, and where disputes are heard.</li>
-				<li>What is promised about availability, and what is not.</li>
-				<li>Where liability sits when a marketplace changes and a publish fails.</li>
-				<li>How a subscription is cancelled, and what happens to the catalogue afterwards.</li>
-				<li>What happens if a marketplace objects to the tool.</li>
-				<li>How a change to these terms is notified and takes effect.</li>
+				<li>
+					Teachouse is an independent tool. It is not made, owned, endorsed or sponsored by
+					Teachers Pay Teachers, Tes, or any other marketplace it connects to. Their names appear
+					here only to say what Teachouse works with.
+				</li>
+				<li>
+					Your marketplace accounts are between you and each marketplace. Their terms and rules
+					apply to those accounts, and nothing in these terms changes them.
+				</li>
+				<li>
+					We are not a marketplace. We don't sell your resources, show them to buyers, take a share
+					of your sales or handle your buyers' payments.
+				</li>
+				<li>
+					Files you import from a marketplace stay on your own devices. When you open one in the
+					console, it passes from your device through our servers to your browser without being
+					kept. Files you upload to Teachouse yourself are stored for you, until you delete them.
+				</li>
+				<li>We are not your lawyer, accountant or tax adviser.</li>
 			</ul>
 
-			<h2>Contact</h2>
+			<h2 id="account">4. Your account</h2>
 			<p>
-				Questions about these terms go to{' '}
-				<a class="link" href={`mailto:${supportEmail}`}>{supportEmail}</a>.
+				<strong>In short:</strong> you must be 18 or over, hold one account, and keep your sign-in to
+				yourself.
 			</p>
+			<ul>
+				<li>You must be at least 18 to create or use a Teachouse account.</li>
+				<li>
+					Each person may hold one Teachouse account. Please don't open extra accounts to get more
+					free moves or previews.
+				</li>
+				<li>Give us true details, and keep your email address up to date so our notices reach you.</li>
+				<li>
+					Your password and passkeys are for you. If you let someone help run your shop in your
+					account, you are responsible for what they do there.
+				</li>
+				<li>
+					Each marketplace shop can be connected to only one Teachouse account at a time, and the
+					free moves come once per shop.
+				</li>
+			</ul>
+
+			<h2 id="content">5. Your resources</h2>
+			<p>
+				<strong>In short:</strong> what you make stays yours. You let us handle it only to run
+				Teachouse for you, and you promise you have the right to sell it.
+			</p>
+			<ul>
+				<li>
+					You keep every right you have in your resources, listings, images and descriptions. We
+					claim no ownership of them.
+				</li>
+				<li>
+					You give us a limited, non-exclusive, worldwide, royalty-free licence to store, copy,
+					process and send your content only as needed to run Teachouse for you: to keep your
+					catalogue, make previews and thumbnails you ask for, and publish to the marketplaces you
+					choose. The licence ends when the content is deleted from Teachouse, apart from copies in
+					backups, which are replaced within 12 months.
+				</li>
+				<li>
+					We don't use your resources to advertise Teachouse, and we don't give them to anyone
+					else, except the marketplaces you publish to.
+				</li>
+				<li>
+					You promise that you own your content or have permission to publish and sell it, and
+					that publishing it doesn't break anyone's rights or any law.
+				</li>
+				<li>
+					You authorise Teachouse to act in your marketplace accounts as you ask, and you promise
+					you are allowed to give that authority.
+				</li>
+				<li>
+					If you think content stored on Teachouse infringes your rights, email us at{' '}
+					<a class="link" href={`mailto:${supportEmail}`}>{supportEmail}</a> and we will look into it
+					and remove it where that is right.
+				</li>
+			</ul>
+
+			<h2 id="use">6. Using Teachouse fairly</h2>
+			<p>
+				<strong>In short:</strong> use Teachouse for your own shop, within the law and the
+				marketplaces' rules.
+			</p>
+			<p>You must not use Teachouse to:</p>
+			<ul>
+				<li>collect, copy or scrape other sellers' listings, resources or data;</li>
+				<li>
+					get around a marketplace's rules or limits, such as its pricing rules, or act in a shop
+					that isn't yours or that you aren't authorised to run;
+				</li>
+				<li>
+					publish anything illegal, infringing, deceptive, hateful or harmful, or anything that
+					isn't suitable for the teaching audience it is sold to;
+				</li>
+				<li>
+					copy, reverse engineer or take apart Teachouse or the app, except as the law allows;
+				</li>
+				<li>
+					probe, overload or break our systems or security, or reach data that isn't yours;
+				</li>
+				<li>resell Teachouse or build a competing service from it.</li>
+			</ul>
+			<p>
+				Some marketplace rules are built into Teachouse as a step you must clear before publishing.
+				That helps, but following each marketplace's rules is still your responsibility.
+			</p>
+
+			<h2 id="free">7. The free plan</h2>
+			<p>
+				<strong>In short:</strong> {freeName} is free for as long as you like, within its limits.
+			</p>
+			<ul>
+				<li>
+					{freeName} costs nothing and has no end date. Its limits on resources, previews and other
+					features are on the <a class="link" href="/pricing/">pricing page</a>.
+				</li>
+				<li>
+					It includes {freeMoves} free moves, once, when your first shop connects. Connecting another
+					shop, or moving a shop to a new account, does not add more.
+				</li>
+				<li>
+					We may change what {freeName} includes. If we lower a limit, you keep everything you
+					already have; you just can't add more until you are under the new limit or you upgrade.
+				</li>
+			</ul>
+
+			<h2 id="billing">8. Plans, packs and payment</h2>
+			<p>
+				<strong>In short:</strong> prices are in US dollars, paid through Stripe. Plans renew until
+				you cancel; packs are one-off.
+			</p>
+			<ul>
+				<li>
+					Prices are in US dollars (USD) and are shown on the{' '}
+					<a class="link" href="/pricing/">pricing page</a> and in Account → Billing. Teachouse is
+					the seller, and payment is taken by Stripe. Your card details go to Stripe, never to us.
+				</li>
+				<li>
+					Any tax that applies, such as GST, is worked out at checkout and shown before you pay.
+				</li>
+				<li>
+					<strong>Plans</strong> are billed monthly or yearly, in advance, and renew automatically
+					at the end of each period until you cancel.
+				</li>
+				<li>
+					You can <strong>cancel</strong> any time in Account → Billing. Your plan keeps working
+					until the end of the period you have paid for and then doesn't renew. Until that day, you
+					can change your mind with Keep my plan.
+				</li>
+				<li>
+					You can <strong>switch plans</strong> any time. Stripe shows you the new price before
+					anything changes.
+				</li>
+				<li>
+					<strong>Move Packs</strong> are one-off purchases. Their moves last 12 months from the day
+					you buy them and work on any plan.
+				</li>
+				<li>
+					A plan's monthly moves build up to three months' worth, then stop adding. When a plan ends,
+					it stops adding moves, and the moves you have stay yours until they expire.
+				</li>
+				<li>
+					A move counts when a resource is published to a marketplace, whether it arrives as a draft
+					or goes live. A publish that never arrives uses no move.
+				</li>
+				<li>
+					Moves are not money. They have no cash value, can't be transferred or sold, and expire as
+					described above.
+				</li>
+				<li>
+					If a renewal payment fails, your paid features stop until it is paid. Nothing in your
+					catalogue is deleted.
+				</li>
+				<li>
+					Discount codes apply only as described when you use them, and have no cash value.
+				</li>
+				<li>
+					We may change our prices. We will email you at least 30 days before a new price applies to
+					you, and it starts from your next renewal after that. You can cancel before then.
+				</li>
+			</ul>
+
+			<h2 id="refunds">9. Refunds</h2>
+			<p>
+				<strong>In short:</strong> an unused Move Pack can be refunded within 14 days. Other refunds
+				are up to us, except where New Zealand law gives you one.
+			</p>
+			<ul>
+				<li>
+					If you haven't used any moves from a Move Pack, you can ask for a refund within 14 days of
+					buying it.
+				</li>
+				<li>
+					Other payments, including plan periods that have started, are not refundable unless we
+					agree or New Zealand law requires it. Cancelling stops the next renewal; it doesn't refund
+					the current period.
+				</li>
+				<li>
+					To ask for a refund, email <a class="link" href={`mailto:${supportEmail}`}>{supportEmail}</a>
+					from the address you sign in with, and tell us what you bought and when. Refunds go back to
+					the card you paid with.
+				</li>
+			</ul>
+
+			<h2 id="marketplaces">10. Marketplaces we don't control</h2>
+			<p>
+				<strong>In short:</strong> marketplaces can change or block things at any time, so we can't
+				promise every listing will publish or stay in sync.
+			</p>
+			<ul>
+				<li>
+					Marketplaces change their websites, rules and limits without telling us. When they do,
+					publishing, importing or syncing can slow down, fail or stop until we catch up.
+				</li>
+				<li>
+					A marketplace may decide that it doesn't allow tools like Teachouse, or may limit,
+					suspend or close your marketplace account. That is its decision under its terms, and
+					we can't promise it won't happen.
+				</li>
+				<li>
+					We may pause or stop a connection to a marketplace at any time, including if the
+					marketplace asks us to. If we stop one for good, we will tell you.
+				</li>
+				<li>
+					Check your listings on the marketplace itself. The marketplace's own record is the one that
+					counts.
+				</li>
+			</ul>
+
+			<h2 id="changes-service">11. Changes and availability</h2>
+			<p>
+				<strong>In short:</strong> Teachouse is young and still changing. We work to keep it running,
+				but we can't promise it will never be down.
+			</p>
+			<ul>
+				<li>
+					We are building Teachouse as we go. Features will be added, changed and sometimes removed,
+					and parts may be marked as early or coming soon.
+				</li>
+				<li>
+					Teachouse may be unavailable at times, for maintenance, updates or problems outside our
+					control. We try to keep that short and to tell you ahead of planned work.
+				</li>
+				<li>
+					If we remove something you pay for in a way that matters to you, tell us; we will look at
+					a fair outcome, including a refund for the part you can no longer use.
+				</li>
+				<li>
+					If we ever close Teachouse altogether, we will tell you at least 30 days ahead where we
+					can, give you time to export your catalogue, and refund any unused part of a plan paid in
+					advance.
+				</li>
+			</ul>
+
+			<h2 id="privacy">12. Your information</h2>
+			<p>
+				<strong>In short:</strong> the Privacy Policy explains what we collect and why, under the New
+				Zealand Privacy Act 2020.
+			</p>
+			<p>
+				We handle personal information as the <a class="link" href="/privacy/">Privacy Policy</a>
+				says, in line with the Privacy Act 2020. It forms part of these terms. If you publish
+				information about other people in your resources, you are responsible for having the right
+				to do so.
+			</p>
+
+			<h2 id="security">13. Keeping your account safe</h2>
+			<p>
+				<strong>In short:</strong> we protect our side; you protect your sign-in and your devices.
+			</p>
+			<ul>
+				<li>
+					We protect Teachouse with encryption and access controls, as the Privacy Policy describes.
+					No system is perfectly secure.
+				</li>
+				<li>
+					Use a strong password that you don't use anywhere else, or a passkey, and don't share it.
+				</li>
+				<li>
+					Your marketplace sign-ins and imported files live on your own devices, so keep those
+					devices locked and up to date.
+				</li>
+				<li>
+					If a device is lost or you no longer use it, sign it out in Account → Account settings,
+					under Device sign-ins.
+				</li>
+				<li>
+					If you think someone else has got into your account, tell us straight away at{' '}
+					<a class="link" href={`mailto:${supportEmail}`}>{supportEmail}</a>.
+				</li>
+			</ul>
+
+			<h2 id="ending">14. Ending your account</h2>
+			<p>
+				<strong>In short:</strong> you can leave any time. We can close an account that breaks these
+				terms, and where we can, we'll give you time to take your catalogue with you.
+			</p>
+			<ul>
+				<li>
+					You can stop using Teachouse at any time. Cancel any plan in Account → Billing, then email
+					us to close your account. We delete your account and catalogue as the Privacy Policy
+					describes.
+				</li>
+				<li>
+					Before you go, you can export your catalogue to a spreadsheet and download files you
+					uploaded. Files you imported are already on your own devices.
+				</li>
+				<li>
+					We may suspend or close your account if you seriously or repeatedly break these terms,
+					misuse Teachouse, put other people or our systems at risk, or if the law requires it.
+				</li>
+				<li>
+					Unless the breach is serious or the law stops us, we will tell you first, give you a
+					chance to fix it, and give you at least 30 days to export your catalogue.
+				</li>
+				<li>
+					Ending your Teachouse account doesn't remove your listings from any marketplace. Listings
+					that are live stay live, and you manage them on the marketplace.
+				</li>
+				<li>
+					Sections that by their nature should continue, such as 5, 15, 16, 17 and 19, continue after
+					your account ends.
+				</li>
+			</ul>
+
+			<h2 id="law">15. New Zealand consumer law</h2>
+			<p>
+				<strong>In short:</strong> New Zealand law gives consumers rights these terms can't take away.
+				Business customers agree to contract out of some of them.
+			</p>
+			<ul>
+				<li>
+					If you are a consumer, you have rights under the Consumer Guarantees Act 1993 and the Fair
+					Trading Act 1986 that can't be excluded. Nothing in these terms limits those rights.
+				</li>
+				<li>
+					If you use Teachouse for the purposes of a business (selling resources on a marketplace
+					usually is one), you agree that the Consumer Guarantees Act does not apply, and that
+					sections 9, 12A, 13 and 14(1) of the Fair Trading Act do not apply, to the extent the law
+					allows. We both agree this is fair and reasonable, because we are each in trade.
+				</li>
+			</ul>
+
+			<h2 id="liability">16. What we're responsible for</h2>
+			<p>
+				<strong>In short:</strong> we provide Teachouse as it is, and our total liability is limited
+				to what you paid us in the last 12 months, or NZ$100, whichever is greater.
+			</p>
+			<ul>
+				<li>
+					We provide Teachouse with reasonable care and skill. Apart from that, and except where the
+					law says otherwise, it is provided "as is" and "as available", without promises that it
+					will be uninterrupted, error-free or right for your purpose.
+				</li>
+				<li>
+					We are not liable for what marketplaces do, including changes to their sites, the loss of
+					a listing, or action against your marketplace account.
+				</li>
+				<li>
+					We are not liable for lost sales, profits, income or opportunities, or for any indirect
+					loss.
+				</li>
+				<li>
+					Our total liability to you for everything to do with Teachouse is limited to the amount
+					you paid us in the 12 months before the event that caused the claim, or NZ$100,
+					whichever is greater.
+				</li>
+				<li>
+					None of this limits liability that New Zealand law doesn't allow us to limit, including
+					your rights under section 15, or liability for our fraud.
+				</li>
+			</ul>
+
+			<h2 id="indemnity">17. What you're responsible for</h2>
+			<p>
+				<strong>In short:</strong> if your content or your breach of these terms gets us into trouble,
+				you cover the reasonable cost.
+			</p>
+			<p>
+				If someone makes a claim against us because of content you published through Teachouse, or
+				because you broke these terms, the law or a marketplace's rules, you agree to cover our
+				reasonable losses and costs from that claim. This doesn't apply to the extent we caused the
+				problem ourselves, and we will tell you promptly about any such claim.
+			</p>
+
+			<h2 id="changes">18. Changes to these terms</h2>
+			<p>
+				<strong>In short:</strong> we'll tell you before a change that matters, and using Teachouse
+				after it takes effect means you accept it.
+			</p>
+			<ul>
+				<li>
+					We may update these terms as Teachouse and the law change. The date at the top always
+					shows the latest version.
+				</li>
+				<li>
+					For a change that matters, we will email you and show a notice in the console at least 30
+					days before it takes effect. Small fixes, such as wording, take effect straight away.
+				</li>
+				<li>
+					If you keep using Teachouse after a change takes effect, you accept it. If you don't, you
+					can cancel and close your account before then.
+				</li>
+			</ul>
+
+			<h2 id="disputes">19. If something goes wrong between us</h2>
+			<p>
+				<strong>In short:</strong> talk to us first. These terms are governed by New Zealand law, and
+				New Zealand courts decide disputes.
+			</p>
+			<ul>
+				<li>
+					If you have a problem, email us first. We will try in good faith to sort it out with you
+					within 20 working days.
+				</li>
+				<li>
+					These terms are governed by the law of New Zealand. Any dispute that can't be settled
+					between us goes to the New Zealand courts, including the Disputes Tribunal where it has
+					jurisdiction.
+				</li>
+				<li>
+					If any part of these terms can't be enforced, the rest still applies. If we don't enforce
+					a term straight away, we haven't given it up.
+				</li>
+				<li>
+					These terms and the Privacy Policy are the whole agreement between us about Teachouse. You
+					can't transfer this agreement without our written agreement; we may transfer it to a
+					business that takes over Teachouse.
+				</li>
+			</ul>
+
+			<h2 id="contact">20. Contact</h2>
+			<p>
+				<strong>In short:</strong> email is the way to reach us.
+			</p>
+			<p>
+				For questions about these terms, refunds, or anything else, email{' '}
+				<a class="link" href={`mailto:${supportEmail}`}>{supportEmail}</a>. Notices to you go to the
+				email address on your account.
+			</p>
+
+			<h2 id="questions">21. Questions people ask</h2>
+			<div class="panel">
+				<div class="faq">
+					<details class="qa">
+						<summary>Can I use Teachouse for a school account?</summary>
+						<p>
+							Yes, if you are allowed to act for the school and to sell what you publish. Some
+							employment agreements give the school rights in resources made for work, so check
+							yours. When you use Teachouse for a school or business, you agree to these terms for
+							it, and section 15 applies to it as a business.
+						</p>
+					</details>
+					<details class="qa">
+						<summary>Can two people use one account?</summary>
+						<p>
+							Yes. You can both use the same Teachouse account and each install the app on your own
+							device. The account holder is responsible for what happens in it.
+						</p>
+					</details>
+					<details class="qa">
+						<summary>What happens to my listings if I cancel?</summary>
+						<p>
+							Nothing on the marketplace. Your plan runs to the end of the period you paid for, then
+							you move to {freeName}. Live listings stay live, your catalogue and moves stay where
+							they are, and if you are over a {freeName} limit you keep everything but can't add
+							more.
+						</p>
+					</details>
+					<details class="qa">
+						<summary>What happens if I close my account?</summary>
+						<p>
+							We delete your account and catalogue as the Privacy Policy describes. Your listings stay
+							on each marketplace, and files you imported stay on your devices. Export your
+							catalogue first if you want a copy.
+						</p>
+					</details>
+					<details class="qa">
+						<summary>Do you see my passwords?</summary>
+						<p>
+							No. You sign in to a marketplace with no official connection inside the Teachouse app
+							on your own device. Your password goes to the marketplace, never to us, and the sign-in
+							stays on that device. Your Teachouse password is stored only as a one-way hash, which
+							we can't read. If you ask us for help, an administrator may view your account as you
+							see it, and every view is recorded.
+						</p>
+					</details>
+					<details class="qa">
+						<summary>Do you keep my files?</summary>
+						<p>
+							Not the files you import: they stay on your devices and pass through without being
+							kept. Files you upload to Teachouse yourself are stored, encrypted, until you delete
+							them. Deleting a resource in Teachouse doesn't delete your own copy of the file.
+						</p>
+					</details>
+					<details class="qa">
+						<summary>Do you sell my resources or take a share of my sales?</summary>
+						<p>
+							No. You sell on the marketplaces, and they pay you. We only charge for plans and Move
+							Packs.
+						</p>
+					</details>
+					<details class="qa">
+						<summary>Could a marketplace object to me using Teachouse?</summary>
+						<p>
+							It could. Teachouse only acts in your own shop, on your own resources, when you ask,
+							but each marketplace decides what it allows. Read its terms, and if a marketplace
+							asks you to stop using a tool, tell us.
+						</p>
+					</details>
+					<details class="qa">
+						<summary>I published and it failed. Did I lose a move?</summary>
+						<p>
+							A move only counts when the listing reaches the marketplace. If it never arrived, it
+							costs nothing.
+						</p>
+					</details>
+					<details class="qa">
+						<summary>Can I get a refund?</summary>
+						<p>
+							Yes, for a Move Pack you haven't used, within 14 days of buying it. For anything else,
+							email us and we'll look at it, and we'll always give you what New Zealand law
+							requires.
+						</p>
+					</details>
+					<details class="qa">
+						<summary>I'm not in New Zealand. Can I still use Teachouse?</summary>
+						<p>
+							Yes. Teachouse is run from New Zealand, prices are in US dollars, and these terms are
+							governed by New Zealand law wherever you are.
+						</p>
+					</details>
+				</div>
+			</div>
 		</div>
 	</section>
 </Base>
