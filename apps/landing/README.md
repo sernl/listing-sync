@@ -36,7 +36,7 @@ Every value the founder must supply is in `src/site.js` and nowhere else: the lo
 The site links no download: the app card says to download the app once signed in, and the console offers the build.
 
 `/privacy` is the privacy policy, written against how the product is built; a change to what Teachouse collects, where it keeps it or who processes it must move its text and its `updated` date in the same commit.
-`/terms` is still a placeholder for counsel, not legal text, and must be replaced in full rather than edited.
+`/terms` is the terms of service, written against how the product works and bills; a change to plans, refunds, cancellation or what Teachouse keeps must move its text and its `updated` date in the same commit. It names the two marketplaces that connect today, by their full names, in the one sentence that says Teachouse is independent of them.
 
 The structure and the copy decisions are in `docs/notes/design/brand-kit-and-teacher-ui.md`, which supersedes the copy, tokens and pricing of `landing-page.md`.
 The founder owes no artwork: since 2026-09-12 the hero and the challenge are inline SVG compositions drawn in tokens, and the solution is a real capture of the console's Resources board under `public/images/`, recorded under "Amended 2026-09-12" in `landing-page.md`.
