@@ -219,9 +219,9 @@ Amended 2026-09-12, phase 1: the prices are no longer the landing's own.
 `apps/landing/src/site.js` holds what the founder must supply and nothing else: the login path, the support address and the availability sentence.
 The login path is `/login` rather than an origin, because the console is served from this same origin, which is also what keeps the site working under `default-src 'self'`.
 
-`apps/landing/public/app-redirect.js` is the site's only script, loaded from our own origin on every page.
-The desktop app opens this origin too and has no use for a marketing page, and `window.__TAURI__` is the one signal available before the console loads, so the script sends that window to `/app`.
-It is an external file rather than an inline block so that the policy needs no hash for it.
+The desktop redirect is an inline block at the top of `apps/landing/src/layouts/Base.astro`'s head.
+The desktop app opens this origin too and has no use for a marketing page, and `window.__TAURI__` is the one signal available before the console loads, so the block sends that window to `/app`.
+It was `public/app-redirect.js` until 0.18.0, an external file so the policy needed no hash for it; `tam-server` now hashes every inline block of the build into the policy (`serving::inline_script_hashes_across`), and as a file it was a render-blocking request on every first visit, so it moved inline.
 
 `apps/landing/src/styles/site.css` carries "Pounamu", from the console design spec, under the same token names and values the console uses in `web/src/lib/styles/tokens.css`, so the two surfaces read as one product.
 It replaced "Kauri" on 2026-09-06, and the realignment that change carried is recorded rather than the drift it fixed: `--accent-deep`, `--hover`, `--muted`, `--ok` and `--warn` had each drifted by a shade under Kauri and all five now take the console's value, `#0f6b54`, `#eef1ee`, `#5a6560`, `#1f6a45` and `#7a5410`.

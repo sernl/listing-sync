@@ -14,7 +14,7 @@ A page whose first path segment is one the console answers under fails the flake
 The server computes the landing page's Content-Security-Policy from the files it just read, so a page that grew an inline script would be served under a policy carrying that script's hash rather than under a stale one.
 
 Two scripts run here, both from our own origin.
-`public/app-redirect.js` is loaded on every page: the desktop app opens this origin too, and `window.__TAURI__` is the one signal available before the console loads, so it sends that window to `/app`.
+An inline block in `src/layouts/Base.astro` runs first on every page: the desktop app opens this origin too, and `window.__TAURI__` is the one signal available before the console loads, so it sends that window to `/app`. It is inline so a visitor's first paint never waits on a request for it.
 The Tes band calculator in `components/Faq.astro` is the other, bundled by Astro from that component and small enough that Astro inlines it into the page; the server hashes every inline script it reads, so the policy it serves already carries this one's `sha256-` token.
 It imports `src/tes-bands.js` rather than `src/pricing.js`, which keeps the generated plan table out of the browser bundle, and it is the only behaviour on the site that needs script at all: the FAQ's `<details>` and everything else work with script refused.
 Nothing else on the site comes from anywhere but this origin: Poppins and Inter are served from `public/fonts/` rather than from Google's CDN, so the page makes no third-party request at all.
