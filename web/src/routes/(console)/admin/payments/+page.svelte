@@ -284,7 +284,7 @@
 			{:else}
 				<section class="pay-section" aria-labelledby="pay-list">
 					<h2 id="pay-list" class="pay-h2">Every payment</h2>
-					<div class="op-filters pay-filters">
+					<div class="pay-filters">
 						<label class="pay-filter">
 							<span>Kind</span>
 							<select bind:value={filters.kind}>
@@ -556,7 +556,10 @@
 	}
 
 	.pay-filters {
+		display: flex;
+		flex-wrap: wrap;
 		align-items: flex-end;
+		gap: var(--s-2);
 	}
 
 	.pay-filter {
@@ -591,7 +594,7 @@
 
 	.pay-org {
 		font-weight: 500;
-		overflow-wrap: anywhere;
+		overflow-wrap: break-word;
 	}
 
 	.pay-ref {
@@ -604,7 +607,7 @@
 	.pay-id {
 		font-size: 12px;
 		color: var(--muted);
-		overflow-wrap: anywhere;
+		white-space: nowrap;
 	}
 
 	.pay-icon,
@@ -781,6 +784,11 @@
 
 		.pay-refund-mail {
 			width: 100%;
+		}
+
+		.pay-id {
+			white-space: normal;
+			overflow-wrap: anywhere;
 		}
 
 		.pay-table .op-acts {
