@@ -61,7 +61,8 @@ stdenv.mkDerivation {
     runHook preInstall
     # tam-server serves this directory as it stands, so an adapter or output
     # change that stopped emitting any of these has to fail here rather than as
-    # a 404 on the box. Every page is linked from every footer, crawlers ask for the robots file and the
+    # a 404 on the box. Every page is linked from every footer, the script is
+    # referenced from every head, crawlers ask for the robots file and the
     # sitemap at the root, and `og:image` on every page points at the
     # card under `images/`. `brand/logo.svg` is the full logo that card is
     # rendered from, shipped so the card can be regenerated from the bytes the
@@ -71,6 +72,7 @@ stdenv.mkDerivation {
       pricing/index.html \
       privacy/index.html \
       terms/index.html \
+      app-redirect.js \
       robots.txt \
       sitemap.xml \
       brand/logo.svg \

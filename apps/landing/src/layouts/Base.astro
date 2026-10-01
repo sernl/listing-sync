@@ -78,20 +78,7 @@ const posthogKey = import.meta.env.PUBLIC_POSTHOG_KEY;
 		<link rel="preload" href="/fonts/inter-400-700-latin.woff2" as="font" type="font/woff2" crossorigin />
 		<link rel="preload" href="/fonts/poppins-700-latin.woff2" as="font" type="font/woff2" crossorigin />
 		<link rel="preload" href="/fonts/poppins-600-latin.woff2" as="font" type="font/woff2" crossorigin />
-		{/* The desktop app and the browser reach the same origin, and the desktop
-		    app has no use for the marketing page. Tauri v2 injects
-		    `window.__TAURI__` into every window it opens, which is the only
-		    signal available before the console itself loads. Inline rather than
-		    a file so no visitor's first paint waits on a request for it;
-		    `tam-server` hashes it into the policy like the blocks around it. */}
-		<script is:inline>
-			(function () {
-				var path = window.location.pathname;
-				if (window.__TAURI__ && path !== '/app' && path.indexOf('/app/') !== 0) {
-					window.location.replace('/app');
-				}
-			})();
-		</script>
+		<script is:inline src="/app-redirect.js"></script>
 		{
 			/* One funnel step and nothing else: did a visitor who read /pricing
 			   reach /login. Pageviews only — `landing_policy` has no
