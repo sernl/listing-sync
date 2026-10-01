@@ -1926,8 +1926,8 @@ mod composition {
         );
         assert_eq!(
             landing.header(header::CACHE_CONTROL),
-            "no-cache",
-            "a cutover has to be visible on the next request"
+            "public, max-age=300",
+            "a page is held five minutes, so a cutover reaches a browser within them"
         );
         assert!(
             landing.header(header::ETAG).starts_with('"'),
