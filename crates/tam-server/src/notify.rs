@@ -1,6 +1,7 @@
-//! The mails this process sends: the seller's completion mail and the
-//! operators' word of a new marketplace request, who each goes to, what each
-//! says, and the relay both go out through.
+//! The mails this process sends: the seller's completion mail, the
+//! operators' word of a new marketplace request, and the refund mail the
+//! Payments page queues (`refund_mail`); who each goes to, what each says,
+//! and the relay they go out through.
 //!
 //! Three seams, and the reason for each. The address comes from the identity
 //! service rather than from this database, because `app_user.email` holds
@@ -581,6 +582,56 @@ pub(crate) fn compose_request(
         html,
         href,
         reply_to: requester.reply_to.clone(),
+    }
+}
+
+/// Where a seller reads their own bills, which the refund mail's button
+/// opens.
+pub(crate) const BILLING_PATH: &str = "/settings/billing";
+
+/// The `refund_issued` mail: one refund, told to the organisation that paid,
+/// in the founder's voice.
+///
+/// The amount is the whole of what it says about the money; the charge, the
+/// reason and the operator's note are ours and stay on the Payments page.
+/// `name` is the recipient's own, where the identity service holds one.
+/// In the completion mail's palette and for the same reasons; its comment
+/// names each literal's token.
+#[must_use]
+pub(crate) fn compose_refund(
+    amount: &str,
+    org_name: &str,
+    name: Option<&str>,
+    console_url: &str,
+) -> Mail {
+    let href = format!("{}{BILLING_PATH}", console_url.trim_end_matches('/'));
+    let greeting = match name.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) => format!("Kia ora {},", escaped(name)),
+        None => "Kia ora,".to_owned(),
+    };
+    let html = format!(
+        "<div style=\"font-family:system-ui,-apple-system,'Segoe UI',sans-serif;\
+           background:#f6f4f1;padding:32px 16px\">\
+           <div style=\"max-width:520px;margin:0 auto;background:#fdfdfc;border-radius:12px;\
+             padding:28px 32px;color:#17231c\">\
+           <p style=\"margin:0 0 16px;font-size:16px\">{greeting}</p>\
+           <p style=\"margin:0 0 16px;font-size:16px\">We've refunded {amount} to your card. \
+             It can take 5–10 business days to show.</p>\
+           <p style=\"margin:0 0 24px;font-size:15px;color:#5a6560\">This is for {org}. \
+             If anything looks wrong, reply to this email and I'll sort it out.</p>\
+           <a href=\"{href}\" style=\"display:inline-block;background:#1f4a38;color:#ffffff;\
+             text-decoration:none;padding:10px 20px;border-radius:8px;font-weight:600\">\
+             See your bills</a>\
+           </div></div>",
+        amount = escaped(amount),
+        org = escaped(org_name),
+        href = escaped(&href),
+    );
+    Mail {
+        subject: format!("We've refunded {amount}"),
+        html,
+        href,
+        reply_to: None,
     }
 }
 

@@ -51,6 +51,13 @@ import type {
 	SaleBody,
 	TermsBody
 } from '$lib/pages/admin/pricing';
+import type {
+	PaymentSettingsBody,
+	PaymentsAdminView,
+	RefundBody,
+	RefundView,
+	SyncView
+} from '$lib/pages/admin/payments';
 import type { Capabilities, PlansView } from '$lib/generated/plans';
 import type { ToastNotice } from '$lib/toast';
 
@@ -3430,6 +3437,20 @@ export const api = {
 	createOneOff: (body: TermsBody) => post<DiscountView>('/v1/admin/pricing/discounts', body),
 	createCode: (body: CodeBody) => post<DiscountView>('/v1/admin/pricing/codes', body),
 	endDiscount: (id: string) => post<DiscountView>(`/v1/admin/pricing/${id}/end`, {}),
+
+	/** The Stripe payment ledger: charges, refunds, chargebacks, invoices and
+	 *  subscriptions, newest first. */
+	adminPayments: () => request<PaymentsAdminView>('/v1/admin/payments'),
+	/** Reads the last 90 days from Stripe into the ledger. */
+	syncPayments: () => post<SyncView>('/v1/admin/payments/sync', {}),
+	/** Refunds part or all of one charge. 422 with a sentence when the amount
+	 *  is more than is left; 503 when the server has no Stripe key. */
+	refundCharge: (charge: string, body: RefundBody) =>
+		post<RefundView>(`/v1/admin/payments/charges/${encodeURIComponent(charge)}/refunds`, body),
+	/** Queues the refund email to the customer. 409 once it has been sent. */
+	mailRefund: (id: string) => post<RefundView>(`/v1/admin/payments/refunds/${id}/mail`, {}),
+	setPaymentSettings: (body: PaymentSettingsBody) =>
+		put<PaymentSettingsBody>('/v1/admin/payments/settings', body),
 
 	/** Writes an operator grant on one organisation, and answers the org
 	 *  detail so the panel redraws from the server's own record rather than

@@ -107,10 +107,13 @@ const TENANT_TABLES: [&str; 77] = [
 /// every tenant at once, written by operators. mail_campaign,
 /// mail_campaign_recipient and mail_image are the operators' mail to sellers
 /// (migration 0097): one platform write across every tenant, kept on the
-/// application pool. The rest are genuinely global:
+/// application pool. payment_event and refund are the operators' payments
+/// ledger (migration 0102): written by the signed Stripe webhook, which holds
+/// no tenant pin, and read only by operator routes; their org_id is a
+/// cross-reference, not a fence. The rest are genuinely global:
 /// reference data, the canonical taxonomy, the fleet kill switch, and sqlx's
 /// migration bookkeeping.
-const GLOBAL_TABLES: [&str; 21] = [
+const GLOBAL_TABLES: [&str; 23] = [
     "_sqlx_migrations",
     "app_user",
     "canonical_term",
@@ -125,10 +128,12 @@ const GLOBAL_TABLES: [&str; 21] = [
     "mail_image",
     "marketplace_inventory",
     "organisation",
+    "payment_event",
     "platform_operator",
     "platform_operator_event",
     "projection_edge",
     "projection_no_counterpart",
+    "refund",
     "site_setting",
     "standards_node",
     "user_session",

@@ -1,0 +1,107 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, org_id, provider_event_id, kind, amount_cents, currency, provider_object_id, charge_id, payment_intent_id, invoice_id, customer_id, status, reason, occurred_at, created_at FROM payment_event WHERE occurred_at >= $1 ORDER BY occurred_at DESC, id LIMIT $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "org_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "provider_event_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "amount_cents",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "currency",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "provider_object_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "charge_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "payment_intent_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "invoice_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "customer_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "reason",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 13,
+        "name": "occurred_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 14,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "07747c505ecd9edd967596374d7e32f070224f3e5c0932b4805dcf26c5b415e0"
+}

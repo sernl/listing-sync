@@ -223,6 +223,7 @@ export const ADMIN_SECTION: NavSection = {
 		{ href: '/admin/guides', label: 'Guides', icon: 'book-open' },
 		{ href: '/admin/impersonations', label: 'Impersonations', icon: 'copy' },
 		{ href: '/admin/pricing', label: 'Pricing', icon: 'tag' },
+		{ href: '/admin/payments', label: 'Payments', icon: 'credit-card' },
 		{ href: '/admin/site', label: 'Site', icon: 'sliders-horizontal' },
 		{ href: '/admin/mail', label: 'Mail', icon: 'mail' }
 	]

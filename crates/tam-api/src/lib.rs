@@ -50,6 +50,7 @@ pub mod migrations;
 pub mod notifications;
 pub mod openapi;
 pub mod org;
+pub mod payments;
 pub mod pricing;
 pub mod product;
 pub mod profile;
@@ -950,6 +951,23 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/{version}/admin/pricing/{id}/end",
             post(pricing::end_discount),
+        )
+        // Payments: the Stripe ledger, its sync, and the refunds issued
+        // from it. Global tables on the application pool; the backoffice
+        // pool only names which organisation a Stripe customer pays for.
+        .route("/{version}/admin/payments", get(payments::admin_view))
+        .route("/{version}/admin/payments/sync", post(payments::sync))
+        .route(
+            "/{version}/admin/payments/charges/{charge}/refunds",
+            post(payments::create_refund),
+        )
+        .route(
+            "/{version}/admin/payments/refunds/{id}/mail",
+            post(payments::mail_refund),
+        )
+        .route(
+            "/{version}/admin/payments/settings",
+            put(payments::update_settings),
         )
         .route(
             "/{version}/admin/guides/{slug}",

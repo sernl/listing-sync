@@ -977,6 +977,11 @@ pub(crate) async fn webhook(
     let Ok(event) = serde_json::from_slice::<Event>(&body) else {
         return Err(unreadable());
     };
+    // The payments ledger first, keyed on Stripe's event id, so the
+    // operators' Payments page sees every money event whatever the handling
+    // below makes of it. A fault here is answered as one, and Stripe's retry
+    // re-runs both halves; each is idempotent on its own key.
+    crate::payments::record_webhook(&state, &body).await?;
     match event.kind.as_str() {
         CHECKOUT_COMPLETED => checkout_completed(&state, &event).await,
         INVOICE_PAID => invoice_paid(&state, &event).await,

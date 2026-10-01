@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 209] = [
+pub const ROUTES: [Route; 214] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -1023,6 +1023,31 @@ pub const ROUTES: [Route; 209] = [
         method: "post",
         path: "/{version}/admin/pricing/{id}/end",
         summary: "Operator: stop offering a discount now; deletes its coupon and deactivates its codes in Stripe",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/admin/payments",
+        summary: "Operator: every Stripe money event and refund on record, cross-referenced, with the auto refund mail switch",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/payments/sync",
+        summary: "Operator: read the last 90 days of charges, refunds, disputes and invoices from Stripe into the ledger",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/payments/charges/{charge}/refunds",
+        summary: "Operator: refund part or all of one charge in Stripe, idempotent by request id; optionally emails the customer",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/payments/refunds/{id}/mail",
+        summary: "Operator: email the customer that a refund was made",
+    },
+    Route {
+        method: "put",
+        path: "/{version}/admin/payments/settings",
+        summary: "Operator: whether new refunds email the customer automatically",
     },
     Route {
         method: "get",

@@ -63,7 +63,7 @@ const ADMIN_PATHS: [&str; 9] = [
 /// loops would be testing method routing rather than the operator fence.
 /// Their own refusal is asserted by `a_seller_cannot_grant_themselves_a_plan`
 /// and `an_operator_credits_moves_once_per_reason`.
-const ADMIN_PATHS_UNCOVERED: [&str; 29] = [
+const ADMIN_PATHS_UNCOVERED: [&str; 34] = [
     "/{version}/admin/marketplace-requests",
     // Pricing and the site switches read the application pool, like the
     // guides below, so they serve with no backoffice database; their
@@ -114,6 +114,15 @@ const ADMIN_PATHS_UNCOVERED: [&str; 29] = [
     "/{version}/admin/mail/campaigns",
     "/{version}/admin/mail/campaigns/{id}",
     "/{version}/admin/mail/campaigns/{id}/retry",
+    // Payments: global tables on the application pool, with the backoffice
+    // pool used only where present to name a Stripe customer's organisation.
+    // Their refusal for a seller and an anonymous caller is asserted in
+    // `payments_flow`.
+    "/{version}/admin/payments",
+    "/{version}/admin/payments/sync",
+    "/{version}/admin/payments/charges/{charge}/refunds",
+    "/{version}/admin/payments/refunds/{id}/mail",
+    "/{version}/admin/payments/settings",
 ];
 
 #[expect(
