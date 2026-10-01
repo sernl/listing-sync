@@ -10,10 +10,15 @@ import ResourceCover from '../components/ResourceCover.astro';
 import { markSlot } from '../art.js';
 import { marks } from '../marketplaces.js';
 import { signupUrl } from '../pricing.js';
+import { faqPage, softwareApplication } from '../seo.js';
+import { availability, homeTitle } from '../site.js';
 
-const title = 'Teachouse \u2014 create once, sell everywhere';
-const description =
-	'Teachouse helps you cross-list and manage your teacher resources across multiple marketplaces, all from one place. Bring your catalogue in once, publish it everywhere you sell, and update it from one home.';
+/* The search result: the title names what connects today, and the
+   description ends on the availability sentence itself, so neither says
+   anything about marketplaces the copy gate has not already been told. */
+const title = homeTitle;
+const description = `One catalogue for your teaching resources, published everywhere you sell. ${availability}`;
+const structuredData = [softwareApplication(Astro.site, description), faqPage()];
 
 /* The hero's composition routes the catalogue out to four marks, read from
    the same list the strip under the buttons draws so the drawing cannot name
@@ -42,7 +47,7 @@ const steps = [
 ];
 ---
 
-<Base title={title} description={description}>
+<Base title={title} description={description} structuredData={structuredData}>
 	<section class="hero">
 		<div class="wrap hero-grid">
 			<div>
@@ -312,19 +317,31 @@ const steps = [
 		    screenshot with no edge reads as part of the page rather than as
 		    the product.
 
-		    Two files: the desktop capture at 2x (1440 wide), and the 390
+		    Two captures: the desktop one at 2x (1440 wide), and the 390
 		    phone layout at 2x, because scaling the wide shot down to a phone
-		    column makes the page unreadable. */}
+		    column makes the page unreadable. Each is shipped as AVIF, about
+		    half the bytes, with the WebP it was encoded from as the fallback
+		    for a browser without AVIF. Below the fold on every width, so lazy;
+		    the hero carries no raster to prioritise. */}
 		<div class="wrap">
 			<figure class="console-shot">
 				<div class="frame">
 					<picture>
 						<source
 							media="(max-width: 720px)"
-							srcset="/images/console-resources-phone.webp"
+							srcset="/images/console-resources-phone.avif"
+							type="image/avif"
 							width="390"
 							height="844"
 						/>
+						<source
+							media="(max-width: 720px)"
+							srcset="/images/console-resources-phone.webp"
+							type="image/webp"
+							width="390"
+							height="844"
+						/>
+						<source srcset="/images/console-resources.avif" type="image/avif" width="1440" height="750" />
 						<img
 							src="/images/console-resources.webp"
 							alt="The Teachouse Resources page listing six resources with their covers, such as Year 6 English, Persuasive writing unit and Grade 4 Math, Fractions practice, each with its price and where it is listed"

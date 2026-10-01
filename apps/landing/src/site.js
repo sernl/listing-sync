@@ -22,3 +22,11 @@ export const supportEmail = 'contact@teachouse.io';
  * is the only claim on the site about whether a seller can use it right now.
  */
 export const availability = 'TPT and Tes connections work today, with more marketplaces coming.';
+
+/**
+ * The home page's `<title>`, and so the line a search result shows. It names
+ * the two marketplaces that connect today because that is what a seller types
+ * into a search box; like `availability`, it is the one other string the copy
+ * gate lets name them, and it is read from here so the gate holds no copy.
+ */
+export const homeTitle = 'Teachouse \u2013 publish and sync your TPT and Tes listings';

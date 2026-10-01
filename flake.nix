@@ -406,6 +406,23 @@
                 fi
               done <<< "$reserved"
 
+              # The console's pages are drawn in the browser behind a sign-in
+              # and have nothing for a crawler, so `robots.txt` refuses every
+              # segment the console answers under. It is written by hand in
+              # `apps/landing/src/pages/robots.txt.js`, because the landing
+              # build cannot see the console's route table; this is where a
+              # route added without its line fails.
+              test -f "$landing/robots.txt"
+              test -f "$landing/sitemap.xml"
+              while IFS= read -r segment; do
+                if ! grep -qxF "Disallow: /$segment" "$landing/robots.txt" \
+                  && ! grep -qxF "Disallow: /$segment/" "$landing/robots.txt"; then
+                  echo "robots.txt does not refuse /$segment, which the console routes under:" >&2
+                  echo "add it to apps/landing/src/pages/robots.txt.js" >&2
+                  exit 1
+                fi
+              done <<< "$console_segments"
+
               # Both tiers self-host their faces, and neither build fingerprints
               # the files, so the name in the sheet is the name in the artefact
               # and a face whose file never shipped renders the fallback stack

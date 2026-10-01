@@ -9,8 +9,9 @@
    belonging to an element this component does not render -- the scene
    under the hero art, the header's, the sections' and the footer's pieces --
    is a pseudo-element in `season.css` instead. The classes name a place,
-   not a picture: each season decides what stands there. */
-import '../styles/season.css';
+   not a picture: each season decides what stands there. `season.css` is
+   linked by `layouts/Base.astro`, switched on only when a season or the
+   banner is. */
 ---
 
 <div class="season-layer" aria-hidden="true">

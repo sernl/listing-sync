@@ -2,10 +2,29 @@
 import SiteFooter from '../components/SiteFooter.astro';
 import SiteHeader from '../components/SiteHeader.astro';
 import SeasonLayer from '../components/SeasonLayer.astro';
+import { breadcrumbs, jsonLd, organization, siteName, themeColor } from '../seo.js';
 import '../styles/site.css';
+/* The seasonal sheet is a file of its own rather than part of the bundle:
+   most of the year no season is on, and as part of the bundle its 35 KB
+   would hold every first paint. It is linked under `media="not all"`, which
+   a browser fetches at its lowest priority and never waits on, and the
+   site-switch script at the foot of the page turns it on. */
+import seasonSheet from '../styles/season.css?url';
 
-const { title, description } = Astro.props;
+/* `structuredData` is the page's own schema.org records; every page carries
+   the organisation, and every page but the home page a breadcrumb back to
+   it, named by the part of its title before the dash ("Pricing — Teachouse"
+   is "Pricing"). */
+const { title, description, structuredData = [] } = Astro.props;
 const canonical = new URL(Astro.url.pathname, Astro.site);
+const isHome = Astro.url.pathname === '/';
+const graph = jsonLd([
+	organization(Astro.site),
+	...(isHome
+		? []
+		: [breadcrumbs(Astro.site, Astro.url.pathname, title.split(' \u2014 ')[0].trim())]),
+	...structuredData
+]);
 /* A social card has to be a raster of a fixed size, which an SVG logo is not:
    every consumer of `og:image` resamples it and several refuse SVG outright.
    `public/images/og.png` is 1200 by 630, the logo centred on the kit's Cream,
@@ -18,7 +37,7 @@ const posthogKey = import.meta.env.PUBLIC_POSTHOG_KEY;
 ---
 
 <!doctype html>
-<html lang="en" data-theme="light">
+<html lang="en-NZ" data-theme="light">
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -51,8 +70,11 @@ const posthogKey = import.meta.env.PUBLIC_POSTHOG_KEY;
 		</script>
 		<title>{title}</title>
 		<meta name="description" content={description} />
+		<meta name="robots" content="index, follow, max-image-preview:large" />
 		<link rel="canonical" href={canonical} />
+		<meta name="theme-color" content={themeColor} />
 		<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+		<link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180" />
 		<link rel="preload" href="/fonts/inter-400-700-latin.woff2" as="font" type="font/woff2" crossorigin />
 		<link rel="preload" href="/fonts/poppins-700-latin.woff2" as="font" type="font/woff2" crossorigin />
 		<link rel="preload" href="/fonts/poppins-600-latin.woff2" as="font" type="font/woff2" crossorigin />
@@ -89,12 +111,26 @@ const posthogKey = import.meta.env.PUBLIC_POSTHOG_KEY;
 			)
 		}
 		<meta property="og:type" content="website" />
+		<meta property="og:site_name" content={siteName} />
+		<meta property="og:locale" content="en_NZ" />
 		<meta property="og:title" content={title} />
 		<meta property="og:description" content={description} />
 		<meta property="og:url" content={canonical} />
 		<meta property="og:image" content={ogImage} />
+		<meta property="og:image:type" content="image/png" />
 		<meta property="og:image:width" content="1200" />
 		<meta property="og:image:height" content="630" />
+		<meta property="og:image:alt" content="The Teachouse logo" />
+		<meta name="twitter:card" content="summary_large_image" />
+		<meta name="twitter:title" content={title} />
+		<meta name="twitter:description" content={description} />
+		<meta name="twitter:image" content={ogImage} />
+		<meta name="twitter:image:alt" content="The Teachouse logo" />
+		{/* Data, not a script: a browser never runs a block of this type, so
+		    the policy has nothing to admit, though `tam-server` hashes it with
+		    the rest. */}
+		<script is:inline type="application/ld+json" set:html={graph} />
+		<link rel="stylesheet" id="season-sheet" href={seasonSheet} media="not all" />
 	</head>
 	<body>
 		<a class="skip" href="#main">Skip to content</a>
@@ -108,7 +144,9 @@ const posthogKey = import.meta.env.PUBLIC_POSTHOG_KEY;
 		{/* The site-wide switches, read once per page from `GET /v1/site`,
 		    which the browser caches for a minute. The seasonal theme is decided
 		    by the server's clock, so this only copies `theme.active` onto
-		    `<html>` as `data-season`, which is all `styles/season.css` keys on;
+		    `<html>` as `data-season`, which is all `styles/season.css` keys on,
+		    and switches that sheet on, as a shown banner does, since it draws
+		    the banner too;
 		    `?season=<name>` forces one of the names below, which is the
 		    operator's preview; the list is `ThemeName` in
 		    `crates/tam-api/src/site.rs`. The banner is text and a link written by
@@ -117,6 +155,12 @@ const posthogKey = import.meta.env.PUBLIC_POSTHOG_KEY;
 		<script is:inline>
 			(function () {
 				var root = document.documentElement;
+				var sheet = document.getElementById('season-sheet');
+				var dress = function () {
+					if (sheet) {
+						sheet.media = 'all';
+					}
+				};
 				var seasons = [
 					'halloween', 'christmas', 'valentines', 'april-fools', 'fourth-of-july',
 					'back-to-school', 'winter', 'summer', 'spring', 'autumn', 'thanksgiving',
@@ -127,6 +171,7 @@ const posthogKey = import.meta.env.PUBLIC_POSTHOG_KEY;
 					forced = null;
 				} else {
 					root.dataset.season = forced;
+					dress();
 				}
 				fetch('/v1/site', { credentials: 'same-origin' })
 					.then(function (response) {
@@ -138,6 +183,7 @@ const posthogKey = import.meta.env.PUBLIC_POSTHOG_KEY;
 						}
 						if (!forced && site.theme && site.theme.active && site.theme.name !== 'none') {
 							root.dataset.season = site.theme.name;
+							dress();
 						}
 						var banner = document.getElementById('site-banner');
 						if (site.banner && banner) {
@@ -145,6 +191,7 @@ const posthogKey = import.meta.env.PUBLIC_POSTHOG_KEY;
 							link.textContent = site.banner.text;
 							link.href = site.banner.href;
 							banner.hidden = false;
+							dress();
 						}
 					})
 					.catch(function () {});

@@ -2,13 +2,18 @@
 import Base from '../layouts/Base.astro';
 import Faq from '../components/Faq.astro';
 import Pricing from '../components/Pricing.astro';
+import { softwareApplication } from '../seo.js';
 
-const title = 'Pricing \u2014 Teachouse';
+const title = 'Pricing \u2014 Teachouse plans and move packs';
 const description =
-	'Teachouse plans: Look is free with moves to try, Starter, Pro and Studio are subscriptions with moves every month, and one-off packs of moves work on any plan. Prices in US dollars.';
+	'Start free on Look, move up to Starter, Pro or Studio for moves every month, or buy a one-off pack of moves on any plan. Prices in US dollars.';
 ---
 
-<Base title={title} description={description}>
+<Base
+	title={title}
+	description={description}
+	structuredData={[softwareApplication(Astro.site, description)]}
+>
 	<Pricing level={1} />
 	<Faq />
 </Base>

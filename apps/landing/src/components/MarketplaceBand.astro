@@ -1,5 +1,6 @@
 ---
 import { marks } from '../marketplaces.js';
+import { intrinsic } from '../intrinsic.js';
 import { availability } from '../site.js';
 
 /* The strip under the hero: the four marks the founder's mockup draws, then
@@ -33,6 +34,7 @@ const rest = marks.filter((mark) => !mark.featured);
 								src={`/marks/${mark.file}`}
 								alt={mark.name}
 								class:list={[`mark-${mark.shape}`]}
+								{...intrinsic(`marks/${mark.file}`)}
 							/>
 							{mark.shape === 'icon' && <span>{mark.name}</span>}
 						</a>
@@ -53,6 +55,7 @@ const rest = marks.filter((mark) => !mark.featured);
 											src={`/marks/${mark.file}`}
 											alt={mark.name}
 											class:list={[`mark-${mark.shape}`]}
+											{...intrinsic(`marks/${mark.file}`)}
 											loading="lazy"
 											decoding="async"
 										/>
