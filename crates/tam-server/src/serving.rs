@@ -197,9 +197,7 @@ const MAINTENANCE_OPEN: [&str; 5] = ["_app", "login", "reset", "status", "api"];
 /// and fonts. The API and the downloads directory are never gated here.
 pub(crate) fn gated(path: &str, answer: &Answer) -> bool {
     match answer {
-        Answer::Landing(file) => std::path::Path::new(file)
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("html")),
+        Answer::Landing(file) => is_page(file),
         Answer::Console => {
             let decoded =
                 percent_decoded(path.trim_start_matches('/')).unwrap_or_else(|| path.to_owned());
@@ -210,6 +208,257 @@ pub(crate) fn gated(path: &str, answer: &Answer) -> bool {
         }
         Answer::Api | Answer::Downloads(_) => false,
     }
+}
+
+/// Which of the two public hosts a request arrived on, once a deployment has
+/// split them.
+///
+/// `Other` is every host that is neither: a health probe on the loopback
+/// address, a test client that sent none. It gets the single-host answer this
+/// server gave before the split, so nothing that does not name a public host
+/// changes behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HostTier {
+    Landing,
+    Console,
+    Other,
+}
+
+/// Where a request on a split deployment is answered.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Destination {
+    /// Here, by the tiers below, as on a single host.
+    Here,
+    /// A 301 to the same path and query on the landing host.
+    Landing,
+    /// A 301 to the same path and query on the console host.
+    Console,
+    /// The console host's own `robots.txt`, which refuses everything.
+    ConsoleRobots,
+}
+
+/// The console host's `robots.txt`. The console is drawn in the browser
+/// behind a sign-in and holds nothing a crawler can use, so every path is
+/// refused; the landing host's own file keeps answering on the apex.
+pub(crate) const CONSOLE_ROBOTS: &str = "User-agent: *\nDisallow: /\n";
+
+/// How long a host redirect may be reused. Five minutes, the same as a
+/// landing page: a client that cached the redirect follows it without a round
+/// trip, and a host change made by mistake stops being repeated soon after it
+/// is undone, which a permanent redirect cached forever would not.
+pub(crate) const HOST_REDIRECT_CACHE: &str = "public, max-age=300";
+
+/// The landing host and the console host of a split deployment, lowercased
+/// once at start-up.
+#[derive(Debug)]
+pub(crate) struct Hosts {
+    landing: String,
+    console: String,
+}
+
+impl Hosts {
+    /// Both hosts, or a sentence saying why one is not a host.
+    ///
+    /// Bare host names only: a scheme, a port or a path would end up inside
+    /// the `Location` of every redirect, and a value no request's host can
+    /// equal would redirect every request to the other host and back.
+    pub(crate) fn new(landing: &str, console: &str) -> Result<Self, String> {
+        let landing = bare_host(landing)?;
+        let console = bare_host(console)?;
+        if landing == console {
+            return Err(format!(
+                "--landing-host and --console-host are both {landing}, so every redirect between them would loop"
+            ));
+        }
+        Ok(Self { landing, console })
+    }
+
+    pub(crate) fn landing(&self) -> &str {
+        &self.landing
+    }
+
+    pub(crate) fn console(&self) -> &str {
+        &self.console
+    }
+
+    /// Which host `headers` name: `X-Forwarded-Host` first, because the edge
+    /// in front of this origin may rewrite `Host`, then `Host`, then the
+    /// authority an HTTP/2 request carries in its target instead of a header.
+    pub(crate) fn tier(
+        &self,
+        headers: &axum::http::HeaderMap,
+        authority: Option<&str>,
+    ) -> HostTier {
+        let named = [
+            axum::http::header::HeaderName::from_static("x-forwarded-host"),
+            axum::http::header::HOST,
+        ]
+        .into_iter()
+        .find_map(|name| {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                // A proxy chain appends, so the first entry is the host the
+                // client asked for.
+                .and_then(|value| value.split(',').next())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .or(authority);
+        let Some(host) = named.map(without_port) else {
+            return HostTier::Other;
+        };
+        if host.eq_ignore_ascii_case(&self.landing) {
+            HostTier::Landing
+        } else if host.eq_ignore_ascii_case(&self.console) {
+            HostTier::Console
+        } else {
+            HostTier::Other
+        }
+    }
+
+    /// The `Location` for `destination`, carrying `path_and_query` as the
+    /// client sent it. `None` for a destination that is not a redirect.
+    pub(crate) fn location(
+        &self,
+        destination: &Destination,
+        path_and_query: &str,
+    ) -> Option<String> {
+        let host = match destination {
+            Destination::Landing => &self.landing,
+            Destination::Console => &self.console,
+            Destination::Here | Destination::ConsoleRobots => return None,
+        };
+        Some(format!("https://{host}{path_and_query}"))
+    }
+}
+
+/// `value` as a lowercased bare host name, or why it is not one.
+fn bare_host(value: &str) -> Result<String, String> {
+    let host = value.trim().to_ascii_lowercase();
+    let well_formed = !host.is_empty()
+        && !host.starts_with(['.', '-'])
+        && !host.ends_with(['.', '-'])
+        && host
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'-');
+    if well_formed {
+        Ok(host)
+    } else {
+        Err(format!(
+            "{value:?} is not a bare host name such as teachouse.io: no scheme, port or path"
+        ))
+    }
+}
+
+/// `host` without a trailing `:port`, and without the brackets around an
+/// IPv6 literal.
+fn without_port(host: &str) -> &str {
+    if let Some(bracketed) = host.strip_prefix('[') {
+        return bracketed.split(']').next().unwrap_or_default();
+    }
+    host.split(':').next().unwrap_or_default()
+}
+
+/// Where a request for `path` on `tier` is answered, given the tier `route`
+/// chose for it.
+///
+/// The landing host keeps what the public site needs and nothing else: its
+/// own files, the downloads directory, the two API reads its pages make, the
+/// analytics proxy under `/ingest/` its pages load from their own origin, the
+/// health check, and the crawler files. Everything else is the console's and
+/// moves there. The console host keeps everything except the landing's pages,
+/// which move to the landing host — but not `/`, which is the console's own
+/// root there, and not the landing's assets, which the maintenance page loads
+/// on whichever host it stands in for. Neither host sends a path to the other
+/// that the other sends back, so no redirect loops.
+pub(crate) fn destination(tier: HostTier, path: &str, answer: &Answer) -> Destination {
+    match tier {
+        HostTier::Other => Destination::Here,
+        HostTier::Landing => {
+            let keeps = matches!(answer, Answer::Landing(_) | Answer::Downloads(_))
+                || matches!(path, "/healthz" | "/robots.txt" | "/sitemap.xml")
+                || is_public_read(path)
+                || path == "/ingest"
+                || path.starts_with("/ingest/");
+            if keeps {
+                Destination::Here
+            } else {
+                Destination::Console
+            }
+        }
+        HostTier::Console => {
+            if path == "/robots.txt" {
+                return Destination::ConsoleRobots;
+            }
+            match answer {
+                Answer::Landing(file) if file == "index.html" => Destination::Here,
+                Answer::Landing(file) if file == "sitemap.xml" || is_page(file) => {
+                    Destination::Landing
+                }
+                Answer::Landing(_) | Answer::Downloads(_) | Answer::Api | Answer::Console => {
+                    Destination::Here
+                }
+            }
+        }
+    }
+}
+
+/// Whether `path` is one of the two API reads the landing pages make from
+/// their own origin: the site settings and the price list, under any version
+/// this build serves.
+fn is_public_read(path: &str) -> bool {
+    let mut segments = path
+        .trim_start_matches('/')
+        .trim_end_matches('/')
+        .split('/');
+    let version = segments.next().unwrap_or_default();
+    let read = segments.next();
+    segments.next().is_none()
+        && matches!(read, Some("site" | "plans"))
+        && version.parse::<tam_api::APIVersion>().is_ok()
+}
+
+/// Whether a landing file is a page rather than an asset.
+fn is_page(file: &str) -> bool {
+    std::path::Path::new(file)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("html"))
+}
+
+/// The 301 to `location`, cached as [`HOST_REDIRECT_CACHE`] says.
+pub(crate) fn host_redirect(location: &str) -> axum::response::Response {
+    match axum::http::HeaderValue::from_str(location) {
+        Ok(value) => (
+            axum::http::StatusCode::MOVED_PERMANENTLY,
+            [
+                (axum::http::header::LOCATION, value),
+                (
+                    axum::http::header::CACHE_CONTROL,
+                    axum::http::HeaderValue::from_static(HOST_REDIRECT_CACHE),
+                ),
+            ],
+        )
+            .into_response(),
+        // The path came off the request line, so it was a valid header byte
+        // sequence there; a value that is not one here names nothing.
+        Err(_) => axum::http::StatusCode::BAD_REQUEST.into_response(),
+    }
+}
+
+/// The console host's `robots.txt`.
+pub(crate) fn console_robots() -> axum::response::Response {
+    (
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "text/plain; charset=utf-8",
+            ),
+            (axum::http::header::CACHE_CONTROL, "public, max-age=3600"),
+        ],
+        CONSOLE_ROBOTS,
+    )
+        .into_response()
 }
 
 /// `page` with `message` as the text of its `data-maintenance-message`
@@ -1506,5 +1755,222 @@ mod tests {
             "<p>no marker</p>",
             "a page without the element is answered as built"
         );
+    }
+
+    mod hosts {
+        use axum::http::{header, HeaderMap, HeaderValue};
+
+        use super::super::{destination, Answer, Destination, HostTier, Hosts};
+
+        fn hosts() -> Hosts {
+            Hosts::new("teachouse.io", "Dash.Teachouse.io").expect("two distinct bare hosts")
+        }
+
+        fn headers(pairs: &[(&'static str, &'static str)]) -> HeaderMap {
+            pairs
+                .iter()
+                .map(|(name, value)| {
+                    (
+                        header::HeaderName::from_static(name),
+                        HeaderValue::from_static(value),
+                    )
+                })
+                .collect()
+        }
+
+        #[test]
+        fn one_bad_or_shared_host_is_refused_with_a_sentence() {
+            for (landing, console) in [
+                ("https://teachouse.io", "dash.teachouse.io"),
+                ("teachouse.io", "dash.teachouse.io:8443"),
+                ("teachouse.io", "dash.teachouse.io/app"),
+                ("", "dash.teachouse.io"),
+                ("teachouse.io", "TEACHOUSE.IO"),
+            ] {
+                let refusal = Hosts::new(landing, console).expect_err("not a usable pair");
+                assert!(
+                    refusal.ends_with("path") || refusal.ends_with("loop"),
+                    "{landing} / {console}: {refusal}"
+                );
+            }
+        }
+
+        #[test]
+        fn the_forwarded_host_wins_and_ports_and_case_are_ignored() {
+            let hosts = hosts();
+            let cases: [(&[(&str, &str)], Option<&str>, HostTier); 7] = [
+                (&[("host", "teachouse.io")], None, HostTier::Landing),
+                (
+                    &[("host", "DASH.teachouse.io:443")],
+                    None,
+                    HostTier::Console,
+                ),
+                (
+                    &[
+                        ("x-forwarded-host", "dash.teachouse.io, teachouse.io"),
+                        ("host", "teachouse.io"),
+                    ],
+                    None,
+                    HostTier::Console,
+                ),
+                (
+                    &[("x-forwarded-host", " "), ("host", "teachouse.io")],
+                    None,
+                    HostTier::Landing,
+                ),
+                (&[], Some("teachouse.io:443"), HostTier::Landing),
+                (&[("host", "[::1]:8080")], None, HostTier::Other),
+                (&[("host", "www.teachouse.io")], None, HostTier::Other),
+            ];
+            for (pairs, authority, tier) in cases {
+                assert_eq!(hosts.tier(&headers(pairs), authority), tier, "{pairs:?}");
+            }
+            assert_eq!(
+                hosts.tier(&HeaderMap::new(), None),
+                HostTier::Other,
+                "no host"
+            );
+        }
+
+        #[test]
+        fn the_landing_host_keeps_only_the_public_site() {
+            let landing = |file: &str| Answer::Landing(file.to_owned());
+            let here = [
+                ("/", landing("index.html")),
+                ("/pricing", landing("pricing/index.html")),
+                ("/_astro/Base.css", landing("_astro/Base.css")),
+                ("/downloads/x.exe", Answer::Downloads("x.exe".to_owned())),
+                ("/healthz", Answer::Api),
+                ("/v1/site", Answer::Api),
+                ("/v1/plans/", Answer::Api),
+                ("/robots.txt", Answer::Console),
+                ("/sitemap.xml", Answer::Console),
+                ("/ingest/e/", Answer::Console),
+            ];
+            for (path, answer) in here {
+                assert_eq!(
+                    destination(HostTier::Landing, path, &answer),
+                    Destination::Here,
+                    "{path}"
+                );
+            }
+            let moved = [
+                ("/catalogue", Answer::Console),
+                ("/app", Answer::Console),
+                ("/api/auth/sign-in", Answer::Api),
+                ("/v1/whoami", Answer::Api),
+                ("/v1/site/extra", Answer::Api),
+                ("/v9/site", Answer::Console),
+                ("/v1/healthz", Answer::Api),
+                ("/ingestion", Answer::Console),
+            ];
+            for (path, answer) in moved {
+                assert_eq!(
+                    destination(HostTier::Landing, path, &answer),
+                    Destination::Console,
+                    "{path}"
+                );
+            }
+        }
+
+        #[test]
+        fn the_console_host_sends_back_only_the_landing_pages() {
+            let landing = |file: &str| Answer::Landing(file.to_owned());
+            let cases = [
+                ("/", landing("index.html"), Destination::Here),
+                (
+                    "/pricing",
+                    landing("pricing/index.html"),
+                    Destination::Landing,
+                ),
+                ("/terms/", landing("terms/index.html"), Destination::Landing),
+                ("/sitemap.xml", landing("sitemap.xml"), Destination::Landing),
+                (
+                    "/fonts/a.woff2",
+                    landing("fonts/a.woff2"),
+                    Destination::Here,
+                ),
+                (
+                    "/robots.txt",
+                    landing("robots.txt"),
+                    Destination::ConsoleRobots,
+                ),
+                ("/robots.txt", Answer::Console, Destination::ConsoleRobots),
+                ("/catalogue", Answer::Console, Destination::Here),
+                ("/api/auth/session", Answer::Api, Destination::Here),
+                (
+                    "/downloads/x.exe",
+                    Answer::Downloads("x.exe".to_owned()),
+                    Destination::Here,
+                ),
+            ];
+            for (path, answer, expected) in cases {
+                assert_eq!(
+                    destination(HostTier::Console, path, &answer),
+                    expected,
+                    "{path}"
+                );
+            }
+        }
+
+        #[test]
+        fn nothing_moves_on_an_unknown_host() {
+            for answer in [
+                Answer::Api,
+                Answer::Console,
+                Answer::Landing("pricing/index.html".to_owned()),
+            ] {
+                assert_eq!(
+                    destination(HostTier::Other, "/pricing", &answer),
+                    Destination::Here,
+                    "{answer:?}"
+                );
+            }
+        }
+
+        /// No path one host sends away is sent back by the other.
+        #[test]
+        fn no_redirect_loops() {
+            let landing = |file: &str| Answer::Landing(file.to_owned());
+            for (path, answer) in [
+                ("/pricing", landing("pricing/index.html")),
+                ("/sitemap.xml", landing("sitemap.xml")),
+                ("/catalogue", Answer::Console),
+                ("/api/auth/x", Answer::Api),
+                ("/v1/whoami", Answer::Api),
+            ] {
+                let there = destination(HostTier::Landing, path, &answer);
+                let back = destination(HostTier::Console, path, &answer);
+                assert!(
+                    there == Destination::Here || back == Destination::Here,
+                    "{path} moves both ways: {there:?} / {back:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_redirect_keeps_the_path_and_query_on_the_configured_host() {
+            let hosts = hosts();
+            assert_eq!(
+                hosts.location(&Destination::Console, "/login?next=%2Fapp"),
+                Some("https://dash.teachouse.io/login?next=%2Fapp".to_owned()),
+                "to dash, lowercased"
+            );
+            assert_eq!(
+                hosts.location(&Destination::Landing, "/pricing/"),
+                Some("https://teachouse.io/pricing/".to_owned()),
+                "to the apex"
+            );
+            assert_eq!(
+                hosts.location(&Destination::Here, "/"),
+                None,
+                "not a redirect"
+            );
+            assert_eq!(
+                hosts.location(&Destination::ConsoleRobots, "/robots.txt"),
+                None,
+                "not a redirect"
+            );
+        }
     }
 }
