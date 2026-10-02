@@ -184,7 +184,7 @@ mod tests {
     use tauri::Url;
 
     fn console() -> Url {
-        "https://teachouse.io/resources".parse().unwrap()
+        "https://dash.teachouse.io/resources".parse().unwrap()
     }
 
     fn start() -> Url {
@@ -208,7 +208,7 @@ mod tests {
         for elapsed in [EARLY, GIVE_UP_AFTER, GIVE_UP_AFTER * 3] {
             assert_eq!(
                 verdict(
-                    Some(&at("https://teachouse.io/login?next=%2F", true)),
+                    Some(&at("https://dash.teachouse.io/login?next=%2F", true)),
                     &console(),
                     &start(),
                     elapsed
@@ -223,7 +223,7 @@ mod tests {
     /// and is taken back at the deadline rather than left white.
     #[test]
     fn a_blank_console_is_taken_back_at_the_deadline() {
-        let blank = at("https://teachouse.io/resources", false);
+        let blank = at("https://dash.teachouse.io/resources", false);
         assert_eq!(
             verdict(Some(&blank), &console(), &start(), EARLY),
             Verdict::Wait
@@ -302,9 +302,9 @@ mod tests {
     /// and anything else is no look rather than a guess.
     #[test]
     fn the_answer_is_read_quoted_or_not() {
-        let raw = r#"{"href":"https://teachouse.io/resources","drawn":false}"#;
+        let raw = r#"{"href":"https://dash.teachouse.io/resources","drawn":false}"#;
         let quoted = serde_json::to_string(raw).unwrap();
-        let expected = at("https://teachouse.io/resources", false);
+        let expected = at("https://dash.teachouse.io/resources", false);
         assert_eq!(read_look(raw), Some(expected.clone()));
         assert_eq!(read_look(&quoted), Some(expected));
         for junk in ["null", "", "\"loading\"", "{\"href\":1}"] {

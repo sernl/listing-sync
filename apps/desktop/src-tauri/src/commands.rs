@@ -1520,7 +1520,7 @@ mod import_command_tests {
             },
             Arc::new(MemorySessionStore::default()),
         ));
-        let origin: tauri::Url = crate::control_plane::DEFAULT_BASE_URL
+        let origin: tauri::Url = crate::control_plane::CONSOLE_ORIGIN
             .parse()
             .expect("the compiled origin is a url");
         let webview = WebviewWindowBuilder::new(&app, "main", WebviewUrl::External(origin.clone()))
@@ -2336,7 +2336,7 @@ mod session_command_tests {
             identity(),
             Arc::new(MemorySessionStore::default()),
         ));
-        let origin: tauri::Url = crate::control_plane::DEFAULT_BASE_URL
+        let origin: tauri::Url = crate::control_plane::CONSOLE_ORIGIN
             .parse()
             .expect("the compiled origin is a url");
         let webview = WebviewWindowBuilder::new(&app, "main", WebviewUrl::External(origin.clone()))
@@ -2501,7 +2501,7 @@ mod session_command_tests {
     fn a_console_window(
         app: &tauri::App<tauri::test::MockRuntime>,
     ) -> tauri::WebviewWindow<tauri::test::MockRuntime> {
-        let origin: tauri::Url = crate::control_plane::DEFAULT_BASE_URL
+        let origin: tauri::Url = crate::control_plane::CONSOLE_ORIGIN
             .parse()
             .expect("the compiled origin is a url");
         tauri::WebviewWindowBuilder::new(
@@ -2562,7 +2562,7 @@ mod session_command_tests {
         );
         assert_eq!(
             window.url().expect("the window has a url").as_str(),
-            "https://teachouse.io/",
+            format!("{}/", crate::control_plane::CONSOLE_ORIGIN),
             "and it has not navigated yet, so the answer above is evaluated in the console's \
              own page rather than in the marketplace's"
         );
@@ -2603,7 +2603,7 @@ mod session_command_tests {
         let store = Arc::new(MemorySessionStore::new());
         let app = app_holding(Arc::clone(&store), Recorder::allowing());
         let window = a_console_window(&app);
-        let console: tauri::Url = crate::control_plane::DEFAULT_BASE_URL
+        let console: tauri::Url = crate::control_plane::CONSOLE_ORIGIN
             .parse()
             .expect("the compiled origin is a url");
 
@@ -2626,7 +2626,11 @@ mod session_command_tests {
 
         let back = settles_at(&window, |at| at.contains("connect=")).await;
         assert_eq!(
-            back, "https://teachouse.io/marketplaces?connect=abandoned&marketplace=Tpt",
+            back,
+            format!(
+                "{}/marketplaces?connect=abandoned&marketplace=Tpt",
+                crate::control_plane::CONSOLE_ORIGIN
+            ),
             "the seller is returned to the page they pressed Connect on, and it is told which \
              marketplace ended how"
         );
@@ -2747,7 +2751,7 @@ mod session_command_tests {
             tokio::time::sleep(core::time::Duration::from_millis(600)).await;
             assert_eq!(
                 window.url().expect("the window has a url").as_str(),
-                "https://teachouse.io/",
+                format!("{}/", crate::control_plane::CONSOLE_ORIGIN),
                 "the one window never left the console, so the seller was never shown a login \
                  they cannot keep. On {surface:?}"
             );
@@ -2839,7 +2843,7 @@ mod session_command_tests {
             identity(),
             Arc::new(MemorySessionStore::default()),
         ));
-        let origin: tauri::Url = crate::control_plane::DEFAULT_BASE_URL
+        let origin: tauri::Url = crate::control_plane::CONSOLE_ORIGIN
             .parse()
             .expect("the compiled origin is a url");
         let webview = WebviewWindowBuilder::new(&app, "main", WebviewUrl::External(origin.clone()))
@@ -2943,7 +2947,11 @@ mod session_command_tests {
 
         let back = settles_at(&window, |at| at.contains("connect=")).await;
         assert_eq!(
-            back, "https://teachouse.io/marketplaces?connect=captured&marketplace=Tpt",
+            back,
+            format!(
+                "{}/marketplaces?connect=captured&marketplace=Tpt",
+                crate::control_plane::CONSOLE_ORIGIN
+            ),
             "a completed sign-in returns the console to the page it left, saying which \
              marketplace was connected"
         );
@@ -3000,7 +3008,11 @@ mod session_command_tests {
 
         let back = settles_at(&window, |at| at.contains("connect=")).await;
         assert_eq!(
-            back, "https://teachouse.io/marketplaces?connect=deadline&marketplace=Tpt",
+            back,
+            format!(
+                "{}/marketplaces?connect=deadline&marketplace=Tpt",
+                crate::control_plane::CONSOLE_ORIGIN
+            ),
             "the seller is returned to the console and told the sign-in ran out of time, which \
              is a different thing from leaving it and a different thing from it never opening"
         );
@@ -3044,7 +3056,10 @@ mod session_command_tests {
         let back = settles_at(&window, |at| at.contains("connect=")).await;
         assert_eq!(
             back,
-            "https://teachouse.io/marketplaces?connect=deadline&marketplace=Tes"
+            format!(
+                "{}/marketplaces?connect=deadline&marketplace=Tes",
+                crate::control_plane::CONSOLE_ORIGIN
+            )
         );
         assert!(store
             .get(Marketplace::Tes)
@@ -3087,7 +3102,10 @@ mod session_command_tests {
         let back = settles_at(&window, |at| at.contains("connect=")).await;
         assert_eq!(
             back,
-            "https://teachouse.io/marketplaces?connect=captured&marketplace=Tes"
+            format!(
+                "{}/marketplaces?connect=captured&marketplace=Tes",
+                crate::control_plane::CONSOLE_ORIGIN
+            )
         );
         assert!(store
             .get(Marketplace::Tes)
@@ -3180,7 +3198,7 @@ mod session_command_tests {
             identity(),
             Arc::new(MemorySessionStore::default()),
         ));
-        let origin: tauri::Url = crate::control_plane::DEFAULT_BASE_URL
+        let origin: tauri::Url = crate::control_plane::CONSOLE_ORIGIN
             .parse()
             .expect("the compiled origin is a url");
         let webview = WebviewWindowBuilder::new(&app, "main", WebviewUrl::External(origin))

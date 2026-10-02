@@ -41,7 +41,7 @@ use crate::heartbeat::{
     CheckIn, ControlPlane, ControlPlaneError, HostFacts, PlaneFuture, SessionReport,
 };
 
-/// Where the control plane is, when nothing overrides it.
+/// Where the console and the control plane are, when nothing overrides it.
 ///
 /// The same origin `tauri.conf.json`'s content-security policy already names
 /// as the one the console may reach, so the two cannot disagree without one of
@@ -49,13 +49,13 @@ use crate::heartbeat::{
 /// rather than configured, so it cannot drift from it and is not a third place
 /// to edit; the genuinely independent ones are the two capabilities below.
 ///
-/// One host carries the console, `/v1` and `/api/auth`. Under
-/// `teachouse.stowiq.io` that was forced rather than chosen: Cloudflare's free
-/// certificate covered one label under `stowiq.io`, so `api.teachouse` would
-/// have been a second. At the apex the constraint has lifted — Universal SSL
-/// covers `teachouse.io` and `*.teachouse.io` — and the single host is kept
-/// because splitting it would move the session cookie, which is a decision of
-/// its own rather than a consequence of this cutover.
+/// `dash.teachouse.io` carries the console, `/v1` and `/api/auth`; the apex
+/// `teachouse.io` is the marketing landing and answers every console path with
+/// a permanent redirect here. The window loads this host directly rather than
+/// following that redirect: the session cookie is host-only on this host, and
+/// the capabilities below grant commands to this origin and no other.
+/// Installers and `downloads.json` stay on the apex, where the server keeps
+/// `/downloads`; the updater itself reads CrabNebula, not either host.
 ///
 /// Four places carry this origin and all of them must move together:
 /// this constant; the `connect-src` in `tauri.conf.json`; the `remote.urls`
@@ -65,14 +65,13 @@ use crate::heartbeat::{
 /// not catch: the window would navigate to the new origin, `Origin::matches`
 /// would test it against the old pattern, and every application command would
 /// be refused with the console rendering "this page is not one the app accepts
-/// commands from" until a new build shipped.
-/// Nothing here can catch that for them: the capability is read by Tauri from
-/// the file at run time, so the only honest check is the console refusing a
-/// command, which `a_marketplace_page_in_the_console_window_reaches_no_command`
-/// in `commands.rs` exercises. The opener capability is pinned to the
-/// console's by `remote('opener')` equalling `remote('console')` in
-/// `web/src/lib/desktop.test.ts`.
-pub const DEFAULT_BASE_URL: &str = "https://teachouse.io";
+/// commands from" until a new build shipped. Tauri reads the capability from
+/// the file at run time, so
+/// `the_committed_origin_lists_name_the_console_origin` below reads the three
+/// files itself and fails when any of them names another origin; the refusal
+/// is exercised by `a_marketplace_page_in_the_console_window_reaches_no_command`
+/// in `commands.rs`.
+pub const CONSOLE_ORIGIN: &str = "https://dash.teachouse.io";
 
 /// The development override. `just web-dev` serves the console on the vite
 /// origin and proxies `/v1` from there to a local `tam-server`, so in
@@ -102,7 +101,7 @@ pub fn base_url() -> String {
         .or_else(|| option_env!("TAM_CONTROL_PLANE").map(str::to_owned))
         .map(|raw| raw.trim().to_owned())
         .filter(|raw| !raw.is_empty())
-        .unwrap_or_else(|| DEFAULT_BASE_URL.to_owned())
+        .unwrap_or_else(|| CONSOLE_ORIGIN.to_owned())
 }
 
 /// How long a check-in may take end to end. Generous, because the seller's
@@ -1177,7 +1176,7 @@ mod tests {
     use super::{
         base_url, heartbeat_path, install_crypto_provider, stream_path, streams_path, Answer,
         Answered, BytesFuture, BytesReply, HttpControlPlane, HttpTransport, Reply, Transport,
-        TransportFuture, DEFAULT_BASE_URL, REGISTER_PATH,
+        TransportFuture, CONSOLE_ORIGIN, REGISTER_PATH,
     };
     use crate::console_session::{NoSession, SessionFuture, SessionSource, SessionUnreadable};
     use crate::device::{DeviceId, DeviceIdentity};
@@ -1804,13 +1803,56 @@ mod tests {
         // shipped condition.
         assert_eq!(
             base_url(),
-            DEFAULT_BASE_URL,
+            CONSOLE_ORIGIN,
             "a build with no override speaks to the origin the content-security policy \
              in tauri.conf.json already names"
         );
         assert!(
-            !DEFAULT_BASE_URL.ends_with('/'),
+            !CONSOLE_ORIGIN.ends_with('/'),
             "the base is joined to paths that begin with a slash"
+        );
+    }
+
+    /// The files Tauri reads at run time name this origin and no other, so a
+    /// cutover that moves the constant and misses one of them fails here
+    /// rather than as a console refusing every command until the next build.
+    #[test]
+    fn the_committed_origin_lists_name_the_console_origin() {
+        for (file, raw) in [
+            (
+                "capabilities/console.json",
+                include_str!("../capabilities/console.json"),
+            ),
+            (
+                "capabilities/opener.json",
+                include_str!("../capabilities/opener.json"),
+            ),
+        ] {
+            let capability: serde_json::Value =
+                serde_json::from_str(raw).expect("a capability is JSON");
+            assert_eq!(
+                capability["remote"]["urls"],
+                serde_json::json!([CONSOLE_ORIGIN]),
+                "{file} grants its commands to the console's origin alone"
+            );
+        }
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+            .expect("tauri.conf.json is JSON");
+        let csp = conf["app"]["security"]["csp"]
+            .as_str()
+            .expect("tauri.conf.json sets a content-security policy");
+        let connect = csp
+            .split(';')
+            .find_map(|directive| directive.trim().strip_prefix("connect-src "))
+            .expect("the policy has a connect-src");
+        let remote: Vec<&str> = connect
+            .split_whitespace()
+            .filter(|source| source.starts_with("https://"))
+            .collect();
+        assert_eq!(
+            remote,
+            [CONSOLE_ORIGIN],
+            "connect-src reaches the console's origin and no other remote one"
         );
     }
 
