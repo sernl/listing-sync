@@ -118,6 +118,12 @@ let
     else
       { };
 
+  # The console's public origin: its own host once the deployment splits
+  # the landing off, the single origin otherwise. The identity service's base
+  # URL, the issuer tam-server checks, the mail's links and the trusted
+  # origins all name this one value.
+  consoleOrigin = "https://${if cfg.consoleHost != null then cfg.consoleHost else cfg.domain}";
+
   serverArgs = [
     (dbUrl "tam_app")
     "${cfg.server.bindAddress}:${toString cfg.server.port}"
@@ -126,7 +132,7 @@ let
     "--ui-dir"
     "${cfg.consolePackage}"
     "--auth-issuer"
-    "https://${cfg.domain}"
+    consoleOrigin
     # The issuer is compared against the assertion's `iss`; the key set is only
     # fetched. Naming the loopback listener for the fetch keeps the identity
     # bridge off the public edge entirely, which is what lets this unit deny
@@ -137,6 +143,12 @@ let
   ++ lib.optionals (cfg.landingPackage != null) [
     "--landing-dir"
     "${cfg.landingPackage}"
+  ]
+  ++ lib.optionals (cfg.landingHost != null && cfg.consoleHost != null) [
+    "--landing-host"
+    cfg.landingHost
+    "--console-host"
+    cfg.consoleHost
   ]
   ++ lib.optionals cfg.downloads.enable [
     "--downloads-dir"
@@ -346,7 +358,39 @@ in
         The single public origin. The API, the console and `/api/auth/*` all
         answer here, which is what `tam-server --ui-dir` exists for and what
         makes the session cookie, the CORS posture and the passkey relying-party
-        identifier one value each rather than three.
+        identifier one value each rather than three. With `landingHost` and
+        `consoleHost` set, this is the registrable domain both sit under, and
+        the console's origin is `consoleHost` instead.
+      '';
+    };
+
+    landingHost = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "teachouse.io";
+      description = ''
+        The public site's host, passed as `tam-server --landing-host`, set
+        together with `consoleHost` or not at all. Requests on it get the
+        landing build, `/downloads/*`, `/v1/site`, `/v1/plans`, `/ingest/*`,
+        `/healthz`, `/robots.txt` and `/sitemap.xml`; every other path is a
+        301 to the same path on `consoleHost`. Null, the default, keeps one
+        origin for everything. A bare host name: no scheme, port or path.
+      '';
+    };
+
+    consoleHost = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "dash.teachouse.io";
+      description = ''
+        The console's host, passed as `tam-server --console-host`, set
+        together with `landingHost` or not at all. Requests on it get the
+        console, `/api/auth/*`, the API and the downloads; the landing's
+        pages other than `/` are a 301 to `landingHost`, and `/robots.txt`
+        refuses every crawler. Set, it is the console's origin everywhere
+        this module names one: the identity service's base URL, the issuer
+        tam-server checks, the mail's links and the trusted origins. The
+        edge must route both hosts to this machine.
       '';
     };
 
@@ -670,8 +714,8 @@ in
         };
         consoleUrl = lib.mkOption {
           type = lib.types.str;
-          default = "https://${cfg.domain}";
-          defaultText = lib.literalMD "`https://\${domain}`";
+          default = consoleOrigin;
+          defaultText = lib.literalMD "`https://\${consoleHost}`, or `https://\${domain}` without one";
           description = ''
             The console's public origin, which the mail's "Open the run"
             button resolves against. Stated as its own value rather than
@@ -790,12 +834,15 @@ in
       passkeyRpName = lib.mkOption {
         type = lib.types.str;
         default = "Teachouse";
-        description = "Relying-party name shown in the browser's passkey prompt. The relying-party identifier is the domain and is not separately configurable, because a passkey enrolled against one identifier does not carry to another.";
+        description = "Relying-party name shown in the browser's passkey prompt. The relying-party identifier is the registrable domain of the console's origin (so `domain` either way) and is not separately configurable, because a passkey enrolled against one identifier does not carry to another.";
       };
       trustedOrigins = lib.mkOption {
         type = lib.types.listOf lib.types.str;
-        default = [ "https://${cfg.domain}" ];
-        defaultText = lib.literalMD "`[ \"https://\${domain}\" ]`";
+        default = lib.unique [
+          "https://${cfg.domain}"
+          consoleOrigin
+        ];
+        defaultText = lib.literalMD "`https://\${domain}`, and `https://\${consoleHost}` where set";
         description = "Bare origins better-auth accepts a request from. Each must carry no path and no trailing slash, which the service checks at start-up.";
       };
     };
@@ -864,6 +911,10 @@ in
 
   config = lib.mkIf cfg.enable {
     assertions = [
+      {
+        assertion = (cfg.landingHost == null) == (cfg.consoleHost == null);
+        message = "services.teachouse.landingHost and consoleHost are set together or not at all: one host alone has nowhere to send what it does not keep.";
+      }
       {
         assertion = cfg.server.requireEntitlementKey -> cfg.server.entitlementKeyFile != null;
         message = "services.teachouse.server.requireEntitlementKey is set but entitlementKeyFile is null, so tam-server would refuse to start.";
@@ -1236,7 +1287,7 @@ in
         TAM_AUTH_ENV = "production";
         TAM_AUTH_BIND = "127.0.0.1";
         TAM_AUTH_PORT = toString cfg.auth.port;
-        TAM_AUTH_BASE_URL = "https://${cfg.domain}";
+        TAM_AUTH_BASE_URL = consoleOrigin;
         TAM_AUTH_TRUSTED_ORIGINS = lib.concatStringsSep "," cfg.auth.trustedOrigins;
         TAM_AUTH_PASSKEY_RP_NAME = cfg.auth.passkeyRpName;
         TAM_AUTH_DATABASE_URL = dbUrl "tam_auth";
