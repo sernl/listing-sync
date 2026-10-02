@@ -906,7 +906,7 @@ guides-check:
 # into the blob store (`tam-admin guides images`) and seeds the guides. This is
 # for a deployment reached only over HTTP.
 #
-#   just guides-images https://teachouse.io ~/operator-session.txt
+#   just guides-images https://dash.teachouse.io ~/operator-session.txt
 #
 # The session file holds an operator's `tam_session` cookie value, alone or as
 # a `tam_session=<value>` line among other cookies.

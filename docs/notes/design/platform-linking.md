@@ -215,4 +215,4 @@ The disconnect prompt says so rather than leaving a seller to discover it by rec
 
 The fence changes character rather than weakening.
 On a computer the marketplace page sits in a window no capability names.
-On a phone it sits in window `main`, and what refuses it is the per-invoke remote-origin check against the single origin `capabilities/console.json` grants. Keep that list restricted to exactly `DEFAULT_BASE_URL`; the shared window label does not provide isolation.
+On a phone it sits in window `main`, and what refuses it is the per-invoke remote-origin check against the single origin `capabilities/console.json` grants. Keep that list restricted to exactly `CONSOLE_ORIGIN` (`https://dash.teachouse.io`); the shared window label does not provide isolation.
