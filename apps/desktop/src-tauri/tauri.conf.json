@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost https://teachouse.io"
+      "csp": "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost https://dash.teachouse.io"
     },
     "withGlobalTauri": true
   },

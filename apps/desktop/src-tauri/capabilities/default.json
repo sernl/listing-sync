@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Local grants for main, including allow-retry-console for the bundled offline page. Remote console commands are granted separately in console.json; updater permissions live in desktop-only updater.json. Tauri injects IPC into all webviews, so permissions provide the isolation. Desktop marketplace windows have no grants. Android marketplace pages reuse main, so console.json must restrict remote access to exactly DEFAULT_BASE_URL.",
+  "description": "Local grants for main, including allow-retry-console for the bundled offline page. Remote console commands are granted separately in console.json; updater permissions live in desktop-only updater.json. Tauri injects IPC into all webviews, so permissions provide the isolation. Desktop marketplace windows have no grants. Android marketplace pages reuse main, so console.json must restrict remote access to exactly CONSOLE_ORIGIN.",
   "windows": [
     "main"
   ],
