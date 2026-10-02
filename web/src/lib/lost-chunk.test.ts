@@ -14,7 +14,7 @@ describe('a lost chunk', () => {
 		expect(
 			isLostChunk(
 				new TypeError(
-					'Failed to fetch dynamically imported module: https://teachouse.io/_app/immutable/nodes/50.js'
+					'Failed to fetch dynamically imported module: https://dash.teachouse.io/_app/immutable/nodes/50.js'
 				)
 			)
 		).toBe(true);

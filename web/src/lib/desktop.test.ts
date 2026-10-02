@@ -361,7 +361,7 @@ describe('asking this computer to run an import', () => {
 	const WRONG_ORIGIN_REJECTION = [
 		`${START_IMPORT} not allowed on window "main", webview "main", URL: http://tauri.localhost/`,
 		'',
-		'allowed on: [windows: "main", URL: local], [windows: "main", URL: https://teachouse.io]',
+		'allowed on: [windows: "main", URL: local], [windows: "main", URL: https://dash.teachouse.io]',
 		'',
 		'referenced by: capability: default, permission: allow-start-import'
 	].join('\n');
@@ -509,7 +509,7 @@ describe('asking this computer to connect or forget one marketplace', () => {
 				throw [
 					`${command} not allowed on window "main", webview "main", URL: http://tauri.localhost/`,
 					'',
-					'allowed on: [windows: "main", URL: local], [windows: "main", URL: https://teachouse.io]',
+					'allowed on: [windows: "main", URL: local], [windows: "main", URL: https://dash.teachouse.io]',
 					'',
 					`referenced by: capability: console, permission: allow-${command.replace(/_/g, '-')}`
 				].join('\n');
