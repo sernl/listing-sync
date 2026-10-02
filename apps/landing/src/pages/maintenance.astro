@@ -11,7 +11,7 @@
    work -- signing in, for the operator, and the status page. */
 import '../styles/site.css';
 import '../styles/maintenance.css';
-import { supportEmail } from '../site.js';
+import { consoleUrl, loginUrl, supportEmail } from '../site.js';
 
 const title = 'Teachouse \u2014 back soon';
 ---
@@ -35,10 +35,10 @@ const title = 'Teachouse \u2014 back soon';
 			</p>
 			<p class="maintenance-back" data-maintenance-message>We expect to be back shortly.</p>
 			<p class="maintenance-contact">
-				You can check the <a href="/status">status page</a> for the latest,
+				You can check the <a href={`${consoleUrl}/status`}>status page</a> for the latest,
 				or write to <a href={`mailto:${supportEmail}`}>{supportEmail}</a>.
 			</p>
-			<p class="maintenance-signin"><a href="/login">Team sign in</a></p>
+			<p class="maintenance-signin"><a href={loginUrl}>Team sign in</a></p>
 		</main>
 	</body>
 </html>

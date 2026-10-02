@@ -17,6 +17,7 @@
 
 import { PACKS, PLANS, PLAN_FEATURES, PLAN_FEATURE_GROUPS } from './plans.generated.js';
 import { dollars } from './sale.js';
+import { consoleUrl } from './site.js';
 
 export { dollars };
 
@@ -55,7 +56,7 @@ export const bestYearlyPercent = Math.max(
  * on arrival. Sending the price key from here means a reader who clicked
  * "Choose Pro" does not have to find Pro again on the other side.
  */
-const SIGNUP = 'https://teachouse.io/signup';
+const SIGNUP = `${consoleUrl}/signup`;
 export const signupUrl = (priceKey) =>
 	priceKey === undefined || priceKey === null
 		? `${SIGNUP}?next=/settings/billing`
@@ -243,11 +244,11 @@ export const faqs = [
 	{
 		q: 'Why do I need the Teachouse app?',
 		a: 'Some marketplaces, including the two that connect today, have no official way for other services to connect to them. For those, the free Teachouse app signs in on your own computer or phone, so Teachouse never holds your password. Connect those marketplaces in the app; importing, editing, publishing and everything else works in your browser too.',
-		link: { href: '/marketplaces', label: 'Get the app from Marketplaces' }
+		link: { href: `${consoleUrl}/marketplaces`, label: 'Get the app from Marketplaces' }
 	},
 	{
 		q: 'Do my files get uploaded to Teachouse?',
 		a: 'Not the files you import. They stay on your own device, and when you open one in your browser, Teachouse passes it across from that device without keeping it. Files you upload to Teachouse yourself are kept so you can use them anywhere, until you delete them.',
-		link: { href: '/guides/why-the-app', label: 'Why the app, and where your files stay' }
+		link: { href: `${consoleUrl}/guides/why-the-app`, label: 'Why the app, and where your files stay' }
 	}
 ];

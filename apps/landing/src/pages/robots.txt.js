@@ -1,52 +1,12 @@
-/* The landing pages are for crawlers; nothing else on this origin is.
-   `tam-server` answers a path from the landing build when the build holds
-   it and hands every other path to the console (`crates/tam-server/src/
-   serving.rs`, `route`), whose pages are drawn in the browser behind a
-   sign-in, so each first segment the console routes under is listed here,
-   with the API, the identity service, the analytics proxy, the installers
-   and the maintenance preview. `/app` is anchored because a bare prefix
-   would also refuse `/apple-touch-icon.png`. The console's segments are the
-   directories under `web/src/routes`, and `served-artefacts` in `flake.nix`
-   fails when one of them has no line here. */
-const disallowed = [
-	'/v1/',
-	'/api/',
-	'/ingest/',
-	'/downloads/',
-	'/maintenance/',
-	'/_app/',
-	'/app$',
-	'/app/',
-	'/login',
-	'/signup',
-	'/reset',
-	'/account',
-	'/admin',
-	'/analytics',
-	'/automations',
-	'/collections',
-	'/connections',
-	'/export',
-	'/guides',
-	'/help',
-	'/import',
-	'/imports',
-	'/inventory',
-	'/jobs',
-	'/labels',
-	'/library',
-	'/listings',
-	'/marketplaces',
-	'/notifications',
-	'/purchases',
-	'/queue',
-	'/reconciliation',
-	'/resources',
-	'/settings',
-	'/status',
-	'/sync',
-	'/templates'
-];
+/* This file is served on the marketing host only. The console moved to its
+   own host (`consoleUrl` in `src/site.js`), which answers its own robots.txt,
+   so no console route is listed here. What this host still answers and no
+   crawler wants is: the API it keeps for the site's banner and plans, the
+   identity service and the analytics proxy it redirects to the console host,
+   the installers, and the maintenance preview. `served-artefacts` in
+   `flake.nix` fails when one of the first four is missing or when a console
+   route segment comes back. */
+const disallowed = ['/v1/', '/api/', '/ingest/', '/downloads/', '/maintenance/'];
 
 export function GET({ site }) {
 	const lines = [

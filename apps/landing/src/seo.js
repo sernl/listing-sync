@@ -7,7 +7,7 @@
  */
 import { PACKS, PLANS } from './plans.generated.js';
 import { faqs } from './pricing.js';
-import { supportEmail } from './site.js';
+import { consoleUrl, supportEmail } from './site.js';
 import sheet from './styles/site.css?raw';
 
 export const siteName = 'Teachouse';
@@ -58,7 +58,10 @@ export const softwareApplication = (site, description) => ({
 	'@type': 'SoftwareApplication',
 	name: siteName,
 	description,
-	url: new URL('/', site).href,
+	/* The application itself is the console, on its own host; the offers
+	   below point at the plans on this one. */
+	url: `${consoleUrl}/`,
+	installUrl: `${consoleUrl}/signup`,
 	applicationCategory: 'BusinessApplication',
 	operatingSystem: 'Web, Windows, macOS, Linux, Android',
 	publisher: { '@id': new URL('/#organization', site).href },

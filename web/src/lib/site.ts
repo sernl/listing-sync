@@ -6,6 +6,11 @@
 
 import type { SeasonName, SiteView } from '$lib/api';
 
+/** The marketing site, which since the console moved to `dash.teachouse.io`
+ *  is another origin: the plans, the terms and the privacy policy live there,
+ *  and a console link to any of them is built from this. */
+export const MARKETING_URL = 'https://teachouse.io';
+
 /** The console pages that stay usable while maintenance is on: signing in and
  *  resetting a password, so an operator can get in to turn it off, and the
  *  status page the maintenance notice points at. The same list `tam-server`

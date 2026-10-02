@@ -29,7 +29,7 @@ The site is four pages: `/`, `/pricing`, `/privacy` and `/terms`.
 `/` runs in heyretro's order with its two content-marketing blocks dropped, since we have no template library to promote.
 A sticky header, a hero, four feature blocks, how it works in three steps, pricing, migrations, questions, a closing call to action, then the footer.
 The header carries three anchors into the home page — how it works, migrations, questions — with pricing as a page link, and the two buttons on the right.
-Both buttons go to `/login`, which the landing build holds no file for and which therefore falls through to the console.
+Both buttons go to the console's `/login` on its own host, `https://dash.teachouse.io/login`, built from `consoleUrl`.
 
 The hero is a badge, a one-line headline, a two-sentence subhead naming the mechanism, two buttons, and one reassurance line underneath: "Your resource files never pass through us."
 An earlier draft said "never leave your computer", which is false: a resource file is uploaded to TPT or TES, and the upload is one of the requests the seller's own machine sends.
@@ -216,11 +216,11 @@ Amended 2026-09-12, phase 1: the prices are no longer the landing's own.
 `just web-check` diffs the emitted file against the tree and fails when a number moved in Rust without the landing being regenerated, which is the gate; the landing lane has no price check of its own, and changing a price is an edit in `tam-limits` and nowhere else.
 `studio` is in the table with `sold: false` and is rendered nowhere on this site.
 
-`apps/landing/src/site.js` holds what the founder must supply and nothing else: the login path, the support address and the availability sentence.
-The login path is `/login` rather than an origin, because the console is served from this same origin, which is also what keeps the site working under `default-src 'self'`.
+`apps/landing/src/site.js` holds what the founder must supply and nothing else: the console's address, the support address and the availability sentence.
+`consoleUrl` is `https://dash.teachouse.io` (overridable at build time with `PUBLIC_CONSOLE_URL`), and the login and signup links are built from it; a link is a navigation, which `default-src 'self'` does not restrict, so the policy is unchanged.
 
-`apps/landing/public/app-redirect.js` is the site's only script, loaded from our own origin on every page.
-The desktop app opens this origin too and has no use for a marketing page, and `window.__TAURI__` is the one signal available before the console loads, so the script sends that window to `/app`.
+`/app-redirect.js`, emitted by the endpoint `apps/landing/src/pages/app-redirect.js.js`, is the site's only script, loaded from our own origin on every page.
+A desktop window that lands here has no use for a marketing page, and `window.__TAURI__` is the one signal available before anything loads, so the script sends that window to `/app` on the console host.
 It is an external file rather than an inline block so that the policy needs no hash for it.
 
 `apps/landing/src/styles/site.css` carries "Pounamu", from the console design spec, under the same token names and values the console uses in `web/src/lib/styles/tokens.css`, so the two surfaces read as one product.
@@ -267,6 +267,7 @@ Three tiers answer a request, in order, and `serving::route` decides between the
 A path whose first segment parses as an API version goes to the API.
 A path the landing build holds a file for is answered from memory, resolving a directory route through its own `index.html`, which is what makes `/pricing`, `/privacy` and `/terms` work without the Astro build emitting extensionless files.
 Everything else is the console's, including `/app` and every route below it, and including `/login`, which is where both of the landing page's buttons go.
+With `--landing-host` and `--console-host` set, as production runs, the landing tier answers only on `teachouse.io` and every console path there is a 301 to `dash.teachouse.io`; the console answers on its own host, which serves its own `robots.txt`, so the landing's refuses only `/v1/`, `/api/`, `/ingest/`, `/downloads/` and the maintenance preview.
 
 The landing page's Content-Security-Policy is computed by `landing_policy` from the files just read rather than written down twice: `default-src 'self'`, `script-src 'self'` plus a `sha256-` token for each inline script found in the build, `style-src 'self'`, `font-src 'self'`, `img-src 'self' data:`, `connect-src 'self'` and `frame-ancestors 'none'`.
 It admitted `'unsafe-inline'` and `https://fonts.googleapis.com` on `style-src` and `https://fonts.gstatic.com` on `font-src` until the console's fonts were bundled and those origins were dropped; every origin the policy names is now this one.
