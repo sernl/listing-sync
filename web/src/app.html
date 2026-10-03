@@ -134,6 +134,11 @@
         }
       })();
     </script>
+    <!-- A reload, once, if SvelteKit has not drawn the first screen within a
+         few seconds: a chunk stalled on a cold edge raises nothing until the
+         browser gives up on it. Inline and ahead of SvelteKit's entry because
+         that entry is what it watches; `$lib/lost-chunk` says the rest. -->
+    %teachouse.watchdog%
     <!-- The signed-out screens' own chunks, preloaded for the one of them
          this shell was opened at, beside SvelteKit's entry rather than after
          it has run and asked, and a connection opened to the Turnstile check
