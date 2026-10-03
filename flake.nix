@@ -424,7 +424,13 @@
                   exit 1
                 fi
               done
+              # `downloads` is in the console segments only because tam-server
+              # reserves it ahead of the landing probe; the installers stay on
+              # the marketing host, so its line is required above, not banned.
               while IFS= read -r segment; do
+                if [ "$segment" = "$downloads" ]; then
+                  continue
+                fi
                 if grep -qxF "Disallow: /$segment" "$landing/robots.txt" \
                   || grep -qxF "Disallow: /$segment/" "$landing/robots.txt"; then
                   echo "robots.txt refuses /$segment, a console route that lives on the console host:" >&2
