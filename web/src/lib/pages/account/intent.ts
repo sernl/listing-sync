@@ -37,12 +37,20 @@ export interface CheckoutIntent {
  *  Anything else is dropped rather than followed: `next` arrives as a query
  *  parameter, and a value that leaves this origin turns our own sign-in into
  *  somebody else's redirector. `//host` is rejected with it — it is a
- *  protocol-relative URL, not a path, however much it looks like one. */
+ *  protocol-relative URL, not a path, however much it looks like one — and so
+ *  is `/\host`, which a URL parser reads as the same thing. The question is
+ *  put to the parser itself rather than to a list of spellings: resolved
+ *  against a placeholder origin, a path stays on it and nothing else does. */
 export function safeNext(value: string | null): string | null {
-	if (value === null || !value.startsWith('/') || value.startsWith('//')) {
+	if (value === null || !value.startsWith('/')) {
 		return null;
 	}
-	return value;
+	const base = 'https://origin.invalid';
+	try {
+		return new URL(value, base).origin === base ? value : null;
+	} catch {
+		return null;
+	}
 }
 
 /** A price key this deployment actually sells, or null.

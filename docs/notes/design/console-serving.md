@@ -27,11 +27,15 @@ Every static response carries a strong entity tag over its bytes and a freshness
 ## Two policies, not one
 
 The two document surfaces carry different content-security policies, and the landing page's is the narrower of them.
-It is `default-src 'self'`, `script-src 'self'` plus a `sha256-` token for every inline block found in every `.html` file at start-up, `style-src 'self'`, `font-src 'self'`, `img-src 'self' data:`, `connect-src 'self'`, and `frame-ancestors 'none'` so the marketing surface cannot be framed at all.
-It admits no third-party host on any directive and no `'unsafe-inline'` on any: the built site self-hosts both font faces from `/fonts/*.woff2` and emits neither a `<style>` element nor a `style` attribute, so the two Google font hosts and the inline-style grant the first version carried were dead grants on the public origin.
+It is `default-src 'self'`, `script-src 'self'` plus a `sha256-` token for every inline block found in every `.html` file at start-up, `style-src 'self'`, `font-src 'self'`, `img-src 'self' data:`, `connect-src 'self' https://cloudflareinsights.com`, and `frame-ancestors 'none'` so the marketing surface cannot be framed at all.
+It admits one third-party host, `https://cloudflareinsights.com` on `connect-src`, where the Web Analytics beacon the edge injects under the page's nonce posts its measurements; the console's policy names the same endpoint on the same directive, and both now carry `frame-ancestors 'none'`.
+It admits no other third-party host and no `'unsafe-inline'` on any directive: the built site self-hosts both font faces from `/fonts/*.woff2` and emits neither a `<style>` element nor a `style` attribute, so the two Google font hosts and the inline-style grant the first version carried were dead grants on the public origin.
 The hashes are computed by the same routine the console's policy uses, generalised from one shell to every page in a directory, so a static site of several pages is covered by one policy and a repeated block contributes one token.
 A download carries no policy at all, because a policy governs a document and nothing renders an installer.
 The static decision is layered outside the console's policy layer, and that placement is load-bearing: a landing or download answer short-circuits before the console's layer can insert the console's header over it.
+
+Outside every tier, the API included, `serving::transport_headers` adds the headers that are not a policy: `Strict-Transport-Security: max-age=31536000; includeSubDomains`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` (the older spelling of `frame-ancestors 'none'`), `Permissions-Policy: camera=(), microphone=(), geolocation=()`, and `Referrer-Policy: strict-origin-when-cross-origin` where no tier set its own — a guide page keeps its `no-referrer`.
+They are sent by the origin rather than left to an edge setting nobody can read from the repository.
 
 ### The edge's own script, and the nonce that admits it
 

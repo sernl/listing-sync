@@ -301,8 +301,11 @@
 	>
 		{#snippet aside()}
 			<!-- The guided tour again, from its first step, whether or not it was
-			     finished or skipped before. -->
-			<Button tier="outline" icon="sparkles" onclick={() => tour.start()}>Show me around</Button>
+			     finished or skipped before. Only under a session: the guides are
+			     public, and the tour walks a console a visitor does not have. -->
+			{#if page.data.session}
+				<Button tier="outline" icon="sparkles" onclick={() => tour.start()}>Show me around</Button>
+			{/if}
 		{/snippet}
 	</PageHead>
 

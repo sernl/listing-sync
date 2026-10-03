@@ -551,6 +551,16 @@ export const PUBLIC_ROUTES: readonly string[] = [
 	'/status'
 ];
 
+/** The sections a browser with no API session may read whole: the section's
+ *  own path and every path under it.
+ *
+ *  Separate from `PUBLIC_ROUTES` because a prefix is a wider grant than a
+ *  path, and that list's own rule is that nothing under a public page becomes
+ *  public by sitting there. The help guides are the one section that is: the
+ *  landing page's pricing questions link prospects to them, and the API serves
+ *  published guides without a session. */
+export const PUBLIC_SECTIONS: readonly string[] = ['/guides'];
+
 /** What a signed-out browser is shown at this path.
  *
  * `redirecting` is a screen rather than the absence of one. The layout's effect
@@ -560,7 +570,22 @@ export const PUBLIC_ROUTES: readonly string[] = [
 export type SignedOutView = 'public' | 'redirecting';
 
 export function signedOutView(pathname: string): SignedOutView {
-	return PUBLIC_ROUTES.includes(pathname) ? 'public' : 'redirecting';
+	if (PUBLIC_ROUTES.includes(pathname)) {
+		return 'public';
+	}
+	const inPublicSection = PUBLIC_SECTIONS.some(
+		(section) => pathname === section || pathname.startsWith(`${section}/`)
+	);
+	return inPublicSection ? 'public' : 'redirecting';
+}
+
+/** Where a signed-out browser is sent from a console address: the sign-in
+ *  screen, carrying the address it asked for as `next` so signing in (or
+ *  signing up from there) lands on it rather than on the home page. The home
+ *  page itself carries nothing, because it is where sign-in lands anyway. */
+export function signInHref(pathname: string, search: string): string {
+	const asked = pathname + search;
+	return asked === '/' ? '/login' : `/login?next=${encodeURIComponent(asked)}`;
 }
 
 /** The account card's avatar: up to two initials from the organisation name.

@@ -66,7 +66,9 @@ stdenv.mkDerivation {
     # sitemap at the root, and `og:image` on every page points at the
     # card under `images/`. `brand/logo.svg` is the full logo that card is
     # rendered from, shipped so the card can be regenerated from the bytes the
-    # site itself serves.
+    # site itself serves. Every head names `apple-touch-icon.png` at the root,
+    # and without the file the apex answered it with a redirect to the console
+    # host's copy.
     for emitted in \
       index.html \
       pricing/index.html \
@@ -76,6 +78,7 @@ stdenv.mkDerivation {
       robots.txt \
       sitemap.xml \
       brand/logo.svg \
+      apple-touch-icon.png \
       images/og.png \
       images/console-resources.avif \
       images/console-resources.webp \

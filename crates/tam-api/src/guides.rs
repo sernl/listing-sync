@@ -1,13 +1,13 @@
-//! The help guides: one document set an operator writes and every seller
-//! reads.
+//! The help guides: one document set an operator writes and anybody reads.
 //!
 //! Two surfaces over one table. The operator's routes take
 //! [`OperatorContext`], so the marking is checked before a handler runs; the
-//! seller's take [`OrgContext`], because `/guides` sits behind the session
-//! gate like every other console page and a guide is not public. Neither
-//! surface uses the backoffice pool: `guide` is global (migration 0073) and
-//! the application pool owns it, so there is no tenant fence here to cross
-//! and no second connection to open.
+//! reader's take no session at all, only the version, because a published
+//! guide is help a prospect may read before signing up — the pricing page
+//! links to them — and carries no organisation's data. Neither surface uses
+//! the backoffice pool: `guide` is global (migration 0073) and the
+//! application pool owns it, so there is no tenant fence here to cross and no
+//! second connection to open.
 //!
 //! # Saving is not publishing
 //!
@@ -82,7 +82,7 @@ use crate::catalogue::parse_hash;
 use crate::error::{APIError, APIErrorCode, APIErrorEntry, APIErrorKind};
 use crate::resources::image_answer;
 use crate::session::OperatorContext;
-use crate::{AppState, OrgContext};
+use crate::{APIVersion, AppState};
 
 /// The extensions a guide body is rendered under.
 ///
@@ -1390,21 +1390,22 @@ pub(crate) async fn upload_guide_image(
 
 /// The bytes of one guide picture.
 ///
-/// [`OrgContext`] authenticates and nothing more: the organisation it names
-/// is the reader's, and the organisation this read pins is the platform one,
-/// because the picture belongs to the guide rather than to whoever is looking
-/// at it. That asymmetry is the reason this route exists instead of the
-/// seller's own `GET /{version}/uploads/{handle}`, which pins the reader's
-/// organisation and therefore answers 404 for every guide picture.
+/// Public, as every reader route of this corpus is: a guide is help anybody
+/// may read before they have an account, and the pricing page links to some.
+/// The organisation this read pins is the platform one, because the picture
+/// belongs to the guide rather than to whoever is looking at it. That is the
+/// reason this route exists instead of the seller's own
+/// `GET /{version}/uploads/{handle}`, which pins the reader's organisation
+/// and therefore answers 404 for every guide picture.
 ///
 /// A deployment where nobody has uploaded a guide picture has no platform
 /// organisation yet, and every handle answers 404 — the same answer a handle
 /// that names nothing gets. This route creates nothing: a read that
 /// provisioned an organisation would be a write wearing a GET.
 pub(crate) async fn guide_image(
+    _version: APIVersion,
     State(state): State<AppState>,
-    _context: OrgContext,
-    Path((_version, handle)): Path<(String, String)>,
+    Path((_version_word, handle)): Path<(String, String)>,
 ) -> Result<([(header::HeaderName, &'static str); 3], Vec<u8>), APIError> {
     let hash = parse_hash(&handle)
         .ok_or_else(|| validation("a handle is the file's 64-character hex hash"))?;
@@ -1461,7 +1462,11 @@ pub(crate) fn image_body_limit() -> DefaultBodyLimit {
 
 // -------------------------------------------------------------------- reader
 
-/// One page of the published guides a seller's filters name.
+/// One page of the published guides a reader's filters name.
+///
+/// Public: published guides carry no organisation's data, and a prospect
+/// following a link from the pricing page has no session yet. The admin
+/// routes beside these, which read drafts, stay behind the operator gate.
 ///
 /// Search AND topic AND any-of-tags, which is the one contract this listing
 /// has: three conditions narrowing one set, so adding a tag never widens a
@@ -1478,8 +1483,8 @@ pub(crate) fn image_body_limit() -> DefaultBodyLimit {
 /// is a count over the same narrowing, which is what lets a reader be told
 /// "26–50 of 143" rather than the length of what they were sent.
 pub(crate) async fn published_guides(
+    _version: APIVersion,
     State(state): State<AppState>,
-    _context: OrgContext,
     Query(filters): Query<GuideFilters>,
 ) -> Result<Json<GuidesView>, APIError> {
     let text = filters
@@ -1594,8 +1599,8 @@ fn asked_page(page: Option<&str>) -> u32 {
 /// operator is still deciding about is not a filter a seller can select and
 /// not a word they can read.
 pub(crate) async fn guide_taxonomy(
+    _version: APIVersion,
     State(state): State<AppState>,
-    _context: OrgContext,
 ) -> Result<Json<GuideTaxonomyView>, APIError> {
     let taxonomy = GuideRepo::new(state.pool.clone())
         .published_taxonomy()
@@ -1604,10 +1609,11 @@ pub(crate) async fn guide_taxonomy(
     Ok(Json(GuideTaxonomyView::of(taxonomy)))
 }
 
+/// One published guide, rendered. Public, as the listing is.
 pub(crate) async fn published_guide(
+    _version: APIVersion,
     State(state): State<AppState>,
-    _context: OrgContext,
-    Path((_version, slug)): Path<(String, String)>,
+    Path((_version_word, slug)): Path<(String, String)>,
 ) -> Result<Json<PublishedGuideView>, APIError> {
     let guide: GuidePublishedPage = GuideRepo::new(state.pool.clone())
         .published_page(&slug)
