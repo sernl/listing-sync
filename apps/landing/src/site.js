@@ -5,10 +5,18 @@
  */
 
 /**
- * The console is served from this same origin, so both buttons are a path
- * rather than a URL and the site keeps working under `default-src 'self'`.
+ * Where the console lives. It has its own host, so every link into it from
+ * this site is an absolute URL built from this; navigation is not something
+ * `default-src 'self'` restricts, so the policy is unchanged. A build for
+ * local development sets `PUBLIC_CONSOLE_URL` to the console it runs beside.
+ * `import.meta.env` is read optionally because `just landing-copy-gate`
+ * imports this module under plain Node, where it is undefined.
  */
-export const loginUrl = '/login';
+export const consoleUrl = import.meta.env?.PUBLIC_CONSOLE_URL || 'https://dash.teachouse.io';
+
+/** The console's sign-in, which the header's "Log in" and the maintenance
+ *  page's team link both go to. */
+export const loginUrl = `${consoleUrl}/login`;
 
 /**
  * The address the founder monitors, and the one the privacy policy and the

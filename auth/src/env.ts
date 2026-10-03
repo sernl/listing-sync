@@ -1,3 +1,5 @@
+import { defaultPasskeyRpId } from './rp-id.ts';
+
 export type Mode = 'development' | 'production';
 
 export interface OAuthCredentials {
@@ -173,7 +175,7 @@ const load = (): Env => {
     trustedOrigins: readTrustedOrigins(mode),
     secret: readRequired('BETTER_AUTH_SECRET'),
     databaseUrl: readRequired('TAM_AUTH_DATABASE_URL'),
-    passkeyRpId: read('TAM_AUTH_PASSKEY_RP_ID') ?? baseUrl.hostname,
+    passkeyRpId: read('TAM_AUTH_PASSKEY_RP_ID') ?? defaultPasskeyRpId(baseUrl.hostname),
     passkeyRpName: read('TAM_AUTH_PASSKEY_RP_NAME') ?? 'Teachouse',
     resendApiKey,
     emailFrom,

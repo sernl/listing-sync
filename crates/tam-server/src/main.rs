@@ -13,7 +13,7 @@
 //! Given an engine-role url it also hosts the two service loops the design
 //! puts in this process: the outbox drainer and the job-event pruner.
 //!
-//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--stripe-webhook-secret <secret>] [--stripe-secret-key <path>] [--stripe-price-map <path>] [--ui-dir <path>] [--landing-dir <path>] [--downloads-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> (--blob-store-root <path> | --blob-store-s3 <endpoint> --blob-store-bucket <name> --blob-store-credentials <path> [--blob-store-region <region>])] [--entitlement-key-path <path>] [--entitlement-public-key <hex>] [--require-entitlement-key] [--broker-advertise <host:port>] [--resend-api-key-file <path> --email-from <address> --console-url <url> --auth-internal-url <url> --auth-internal-secret-file <path> [--ops-email <address>] [--marketing-email-from <address>]] [--posthog-key <key> [--posthog-host <url>]] [--disclose-internals]
+//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--stripe-webhook-secret <secret>] [--stripe-secret-key <path>] [--stripe-price-map <path>] [--ui-dir <path>] [--landing-dir <path>] [--landing-host <host> --console-host <host>] [--downloads-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> (--blob-store-root <path> | --blob-store-s3 <endpoint> --blob-store-bucket <name> --blob-store-credentials <path> [--blob-store-region <region>])] [--entitlement-key-path <path>] [--entitlement-public-key <hex>] [--require-entitlement-key] [--broker-advertise <host:port>] [--resend-api-key-file <path> --email-from <address> --console-url <url> --auth-internal-url <url> --auth-internal-secret-file <path> [--ops-email <address>] [--marketing-email-from <address>]] [--posthog-key <key> [--posthog-host <url>]] [--disclose-internals]
 
 #![forbid(unsafe_code)]
 
@@ -128,6 +128,20 @@ const UI_FLAG: &str = "--ui-dir";
 /// prerendering — and separate content-security policies for the reason
 /// [`serving::Landing`] gives.
 pub(crate) const LANDING_FLAG: &str = "--landing-dir";
+
+/// The public site's host, given with [`CONSOLE_HOST_FLAG`] or not at all.
+///
+/// Together the two split one origin into two: the landing host keeps the
+/// landing build, the downloads, the two API reads its pages make, the health
+/// check and the crawler files, and sends everything else to the console host
+/// with a 301; the console host sends the landing's pages back the same way,
+/// except `/`, which is the console's own root there. Absent, every host gets
+/// the single-origin answer, which is what development and the tests run.
+/// [`serving::destination`] is the whole rule.
+const LANDING_HOST_FLAG: &str = "--landing-host";
+
+/// The console's host, given with [`LANDING_HOST_FLAG`] or not at all.
+const CONSOLE_HOST_FLAG: &str = "--console-host";
 
 /// The directory the desktop installers and their manifest are read from,
 /// served under `/downloads/`.
@@ -747,7 +761,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         None => None,
     };
-    let app = assemble(state, console, landing, downloads);
+    if let Some(hosts) = &invocation.hosts {
+        eprintln!(
+            "tam-server splitting hosts: landing {}, console {}",
+            hosts.landing(),
+            hosts.console()
+        );
+    }
+    let app = assemble(
+        state,
+        console,
+        landing,
+        downloads,
+        invocation.hosts.map(std::sync::Arc::new),
+    );
     let served = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown())
         .await;
@@ -767,6 +794,8 @@ struct Invocation {
     /// Independent of `ui_dir`: either, both or neither is a coherent
     /// deployment.
     landing_dir: Option<std::path::PathBuf>,
+    /// The landing and console hosts, if this deployment splits its origin.
+    hosts: Option<serving::Hosts>,
     /// The directory the desktop installers are read from, if this deployment
     /// serves them. Independent of both directories above.
     downloads_dir: Option<std::path::PathBuf>,
@@ -799,6 +828,8 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     let mut backoffice_db_url = None;
     let mut ui_dir = None;
     let mut landing_dir = None;
+    let mut landing_host = None;
+    let mut console_host = None;
     let mut downloads_dir = None;
     let mut auth_issuer = None;
     let mut auth_jwks_url = None;
@@ -871,6 +902,18 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
                     .next()
                     .ok_or("--landing-dir needs a path argument")?,
             ));
+        } else if argument == LANDING_HOST_FLAG {
+            landing_host = Some(
+                arguments
+                    .next()
+                    .ok_or("--landing-host needs a host argument")?,
+            );
+        } else if argument == CONSOLE_HOST_FLAG {
+            console_host = Some(
+                arguments
+                    .next()
+                    .ok_or("--console-host needs a host argument")?,
+            );
         } else if argument == DOWNLOADS_FLAG {
             downloads_dir = Some(std::path::PathBuf::from(
                 arguments
@@ -999,6 +1042,18 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
             .into())
         }
     };
+    // Refused rather than half-configured: one host alone has nowhere to send
+    // what it does not keep.
+    let hosts = match (landing_host, console_host) {
+        (Some(landing), Some(console)) => Some(serving::Hosts::new(&landing, &console)?),
+        (None, None) => None,
+        _ => {
+            return Err(format!(
+                "{LANDING_HOST_FLAG} and {CONSOLE_HOST_FLAG} are given together or not at all"
+            )
+            .into())
+        }
+    };
     // The assertion a production unit file makes, refused rather than warned
     // about: a deployment that meant to mint tokens and was started without a
     // key would serve every seller a closed gate and look healthy doing it.
@@ -1060,6 +1115,7 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
         backoffice_db_url,
         ui_dir,
         landing_dir,
+        hosts,
         downloads_dir,
         identity,
         blobs,
@@ -1220,12 +1276,25 @@ fn console_router(dir: &std::path::Path) -> Result<axum::Router, Box<dyn std::er
 /// anonymous browser a 401 where the console shell was asked for. That is a
 /// fourth mutation of this function, and the test named for it is the only one
 /// that sees it.
+///
+/// The host split goes in front of everything, the API included, because the
+/// landing host sends `/v1/…` paths the API would otherwise answer to the
+/// console host. It decides only where a request goes; what answers it there
+/// is the composition below, unchanged.
 fn assemble(
     state: AppState,
     console: Option<axum::Router>,
     landing: Option<std::sync::Arc<serving::Landing>>,
     downloads: Option<std::sync::Arc<downloads::Downloads>>,
+    hosts: Option<std::sync::Arc<serving::Hosts>>,
 ) -> axum::Router {
+    let split = hosts.map(|hosts| {
+        std::sync::Arc::new(HostSplit {
+            hosts,
+            landing: landing.clone(),
+            serves_downloads: downloads.is_some(),
+        })
+    });
     let fallback = if landing.is_some() || downloads.is_some() {
         let tiers = std::sync::Arc::new(Tiers {
             landing,
@@ -1240,7 +1309,7 @@ fn assemble(
     } else {
         console
     };
-    match fallback {
+    let router = match fallback {
         // The same tier twice, and deliberately: as this router's fallback it
         // answers the paths the API matched no route for, and as the guard's
         // state it answers the paths the API must not be consulted about at
@@ -1254,7 +1323,58 @@ fn assemble(
         // Nothing is mounted behind the API, so it owns every path there is
         // and its own refusal of an unknown version is the only answer left.
         None => tam_api::router(state),
+    };
+    match split {
+        Some(split) => router.layer(axum::middleware::from_fn_with_state(split, host_split)),
+        None => router,
     }
+}
+
+/// What the host split needs to place a request: the two hosts, and enough of
+/// the static tiers to ask `serving::route` which tier a path is.
+struct HostSplit {
+    hosts: std::sync::Arc<serving::Hosts>,
+    landing: Option<std::sync::Arc<serving::Landing>>,
+    serves_downloads: bool,
+}
+
+/// A 301 to the other host where `serving::destination` says the path is not
+/// this host's, the console host's own `robots.txt`, or the request passed on
+/// with its host tier attached for `static_tiers` to read.
+async fn host_split(
+    axum::extract::State(split): axum::extract::State<std::sync::Arc<HostSplit>>,
+    mut request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let tier = split.hosts.tier(
+        request.headers(),
+        request
+            .uri()
+            .authority()
+            .map(axum::http::uri::Authority::as_str),
+    );
+    let path = request.uri().path();
+    let answer = serving::route(
+        path,
+        |file| split.landing.as_ref().is_some_and(|it| it.has(file)),
+        split.serves_downloads,
+    );
+    let destination = serving::destination(tier, path, &answer);
+    if destination == serving::Destination::ConsoleRobots {
+        if !serving::method_serves_static(request.method()) {
+            return serving::method_not_allowed();
+        }
+        return serving::console_robots();
+    }
+    let path_and_query = request
+        .uri()
+        .path_and_query()
+        .map_or(path, axum::http::uri::PathAndQuery::as_str);
+    if let Some(location) = split.hosts.location(&destination, path_and_query) {
+        return serving::host_redirect(&location);
+    }
+    request.extensions_mut().insert(tier);
+    next.run(request).await
 }
 
 /// The API consulted only where the path is the API's, with everything else
@@ -1318,6 +1438,16 @@ async fn static_tiers(
         |file| tiers.landing.as_ref().is_some_and(|it| it.has(file)),
         tiers.downloads.is_some(),
     );
+    // The console host's `/` is the console's root, not the landing page:
+    // `serving::destination` let it through for exactly that.
+    let answer = match (request.extensions().get::<serving::HostTier>(), answer) {
+        (Some(serving::HostTier::Console), serving::Answer::Landing(file))
+            if file == "index.html" =>
+        {
+            serving::Answer::Console
+        }
+        (_, answer) => answer,
+    };
     let serves_static = matches!(
         answer,
         serving::Answer::Landing(_) | serving::Answer::Downloads(_)
@@ -1708,7 +1838,7 @@ mod composition {
     /// Hostile on purpose: a fixture that merely omitted those names would let
     /// every reservation below pass without being enforced, which is how the
     /// rule went unenforced while a design note said it held.
-    const GREEDY_LANDING: [(&str, &str); 7] = [
+    const GREEDY_LANDING: [(&str, &str); 9] = [
         (
             "index.html",
             "<!doctype html><title>the public page</title>",
@@ -1731,6 +1861,8 @@ mod composition {
             "<!doctype html><title>NOT the console</title>",
         ),
         ("v1/nothing", "NOT the api"),
+        ("robots.txt", "User-agent: *\nAllow: /\n"),
+        ("sitemap.xml", "<urlset></urlset>"),
     ];
 
     const DOWNLOADS: [(&str, &str); 2] = [
@@ -1802,12 +1934,16 @@ mod composition {
         root
     }
 
-    /// The router `main` builds, over the three directories above.
-    fn assembled() -> axum::Router {
+    /// The router `main` builds, over the three directories above, split
+    /// across `hosts` where given.
+    fn assembled(hosts: Option<crate::serving::Hosts>) -> axum::Router {
         let state = tam_api::AppState {
             exchange_rates: None, // Lazy: this never opens a socket, and no route reached below would
             // use it if it did.
+            // A short acquire timeout, so a route that does reach for the
+            // database, such as `/v1/site`, fails fast rather than in a minute.
             pool: sqlx::postgres::PgPoolOptions::new()
+                .acquire_timeout(std::time::Duration::from_millis(200))
                 .connect_lazy("postgres://tam_app@127.0.0.1/tam")
                 .expect("a lazy pool needs no server"),
             config: tam_api::Config::default(),
@@ -1830,17 +1966,18 @@ mod composition {
             Some(std::sync::Arc::new(
                 crate::downloads::Downloads::open(&built.downloads).expect("a directory"),
             )),
+            hosts.map(std::sync::Arc::new),
         )
     }
 
-    struct Answer {
-        status: StatusCode,
+    pub(super) struct Answer {
+        pub(super) status: StatusCode,
         headers: axum::http::HeaderMap,
-        body: String,
+        pub(super) body: String,
     }
 
     impl Answer {
-        fn header(&self, name: header::HeaderName) -> &str {
+        pub(super) fn header(&self, name: header::HeaderName) -> &str {
             self.headers
                 .get(name)
                 .and_then(|value| value.to_str().ok())
@@ -1854,7 +1991,24 @@ mod composition {
             .uri(path)
             .body(Body::empty())
             .expect("a well-formed request");
-        let response = assembled()
+        answer(assembled(None), request).await
+    }
+
+    /// `GET path` on `host` of a deployment split between `teachouse.io` and
+    /// `dash.teachouse.io`.
+    pub(super) async fn on(host: &str, path: &str) -> Answer {
+        let request = Request::builder()
+            .uri(path)
+            .header(header::HOST, host)
+            .body(Body::empty())
+            .expect("a well-formed request");
+        let hosts = crate::serving::Hosts::new("teachouse.io", "dash.teachouse.io")
+            .expect("two distinct bare hosts");
+        answer(assembled(Some(hosts)), request).await
+    }
+
+    async fn answer(router: axum::Router, request: Request<Body>) -> Answer {
+        let response = router
             .oneshot(request)
             .await
             .expect("the router is infallible");
@@ -2157,7 +2311,7 @@ mod composition {
                 .header(header::IF_NONE_MATCH, &etag)
                 .body(Body::empty())
                 .expect("a well-formed request");
-            let response = assembled()
+            let response = assembled(None)
                 .oneshot(request)
                 .await
                 .expect("the router is infallible");
@@ -2203,6 +2357,171 @@ mod composition {
             answer.body.contains("__sveltekit"),
             "an encoded traversal names no file of any tier: {}",
             answer.body
+        );
+    }
+}
+
+#[cfg(test)]
+mod host_split {
+    use axum::http::{header, StatusCode};
+
+    use super::composition::on;
+
+    const APEX: &str = "teachouse.io";
+    const DASH: &str = "dash.teachouse.io";
+
+    async fn assert_moved(host: &str, path: &str, to: &str) {
+        let answer = on(host, path).await;
+        assert_eq!(
+            answer.status,
+            StatusCode::MOVED_PERMANENTLY,
+            "{path} on {host} moves: {}",
+            answer.body
+        );
+        assert_eq!(answer.header(header::LOCATION), to, "{path} on {host}");
+        assert_eq!(
+            answer.header(header::CACHE_CONTROL),
+            "public, max-age=300",
+            "{path} on {host} is a redirect a client may hold five minutes"
+        );
+    }
+
+    /// The apex answers the landing and its few API reads, and moves the rest.
+    #[tokio::test]
+    async fn the_landing_host_keeps_the_public_site_and_moves_the_console() {
+        let root = on(APEX, "/").await;
+        assert_eq!(root.status, StatusCode::OK, "the apex root answers");
+        assert!(
+            root.body.contains("the public page"),
+            "the apex root is the landing page: {}",
+            root.body
+        );
+        let pricing = on(APEX, "/pricing").await;
+        assert!(pricing.body.contains("pricing"), "{}", pricing.body);
+
+        let plans = on(APEX, "/v1/plans").await;
+        assert_eq!(plans.status, StatusCode::OK, "the price list stays");
+        assert!(
+            plans
+                .header(header::CONTENT_TYPE)
+                .starts_with("application/json"),
+            "the price list is the API's JSON"
+        );
+        // The settings read needs the database, which this harness has none
+        // of; what is asserted is that the API answers it on the apex.
+        let site = on(APEX, "/v1/site").await;
+        assert_ne!(site.status, StatusCode::MOVED_PERMANENTLY, "/v1/site stays");
+        assert!(
+            site.header(header::CONTENT_TYPE)
+                .starts_with("application/json"),
+            "/v1/site is the API's answer on the apex: {} {}",
+            site.status,
+            site.body
+        );
+        for path in [
+            "/healthz",
+            "/downloads/downloads.json",
+            "/robots.txt",
+            "/sitemap.xml",
+        ] {
+            assert_eq!(on(APEX, path).await.status, StatusCode::OK, "{path} stays");
+        }
+        assert!(
+            on(APEX, "/robots.txt").await.body.contains("Allow: /"),
+            "the apex robots file is the landing build's"
+        );
+        assert_ne!(
+            on(APEX, "/ingest/static/array.js").await.status,
+            StatusCode::MOVED_PERMANENTLY,
+            "the analytics proxy stays same-origin for the landing pages"
+        );
+
+        assert_moved(APEX, "/catalogue", "https://dash.teachouse.io/catalogue").await;
+        assert_moved(
+            APEX,
+            "/login?next=%2Fapp",
+            "https://dash.teachouse.io/login?next=%2Fapp",
+        )
+        .await;
+        assert_moved(APEX, "/api/auth/x", "https://dash.teachouse.io/api/auth/x").await;
+        assert_moved(APEX, "/v1/whoami", "https://dash.teachouse.io/v1/whoami").await;
+        assert_moved(APEX, "/app", "https://dash.teachouse.io/app").await;
+        assert_moved(
+            APEX,
+            "/_app/immutable/entry/start.abc123.js",
+            "https://dash.teachouse.io/_app/immutable/entry/start.abc123.js",
+        )
+        .await;
+    }
+
+    /// Dash answers the console, its root included, and sends the landing's
+    /// pages back to the apex.
+    #[tokio::test]
+    async fn the_console_host_keeps_the_console_and_moves_the_landing_pages() {
+        let root = on(DASH, "/").await;
+        assert_eq!(root.status, StatusCode::OK, "dash's root answers");
+        assert!(
+            root.body.contains("__sveltekit"),
+            "dash's root is the console shell, not the landing page: {}",
+            root.body
+        );
+        let catalogue = on(DASH, "/catalogue").await;
+        assert!(catalogue.body.contains("__sveltekit"), "{}", catalogue.body);
+        assert_eq!(on(DASH, "/healthz").await.status, StatusCode::OK, "health");
+        assert_eq!(
+            on(DASH, "/downloads/downloads.json").await.status,
+            StatusCode::OK,
+            "the downloads answer on dash too"
+        );
+        // The maintenance page loads the landing's stylesheet on whichever
+        // host it stands in for.
+        assert_eq!(
+            on(DASH, "/_astro/Base.abc123.css").await.status,
+            StatusCode::OK,
+            "landing assets answer on dash"
+        );
+
+        let robots = on(DASH, "/robots.txt").await;
+        assert_eq!(
+            robots.status,
+            StatusCode::OK,
+            "dash has its own robots file"
+        );
+        assert_eq!(
+            robots.body, "User-agent: *\nDisallow: /\n",
+            "dash refuses crawlers"
+        );
+
+        assert_moved(DASH, "/pricing", "https://teachouse.io/pricing").await;
+        assert_moved(
+            DASH,
+            "/pricing/?plan=pro",
+            "https://teachouse.io/pricing/?plan=pro",
+        )
+        .await;
+        assert_moved(DASH, "/sitemap.xml", "https://teachouse.io/sitemap.xml").await;
+    }
+
+    /// The host is matched without its port and without regard to case, and
+    /// a host that is neither keeps the single-host answer.
+    #[tokio::test]
+    async fn hosts_match_loosely_and_an_unknown_host_is_unsplit() {
+        assert_moved(
+            "DASH.Teachouse.IO:443",
+            "/pricing",
+            "https://teachouse.io/pricing",
+        )
+        .await;
+        let loopback = on("127.0.0.1:8080", "/").await;
+        assert!(
+            loopback.body.contains("the public page"),
+            "an unknown host gets the single-host root: {}",
+            loopback.body
+        );
+        assert_eq!(
+            on("127.0.0.1:8080", "/catalogue").await.status,
+            StatusCode::OK,
+            "an unknown host is never redirected"
         );
     }
 }

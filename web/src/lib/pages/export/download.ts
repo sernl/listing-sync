@@ -53,7 +53,7 @@ export const HANDOFF_ADVICE = 'Check your downloads folder.';
 /** The name the server gave this document, read out of `Content-Disposition`.
  *
  * Readable at all only because the console and the API are one origin: the
- * desktop application loads the console from `control_plane::DEFAULT_BASE_URL`
+ * desktop application loads the console from `control_plane::CONSOLE_ORIGIN`
  * and `api.ts` addresses the API by relative path, so no header is hidden
  * behind CORS exposure rules.
  *

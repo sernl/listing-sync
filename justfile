@@ -644,7 +644,7 @@ desktop-dev:
         echo "  answers no. Mint one, once per machine:  just dev-entitlement-key"
     fi
     # Without this the window navigates to the compiled default, which is
-    # production: `base_url()` falls back to DEFAULT_BASE_URL, and setup points
+    # production: `base_url()` falls back to CONSOLE_ORIGIN, and setup points
     # the console there and builds the control-plane client against the same
     # origin — so a developer's registration, check-in and import would all go
     # to the live server. The vite origin proxies /v1 to a local tam-server, so
@@ -906,7 +906,7 @@ guides-check:
 # into the blob store (`tam-admin guides images`) and seeds the guides. This is
 # for a deployment reached only over HTTP.
 #
-#   just guides-images https://teachouse.io ~/operator-session.txt
+#   just guides-images https://dash.teachouse.io ~/operator-session.txt
 #
 # The session file holds an operator's `tam_session` cookie value, alone or as
 # a `tam_session=<value>` line among other cookies.

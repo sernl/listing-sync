@@ -988,7 +988,7 @@ pub(crate) async fn retry_console_from<R: tauri::Runtime>(
 
 #[cfg(test)]
 mod start_up_tests {
-    use super::{console_home, replacing, show_console, StartUpNav};
+    use super::{console_home, control_plane::CONSOLE_ORIGIN, replacing, show_console, StartUpNav};
     use tauri::test::{mock_builder, mock_context, noop_assets};
     use tauri::{WebviewUrl, WebviewWindowBuilder};
 
@@ -1018,8 +1018,8 @@ mod start_up_tests {
     #[test]
     fn the_address_cannot_end_the_string_it_travels_in() {
         assert_eq!(
-            replacing("https://teachouse.io"),
-            r#"location.replace("https://teachouse.io")"#
+            replacing(CONSOLE_ORIGIN),
+            format!(r#"location.replace("{CONSOLE_ORIGIN}")"#)
         );
         // Read back rather than pattern-matched: the property is that the
         // argument is one JSON string carrying exactly the address, which is
@@ -1042,13 +1042,13 @@ mod start_up_tests {
     /// The window opens on the console's canonical home, not on the origin or
     /// its client-side redirect.
     ///
-    /// The origin is where the landing page answers; `/app` would load the
-    /// console once merely to redirect to `/resources`.
+    /// The origin's root redirects to sign-in or to the catalogue; `/app`
+    /// would load the console once merely to redirect to `/resources`.
     #[test]
     fn the_window_opens_on_the_console_home() {
         for origin in [
-            "https://teachouse.io",
-            "https://teachouse.io/",
+            CONSOLE_ORIGIN,
+            &format!("{CONSOLE_ORIGIN}/"),
             "http://127.0.0.1:8080",
         ] {
             let home = console_home(origin).expect("the origin is a url");
@@ -1075,7 +1075,7 @@ mod start_up_tests {
         let app = mock_builder()
             .build(mock_context(noop_assets()))
             .expect("the mock application builds");
-        let console: tauri::Url = "https://teachouse.io/"
+        let console: tauri::Url = format!("{CONSOLE_ORIGIN}/")
             .parse()
             .expect("the console origin is a url");
 

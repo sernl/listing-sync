@@ -406,19 +406,36 @@
                 fi
               done <<< "$reserved"
 
-              # The console's pages are drawn in the browser behind a sign-in
-              # and have nothing for a crawler, so `robots.txt` refuses every
-              # segment the console answers under. It is written by hand in
-              # `apps/landing/src/pages/robots.txt.js`, because the landing
-              # build cannot see the console's route table; this is where a
-              # route added without its line fails.
+              # The console lives on its own host (`--console-host`), which
+              # answers its own `robots.txt`, so this file speaks for the
+              # marketing host alone: it refuses what that host still serves
+              # and no crawler wants -- the API it keeps for the site's own
+              # banner and plans, the installers, and the identity and ingest
+              # paths it redirects -- and names no console route, because a
+              # console segment here is a line about a host this file is never
+              # served on. Written by hand in
+              # `apps/landing/src/pages/robots.txt.js`.
               test -f "$landing/robots.txt"
               test -f "$landing/sitemap.xml"
-              while IFS= read -r segment; do
-                if ! grep -qxF "Disallow: /$segment" "$landing/robots.txt" \
-                  && ! grep -qxF "Disallow: /$segment/" "$landing/robots.txt"; then
-                  echo "robots.txt does not refuse /$segment, which the console routes under:" >&2
+              for refused in /v1/ /api/ /ingest/ /downloads/; do
+                if ! grep -qxF "Disallow: $refused" "$landing/robots.txt"; then
+                  echo "robots.txt does not refuse $refused, which the marketing host still answers:" >&2
                   echo "add it to apps/landing/src/pages/robots.txt.js" >&2
+                  exit 1
+                fi
+              done
+              # `downloads` is in the console segments only because tam-server
+              # reserves it ahead of the landing probe; the installers stay on
+              # the marketing host, so its line is required above, not banned.
+              while IFS= read -r segment; do
+                if [ "$segment" = "$downloads" ]; then
+                  continue
+                fi
+                if grep -qxF "Disallow: /$segment" "$landing/robots.txt" \
+                  || grep -qxF "Disallow: /$segment/" "$landing/robots.txt"; then
+                  echo "robots.txt refuses /$segment, a console route that lives on the console host:" >&2
+                  echo "the console host answers its own robots.txt; drop the line from" >&2
+                  echo "apps/landing/src/pages/robots.txt.js" >&2
                   exit 1
                 fi
               done <<< "$console_segments"

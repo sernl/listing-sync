@@ -273,7 +273,7 @@ The two were one code until a review found what that cost — a seller whose dev
 The fence changes character on this surface and the difference is worth stating.
 On a computer the marketplace page sits in a window whose label is in no capability, and that absence is the whole fence.
 On a phone it sits in window `main`, which every capability names, and what refuses it is the per-invoke remote-origin check against the one origin `console.json` grants (tauri 2.11.5, `src/webview/mod.rs`).
-Keep that remote-origin list restricted to exactly `DEFAULT_BASE_URL`; Android's shared window label does not provide isolation from marketplace content.
+Keep that remote-origin list restricted to exactly `CONSOLE_ORIGIN` (`https://dash.teachouse.io`); Android's shared window label does not provide isolation from marketplace content.
 
 ## Amended 2026-09-06: back walks the webview's history
 

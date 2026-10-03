@@ -14,6 +14,8 @@
 	import Button from '$lib/Button.svelte';
 	import Field from '$lib/Field.svelte';
 	import Turnstile from '$lib/Turnstile.svelte';
+	import { MARKETING_URL } from '$lib/site';
+	import { external } from '$lib/external';
 	import { TURNSTILE_SITE_KEY, captchaOptions, captchaPending } from '$lib/captcha';
 	import { ENABLED_SOCIAL_PROVIDERS, type SocialProvider } from '$lib/social-providers';
 	import { toast } from '$lib/toast';
@@ -258,8 +260,20 @@
 
 		<p class="auth-consent">
 			By continuing you agree to the
-			<a class="link" href="/terms/" data-sveltekit-reload>Terms</a>
-			and <a class="link" href="/privacy/" data-sveltekit-reload>Privacy Policy</a>.
+			<a
+				class="link"
+				href={`${MARKETING_URL}/terms/`}
+				target="_blank"
+				rel="noopener"
+				use:external>Terms</a
+			>
+			and <a
+				class="link"
+				href={`${MARKETING_URL}/privacy/`}
+				target="_blank"
+				rel="noopener"
+				use:external>Privacy Policy</a
+			>.
 		</p>
 
 		<p class="auth-foot">
