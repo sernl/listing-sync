@@ -83,6 +83,8 @@ describe('where the intent says to land', () => {
 		expect(safeNext('https://evil.test/take')).toBeNull();
 		expect(safeNext('//evil.test/take')).toBeNull();
 		expect(safeNext('settings/subscription')).toBeNull();
+		expect(safeNext('/\\evil.test/take')).toBeNull();
+		expect(safeNext('/\t/evil.test/take')).toBeNull();
 		expect(safeNext(null)).toBeNull();
 	});
 });

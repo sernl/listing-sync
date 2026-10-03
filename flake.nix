@@ -220,6 +220,12 @@
           teachouseLanding = pkgs.callPackage ./nix/landing.nix { nodejs = pkgs.nodejs_22; };
           tamAuth = pkgs.callPackage ./nix/tam-auth.nix { nodejs = pkgs.nodejs_22; };
           teachouseMigrations = pkgs.callPackage ./nix/migrations.nix { };
+          # Built against the default console and landing; a deployment that
+          # overrides either passes its own in (`warmEdge` in the module does).
+          teachouseEdgeWarm = pkgs.callPackage ./nix/edge-warm.nix {
+            consolePackage = teachouseConsole;
+            landingPackage = teachouseLanding;
+          };
 
           # Every first path segment the console's route table defines, read
           # off `web/src/routes` so a route added tomorrow is gated the day it
@@ -272,6 +278,7 @@
             teachouse-landing = teachouseLanding;
             teachouse-migrations = teachouseMigrations;
             teachouse-core-wasm = coreWasm;
+            teachouse-edge-warm = teachouseEdgeWarm;
           };
 
           checks = {

@@ -5,6 +5,7 @@ import tailwindcss from '@tailwindcss/vite';
 import type { Plugin, ProxyOptions, Rollup } from 'vite';
 import { visualizer } from 'rollup-plugin-visualizer';
 import { defineConfig } from 'vitest/config';
+import { planChunks } from './src/lib/chunk-groups';
 import { AUTH_PRELOADS, authPageOf } from './src/lib/shell-preload';
 
 /** The API sets its session cookie `Secure`, which is right behind TLS and
@@ -71,8 +72,9 @@ function authPreloads(): Plugin {
 				}
 				return [...seen.values()];
 			};
-			// Exactly what SvelteKit writes into the shell as `modulepreload`:
-			// its two entries and the root layout.
+			// Exactly what SvelteKit writes into the shell as `modulepreload`, with
+			// those chunks' stylesheets as `stylesheet`: its two entries and the
+			// root layout.
 			const shell = new Set(
 				reach([
 					...chunks.filter((chunk) => chunk.fileName.startsWith('_app/immutable/entry/')),
@@ -87,14 +89,45 @@ function authPreloads(): Plugin {
 					if (path === null) {
 						continue;
 					}
-					const reached = reach([...shared, chunk]);
-					const css = reached.flatMap((each) => [...(each.viteMetadata?.importedCss ?? [])]);
-					const js = reached.map((each) => each.fileName).filter((name) => !shell.has(name));
+					const own = reach([...shared, chunk]).filter((each) => !shell.has(each.fileName));
+					const css = own.flatMap((each) => [...(each.viteMetadata?.importedCss ?? [])]);
+					const js = own.map((each) => each.fileName);
 					files[path] = [...new Set([...css, ...js])].map((name) => `/${name}`);
 				}
 			}
 			mkdirSync(join(root, '.svelte-kit'), { recursive: true });
 			writeFileSync(join(root, AUTH_PRELOADS), JSON.stringify(files));
+		}
+	};
+}
+
+/** Writes the client build's modules into the chunks `$lib/chunk-groups`
+ *  plans, so a cold page load is a handful of requests rather than a hundred.
+ *  The server build is left alone: it is read from disk, not fetched. */
+function chunkGroups(): Plugin {
+	let server = false;
+	return {
+		name: 'teachouse-chunk-groups',
+		apply: 'build',
+		configResolved(config) {
+			server = Boolean(config.build.ssr);
+		},
+		outputOptions(options) {
+			if (server) {
+				return null;
+			}
+			let plan: Map<string, string> | undefined;
+			return {
+				...options,
+				manualChunks(id, { getModuleIds, getModuleInfo }) {
+					plan ??= planChunks({
+						ids: getModuleIds(),
+						staticImports: (each) => getModuleInfo(each)?.importedIds ?? [],
+						isEntry: (each) => getModuleInfo(each)?.isEntry ?? false
+					});
+					return plan.get(id);
+				}
+			};
 		}
 	};
 }
@@ -111,6 +144,7 @@ export default defineConfig(({ mode }) => ({
     tailwindcss(),
     sveltekit(),
     authPreloads(),
+    chunkGroups(),
     mode === 'analyze' &&
       visualizer({ filename: 'stats.html', gzipSize: true, brotliSize: true, template: 'treemap' })
   ],

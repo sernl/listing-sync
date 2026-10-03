@@ -1077,22 +1077,22 @@ pub const ROUTES: [Route; 214] = [
     Route {
         method: "get",
         path: "/{version}/guides",
-        summary: "Published help guides filtered by text, topic and tags",
+        summary: "Public: published help guides filtered by text, topic and tags",
     },
     Route {
         method: "get",
         path: "/{version}/guides/_taxonomy",
-        summary: "Topics and tags used by published guides",
+        summary: "Public: topics and tags used by published guides",
     },
     Route {
         method: "get",
         path: "/{version}/guides/images/{handle}",
-        summary: "The bytes of one guide picture, readable by every seller",
+        summary: "Public: the bytes of one guide picture",
     },
     Route {
         method: "get",
         path: "/{version}/guides/{slug}",
-        summary: "One published guide, rendered; a draft answers as no such guide",
+        summary: "Public: one published guide, rendered; a draft answers as no such guide",
     },
     Route {
         method: "get",

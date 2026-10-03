@@ -237,6 +237,7 @@ The page therefore makes no third-party request at all, and the server's policy 
 The favicon is `apps/landing/public/favicon.svg`, a copy of the product mark at `web/static/email/teachouse-mark.svg`.
 It is a copy rather than a reference because the two trees build separately; if the mark changes, this copy changes with it.
 The header and footer wordmarks draw the same file as an `<img>` beside the word "Teachouse", with an empty `alt` because the word beside it already names the product.
+`apps/landing/public/apple-touch-icon.png` is the console's 180×180 `web/static/apple-touch-icon.png`, copied for the same reason; every page's head names it, and before the copy existed the apex answered it with a redirect to the console host.
 
 ## Placeholders the founder must replace
 
@@ -269,7 +270,8 @@ A path the landing build holds a file for is answered from memory, resolving a d
 Everything else is the console's, including `/app` and every route below it, and including `/login`, which is where both of the landing page's buttons go.
 With `--landing-host` and `--console-host` set, as production runs, the landing tier answers only on `teachouse.io` and every console path there is a 301 to `dash.teachouse.io`; the console answers on its own host, which serves its own `robots.txt`, so the landing's refuses only `/v1/`, `/api/`, `/ingest/`, `/downloads/` and the maintenance preview.
 
-The landing page's Content-Security-Policy is computed by `landing_policy` from the files just read rather than written down twice: `default-src 'self'`, `script-src 'self'` plus a `sha256-` token for each inline script found in the build, `style-src 'self'`, `font-src 'self'`, `img-src 'self' data:`, `connect-src 'self'` and `frame-ancestors 'none'`.
+The landing page's Content-Security-Policy is computed by `landing_policy` from the files just read rather than written down twice: `default-src 'self'`, `script-src 'self'` plus a `sha256-` token for each inline script found in the build, `style-src 'self'`, `font-src 'self'`, `img-src 'self' data:`, `connect-src 'self' https://cloudflareinsights.com` and `frame-ancestors 'none'`.
+The one host is where the Cloudflare Web Analytics beacon posts: the edge injects that script into every HTML page under the nonce `with_nonce` adds, and without the grant its report was refused and logged as a violation on every visit.
 It admitted `'unsafe-inline'` and `https://fonts.googleapis.com` on `style-src` and `https://fonts.gstatic.com` on `font-src` until the console's fonts were bundled and those origins were dropped; every origin the policy names is now this one.
 The site carries no inline script, so no hash is emitted today.
 

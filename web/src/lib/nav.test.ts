@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { safeNext } from './pages/account/intent';
 import {
 	ADMIN_SECTION,
 	ALL_DESTINATIONS,
@@ -15,6 +16,7 @@ import {
 	legacyDestination,
 	searchHref,
 	sectionFor,
+	signInHref,
 	signedOutView
 } from './nav';
 
@@ -325,6 +327,43 @@ describe('what a signed-out browser is shown', () => {
 			(item) => item.href
 		);
 		expect(overlap).toEqual(['/status']);
+	});
+	it('lets the help guides be read whole, and nothing that only starts like them', () => {
+		// The pricing page links prospects to a guide; sending them to sign in
+		// instead was the defect.
+		for (const route of ['/guides', '/guides/why-the-app']) {
+			expect(signedOutView(route), route).toBe('public');
+		}
+		expect(signedOutView('/guidesandmore')).toBe('redirecting');
+		expect(signedOutView('/admin/guides')).toBe('redirecting');
+		expect(signedOutView('/admin/guides/why-the-app')).toBe('redirecting');
+	});
+});
+
+describe('where a signed-out browser is sent', () => {
+	it('carries the address it asked for, query included, to the sign-in screen', () => {
+		expect(signInHref('/marketplaces', '')).toBe('/login?next=%2Fmarketplaces');
+		expect(signInHref('/resources', '?q=fractions&page=2')).toBe(
+			'/login?next=%2Fresources%3Fq%3Dfractions%26page%3D2'
+		);
+	});
+
+	it('arrives at the sign-in page as the same path it left', () => {
+		// What the login page reads back: the query decoded, then checked to
+		// be a path on this origin. An address the encoding mangled would be
+		// dropped there and the seller sent home instead.
+		for (const [pathname, search] of [
+			['/marketplaces', ''],
+			['/resources', '?q=fractions&page=2'],
+			['/marketplaces', '?tab=connected']
+		]) {
+			const href = new URL(signInHref(pathname, search), 'https://dash.teachouse.io');
+			expect(safeNext(href.searchParams.get('next'))).toBe(pathname + search);
+		}
+	});
+
+	it('carries nothing from the home page, where signing in lands anyway', () => {
+		expect(signInHref('/', '')).toBe('/login');
 	});
 });
 

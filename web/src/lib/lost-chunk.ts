@@ -12,6 +12,14 @@
 // is what Vite's own guidance prescribes for `vite:preloadError`. It is done
 // once per window, so a chunk that keeps failing shows the page with its
 // cause rather than a phone that reloads forever.
+//
+// A chunk can also neither arrive nor fail. On a cold Cloudflare edge a few
+// of a first load's requests stalled for 20-30 s (0.19.1), and the browser
+// raises nothing until its own timeout, so the founder watched a blank page
+// for half a minute before the error above could even happen. The shell
+// therefore carries a watchdog (`START_WATCHDOG`) that reloads, under the same
+// once-per-window guard, when the first screen has not been drawn in
+// `START_TIMEOUT_MS`.
 
 const KEY = 'teachouse.reloaded-for-lost-chunk';
 const WINDOW_MS = 30_000;
@@ -45,3 +53,41 @@ export function mayReloadForLostChunk(
 /** The sentence the error page shows for a lost chunk, in place of the cause. */
 export const LOST_CHUNK_SAID =
 	'Part of this page did not download, so it could not be drawn. Check your connection, then reload.';
+
+/** How long SvelteKit's start -- its two entries, the route's chunks and the
+ *  first draw -- may take before the shell reloads. Every chunk is answered
+ *  by the origin in well under a second, so this is only ever a stall. */
+export const START_TIMEOUT_MS = 8_000;
+
+/** The inline script the shell carries ahead of SvelteKit's entry, written
+ *  in by `hooks.server.ts`. It cannot be a module: what it watches is the
+ *  module graph arriving, and `hooks.client.ts` is part of that graph.
+ *
+ *  At `START_TIMEOUT_MS` it looks for anything SvelteKit has drawn beside its
+ *  own bootstrap script in the body's wrapper (`app.html`); the router draws
+ *  only once every chunk of the route has arrived, so nothing there means
+ *  start has not finished. It then reloads under the same record
+ *  `mayReloadForLostChunk` keeps, so a stall and a failure together reload
+ *  once per window between them. Storage that refuses means no reload,
+ *  because without a record the guard cannot hold.
+ *
+ *  Plain ES5 for the same reason as the shell's other inline blocks, and
+ *  hashed into the policy with them by `tam-server`. */
+export const START_WATCHDOG = `<script>
+      (function () {
+        var key = ${JSON.stringify(KEY)};
+        setTimeout(function () {
+          if (document.querySelector('body > div > :not(script)')) return;
+          var now = Date.now();
+          try {
+            var record = sessionStorage.getItem(key);
+            var last = record === null ? -Infinity : Number(record);
+            if (isFinite(last) && now - last < ${WINDOW_MS}) return;
+            sessionStorage.setItem(key, String(now));
+          } catch (refused) {
+            return;
+          }
+          location.reload();
+        }, ${START_TIMEOUT_MS});
+      })();
+    </script>`;

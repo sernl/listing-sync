@@ -3,6 +3,7 @@ import type { Handle } from '@sveltejs/kit';
 import { building } from '$app/environment';
 import inter from '$lib/fonts/inter-400-700-latin.woff2?url';
 import poppins from '$lib/fonts/poppins-600-latin.woff2?url';
+import { START_WATCHDOG } from '$lib/lost-chunk';
 import { AUTH_PRELOADS, preloadScript } from '$lib/shell-preload';
 
 // Runs once, at build time, when the adapter renders the single shell every
@@ -28,5 +29,10 @@ function authPreloads(): string {
 export const handle: Handle = ({ event, resolve }) =>
 	resolve(event, {
 		transformPageChunk: ({ html }) =>
-			html.replace('%teachouse.fonts%', FONT_PRELOADS).replace('%teachouse.auth%', authPreloads())
+			html
+				.replace('%teachouse.fonts%', FONT_PRELOADS)
+				.replace('%teachouse.auth%', authPreloads())
+				// Built shells only: `vite dev` compiles each module as it is first
+				// asked for, and a cold dev server takes longer than the watchdog.
+				.replace('%teachouse.watchdog%', building ? START_WATCHDOG : '')
 	});

@@ -865,7 +865,9 @@ pub fn router(state: AppState) -> Router {
         // The guided tour's ending, recorded on the same row the profile
         // reads, so the console stops offering it.
         .route("/{version}/onboarding/tour", post(profile::settle_tour))
-        // The help corpus, read by every seller through the session gate.
+        // The help corpus, published guides only, readable without a session:
+        // the pricing page links prospects to it. The operator's half below
+        // keeps its gate.
         // `/{version}/guides/images/{handle}` is listed before
         // `/{version}/guides/{slug}` because `images` is a literal segment
         // and a slug is a parameter: no guide is called "images", and the

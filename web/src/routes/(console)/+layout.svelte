@@ -11,7 +11,7 @@
 	import ClaimBanner from '$lib/pages/account/claim/ClaimBanner.svelte';
 	import ClaimScreen from '$lib/pages/account/claim/ClaimScreen.svelte';
 	import { consoleGate } from '$lib/pages/account/claim/state';
-	import { PUBLIC_ROUTES, signedOutView } from '$lib/nav';
+	import { PUBLIC_ROUTES, signInHref, signedOutView } from '$lib/nav';
 	import { createQueryClient, queryKeys } from '$lib/query';
 	import { signOut } from '$lib/sign-out';
 	import { resetIdentity } from '$lib/posthog';
@@ -32,9 +32,13 @@
 	// navigation is still in flight mounts its markup and fires its queries for
 	// a frame, against a session that is not there.
 	const signedOut = $derived(signedOutView(page.url.pathname));
+	// The address asked for rides along as `next`, so a link into the console
+	// -- a guide, a marketplace card -- lands on that page after signing in
+	// rather than on the home page.
+	const signIn = $derived(signInHref(page.url.pathname, page.url.search));
 	$effect(() => {
 		if (!data.session && !data.unreachable && signedOut === 'redirecting') {
-			goto('/login');
+			goto(signIn);
 		}
 	});
 
@@ -174,7 +178,7 @@
 			<div class="auth-card">
 				<h1>Taking you to sign in</h1>
 				<p>Sign in to see this page.</p>
-				<Button href="/login" tier="primary">Sign in</Button>
+				<Button href={signIn} tier="primary">Sign in</Button>
 			</div>
 		</div>
 	{/if}

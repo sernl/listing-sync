@@ -467,6 +467,34 @@ in
       '';
     };
 
+    warmEdge = {
+      enable = lib.mkEnableOption ''
+        fetching every hashed console and landing asset through the public
+        hosts once after tam-server starts and every 15 minutes, so the CDN
+        in front of this machine holds them before a teacher asks. A first
+        load through a cold Cloudflare edge stalled on a few of its chunks
+        for 20-30 s while the origin answered each in milliseconds; see
+        `nix/edge-warm.sh`. Off by default: it only helps behind a CDN'';
+
+      package = lib.mkOption {
+        type = lib.types.package;
+        default = packages.teachouse-edge-warm.override {
+          inherit (cfg) consolePackage landingPackage;
+        };
+        defaultText = lib.literalMD "`packages.teachouse-edge-warm` built against `consolePackage` and `landingPackage`";
+        description = ''
+          The warmer. Its default walks the same console and landing builds
+          this module serves, so the list it fetches is the one deployed.
+        '';
+      };
+
+      interval = lib.mkOption {
+        type = lib.types.str;
+        default = "*:0/15";
+        description = "When the warmer repeats, as a systemd `OnCalendar` expression.";
+      };
+    };
+
     database = {
       name = lib.mkOption {
         type = lib.types.str;
@@ -1311,6 +1339,40 @@ in
         MemoryDenyWriteExecute = false;
       }
       // hardening;
+    };
+
+    # A oneshot pulled in by tam-server's start, so a deploy's new hashes are
+    # fetched as soon as they are served, and repeated by the timer below.
+    # It reaches the origin back through the edge, so it starts after
+    # tam-server and `--retry` covers the moment before it listens.
+    systemd.services.teachouse-edge-warm = lib.mkIf cfg.warmEdge.enable {
+      description = "Fetch every hashed Teachouse asset through the edge";
+      after = [
+        "network-online.target"
+        "tam-server.service"
+      ];
+      wants = [ "network-online.target" ];
+      wantedBy = [ "tam-server.service" ];
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = lib.escapeShellArgs [
+          (lib.getExe cfg.warmEdge.package)
+          consoleOrigin
+          "https://${if cfg.landingHost != null then cfg.landingHost else cfg.domain}"
+        ];
+        DynamicUser = true;
+        MemoryDenyWriteExecute = true;
+      }
+      // hardening;
+    };
+
+    systemd.timers.teachouse-edge-warm = lib.mkIf cfg.warmEdge.enable {
+      description = "Keep the edge's copies of the Teachouse assets warm";
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnCalendar = cfg.warmEdge.interval;
+        RandomizedDelaySec = "1m";
+      };
     };
 
     services.pgbackrest = lib.mkIf cfg.backup.enable {
