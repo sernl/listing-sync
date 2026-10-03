@@ -5,9 +5,10 @@
 // reached by a different mix of nodes module by module, so a cold load of
 // `/resources` asked for 82 scripts, most under 2 kB, and the sign-in screen
 // for 39. Each is a request a cold Cloudflare edge can stall on, and one
-// stalled script holds the whole route. The modules that are always loaded
-// together are written together instead, which removes those requests
-// without adding a byte to any page:
+// stalled script holds the whole route. The modules that are (nearly) always
+// loaded together are written together instead, which removes most of those
+// requests for a kilobyte or two either way (0.19.1: `/login` +1.5 kB,
+// `/resources` -1.5 kB, out of 150 kB and 410 kB):
 //
 // - `shell`: everything SvelteKit's two entries, the root layout and the
 //   root error page reach. Every path runs it.
