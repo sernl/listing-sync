@@ -122,18 +122,20 @@ const Sub = level === 1 ? 'h2' : 'h3';
 										<a
 											class:list={[plan.recommended ? 'cta' : 'btn', 'yearly-only']}
 											href={signupUrl(plan.yearly_key)}
+											data-cta={`pricing-${plan.yearly_key}`}
 										>
 											Choose {plan.name}
 										</a>
 										<a
 											class:list={[plan.recommended ? 'cta' : 'btn', 'monthly-only']}
 											href={signupUrl(plan.monthly_key)}
+											data-cta={`pricing-${plan.monthly_key}`}
 										>
 											Choose {plan.name}
 										</a>
 									</>
 								) : (
-									<a class="btn" href={signupUrl()}>
+									<a class="btn" href={signupUrl()} data-cta="pricing-free">
 										Start free
 									</a>
 								)}

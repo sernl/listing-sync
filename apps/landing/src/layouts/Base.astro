@@ -80,13 +80,17 @@ const posthogKey = import.meta.env.PUBLIC_POSTHOG_KEY;
 		<link rel="preload" href="/fonts/poppins-600-latin.woff2" as="font" type="font/woff2" crossorigin />
 		<script is:inline src="/app-redirect.js"></script>
 		{
-			/* One funnel step and nothing else: did a visitor who read /pricing
-			   reach /login. Pageviews only — `landing_policy` has no
-			   `worker-src`, so replay's blob worker would be refused, and it is
-			   switched off here rather than left to fail. The library is
+			/* Pageviews, and one named event: `cta_click` when a visitor
+			   presses a link carrying `data-cta` (Start free, a plan's
+			   Choose), whose value says which one. The admin Analytics page
+			   reads it beside the server's own `signup_completed`. Replay is
+			   off — `landing_policy` has no `worker-src`, so its blob worker
+			   would be refused — rather than left to fail. The library is
 			   fetched from this origin's own /ingest proxy, so `script-src
 			   'self'` and `connect-src 'self'` both hold unchanged, and
-			   `tam-server` hashes this block into the policy it serves. */
+			   `tam-server` hashes this block into the policy it serves. The
+			   click is sent by beacon because the link navigates away at
+			   once. */
 		}
 		{
 			posthogKey && (
@@ -106,6 +110,12 @@ const posthogKey = import.meta.env.PUBLIC_POSTHOG_KEY;
 							});
 						};
 						document.head.appendChild(loader);
+						document.addEventListener('click', function (event) {
+							var link = event.target instanceof Element ? event.target.closest('[data-cta]') : null;
+							if (link && window.posthog && window.posthog.__loaded) {
+								window.posthog.capture('cta_click', { cta: link.getAttribute('data-cta') }, { transport: 'sendBeacon' });
+							}
+						});
 					`}
 				</script>
 			)

@@ -13,7 +13,7 @@
 //! Given an engine-role url it also hosts the two service loops the design
 //! puts in this process: the outbox drainer and the job-event pruner.
 //!
-//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--stripe-webhook-secret <secret>] [--stripe-secret-key <path>] [--stripe-price-map <path>] [--ui-dir <path>] [--landing-dir <path>] [--landing-host <host> --console-host <host>] [--downloads-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> (--blob-store-root <path> | --blob-store-s3 <endpoint> --blob-store-bucket <name> --blob-store-credentials <path> [--blob-store-region <region>])] [--entitlement-key-path <path>] [--entitlement-public-key <hex>] [--require-entitlement-key] [--broker-advertise <host:port>] [--resend-api-key-file <path> --email-from <address> --console-url <url> --auth-internal-url <url> --auth-internal-secret-file <path> [--ops-email <address>] [--marketing-email-from <address>]] [--posthog-key <key> [--posthog-host <url>]] [--disclose-internals]
+//! Usage: tam-server <db-url> [bind-addr] [--engine-db-url <url>] [--backoffice-db-url <url>] [--stripe-webhook-secret <secret>] [--stripe-secret-key <path>] [--stripe-price-map <path>] [--ui-dir <path>] [--landing-dir <path>] [--landing-host <host> --console-host <host>] [--downloads-dir <path>] [--auth-issuer <url> --auth-jwks-url <url>] [--blob-kek-path <path> (--blob-store-root <path> | --blob-store-s3 <endpoint> --blob-store-bucket <name> --blob-store-credentials <path> [--blob-store-region <region>])] [--entitlement-key-path <path>] [--entitlement-public-key <hex>] [--require-entitlement-key] [--broker-advertise <host:port>] [--resend-api-key-file <path> --email-from <address> --console-url <url> --auth-internal-url <url> --auth-internal-secret-file <path> [--ops-email <address>] [--marketing-email-from <address>]] [--posthog-key <key> [--posthog-host <url>]] [--posthog-project-id <id> --posthog-personal-key-file <path> [--posthog-api-host <url>]] [--disclose-internals]
 
 #![forbid(unsafe_code)]
 
@@ -108,6 +108,26 @@ const POSTHOG_KEY_FLAG: &str = "--posthog-key";
 /// compliance floor leaves open, and is a one-way door: moving later
 /// abandons the history.
 const POSTHOG_HOST_FLAG: &str = "--posthog-host";
+
+/// The PostHog project the operators' site analytics page reads, by its
+/// numeric id (PostHog: Settings → Project → General, "Project ID"). Given
+/// with [`POSTHOG_PERSONAL_KEY_FILE_FLAG`] or not at all; absent, that page's
+/// route answers 503 and the page says site analytics is not configured. An
+/// empty value means absent, which is how a template that leaves it unset
+/// arrives.
+const POSTHOG_PROJECT_ID_FLAG: &str = "--posthog-project-id";
+
+/// The file holding a PostHog personal API key with Query Read on that
+/// project. A path rather than a value, unlike `--posthog-key`: a personal
+/// key reads every event in the project, so it is a secret in the way the
+/// project key is not, and stays out of the process table as the Stripe key
+/// does.
+const POSTHOG_PERSONAL_KEY_FILE_FLAG: &str = "--posthog-personal-key-file";
+
+/// Which PostHog app host the query API is asked on. Not `--posthog-host`:
+/// that one is the ingestion host (`eu.i.posthog.com`), and queries go to the
+/// app host (`eu.posthog.com`), so the two cannot share a value.
+const POSTHOG_API_HOST_FLAG: &str = "--posthog-api-host";
 
 /// The built client directory, served as the router's fallback so the API
 /// and the UI share one origin; unknown paths fall through to index.html,
@@ -632,6 +652,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
              capture is a no-op"
         ),
     }
+    match &invocation.config.site_analytics {
+        Some(analytics) => eprintln!(
+            "tam-server reading site analytics for PostHog project {} at {}{}",
+            analytics.project_id(),
+            analytics.api_host(),
+            analytics
+                .site_host()
+                .map_or_else(String::new, |host| format!(", pageviews on {host}"))
+        ),
+        None => eprintln!(
+            "tam-server reading no site analytics ({POSTHOG_PROJECT_ID_FLAG} unset); the admin \
+             analytics page answers 503"
+        ),
+    }
     if invocation.config.disclosure == Disclosure::Full {
         eprintln!("tam-server disclosing fault internals ({DISCLOSE_FLAG}); development only");
     }
@@ -847,6 +881,9 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     let mut marketing_email_from = None;
     let mut posthog_key = None;
     let mut posthog_host = tam_api::telemetry::DEFAULT_HOST.to_owned();
+    let mut posthog_project_id = None;
+    let mut posthog_personal_key_file = None;
+    let mut posthog_api_host = tam_api::admin_analytics::DEFAULT_API_HOST.to_owned();
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         if argument == DISCLOSE_FLAG {
@@ -892,6 +929,21 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
             posthog_host = arguments
                 .next()
                 .ok_or("--posthog-host needs a url argument")?;
+        } else if argument == POSTHOG_PROJECT_ID_FLAG {
+            let given = arguments
+                .next()
+                .ok_or("--posthog-project-id needs an id argument")?;
+            posthog_project_id = Some(given.trim().to_owned()).filter(|id| !id.is_empty());
+        } else if argument == POSTHOG_PERSONAL_KEY_FILE_FLAG {
+            posthog_personal_key_file = Some(
+                arguments
+                    .next()
+                    .ok_or("--posthog-personal-key-file needs a path argument")?,
+            );
+        } else if argument == POSTHOG_API_HOST_FLAG {
+            posthog_api_host = arguments
+                .next()
+                .ok_or("--posthog-api-host needs a url argument")?;
         } else if argument == UI_FLAG {
             ui_dir = Some(std::path::PathBuf::from(
                 arguments.next().ok_or("--ui-dir needs a path argument")?,
@@ -1037,6 +1089,36 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
         _ => {
             return Err(format!(
                 "{BLOB_KEK_FLAG} and one of {STORE_ROOT_FLAG} or {STORE_S3_FLAG} are given \
+                 together or not at all"
+            )
+            .into())
+        }
+    };
+    // Refused rather than half-configured, as the pairs above are: an id with
+    // no key is a page that can only be refused by PostHog, and a key with no
+    // project has nothing to read. The id goes into a URL path, so it is held
+    // to the digits PostHog's ids are. Pageviews are narrowed to the landing
+    // host where the deployment splits its origin, because the console sends
+    // its own pageviews to the same project.
+    config.site_analytics = match (posthog_project_id, posthog_personal_key_file) {
+        (Some(id), Some(path)) => {
+            if !id.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(format!(
+                    "{POSTHOG_PROJECT_ID_FLAG} is PostHog's numeric project id, not {id:?}"
+                )
+                .into());
+            }
+            Some(tam_api::admin_analytics::SiteAnalytics::new(
+                tam_api::admin_analytics::PersonalKey::new(read_secret(&path)?),
+                &posthog_api_host,
+                id,
+                landing_host.clone().filter(|_| console_host.is_some()),
+            ))
+        }
+        (None, None) => None,
+        _ => {
+            return Err(format!(
+                "{POSTHOG_PROJECT_ID_FLAG} and {POSTHOG_PERSONAL_KEY_FILE_FLAG} are given \
                  together or not at all"
             )
             .into())

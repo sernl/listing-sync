@@ -50,6 +50,11 @@ let
   # below hold the rest of the set to this one switch.
   mailEnabled = cfg.server.mail.resendApiKeyFile != null;
 
+  # The admin Site analytics page reads PostHog's query API exactly when a
+  # personal key is named; the binary takes the id and the key together, and
+  # an assertion below holds the id to this switch.
+  siteAnalyticsEnabled = cfg.server.siteAnalytics.personalKeyFile != null;
+
   # The store both blob-holding binaries are pointed at, rendered once: the
   # server and the ingest worker hold the same objects, so a unit that named
   # one store and a unit that named another would be a worker reading a bucket
@@ -96,11 +101,12 @@ let
 
   # tam-server's egress. The deny stands unless something the binary must
   # reach is off this machine: the completion mail's relay is one such thing,
-  # for the reason `loopbackOnly` states, and an object store in a bucket is
-  # the other. Where that endpoint is an address the filter names it rather
-  # than being dropped; where it is a hostname there is nothing to name, and
-  # the warning below says so.
-  serverEgress = if mailEnabled then { } else storeEgress;
+  # for the reason `loopbackOnly` states, PostHog's query API behind the admin
+  # Site analytics page is another for the same reason, and an object store in
+  # a bucket is the third. Where that endpoint is an address the filter names
+  # it rather than being dropped; where it is a hostname there is nothing to
+  # name, and the warning below says so.
+  serverEgress = if mailEnabled || siteAnalyticsEnabled then { } else storeEgress;
 
   # The egress of a process whose only off-machine reach is the blob store:
   # loopback, plus the store's address where it is a bucket named by one.
@@ -186,6 +192,14 @@ let
     "--stripe-price-map"
     (pkgs.writeText "teachouse-stripe-price-map.json" (builtins.toJSON cfg.server.stripePriceMap))
   ]
+  ++ lib.optionals siteAnalyticsEnabled [
+    "--posthog-project-id"
+    cfg.server.siteAnalytics.projectId
+    "--posthog-personal-key-file"
+    cfg.server.siteAnalytics.personalKeyFile
+    "--posthog-api-host"
+    cfg.server.siteAnalytics.apiHost
+  ]
   ++ lib.optionals mailEnabled [
     "--resend-api-key-file"
     cfg.server.mail.resendApiKeyFile
@@ -212,11 +226,13 @@ let
   # loopback above and the identity service's address route on the same
   # loopback, and tam-worker reaches no marketplace by decision D1. So the
   # charter's egress constraint is achievable on both as an actual deny rather
-  # than an aspiration. Two exceptions, each stated where it is taken: with the
+  # than an aspiration. Three exceptions, each stated where it is taken: with the
   # completion mail configured, tam-server posts to the relay, which is off
   # this machine and resolves to no address a filter could name, so that unit
   # drops the filter and the constraint rests on the binary reaching nothing
-  # else — which is what `--resend-api-key-file`'s own header records. And with
+  # else — which is what `--resend-api-key-file`'s own header records. The
+  # admin Site analytics page's PostHog personal key does the same, for the
+  # same reason: PostHog's query API is a name, not an address. And with
   # `blobStore.kind = "s3"` the blob bytes go to an object store rather than a
   # directory, so `serverEgress` allows that endpoint's address beside
   # loopback, or drops the filter where the endpoint is a name.
@@ -704,6 +720,49 @@ in
         '';
       };
 
+      siteAnalytics = {
+        projectId = lib.mkOption {
+          type = lib.types.nullOr (lib.types.strMatching "[0-9]+");
+          default = null;
+          example = "12345";
+          description = ''
+            The PostHog project the admin Site analytics page reads, by its
+            numeric id, passed as `tam-server --posthog-project-id`. PostHog
+            shows it under Settings → Project → General ("Project ID"), and
+            it is the number in the project's URLs
+            (`https://eu.posthog.com/project/<id>/…`). Not a secret. Set
+            together with `personalKeyFile` or not at all; null, the page's
+            route answers 503 and the page says site analytics is not
+            configured.
+          '';
+        };
+
+        personalKeyFile = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          example = "/run/safix/teachouse-api/teachouse-posthog-personal-key";
+          description = ''
+            Path to a PostHog personal API key (`phx_…`) with the Query Read
+            scope on that project, readable by the `teachouse-api` account,
+            passed as `tam-server --posthog-personal-key-file`. A path
+            because the key reads every event in the project. Given, the
+            server calls PostHog's query API, which is off this machine, so
+            tam-server's IP deny is dropped exactly as it is for the mail
+            relay.
+          '';
+        };
+
+        apiHost = lib.mkOption {
+          type = lib.types.str;
+          default = "https://eu.posthog.com";
+          description = ''
+            PostHog's app host, where the query API is
+            (`tam-server --posthog-api-host`). The EU app host by default;
+            not the ingestion host `eu.i.posthog.com`.
+          '';
+        };
+      };
+
       mail = {
         resendApiKeyFile = lib.mkOption {
           type = lib.types.nullOr lib.types.str;
@@ -960,6 +1019,14 @@ in
         '';
       }
       {
+        assertion = siteAnalyticsEnabled == (cfg.server.siteAnalytics.projectId != null);
+        message = ''
+          services.teachouse.server.siteAnalytics.projectId and
+          services.teachouse.server.siteAnalytics.personalKeyFile are given
+          together or not at all: tam-server refuses one without the other.
+        '';
+      }
+      {
         assertion = mailEnabled -> cfg.server.mail.from != null;
         message = ''
           services.teachouse.server.mail.resendApiKeyFile is set but no sender
@@ -1072,14 +1139,22 @@ in
             version before the first deploy, or pin services.postgresql.package
             to 17 on the host.
           ''
-      ++ lib.optional (cfg.server.blobStore.kind == "s3" && !mailEnabled && !blobStoreHostIsAddress) ''
-        services.teachouse.server.blobStore.endpoint names the host
-        ${blobStoreHost} rather than an address, so tam-server's
-        IPAddressDeny is dropped entirely: systemd's filter takes addresses
-        and prefixes, and a name resolved at run time is neither. Give the
-        endpoint as an address to keep the deny, and the store's own
-        address allowed beside loopback.
-      '';
+      ++
+        lib.optional
+          (
+            cfg.server.blobStore.kind == "s3"
+            && !mailEnabled
+            && !siteAnalyticsEnabled
+            && !blobStoreHostIsAddress
+          )
+          ''
+            services.teachouse.server.blobStore.endpoint names the host
+            ${blobStoreHost} rather than an address, so tam-server's
+            IPAddressDeny is dropped entirely: systemd's filter takes addresses
+            and prefixes, and a name resolved at run time is neither. Give the
+            endpoint as an address to keep the deny, and the store's own
+            address allowed beside loopback.
+          '';
 
     users.groups.${group} = { };
     users.users =

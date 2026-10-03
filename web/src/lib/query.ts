@@ -151,6 +151,7 @@ export const queryKeys = {
 	adminImpersonations: ['admin-impersonations'] as const,
 	adminPricing: ['admin-pricing'] as const,
 	adminPayments: ['admin-payments'] as const,
+	adminSiteAnalytics: (range: string) => ['admin-site-analytics', range] as const,
 	/** One page of the identity plane's user list, keyed by the search, the
 	 *  page and the order that produced it. */
 	identityUsers: (search: string, page: number, direction: 'asc' | 'desc') =>
