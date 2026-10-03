@@ -5,6 +5,7 @@ import { admin, captcha, haveIBeenPwned, jwt, openAPI } from 'better-auth/plugin
 import { PostgresDialect } from 'kysely';
 import pg from 'pg';
 import { type AuthEvent, record } from './audit.ts';
+import { ipAddress } from './client-ip.ts';
 import { deliver } from './email.ts';
 import { env } from './env.ts';
 import { vouchedByProvider } from './provider-profile.ts';
@@ -161,7 +162,8 @@ export const auth = betterAuth({
   secret: env.secret,
   database: { dialect, type: 'postgres' },
   telemetry: { enabled: false },
-  advanced: { database: { generateId: 'uuid' } },
+  // The client's address: Cloudflare's header first, see client-ip.ts.
+  advanced: { database: { generateId: 'uuid' }, ipAddress },
   rateLimit: { enabled: true, storage: 'database' },
   // The session cookie cache is off, explicitly rather than by default.
   // Verified 2026-09-02 against better-auth 1.7.2: with it on, getSession

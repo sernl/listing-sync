@@ -625,6 +625,16 @@ landing-style-gate:
 landing-dev:
     cd apps/landing && npm run dev
 
+# `nix/edge-warm.sh` reads `web/build` and `apps/landing/dist` here rather than
+# the store paths `teachouse-edge-warm` carries: a local tam-server serves
+# these, and their hashes are not the store build's. A tam-server without
+# `--console-host` answers both on one origin, so
+# `just edge-warm http://127.0.0.1:8080 http://127.0.0.1:8080`.
+#
+# The edge warmer against the local console and landing builds
+edge-warm console landing *args:
+    bash nix/edge-warm.sh --ui-dir web/build --landing-dir apps/landing/dist {{args}} {{console}} {{landing}}
+
 # The desktop client (Tauri v2, D2), which hosts this same console and owns the
 # seller's marketplace sessions on the seller's own device. The console comes
 # from the SvelteKit dev server, so `just web-dev` must already be running.
