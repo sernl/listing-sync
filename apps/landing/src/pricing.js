@@ -211,8 +211,9 @@ export const moveExplained = [
  * can. Every figure in an answer is interpolated from the plan table.
  *
  * An answer may carry a `link`, drawn after its text: the console page that
- * acts on it. `/marketplaces` is where the app's downloads are, and a reader
- * who is not signed in is asked to sign in first.
+ * acts on it, or the section of the terms that sets it out in full.
+ * `/marketplaces` is where the app's downloads are, and a reader who is not
+ * signed in is asked to sign in first.
  */
 export const faqs = [
 	{
@@ -239,7 +240,8 @@ export const faqs = [
 	},
 	{
 		q: 'Can I get a refund?',
-		a: 'Yes, for a Move Pack you have not used: write to us within 14 days of buying it.'
+		a: 'Yes. A Move Pack you have not used is refunded in full within 14 days of buying it. A yearly plan is refunded for its unused whole months, less one month\u2019s fee. A monthly plan is not refunded once its month has started; cancelling stops the next renewal.',
+		link: { href: '/terms/#refunds', label: 'How refunds work' }
 	},
 	{
 		q: 'Why do I need the Teachouse app?',
