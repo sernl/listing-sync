@@ -928,14 +928,21 @@ pub(crate) fn with_nonce(policy: &str, nonce: &str) -> String {
 /// carries no `'unsafe-inline'` and admits an inline block only by its hash,
 /// computed from the pages actually being served.
 ///
-/// It admits no third-party host at all, and `style-src` carries no
-/// `'unsafe-inline'` either. The first version of this carried the console's
-/// two Google font hosts and its inline-style grant; the built site loads
-/// neither host and emits neither a `<style>` element nor a `style` attribute,
-/// because `apps/landing/src/styles/site.css` self-hosts both faces from
-/// `/fonts/*.woff2` and Astro bundles component styles into `_astro/`. A
-/// dead grant on the public origin is a grant nobody is checking, so a page
-/// that ever needs one has to come back here and say why.
+/// It admits one third-party host, on one directive: `connect-src` names
+/// `https://cloudflareinsights.com`, where Cloudflare's Web Analytics beacon
+/// posts what it measured. The edge injects that beacon into every HTML page
+/// it proxies, under the nonce `with_nonce` puts in `script-src`, so the
+/// script itself needs no host grant; refused its POST, it logged a policy
+/// violation in every visitor's console and reported nothing.
+///
+/// `style-src` carries no `'unsafe-inline'`. The first version of this
+/// carried the console's two Google font hosts and its inline-style grant;
+/// the built site loads neither host and emits neither a `<style>` element
+/// nor a `style` attribute, because `apps/landing/src/styles/site.css`
+/// self-hosts both faces from `/fonts/*.woff2` and Astro bundles component
+/// styles into `_astro/`. A dead grant on the public origin is a grant nobody
+/// is checking, so a page that ever needs one has to come back here and say
+/// why.
 fn landing_policy(hashes: &[String]) -> String {
     let mut script = String::from("script-src 'self'");
     for hash in hashes {
@@ -948,9 +955,56 @@ fn landing_policy(hashes: &[String]) -> String {
          style-src 'self'; \
          font-src 'self'; \
          img-src 'self' data:; \
-         connect-src 'self'; \
+         connect-src 'self' {BEACON_ENDPOINT}; \
          frame-ancestors 'none'"
     )
+}
+
+/// Where the edge's Web Analytics beacon posts, and so the one host both
+/// policies admit on `connect-src`. One name for the two policies, so the
+/// landing page and the console cannot drift into reporting on one host only.
+pub(crate) const BEACON_ENDPOINT: &str = "https://cloudflareinsights.com";
+
+/// The headers every answer carries, whichever tier gave it.
+///
+/// Outermost, so the API, both static tiers, the console and a maintenance
+/// page all get them, and so no tier can forget one. A tier that has its own
+/// reason for a stricter `Referrer-Policy` keeps it — the guide pages send
+/// `no-referrer` — so that one is inserted only where nothing set it.
+///
+/// `X-Frame-Options: DENY` is the older spelling of `frame-ancestors 'none'`,
+/// which both policies carry; it is for the browser that reads only the old
+/// one. Nothing this origin serves is meant to be framed, its own pages
+/// included: the console's only frames are Turnstile's and `srcdoc` mail
+/// previews, neither of which loads a document from here.
+///
+/// HSTS names subdomains because every host under the apex is served over
+/// TLS by the same edge; it is sent from the origin rather than left to a
+/// zone setting nobody can see from the repository.
+pub(crate) async fn transport_headers(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::http::{header, HeaderValue};
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::STRICT_TRANSPORT_SECURITY,
+        HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(
+        axum::http::HeaderName::from_static("permissions-policy"),
+        HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+    );
+    headers
+        .entry(header::REFERRER_POLICY)
+        .or_insert(HeaderValue::from_static("strict-origin-when-cross-origin"));
+    response
 }
 
 /// The `sha256-…` token for every inline `<script>` block in a page.
@@ -1515,10 +1569,17 @@ mod tests {
         // Enumerated by hand rather than by a list of things the console
         // happens to name, because the previous version of this list did not
         // name the two font hosts and they sat in the policy unused for that
-        // reason alone.
-        assert!(
-            !policy.contains("https://"),
-            "the landing policy admits no third-party host on any directive: {policy}"
+        // reason alone. The one host it does name is the edge's analytics
+        // beacon, on `connect-src` and nowhere else.
+        let hosts: Vec<&str> = policy
+            .split(';')
+            .filter(|part| part.contains("https://"))
+            .map(str::trim)
+            .collect();
+        assert_eq!(
+            hosts,
+            ["connect-src 'self' https://cloudflareinsights.com"],
+            "the landing policy admits the beacon's endpoint and no other host: {policy}"
         );
         assert!(
             !policy.contains("'unsafe-inline'"),

@@ -270,6 +270,23 @@ async fn a_draft_is_invisible_until_it_is_published_and_its_markup_arrives_escap
         String::from_utf8_lossy(&body)
     );
 
+    // Nor to somebody with no session, now that the reader is public.
+    let (status, _kind, anonymous) = call(
+        state(pool.clone(), None),
+        None,
+        Call {
+            method: Method::GET,
+            path: "/v1/guides/getting-started",
+            body: None,
+        },
+    )
+    .await;
+    assert_eq!(
+        (status, anonymous),
+        (StatusCode::NOT_FOUND, body),
+        "an anonymous reader is told exactly what a seller is about a draft"
+    );
+
     let (status, _kind, body) = call(
         state(pool.clone(), None),
         Some(&TOKEN_SELLER),
@@ -351,6 +368,44 @@ async fn a_draft_is_invisible_until_it_is_published_and_its_markup_arrives_escap
         read.updated_at, NOW,
         "and the reader's update time is the publication"
     );
+
+    // The pricing page links prospects here, so the published page answers
+    // without a session, and answers the same page.
+    let (status, _kind, anonymous) = call(
+        state(pool.clone(), None),
+        None,
+        Call {
+            method: Method::GET,
+            path: "/v1/guides/getting-started",
+            body: None,
+        },
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a published guide is public: {}",
+        String::from_utf8_lossy(&anonymous)
+    );
+    let public: PublishedGuideView = json(&anonymous);
+    assert_eq!(
+        (public.slug, public.html),
+        (read.slug, read.html),
+        "and the anonymous reader is sent the seller's page"
+    );
+    let (status, _kind, listing) = call(
+        state(pool.clone(), None),
+        None,
+        Call {
+            method: Method::GET,
+            path: "/v1/guides",
+            body: None,
+        },
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the listing is public as well");
+    let listed: GuidesView = json(&listing);
+    assert_eq!(listed.total, 1, "and lists the published guide");
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]
@@ -1044,6 +1099,22 @@ async fn a_guide_picture_is_readable_by_a_seller_whose_own_upload_route_cannot_s
         bytes,
         tiny_jpeg(),
         "and reads the bytes that were sealed, not an error document"
+    );
+
+    let (status, _kind, anonymous) = call(
+        state(pool.clone(), Some(&root)),
+        None,
+        Call {
+            method: Method::GET,
+            path: &format!("/v1/guides/images/{}", stored.handle),
+            body: None,
+        },
+    )
+    .await;
+    assert_eq!(
+        (status, anonymous),
+        (StatusCode::OK, tiny_jpeg()),
+        "and so does a reader with no session, since the guide it sits in is public"
     );
 
     // The same handle through the tenant's own upload route, which pins the

@@ -1324,10 +1324,12 @@ fn assemble(
         // and its own refusal of an unknown version is the only answer left.
         None => tam_api::router(state),
     };
-    match split {
+    let router = match split {
         Some(split) => router.layer(axum::middleware::from_fn_with_state(split, host_split)),
         None => router,
-    }
+    };
+    // Outermost, so every answer carries it whichever tier gave it.
+    router.layer(axum::middleware::from_fn(serving::transport_headers))
 }
 
 /// What the host split needs to place a request: the two hosts, and enough of
@@ -1553,11 +1555,19 @@ async fn nothing_here() -> axum::http::StatusCode {
 /// refuse the console's own frames too, silently and with nothing to explain
 /// it.
 ///
-/// `connect-src` stays `'self'` and names no host. The console is served from
-/// the same origin it calls, which is the whole reason one host carries the
-/// console and `/v1`, so naming it would be a second thing to edit at cutover
-/// buying no guarantee — and a stale host there would break every request
-/// rather than failing a build.
+/// `connect-src` names no host of ours. The console is served from the same
+/// origin it calls, which is the whole reason one host carries the console
+/// and `/v1`, so naming it would be a second thing to edit at cutover buying
+/// no guarantee — and a stale host there would break every request rather
+/// than failing a build. The one host it does name is
+/// `serving::BEACON_ENDPOINT`, where the Web Analytics beacon the edge
+/// injects (under the page's nonce) posts; refused, it logged a violation on
+/// every page and reported nothing.
+///
+/// `frame-ancestors 'none'` matches the landing policy and the
+/// `X-Frame-Options: DENY` that `serving::transport_headers` sends: nothing
+/// frames the console, its own pages included, since its frames are
+/// Turnstile's and `srcdoc` previews.
 ///
 /// `worker-src` is named rather than left to fall back through `child-src` to
 /// `script-src`, and it is the one directive that admits `blob:`. The preview
@@ -1576,13 +1586,15 @@ fn console_policy(shell: &str) -> String {
         script.push('\'');
     }
     script.push_str(" https://challenges.cloudflare.com");
+    let beacon = serving::BEACON_ENDPOINT;
     format!(
-        "default-src 'self'; connect-src 'self'; {script}; \
+        "default-src 'self'; connect-src 'self' {beacon}; {script}; \
          img-src 'self' data: blob: https:; \
          style-src 'self' 'unsafe-inline'; \
          font-src 'self' data:; \
          frame-src 'self' https://challenges.cloudflare.com; \
-         worker-src 'self' blob:"
+         worker-src 'self' blob:; \
+         frame-ancestors 'none'"
     )
 }
 
@@ -1775,23 +1787,35 @@ mod tests {
         );
     }
 
-    /// `connect-src` names no host.
+    /// `connect-src` names no host of ours, and the analytics beacon's
+    /// endpoint is the only one it names.
     ///
-    /// Narrowed from the whole policy, which now names two hosts on purpose.
-    /// This directive is the one that must stay relative: the console is served
-    /// from the origin it calls, so naming it here would be a second thing to
-    /// edit at cutover and a stale value would break every request rather than
-    /// failing a build.
+    /// This directive is the one that must stay relative to our own origin:
+    /// the console is served from the origin it calls, so naming it here would
+    /// be a second thing to edit at cutover and a stale value would break every
+    /// request rather than failing a build. The edge's beacon posts to
+    /// Cloudflare, and refusing that put a violation in every page's console.
     #[test]
-    fn the_connect_directive_names_no_host() {
+    fn the_connect_directive_names_only_the_beacon() {
         let policy = super::console_policy("<html></html>");
         let connect = policy
             .split(';')
             .find(|part| part.trim_start().starts_with("connect-src"))
             .expect("connect-src is in the policy");
+        assert_eq!(
+            connect.trim(),
+            "connect-src 'self' https://cloudflareinsights.com",
+            "the beacon's endpoint and nothing to keep in step with the origin: {connect}"
+        );
+    }
+
+    /// The console refuses to be framed, as the landing page does.
+    #[test]
+    fn the_console_is_framed_by_nothing() {
+        let policy = super::console_policy("<html></html>");
         assert!(
-            !connect.contains("http"),
-            "a host here is a second thing to keep in step with the origin: {connect}"
+            policy.contains("frame-ancestors 'none'"),
+            "the policy's spelling of X-Frame-Options: DENY: {policy}"
         );
     }
 
@@ -1815,7 +1839,7 @@ mod tests {
 /// string. None of them can see the thing those pieces are assembled into, and
 /// three mutations of that assembly answer wrongly while the whole suite stays
 /// green: swapping the two `.layer()` calls, which puts the console's policy —
-/// `wasm-unsafe-eval`, Turnstile, Paddle, no `frame-ancestors` — on every
+/// `wasm-unsafe-eval`, Turnstile, Paddle — on every
 /// marketing page; dropping the policy header from `Landing::respond`, which
 /// serves the public root under no policy at all; and answering the API's
 /// namespace from a static tier. Each is asserted below.
@@ -2084,10 +2108,10 @@ mod composition {
         let policy = landing.header(header::CONTENT_SECURITY_POLICY);
         assert!(
             policy.contains("frame-ancestors 'none'"),
-            "the landing policy, not the console's and not none at all: {policy}"
+            "a policy, not none at all: {policy}"
         );
         assert!(
-            !policy.contains("'wasm-unsafe-eval'") && !policy.contains("https://"),
+            !policy.contains("'wasm-unsafe-eval'") && !policy.contains("challenges.cloudflare.com"),
             "the console's policy has been written over the landing one: {policy}"
         );
         assert_eq!(
@@ -2166,6 +2190,71 @@ mod composition {
             get("/downloads").await.body.contains("__sveltekit"),
             "and what answers it is the shell"
         );
+    }
+
+    /// Every tier's answer carries the transport headers, on both hosts.
+    ///
+    /// One probe per tier because each is a different service under the
+    /// layer, and a layer moved inward would cover some of them and not
+    /// others: the API's JSON, a landing page, a download, the console shell.
+    /// A guide page keeps the stricter referrer rule it sets for itself.
+    #[tokio::test]
+    async fn every_answer_carries_the_transport_headers() {
+        let expected = [
+            (
+                header::STRICT_TRANSPORT_SECURITY,
+                "max-age=31536000; includeSubDomains",
+            ),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::X_FRAME_OPTIONS, "DENY"),
+            (
+                header::HeaderName::from_static("permissions-policy"),
+                "camera=(), microphone=(), geolocation=()",
+            ),
+        ];
+        let answers = [
+            (
+                "/healthz",
+                get("/healthz").await,
+                "strict-origin-when-cross-origin",
+            ),
+            ("/", get("/").await, "strict-origin-when-cross-origin"),
+            (
+                "/downloads/downloads.json",
+                get("/downloads/downloads.json").await,
+                "strict-origin-when-cross-origin",
+            ),
+            (
+                "/resources",
+                get("/resources").await,
+                "strict-origin-when-cross-origin",
+            ),
+            (
+                "/guides/why-the-app",
+                get("/guides/why-the-app").await,
+                "no-referrer",
+            ),
+            (
+                "teachouse.io/",
+                on("teachouse.io", "/").await,
+                "strict-origin-when-cross-origin",
+            ),
+            (
+                "dash.teachouse.io/login",
+                on("dash.teachouse.io", "/login").await,
+                "strict-origin-when-cross-origin",
+            ),
+        ];
+        for (path, answer, referrer) in &answers {
+            for (name, value) in &expected {
+                assert_eq!(answer.header(name.clone()), *value, "{name} on {path}");
+            }
+            assert_eq!(
+                answer.header(header::REFERRER_POLICY),
+                *referrer,
+                "the referrer rule on {path}"
+            );
+        }
     }
 
     /// The reserved namespaces hold against a landing build that claims them.

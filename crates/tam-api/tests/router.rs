@@ -222,6 +222,46 @@ async fn every_notification_route_is_behind_the_session() {
     }
 }
 
+/// The guide reader is public and the guide editor is not.
+///
+/// The pricing page links prospects to guides, and a session gate there sent
+/// them to the sign-in screen instead. The pool here never dials, so a reader
+/// route that ran answers a storage fault or the missing object store; what it
+/// must not answer is the session refusal. The operator's routes over the same
+/// table read drafts and must still refuse before reading anything.
+#[tokio::test]
+async fn the_guide_reader_is_public_and_the_editor_is_not() {
+    for path in [
+        "/v1/guides",
+        "/v1/guides/_taxonomy",
+        "/v1/guides/why-the-app",
+        "/v1/guides/images/1111111111111111111111111111111111111111111111111111111111111111",
+    ] {
+        let answer = get(path).await;
+        assert_ne!(
+            answer.status,
+            StatusCode::UNAUTHORIZED,
+            "GET {path} is read without a session"
+        );
+    }
+    assert_eq!(
+        get("/v9/guides").await.status,
+        StatusCode::BAD_REQUEST,
+        "a public route still names a version this build serves"
+    );
+    for path in [
+        "/v1/admin/guides",
+        "/v1/admin/guides/why-the-app",
+        "/v1/admin/guides/_taxonomy",
+    ] {
+        assert_eq!(
+            get(path).await.status,
+            StatusCode::UNAUTHORIZED,
+            "GET {path} reads drafts, so it stays behind the operator gate"
+        );
+    }
+}
+
 /// The structural half of the OpenAPI parity: every documented operation must
 /// be mounted. (The reverse — every mounted route documented — has no
 /// introspection hook in axum and is held by review plus the one-constant
