@@ -13,8 +13,9 @@ set -euo pipefail
 # reaches, which for a box in New Zealand is the one New Zealand teachers do.
 #
 # GET only, sixteen at a time, each to /dev/null. Exits non-zero, after the
-# whole list has run, when any asset answers other than 200: an asset the
-# edge cannot fetch is one a teacher's browser could not either.
+# whole list has run, when any asset answers other than 200 or answers with
+# the HTML shell instead of itself: an asset the edge cannot fetch is one a
+# teacher's browser could not either.
 #
 # Written into `teachouse-edge-warm` by `nix/edge-warm.nix`, which bakes the
 # built console and landing directories in as the defaults; `just edge-warm`
@@ -102,16 +103,20 @@ results="$(
   printf '%s\n' "$urls" | sed 's|.*|url = "&"\noutput = "/dev/null"|' |
     curl --config - --parallel --parallel-max 16 --silent --compressed \
       --user-agent teachouse-edge-warm --max-time 60 --retry 3 --retry-delay 2 \
-      --write-out '%{http_code} %header{cf-cache-status} %{url}\n' || true
+      --write-out '%{http_code}\t%{content_type}\t%header{cf-cache-status}\t%{url}\n' || true
 )"
 
-failed="$(printf '%s\n' "$results" | awk '$1 != "200"' || true)"
+# A 200 is not enough on its own: tam-server answers a path it holds no file
+# for with the console shell, so an asset this build has and the deployment
+# does not (a console built with other arguments, a deploy half rolled out)
+# comes back 200 as HTML. None of the hashed assets is HTML.
+failed="$(printf '%s\n' "$results" | awk -F'\t' 'NF && ($1 != "200" || $2 ~ /^text\/html/)' || true)"
 fetched="$(printf '%s\n' "$results" | grep -c . || true)"
-ok="$(printf '%s\n' "$results" | awk '$1 == "200"' | grep -c . || true)"
-cache="$(printf '%s\n' "$results" | awk 'NF == 3 { n[$2]++ } END { for (k in n) printf " %s=%d", k, n[k] }')"
-echo "teachouse-edge-warm: ${ok} of ${total} assets answered 200 through ${console} and ${landing}${cache:+ (cf-cache-status:${cache})}"
+cache="$(printf '%s\n' "$results" | awk -F'\t' '$3 != "" { n[$3]++ } END { for (k in n) printf " %s=%d", k, n[k] }')"
+bad="$(printf '%s\n' "$failed" | grep -c . || true)"
+echo "teachouse-edge-warm: $((fetched - bad)) of ${total} assets answered 200 through ${console} and ${landing}${cache:+ (cf-cache-status:${cache})}"
 if [[ -n "$failed" || "$fetched" -ne "$total" ]]; then
-  echo "teachouse-edge-warm: not every asset answered 200:" >&2
-  printf '%s\n' "$failed" | sed '/^$/d' >&2
+  echo "teachouse-edge-warm: not every asset answered 200 with the asset itself:" >&2
+  printf '%s\n' "$failed" >&2
   exit 1
 fi
