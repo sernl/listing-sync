@@ -1,0 +1,265 @@
+# The macOS half of a tagged release, outside the App Store: one universal
+# (Apple silicon + Intel) `.app`, signed with the Developer ID Application
+# certificate under the hardened runtime, notarized and stapled; the `.dmg`
+# that carries it, signed, notarized and stapled in its own right; and the
+# `.app.tar.gz` updater payload with its minisign signature. Called by
+# desktop-release.yml only, and only when the signing certificate and one set
+# of notarization credentials exist: Gatekeeper refuses an unsigned or
+# un-notarized download on every Mac, so there is no unsigned fallback.
+#
+# Sources: https://v2.tauri.app/distribute/sign/macos/ (certificate import,
+# APPLE_* variables), https://v2.tauri.app/distribute/macos-application-bundle/
+# and https://v2.tauri.app/distribute/dmg/.
+name: release-macos
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+      tauri-cli-version:
+        type: string
+        required: true
+      notary:
+        description: "apple-id (APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID) or api-key (APPLE_API_ISSUER/APPLE_API_KEY/APPLE_API_KEY_P8)"
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  macos:
+    # Apple silicon; the universal target cross-compiles the Intel half.
+    runs-on: macos-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ inputs.version }}
+      NOTARY: ${{ inputs.notary }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/tauri-setup
+        with:
+          tauri-cli-version: ${{ inputs.tauri-cli-version }}
+          # rust-toolchain.toml carries aarch64-apple-darwin alone; the
+          # universal binary needs the Intel half too.
+          targets: x86_64-apple-darwin
+
+      # A throwaway keychain, unlocked for the job and deleted after it, so the
+      # certificate never touches the runner's login keychain. The identity is
+      # read back from the keychain rather than configured, so the certificate
+      # in the secret is the only place the team's name lives.
+      - name: import the Developer ID certificate
+        id: identity
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/release.keychain-db"
+          password=$(openssl rand -hex 24)
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productsign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain"
+          # Searched before the login keychain, which stays on the list.
+          security list-keychains -d user -s "$keychain" "$HOME/Library/Keychains/login.keychain-db"
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          identity=$(security find-identity -v -p codesigning "$keychain" \
+            | sed -n 's/.*"\(Developer ID Application: .*\)"$/\1/p' | head -1)
+          if [ -z "$identity" ]; then
+            echo "APPLE_CERTIFICATE holds no Developer ID Application identity" >&2
+            security find-identity -v -p codesigning "$keychain" >&2
+            exit 1
+          fi
+          echo "signing as: $identity"
+          printf 'name=%s\n' "$identity" >> "$GITHUB_OUTPUT"
+          printf 'keychain=%s\n' "$keychain" >> "$GITHUB_OUTPUT"
+
+      # Tauri reads an App Store Connect key from a file; the secret holds the
+      # .p8's contents, written where the bundler and notarytool both look.
+      - name: write the App Store Connect key
+        if: ${{ inputs.notary == 'api-key' }}
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/private_keys"
+          path="$RUNNER_TEMP/private_keys/AuthKey_$APPLE_API_KEY.p8"
+          printf '%s\n' "$APPLE_API_KEY_P8" > "$path"
+          chmod 600 "$path"
+          printf 'APPLE_API_KEY_PATH=%s\n' "$path" >> "$GITHUB_ENV"
+
+      - uses: ./.github/actions/release-overlay
+        with:
+          cn-application: ${{ vars.CN_APPLICATION }}
+          cn-channel: ${{ vars.CN_CHANNEL }}
+
+      # Tauri signs the .app with the identity, notarizes it with whichever
+      # credentials are in the environment, waits, and staples the ticket.
+      # Only one set is passed, so there is no question which it uses.
+      - name: build, sign and notarize the universal app
+        working-directory: apps/desktop
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ steps.identity.outputs.name }}
+          APPLE_ID: ${{ inputs.notary == 'apple-id' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ inputs.notary == 'apple-id' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ inputs.notary == 'apple-id' && secrets.APPLE_TEAM_ID || '' }}
+          APPLE_API_ISSUER: ${{ inputs.notary == 'api-key' && secrets.APPLE_API_ISSUER || '' }}
+          APPLE_API_KEY: ${{ inputs.notary == 'api-key' && secrets.APPLE_API_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAM_ENTITLEMENT_PUBLIC_KEY: ${{ vars.TAM_ENTITLEMENT_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          for name in APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID APPLE_API_ISSUER APPLE_API_KEY; do
+            if [ -z "${!name}" ]; then unset "$name"; fi
+          done
+          tauri build --target universal-apple-darwin --bundles app,dmg \
+            --config ../../release.conf.json
+
+      # The disk image is what a seller downloads, so it is notarized and
+      # stapled itself rather than relying on the app inside it: a stapled
+      # image opens without a network round trip to Apple, and `spctl` below
+      # checks exactly what Gatekeeper will.
+      - name: sign, notarize and staple the disk image
+        env:
+          IDENTITY: ${{ steps.identity.outputs.name }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          set -euo pipefail
+          bundle=target/universal-apple-darwin/release/bundle
+          dmg="$bundle/dmg/Teachouse_${VERSION}_universal.dmg"
+          if [ ! -s "$dmg" ]; then
+            echo "the build left no $dmg" >&2
+            find "$bundle" -maxdepth 2 >&2 || true
+            exit 1
+          fi
+          codesign --force --timestamp --sign "$IDENTITY" "$dmg"
+          if [ "$NOTARY" = api-key ]; then
+            xcrun notarytool submit "$dmg" --wait \
+              --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER"
+          else
+            xcrun notarytool submit "$dmg" --wait \
+              --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID"
+          fi
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
+          codesign --verify --deep --strict --verbose=2 "$bundle/macos/Teachouse.app"
+          spctl --assess --type execute --verbose=2 "$bundle/macos/Teachouse.app"
+
+      # Tauri names the updater archive after the product alone; the release
+      # names every artefact after its version, so a stale archive can never
+      # pass for a fresh one.
+      - name: collect the disk image and the updater archive
+        run: |
+          set -euo pipefail
+          bundle=target/universal-apple-darwin/release/bundle
+          out=macos-artifacts
+          mkdir -p "$out"
+          archive="$bundle/macos/Teachouse.app.tar.gz"
+          for file in "$archive" "$archive.sig"; do
+            if [ ! -s "$file" ]; then
+              echo "the build left no $file; is createUpdaterArtifacts on?" >&2
+              exit 1
+            fi
+          done
+          cp "$bundle/dmg/Teachouse_${VERSION}_universal.dmg" "$out/"
+          cp "$archive" "$out/Teachouse_${VERSION}_universal.app.tar.gz"
+          cp "$archive.sig" "$out/Teachouse_${VERSION}_universal.app.tar.gz.sig"
+          ls -l "$out"
+
+      - name: attest build provenance
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            macos-artifacts/*.dmg
+            macos-artifacts/*.app.tar.gz
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-universal
+          path: macos-artifacts
+          if-no-files-found: error
+          retention-days: 30
+
+      # The Cloud has no universal platform: its DMG slugs are dmg-aarch64 and
+      # dmg-x86_64, and its update platforms darwin-aarch64 and darwin-x86_64
+      # (https://docs.crabnebula.dev/cloud/cli/upload-assets/). The one
+      # universal file goes up under each, as two copies named for the
+      # architecture, because one asset carries one platform. The minisign
+      # signature covers the bytes, not the name, so both archives share it.
+      - name: name a copy for each architecture the Cloud knows
+        run: |
+          set -euo pipefail
+          mkdir -p cloud
+          for arch in aarch64 x64; do
+            cp "macos-artifacts/Teachouse_${VERSION}_universal.dmg" "cloud/Teachouse_${VERSION}_${arch}.dmg"
+            cp "macos-artifacts/Teachouse_${VERSION}_universal.app.tar.gz" "cloud/Teachouse_${VERSION}_${arch}.app.tar.gz"
+            cp "macos-artifacts/Teachouse_${VERSION}_universal.app.tar.gz.sig" "cloud/Teachouse_${VERSION}_${arch}.app.tar.gz.sig"
+          done
+      - name: upload the Apple silicon update to CrabNebula Cloud
+        uses: crabnebula-dev/cloud-release@1a8803698ba41de6b23e42abc5dcc3721308233c # action-v0.2.6
+        with:
+          command: >-
+            release upload ${{ vars.CN_APPLICATION }} ${{ inputs.version }}
+            --file cloud/Teachouse_${{ inputs.version }}_aarch64.app.tar.gz
+            --signature cloud/Teachouse_${{ inputs.version }}_aarch64.app.tar.gz.sig
+            --update-platform darwin-aarch64
+            ${{ vars.CN_CHANNEL && format('--channel {0}', vars.CN_CHANNEL) || '' }}
+          api-key: ${{ secrets.CN_API_KEY }}
+          working-directory: .
+      - name: upload the Intel update to CrabNebula Cloud
+        uses: crabnebula-dev/cloud-release@1a8803698ba41de6b23e42abc5dcc3721308233c # action-v0.2.6
+        with:
+          command: >-
+            release upload ${{ vars.CN_APPLICATION }} ${{ inputs.version }}
+            --file cloud/Teachouse_${{ inputs.version }}_x64.app.tar.gz
+            --signature cloud/Teachouse_${{ inputs.version }}_x64.app.tar.gz.sig
+            --update-platform darwin-x86_64
+            ${{ vars.CN_CHANNEL && format('--channel {0}', vars.CN_CHANNEL) || '' }}
+          api-key: ${{ secrets.CN_API_KEY }}
+          working-directory: .
+      - name: upload the Apple silicon disk image to CrabNebula Cloud
+        uses: crabnebula-dev/cloud-release@1a8803698ba41de6b23e42abc5dcc3721308233c # action-v0.2.6
+        with:
+          command: >-
+            release upload ${{ vars.CN_APPLICATION }} ${{ inputs.version }}
+            --file cloud/Teachouse_${{ inputs.version }}_aarch64.dmg
+            --public-platform dmg-aarch64
+            ${{ vars.CN_CHANNEL && format('--channel {0}', vars.CN_CHANNEL) || '' }}
+          api-key: ${{ secrets.CN_API_KEY }}
+          working-directory: .
+      - name: upload the Intel disk image to CrabNebula Cloud
+        uses: crabnebula-dev/cloud-release@1a8803698ba41de6b23e42abc5dcc3721308233c # action-v0.2.6
+        with:
+          command: >-
+            release upload ${{ vars.CN_APPLICATION }} ${{ inputs.version }}
+            --file cloud/Teachouse_${{ inputs.version }}_x64.dmg
+            --public-platform dmg-x86_64
+            ${{ vars.CN_CHANNEL && format('--channel {0}', vars.CN_CHANNEL) || '' }}
+          api-key: ${{ secrets.CN_API_KEY }}
+          working-directory: .
+
+      - name: remove the release keychain
+        if: ${{ always() }}
+        env:
+          KEYCHAIN: ${{ steps.identity.outputs.keychain }}
+        run: |
+          if [ -n "${KEYCHAIN:-}" ]; then security delete-keychain "$KEYCHAIN" || true; fi
+          rm -rf "$RUNNER_TEMP/private_keys"

@@ -1072,6 +1072,23 @@ main {
 	font-weight: 600;
 	font-size: 15px;
 	color: var(--text);
+	text-decoration: none;
+}
+
+.platform:hover {
+	border-color: var(--primary);
+}
+
+.platform:focus-visible {
+	outline: 2px solid var(--primary);
+	outline-offset: 2px;
+}
+
+/* Set by the row's script where the manifest names nothing for a platform. */
+.platform-soon {
+	font-size: 12px;
+	font-weight: 500;
+	color: var(--muted);
 }
 
 .platform img {
@@ -1966,7 +1983,7 @@ main {
 		gap: 6px;
 	}
 
-	/* The two platform chips stay one row on a phone. */
+	/* Tighter chips on a phone, so the four wrap to two rows rather than four. */
 	.download {
 		padding: 22px;
 	}

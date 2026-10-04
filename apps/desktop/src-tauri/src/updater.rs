@@ -74,8 +74,9 @@ pub enum Skip {
     Development,
     /// A build with no updater plugin registered. `lib.rs` registers it under
     /// `#[cfg(desktop)]` because the plugin's own manifest declares Android
-    /// support level `none`, and asking for an unregistered plugin's state
-    /// panics rather than failing (tauri 2.11.5, `src/lib.rs:733-738`).
+    /// support level `none`, and not at all in the Mac App Store build, which
+    /// the store updates; asking for an unregistered plugin's state panics
+    /// rather than failing (tauri 2.11.5, `src/lib.rs:733-738`).
     Unsupported,
 }
 
@@ -90,9 +91,9 @@ pub enum Decision {
 /// compiled into.
 ///
 /// `updater_registered` is what keeps the panic above out of reach: the only
-/// caller passes `cfg!(desktop)`, so widening this module to a platform where
-/// `lib.rs` registers no updater refuses the check instead of asking a plugin
-/// that is not there.
+/// caller passes the same predicate `lib.rs` registers the plugin under, so a
+/// build where `lib.rs` registers no updater refuses the check instead of
+/// asking a plugin that is not there.
 #[must_use]
 pub const fn decide(development: bool, updater_registered: bool) -> Decision {
     if development {
@@ -164,7 +165,10 @@ fn one_line(text: &str) -> String {
 /// 2.11.5, `src/app.rs:588-609` and `:1430-1436`).
 #[cfg(desktop)]
 pub async fn check_at_startup(app: &AppHandle) {
-    let outcome = match decide(cfg!(debug_assertions), cfg!(desktop)) {
+    let outcome = match decide(
+        cfg!(debug_assertions),
+        cfg!(all(desktop, not(feature = "app-store"))),
+    ) {
         Decision::Skip(why) => Outcome::Skipped(why),
         Decision::Check => check_and_install(app).await,
     };

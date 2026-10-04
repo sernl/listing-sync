@@ -752,6 +752,28 @@ android-build-aab:
 release-check tag="":
     sh .github/scripts/release-check.sh {{ tag }}
 
+# The static updater manifest the release attaches, over a directory of local
+# artefacts and their .sig files: the same script the desktop-release
+# workflow's github-release job runs, so a local build checks what a tag will
+# publish. Writes latest.json into the directory.
+#
+# Write latest.json for a directory of release artefacts
+updater-manifest version dir base_url="":
+    bash .github/scripts/updater-manifest.sh {{ version }} {{ dir }} {{ base_url }} > {{ dir }}/latest.json
+    cat {{ dir }}/latest.json
+
+# The download mirror's refresh, run against a directory of local artefacts
+# rather than the GitHub release: the same script the
+# teachouse-downloads-refresh unit runs, publishing into `mirror` exactly what
+# the server would serve at /downloads/. The directory must hold a
+# SHA256SUMS.txt naming the files, as a release does.
+#
+# Mirror a directory of local release artefacts into a downloads directory
+downloads-refresh-local dir tag mirror:
+    mkdir -p {{ mirror }}
+    DOWNLOADS_DIR={{ mirror }} DOWNLOADS_LOCAL_RELEASE={{ dir }} DOWNLOADS_LOCAL_TAG={{ tag }} bash nix/downloads-refresh.sh
+    cat {{ mirror }}/downloads.json
+
 # Give tam-auth an environment file, creating one from the template on a
 # machine that has none. An existing auth/.env is never touched.
 auth-env:

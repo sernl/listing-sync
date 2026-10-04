@@ -1,39 +1,95 @@
 ---
 import { platforms, attribution } from '../platforms.js';
+import { consoleUrl } from '../site.js';
 
-/* The two platforms a build is published for, under the sentence that tells a
-   reader an app is involved at all. Each draws its owner's mark where the owner
-   permits one and a plain desktop glyph where it does not, at one size, beside
-   its name.
+/* The platforms a build is published for, under the sentence that tells a
+   reader an app is involved at all, each a link to its download. Each draws
+   its owner's mark where the owner permits one and a plain desktop glyph where
+   it does not, at one size, beside its name.
 
-   No store badge, on either row: all three badge programmes license the badge
-   to link to a listing on that store, and Teachouse has none, so a badge here
-   would state something untrue about where the file came from.
+   No store badge on any chip: a chip whose platform has a store listing and
+   no file links the listing in words, and each badge programme licenses its
+   artwork on conditions of its own.
 
-   The missing platforms are said plainly rather than left for a reader to
-   infer from their absence. */
+   Every chip starts at the console's download cards, which is right with no
+   script and right for a platform with nothing published yet. The script
+   below then reads the download mirror's manifest on this origin and points
+   each chip at its own file. */
+const fallback = `${consoleUrl}/marketplaces#downloads`;
 ---
 
 <div class="platform-row">
 	<ul class="platforms">
 		{
 			platforms.map((platform) => (
-				<li class="platform">
-					{platform.file ? (
-						<img src={`/vendors/${platform.file}`} alt="" width="41" height="24" loading="lazy" decoding="async" />
-					) : (
-						platform.glyph === 'desktop' && (
-							<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-								<rect width="20" height="14" x="2" y="3" rx="2" />
-								<path d="M8 21h8M12 17v4" />
-							</svg>
-						)
-					)}
-					<span>{platform.name}</span>
+				<li>
+					<a class="platform" href={fallback} data-platform={platform.key}>
+						{platform.file ? (
+							<img src={`/vendors/${platform.file}`} alt="" width="41" height="24" loading="lazy" decoding="async" />
+						) : (
+							platform.glyph === 'desktop' && (
+								<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+									<rect width="20" height="14" x="2" y="3" rx="2" />
+									<path d="M8 21h8M12 17v4" />
+								</svg>
+							)
+						)}
+						<span>{platform.name}</span>
+						<span class="platform-soon" data-platform-soon hidden>Coming soon</span>
+					</a>
 				</li>
 			))
 		}
 	</ul>
-	<p class="platform-missing">No iPhone or Mac app yet.</p>
+	<p class="platform-missing">No iPhone or iPad app yet.</p>
 	<p class="platform-note">{attribution.join(' ')}</p>
 </div>
+
+<script>
+	/* The same two guards the console's manifest reader holds
+	   (web/src/lib/pages/marketplaces/api.ts): a file name stays inside
+	   `/downloads/`, and a store link is that platform's own store over
+	   https. The manifest is ours, so neither is a trust boundary; both are
+	   cheap, and both values become an href. */
+	const SAFE_FILE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+	const STORE_HOST = {
+		windows: 'apps.microsoft.com',
+		macos: 'apps.apple.com',
+		android: 'play.google.com'
+	};
+
+	const chips = document.querySelectorAll('a[data-platform]');
+	if (chips.length > 0) {
+		fetch('/downloads/downloads.json', { headers: { accept: 'application/json' } })
+			.then((response) => (response.ok ? response.json() : null))
+			.catch(() => null)
+			.then((manifest) => {
+				// No manifest at all is not "nothing published": it is this page
+				// served somewhere without the mirror, and the console link stands.
+				if (manifest === null || typeof manifest !== 'object') {
+					return;
+				}
+				for (const chip of chips) {
+					const key = chip.getAttribute('data-platform');
+					const entry = manifest[key];
+					const first = entry?.files?.[0]?.file;
+					let store = null;
+					try {
+						const url = new URL(entry?.store);
+						store = url.protocol === 'https:' && url.hostname === STORE_HOST[key] ? url.href : null;
+					} catch {
+						store = null;
+					}
+					if (typeof first === 'string' && SAFE_FILE.test(first)) {
+						chip.setAttribute('href', `/downloads/${first}`);
+						chip.setAttribute('download', '');
+					} else if (store !== null) {
+						chip.setAttribute('href', store);
+						chip.setAttribute('rel', 'noopener');
+					} else {
+						chip.querySelector('[data-platform-soon]')?.removeAttribute('hidden');
+					}
+				}
+			});
+	}
+</script>

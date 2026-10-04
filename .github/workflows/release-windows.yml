@@ -1,0 +1,282 @@
+# The Windows half of a tagged release: the NSIS installer and the MSI, each
+# Authenticode-signed where a signing method is configured and each with its
+# updater signature, plus the Microsoft Store's signed offline installer where
+# signing and a publisher name exist. Called by desktop-release.yml only; the
+# caller decides both from which secrets and variables exist
+# (.github/scripts/release-plan.sh).
+#
+# Runs on a Windows runner because WiX builds an MSI only on Windows and the
+# default signtool path is Windows-only too (docs/notes/design/desktop-distribution.md).
+name: release-windows
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+      tauri-cli-version:
+        type: string
+        required: true
+      signing:
+        description: "artifact (Azure Artifact Signing), pfx (WINDOWS_CERTIFICATE) or none"
+        type: string
+        required: true
+      store:
+        description: Also build the Microsoft Store's offline installer.
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      # Provenance attestation only; inert while this repository is private.
+      id-token: write
+      attestations: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ inputs.version }}
+      SIGNING: ${{ inputs.signing }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/tauri-setup
+        with:
+          tauri-cli-version: ${{ inputs.tauri-cli-version }}
+
+      # Microsoft's own Artifact Signing path: SignTool driven by the signing
+      # library, from learn.microsoft.com/azure/artifact-signing/how-to-signing-integrations.
+      # Tauri's guide suggests a third-party `artifact-signing-cli` instead;
+      # Microsoft is the authority on its own service.
+      - name: install the Artifact Signing client tools
+        if: ${{ inputs.signing == 'artifact' }}
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "https://download.microsoft.com/download/70ad2c3b-761f-4aa9-a9de-e7405aa2b4c1/ArtifactSigningClientTools.msi" -OutFile ArtifactSigningClientTools.msi
+          Start-Process msiexec.exe -Wait -ArgumentList '/I ArtifactSigningClientTools.msi /quiet'
+          Remove-Item ArtifactSigningClientTools.msi
+
+      - name: compose the Artifact Signing sign command
+        id: artifact
+        if: ${{ inputs.signing == 'artifact' }}
+        env:
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+        run: |
+          set -euo pipefail
+          for name in AZURE_SIGNING_ENDPOINT AZURE_SIGNING_ACCOUNT AZURE_SIGNING_PROFILE; do
+            if [ -z "${!name}" ]; then
+              echo "the AZURE_* signing secrets are set but the $name repository variable is not" >&2
+              exit 1
+            fi
+          done
+          # The ExcludeCredentials list forces DefaultAzureCredential past every
+          # interactive and managed-identity method to EnvironmentCredential,
+          # which reads AZURE_TENANT_ID, AZURE_CLIENT_ID and AZURE_CLIENT_SECRET.
+          jq -n \
+            --arg endpoint "$AZURE_SIGNING_ENDPOINT" \
+            --arg account "$AZURE_SIGNING_ACCOUNT" \
+            --arg profile "$AZURE_SIGNING_PROFILE" \
+            '{Endpoint: $endpoint, CodeSigningAccountName: $account, CertificateProfileName: $profile,
+              ExcludeCredentials: ["ManagedIdentityCredential","WorkloadIdentityCredential",
+                "SharedTokenCacheCredential","VisualStudioCredential","VisualStudioCodeCredential",
+                "AzureCliCredential","AzurePowerShellCredential","AzureDeveloperCliCredential",
+                "InteractiveBrowserCredential"]}' > "$RUNNER_TEMP/signing-metadata.json"
+          dlib=$(find "/c/Program Files" "/c/Program Files (x86)" -name 'Azure.CodeSigning.Dlib.dll' -path '*x64*' 2>/dev/null | head -1)
+          signtool=$(find "/c/Program Files (x86)/Windows Kits/10/bin" -name 'signtool.exe' -path '*x64*' 2>/dev/null | sort | tail -1)
+          if [ -z "$dlib" ] || [ -z "$signtool" ]; then
+            echo "could not locate Azure.CodeSigning.Dlib.dll or signtool.exe after installing the client tools" >&2
+            exit 1
+          fi
+          # A three-day certificate validity makes the timestamp mandatory
+          # rather than advisory; the authority is Microsoft's own.
+          command=$(printf '"%s" sign /v /debug /fd SHA256 /tr "http://timestamp.acs.microsoft.com" /td SHA256 /dlib "%s" /dmdf "%s" %%1' \
+            "$(cygpath -w "$signtool")" "$(cygpath -w "$dlib")" "$(cygpath -w "$RUNNER_TEMP/signing-metadata.json")")
+          jq -n --arg cmd "$command" '{bundle: {windows: {signCommand: $cmd}}}' > "$RUNNER_TEMP/signing.json"
+
+      # Tauri's documented PFX path: import into the user store, then name the
+      # certificate by thumbprint and let Tauri run signtool. Since June 2023
+      # the CA/B Forum requires new OV and EV keys to live in hardware, so a
+      # PFX is only possible for a certificate issued before then or for an
+      # HSM vendor that exports one; docs/notes/runbooks/release.md says more.
+      - name: import the signing certificate
+        id: pfx
+        if: ${{ inputs.signing == 'pfx' }}
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pfx = Join-Path $env:RUNNER_TEMP 'certificate.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $password = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
+          $imported = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          Remove-Item $pfx
+          $thumbprint = ($imported | Where-Object { $_.HasPrivateKey } | Select-Object -First 1).Thumbprint
+          if (-not $thumbprint) { throw 'the PFX carried no certificate with a private key' }
+          "thumbprint=$thumbprint" >> $env:GITHUB_OUTPUT
+
+      - name: compose the PFX signing configuration
+        if: ${{ inputs.signing == 'pfx' }}
+        env:
+          THUMBPRINT: ${{ steps.pfx.outputs.thumbprint }}
+          TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL || 'http://timestamp.digicert.com' }}
+        run: |
+          set -euo pipefail
+          jq -n --arg t "$THUMBPRINT" --arg u "$TIMESTAMP_URL" \
+            '{bundle: {windows: {certificateThumbprint: $t, digestAlgorithm: "sha256", timestampUrl: $u}}}' \
+            > "$RUNNER_TEMP/signing.json"
+
+      - name: record an unsigned build
+        if: ${{ inputs.signing == 'none' }}
+        run: |
+          set -euo pipefail
+          echo '{}' > "$RUNNER_TEMP/signing.json"
+          echo "::warning::no Windows signing secrets are set; this release is unsigned and SmartScreen will show no publisher name"
+          echo 'The Windows installers are **unsigned**: no Azure Artifact Signing or PFX secrets are set.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: read the signing configuration
+        id: signing
+        run: |
+          set -euo pipefail
+          printf 'patch=%s\n' "$(jq -c . "$RUNNER_TEMP/signing.json")" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/release-overlay
+        with:
+          cn-application: ${{ vars.CN_APPLICATION }}
+          cn-channel: ${{ vars.CN_CHANNEL }}
+          patch: ${{ steps.signing.outputs.patch }}
+
+      - name: build the Windows bundles
+        working-directory: apps/desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # The key this build verifies entitlement tokens against, embedded by
+          # the crate's build script. The verify job has already refused the
+          # tag if it is unset or malformed.
+          TAM_ENTITLEMENT_PUBLIC_KEY: ${{ vars.TAM_ENTITLEMENT_PUBLIC_KEY }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY is unset; the updater artifacts could not be signed" >&2
+            exit 1
+          fi
+          tauri build --bundles nsis,msi --config ../../release.conf.json
+
+      - name: collect the installers and their updater signatures
+        run: |
+          set -euo pipefail
+          bundle=target/release/bundle
+          out=windows-artifacts
+          mkdir -p "$out"
+          setup="$bundle/nsis/Teachouse_${VERSION}_x64-setup.exe"
+          msi="$bundle/msi/Teachouse_${VERSION}_x64_en-US.msi"
+          for file in "$setup" "$setup.sig" "$msi" "$msi.sig"; do
+            if [ ! -s "$file" ]; then
+              echo "the build left no $file" >&2
+              find "$bundle" -type f >&2 || true
+              exit 1
+            fi
+            cp "$file" "$out/"
+          done
+          ls -l "$out"
+
+      # The Store's own installer: WebView2 bundled offline, because the Store
+      # requires an installer that runs without a network, and no updater
+      # artefacts, because the Store updates what it installed. It reuses the
+      # binary built above and the same signing configuration; `bundle` writes
+      # the same NSIS file name, so the downloadable installer was collected
+      # first. The publisher name must be the Partner Center publisher and must
+      # differ from the product name (https://v2.tauri.app/distribute/microsoft-store/).
+      - name: build the Microsoft Store installer
+        if: ${{ inputs.store }}
+        working-directory: apps/desktop
+        env:
+          TAM_ENTITLEMENT_PUBLIC_KEY: ${{ vars.TAM_ENTITLEMENT_PUBLIC_KEY }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          MSSTORE_PUBLISHER: ${{ vars.MSSTORE_PUBLISHER }}
+        run: |
+          set -euo pipefail
+          if [ -z "$MSSTORE_PUBLISHER" ]; then
+            echo "the MSSTORE_PUBLISHER repository variable is unset; it is the publisher display name Partner Center shows" >&2
+            exit 1
+          fi
+          jq -n --arg p "$MSSTORE_PUBLISHER" '{bundle: {publisher: $p}}' > "$RUNNER_TEMP/store.json"
+          tauri bundle --bundles nsis --config ../../release.conf.json \
+            --config src-tauri/tauri.microsoftstore.conf.json --config "$RUNNER_TEMP/store.json"
+          cp "../../target/release/bundle/nsis/Teachouse_${VERSION}_x64-setup.exe" \
+            "../../windows-artifacts/Teachouse_${VERSION}_x64_store-setup.exe"
+
+      # Authenticode, checked rather than assumed: a sign command that ran and
+      # signed nothing would otherwise ship as a signed release.
+      - name: verify the Authenticode signatures
+        if: ${{ inputs.signing != 'none' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $failed = $false
+          Get-ChildItem windows-artifacts -Include *.exe,*.msi -Recurse | ForEach-Object {
+            $signature = Get-AuthenticodeSignature $_.FullName
+            "{0}: {1} ({2})" -f $_.Name, $signature.Status, $signature.SignerCertificate.Subject
+            if ($signature.Status -ne 'Valid') { $failed = $true }
+          }
+          if ($failed) { throw 'an installer is not validly signed' }
+
+      - name: attest build provenance
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            windows-artifacts/*.exe
+            windows-artifacts/*.msi
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-x86_64
+          path: windows-artifacts
+          if-no-files-found: error
+          retention-days: 30
+
+      # Named files rather than `--framework tauri`, which looks for bundles
+      # beneath the Tauri config while this workspace member writes them to the
+      # workspace root (run 33730896941). The NSIS installer is the update
+      # payload — the one Tauri's passive install mode drives without an
+      # elevation prompt — so it alone carries an update platform; the MSI is a
+      # download only. The Store installer never goes to the Cloud.
+      - name: upload the NSIS installer to CrabNebula Cloud
+        uses: crabnebula-dev/cloud-release@1a8803698ba41de6b23e42abc5dcc3721308233c # action-v0.2.6
+        with:
+          command: >-
+            release upload ${{ vars.CN_APPLICATION }} ${{ inputs.version }}
+            --file windows-artifacts/Teachouse_${{ inputs.version }}_x64-setup.exe
+            --signature windows-artifacts/Teachouse_${{ inputs.version }}_x64-setup.exe.sig
+            --update-platform windows-x86_64 --public-platform nsis-x86_64
+            ${{ vars.CN_CHANNEL && format('--channel {0}', vars.CN_CHANNEL) || '' }}
+          api-key: ${{ secrets.CN_API_KEY }}
+          working-directory: .
+      - name: upload the MSI installer to CrabNebula Cloud
+        uses: crabnebula-dev/cloud-release@1a8803698ba41de6b23e42abc5dcc3721308233c # action-v0.2.6
+        with:
+          command: >-
+            release upload ${{ vars.CN_APPLICATION }} ${{ inputs.version }}
+            --file windows-artifacts/Teachouse_${{ inputs.version }}_x64_en-US.msi
+            --public-platform wix-x86_64
+            ${{ vars.CN_CHANNEL && format('--channel {0}', vars.CN_CHANNEL) || '' }}
+          api-key: ${{ secrets.CN_API_KEY }}
+          working-directory: .

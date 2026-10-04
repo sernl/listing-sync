@@ -1100,10 +1100,12 @@ pub(crate) fn content_type(file: &str) -> &'static str {
         "ttf" => "font/ttf",
         "pdf" => "application/pdf",
         "mp4" => "video/mp4",
-        // The four the downloads tier serves. Named rather than left to the
+        // The six the downloads tier serves. Named rather than left to the
         // octet-stream default so a browser's own download prompt says what
         // the file is.
         "exe" => "application/vnd.microsoft.portable-executable",
+        "msi" => "application/x-msi",
+        "dmg" => "application/x-apple-diskimage",
         "apk" => "application/vnd.android.package-archive",
         "appimage" => "application/vnd.appimage",
         "deb" => "application/vnd.debian.binary-package",

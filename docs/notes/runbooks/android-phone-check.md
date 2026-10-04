@@ -14,8 +14,8 @@ Marketplace sign-in must run from the authenticated control-plane origin; do not
 
 ## Before you start
 
-Open the release page for the version you are testing and confirm it carries two files: `Teachouse_<version>_universal.apk` and `SHA256SUMS-android.txt`.
-Releases up to 0.14.0 carried `Teachouse_<version>_arm64.apk` instead.
+Open the release page for the version you are testing and confirm it carries `Teachouse_<version>_universal.apk` and a `SHA256SUMS.txt` that names it.
+Releases up to 0.20.0 carried the APK's checksum in a separate `SHA256SUMS-android.txt`, and releases up to 0.14.0 carried `Teachouse_<version>_arm64.apk` instead.
 
 If either file is missing, inspect the complete tagged-release logs before installing anything.
 Missing signing credentials, a build failure and a skipped release job are distinct failures; do not substitute an unsigned or debug APK for an existing signed installation.
@@ -45,7 +45,7 @@ Read the whole sentence: Android's installer names the failure class after "App 
 | --- | --- | --- |
 | "…as package conflicts with an existing package" | A Teachouse signed with a **different certificate** is already installed. Every release is signed with the one release key, so the installed copy is a debug build. | Uninstall first, below. |
 | "…as app isn't compatible with your phone/tablet" | The device is below Android 7.0, the APK is for another processor, or the installed copy has a **higher** version than this APK. | Install the newest release. On a release installation, never uninstall to downgrade. |
-| "…as package appears to be invalid" | The download is truncated or not the release file. | Download again; compare its SHA-256 with `SHA256SUMS-android.txt`. |
+| "…as package appears to be invalid" | The download is truncated or not the release file. | Download again; compare its SHA-256 with the APK's line in `SHA256SUMS.txt`. |
 | A Samsung sheet naming **Auto Blocker** | Samsung's Auto Blocker (One UI 6 and newer) refuses every app not from Play or Galaxy Store. It is on by default on devices that shipped with One UI 6.1.1. | Settings → Security and privacy → Auto Blocker → off, install, then turn it back on. |
 
 With a cable, `adb -s SERIAL install -r APK` prints the underlying code instead of a sentence:
