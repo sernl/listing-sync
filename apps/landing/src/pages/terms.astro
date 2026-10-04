@@ -9,7 +9,7 @@ import { supportEmail } from '../site.js';
    also the version every sign-up's agreement records, so the date printed
    here is the one a person agreed to. Moving it is part of changing the
    terms (crates/tam-api/src/account_consent.rs), asks every signed-in person
-   to agree again, and section 18 says how a change is announced. */
+   to agree again, and section 20 says how a change is announced. */
 const effective = new Date(`${TERMS_VERSION}T00:00:00Z`).toLocaleDateString('en-NZ', {
 	day: 'numeric',
 	month: 'long',
@@ -23,7 +23,7 @@ const updated = effective;
 const freeName = free.name;
 const freeMoves = free.capabilities.free_moves_lifetime;
 
-/* The yearly refund in section 9, worked on Pro's yearly price from the same
+/* The yearly refund in section 11, worked on Pro's yearly price from the same
    table: asking during the fourth month leaves 8 whole months unused, and one
    month's fee is kept, so 7 twelfths come back. */
 const pro = plans.find((plan) => plan.id === 'subscriber');
@@ -58,8 +58,10 @@ const exampleRefund = dollars(Math.max(0, (pro.yearly_cents * (exampleUnused - 1
 					<li><a href="#what">What Teachouse is</a></li>
 					<li><a href="#not">What Teachouse is not</a></li>
 					<li><a href="#account">Your account</a></li>
+					<li><a href="#one-account">One person, one free account</a></li>
 					<li><a href="#content">Your resources</a></li>
 					<li><a href="#use">Using Teachouse fairly</a></li>
+					<li><a href="#automated">Automated access</a></li>
 					<li><a href="#free">The free plan</a></li>
 					<li><a href="#billing">Plans, packs and payment</a></li>
 					<li><a href="#refunds">Refunds</a></li>
@@ -152,21 +154,58 @@ const exampleRefund = dollars(Math.max(0, (pro.yearly_cents * (exampleUnused - 1
 			<ul>
 				<li>You must be at least 18 to create or use a Teachouse account.</li>
 				<li>
-					Each person may hold one Teachouse account. Please don't open extra accounts to get more
-					free moves or previews.
+					Each person may hold one Teachouse account. Section 5 says what happens to extra ones.
 				</li>
 				<li>Give us true details, and keep your email address up to date so our notices reach you.</li>
 				<li>
 					Your password and passkeys are for you. If you let someone help run your shop in your
 					account, you are responsible for what they do there.
 				</li>
+			</ul>
+
+			<h2 id="one-account">5. One person, one free account</h2>
+			<p>
+				<strong>In short:</strong> one free account per person and free moves once per shop. Extra
+				accounts made to get more for free are abuse, and we can close them.
+			</p>
+			<ul>
 				<li>
-					Each marketplace shop can be connected to only one Teachouse account at a time, and the
-					free moves come once per shop.
+					Each person may hold one Teachouse account. The free moves come once, and never again for
+					a shop that has had them, whichever account it is connected to. Each shop can be connected
+					to only one Teachouse account at a time.
+				</li>
+				<li>
+					It is abuse to create more than one account to get more free moves or previews, to share a
+					shop between accounts or move it to a new one to get its free moves again, or to open an
+					account to get around a limit or a suspension.
+				</li>
+				<li>
+					To spot abuse we compare a few signals between accounts, such as hashed network addresses,
+					device IDs, shop IDs and card fingerprints, as the{' '}
+					<a class="link" href="/privacy/#abuse">Privacy Policy</a> describes. A person looks at
+					every flag before we act on it.
+				</li>
+				<li>
+					If we find abuse, we may warn you, remove free moves, stop new marketplace connections,
+					or suspend or ban the account. A ban can cover the email address, the linked marketplace
+					shops, the devices and the payment cards, and we may refuse them on any other account,
+					including a new sign-up.
+					<details class="explain">
+						<summary>Explain</summary>
+						<p>
+							While an account is suspended, its moves and Move Packs are frozen. If we close it for
+							abuse, its unused moves and Move Packs are forfeited, and section 11 doesn't apply to
+							them unless the law says otherwise.
+						</p>
+						<p>
+							We'll tell you what we found and why. If you think we got it wrong, reply to that
+							email and we'll look again.
+						</p>
+					</details>
 				</li>
 			</ul>
 
-			<h2 id="content">5. Your resources</h2>
+			<h2 id="content">6. Your resources</h2>
 			<p>
 				<strong>In short:</strong> what you make stays yours. You let us handle it only to run
 				Teachouse for you, and you promise you have the right to sell it.
@@ -202,7 +241,7 @@ const exampleRefund = dollars(Math.max(0, (pro.yearly_cents * (exampleUnused - 1
 				</li>
 			</ul>
 
-			<h2 id="use">6. Using Teachouse fairly</h2>
+			<h2 id="use">7. Using Teachouse fairly</h2>
 			<p>
 				<strong>In short:</strong> use Teachouse for your own shop, within the law and the
 				marketplaces' rules.
@@ -231,7 +270,40 @@ const exampleRefund = dollars(Math.max(0, (pro.yearly_cents * (exampleUnused - 1
 				That helps, but following each marketplace's rules is still your responsibility.
 			</p>
 
-			<h2 id="free">7. The free plan</h2>
+			<h2 id="automated">8. Automated access</h2>
+			<p>
+				<strong>In short:</strong> Teachouse is for people. No scraping, no bots and no AI training,
+				apart from our own app.
+			</p>
+			<p>You must not, and must not let anyone or anything else:</p>
+			<ul>
+				<li>
+					scrape, crawl or bulk-download our website, the console or the API, or the listings of
+					other sellers that Teachouse shows you;
+				</li>
+				<li>
+					use anything from Teachouse, including our pages, guides and other sellers' listings, to
+					train, fine-tune or feed an AI or machine-learning model, or to build a dataset;
+				</li>
+				<li>
+					reach the console or the API with anything but the Teachouse app or an ordinary browser,
+					such as bots, scripts, headless browsers or AI agents;
+				</li>
+				<li>
+					use the API other than through the console and the Teachouse app, unless we have issued
+					you an API key for it, and then only as that key allows;
+				</li>
+				<li>
+					give your sign-in, session or API key to a tool, a service, or anyone who isn't helping you
+					run your shop, or sell or lend access to your account.
+				</li>
+			</ul>
+			<p>
+				We may rate-limit, challenge or block automated traffic, and suspend or close an account
+				that uses it (section 16). Our robots.txt and page tags say the same thing to crawlers.
+			</p>
+
+			<h2 id="free">9. The free plan</h2>
 			<p>
 				<strong>In short:</strong> {freeName} is free for as long as you like, within its limits.
 			</p>
@@ -250,7 +322,7 @@ const exampleRefund = dollars(Math.max(0, (pro.yearly_cents * (exampleUnused - 1
 				</li>
 			</ul>
 
-			<h2 id="billing">8. Plans, packs and payment</h2>
+			<h2 id="billing">10. Plans, packs and payment</h2>
 			<p>
 				<strong>In short:</strong> prices are in US dollars, paid through Stripe. Plans renew until
 				you cancel; packs are one-off.
@@ -306,7 +378,7 @@ const exampleRefund = dollars(Math.max(0, (pro.yearly_cents * (exampleUnused - 1
 				</li>
 			</ul>
 
-			<h2 id="refunds">9. Refunds</h2>
+			<h2 id="refunds">11. Refunds</h2>
 			<p>
 				<strong>In short:</strong> an unused Move Pack is refunded in full within 14 days, a yearly
 				plan is refunded for its unused whole months less one month's fee, and a monthly plan isn't
@@ -329,7 +401,8 @@ const exampleRefund = dollars(Math.max(0, (pro.yearly_cents * (exampleUnused - 1
 						<summary>Explain</summary>
 						<p>
 							The refund is the yearly price × (unused whole months − 1) ÷ 12, and never less than
-							zero. A month counts as used once it has started.
+							zero. A month counts as used once it has started. Months are counted in New Zealand
+							time from the day your yearly plan started.
 						</p>
 						<p>
 							For example, {pro.name} yearly costs {exampleYearly}. You ask for a refund during
@@ -341,14 +414,14 @@ const exampleRefund = dollars(Math.max(0, (pro.yearly_cents * (exampleUnused - 1
 					</details>
 				</li>
 				<li>
-					To ask for a refund, email{' '}
+					To ask for a refund, press Ask for a refund in Account → Billing, or email{' '}
 					<a class="link" href={`mailto:${supportEmail}`}>{supportEmail}</a> from the address you
-					sign in with, and tell us what you bought and when. Refunds go back to the card you paid
+					sign in with and tell us what you bought and when. Refunds go back to the card you paid
 					with.
 				</li>
 			</ul>
 
-			<h2 id="marketplaces">10. Marketplaces we don't control</h2>
+			<h2 id="marketplaces">12. Marketplaces we don't control</h2>
 			<p>
 				<strong>In short:</strong> marketplaces can change or block things at any time, so we can't
 				promise every listing will publish or stay in sync.
@@ -373,7 +446,7 @@ const exampleRefund = dollars(Math.max(0, (pro.yearly_cents * (exampleUnused - 1
 				</li>
 			</ul>
 
-			<h2 id="changes-service">11. Changes and availability</h2>
+			<h2 id="changes-service">13. Changes and availability</h2>
 			<p>
 				<strong>In short:</strong> we keep Teachouse running and improve it over time, but we can't
 				promise it will never be down.
@@ -397,7 +470,7 @@ const exampleRefund = dollars(Math.max(0, (pro.yearly_cents * (exampleUnused - 1
 				</li>
 			</ul>
 
-			<h2 id="privacy">12. Your information</h2>
+			<h2 id="privacy">14. Your information</h2>
 			<p>
 				<strong>In short:</strong> the Privacy Policy explains what we collect and why, under the New
 				Zealand Privacy Act 2020.
@@ -409,7 +482,7 @@ const exampleRefund = dollars(Math.max(0, (pro.yearly_cents * (exampleUnused - 1
 				resources, you are responsible for having the right to do so.
 			</p>
 
-			<h2 id="security">13. Keeping your account safe</h2>
+			<h2 id="security">15. Keeping your account safe</h2>
 			<p>
 				<strong>In short:</strong> we protect our side; you protect your sign-in and your devices.
 			</p>
@@ -435,16 +508,16 @@ const exampleRefund = dollars(Math.max(0, (pro.yearly_cents * (exampleUnused - 1
 				</li>
 			</ul>
 
-			<h2 id="ending">14. Ending your account</h2>
+			<h2 id="ending">16. Ending your account</h2>
 			<p>
 				<strong>In short:</strong> you can leave any time. We can close an account that breaks these
 				terms, and where we can, we'll give you time to take your catalogue with you.
 			</p>
 			<ul>
 				<li>
-					You can stop using Teachouse at any time. Cancel any plan in Account → Billing, then email
-					us to close your account. We delete your account and catalogue as the Privacy Policy
-					describes.
+					You can stop using Teachouse at any time. Delete your account yourself at the foot of
+					Account settings: it cancels any plan straight away, and we delete your account and
+					catalogue as the Privacy Policy describes.
 				</li>
 				<li>
 					Before you go, you can export your catalogue to a spreadsheet and download files you
@@ -463,12 +536,12 @@ const exampleRefund = dollars(Math.max(0, (pro.yearly_cents * (exampleUnused - 1
 					that are live stay live, and you manage them on the marketplace.
 				</li>
 				<li>
-					Sections that by their nature should continue, such as 5, 15, 16, 17 and 19, continue after
+					Sections that by their nature should continue, such as 6, 17, 18, 19 and 21, continue after
 					your account ends.
 				</li>
 			</ul>
 
-			<h2 id="law">15. New Zealand consumer law</h2>
+			<h2 id="law">17. New Zealand consumer law</h2>
 			<p>
 				<strong>In short:</strong> New Zealand law gives consumers rights these terms can't take away.
 				Business customers agree to contract out of some of them.
@@ -486,7 +559,7 @@ const exampleRefund = dollars(Math.max(0, (pro.yearly_cents * (exampleUnused - 1
 				</li>
 			</ul>
 
-			<h2 id="liability">16. What we're responsible for</h2>
+			<h2 id="liability">18. What we're responsible for</h2>
 			<p>
 				<strong>In short:</strong> we provide Teachouse as it is, and our total liability is limited
 				to what you paid us in the last 12 months, or NZ$100, whichever is greater.
@@ -512,11 +585,11 @@ const exampleRefund = dollars(Math.max(0, (pro.yearly_cents * (exampleUnused - 1
 				</li>
 				<li>
 					None of this limits liability that New Zealand law doesn't allow us to limit, including
-					your rights under section 15, or liability for our fraud.
+					your rights under section 17, or liability for our fraud.
 				</li>
 			</ul>
 
-			<h2 id="indemnity">17. What you're responsible for</h2>
+			<h2 id="indemnity">19. What you're responsible for</h2>
 			<p>
 				<strong>In short:</strong> if your content or your breach of these terms gets us into trouble,
 				you cover the reasonable cost.
@@ -528,7 +601,7 @@ const exampleRefund = dollars(Math.max(0, (pro.yearly_cents * (exampleUnused - 1
 				problem ourselves, and we will tell you promptly about any such claim.
 			</p>
 
-			<h2 id="changes">18. Changes to these terms</h2>
+			<h2 id="changes">20. Changes to these terms</h2>
 			<p>
 				<strong>In short:</strong> we'll tell you before a change that matters, and using Teachouse
 				after it takes effect means you accept it.
@@ -548,7 +621,7 @@ const exampleRefund = dollars(Math.max(0, (pro.yearly_cents * (exampleUnused - 1
 				</li>
 			</ul>
 
-			<h2 id="disputes">19. If something goes wrong between us</h2>
+			<h2 id="disputes">21. If something goes wrong between us</h2>
 			<p>
 				<strong>In short:</strong> talk to us first. These terms are governed by New Zealand law, and
 				New Zealand courts decide disputes.
@@ -574,7 +647,7 @@ const exampleRefund = dollars(Math.max(0, (pro.yearly_cents * (exampleUnused - 1
 				</li>
 			</ul>
 
-			<h2 id="contact">20. Contact</h2>
+			<h2 id="contact">22. Contact</h2>
 			<p>
 				<strong>In short:</strong> email is the way to reach us.
 			</p>
@@ -584,7 +657,7 @@ const exampleRefund = dollars(Math.max(0, (pro.yearly_cents * (exampleUnused - 1
 				email address on your account.
 			</p>
 
-			<h2 id="questions">21. Questions people ask</h2>
+			<h2 id="questions">23. Questions people ask</h2>
 			<div class="panel">
 				<div class="faq">
 					<details class="qa">
@@ -593,7 +666,7 @@ const exampleRefund = dollars(Math.max(0, (pro.yearly_cents * (exampleUnused - 1
 							Yes, if you are allowed to act for the school and to sell what you publish. Some
 							employment agreements give the school rights in resources made for work, so check
 							yours. When you use Teachouse for a school or business, you agree to these terms for
-							it, and section 15 applies to it as a business.
+							it, and section 17 applies to it as a business.
 						</p>
 					</details>
 					<details class="qa">
@@ -666,7 +739,7 @@ const exampleRefund = dollars(Math.max(0, (pro.yearly_cents * (exampleUnused - 1
 							Yes, for a Move Pack you haven't used, within 14 days of buying it, and for the unused
 							whole months of a yearly plan, less one month's fee. A monthly plan isn't refunded once
 							its month has started; cancelling stops the next renewal.
-							<a class="link" href="#refunds">Section 9</a> has the details.
+							<a class="link" href="#refunds">Section 11</a> has the details.
 						</p>
 					</details>
 					<details class="qa">

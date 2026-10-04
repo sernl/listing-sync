@@ -116,7 +116,7 @@ impl Offboarding for AuthOffboarding {
 
     fn farewell<'a>(&'a self, to: &'a Departing) -> OffboardingFuture<'a, ()> {
         Box::pin(async move {
-            let mail = compose_goodbye(to.name.as_deref(), &self.console_url);
+            let mail = compose_goodbye(to.first_name(), &self.console_url);
             self.relay
                 .send(&to.email, &mail)
                 .await
@@ -167,6 +167,15 @@ mod tests {
             verdict(200, &nameless),
             Ok(Reauthentication::Confirmed(Departing { name: None, .. }))
         ));
+        let full = Departing {
+            email: "seller@example.test".to_owned(),
+            name: Some("Aroha Te Whare".to_owned()),
+        };
+        assert_eq!(
+            full.first_name(),
+            Some("Aroha"),
+            "the goodbye greets by first name"
+        );
     }
 
     #[test]
