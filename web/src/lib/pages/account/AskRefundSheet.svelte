@@ -45,7 +45,9 @@
 		},
 		onError: (failure: Error) => {
 			refusal =
-				failure instanceof ApiFailure ? failure.message : 'Your request did not reach us. Try again.';
+				failure instanceof ApiFailure
+					? failure.message
+					: 'Your request did not reach us. Try again.';
 		}
 	}));
 

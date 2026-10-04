@@ -101,7 +101,7 @@ pub use duplicates::{
 pub use entitlement::{
     spend_monthly_in, Accrual, CounterWindow, EntitlementRepo, Grant, GrantRecord, GrantedBy,
     MonthlyCharge, MonthlyKind, MonthlySpend, MoveBalance, MoveCredit, MoveSource, NewGrant,
-    StorefrontAllowance, Usage,
+    PackUse, StorefrontAllowance, Usage,
 };
 pub use erasure::{
     DeletionRecord, Erased, ErasureRefusal, ErasureRepo, HeldSubscription, Standing,
@@ -185,9 +185,11 @@ pub use operators::{OperatorEvent, OperatorRecord, OperatorRepo};
 pub use org::{OrgRecord, OrgRepo, OrgWrite};
 pub use overrides::OverrideRepo;
 pub use payments::{
-    ClaimedRefundMail, MailRequest, ObservedRefund, PaymentBackofficeRepo, PaymentEvent,
-    PaymentKind, PaymentRepo, Refund, RefundMailOutcome, RefundStatus, AUTO_REFUND_MAIL_SETTING,
-    REFUND_MAIL_ATTEMPTS, SYNC_EVENT_PREFIX,
+    ClaimedRefundMail, Decision, MailRequest, NewRefundRequest, ObservedRefund,
+    PaymentBackofficeRepo, PaymentEvent, PaymentKind, PaymentRepo, Refund, RefundDecision,
+    RefundMailOutcome, RefundRequest, RefundRequestStatus, RefundRequestWrite, RefundStatus,
+    AUTO_REFUND_MAIL_SETTING, REFUND_DECLINED_TOPIC, REFUND_MAIL_ATTEMPTS, REFUND_REQUESTED_TOPIC,
+    SYNC_EVENT_PREFIX,
 };
 pub use product::{
     fill_rights, fill_tes_licence, has_live_payload, insert_product, live_count_in, offer_cover,

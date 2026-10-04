@@ -110,14 +110,17 @@ const TENANT_TABLES: [&str; 77] = [
 /// application pool. payment_event and refund are the operators' payments
 /// ledger (migration 0102): written by the signed Stripe webhook, which holds
 /// no tenant pin, and read only by operator routes; their org_id is a
-/// cross-reference, not a fence. account_consent is what a person agreed to
+/// cross-reference, not a fence. refund_request is a seller's "Ask for a
+/// refund" (migration 0107), global for the same reason: operator routes list
+/// and decide it unpinned, and the seller's own routes reach only their
+/// organisation's rows by an explicit predicate. account_consent is what a person agreed to
 /// at sign-up (migration 0103): keyed on the identity subject, written before
 /// any organisation exists, and owned by no tenant. account_deletion is what a
 /// seller's own deletion leaves behind (migration 0104), written after their
 /// organisation is gone, so there is no tenant left to fence it by. The rest
 /// are genuinely global: reference data, the canonical taxonomy, the fleet
 /// kill switch, and sqlx's migration bookkeeping.
-const GLOBAL_TABLES: [&str; 25] = [
+const GLOBAL_TABLES: [&str; 26] = [
     "_sqlx_migrations",
     "account_consent",
     "account_deletion",
@@ -140,6 +143,7 @@ const GLOBAL_TABLES: [&str; 25] = [
     "projection_edge",
     "projection_no_counterpart",
     "refund",
+    "refund_request",
     "site_setting",
     "standards_node",
     "user_session",

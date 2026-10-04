@@ -23,7 +23,7 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 221] = [
+pub const ROUTES: [Route; 227] = [
     Route {
         method: "get",
         path: "/healthz",
@@ -83,6 +83,21 @@ pub const ROUTES: [Route; 221] = [
         method: "post",
         path: "/{version}/billing/webhook",
         summary: "Stripe's event endpoint; the signature is the authentication",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/billing/refund-requests",
+        summary: "The calling organisation's payments of the last 400 days with something left to refund, and its refund requests",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/billing/refund-requests",
+        summary: "Ask for the refund policy's amount on one of the calling organisation's payments; mails the operators",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/billing/payments/{charge}/refund-quote",
+        summary: "What the refund policy gives today on one of the calling organisation's payments, and why",
     },
     Route {
         method: "get",
@@ -1067,7 +1082,22 @@ pub const ROUTES: [Route; 221] = [
     Route {
         method: "post",
         path: "/{version}/admin/payments/charges/{charge}/refunds",
-        summary: "Operator: refund part or all of one charge in Stripe, idempotent by request id; optionally emails the customer",
+        summary: "Operator: refund part or all of one charge in Stripe, idempotent by request id, recording the policy quote beside the amount; optionally emails the customer and ends a yearly plan",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/admin/payments/charges/{charge}/quote",
+        summary: "Operator: what the refund policy gives today on one charge, traced to the plan or Move Pack it paid for",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/payments/refund-requests/{id}/approve",
+        summary: "Operator: approve a seller's refund request, issuing the quoted refund and, for a yearly plan, ending it today",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/admin/payments/refund-requests/{id}/decline",
+        summary: "Operator: decline a seller's refund request and email them the reason",
     },
     Route {
         method: "post",

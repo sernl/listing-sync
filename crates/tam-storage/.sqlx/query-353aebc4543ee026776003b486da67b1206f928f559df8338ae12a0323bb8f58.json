@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO refund (id, org_id, provider_refund_id, charge_id, amount_cents, currency, status, reason, note, issued_by, issued_by_label, mail_requested_at, mail_due_at, created_at, updated_at, policy_basis, quoted_cents, override_reason) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12, $13, $13, $14, $15, $16) ON CONFLICT (provider_refund_id) DO UPDATE SET id = EXCLUDED.id, org_id = coalesce(refund.org_id, EXCLUDED.org_id), reason = coalesce(refund.reason, EXCLUDED.reason), note = EXCLUDED.note, issued_by = EXCLUDED.issued_by, issued_by_label = EXCLUDED.issued_by_label, policy_basis = EXCLUDED.policy_basis, quoted_cents = EXCLUDED.quoted_cents, override_reason = EXCLUDED.override_reason, mail_requested_at = CASE WHEN refund.mail_sent_at IS NULL THEN EXCLUDED.mail_requested_at ELSE refund.mail_requested_at END, mail_due_at = CASE WHEN refund.mail_sent_at IS NULL THEN EXCLUDED.mail_due_at ELSE refund.mail_due_at END WHERE refund.issued_by IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Uuid",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Text",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "353aebc4543ee026776003b486da67b1206f928f559df8338ae12a0323bb8f58"
+}
