@@ -38,6 +38,7 @@
 	let refusal = $state<string | null>(null);
 
 	const problem = $derived(tried ? declineProblem(reason) : null);
+	const approving = $derived(kind === 'approve');
 
 	$effect(() => {
 		if (element !== null && !element.open) element.showModal();
@@ -121,8 +122,8 @@
 			</Button>
 			<Button
 				tier="primary"
-				danger={kind === 'approve'}
-				icon={kind === 'approve' ? 'check' : 'x'}
+				danger={approving}
+				icon={approving ? 'check' : 'x'}
 				disabled={working}
 				reason={working ? 'Sending.' : undefined}
 				onclick={decide}

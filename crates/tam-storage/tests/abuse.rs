@@ -10,7 +10,7 @@
 use sqlx::PgPool;
 use tam_secrets::Kek;
 use tam_storage::{
-    AbuseAction, AbuseBackofficeRepo, AbuseRepo, BannedKind, ConnectionRepo, Decision,
+    AbuseAction, AbuseBackofficeRepo, AbuseDecision, AbuseRepo, BannedKind, ConnectionRepo,
     DeviceRegistration, DeviceRepo, DeviceSessionReport, DeviceSessionStatus, EntitlementRepo,
     FlagKind, SessionRepo, SessionToken, Signal, SignalKind, StorageError,
 };
@@ -312,7 +312,7 @@ async fn the_scorer_flags_shared_values_once_and_respects_a_dismissal(app: PgPoo
         .await
         .expect("the flag reads");
     abuse
-        .decide(Decision {
+        .decide(AbuseDecision {
             flag: Uuid(*flag.as_bytes()),
             action: AbuseAction::None,
             reason: Some("Siblings sharing a laptop"),
@@ -432,7 +432,7 @@ async fn a_ban_suspends_refuses_its_shop_and_lifts_cleanly(app: PgPool) {
     let flag = Uuid(*flag.as_bytes());
     let email = [0xE1; 32];
     abuse
-        .decide(Decision {
+        .decide(AbuseDecision {
             flag,
             action: AbuseAction::Ban,
             reason: Some("Ten accounts on one shop"),
@@ -494,7 +494,7 @@ async fn a_ban_suspends_refuses_its_shop_and_lifts_cleanly(app: PgPool) {
     );
 
     abuse
-        .decide(Decision {
+        .decide(AbuseDecision {
             flag,
             action: AbuseAction::None,
             reason: None,
@@ -531,7 +531,7 @@ async fn a_limit_withholds_free_moves_and_new_connections(app: PgPool) {
         .await
         .expect("the flag reads");
     abuse
-        .decide(Decision {
+        .decide(AbuseDecision {
             flag: Uuid(*flag.as_bytes()),
             action: AbuseAction::Limit,
             reason: None,

@@ -23,8 +23,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use tam_storage::{
-    AbuseAction, AbuseBackofficeRepo, AbuseOrgDetail, AbuseRepo, AbuseSearch, BannedKind, Decision,
-    DeviceRepo, FlagKind, FlaggedOrg, Signal, SignalKind, SIGNUPS_PER_IP_PER_DAY,
+    AbuseAction, AbuseBackofficeRepo, AbuseDecision, AbuseOrgDetail, AbuseRepo, AbuseSearch,
+    BannedKind, DeviceRepo, FlagKind, FlaggedOrg, Signal, SignalKind, SIGNUPS_PER_IP_PER_DAY,
 };
 use tam_types::{Marketplace, OrgId, Timestamp, Uuid};
 
@@ -746,7 +746,7 @@ pub(crate) async fn act(
     } else {
         Vec::new()
     };
-    repo.decide(Decision {
+    repo.decide(AbuseDecision {
         flag,
         action,
         reason: reason.as_deref(),

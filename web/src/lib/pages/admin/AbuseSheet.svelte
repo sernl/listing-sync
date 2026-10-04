@@ -240,11 +240,12 @@
 					<div class="ab-acts">
 						{#each ACTIONS as action (action)}
 							{@const same = actionIsCurrent(action, view)}
+							{@const banning = action === 'ban'}
 							<Button
 								small
-								tier={action === 'ban' ? 'outline' : undefined}
-								danger={action === 'ban'}
-								icon={action === 'ban' ? 'lock' : undefined}
+								tier={banning ? 'outline' : undefined}
+								danger={banning}
+								icon={banning ? 'lock' : undefined}
 								disabled={acting.isPending || same}
 								reason={same
 									? 'It already stands there.'

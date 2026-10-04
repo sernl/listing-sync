@@ -224,7 +224,7 @@ pub struct Signal<'a> {
 
 /// An operator's decision about the organisation a flag names.
 #[derive(Debug, Clone, Copy)]
-pub struct Decision<'a> {
+pub struct AbuseDecision<'a> {
     pub flag: Uuid,
     pub action: AbuseAction,
     pub reason: Option<&'a str>,
@@ -635,8 +635,8 @@ impl AbuseRepo {
     /// moves; a ban ends every session the organisation holds and writes what
     /// it refuses; any other decision about a banned organisation lifts the
     /// ban and deletes what it refused.
-    pub async fn decide(&self, decision: Decision<'_>) -> Result<Option<OrgId>, StorageError> {
-        let Decision {
+    pub async fn decide(&self, decision: AbuseDecision<'_>) -> Result<Option<OrgId>, StorageError> {
+        let AbuseDecision {
             flag,
             action,
             reason,
@@ -863,9 +863,9 @@ impl AbuseRepo {
 async fn ban_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     org: OrgId,
-    decision: &Decision<'_>,
+    decision: &AbuseDecision<'_>,
 ) -> Result<(), StorageError> {
-    let Decision {
+    let AbuseDecision {
         flag,
         reason,
         at,

@@ -321,7 +321,7 @@ a.mp-mark:hover {
   padding: 2px var(--s-2);
   border-radius: var(--r-pill);
   background: var(--accent-soft);
-  color: var(--accent-ink);
+  color: var(--primary);
   font-size: 12px;
   font-weight: 600;
 }

@@ -97,6 +97,12 @@ const STRIPE_SECRET_KEY_FLAG: &str = "--stripe-secret-key";
 /// interpret.
 const STRIPE_PRICE_MAP_FLAG: &str = "--stripe-price-map";
 
+/// Where the outbound Stripe calls go instead of `https://api.stripe.com`:
+/// a local double, for a development stack that exercises checkout, the
+/// payments ledger and refunds without reaching Stripe. Given only with
+/// [`STRIPE_SECRET_KEY_FLAG`]; production never passes it.
+const STRIPE_API_BASE_FLAG: &str = "--stripe-api-base";
+
 /// The PostHog project key this deployment captures product analytics under.
 ///
 /// Inline rather than a path, unlike the two secrets above: the project key
@@ -932,6 +938,8 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     let mut posthog_project_id = None;
     let mut posthog_personal_key_file = None;
     let mut posthog_api_host = tam_api::admin_analytics::DEFAULT_API_HOST.to_owned();
+    let mut stripe_key = None;
+    let mut stripe_api_base = None;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         if argument == DISCLOSE_FLAG {
@@ -963,9 +971,13 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
             let path = arguments
                 .next()
                 .ok_or("--stripe-secret-key needs a path argument")?;
-            config.stripe = Some(tam_api::stripe::Client::new(SecretKey::new(read_secret(
-                &path,
-            )?)));
+            stripe_key = Some(SecretKey::new(read_secret(&path)?));
+        } else if argument == STRIPE_API_BASE_FLAG {
+            stripe_api_base = Some(
+                arguments
+                    .next()
+                    .ok_or("--stripe-api-base needs a url argument")?,
+            );
         } else if argument == STRIPE_PRICE_MAP_FLAG {
             let path = arguments
                 .next()
@@ -1119,6 +1131,15 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     let bind = match positional.get(1) {
         Some(raw) => raw.parse()?,
         None => DEFAULT_BIND,
+    };
+    // A base with no key would point nothing anywhere.
+    config.stripe = match (stripe_key, stripe_api_base) {
+        (Some(key), Some(base)) => Some(tam_api::stripe::Client::with_base(key, base)),
+        (Some(key), None) => Some(tam_api::stripe::Client::new(key)),
+        (None, None) => None,
+        (None, Some(_)) => {
+            return Err(format!("{STRIPE_API_BASE_FLAG} needs {STRIPE_SECRET_KEY_FLAG}").into())
+        }
     };
     // Refused rather than half-configured: an issuer with nowhere to fetch
     // keys from would verify nothing, and a key set with no expected issuer
