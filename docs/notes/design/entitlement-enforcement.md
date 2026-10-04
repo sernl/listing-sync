@@ -106,3 +106,32 @@ The founder's tier changes (pricing review §12) replace the §1 table:
 Figures, and the source each is counted from: resources, non-deleted `product`; marketplaces, `connection` rows in state `linked`; templates, `resource_template`; collections, `collection`; labels, the seller's own `label` rows; devices, `device` rows not revoked; watermarked previews, `usage_counter` for the UTC month (and summed for the lifetime); moves this month, `move_ledger` `commit` rows since the 1st (UTC). `tam-storage/tests/entitlement.rs` seeds each source, including rows that must not count, and asserts every figure; `tam-api/tests/catalogue_flow.rs` asserts that a create, an add and a Change or re-make each spend one preview and a removal gives none back.
 
 The Billing page draws these as a table (Used, Included, Left, a thin bar, and the day a monthly count starts again) in the Invoices table's style.
+
+## 7. Addendum, 2026-10-05 (0.21.0): the matrix review's gates
+
+The founder's matrix review (pricing review §13) moves four gates and adds one. Every figure is still `Plan::capabilities`, and the comparison table is still computed from it.
+
+| | Look | Starter | Pro | Studio |
+|---|---|---|---|---|
+| Resources (`resources_max`) | 100 | 250 | 500 | no cap |
+| Watermarked previews | 5 for the account's life | 20 a month | 50 a month | **no cap** (was 100 a month) |
+| Labels (`labels_max`) | **1** (was 5) | **5** (was no cap) | **10** (was no cap) | no cap |
+| Templates / collections | 1 / 1 | 5 / 5 | 10 / 10 | no cap |
+| Edit sync interval (`sync_pull_interval_secs`) | none | **none** (was daily) | **weekly** (was 6 hours) | **daily** (was hourly) |
+| Scheduling (`scheduling`) | – | **–** | ✓ | ✓ |
+| Term mapping and price rules (`term_and_price_rules`, new) | **–** | **–** | ✓ | ✓ |
+| Statistics (`analytics`) | – | **✓** | ✓ | ✓ |
+
+Where each is held, adding to the §3 table:
+
+| Capability | Server gate | Console |
+|---|---|---|
+| **Term mapping and price rules** (`term_and_price_rules`) | `seller_rules.rs` `held()` first on `POST /v1/seller-rules`, `PUT /v1/seller-rules/{r}`, `GET /v1/seller-rules/reference`, `POST /v1/seller-rules/preview` and `POST /v1/seller-rules/previews/{p}/decision`: 422 `quota_exceeded`, `detail.quota = "plan_feature"`, `detail.feature = "term_and_price_rules"`. List, presets, reading a preview and delete stay open. Rules and approvals already saved keep applying at move, cross-list and schedule time (grandfathering, §4) | `RuleWorkbench` banner, and the plan's sentence on Save, the bank-rate button, Preview and every decision; the bulk bar's "Set target prices" and "Set licence and type" verbs (`VERB_FEATURE`) |
+| **Edit sync interval** | unchanged gates; `sync_settings::INTERVAL_CHOICES` is now daily and weekly, because no plan reaches six hours. A stored six-hour row is read at the plan's floor by the scheduler, and a write of six hours is refused as not on the list | the cadence select offers Daily and Weekly, disabling Daily on Pro with the floor sentence |
+| **Scheduling**, **statistics**, **labels** | unchanged gates, new figures: Starter is refused `POST /v1/schedules` and its stored schedules stop firing; Starter reads `GET /v1/analytics/summary`; the three label gates refuse the label past 1 / 5 / 10 | unchanged |
+| **Watermarked previews** | unchanged gate; Studio's cap is `u32::MAX`, so the spend always fits, and every preview is still counted | Billing usage reads "Unlimited" on Studio |
+| **Bulk actions** (new comparison row) | none, deliberately: the bulk bar is on every plan, and each verb meets its own gate (labels, collections, templates, moves) | – |
+
+The usage table on Billing (§6) is unchanged in shape; Studio's previews row shows no ceiling, as its resources row already did.
+
+Tests: `tam-limits` `the_2026_10_05_matrix_holds` pins every moved cell, and `every_edit_sync_interval_is_whole_hours` now also requires each floor to be one the console offers. Pg tests: `schedules_flow` (Starter refused scheduling and edit sync; Pro floored to weekly; six hours refused), `analytics_flow` (Starter reads statistics), `seller_rules_flow` (Pro writes rules; Starter and Look refused every write, still list and delete), `mappings_flow` (labels 1 / 5 / 10, then Studio past ten).

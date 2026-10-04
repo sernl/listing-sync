@@ -9,6 +9,8 @@
 // URL a teaching resource accumulates; the reconciliation verb is
 // revise-in-place (`docs/notes/design/seller-dashboard.md`).
 
+import type { Feature } from '$lib/entitlement';
+
 export type BulkVerb =
 	| 'cross_list'
 	| 'move'
@@ -94,3 +96,13 @@ export const BULK_ACTIONS: readonly BulkAction[] = BULK_VERBS.map((verb) => ({
 export function unavailable(actions: readonly BulkAction[] = BULK_ACTIONS): BulkAction[] {
 	return actions.filter((action) => action.missing !== null);
 }
+
+/** The verbs that hand the selection to a page a plan may not include. The
+ *  bulk bar itself is on every plan (the comparison's "Bulk actions" row);
+ *  only these two verbs land on term mapping and price rules, which start at
+ *  Pro, so below it they carry the plan's sentence rather than opening a page
+ *  that refuses every write. */
+export const VERB_FEATURE: Partial<Record<BulkVerb, Feature>> = {
+	price: 'term_and_price_rules',
+	map_terms: 'term_and_price_rules'
+};

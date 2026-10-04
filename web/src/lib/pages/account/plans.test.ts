@@ -18,6 +18,7 @@ import {
 	moves,
 	packsBySize,
 	perMonth,
+	organisersLine,
 	planBullets,
 	planCards,
 	planMeaning,
@@ -232,26 +233,57 @@ describe('the lines on a plan card', () => {
 	const caps = (id: string) => PLANS.find((plan) => plan.id === id)!.capabilities;
 	const texts = (id: string) => planBullets(caps(id)).map((line) => line.text);
 
-	it('states a resource ceiling only where the plan has one', () => {
+	it('states the catalogue as a sentence on every plan', () => {
 		for (const id of ['free', 'starter', 'subscriber']) {
-			expect(texts(id)).toContain(`Up to ${caps(id).resources_max} resources`);
+			expect(texts(id)).toContain(`Catalogue up to ${caps(id).resources_max} resources`);
 		}
-		expect(texts('studio').some((text) => /^Up to \d+ resources$/.test(text))).toBe(false);
+		expect(texts('studio')).toContain('Catalogue unlimited resources');
 	});
 
 	it("states each paid plan's monthly previews from its own figure, and Look's as a lifetime few", () => {
-		for (const id of ['starter', 'subscriber', 'studio']) {
+		for (const id of ['starter', 'subscriber']) {
 			expect(texts(id)).toContain(`${caps(id).previews_per_month} watermarked previews a month`);
 		}
+		expect(texts('studio')).toContain('Unlimited watermarked previews');
 		expect(texts('free')).toContain(
 			`${caps('free').previews_lifetime} watermarked previews to try`
 		);
 		expect(texts('free').some((text) => /previews a month$/.test(text))).toBe(false);
 	});
 
-	it('says unlimited previews rather than the sentinel on a plan with no ceiling', () => {
-		const open = { ...caps('studio'), previews_per_month: 4294967295 };
-		expect(planBullets(open).map((line) => line.text)).toContain('Unlimited watermarked previews');
+	it('carries bulk actions on every plan', () => {
+		for (const plan of PLANS) expect(texts(plan.id)).toContain('Bulk actions');
+	});
+
+	it('says labels, templates and collections as one line, spelled out the first time', () => {
+		expect(texts('starter')).toContain('5 labels, 5 templates and 5 collections');
+		expect(texts('subscriber')).toContain('10 labels, templates and collections');
+		expect(texts('studio')).toContain('Unlimited labels, templates and collections');
+		expect(organisersLine(caps('free'))).toBeNull();
+	});
+
+	it('sends edits weekly on Pro and daily on Studio, and says nothing below', () => {
+		expect(texts('subscriber')).toContain('Edits synced weekly');
+		expect(texts('studio')).toContain('Edits synced daily');
+		for (const id of ['free', 'starter'])
+			expect(texts(id).some((text) => text.startsWith('Edits synced'))).toBe(false);
+	});
+
+	it('starts statistics at Starter and the automations at Pro, unlimited on Studio', () => {
+		expect(texts('free')).not.toContain('Statistics on every shop');
+		expect(texts('starter')).toContain('Statistics on every shop');
+		expect(texts('starter')).not.toContain('Schedule when a listing goes live');
+		expect(texts('starter')).not.toContain('Term mapping and price rules');
+		expect(texts('subscriber')).toEqual(
+			expect.arrayContaining([
+				'Schedule when a listing goes live',
+				'Automatic publishing rules',
+				'Term mapping and price rules'
+			])
+		);
+		expect(texts('studio')).toContain(
+			'Unlimited automations including scheduling, price rules and term mapping'
+		);
 	});
 
 	it('never prints the no-limit sentinel as a count', () => {
@@ -262,10 +294,7 @@ describe('the lines on a plan card', () => {
 		const free = texts('free');
 		expect(free[0]).toBe('Import from wherever you sell');
 		expect(free[free.length - 1]).toMatch(/onto a marketplace of your choice$/);
-		expect(texts('starter').slice(0, 2)).toEqual([
-			'Import from wherever you sell',
-			'Edit once, sync everywhere'
-		]);
+		expect(texts('starter').slice(0, 2)).toEqual(['Import from wherever you sell', 'Bulk actions']);
 	});
 
 	it('marks AI fill as not yet built only while it is coming soon', () => {

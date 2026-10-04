@@ -93,21 +93,66 @@ export interface PlanBullet {
 	soon?: boolean;
 }
 
+/** The one figure a plan holds of labels, templates and collections, or null
+ *  where the three differ or it is one of each: a single label, template and
+ *  collection is Look's trial, said as its own lines. */
+function organiserFigure(caps: Capabilities): number | null {
+	const { labels_max: labels, templates_max: templates, collections_max: collections } = caps;
+	return labels === templates && templates === collections && labels > 1 ? labels : null;
+}
+
+/** Labels, templates and collections as the one line the founder's cards say
+ *  (2026-10-05): spelled out on the first plan that carries it ("5 labels,
+ *  5 templates and 5 collections"), compact above it ("10 labels, templates
+ *  and collections"), and "Unlimited …" with no ceiling. Null where the plan
+ *  has no common figure. The landing page's `pricing.js` says the same. */
+export function organisersLine(
+	caps: Capabilities,
+	plans: readonly PlanRow[] = PLANS
+): string | null {
+	const figure = organiserFigure(caps);
+	if (figure === null) return null;
+	if (unlimited(figure)) return 'Unlimited labels, templates and collections';
+	const lower = plans.some((plan) => {
+		const other = organiserFigure(plan.capabilities);
+		return other !== null && other < figure;
+	});
+	return lower
+		? `${figure} labels, templates and collections`
+		: `${figure} labels, ${figure} templates and ${figure} collections`;
+}
+
+/** How often edits go out, as the cards say it: "weekly", "daily". */
+function cadenceWord(secs: number): string {
+	if (secs === 7 * 86_400) return 'weekly';
+	if (secs === 86_400) return 'daily';
+	if (secs === 3_600) return 'hourly';
+	return `every ${Math.round(secs / 3_600)} hours`;
+}
+
 /** A plan card's lines, read off `capabilities` so no figure is typed twice.
  *
- *  The wording and order are the landing page's pricing cards
+ *  The wording is the landing page's pricing cards
  *  (`apps/landing/src/pricing.js`), so a seller reads the same promise on
- *  both. */
+ *  both; this card lists everything the plan holds rather than only what it
+ *  adds. */
 export function planBullets(caps: Capabilities, ai: AiOffer = AI): PlanBullet[] {
 	const count = (n: number, noun: string) => `${unlimited(n) ? 'Unlimited' : n} ${noun}`;
 	const lines: PlanBullet[] = [];
 	if (caps.import_spreadsheet && caps.import_marketplace)
 		lines.push({ text: 'Import from wherever you sell' });
-	if (caps.sync_pull_interval_secs !== null) lines.push({ text: 'Edit once, sync everywhere' });
+	// The bulk bar is on every plan: the comparison's "Bulk actions" row.
+	lines.push({ text: 'Bulk actions' });
+	if (caps.sync_pull_interval_secs !== null)
+		lines.push({ text: `Edits synced ${cadenceWord(caps.sync_pull_interval_secs)}` });
 	if (caps.moves_per_month > 0) lines.push({ text: `${caps.moves_per_month} moves a month` });
 	if (caps.moves_accrual_cap > caps.moves_per_month)
 		lines.push({ text: `Unused moves stack to ${caps.moves_accrual_cap}` });
-	if (!unlimited(caps.resources_max)) lines.push({ text: `Up to ${caps.resources_max} resources` });
+	lines.push({
+		text: unlimited(caps.resources_max)
+			? 'Catalogue unlimited resources'
+			: `Catalogue up to ${caps.resources_max} resources`
+	});
 	lines.push({
 		text:
 			caps.previews_lifetime > 0
@@ -116,13 +161,25 @@ export function planBullets(caps: Capabilities, ai: AiOffer = AI): PlanBullet[] 
 					? 'Unlimited watermarked previews'
 					: `${caps.previews_per_month} watermarked previews a month`
 	});
-	if (caps.scheduling) lines.push({ text: 'Scheduling' });
-	if (caps.templates_max > 1) lines.push({ text: count(caps.templates_max, 'templates') });
-	if (caps.collections_max === 1) lines.push({ text: '1 collection' });
-	else if (caps.collections_max > 0)
-		lines.push({ text: count(caps.collections_max, 'collections') });
+	const organisers = organisersLine(caps);
+	if (organisers !== null) lines.push({ text: organisers });
+	else {
+		if (caps.templates_max > 1) lines.push({ text: count(caps.templates_max, 'templates') });
+		if (caps.collections_max === 1) lines.push({ text: '1 collection' });
+		else if (caps.collections_max > 0)
+			lines.push({ text: count(caps.collections_max, 'collections') });
+	}
+	const automations = caps.scheduling && caps.auto_publish_rules && caps.term_and_price_rules;
+	if (automations && unlimited(caps.templates_max) && organisers !== null)
+		lines.push({
+			text: 'Unlimited automations including scheduling, price rules and term mapping'
+		});
+	else {
+		if (caps.scheduling) lines.push({ text: 'Schedule when a listing goes live' });
+		if (caps.auto_publish_rules) lines.push({ text: 'Automatic publishing rules' });
+		if (caps.term_and_price_rules) lines.push({ text: 'Term mapping and price rules' });
+	}
 	if (caps.analytics) lines.push({ text: 'Statistics on every shop' });
-	if (caps.auto_publish_rules) lines.push({ text: 'Automatic publishing rules' });
 	if (caps.support === 'email_1_day') lines.push({ text: 'Priority support' });
 	if (caps.ai_fills_per_month > 0 && ai.status === 'coming_soon')
 		lines.push({ text: 'AI description fill, coming soon', soon: true });

@@ -18,14 +18,12 @@ const SIX_HOURS = 21_600;
 const DAILY = 86_400;
 const WEEKLY = 604_800;
 
-function setting(
-	over: Partial<MarketplaceSyncSettingView> = {}
-): MarketplaceSyncSettingView {
+function setting(over: Partial<MarketplaceSyncSettingView> = {}): MarketplaceSyncSettingView {
 	return {
 		inventory: 'Tpt',
 		enabled: true,
 		interval_secs: DAILY,
-		minimum_secs: SIX_HOURS,
+		minimum_secs: DAILY,
 		last_pull_at: null,
 		publish_to: [],
 		template_id: null,
@@ -41,24 +39,19 @@ describe('a run row', () => {
 });
 
 describe('the cadences a plan reaches', () => {
-	it('offers the three §5 names and nothing else', () => {
-		expect(cadenceOptions(SIX_HOURS).map((option) => option.label)).toEqual([
-			'Every 6 hours',
-			'Daily',
-			'Weekly'
-		]);
+	it('offers daily and weekly and nothing else', () => {
+		expect(cadenceOptions(DAILY).map((option) => option.label)).toEqual(['Daily', 'Weekly']);
 	});
 
 	// Disabled rather than absent: a seller asking why they cannot check
-	// hourly is owed the figure, and an option that is not there answers
+	// daily is owed the figure, and an option that is not there answers
 	// nothing.
 	it('disables what is under the floor and names the floor', () => {
-		const [six, daily, weekly] = cadenceOptions(DAILY);
-		expect(six.enabled).toBe(false);
-		expect(six.reason).toContain('daily');
-		expect(daily.enabled).toBe(true);
-		expect(daily.reason).toBeNull();
+		const [daily, weekly] = cadenceOptions(WEEKLY);
+		expect(daily.enabled).toBe(false);
+		expect(daily.reason).toContain('weekly');
 		expect(weekly.enabled).toBe(true);
+		expect(weekly.reason).toBeNull();
 	});
 
 	// An unread entitlement and a marketplace with no stored row both arrive
@@ -71,19 +64,21 @@ describe('the cadences a plan reaches', () => {
 	});
 
 	it('keeps the stored cadence where the plan still reaches it', () => {
-		expect(heldCadence(WEEKLY, SIX_HOURS)).toBe(WEEKLY);
+		expect(heldCadence(WEEKLY, DAILY)).toBe(WEEKLY);
 	});
 
-	// What a downgrade leaves behind. A select whose value matches only a
-	// disabled option shows a setting that cannot be saved, so the card lands
-	// on the fastest cadence the plan does reach.
+	// What a downgrade leaves behind, including a six-hourly row stored before
+	// that cadence went. A select whose value matches no enabled option shows a
+	// setting that cannot be saved, so the card lands on the fastest cadence
+	// the plan does reach.
 	it('lifts a stored cadence the plan has since moved above', () => {
 		expect(heldCadence(SIX_HOURS, DAILY)).toBe(DAILY);
+		expect(heldCadence(DAILY, WEEKLY)).toBe(WEEKLY);
 	});
 
 	it('opens a card with no stored cadence on the fastest the plan reaches', () => {
-		expect(heldCadence(0, DAILY)).toBe(DAILY);
-		expect(heldCadence(0, null)).toBe(SIX_HOURS);
+		expect(heldCadence(0, WEEKLY)).toBe(WEEKLY);
+		expect(heldCadence(0, null)).toBe(DAILY);
 	});
 });
 

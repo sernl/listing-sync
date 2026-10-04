@@ -11,6 +11,7 @@
 	import Icon from '$lib/Icon.svelte';
 	import Button from '$lib/Button.svelte';
 	import Field from '$lib/Field.svelte';
+	import { entitlementRead, featureOf } from '$lib/entitlement-read';
 	import { external } from '$lib/external';
 	import type { InventoryId, TermKind } from '$lib/generated/vocab';
 	import { INVENTORY_ORDER, formatPrice, normaliseQuery } from '$lib/listings-view';
@@ -192,8 +193,14 @@
 	let referenceFailure = $state<string | null>(null);
 	let referenceGeneration = 0;
 
+	// Term mapping and price rules start at Pro. Below it the page still reads
+	// and deletes what the seller already saved, and every write (save, rate,
+	// preview, decision) carries the plan's sentence, which is the server's own.
+	const plan = createQuery(() => entitlementRead);
+	const gate = $derived(featureOf(plan.data, 'term_and_price_rules'));
+
 	const draft = $derived(editing?.definition ?? null);
-	const draftRefusal = $derived(draft === null ? null : definitionRefusal(draft));
+	const draftRefusal = $derived(gate ?? (draft === null ? null : definitionRefusal(draft)));
 
 	function clearReference() {
 		referenceGeneration += 1;
@@ -533,14 +540,16 @@
 	);
 
 	const askRefusal = $derived(
-		previewRefusal({
-			source,
-			target,
-			all,
-			products: [...ticked],
-			scope,
-			draft: scopeKind === 'draft' ? draft : null
-		}) ?? overrideRateRefusal
+		gate ??
+			previewRefusal({
+				source,
+				target,
+				all,
+				products: [...ticked],
+				scope,
+				draft: scopeKind === 'draft' ? draft : null
+			}) ??
+			overrideRateRefusal
 	);
 
 	const pairRefusal = $derived(rulePairRefusal(source, target));
@@ -553,23 +562,27 @@
 	);
 
 	const acceptRefusal = $derived(
-		decisionReadRefusal ??
+		gate ??
+			decisionReadRefusal ??
 			(preview === null
 				? 'Take a preview first, so you can see what would be proposed.'
 				: decisionRefusal(preview.rows, 'accept', false, picked))
 	);
 	const rejectRefusal = $derived(
-		decisionReadRefusal ??
+		gate ??
+			decisionReadRefusal ??
 			(preview === null ? 'Take a preview first.' : decisionRefusal(preview.rows, 'reject', false, picked))
 	);
 	const acceptAllRefusal = $derived(
-		decisionReadRefusal ??
+		gate ??
+			decisionReadRefusal ??
 			(preview === null
 				? 'Take a preview first, so you can see what would be proposed.'
 				: decisionRefusal(preview.rows, 'accept', true, picked))
 	);
 	const rejectAllRefusal = $derived(
-		decisionReadRefusal ??
+		gate ??
+			decisionReadRefusal ??
 			(preview === null ? 'Take a preview first.' : decisionRefusal(preview.rows, 'reject', true, picked))
 	);
 
@@ -920,6 +933,11 @@
 </script>
 
 <div class="flow" class:has-editor={editing !== null}>
+	{#if gate !== null}
+		<Banner tone="warn" title="Term mapping and price rules are on Pro and Studio" action={toPlans}>
+			{gate}
+		</Banner>
+	{/if}
 	<Stepper steps={steps} label="{kind === 'pricing' ? 'Pricing' : 'Target terms'} steps" />
 
 	<FlowStep
@@ -1542,6 +1560,10 @@
 	</Button>
 </FlowActionBar>
 
+{#snippet toPlans()}
+	<Button tier="primary" small href="/settings/billing">See plans</Button>
+{/snippet}
+
 {#snippet editorFooter()}
 	<Button
 		tier="primary"
@@ -1666,8 +1688,8 @@
 				<Button
 					small
 					tier="outline"
-					disabled={referencing}
-					reason={referencing ? 'The rate is being fetched.' : undefined}
+					disabled={referencing || gate !== null}
+					reason={gate ?? (referencing ? 'The rate is being fetched.' : undefined)}
 					onclick={() => void quote()}
 				>
 					{referencing ? 'Fetching…' : 'Use today’s bank rate'}

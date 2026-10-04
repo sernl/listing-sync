@@ -12,7 +12,7 @@ tags: connections, publishing, desktop-app
 Each connected marketplace has its own card.
 
 1. Turn the switch **On**.
-2. Under **How often**, choose **Every 6 hours**, **Daily** or **Weekly**. Your plan may not check as often as every 6 hours; the card says so.
+2. Under **How often**, choose **Daily** or **Weekly**. Pro checks weekly and Studio daily; the card says which your plan reaches. Look and Starter don't check for changes.
 3. Under **Then publish to**, tick another marketplace if you want new finds listed there too. Leave it empty to keep them in your catalogue only.
 4. Under **Fill gaps from a template**, pick a template for the marketplace you publish to, or leave **No template**.
 5. Press **Save TPT** or **Save TES**.
