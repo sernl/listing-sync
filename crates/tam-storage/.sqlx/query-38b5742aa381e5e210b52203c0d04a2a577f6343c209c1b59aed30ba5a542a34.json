@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM banned_identity WHERE origin_org = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "38b5742aa381e5e210b52203c0d04a2a577f6343c209c1b59aed30ba5a542a34"
+}

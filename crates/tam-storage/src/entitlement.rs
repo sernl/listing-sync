@@ -598,6 +598,100 @@ impl EntitlementRepo {
         Ok(Some(nth))
     }
 
+    /// What the ledger says of one Move Pack, by the checkout session that
+    /// bought it (the credit's `source_ref`), or `None` where no credit names
+    /// that session.
+    ///
+    /// Read in one pinned transaction so the four answers agree: the credit,
+    /// the commits stamped with its expiry (a debit carries the expiry of the
+    /// credit it drew on, migration 0084), whether it was already refunded,
+    /// and the balance now.
+    pub async fn pack_use(
+        &self,
+        org: OrgId,
+        session: &str,
+        now: Timestamp,
+    ) -> Result<Option<PackUse>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let Some(credit) = sqlx::query!(
+            "SELECT delta, expires_at FROM move_ledger \
+              WHERE org_id = $1 AND source = 'pack' AND source_ref = $2",
+            uuid_to_db(org.0),
+            session,
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            tx.commit().await?;
+            return Ok(None);
+        };
+        let row = sqlx::query!(
+            r#"SELECT
+                 (SELECT count(*) FROM move_ledger
+                   WHERE org_id = $1 AND source = 'commit' AND expires_at = $2) AS "drawn!",
+                 EXISTS (SELECT 1 FROM move_ledger
+                   WHERE org_id = $1 AND source = 'refund' AND source_ref = $3) AS "refunded!",
+                 (SELECT COALESCE(SUM(delta), 0)::bigint FROM move_ledger
+                   WHERE org_id = $1 AND (expires_at IS NULL OR expires_at > $4)) AS "balance!""#,
+            uuid_to_db(org.0),
+            credit.expires_at,
+            session,
+            timestamp_to_db(now)?,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(Some(PackUse {
+            moves: i64::from(credit.delta),
+            expires_at: credit.expires_at.map(timestamp_from_db),
+            drawn: row.drawn,
+            refunded: row.refunded,
+            balance: row.balance.max(0),
+        }))
+    }
+
+    /// Takes a refunded Move Pack's moves back out of the balance: one
+    /// `refund` debit of the pack's size, stamped with the pack's expiry so
+    /// the pair leaves the balance together, and idempotent on the session.
+    /// Answers whether it was written; `false` for a session with no pack
+    /// credit or one already taken back.
+    pub async fn refund_pack(
+        &self,
+        org: OrgId,
+        session: &str,
+        at: Timestamp,
+    ) -> Result<bool, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let Some(credit) = sqlx::query!(
+            "SELECT delta, expires_at FROM move_ledger \
+              WHERE org_id = $1 AND source = 'pack' AND source_ref = $2",
+            uuid_to_db(org.0),
+            session,
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            tx.commit().await?;
+            return Ok(false);
+        };
+        let written = write_move(
+            &mut tx,
+            org,
+            LedgerEntry {
+                delta: credit.delta.saturating_neg(),
+                source: MoveSource::Refund,
+                source_ref: Some(session),
+                expires_at: credit.expires_at,
+                at: timestamp_to_db(at)?,
+            },
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(written)
+    }
+
     /// Credits one billing period's moves to a subscription.
     ///
     /// Idempotent on the period, so a scheduler that runs twice or a webhook
@@ -746,6 +840,21 @@ impl MoveSource {
     }
 }
 
+/// One Move Pack as the ledger records it, for the refund policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PackUse {
+    /// The moves the pack credited.
+    pub moves: i64,
+    pub expires_at: Option<Timestamp>,
+    /// Commits stamped with the pack's expiry: the moves the ledger says
+    /// were drawn on it.
+    pub drawn: i64,
+    /// Whether the pack's moves were already taken back by a refund.
+    pub refunded: bool,
+    /// The organisation's spendable balance now, floored at zero.
+    pub balance: i64,
+}
+
 /// What an organisation can spend, and when the soonest of it lapses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MoveBalance {
@@ -803,6 +912,11 @@ pub struct StorefrontAllowance<'a> {
 /// and grant its moves in one transaction: a row here with no credit, or a
 /// credit with no row here, would each be a way to lose or repeat the grant.
 /// The caller has already pinned `org`.
+///
+/// An organisation an operator has limited or banned (migration 0106's
+/// `abuse_standing`) claims nothing and is credited nothing: the limit is
+/// "no free moves", and leaving the shop unclaimed means a cleared seller
+/// can still be credited for it later.
 pub(crate) async fn grant_storefront_allowance_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     org: OrgId,
@@ -815,6 +929,12 @@ pub(crate) async fn grant_storefront_allowance_in(
         at,
     } = allowance;
     let now = timestamp_to_db(at)?;
+    if crate::abuse::standing_in(tx, org)
+        .await?
+        .withholds_free_moves()
+    {
+        return Ok(false);
+    }
     // The primary key crosses the tenant fence even though the policy does
     // not: a unique violation is raised on rows the pin cannot see, so a
     // second organisation naming the same shop inserts nothing and is never
@@ -849,6 +969,25 @@ pub(crate) async fn grant_storefront_allowance_in(
     if prior > 1 {
         return Ok(false);
     }
+    // The claim above goes when its organisation is erased (migration 0092
+    // walks every org_id column); this record has none, so it does not, and a
+    // shop whose account was deleted is not credited a second time under the
+    // next one (migration 0105).
+    let first_ever = sqlx::query!(
+        "INSERT INTO storefront_grant_record \
+         (marketplace, platform_account_digest, granted_at) \
+         VALUES ($1, $2, $3) \
+         ON CONFLICT (marketplace, platform_account_digest) DO NOTHING",
+        marketplace,
+        digest,
+        now,
+    )
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+    if first_ever == 0 {
+        return Ok(false);
+    }
     let reference = storefront_reference(marketplace, digest);
     write_move(
         tx,
@@ -866,6 +1005,50 @@ pub(crate) async fn grant_storefront_allowance_in(
     )
     .await?;
     Ok(true)
+}
+
+/// Takes back what is left of an organisation's free moves, in a caller's
+/// transaction that has already pinned `org`. Answers how many were taken.
+///
+/// "Left" is the smaller of the free credits ever granted and the balance of
+/// everything that never expires: a commit inherits the expiry of the credit
+/// it drew on (migration 0084), so the non-expiring sum is what the free grant
+/// and its spending leave between them. The debit is an `operator` row with
+/// no expiry, which is what makes a second call find nothing left; `reference`
+/// makes the same decision idempotent besides.
+pub(crate) async fn zero_free_moves_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    reference: &str,
+    at: Timestamp,
+) -> Result<i64, StorageError> {
+    let now = timestamp_to_db(at)?;
+    let left = sqlx::query_scalar!(
+        r#"SELECT LEAST(
+                 COALESCE(SUM(delta) FILTER (WHERE source = 'free'), 0),
+                 COALESCE(SUM(delta), 0))::bigint AS "left!"
+             FROM move_ledger
+            WHERE org_id = $1 AND expires_at IS NULL"#,
+        uuid_to_db(org.0),
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    if left <= 0 {
+        return Ok(0);
+    }
+    let written = write_move(
+        tx,
+        org,
+        LedgerEntry {
+            delta: -i32::try_from(left).unwrap_or(i32::MAX),
+            source: MoveSource::Operator,
+            source_ref: Some(reference),
+            expires_at: None,
+            at: now,
+        },
+    )
+    .await?;
+    Ok(if written { left } else { 0 })
 }
 
 /// One ledger entry, in a caller's transaction, idempotent on its reference.

@@ -22,6 +22,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod abuse;
 pub mod account;
 pub mod account_consent;
 pub mod admin;
@@ -34,6 +35,7 @@ pub mod broker;
 pub mod catalogue;
 pub mod collections;
 pub mod consent;
+pub mod crawlers;
 pub mod devices;
 pub mod duplicates;
 pub mod entitlement;
@@ -57,6 +59,9 @@ pub mod payments;
 pub mod pricing;
 pub mod product;
 pub mod profile;
+pub mod refund_policy;
+pub mod refund_quote;
+pub mod refund_requests;
 pub mod resource_templates;
 pub mod resources;
 pub mod rich_text;
@@ -290,7 +295,7 @@ pub struct Whoami {
 /// not introspectable, so this is the one place [`claims_path`] can learn that
 /// `/healthz` is the API's. A route added to [`router`] without a version and
 /// not named here is a route whatever is mounted behind the API swallows.
-const UNVERSIONED_ROUTES: [&str; 2] = ["/healthz", "/internal/consent"];
+const UNVERSIONED_ROUTES: [&str; 3] = ["/healthz", "/internal/consent", "/internal/abuse/screen"];
 
 /// Whether the API owns `path`, which is the question a binary mounting
 /// anything behind this router has to ask before it lets the router answer.
@@ -316,6 +321,9 @@ pub fn router(state: AppState) -> Router {
         // shared secret rather than a session: the account it describes was
         // made a moment ago and holds no session this API knows.
         .route("/internal/consent", post(account_consent::record_internal))
+        // The identity service's question before it makes an account, on
+        // the same shared secret (`abuse`).
+        .route("/internal/abuse/screen", post(abuse::screen))
         .route("/{version}/healthz", get(versioned_healthz))
         .route("/{version}/whoami", get(whoami))
         .route(
@@ -338,6 +346,16 @@ pub fn router(state: AppState) -> Router {
         .route("/{version}/billing/invoices", get(billing::invoices))
         .route("/{version}/billing/cancel", post(billing::cancel))
         .route("/{version}/billing/resume", post(billing::resume))
+        // "Ask for a refund": the seller's payments, the policy's quote on
+        // one, and the request itself (migration 0107).
+        .route(
+            "/{version}/billing/refund-requests",
+            get(refund_requests::billing_refunds).post(refund_requests::ask),
+        )
+        .route(
+            "/{version}/billing/payments/{charge}/refund-quote",
+            get(refund_requests::billing_quote),
+        )
         .route("/{version}/billing/webhook", post(billing::webhook))
         // The price list, unauthenticated: the pricing page is public, and a
         // price a seller cannot read before signing up is not a price list.
@@ -990,6 +1008,18 @@ pub fn router(state: AppState) -> Router {
             post(payments::create_refund),
         )
         .route(
+            "/{version}/admin/payments/charges/{charge}/quote",
+            get(payments::quote),
+        )
+        .route(
+            "/{version}/admin/payments/refund-requests/{id}/approve",
+            post(refund_requests::approve),
+        )
+        .route(
+            "/{version}/admin/payments/refund-requests/{id}/decline",
+            post(refund_requests::decline),
+        )
+        .route(
             "/{version}/admin/payments/refunds/{id}/mail",
             post(payments::mail_refund),
         )
@@ -1019,6 +1049,15 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/{version}/admin/users/{subject}/consent",
             get(account_consent::admin_subject),
+        )
+        // Abuse prevention: the flagged organisations and one cluster read on
+        // the backoffice pool; the decision written on the application pool,
+        // where the session gate and the free-move grant read it.
+        .route("/{version}/admin/abuse/flags", get(abuse::list_flags))
+        .route("/{version}/admin/abuse/orgs/{org}", get(abuse::org_detail))
+        .route(
+            "/{version}/admin/abuse/flags/{id}/{action}",
+            post(abuse::act),
         )
         .route(
             "/{version}/admin/users/{subject}",

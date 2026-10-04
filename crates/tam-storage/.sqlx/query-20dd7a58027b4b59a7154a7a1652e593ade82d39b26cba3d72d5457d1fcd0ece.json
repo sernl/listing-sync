@@ -1,0 +1,56 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH standing AS (\n                   SELECT abuse_standing(org_id) AS action\n                     FROM (SELECT DISTINCT org_id FROM abuse_flag\n                            WHERE resolved_at IS NOT NULL) decided\n               )\n               SELECT\n                 (SELECT count(DISTINCT org_id) FROM abuse_flag\n                   WHERE resolved_at IS NULL)                              AS \"open_orgs!\",\n                 (SELECT count(*) FROM abuse_flag WHERE resolved_at IS NULL) AS \"open_flags!\",\n                 (SELECT count(*) FROM standing WHERE action = 'warn')     AS \"warned!\",\n                 (SELECT count(*) FROM standing WHERE action = 'limit')    AS \"limited!\",\n                 (SELECT count(*) FROM standing WHERE action = 'ban')      AS \"banned!\",\n                 (SELECT count(*) FROM banned_identity)                    AS \"banned_identities!\",\n                 (SELECT count(*) FROM account_link_signal)                AS \"signals!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "open_orgs!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "open_flags!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "warned!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "limited!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "banned!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "banned_identities!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "signals!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "20dd7a58027b4b59a7154a7a1652e593ade82d39b26cba3d72d5457d1fcd0ece"
+}

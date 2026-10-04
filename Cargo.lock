@@ -6771,7 +6771,7 @@ dependencies = [
 
 [[package]]
 name = "tam-desktop"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "blake3",
  "bytes",
@@ -7011,6 +7011,7 @@ dependencies = [
 name = "tam-server"
 version = "0.0.0"
 dependencies = [
+ "aho-corasick",
  "axum",
  "base64 0.22.1",
  "http-body-util",

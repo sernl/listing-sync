@@ -9,6 +9,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod abuse;
 pub mod account_consent;
 pub mod analytics;
 pub mod authorship;
@@ -56,6 +57,12 @@ pub mod sync_settings;
 pub mod taxonomy;
 pub mod tpt_base;
 
+pub use abuse::{
+    AbuseAction, AbuseBackofficeRepo, AbuseCounters, AbuseDecision, AbuseMailOutcome,
+    AbuseOrgDetail, AbuseRepo, AbuseSearch, BannedKind, ClaimedAbuseMail, FlagKind, FlagRecord,
+    FlaggedOrg, LinkedOrg, Pruned, Scored, Signal, SignalKind, SignalRecord, ABUSE_MAIL_ATTEMPTS,
+    BAN_MONTHS, QUICK_UNLINK_DAYS, SHORT_SIGNAL_DAYS, SIGNUPS_PER_IP_PER_DAY,
+};
 pub use account_consent::{
     AccountConsentKind, AccountConsentRecord, AccountConsentRepo, AccountConsentSummary,
     NewAccountConsent,
@@ -82,7 +89,7 @@ pub use connections::{
 pub use consent::{ConsentRecord, ConsentRepo};
 pub use device::{
     DeviceHeartbeat, DeviceRecord, DeviceRegistration, DeviceRepo, DeviceSessionRecord,
-    DeviceSessionReport, DeviceSessionStatus,
+    DeviceSessionReport, DeviceSessionStatus, ACCOUNT_KEY_VERSION,
 };
 pub use device_library::{
     DeviceLibraryRepo, Holder, HoldingReport, LibraryAvailability, LibraryFile, LibraryFilter,
@@ -101,7 +108,7 @@ pub use duplicates::{
 pub use entitlement::{
     spend_monthly_in, Accrual, CounterWindow, EntitlementRepo, Grant, GrantRecord, GrantedBy,
     MonthlyCharge, MonthlyKind, MonthlySpend, MoveBalance, MoveCredit, MoveSource, NewGrant,
-    StorefrontAllowance, Usage,
+    PackUse, StorefrontAllowance, Usage,
 };
 pub use erasure::{
     DeletionRecord, Erased, ErasureRefusal, ErasureRepo, HeldSubscription, Standing,
@@ -185,9 +192,11 @@ pub use operators::{OperatorEvent, OperatorRecord, OperatorRepo};
 pub use org::{OrgRecord, OrgRepo, OrgWrite};
 pub use overrides::OverrideRepo;
 pub use payments::{
-    ClaimedRefundMail, MailRequest, ObservedRefund, PaymentBackofficeRepo, PaymentEvent,
-    PaymentKind, PaymentRepo, Refund, RefundMailOutcome, RefundStatus, AUTO_REFUND_MAIL_SETTING,
-    REFUND_MAIL_ATTEMPTS, SYNC_EVENT_PREFIX,
+    ClaimedRefundMail, Decision, MailRequest, NewRefundRequest, ObservedRefund,
+    PaymentBackofficeRepo, PaymentEvent, PaymentKind, PaymentRepo, Refund, RefundDecision,
+    RefundMailOutcome, RefundRequest, RefundRequestStatus, RefundRequestWrite, RefundStatus,
+    AUTO_REFUND_MAIL_SETTING, REFUND_DECLINED_TOPIC, REFUND_MAIL_ATTEMPTS, REFUND_REQUESTED_TOPIC,
+    SYNC_EVENT_PREFIX,
 };
 pub use product::{
     fill_rights, fill_tes_licence, has_live_payload, insert_product, live_count_in, offer_cover,
@@ -343,6 +352,11 @@ pub enum StorageError {
     /// the seller a sentence and a 409 rather than a 500.
     #[error("that {marketplace:?} shop is already bound to another organisation")]
     StorefrontBoundElsewhere { marketplace: tam_types::Marketplace },
+    /// A check-in named a shop an operator's ban still refuses (migration
+    /// 0106's `banned_identity`). The API answers it with the suspension
+    /// sentence rather than a fault.
+    #[error("that {marketplace:?} shop is suspended")]
+    StorefrontSuspended { marketplace: tam_types::Marketplace },
 }
 
 /// The tenant pin, for a caller assembling its own transaction across this

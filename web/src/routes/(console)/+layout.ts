@@ -1,4 +1,4 @@
-import { api, ApiFailure, type SiteView, type Whoami } from '$lib/api';
+import { api, ApiFailure, isSuspended, type SiteView, type Whoami } from '$lib/api';
 import { describeUnreachable, type Unreachable } from '$lib/unreachable';
 import { setLedgerScope } from '$lib/ledger';
 import { identifyOrg, startTelemetry } from '$lib/posthog';
@@ -20,10 +20,15 @@ import { identifyOrg, startTelemetry } from '$lib/posthog';
  *  and neither may stop the console loading. `operator` is asked only when
  *  maintenance is on and there is a session, because that is the only time
  *  the answer changes what renders; the operator's own read of the switches is
- *  the probe, and its blank 401 is how a seller is told apart. */
+ *  the probe, and its blank 401 is how a seller is told apart.
+ *
+ *  `suspended` is the session refused because its organisation is banned: a
+ *  sign-in would be refused the same way, so the layout shows why instead of
+ *  sending the browser to `/login`. */
 export async function load(): Promise<{
 	session: Whoami | null;
 	unreachable: Unreachable | null;
+	suspended: boolean;
 	site: SiteView | null;
 	operator: boolean;
 }> {
@@ -43,13 +48,23 @@ export async function load(): Promise<{
 					() => false
 				)
 			: false;
-		return { session, unreachable: null, site, operator };
+		return { session, unreachable: null, suspended: false, site, operator };
 	} catch (failure) {
 		const site = await siteRead;
+		if (isSuspended(failure)) {
+			setLedgerScope(null);
+			return { session: null, unreachable: null, suspended: true, site, operator: false };
+		}
 		if (failure instanceof ApiFailure && failure.status === 401 && failure.body !== null) {
 			setLedgerScope(null);
-			return { session: null, unreachable: null, site, operator: false };
+			return { session: null, unreachable: null, suspended: false, site, operator: false };
 		}
-		return { session: null, unreachable: describeUnreachable(failure), site, operator: false };
+		return {
+			session: null,
+			unreachable: describeUnreachable(failure),
+			suspended: false,
+			site,
+			operator: false
+		};
 	}
 }

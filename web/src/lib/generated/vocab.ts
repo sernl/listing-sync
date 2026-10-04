@@ -67,6 +67,8 @@ export type APIErrorCode =
   | "consent_required"
   | "device_offline"
   | "streaming_unavailable"
+  | "account_suspended"
+  | "signup_refused"
   | "internal";
 
 export const API_ERROR_CODES: readonly APIErrorCode[] = [
@@ -101,6 +103,8 @@ export const API_ERROR_CODES: readonly APIErrorCode[] = [
   "consent_required",
   "device_offline",
   "streaming_unavailable",
+  "account_suspended",
+  "signup_refused",
   "internal",
 ];
 
@@ -827,6 +831,7 @@ export type FeatureKey =
   | "moves_rollover"
   | "copy_or_move"
   | "edit_sync"
+  | "bulk_actions"
   | "scheduling"
   | "auto_publish_rules"
   | "term_and_price_rules"
@@ -851,6 +856,7 @@ export const FEATURE_KEYS: readonly FeatureKey[] = [
   "moves_rollover",
   "copy_or_move",
   "edit_sync",
+  "bulk_actions",
   "scheduling",
   "auto_publish_rules",
   "term_and_price_rules",
@@ -890,13 +896,15 @@ export type FeatureUnit =
   | "count"
   | "per_month"
   | "megabytes"
-  | "every_hours";
+  | "every_hours"
+  | "catalogue";
 
 export const FEATURE_UNITS: readonly FeatureUnit[] = [
   "count",
   "per_month",
   "megabytes",
   "every_hours",
+  "catalogue",
 ];
 
 export type GrantedBy =

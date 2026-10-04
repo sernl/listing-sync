@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT charge_id, COALESCE(SUM(amount_cents), 0)::bigint AS \"refunded!\" FROM refund WHERE charge_id = ANY($1) AND status IN ('pending', 'succeeded') GROUP BY charge_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "charge_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "refunded!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "2904592635602c9ce87da392edb4846078e52287103e262f5f64d1ac8aee2f85"
+}

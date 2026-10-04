@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE abuse_flag SET resolved_at = $3, resolved_by = $4, action = $5, action_reason = $6 WHERE org_id = $1 AND id <> $2 AND resolved_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ea914597ce817c61d59fe41a06ab4ac5b0679da5d27c3622eb95f8cea32ea99b"
+}

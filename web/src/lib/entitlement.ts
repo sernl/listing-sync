@@ -72,6 +72,7 @@ export type Feature =
 	| 'scheduling'
 	| 'sync'
 	| 'auto_publish_rules'
+	| 'term_and_price_rules'
 	| 'analytics';
 
 /** Why a control is disabled, or null where it is not.
@@ -99,6 +100,10 @@ export function featureReason(caps: Capabilities, feature: Feature): string | nu
 			return caps.auto_publish_rules
 				? null
 				: 'Upgrade your plan to republish a listing when its resource changes.';
+		case 'term_and_price_rules':
+			return caps.term_and_price_rules
+				? null
+				: 'Upgrade your plan to set up term mapping and price rules.';
 		case 'analytics':
 			return caps.analytics ? null : 'Upgrade your plan to see how your listings are doing.';
 	}

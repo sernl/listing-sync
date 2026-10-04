@@ -133,6 +133,21 @@ describe('why a control is disabled', () => {
 		expect(caps('free').sync_pull_interval_secs).toBeNull();
 		expect(featureReason(caps('free'), 'sync')).not.toBeNull();
 	});
+
+	// The 2026-10-05 matrix review: statistics move down to Starter, and
+	// scheduling, edits sent everywhere and term mapping and price rules start
+	// at Pro.
+	it('holds the moved gates where the founder put them', () => {
+		expect(featureReason(caps('starter'), 'analytics')).toBeNull();
+		expect(featureReason(caps('starter'), 'scheduling')).not.toBeNull();
+		expect(featureReason(caps('starter'), 'sync')).not.toBeNull();
+		expect(featureReason(caps('starter'), 'term_and_price_rules')).toBe(
+			'Upgrade your plan to set up term mapping and price rules.'
+		);
+		expect(featureReason(caps('free'), 'term_and_price_rules')).not.toBeNull();
+		expect(featureReason(caps('subscriber'), 'term_and_price_rules')).toBeNull();
+		expect(featureReason(caps('subscriber'), 'scheduling')).toBeNull();
+	});
 });
 
 describe('why a counted allowance is full', () => {
@@ -250,7 +265,10 @@ describe('the usage table on the Billing page', () => {
 			fraction: 1,
 			full: true
 		});
-		expect(row(rows, 'labels')).toMatchObject({ used: 2, left: '3', full: false });
+		// Look holds one label, Starter five (founder, 2026-10-05).
+		expect(row(rows, 'labels')).toMatchObject({ used: 2, left: '0', full: true });
+		const starter = usageTable(usage({ labels: 2 }), caps('starter'), { available: 0 });
+		expect(row(starter, 'labels')).toMatchObject({ used: 2, left: '3', full: false });
 	});
 
 	// Grandfathered: over a lowered ceiling reads as none left, not a

@@ -1,3 +1,4 @@
+import { defaultScreenUrl } from './abuse.ts';
 import { defaultPasskeyRpId } from './rp-id.ts';
 
 export type Mode = 'development' | 'production';
@@ -33,6 +34,14 @@ export interface Env {
    * because no account may exist without its agreement on record.
    */
   readonly consentUrl: string | undefined;
+  /**
+   * Where a sign-up is screened for abuse before its account exists:
+   * tam-server's `POST /internal/abuse/screen`, fenced by the same shared
+   * secret. Defaults to the consent URL with `/internal/consent` replaced by
+   * `/internal/abuse/screen`. Absent, or with no secret, sign-ups are let
+   * through unscreened (abuse.ts).
+   */
+  readonly abuseScreenUrl: string | undefined;
   readonly google: OAuthCredentials | undefined;
   readonly microsoft: (OAuthCredentials & { readonly tenantId: string }) | undefined;
 }
@@ -174,6 +183,7 @@ const load = (): Env => {
     throw new ConfigurationError('tam-auth: TAM_AUTH_EMAIL_FROM is required when RESEND_API_KEY is set');
   }
   const microsoft = readOAuthPair('MICROSOFT_CLIENT_ID', 'MICROSOFT_CLIENT_SECRET');
+  const consentUrl = read('TAM_AUTH_CONSENT_URL');
   return {
     mode,
     bind: read('TAM_AUTH_BIND') ?? '127.0.0.1',
@@ -188,7 +198,8 @@ const load = (): Env => {
     emailFrom,
     turnstileSecretKey: readRequiredInProduction(mode, 'TURNSTILE_SECRET_KEY'),
     internalSecret: read('TAM_AUTH_INTERNAL_SECRET'),
-    consentUrl: read('TAM_AUTH_CONSENT_URL'),
+    consentUrl,
+    abuseScreenUrl: read('TAM_AUTH_ABUSE_SCREEN_URL') ?? defaultScreenUrl(consentUrl),
     google: readOAuthPair('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'),
     microsoft:
       microsoft === undefined

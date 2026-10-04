@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, org_id, provider_refund_id, charge_id, amount_cents, currency, status, reason, note, issued_by, issued_by_label, mail_requested_at, mail_sent_at, mail_error, created_at, updated_at FROM refund WHERE id = $1",
+  "query": "INSERT INTO refund_request (id, org_id, charge_id, quoted_cents, currency, policy_basis, note, requested_by, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9) ON CONFLICT (charge_id) WHERE status = 'requested' DO NOTHING RETURNING id, org_id, charge_id, quoted_cents, currency, policy_basis, status, note, requested_by, decided_by_label, decided_at, decline_reason, refund_id, created_at, updated_at",
   "describe": {
     "columns": [
       {
@@ -15,22 +15,22 @@
       },
       {
         "ordinal": 2,
-        "name": "provider_refund_id",
-        "type_info": "Text"
-      },
-      {
-        "ordinal": 3,
         "name": "charge_id",
         "type_info": "Text"
       },
       {
-        "ordinal": 4,
-        "name": "amount_cents",
+        "ordinal": 3,
+        "name": "quoted_cents",
         "type_info": "Int8"
       },
       {
-        "ordinal": 5,
+        "ordinal": 4,
         "name": "currency",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "policy_basis",
         "type_info": "Text"
       },
       {
@@ -40,64 +40,66 @@
       },
       {
         "ordinal": 7,
-        "name": "reason",
-        "type_info": "Text"
-      },
-      {
-        "ordinal": 8,
         "name": "note",
         "type_info": "Text"
       },
       {
-        "ordinal": 9,
-        "name": "issued_by",
+        "ordinal": 8,
+        "name": "requested_by",
         "type_info": "Uuid"
       },
       {
-        "ordinal": 10,
-        "name": "issued_by_label",
+        "ordinal": 9,
+        "name": "decided_by_label",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "decided_at",
+        "type_info": "Timestamptz"
       },
       {
         "ordinal": 11,
-        "name": "mail_requested_at",
-        "type_info": "Timestamptz"
-      },
-      {
-        "ordinal": 12,
-        "name": "mail_sent_at",
-        "type_info": "Timestamptz"
-      },
-      {
-        "ordinal": 13,
-        "name": "mail_error",
+        "name": "decline_reason",
         "type_info": "Text"
       },
       {
-        "ordinal": 14,
+        "ordinal": 12,
+        "name": "refund_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 13,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 15,
+        "ordinal": 14,
         "name": "updated_at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Uuid",
+        "Timestamptz"
       ]
     },
     "nullable": [
       false,
-      true,
       false,
       false,
       false,
       false,
       false,
-      true,
+      false,
       true,
       true,
       true,
@@ -108,5 +110,5 @@
       false
     ]
   },
-  "hash": "47bdaedcdaa385c2830f7ac10339418d14061ee9b3c947411f32cd87d8f0b109"
+  "hash": "d5cad62087b2979aec9ae579415eee28145da72f583eb0a6b016c10e4876ecec"
 }

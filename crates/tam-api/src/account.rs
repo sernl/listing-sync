@@ -9,15 +9,17 @@
 //!    or say `DELETE` (422).
 //! 2. The identity service checks the proof — the current password for an
 //!    account that has one, and otherwise a sign-in younger than five
-//!    minutes — and answers the address the goodbye goes to.
+//!    minutes — and answers the address and name the goodbye goes to, which
+//!    this request holds until the end.
 //! 3. Stripe cancels the subscription now, not at the period's end, and the
 //!    answer is recorded so the erasure reads it as ended.
-//! 4. The goodbye mail goes, while the identity service still knows the
-//!    address.
-//! 5. The identity service deletes the account: sessions, linked accounts
+//! 4. The identity service deletes the account: sessions, linked accounts
 //!    and passkeys with it.
-//! 6. [`erase`] removes the platform user and their organisation and writes
+//! 5. [`erase`] removes the platform user and their organisation and writes
 //!    the `account_deletion` row in the same transaction (migration 0104).
+//! 6. Only then does the goodbye mail go, to the address captured in step 2,
+//!    so it never lands for a deletion that stopped halfway. A relay that
+//!    refuses it is logged and reported in the answer; the deletion stands.
 //!
 //! The identity service, the relay and the address are the serving binary's
 //! (`tam-server`'s `offboarding.rs`), reached through [`Offboarding`], so this
@@ -70,6 +72,14 @@ const IDENTITY_SESSION_COOKIE: &str = "better-auth.session_token";
 pub struct Departing {
     pub email: String,
     pub name: Option<String>,
+}
+
+impl Departing {
+    /// The first word of the name, for the goodbye's greeting.
+    #[must_use]
+    pub fn first_name(&self) -> Option<&str> {
+        self.name.as_deref()?.split_whitespace().next()
+    }
 }
 
 impl core::fmt::Debug for Departing {
@@ -134,7 +144,7 @@ pub trait Offboarding: Send + Sync {
         proof: Proof<'a>,
     ) -> OffboardingFuture<'a, Reauthentication>;
 
-    /// Send "Your Teachouse account is deleted".
+    /// Send "Goodbye from Teachouse", after the deletion has committed.
     fn farewell<'a>(&'a self, to: &'a Departing) -> OffboardingFuture<'a, ()>;
 
     /// Delete the identity account, its sessions, linked accounts and
@@ -262,17 +272,6 @@ pub(crate) async fn delete_own_account(
 
     let cancelled = cancel_subscription(&state, &standing).await?;
 
-    let goodbye_sent = match port.0.farewell(&departing).await {
-        Ok(()) => true,
-        Err(fault) => {
-            eprintln!(
-                "tam-api: the goodbye mail to subject {} did not go: {fault}",
-                subject.to_hyphenated()
-            );
-            false
-        }
-    };
-
     port.0.delete_identity(subject).await.map_err(|fault| {
         eprintln!(
             "tam-api: the identity of subject {} was not deleted: {fault}",
@@ -300,6 +299,16 @@ pub(crate) async fn delete_own_account(
     let erased = erase(&state, subject, Some(&record))
         .await?
         .map_err(|refusal| self_refusal(&refusal))?;
+    let goodbye_sent = match port.0.farewell(&departing).await {
+        Ok(()) => true,
+        Err(fault) => {
+            eprintln!(
+                "tam-api: subject {} is deleted, but the goodbye mail did not go: {fault}",
+                subject.to_hyphenated()
+            );
+            false
+        }
+    };
     eprintln!(
         "tam-api: user {} deleted their own account and organisation {} ({} rows)",
         erased.user.0.to_hyphenated(),

@@ -271,3 +271,30 @@ The founder reviewed the live Billing page and changed these figures. Prices, pr
 - **Starter carries no AI fill.** The offer starts at Pro, so the Starter card no longer says "AI description fill, coming soon".
 - The §2.2 value-gap rule still holds on resources (2.5×, 2×, then no cap) and previews (4×, 2.5×, 2×); `every_cap_climbs_the_ladder` and `every_plan_grants_strictly_more_of_each_counted_axis_than_the_one_below` pin it.
 - §9's Sync trigger now reads as Pro.
+
+## 13. Addendum, 2026-10-05: the founder's matrix review (0.21.0)
+
+The founder marked up the live comparison table and the four cards. Prices, price keys, the recommended plan (Pro), the move ladder and the grandfather rule (§8) do not change.
+
+| Row | Look | Starter | Pro | Studio |
+|---|---|---|---|---|
+| Edits sent to every marketplace (`sync_pull_interval_secs`) | – | **–** (was daily) | **weekly** (was every 6 hours) | **daily** (was hourly) |
+| Bulk actions (new row, core) | ✓ | ✓ | ✓ | ✓ |
+| Schedule when a listing goes live (`scheduling`) | – | **–** (was ✓) | ✓ | ✓ |
+| Term mapping and price rules (`term_and_price_rules`, new) | **–** (was core) | **–** (was core) | ✓ | ✓ |
+| Statistics on every shop (`analytics`) | – | **✓** (was –) | ✓ | ✓ |
+| Catalogue size (was "Resources") | Catalogue up to 100 resources | Catalogue up to 250 resources | Catalogue up to 500 resources | Catalogue unlimited resources |
+| Labels | **1** (was 5) | **5** (was no cap) | **10** (was no cap) | no cap |
+| Templates / collections | 1 / 1 | 5 / 5 | 10 / 10 | no cap |
+| Watermarked previews | 5 to try | 20 a month | 50 a month | **no cap** (was 100 a month) |
+
+- **Term mapping and price rules leave the core** (§5). They become `Capabilities::term_and_price_rules`, true from Pro. The gate refuses creating, editing, fetching a reference rate for, previewing and deciding a rule below Pro (`seller_rules.rs`, `detail.feature = "term_and_price_rules"`). Reading, deleting, and the rules and approvals already saved are untouched, so a seller who moves down keeps what they made, as §8 says of every ceiling.
+- **Edits go out less often.** Pro's floor is a week and Studio's a day; Starter sends none. The console's cadence control offers **Daily** and **Weekly** only, because six-hourly is no longer reachable on any plan (`sync_settings::INTERVAL_CHOICES`). The scheduler already reads a stored interval shorter than the plan's floor at the floor, so a Pro shop stored at six hours is read weekly from the next pass.
+- **Scheduling starts at Pro.** The scheduler skips a plan without it, so a Starter organisation's stored schedules stop firing and stay listed; upgrading starts them again.
+- **One ladder for the organising objects.** Labels join templates and collections at 1 / 5 / 10 / no cap, which reverses §5's "labels are not a ladder axis". The cards say them as one line: "5 labels, 5 templates and 5 collections" on Starter (the first plan that carries it), "10 labels, templates and collections" on Pro, "Unlimited labels, templates and collections" on Studio.
+- **Studio's previews are uncapped**, reversing §12's "no plan has unlimited previews". Studio is sold on it ("Unlimited watermarked previews" replaces the "Unlimited templates" card line). Every preview still spends a `usage_counter` row, so the figure stays on record and §5's trigger on preview use can still be read.
+- **Bulk actions is a core row.** The Resources bulk bar was never gated; the row says so. Its "Set target prices" and "Set licence and type" verbs open the Pricing and Target terms pages, so below Pro they carry the plan's sentence; every other verb runs on every plan.
+- **The Resources row reads as a sentence per plan** (`FeatureUnit::Catalogue`): "Catalogue up to 250 resources", "Catalogue unlimited resources". The row label is "Catalogue size".
+- **Cards.** Look: 5 moves to try, Catalogue up to 100 resources, Bulk actions, Import from your shops or a spreadsheet, 5 watermarked previews to try, 1 template. Starter: 10 moves a month, Statistics on every shop, Catalogue up to 250 resources, 5 labels, 5 templates and 5 collections, 20 watermarked previews a month. Pro: 25 moves a month, Edits synced weekly, Schedule when a listing goes live, Automatic publishing rules, Catalogue up to 500 resources, 10 labels, templates and collections. Studio: 100 moves a month, Edits synced daily, Catalogue unlimited resources, Unlimited labels, templates and collections, Unlimited watermarked previews, Unlimited automations including scheduling, price rules and term mapping. A card now holds six lines rather than five.
+- **What the value-gap rule (§2.2) now reads.** Starter's step over Look is statistics and the organisers; Pro's step over Starter is every automation and edits sent everywhere; Studio's is unlimited everything and daily edits. Moves, resources and previews still strictly climb (`every_plan_grants_strictly_more_of_each_counted_axis_than_the_one_below`); `the_2026_10_05_matrix_holds` pins every moved cell.
+- `PLAN_FEATURES` is now 23 rows.

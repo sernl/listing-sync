@@ -581,6 +581,75 @@ async fn set_ending(state: &AppState, org: OrgId, ending: bool) -> Result<Billin
     view_of(state, org).await
 }
 
+/// Ends a subscription today rather than at its period's end: Stripe
+/// cancels it now, the grant stops now, and the billing page says it ended
+/// today. What a yearly refund does, because the Terms say the plan ends on
+/// the day of the refund and the account moves to Look.
+///
+/// A subscription Stripe already holds as cancelled, or no longer holds,
+/// is a refusal this treats as done: the plan is over either way. The
+/// `customer.subscription.deleted` that follows lands the same end, because
+/// it reads `ended_at` rather than the period the subscription was cancelled
+/// out of.
+pub(crate) async fn end_plan_now(
+    state: &AppState,
+    client: &stripe::Client,
+    org: Option<OrgId>,
+    subscription: &str,
+    now: Timestamp,
+) -> Result<(), APIError> {
+    match client.cancel_subscription(subscription).await {
+        Ok(_) => {}
+        Err(stripe::StripeError::Api { status, message }) if (400..500).contains(&status) => {
+            eprintln!(
+                "tam-api: Stripe refused to cancel {subscription} for a refund ({message}); \
+                 read as already ended"
+            );
+        }
+        Err(error) => return Err(state.internal(&error.to_string())),
+    }
+    let Some(org) = org else {
+        return Ok(());
+    };
+    let entitlements = EntitlementRepo::new(state.pool.clone());
+    let grant = entitlements
+        .provider_grant(org, subscription)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?;
+    if let Some(grant) = grant {
+        let _moved: bool = entitlements
+            .set_expiry(org, grant, Some(now))
+            .await
+            .map_err(|error| state.internal(&error.to_string()))?;
+    }
+    let billing = BillingRepo::new(state.pool.clone());
+    let held = billing
+        .get(org)
+        .await
+        .map_err(|error| state.internal(&error.to_string()))?
+        .filter(|held| held.provider_subscription_id == subscription);
+    if let Some(held) = held {
+        let _applied: bool = billing
+            .apply(
+                org,
+                &SubscriptionState {
+                    status: "canceled".to_owned(),
+                    current_period_end: Some(now),
+                    cancel_at_period_end: Some(false),
+                    occurred_at: now,
+                    ..held
+                },
+                now,
+            )
+            .await
+            .map_err(|error| state.internal(&error.to_string()))?;
+    }
+    state
+        .telemetry
+        .capture(org, "subscription_ended_by_refund", serde_json::json!({}));
+    Ok(())
+}
+
 /// The Stripe customer a stored subscription row names, where it names one.
 fn customer_of(held: Option<&SubscriptionState>) -> Option<&str> {
     held.map(|held| held.provider_customer_id.as_str())
@@ -677,6 +746,11 @@ struct SubscriptionObject {
     cancel_at_period_end: Option<bool>,
     #[serde(default)]
     cancel_at: Option<i64>,
+    /// When an ended subscription stopped, which for one cancelled
+    /// immediately (an approved yearly refund, a deleted account) is before
+    /// the period end it still reports.
+    #[serde(default)]
+    ended_at: Option<i64>,
     #[serde(default)]
     metadata: BTreeMap<String, String>,
     #[serde(default)]
@@ -727,7 +801,7 @@ impl SubscriptionObject {
 
 /// An `invoice.*` object, narrowed to what is read.
 #[derive(Debug, Default, Deserialize)]
-struct InvoiceObject {
+pub(crate) struct InvoiceObject {
     #[serde(default)]
     subscription: Option<serde_json::Value>,
     #[serde(default)]
@@ -831,7 +905,7 @@ struct LinePeriod {
 }
 
 impl InvoiceObject {
-    fn subscription_id(&self) -> Option<&str> {
+    pub(crate) fn subscription_id(&self) -> Option<&str> {
         identifier(self.subscription.as_ref()).or_else(|| {
             identifier(
                 self.parent
@@ -848,7 +922,7 @@ impl InvoiceObject {
     /// cover, and the header only where no line states one. The header of a
     /// subscription's first invoice reads created-to-created, and a grant
     /// expiring on that would lock the seller out a day after paying.
-    fn period(&self) -> (Option<i64>, Option<i64>) {
+    pub(crate) fn period(&self) -> (Option<i64>, Option<i64>) {
         let periods = || {
             self.lines
                 .data
@@ -860,7 +934,7 @@ impl InvoiceObject {
         (start.or(self.period_start), end.or(self.period_end))
     }
 
-    fn price(&self) -> Option<&str> {
+    pub(crate) fn price(&self) -> Option<&str> {
         self.lines.data.iter().find_map(InvoiceLine::price)
     }
 }
@@ -982,6 +1056,22 @@ pub(crate) async fn webhook(
     // below makes of it. A fault here is answered as one, and Stripe's retry
     // re-runs both halves; each is idempotent on its own key.
     crate::payments::record_webhook(&state, &body).await?;
+    // A successful charge names the card it was paid with; the linkage
+    // ledger (migration 0105) keeps its digest so two accounts paying with
+    // one card can be seen. Evidence, not fulfilment: a failure is logged
+    // and the nightly sweep catches the charge up.
+    if event.kind == "charge.succeeded" {
+        if let Some(charge) = event
+            .data
+            .object
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+        {
+            if let Err(error) = crate::abuse::harvest_cards(&state, Some(charge)).await {
+                eprintln!("tam-api: a card fingerprint was not recorded: {error}");
+            }
+        }
+    }
     match event.kind.as_str() {
         CHECKOUT_COMPLETED => checkout_completed(&state, &event).await,
         INVOICE_PAID => invoice_paid(&state, &event).await,
@@ -1378,8 +1468,16 @@ async fn subscription_changed(state: &AppState, event: &Event) -> Result<StatusC
         return Err(unreadable());
     };
     let occurred_at = at(event.created);
-    let period_end = object.period_end().map(at);
     let ended = event.kind == SUBSCRIPTION_DELETED;
+    // An ended subscription stops when it ended: one cancelled immediately
+    // still reports the period it was cancelled out of, and running the
+    // grant to that would keep entitling a seller whose plan ended today.
+    let period_end = if ended {
+        object.ended_at.or_else(|| object.period_end())
+    } else {
+        object.period_end()
+    }
+    .map(at);
     let entitling = !ended && ENTITLING.contains(&status);
 
     let expires_at = if entitling {

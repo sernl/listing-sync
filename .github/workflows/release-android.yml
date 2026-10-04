@@ -1,0 +1,217 @@
+# The Android half of a tagged release: one signed universal APK for sideload
+# (GitHub, the Cloud, the download mirror) and one signed AAB for Google Play,
+# uploaded to the configured track. Called by desktop-release.yml only, and
+# only when the three upload-key secrets exist: an unsigned APK cannot be
+# installed and Play refuses an unsigned bundle.
+#
+# Play automation is ours rather than Tauri's — Tauri's Google Play guide says
+# release automation is "work in progress" — and it starts after the first
+# upload, which Play requires to be made by hand in the Play Console
+# (https://v2.tauri.app/distribute/google-play/). The versionCode Tauri derives
+# from the version (major*1000000 + minor*1000 + patch) only ever rises, which
+# is what Play requires of each upload.
+name: release-android
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+      tauri-cli-version:
+        type: string
+        required: true
+      play:
+        description: Upload the AAB to Google Play.
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: console
+          path: web/build
+
+      - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # `flake.nix` owns the NDK version and this reads it, so a runner build
+      # and a local one compile against one toolchain rather than two.
+      - name: read the pinned Android toolchain
+        id: pins
+        run: sh .github/scripts/android-pins.sh >> "$GITHUB_OUTPUT"
+
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        with:
+          packages: >-
+            platform-tools
+            platforms;android-36
+            build-tools;35.0.0
+            ndk;${{ steps.pins.outputs.ndk }}
+
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          # rust-toolchain.toml carries aarch64-linux-android alone, because
+          # `just check-portable` proves one triple per surface; the universal
+          # build also needs x86_64.
+          target: x86_64-linux-android
+          cache: true
+
+      # An Android build needs the cargo subcommand, not the npm binary. Tauri's
+      # generated Gradle plugin runs `cargo tauri android android-studio-script`
+      # with the executable hardcoded as `cargo` and no property to override it
+      # (gen/android/buildSrc/src/main/java/io/teachouse/desktop/kotlin/BuildTask.kt,
+      # lines 19 and 51), so `cargo-tauri` has to be on the runner however this
+      # file invokes the CLI. binstall fetches Tauri's own published binary for
+      # the pinned version rather than compiling the crate.
+      - uses: cargo-bins/cargo-binstall@75b4bfae1b2c753a6806bbce6e6cb89b602de33c # v1.22.0
+      - name: install the Tauri CLI
+        env:
+          CLI_VERSION: ${{ inputs.tauri-cli-version }}
+        run: |
+          set -euo pipefail
+          # `--force`: the restored cargo cache can carry binstall's record of
+          # the install without the binary, and the record alone made the
+          # 0.8.0 run skip the download and fail on `cargo tauri`.
+          cargo binstall --no-confirm --locked --force "tauri-cli@$CLI_VERSION"
+          cargo tauri --version
+
+      - name: point the build at the pinned NDK
+        env:
+          NDK_VERSION: ${{ steps.pins.outputs.ndk }}
+        run: |
+          set -euo pipefail
+          ndk="$ANDROID_HOME/ndk/$NDK_VERSION"
+          if [ ! -d "$ndk" ]; then
+            echo "the pinned NDK $NDK_VERSION is not at $ndk after setup-android" >&2
+            ls -1 "$ANDROID_HOME/ndk" >&2 || true
+            exit 1
+          fi
+          printf 'NDK_HOME=%s\n' "$ndk" >> "$GITHUB_ENV"
+          printf 'ANDROID_NDK_ROOT=%s\n' "$ndk" >> "$GITHUB_ENV"
+
+      - name: set up release signing
+        env:
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          keystore="$RUNNER_TEMP/keystore.jks"
+          printf '%s' "$ANDROID_KEY_BASE64" | base64 -d > "$keystore"
+          chmod 600 "$keystore"
+          properties=apps/desktop/src-tauri/gen/android/keystore.properties
+          {
+            printf 'keyAlias=%s\n' "$ANDROID_KEY_ALIAS"
+            printf 'password=%s\n' "$ANDROID_KEY_PASSWORD"
+            printf 'storeFile=%s\n' "$keystore"
+          } > "$properties"
+          chmod 600 "$properties"
+          echo "release signing is configured"
+
+      # Every 64-bit ABI in one universal APK and one AAB: the tablet and the
+      # phone are arm64, and a Chromebook or an x86_64 emulator installs the
+      # same file. 32-bit ARM is not buildable: tam-limits refuses a target
+      # whose usize is narrower than its u64 byte bounds at compile time.
+      - name: build the APK and the app bundle
+        working-directory: apps/desktop
+        env:
+          TAM_ENTITLEMENT_PUBLIC_KEY: ${{ vars.TAM_ENTITLEMENT_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          cargo tauri android build --apk --aab --ci --target aarch64 --target x86_64
+
+      # Gradle names an unsigned build `...-release-unsigned.apk`, so matching
+      # `*-universal-release.apk` alone is the check that signing happened and
+      # that the universal APK was the one built. The certificate digest
+      # printed is public — it is what `apksigner` prints for any downloaded
+      # copy — and it is the value to compare when a device answers "App not
+      # installed". The AAB is checked with jarsigner, which is what verifies
+      # an app bundle's upload signature.
+      - name: collect the APK and the app bundle
+        run: |
+          set -euo pipefail
+          outputs=apps/desktop/src-tauri/gen/android/app/build/outputs
+          out=android-artifacts
+          mkdir -p "$out"
+          apk=$(find "$outputs/apk" -type f -name '*-universal-release.apk' | head -1)
+          aab=$(find "$outputs/bundle" -type f -name '*-universal-release.aab' | head -1)
+          if [ -z "$apk" ] || [ -z "$aab" ]; then
+            echo "no signed universal release APK and AAB under $outputs" >&2
+            find "$outputs" -type f \( -name '*.apk' -o -name '*.aab' \) >&2 || true
+            exit 1
+          fi
+          for abi in arm64-v8a x86_64; do
+            if ! unzip -l "$apk" | grep -q " lib/$abi/libtam_desktop.so$"; then
+              echo "the universal APK carries no lib/$abi/libtam_desktop.so" >&2
+              exit 1
+            fi
+            if ! unzip -l "$aab" | grep -q " base/lib/$abi/libtam_desktop.so$"; then
+              echo "the app bundle carries no base/lib/$abi/libtam_desktop.so" >&2
+              exit 1
+            fi
+          done
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$apk" \
+            | grep -E 'certificate (DN|SHA-256 digest)'
+          jarsigner -verify "$aab" | tail -1
+          cp "$apk" "$out/Teachouse_${VERSION}_universal.apk"
+          cp "$aab" "$out/Teachouse_${VERSION}_universal.aab"
+          ls -l "$out"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android-universal
+          path: android-artifacts
+          if-no-files-found: error
+          retention-days: 30
+
+      # The Cloud publishes no Android platform identifier, so the APK goes up
+      # as a generic asset, served from the CDN by file name. The AAB is for
+      # Play alone and goes nowhere else.
+      - name: upload the APK to CrabNebula Cloud
+        uses: crabnebula-dev/cloud-release@1a8803698ba41de6b23e42abc5dcc3721308233c # action-v0.2.6
+        with:
+          command: >-
+            release upload ${{ vars.CN_APPLICATION }} ${{ inputs.version }}
+            --file android-artifacts/Teachouse_${{ inputs.version }}_universal.apk
+            ${{ vars.CN_CHANNEL && format('--channel {0}', vars.CN_CHANNEL) || '' }}
+          api-key: ${{ secrets.CN_API_KEY }}
+          working-directory: .
+
+      # `internal` unless PLAY_TRACK says otherwise, and `completed` unless
+      # PLAY_RELEASE_STATUS says otherwise. An app that has never been
+      # published to any track can take only `draft`: Play refuses a completed
+      # release of an unpublished app, so set PLAY_RELEASE_STATUS=draft until
+      # the first review passes.
+      - name: upload the app bundle to Google Play
+        if: ${{ inputs.play }}
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: io.teachouse.desktop
+          releaseFiles: android-artifacts/Teachouse_${{ inputs.version }}_universal.aab
+          releaseName: ${{ inputs.version }}
+          track: ${{ vars.PLAY_TRACK || 'internal' }}
+          status: ${{ vars.PLAY_RELEASE_STATUS || 'completed' }}
+
+      - name: say where the app bundle went
+        if: ${{ inputs.play }}
+        env:
+          TRACK: ${{ vars.PLAY_TRACK || 'internal' }}
+          STATUS: ${{ vars.PLAY_RELEASE_STATUS || 'completed' }}
+        run: |
+          echo "The Android app bundle for $VERSION was uploaded to Google Play, track \`$TRACK\`, status \`$STATUS\`." >> "$GITHUB_STEP_SUMMARY"

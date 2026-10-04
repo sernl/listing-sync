@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT a.org_id AS \"org!\",\n                      array_agg(DISTINCT a.kind) AS \"kinds!\",\n                      count(DISTINCT b.org_id)   AS \"linked!\"\n                 FROM account_link_signal a\n                 JOIN account_link_signal b\n                   ON b.kind = a.kind AND b.value_hash = a.value_hash AND b.org_id <> a.org_id\n                WHERE a.org_id = ANY($1)\n                  AND a.kind IN ('shop_digest', 'device_fingerprint', 'ip', 'payment_fingerprint')\n                GROUP BY a.org_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "org!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "kinds!",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 2,
+        "name": "linked!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "fee3c89197a688b48494e51e367497f593b314ac1381c93f9586299525a168d1"
+}

@@ -1,6 +1,6 @@
 [package]
 name        = "tam-desktop"
-version     = "0.20.0"
+version     = "0.21.0"
 edition     = "2021"
 publish     = false
 description = "Teachouse cross-lists your teaching resources to the marketplaces you sell on. Marketplace work for Tes and TPT runs on your own device."
@@ -23,6 +23,10 @@ path = "src/main.rs"
 # frontend rather than pointing the webview at the dev server; removing it
 # makes a release bundle that loads nothing.
 custom-protocol = ["tauri/custom-protocol"]
+# The Mac App Store build, and only that one: the store updates the app, so
+# the build registers no updater (App Review guideline 2.4.5(vii)). The
+# release workflow's `mac-app-store` job is the one caller.
+app-store = []
 
 [build-dependencies]
 tauri-build = { version = "2.6", features = [] }

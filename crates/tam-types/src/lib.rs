@@ -951,6 +951,43 @@ pub struct MarketplaceRequestedNotice {
     pub note: String,
 }
 
+/// The `email.refund_requested` outbox payload: a seller pressed "Ask for a
+/// refund" on the billing page, and every operator is told.
+///
+/// Composed in the transaction that stores the request, so the drainer reads
+/// nothing else. `explanation` is the policy's own sentence about the quote,
+/// which is what an operator reads before deciding; `note` is what the seller
+/// wrote, if anything. The requester travels as their identity-service
+/// subject, as [`MarketplaceRequestedNotice`]'s does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefundRequestedNotice {
+    pub request: Uuid,
+    pub requester_subject: Option<Uuid>,
+    pub org: OrgId,
+    pub org_name: String,
+    pub charge_id: String,
+    pub quoted_cents: i64,
+    pub currency: String,
+    pub explanation: String,
+    pub note: String,
+}
+
+/// The `email.refund_declined` outbox payload: an operator declined a
+/// seller's refund request, and the organisation's people are told why.
+///
+/// The recipients travel as identity-service subjects, read when the request
+/// was declined, for the reason the refund mail reads them at its claim: the
+/// address is the identity service's and is held for one send.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefundDeclinedNotice {
+    pub org: OrgId,
+    pub org_name: String,
+    pub quoted_cents: i64,
+    pub currency: String,
+    pub reason: String,
+    pub subjects: Vec<Uuid>,
+}
+
 /// The body carried beside each `job_event.kind`. The serde tag of each
 /// variant is exactly one `JobEventKind` name — the agreement test below is
 /// the tripwire — and the pair is one tagged union split across the two

@@ -306,8 +306,41 @@ a.mp-mark:hover {
   font-variant-numeric: tabular-nums;
 }
 
-.mp-dl .cta {
+.mp-dl .cta,
+.mp-dl .btn {
   margin-top: auto;
+}
+
+/* The card for the device reading the page, drawn first. */
+.mp-dl-current {
+  border-color: var(--accent);
+  box-shadow: var(--sh-1);
+}
+
+.mp-dl-here {
+  padding: 2px var(--s-2);
+  border-radius: var(--r-pill);
+  background: var(--accent-soft);
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* The platform's other files and its store listing, under the button. */
+.mp-dl-more {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+
+.mp-dl-more li {
+  display: flex;
+  gap: var(--s-2);
+  align-items: baseline;
 }
 
 .mp-sha {
@@ -315,7 +348,8 @@ a.mp-mark:hover {
   overflow-wrap: anywhere;
 }
 
-/* The one "Coming soon" row: macOS and the browser extensions. */
+/* The one "Coming soon" row: platforms with nothing published yet, and the
+   browser extensions. */
 .mp-soon {
   display: flex;
   align-items: center;

@@ -17,6 +17,7 @@
 
 #![forbid(unsafe_code)]
 
+mod abuse;
 mod campaigns;
 mod downloads;
 mod exchange_rates;
@@ -95,6 +96,12 @@ const STRIPE_SECRET_KEY_FLAG: &str = "--stripe-secret-key";
 /// log, which is the fail-closed direction for a purchase we cannot
 /// interpret.
 const STRIPE_PRICE_MAP_FLAG: &str = "--stripe-price-map";
+
+/// Where the outbound Stripe calls go instead of `https://api.stripe.com`:
+/// a local double, for a development stack that exercises checkout, the
+/// payments ledger and refunds without reaching Stripe. Given only with
+/// [`STRIPE_SECRET_KEY_FLAG`]; production never passes it.
+const STRIPE_API_BASE_FLAG: &str = "--stripe-api-base";
 
 /// The PostHog project key this deployment captures product analytics under.
 ///
@@ -773,6 +780,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // an engine url still owes its sellers their Friday drop.
     eprintln!("tam-server hosting the scheduler pass every {SCHEDULER_INTERVAL_SECS}s");
     spawn_scheduler_pass(state.clone(), loops.clone());
+    // Abuse prevention's nightly pass: global tables on the application
+    // pool, like the scheduler, so every deployment runs it.
+    eprintln!("tam-server running the abuse pass nightly");
+    abuse::spawn_pass(state.clone(), loops.clone());
     // The operators' campaigns: global rows on the application pool, so this
     // needs no engine url, only the mail set. Without it the rows stay
     // queued and the operator's log says so.
@@ -795,6 +806,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("tam-server sending refund mail from {}", mail.email_from);
             refund_mail::spawn(
                 PaymentRepo::new(state.pool.clone()),
+                notify::AuthAddresses::new(&mail.auth_internal_url, &mail.auth_internal_secret)?,
+                notify::ResendRelay::new(&mail.resend_api_key, &mail.email_from)?,
+                mail.console_url.clone(),
+                loops.clone(),
+            );
+            // The warning or suspension an operator's decision queued.
+            abuse::spawn_mail(
+                tam_storage::AbuseRepo::new(state.pool.clone()),
                 notify::AuthAddresses::new(&mail.auth_internal_url, &mail.auth_internal_secret)?,
                 notify::ResendRelay::new(&mail.resend_api_key, &mail.email_from)?,
                 mail.console_url.clone(),
@@ -919,6 +938,8 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     let mut posthog_project_id = None;
     let mut posthog_personal_key_file = None;
     let mut posthog_api_host = tam_api::admin_analytics::DEFAULT_API_HOST.to_owned();
+    let mut stripe_key = None;
+    let mut stripe_api_base = None;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         if argument == DISCLOSE_FLAG {
@@ -950,9 +971,13 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
             let path = arguments
                 .next()
                 .ok_or("--stripe-secret-key needs a path argument")?;
-            config.stripe = Some(tam_api::stripe::Client::new(SecretKey::new(read_secret(
-                &path,
-            )?)));
+            stripe_key = Some(SecretKey::new(read_secret(&path)?));
+        } else if argument == STRIPE_API_BASE_FLAG {
+            stripe_api_base = Some(
+                arguments
+                    .next()
+                    .ok_or("--stripe-api-base needs a url argument")?,
+            );
         } else if argument == STRIPE_PRICE_MAP_FLAG {
             let path = arguments
                 .next()
@@ -1106,6 +1131,15 @@ fn parse_invocation() -> Result<Invocation, Box<dyn std::error::Error>> {
     let bind = match positional.get(1) {
         Some(raw) => raw.parse()?,
         None => DEFAULT_BIND,
+    };
+    // A base with no key would point nothing anywhere.
+    config.stripe = match (stripe_key, stripe_api_base) {
+        (Some(key), Some(base)) => Some(tam_api::stripe::Client::with_base(key, base)),
+        (Some(key), None) => Some(tam_api::stripe::Client::new(key)),
+        (None, None) => None,
+        (None, Some(_)) => {
+            return Err(format!("{STRIPE_API_BASE_FLAG} needs {STRIPE_SECRET_KEY_FLAG}").into())
+        }
     };
     // Refused rather than half-configured: an issuer with nowhere to fetch
     // keys from would verify nothing, and a key set with no expected issuer
@@ -1403,6 +1437,11 @@ fn console_router(dir: &std::path::Path) -> Result<axum::Router, Box<dyn std::er
 /// landing host sends `/v1/…` paths the API would otherwise answer to the
 /// console host. It decides only where a request goes; what answers it there
 /// is the composition below, unchanged.
+///
+/// The crawler check sits just inside the host split, so it reads the host
+/// the split attached and never sees a request the split redirected or the
+/// console host's `robots.txt`, which a refused crawler must still be able to
+/// read.
 fn assemble(
     state: AppState,
     console: Option<axum::Router>,
@@ -1410,6 +1449,10 @@ fn assemble(
     downloads: Option<std::sync::Arc<downloads::Downloads>>,
     hosts: Option<std::sync::Arc<serving::Hosts>>,
 ) -> axum::Router {
+    let fence = std::sync::Arc::new(CrawlerFence {
+        landing: landing.clone(),
+        serves_downloads: downloads.is_some(),
+    });
     let split = hosts.map(|hosts| {
         std::sync::Arc::new(HostSplit {
             hosts,
@@ -1446,6 +1489,7 @@ fn assemble(
         // and its own refusal of an unknown version is the only answer left.
         None => tam_api::router(state),
     };
+    let router = router.layer(axum::middleware::from_fn_with_state(fence, refuse_crawlers));
     let router = match split {
         Some(split) => router.layer(axum::middleware::from_fn_with_state(split, host_split)),
         None => router,
@@ -1498,6 +1542,46 @@ async fn host_split(
         return serving::host_redirect(&location);
     }
     request.extensions_mut().insert(tier);
+    next.run(request).await
+}
+
+/// What the crawler check needs to place a request: enough of the static
+/// tiers to ask `serving::route` which tier a path is.
+struct CrawlerFence {
+    landing: Option<std::sync::Arc<serving::Landing>>,
+    serves_downloads: bool,
+}
+
+/// A 403 for an AI crawler or scraper (`serving::refused_agent`) asking for
+/// the API or the console (`serving::guarded_from_crawlers`); everything else
+/// passes on. The path is placed only once the `User-Agent` has matched, so
+/// a person's request costs one scan of one header.
+async fn refuse_crawlers(
+    axum::extract::State(fence): axum::extract::State<std::sync::Arc<CrawlerFence>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let named = request
+        .headers()
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(serving::refused_agent);
+    if named {
+        let tier = request
+            .extensions()
+            .get::<serving::HostTier>()
+            .copied()
+            .unwrap_or(serving::HostTier::Other);
+        let path = request.uri().path();
+        let answer = serving::route(
+            path,
+            |file| fence.landing.as_ref().is_some_and(|it| it.has(file)),
+            fence.serves_downloads,
+        );
+        if serving::guarded_from_crawlers(tier, path, &answer) {
+            return serving::crawler_refused();
+        }
+    }
     next.run(request).await
 }
 
@@ -2143,14 +2227,25 @@ mod composition {
     /// `GET path` on `host` of a deployment split between `teachouse.io` and
     /// `dash.teachouse.io`.
     pub(super) async fn on(host: &str, path: &str) -> Answer {
-        let request = Request::builder()
-            .uri(path)
-            .header(header::HOST, host)
-            .body(Body::empty())
-            .expect("a well-formed request");
-        let hosts = crate::serving::Hosts::new("teachouse.io", "dash.teachouse.io")
-            .expect("two distinct bare hosts");
-        answer(assembled(Some(hosts)), request).await
+        as_agent(Some(host), path, None).await
+    }
+
+    /// `GET path` sent by `agent`, on `host` of the split deployment where
+    /// one is named and on the single-host one otherwise.
+    pub(super) async fn as_agent(host: Option<&str>, path: &str, agent: Option<&str>) -> Answer {
+        let mut request = Request::builder().uri(path);
+        if let Some(host) = host {
+            request = request.header(header::HOST, host);
+        }
+        if let Some(agent) = agent {
+            request = request.header(header::USER_AGENT, agent);
+        }
+        let request = request.body(Body::empty()).expect("a well-formed request");
+        let hosts = host.map(|_| {
+            crate::serving::Hosts::new("teachouse.io", "dash.teachouse.io")
+                .expect("two distinct bare hosts")
+        });
+        answer(assembled(hosts), request).await
     }
 
     async fn answer(router: axum::Router, request: Request<Body>) -> Answer {
@@ -2175,6 +2270,58 @@ mod composition {
 
     async fn get(path: &str) -> Answer {
         ask(Method::GET, path).await
+    }
+
+    /// An AI crawler is refused the API and the console, and still reads the
+    /// landing, the installers and `robots.txt`; a browser is refused nothing,
+    /// and neither is an editor whose agent merely contains a short name on
+    /// the list.
+    #[tokio::test]
+    async fn an_ai_crawler_is_refused_the_api_and_the_console() {
+        const GPTBOT: &str = "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.2; +https://openai.com/gptbot)";
+        const BROWSER: &str =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
+        const EDITOR: &str =
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Code/1.104.0 Chrome/138.0.0.0 Electron/37.3.1 Safari/537.36";
+        for path in [
+            "/v1/plans",
+            "/catalogue",
+            "/app",
+            "/_app/immutable/entry/start.abc123.js",
+        ] {
+            for agent in [
+                GPTBOT,
+                "ccbot/2.0 (https://commoncrawl.org/faq/)",
+                "Scrapy/2.13",
+            ] {
+                let refused = as_agent(None, path, Some(agent)).await;
+                assert_eq!(refused.status, StatusCode::FORBIDDEN, "{agent} on {path}");
+                assert!(
+                    refused.body.contains("/terms/#automated"),
+                    "{}",
+                    refused.body
+                );
+                assert_eq!(
+                    refused.header(header::HeaderName::from_static("x-robots-tag")),
+                    "noai, noimageai",
+                    "a refusal carries the transport headers too"
+                );
+            }
+            for agent in [BROWSER, EDITOR] {
+                assert_ne!(
+                    as_agent(None, path, Some(agent)).await.status,
+                    StatusCode::FORBIDDEN,
+                    "{agent} on {path}"
+                );
+            }
+        }
+        for path in ["/", "/pricing", "/robots.txt", "/downloads/downloads.json"] {
+            assert_eq!(
+                as_agent(None, path, Some(GPTBOT)).await.status,
+                StatusCode::OK,
+                "the landing's {path} stays readable"
+            );
+        }
     }
 
     /// Each of the four tiers answers, and answers as itself.
@@ -2332,6 +2479,10 @@ mod composition {
             (
                 header::HeaderName::from_static("permissions-policy"),
                 "camera=(), microphone=(), geolocation=()",
+            ),
+            (
+                header::HeaderName::from_static("x-robots-tag"),
+                "noai, noimageai",
             ),
         ];
         let answers = [
@@ -2576,10 +2727,37 @@ mod composition {
 mod host_split {
     use axum::http::{header, StatusCode};
 
-    use super::composition::on;
+    use super::composition::{as_agent, on};
 
     const APEX: &str = "teachouse.io";
     const DASH: &str = "dash.teachouse.io";
+    const GPTBOT: &str = "Mozilla/5.0 (compatible; GPTBot/1.2; +https://openai.com/gptbot)";
+
+    /// On a split deployment the console host refuses a crawler every path
+    /// but its `robots.txt`, its root included; the apex refuses it the API
+    /// and keeps its pages readable.
+    #[tokio::test]
+    async fn an_ai_crawler_is_refused_the_console_host_and_the_apex_api() {
+        for path in ["/", "/catalogue", "/v1/plans", "/_astro/Base.abc123.css"] {
+            assert_eq!(
+                as_agent(Some(DASH), path, Some(GPTBOT)).await.status,
+                StatusCode::FORBIDDEN,
+                "{path} on dash"
+            );
+        }
+        assert_eq!(
+            as_agent(Some(APEX), "/v1/plans", Some(GPTBOT)).await.status,
+            StatusCode::FORBIDDEN,
+            "the apex's API reads"
+        );
+        for path in ["/", "/pricing", "/robots.txt", "/sitemap.xml"] {
+            assert_eq!(
+                as_agent(Some(APEX), path, Some(GPTBOT)).await.status,
+                StatusCode::OK,
+                "{path} on the apex"
+            );
+        }
+    }
 
     async fn assert_moved(host: &str, path: &str, to: &str) {
         let answer = on(host, path).await;
@@ -2698,9 +2876,23 @@ mod host_split {
             StatusCode::OK,
             "dash has its own robots file"
         );
+        assert!(
+            robots.body.ends_with("User-agent: *\nDisallow: /\n"),
+            "dash refuses every crawler: {}",
+            robots.body
+        );
+        for named in [
+            "User-agent: GPTBot\n",
+            "User-agent: ClaudeBot\n",
+            "User-agent: CCBot\n",
+        ] {
+            assert!(robots.body.contains(named), "dash names {named:?}");
+        }
+        let refused = as_agent(Some(DASH), "/robots.txt", Some(GPTBOT)).await;
         assert_eq!(
-            robots.body, "User-agent: *\nDisallow: /\n",
-            "dash refuses crawlers"
+            refused.status,
+            StatusCode::OK,
+            "a refused crawler can still read that it is refused"
         );
 
         assert_moved(DASH, "/pricing", "https://teachouse.io/pricing").await;

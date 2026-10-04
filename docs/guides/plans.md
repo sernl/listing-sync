@@ -13,7 +13,7 @@ A move is publishing one imported resource onto one marketplace. Publishing a re
 - Duplicates are merged first, so the same resource never counts twice.
 - Importing, editing, previewing and exporting use no moves.
 
-Each plan also sets how many resources you can keep and how many watermarked previews you can make. If you are over a number, for example after changing plan, you keep everything you have. You can't add more until you upgrade or make room. On Look you get 5 previews in all; on the paid plans previews start again on the 1st of each month.
+Each plan also sets how many resources your catalogue can hold and how many watermarked previews you can make. If you are over a number, for example after changing plan, you keep everything you have. You can't add more until you upgrade or make room. On Look you get 5 previews in all; on Starter and Pro previews start again on the 1st of each month; Studio has no limit.
 
 ## See your plan
 
@@ -27,23 +27,29 @@ Open **Account → Billing**. The card at the top shows **Your plan**, what it g
 | | Look | Starter | Pro | Studio |
 |---|---|---|---|---|
 | Price | Free | $12 a month, or $96 a year | $29 a month, or $240 a year | $59 a month, or $480 a year |
-| Resources you can keep | 100 | 250 | 500 | Unlimited |
-| Watermarked previews | 5 in all | 20 a month | 50 a month | 100 a month |
+| Catalogue | Up to 100 resources | Up to 250 resources | Up to 500 resources | Unlimited resources |
+| Watermarked previews | 5 in all | 20 a month | 50 a month | Unlimited |
 | Moves | 5 free, once | 10 a month | 25 a month | 100 a month |
 | Unused moves stack to | — | 30 | 75 | 300 |
-| Edits sent to every marketplace | — | Once a day | Every 6 hours | Every hour |
-| Templates and collections | 1 each | 5 each | 10 each | Unlimited |
-| Labels | 5 | Unlimited | Unlimited | Unlimited |
+| Bulk actions | Yes | Yes | Yes | Yes |
+| Edits sent to every marketplace | — | — | Weekly | Daily |
+| Schedule when a listing goes live | — | — | Yes | Yes |
+| Term mapping and price rules | — | — | Yes | Yes |
+| Automatic publishing rules | — | — | Yes | Yes |
+| Statistics on every shop | — | Yes | Yes | Yes |
+| Labels, templates and collections | 1 each | 5 each | 10 each | Unlimited |
 
-**Look** is free for as long as you like: "For a small shop: bring your resources in, make previews and try five moves." Your five free moves go onto a marketplace of your choice.
+**Look** is free for as long as you like: "For a small shop: bring your resources in, make five previews and try five moves." Your five free moves go onto a marketplace of your choice.
 
-**Starter** adds editing once and syncing everywhere, scheduling and email support.
+**Starter** adds statistics on every shop, 5 labels, 5 templates and 5 collections, and email support.
 
-**Pro** adds statistics on every shop and automatic publishing rules. It is the recommended plan.
+**Pro** adds edits sent to every marketplace each week, scheduling, term mapping and price rules, automatic publishing rules, and 10 labels, templates and collections. It is the recommended plan.
 
-**Studio** adds priority support: we answer within a day.
+**Studio** sends edits every day, and has unlimited resources, watermarked previews, labels, templates and collections, and automations. We answer support within a day.
 
-Every plan can import from wherever you sell, find and merge duplicates, use rich-text descriptions, export to a spreadsheet, and use the Teachouse app on your own devices. AI description fill is coming soon on Pro and Studio.
+Every plan can import from wherever you sell, use bulk actions on the Resources page, find and merge duplicates, use rich-text descriptions, export to a spreadsheet, and use the Teachouse app on your own devices. AI description fill is coming soon on Pro and Studio.
+
+On Look and Starter, the **Target terms** and **Pricing** pages still show the rules you saved before, and you can delete them. Saving, previewing and approving need Pro or Studio.
 
 The switch above the plans shows **Monthly** or **Yearly** prices. The yearly price is shown as what it works out at each month, with what you save. The plan you are on is marked **Your plan**.
 

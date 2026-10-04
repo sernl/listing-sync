@@ -217,17 +217,31 @@ mod tests {
         );
     }
 
-    /// The two installer types are named rather than served as bytes.
+    /// Every installer type the mirror publishes is named rather than served
+    /// as bytes.
     #[test]
     fn each_download_type_is_named() {
         for (file, expected) in [
             ("downloads.json", "application/json"),
             (
-                "Teachouse_0.2.0_x64-setup.exe",
+                "Teachouse_0.21.0_x64-setup.exe",
                 "application/vnd.microsoft.portable-executable",
             ),
+            ("Teachouse_0.21.0_x64_en-US.msi", "application/x-msi"),
             (
-                "Teachouse_0.2.0_arm64.apk",
+                "Teachouse_0.21.0_universal.dmg",
+                "application/x-apple-diskimage",
+            ),
+            (
+                "Teachouse_0.21.0_amd64.AppImage",
+                "application/vnd.appimage",
+            ),
+            (
+                "Teachouse_0.21.0_amd64.deb",
+                "application/vnd.debian.binary-package",
+            ),
+            (
+                "Teachouse_0.21.0_universal.apk",
                 "application/vnd.android.package-archive",
             ),
             ("SHA256SUMS.txt", "text/plain; charset=utf-8"),

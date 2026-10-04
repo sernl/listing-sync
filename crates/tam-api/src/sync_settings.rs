@@ -32,14 +32,16 @@ const NO_SYNC: &str = "Upgrade your plan to check your marketplaces for changes.
 /// And for the rules, which are the second capability.
 const NO_RULES: &str = "Upgrade your plan to republish a listing when its resource changes.";
 
-/// What a seller may choose: six-hourly, daily, weekly.
+/// What a seller may choose: daily or weekly.
 ///
 /// A closed set rather than a free number, because it is a radio group in the
 /// console and a free interval is a support question about why a shop is read
 /// every ninety seconds. The plan's floor then removes the ones a plan does
 /// not reach, which is why both exist: the set is what the control offers and
-/// the floor is what the plan allows of it.
-pub const INTERVAL_CHOICES: [u32; 3] = [6 * 3_600, 24 * 3_600, 7 * 24 * 3_600];
+/// the floor is what the plan allows of it. Six-hourly went when no plan
+/// reached it any more (Studio daily, Pro weekly; founder, 2026-10-05); a row
+/// stored at six hours is read at the plan's floor by the scheduler.
+pub const INTERVAL_CHOICES: [u32; 2] = [24 * 3_600, 7 * 24 * 3_600];
 
 /// The interval a marketplace the seller has never configured is offered at.
 ///

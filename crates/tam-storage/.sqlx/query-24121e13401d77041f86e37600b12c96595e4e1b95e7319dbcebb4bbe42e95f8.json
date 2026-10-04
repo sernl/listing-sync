@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE abuse_flag SET mail_sent_at = $2, mail_due_at = NULL, mail_error = NULL WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "24121e13401d77041f86e37600b12c96595e4e1b95e7319dbcebb4bbe42e95f8"
+}

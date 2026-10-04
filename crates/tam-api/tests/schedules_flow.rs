@@ -64,9 +64,11 @@ const READY: &str = "Ready";
 /// Comfortably past the matcher's fifty-kilobyte floor.
 const BIG: u64 = 120_000;
 
-/// Subscriber's own floor, which is also the shortest interval the control
-/// offers.
-const SIX_HOURS: u32 = 6 * 3_600;
+/// Pro's (Subscriber's) own floor since the 2026-10-05 matrix review.
+const WEEKLY: u32 = 7 * 24 * 3_600;
+
+/// The shorter of the two cadences the control offers, and Studio's floor.
+const DAILY: u32 = 24 * 3_600;
 
 // ------------------------------------------------------------------ harness
 
@@ -526,6 +528,86 @@ async fn a_free_plan_is_refused_the_timetable(pool: PgPool) {
     );
 }
 
+/// Scheduling moved up to Pro in the 2026-10-05 matrix review, and edits sent
+/// to every marketplace with it: Starter is refused both by capability, and
+/// a stored schedule of a Starter organisation does not fire.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_starter_plan_is_refused_the_timetable_and_the_edit_sync(pool: PgPool) {
+    provision(&pool, Some(tam_limits::Plan::Starter)).await;
+    let root = store_root("starter");
+    let app = router(configured(pool.clone(), &root));
+
+    let refused = call(&app, Method::POST, "/v1/schedules", Some(daily_body())).await;
+    assert_eq!(
+        refused.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        refused.body
+    );
+    assert_eq!(
+        refused.body["errors"][0]["detail"]["feature"],
+        serde_json::json!("scheduling"),
+        "the refusal names the capability: {}",
+        refused.body
+    );
+
+    let sync = call(
+        &app,
+        Method::PUT,
+        "/v1/sync/settings/Tes",
+        Some(serde_json::json!({ "enabled": true, "interval_secs": WEEKLY })),
+    )
+    .await;
+    assert_eq!(
+        sync.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        sync.body
+    );
+    assert_eq!(
+        sync.body["errors"][0]["detail"]["feature"],
+        serde_json::json!("sync_pull_interval_secs"),
+        "Starter sends no edits: {}",
+        sync.body
+    );
+}
+
+/// Pro's floor is a week: a Pro seller asking for a daily check is held to
+/// weekly rather than refused, and the six-hourly cadence no plan reaches
+/// any more is no longer a choice at all.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_pro_plan_sends_edits_weekly(pool: PgPool) {
+    provision(&pool, Some(tam_limits::Plan::Subscriber)).await;
+    let root = store_root("pro-weekly");
+    let app = router(configured(pool.clone(), &root));
+
+    let saved = call(
+        &app,
+        Method::PUT,
+        "/v1/sync/settings/Tes",
+        Some(serde_json::json!({ "enabled": true, "interval_secs": DAILY })),
+    )
+    .await;
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
+    let setting: SyncSettingView = saved.json();
+    assert_eq!(setting.interval_secs, WEEKLY, "floored to the plan's week");
+    assert_eq!(setting.minimum_secs, Some(WEEKLY));
+
+    let six = call(
+        &app,
+        Method::PUT,
+        "/v1/sync/settings/Tes",
+        Some(serde_json::json!({ "enabled": true, "interval_secs": 6 * 3_600 })),
+    )
+    .await;
+    assert_eq!(
+        six.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "six-hourly is no longer offered: {}",
+        six.body
+    );
+}
+
 /// The inbound clock, whole: a setting becomes due, the pass opens a run the
 /// device finds, the list is ticked without a seller, the description
 /// completes, the next pass commits it, and the seller's own rule publishes
@@ -551,7 +633,7 @@ async fn a_due_sync_setting_pulls_commits_and_publishes(pool: PgPool) {
         "/v1/sync/settings/Tes",
         Some(serde_json::json!({
             "enabled": true,
-            "interval_secs": SIX_HOURS,
+            "interval_secs": WEEKLY,
             "publish_to": ["Tpt"],
         })),
     )
@@ -563,10 +645,10 @@ async fn a_due_sync_setting_pulls_commits_and_publishes(pool: PgPool) {
         saved.body
     );
     let setting: SyncSettingView = saved.json();
-    assert_eq!(setting.interval_secs, SIX_HOURS);
+    assert_eq!(setting.interval_secs, WEEKLY);
     assert_eq!(
         setting.minimum_secs,
-        Some(SIX_HOURS),
+        Some(WEEKLY),
         "the plan's floor travels with the row, so the control can disable what is below it"
     );
     assert_eq!(setting.publish_to, vec![tam_types::InventoryId::Tpt]);

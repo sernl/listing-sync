@@ -37,7 +37,7 @@ An import adds its own labels, such as TPT or Tes, so you can find what it broug
 2. Give it a **Name**, and a **Note to yourself** if you like.
 3. Press **Create**.
 
-Collections come with the subscription. See [Plans](/guides/plans).
+Look has 1 label, 1 template and 1 collection, Starter 5 of each, Pro 10 and Studio no limit. See [Plans](/guides/plans).
 
 <!-- shot: /collections, two collections with their counts and marketplaces -->
 ![Your collections](/v1/guides/images/0a97c56e5b3107721e8cb5ffa8ce98ebc8cc3a112ded674cb224a812616a2b00)

@@ -59,6 +59,8 @@
               || (builtins.match ".*/tests/fixtures/.*\\.zip" path != null)
               || (builtins.match ".*/docs/design/data/.*\\.jsonl?" path != null)
               || (builtins.match ".*/apps/extension/static/manifest\\.json" path != null)
+              # The sign-up screen's bundled throwaway-domain list (tam-api).
+              || (builtins.match ".*/crates/tam-api/data/.*\\.txt" path != null)
               # The verdict-fixtures bin and equivalence test in tam-core-wasm
               # include drafts.json and verdicts.json from outside src/.
               || (builtins.match ".*/crates/[^/]+/fixtures/.*\\.json" path != null);
@@ -421,13 +423,20 @@
               # paths it redirects -- and names no console route, because a
               # console segment here is a line about a host this file is never
               # served on. Written by hand in
-              # `apps/landing/src/pages/robots.txt.js`.
+              # `apps/landing/src/pages/robots.txt.js`, ahead of one group that
+              # refuses the AI crawlers in `tam_api::crawlers` everywhere.
               test -f "$landing/robots.txt"
               test -f "$landing/sitemap.xml"
               for refused in /v1/ /api/ /ingest/ /downloads/; do
                 if ! grep -qxF "Disallow: $refused" "$landing/robots.txt"; then
                   echo "robots.txt does not refuse $refused, which the marketing host still answers:" >&2
                   echo "add it to apps/landing/src/pages/robots.txt.js" >&2
+                  exit 1
+                fi
+              done
+              for crawler in GPTBot ClaudeBot CCBot Google-Extended; do
+                if ! grep -qxF "User-agent: $crawler" "$landing/robots.txt"; then
+                  echo "robots.txt does not name $crawler; run just web-typegen" >&2
                   exit 1
                 fi
               done

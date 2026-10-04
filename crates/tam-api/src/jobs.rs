@@ -463,6 +463,7 @@ pub(crate) fn storage_fault(state: &AppState, error: &StorageError) -> APIError 
         // Unreachable from a job path: the check-in is the only writer that
         // binds a storefront, and it answers the seller itself.
         | StorageError::StorefrontBoundElsewhere { .. }
+        | StorageError::StorefrontSuspended { .. }
         | StorageError::InventoryMappingAlreadyExists => state.internal(&error.to_string()),
     }
 }

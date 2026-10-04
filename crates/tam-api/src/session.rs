@@ -77,6 +77,13 @@ async fn resolve(parts: &Parts, state: &AppState) -> Result<Option<OrgContext>, 
     let Some(identity) = identity else {
         return Ok(None);
     };
+    // A suspended organisation (migration 0106) is refused here, on every
+    // authenticated route at once, with the sentence the console shows. A ban
+    // also deletes the organisation's sessions, so this is the belt to that
+    // pair of braces: a session minted between the two still meets it.
+    if identity.suspended {
+        return Err(crate::abuse::suspended());
+    }
     let grant = EntitlementRepo::new(state.pool.clone())
         .current(identity.org, now)
         .await
@@ -270,6 +277,9 @@ async fn from_minted_token(
         .await
         .map_err(|error| state.internal(&error.to_string()))?
         .ok_or_else(unauthenticated)?;
+    if identity.suspended {
+        return Err(crate::abuse::suspended());
+    }
     Ok(Exchanged {
         token_hex: raw.to_owned(),
         org: identity.org,
@@ -288,6 +298,7 @@ async fn from_minted_token(
 async fn from_assertion(
     state: &AppState,
     raw: &str,
+    headers: &axum::http::HeaderMap,
     now: Timestamp,
 ) -> Result<Exchanged, APIError> {
     let bridge = state.auth.as_ref().ok_or_else(unauthenticated)?;
@@ -323,8 +334,13 @@ async fn from_assertion(
             "signup_completed",
             serde_json::json!({ "auth_method": "assertion" }),
         );
+        crate::abuse::record_new_tenant(state, provisioned.0, verified.subject, now).await;
         provisioned
     };
+    crate::abuse::refuse_suspended(state, org).await?;
+    // Every sign-in passes through here, so this is where its address and
+    // browser reach the linkage ledger (migration 0105).
+    crate::abuse::record_sign_in(state, org, headers, now).await;
 
     let token = fresh_session_token();
     let expires_at = Timestamp(now.0.saturating_add(ASSERTED_SESSION_TTL_MS));
@@ -341,6 +357,7 @@ async fn from_assertion(
 
 pub(crate) async fn exchange(
     axum::extract::State(state): axum::extract::State<AppState>,
+    headers: axum::http::HeaderMap,
     axum::Json(body): axum::Json<ExchangeBody>,
 ) -> Result<axum::response::Response, APIError> {
     use axum::response::IntoResponse;
@@ -353,7 +370,7 @@ pub(crate) async fn exchange(
     // JWT has dots, the mint tool's token is 64 hex characters, and no string
     // is both. A fallback would let a failed assertion be retried as a token.
     let settled = if raw.contains('.') {
-        from_assertion(&state, raw, now).await?
+        from_assertion(&state, raw, &headers, now).await?
     } else {
         from_minted_token(&state, raw, now).await?
     };

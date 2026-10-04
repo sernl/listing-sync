@@ -16,11 +16,11 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use sqlx::PgPool;
-use tam_types::{OrgId, Timestamp, UserId, Uuid};
+use sqlx::{PgPool, Postgres, Transaction};
+use tam_types::{OrgId, RefundDeclinedNotice, RefundRequestedNotice, Timestamp, UserId, Uuid};
 
 use crate::codec::{timestamp_from_db, timestamp_to_db, uuid_from_db, uuid_to_db};
-use crate::StorageError;
+use crate::{pin_org, NewOutboxMessage, OutboxRepo, StorageError};
 
 /// The `site_setting` key the auto refund mail switch lives under.
 pub const AUTO_REFUND_MAIL_SETTING: &str = "payments.auto_refund_mail";
@@ -30,6 +30,14 @@ pub const SYNC_EVENT_PREFIX: &str = "sync:";
 
 /// How many times a refund mail is tried before it is left failed.
 pub const REFUND_MAIL_ATTEMPTS: i32 = 5;
+
+/// The topic the operators' mail about a seller's refund request is drained
+/// from, in the `email.` family beside the marketplace request's.
+pub const REFUND_REQUESTED_TOPIC: &str = "email.refund_requested";
+
+/// The topic the seller's mail about a declined refund request is drained
+/// from.
+pub const REFUND_DECLINED_TOPIC: &str = "email.refund_declined";
 
 /// What one ledger row records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -192,6 +200,107 @@ pub struct Refund {
     pub mail_error: Option<String>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    /// The rule of the refund policy that quoted this refund, as tam-api's
+    /// `RefundBasis` spells it, where it was issued against a quote
+    /// (migration 0107).
+    pub policy_basis: Option<String>,
+    /// What that rule gave, beside `amount_cents`, which is what was refunded.
+    pub quoted_cents: Option<i64>,
+    /// Why the operator refunded other than the quote. Required by the
+    /// database whenever the two differ.
+    pub override_reason: Option<String>,
+}
+
+/// Where a seller's refund request stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefundRequestStatus {
+    Requested,
+    Approved,
+    Declined,
+}
+
+impl RefundRequestStatus {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Requested => "requested",
+            Self::Approved => "approved",
+            Self::Declined => "declined",
+        }
+    }
+
+    fn parse(raw: &str) -> Result<Self, StorageError> {
+        match raw {
+            "requested" => Ok(Self::Requested),
+            "approved" => Ok(Self::Approved),
+            "declined" => Ok(Self::Declined),
+            other => Err(StorageError::CorruptRow {
+                reason: format!("refund_request.status {other:?} is not a known status"),
+            }),
+        }
+    }
+}
+
+/// One seller's refund request (migration 0107).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefundRequest {
+    pub id: Uuid,
+    pub org: OrgId,
+    pub charge_id: String,
+    pub quoted_cents: i64,
+    pub currency: String,
+    pub policy_basis: String,
+    pub status: RefundRequestStatus,
+    pub note: Option<String>,
+    pub requested_by: Option<UserId>,
+    pub decided_by_label: Option<String>,
+    pub decided_at: Option<Timestamp>,
+    pub decline_reason: Option<String>,
+    pub refund_id: Option<Uuid>,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+}
+
+/// A new refund request, as the seller's route composes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewRefundRequest<'a> {
+    pub id: Uuid,
+    pub org: OrgId,
+    pub charge_id: &'a str,
+    pub quoted_cents: i64,
+    pub currency: &'a str,
+    pub policy_basis: &'a str,
+    /// The policy's sentence about the quote, which the operators' mail
+    /// carries. Not stored: the quote route recomputes it on demand.
+    pub explanation: &'a str,
+    pub note: &'a str,
+    pub requested_by: UserId,
+    pub at: Timestamp,
+}
+
+/// What asking for a refund did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefundRequestWrite {
+    Recorded(Box<RefundRequest>),
+    /// The charge already has a request waiting for an operator.
+    AlreadyOpen,
+}
+
+/// Who decided a request, and when.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Decision<'a> {
+    pub by: UserId,
+    pub label: &'a str,
+    pub at: Timestamp,
+}
+
+/// What deciding a request did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefundDecision {
+    Decided(Box<RefundRequest>),
+    /// It was already approved or declined; the row as it stands.
+    AlreadyDecided(Box<RefundRequest>),
+    NoRequest,
 }
 
 /// A refund Stripe reports that this page may not have issued: from the
@@ -305,6 +414,9 @@ struct RefundRow {
     mail_error: Option<String>,
     created_at: chrono::DateTime<chrono::Utc>,
     updated_at: chrono::DateTime<chrono::Utc>,
+    policy_basis: Option<String>,
+    quoted_cents: Option<i64>,
+    override_reason: Option<String>,
 }
 
 impl TryFrom<RefundRow> for Refund {
@@ -326,6 +438,51 @@ impl TryFrom<RefundRow> for Refund {
             mail_requested_at: row.mail_requested_at.map(timestamp_from_db),
             mail_sent_at: row.mail_sent_at.map(timestamp_from_db),
             mail_error: row.mail_error,
+            created_at: timestamp_from_db(row.created_at),
+            updated_at: timestamp_from_db(row.updated_at),
+            policy_basis: row.policy_basis,
+            quoted_cents: row.quoted_cents,
+            override_reason: row.override_reason,
+        })
+    }
+}
+
+struct RequestRow {
+    id: uuid::Uuid,
+    org_id: uuid::Uuid,
+    charge_id: String,
+    quoted_cents: i64,
+    currency: String,
+    policy_basis: String,
+    status: String,
+    note: Option<String>,
+    requested_by: Option<uuid::Uuid>,
+    decided_by_label: Option<String>,
+    decided_at: Option<chrono::DateTime<chrono::Utc>>,
+    decline_reason: Option<String>,
+    refund_id: Option<uuid::Uuid>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl TryFrom<RequestRow> for RefundRequest {
+    type Error = StorageError;
+
+    fn try_from(row: RequestRow) -> Result<Self, StorageError> {
+        Ok(Self {
+            id: uuid_from_db(row.id),
+            org: OrgId(uuid_from_db(row.org_id)),
+            charge_id: row.charge_id,
+            quoted_cents: row.quoted_cents,
+            currency: row.currency,
+            policy_basis: row.policy_basis,
+            status: RefundRequestStatus::parse(&row.status)?,
+            note: row.note,
+            requested_by: row.requested_by.map(|id| UserId(uuid_from_db(id))),
+            decided_by_label: row.decided_by_label,
+            decided_at: row.decided_at.map(timestamp_from_db),
+            decline_reason: row.decline_reason,
+            refund_id: row.refund_id.map(uuid_from_db),
             created_at: timestamp_from_db(row.created_at),
             updated_at: timestamp_from_db(row.updated_at),
         })
@@ -512,7 +669,7 @@ impl PaymentRepo {
             RefundRow,
             "SELECT id, org_id, provider_refund_id, charge_id, amount_cents, currency, status, \
                     reason, note, issued_by, issued_by_label, mail_requested_at, mail_sent_at, \
-                    mail_error, created_at, updated_at \
+                    mail_error, created_at, updated_at, policy_basis, quoted_cents, override_reason \
              FROM refund ORDER BY created_at DESC, id",
         )
         .fetch_all(&self.pool)
@@ -526,7 +683,7 @@ impl PaymentRepo {
             RefundRow,
             "SELECT id, org_id, provider_refund_id, charge_id, amount_cents, currency, status, \
                     reason, note, issued_by, issued_by_label, mail_requested_at, mail_sent_at, \
-                    mail_error, created_at, updated_at \
+                    mail_error, created_at, updated_at, policy_basis, quoted_cents, override_reason \
              FROM refund WHERE id = $1",
             uuid_to_db(id),
         )
@@ -549,8 +706,9 @@ impl PaymentRepo {
             "INSERT INTO refund \
                  (id, org_id, provider_refund_id, charge_id, amount_cents, currency, status, \
                   reason, note, issued_by, issued_by_label, mail_requested_at, mail_due_at, \
-                  created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12, $13, $13) \
+                  created_at, updated_at, policy_basis, quoted_cents, override_reason) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12, $13, $13, \
+                     $14, $15, $16) \
              ON CONFLICT (provider_refund_id) DO UPDATE SET \
                  id = EXCLUDED.id, \
                  org_id = coalesce(refund.org_id, EXCLUDED.org_id), \
@@ -558,6 +716,9 @@ impl PaymentRepo {
                  note = EXCLUDED.note, \
                  issued_by = EXCLUDED.issued_by, \
                  issued_by_label = EXCLUDED.issued_by_label, \
+                 policy_basis = EXCLUDED.policy_basis, \
+                 quoted_cents = EXCLUDED.quoted_cents, \
+                 override_reason = EXCLUDED.override_reason, \
                  mail_requested_at = CASE WHEN refund.mail_sent_at IS NULL \
                      THEN EXCLUDED.mail_requested_at ELSE refund.mail_requested_at END, \
                  mail_due_at = CASE WHEN refund.mail_sent_at IS NULL \
@@ -576,6 +737,9 @@ impl PaymentRepo {
             refund.issued_by_label,
             refund.mail_requested_at.map(timestamp_to_db).transpose()?,
             timestamp_to_db(refund.created_at)?,
+            refund.policy_basis,
+            refund.quoted_cents,
+            refund.override_reason,
         )
         .execute(&mut *tx)
         .await?
@@ -613,7 +777,7 @@ impl PaymentRepo {
             RefundRow,
             "SELECT id, org_id, provider_refund_id, charge_id, amount_cents, currency, status, \
                     reason, note, issued_by, issued_by_label, mail_requested_at, mail_sent_at, \
-                    mail_error, created_at, updated_at \
+                    mail_error, created_at, updated_at, policy_basis, quoted_cents, override_reason \
              FROM refund WHERE provider_refund_id = $1",
             provider,
         )
@@ -785,6 +949,339 @@ impl PaymentRepo {
         }
         Ok(())
     }
+}
+
+/// The refund policy's reads on the ledger and the seller's refund requests
+/// (migration 0107).
+impl PaymentRepo {
+    /// One organisation's successful payments since `since`, newest first:
+    /// the ledger rows naming it, and the rows of the Stripe customers it
+    /// pays through, which a row the webhook could not attribute still names.
+    /// `raw` is not read.
+    pub async fn org_payments(
+        &self,
+        org: OrgId,
+        customers: &[String],
+        since: Timestamp,
+    ) -> Result<Vec<PaymentEvent>, StorageError> {
+        let rows = sqlx::query_as!(
+            EventRow,
+            "SELECT id, org_id, provider_event_id, kind, amount_cents, currency, \
+                    provider_object_id, charge_id, payment_intent_id, invoice_id, customer_id, \
+                    status, reason, occurred_at, created_at \
+             FROM payment_event \
+             WHERE kind = 'payment_succeeded' AND occurred_at >= $3 \
+               AND (org_id = $1 OR customer_id = ANY($2)) \
+             ORDER BY occurred_at DESC, id LIMIT 100",
+            uuid_to_db(org.0),
+            customers,
+            timestamp_to_db(since)?,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(PaymentEvent::try_from).collect()
+    }
+
+    /// The invoice a charge paid, as Stripe sent it, from the ledger's
+    /// `invoice_paid` rows naming the charge or its payment intent.
+    pub async fn invoice_paid_by(
+        &self,
+        ids: &[String],
+    ) -> Result<Option<serde_json::Value>, StorageError> {
+        if ids.is_empty() {
+            return Ok(None);
+        }
+        Ok(sqlx::query_scalar!(
+            "SELECT raw FROM payment_event \
+             WHERE kind = 'invoice_paid' \
+               AND (charge_id = ANY($1) OR payment_intent_id = ANY($1)) \
+             ORDER BY occurred_at DESC LIMIT 1",
+            ids,
+        )
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    /// What the refunds on record that count (pending or succeeded) have
+    /// returned on each charge.
+    pub async fn refunded_on(
+        &self,
+        charges: &[String],
+    ) -> Result<HashMap<String, i64>, StorageError> {
+        if charges.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = sqlx::query!(
+            "SELECT charge_id, COALESCE(SUM(amount_cents), 0)::bigint AS \"refunded!\" \
+             FROM refund WHERE charge_id = ANY($1) AND status IN ('pending', 'succeeded') \
+             GROUP BY charge_id",
+            charges,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.charge_id, row.refunded))
+            .collect())
+    }
+
+    /// Records a seller's refund request and the operators' mail about it,
+    /// in one transaction, or answers that the charge already has one open.
+    pub async fn create_request(
+        &self,
+        new: &NewRefundRequest<'_>,
+    ) -> Result<RefundRequestWrite, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        let at = timestamp_to_db(new.at)?;
+        let row = sqlx::query_as!(
+            RequestRow,
+            "INSERT INTO refund_request \
+                 (id, org_id, charge_id, quoted_cents, currency, policy_basis, note, \
+                  requested_by, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9) \
+             ON CONFLICT (charge_id) WHERE status = 'requested' DO NOTHING \
+             RETURNING id, org_id, charge_id, quoted_cents, currency, policy_basis, status, \
+                       note, requested_by, decided_by_label, decided_at, decline_reason, \
+                       refund_id, created_at, updated_at",
+            uuid_to_db(new.id),
+            uuid_to_db(new.org.0),
+            new.charge_id,
+            new.quoted_cents,
+            new.currency,
+            new.policy_basis,
+            (!new.note.is_empty()).then_some(new.note),
+            uuid_to_db(new.requested_by.0),
+            at,
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(row) = row else {
+            tx.commit().await?;
+            return Ok(RefundRequestWrite::AlreadyOpen);
+        };
+        let requester_subject = sqlx::query_scalar!(
+            "SELECT auth_subject FROM app_user WHERE id = $1",
+            uuid_to_db(new.requested_by.0),
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        .flatten()
+        .map(uuid_from_db);
+        let notice = RefundRequestedNotice {
+            request: new.id,
+            requester_subject,
+            org: new.org,
+            org_name: org_name(&mut tx, new.org).await?,
+            charge_id: new.charge_id.to_owned(),
+            quoted_cents: new.quoted_cents,
+            currency: new.currency.to_owned(),
+            explanation: new.explanation.to_owned(),
+            note: new.note.to_owned(),
+        };
+        enqueue(
+            &mut tx,
+            Mailing {
+                org: new.org,
+                topic: REFUND_REQUESTED_TOPIC,
+                request: new.id,
+                payload: serde_json::to_value(&notice),
+                at: new.at,
+            },
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(RefundRequestWrite::Recorded(Box::new(
+            RefundRequest::try_from(row)?,
+        )))
+    }
+
+    /// One organisation's refund requests, newest first.
+    pub async fn org_requests(&self, org: OrgId) -> Result<Vec<RefundRequest>, StorageError> {
+        let rows = sqlx::query_as!(
+            RequestRow,
+            "SELECT id, org_id, charge_id, quoted_cents, currency, policy_basis, status, note, \
+                    requested_by, decided_by_label, decided_at, decline_reason, refund_id, \
+                    created_at, updated_at \
+             FROM refund_request WHERE org_id = $1 ORDER BY created_at DESC, id LIMIT 50",
+            uuid_to_db(org.0),
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(RefundRequest::try_from).collect()
+    }
+
+    /// Every refund request, the open ones first, then newest first.
+    pub async fn requests(&self) -> Result<Vec<RefundRequest>, StorageError> {
+        let rows = sqlx::query_as!(
+            RequestRow,
+            "SELECT id, org_id, charge_id, quoted_cents, currency, policy_basis, status, note, \
+                    requested_by, decided_by_label, decided_at, decline_reason, refund_id, \
+                    created_at, updated_at \
+             FROM refund_request \
+             ORDER BY (status = 'requested') DESC, created_at DESC, id LIMIT 500",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(RefundRequest::try_from).collect()
+    }
+
+    /// One refund request by id.
+    pub async fn refund_request(&self, id: Uuid) -> Result<Option<RefundRequest>, StorageError> {
+        let row = sqlx::query_as!(
+            RequestRow,
+            "SELECT id, org_id, charge_id, quoted_cents, currency, policy_basis, status, note, \
+                    requested_by, decided_by_label, decided_at, decline_reason, refund_id, \
+                    created_at, updated_at \
+             FROM refund_request WHERE id = $1",
+            uuid_to_db(id),
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(RefundRequest::try_from).transpose()
+    }
+
+    /// Marks an open request approved by the refund `refund`.
+    pub async fn approve_request(
+        &self,
+        id: Uuid,
+        refund: Uuid,
+        decision: Decision<'_>,
+    ) -> Result<RefundDecision, StorageError> {
+        let row = sqlx::query_as!(
+            RequestRow,
+            "UPDATE refund_request SET status = 'approved', refund_id = $2, decided_by = $3, \
+                 decided_by_label = $4, decided_at = $5, updated_at = $5 \
+             WHERE id = $1 AND status = 'requested' \
+             RETURNING id, org_id, charge_id, quoted_cents, currency, policy_basis, status, \
+                       note, requested_by, decided_by_label, decided_at, decline_reason, \
+                       refund_id, created_at, updated_at",
+            uuid_to_db(id),
+            uuid_to_db(refund),
+            uuid_to_db(decision.by.0),
+            decision.label,
+            timestamp_to_db(decision.at)?,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        self.decided(id, row).await
+    }
+
+    /// Marks an open request declined for `reason`, and queues the mail
+    /// telling the organisation why, in one transaction.
+    pub async fn decline_request(
+        &self,
+        id: Uuid,
+        reason: &str,
+        decision: Decision<'_>,
+    ) -> Result<RefundDecision, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query_as!(
+            RequestRow,
+            "UPDATE refund_request SET status = 'declined', decline_reason = $2, \
+                 decided_by = $3, decided_by_label = $4, decided_at = $5, updated_at = $5 \
+             WHERE id = $1 AND status = 'requested' \
+             RETURNING id, org_id, charge_id, quoted_cents, currency, policy_basis, status, \
+                       note, requested_by, decided_by_label, decided_at, decline_reason, \
+                       refund_id, created_at, updated_at",
+            uuid_to_db(id),
+            reason,
+            uuid_to_db(decision.by.0),
+            decision.label,
+            timestamp_to_db(decision.at)?,
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(row) = &row {
+            let org = OrgId(uuid_from_db(row.org_id));
+            let subjects = sqlx::query_scalar!(
+                "SELECT auth_subject AS \"subject!\" FROM app_user \
+                 WHERE org_id = $1 AND auth_subject IS NOT NULL ORDER BY id",
+                row.org_id,
+            )
+            .fetch_all(&mut *tx)
+            .await?;
+            let notice = RefundDeclinedNotice {
+                org,
+                org_name: org_name(&mut tx, org).await?,
+                quoted_cents: row.quoted_cents,
+                currency: row.currency.clone(),
+                reason: reason.to_owned(),
+                subjects: subjects.into_iter().map(uuid_from_db).collect(),
+            };
+            enqueue(
+                &mut tx,
+                Mailing {
+                    org,
+                    topic: REFUND_DECLINED_TOPIC,
+                    request: id,
+                    payload: serde_json::to_value(&notice),
+                    at: decision.at,
+                },
+            )
+            .await?;
+        }
+        tx.commit().await?;
+        self.decided(id, row).await
+    }
+
+    /// What a decision's UPDATE came to: the row it changed, or why none.
+    async fn decided(
+        &self,
+        id: Uuid,
+        changed: Option<RequestRow>,
+    ) -> Result<RefundDecision, StorageError> {
+        if let Some(row) = changed {
+            return Ok(RefundDecision::Decided(Box::new(RefundRequest::try_from(
+                row,
+            )?)));
+        }
+        Ok(match self.refund_request(id).await? {
+            Some(standing) => RefundDecision::AlreadyDecided(Box::new(standing)),
+            None => RefundDecision::NoRequest,
+        })
+    }
+}
+
+async fn org_name(tx: &mut Transaction<'_, Postgres>, org: OrgId) -> Result<String, StorageError> {
+    Ok(sqlx::query_scalar!(
+        "SELECT name FROM organisation WHERE id = $1",
+        uuid_to_db(org.0),
+    )
+    .fetch_optional(&mut **tx)
+    .await?
+    .unwrap_or_default())
+}
+
+/// One refund-request mail, as the outbox will carry it.
+struct Mailing {
+    org: OrgId,
+    topic: &'static str,
+    request: Uuid,
+    payload: Result<serde_json::Value, serde_json::Error>,
+    at: Timestamp,
+}
+
+/// One refund-request mail as an outbox message, deduplicated on the
+/// request: one request, one mail of each kind, whatever retries the write.
+async fn enqueue(tx: &mut Transaction<'_, Postgres>, mailing: Mailing) -> Result<(), StorageError> {
+    let payload = mailing
+        .payload
+        .map_err(|error| StorageError::Inconsistent {
+            reason: format!("a refund request notice must serialise: {error}"),
+        })?;
+    pin_org(tx, mailing.org).await?;
+    OutboxRepo::append(
+        tx,
+        &NewOutboxMessage {
+            org: mailing.org,
+            id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
+            topic: mailing.topic.to_owned(),
+            dedupe_key: uuid_to_db(mailing.request).to_string(),
+            payload,
+            at: mailing.at,
+        },
+    )
+    .await
 }
 
 async fn insert_event(

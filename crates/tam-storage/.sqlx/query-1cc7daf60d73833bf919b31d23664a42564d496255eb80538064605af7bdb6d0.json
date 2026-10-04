@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT org_id AS \"org!\" FROM account_link_signal\n                        WHERE encode(value_hash, 'hex') LIKE $1 || '%'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "org!",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1cc7daf60d73833bf919b31d23664a42564d496255eb80538064605af7bdb6d0"
+}

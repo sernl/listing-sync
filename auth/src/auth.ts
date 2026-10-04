@@ -12,6 +12,7 @@ import { deleteSessionCookie } from 'better-auth/cookies';
 import { admin, captcha, haveIBeenPwned, jwt, openAPI } from 'better-auth/plugins';
 import { PostgresDialect } from 'kysely';
 import pg from 'pg';
+import { type AbuseDeps, screenNewUser } from './abuse.ts';
 import { type AuthEvent, record } from './audit.ts';
 import { ipAddress } from './client-ip.ts';
 import { consentHooks, consentUnavailable, PendingConsents, parseConsent } from './consent.ts';
@@ -66,6 +67,16 @@ const consent = consentHooks({
     await context.internalAdapter.deleteUser(id);
   },
 });
+
+// The sign-up abuse screen: refuses a throwaway domain, a busy network or a
+// banned identity before the account exists, and lets the sign-up through
+// when tam-server cannot answer. See abuse.ts.
+const screen: AbuseDeps = {
+  sink:
+    env.abuseScreenUrl === undefined || env.internalSecret === undefined
+      ? undefined
+      : { url: env.abuseScreenUrl, secret: env.internalSecret },
+};
 
 const audit = (event: AuthEvent): void => record(pool, event);
 
@@ -413,9 +424,23 @@ export const auth = betterAuth({
   databaseHooks: {
     user: {
       create: {
-        // A sign-up's account is created only with an agreement, and is given
-        // its id here so the after hook can find that agreement again.
-        before: async (user, context) => consent.createUser(user, context),
+        // A sign-up is screened for abuse first (abuse.ts), so a refusal
+        // throws before the row exists. Then its account is created only with
+        // an agreement, and is given its id here so the after hook can find
+        // that agreement again.
+        before: async (user, context) => {
+          await screenNewUser(
+            screen,
+            user,
+            context === null
+              ? null
+              : {
+                  path: context.path,
+                  ipAddress: origin(context.headers, context.context.options).ipAddress,
+                },
+          );
+          return consent.createUser(user, context);
+        },
       },
     },
     session: {

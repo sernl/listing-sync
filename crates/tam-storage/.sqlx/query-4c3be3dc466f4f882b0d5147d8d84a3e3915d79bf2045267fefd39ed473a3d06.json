@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, org_id, provider_refund_id, charge_id, amount_cents, currency, status, reason, note, issued_by, issued_by_label, mail_requested_at, mail_sent_at, mail_error, created_at, updated_at FROM refund ORDER BY created_at DESC, id",
+  "query": "SELECT id, org_id, provider_refund_id, charge_id, amount_cents, currency, status, reason, note, issued_by, issued_by_label, mail_requested_at, mail_sent_at, mail_error, created_at, updated_at, policy_basis, quoted_cents, override_reason FROM refund WHERE id = $1",
   "describe": {
     "columns": [
       {
@@ -82,10 +82,27 @@
         "ordinal": 15,
         "name": "updated_at",
         "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 16,
+        "name": "policy_basis",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 17,
+        "name": "quoted_cents",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 18,
+        "name": "override_reason",
+        "type_info": "Text"
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Uuid"
+      ]
     },
     "nullable": [
       false,
@@ -103,8 +120,11 @@
       true,
       true,
       false,
-      false
+      false,
+      true,
+      true,
+      true
     ]
   },
-  "hash": "3f0729141556b6479cadc5d5f5b8f579278dbc053be59112b2e5882958b285f7"
+  "hash": "4c3be3dc466f4f882b0d5147d8d84a3e3915d79bf2045267fefd39ed473a3d06"
 }

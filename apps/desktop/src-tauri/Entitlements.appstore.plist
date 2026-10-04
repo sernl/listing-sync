@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The Mac App Store build's entitlements, and no other build's: the Developer ID
+  build runs under the hardened runtime with no entitlements at all.
+
+  The sandbox is mandatory in the Mac App Store. The rest is what the app does:
+  it talks to dash.teachouse.io and the marketplaces (network.client), accepts
+  peer connections for the library sync (network.server), and reads and writes
+  the files a seller picks or drops in (user-selected and downloads).
+
+  `com.apple.application-identifier` and `com.apple.developer.team-identifier`
+  are added by the release workflow's mac-app-store job from APPLE_TEAM_ID, so
+  the team never lives in the tree; Tauri's App Store guide lists both.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<key>com.apple.security.network.server</key>
+	<true/>
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
+	<key>com.apple.security.files.downloads.read-write</key>
+	<true/>
+</dict>
+</plist>

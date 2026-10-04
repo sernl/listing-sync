@@ -56,11 +56,16 @@ impl SessionToken {
 }
 
 /// Who a resolved session speaks for, and until when.
+///
+/// `suspended` is the organisation's standing read in the same statement
+/// (migration 0106's `abuse_standing`), so the gate every request passes
+/// through costs no second round trip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionIdentity {
     pub org: OrgId,
     pub user: UserId,
     pub expires_at: Timestamp,
+    pub suspended: bool,
 }
 
 pub struct SessionRepo {
@@ -154,8 +159,10 @@ impl SessionRepo {
         now: Timestamp,
     ) -> Result<Option<SessionIdentity>, StorageError> {
         let row = sqlx::query!(
-            "SELECT org_id, user_id, expires_at FROM user_session \
-             WHERE token_digest = $1 AND expires_at > $2",
+            r#"SELECT org_id, user_id, expires_at,
+                      abuse_standing(org_id) = 'ban' AS "suspended!"
+                 FROM user_session
+                WHERE token_digest = $1 AND expires_at > $2"#,
             token.digest(),
             timestamp_to_db(now)?,
         )
@@ -165,6 +172,7 @@ impl SessionRepo {
             org: OrgId(crate::codec::uuid_from_db(row.org_id)),
             user: UserId(crate::codec::uuid_from_db(row.user_id)),
             expires_at: crate::codec::timestamp_from_db(row.expires_at),
+            suspended: row.suspended,
         }))
     }
 

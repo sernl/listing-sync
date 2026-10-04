@@ -1,5 +1,6 @@
 //! The mails this process sends: the seller's completion mail, the
-//! operators' word of a new marketplace request, and the refund mail the
+//! operators' word of a new marketplace request or refund request, the
+//! seller's word that a refund request was declined, and the refund mail the
 //! Payments page queues (`refund_mail`); who each goes to, what each says,
 //! and the relay they go out through.
 //!
@@ -23,11 +24,11 @@ use std::future::Future;
 use tam_engine::outbox::{Deliverer, DeliveryError};
 use tam_storage::{
     NotificationRepo, OperatorRepo, OutboxMessage, Recipient, JOB_SETTLED_TOPIC,
-    MARKETPLACE_REQUESTED_TOPIC,
+    MARKETPLACE_REQUESTED_TOPIC, REFUND_DECLINED_TOPIC, REFUND_REQUESTED_TOPIC,
 };
 use tam_types::{
     JobSettledNotice, Marketplace, MarketplaceRequestedNotice, NotificationCounts,
-    NotificationKind, OrgId, Uuid,
+    NotificationKind, OrgId, RefundDeclinedNotice, RefundRequestedNotice, Uuid,
 };
 
 /// Resend's send endpoint, which is one authenticated JSON POST.
@@ -402,7 +403,7 @@ fn stated_counts(counts: NotificationCounts) -> Vec<(&'static str, u32)> {
 /// chose from a closed set, so nothing a seller or a marketplace wrote can
 /// reach it. This runs anyway, because the day one of those becomes a stored
 /// value the escape must already be in the path rather than remembered.
-fn escaped(raw: &str) -> String {
+pub(crate) fn escaped(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for character in raw.chars() {
         match character {
@@ -635,20 +636,93 @@ pub(crate) fn compose_refund(
     }
 }
 
-/// Where the goodbye mail's button goes: signing up again.
-pub(crate) const SIGNUP_PATH: &str = "/signup";
+/// Where an operator decides a refund request: the Payments page.
+pub(crate) const PAYMENTS_ADMIN_PATH: &str = "/admin/payments";
 
-/// The goodbye a seller gets when they delete their own account, in the
-/// founder's voice, sent before the identity service forgets the address.
+/// The operators' mail about one seller's refund request, as a pure function
+/// of the payload, who asked, and the console's origin.
 ///
-/// It says what went and what stayed, the way the console's danger zone
-/// said it before they pressed the button, and gives them one way to say "this
-/// was not me": a reply. Nothing about the account itself is in it, because
-/// by the time it lands there is no account. `name` is the recipient's own,
-/// where the identity service held one. The palette is the refund mail's.
+/// The policy's sentence is the operator's reason to approve or decline;
+/// the seller's note is theirs, escaped like every stored string a seller
+/// controls. A reply goes to the seller, as the marketplace request's does.
 #[must_use]
-pub(crate) fn compose_goodbye(name: Option<&str>, console_url: &str) -> Mail {
-    let href = format!("{}{SIGNUP_PATH}", console_url.trim_end_matches('/'));
+pub(crate) fn compose_refund_request(
+    notice: &RefundRequestedNotice,
+    requester: &Requester,
+    console_url: &str,
+) -> Mail {
+    let amount = tam_api::payments::money(notice.quoted_cents, &notice.currency);
+    let subject = format!("Refund request: {amount} for {}", notice.org_name);
+    let href = format!("{}{PAYMENTS_ADMIN_PATH}", console_url.trim_end_matches('/'));
+    let row = |label: &str, value: &str| {
+        format!(
+            "<tr><td style=\"padding:6px 16px 6px 0;color:#5a6560;vertical-align:top\">{label}</td>\
+             <td style=\"padding:6px 0;color:#17231c;white-space:pre-wrap\">{value}</td></tr>"
+        )
+    };
+    let note = if notice.note.trim().is_empty() {
+        "Nothing written"
+    } else {
+        notice.note.as_str()
+    };
+    let rows = [
+        row(
+            "Name",
+            &escaped(requester.name.as_deref().unwrap_or("Not given")),
+        ),
+        row("Email", &escaped(&requester.contact)),
+        row(
+            "Organisation",
+            &format!(
+                "{} <span style=\"color:#5a6560\">({})</span>",
+                escaped(&notice.org_name),
+                uuid_text(notice.org.0)
+            ),
+        ),
+        row("Policy amount", &escaped(&amount)),
+        row("Why", &escaped(&notice.explanation)),
+        row("Payment", &escaped(&notice.charge_id)),
+        row("Their note", &escaped(note)),
+    ]
+    .concat();
+    let lead = if requester.reply_to.is_some() {
+        "A seller asked for a refund. Approve or decline it on the Payments page, or reply to \
+         this mail to talk to them."
+    } else {
+        "A seller asked for a refund. Approve or decline it on the Payments page."
+    };
+    let html = format!(
+        "<div style=\"font-family:system-ui,-apple-system,'Segoe UI',sans-serif;\
+           background:#f6f4f1;padding:32px 16px\">\
+           <div style=\"max-width:520px;margin:0 auto;background:#fdfdfc;border-radius:12px;\
+             padding:28px 32px;color:#17231c\">\
+           <p style=\"margin:0 0 16px;font-size:16px\">{lead}</p>\
+           <table style=\"border-collapse:collapse;margin:0 0 24px;font-size:15px\">{rows}</table>\
+           <a href=\"{href}\" style=\"display:inline-block;background:#1f4a38;color:#ffffff;\
+             text-decoration:none;padding:10px 20px;border-radius:8px;font-weight:600\">\
+             Open Payments</a>\
+           </div></div>",
+        href = escaped(&href),
+    );
+    Mail {
+        subject,
+        html,
+        href,
+        reply_to: requester.reply_to.clone(),
+    }
+}
+
+/// The seller's mail about a declined refund request, in the founder's
+/// voice: the amount they asked about, the operator's reason, and a reply
+/// as the way to talk it through. In the refund mail's palette.
+#[must_use]
+pub(crate) fn compose_refund_declined(
+    notice: &RefundDeclinedNotice,
+    name: Option<&str>,
+    console_url: &str,
+) -> Mail {
+    let amount = tam_api::payments::money(notice.quoted_cents, &notice.currency);
+    let href = format!("{}{BILLING_PATH}", console_url.trim_end_matches('/'));
     let greeting = match name.map(str::trim).filter(|name| !name.is_empty()) {
         Some(name) => format!("Kia ora {},", escaped(name)),
         None => "Kia ora,".to_owned(),
@@ -659,21 +733,76 @@ pub(crate) fn compose_goodbye(name: Option<&str>, console_url: &str) -> Mail {
            <div style=\"max-width:520px;margin:0 auto;background:#fdfdfc;border-radius:12px;\
              padding:28px 32px;color:#17231c\">\
            <p style=\"margin:0 0 16px;font-size:16px\">{greeting}</p>\
-           <p style=\"margin:0 0 16px;font-size:16px\">Your Teachouse account is deleted, \
-             along with your catalogue and your device registrations. If you had a plan, \
-             it's cancelled and you won't be charged again.</p>\
-           <p style=\"margin:0 0 16px;font-size:15px;color:#5a6560\">Your listings on TPT \
-             and Tes stay as they are, and the files on your devices are untouched.</p>\
-           <p style=\"margin:0 0 24px;font-size:15px;color:#5a6560\">Thank you for teaching \
-             with us. If you didn't ask for this, reply to this email straight away.</p>\
+           <p style=\"margin:0 0 16px;font-size:16px\">I looked at your request for a {amount} \
+             refund, and I can't refund it this time.</p>\
+           <p style=\"margin:0 0 16px;font-size:16px;white-space:pre-wrap\">{reason}</p>\
+           <p style=\"margin:0 0 24px;font-size:15px;color:#5a6560\">This is for {org}. \
+             If you'd like to talk it through, reply to this email.</p>\
            <a href=\"{href}\" style=\"display:inline-block;background:#1f4a38;color:#ffffff;\
              text-decoration:none;padding:10px 20px;border-radius:8px;font-weight:600\">\
-             Start again any time</a>\
+             See your bills</a>\
+           </div></div>",
+        amount = escaped(&amount),
+        reason = escaped(&notice.reason),
+        org = escaped(&notice.org_name),
+        href = escaped(&href),
+    );
+    Mail {
+        subject: "About your refund request".to_owned(),
+        html,
+        href,
+        reply_to: None,
+    }
+}
+
+/// Where the goodbye mail's button goes: signing up again.
+pub(crate) const SIGNUP_PATH: &str = "/signup";
+
+/// The goodbye a seller gets when they delete their own account, in the
+/// founder's voice, sent once the deletion has committed.
+///
+/// It thanks them, names what went and the little that stays, says their
+/// marketplace listings are untouched, and leaves the door open: the one
+/// button is signing up again, and a reply is the way to say "this was not
+/// me". Nothing about the account itself is in it, because by the time it
+/// lands there is no account. `first_name` is the recipient's own, where the
+/// identity service held a name. The palette is the refund mail's.
+#[must_use]
+pub(crate) fn compose_goodbye(first_name: Option<&str>, console_url: &str) -> Mail {
+    let href = format!("{}{SIGNUP_PATH}", console_url.trim_end_matches('/'));
+    let greeting = match first_name.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) => format!("Kia ora {},", escaped(name)),
+        None => "Kia ora,".to_owned(),
+    };
+    let html = format!(
+        "<div style=\"font-family:system-ui,-apple-system,'Segoe UI',sans-serif;\
+           background:#f6f4f1;padding:32px 16px\">\
+           <div style=\"max-width:520px;margin:0 auto;background:#fdfdfc;border-radius:12px;\
+             padding:28px 32px;color:#17231c\">\
+           <p style=\"margin:0 0 16px;font-size:16px\">{greeting}</p>\
+           <p style=\"margin:0 0 16px;font-size:16px\">Thank you for teaching with us. \
+             It meant a lot to have you here.</p>\
+           <p style=\"margin:0 0 16px;font-size:16px\">Everything tied to your account is \
+             now deleted: your account and sign-in, your catalogue, your shop connections \
+             and your devices. If you had a plan, it's cancelled and you won't be charged \
+             again.</p>\
+           <p style=\"margin:0 0 16px;font-size:15px;color:#5a6560\">We keep only what the \
+             law or our privacy policy asks of us, such as the terms you agreed to, a note \
+             that the account was deleted, and billing records for tax.</p>\
+           <p style=\"margin:0 0 16px;font-size:15px;color:#5a6560\">Your listings on TPT \
+             and Tes are untouched, and so are the files on your devices.</p>\
+           <p style=\"margin:0 0 24px;font-size:16px\">You're welcome back any time. \
+             Good luck with your teaching and your shop; I hope this term is a kind one.</p>\
+           <a href=\"{href}\" style=\"display:inline-block;background:#1f4a38;color:#ffffff;\
+             text-decoration:none;padding:10px 20px;border-radius:8px;font-weight:600\">\
+             Sign up again</a>\
+           <p style=\"margin:24px 0 0;font-size:14px;color:#5a6560\">If you didn't ask for \
+             this, reply to this email straight away.</p>\
            </div></div>",
         href = escaped(&href),
     );
     Mail {
-        subject: "Your Teachouse account is deleted".to_owned(),
+        subject: "Goodbye from Teachouse".to_owned(),
         html,
         href,
         reply_to: None,
@@ -838,9 +967,10 @@ impl<R: AddressResolver, S: Relay> EmailDeliverer<R, S> {
     /// for.
     async fn requester(
         &self,
-        notice: &MarketplaceRequestedNotice,
+        subject: Option<Uuid>,
+        what: &str,
     ) -> Result<Requester, DeliveryError> {
-        let Some(subject) = notice.requester_subject else {
+        let Some(subject) = subject else {
             return Ok(Requester {
                 name: None,
                 contact: "a user with no sign-in identity".to_owned(),
@@ -871,9 +1001,7 @@ impl<R: AddressResolver, S: Relay> EmailDeliverer<R, S> {
                     "the address of requester subject {}: {why}",
                     uuid_text(subject)
                 );
-                eprintln!(
-                    "tam-server: could not read {reason}; the marketplace request mail is retried"
-                );
+                eprintln!("tam-server: could not read {reason}; the {what} is retried");
                 Err(DeliveryError::Retryable(reason))
             }
             Err(ResolveError::NoAddress(_)) => Ok(Requester {
@@ -899,13 +1027,11 @@ impl<R: AddressResolver, S: Relay> EmailDeliverer<R, S> {
     async fn request_recipients(
         &self,
         operators: &[Recipient],
+        what: &str,
     ) -> Result<Vec<(String, String)>, DeliveryError> {
         let mut recipients = Vec::with_capacity(operators.len());
         for operator in operators {
-            if let Some(address) = self
-                .verified_address(operator.subject, "marketplace request mail")
-                .await?
-            {
+            if let Some(address) = self.verified_address(operator.subject, what).await? {
                 recipients.push((
                     format!("operator subject {}", uuid_text(operator.subject)),
                     address,
@@ -915,7 +1041,7 @@ impl<R: AddressResolver, S: Relay> EmailDeliverer<R, S> {
         if recipients.is_empty() {
             if let Some(inbox) = &self.ops_email {
                 eprintln!(
-                    "tam-server: no operator has a verified address; the marketplace request mail goes to the operations inbox"
+                    "tam-server: no operator has a verified address; the {what} goes to the operations inbox"
                 );
                 recipients.push(("the operations inbox".to_owned(), inbox.clone()));
             }
@@ -944,32 +1070,130 @@ impl<R: AddressResolver, S: Relay> EmailDeliverer<R, S> {
         operators: &[Recipient],
         notice: &MarketplaceRequestedNotice,
     ) -> Result<(), DeliveryError> {
-        let recipients = self.request_recipients(operators).await?;
+        let telling = Telling {
+            org: notice.org,
+            requester: notice.requester_subject,
+            what: "marketplace request mail",
+        };
+        self.tell_operators(operators, telling, |requester| {
+            compose_request(notice, requester, &self.console_url)
+        })
+        .await
+    }
+
+    /// The operators' mail about one thing a seller asked for, by the rule
+    /// [`Self::mail_operators`] states: every operator with a vouched-for
+    /// address or the operations inbox, the seller resolved once, and the
+    /// mail composed for them.
+    async fn tell_operators(
+        &self,
+        operators: &[Recipient],
+        telling: Telling<'_>,
+        compose: impl Fn(&Requester) -> Mail + Send + Sync,
+    ) -> Result<(), DeliveryError> {
+        let Telling {
+            org,
+            requester,
+            what,
+        } = telling;
+        let recipients = self.request_recipients(operators, what).await?;
         if recipients.is_empty() {
             eprintln!(
-                "tam-server: no operator with a verified address and no operations inbox to tell about a marketplace request from organisation {}; it is on the operator listing",
-                uuid_text(notice.org.0)
+                "tam-server: no operator with a verified address and no operations inbox to send the {what} from organisation {} to; it is on the operator listing",
+                uuid_text(org.0)
             );
             return Ok(());
         }
-        let requester = self.requester(notice).await?;
-        let mail = compose_request(notice, &requester, &self.console_url);
+        let requester = self.requester(requester, what).await?;
+        let mail = compose(&requester);
         for (who, address) in &recipients {
             match self.relay.send(address, &mail).await {
                 Ok(()) => {}
                 Err(RelayError::Retryable(why)) => {
                     eprintln!(
-                        "tam-server: the relay faulted on the marketplace request mail to {who} ({why}); retried"
+                        "tam-server: the relay faulted on the {what} to {who} ({why}); retried"
                     );
                     return Err(DeliveryError::Retryable(why));
                 }
                 Err(RelayError::Permanent(why)) => eprintln!(
-                    "tam-server: the relay refused the marketplace request mail to {who} ({why}); not retried"
+                    "tam-server: the relay refused the {what} to {who} ({why}); not retried"
                 ),
             }
         }
         Ok(())
     }
+
+    async fn deliver_refund_request(
+        &self,
+        notice: &RefundRequestedNotice,
+    ) -> Result<(), DeliveryError> {
+        let operators = self
+            .operators
+            .mail_recipients()
+            .await
+            .map_err(|error| DeliveryError::Retryable(error.to_string()))?;
+        let telling = Telling {
+            org: notice.org,
+            requester: notice.requester_subject,
+            what: "refund request mail",
+        };
+        self.tell_operators(&operators, telling, |requester| {
+            compose_refund_request(notice, requester, &self.console_url)
+        })
+        .await
+    }
+
+    /// The seller's mail about a declined refund request: one per subject
+    /// with a vouched-for address, by the completion mail's retry rule.
+    async fn deliver_refund_declined(
+        &self,
+        notice: &RefundDeclinedNotice,
+    ) -> Result<(), DeliveryError> {
+        for subject in &notice.subjects {
+            let address = match self.resolver.address(*subject).await {
+                Ok(address) if address.verified => address,
+                Ok(_unvouched) => {
+                    eprintln!(
+                        "tam-server: subject {} has an address the identity service does not vouch for; its refund declined mail is not sent",
+                        uuid_text(*subject)
+                    );
+                    continue;
+                }
+                Err(ResolveError::NoAddress(why)) => {
+                    eprintln!(
+                        "tam-server: subject {} has no address to mail ({why}); its refund declined mail is not sent",
+                        uuid_text(*subject)
+                    );
+                    continue;
+                }
+                Err(ResolveError::Unreachable(why)) => {
+                    let reason = format!("the address of subject {}: {why}", uuid_text(*subject));
+                    eprintln!(
+                        "tam-server: could not read {reason}; the refund declined mail is retried"
+                    );
+                    return Err(DeliveryError::Retryable(reason));
+                }
+            };
+            let mail = compose_refund_declined(notice, address.name.as_deref(), &self.console_url);
+            self.relay
+                .send(&address.email, &mail)
+                .await
+                .map_err(|error| match error {
+                    RelayError::Retryable(why) => DeliveryError::Retryable(why),
+                    RelayError::Permanent(why) => DeliveryError::Poison(why),
+                })?;
+        }
+        Ok(())
+    }
+}
+
+/// Who an operators' mail is about: the organisation, the seller who asked,
+/// and which mail it is, for the log lines.
+#[derive(Clone, Copy)]
+struct Telling<'a> {
+    org: OrgId,
+    requester: Option<Uuid>,
+    what: &'a str,
 }
 
 impl<R: AddressResolver, S: Relay> Deliverer for EmailDeliverer<R, S> {
@@ -978,6 +1202,30 @@ impl<R: AddressResolver, S: Relay> Deliverer for EmailDeliverer<R, S> {
         // succeed rather than dead-letter: delivery is unordered, and one
         // message the drainer does not understand must not stall the ones
         // behind it.
+        if message.topic == REFUND_REQUESTED_TOPIC {
+            let Ok(notice) =
+                serde_json::from_value::<RefundRequestedNotice>(message.payload.clone())
+            else {
+                eprintln!(
+                    "tam-server: outbox message on {} carries no refund request; logged and dropped",
+                    message.topic
+                );
+                return Ok(());
+            };
+            return self.deliver_refund_request(&notice).await;
+        }
+        if message.topic == REFUND_DECLINED_TOPIC {
+            let Ok(notice) =
+                serde_json::from_value::<RefundDeclinedNotice>(message.payload.clone())
+            else {
+                eprintln!(
+                    "tam-server: outbox message on {} carries no declined refund; logged and dropped",
+                    message.topic
+                );
+                return Ok(());
+            };
+            return self.deliver_refund_declined(&notice).await;
+        }
         if message.topic == MARKETPLACE_REQUESTED_TOPIC {
             let Ok(notice) =
                 serde_json::from_value::<MarketplaceRequestedNotice>(message.payload.clone())
@@ -1026,8 +1274,9 @@ fn uuid_text(id: Uuid) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        compose, compose_request, relay_verdict, run_path, select, Address, AddressResolver,
-        EmailDeliverer, Mail, MailConfig, Relay, RelayError, Requester, ResolveError, Selected,
+        compose, compose_refund_declined, compose_refund_request, compose_request, relay_verdict,
+        run_path, select, Address, AddressResolver, EmailDeliverer, Mail, MailConfig, Relay,
+        RelayError, Requester, ResolveError, Selected,
     };
     use std::future::Future;
     use std::sync::{OnceLock, RwLock};
@@ -1508,6 +1757,55 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_refund_request_mail_carries_the_policy_and_the_note_escaped() {
+        let notice = tam_types::RefundRequestedNotice {
+            request: Uuid([0x01; 16]),
+            requester_subject: Some(REQUESTER),
+            org: OrgId(Uuid([0x0c; 16])),
+            org_name: "O'Brien & Daughters".to_owned(),
+            charge_id: "ch_01".to_owned(),
+            quoted_cents: 14_000,
+            currency: "usd".to_owned(),
+            explanation: "This is month 4 of the yearly plan.".to_owned(),
+            note: "<b>moved</b> schools".to_owned(),
+        };
+        let mail = compose_refund_request(&notice, &seller(), "https://app.example.test/");
+        assert_eq!(
+            mail.subject,
+            "Refund request: $140.00 for O'Brien & Daughters"
+        );
+        assert_eq!(mail.href, "https://app.example.test/admin/payments");
+        assert_eq!(mail.reply_to.as_deref(), Some("seller@example.test"));
+        assert!(mail.html.contains("This is month 4 of the yearly plan."));
+        assert!(mail.html.contains("&lt;b&gt;moved&lt;/b&gt; schools"));
+        assert!(
+            !mail.html.contains("<b>moved"),
+            "the seller's note is never markup"
+        );
+    }
+
+    #[test]
+    fn the_declined_mail_gives_the_reason_in_the_founders_voice() {
+        let notice = tam_types::RefundDeclinedNotice {
+            org: OrgId(Uuid([0x0c; 16])),
+            org_name: "Kauri Room".to_owned(),
+            quoted_cents: 2_900,
+            currency: "usd".to_owned(),
+            reason: "Two moves were used <on Tuesday>.".to_owned(),
+            subjects: vec![REQUESTER],
+        };
+        let mail = compose_refund_declined(&notice, Some("Aroha"), "https://app.example.test");
+        assert_eq!(mail.subject, "About your refund request");
+        assert_eq!(mail.href, "https://app.example.test/settings/billing");
+        assert!(mail.html.contains("Kia ora Aroha,"));
+        assert!(mail.html.contains("request for a $29.00 refund"));
+        assert!(mail
+            .html
+            .contains("Two moves were used &lt;on Tuesday&gt;."));
+        assert!(mail.reply_to.is_none(), "a reply goes back to us");
+    }
+
     fn operator(byte: u8) -> Recipient {
         Recipient {
             user: tam_types::UserId(Uuid([byte; 16])),
@@ -1807,12 +2105,12 @@ mod tests {
         }
     }
 
-    /// The goodbye says what went and what stayed, greets by an escaped
-    /// name, and its one button is signing up again.
+    /// The goodbye thanks them, says what went and what stayed, greets by an
+    /// escaped first name, and its one button is signing up again.
     #[test]
     fn the_goodbye_mail_says_what_went_and_what_stayed() {
         let mail = super::compose_goodbye(Some("Aroha <b>"), "https://dash.example.test/");
-        assert_eq!(mail.subject, "Your Teachouse account is deleted");
+        assert_eq!(mail.subject, "Goodbye from Teachouse");
         assert_eq!(mail.href, "https://dash.example.test/signup");
         assert!(
             mail.html.contains("Kia ora Aroha &lt;b&gt;,"),
@@ -1820,11 +2118,16 @@ mod tests {
             mail.html
         );
         for said in [
-            "Your Teachouse account is deleted",
-            "your catalogue and your device registrations",
+            "Thank you for teaching with us",
+            "Everything tied to your account is now deleted",
+            "your catalogue, your shop connections and your devices",
             "won't be charged again",
-            "Your listings on TPT and Tes stay as they are",
-            "the files on your devices are untouched",
+            "the terms you agreed to",
+            "Your listings on TPT and Tes are untouched",
+            "the files on your devices",
+            "welcome back any time",
+            "Good luck",
+            "Sign up again",
             "reply to this email",
         ] {
             assert!(mail.html.contains(said), "missing {said:?}");
@@ -1832,5 +2135,7 @@ mod tests {
         assert!(mail.reply_to.is_none());
         let anonymous = super::compose_goodbye(None, "https://dash.example.test");
         assert!(anonymous.html.contains("Kia ora,"));
+        let blank = super::compose_goodbye(Some("  "), "https://dash.example.test");
+        assert!(blank.html.contains("Kia ora,"));
     }
 }

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO account_link_signal (org_id, kind, value_hash, first_seen, last_seen) VALUES ($1, $2, $3, $4, $4) ON CONFLICT (org_id, kind, value_hash) DO UPDATE SET last_seen = GREATEST(account_link_signal.last_seen, EXCLUDED.last_seen)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Bytea",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "752de8e7dea4af68f336d92bdfb97807c171303ebb3f42e7ce8c9329e396d4f4"
+}

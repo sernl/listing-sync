@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto, invalidateAll } from '$app/navigation';
-	import { ApiFailure } from '$lib/api';
+	import { ApiFailure, isSuspended } from '$lib/api';
 	import {
 		BridgeFailure,
 		establishSession,
@@ -9,11 +9,13 @@
 		resendVerification,
 		signInWithPasskey,
 		signInWithPassword,
-		signInWithProvider
+		signInWithProvider,
+		signOutEverywhere
 	} from '$lib/auth-client';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
 	import Field from '$lib/Field.svelte';
+	import SuspendedNotice from '$lib/SuspendedNotice.svelte';
 	import Turnstile from '$lib/Turnstile.svelte';
 	import { MARKETING_URL } from '$lib/site';
 	import { socialConsentError } from '$lib/legal';
@@ -51,13 +53,20 @@
 	let password = $state('');
 	let busy = $state<Busy | null>(null);
 	let awaitingVerification = $state<string | null>(null);
+	/** The exchange was refused because the account is suspended. */
+	let suspended = $state(false);
 	let captchaToken = $state<string | null>(null);
 	let captcha = $state<ReturnType<typeof Turnstile> | null>(null);
 	const challengePending = $derived(captchaPending(TURNSTILE_SITE_KEY, captchaToken));
 	/** Why a provider sign-in came back here rather than signed in: most
 	 *  often an account that does not exist yet, which only the sign-up page,
 	 *  with its two boxes, can make. */
-	const returnedRefusal = $derived(socialConsentError(page.url.searchParams.get('error')));
+	const returnedRefusal = $derived(
+		socialConsentError(
+			page.url.searchParams.get('error'),
+			page.url.searchParams.get('error_description')
+		)
+	);
 
 	function messageOf(error: unknown, fallback: string): string {
 		if (error !== null && typeof error === 'object' && 'message' in error) {
@@ -84,6 +93,10 @@
 		} catch (failure) {
 			if (failure instanceof BridgeFailure && failure.refusal === 'unverified-email') {
 				awaitingVerification = (await identity())?.email ?? fallbackAddress;
+				return;
+			}
+			if (isSuspended(failure)) {
+				suspended = true;
 				return;
 			}
 			toast(
@@ -182,10 +195,19 @@
 			busy = null;
 		}
 	}
+
+	// The identity session is ended too: left standing, the next visit here
+	// would finish the exchange again and land on the same refusal.
+	async function leaveSuspended() {
+		await signOutEverywhere();
+		suspended = false;
+	}
 </script>
 
 <div class="auth-card acct-signed-out">
-	{#if awaitingVerification !== null}
+	{#if suspended}
+		<SuspendedNotice onSignOut={leaveSuspended} />
+	{:else if awaitingVerification !== null}
 		<h1>Verify your email</h1>
 		<p>Open the link we sent to <b>{awaitingVerification}</b>.</p>
 		<div class="actions">

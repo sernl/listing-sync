@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM account_link_signal WHERE kind IN ('ip', 'user_agent_hash') AND last_seen < $1::timestamptz - make_interval(days => $2::int)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "45174d2f18a5a08b03e06092c4899d18cfaae256bf02a4c816a57742c892ef2d"
+}

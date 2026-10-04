@@ -23,7 +23,7 @@ use tam_domain::{
     VocabularyPath,
 };
 use tam_storage::{
-    BlobError, BlobRepo, ConnectionFactsRepo, ConnectionRepo, DrainStats, ElectionRepo,
+    AbuseRepo, BlobError, BlobRepo, ConnectionFactsRepo, ConnectionRepo, DrainStats, ElectionRepo,
     LabelRename, LabelRepo, LedgerCursor, MappingRepo, NewAnswer, OpenElection, OverrideRepo,
     PastedBind, ProductRepo, StorageError, TaxonomyRepo,
 };
@@ -1390,6 +1390,15 @@ pub(crate) async fn disconnect_connection(
         )
         .await
         .map_err(|error| storage_fault(&state, &error))?;
+    // Connect, spend, unlink, next account: the farming loop's own shape.
+    // An unlink soon after the shop's free moves were granted takes back what
+    // is left of them and flags the organisation (migration 0106).
+    if unlinked {
+        AbuseRepo::new(state.pool.clone())
+            .quick_unlink(context.org, connection.0, now)
+            .await
+            .map_err(|error| storage_fault(&state, &error))?;
+    }
     Ok(Json(RevokedView {
         connections: u32::from(unlinked),
         elapsed_ms: ((state.wall)().0 - now.0).max(0),
@@ -2205,6 +2214,7 @@ pub(crate) async fn bind_mapping(
             | StorageError::MappingAlreadyBound
             | StorageError::InventoryMappingAlreadyExists
             | StorageError::StorefrontBoundElsewhere { .. }
+            | StorageError::StorefrontSuspended { .. }
             | StorageError::ListingAlreadyBound) => storage_fault(&state, &other),
         })?;
     match outcome {

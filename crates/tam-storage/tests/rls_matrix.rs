@@ -110,18 +110,30 @@ const TENANT_TABLES: [&str; 77] = [
 /// application pool. payment_event and refund are the operators' payments
 /// ledger (migration 0102): written by the signed Stripe webhook, which holds
 /// no tenant pin, and read only by operator routes; their org_id is a
-/// cross-reference, not a fence. account_consent is what a person agreed to
+/// cross-reference, not a fence. refund_request is a seller's "Ask for a
+/// refund" (migration 0107), global for the same reason: operator routes list
+/// and decide it unpinned, and the seller's own routes reach only their
+/// organisation's rows by an explicit predicate. account_consent is what a person agreed to
 /// at sign-up (migration 0103): keyed on the identity subject, written before
 /// any organisation exists, and owned by no tenant. account_deletion is what a
 /// seller's own deletion leaves behind (migration 0104), written after their
-/// organisation is gone, so there is no tenant left to fence it by. The rest
-/// are genuinely global: reference data, the canonical taxonomy, the fleet
-/// kill switch, and sqlx's migration bookkeeping.
-const GLOBAL_TABLES: [&str; 25] = [
+/// organisation is gone, so there is no tenant left to fence it by.
+/// account_link_signal, abuse_flag and banned_identity are abuse prevention
+/// (migrations 0105 and 0106): their whole purpose is the comparison across
+/// tenants, so a fence would hide exactly the rows the scorer reads; the
+/// first two carry org_id as a real column so an erasure still takes them,
+/// and banned_identity deliberately does not. storefront_grant_record is
+/// "this shop has had its five" with no organisation on it at all (0105).
+/// The rest are genuinely global: reference data, the canonical taxonomy, the
+/// fleet kill switch, and sqlx's migration bookkeeping.
+const GLOBAL_TABLES: [&str; 30] = [
     "_sqlx_migrations",
+    "abuse_flag",
     "account_consent",
     "account_deletion",
+    "account_link_signal",
     "app_user",
+    "banned_identity",
     "canonical_term",
     "discount",
     "discount_code",
@@ -140,8 +152,10 @@ const GLOBAL_TABLES: [&str; 25] = [
     "projection_edge",
     "projection_no_counterpart",
     "refund",
+    "refund_request",
     "site_setting",
     "standards_node",
+    "storefront_grant_record",
     "user_session",
 ];
 

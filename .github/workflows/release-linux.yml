@@ -1,0 +1,129 @@
+# The Linux half of a tagged release: an AppImage and a .deb, each with its
+# updater signature. Called by desktop-release.yml only.
+#
+# ubuntu-22.04 rather than latest because an AppImage links against the glibc
+# of the machine that built it, and the older the runner the more machines it
+# runs on (https://v2.tauri.app/distribute/appimage/).
+#
+# Two updatable bundles on one platform is the one place the plain
+# `{{target}}-{{arch}}` update key is ambiguous: tauri-plugin-updater installs
+# a payload with the installer matching how the running copy was installed
+# (2.11.0, `Update::install_inner`), so a .deb install handed the AppImage
+# would fail in dpkg. These builds therefore ask for
+# `linux-x86_64-{{bundle_type}}`, and each bundle is uploaded under its own
+# suffixed platform, which the Cloud documents
+# (https://docs.crabnebula.dev/cloud/cli/upload-assets/).
+name: release-linux
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+      tauri-cli-version:
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/tauri-setup
+        with:
+          tauri-cli-version: ${{ inputs.tauri-cli-version }}
+          # The vendored wry is a path crate whose webkit2gtk deprecations
+          # cargo does not cap for us.
+          rustflags: "--cap-lints=warn"
+      - name: install the webkit and bundling dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+
+      - uses: ./.github/actions/release-overlay
+        with:
+          cn-application: ${{ vars.CN_APPLICATION }}
+          cn-channel: ${{ vars.CN_CHANNEL }}
+          update-platform: "{{target}}-{{arch}}-{{bundle_type}}"
+
+      - name: build the Linux bundles
+        working-directory: apps/desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAM_ENTITLEMENT_PUBLIC_KEY: ${{ vars.TAM_ENTITLEMENT_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY is unset; the updater artifacts could not be signed" >&2
+            exit 1
+          fi
+          tauri build --bundles deb,appimage --config ../../release.conf.json
+
+      - name: collect the bundles and their updater signatures
+        run: |
+          set -euo pipefail
+          bundle=target/release/bundle
+          out=linux-artifacts
+          mkdir -p "$out"
+          appimage="$bundle/appimage/Teachouse_${VERSION}_amd64.AppImage"
+          deb="$bundle/deb/Teachouse_${VERSION}_amd64.deb"
+          for file in "$appimage" "$appimage.sig" "$deb" "$deb.sig"; do
+            if [ ! -s "$file" ]; then
+              echo "the build left no $file" >&2
+              find "$bundle" -maxdepth 2 -type f >&2 || true
+              exit 1
+            fi
+            cp "$file" "$out/"
+          done
+          ls -l "$out"
+
+      - name: attest build provenance
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            linux-artifacts/*.AppImage
+            linux-artifacts/*.deb
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-x86_64
+          path: linux-artifacts
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: upload the AppImage to CrabNebula Cloud
+        uses: crabnebula-dev/cloud-release@1a8803698ba41de6b23e42abc5dcc3721308233c # action-v0.2.6
+        with:
+          command: >-
+            release upload ${{ vars.CN_APPLICATION }} ${{ inputs.version }}
+            --file linux-artifacts/Teachouse_${{ inputs.version }}_amd64.AppImage
+            --signature linux-artifacts/Teachouse_${{ inputs.version }}_amd64.AppImage.sig
+            --update-platform linux-x86_64-appimage --public-platform appimage-x86_64
+            ${{ vars.CN_CHANNEL && format('--channel {0}', vars.CN_CHANNEL) || '' }}
+          api-key: ${{ secrets.CN_API_KEY }}
+          working-directory: .
+      - name: upload the .deb to CrabNebula Cloud
+        uses: crabnebula-dev/cloud-release@1a8803698ba41de6b23e42abc5dcc3721308233c # action-v0.2.6
+        with:
+          command: >-
+            release upload ${{ vars.CN_APPLICATION }} ${{ inputs.version }}
+            --file linux-artifacts/Teachouse_${{ inputs.version }}_amd64.deb
+            --signature linux-artifacts/Teachouse_${{ inputs.version }}_amd64.deb.sig
+            --update-platform linux-x86_64-deb --public-platform deb-x86_64
+            ${{ vars.CN_CHANNEL && format('--channel {0}', vars.CN_CHANNEL) || '' }}
+          api-key: ${{ secrets.CN_API_KEY }}
+          working-directory: .

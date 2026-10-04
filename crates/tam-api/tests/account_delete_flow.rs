@@ -3,10 +3,11 @@
 //! Stripe is a loopback double that answers the subscription read and the
 //! immediate cancellation, and records that the cancellation was asked for.
 //! The identity service and the relay are an in-process [`Offboarding`] that
-//! records every call in order, because the order is the contract: the
-//! goodbye goes before the identity is deleted, and nothing irreversible
-//! happens before the proof is checked. Each test reads the database back
-//! rather than trusting the status.
+//! records every call in order, because the order is the contract: nothing
+//! irreversible happens before the proof is checked, and the goodbye goes
+//! only after the identity is deleted and the erasure has committed, so it
+//! never lands for a deletion that stopped halfway. Each test reads the
+//! database back rather than trusting the status.
 
 #![cfg(feature = "pg-tests")]
 
@@ -47,9 +48,16 @@ const SUBSCRIPTION: &str = "sub_seller";
 const NOW: Timestamp = Timestamp(1_800_000_000_000);
 
 /// The identity service and the relay, recording each call in order.
+///
+/// With `audit`, the goodbye also records how many deletion rows had
+/// committed when it went. `identity_fails` and `relay_fails` make those
+/// steps fail.
 #[derive(Default)]
 struct FakeOffboarding {
     calls: RwLock<Vec<String>>,
+    audit: Option<PgPool>,
+    identity_fails: bool,
+    relay_fails: bool,
 }
 
 impl FakeOffboarding {
@@ -92,13 +100,27 @@ impl Offboarding for FakeOffboarding {
     }
 
     fn farewell<'a>(&'a self, to: &'a Departing) -> OffboardingFuture<'a, ()> {
-        self.note(format!("farewell {}", to.email));
-        Box::pin(core::future::ready(Ok(())))
+        Box::pin(async move {
+            let committed = match &self.audit {
+                Some(pool) => format!(" after {} deletion row(s)", deletions(pool).await),
+                None => String::new(),
+            };
+            self.note(format!("farewell {}{committed}", to.email));
+            if self.relay_fails {
+                Err(OffboardingFault("the relay refused".to_owned()))
+            } else {
+                Ok(())
+            }
+        })
     }
 
     fn delete_identity(&self, subject: Uuid) -> OffboardingFuture<'_, ()> {
         self.note(format!("delete {}", subject.to_hyphenated()));
-        Box::pin(core::future::ready(Ok::<(), OffboardingFault>(())))
+        Box::pin(core::future::ready(if self.identity_fails {
+            Err(OffboardingFault("the identity service is down".to_owned()))
+        } else {
+            Ok(())
+        }))
     }
 }
 
@@ -348,7 +370,10 @@ async fn a_seller_deletes_their_account_and_everything_goes_in_order(pool: PgPoo
     provision(&pool).await;
     let cancelled = Arc::new(AtomicBool::new(false));
     let base = stripe_double(Arc::clone(&cancelled)).await;
-    let fake = Arc::new(FakeOffboarding::default());
+    let fake = Arc::new(FakeOffboarding {
+        audit: Some(pool.clone()),
+        ..FakeOffboarding::default()
+    });
 
     let answer = delete_account(
         state(pool.clone(), &base, Some(Arc::clone(&fake))),
@@ -388,10 +413,10 @@ async fn a_seller_deletes_their_account_and_everything_goes_in_order(pool: PgPoo
         fake.calls(),
         vec![
             format!("reauth {subject}"),
-            format!("farewell {ADDRESS}"),
             format!("delete {subject}"),
+            format!("farewell {ADDRESS} after 1 deletion row(s)"),
         ],
-        "the proof first, the goodbye while the address is known, the identity last"
+        "the proof first, then the identity, and the goodbye only once the erasure committed"
     );
 
     assert_eq!(
@@ -457,6 +482,59 @@ async fn a_seller_deletes_their_account_and_everything_goes_in_order(pool: PgPoo
         .await
         .expect("the backoffice role reads the deletions");
     assert_eq!(seen, 1, "support can see that the account was deleted");
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_deletion_that_stops_halfway_sends_no_goodbye(pool: PgPool) {
+    provision(&pool).await;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let base = stripe_double(Arc::clone(&cancelled)).await;
+    let fake = Arc::new(FakeOffboarding {
+        identity_fails: true,
+        ..FakeOffboarding::default()
+    });
+
+    let answer = delete_account(
+        state(pool.clone(), &base, Some(Arc::clone(&fake))),
+        &confirmed(SLUG, PASSWORD),
+    )
+    .await;
+    assert_eq!(answer.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(refusal(&answer.body), "unavailable");
+    let subject = Uuid(SUBJECT).to_hyphenated();
+    assert_eq!(
+        fake.calls(),
+        vec![format!("reauth {subject}"), format!("delete {subject}")],
+        "no goodbye for an account that still exists"
+    );
+    assert_eq!(deletions(&pool).await, 0);
+}
+
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_goodbye_the_relay_refuses_leaves_the_deletion_standing(pool: PgPool) {
+    provision(&pool).await;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let base = stripe_double(Arc::clone(&cancelled)).await;
+    let fake = Arc::new(FakeOffboarding {
+        relay_fails: true,
+        ..FakeOffboarding::default()
+    });
+
+    let answer = delete_account(
+        state(pool.clone(), &base, Some(Arc::clone(&fake))),
+        &confirmed(SLUG, PASSWORD),
+    )
+    .await;
+    assert_eq!(
+        answer.status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&answer.body)
+    );
+    let view: AccountDeletedView = serde_json::from_slice(&answer.body).expect("the answer parses");
+    assert!(!view.goodbye_sent, "the answer says the mail did not go");
+    assert_eq!(seller_rows(&pool).await, [0; 3], "the deletion is done");
+    assert_eq!(deletions(&pool).await, 1);
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]

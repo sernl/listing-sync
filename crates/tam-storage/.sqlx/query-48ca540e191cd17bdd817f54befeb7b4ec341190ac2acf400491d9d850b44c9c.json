@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT b.org_id AS \"org!\", o.name AS \"name!\",\n                      abuse_standing(b.org_id) AS \"standing!\",\n                      array_agg(DISTINCT b.kind) AS \"kinds!\"\n                 FROM account_link_signal a\n                 JOIN account_link_signal b\n                   ON b.kind = a.kind AND b.value_hash = a.value_hash AND b.org_id <> a.org_id\n                 JOIN organisation o ON o.id = b.org_id\n                WHERE a.org_id = $1\n                  AND a.kind IN ('shop_digest', 'device_fingerprint', 'ip', 'payment_fingerprint')\n                GROUP BY b.org_id, o.name\n                ORDER BY o.name",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "org!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "standing!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "kinds!",
+        "type_info": "TextArray"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "48ca540e191cd17bdd817f54befeb7b4ec341190ac2acf400491d9d850b44c9c"
+}

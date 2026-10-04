@@ -7,7 +7,7 @@
 	import ApplyTemplateDialog from '$lib/ApplyTemplateDialog.svelte';
 	import Banner from '$lib/Banner.svelte';
 	import BulkDeleteDialog from '$lib/BulkDeleteDialog.svelte';
-	import { BULK_ACTIONS, type BulkVerb } from '$lib/bulk-verbs';
+	import { BULK_ACTIONS, VERB_FEATURE, type BulkVerb } from '$lib/bulk-verbs';
 	import Button from '$lib/Button.svelte';
 	import CrossListDialog from '$lib/CrossListDialog.svelte';
 	import DeleteDialog from '$lib/DeleteDialog.svelte';
@@ -81,6 +81,12 @@
 	const plan = createQuery(() => entitlementRead);
 	const createRefusal = $derived(limitOf(plan.data, 'resources'));
 	const importRefusal = $derived(featureOf(plan.data, 'import_marketplace'));
+	/** Why a bulk verb is off this plan, or null. The bar itself is on every
+	 *  plan; only the verbs that open a Pro page carry a plan reason. */
+	function planRefusal(verb: BulkVerb): string | null {
+		const feature = VERB_FEATURE[verb];
+		return feature === undefined ? null : featureOf(plan.data, feature);
+	}
 
 	// The two filters the server answers ride the URL: the Labels page links
 	// straight to `/resources?label=<name>`, and a narrowed board is a place
@@ -833,8 +839,11 @@
 					<MenuItem
 						icon={BULK_ICON[action.verb]}
 						danger={action.verb === 'delete'}
-						disabled={action.missing !== null || chosen.length === 0}
+						disabled={action.missing !== null ||
+							planRefusal(action.verb) !== null ||
+							chosen.length === 0}
 						reason={action.missing ??
+							planRefusal(action.verb) ??
 							(chosen.length === 0 ? 'Select at least one resource that is in view.' : undefined)}
 						onclick={() => {
 							bulkMenu = false;

@@ -131,10 +131,12 @@ pub fn run() {
     // `tauri-plugin-updater` declares `platforms.support.android.level = "none"`
     // in its own manifest, so a phone updates through the store it was
     // installed from and never through us. Registering it there anyway would
-    // give the console an update surface that answers nothing. Shadowing
-    // rather than a `mut` binding, which would be pointlessly mutable on the
-    // build where this line is compiled out.
-    #[cfg(desktop)]
+    // give the console an update surface that answers nothing. The Mac App
+    // Store build (`--features app-store`) leaves it out for the same reason:
+    // App Review guideline 2.4.5(vii) forbids an app that updates itself
+    // outside the store. Shadowing rather than a `mut` binding, which would be
+    // pointlessly mutable on the build where this line is compiled out.
+    #[cfg(all(desktop, not(feature = "app-store")))]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     let built = builder
         .setup(move |app| {

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Teachouse",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "identifier": "io.teachouse.desktop",
   "build": {
     "frontendDist": "../../../web/build",
@@ -30,13 +30,31 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "deb", "appimage"],
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.ico"],
+    "targets": ["nsis", "msi", "deb", "appimage", "app", "dmg"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
     "createUpdaterArtifacts": false,
     "publisher": "Teachouse",
     "category": "Business",
     "shortDescription": "Create once. Sell everywhere.",
-    "longDescription": "Teachouse cross-lists your teaching resources to the marketplaces you sell on. Marketplace work for Tes and TPT runs on your own device."
+    "longDescription": "Teachouse cross-lists your teaching resources to the marketplaces you sell on. Marketplace work for Tes and TPT runs on your own device.",
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "hardenedRuntime": true,
+      "signingIdentity": null,
+      "entitlements": null
+    },
+    "windows": {
+      "digestAlgorithm": "sha256",
+      "certificateThumbprint": null,
+      "timestampUrl": null,
+      "signCommand": null
+    }
   },
   "plugins": {
     "updater": {
