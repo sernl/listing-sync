@@ -112,12 +112,15 @@ const TENANT_TABLES: [&str; 77] = [
 /// no tenant pin, and read only by operator routes; their org_id is a
 /// cross-reference, not a fence. account_consent is what a person agreed to
 /// at sign-up (migration 0103): keyed on the identity subject, written before
-/// any organisation exists, and owned by no tenant. The rest are genuinely
-/// global: reference data, the canonical taxonomy, the fleet kill switch, and
-/// sqlx's migration bookkeeping.
-const GLOBAL_TABLES: [&str; 24] = [
+/// any organisation exists, and owned by no tenant. account_deletion is what a
+/// seller's own deletion leaves behind (migration 0104), written after their
+/// organisation is gone, so there is no tenant left to fence it by. The rest
+/// are genuinely global: reference data, the canonical taxonomy, the fleet
+/// kill switch, and sqlx's migration bookkeeping.
+const GLOBAL_TABLES: [&str; 25] = [
     "_sqlx_migrations",
     "account_consent",
+    "account_deletion",
     "app_user",
     "canonical_term",
     "discount",

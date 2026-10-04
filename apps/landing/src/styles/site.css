@@ -1996,3 +1996,15 @@ main {
 		font-size: 14px;
 	}
 }
+
+/* The goodbye a seller reads after deleting their own account (`/?deleted=1`,
+   shown by the home page's script). No `display` here: the `hidden`
+   attribute is what keeps it off the page for everyone else. */
+.goodbye {
+	margin: 0;
+	padding: 14px 0;
+	background: var(--accent-soft);
+	color: var(--primary);
+	font-weight: 600;
+	text-align: center;
+}

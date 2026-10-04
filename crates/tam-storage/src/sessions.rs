@@ -227,6 +227,23 @@ impl SessionRepo {
         }))
     }
 
+    /// The identity subject a platform user signed in as, or `None` for a
+    /// user no identity names (one provisioned by a one-shot rather than by
+    /// signing in).
+    pub async fn auth_subject_of(
+        &self,
+        user: UserId,
+    ) -> Result<Option<tam_types::Uuid>, StorageError> {
+        let subject = sqlx::query_scalar!(
+            "SELECT auth_subject FROM app_user WHERE id = $1",
+            uuid_to_db(user.0),
+        )
+        .fetch_optional(&self.pool)
+        .await?
+        .flatten();
+        Ok(subject.map(crate::codec::uuid_from_db))
+    }
+
     /// A subject seen for the first time becomes a tenant: the organisation
     /// and its first user in one transaction, so a crash between the two
     /// cannot leave a user referencing an organisation that does not exist.

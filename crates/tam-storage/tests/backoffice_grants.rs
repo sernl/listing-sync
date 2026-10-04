@@ -263,6 +263,11 @@ async fn the_backoffice_role_cannot_write_a_table_it_reads(app: PgPool) {
              'https://x.test', 'y', now())",
         "INSERT INTO org_halt (org_id, raised_by, reason, raised_at) \
          VALUES (gen_random_uuid(), 'nobody', 'because', now())",
+        // Migration 0104: what a seller's own deletion left behind is read by
+        // support and written by the deletion alone.
+        "INSERT INTO account_deletion (subject, email_hash, org_id, requested_at) \
+         VALUES (gen_random_uuid(), repeat('a', 64), gen_random_uuid(), now())",
+        "DELETE FROM account_deletion",
     ] {
         let denied = sqlx::query(statement).execute(&backoffice).await;
         assert!(
@@ -354,6 +359,8 @@ async fn the_backoffice_role_sees_only_the_tables_it_was_granted(app: PgPool) {
         // Migration 0103's grant: the operator looks a disputed agreement up
         // from the Users page.
         "account_consent",
+        // Migration 0104: a global table, so the grant alone opens it.
+        "account_deletion",
     ] {
         let allowed = sqlx::query(&format!("SELECT count(*) FROM {table}"))
             .fetch_one(&backoffice)
