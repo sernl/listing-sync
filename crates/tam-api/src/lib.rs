@@ -58,6 +58,9 @@ pub mod payments;
 pub mod pricing;
 pub mod product;
 pub mod profile;
+pub mod refund_policy;
+pub mod refund_quote;
+pub mod refund_requests;
 pub mod resource_templates;
 pub mod resources;
 pub mod rich_text;
@@ -339,6 +342,16 @@ pub fn router(state: AppState) -> Router {
         .route("/{version}/billing/invoices", get(billing::invoices))
         .route("/{version}/billing/cancel", post(billing::cancel))
         .route("/{version}/billing/resume", post(billing::resume))
+        // "Ask for a refund": the seller's payments, the policy's quote on
+        // one, and the request itself (migration 0107).
+        .route(
+            "/{version}/billing/refund-requests",
+            get(refund_requests::billing_refunds).post(refund_requests::ask),
+        )
+        .route(
+            "/{version}/billing/payments/{charge}/refund-quote",
+            get(refund_requests::billing_quote),
+        )
         .route("/{version}/billing/webhook", post(billing::webhook))
         // The price list, unauthenticated: the pricing page is public, and a
         // price a seller cannot read before signing up is not a price list.
@@ -989,6 +1002,18 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/{version}/admin/payments/charges/{charge}/refunds",
             post(payments::create_refund),
+        )
+        .route(
+            "/{version}/admin/payments/charges/{charge}/quote",
+            get(payments::quote),
+        )
+        .route(
+            "/{version}/admin/payments/refund-requests/{id}/approve",
+            post(refund_requests::approve),
+        )
+        .route(
+            "/{version}/admin/payments/refund-requests/{id}/decline",
+            post(refund_requests::decline),
         )
         .route(
             "/{version}/admin/payments/refunds/{id}/mail",

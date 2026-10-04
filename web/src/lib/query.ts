@@ -111,6 +111,10 @@ export const queryKeys = {
 	 *  under `billing` so invalidating the billing read refreshes them too. */
 	billingPaymentMethod: ['billing', 'payment-method'] as const,
 	billingInvoices: ['billing', 'invoices'] as const,
+	/** The payments a seller can ask a refund on, and their requests. */
+	billingRefunds: ['billing', 'refunds'] as const,
+	/** The policy's quote on one of the seller's payments. */
+	billingRefundQuote: (charge: string) => ['billing', 'refund-quote', charge] as const,
 	/** What this organisation's plan allows and what it has used. Asked once
 	 *  by the shell and read from the cache by every page that draws a gated
 	 *  control, so a cap is stated the same way everywhere on one answer. */
@@ -154,6 +158,10 @@ export const queryKeys = {
 	adminImpersonations: ['admin-impersonations'] as const,
 	adminPricing: ['admin-pricing'] as const,
 	adminPayments: ['admin-payments'] as const,
+	/** The policy's quote on one charge, read each time the refund panel
+	 *  opens. Its own key: invalidating the ledger should not requote a
+	 *  panel that is closing. */
+	adminRefundQuote: (charge: string) => ['admin-refund-quote', charge] as const,
 	adminSiteAnalytics: (range: string) => ['admin-site-analytics', range] as const,
 	/** One page of the identity plane's user list, keyed by the search, the
 	 *  page and the order that produced it. */

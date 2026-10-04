@@ -25,17 +25,20 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use tam_storage::{
-    MailRequest, ObservedRefund, PaymentBackofficeRepo, PaymentEvent, PaymentKind, PaymentRepo,
-    Refund, RefundStatus, SiteSettingRepo, StorageError, AUTO_REFUND_MAIL_SETTING,
+    EntitlementRepo, MailRequest, ObservedRefund, PaymentBackofficeRepo, PaymentEvent, PaymentKind,
+    PaymentRepo, Refund, RefundStatus, SiteSettingRepo, StorageError, AUTO_REFUND_MAIL_SETTING,
     SYNC_EVENT_PREFIX,
 };
-use tam_types::{OrgId, Timestamp, Uuid};
+use tam_types::{OrgId, Timestamp, UserId, Uuid};
 
 use crate::billing::ORG_METADATA_KEY;
 use crate::error::{APIError, APIErrorEntry, APIErrorKind};
 use crate::mail_campaigns::long_date;
+use crate::refund_policy::RefundBasis;
+use crate::refund_quote::{self, QuoteView, Resolved};
+use crate::refund_requests::{request_view, RefundRequestView};
 use crate::session::OperatorContext;
-use crate::stripe::{Listed, RefundReason, RefundRequest, StripeError};
+use crate::stripe::{self, Charge, Listed, RefundReason, RefundRequest, StripeError};
 use crate::AppState;
 
 const MILLIS_PER_SEC: i64 = 1_000;
@@ -92,12 +95,20 @@ pub struct RefundView {
     pub mail_error: Option<String>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
+    /// The policy rule and amount the refund was issued against, and why the
+    /// amount differs where it does (migration 0107). Absent on a refund
+    /// issued before the policy was automated or made in Stripe's dashboard.
+    pub policy_basis: Option<String>,
+    pub quoted_cents: Option<i64>,
+    pub override_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaymentsAdminView {
     pub events: Vec<PaymentEventView>,
     pub refunds: Vec<RefundView>,
+    /// Sellers' "Ask for a refund" requests, the open ones first.
+    pub requests: Vec<RefundRequestView>,
     pub auto_refund_mail: bool,
     pub stripe_configured: bool,
 }
@@ -125,6 +136,21 @@ pub struct RefundBody {
     /// The name the console showed for the operator, as the Mail page sends.
     #[serde(default)]
     pub issued_by_label: String,
+    /// The policy quote the panel showed, which must still be the quote when
+    /// the refund is made: a quote that changed underneath the operator (a
+    /// month turned over, a refund landed elsewhere) is refused so they see
+    /// the new one. Absent, the quote is recorded without that check.
+    #[serde(default)]
+    pub policy_basis: Option<RefundBasis>,
+    #[serde(default)]
+    pub quoted_cents: Option<i64>,
+    /// Why the amount is not the quote. Required when they differ.
+    #[serde(default)]
+    pub override_reason: String,
+    /// End the yearly plan this charge paid for today, as the Terms say a
+    /// yearly refund does. Ignored for any other charge.
+    #[serde(default)]
+    pub end_plan: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,28 +177,28 @@ pub fn money(cents: i64, currency: &str) -> String {
 
 // ----------------------------------------------------------------- errors
 
-fn invalid(message: &str) -> APIError {
+pub(crate) fn invalid(message: &str) -> APIError {
     APIError::new(
         StatusCode::UNPROCESSABLE_ENTITY,
         APIErrorEntry::new(message).kind(APIErrorKind::Validation),
     )
 }
 
-fn conflict(message: &str) -> APIError {
+pub(crate) fn conflict(message: &str) -> APIError {
     APIError::new(
         StatusCode::CONFLICT,
         APIErrorEntry::new(message).kind(APIErrorKind::Validation),
     )
 }
 
-fn not_found(message: &str) -> APIError {
+pub(crate) fn not_found(message: &str) -> APIError {
     APIError::new(
         StatusCode::NOT_FOUND,
         APIErrorEntry::new(message).kind(APIErrorKind::NotFound),
     )
 }
 
-fn unconfigured() -> APIError {
+pub(crate) fn unconfigured() -> APIError {
     APIError::new(
         StatusCode::SERVICE_UNAVAILABLE,
         APIErrorEntry::new(
@@ -182,11 +208,11 @@ fn unconfigured() -> APIError {
     )
 }
 
-fn storage(state: &AppState, error: &StorageError) -> APIError {
+pub(crate) fn storage(state: &AppState, error: &StorageError) -> APIError {
     state.internal(&error.to_string())
 }
 
-fn stripe_fault(state: &AppState, error: &StripeError) -> APIError {
+pub(crate) fn stripe_fault(state: &AppState, error: &StripeError) -> APIError {
     state.internal(&error.to_string())
 }
 
@@ -479,7 +505,7 @@ pub(crate) async fn record_webhook(state: &AppState, body: &[u8]) -> Result<(), 
 
 // --------------------------------------------------------------- the read
 
-fn refund_view(refund: Refund, names: &HashMap<OrgId, String>) -> RefundView {
+pub(crate) fn refund_view(refund: Refund, names: &HashMap<OrgId, String>) -> RefundView {
     RefundView {
         id: refund.id.to_hyphenated(),
         org_id: refund.org.map(|org| org.0.to_hyphenated()),
@@ -499,6 +525,9 @@ fn refund_view(refund: Refund, names: &HashMap<OrgId, String>) -> RefundView {
         mail_error: refund.mail_error,
         created_at: refund.created_at,
         updated_at: refund.updated_at,
+        policy_basis: refund.policy_basis,
+        quoted_cents: refund.quoted_cents,
+        override_reason: refund.override_reason,
     }
 }
 
@@ -546,12 +575,14 @@ pub(crate) async fn admin_view(
         .await
         .map_err(|e| fault(&e))?;
     let mut refunds = repo.refunds().await.map_err(|e| fault(&e))?;
+    let requests = repo.requests().await.map_err(|e| fault(&e))?;
     let customers = customer_orgs(&state, &repo).await.map_err(|e| fault(&e))?;
     fill_orgs(&mut events, &mut refunds, &customers);
     let orgs: Vec<OrgId> = events
         .iter()
         .filter_map(|row| row.org)
         .chain(refunds.iter().filter_map(|refund| refund.org))
+        .chain(requests.iter().map(|request| request.org))
         .collect::<HashSet<OrgId>>()
         .into_iter()
         .collect();
@@ -579,6 +610,10 @@ pub(crate) async fn admin_view(
         refunds: refunds
             .into_iter()
             .map(|refund| refund_view(refund, &names))
+            .collect(),
+        requests: requests
+            .into_iter()
+            .map(|request| request_view(request, &names))
             .collect(),
         auto_refund_mail: auto_mail(&state).await.map_err(|e| fault(&e))?,
         stripe_configured: state.config.stripe.is_some(),
@@ -687,14 +722,14 @@ pub(crate) async fn sync(
 /// A Stripe object id as a path segment may carry one: letters, digits and
 /// underscores, which is every id Stripe mints and nothing that could turn
 /// the outbound URL into a different request.
-fn stripe_id(raw: &str) -> bool {
+pub(crate) fn stripe_id(raw: &str) -> bool {
     (3..=255).contains(&raw.len())
         && raw
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
-fn clean(raw: &str, max: usize) -> String {
+pub(crate) fn clean(raw: &str, max: usize) -> String {
     raw.chars()
         .filter(|c| !c.is_control() || *c == '\n')
         .collect::<String>()
@@ -704,140 +739,137 @@ fn clean(raw: &str, max: usize) -> String {
         .collect()
 }
 
+/// The organisation a charge belongs to: the one its own metadata names,
+/// else the one a ledger row about the same charge or payment intent names,
+/// else the one its Stripe customer subscribes for.
+pub(crate) async fn charge_org(
+    state: &AppState,
+    repo: &PaymentRepo,
+    held: &Charge,
+) -> Result<Option<OrgId>, StorageError> {
+    if let Some(org) = org_in(serde_json::to_value(&held.metadata).ok().as_ref()) {
+        return Ok(Some(org));
+    }
+    let mut keys = vec![held.id.clone()];
+    keys.extend(held.payment_intent.clone());
+    if let Some(org) = repo.org_for_objects(&keys).await? {
+        return Ok(Some(org));
+    }
+    let Some(customer) = &held.customer else {
+        return Ok(None);
+    };
+    Ok(customer_orgs(state, repo).await?.get(customer).copied())
+}
+
+/// `GET /v1/admin/payments/charges/{charge}/quote`: what the refund policy
+/// gives on one charge today, which the refund panel opens with.
+pub(crate) async fn quote(
+    State(state): State<AppState>,
+    _operator: OperatorContext,
+    Path((_version, charge)): Path<(String, String)>,
+) -> Result<Json<QuoteView>, APIError> {
+    if !stripe_id(&charge) {
+        return Err(not_found("There is no payment with that id."));
+    }
+    let client = state.config.stripe.as_ref().ok_or_else(unconfigured)?;
+    let resolved = refund_quote::resolve(&state, client, &charge, (state.wall)()).await?;
+    Ok(Json(resolved.view))
+}
+
+/// Who a refund is issued by: the operator, and the name the console showed
+/// for them.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Issuer<'a> {
+    pub(crate) user: UserId,
+    pub(crate) label: &'a str,
+}
+
 /// `POST /v1/admin/payments/charges/{charge}/refunds`.
-///
-/// The ceiling is Stripe's: the charge is re-read and its own
-/// `amount_refunded` decides what is left, so a refund made elsewhere counts
-/// even before its webhook lands. The refund is made with our row's id as
-/// its idempotency key, then recorded, with a line in the operators' trail
-/// naming who issued it. A request id seen before answers the refund it made.
 pub(crate) async fn create_refund(
     State(state): State<AppState>,
     operator: OperatorContext,
     Path((_version, charge)): Path<(String, String)>,
     Json(body): Json<RefundBody>,
 ) -> Result<(StatusCode, Json<RefundView>), APIError> {
-    if !stripe_id(&charge) {
-        return Err(not_found("There is no payment with that id."));
-    }
-    let Some(id) = Uuid::parse_hyphenated(&body.request_id) else {
-        return Err(invalid(
-            "The refund request is missing its id. Reload the page and try again.",
-        ));
-    };
-    if body.amount_cents <= 0 {
-        return Err(invalid("Enter an amount greater than zero."));
-    }
-    let note = clean(&body.note, NOTE_MAX);
     let label = clean(&body.issued_by_label, LABEL_MAX);
-    let client = state.config.stripe.as_ref().ok_or_else(unconfigured)?;
-    let repo = PaymentRepo::new(state.pool.clone());
-    let fault = |error: &StorageError| storage(&state, error);
-
-    let mut names = HashMap::new();
-    if let Some(existing) = repo.refund(id).await.map_err(|e| fault(&e))? {
-        if existing.charge_id != charge {
-            return Err(conflict("That refund request was for a different payment."));
-        }
-        if let Some(org) = existing.org {
-            names = repo.org_names(&[org]).await.map_err(|e| fault(&e))?;
-        }
-        return Ok((StatusCode::OK, Json(refund_view(existing, &names))));
-    }
-
-    let held = match client.retrieve_charge(&charge).await {
-        Ok(held) => held,
-        Err(StripeError::Api { status: 404, .. }) => {
-            return Err(not_found("There is no payment with that id in Stripe."))
-        }
-        Err(error) => return Err(stripe_fault(&state, &error)),
+    let issuer = Issuer {
+        user: operator.user,
+        label: &label,
     };
-    let remaining = held.amount.saturating_sub(held.amount_refunded);
-    if held.refunded || remaining <= 0 {
-        return Err(invalid("This payment has already been refunded in full."));
+    let (status, view) = issue_refund(&state, issuer, &charge, &body).await?;
+    Ok((status, Json(view)))
+}
+
+/// The quote the body names against the one the policy gives now, and the
+/// reason an amount other than the quote needs.
+fn check_quote(
+    quote: &QuoteView,
+    body: &RefundBody,
+    override_reason: &str,
+) -> Result<(), APIError> {
+    match (body.policy_basis, body.quoted_cents) {
+        (None, None) => {}
+        (Some(basis), Some(quoted)) => {
+            if basis != quote.basis || quoted != quote.amount_cents {
+                return Err(conflict(&format!(
+                    "The policy amount for this payment changed since the panel opened: it is \
+                     now {}. Check it and try again.",
+                    money(quote.amount_cents, &quote.currency)
+                )));
+            }
+        }
+        (Some(_), None) | (None, Some(_)) => {
+            return Err(invalid(
+                "The refund names half of a policy quote. Reload the page and try again.",
+            ))
+        }
     }
-    if body.amount_cents > remaining {
+    if body.amount_cents != quote.amount_cents && override_reason.is_empty() {
         return Err(invalid(&format!(
-            "You can refund at most {} on this payment.",
-            money(remaining, &held.currency)
+            "Say why you're refunding {} rather than the policy's {}.",
+            money(body.amount_cents, &quote.currency),
+            money(quote.amount_cents, &quote.currency)
         )));
     }
+    Ok(())
+}
 
-    let customers = customer_orgs(&state, &repo).await.map_err(|e| fault(&e))?;
-    let mut keys = vec![held.id.clone()];
-    keys.extend(held.payment_intent.clone());
-    let org = match org_in(serde_json::to_value(&held.metadata).ok().as_ref()) {
-        Some(org) => Some(org),
-        None => repo
-            .org_for_objects(&keys)
-            .await
-            .map_err(|e| fault(&e))?
-            .or_else(|| {
-                held.customer
-                    .as_ref()
-                    .and_then(|customer| customers.get(customer))
-                    .copied()
-            }),
-    };
-    let org_text = org.map(|org| org.0.to_hyphenated());
-    let id_text = id.to_hyphenated();
-    let made = match client
-        .create_refund(&RefundRequest {
-            id: &id_text,
-            charge: &charge,
-            amount_cents: body.amount_cents,
-            reason: body.reason,
-            org: org_text.as_deref(),
-        })
-        .await
-    {
-        Ok(made) => made,
+/// Makes the refund in Stripe, under our row's id as its idempotency key.
+async fn make_refund(
+    state: &AppState,
+    client: &stripe::Client,
+    request: &RefundRequest<'_>,
+) -> Result<stripe::Refund, APIError> {
+    match client.create_refund(request).await {
+        Ok(made) => Ok(made),
         Err(StripeError::Api { status, message }) if (400..500).contains(&status) => {
-            eprintln!("tam-api: Stripe refused a refund on {charge}: {message}");
-            return Err(invalid(
+            eprintln!(
+                "tam-api: Stripe refused a refund on {}: {message}",
+                request.charge
+            );
+            Err(invalid(
                 "Stripe refused this refund. Open the payment in Stripe's dashboard to see why.",
-            ));
+            ))
         }
-        Err(error) => return Err(stripe_fault(&state, &error)),
-    };
+        Err(error) => Err(stripe_fault(state, &error)),
+    }
+}
 
-    let now = (state.wall)();
-    let refund = Refund {
-        id,
-        org,
-        provider_refund_id: made.id.clone(),
-        charge_id: charge.clone(),
-        amount_cents: made.amount,
-        currency: if made.currency.is_empty() {
-            held.currency.clone()
-        } else {
-            made.currency.clone()
-        },
-        status: RefundStatus::from_stripe(made.status.as_deref().unwrap_or("pending")),
-        reason: Some(body.reason.as_str().to_owned()),
-        note: (!note.is_empty()).then_some(note),
-        issued_by: Some(operator.user),
-        issued_by_label: Some(if label.is_empty() {
-            "an admin".to_owned()
-        } else {
-            label
-        }),
-        mail_requested_at: (body.send_email && org.is_some()).then_some(now),
-        mail_sent_at: None,
-        mail_error: None,
-        created_at: now,
-        updated_at: now,
-    };
-    let stored = repo.issue(&refund).await.map_err(|e| fault(&e))?;
-
-    // The ledger row the webhook's `refund.created` will replace, so the page
-    // shows the refund the moment it is made rather than when Stripe calls.
+/// The ledger row the webhook's `refund.created` will replace, so the page
+/// shows the refund the moment it is made rather than when Stripe calls.
+async fn record_made(
+    repo: &PaymentRepo,
+    made: &stripe::Refund,
+    refund: &Refund,
+    held: &Charge,
+    now: Timestamp,
+) -> Result<(), StorageError> {
     let object = serde_json::json!({
         "id": made.id,
         "object": "refund",
         "amount": made.amount,
         "currency": refund.currency,
-        "charge": charge,
+        "charge": refund.charge_id,
         "payment_intent": held.payment_intent,
         "status": made.status,
         "reason": made.reason,
@@ -858,14 +890,160 @@ pub(crate) async fn create_refund(
         },
         now,
     ) {
-        row.org = org;
-        repo.record_synced(&row).await.map_err(|e| fault(&e))?;
+        row.org = refund.org;
+        repo.record_synced(&row).await?;
+    }
+    Ok(())
+}
+
+/// What a refund does beyond the money: a Move Pack refunded in full takes
+/// its moves back out of the balance, and a yearly plan whose refund asks
+/// for it ends today, as the Terms say.
+async fn settle_purchase(
+    state: &AppState,
+    client: &stripe::Client,
+    resolved: &Resolved,
+    refunded: i64,
+    end_plan: bool,
+) -> Result<(), APIError> {
+    let now = (state.wall)();
+    if let (Some(session), Some(org)) = (resolved.pack_session(), resolved.org) {
+        if resolved.view.remaining_cents.saturating_sub(refunded) <= 0 {
+            let _taken: bool = EntitlementRepo::new(state.pool.clone())
+                .refund_pack(org, session, now)
+                .await
+                .map_err(|error| storage(state, &error))?;
+        }
+    }
+    if end_plan {
+        if let Some(subscription) = resolved.yearly_subscription() {
+            crate::billing::end_plan_now(state, client, resolved.org, subscription, now).await?;
+        }
+    }
+    Ok(())
+}
+
+/// One refund, issued from the refund panel or by approving a seller's
+/// request.
+///
+/// The ceiling is Stripe's: the charge is re-read and its own
+/// `amount_refunded` decides what is left, so a refund made elsewhere counts
+/// even before its webhook lands. The policy's quote is taken on the same
+/// read and recorded beside the amount, with the operator's reason where the
+/// two differ. The refund is made with our row's id as its idempotency key,
+/// then recorded, with a line in the operators' trail naming who issued it.
+/// A request id seen before answers the refund it made.
+pub(crate) async fn issue_refund(
+    state: &AppState,
+    issuer: Issuer<'_>,
+    charge: &str,
+    body: &RefundBody,
+) -> Result<(StatusCode, RefundView), APIError> {
+    if !stripe_id(charge) {
+        return Err(not_found("There is no payment with that id."));
+    }
+    let Some(id) = Uuid::parse_hyphenated(&body.request_id) else {
+        return Err(invalid(
+            "The refund request is missing its id. Reload the page and try again.",
+        ));
+    };
+    if body.amount_cents <= 0 {
+        return Err(invalid("Enter an amount greater than zero."));
+    }
+    let note = clean(&body.note, NOTE_MAX);
+    let override_reason = clean(&body.override_reason, NOTE_MAX);
+    let client = state.config.stripe.as_ref().ok_or_else(unconfigured)?;
+    let repo = PaymentRepo::new(state.pool.clone());
+    let fault = |error: &StorageError| storage(state, error);
+
+    if let Some(existing) = repo.refund(id).await.map_err(|e| fault(&e))? {
+        if existing.charge_id != charge {
+            return Err(conflict("That refund request was for a different payment."));
+        }
+        let names = match existing.org {
+            Some(org) => repo.org_names(&[org]).await.map_err(|e| fault(&e))?,
+            None => HashMap::new(),
+        };
+        return Ok((StatusCode::OK, refund_view(existing, &names)));
     }
 
-    if let Some(org) = stored.org {
-        names = repo.org_names(&[org]).await.map_err(|e| fault(&e))?;
+    let resolved = refund_quote::resolve(state, client, charge, (state.wall)()).await?;
+    let quote = &resolved.view;
+    let held = &resolved.charge;
+    if held.refunded || quote.remaining_cents <= 0 {
+        return Err(invalid("This payment has already been refunded in full."));
     }
-    Ok((StatusCode::CREATED, Json(refund_view(stored, &names))))
+    if body.amount_cents > quote.remaining_cents {
+        return Err(invalid(&format!(
+            "You can refund at most {} on this payment.",
+            money(quote.remaining_cents, &held.currency)
+        )));
+    }
+    check_quote(quote, body, &override_reason)?;
+
+    let org = resolved.org;
+    let org_text = org.map(|org| org.0.to_hyphenated());
+    let id_text = id.to_hyphenated();
+    let made = make_refund(
+        state,
+        client,
+        &RefundRequest {
+            id: &id_text,
+            charge,
+            amount_cents: body.amount_cents,
+            reason: body.reason,
+            org: org_text.as_deref(),
+        },
+    )
+    .await?;
+
+    let now = (state.wall)();
+    let refund = Refund {
+        id,
+        org,
+        provider_refund_id: made.id.clone(),
+        charge_id: charge.to_owned(),
+        amount_cents: made.amount,
+        currency: if made.currency.is_empty() {
+            held.currency.clone()
+        } else {
+            made.currency.clone()
+        },
+        status: RefundStatus::from_stripe(made.status.as_deref().unwrap_or("pending")),
+        reason: Some(body.reason.as_str().to_owned()),
+        note: (!note.is_empty()).then_some(note),
+        issued_by: Some(issuer.user),
+        issued_by_label: Some(if issuer.label.is_empty() {
+            "an admin".to_owned()
+        } else {
+            issuer.label.to_owned()
+        }),
+        mail_requested_at: (body.send_email && org.is_some()).then_some(now),
+        mail_sent_at: None,
+        mail_error: None,
+        created_at: now,
+        updated_at: now,
+        policy_basis: Some(quote.basis.as_str().to_owned()),
+        quoted_cents: Some(quote.amount_cents),
+        override_reason: (made.amount != quote.amount_cents).then(|| {
+            if override_reason.is_empty() {
+                "Stripe refunded a different amount from the one asked for.".to_owned()
+            } else {
+                override_reason
+            }
+        }),
+    };
+    let stored = repo.issue(&refund).await.map_err(|e| fault(&e))?;
+    record_made(&repo, &made, &refund, held, now)
+        .await
+        .map_err(|e| fault(&e))?;
+    settle_purchase(state, client, &resolved, made.amount, body.end_plan).await?;
+
+    let names = match stored.org {
+        Some(org) => repo.org_names(&[org]).await.map_err(|e| fault(&e))?,
+        None => HashMap::new(),
+    };
+    Ok((StatusCode::CREATED, refund_view(stored, &names)))
 }
 
 /// `POST /v1/admin/payments/refunds/{id}/mail`: queues the refund mail to

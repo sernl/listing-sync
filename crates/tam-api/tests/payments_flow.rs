@@ -403,10 +403,12 @@ async fn refund(
         Some(&TOKEN_OPERATOR),
         Method::POST,
         &format!("/v1/admin/payments/charges/{CHARGE}/refunds"),
+        // The double's charge traces to no plan or pack, so the policy quotes
+        // nothing and every amount here is an override that must say why.
         Some(serde_json::json!({
             "request_id": request, "amount_cents": amount, "reason": "requested_by_customer",
             "note": "Charged twice in September", "send_email": send_email,
-            "issued_by_label": "Sam"
+            "issued_by_label": "Sam", "override_reason": "Charged twice in September"
         })),
     )
     .await

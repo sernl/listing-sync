@@ -453,6 +453,9 @@ pub struct CheckoutSession {
     pub metadata: BTreeMap<String, String>,
     #[serde(default)]
     pub line_items: Option<LineItems>,
+    /// Unix seconds.
+    #[serde(default)]
+    pub created: i64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -542,6 +545,13 @@ pub enum PortalFlow {
 struct List<T> {
     #[serde(default = "Vec::new")]
     data: Vec<T>,
+}
+
+/// One invoice payment: which invoice a payment intent paid.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct InvoicePayment {
+    #[serde(default, deserialize_with = "expandable")]
+    invoice: Option<String>,
 }
 
 /// One invoice, narrowed to what the billing page lists.
@@ -804,6 +814,13 @@ pub struct Charge {
     pub payment_intent: Option<String>,
     #[serde(default)]
     pub metadata: BTreeMap<String, String>,
+    /// The invoice the charge paid, on API versions before 2025-03-31.
+    /// Later versions name a charge from the invoice's `payments` instead.
+    #[serde(default, deserialize_with = "expandable")]
+    pub invoice: Option<String>,
+    /// Unix seconds.
+    #[serde(default)]
+    pub created: i64,
 }
 
 /// Why a refund is being made, in Stripe's three words.
@@ -1351,6 +1368,42 @@ impl Client {
     /// One charge, with Stripe's running refund total.
     pub async fn retrieve_charge(&self, id: &str) -> Result<Charge, StripeError> {
         self.get(&format!("/v1/charges/{id}")).await
+    }
+
+    /// One invoice as Stripe renders it, for the billing webhook's own reader
+    /// to narrow: the refund quote reads the service period and the price
+    /// from its lines.
+    pub async fn retrieve_invoice(&self, id: &str) -> Result<serde_json::Value, StripeError> {
+        self.get(&format!("/v1/invoices/{id}")).await
+    }
+
+    /// The invoice a payment intent paid, on API versions from 2025-03-31,
+    /// where the charge no longer names it: the invoice payment records the
+    /// pairing. `None` where the intent paid no invoice (a pack's checkout).
+    pub async fn invoice_paid_by_intent(
+        &self,
+        intent: &str,
+    ) -> Result<Option<String>, StripeError> {
+        let list: List<InvoicePayment> = self
+            .get(&format!(
+                "/v1/invoice_payments?payment[type]=payment_intent&payment[payment_intent]={intent}&limit=1"
+            ))
+            .await?;
+        Ok(list.data.into_iter().find_map(|payment| payment.invoice))
+    }
+
+    /// The Checkout Session a payment intent completed, with its line items,
+    /// which is how a pack's charge is traced to the pack it bought.
+    pub async fn checkout_session_for_intent(
+        &self,
+        intent: &str,
+    ) -> Result<Option<CheckoutSession>, StripeError> {
+        let list: List<CheckoutSession> = self
+            .get(&format!(
+                "/v1/checkout/sessions?payment_intent={intent}&expand[]=data.line_items&limit=1"
+            ))
+            .await?;
+        Ok(list.data.into_iter().next())
     }
 
     /// Refunds part or all of one charge, answering the refund.

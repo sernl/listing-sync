@@ -52,12 +52,16 @@ import type {
 	TermsBody
 } from '$lib/pages/admin/pricing';
 import type {
+	DecisionBody,
 	PaymentSettingsBody,
 	PaymentsAdminView,
+	QuoteView,
 	RefundBody,
+	RefundRequestView,
 	RefundView,
 	SyncView
 } from '$lib/pages/admin/payments';
+import type { AskBody, BillingRefundsView } from '$lib/pages/account/refunds';
 import type { SiteAnalyticsView, SiteRange } from '$lib/pages/admin/site-analytics';
 import type { Capabilities, PlansView } from '$lib/generated/plans';
 import type { ToastNotice } from '$lib/toast';
@@ -3456,6 +3460,18 @@ export const api = {
 	/** Undoes a cancellation while the period still runs. */
 	billingResume: () => post<BillingView>('/v1/billing/resume', {}),
 
+	/** The seller's payments from the last year and the refunds they have
+	 *  asked for. */
+	billingRefunds: () => request<BillingRefundsView>('/v1/billing/refund-requests'),
+
+	/** What the refund policy says one of the seller's payments is owed. */
+	billingRefundQuote: (charge: string) =>
+		request<QuoteView>(`/v1/billing/payments/${encodeURIComponent(charge)}/refund-quote`),
+
+	/** Asks for the policy's refund. 422 when it is nothing; 409 when one is
+	 *  already waiting. */
+	askRefund: (body: AskBody) => post<RefundRequestView>('/v1/billing/refund-requests', body),
+
 	/** The price table and what each plan allows. Public: naming a price needs
 	 *  no session, and the landing build reads the same figures out of the
 	 *  generated module rather than over the wire. */
@@ -3534,8 +3550,18 @@ export const api = {
 	 *  is more than is left; 503 when the server has no Stripe key. */
 	refundCharge: (charge: string, body: RefundBody) =>
 		post<RefundView>(`/v1/admin/payments/charges/${encodeURIComponent(charge)}/refunds`, body),
+	/** What the refund policy says the charge is owed, quoted per opening. */
+	refundQuote: (charge: string) =>
+		request<QuoteView>(`/v1/admin/payments/charges/${encodeURIComponent(charge)}/quote`),
 	/** Queues the refund email to the customer. 409 once it has been sent. */
 	mailRefund: (id: string) => post<RefundView>(`/v1/admin/payments/refunds/${id}/mail`, {}),
+	/** Issues a seller's requested refund at its quote and emails them. 409
+	 *  once it has been decided. */
+	approveRefundRequest: (id: string, body: DecisionBody) =>
+		post<RefundRequestView>(`/v1/admin/payments/refund-requests/${id}/approve`, body),
+	/** Declines a seller's request; they are emailed the reason. */
+	declineRefundRequest: (id: string, body: DecisionBody) =>
+		post<RefundRequestView>(`/v1/admin/payments/refund-requests/${id}/decline`, body),
 	setPaymentSettings: (body: PaymentSettingsBody) =>
 		put<PaymentSettingsBody>('/v1/admin/payments/settings', body),
 

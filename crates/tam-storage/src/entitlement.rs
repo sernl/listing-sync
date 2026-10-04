@@ -598,6 +598,100 @@ impl EntitlementRepo {
         Ok(Some(nth))
     }
 
+    /// What the ledger says of one Move Pack, by the checkout session that
+    /// bought it (the credit's `source_ref`), or `None` where no credit names
+    /// that session.
+    ///
+    /// Read in one pinned transaction so the four answers agree: the credit,
+    /// the commits stamped with its expiry (a debit carries the expiry of the
+    /// credit it drew on, migration 0084), whether it was already refunded,
+    /// and the balance now.
+    pub async fn pack_use(
+        &self,
+        org: OrgId,
+        session: &str,
+        now: Timestamp,
+    ) -> Result<Option<PackUse>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let Some(credit) = sqlx::query!(
+            "SELECT delta, expires_at FROM move_ledger \
+              WHERE org_id = $1 AND source = 'pack' AND source_ref = $2",
+            uuid_to_db(org.0),
+            session,
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            tx.commit().await?;
+            return Ok(None);
+        };
+        let row = sqlx::query!(
+            r#"SELECT
+                 (SELECT count(*) FROM move_ledger
+                   WHERE org_id = $1 AND source = 'commit' AND expires_at = $2) AS "drawn!",
+                 EXISTS (SELECT 1 FROM move_ledger
+                   WHERE org_id = $1 AND source = 'refund' AND source_ref = $3) AS "refunded!",
+                 (SELECT COALESCE(SUM(delta), 0)::bigint FROM move_ledger
+                   WHERE org_id = $1 AND (expires_at IS NULL OR expires_at > $4)) AS "balance!""#,
+            uuid_to_db(org.0),
+            credit.expires_at,
+            session,
+            timestamp_to_db(now)?,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(Some(PackUse {
+            moves: i64::from(credit.delta),
+            expires_at: credit.expires_at.map(timestamp_from_db),
+            drawn: row.drawn,
+            refunded: row.refunded,
+            balance: row.balance.max(0),
+        }))
+    }
+
+    /// Takes a refunded Move Pack's moves back out of the balance: one
+    /// `refund` debit of the pack's size, stamped with the pack's expiry so
+    /// the pair leaves the balance together, and idempotent on the session.
+    /// Answers whether it was written; `false` for a session with no pack
+    /// credit or one already taken back.
+    pub async fn refund_pack(
+        &self,
+        org: OrgId,
+        session: &str,
+        at: Timestamp,
+    ) -> Result<bool, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        pin_org(&mut tx, org).await?;
+        let Some(credit) = sqlx::query!(
+            "SELECT delta, expires_at FROM move_ledger \
+              WHERE org_id = $1 AND source = 'pack' AND source_ref = $2",
+            uuid_to_db(org.0),
+            session,
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            tx.commit().await?;
+            return Ok(false);
+        };
+        let written = write_move(
+            &mut tx,
+            org,
+            LedgerEntry {
+                delta: credit.delta.saturating_neg(),
+                source: MoveSource::Refund,
+                source_ref: Some(session),
+                expires_at: credit.expires_at,
+                at: timestamp_to_db(at)?,
+            },
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(written)
+    }
+
     /// Credits one billing period's moves to a subscription.
     ///
     /// Idempotent on the period, so a scheduler that runs twice or a webhook
@@ -744,6 +838,21 @@ impl MoveSource {
     pub fn parse(raw: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|source| source.as_str() == raw)
     }
+}
+
+/// One Move Pack as the ledger records it, for the refund policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PackUse {
+    /// The moves the pack credited.
+    pub moves: i64,
+    pub expires_at: Option<Timestamp>,
+    /// Commits stamped with the pack's expiry: the moves the ledger says
+    /// were drawn on it.
+    pub drawn: i64,
+    /// Whether the pack's moves were already taken back by a refund.
+    pub refunded: bool,
+    /// The organisation's spendable balance now, floored at zero.
+    pub balance: i64,
 }
 
 /// What an organisation can spend, and when the soonest of it lapses.

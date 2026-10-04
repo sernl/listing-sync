@@ -1,0 +1,128 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, org_id, provider_refund_id, charge_id, amount_cents, currency, status, reason, note, issued_by, issued_by_label, mail_requested_at, mail_sent_at, mail_error, created_at, updated_at, policy_basis, quoted_cents, override_reason FROM refund ORDER BY created_at DESC, id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "org_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "provider_refund_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "charge_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "amount_cents",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "currency",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "reason",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "note",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "issued_by",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 10,
+        "name": "issued_by_label",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "mail_requested_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 12,
+        "name": "mail_sent_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 13,
+        "name": "mail_error",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 14,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 15,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 16,
+        "name": "policy_basis",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 17,
+        "name": "quoted_cents",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 18,
+        "name": "override_reason",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "a3c43a36f24574aa552d8d0289a2f106391c81a51d99559737bdfe92e3ee50f4"
+}

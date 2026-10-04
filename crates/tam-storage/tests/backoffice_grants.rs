@@ -329,6 +329,8 @@ async fn the_backoffice_role_sees_only_the_tables_it_was_granted(app: PgPool) {
         // granted nothing here either.
         "payment_event",
         "refund",
+        // Migration 0107's decision, migration 0102's reason.
+        "refund_request",
     ] {
         let denied = sqlx::query(&format!("SELECT count(*) FROM {table}"))
             .fetch_one(&backoffice)

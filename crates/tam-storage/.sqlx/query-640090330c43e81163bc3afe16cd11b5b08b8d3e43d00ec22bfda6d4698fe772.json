@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT raw FROM payment_event WHERE kind = 'invoice_paid' AND (charge_id = ANY($1) OR payment_intent_id = ANY($1)) ORDER BY occurred_at DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "raw",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "640090330c43e81163bc3afe16cd11b5b08b8d3e43d00ec22bfda6d4698fe772"
+}

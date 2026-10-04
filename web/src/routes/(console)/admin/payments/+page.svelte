@@ -13,6 +13,7 @@
 	import StatusPill from '$lib/StatusPill.svelte';
 	import { toast } from '$lib/toast';
 	import Toggle from '$lib/Toggle.svelte';
+	import PaymentsRefundRequests from '$lib/pages/admin/PaymentsRefundRequests.svelte';
 	import PaymentsRefundSheet from '$lib/pages/admin/PaymentsRefundSheet.svelte';
 	import {
 		GROUP_LABEL,
@@ -30,6 +31,7 @@
 		nzTime,
 		refundOf,
 		refundPill,
+		refundPolicy,
 		rowPill,
 		relatedEvents,
 		relatedRefunds,
@@ -65,6 +67,7 @@
 	const now = Date.now();
 	const events = $derived(payments.data?.events ?? []);
 	const refunds = $derived(payments.data?.refunds ?? []);
+	const requests = $derived(payments.data?.requests ?? []);
 	const stripeless = $derived(payments.data?.stripe_configured === false);
 	const stats = $derived(monthStats(events, refunds, now));
 	const statuses = $derived(statusOptions(events));
@@ -148,11 +151,13 @@
 {#snippet refundLine(refund: RefundView)}
 	{@const button = mailButton(refund)}
 	{@const pill = refundPill(refund)}
+	{@const policy = refundPolicy(refund)}
 	<li class="pay-refund">
 		<div class="pay-refund-main">
 			<span class="pay-refund-top">
 				<b>{eventAmount(refund)}</b>
 				<StatusPill tone={pill.tone} label={pill.label} />
+				{#if policy !== null}<span class="quiet">{policy.quoted}</span>{/if}
 				<span class="quiet">{nzShortDate(refund.created_at)}</span>
 			</span>
 			<span class="quiet">
@@ -162,6 +167,9 @@
 				{refund.issued_by === null ? "made in Stripe's dashboard" : `by ${refund.issued_by}`}
 			</span>
 			{#if refund.note}<span class="pay-note">“{refund.note}”</span>{/if}
+			{#if policy?.override}
+				<span class="pay-override">Not the policy amount: {policy.override}</span>
+			{/if}
 			<span class="mono pay-id">{refund.provider_refund_id}</span>
 		</div>
 		<div class="pay-refund-mail">
@@ -274,6 +282,23 @@
 					<p>Refunds made in Stripe's dashboard never send our email by themselves.</p>
 				</Explain>
 			</div>
+
+			{#if requests.length > 0}
+				<PaymentsRefundRequests
+					{requests}
+					decidedBy={issuedBy}
+					blocked={stripeless ? NO_STRIPE : null}
+					onDecided={async (decided) => {
+						await invalidate();
+						toast(
+							'success',
+							decided.status === 'approved'
+								? 'Refunded. We have emailed them.'
+								: 'Declined. We have emailed them the reason.'
+						);
+					}}
+				/>
+			{/if}
 
 			{#if events.length === 0}
 				<Placeholder
@@ -745,6 +770,11 @@
 
 	.pay-note {
 		font-style: italic;
+	}
+
+	.pay-override {
+		color: var(--muted);
+		overflow-wrap: anywhere;
 	}
 
 	.pay-refund-mail {
