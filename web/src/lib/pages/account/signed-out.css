@@ -65,3 +65,9 @@
 	color: var(--muted);
 	text-align: center;
 }
+
+/* Why a provider sent the browser back here rather than signed in: the
+   agreement could not be recorded, or there is no account to sign in to. */
+.auth-card.acct-signed-out .auth-refusal {
+	margin-bottom: 16px;
+}

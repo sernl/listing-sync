@@ -53,7 +53,7 @@ const Sub = level === 1 ? 'h2' : 'h3';
 		    `just landing-copy-gate`. */}
 		<div class="move-box" data-marketplace-band>
 			<p><strong>What is a move?</strong> {moveDefinition}</p>
-			<details class="move-explain">
+			<details class="explain">
 				<summary>Explain</summary>
 				{moveExplained.map((line) => <p>{line}</p>)}
 			</details>
@@ -122,18 +122,20 @@ const Sub = level === 1 ? 'h2' : 'h3';
 										<a
 											class:list={[plan.recommended ? 'cta' : 'btn', 'yearly-only']}
 											href={signupUrl(plan.yearly_key)}
+											data-cta={`pricing-${plan.yearly_key}`}
 										>
 											Choose {plan.name}
 										</a>
 										<a
 											class:list={[plan.recommended ? 'cta' : 'btn', 'monthly-only']}
 											href={signupUrl(plan.monthly_key)}
+											data-cta={`pricing-${plan.monthly_key}`}
 										>
 											Choose {plan.name}
 										</a>
 									</>
 								) : (
-									<a class="btn" href={signupUrl()}>
+									<a class="btn" href={signupUrl()} data-cta="pricing-free">
 										Start free
 									</a>
 								)}
@@ -182,7 +184,12 @@ const Sub = level === 1 ? 'h2' : 'h3';
 								<tr>
 									<th scope="row">
 										{feature.label}
-										{feature.soon && <span class="soon-tag">Coming soon</span>}
+										{feature.soon && (
+											<>
+												{' '}
+												<span class="soon-tag">Coming soon</span>
+											</>
+										)}
 									</th>
 									{plans.map((plan) => {
 										const shown = cell(feature, plan);

@@ -1206,6 +1206,16 @@ impl Client {
             .await
     }
 
+    /// Cancels the subscription now rather than at the period's end,
+    /// answering it as Stripe left it (`status` `canceled`).
+    ///
+    /// Only a seller deleting their own account asks for this: the plan
+    /// stops with the account, and the Terms say what is refunded, which is
+    /// nothing beyond them, so no proration or refund is requested here.
+    pub async fn cancel_subscription(&self, id: &str) -> Result<Subscription, StripeError> {
+        self.delete(&format!("/v1/subscriptions/{id}")).await
+    }
+
     /// Creates one coupon, answering it.
     ///
     /// The request carries an `Idempotency-Key` derived from the coupon's own

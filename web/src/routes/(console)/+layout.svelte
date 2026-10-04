@@ -18,6 +18,7 @@
 	import { probeReachability } from '$lib/unreachable';
 	import MaintenanceCard from '$lib/MaintenanceCard.svelte';
 	import Toasts from '$lib/Toasts.svelte';
+	import TermsConsentSheet from '$lib/TermsConsentSheet.svelte';
 	import { activeSeason, siteGate } from '$lib/site';
 
 	let { data, children } = $props();
@@ -159,6 +160,12 @@
 			{/if}
 			{@render children()}
 		</Console>
+		<!-- The terms asked for again when they have changed. Held until the
+		     identity session is read, so an impersonating operator is never
+		     shown a seller's agreement to make. -->
+		<TermsConsentSheet
+			suppressed={identity.isPending || impersonationState(identity.data ?? null) !== null}
+		/>
 	{:else if signedOut === 'public'}
 		<div class="auth">
 			<div class="wordmark">

@@ -23,11 +23,16 @@ pub struct Route {
 
 /// Every operation this build serves. Mounting happens in `router()`;
 /// documenting happens here; the parity test holds the two together.
-pub const ROUTES: [Route; 214] = [
+pub const ROUTES: [Route; 221] = [
     Route {
         method: "get",
         path: "/healthz",
         summary: "Unversioned liveness probe",
+    },
+    Route {
+        method: "post",
+        path: "/internal/consent",
+        summary: "Identity service: record a new account's sign-up agreement (shared secret)",
     },
     Route {
         method: "get",
@@ -63,6 +68,11 @@ pub const ROUTES: [Route; 214] = [
         method: "get",
         path: "/{version}/org/slug/{slug}",
         summary: "Whether a slug is free, advisory; the write's 409 is authoritative",
+    },
+    Route {
+        method: "delete",
+        path: "/{version}/account",
+        summary: "Delete your own account: cancel the plan, the sign-in and the organisation",
     },
     Route {
         method: "get",
@@ -218,6 +228,16 @@ pub const ROUTES: [Route; 214] = [
         method: "post",
         path: "/{version}/onboarding/tour",
         summary: "Record that the requesting user completed or skipped the guided tour",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/consent/status",
+        summary: "Whether the requesting user has agreed to the current terms",
+    },
+    Route {
+        method: "post",
+        path: "/{version}/consent",
+        summary: "Record the requesting user's agreement to the current terms",
     },
     Route {
         method: "get",
@@ -875,6 +895,16 @@ pub const ROUTES: [Route; 214] = [
         summary: "Operator: a page of users with their organisation, its plan and their last sign-in",
     },
     Route {
+        method: "get",
+        path: "/{version}/admin/consents",
+        summary: "Operator: every account's newest terms agreement",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/admin/users/{subject}/consent",
+        summary: "Operator: every statement one account agreed to, with time, address and browser",
+    },
+    Route {
         method: "delete",
         path: "/{version}/admin/users/{subject}",
         summary: "Operator: delete a seller and the organisation that was theirs alone",
@@ -1048,6 +1078,11 @@ pub const ROUTES: [Route; 214] = [
         method: "put",
         path: "/{version}/admin/payments/settings",
         summary: "Operator: whether new refunds email the customer automatically",
+    },
+    Route {
+        method: "get",
+        path: "/{version}/admin/analytics/site",
+        summary: "Operator: the public site's visitors, pageviews, pages, referrers, locations, devices and signups from PostHog over 7, 30 or 90 New Zealand days; cached five minutes",
     },
     Route {
         method: "get",

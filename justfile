@@ -11,6 +11,9 @@ db_url := "postgres://tam_app:tam_dev_password@127.0.0.1:5433/tam"
 # the private half is generated per machine and never committed.
 dev_entitlement_key := ".dev/entitlement.pkcs8"
 dev_entitlement_public := ".dev/entitlement.pub.hex"
+# The shared secret tam-auth offers when it records a sign-up's agreement,
+# copied out of auth/.env by `dev-all` for tam-server's --consent-secret-file.
+dev_consent_secret := ".dev/consent-secret"
 
 # The identity role, whose search_path is auth and whose grants stop at that
 # schema; dev-only credential, matching db/init/02-auth-role.sql
@@ -267,6 +270,8 @@ web-typegen:
     emit vocab    web/src/lib/generated/vocab.ts
     emit plans-ts web/src/lib/generated/plans.ts
     emit plans-js apps/landing/src/plans.generated.js
+    emit legal-ts web/src/lib/generated/legal.ts
+    emit legal-js apps/landing/src/legal.generated.js
 
 # The browser's copy of the core: the same rules the API answers with, compiled
 # to wasm32 and bound for the browser. Generated output is gitignored and built
@@ -346,7 +351,7 @@ web-wasm-fixtures:
 # recipe reports that vocab.ts is stale — which is false, and sends the reader
 # to `just web-typegen`, which would then truncate a correct file.
 #
-# All three generated artefacts are diffed here, the landing build's included:
+# Every generated artefact is diffed here, the landing build's included:
 # the whole point of generating the landing page's price list is that it
 # cannot drift from the server's, and a gate that checked only the console's
 # copy would let it.
@@ -368,6 +373,8 @@ web-check: web-wasm
     fresh vocab    web/src/lib/generated/vocab.ts
     fresh plans-ts web/src/lib/generated/plans.ts
     fresh plans-js apps/landing/src/plans.generated.js
+    fresh legal-ts web/src/lib/generated/legal.ts
+    fresh legal-js apps/landing/src/legal.generated.js
     cd web
     npm ci --no-audit --no-fund
     npx svelte-kit sync
@@ -385,12 +392,14 @@ web-dev: web-wasm
 # for performance and search, and the marketing page is the one surface where
 # that matters (D28).
 #
-# The landing lane: lockfile install, the static build, then the copy gate
+# The landing lane: lockfile install, the static build, then the copy and
+# spacing gates
 landing-check:
     just landing-style-gate
     cd apps/landing && npm ci --no-audit --no-fund
     cd apps/landing && npm run build
     just landing-copy-gate
+    just landing-spacing-gate
 
 # Prose on this site names no marketplace. Three things do, and they are all
 # deliberate: `availability` in `apps/landing/src/site.js`, which is the one
@@ -506,6 +515,17 @@ landing-copy-gate:
     }
     console.log("landing: " + pages.length + " pages, no marketplace named outside the availability sentence and the marked bands");
     '
+
+# Words that run together: Astro drops a line break between text and a tag or
+# an expression, so `</a>` at a line end followed by `says` builds as
+# "Policysays", and `is` followed by `{amount}` as "is7". The terms shipped two
+# of these. The script reads the built pages for words touching an inline
+# element's tag (`a`, `strong`, `em`, `code`, `span`) and the `.astro` sources
+# for text meeting an expression across a line break, which leaves no tag to
+# find in the build. Like `landing-copy-gate` it needs `npm run build` first and
+# runs in `just landing-check`.
+landing-spacing-gate:
+    cd apps/landing && node scripts/check-spacing.mjs
 
 # One stylesheet draws this whole site, and on 2026-09-06 it declared `.band`
 # twice: the migration table's rule and, forty-two lines later, the marketplace
@@ -761,7 +781,11 @@ auth-env:
     # secret unset and fail at tam-auth's startup instead.
     grep -q '^BETTER_AUTH_SECRET=.' auth/.env \
         || printf 'BETTER_AUTH_SECRET=%s\n' "$secret" >> auth/.env
-    echo 'created auth/.env from auth/.env.example with a fresh BETTER_AUTH_SECRET'
+    # The shared secret a sign-up's agreement is written to tam-server under:
+    # hex rather than base64, so it survives a shell and a file unquoted.
+    internal="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    sed -i "s|^TAM_AUTH_INTERNAL_SECRET=.*|TAM_AUTH_INTERNAL_SECRET=$internal|" auth/.env
+    echo 'created auth/.env from auth/.env.example with a fresh BETTER_AUTH_SECRET and TAM_AUTH_INTERNAL_SECRET'
 
 # The auth lane: lockfile install, types, tests
 auth-check:
@@ -889,6 +913,17 @@ dev-all: db-up db-wait db-migrate auth-migrate auth-env
     else
         echo "no development entitlement key: every desktop gate stays closed"
         echo "  mint one, once per machine:  just dev-entitlement-key"
+    fi
+    # tam-auth refuses every sign-up unless tam-server holds the secret it
+    # writes the agreement under, so the two are handed the same value.
+    consent="$(node --env-file=auth/.env \
+        -e 'process.stdout.write(process.env.TAM_AUTH_INTERNAL_SECRET ?? "")')"
+    if [ -n "$consent" ]; then
+        mkdir -p .dev
+        (umask 077 && printf '%s' "$consent" > "{{dev_consent_secret}}")
+        set -- "$@" --consent-secret-file "{{dev_consent_secret}}"
+    else
+        echo "no TAM_AUTH_INTERNAL_SECRET in auth/.env: every sign-up will be refused"
     fi
     cargo run -p tam-server -- "$@" &
     (cd auth && npm run dev) &

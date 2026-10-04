@@ -1133,16 +1133,19 @@ main {
 	color: var(--text);
 }
 
-.move-explain {
+/* Explain: the long text behind a one-sentence answer, on the pricing page's
+   move box and in the terms. The flex values only matter inside the move box,
+   where the sentence and Explain share a line. */
+.explain {
 	flex: 0 0 auto;
 	font-size: 15px;
 }
 
-.move-explain[open] {
+.explain[open] {
 	flex-basis: 100%;
 }
 
-.move-explain summary {
+.explain summary {
 	cursor: pointer;
 	font-weight: 600;
 	color: var(--primary);
@@ -1150,7 +1153,7 @@ main {
 	text-underline-offset: 3px;
 }
 
-.move-explain p {
+.explain p {
 	margin: 8px 0 0;
 	max-width: 72ch;
 	color: var(--text);
@@ -1422,7 +1425,7 @@ main {
 
 .soon-tag {
 	display: inline-block;
-	margin-left: 8px;
+	margin-left: 4px;
 	padding: 1px 8px;
 	border-radius: var(--r-pill);
 	background: var(--soon-soft);
@@ -1992,4 +1995,16 @@ main {
 		padding: 7px 10px;
 		font-size: 14px;
 	}
+}
+
+/* The goodbye a seller reads after deleting their own account (`/?deleted=1`,
+   shown by the home page's script). No `display` here: the `hidden`
+   attribute is what keeps it off the page for everyone else. */
+.goodbye {
+	margin: 0;
+	padding: 14px 0;
+	background: var(--accent-soft);
+	color: var(--primary);
+	font-weight: 600;
+	text-align: center;
 }

@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT document_version FROM account_consent WHERE subject = $1 AND kind = 'terms_privacy' ORDER BY accepted_at DESC, created_at DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "document_version",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "95896f4fa1b330761fa89d7e9ca565f5d03bf7344378c3dbf9211423a51543cf"
+}

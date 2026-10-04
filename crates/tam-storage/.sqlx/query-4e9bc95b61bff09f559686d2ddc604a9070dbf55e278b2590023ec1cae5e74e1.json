@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO account_consent (subject, email, kind, document_version, accepted_at, ip_address, user_agent) SELECT $1, $2, kind, $3, $4, $5::text::inet, $6 FROM unnest(enum_range(NULL::account_consent_kind)) AS kind",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4e9bc95b61bff09f559686d2ddc604a9070dbf55e278b2590023ec1cae5e74e1"
+}

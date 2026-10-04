@@ -58,8 +58,10 @@ import type {
 	RefundView,
 	SyncView
 } from '$lib/pages/admin/payments';
+import type { SiteAnalyticsView, SiteRange } from '$lib/pages/admin/site-analytics';
 import type { Capabilities, PlansView } from '$lib/generated/plans';
 import type { ToastNotice } from '$lib/toast';
+import type { ConsentBody } from '$lib/legal';
 
 import { ApiFailure, patch, post, put, request, type APIErrorBody } from '$lib/http';
 
@@ -1369,6 +1371,49 @@ export async function walkAdminUsers(
 export interface DeletedUserView {
 	user: string;
 	organisation: { org: string; name: string };
+}
+
+// ------------------------------------------------------------ terms consent
+
+/** `GET /v1/consent/status`: the terms in force, the version this account
+ *  last agreed to, and whether it must agree again before going on. */
+export interface TermsConsentStatus {
+	current_version: string;
+	accepted_version: string | null;
+	required: boolean;
+}
+
+/** One account's latest terms acceptance, as `GET /v1/admin/consents` lists
+ *  it. `subject` is the identity account's id; `accepted_at` is epoch ms. */
+export interface AdminConsentSummary {
+	subject: string;
+	document_version: string;
+	accepted_at: number;
+}
+
+export interface AdminConsentsView {
+	consents: AdminConsentSummary[];
+}
+
+/** What one recorded agreement covered. Box (a) on the sign-up page records
+ *  `terms_privacy` and `ip_ownership`; box (b) records `age_18`. */
+export type ConsentKind = 'terms_privacy' | 'ip_ownership' | 'age_18';
+
+/** One recorded agreement, with where it was made from. */
+export interface AdminConsentRecord {
+	kind: ConsentKind;
+	document_version: string;
+	accepted_at: number;
+	ip_address: string | null;
+	user_agent: string | null;
+	email: string | null;
+}
+
+/** `GET /v1/admin/users/{subject}/consent`: every agreement one account has
+ *  made, newest first. */
+export interface AdminUserConsentView {
+	subject: string;
+	consents: AdminConsentRecord[];
 }
 
 // -------------------------------------------------------------------- guides
@@ -2790,6 +2835,20 @@ export function upload(
 	});
 }
 
+/** `DELETE /v1/account`'s body: the typed confirmation (the account's name or
+ *  `DELETE`), the password where the account has one, and an optional reason. */
+export interface DeleteAccountBody {
+	confirm: string;
+	password?: string;
+	reason?: string;
+}
+
+/** What `DELETE /v1/account` did. */
+export interface AccountDeletedView {
+	subscription_cancelled: boolean;
+	goodbye_sent: boolean;
+}
+
 // --------------------------------------------------------------- endpoints
 
 export const api = {
@@ -2812,6 +2871,16 @@ export const api = {
 	 *  reserved slug answers 422 rather than `available: false`. */
 	slugAvailability: (slug: string) =>
 		request<SlugAvailability>(`/v1/org/slug/${encodeURIComponent(slug)}`),
+
+	/** The seller deletes their own account: the plan at Stripe, the sign-in
+	 *  and the organisation. Refusals carry a `refusal` detail
+	 *  (`$lib/pages/account/delete-account.ts` words them). */
+	deleteAccount: (body: DeleteAccountBody) =>
+		request<AccountDeletedView>('/v1/account', {
+			method: 'DELETE',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify(body)
+		}),
 
 	/** One keyset page of the catalogue, optionally narrowed to the items
 	 *  carrying one label. The label narrows the query rather than the page, so
@@ -3347,6 +3416,12 @@ export const api = {
 	settleTour: (outcome: 'completed' | 'skipped') =>
 		post<ProfileView>('/v1/onboarding/tour', { outcome }),
 
+	/** Whether the signed-in account has agreed to the terms in force. */
+	consentStatus: () => request<TermsConsentStatus>('/v1/consent/status'),
+	/** Records the agreement. 422 when a box is unticked; 409 when `version`
+	 *  is no longer the terms in force. Answers 204. */
+	recordConsent: (body: ConsentBody) => post<void>('/v1/consent', body),
+
 	status: () => request<{ inventories: InventoryStatus[] }>('/v1/status'),
 
 	billing: () => request<BillingView>('/v1/billing'),
@@ -3431,6 +3506,11 @@ export const api = {
 	 *  to do first; 404 when the subject has no platform user. */
 	adminDeleteUser: (subject: string) =>
 		request<DeletedUserView>(`/v1/admin/users/${subject}`, { method: 'DELETE' }),
+	/** Every account's latest terms acceptance, keyed by identity subject. */
+	adminConsents: () => request<AdminConsentsView>('/v1/admin/consents'),
+	/** Every agreement one account has made, newest first. */
+	adminUserConsent: (subject: string) =>
+		request<AdminUserConsentView>(`/v1/admin/users/${encodeURIComponent(subject)}/consent`),
 
 	/** Sales, one-off discounts and discount codes. Every create makes the
 	 *  Stripe coupon (and promotion code) before it answers, so a 201 means
@@ -3444,6 +3524,10 @@ export const api = {
 	/** The Stripe payment ledger: charges, refunds, chargebacks, invoices and
 	 *  subscriptions, newest first. */
 	adminPayments: () => request<PaymentsAdminView>('/v1/admin/payments'),
+	/** The public site's visitors from PostHog over one range. 503 when the
+	 *  server has no PostHog personal key; 502 when PostHog did not answer. */
+	adminSiteAnalytics: (range: SiteRange) =>
+		request<SiteAnalyticsView>(`/v1/admin/analytics/site?range=${range}`),
 	/** Reads the last 90 days from Stripe into the ledger. */
 	syncPayments: () => post<SyncView>('/v1/admin/payments/sync', {}),
 	/** Refunds part or all of one charge. 422 with a sentence when the amount

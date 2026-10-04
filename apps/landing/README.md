@@ -3,7 +3,7 @@
 The public site a seller reaches before signing up.
 It is a separate Astro build rather than a console route, because the console's root layout turns off both server rendering and prerendering (D28).
 
-`just landing-check` installs from the lockfile and builds, and runs as part of `just pre-push`; `just landing-dev` serves it locally.
+`just landing-check` installs from the lockfile, builds, and runs the style, copy and spacing gates (`scripts/check-spacing.mjs` fails when words run into a link or an interpolation), as part of `just pre-push`; `just landing-dev` serves it locally.
 `nix/landing.nix` builds the same site as a store path, exposed as the flake package `teachouse-landing` and as the flake check `landing`.
 
 Deployment is not a static host of its own.

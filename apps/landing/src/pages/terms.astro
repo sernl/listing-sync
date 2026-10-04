@@ -1,18 +1,36 @@
 ---
 import Base from '../layouts/Base.astro';
-import { free } from '../pricing.js';
+import { TERMS_VERSION } from '../legal.generated.js';
+import { dollars, free, plans } from '../pricing.js';
 import { supportEmail } from '../site.js';
 
-/* The dates the text below last changed in substance and took effect. Moving
-   them is part of changing the terms, and section 18 says how a change is
-   announced. */
-const updated = '2 October 2026';
-const effective = '2 October 2026';
+/* The date the text below last changed in substance and took effect. It is
+   TERMS_VERSION, which tam-typegen emits from the server's constant, and it is
+   also the version every sign-up's agreement records, so the date printed
+   here is the one a person agreed to. Moving it is part of changing the
+   terms (crates/tam-api/src/account_consent.rs), asks every signed-in person
+   to agree again, and section 18 says how a change is announced. */
+const effective = new Date(`${TERMS_VERSION}T00:00:00Z`).toLocaleDateString('en-NZ', {
+	day: 'numeric',
+	month: 'long',
+	year: 'numeric',
+	timeZone: 'UTC'
+});
+const updated = effective;
 
 /* Read from the plan table the server enforces, so the free plan's name and
    its one-off moves cannot drift from what the product actually gives. */
 const freeName = free.name;
 const freeMoves = free.capabilities.free_moves_lifetime;
+
+/* The yearly refund in section 9, worked on Pro's yearly price from the same
+   table: asking during the fourth month leaves 8 whole months unused, and one
+   month's fee is kept, so 7 twelfths come back. */
+const pro = plans.find((plan) => plan.id === 'subscriber');
+const exampleMonth = 4;
+const exampleUnused = 12 - exampleMonth;
+const exampleYearly = dollars(pro.yearly_cents);
+const exampleRefund = dollars(Math.max(0, (pro.yearly_cents * (exampleUnused - 1)) / 12));
 ---
 
 <Base
@@ -290,23 +308,43 @@ const freeMoves = free.capabilities.free_moves_lifetime;
 
 			<h2 id="refunds">9. Refunds</h2>
 			<p>
-				<strong>In short:</strong> an unused Move Pack can be refunded within 14 days. Other refunds
-				are up to us, except where New Zealand law gives you one.
+				<strong>In short:</strong> an unused Move Pack is refunded in full within 14 days, a yearly
+				plan is refunded for its unused whole months less one month's fee, and a monthly plan isn't
+				refunded once its month has started.
 			</p>
 			<ul>
 				<li>
-					If you haven't used any moves from a Move Pack, you can ask for a refund within 14 days of
-					buying it.
+					<strong>Move Packs:</strong> if you haven't used any moves from a Move Pack, you can ask
+					for a full refund within 14 days of buying it.
 				</li>
 				<li>
-					Other payments, including plan periods that have started, are not refundable unless we
-					agree or New Zealand law requires it. Cancelling stops the next renewal; it doesn't refund
-					the current period.
+					<strong>Monthly plans:</strong> a month that has started is not refunded. Cancelling
+					stops the next renewal.
 				</li>
 				<li>
-					To ask for a refund, email <a class="link" href={`mailto:${supportEmail}`}>{supportEmail}</a>
-					from the address you sign in with, and tell us what you bought and when. Refunds go back to
-					the card you paid with.
+					<strong>Yearly plans:</strong> you can ask for a refund at any time during the year. We
+					refund the whole months that haven't started yet and keep one month's fee. The plan ends
+					on the day of the refund and your account moves to {freeName}.
+					<details class="explain">
+						<summary>Explain</summary>
+						<p>
+							The refund is the yearly price × (unused whole months − 1) ÷ 12, and never less than
+							zero. A month counts as used once it has started.
+						</p>
+						<p>
+							For example, {pro.name} yearly costs {exampleYearly}. You ask for a refund during
+							month {exampleMonth}, so months {exampleMonth + 1} to 12 are unused: {exampleUnused} whole
+							months. We keep one month's fee, so the refund is {exampleUnused - 1} × {exampleYearly} ÷
+							12 = {exampleRefund}.
+						</p>
+						<p>From month 11 onwards there is nothing left to refund.</p>
+					</details>
+				</li>
+				<li>
+					To ask for a refund, email{' '}
+					<a class="link" href={`mailto:${supportEmail}`}>{supportEmail}</a> from the address you
+					sign in with, and tell us what you bought and when. Refunds go back to the card you paid
+					with.
 				</li>
 			</ul>
 
@@ -337,13 +375,12 @@ const freeMoves = free.capabilities.free_moves_lifetime;
 
 			<h2 id="changes-service">11. Changes and availability</h2>
 			<p>
-				<strong>In short:</strong> Teachouse is young and still changing. We work to keep it running,
-				but we can't promise it will never be down.
+				<strong>In short:</strong> we keep Teachouse running and improve it over time, but we can't
+				promise it will never be down.
 			</p>
 			<ul>
 				<li>
-					We are building Teachouse as we go. Features will be added, changed and sometimes removed,
-					and parts may be marked as early or coming soon.
+					We improve Teachouse over time. Features may be added, changed and sometimes removed.
 				</li>
 				<li>
 					Teachouse may be unavailable at times, for maintenance, updates or problems outside our
@@ -366,10 +403,10 @@ const freeMoves = free.capabilities.free_moves_lifetime;
 				Zealand Privacy Act 2020.
 			</p>
 			<p>
-				We handle personal information as the <a class="link" href="/privacy/">Privacy Policy</a>
-				says, in line with the Privacy Act 2020. It forms part of these terms. If you publish
-				information about other people in your resources, you are responsible for having the right
-				to do so.
+				We handle personal information as the{' '}
+				<a class="link" href="/privacy/">Privacy Policy</a> says, in line with the Privacy Act 2020.
+				It forms part of these terms. If you publish information about other people in your
+				resources, you are responsible for having the right to do so.
 			</p>
 
 			<h2 id="security">13. Keeping your account safe</h2>
@@ -626,9 +663,10 @@ const freeMoves = free.capabilities.free_moves_lifetime;
 					<details class="qa">
 						<summary>Can I get a refund?</summary>
 						<p>
-							Yes, for a Move Pack you haven't used, within 14 days of buying it. For anything else,
-							email us and we'll look at it, and we'll always give you what New Zealand law
-							requires.
+							Yes, for a Move Pack you haven't used, within 14 days of buying it, and for the unused
+							whole months of a yearly plan, less one month's fee. A monthly plan isn't refunded once
+							its month has started; cancelling stops the next renewal.
+							<a class="link" href="#refunds">Section 9</a> has the details.
 						</p>
 					</details>
 					<details class="qa">

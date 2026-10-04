@@ -3,7 +3,7 @@
 	// and plan, and every action an operator takes on them. A side sheet on a
 	// desktop, a bottom sheet on a phone; Escape or a press outside closes it.
 
-	import { createMutation, useQueryClient } from '@tanstack/svelte-query';
+	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { sessionWords, type AdminUserRow } from '$lib/admin';
 	import { ApiFailure, api } from '$lib/api';
@@ -29,7 +29,14 @@
 	import { planName, planTone } from './admin-view';
 	import DeleteUserDialog from './DeleteUserDialog.svelte';
 	import SessionsDialog from './SessionsDialog.svelte';
-	import { CHIP_WORDS, displayName, initials, joinedAt, userChips } from './users-view';
+	import {
+		CHIP_WORDS,
+		CONSENT_KIND_WORDS,
+		displayName,
+		initials,
+		joinedAt,
+		userChips
+	} from './users-view';
 
 	let {
 		row,
@@ -73,6 +80,13 @@
 	const joined = $derived(joinedAt(user));
 	const signedIn = $derived(platform?.last_sign_in_at ?? null);
 	const isAdmin = $derived(user.role === 'admin');
+
+	/** Every agreement this account has made, newest first, with where it was
+	 *  made from. Read when the sheet opens, for this account alone. */
+	const consent = createQuery(() => ({
+		queryKey: queryKeys.adminUserConsent(user.id),
+		queryFn: () => api.adminUserConsent(user.id)
+	}));
 
 	function refusalOf(failure: Error, fallback: string): string {
 		return failure instanceof AuthFailure || failure instanceof ApiFailure
@@ -275,6 +289,35 @@
 						Set plan
 					</Button>
 				{/if}
+			{/if}
+		</section>
+
+		<section class="block" id="user-sheet-consent" aria-labelledby="user-sheet-consent-title">
+			<h3 id="user-sheet-consent-title">Consent</h3>
+			{#if consent.isPending}
+				<p class="quiet">Reading the agreements on record…</p>
+			{:else if consent.isError}
+				<p class="quiet">The agreements could not be read. Close this and open it again.</p>
+			{:else if consent.data.consents.length === 0}
+				<p class="quiet">No agreement on record: this account predates the sign-up boxes.</p>
+			{:else}
+				<ul class="consents">
+					{#each consent.data.consents as record}
+						<li class="consent-row">
+							<span class="consent-kind">{CONSENT_KIND_WORDS[record.kind]}</span>
+							<span class="consent-meta">
+								v{record.document_version} ·
+								<span title={utcInstant(record.accepted_at)}
+									>{agoLabel(record.accepted_at, now)}</span
+								>
+								· IP {record.ip_address ?? 'not recorded'}
+							</span>
+							<span class="consent-agent" title={record.user_agent ?? undefined}>
+								{record.user_agent ?? 'Browser not recorded'}
+							</span>
+						</li>
+					{/each}
+				</ul>
 			{/if}
 		</section>
 
@@ -613,6 +656,41 @@
 		color: var(--text);
 		padding-inline: 12px;
 		font: inherit;
+	}
+
+	.consents {
+		display: grid;
+		gap: var(--s-2);
+		margin: 0;
+		min-width: 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	.consent-row {
+		display: grid;
+		gap: 2px;
+		min-width: 0;
+		font-size: 13.5px;
+	}
+
+	.consent-kind {
+		font-weight: 600;
+		color: var(--ink);
+	}
+
+	.consent-meta {
+		color: var(--muted);
+		font-size: 12.5px;
+		overflow-wrap: anywhere;
+	}
+
+	.consent-agent {
+		color: var(--muted);
+		font-size: 12px;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
 	.quiet {
