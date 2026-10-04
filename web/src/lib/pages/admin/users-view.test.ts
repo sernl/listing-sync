@@ -2,7 +2,16 @@ import { describe, expect, it } from 'vitest';
 import type { AdminUserRow } from '$lib/admin';
 import type { AdminUserView } from '$lib/api';
 import type { IdentityUser } from '$lib/auth-client';
-import { deleteConfirmed, inFilter, initials, partyOf, rowMatches, userChips } from './users-view';
+import {
+	CONSENT_KIND_WORDS,
+	consentCell,
+	deleteConfirmed,
+	inFilter,
+	initials,
+	partyOf,
+	rowMatches,
+	userChips
+} from './users-view';
 
 const account = (over: Partial<IdentityUser> = {}): IdentityUser => ({
 	id: 'id-1',
@@ -151,6 +160,36 @@ describe('naming a party in the impersonation trail', () => {
 		expect(partyOf('0f3a9c21-aaaa-bbbb-cccc-000000000000', accounts)).toEqual({
 			label: '0f3a9c21…',
 			known: false
+		});
+	});
+});
+
+describe('the consent column', () => {
+	const DAY = 24 * 60 * 60 * 1000;
+	const accepted = Date.UTC(2026, 9, 4, 9, 30);
+
+	it('reads none when no agreement is on record', () => {
+		expect(consentCell(undefined, accepted)).toEqual({ agreed: false, label: 'none' });
+	});
+
+	it('reads how long ago and which version, with the exact instant as its title', () => {
+		expect(
+			consentCell(
+				{ subject: 'id-1', document_version: '2026-10-04', accepted_at: accepted },
+				accepted + 3 * DAY
+			)
+		).toEqual({
+			agreed: true,
+			label: '✓ 3 days ago · v2026-10-04',
+			title: '2026-10-04 09:30:00Z'
+		});
+	});
+
+	it('names every kind of agreement in words', () => {
+		expect(CONSENT_KIND_WORDS).toEqual({
+			terms_privacy: 'Terms and Privacy',
+			ip_ownership: 'Owns what they publish',
+			age_18: '18 or older'
 		});
 	});
 });

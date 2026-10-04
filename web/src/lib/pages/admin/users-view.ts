@@ -4,7 +4,9 @@
 // tests without a component.
 
 import type { AdminUserRow } from '$lib/admin';
+import type { AdminConsentSummary, ConsentKind } from '$lib/api';
 import type { IdentityUser } from '$lib/auth-client';
+import { agoLabel, utcInstant } from '$lib/elapsed';
 import type { Tone } from '$lib/StatusPill.svelte';
 
 /** Up to two letters for the avatar: the first letters of the first and last
@@ -187,3 +189,26 @@ export function bySignIn(rows: readonly AdminUserRow[], direction: 'asc' | 'desc
 		return sign * (left - right);
 	});
 }
+
+/** The users page's Consent cell: when this account last agreed to the terms,
+ *  and to which version, or that no agreement is on record. */
+export type ConsentCell =
+	{ agreed: true; label: string; title: string } | { agreed: false; label: 'none' };
+
+export function consentCell(summary: AdminConsentSummary | undefined, now: number): ConsentCell {
+	if (summary === undefined) {
+		return { agreed: false, label: 'none' };
+	}
+	return {
+		agreed: true,
+		label: `✓ ${agoLabel(summary.accepted_at, now)} · v${summary.document_version}`,
+		title: utcInstant(summary.accepted_at)
+	};
+}
+
+/** What each recorded agreement covered, in the words the user sheet shows. */
+export const CONSENT_KIND_WORDS: Record<ConsentKind, string> = {
+	terms_privacy: 'Terms and Privacy',
+	ip_ownership: 'Owns what they publish',
+	age_18: '18 or older'
+};

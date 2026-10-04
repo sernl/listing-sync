@@ -32,6 +32,9 @@ export const queryKeys = {
 	 *  Connect gate and the Account page's permissions panel; a grant or a
 	 *  withdrawal on either invalidates it. */
 	consents: ['consents'] as const,
+	/** Whether this account has agreed to the terms in force. A key of its own
+	 *  rather than under `consents`, which is the seller-device record. */
+	termsConsent: ['terms-consent'] as const,
 	/** File-browser pages share this invalidation prefix with transfer actions. */
 	library: ['library'] as const,
 	libraryPage: (params: LibraryQuery) => ['library', 'page', params] as const,
@@ -169,6 +172,11 @@ export const queryKeys = {
 	 *  shape under `identityUsers`, which the search narrows and this does
 	 *  not. */
 	adminUsers: ['admin-users'] as const,
+	/** Every account's latest terms acceptance, which the users page's
+	 *  Consent column reads once. */
+	adminTermsConsents: ['admin-terms-consents'] as const,
+	/** Every agreement one account has made, read when its sheet opens. */
+	adminUserConsent: (subject: string) => ['admin-terms-consents', subject] as const,
 	/** The platform's users from the newest back to `oldest` (epoch ms): as
 	 *  far as the identity page on screen needs. Under `adminUsers`, so
 	 *  invalidating that invalidates this. */

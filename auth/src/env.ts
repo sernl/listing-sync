@@ -26,6 +26,13 @@ export interface Env {
    * does, so a deployment that has not opted in has nothing to reach.
    */
   readonly internalSecret: string | undefined;
+  /**
+   * Where a new account's sign-up agreement is written: tam-server's
+   * `POST /internal/consent`, fenced by the same shared secret. Absent, or
+   * with no secret, every sign-up is refused once the account would exist,
+   * because no account may exist without its agreement on record.
+   */
+  readonly consentUrl: string | undefined;
   readonly google: OAuthCredentials | undefined;
   readonly microsoft: (OAuthCredentials & { readonly tenantId: string }) | undefined;
 }
@@ -181,6 +188,7 @@ const load = (): Env => {
     emailFrom,
     turnstileSecretKey: readRequiredInProduction(mode, 'TURNSTILE_SECRET_KEY'),
     internalSecret: read('TAM_AUTH_INTERNAL_SECRET'),
+    consentUrl: read('TAM_AUTH_CONSENT_URL'),
     google: readOAuthPair('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'),
     microsoft:
       microsoft === undefined

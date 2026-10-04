@@ -6,7 +6,7 @@
 		signInTrailVisible,
 		type AdminUserRow
 	} from '$lib/admin';
-	import { walkAdminUsers } from '$lib/api';
+	import { api, walkAdminUsers } from '$lib/api';
 	import {
 		AuthFailure,
 		impersonatedSession,
@@ -43,6 +43,7 @@
 		CHIP_WORDS,
 		USER_FILTERS,
 		bySignIn,
+		consentCell,
 		displayName,
 		inFilter,
 		initials,
@@ -133,6 +134,16 @@
 		queryKey: queryKeys.identitySession,
 		queryFn: () => impersonatedSession()
 	}));
+
+	/** Every account's latest terms acceptance, by identity account id. One
+	 *  read for the whole list: the table pages, this does not. */
+	const consents = createQuery(() => ({
+		queryKey: queryKeys.adminTermsConsents,
+		queryFn: () => api.adminConsents()
+	}));
+	const consentBySubject = $derived(
+		new Map((consents.data?.consents ?? []).map((summary) => [summary.subject, summary]))
+	);
 	const selfId = $derived(self.data?.user.id ?? null);
 
 	/**
@@ -388,6 +399,7 @@
 								<th scope="col">Organisation</th>
 								<th scope="col">Plan</th>
 								<th scope="col">Status</th>
+								<th scope="col" class="c-consent-head">Consent</th>
 								<th scope="col" aria-sort={ariaSort('joined')}>
 									<button type="button" class="ux-sorter" onclick={() => sortBy('joined')}>
 										Joined
@@ -425,6 +437,7 @@
 								{@const joined = joinedAt(user)}
 								{@const signedIn = row.platform?.last_sign_in_at ?? null}
 								{@const ticked = isSelected(selection, user.id)}
+								{@const consent = consentCell(consentBySubject.get(user.id), now)}
 								<!-- The name is the row's keyboard-reachable control; a press anywhere
 								     else on the row is a larger target for the same thing. -->
 								<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
@@ -475,6 +488,14 @@
 											{/each}
 										</span>
 									</td>
+									<td class="c-consent" title={consent.agreed ? consent.title : undefined}>
+										<span class="ux-when-label">Consent</span>
+										{#if consent.agreed}
+											{consent.label}
+										{:else}
+											<span class="quiet">{consent.label}</span>
+										{/if}
+									</td>
 									<td class="c-when" title={joined === null ? undefined : utcInstant(joined)}>
 										<span class="ux-when-label">Joined</span>
 										{joined === null ? '—' : agoLabel(joined, now)}
@@ -486,7 +507,7 @@
 									<td class="c-go" aria-hidden="true"><Icon name="chevron-right" size={16} /></td>
 								</tr>
 							{:else}
-								<tr><td colspan="8" class="quiet">Nobody on this page matches.</td></tr>
+								<tr><td colspan="9" class="quiet">Nobody on this page matches.</td></tr>
 							{/each}
 						</tbody>
 					</table>
@@ -766,7 +787,8 @@
 		gap: var(--s-1);
 	}
 
-	.c-when {
+	.c-when,
+	.c-consent {
 		color: var(--muted);
 		white-space: nowrap;
 	}
@@ -776,7 +798,8 @@
 	}
 
 	/* A phone: the table becomes a list of cards, each a tick box beside the
-	   name, the organisation and plan, the chips and the two dates. */
+	   name, the organisation and plan, the chips, the consent and the two
+	   dates. */
 	@media (max-width: 760px) {
 		.ux-tools {
 			display: flex;
@@ -829,6 +852,7 @@
 				'check who who go'
 				'. org plan go'
 				'. status status go'
+				'. consent consent go'
 				'. joined signin go';
 			gap: var(--s-1) var(--s-2);
 			padding: var(--s-3) var(--s-4);
@@ -880,15 +904,20 @@
 			display: none;
 		}
 
-		.ux-table td.c-when {
+		.ux-table td.c-when,
+		.ux-table td.c-consent {
 			font-size: 12px;
 		}
 
-		.ux-table td.c-when:nth-of-type(6) {
-			grid-area: joined;
+		.ux-table td.c-consent {
+			grid-area: consent;
 		}
 
 		.ux-table td.c-when:nth-of-type(7) {
+			grid-area: joined;
+		}
+
+		.ux-table td.c-when:nth-of-type(8) {
 			grid-area: signin;
 		}
 

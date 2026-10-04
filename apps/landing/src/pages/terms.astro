@@ -1,13 +1,22 @@
 ---
 import Base from '../layouts/Base.astro';
+import { TERMS_VERSION } from '../legal.generated.js';
 import { dollars, free, plans } from '../pricing.js';
 import { supportEmail } from '../site.js';
 
-/* The dates the text below last changed in substance and took effect. Moving
-   them is part of changing the terms, and section 18 says how a change is
-   announced. */
-const updated = '2 October 2026';
-const effective = '2 October 2026';
+/* The date the text below last changed in substance and took effect. It is
+   TERMS_VERSION, which tam-typegen emits from the server's constant, and it is
+   also the version every sign-up's agreement records, so the date printed
+   here is the one a person agreed to. Moving it is part of changing the
+   terms (crates/tam-api/src/account_consent.rs), asks every signed-in person
+   to agree again, and section 18 says how a change is announced. */
+const effective = new Date(`${TERMS_VERSION}T00:00:00Z`).toLocaleDateString('en-NZ', {
+	day: 'numeric',
+	month: 'long',
+	year: 'numeric',
+	timeZone: 'UTC'
+});
+const updated = effective;
 
 /* Read from the plan table the server enforces, so the free plan's name and
    its one-off moves cannot drift from what the product actually gives. */

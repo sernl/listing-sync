@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT ON (subject) subject, document_version, accepted_at FROM account_consent WHERE kind = 'terms_privacy' ORDER BY subject, accepted_at DESC, created_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "subject",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "document_version",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "accepted_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "379b3c0d88d2fe65d18388ccf9a0536d9441615a37c96551555dd80099450d4b"
+}

@@ -22,6 +22,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod account_consent;
 pub mod admin;
 pub mod analytics;
 pub mod auth;
@@ -146,6 +147,12 @@ pub struct Config {
     pub broker_advertise: Option<String>,
     /// How long the broker waits for a device.
     pub broker_timeouts: broker::Timeouts,
+    /// The shared secret the identity service offers when it records a
+    /// sign-up's agreement (`POST /internal/consent`). Absent, that route
+    /// answers the 404 an unknown path does, and the identity service, which
+    /// fails a sign-up closed when the record cannot be written, refuses
+    /// every new account: no account exists without its agreement.
+    pub consent_secret: Option<account_consent::InternalSecret>,
 }
 
 /// How the current instant enters a handler: as a function the binary
@@ -273,7 +280,7 @@ pub struct Whoami {
 /// not introspectable, so this is the one place [`claims_path`] can learn that
 /// `/healthz` is the API's. A route added to [`router`] without a version and
 /// not named here is a route whatever is mounted behind the API swallows.
-const UNVERSIONED_ROUTES: [&str; 1] = ["/healthz"];
+const UNVERSIONED_ROUTES: [&str; 2] = ["/healthz", "/internal/consent"];
 
 /// Whether the API owns `path`, which is the question a binary mounting
 /// anything behind this router has to ask before it lets the router answer.
@@ -295,6 +302,10 @@ pub fn claims_path(path: &str) -> bool {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
+        // The identity service's write of a sign-up's agreement, fenced by a
+        // shared secret rather than a session: the account it describes was
+        // made a moment ago and holds no session this API knows.
+        .route("/internal/consent", post(account_consent::record_internal))
         .route("/{version}/healthz", get(versioned_healthz))
         .route("/{version}/whoami", get(whoami))
         .route(
@@ -865,6 +876,10 @@ pub fn router(state: AppState) -> Router {
         // The guided tour's ending, recorded on the same row the profile
         // reads, so the console stops offering it.
         .route("/{version}/onboarding/tour", post(profile::settle_tour))
+        // What the signed-in person agreed to, and their agreement to terms
+        // that changed since: the console asks on every load.
+        .route("/{version}/consent/status", get(account_consent::status))
+        .route("/{version}/consent", post(account_consent::accept))
         // The help corpus, published guides only, readable without a session:
         // the pricing page links prospects to it. The operator's half below
         // keeps its gate.
@@ -986,6 +1001,14 @@ pub fn router(state: AppState) -> Router {
             post(guides::unpublish_guide),
         )
         .route("/{version}/admin/users", get(admin::list_users))
+        .route(
+            "/{version}/admin/consents",
+            get(account_consent::admin_summaries),
+        )
+        .route(
+            "/{version}/admin/users/{subject}/consent",
+            get(account_consent::admin_subject),
+        )
         .route(
             "/{version}/admin/users/{subject}",
             delete(admin::delete_user),

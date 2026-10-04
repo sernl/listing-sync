@@ -351,6 +351,9 @@ async fn the_backoffice_role_sees_only_the_tables_it_was_granted(app: PgPool) {
         "app_user",
         "billing_subscription",
         "marketplace_request",
+        // Migration 0103's grant: the operator looks a disputed agreement up
+        // from the Users page.
+        "account_consent",
     ] {
         let allowed = sqlx::query(&format!("SELECT count(*) FROM {table}"))
             .fetch_one(&backoffice)

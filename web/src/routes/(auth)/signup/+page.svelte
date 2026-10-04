@@ -2,14 +2,15 @@
 	import {
 		identity,
 		resendVerification,
-		signInWithProvider,
-		signUpWithPassword
+		signUpWithPassword,
+		signUpWithProvider
 	} from '$lib/auth-client';
+	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
+	import ConsentBoxes from '$lib/ConsentBoxes.svelte';
 	import Field from '$lib/Field.svelte';
 	import Turnstile from '$lib/Turnstile.svelte';
-	import { MARKETING_URL } from '$lib/site';
-	import { external } from '$lib/external';
+	import { consentBody, socialConsentError } from '$lib/legal';
 	import { TURNSTILE_SITE_KEY, captchaOptions, captchaPending } from '$lib/captcha';
 	import { ENABLED_SOCIAL_PROVIDERS, type SocialProvider } from '$lib/social-providers';
 	import { toast } from '$lib/toast';
@@ -47,11 +48,18 @@
 	let name = $state('');
 	let email = $state('');
 	let password = $state('');
+	let terms = $state(false);
+	let age = $state(false);
 	let busy = $state<Busy | null>(null);
 	let awaitingVerification = $state<string | null>(null);
 	let captchaToken = $state<string | null>(null);
 	let captcha = $state<ReturnType<typeof Turnstile> | null>(null);
 	const challengePending = $derived(captchaPending(TURNSTILE_SITE_KEY, captchaToken));
+	/** What is sent with the account, or null until both boxes are ticked:
+	 *  nothing on this page makes an account without it. */
+	const agreement = $derived(consentBody({ terms, age }));
+	/** Why a provider sign-up came back here rather than signed in. */
+	const returnedRefusal = $derived(socialConsentError(page.url.searchParams.get('error')));
 
 	function messageOf(error: unknown, fallback: string): string {
 		if (error !== null && typeof error === 'object' && 'message' in error) {
@@ -69,6 +77,9 @@
 	// says so rather than an exchange that would fail.
 	async function register(event: SubmitEvent) {
 		event.preventDefault();
+		if (agreement === null) {
+			return;
+		}
 		busy = 'register';
 		try {
 			const address = email.trim();
@@ -76,6 +87,7 @@
 				name.trim(),
 				address,
 				password,
+				agreement,
 				captchaOptions(captchaToken)
 			);
 			if (error) {
@@ -91,8 +103,11 @@
 	}
 
 	async function withProvider(provider: SocialProvider) {
+		if (agreement === null) {
+			return;
+		}
 		busy = provider;
-		const { error } = await signInWithProvider(provider);
+		const { error } = await signUpWithProvider(provider, agreement);
 		if (error) {
 			busy = null;
 			toast('error', messageOf(error, `You cannot sign up with ${provider} right now.`));
@@ -138,7 +153,13 @@
 		<h1>Create an account</h1>
 		<p>Set up your Teachouse account.</p>
 
-		<form onsubmit={register} class="form">
+		{#if returnedRefusal !== null}
+			<div id="signup-refusal" class="auth-refusal">
+				<Banner tone="bad">{returnedRefusal}</Banner>
+			</div>
+		{/if}
+
+		<form id="signup-form" onsubmit={register} class="form">
 			<Field label="Name" id="name" required>
 				<input
 					id="name"
@@ -164,15 +185,18 @@
 				/>
 			</Field>
 			<Turnstile bind:this={captcha} onToken={(token) => (captchaToken = token)} />
+			<ConsentBoxes bind:terms bind:age disabled={busy !== null} idPrefix="signup-consent" />
 			<Button
 				tier="primary"
 				type="submit"
-				disabled={busy !== null || challengePending}
+				disabled={busy !== null || challengePending || agreement === null}
 				reason={busy !== null
 					? 'Wait for the current step to finish.'
 					: challengePending
 						? 'Complete the check above first.'
-						: undefined}
+						: agreement === null
+							? 'Tick both boxes above first.'
+							: undefined}
 			>
 				{busy === 'register' ? 'Creating…' : 'Create account'}
 			</Button>
@@ -184,8 +208,12 @@
 				{#each ENABLED_SOCIAL_PROVIDERS as provider (provider.id)}
 					<Button
 						tier="outline"
-						disabled={busy !== null}
-						reason={busy !== null ? 'Wait for the current step to finish.' : undefined}
+						disabled={busy !== null || agreement === null}
+						reason={busy !== null
+							? 'Wait for the current step to finish.'
+							: agreement === null
+								? 'Tick both boxes above first.'
+								: undefined}
 						onclick={() => withProvider(provider.id)}
 					>
 						{busy === provider.id ? 'Redirecting…' : `Continue with ${provider.label}`}
@@ -193,24 +221,6 @@
 				{/each}
 			</div>
 		{/if}
-
-		<p class="auth-consent">
-			By signing up you agree to the
-			<a
-				class="link"
-				href={`${MARKETING_URL}/terms/`}
-				target="_blank"
-				rel="noopener"
-				use:external>Terms</a
-			>
-			and <a
-				class="link"
-				href={`${MARKETING_URL}/privacy/`}
-				target="_blank"
-				rel="noopener"
-				use:external>Privacy Policy</a
-			>.
-		</p>
 
 		<p class="auth-foot">
 			Already have an account? <a class="link" href="/login">Sign in</a>.
