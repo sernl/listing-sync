@@ -134,7 +134,11 @@ impl Plan {
     /// for the account's lifetime, previews climb 20 / 50 / 100 a month and
     /// stop being unlimited anywhere, Starter holds 250 resources and Pro 500,
     /// Pro keeps ten templates and ten collections, and Starter carries no AI
-    /// fill):
+    /// fill; and by the second addendum, dated 2026-10-05, the founder's
+    /// matrix review: labels climb 1 / 5 / 10 / no cap beside templates and
+    /// collections, scheduling and term mapping and price rules start at Pro,
+    /// statistics start at Starter, edits go out weekly on Pro and daily on
+    /// Studio and not at all below Pro, and Studio's previews are uncapped):
     /// every figure here is that table's. Section 8 of the tiers note and
     /// section 9 of the review name the triggers that re-open them.
     ///
@@ -167,13 +171,14 @@ impl Plan {
                 free_moves_lifetime: 5,
                 pack_edit_days: 90,
                 scheduling: false,
+                term_and_price_rules: false,
                 sync_pull_interval_secs: None,
                 auto_publish_rules: false,
                 templates_max: 1,
                 // One of each organising object, so a trial seller can try
                 // grouping resources before paying (review section 5).
                 collections_max: 1,
-                labels_max: 5,
+                labels_max: 1,
                 analytics: false,
                 export: true,
                 devices_max: 5,
@@ -186,10 +191,12 @@ impl Plan {
                 uploads_in_flight_max: 1,
                 support: Support::Guides,
             },
-            // Starter: one teacher adding about a resource a week. Edits go
-            // out once a day; statistics and automatic rules start at Pro.
-            // Two hundred and fifty resources is two and a half times Look,
-            // and twenty previews a month covers every new resource.
+            // Starter: one teacher adding about a resource a week. Statistics
+            // start here; edits sent everywhere, scheduling, term mapping and
+            // price rules and automatic rules start at Pro (founder,
+            // 2026-10-05). Two hundred and fifty resources is two and a half
+            // times Look, and twenty previews a month covers every new
+            // resource.
             Self::Starter => Capabilities {
                 resources_max: 250,
                 marketplaces_max: u32::MAX,
@@ -202,15 +209,16 @@ impl Plan {
                 moves_accrual_cap: 30,
                 free_moves_lifetime: 0,
                 pack_edit_days: 90,
-                scheduling: true,
-                sync_pull_interval_secs: Some(24 * 3_600),
+                scheduling: false,
+                term_and_price_rules: false,
+                sync_pull_interval_secs: None,
                 auto_publish_rules: false,
+                // One ladder for the three organising objects: 1 / 5 / 10 /
+                // no cap (founder, 2026-10-05).
                 templates_max: 5,
                 collections_max: 5,
-                // Labels cost nothing to keep and are not a ladder axis:
-                // capped on Look, unlimited on every paid plan (review §5).
-                labels_max: u32::MAX,
-                analytics: false,
+                labels_max: 5,
+                analytics: true,
                 export: true,
                 devices_max: 5,
                 // No AI fill on Starter: the offer starts at Pro.
@@ -233,11 +241,14 @@ impl Plan {
                 free_moves_lifetime: 0,
                 pack_edit_days: 90,
                 scheduling: true,
-                sync_pull_interval_secs: Some(6 * 3_600),
+                term_and_price_rules: true,
+                // Weekly: a Pro shop's edits go out once a week, Studio's
+                // once a day (founder, 2026-10-05).
+                sync_pull_interval_secs: Some(7 * 24 * 3_600),
                 auto_publish_rules: true,
                 templates_max: 10,
                 collections_max: 10,
-                labels_max: u32::MAX,
+                labels_max: 10,
                 analytics: true,
                 export: true,
                 devices_max: 5,
@@ -263,7 +274,8 @@ impl Plan {
                 free_moves_lifetime: 0,
                 pack_edit_days: 90,
                 scheduling: true,
-                sync_pull_interval_secs: Some(3_600),
+                term_and_price_rules: true,
+                sync_pull_interval_secs: Some(24 * 3_600),
                 auto_publish_rules: true,
                 templates_max: u32::MAX,
                 collections_max: u32::MAX,
@@ -272,10 +284,10 @@ impl Plan {
                 export: true,
                 devices_max: 5,
                 ai_fills_per_month: 600,
-                // A ceiling rather than none: every preview is a render and
-                // a stored image, and a hundred a month covers a whole shop
-                // refreshed over a term (founder, 2026-09-30).
-                previews_per_month: 100,
+                // No ceiling on the top plan: Studio is sold on unlimited
+                // previews (founder, 2026-10-05). Every preview is still
+                // spent on `usage_counter`, so the figure stays on record.
+                previews_per_month: u32::MAX,
                 previews_lifetime: 0,
                 uploads_in_flight_max: 3,
                 support: Support::Email1Day,
@@ -326,7 +338,7 @@ impl Support {
 /// is an `Option`: no sync cadence at all.
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "the eight flags are the price list's own rows, not a state machine; \
+    reason = "the nine flags are the price list's own rows, not a state machine; \
               collapsing them into a bitset or sub-structs would make the struct \
               disagree with the table every surface renders from it"
 )]
@@ -366,6 +378,11 @@ pub struct Capabilities {
     /// pack's promise, and a pack is bought on any plan.
     pub pack_edit_days: u32,
     pub scheduling: bool,
+    /// Writing the seller's own target rules: term mapping (which of the
+    /// target marketplace's licences and resource types a resource lands
+    /// under) and price rules, and previewing and deciding the proposals they
+    /// make. Rules and approvals already saved keep applying on every plan.
+    pub term_and_price_rules: bool,
     /// How often the device re-enumerates a shop. `None` is no sync pulls.
     pub sync_pull_interval_secs: Option<u32>,
     pub auto_publish_rules: bool,
@@ -815,16 +832,21 @@ pub enum FeatureUnit {
     PerMonth,
     /// A size in mebibytes, which a client renders as MB or GB.
     Megabytes,
-    /// An interval in hours, where fewer is better: "every 6 hours".
+    /// An interval in hours, where fewer is better: "weekly" at 168.
     EveryHours,
+    /// How many resources the catalogue holds, which a table says as a
+    /// sentence per plan: "Catalogue up to 250 resources", and an uncapped
+    /// cell as "Catalogue unlimited resources" (founder, 2026-10-05).
+    Catalogue,
 }
 
 impl FeatureUnit {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Count,
         Self::PerMonth,
         Self::Megabytes,
         Self::EveryHours,
+        Self::Catalogue,
     ];
 }
 
@@ -874,6 +896,7 @@ pub enum FeatureKey {
     MovesRollover,
     CopyOrMove,
     EditSync,
+    BulkActions,
     Scheduling,
     AutoPublishRules,
     TermAndPriceRules,
@@ -896,11 +919,12 @@ pub enum FeatureKey {
 
 impl FeatureKey {
     /// Every key, for the same reason [`Plan::ALL`] exists.
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::Moves,
         Self::MovesRollover,
         Self::CopyOrMove,
         Self::EditSync,
+        Self::BulkActions,
         Self::Scheduling,
         Self::AutoPublishRules,
         Self::TermAndPriceRules,
@@ -924,13 +948,14 @@ impl FeatureKey {
     /// What a plan holding `caps` gets of this feature.
     ///
     /// The rows answering a constant `true` are the core: import, the
-    /// editor, rules and the desktop app are the product itself, cost
+    /// editor, the bulk bar and the desktop app are the product itself, cost
     /// nothing per seller, and are what a trial has to show
-    /// (`2026-09-29-pricing-structure-review.md` section 5). Watermarked
-    /// previews left the core in the enforcement note: every plan makes
-    /// them, and how many a month climbs the ladder. Look's cell is the dash
-    /// of a plan with no monthly allowance; its five lifetime previews are
-    /// `previews_lifetime`, which a table says in place of the dash, as it
+    /// (`2026-09-29-pricing-structure-review.md` section 5). Term mapping and
+    /// price rules left the core in the 2026-10-05 addendum and start at Pro.
+    /// Watermarked previews left the core in the enforcement note: every plan
+    /// makes them, and how many a month climbs the ladder. Look's cell is the
+    /// dash of a plan with no monthly allowance; its five lifetime previews
+    /// are `previews_lifetime`, which a table says in place of the dash, as it
     /// does Look's trial moves.
     #[must_use]
     #[expect(
@@ -952,6 +977,7 @@ impl FeatureKey {
             },
             Self::Scheduling => Included::Flag(caps.scheduling),
             Self::AutoPublishRules => Included::Flag(caps.auto_publish_rules),
+            Self::TermAndPriceRules => Included::Flag(caps.term_and_price_rules),
             Self::Resources => Included::counted(caps.resources_max),
             Self::Storage => Included::counted((caps.storage_bytes_max >> 20) as u32),
             Self::Import => Included::Flag(caps.import_spreadsheet && caps.import_marketplace),
@@ -966,7 +992,7 @@ impl FeatureKey {
             Self::DesktopApp => Included::Flag(caps.devices_max > 0),
             Self::EmailSupport => Included::Flag(!matches!(caps.support, Support::Guides)),
             Self::PrioritySupport => Included::Flag(matches!(caps.support, Support::Email1Day)),
-            Self::CopyOrMove | Self::TermAndPriceRules | Self::RichText => Included::Flag(true),
+            Self::CopyOrMove | Self::BulkActions | Self::RichText => Included::Flag(true),
         }
     }
 }
@@ -1011,12 +1037,12 @@ const fn feature(
 /// The plan comparison, grouped and in reading order.
 ///
 /// DECIDED (`docs/notes/design/research/2026-09-29-pricing-structure-review.md`
-/// section 5, the feature matrix): which features are core, which are
-/// counted per plan and which start at a plan. The cells are computed from
-/// [`Plan::capabilities`] at compile time, so this table cannot promise a
-/// plan more or less than its gates allow; only the labels and the order
-/// are written here.
-pub const PLAN_FEATURES: [PlanFeature; 22] = [
+/// section 5, the feature matrix, and its 2026-10-05 addendum): which
+/// features are core, which are counted per plan and which start at a plan.
+/// The cells are computed from [`Plan::capabilities`] at compile time, so
+/// this table cannot promise a plan more or less than its gates allow; only
+/// the labels and the order are written here.
+pub const PLAN_FEATURES: [PlanFeature; 23] = [
     feature(
         FeatureKey::Moves,
         "Moves",
@@ -1042,6 +1068,12 @@ pub const PLAN_FEATURES: [PlanFeature; 22] = [
         Some(FeatureUnit::EveryHours),
     ),
     feature(
+        FeatureKey::BulkActions,
+        "Bulk actions",
+        FeatureGroup::Moving,
+        None,
+    ),
+    feature(
         FeatureKey::Scheduling,
         "Schedule when a listing goes live",
         FeatureGroup::Automation,
@@ -1061,9 +1093,9 @@ pub const PLAN_FEATURES: [PlanFeature; 22] = [
     ),
     feature(
         FeatureKey::Resources,
-        "Resources",
+        "Catalogue size",
         FeatureGroup::Catalogue,
-        Some(FeatureUnit::Count),
+        Some(FeatureUnit::Catalogue),
     ),
     feature(
         FeatureKey::Storage,
@@ -1388,6 +1420,7 @@ mod tests {
                 | FeatureKey::MovesRollover
                 | FeatureKey::CopyOrMove
                 | FeatureKey::EditSync
+                | FeatureKey::BulkActions
                 | FeatureKey::Scheduling
                 | FeatureKey::AutoPublishRules
                 | FeatureKey::TermAndPriceRules
@@ -1444,10 +1477,10 @@ mod tests {
         // Core: what a trial has to show and no gate withholds.
         for key in [
             FeatureKey::CopyOrMove,
+            FeatureKey::BulkActions,
             FeatureKey::Import,
             FeatureKey::DuplicateReview,
             FeatureKey::RichText,
-            FeatureKey::TermAndPriceRules,
             FeatureKey::Export,
             FeatureKey::DesktopApp,
         ] {
@@ -1472,6 +1505,77 @@ mod tests {
         }
     }
 
+    /// The founder's 2026-10-05 matrix review, cell by cell for every row it
+    /// moved: who sends edits and how often, where scheduling, term mapping
+    /// and price rules and statistics start, the one ladder the organising
+    /// objects climb, and Studio's uncapped previews.
+    #[test]
+    fn the_2026_10_05_matrix_holds() {
+        let row = |key: FeatureKey| {
+            PLAN_FEATURES
+                .iter()
+                .find(|row| row.key == key)
+                .map(|row| {
+                    [
+                        row.included.free,
+                        row.included.starter,
+                        row.included.subscriber,
+                        row.included.studio,
+                    ]
+                })
+                .expect("every key has a row")
+        };
+        let (no, yes) = (Included::Flag(false), Included::Flag(true));
+        assert_eq!(
+            row(FeatureKey::EditSync),
+            [no, no, Included::Limit(168), Included::Limit(24)],
+            "edits go out weekly on Pro, daily on Studio, and not below Pro"
+        );
+        assert_eq!(row(FeatureKey::BulkActions), [yes, yes, yes, yes]);
+        assert_eq!(row(FeatureKey::Scheduling), [no, no, yes, yes]);
+        assert_eq!(row(FeatureKey::AutoPublishRules), [no, no, yes, yes]);
+        assert_eq!(row(FeatureKey::TermAndPriceRules), [no, no, yes, yes]);
+        assert_eq!(row(FeatureKey::Analytics), [no, yes, yes, yes]);
+        assert_eq!(
+            row(FeatureKey::Resources),
+            [
+                Included::Limit(100),
+                Included::Limit(250),
+                Included::Limit(500),
+                yes
+            ]
+        );
+        for key in [
+            FeatureKey::Labels,
+            FeatureKey::Templates,
+            FeatureKey::Collections,
+        ] {
+            assert_eq!(
+                row(key),
+                [
+                    Included::Limit(1),
+                    Included::Limit(5),
+                    Included::Limit(10),
+                    yes
+                ],
+                "{key:?} climbs 1 / 5 / 10 / no cap"
+            );
+        }
+        assert_eq!(
+            row(FeatureKey::WatermarkedPreviews),
+            [no, Included::Limit(20), Included::Limit(50), yes]
+        );
+        let resources = PLAN_FEATURES
+            .iter()
+            .find(|row| row.key == FeatureKey::Resources)
+            .expect("the resources row");
+        assert_eq!(
+            resources.unit,
+            Some(FeatureUnit::Catalogue),
+            "the resources row reads as a sentence per plan, not a bare count"
+        );
+    }
+
     /// Every capability, as a score on which a stronger plan must never be
     /// lower. The destructure names every field with no `..`, so a new
     /// capability is a compile error here until someone says how it climbs.
@@ -1491,11 +1595,12 @@ mod tests {
             free_moves_lifetime: _,
             // Descends for the same reason: Look's five lifetime previews
             // are its whole allowance, and
-            // `only_look_counts_its_previews_for_life_and_no_plan_is_unlimited`
+            // `only_look_counts_its_previews_for_life_and_only_studio_is_unlimited`
             // pins it.
             previews_lifetime: _,
             pack_edit_days,
             scheduling,
+            term_and_price_rules,
             sync_pull_interval_secs,
             auto_publish_rules,
             templates_max,
@@ -1524,6 +1629,7 @@ mod tests {
             ("moves_accrual_cap", u64::from(moves_accrual_cap)),
             ("pack_edit_days", u64::from(pack_edit_days)),
             ("scheduling", u64::from(scheduling)),
+            ("term_and_price_rules", u64::from(term_and_price_rules)),
             (
                 "sync_pull_interval_secs",
                 sync_pull_interval_secs.map_or(0, |secs| u64::MAX - u64::from(secs)),
@@ -1568,12 +1674,34 @@ mod tests {
         }
     }
 
+    /// The comparison table divides the interval into hours, so it must be
+    /// whole hours; and the console's cadence control offers only "Daily"
+    /// and "Weekly" (`sync_settings::INTERVAL_CHOICES`), so every plan's
+    /// floor must be one of those two, or a plan would hold a cadence no
+    /// seller can choose.
     #[test]
     fn every_edit_sync_interval_is_whole_hours() {
+        const DAILY: u32 = 24 * 3_600;
+        const WEEKLY: u32 = 7 * DAILY;
         for plan in Plan::ALL {
             if let Some(secs) = plan.capabilities(None).sync_pull_interval_secs {
                 assert_eq!(secs % 3_600, 0, "{} syncs off the hour", plan.as_str());
+                assert!(
+                    secs == DAILY || secs == WEEKLY,
+                    "{} syncs every {secs} s, which the console cannot offer",
+                    plan.as_str()
+                );
             }
+        }
+        assert_eq!(Plan::Subscriber.capabilities(None).sync_pull_interval_secs, Some(WEEKLY));
+        assert_eq!(Plan::Studio.capabilities(None).sync_pull_interval_secs, Some(DAILY));
+        for plan in [Plan::Free, Plan::Starter] {
+            assert_eq!(
+                plan.capabilities(None).sync_pull_interval_secs,
+                None,
+                "{} sends no edits",
+                plan.as_str()
+            );
         }
     }
 
@@ -1665,10 +1793,10 @@ mod tests {
     }
 
     /// Previews are counted in exactly one window per plan: Look's five for
-    /// the account's life, every paid plan a month at a time, and none of
-    /// them without a ceiling (founder, 2026-09-30).
+    /// the account's life, every paid plan a month at a time (founder,
+    /// 2026-09-30), and only Studio without a ceiling (founder, 2026-10-05).
     #[test]
-    fn only_look_counts_its_previews_for_life_and_no_plan_is_unlimited() {
+    fn only_look_counts_its_previews_for_life_and_only_studio_is_unlimited() {
         assert_eq!(
             Plan::Free.capabilities(None).previews(),
             PreviewAllowance::Lifetime(5)
@@ -1683,8 +1811,11 @@ mod tests {
                 plan.as_str()
             );
             assert!(
-                matches!(caps.previews(), PreviewAllowance::Monthly(cap) if cap < u32::MAX),
-                "{} must count previews a month against a ceiling",
+                matches!(
+                    caps.previews(),
+                    PreviewAllowance::Monthly(cap) if (cap == u32::MAX) == (plan == Plan::Studio)
+                ),
+                "{} must count previews a month, uncapped on Studio alone",
                 plan.as_str()
             );
         }

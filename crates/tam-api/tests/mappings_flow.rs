@@ -651,10 +651,38 @@ fn labels_path(product: ProductId) -> String {
     format!("/v1/products/{}/labels", product.0.to_hyphenated())
 }
 
+/// One more live grant of `plan`; the strongest unexpired grant is the one a
+/// request runs under, so each call here lifts the organisation a rung.
+#[expect(
+    clippy::expect_used,
+    reason = "allow-expect-in-tests reaches #[test] functions, not free helpers in an integration-test crate; a broken fixture should panic"
+)]
+async fn hold(pool: &PgPool, org: OrgId, plan: tam_limits::Plan) {
+    tam_storage::EntitlementRepo::new(pool.clone())
+        .grant(
+            org,
+            &tam_storage::NewGrant {
+                id: Uuid(*uuid::Uuid::new_v4().as_bytes()),
+                plan,
+                rung: None,
+                granted_by: tam_storage::GrantedBy::Operator,
+                grantor_user: None,
+                reason: Some("label fixture"),
+                source_ref: None,
+                granted_at: Timestamp(1_000),
+                expires_at: None,
+            },
+        )
+        .await
+        .expect("the fixture grant seeds");
+}
+
 /// The write answers the set it left behind, and the catalogue narrows to it.
 #[sqlx::test(migrations = "../tam-storage/migrations")]
 async fn labels_are_written_read_back_and_filtered_on(pool: PgPool) {
     provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    // Two labels, which is past Look's one (founder, 2026-10-05).
+    hold(&pool, ORG_A, tam_limits::Plan::Starter).await;
     seed_product(&pool, ORG_A, PRODUCT_A).await;
 
     let (status, body) = call(
@@ -777,6 +805,67 @@ async fn a_blank_or_overlong_label_is_refused(pool: PgPool) {
         StatusCode::UNPROCESSABLE_ENTITY,
         "an item carries at most twenty labels"
     );
+}
+
+/// Labels climb 1 / 5 / 10 / no cap since the 2026-10-05 matrix review: on
+/// each plan the shelf fills to the plan's figure and the next new label is
+/// refused with `labels_max`, and Studio takes past Pro's ten.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn labels_are_capped_one_five_ten_then_open(pool: PgPool) {
+    provision(&pool, ORG_A, USER_A, &TOKEN_A, "org-a").await;
+    seed_product(&pool, ORG_A, PRODUCT_A).await;
+    let shelf = |count: usize| {
+        serde_json::json!({
+            "labels": (0..count).map(|n| format!("label {n}")).collect::<Vec<_>>()
+        })
+    };
+    for (plan, cap) in [
+        (None, 1_usize),
+        (Some(tam_limits::Plan::Starter), 5),
+        (Some(tam_limits::Plan::Subscriber), 10),
+    ] {
+        if let Some(plan) = plan {
+            hold(&pool, ORG_A, plan).await;
+        }
+        let (status, _body) = call(
+            pool.clone(),
+            Some(&TOKEN_A),
+            Method::PUT,
+            &labels_path(PRODUCT_A),
+            Some(shelf(cap)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{cap} labels fit on {plan:?}");
+        let (status, body) = call(
+            pool.clone(),
+            Some(&TOKEN_A),
+            Method::PUT,
+            &labels_path(PRODUCT_A),
+            Some(shelf(cap + 1)),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "label {} is past {plan:?}",
+            cap + 1
+        );
+        let refusal: serde_json::Value = parse(&body);
+        assert_eq!(
+            refusal["errors"][0]["detail"]["quota"], "labels_max",
+            "the refusal names the bound: {refusal}"
+        );
+    }
+    hold(&pool, ORG_A, tam_limits::Plan::Studio).await;
+    let (status, _body) = call(
+        pool,
+        Some(&TOKEN_A),
+        Method::PUT,
+        &labels_path(PRODUCT_A),
+        Some(shelf(20)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "Studio has no label ceiling");
 }
 
 #[sqlx::test(migrations = "../tam-storage/migrations")]

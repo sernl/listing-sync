@@ -202,7 +202,7 @@ The licence lines stay as 11px fine print, verbatim, because the robot's grant r
 The pricing section is four cards, a comparison table and the packs strip (`docs/notes/design/research/2026-09-29-pricing-structure-review.md` §6).
 
 - **The switch.** A Monthly/Yearly switch defaults to yearly. It is two native radio inputs, and `site.css` shows one cadence with `:has()`, so it needs no script and reads as a radio group.
-- **The cards.** The plan the table marks `recommended` (Sync) is raised with a badge. Each card carries the plan's `tagline`, its price and at most five highlights. For a paid card those are only what it adds to the plan below ("Everything in Starter, plus:").
+- **The cards.** The plan the table marks `recommended` (Sync) is raised with a badge. Each card carries the plan's `tagline`, its price and at most six highlights (five until the 2026-10-05 matrix review). For a paid card those are only what it adds to the plan below ("Everything in Starter, plus:"). Two highlights are composed from several rows: labels, templates and collections as one line, and Studio's "Unlimited automations including scheduling, price rules and term mapping".
 - **The table.** "Compare the plans" is drawn from `PLAN_FEATURES`, whose cells `tam-limits` computes from the gates at compile time. `src/pricing.js` only words a cell. The table scrolls sideways in a focusable region with the feature column pinned.
 - **Sales.** The page still strikes prices during a sale, and it hides "save $N a year" (`data-sale-hide`) because that figure is worked out at list price.
 - **The questions.** They are cut to eight.

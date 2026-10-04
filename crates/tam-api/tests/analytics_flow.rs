@@ -692,3 +692,28 @@ async fn a_plan_without_analytics_is_refused_the_summary(pool: PgPool) {
         "hiding the section in the rail is courtesy; the refusal is the fence"
     );
 }
+
+/// Statistics moved down to Starter in the 2026-10-05 matrix review: a
+/// Starter tenant reads its own figures where it used to be refused.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn a_starter_plan_reads_its_statistics(pool: PgPool) {
+    provision(&pool).await;
+    let mut tx = pool.begin().await.expect("the transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the pin applies");
+    sqlx::query("UPDATE entitlement_grant SET plan = 'starter' WHERE org_id = $1")
+        .bind(uuid::Uuid::from_bytes(ORG_A.0 .0))
+        .execute(&mut *tx)
+        .await
+        .expect("the fixture grant becomes Starter");
+    tx.commit().await.expect("the change commits");
+
+    let read = summary(pool, &TOKEN_A).await;
+    assert!(
+        !read.listings.is_empty(),
+        "a Starter tenant sees its own listing's figures"
+    );
+}

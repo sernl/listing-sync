@@ -1,4 +1,10 @@
 //! Seller-owned target proposals. Accepting one never edits the source catalogue.
+//!
+//! Writing them is a plan capability (`term_and_price_rules`, Pro and
+//! Studio): creating or editing a rule, fetching a reference rate for one,
+//! and previewing or deciding proposals are refused below Pro. Reading,
+//! deleting and the rules and approvals already saved are not: a seller who
+//! moved down keeps what they made (grandfathering, as every other gate).
 
 use axum::{
     extract::{Path, Query, State},
@@ -20,8 +26,23 @@ use tam_storage::{
 };
 use tam_types::{Currency, InventoryId, PriceIntent, ProductId, Timestamp, Uuid};
 
+use crate::entitlement::feature_refusal;
 use crate::exchange_rates::{ECB_DATA_URL, ECB_NOTICE};
 use crate::{APIError, APIErrorEntry, APIErrorKind, AppState, OrgContext};
+
+/// The console's own sentence, matching
+/// `entitlement.ts::featureReason('term_and_price_rules')`.
+const NO_RULES: &str = "Upgrade your plan to set up term mapping and price rules.";
+
+/// Every write here asks this first, before any validation, so a plan
+/// without the capability is told so rather than corrected on a field.
+fn held(context: &OrgContext) -> Result<(), APIError> {
+    if context.entitlement.caps.term_and_price_rules {
+        Ok(())
+    } else {
+        Err(feature_refusal("term_and_price_rules", NO_RULES))
+    }
+}
 
 fn validation(message: &str) -> APIError {
     APIError::new(
@@ -182,6 +203,7 @@ pub(crate) async fn create(
     context: OrgContext,
     Json(body): Json<CreateRule>,
 ) -> Result<(StatusCode, Json<SellerRuleRecord>), APIError> {
+    held(&context)?;
     validate_rule(&state, &context, &body.definition).await?;
     let saved = SellerRuleRepo::new(state.pool.clone())
         .create(context.org, context.user, &body.definition, (state.wall)())
@@ -196,6 +218,7 @@ pub(crate) async fn update(
     Path((_version, raw)): Path<(String, String)>,
     Json(body): Json<UpdateRule>,
 ) -> Result<Json<SellerRuleRecord>, APIError> {
+    held(&context)?;
     let id = parse_id(&raw)?;
     validate_rule(&state, &context, &body.definition).await?;
     match SellerRuleRepo::new(state.pool.clone())
@@ -292,6 +315,7 @@ pub(crate) async fn reference(
     context: OrgContext,
     Query(query): Query<ReferenceQuery>,
 ) -> Result<Json<ReferenceView>, APIError> {
+    held(&context)?;
     if query.source == query.target {
         return Err(validation("Choose different source and target currencies."));
     }
@@ -516,6 +540,7 @@ pub(crate) async fn preview(
     context: OrgContext,
     Json(body): Json<PreviewRequest>,
 ) -> Result<Json<RulePreview>, APIError> {
+    held(&context)?;
     body.selection.validate()?;
     if body.source == body.target {
         return Err(validation(
@@ -771,6 +796,7 @@ pub(crate) async fn decide(
     Path((_version, raw)): Path<(String, String)>,
     Json(body): Json<DecisionRequest>,
 ) -> Result<Json<DecisionView>, APIError> {
+    held(&context)?;
     body.selection.validate()?;
     let kind = match body.decision {
         Decision::Accept => DecisionKind::Accept,

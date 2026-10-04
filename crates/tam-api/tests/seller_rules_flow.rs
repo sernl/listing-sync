@@ -917,3 +917,89 @@ async fn all_means_the_bound_source_catalogue_not_other_sources_or_drafts(pool: 
         "an unbound TPT draft does not relabel a TES listing as a TPT source"
     );
 }
+
+/// Moves the fixture organisation's grant to another plan.
+#[expect(
+    clippy::expect_used,
+    reason = "integration fixture failures must stop the scenario"
+)]
+async fn hold(pool: &PgPool, plan: tam_limits::Plan) {
+    let mut tx = pool.begin().await.expect("the transaction opens");
+    sqlx::query("SELECT set_config('app.current_org', $1, true)")
+        .bind(uuid::Uuid::from_bytes(ORG.0 .0).to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("the pin applies");
+    sqlx::query("UPDATE entitlement_grant SET plan = $2 WHERE org_id = $1")
+        .bind(uuid::Uuid::from_bytes(ORG.0 .0))
+        .bind(plan.as_str())
+        .execute(&mut *tx)
+        .await
+        .expect("the fixture grant changes plan");
+    tx.commit().await.expect("the change commits");
+}
+
+/// Term mapping and price rules start at Pro since the 2026-10-05 matrix
+/// review. Look and Starter are refused every write by capability, before
+/// any field is checked, and keep what they already saved: the list still
+/// reads and a rule can still be deleted.
+#[sqlx::test(migrations = "../tam-storage/migrations")]
+async fn term_and_price_rules_start_at_pro(pool: PgPool) {
+    provision(&pool).await;
+    hold(&pool, tam_limits::Plan::Subscriber).await;
+    let (status, saved) = call(&pool, Method::POST, "/v1/seller-rules", price_rule("0.75")).await;
+    assert_eq!(status, StatusCode::CREATED, "Pro saves a rule: {saved}");
+    let product = uuid::Uuid::from_bytes([1; 16]).to_string();
+    let preview = json!({"source":"Tpt","target":"Tes","selection":{"products":[product]}});
+    let (status, answer) = call(
+        &pool,
+        Method::POST,
+        "/v1/seller-rules/preview",
+        preview.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "Pro previews: {answer}");
+
+    for plan in [tam_limits::Plan::Starter, tam_limits::Plan::Free] {
+        hold(&pool, plan).await;
+        for (method, path, body) in [
+            (Method::POST, "/v1/seller-rules", price_rule("0.80")),
+            (Method::POST, "/v1/seller-rules/preview", preview.clone()),
+        ] {
+            let (status, refused) = call(&pool, method, path, body).await;
+            assert_eq!(
+                status,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{} is refused {path}: {refused}",
+                plan.as_str()
+            );
+            assert_eq!(
+                refused["errors"][0]["detail"]["feature"],
+                "term_and_price_rules",
+                "the refusal names the capability: {refused}"
+            );
+        }
+        let (status, listed) = call(&pool, Method::GET, "/v1/seller-rules", Value::Null).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{} still reads the rules it saved: {listed}",
+            plan.as_str()
+        );
+        assert_eq!(listed["counts"]["all"], 1);
+    }
+    let rule = saved["id"].as_str().expect("rule id");
+    let revision = saved["revision"].as_i64().expect("rule revision");
+    let (status, gone) = call(
+        &pool,
+        Method::DELETE,
+        &format!("/v1/seller-rules/{rule}?revision={revision}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "a plan below Pro can still delete what it made: {gone}"
+    );
+}

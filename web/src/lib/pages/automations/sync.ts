@@ -59,11 +59,12 @@ export const NO_RUN_YET = 'Start one from Resources.';
 
 // ------------------------------------------------------------------ cadence
 
-/** The three cadences a seller chooses between, as §5 names them. The figures
- *  are seconds because that is what the setting stores and what the plan's
- *  floor is stated in. */
+/** The two cadences a seller chooses between, matching the server's
+ *  `sync_settings::INTERVAL_CHOICES`: daily (Studio's floor) and weekly
+ *  (Pro's). Six-hourly went when no plan reached it (founder, 2026-10-05).
+ *  The figures are seconds because that is what the setting stores and what
+ *  the plan's floor is stated in. */
 export const CADENCES: readonly { secs: number; label: string }[] = [
-	{ secs: 21_600, label: 'Every 6 hours' },
 	{ secs: 86_400, label: 'Daily' },
 	{ secs: 604_800, label: 'Weekly' }
 ];
@@ -254,5 +255,4 @@ export function activityEntries(lines: readonly ActivityLine[], now: number): Lo
 export const NO_ACTIVITY_YET =
 	'Nothing has been pulled or published yet, so there is nothing to log.';
 
-export const NOTHING_MULTI_LISTED =
-	'Send a resource to a second marketplace and it appears here.';
+export const NOTHING_MULTI_LISTED = 'Send a resource to a second marketplace and it appears here.';

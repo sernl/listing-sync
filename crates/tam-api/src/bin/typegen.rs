@@ -641,6 +641,7 @@ const CAPABILITIES_TS: &str = "export interface Capabilities {
   readonly free_moves_lifetime: number;
   readonly pack_edit_days: number;
   readonly scheduling: boolean;
+  readonly term_and_price_rules: boolean;
   readonly sync_pull_interval_secs: number | null;
   readonly auto_publish_rules: boolean;
   readonly templates_max: number;

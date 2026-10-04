@@ -64,7 +64,17 @@ export const signupUrl = (priceKey) =>
 
 /** How often edits go out, said the way a teacher would. */
 const cadence = (hours) =>
-	hours === 24 ? 'Daily' : hours === 1 ? 'Hourly' : `Every ${hours} hours`;
+	hours === 168
+		? 'Weekly'
+		: hours === 24
+			? 'Daily'
+			: hours === 1
+				? 'Hourly'
+				: `Every ${hours} hours`;
+
+/** The resources row as the sentence the founder's table reads per plan. */
+const catalogue = (value) =>
+	value === true ? 'Catalogue unlimited resources' : `Catalogue up to ${value} resources`;
 
 /** A size in mebibytes, as MB below a gigabyte and GB above. */
 const size = (megabytes) =>
@@ -98,6 +108,7 @@ export const cell = (feature, plan) => {
 	if (value === false && forLife > 0) return { kind: 'text', text: `${forLife} to try` };
 	if (value === false) return { kind: 'no', label: 'Not included' };
 	if (value === true) {
+		if (feature.unit === 'catalogue') return { kind: 'text', text: catalogue(value) };
 		if (feature.unit !== null) return { kind: 'text', text: 'Unlimited' };
 		return feature.soon
 			? { kind: 'soon', label: 'Coming soon' }
@@ -110,6 +121,8 @@ export const cell = (feature, plan) => {
 			return { kind: 'text', text: size(value) };
 		case 'every_hours':
 			return { kind: 'text', text: cadence(value) };
+		case 'catalogue':
+			return { kind: 'text', text: catalogue(value) };
 		default:
 			return { kind: 'text', text: `${value}` };
 	}
@@ -122,9 +135,14 @@ export const comparison = PLAN_FEATURE_GROUPS.map((group) => ({
 }));
 
 /**
- * The rows a card lifts out, in the order they matter to a teacher choosing.
- * A card shows at most five, so the full list lives in the table under the
- * cards and each card stays a glance.
+ * The lines a card lifts out, in the order they matter to a teacher choosing.
+ * Most are rows of the table, worded from one plan's cell. Two are composed
+ * from several rows, because the founder's cards say them as one line
+ * (2026-10-05): `organisers` is labels, templates and collections, which
+ * climb one ladder, and `automations` is Studio's "unlimited automations",
+ * said where a plan holds every automation and no organising ceiling. A card
+ * shows at most six, so the full list lives in the table under the cards and
+ * each card stays a glance.
  */
 const HIGHLIGHT_ORDER = [
 	'moves',
@@ -133,15 +151,51 @@ const HIGHLIGHT_ORDER = [
 	'auto_publish_rules',
 	'analytics',
 	'resources',
+	'bulk_actions',
 	'import',
+	'organisers',
 	'watermarked_previews',
 	'templates',
-	'collections',
+	'automations',
 	'priority_support',
 	'export'
 ];
-const HIGHLIGHTS_MAX = 5;
+const HIGHLIGHTS_MAX = 6;
 const byKey = new Map(PLAN_FEATURES.map((feature) => [feature.key, feature]));
+const ORGANISERS = ['labels', 'templates', 'collections'];
+
+/** The one figure a plan holds of labels, templates and collections, or null
+ *  where the three differ or the plan holds one of each (Look's card says
+ *  "1 template" rather than a three-part line about single items). */
+const organiserFigure = (plan) => {
+	const cells = ORGANISERS.map((key) => byKey.get(key)?.included[plan.id]);
+	const [first] = cells;
+	if (!cells.every((cell) => cell === first)) return null;
+	return first === true || (typeof first === 'number' && first > 1) ? first : null;
+};
+
+/** Whether a plan before this one in the table already carries the
+ *  organisers line: said in full the first time, compactly after. */
+const organisersSaidBefore = (plan) =>
+	PLANS.slice(0, PLANS.indexOf(plan)).some((earlier) => organiserFigure(earlier) !== null);
+
+/** The composed lines, or null where a plan does not carry one. */
+const composed = {
+	organisers: (plan) => {
+		const figure = organiserFigure(plan);
+		if (figure === null) return null;
+		if (figure === true) return 'Unlimited labels, templates and collections';
+		return organisersSaidBefore(plan)
+			? `${figure} labels, templates and collections`
+			: `${figure} labels, ${figure} templates and ${figure} collections`;
+	},
+	automations: (plan) =>
+		['scheduling', 'auto_publish_rules', 'term_and_price_rules'].every(
+			(key) => byKey.get(key)?.included[plan.id] === true
+		) && organiserFigure(plan) === true
+			? 'Unlimited automations including scheduling, price rules and term mapping'
+			: null
+};
 
 /** One highlight line, worded from a row and one plan's cell. */
 const highlight = (feature, plan) => {
@@ -150,16 +204,26 @@ const highlight = (feature, plan) => {
 	if (value === false && lifetime(feature, plan) > 0)
 		return `${lifetime(feature, plan)} ${noun} to try`;
 	if (feature.key === 'edit_sync') return `Edits synced ${cadence(value).toLowerCase()}`;
+	if (feature.unit === 'catalogue') return catalogue(value);
 	if (feature.unit === null) return feature.label;
 	if (value === true) return `Unlimited ${noun}`;
 	if (feature.unit === 'per_month') return `${value} ${noun} a month`;
 	const counted = value === 1 ? noun.replace(/s$/, '') : noun;
-	return feature.key === 'resources' ? `Up to ${value} ${counted}` : `${value} ${counted}`;
+	return `${value} ${counted}`;
 };
 
-/** Whether a row's cell on one plan is worth saying on that plan's card. */
-const reaches = (feature, plan) =>
-	feature.included[plan.id] !== false || lifetime(feature, plan) > 0;
+/** A card line for one key on one plan, or null where the plan's card has
+ *  nothing to say for it. */
+const line = (key, plan) => {
+	if (key in composed) return composed[key](plan);
+	const feature = byKey.get(key);
+	if (feature === undefined || feature.soon) return null;
+	if (feature.included[plan.id] === false && lifetime(feature, plan) === 0) return null;
+	// The templates row stands alone only where the organisers line does not
+	// already say it.
+	if (ORGANISERS.includes(key) && organiserFigure(plan) !== null) return null;
+	return highlight(feature, plan);
+};
 
 /**
  * A card's highlights. The free card says what the trial gives; each paid
@@ -169,14 +233,13 @@ const reaches = (feature, plan) =>
 export const cardHighlights = (plan) => {
 	const index = PLANS.indexOf(plan);
 	const below = index > 0 ? PLANS[index - 1] : null;
-	const lines = HIGHLIGHT_ORDER.map((key) => byKey.get(key))
-		.filter((feature) => feature !== undefined && !feature.soon && reaches(feature, plan))
-		.filter(
-			(feature) =>
-				below === null || feature.included[plan.id] !== feature.included[below.id]
-		)
+	const lines = HIGHLIGHT_ORDER.map((key) => ({
+		text: line(key, plan),
+		before: below === null ? null : line(key, below)
+	}))
+		.filter(({ text, before }) => text !== null && text !== before)
 		.slice(0, HIGHLIGHTS_MAX)
-		.map((feature) => highlight(feature, plan));
+		.map(({ text }) => text);
 	return { base: below === null ? null : below.name, lines };
 };
 
@@ -226,7 +289,9 @@ export const faqs = [
 	},
 	{
 		q: 'Which plan is right for me?',
-		a: `Pick by how often you publish: ${PLANS.filter((plan) => plan.capabilities.moves_per_month > 0)
+		a: `Pick by how often you publish: ${PLANS.filter(
+			(plan) => plan.capabilities.moves_per_month > 0
+		)
 			.map((plan) => `${plan.name} gives ${plan.capabilities.moves_per_month} moves a month`)
 			.join(', ')}. Moving your shop once? A Move Pack is cheaper than subscribing.`
 	},
@@ -251,6 +316,9 @@ export const faqs = [
 	{
 		q: 'Do my files get uploaded to Teachouse?',
 		a: 'Not the files you import. They stay on your own device, and when you open one in your browser, Teachouse passes it across from that device without keeping it. Files you upload to Teachouse yourself are kept so you can use them anywhere, until you delete them.',
-		link: { href: `${consoleUrl}/guides/why-the-app`, label: 'Why the app, and where your files stay' }
+		link: {
+			href: `${consoleUrl}/guides/why-the-app`,
+			label: 'Why the app, and where your files stay'
+		}
 	}
 ];
