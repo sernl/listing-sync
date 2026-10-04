@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE abuse_flag SET mail_due_at = $2, mail_attempts = mail_attempts + 1 WHERE id = ( SELECT id FROM abuse_flag WHERE mail_requested_at IS NOT NULL AND mail_sent_at IS NULL AND mail_due_at <= $1 AND mail_attempts < $3 ORDER BY mail_due_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id, org_id, action, mail_attempts",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "org_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "action",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "mail_attempts",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Timestamptz",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "97feab33a1bb83a5f7a6c1c14421862e339a182af2724cadb21ebd93f2c687f4"
+}

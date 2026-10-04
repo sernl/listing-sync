@@ -437,6 +437,32 @@ pub fn account_digest(
     digest
 }
 
+/// Domain separation for the abuse-signal pepper, apart from the account
+/// digest's: a shop's exclusivity digest and an address's abuse digest are
+/// never the same function of the KEK.
+const ABUSE_DIGEST_LABEL: &[u8] = b"tam:abuse-signal:v1";
+
+/// A keyed, non-reversible name for one abuse-prevention signal: a sign-in
+/// address, a browser, a device id, a card fingerprint, an email domain or
+/// address.
+///
+/// `kind` is bound into the message so the same text under two kinds (an
+/// email domain that is also somebody's device id) digests differently. The
+/// value is compared across accounts by equality and never read back, so the
+/// database holds no address or card an operator could recover; confirming a
+/// guess needs the key-encryption key.
+#[must_use]
+pub fn abuse_digest(kek: &Kek, kind: &str, value: &str) -> [u8; 32] {
+    let mut pepper = hmac_sha256(&kek.0, ABUSE_DIGEST_LABEL);
+    let mut message = Vec::with_capacity(kind.len() + 1 + value.len());
+    message.extend_from_slice(kind.as_bytes());
+    message.push(FIELD_SEPARATOR);
+    message.extend_from_slice(value.as_bytes());
+    let digest = hmac_sha256(&pepper, &message);
+    pepper.zeroize();
+    digest
+}
+
 /// One nibble as a lowercase hex character.
 ///
 /// Total by construction: every caller masks to four bits, so no value above
@@ -476,7 +502,8 @@ pub fn random_token() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        account_digest, hmac_sha256, open, random_token, seal, AadContext, Kek, OpenError, Secret,
+        abuse_digest, account_digest, hmac_sha256, open, random_token, seal, AadContext, Kek,
+        OpenError, Secret,
     };
     use tam_types::{ConnectionId, Marketplace, OrgId, Uuid};
 
@@ -693,6 +720,31 @@ mod tests {
             &[0x09; 32],
             "a digest that exposed the key-encryption key would make every stored row's \
              pepper an oracle for the vault"
+        );
+    }
+
+    #[test]
+    fn an_abuse_digest_is_stable_and_bound_to_its_kind_and_key() {
+        let key = kek(0x07);
+        assert_eq!(
+            abuse_digest(&key, "ip", "203.0.113.9"),
+            abuse_digest(&key, "ip", "203.0.113.9"),
+            "accounts are linked by equality, so one value must digest identically"
+        );
+        assert_ne!(
+            abuse_digest(&key, "ip", "203.0.113.9"),
+            abuse_digest(&key, "email_domain", "203.0.113.9"),
+            "the same text under two kinds must not link two unrelated facts"
+        );
+        assert_ne!(
+            abuse_digest(&key, "ip", "203.0.113.9"),
+            abuse_digest(&kek(0x08), "ip", "203.0.113.9"),
+            "the pepper derives from the KEK"
+        );
+        assert_ne!(
+            abuse_digest(&key, "tpt", "1"),
+            account_digest(&key, Marketplace::Tpt, 1, "1"),
+            "the abuse pepper is domain-separated from the exclusivity pepper"
         );
     }
 

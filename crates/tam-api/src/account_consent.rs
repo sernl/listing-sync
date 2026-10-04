@@ -69,7 +69,7 @@ impl InternalSecret {
     /// Compared over SHA-256 digests in constant time, as the identity
     /// service compares its own, so neither the secret nor its length is an
     /// oracle.
-    fn matches(&self, offered: &str) -> bool {
+    pub(crate) fn matches(&self, offered: &str) -> bool {
         let configured = ring::digest::digest(&ring::digest::SHA256, self.0.as_bytes());
         let offered = ring::digest::digest(&ring::digest::SHA256, offered.as_bytes());
         configured.as_ref().ct_eq(offered.as_ref()).into()

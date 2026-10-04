@@ -1581,6 +1581,7 @@ async fn finish_in(
             | StorageError::MappingAlreadyBound
             | StorageError::InventoryMappingAlreadyExists
             | StorageError::StorefrontBoundElsewhere { .. }
+            | StorageError::StorefrontSuspended { .. }
             | StorageError::ListingAlreadyBound) => storage_fault(state, &other),
         })?;
         recorded += usize::from(wrote);
@@ -1667,6 +1668,7 @@ fn create_fault(state: &AppState, error: &StorageError) -> APIError {
         | StorageError::MappingAlreadyBound
         | StorageError::InventoryMappingAlreadyExists
         | StorageError::StorefrontBoundElsewhere { .. }
+        | StorageError::StorefrontSuspended { .. }
         | StorageError::ListingAlreadyBound) => storage_fault(state, other),
     }
 }

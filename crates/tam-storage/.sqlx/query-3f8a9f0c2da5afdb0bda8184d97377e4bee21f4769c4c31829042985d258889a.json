@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"n!\" FROM (\n                   SELECT DISTINCT ON (subject) subject, ip_address, accepted_at\n                     FROM account_consent\n                    ORDER BY subject, accepted_at\n               ) first\n              WHERE first.ip_address = $1::text::inet AND first.accepted_at >= $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "n!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "3f8a9f0c2da5afdb0bda8184d97377e4bee21f4769c4c31829042985d258889a"
+}

@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT abuse_standing($1) AS \"standing!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "standing!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "eae41486d28da3fd9a811a8110b9fabce986422e02578390a228fac13e9f1fda"
+}

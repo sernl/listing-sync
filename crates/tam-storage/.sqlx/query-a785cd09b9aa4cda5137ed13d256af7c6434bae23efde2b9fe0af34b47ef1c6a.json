@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO abuse_flag (id, org_id, kind, score, reason, created_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (org_id, kind) WHERE resolved_at IS NULL DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Int4",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a785cd09b9aa4cda5137ed13d256af7c6434bae23efde2b9fe0af34b47ef1c6a"
+}

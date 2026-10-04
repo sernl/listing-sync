@@ -22,6 +22,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod abuse;
 pub mod account;
 pub mod account_consent;
 pub mod admin;
@@ -290,7 +291,7 @@ pub struct Whoami {
 /// not introspectable, so this is the one place [`claims_path`] can learn that
 /// `/healthz` is the API's. A route added to [`router`] without a version and
 /// not named here is a route whatever is mounted behind the API swallows.
-const UNVERSIONED_ROUTES: [&str; 2] = ["/healthz", "/internal/consent"];
+const UNVERSIONED_ROUTES: [&str; 3] = ["/healthz", "/internal/consent", "/internal/abuse/screen"];
 
 /// Whether the API owns `path`, which is the question a binary mounting
 /// anything behind this router has to ask before it lets the router answer.
@@ -316,6 +317,9 @@ pub fn router(state: AppState) -> Router {
         // shared secret rather than a session: the account it describes was
         // made a moment ago and holds no session this API knows.
         .route("/internal/consent", post(account_consent::record_internal))
+        // The identity service's question before it makes an account, on
+        // the same shared secret (`abuse`).
+        .route("/internal/abuse/screen", post(abuse::screen))
         .route("/{version}/healthz", get(versioned_healthz))
         .route("/{version}/whoami", get(whoami))
         .route(
@@ -1019,6 +1023,15 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/{version}/admin/users/{subject}/consent",
             get(account_consent::admin_subject),
+        )
+        // Abuse prevention: the flagged organisations and one cluster read on
+        // the backoffice pool; the decision written on the application pool,
+        // where the session gate and the free-move grant read it.
+        .route("/{version}/admin/abuse/flags", get(abuse::list_flags))
+        .route("/{version}/admin/abuse/orgs/{org}", get(abuse::org_detail))
+        .route(
+            "/{version}/admin/abuse/flags/{id}/{action}",
+            post(abuse::act),
         )
         .route(
             "/{version}/admin/users/{subject}",

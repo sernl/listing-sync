@@ -58,14 +58,22 @@ import type {
 	RefundView,
 	SyncView
 } from '$lib/pages/admin/payments';
+import type {
+	AbuseActionBody,
+	AbuseFlagsView,
+	AbuseOrgView,
+	AbuseState,
+	OperatorAction
+} from '$lib/pages/admin/abuse';
+import { flagsQuery } from '$lib/pages/admin/abuse';
 import type { SiteAnalyticsView, SiteRange } from '$lib/pages/admin/site-analytics';
 import type { Capabilities, PlansView } from '$lib/generated/plans';
 import type { ToastNotice } from '$lib/toast';
 import type { ConsentBody } from '$lib/legal';
 
-import { ApiFailure, patch, post, put, request, type APIErrorBody } from '$lib/http';
+import { ApiFailure, isSuspended, patch, post, put, request, type APIErrorBody } from '$lib/http';
 
-export { ApiFailure, post, put, request };
+export { ApiFailure, isSuspended, post, put, request };
 export type { APIErrorBody, APIErrorEntry, ApiResponseContext } from '$lib/http';
 
 // ------------------------------------------------------------------ shapes
@@ -3538,6 +3546,18 @@ export const api = {
 	mailRefund: (id: string) => post<RefundView>(`/v1/admin/payments/refunds/${id}/mail`, {}),
 	setPaymentSettings: (body: PaymentSettingsBody) =>
 		put<PaymentSettingsBody>('/v1/admin/payments/settings', body),
+
+	/** Organisations flagged for farming free moves across accounts: open
+	 *  ones by default, every one ever flagged with `all`, narrowed by `q`. */
+	adminAbuseFlags: (state: AbuseState, q: string) =>
+		request<AbuseFlagsView>(`/v1/admin/abuse/flags?${flagsQuery(state, q)}`),
+	/** One organisation's flags, signals and the organisations sharing them. */
+	adminAbuseOrg: (org: string) =>
+		request<AbuseOrgView>(`/v1/admin/abuse/orgs/${encodeURIComponent(org)}`),
+	/** Resolves every open flag of the flag's organisation with the action and
+	 *  answers the organisation as it now stands. 422 for a ban with no reason. */
+	adminAbuseAct: (flag: string, action: OperatorAction, body: AbuseActionBody) =>
+		post<AbuseOrgView>(`/v1/admin/abuse/flags/${encodeURIComponent(flag)}/${action}`, body),
 
 	/** Writes an operator grant on one organisation, and answers the org
 	 *  detail so the panel redraws from the server's own record rather than

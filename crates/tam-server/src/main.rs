@@ -17,6 +17,7 @@
 
 #![forbid(unsafe_code)]
 
+mod abuse;
 mod campaigns;
 mod downloads;
 mod exchange_rates;
@@ -773,6 +774,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // an engine url still owes its sellers their Friday drop.
     eprintln!("tam-server hosting the scheduler pass every {SCHEDULER_INTERVAL_SECS}s");
     spawn_scheduler_pass(state.clone(), loops.clone());
+    // Abuse prevention's nightly pass: global tables on the application
+    // pool, like the scheduler, so every deployment runs it.
+    eprintln!("tam-server running the abuse pass nightly");
+    abuse::spawn_pass(state.clone(), loops.clone());
     // The operators' campaigns: global rows on the application pool, so this
     // needs no engine url, only the mail set. Without it the rows stay
     // queued and the operator's log says so.
@@ -795,6 +800,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("tam-server sending refund mail from {}", mail.email_from);
             refund_mail::spawn(
                 PaymentRepo::new(state.pool.clone()),
+                notify::AuthAddresses::new(&mail.auth_internal_url, &mail.auth_internal_secret)?,
+                notify::ResendRelay::new(&mail.resend_api_key, &mail.email_from)?,
+                mail.console_url.clone(),
+                loops.clone(),
+            );
+            // The warning or suspension an operator's decision queued.
+            abuse::spawn_mail(
+                tam_storage::AbuseRepo::new(state.pool.clone()),
                 notify::AuthAddresses::new(&mail.auth_internal_url, &mail.auth_internal_secret)?,
                 notify::ResendRelay::new(&mail.resend_api_key, &mail.email_from)?,
                 mail.console_url.clone(),

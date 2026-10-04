@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n             SELECT 1 FROM banned_identity\n              WHERE kind = $1 AND value_hash = $2 AND expires_at > $3\n           ) AS \"banned!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "banned!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Bytea",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "957aa40cab076b75477b2f949b0af8e350337cce02b8ed53e71e863316bf5380"
+}

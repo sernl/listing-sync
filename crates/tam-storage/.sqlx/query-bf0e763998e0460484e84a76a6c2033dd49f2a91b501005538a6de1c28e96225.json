@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT LEAST(\n                 COALESCE(SUM(delta) FILTER (WHERE source = 'free'), 0),\n                 COALESCE(SUM(delta), 0))::bigint AS \"left!\"\n             FROM move_ledger\n            WHERE org_id = $1 AND expires_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "left!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "bf0e763998e0460484e84a76a6c2033dd49f2a91b501005538a6de1c28e96225"
+}

@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO banned_identity\n               (kind, value_hash, origin_org, flag_id, reason, created_at, expires_at)\n           SELECT DISTINCT\n                  CASE s.kind WHEN 'shop_digest' THEN 'shop_digest'\n                              WHEN 'device_fingerprint' THEN 'device_fingerprint'\n                              ELSE 'payment_fingerprint' END,\n                  s.value_hash, $1::uuid, $2::uuid, $3::text, $4::timestamptz, $5::timestamptz\n             FROM (SELECT kind, value_hash FROM account_link_signal\n                    WHERE org_id = $1\n                      AND kind IN ('shop_digest', 'device_fingerprint', 'payment_fingerprint')\n                   UNION\n                   SELECT 'shop_digest', platform_account_digest FROM storefront_allowance\n                    WHERE org_id = $1\n                   UNION\n                   SELECT 'shop_digest', platform_account_digest FROM connection\n                    WHERE org_id = $1 AND platform_account_digest IS NOT NULL\n                      AND octet_length(platform_account_digest) = 32) s\n           ON CONFLICT (kind, value_hash) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8c1a5bb4e7562280132588582937c189c18cb242b6a5f771c30f3b4784b22cd1"
+}

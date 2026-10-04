@@ -803,6 +803,11 @@ pub struct StorefrontAllowance<'a> {
 /// and grant its moves in one transaction: a row here with no credit, or a
 /// credit with no row here, would each be a way to lose or repeat the grant.
 /// The caller has already pinned `org`.
+///
+/// An organisation an operator has limited or banned (migration 0106's
+/// `abuse_standing`) claims nothing and is credited nothing: the limit is
+/// "no free moves", and leaving the shop unclaimed means a cleared seller
+/// can still be credited for it later.
 pub(crate) async fn grant_storefront_allowance_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     org: OrgId,
@@ -815,6 +820,9 @@ pub(crate) async fn grant_storefront_allowance_in(
         at,
     } = allowance;
     let now = timestamp_to_db(at)?;
+    if crate::abuse::standing_in(tx, org).await?.withholds_free_moves() {
+        return Ok(false);
+    }
     // The primary key crosses the tenant fence even though the policy does
     // not: a unique violation is raised on rows the pin cannot see, so a
     // second organisation naming the same shop inserts nothing and is never
@@ -849,6 +857,25 @@ pub(crate) async fn grant_storefront_allowance_in(
     if prior > 1 {
         return Ok(false);
     }
+    // The claim above goes when its organisation is erased (migration 0092
+    // walks every org_id column); this record has none, so it does not, and a
+    // shop whose account was deleted is not credited a second time under the
+    // next one (migration 0105).
+    let first_ever = sqlx::query!(
+        "INSERT INTO storefront_grant_record \
+         (marketplace, platform_account_digest, granted_at) \
+         VALUES ($1, $2, $3) \
+         ON CONFLICT (marketplace, platform_account_digest) DO NOTHING",
+        marketplace,
+        digest,
+        now,
+    )
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+    if first_ever == 0 {
+        return Ok(false);
+    }
     let reference = storefront_reference(marketplace, digest);
     write_move(
         tx,
@@ -866,6 +893,50 @@ pub(crate) async fn grant_storefront_allowance_in(
     )
     .await?;
     Ok(true)
+}
+
+/// Takes back what is left of an organisation's free moves, in a caller's
+/// transaction that has already pinned `org`. Answers how many were taken.
+///
+/// "Left" is the smaller of the free credits ever granted and the balance of
+/// everything that never expires: a commit inherits the expiry of the credit
+/// it drew on (migration 0084), so the non-expiring sum is what the free grant
+/// and its spending leave between them. The debit is an `operator` row with
+/// no expiry, which is what makes a second call find nothing left; `reference`
+/// makes the same decision idempotent besides.
+pub(crate) async fn zero_free_moves_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: OrgId,
+    reference: &str,
+    at: Timestamp,
+) -> Result<i64, StorageError> {
+    let now = timestamp_to_db(at)?;
+    let left = sqlx::query_scalar!(
+        r#"SELECT LEAST(
+                 COALESCE(SUM(delta) FILTER (WHERE source = 'free'), 0),
+                 COALESCE(SUM(delta), 0))::bigint AS "left!"
+             FROM move_ledger
+            WHERE org_id = $1 AND expires_at IS NULL"#,
+        uuid_to_db(org.0),
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    if left <= 0 {
+        return Ok(0);
+    }
+    let written = write_move(
+        tx,
+        org,
+        LedgerEntry {
+            delta: -i32::try_from(left).unwrap_or(i32::MAX),
+            source: MoveSource::Operator,
+            source_ref: Some(reference),
+            expires_at: None,
+            at: now,
+        },
+    )
+    .await?;
+    Ok(if written { left } else { 0 })
 }
 
 /// One ledger entry, in a caller's transaction, idempotent on its reference.

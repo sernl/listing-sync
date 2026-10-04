@@ -64,7 +64,7 @@ use crate::{pin_org, StorageError};
 /// a storefront the first still holds under the retired key. Rotating means
 /// bumping this and re-claiming, which every check-in does on its own within
 /// one beat.
-const ACCOUNT_KEY_VERSION: i32 = 1;
+pub const ACCOUNT_KEY_VERSION: i32 = 1;
 
 /// What a device last reported about one marketplace session.
 ///
@@ -672,23 +672,42 @@ async fn derive_link(
     // records transitions rather than check-ins: a device reporting the same
     // session every thirty seconds writes one row, not one per beat.
     let moved = if connected {
-        // The only path that may create a connection. A seller who declared
-        // authorship before connecting anything left an `unlinked` row here,
-        // and a live session is what turns it into one the claim will serve.
-        sqlx::query_scalar!(
-            "INSERT INTO connection \
-             (org_id, id, marketplace, state, created_at, updated_at) \
-             VALUES ($1, $2, $3, 'linked', now(), now()) \
-             ON CONFLICT (org_id, marketplace) DO UPDATE \
-                 SET state = 'linked', updated_at = now() \
-                 WHERE connection.state IN ('unlinked', 'linking', 'needs_reauth') \
-             RETURNING id",
-            uuid_to_db(org.0),
-            uuid::Uuid::new_v4(),
-            marketplace,
-        )
-        .fetch_optional(&mut **tx)
-        .await?
+        // A limited organisation (migration 0106) keeps the links it already
+        // holds, and may re-establish one that lapsed, but connects nothing
+        // new: that is half of what the limit is.
+        if crate::abuse::standing_in(tx, org)
+            .await?
+            .withholds_free_moves()
+        {
+            sqlx::query_scalar!(
+                "UPDATE connection SET state = 'linked', updated_at = now() \
+                 WHERE org_id = $1 AND marketplace = $2 AND state IN ('linking', 'needs_reauth') \
+                 RETURNING id",
+                uuid_to_db(org.0),
+                marketplace,
+            )
+            .fetch_optional(&mut **tx)
+            .await?
+        } else {
+            // The only path that may create a connection. A seller who
+            // declared authorship before connecting anything left an
+            // `unlinked` row here, and a live session is what turns it into
+            // one the claim will serve.
+            sqlx::query_scalar!(
+                "INSERT INTO connection \
+                 (org_id, id, marketplace, state, created_at, updated_at) \
+                 VALUES ($1, $2, $3, 'linked', now(), now()) \
+                 ON CONFLICT (org_id, marketplace) DO UPDATE \
+                     SET state = 'linked', updated_at = now() \
+                     WHERE connection.state IN ('unlinked', 'linking', 'needs_reauth') \
+                 RETURNING id",
+                uuid_to_db(org.0),
+                uuid::Uuid::new_v4(),
+                marketplace,
+            )
+            .fetch_optional(&mut **tx)
+            .await?
+        }
     } else {
         // Only ever the downgrade of a link that stood. A marketplace the
         // seller never linked stays `unlinked`, because asking them to re-link
@@ -771,6 +790,15 @@ async fn bind_storefront(
     at: Timestamp,
 ) -> Result<(), StorageError> {
     let stamp = timestamp_to_db(at)?;
+    // A shop a ban still refuses is refused to every organisation, before
+    // anything is written: the whole beat rolls back, as it does for a shop
+    // bound elsewhere.
+    if crate::abuse::is_banned_in(tx, crate::abuse::BannedKind::ShopDigest, &digest[..], at).await? {
+        return Err(match marketplace_from_db(marketplace) {
+            Ok(named) => StorageError::StorefrontSuspended { marketplace: named },
+            Err(corrupt) => corrupt,
+        });
+    }
     let bound = sqlx::query_scalar!(
         "UPDATE connection \
             SET platform_account_digest = $3, platform_account_seen_at = $4 \
@@ -789,6 +817,20 @@ async fn bind_storefront(
     if bound.is_none() {
         return Ok(());
     }
+    // The linkage ledger (migration 0105): the shop is the farming loop's
+    // own currency, so a second organisation binding it is the first thing
+    // the scorer looks for, and it looks here, on the event.
+    crate::abuse::record_signal_in(
+        tx,
+        crate::abuse::Signal {
+            org,
+            kind: crate::abuse::SignalKind::ShopDigest,
+            value: digest,
+            at,
+        },
+    )
+    .await?;
+    crate::abuse::score_in(tx, Some(org), at).await?;
     let free_moves = tam_limits::Plan::Free
         .capabilities(None)
         .free_moves_lifetime;

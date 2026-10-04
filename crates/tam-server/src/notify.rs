@@ -402,7 +402,7 @@ fn stated_counts(counts: NotificationCounts) -> Vec<(&'static str, u32)> {
 /// chose from a closed set, so nothing a seller or a marketplace wrote can
 /// reach it. This runs anyway, because the day one of those becomes a stored
 /// value the escape must already be in the path rather than remembered.
-fn escaped(raw: &str) -> String {
+pub(crate) fn escaped(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for character in raw.chars() {
         match character {
