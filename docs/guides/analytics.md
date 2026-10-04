@@ -61,4 +61,4 @@ If no device has sent figures yet, **Top resources** says **No figures yet**. Th
 
 ## Figures need a plan
 
-Statistics on every shop come with Pro and Studio. See [Your plan and what it allows](/guides/plans).
+Statistics on every shop come with Starter, Pro and Studio. See [Your plan and what it allows](/guides/plans).

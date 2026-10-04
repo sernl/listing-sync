@@ -9,6 +9,8 @@ A price rule says what a resource should cost on the marketplace you send it to.
 
 **Automations → Pricing** has five steps: **Where**, **Rule**, **What**, **Preview** and **Approve**.
 
+Price rules come with Pro and Studio. On Look and Starter you can still see and delete rules you saved before. See [Your plan and what it allows](/guides/plans).
+
 ## Step 1: Where
 
 Choose where your resources come **From** and where they go **To**. The picture shows the rule that is on for that pair, with one of your resources as an example.

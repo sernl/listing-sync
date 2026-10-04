@@ -1693,8 +1693,14 @@ mod tests {
                 );
             }
         }
-        assert_eq!(Plan::Subscriber.capabilities(None).sync_pull_interval_secs, Some(WEEKLY));
-        assert_eq!(Plan::Studio.capabilities(None).sync_pull_interval_secs, Some(DAILY));
+        assert_eq!(
+            Plan::Subscriber.capabilities(None).sync_pull_interval_secs,
+            Some(WEEKLY)
+        );
+        assert_eq!(
+            Plan::Studio.capabilities(None).sync_pull_interval_secs,
+            Some(DAILY)
+        );
         for plan in [Plan::Free, Plan::Starter] {
             assert_eq!(
                 plan.capabilities(None).sync_pull_interval_secs,

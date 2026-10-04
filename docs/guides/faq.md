@@ -23,7 +23,7 @@ No. Look is free for as long as you like. Buy a Move Pack on Look and use the mo
 
 Pick by how often you publish: Starter gives 10 moves a month, Pro 25 and Studio 100. Moving your shop once? A Move Pack is cheaper than subscribing.
 
-Pro and Studio also show statistics for every shop and can publish automatically. See [Your plan and what it allows](/guides/plans).
+Starter and up show statistics for every shop. Pro and Studio also send your edits to every marketplace, schedule when listings go live, use term mapping and price rules, and can publish automatically. See [Your plan and what it allows](/guides/plans).
 
 ## What do the free moves give me?
 
@@ -47,7 +47,7 @@ If you go over, for example after moving to a smaller plan, you keep everything 
 
 ## How many watermarked previews can I make?
 
-Look makes 5 in all, for as long as you have your account. Starter makes 20 a month, Pro 50 and Studio 100, and the count starts again on the 1st of each month.
+Look makes 5 in all, for as long as you have your account. Starter makes 20 a month and Pro 50, and the count starts again on the 1st of each month. Studio has no limit.
 
 ## What happens to my moves if I cancel?
 

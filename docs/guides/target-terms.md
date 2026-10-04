@@ -9,6 +9,8 @@ Each marketplace has its own list of licences and resource types. A term rule sa
 
 **Automations → Target terms** has five steps: **Where**, **Rule**, **What**, **Preview** and **Approve**.
 
+Term rules come with Pro and Studio. On Look and Starter you can still see and delete rules you saved before. See [Your plan and what it allows](/guides/plans).
+
 ## Step 1: Where
 
 Choose where your resources come **From** and where they go **To**. The picture underneath shows the rules that are on for that pair, for example the word “unit” becoming Tes's **Unit of work**.

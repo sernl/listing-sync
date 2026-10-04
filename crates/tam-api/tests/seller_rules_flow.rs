@@ -974,8 +974,7 @@ async fn term_and_price_rules_start_at_pro(pool: PgPool) {
                 plan.as_str()
             );
             assert_eq!(
-                refused["errors"][0]["detail"]["feature"],
-                "term_and_price_rules",
+                refused["errors"][0]["detail"]["feature"], "term_and_price_rules",
                 "the refusal names the capability: {refused}"
             );
         }
