@@ -267,8 +267,15 @@ async fn the_guide_reader_is_public_and_the_editor_is_not() {
 /// introspection hook in axum and is held by review plus the one-constant
 /// discipline.) A bare 404 means unmounted; a 405 means the documented method
 /// is wrong; anything else, including 401 and 204, proves the route exists.
+/// `/internal/consent` answers the 404 of an unknown path to anyone without
+/// its shared secret, so the probe state holds one and every probe offers it.
 #[tokio::test]
 async fn every_documented_operation_is_mounted() {
+    const PROBE_SECRET: &str = "parity-probe";
+    let mut state = test_state();
+    state.config.consent_secret = Some(tam_api::account_consent::InternalSecret::new(
+        PROBE_SECRET.to_owned(),
+    ));
     for route in tam_api::openapi::ROUTES {
         let path = route
             .path
@@ -293,9 +300,13 @@ async fn every_documented_operation_is_mounted() {
         let request = Request::builder()
             .method(method.as_str())
             .uri(&path)
+            .header(
+                tam_api::account_consent::INTERNAL_SECRET_HEADER,
+                PROBE_SECRET,
+            )
             .body(Body::empty())
             .expect("the probe request builds");
-        let response = router(test_state())
+        let response = router(state.clone())
             .oneshot(request)
             .await
             .expect("the router serves");
