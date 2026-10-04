@@ -1,8 +1,9 @@
 /**
  * The admin Payments page's wire shapes and the arithmetic it does on them:
  * which rows the filters keep, this month's figures, what is left to refund
- * on a charge, which rows belong together, and what the refund form accepts
- * before it sends.
+ * on a charge, which rows belong together, what the refund policy quotes,
+ * what the refund form accepts before it sends, and how sellers' refund
+ * requests read.
  *
  * The server checks every refund rule again; these exist so the panel can say
  * what is wrong before Stripe is asked. Months and days are New Zealand's
@@ -68,6 +69,66 @@ export interface RefundView {
 	mail_error: string | null;
 	created_at: number;
 	updated_at: number;
+	/** The policy's basis when the refund panel sent its quote; null for older
+	 *  refunds and ones made in Stripe's dashboard. */
+	policy_basis: string | null;
+	/** What the policy said, in cents, when the refund was issued. */
+	quoted_cents: number | null;
+	/** Why the amount differs from `quoted_cents`, where it does. */
+	override_reason: string | null;
+}
+
+/** Why the policy came to its amount. */
+export type RefundBasis =
+	| 'pack_unused'
+	| 'pack_used'
+	| 'pack_window_closed'
+	| 'monthly_started'
+	| 'monthly_not_started'
+	| 'yearly_unused_months'
+	| 'yearly_ended'
+	| 'unmatched';
+
+/** What the Terms' refund policy says one charge is owed, as the server
+ *  works it out. */
+export interface QuoteView {
+	charge_id: string;
+	org_id: string | null;
+	/** "Pro yearly plan", "Move Pack of 50 moves"; null when unmatched. */
+	what: string | null;
+	paid_cents: number;
+	currency: string;
+	paid_at: number;
+	/** What Stripe says is left on the charge. */
+	remaining_cents: number;
+	/** The policy amount, already capped at `remaining_cents`. */
+	amount_cents: number;
+	basis: RefundBasis;
+	/** The policy sentence; shown verbatim. */
+	explanation: string;
+	/** A yearly plan: refunding ends the plan today. */
+	ends_plan: boolean;
+}
+
+export type RefundRequestStatus = 'requested' | 'approved' | 'declined';
+
+/** A seller asking for the policy's refund on one of their payments. */
+export interface RefundRequestView {
+	id: string;
+	org_id: string;
+	org_name: string | null;
+	charge_id: string;
+	quoted_cents: number;
+	currency: string;
+	policy_basis: string;
+	status: RefundRequestStatus;
+	/** The seller's own note. */
+	note: string | null;
+	decided_by: string | null;
+	decided_at: number | null;
+	decline_reason: string | null;
+	refund_id: string | null;
+	created_at: number;
 }
 
 export interface PaymentsAdminView {
@@ -75,6 +136,8 @@ export interface PaymentsAdminView {
 	events: PaymentEventView[];
 	/** Newest first. */
 	refunds: RefundView[];
+	/** Sellers' refund requests, open ones first. */
+	requests: RefundRequestView[];
 	auto_refund_mail: boolean;
 	stripe_configured: boolean;
 }
@@ -88,6 +151,21 @@ export interface RefundBody {
 	send_email: boolean;
 	/** The operator's name; the server says "an admin" without it. */
 	issued_by_label?: string;
+	/** The quote the panel opened with, so the server can tell it changed. */
+	policy_basis?: RefundBasis;
+	quoted_cents?: number;
+	/** Required by the server when `amount_cents` differs from `quoted_cents`. */
+	override_reason?: string;
+	/** Only meaningful when the quote ends a yearly plan. */
+	end_plan?: boolean;
+}
+
+/** What Approve and Decline send on a refund request. */
+export interface DecisionBody {
+	/** Why it was declined; the seller is emailed it. Ignored by Approve. */
+	reason?: string;
+	/** The operator's name, as the refund panel sends `issued_by_label`. */
+	decided_by_label: string;
 }
 
 export interface SyncView {
@@ -147,6 +225,24 @@ export const REASONS: readonly RefundReason[] = [
 	'duplicate',
 	'fraudulent'
 ];
+
+/** Why the policy came to its amount, as the operator reads it. */
+export const BASIS_LABEL: Record<RefundBasis, string> = {
+	pack_unused: 'Unused Move Pack, within 14 days',
+	pack_used: 'Move Pack with moves used',
+	pack_window_closed: 'Move Pack, after 14 days',
+	monthly_started: 'Monthly plan, month started',
+	monthly_not_started: 'Monthly plan, month not started',
+	yearly_unused_months: 'Yearly plan, unused months less one',
+	yearly_ended: 'Yearly plan, year over',
+	unmatched: 'Not matched to a plan or pack'
+};
+
+/** A basis as the wire carries it, which may be a word this console does
+ *  not know yet: that one is shown as written. */
+export function basisLabel(basis: string): string {
+	return Object.hasOwn(BASIS_LABEL, basis) ? BASIS_LABEL[basis as RefundBasis] : statusWords(basis);
+}
 
 // ------------------------------------------------------------ NZ calendar
 
@@ -521,13 +617,36 @@ export interface RefundDraft {
 	reason: RefundReason | '';
 	note: string;
 	sendEmail: boolean;
+	/** Why the amount differs from the policy's; sent only when it does. */
+	overrideReason: string;
+	/** End a yearly plan today; only read when the quote ends one. */
+	endPlan: boolean;
 }
 
-export type RefundField = 'amount' | 'reason';
+export type RefundField = 'amount' | 'reason' | 'override';
 
-/** The panel's opening state: the whole of what is left, and the auto-mail setting. */
-export function refundDraft(left: number, autoMail: boolean): RefundDraft {
-	return { dollars: left / 100, reason: '', note: '', sendEmail: autoMail };
+/** The panel's opening state once the quote is in: the policy's amount, the
+ *  auto-mail setting, and a yearly plan ending as the Terms say it does. */
+export function quoteDraft(quote: QuoteView, autoMail: boolean): RefundDraft {
+	return {
+		dollars: quote.amount_cents / 100,
+		reason: '',
+		note: '',
+		sendEmail: autoMail,
+		overrideReason: '',
+		endPlan: quote.ends_plan
+	};
+}
+
+/** The draft against a newer quote (the old one went stale): the amount
+ *  starts again from the policy's, everything else typed stays. */
+export function requote(draft: RefundDraft, quote: QuoteView): RefundDraft {
+	return { ...draft, dollars: quote.amount_cents / 100 };
+}
+
+/** What the policy covers, or that the charge matched nothing it covers. */
+export function quoteWhat(quote: QuoteView): string {
+	return quote.what ?? 'Not matched to a plan or pack';
 }
 
 /** Dollars as typed, in cents; null where it is not a whole number of cents. */
@@ -537,11 +656,19 @@ export function toCents(dollars: number | null): number | null {
 	return Math.abs(cents - dollars * 100) < 1e-6 ? cents : null;
 }
 
+/** Whether the typed amount is not the policy's, which needs a reason. An
+ *  amount that is not yet a whole number of cents is not compared. */
+export function differsFromQuote(draft: RefundDraft, quote: QuoteView): boolean {
+	const cents = toCents(draft.dollars);
+	return cents !== null && cents !== quote.amount_cents;
+}
+
 /** What is wrong with the refund form, by field; empty when it can be sent. */
 export function refundProblems(
 	draft: RefundDraft,
 	left: number,
-	currency: string
+	currency: string,
+	quote: QuoteView
 ): Partial<Record<RefundField, string>> {
 	const problems: Partial<Record<RefundField, string>> = {};
 	const cents = toCents(draft.dollars);
@@ -557,26 +684,109 @@ export function refundProblems(
 	if (draft.reason === '') {
 		problems.reason = 'Pick a reason.';
 	}
+	if (differsFromQuote(draft, quote) && draft.overrideReason.trim() === '') {
+		problems.override = "Say why you're refunding a different amount from the policy.";
+	}
 	return problems;
 }
 
-/** The body the refund is sent as. Only call once `refundProblems` is empty. */
-export function refundBody(draft: RefundDraft, requestId: string, issuedBy: string): RefundBody {
+/** The body the refund is sent as, carrying the quote the panel opened with.
+ *  Only call once `refundProblems` is empty. */
+export function refundBody(
+	draft: RefundDraft,
+	requestId: string,
+	issuedBy: string,
+	quote: QuoteView
+): RefundBody {
 	return {
 		request_id: requestId,
 		amount_cents: toCents(draft.dollars) ?? 0,
 		reason: draft.reason === '' ? 'requested_by_customer' : draft.reason,
 		note: draft.note.trim(),
 		send_email: draft.sendEmail,
-		issued_by_label: issuedBy
+		issued_by_label: issuedBy,
+		policy_basis: quote.basis,
+		quoted_cents: quote.amount_cents,
+		...(differsFromQuote(draft, quote) ? { override_reason: draft.overrideReason.trim() } : {}),
+		end_plan: quote.ends_plan && draft.endPlan
 	};
+}
+
+/** Whose card, as a refund sentence names it. */
+function cardOf(orgName: string | null): string {
+	return orgName === null || orgName.trim() === '' ? "the customer's" : `${orgName.trim()}'s`;
 }
 
 /** "Refund $12.00 to Kiwi Kids's card?" */
 export function confirmSentence(cents: number, currency: string, orgName: string | null): string {
-	const whose =
-		orgName === null || orgName.trim() === '' ? "the customer's" : `${orgName.trim()}'s`;
-	return `Refund ${money(cents, currency)} to ${whose} card?`;
+	return `Refund ${money(cents, currency)} to ${cardOf(orgName)} card?`;
+}
+
+/** The confirm step's word on the plan, where this refund ends one. */
+export function planLine(draft: RefundDraft, quote: QuoteView): string | null {
+	if (!quote.ends_plan) return null;
+	return draft.endPlan
+		? 'Their yearly plan ends today and the account moves to Look.'
+		: 'Their yearly plan keeps running.';
+}
+
+/** What the policy said beside a refund that carried a quote, and why the
+ *  amount differs where it does. Null for refunds without one. */
+export function refundPolicy(
+	refund: RefundView
+): { quoted: string; override: string | null } | null {
+	if (refund.quoted_cents === null) return null;
+	const differs = refund.quoted_cents !== refund.amount_cents;
+	return {
+		quoted: `Policy ${money(refund.quoted_cents, refund.currency)}`,
+		override: differs && refund.override_reason ? refund.override_reason : null
+	};
+}
+
+// ---------------------------------------------------------- refund requests
+
+/** Open requests first, otherwise in the order the server sent them. */
+export function requestsInOrder(requests: readonly RefundRequestView[]): RefundRequestView[] {
+	const open = requests.filter((request) => request.status === 'requested');
+	return [...open, ...requests.filter((request) => request.status !== 'requested')];
+}
+
+const REQUEST_PILL: Record<RefundRequestStatus, Pill> = {
+	requested: { tone: 'warn', label: 'Open' },
+	approved: { tone: 'ok', label: 'Approved' },
+	declined: { tone: 'flat', label: 'Declined' }
+};
+
+export function requestPill(request: RefundRequestView): Pill {
+	return REQUEST_PILL[request.status];
+}
+
+/** "Refund $140.00 to Kiwi Kids's card? We'll email them, and a yearly plan
+ *  ends today." The plan clause only where the quote was a yearly plan's. */
+export function approveSentence(request: RefundRequestView): string {
+	const refund = `Refund ${money(request.quoted_cents, request.currency)} to ${cardOf(request.org_name)} card?`;
+	return request.policy_basis === 'yearly_unused_months'
+		? `${refund} We'll email them, and a yearly plan ends today.`
+		: `${refund} We'll email them.`;
+}
+
+/** "Approved by Sam on 3 Oct 2026"; null while the request is open. */
+export function decidedLine(request: RefundRequestView): string | null {
+	if (request.status === 'requested') return null;
+	const verb = request.status === 'approved' ? 'Approved' : 'Declined';
+	const by = request.decided_by ? ` by ${request.decided_by}` : '';
+	const on = request.decided_at === null ? '' : ` on ${nzShortDate(request.decided_at)}`;
+	return `${verb}${by}${on}`;
+}
+
+/** What is wrong with a decline reason; null when it can be sent. */
+export function declineProblem(reason: string): string | null {
+	return reason.trim() === '' ? 'Say why, in a sentence they will read.' : null;
+}
+
+/** The body Decline sends. Only call once `declineProblem` is null. */
+export function declineBody(reason: string, decidedBy: string): DecisionBody {
+	return { reason: reason.trim(), decided_by_label: decidedBy };
 }
 
 // ------------------------------------------------------------- refund mail

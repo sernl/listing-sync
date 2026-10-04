@@ -1,21 +1,36 @@
 import { describe, expect, it } from 'vitest';
 import {
+	BASIS_LABEL,
 	NO_FILTERS,
+	approveSentence,
+	basisLabel,
 	confirmSentence,
+	decidedLine,
+	declineBody,
+	declineProblem,
+	differsFromQuote,
 	eventPill,
 	filterEvents,
 	mailButton,
 	monthStats,
 	nzDay,
+	planLine,
+	quoteDraft,
+	quoteWhat,
 	refundBody,
-	refundDraft,
 	refundOf,
+	refundPolicy,
 	refundProblems,
 	relatedEvents,
 	relatedRefunds,
 	remaining,
+	requestPill,
+	requestsInOrder,
+	requote,
 	tallyAmount,
 	type PaymentEventView,
+	type QuoteView,
+	type RefundRequestView,
 	type RefundView
 } from './payments';
 
@@ -56,6 +71,57 @@ function refund(over: Partial<RefundView> & Pick<RefundView, 'id' | 'charge_id'>
 		mail_error: null,
 		created_at: at('2026-10-02T00:00:00Z'),
 		updated_at: at('2026-10-02T00:00:00Z'),
+		policy_basis: null,
+		quoted_cents: null,
+		override_reason: null,
+		...over
+	};
+}
+
+function quote(over: Partial<QuoteView> = {}): QuoteView {
+	return {
+		charge_id: 'ch_a',
+		org_id: 'org-kiwi',
+		what: 'Move Pack of 50 moves',
+		paid_cents: 1200,
+		currency: 'usd',
+		paid_at: at('2026-10-01T00:00:00Z'),
+		remaining_cents: 1200,
+		amount_cents: 1200,
+		basis: 'pack_unused',
+		explanation: 'No moves used and bought 4 days ago, so all of it comes back.',
+		ends_plan: false,
+		...over
+	};
+}
+
+const yearly = quote({
+	what: 'Pro yearly plan',
+	paid_cents: 24000,
+	remaining_cents: 24000,
+	amount_cents: 14000,
+	basis: 'yearly_unused_months',
+	explanation: '8 months unused, less one: 7 × $240.00 ÷ 12 = $140.00.',
+	ends_plan: true
+});
+
+function request(
+	over: Partial<RefundRequestView> & Pick<RefundRequestView, 'id'>
+): RefundRequestView {
+	return {
+		org_id: 'org-kiwi',
+		org_name: 'Kiwi Kids',
+		charge_id: 'ch_a',
+		quoted_cents: 14000,
+		currency: 'usd',
+		policy_basis: 'yearly_unused_months',
+		status: 'requested',
+		note: null,
+		decided_by: null,
+		decided_at: null,
+		decline_reason: null,
+		refund_id: null,
+		created_at: at('2026-10-02T00:00:00Z'),
 		...over
 	};
 }
@@ -238,64 +304,232 @@ describe('related rows', () => {
 });
 
 describe('the refund form', () => {
-	it('opens with what is left and the auto-mail setting', () => {
-		expect(refundDraft(1250, true)).toEqual({
+	it('opens with the policy amount, the auto-mail setting and a yearly plan ending', () => {
+		expect(quoteDraft(quote({ amount_cents: 1250 }), true)).toEqual({
 			dollars: 12.5,
 			reason: '',
 			note: '',
-			sendEmail: true
+			sendEmail: true,
+			overrideReason: '',
+			endPlan: false
+		});
+		expect(quoteDraft(yearly, false)).toMatchObject({ dollars: 140, endPlan: true });
+	});
+
+	it('moves the amount back to a newer quote and keeps everything typed', () => {
+		const typed = { ...quoteDraft(yearly, true), dollars: 100, note: 'asked by phone' };
+		expect(requote(typed, quote({ ...yearly, amount_cents: 12000 }))).toEqual({
+			...typed,
+			dollars: 120
 		});
 	});
 
+	it('names what was bought, or that it matched nothing', () => {
+		expect(quoteWhat(yearly)).toBe('Pro yearly plan');
+		expect(quoteWhat(quote({ what: null, basis: 'unmatched' }))).toBe(
+			'Not matched to a plan or pack'
+		);
+	});
+
 	it('accepts one cent up to what is left', () => {
-		const draft = { ...refundDraft(1200, false), reason: 'duplicate' as const };
-		expect(refundProblems({ ...draft, dollars: 0.01 }, 1200, 'usd')).toEqual({});
-		expect(refundProblems({ ...draft, dollars: 12 }, 1200, 'usd')).toEqual({});
+		const draft = { ...quoteDraft(quote(), false), reason: 'duplicate' as const };
+		const q = quote({ amount_cents: 1 });
+		expect(refundProblems({ ...draft, dollars: 0.01 }, 1200, 'usd', q)).toEqual({});
+		expect(refundProblems(draft, 1200, 'usd', quote())).toEqual({});
 	});
 
 	it('refuses more than is left with the sentence the server uses', () => {
-		const draft = { ...refundDraft(1200, false), reason: 'duplicate' as const, dollars: 12.01 };
-		expect(refundProblems(draft, 1200, 'usd').amount).toBe(
+		const draft = {
+			...quoteDraft(quote(), false),
+			reason: 'duplicate' as const,
+			dollars: 12.01,
+			overrideReason: 'goodwill'
+		};
+		expect(refundProblems(draft, 1200, 'usd', quote()).amount).toBe(
 			'You can refund at most $12.00 on this payment.'
 		);
 	});
 
 	it('refuses nothing, less than nothing, and fractions of a cent', () => {
-		const draft = { ...refundDraft(1200, false), reason: 'duplicate' as const };
+		const draft = { ...quoteDraft(quote(), false), reason: 'duplicate' as const };
 		for (const dollars of [null, 0, -1, Number.NaN]) {
-			expect(refundProblems({ ...draft, dollars }, 1200, 'usd').amount).toBe(
+			expect(refundProblems({ ...draft, dollars }, 1200, 'usd', quote()).amount).toBe(
 				'Enter an amount greater than zero.'
 			);
 		}
-		expect(refundProblems({ ...draft, dollars: 1.005 }, 1200, 'usd').amount).toMatch(/cents/);
+		expect(refundProblems({ ...draft, dollars: 1.005 }, 1200, 'usd', quote()).amount).toMatch(
+			/cents/
+		);
 	});
 
 	it('needs a reason', () => {
-		expect(refundProblems(refundDraft(1200, false), 1200, 'usd')).toEqual({
+		expect(refundProblems(quoteDraft(quote(), false), 1200, 'usd', quote())).toEqual({
 			reason: 'Pick a reason.'
 		});
 	});
 
-	it('sends dollars as cents, with the request id and who issued it', () => {
+	it('needs a reason of its own for an amount other than the policy amount', () => {
+		const draft = { ...quoteDraft(yearly, false), reason: 'requested_by_customer' as const };
+		expect(differsFromQuote(draft, yearly)).toBe(false);
+		expect(refundProblems(draft, 24000, 'usd', yearly)).toEqual({});
+
+		const more = { ...draft, dollars: 160 };
+		expect(differsFromQuote(more, yearly)).toBe(true);
+		expect(refundProblems(more, 24000, 'usd', yearly)).toEqual({
+			override: "Say why you're refunding a different amount from the policy."
+		});
+		expect(refundProblems({ ...more, overrideReason: '  ' }, 24000, 'usd', yearly)).toHaveProperty(
+			'override'
+		);
+		expect(
+			refundProblems({ ...more, overrideReason: 'Two weeks of downtime' }, 24000, 'usd', yearly)
+		).toEqual({});
+	});
+
+	it('does not compare an amount that is not yet whole cents', () => {
+		expect(differsFromQuote({ ...quoteDraft(yearly, false), dollars: 1.005 }, yearly)).toBe(false);
+	});
+
+	it('sends dollars as cents, with the request id, who issued it and the quote', () => {
 		const draft = {
-			dollars: 19.99,
+			...quoteDraft(quote(), true),
+			dollars: 12,
 			reason: 'fraudulent' as const,
-			note: ' card stolen ',
-			sendEmail: true
+			note: ' card stolen '
 		};
-		expect(refundBody(draft, 'req-1', 'Sam')).toEqual({
+		expect(refundBody(draft, 'req-1', 'Sam', quote())).toEqual({
 			request_id: 'req-1',
-			amount_cents: 1999,
+			amount_cents: 1200,
 			reason: 'fraudulent',
 			note: 'card stolen',
 			send_email: true,
-			issued_by_label: 'Sam'
+			issued_by_label: 'Sam',
+			policy_basis: 'pack_unused',
+			quoted_cents: 1200,
+			end_plan: false
 		});
 	});
 
-	it('asks to confirm in one sentence', () => {
+	it('sends why the amount differs only when it does', () => {
+		const draft = {
+			...quoteDraft(yearly, false),
+			reason: 'requested_by_customer' as const,
+			overrideReason: ' Two weeks of downtime '
+		};
+		expect(refundBody(draft, 'r', 'Sam', yearly)).not.toHaveProperty('override_reason');
+		expect(refundBody({ ...draft, dollars: 160 }, 'r', 'Sam', yearly)).toMatchObject({
+			amount_cents: 16000,
+			quoted_cents: 14000,
+			policy_basis: 'yearly_unused_months',
+			override_reason: 'Two weeks of downtime'
+		});
+	});
+
+	it('ends a yearly plan unless unticked, and never a plan the quote does not end', () => {
+		const draft = { ...quoteDraft(yearly, false), reason: 'duplicate' as const };
+		expect(refundBody(draft, 'r', 'Sam', yearly).end_plan).toBe(true);
+		expect(refundBody({ ...draft, endPlan: false }, 'r', 'Sam', yearly).end_plan).toBe(false);
+		expect(refundBody({ ...draft, endPlan: true }, 'r', 'Sam', quote()).end_plan).toBe(false);
+	});
+
+	it('asks to confirm in one sentence, and says when the plan ends', () => {
 		expect(confirmSentence(1200, 'usd', 'Kiwi Kids')).toBe("Refund $12.00 to Kiwi Kids's card?");
 		expect(confirmSentence(1200, 'usd', null)).toBe("Refund $12.00 to the customer's card?");
+		const draft = quoteDraft(yearly, false);
+		expect(planLine(draft, yearly)).toBe(
+			'Their yearly plan ends today and the account moves to Look.'
+		);
+		expect(planLine({ ...draft, endPlan: false }, yearly)).toBe('Their yearly plan keeps running.');
+		expect(planLine(quoteDraft(quote(), false), quote())).toBeNull();
+	});
+});
+
+describe('policy bases', () => {
+	it('has a short label for every basis', () => {
+		expect(BASIS_LABEL.yearly_unused_months).toBe('Yearly plan, unused months less one');
+		expect(BASIS_LABEL.pack_unused).toBe('Unused Move Pack, within 14 days');
+		expect(BASIS_LABEL.unmatched).toBe('Not matched to a plan or pack');
+		expect(Object.keys(BASIS_LABEL)).toHaveLength(8);
+	});
+
+	it('shows a basis this console does not know as written', () => {
+		expect(basisLabel('monthly_started')).toBe('Monthly plan, month started');
+		expect(basisLabel('pack_gifted')).toBe('pack gifted');
+	});
+});
+
+describe('a refund that carried a quote', () => {
+	it('says the policy amount, and why it differs where it does', () => {
+		expect(refundPolicy(refund({ id: '1', charge_id: 'ch_a' }))).toBeNull();
+		expect(
+			refundPolicy(refund({ id: '1', charge_id: 'ch_a', amount_cents: 1000, quoted_cents: 1000 }))
+		).toEqual({ quoted: 'Policy $10.00', override: null });
+		expect(
+			refundPolicy(
+				refund({
+					id: '1',
+					charge_id: 'ch_a',
+					amount_cents: 1500,
+					quoted_cents: 1000,
+					override_reason: 'Goodwill'
+				})
+			)
+		).toEqual({ quoted: 'Policy $10.00', override: 'Goodwill' });
+	});
+});
+
+describe('refund requests', () => {
+	const open = request({ id: 'open' });
+	const approved = request({
+		id: 'approved',
+		status: 'approved',
+		decided_by: 'Sam',
+		decided_at: at('2026-10-03T00:00:00Z')
+	});
+	const declined = request({
+		id: 'declined',
+		status: 'declined',
+		decided_by: null,
+		decided_at: at('2026-10-04T00:00:00Z'),
+		decline_reason: 'You have used the year.'
+	});
+
+	it('puts open requests first and keeps the rest in order', () => {
+		expect(requestsInOrder([approved, open, declined]).map((r) => r.id)).toEqual([
+			'open',
+			'approved',
+			'declined'
+		]);
+	});
+
+	it('pills each status', () => {
+		expect(requestPill(open)).toEqual({ tone: 'warn', label: 'Open' });
+		expect(requestPill(approved)).toEqual({ tone: 'ok', label: 'Approved' });
+		expect(requestPill(declined)).toEqual({ tone: 'flat', label: 'Declined' });
+	});
+
+	it('confirms approval in one sentence, with the plan ending only for a yearly plan', () => {
+		expect(approveSentence(open)).toBe(
+			"Refund $140.00 to Kiwi Kids's card? We'll email them, and a yearly plan ends today."
+		);
+		expect(
+			approveSentence({ ...open, quoted_cents: 1200, policy_basis: 'pack_unused', org_name: null })
+		).toBe("Refund $12.00 to the customer's card? We'll email them.");
+	});
+
+	it('says who decided and when, New Zealand day', () => {
+		expect(decidedLine(open)).toBeNull();
+		expect(decidedLine(approved)).toBe('Approved by Sam on 3 Oct 2026');
+		expect(decidedLine(declined)).toBe('Declined on 4 Oct 2026');
+	});
+
+	it('needs a decline reason, and sends it trimmed with who decided', () => {
+		expect(declineProblem('  ')).toBe('Say why, in a sentence they will read.');
+		expect(declineProblem('Out of the window')).toBeNull();
+		expect(declineBody(' Out of the window ', 'Sam')).toEqual({
+			reason: 'Out of the window',
+			decided_by_label: 'Sam'
+		});
 	});
 });
 

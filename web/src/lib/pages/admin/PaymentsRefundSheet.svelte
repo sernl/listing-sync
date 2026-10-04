@@ -1,28 +1,35 @@
 <script lang="ts">
-	// The refund panel: how much, why, a note for ourselves, whether the
-	// customer hears about it, then one sentence to confirm. The request id is
-	// minted once per opening, so a double press or a retry after a dropped
-	// answer refunds once.
-	import { createMutation } from '@tanstack/svelte-query';
+	// The refund panel: what the refund policy says first, then how much,
+	// why, a note for ourselves, whether the customer hears about it, and
+	// one sentence to confirm. The request id is minted once per opening, so a
+	// double press or a retry after a dropped answer refunds once.
+	import { createMutation, createQuery } from '@tanstack/svelte-query';
 	import { ApiFailure, api } from '$lib/api';
 	import Banner from '$lib/Banner.svelte';
 	import Button from '$lib/Button.svelte';
 	import Field from '$lib/Field.svelte';
 	import Icon from '$lib/Icon.svelte';
+	import { queryKeys } from '$lib/query';
 	import Sheet, { type SheetHandle } from '$lib/Sheet.svelte';
 	import { toast } from '$lib/toast';
 	import { money } from '$lib/pages/account/plans';
 	import {
 		REASONS,
 		REASON_LABEL,
+		basisLabel,
 		confirmSentence,
+		differsFromQuote,
 		eventAmount,
 		nzShortDate,
+		planLine,
+		quoteDraft,
+		quoteWhat,
 		refundBody,
-		refundDraft,
 		refundProblems,
+		requote,
 		toCents,
 		type PaymentEventView,
+		type QuoteView,
 		type RefundDraft,
 		type RefundField,
 		type RefundView
@@ -52,19 +59,40 @@
 	const currency = $derived(payment.currency ?? 'usd');
 	const charge = $derived(payment.charge_id ?? payment.provider_object_id);
 
-	// svelte-ignore state_referenced_locally
-	let draft = $state<RefundDraft>(refundDraft(left, autoMail));
+	// Quoted afresh on every opening and never served stale: the policy's
+	// amount moves when a month turns over.
+	const quoting = createQuery(() => ({
+		queryKey: queryKeys.adminRefundQuote(charge),
+		queryFn: () => api.refundQuote(charge),
+		staleTime: 0,
+		gcTime: 0,
+		refetchOnWindowFocus: false
+	}));
+
+	// The draft is built on the first quote; a later quote (after the server
+	// said the first went stale) moves the amount back to the policy's.
+	let draft = $state<RefundDraft | null>(null);
+	let quotedOn = $state<QuoteView | null>(null);
+	$effect(() => {
+		const quote = quoting.data;
+		if (quote === undefined || quote === quotedOn) return;
+		draft = draft === null ? quoteDraft(quote, autoMail) : requote(draft, quote);
+		quotedOn = quote;
+	});
+
 	let confirming = $state(false);
 	let tried = $state(false);
 	let touched = $state<Partial<Record<RefundField, boolean>>>({});
 	let refusal = $state<string | null>(null);
 
-	const problems = $derived(refundProblems(draft, left, currency));
+	const problems = $derived(
+		draft === null || quotedOn === null ? {} : refundProblems(draft, left, currency, quotedOn)
+	);
 	const problemOf = (field: RefundField) =>
 		tried || touched[field] === true ? (problems[field] ?? null) : null;
 
 	const refunding = createMutation(() => ({
-		mutationFn: () => api.refundCharge(charge, refundBody(draft, requestId, issuedBy)),
+		mutationFn: (body: Parameters<typeof api.refundCharge>[1]) => api.refundCharge(charge, body),
 		onSuccess: async (refund: RefundView) => {
 			await onRefunded(refund);
 			toast('success', `Refunded ${money(refund.amount_cents, refund.currency)}.`);
@@ -73,15 +101,23 @@
 		onError: (failure: Error) => {
 			confirming = false;
 			refusal = failure instanceof ApiFailure ? failure.message : 'The refund did not go through.';
+			// The quote changed since the panel opened: the message says the
+			// new amount, and the panel reads it.
+			if (failure instanceof ApiFailure && failure.status === 409) void quoting.refetch();
 		}
 	}));
 
 	function review() {
 		tried = true;
-		if (Object.keys(problems).length === 0) {
+		if (draft !== null && quotedOn !== null && Object.keys(problems).length === 0) {
 			refusal = null;
 			confirming = true;
 		}
+	}
+
+	function send() {
+		if (draft === null || quotedOn === null) return;
+		refunding.mutate(refundBody(draft, requestId, issuedBy, quotedOn));
 	}
 
 	function keepOpenWhileSending(event: Event) {
@@ -126,7 +162,7 @@
 		novalidate
 		onsubmit={(event) => {
 			event.preventDefault();
-			if (confirming) refunding.mutate();
+			if (confirming) send();
 			else review();
 		}}
 	>
@@ -134,81 +170,161 @@
 			<Banner tone="bad" title="The refund did not go through">{refusal}</Banner>
 		{/if}
 
-		{#if confirming}
-			<p class="rf-confirm">
-				{confirmSentence(toCents(draft.dollars) ?? 0, currency, payment.org_name)}
-			</p>
-			<p class="quiet">
-				{REASON_LABEL[draft.reason === '' ? 'requested_by_customer' : draft.reason]}.
-				{draft.sendEmail ? 'The customer gets an email.' : 'No email goes to the customer.'}
-			</p>
+		{#if quotedOn === null || draft === null}
+			{#if quoting.isError}
+				<Banner tone="bad" title="The refund policy did not load">
+					You can refund once it has quoted this payment.
+					{#snippet action()}
+						<Button
+							small
+							icon="refresh-cw"
+							disabled={quoting.isFetching}
+							reason={quoting.isFetching ? 'Asking again.' : undefined}
+							onclick={() => void quoting.refetch()}
+						>
+							Try again
+						</Button>
+					{/snippet}
+				</Banner>
+			{:else}
+				<p class="quiet">Reading the refund policy…</p>
+			{/if}
 			<div class="rf-foot">
-				<Button
-					disabled={refunding.isPending}
-					reason={refunding.isPending ? 'Refunding.' : undefined}
-					onclick={() => (confirming = false)}
-				>
-					Back
-				</Button>
+				<Button onclick={() => sheet?.close()}>Cancel</Button>
 				<Button
 					tier="primary"
-					danger
-					type="submit"
-					icon="check"
-					disabled={refunding.isPending}
-					reason={refunding.isPending ? 'Refunding.' : undefined}
+					icon="chevron-right"
+					disabled
+					reason="The refund policy has not quoted this payment yet."
 				>
-					{refunding.isPending ? 'Refunding…' : 'Refund'}
+					Review refund
 				</Button>
 			</div>
 		{:else}
-			<Field label="Amount ({currency.toUpperCase()})" id="refund-amount" required>
-				<input
-					id="refund-amount"
-					type="number"
-					min="0.01"
-					step="0.01"
-					max={left / 100}
-					bind:value={draft.dollars}
-					onblur={() => (touched = { ...touched, amount: true })}
-					aria-invalid={problemOf('amount') !== null}
-				/>
-				{@render problem('amount', `Up to ${money(left, currency)}.`)}
-			</Field>
+			{@const quote = quotedOn}
+			<section class="rf-policy" aria-labelledby="refund-policy">
+				<div class="rf-policy-head">
+					<h3 id="refund-policy">Policy</h3>
+					<b>{money(quote.amount_cents, quote.currency)}</b>
+				</div>
+				<p class="rf-policy-what">{quoteWhat(quote)} · {basisLabel(quote.basis)}</p>
+				<p class="quiet">{quote.explanation}</p>
+			</section>
 
-			<Field label="Reason" id="refund-reason" required>
-				<select
-					id="refund-reason"
-					bind:value={draft.reason}
-					onblur={() => (touched = { ...touched, reason: true })}
-					aria-invalid={problemOf('reason') !== null}
-				>
-					<option value="" disabled>Pick one</option>
-					{#each REASONS as reason (reason)}
-						<option value={reason}>{REASON_LABEL[reason]}</option>
-					{/each}
-				</select>
-				{@render problem('reason', 'Stripe keeps this with the refund.')}
-			</Field>
+			{#if confirming}
+				{@const ending = planLine(draft, quote)}
+				<p class="rf-confirm">
+					{confirmSentence(toCents(draft.dollars) ?? 0, currency, payment.org_name)}
+				</p>
+				<p class="quiet">
+					{REASON_LABEL[draft.reason === '' ? 'requested_by_customer' : draft.reason]}.
+					{draft.sendEmail ? 'The customer gets an email.' : 'No email goes to the customer.'}
+					{#if ending !== null}{ending}{/if}
+				</p>
+				<div class="rf-foot">
+					<Button
+						disabled={refunding.isPending}
+						reason={refunding.isPending ? 'Refunding.' : undefined}
+						onclick={() => (confirming = false)}
+					>
+						Back
+					</Button>
+					<Button
+						tier="primary"
+						danger
+						type="submit"
+						icon="check"
+						disabled={refunding.isPending}
+						reason={refunding.isPending ? 'Refunding.' : undefined}
+					>
+						{refunding.isPending ? 'Refunding…' : 'Refund'}
+					</Button>
+				</div>
+			{:else}
+				<Field label="Amount ({currency.toUpperCase()})" id="refund-amount" required>
+					<input
+						id="refund-amount"
+						type="number"
+						min="0.01"
+						step="0.01"
+						max={left / 100}
+						bind:value={draft.dollars}
+						onblur={() => (touched = { ...touched, amount: true })}
+						aria-invalid={problemOf('amount') !== null}
+					/>
+					{@render problem('amount', `Up to ${money(left, currency)}.`)}
+				</Field>
 
-			<Field label="Note" id="refund-note" hint="For us only. The customer never sees it.">
-				<textarea id="refund-note" rows="3" maxlength="500" bind:value={draft.note}></textarea>
-			</Field>
+				{#if differsFromQuote(draft, quote)}
+					<Field label="Why a different amount?" id="refund-override" required>
+						<textarea
+							id="refund-override"
+							rows="2"
+							maxlength="500"
+							bind:value={draft.overrideReason}
+							onblur={() => (touched = { ...touched, override: true })}
+							aria-invalid={problemOf('override') !== null}
+						></textarea>
+						{@render problem('override', 'Kept with the refund, beside the policy amount.')}
+					</Field>
+				{/if}
 
-			<label class="rf-check">
-				<input type="checkbox" bind:checked={draft.sendEmail} disabled={payment.org_id === null} />
-				<span>
-					Email the customer
-					{#if payment.org_id === null}
-						<span class="hint">This payment isn't linked to an organisation.</span>
-					{/if}
-				</span>
-			</label>
+				<Field label="Reason" id="refund-reason" required>
+					<select
+						id="refund-reason"
+						bind:value={draft.reason}
+						onblur={() => (touched = { ...touched, reason: true })}
+						aria-invalid={problemOf('reason') !== null}
+					>
+						<option value="" disabled>Pick one</option>
+						{#each REASONS as reason (reason)}
+							<option value={reason}>{REASON_LABEL[reason]}</option>
+						{/each}
+					</select>
+					{@render problem('reason', 'Stripe keeps this with the refund.')}
+				</Field>
 
-			<div class="rf-foot">
-				<Button onclick={() => sheet?.close()}>Cancel</Button>
-				<Button tier="primary" type="submit" icon="chevron-right">Review refund</Button>
-			</div>
+				<Field label="Note" id="refund-note" hint="For us only. The customer never sees it.">
+					<textarea id="refund-note" rows="3" maxlength="500" bind:value={draft.note}></textarea>
+				</Field>
+
+				{#if quote.ends_plan}
+					<label class="rf-check">
+						<input type="checkbox" bind:checked={draft.endPlan} />
+						<span>
+							End the plan today
+							<span class="hint">The terms say a yearly plan ends on the day of its refund.</span>
+						</span>
+					</label>
+				{/if}
+
+				<label class="rf-check">
+					<input
+						type="checkbox"
+						bind:checked={draft.sendEmail}
+						disabled={payment.org_id === null}
+					/>
+					<span>
+						Email the customer
+						{#if payment.org_id === null}
+							<span class="hint">This payment isn't linked to an organisation.</span>
+						{/if}
+					</span>
+				</label>
+
+				<div class="rf-foot">
+					<Button onclick={() => sheet?.close()}>Cancel</Button>
+					<Button
+						tier="primary"
+						type="submit"
+						icon="chevron-right"
+						disabled={quoting.isFetching}
+						reason={quoting.isFetching ? 'Reading the refund policy again.' : undefined}
+					>
+						Review refund
+					</Button>
+				</div>
+			{/if}
 		{/if}
 	</form>
 </Sheet>
@@ -311,6 +427,38 @@
 	.rf-check > span {
 		display: grid;
 		gap: 2px;
+	}
+
+	.rf-policy {
+		display: grid;
+		gap: var(--s-1);
+		padding: var(--s-3);
+		background: var(--surface);
+		border: 1px solid var(--line);
+		border-radius: var(--r-field);
+	}
+
+	.rf-policy-head {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: var(--s-2);
+	}
+
+	.rf-policy h3 {
+		margin: 0;
+		font-size: 12px;
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--muted);
+	}
+
+	.rf-policy-what {
+		margin: 0;
+		font-size: 13.5px;
+		font-weight: 500;
+		overflow-wrap: anywhere;
 	}
 
 	.rf-confirm {

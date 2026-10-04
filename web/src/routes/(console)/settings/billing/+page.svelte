@@ -36,6 +36,8 @@
 		type Cadence
 	} from '$lib/pages/account/plans';
 	import CancelPlanDialog from '$lib/pages/account/CancelPlanDialog.svelte';
+	import AskRefundSheet from '$lib/pages/account/AskRefundSheet.svelte';
+	import { requestRows } from '$lib/pages/account/refunds';
 	import { readIntent } from '$lib/pages/account/intent';
 	import { saleLine } from '$lib/sale';
 	import '$lib/pages/account/account.css';
@@ -127,6 +129,16 @@
 		enabled: hasCustomer
 	}));
 	const invoiceList = $derived(invoiceRows(invoices.data?.invoices ?? []));
+
+	// The refunds the seller has asked for, under the Ask for a refund button.
+	// Someone who has never paid has nothing to ask about.
+	const refunds = createQuery(() => ({
+		queryKey: queryKeys.billingRefunds,
+		queryFn: () => api.billingRefunds(),
+		enabled: hasCustomer
+	}));
+	const requestList = $derived(requestRows(refunds.data?.requests ?? []));
+	let askOpen = $state(false);
 
 	// A subscription that is still running can be cancelled; a cancelled one
 	// that has not yet ended can be kept. Neither applies to a plan with no
@@ -532,6 +544,64 @@
 		</section>
 	{/if}
 
+	{#if hasCustomer}
+		<section class="bill-section" aria-labelledby="refunds-title">
+			<div class="bill-card-head">
+				<h2 id="refunds-title" class="bill-h2">Refunds</h2>
+				<div class="bill-refund-acts">
+					<Explain title="Our refund policy" label="How refunds work">
+						<ul>
+							<li>
+								<strong>Move Packs.</strong> If you haven't used any moves from a pack, you can
+								have all of it back within 14 days of buying it. After that, or once you've used a
+								move, it isn't refunded.
+							</li>
+							<li>
+								<strong>Monthly plans.</strong> A month that has started isn't refunded. Cancel
+								any time and your plan won't renew.
+							</li>
+							<li>
+								<strong>Yearly plans.</strong> We refund the whole months you haven't started, less
+								one. A month counts as used once it has started, and months count from the day
+								your yearly plan started, in New Zealand time. Your plan ends on the day of the
+								refund and your account moves to Look.
+							</li>
+							<li>
+								<strong>For example,</strong> you paid $240 for Pro yearly and ask during month 4.
+								Months 5 to 12 are unused, which is 8, so you get 7 × $240 ÷ 12 = $140 back. From
+								month 11 on there is nothing left to refund.
+							</li>
+						</ul>
+						<p>
+							<a href="https://teachouse.io/terms/#refunds" target="_blank" rel="noopener noreferrer"
+								>Read the refunds part of our terms.</a
+							>
+						</p>
+					</Explain>
+					<Button small icon="arrow-left" onclick={() => (askOpen = true)}>Ask for a refund</Button>
+				</div>
+			</div>
+			{#if requestList.length > 0}
+				<ul class="bill-refunds">
+					{#each requestList as row (row.id)}
+						<li>
+							<span class="bill-refund-top">
+								<b>{row.amount}</b>
+								<StatusPill tone={row.status.tone} label={row.status.label} />
+								<span class="quiet">{row.asked}</span>
+							</span>
+							{#if row.declined !== null}
+								<span class="quiet">{row.declined}</span>
+							{/if}
+						</li>
+					{/each}
+				</ul>
+			{:else}
+				<p class="quiet">You can ask about any payment from the last year.</p>
+			{/if}
+		</section>
+	{/if}
+
 	<section class="bill-section" id="plans" aria-labelledby="plans-title">
 		<div class="bill-plans-head">
 			<h2 id="plans-title" class="bill-h2">Plans</h2>
@@ -714,6 +784,10 @@
 		toast('success', 'Your plan is cancelled. It keeps working until the end date.');
 	}}
 />
+
+{#if askOpen}
+	<AskRefundSheet onClose={() => (askOpen = false)} />
+{/if}
 
 <style>
 	/* One column of sections at one rhythm: --s-6 between sections, --s-4
@@ -950,6 +1024,41 @@
 		font-family: var(--display);
 		font-size: 16px;
 		font-weight: 600;
+	}
+
+	.bill-refund-acts {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--s-2);
+	}
+
+	.bill-refunds {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: var(--s-2);
+	}
+
+	.bill-refunds li {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		padding: var(--s-3) var(--s-4);
+		background: var(--card);
+		border: 1px solid var(--line);
+		border-radius: var(--r-field);
+		font-size: 13.5px;
+		overflow-wrap: anywhere;
+	}
+
+	.bill-refund-top {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--s-1) var(--s-2);
 	}
 
 	.bill-method {
